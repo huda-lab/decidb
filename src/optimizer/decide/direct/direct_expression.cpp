@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
@@ -132,7 +133,8 @@ bool DirectFiniteFoldableDouble(ClientContext &context, const Expression &expr, 
 	}
 	try {
 		result = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		return std::isfinite(result) && Value::DOUBLE(result).DefaultCastAs(value.type()) == value;
+		return DecideIsExactFiniteDouble(
+		    result, value, [&](double converted) { return Value::DOUBLE(converted).DefaultCastAs(value.type()); });
 	} catch (Exception &) {
 		return false;
 	}

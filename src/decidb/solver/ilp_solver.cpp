@@ -1,4 +1,5 @@
 #include "duckdb/decidb/solver/ilp_solver.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_profile.hpp"
 #include "duckdb/decidb/solver/probe_models.hpp"
 #include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
@@ -339,8 +340,8 @@ static SolverResult RejectIntegerCeilingOptimum(const SolverModel &model, const 
 		// Only a column the query never bounded can be pinned by the solver's own
 		// integer range. One the user bounded is answered against THAT bound, however
 		// large, and is a real optimum.
-		bool open_above = model.col_upper[col] >= EFFECTIVE_INFINITY;
-		bool open_below = model.col_lower[col] <= -EFFECTIVE_INFINITY;
+		bool open_above = DecideIsOpenAbove(model.col_upper[col]);
+		bool open_below = DecideIsOpenBelow(model.col_lower[col]);
 		if ((open_above && value >= INTEGER_SOLVER_CEILING) ||
 		    (open_below && value <= -INTEGER_SOLVER_CEILING)) {
 			SolverResult unbounded = result;

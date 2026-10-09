@@ -1,4 +1,5 @@
 #include "duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 
 #include "duckdb/common/assert.hpp"
 #include "duckdb/common/enums/decide.hpp"
@@ -153,7 +154,7 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	auto add_slack = [&]() -> idx_t {
 		idx_t c = elastic.num_vars;
 		elastic.col_lower.push_back(0.0);
-		elastic.col_upper.push_back(1e30);
+		elastic.col_upper.push_back(DECIDE_SOLVER_INFINITY);
 		elastic.is_integer.push_back(false);
 		elastic.is_binary.push_back(false);
 		elastic.obj_coeffs.push_back(0.0);

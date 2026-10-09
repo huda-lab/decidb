@@ -4,6 +4,7 @@
 #include <cmath>
 #include <limits>
 
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
@@ -142,7 +143,7 @@ bool NormalizeCapacity(ClientContext &context, const Expression &expr, Expressio
 		inclusive = std::ceil(as_double);
 		break;
 	case ExpressionType::COMPARE_GREATERTHAN:
-		if (as_double >= DIRECT_MAX_EXACT_INTEGER) {
+		if (as_double >= DECIDE_MAX_EXACT_INTEGER) {
 			return false;
 		}
 		inclusive = std::floor(as_double) + 1.0;
@@ -166,7 +167,7 @@ bool NormalizeCapacity(ClientContext &context, const Expression &expr, Expressio
 		capacity = 0;
 		return true;
 	}
-	if (!std::isfinite(inclusive) || inclusive > DIRECT_MAX_EXACT_INTEGER) {
+	if (!DecideIsWithinExactRange(inclusive)) {
 		return false;
 	}
 	capacity = static_cast<idx_t>(inclusive);
@@ -1019,7 +1020,7 @@ private:
 		}
 		auto beyond_bigint = make_uniq<BoundComparisonExpression>(
 		    ExpressionType::COMPARE_GREATERTHANOREQUALTO, cap(),
-		    make_uniq<BoundConstantExpression>(Value::DOUBLE(9223372036854775808.0)));
+		    make_uniq<BoundConstantExpression>(Value::DOUBLE(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT)));
 		auto bounded = make_uniq<BoundCaseExpression>(
 		    std::move(beyond_bigint),
 		    make_uniq<BoundConstantExpression>(Value::BIGINT(std::numeric_limits<int64_t>::max())),
@@ -1187,7 +1188,7 @@ private:
 					group_checks.push_back(must_not_hold(make_uniq<BoundComparisonExpression>(
 					    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 					    DirectColumn(LogicalType::DOUBLE, ColumnBinding(score_index, slots.max_score)),
-					    make_uniq<BoundConstantExpression>(Value::DOUBLE(9223372036854775808.0)))));
+					    make_uniq<BoundConstantExpression>(Value::DOUBLE(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT)))));
 				}
 			}
 			if (has_fixes && has_upper) {

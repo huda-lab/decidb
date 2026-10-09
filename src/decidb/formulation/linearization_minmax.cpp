@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 
 #include <cmath>
@@ -538,8 +539,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             // it on the constraint side. A negative coefficient swaps which end of the
             // variable's box feeds which end of the term, so an open ceiling on `v` can
             // open the term's FLOOR — sign has to be respected before blaming a side.
-            bool lb_open = lb <= -1e20;
-            bool ub_open = ub >= 1e20;
+            bool lb_open = DecideIsOpenBelow(lb);
+            bool ub_open = DecideIsOpenAbove(ub);
             bool lo_from_ub = c < 0.0;
             if (lo_from_ub ? ub_open : lb_open) {
                 if (out.unbounded_var == DConstants::INVALID_INDEX) {
@@ -962,7 +963,7 @@ static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideT
             }
             double lb = input.lower_bounds[v];
             double ub = input.upper_bounds[v];
-            if (ub >= 1e20 || lb <= -1e20) {
+            if (DecideIsOpenAbove(ub) || DecideIsOpenBelow(lb)) {
                 range.MarkUnbounded(v);
                 continue;
             }

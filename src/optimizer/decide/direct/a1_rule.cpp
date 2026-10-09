@@ -5,6 +5,7 @@
 #include <limits>
 #include <memory>
 
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
@@ -28,11 +29,6 @@ namespace duckdb {
 namespace direct_a1 {
 
 constexpr const char *A1_RULE = "A1_INDEPENDENT_BOUNDS";
-//! Below this magnitude a DOUBLE can still carry a fraction, so a rounded bound is worth testing.
-constexpr double FRACTION_LIMIT = 4503599627370496.0;
-//! The solver reads a bound of this magnitude as no bound at all: an upper bound of 1e20 or more, or a lower bound of
-//! -1e20 or less.
-constexpr double INFINITE_BOUND = 1e20;
 constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
 constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 
@@ -371,7 +367,7 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 			if (DirectIsLowerBound(comparison)) {
 				solver_lower[decision] = std::max(solver_lower[decision], strict ? DecideStrictBound(true, k) : k);
 				double value = strict ? DecideStrictBound(true, k) : (whole ? std::ceil(k) : k);
-				if (value <= -INFINITE_BOUND) {
+				if (DecideIsOpenBelow(value)) {
 					value = NEGATIVE_INFINITY;
 				}
 				lower_written[decision] = true;
@@ -380,7 +376,7 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 			if (DirectIsUpperBound(comparison)) {
 				solver_upper[decision] = std::min(solver_upper[decision], strict ? DecideStrictBound(false, k) : k);
 				double value = strict ? DecideStrictBound(false, k) : (whole ? std::floor(k) : k);
-				if (value >= INFINITE_BOUND) {
+				if (DecideIsOpenAbove(value)) {
 					value = POSITIVE_INFINITY;
 				}
 				absorbed_upper[decision] = std::min(absorbed_upper[decision], value);
@@ -1006,8 +1002,8 @@ private:
 		Ex upper_candidate = v;
 		Ex lower_candidate = v;
 		if (whole) {
-			auto huge =
-			    calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Fn("abs", v), calc.Num(FRACTION_LIMIT));
+			auto huge = calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Fn("abs", v),
+			                     calc.Num(DECIDE_MAX_FRACTIONAL_MAGNITUDE));
 			auto floored = calc.Fn("floor", v);
 			auto up_one = calc.Add(floored, calc.Num(1.0));
 			auto down_one = calc.Sub(floored, calc.Num(1.0));
@@ -1033,8 +1029,9 @@ private:
 		auto row_upper = calc.If(zero_coefficient, positive_infinity, upper_by_sign);
 		auto row_lower = calc.If(zero_coefficient, calc.If(holds, negative_infinity, positive_infinity), lower_by_sign);
 		// A right side the solver reads as infinite binds nothing.
-		auto vacuous = at_most ? calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, r, calc.Num(INFINITE_BOUND))
-		                       : calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, r, calc.Num(-INFINITE_BOUND));
+		auto vacuous =
+		    at_most ? calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, r, calc.Num(DECIDE_EFFECTIVE_INFINITY))
+		            : calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, r, calc.Num(-DECIDE_EFFECTIVE_INFINITY));
 		upper = calc.If(vacuous, positive_infinity, row_upper);
 		lower = calc.If(vacuous, negative_infinity, row_lower);
 		if (columns.has_when) {
@@ -1110,6 +1107,15 @@ private:
 		answers.valid_data = p4.Add(DirectColumn(LogicalType::BOOLEAN, box.valid_data));
 	}
 
+	//! `abs(value) <= 2^53`, the SQL spelling of the range half of DecideIsWithinExactRange. Callers test finiteness
+	//! first, so an infinite or NaN value never reaches it.
+	unique_ptr<Expression> WithinExactRange(ColumnBinding value) const {
+		return make_uniq<BoundComparisonExpression>(
+		    ExpressionType::COMPARE_LESSTHANOREQUALTO,
+		    optimizer.BindScalarFunction("abs", DirectColumn(LogicalType::DOUBLE, value)),
+		    make_uniq<BoundConstantExpression>(Value::DOUBLE(DECIDE_MAX_EXACT_INTEGER)));
+	}
+
 	//! The condition the barrier evaluates on every row. It is true, or the row raises the error that applies: a
 	//! coefficient the arithmetic made non-finite, an empty box, an improvement without limit, or a whole number the
 	//! answer cannot hold exactly. Every raw value was checked in P2 and arrives as `valid_data`.
@@ -1130,11 +1136,8 @@ private:
 			                                                DirectConstantBool(true),
 			                                                DirectUnboundedErrorPredicate(optimizer)));
 			if (IsWholeNumbered(proof.decisions[d].domain)) {
-				auto within = make_uniq<BoundComparisonExpression>(
-				    ExpressionType::COMPARE_LESSTHANOREQUALTO, optimizer.BindScalarFunction("abs", value()),
-				    make_uniq<BoundConstantExpression>(Value::DOUBLE(DIRECT_MAX_EXACT_INTEGER)));
 				checks.push_back(make_uniq<BoundCaseExpression>(
-				    std::move(within), DirectConstantBool(true),
+				    WithinExactRange(answers.value[d]), DirectConstantBool(true),
 				    DirectErrorPredicate(optimizer, "DECIDE: a decision solves to a whole number beyond the range "
 				                                    "DeciDB can return. Tighten its bounds, or declare it REAL to read "
 				                                    "the value approximately.")));
@@ -1156,12 +1159,8 @@ private:
 		if (!IsWholeNumbered(prepared.domain)) {
 			return DirectColumn(LogicalType::DOUBLE, value);
 		}
-		auto within = make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_LESSTHANOREQUALTO,
-		    optimizer.BindScalarFunction("abs", DirectColumn(LogicalType::DOUBLE, value)),
-		    make_uniq<BoundConstantExpression>(Value::DOUBLE(DIRECT_MAX_EXACT_INTEGER)));
 		auto finite = make_uniq<BoundCaseExpression>(
-		    optimizer.BindScalarFunction("isfinite", DirectColumn(LogicalType::DOUBLE, value)), std::move(within),
+		    optimizer.BindScalarFunction("isfinite", DirectColumn(LogicalType::DOUBLE, value)), WithinExactRange(value),
 		    DirectConstantBool(false));
 		auto cast = BoundCastExpression::AddCastToType(optimizer.context, DirectColumn(LogicalType::DOUBLE, value),
 		                                               prepared.output_type);

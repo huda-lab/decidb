@@ -8,6 +8,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/formulation/ilp_linearization_internal.hpp"
 
@@ -57,8 +58,8 @@ idx_t decide_linearize::AddGlobalContinuousAux(SolverInput &input, const VarInde
     // Per side. An auxiliary over `x >= 0` with no ceiling is emitted `[0, 1e30]`,
     // not `[-1e30, 1e30]`: the floor was derived, and throwing it away because the
     // ceiling was not is a box given up for nothing.
-    input.global_lower_bounds.push_back(range.lo_unbounded ? -1e30 : range.lo);
-    input.global_upper_bounds.push_back(range.hi_unbounded ? 1e30 : range.hi);
+    input.global_lower_bounds.push_back(range.lo_unbounded ? -DECIDE_SOLVER_INFINITY : range.lo);
+    input.global_upper_bounds.push_back(range.hi_unbounded ? DECIDE_SOLVER_INFINITY : range.hi);
     input.global_bounds_unbounded.push_back(range.Unbounded());
     input.global_obj_coeffs.push_back(obj_coeff);
     return aux_idx;
@@ -141,7 +142,7 @@ static bool FlatRowReach(const SolverInput &input, const FormulationBox &box,
         // A negative coefficient swaps which end of the box feeds which end of the term,
         // so the sign has to be respected before an end is blamed.
         double end = (c > 0.0) == hi_end ? hi : lo;
-        if (end >= 1e20 || end <= -1e20) {
+        if (DecideIsOpenAbove(end) || DecideIsOpenBelow(end)) {
             blame_col = static_cast<idx_t>(indices[k]);
             return false;
         }

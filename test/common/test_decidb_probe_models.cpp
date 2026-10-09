@@ -1,5 +1,6 @@
 #include "catch.hpp"
 
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/decidb/solver/probe_models.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 
@@ -10,7 +11,7 @@ using namespace duckdb;
 
 namespace {
 
-constexpr double DEFAULT_INFINITY = 1e30;
+constexpr double DEFAULT_INFINITY = DECIDE_SOLVER_INFINITY;
 constexpr double RAY_EPSILON = 1e-8;
 
 SolverModel MakeLinearModel(const duckdb::vector<double> &objective, bool maximize = true) {

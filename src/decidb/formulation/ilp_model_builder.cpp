@@ -1,4 +1,5 @@
 #include "duckdb/decidb/formulation/ilp_model.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/decide_profile.hpp"
 
@@ -298,7 +299,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         if (logical_type == LogicalType::DOUBLE || logical_type == LogicalType::FLOAT) {
             per_var_binary[var] = false;
             per_var_lower[var] = 0.0;
-            per_var_upper[var] = 1e30;
+            per_var_upper[var] = DECIDE_SOLVER_INFINITY;
         } else if (logical_type == LogicalType::BOOLEAN) {
             per_var_binary[var] = true;
             per_var_lower[var] = 0.0;
@@ -306,7 +307,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         } else {
             // INTEGER / BIGINT or default
             per_var_lower[var] = 0.0;
-            per_var_upper[var] = 1e30;
+            per_var_upper[var] = DECIDE_SOLVER_INFINITY;
         }
     }
 
@@ -368,7 +369,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         idx_t var_idx = indexer.global_block_start + g;
         auto gtype = input.global_variable_types[g];
         D_ASSERT(g >= input.global_bounds_unbounded.size() || input.global_bounds_unbounded[g] ||
-                 (input.global_lower_bounds[g] > -1e20 && input.global_upper_bounds[g] < 1e20));
+                 (input.global_lower_bounds[g] > -DECIDE_EFFECTIVE_INFINITY &&
+                  input.global_upper_bounds[g] < DECIDE_EFFECTIVE_INFINITY));
         model.col_lower[var_idx] = input.global_lower_bounds[g];
         model.col_upper[var_idx] = input.global_upper_bounds[g];
         model.is_integer[var_idx] = !(gtype == LogicalType::DOUBLE || gtype == LogicalType::FLOAT);

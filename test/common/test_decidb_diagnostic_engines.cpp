@@ -1,5 +1,6 @@
 #include "catch.hpp"
 
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb.hpp"
@@ -34,7 +35,7 @@ SolverModel MakeSingleVarModel(const duckdb::vector<SingleVarRow> &rows) {
 	SolverModel m;
 	m.num_vars = 1;
 	m.col_lower = {0.0};
-	m.col_upper = {1e30};
+	m.col_upper = {DECIDE_SOLVER_INFINITY};
 	m.is_integer = {false};
 	m.is_binary = {false};
 	m.obj_coeffs = {0.0};
@@ -82,7 +83,7 @@ SolverModel MakeModel(idx_t num_vars, const duckdb::vector<MultiVarRow> &rows) {
 	SolverModel m;
 	m.num_vars = num_vars;
 	m.col_lower.assign(num_vars, 0.0);
-	m.col_upper.assign(num_vars, 1e30);
+	m.col_upper.assign(num_vars, DECIDE_SOLVER_INFINITY);
 	m.is_integer.assign(num_vars, false);
 	m.is_binary.assign(num_vars, false);
 	m.obj_coeffs.assign(num_vars, 0.0);
@@ -272,7 +273,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		input.num_global_vars = 1;
 		input.global_variable_types = {LogicalType::DOUBLE};
 		input.global_lower_bounds = {0.0};
-		input.global_upper_bounds = {1e30};
+		input.global_upper_bounds = {DECIDE_SOLVER_INFINITY};
 		input.global_obj_coeffs = {0.0};
 		VarIndexer indexer = VarIndexer::Build(input);
 		indexer.total_vars = indexer.global_block_start + input.num_global_vars;
@@ -704,7 +705,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		SolverModel m;
 		m.num_vars = 2;
 		m.col_lower = {0.0, 0.0};
-		m.col_upper = {1e30, 1e30};
+		m.col_upper = {DECIDE_SOLVER_INFINITY, DECIDE_SOLVER_INFINITY};
 		m.is_integer = {false, false};
 		m.is_binary = {false, false};
 		m.obj_coeffs = {0.0, 0.0};
@@ -746,7 +747,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		SolverModel model;
 		model.num_vars = 1;
 		model.col_lower = {0.0};
-		model.col_upper = {1e30};
+		model.col_upper = {DECIDE_SOLVER_INFINITY};
 		model.is_integer = {false};
 		model.is_binary = {false};
 		model.obj_coeffs = {0.0};

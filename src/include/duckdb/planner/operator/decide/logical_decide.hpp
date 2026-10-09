@@ -12,6 +12,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/decide_solver_capabilities.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 
 namespace duckdb {
@@ -253,9 +254,9 @@ public:
     //! honored instead of being clamped up to 0. The std::max combiner still picks the
     //! tightest of several `>=` bounds, and physical Finalize resolves anything still at
     //! the sentinel to the default 0 floor.
-    static constexpr double ABSORBED_LOWER_UNSET = -1e30;
+    static constexpr double ABSORBED_LOWER_UNSET = -DECIDE_SOLVER_INFINITY;
     //! The matching starting point of the upper side: no explicit upper bound was written.
-    static constexpr double ABSORBED_UPPER_UNSET = 1e30;
+    static constexpr double ABSORBED_UPPER_UNSET = DECIDE_SOLVER_INFINITY;
 
     //! Per-decision-variable box, sized to decide_variables. Physical execution copies
     //! these into SolverInput instead of re-walking the constraint tree.

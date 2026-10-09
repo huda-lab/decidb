@@ -1,5 +1,6 @@
 #include "duckdb/decidb/solver/probe_models.hpp"
 
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
 
 #include <utility>
@@ -38,7 +39,7 @@ bool BuildUnboundedRayFallbackModel(const SolverModel &model, SolverModel &ray_m
 	ray_model.col_lower.assign(model.num_vars, 0.0);
 	ray_model.col_upper.resize(model.num_vars, 0.0);
 	for (idx_t col = 0; col < model.num_vars; col++) {
-		ray_model.col_upper[col] = model.col_upper[col] >= EFFECTIVE_INFINITY ? 1.0 : 0.0;
+		ray_model.col_upper[col] = DecideIsOpenAbove(model.col_upper[col]) ? 1.0 : 0.0;
 	}
 
 	ray_model.is_integer.assign(model.num_vars, false);

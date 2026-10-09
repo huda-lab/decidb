@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 
 #include <algorithm>
@@ -44,7 +45,7 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
         }
         double lb = lower_bounds[v];
         double ub = upper_bounds[v];
-        if (ub >= 1e20 || lb <= -1e20) {
+        if (DecideIsOpenAbove(ub) || DecideIsOpenBelow(lb)) {
             has_unbounded = true;
             continue;
         }
@@ -113,8 +114,8 @@ void decide_linearize::DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t
         }
         double lb = lower_bounds[v];
         double ub = upper_bounds[v];
-        bool lb_unbounded = lb <= -1e20;
-        bool ub_unbounded = ub >= 1e20;
+        bool lb_unbounded = DecideIsOpenBelow(lb);
+        bool ub_unbounded = DecideIsOpenAbove(ub);
         // The low end of a positive term comes from the variable's low end, and from its
         // high end when the coefficient flips the sense.
         bool lo_from_ub = coef < 0.0;
@@ -179,7 +180,7 @@ idx_t decide_linearize::FindUnboundedContributor(const EvaluatedConstraint &ec,
             continue;
         }
         if (v < upper_bounds.size() && v < lower_bounds.size() &&
-            (upper_bounds[v] >= 1e20 || lower_bounds[v] <= -1e20)) {
+            (DecideIsOpenAbove(upper_bounds[v]) || DecideIsOpenBelow(lower_bounds[v]))) {
             return v;
         }
     }

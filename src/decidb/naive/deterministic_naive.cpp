@@ -1,4 +1,5 @@
 #include "duckdb/decidb/naive/deterministic_naive.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_profile.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/solver/solver_session.hpp"
@@ -344,9 +345,9 @@ void HighsSession::Load(const SolverModel &model) {
 
         if (constr.sense == '>') {
             row_lower.push_back(constr.rhs);
-            row_upper.push_back(1e30);
+            row_upper.push_back(DECIDE_SOLVER_INFINITY);
         } else if (constr.sense == '<') {
-            row_lower.push_back(-1e30);
+            row_lower.push_back(-DECIDE_SOLVER_INFINITY);
             row_upper.push_back(constr.rhs);
         } else {
             row_lower.push_back(constr.rhs);
@@ -564,7 +565,7 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
             // as a confident (and wrong) "best possible objective". Keep the NaN
             // "unavailable" default there and for non-finite values.
             if (is_mip && std::isfinite(info.mip_dual_bound) &&
-                std::fabs(info.mip_dual_bound) < EFFECTIVE_INFINITY) {
+                std::fabs(info.mip_dual_bound) < DECIDE_EFFECTIVE_INFINITY) {
                 result.best_bound = info.mip_dual_bound;
             }
             // Incumbent reads (objective / gap / solution vector) are only valid
@@ -575,7 +576,7 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
             if (info.primal_solution_status == kSolutionStatusFeasible) {
                 result.has_solution = true;
                 result.objective_value = info.objective_function_value;
-                if (is_mip && std::isfinite(info.mip_gap) && info.mip_gap < EFFECTIVE_INFINITY) {
+                if (is_mip && std::isfinite(info.mip_gap) && info.mip_gap < DECIDE_EFFECTIVE_INFINITY) {
                     result.gap = info.mip_gap;
                 }
                 const HighsSolution& incumbent = highs.getSolution();

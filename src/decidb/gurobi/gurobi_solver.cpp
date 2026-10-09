@@ -1,6 +1,7 @@
 #include "duckdb/decidb/gurobi/gurobi_solver.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/solver/solver_session.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/decidb/gurobi/gurobi_loader.hpp"
 #include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
@@ -187,7 +188,7 @@ void GurobiSession::Load(const SolverModel &ilp) {
 
     // An open column box has to arrive as Gurobi's OWN infinity, not ours. The model
     // builder writes 1e30 for "no bound" and every DeciDB-side check reads it that way
-    // (EFFECTIVE_INFINITY is 1e20), but GRB_INFINITY is 1e100 — so 1e30 lands as a
+    // (DECIDE_EFFECTIVE_INFINITY is 1e20), but GRB_INFINITY is 1e100 — so 1e30 lands as a
     // perfectly finite bound. Gurobi then solves an unbounded query to "optimality"
     // against that ceiling, and an INTEGER column comes back at its integer limit
     // (2147483647) instead of the query being reported as unbounded. Translating here
@@ -196,10 +197,10 @@ void GurobiSession::Load(const SolverModel &ilp) {
     vector<double> col_lower(ilp.col_lower.begin(), ilp.col_lower.end());
     vector<double> col_upper(ilp.col_upper.begin(), ilp.col_upper.end());
     for (idx_t i = 0; i < total_vars; i++) {
-        if (col_lower[i] <= -EFFECTIVE_INFINITY) {
+        if (DecideIsOpenBelow(col_lower[i])) {
             col_lower[i] = -GRB_INFINITY_VALUE;
         }
-        if (col_upper[i] >= EFFECTIVE_INFINITY) {
+        if (DecideIsOpenAbove(col_upper[i])) {
             col_upper[i] = GRB_INFINITY_VALUE;
         }
     }
@@ -526,7 +527,7 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
             // "unavailable" default unless the read succeeds with a real value.
             double obj_bound = 0.0;
             if (api.getdblattr(guard.model, GRB_DBL_ATTR_OBJBOUND, &obj_bound) == 0 &&
-                std::isfinite(obj_bound) && std::fabs(obj_bound) < EFFECTIVE_INFINITY) {
+                std::isfinite(obj_bound) && std::fabs(obj_bound) < DECIDE_EFFECTIVE_INFINITY) {
                 result.best_bound = obj_bound;
             }
             // A stop-with-best-so-far is usable only when the solution vector itself
@@ -541,7 +542,7 @@ SolverResult GurobiSession::RunAndReadback(double time_limit_seconds) {
                 // asserting "within 0.00%" on an unproven incumbent.
                 double mip_gap = 0.0;
                 if (api.getdblattr(guard.model, GRB_DBL_ATTR_MIPGAP, &mip_gap) == 0 &&
-                    std::isfinite(mip_gap) && mip_gap < EFFECTIVE_INFINITY) {
+                    std::isfinite(mip_gap) && mip_gap < DECIDE_EFFECTIVE_INFINITY) {
                     result.gap = mip_gap;
                 }
             } else if (incumbent.exists) {

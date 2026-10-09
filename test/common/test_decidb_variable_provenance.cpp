@@ -1,5 +1,6 @@
 #include "catch.hpp"
 
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/decidb/formulation/solver_input.hpp"
 
@@ -24,7 +25,7 @@ SolverInput MakeRowScopedInput(idx_t num_rows, idx_t num_vars, idx_t num_global)
 	input.num_global_vars = num_global;
 	input.global_variable_types.assign(num_global, LogicalType::DOUBLE);
 	input.global_lower_bounds.assign(num_global, 0.0);
-	input.global_upper_bounds.assign(num_global, 1e30);
+	input.global_upper_bounds.assign(num_global, DECIDE_SOLVER_INFINITY);
 	return input;
 }
 

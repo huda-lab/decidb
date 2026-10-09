@@ -7,6 +7,7 @@
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 
 #include <algorithm>
@@ -27,7 +28,7 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
     for (const auto &link : input.bilinear_links) {
         double U = box.upper[link.other_var_idx];
         double L = box.lower[link.other_var_idx];
-        if (U >= 1e20) {
+        if (DecideIsOpenAbove(U)) {
             throw InvalidInputException(
                 "Bilinear term requires a finite upper bound on variable '%s'. "
                 "Add a constraint like '%s <= <bound>' to provide one.",
@@ -56,7 +57,7 @@ void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
     for (auto &link : input.bilinear_links) {
         double U = box.upper[link.other_var_idx];
         double L = box.lower[link.other_var_idx];
-        D_ASSERT(U < 1e20); // derived and validated before ABS descendants read the aux box
+        D_ASSERT(U < DECIDE_EFFECTIVE_INFINITY); // derived and validated before ABS descendants read the aux box
 
         // ec1: w <= U * b  (i.e., w - U*b <= 0)
         EvaluatedConstraint ec1;
@@ -185,7 +186,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
     // auxiliary's own box rather than leaving a row (`AbsorbVariableBounds`). The floor
     // it puts there IS the demand, and without this the ceiling below is set under it —
     // an empty column, which no widening of `x` can repair.
-    if (aux_idx < input.lower_bounds.size() && input.lower_bounds[aux_idx] > -1e20) {
+    if (aux_idx < input.lower_bounds.size() && input.lower_bounds[aux_idx] > -DECIDE_EFFECTIVE_INFINITY) {
         demanded = MaxValue<double>(demanded, input.lower_bounds[aux_idx]);
     }
     for (const auto &ec : input.constraints) {
@@ -293,7 +294,7 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
                 if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
                     continue;
                 }
-                if (input.upper_bounds[v] >= 1e20 || input.lower_bounds[v] <= -1e20) {
+                if (DecideIsOpenAbove(input.upper_bounds[v]) || DecideIsOpenBelow(input.lower_bounds[v])) {
                     bad = v;
                     break;
                 }

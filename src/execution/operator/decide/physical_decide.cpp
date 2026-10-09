@@ -1,4 +1,5 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/execution/executor.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -3510,10 +3511,10 @@ static void OpenElasticColumnBox(SolverInput &input) {
         // The column's own magnitude, from whichever of its bounds are finite. Floored at
         // one so a column pinned at zero still has somewhere to move.
         double magnitude = 1.0;
-        if (std::abs(input.lower_bounds[var]) < 1e20) {
+        if (std::abs(input.lower_bounds[var]) < DECIDE_EFFECTIVE_INFINITY) {
             magnitude = std::max(magnitude, std::abs(input.lower_bounds[var]));
         }
-        if (std::abs(input.upper_bounds[var]) < 1e20) {
+        if (std::abs(input.upper_bounds[var]) < DECIDE_EFFECTIVE_INFINITY) {
             magnitude = std::max(magnitude, std::abs(input.upper_bounds[var]));
         }
         double room = std::max(ELASTIC_WIDENING * magnitude, row_demand[var]);
@@ -4158,10 +4159,10 @@ static int64_t DecideSolutionToInteger(double solution_value, const LogicalType 
     // symmetric, and `-2147483648` is a value the column can hold.
     double lo = var_type == LogicalType::INTEGER
                     ? static_cast<double>(NumericLimits<int32_t>::Minimum())
-                    : -9007199254740992.0; // -2^53
+                    : -DECIDE_MAX_EXACT_INTEGER;
     double hi = var_type == LogicalType::INTEGER
                     ? static_cast<double>(NumericLimits<int32_t>::Maximum())
-                    : 9007199254740992.0; // 2^53
+                    : DECIDE_MAX_EXACT_INTEGER;
     // Negated so a NaN — which compares false against everything — is refused rather
     // than passed through to the cast this exists to protect.
     if (!(rounded >= lo && rounded <= hi)) {

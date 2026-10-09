@@ -27,8 +27,24 @@ which needs Gurobi; C++ `[decidb]` 1,227 assertions in 39 cases. `test/decide/ru
   `DirectValidBoundPredicate` and `DirectValidNumberPredicate`. Which of several errors a query reports is not
   specified. The helpers only S1 uses (the scope projection `DirectProjectScope`, the bound validation
   `DirectValidateBounds`, `DirectWindowExtremum`, `DirectAnyCondition`) live in `src/optimizer/decide/direct/s1_support.{hpp,cpp}`
-  in `namespace direct_s1`, and move to the builders when a second rule needs them. `DIRECT_MAX_EXACT_INTEGER` (2^53) in
-  `direct_expression.hpp` is the one copy of the exactness limit, used by S1 and A1.
+  in `namespace direct_s1`, and move to the builders when a second rule needs them. The exactness limit (2^53) is
+  `DECIDE_MAX_EXACT_INTEGER` in the numeric-policy header (next bullet).
+- **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
+  DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
+  rules, the model builder and the solver backends all read it without including each other. It names the solver's
+  sentinel `DECIDE_SOLVER_INFINITY` (1e30: the builder's "no bound", the unset side of an absorbed bound, a one-sided
+  row), the reading margin `DECIDE_EFFECTIVE_INFINITY` (1e20) with `DecideIsOpenAbove` and `DecideIsOpenBelow`,
+  `DECIDE_MAX_EXACT_INTEGER` (2^53) with `DecideIsWithinExactRange`, `DECIDE_MAX_FRACTIONAL_MAGNITUDE` (2^52),
+  `DECIDE_FIRST_DOUBLE_BEYOND_BIGINT` (2^63), and `DecideIsExactFiniteDouble` (a converted double is exact when it is
+  finite and converts back to the original value; `DirectFiniteFoldableDouble` calls it). `LogicalDecide::ABSORBED_*_UNSET`
+  are the sentinel under their old names; `EFFECTIVE_INFINITY` was renamed `DECIDE_EFFECTIVE_INFINITY` and moved from
+  `diagnostic_constants.hpp`. A1 builds its `abs(answer) <= 2^53` check once (`WithinExactRange`). What stays outside the
+  header on purpose: bare `std::isfinite` and `std::isinf` that only reject NaN or infinity in input, a report or a
+  diagnostic (they state no exactness policy); HiGHS's own infinite bound and large-matrix limits in
+  `deterministic_naive.cpp`; Gurobi's 1e100; `INTEGER_SOLVER_CEILING` and the ray epsilon in `diagnostic_constants.hpp`
+  (diagnostic-only thresholds). Range proofs that mimic DuckDB's overflow or may-throw logic are not in the header; they
+  are listed for parity-by-construction work (N-02). Test: `test/common/test_decidb_numeric_policy.cpp`
+  (`[numeric_policy]`, 4 cases).
 - **Shared admission predicates.** `DirectIsNumericDecisionFree`, `DirectSourceNumericColumn`,
   `DirectIsSourceOnlyNumeric`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
   `DirectFoldableDouble` and `DirectConstraintFact::PlainSum` answer "may a rule use this value" once for all rules.

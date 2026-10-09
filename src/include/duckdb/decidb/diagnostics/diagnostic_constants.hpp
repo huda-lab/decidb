@@ -3,7 +3,8 @@
 //
 // duckdb/decidb/diagnostics/diagnostic_constants.hpp
 //
-// Shared numeric thresholds for the diagnostic re-solve / unbounded-ray path.
+// Shared numeric thresholds for the diagnostic re-solve / unbounded-ray path. The solver's infinity
+// sentinels live in duckdb/common/decide_numeric_policy.hpp.
 // These were previously redefined per-file; they must agree for the box-LP
 // "free suspect filter" invariant to hold (the set of bounds opened in the
 // fallback LP and the set of ray components deemed non-zero must be computed
@@ -13,12 +14,9 @@
 
 #pragma once
 
-namespace duckdb {
+#include "duckdb/common/decide_numeric_policy.hpp"
 
-//! A finite bound at or above this magnitude is treated as "effectively
-//! infinite" (i.e. the variable is unbounded in that direction). Used to decide
-//! which upper bounds to open in the box-LP ray-fallback model.
-constexpr double EFFECTIVE_INFINITY = 1e20;
+namespace duckdb {
 
 //! The largest magnitude a mixed-integer solver will actually give an integer
 //! column. Gurobi documents ~2e9 and HiGHS behaves the same way; neither can
