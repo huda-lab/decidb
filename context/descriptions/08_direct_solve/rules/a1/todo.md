@@ -11,17 +11,6 @@ is fixed (`ProveBounds` records the box the solver sees, and the declined shapes
 `test_direct_a1.py`). A1-01, A1-02 and A1-04 shipped on 2026-10-09 and are in `done.md`. A1-06 and A1-07 shipped on the same day. A1-05
 (re-stamp) remains.
 
-## A1-03 — A wide column read back costs memory in proportion to the input
-
-- **Problem.** The barrier holds every row until the check has run, so a parent that reads a wide column makes direct solve
-  hold it: with a 512-byte payload at 1,000,000 rows the peak is 1.06 GiB where an unused payload costs 47 MiB.
-- **Not known.** Whether a plan that evaluates the check in a first pass and joins the result back to the source (reading
-  the source twice) beats holding the rows. `architecture/result_boundary.md` chose holding over a second read for S1; no
-  measurement for A1's wide case exists. The constant-problem variant already streams.
-- **Done when.** A measurement at 1,000,000 and 5,000,000 wide rows, and one recorded decision: keep the barrier or change
-  the plan. Update the weak-spots paragraph in `done.md`. This is the same question as S1-05; run it once for both as
-  `../_harness/todo.md` H-13.
-
 ## A1-05 — Re-stamp A1's verification
 
 - **Problem.** The verification stamp at the top of `done.md` (date, commit, counts, and the sentence about "the 7

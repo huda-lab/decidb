@@ -122,8 +122,10 @@ paths finish in under 0.1 s.
 
 **Weak spots.** A parent that reads a wide column back makes the barrier hold it: with a 512-byte payload read at
 1,000,000 rows direct peaks at 1.06 GiB (0.26 s against 0.59 s, 2.3x) instead of 47 MiB. The speedup is smaller than
-S1's because the solver is already cheap on a bound-only problem. 5,000,000 wide rows were not run (about 3 GiB of
-disk and several GiB of memory).
+S1's because the solver is already cheap on a bound-only problem. Measured again on 2026-10-09 at 1,000,000 and
+5,000,000 rows: the peak footprint is 1,049 MiB and 5,212 MiB held, against 32 and 131 MiB for an unused payload and 80
+and 316 MiB when the source is read twice. The numbers, the decision and the recommendation to read twice are in
+`../../architecture/result_boundary.md` ("Memory of holding rows").
 
 **Reproduce** (after `make release`; the sweeps above took under a minute in total, building the databases included):
 
