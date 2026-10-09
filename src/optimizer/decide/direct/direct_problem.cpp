@@ -3,7 +3,6 @@
 #include <algorithm>
 
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
@@ -157,13 +156,12 @@ private:
 		string order;
 		auto name = StringUtil::Lower(aggregate.function.name);
 		if (ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, order)) {
-			// Canonicalization replaced every other order with its definition; L0 needs indicator variables.
-			if (order != "0_auto" && order.rfind("0_", 0) != 0) {
-				throw InternalException("DECIDE norm of order %s reached direct-solve facts", order);
-			}
-			part.reducer = DirectReducer::COUNT_NONZERO;
-			part.l0_tolerance = GetDecideL0Tolerance(context);
-			part.l0_bound = order == "0_auto" ? 0.0 : std::stod(order.substr(2));
+			// Canonicalization replaced every order but 0 with its definition. Order 0 needs indicator variables, so no
+			// rule models it, and any other tag is not one this reader knows: both decline instead of throwing.
+			MarkUnknown(part.status, part.reason,
+			            order.rfind("0_", 0) == 0 ? string("norm of order 0 is not modelled")
+			                                      : StringUtil::Format("norm tag '%s' is not modelled", order));
+			return;
 		} else if (name == "sum") {
 			part.reducer = DirectReducer::SUM;
 		} else if (name == "avg") {
@@ -271,9 +269,6 @@ private:
 			fact.comparison = ExpressionType::COMPARE_IN;
 			fact.degree = 1;
 			fact.lhs.push_back(ReadRowPart(*membership.children[0]));
-			for (idx_t i = 1; i < membership.children.size(); i++) {
-				fact.members.push_back(membership.children[i]->Copy());
-			}
 		} else if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			auto &comparison = leaf.Cast<BoundComparisonExpression>();
 			fact.comparison = comparison.type;
@@ -288,9 +283,6 @@ private:
 				fact.lhs.push_back(ReadRowPart(*comparison.left));
 			}
 			fact.rhs = comparison.right->Copy();
-			fact.rhs_provenance = comparison.right->IsFoldable()                               ? DirectProvenance::CONSTANT
-			                      : HasDecideTag(comparison.right->GetAlias(), QUERY_WIDE_BOUND_TAG) ? DirectProvenance::QUERY_WIDE
-			                                                                                  : DirectProvenance::ROW_VARYING;
 			fact.degree = DecideExpressionDegree(*comparison.left, decide.decide_index).degree;
 			// Absorption never reads a clause under a WHEN: `x <= 0 WHEN c` does not bound `x` everywhere.
 			fact.variable_bound = !wrappers.when && DecideBoundIsAbsorbed(context, decide, comparison);

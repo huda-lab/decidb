@@ -120,6 +120,29 @@ def test_null_score_error_quotes_the_score(decidb_cli):
 
 
 @pytest.mark.correctness
+@pytest.mark.parametrize("bad", ["'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
+def test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in(decidb_cli, bad):
+    # A bad number is reported with the noun of the clause that holds it, in both modes. `at row N` is left out of the
+    # direct message on purpose, so the two are not compared whole.
+    def error(constraint_expression, objective_expression, mode):
+        sql = f"""
+            SELECT id, x FROM (
+                FROM (VALUES (1, 1.0, 1.0), (2, 2.0, {bad}), (3, 3.0, 1.0)) t(id, s, w)
+                DECIDE x(REAL) SUCH THAT {constraint_expression} <= 5 MAXIMIZE SUM({objective_expression})
+            ) q
+        """
+        return _raw(decidb_cli, sql, mode=mode).stderr
+
+    for mode in ("require", "off"):
+        in_constraint = error("w * x", "s * x", mode)
+        assert "constraint coefficient contains invalid value" in in_constraint, (mode, in_constraint)
+        assert "objective coefficient" not in in_constraint, (mode, in_constraint)
+        in_objective = error("x", "w * x", mode)
+        assert "objective coefficient contains invalid value" in in_objective, (mode, in_objective)
+        assert "constraint coefficient" not in in_objective, (mode, in_objective)
+
+
+@pytest.mark.correctness
 def test_s1_null_source_bound_error_names_the_column(decidb_cli):
     """A NULL or NaN bound is reported with the column, then COALESCE or WHERE. The wording is direct solve's own."""
 

@@ -12,8 +12,8 @@ from dataclasses import dataclass
 # Per-row bounds on x with no WHEN that S1 leaves on the solver, as (comparison, constant). The solver reads these as
 # bounds on the variable, not as arithmetic on a Boolean: a negative lower bound makes x signed (the result holds
 # -3, -1, ...), and a bound that cannot hold raises a message naming the clause. A strict bound against a fraction is
-# also left there (the solver rounds it correctly now; S1 has not been widened to admit it). The same bounds with a
-# WHEN are plain arithmetic and are admitted.
+# admitted when it shifts to a whole bound inside {0, 1} (`x > 0.5`, `x < 1.5`, `x < 0.5`, `x > -0.5`): the solver
+# shifts it with the same function. The same bounds with a WHEN are plain arithmetic and are admitted.
 S1_SOLVER_ONLY_ROW_BOUNDS = {
     ("<=", "-3"),
     ("<=", "-1"),
@@ -22,16 +22,12 @@ S1_SOLVER_ONLY_ROW_BOUNDS = {
     ("<", "-1"),
     ("<", "-0.5"),
     ("<", "0"),
-    ("<", "0.5"),
-    ("<", "1.5"),
     (">=", "-3"),
     (">=", "-1"),
     (">=", "-0.5"),
     (">=", "1.5"),
     (">=", "2"),
     (">", "-3"),
-    (">", "-0.5"),
-    (">", "0.5"),
     (">", "1"),
     (">", "1.5"),
     (">", "2"),
@@ -49,6 +45,12 @@ class RuleFixture:
     rule: str
     #: A query the rule proves, ordered so its rows are comparable, with one optimal assignment.
     hit: str
+    #: The `hit` query over a source with no rows. The solver answers it, so the rule must give its outcome.
+    empty_hit: str
+    #: Queries whose constant bound contradicts the decision's built-in domain (`x <= -1` on a decision that cannot
+    #: be negative, `BOOL x >= 2`), over an empty source and over a source with rows. The solver rejects every one
+    #: before it reads a row. A rule either declines them or gives the solver's outcome.
+    impossible_bound_hits: tuple
     #: SQL that creates a temporary table, then a query the rule proves over it. The suite
     #: prepares the query, changes the table, and checks the plan is rebuilt.
     table_setup: str
@@ -77,6 +79,26 @@ S1 = RuleFixture(
             MAXIMIZE SUM(score * x)
         ) q ORDER BY id
     """,
+    empty_hit="""
+        SELECT id, score, x FROM (
+            FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('9.0' AS DOUBLE))) t(id, score)
+                  WHERE false) t
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1
+            MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+    """,
+    impossible_bound_hits=tuple(
+        f"""
+        SELECT id, score, x FROM (
+            FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('9.0' AS DOUBLE))) t(id, score)
+                  WHERE {where}) t
+            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 AND {bound}
+            MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+        """
+        for where in ("false", "true")
+        for bound in ("x <= -1", "x >= 2")
+    ),
     table_setup="""
         CREATE TEMP TABLE direct_life(id INTEGER, score DOUBLE);
         INSERT INTO direct_life VALUES (1,2),(2,9);
@@ -196,6 +218,30 @@ A1 = RuleFixture(
             MAXIMIZE SUM(score * x)
         ) q ORDER BY id
     """,
+    empty_hit="""
+        SELECT id, score, cap, x FROM (
+            FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE), 3), (1, CAST('-1.0' AS DOUBLE), 5)) t(id, score, cap)
+                  WHERE false) t
+            DECIDE x(INT) SUCH THAT x BETWEEN 0 AND cap
+            MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+    """,
+    impossible_bound_hits=tuple(
+        f"""
+        SELECT id, score, cap, x FROM (
+            FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE), 3), (1, CAST('-1.0' AS DOUBLE), 5)) t(id, score, cap)
+                  WHERE {where}) t
+            DECIDE {declaration} SUCH THAT {bound}
+            MAXIMIZE SUM(score * x)
+        ) q ORDER BY id
+        """
+        for where in ("false", "true")
+        for declaration, bound in (
+            ("x(INT)", "x <= -1"),
+            ("x(REAL)", "x <= -0.5"),
+            ("x(BOOL)", "x >= 2"),
+        )
+    ),
     table_setup="""
         CREATE TEMP TABLE direct_a1_life(id INTEGER, score DOUBLE, cap INTEGER);
         INSERT INTO direct_a1_life VALUES (1,2,3),(2,-1,5);

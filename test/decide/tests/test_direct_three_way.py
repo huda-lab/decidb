@@ -330,7 +330,7 @@ for _op, _bound in itertools.product(("<=", "<", ">=", ">", "="), ("COUNT(*) / 2
         "sense": "MINIMIZE" if _op in (">", ">=") else "MAXIMIZE",
     }
 
-_ROWBOUND_CONSTANTS = ("-1", "0", "0.5", "1", "2")
+_ROWBOUND_CONSTANTS = ("-1", "-0.5", "0", "0.5", "1", "1.5", "2")
 for _op, _constant in itertools.product(_OPNAMES, _ROWBOUND_CONSTANTS):
     S1_CASES[f"x_{_OPNAMES[_op]}_{_tag(_constant)}_when"] = {
         "bounds": [("<=", 3)],
@@ -582,6 +582,35 @@ def _agree(decidb_cli, oracle_solver, case, wrap="plain"):
 @pytest.mark.parametrize("name", sorted(S1_CASES))
 def test_s1_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
     _agree(decidb_cli, oracle_solver, S1_CASES[name])
+
+
+# A strict bound against a fraction, with no WHEN, is a bound on the variable that the solver shifts to a whole number
+# (`x > 0.5` is `x >= 1`, `x < 1.5` is `x <= 1`, `x < 0.5` is `x <= 0`, `x > -0.5` is `x >= 0`). S1 shifts it the
+# same way, so the oracle, `off`, `require` and `auto` all give the same answer, and `auto` takes the direct path.
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("op,constant", [(">", 0.5), ("<", 1.5), ("<", 0.5), (">", -0.5)])
+@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
+@pytest.mark.parametrize("limit", [4, 50])
+def test_s1_strict_bound_against_a_fraction_agrees_under_every_mode(
+    decidb_cli, oracle_solver, op, constant, sense, limit
+):
+    # With the limit of 4 the bound `x > 0.5` (every row selected) is infeasible: every mode must say so.
+    case = {"bounds": [("<=", limit)], "rowbounds": [(op, constant, None)], "sense": sense}
+    _agree(decidb_cli, oracle_solver, case)
+    sql = _wrapped_sql(case, "plain")
+
+    def outcome(mode):
+        try:
+            return "ok", _run(decidb_cli, sql, mode)
+        except DecidBCliError as error:
+            return "error", error_class(str(error))
+
+    assert outcome("auto") == outcome("require")
+    assert outcome("auto")[0] == outcome("off")[0]
+    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='auto'; EXPLAIN {sql}").stdout
+    assert "S1_CARDINALITY_INTERVAL" in plan, plan
 
 
 # The same problem inside a parent query. The first base case meets every context; the others meet one each,

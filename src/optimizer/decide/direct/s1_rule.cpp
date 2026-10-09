@@ -201,17 +201,13 @@ bool SatisfiesComparison(ExpressionType comparison, double value, double bound) 
 //! The solver reads a bound with a WHEN as a per-row constraint and applies plain arithmetic to it. A bound without a
 //! WHEN is a bound on the variable itself, and the solver reads some spellings of those differently from arithmetic on
 //! a Boolean: a negative lower bound makes `x` signed, so the result can hold -3, and a bound that cannot hold raises a
-//! message naming the clause rather than DECIDE's infeasible error. Those spellings stay on the solver. A strict bound
-//! against a fraction (`x > 0.5`) also stays there: the solver now rounds it to the right whole value, but this rule
-//! has not been widened to admit it. False for all of them.
+//! message naming the clause rather than DECIDE's infeasible error. Those spellings stay on the solver: false for all
+//! of them. A strict bound is shifted to a whole number first, with the solver's own function, so `x > 0.5` is the
+//! lower bound 1 and `x < 1.5` the upper bound 1 here as there; for a variable that is 0 or 1 that is the same as the
+//! comparison itself.
 bool ConstantPinDomain(const DirectConstraintFact &fact, double bound, PinDomain &domain) {
 	auto comparison = fact.comparison;
 	if (!fact.scope.when && comparison != ExpressionType::COMPARE_NOTEQUAL) {
-		bool strict =
-		    comparison == ExpressionType::COMPARE_GREATERTHAN || comparison == ExpressionType::COMPARE_LESSTHAN;
-		if (strict && bound != std::floor(bound)) {
-			return false;
-		}
 		bool has_lower = comparison == ExpressionType::COMPARE_GREATERTHAN ||
 		                 comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
 		                 comparison == ExpressionType::COMPARE_EQUAL;
@@ -573,7 +569,7 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 			if (!ConstantPinDomain(*factor, constant, domain)) {
 				reason =
 				    "constraint_shape: an unconditional bound on x that the solver reads differently from a Boolean "
-				    "(negative lower bound, fractional strict bound, or a bound that cannot hold)";
+				    "(negative lower bound, or a bound that cannot hold)";
 				return false;
 			}
 			// Both values allowed is no constraint. Neither allowed fixes the row to both, which the plan reports as
@@ -1160,8 +1156,8 @@ private:
 	//! Stage 5: validate the score, rank rows within their scope, and raise the infeasibility error when the
 	//! bounds, pins, and row counts cannot all hold.
 	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score, const BoundChecks &bounds) const {
-		auto guard = make_uniq<LogicalFilter>(
-		    DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, score_binding, proof.score_text));
+		auto guard = make_uniq<LogicalFilter>(DirectValidNumberPredicate(
+		    optimizer, LogicalType::DOUBLE, score_binding, proof.score_text, DirectNumberKind::OBJECTIVE));
 		guard->children.push_back(std::move(score));
 		auto rank = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr,
 		                                             nullptr);

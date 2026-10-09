@@ -3,6 +3,7 @@
 
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 using namespace duckdb;
@@ -30,11 +31,25 @@ struct QueryFacts {
 			con.BeginTransaction();
 		}
 		plan = con.ExtractPlan(sql);
-		auto decide = FindDirectFactsInput(*plan);
+		decide = FindDirectFactsInput(*plan);
 		REQUIRE(decide != nullptr);
-		facts = DirectProblemFacts::Read(*con.context, *decide);
+		client = con.context.get();
+		facts = DirectProblemFacts::Read(*client, *decide);
+	}
+	//! Rewrites every norm tag in the constraints to `payload` and reads the facts again.
+	void RetagNorms(const string &payload) {
+		ExpressionIterator::EnumerateExpression(decide->decide_constraints, [&](Expression &expression) {
+			string old_payload;
+			if (ExtractDecideTagPayload(expression.alias, NORM_MARKER_TAG_PREFIX, old_payload)) {
+				RemoveDecideTag(expression.alias, string(NORM_MARKER_TAG_PREFIX) + old_payload + "__");
+				AddDecideTag(expression.alias, string(NORM_MARKER_TAG_PREFIX) + payload + "__");
+			}
+		});
+		facts = DirectProblemFacts::Read(*client, *decide);
 	}
 	duckdb::unique_ptr<LogicalOperator> plan;
+	LogicalDecide *decide = nullptr;
+	ClientContext *client = nullptr;
 	DirectProblemFacts facts;
 };
 
@@ -311,13 +326,9 @@ TEST_CASE("Direct-solve facts model comparisons, membership, and right-hand side
 	REQUIRE(constraints[0].lhs.size() == 1);
 	REQUIRE(constraints[0].lhs[0].reducer == DirectReducer::NONE);
 	REQUIRE(constraints[0].lhs[0].terms.size() == 2);
-	REQUIRE(constraints[0].rhs_provenance == DirectProvenance::CONSTANT);
 	REQUIRE(constraints[1].comparison == ExpressionType::COMPARE_NOTEQUAL);
 	REQUIRE(constraints[2].comparison == ExpressionType::COMPARE_IN);
-	REQUIRE(constraints[2].members.size() == 2);
 	REQUIRE(constraints[3].aggregate);
-	REQUIRE(constraints[3].rhs_provenance == DirectProvenance::ROW_VARYING);
-	REQUIRE(constraints[4].rhs_provenance == DirectProvenance::QUERY_WIDE);
 	// BETWEEN is two written comparisons, each with its own clause.
 	REQUIRE(constraints[6].source_clause_id == constraints[5].source_clause_id + 1);
 	REQUIRE(constraints[5].comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO);
@@ -334,9 +345,10 @@ TEST_CASE("Direct-solve facts model reducers, filters, qualifiers, scales and no
 	                                 "MINIMIZE SUM(w*y)"));
 	auto &constraints = query.facts.constraints;
 	REQUIRE(constraints.size() == 8);
-	for (auto &constraint : constraints) {
-		REQUIRE(constraint.status == DirectFactStatus::KNOWN);
-		REQUIRE(constraint.lhs.size() == 1);
+	for (idx_t i = 0; i < constraints.size(); i++) {
+		// `norm(y, 0)` needs indicator variables: it reads as an unknown part, not as a reducer.
+		REQUIRE(constraints[i].status == (i == 6 ? DirectFactStatus::UNKNOWN : DirectFactStatus::KNOWN));
+		REQUIRE(constraints[i].lhs.size() == 1);
 	}
 	REQUIRE(constraints[0].lhs[0].reducer == DirectReducer::AVG);
 	REQUIRE(constraints[1].lhs[0].reducer == DirectReducer::MIN);
@@ -344,13 +356,31 @@ TEST_CASE("Direct-solve facts model reducers, filters, qualifiers, scales and no
 	REQUIRE(constraints[3].lhs[0].filter != nullptr);
 	REQUIRE(constraints[4].lhs[0].qualifier == 0);
 	REQUIRE(constraints[5].lhs[0].scale != nullptr);
-	REQUIRE(constraints[6].lhs[0].reducer == DirectReducer::COUNT_NONZERO);
-	REQUIRE(constraints[6].lhs[0].l0_tolerance > 0);
-	REQUIRE(constraints[6].lhs[0].l0_bound == 0);
+	REQUIRE(constraints[6].lhs[0].status == DirectFactStatus::UNKNOWN);
+	REQUIRE(constraints[6].lhs[0].reason == "norm of order 0 is not modelled");
+	REQUIRE(constraints[6].reason == constraints[6].lhs[0].reason);
 	// L1 reads as its definition: SUM of an absolute value.
 	REQUIRE(constraints[7].lhs[0].reducer == DirectReducer::SUM);
 	REQUIRE(constraints[7].lhs[0].terms.size() == 1);
 	REQUIRE(constraints[7].lhs[0].terms[0].kind == DecideTermKind::ABS);
+}
+
+TEST_CASE("Direct-solve facts read an unexpected norm tag as an unknown part, never an exception", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	QueryFacts query(con, FactsQuery("y(INT)", "norm(y, 0) <= 2", "MINIMIZE SUM(w*y)"));
+	REQUIRE(query.facts.constraints.size() == 1);
+	REQUIRE(query.facts.constraints[0].status == DirectFactStatus::UNKNOWN);
+	// An order canonicalization would have expanded, a malformed order 0, and a tag that is not a number.
+	for (string payload : {"2", "0_not_a_number", "garbage"}) {
+		DYNAMIC_SECTION("payload '" << payload << "'") {
+			REQUIRE_NOTHROW(query.RetagNorms(payload));
+			auto &constraint = query.facts.constraints[0];
+			REQUIRE(constraint.status == DirectFactStatus::UNKNOWN);
+			REQUIRE(constraint.lhs[0].status == DirectFactStatus::UNKNOWN);
+			REQUIRE(!constraint.lhs[0].reason.empty());
+		}
+	}
 }
 
 TEST_CASE("Direct-solve facts model products, squares, and nested objective reducers", "[decidb]") {

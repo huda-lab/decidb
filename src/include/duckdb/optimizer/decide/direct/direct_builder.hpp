@@ -52,10 +52,14 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer);
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
                                                  const string &column_name);
 
-//! Evaluates to true for a finite score and raises an error for a NULL or non-finite one. A NULL score's message
-//! quotes `score_text`, or stays generic when that is empty.
-unique_ptr<Expression> DirectValidScorePredicate(Optimizer &optimizer, const LogicalType &score_type,
-                                                 ColumnBinding score_binding, const string &score_text);
+//! Which clause a number belongs to, so an error names the object the user wrote.
+enum class DirectNumberKind : uint8_t { OBJECTIVE, CONSTRAINT };
+
+//! Evaluates to true for a finite number and raises an error for a NULL or non-finite one. A NULL number's message
+//! quotes `number_text`, or stays generic when that is empty. The NaN and infinity message names `kind`.
+unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
+                                                  ColumnBinding number_binding, const string &number_text,
+                                                  DirectNumberKind kind);
 
 //! A plan that releases no row before `valid` has been evaluated on every input row.
 struct DirectBarrier {

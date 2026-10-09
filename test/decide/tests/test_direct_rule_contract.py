@@ -11,6 +11,9 @@ import re
 
 import pytest
 
+from decidb_cli import DecidBCliError
+
+from ._direct_differential import error_class
 from ._direct_rule_fixtures import RULE_FIXTURES, late_error_cases, near_miss_cases
 
 
@@ -33,6 +36,14 @@ def _has_decide_operator(plan):
     # The operator's box title. A plain substring test would also match the DECIDE: prefix of the error text that
     # a direct plan carries.
     return re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan) is not None
+
+
+def _outcome(cli, sql, mode):
+    """("ok", rows) or ("error", class of the message). The rows may be empty."""
+    try:
+        return "ok", _run(cli, sql, mode)[0]
+    except DecidBCliError as error:
+        return "error", error_class(str(error))
 
 
 _RULES = pytest.mark.parametrize("fixture", RULE_FIXTURES, ids=lambda fixture: fixture.rule)
@@ -61,6 +72,39 @@ def test_hit_keeps_the_decide_schema_and_rows(decidb_cli, fixture):
     assert direct_rows == solver_rows
     plan = _raw(decidb_cli, f"EXPLAIN {fixture.hit}").stdout
     assert f"{fixture.rule}" in plan and not _has_decide_operator(plan)
+
+
+@pytest.mark.correctness
+@_RULES
+def test_empty_source_gives_the_solvers_outcome(decidb_cli, fixture):
+    # The solver answers an empty source, and it must also give the same outcome under every mode. The rule proves
+    # this query, so `require` is not allowed to decline it.
+    solver = _outcome(decidb_cli, fixture.empty_hit, "off")
+    assert solver == ("ok", []), solver
+    assert _outcome(decidb_cli, fixture.empty_hit, "auto") == solver
+    assert _outcome(decidb_cli, fixture.empty_hit, "require") == solver
+    plan = _raw(decidb_cli, f"EXPLAIN {fixture.empty_hit}").stdout
+    assert f"{fixture.rule}" in plan and not _has_decide_operator(plan)
+
+
+def _impossible_bound_cases():
+    return [(fixture, sql) for fixture in RULE_FIXTURES for sql in fixture.impossible_bound_hits]
+
+
+_IMPOSSIBLE_BOUNDS = _impossible_bound_cases()
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("fixture,sql", _IMPOSSIBLE_BOUNDS, ids=_case_ids(_IMPOSSIBLE_BOUNDS))
+def test_impossible_constant_bound_gives_the_solvers_outcome(decidb_cli, fixture, sql):
+    # The solver rejects a constant bound that contradicts the decision's domain before it reads any row, so it
+    # raises on an empty source too. A rule may decline such a query (the solver path then answers) but must never
+    # answer it with rows or with an empty result of its own.
+    solver = _outcome(decidb_cli, sql, "off")
+    assert solver[0] == "error", (sql, solver)
+    assert _outcome(decidb_cli, sql, "auto") == solver, sql
+    required = _outcome(decidb_cli, sql, "require")
+    assert required in (solver, ("error", "direct_miss")), (sql, required, solver)
 
 
 @pytest.mark.correctness

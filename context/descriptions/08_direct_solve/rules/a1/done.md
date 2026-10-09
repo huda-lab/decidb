@@ -29,8 +29,8 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   rounds the wrong way. A strict bound against a fraction (`x > 0.5`, `x < 2.5`, no `WHEN`) rounds to the first whole
   value inside it (1 and 2). The solver and A1 take that shift from one function (`DecideStrictBound`), so they agree;
   on a `BOOL`, A1 and the solver now both answer `BOOL x > 0.5` with `x = 1`. The six cases are in `SOLVER_OFF_BY_ONE`
-  (`test_direct_a1.py`), checked against the oracle on both paths. S1 still leaves a strict bound against a fraction on
-  a `BOOL` to the solver.
+  (`test_direct_a1.py`), checked against the oracle on both paths. S1 admits the same bounds on a `BOOL`
+  (`x > 0.5`, `x < 1.5`) with the same shift.
 - **Objective.** `MINIMIZE`, `MAXIMIZE`, or none (the lowest allowed value). Signed `SUM` parts, each with an optional
   constant factor or divisor and an optional `WHEN`, plus an optional objective-level `WHEN`. Terms: a row-valued
   coefficient times a decision, a per-row constant, and at most one square `k*(w*x + t)^2`, where `k` is a nonzero

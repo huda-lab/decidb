@@ -58,9 +58,7 @@ enum class DirectReducer : uint8_t {
 	SUM,
 	AVG,
 	MIN,
-	MAX,
-	//! `norm(e, 0)`: the number of rows whose |e| reaches `l0_tolerance`.
-	COUNT_NONZERO
+	MAX
 };
 
 //! One additive part of a constraint's left side or of the objective: `sign * scale * reducer(terms)`.
@@ -76,15 +74,10 @@ struct DirectPart {
 	unique_ptr<Expression> filter;
 	//! Entity scope the reducer is qualified by (`SUM(D: e)`), or INVALID_INDEX.
 	idx_t qualifier = DConstants::INVALID_INDEX;
-	double l0_tolerance = 0;
-	//! COUNT_NONZERO: the user's bound on |e|, or 0 when it is inferred from the data.
-	double l0_bound = 0;
 	//! The body's terms. Empty when `inner` holds a nested reducer (`OUTER(INNER(e)) PER k` objectives).
 	vector<DecideSplitTerm> terms;
 	unique_ptr<DirectPart> inner;
 };
-
-enum class DirectProvenance : uint8_t { CONSTANT, QUERY_WIDE, ROW_VARYING };
 
 //! Which rows a constraint or objective applies to. PER keys exclude NULL rows; WHEN false or NULL rows do not
 //! join.
@@ -107,13 +100,10 @@ struct DirectConstraintFact {
 	ExpressionType comparison = ExpressionType::INVALID;
 	vector<DirectPart> lhs;
 	unique_ptr<Expression> rhs;
-	DirectProvenance rhs_provenance = DirectProvenance::ROW_VARYING;
 	//! True when the solver path folds this clause into its decision's box (see DecideBoundIsAbsorbed): an
 	//! unconditional comparison of one bare decision against a finite constant. Such a bound replaces the variable's
 	//! default lower bound of 0, where every other bound only intersects with it.
 	bool variable_bound = false;
-	//! COMPARE_IN: the allowed values.
-	vector<unique_ptr<Expression>> members;
 	DirectScopeFact scope;
 	idx_t degree = 0;
 

@@ -37,6 +37,21 @@ _NORM_OBJECTIVES = {
 _DOMAIN_RESTATEMENTS = ["x <= 1", "x >= 0", "x < 2", "x > -1", "x <> 2", "x BETWEEN 0 AND 1"]
 
 
+def _empty_source(source):
+    """The same VALUES with every row filtered out: the solver answers (or rejects) an empty source too."""
+    return f"(SELECT * FROM {source} WHERE false) empty_t"
+
+
+# Constant bounds that contradict the decision's built-in domain. The solver rejects them before reading a row, so it
+# raises on an empty source as well.
+_S1_IMPOSSIBLE_BOUNDS = ["x <= -1", "x >= 2", "x < 0", "x > 1"]
+
+
+# Strict bounds against a fraction, with no WHEN. Each shifts to a whole bound inside {0, 1}, so S1 admits it: 0.5 gives
+# the lower bound 1, 1.5 and 0.5 give the upper bounds 1 and 0.
+_S1_STRICT_FRACTION_BOUNDS = ["x > 0.5", "x < 1.5", "x < 0.5", "x > -0.5"]
+
+
 def _fuzz_rowbound(rng):
     """One per-row bound on x: a 0/1 pin, a restated domain, or any constant bound on one row."""
     kind = rng.choice(["pin", "pin", "restate", "constant", "column"])
@@ -83,6 +98,13 @@ def _fuzz_query(rng):
     objectives = _NORM_OBJECTIVES if near_miss == "objective" else _OBJECTIVES
     objective = rng.choice(sorted(objectives))
     sense = rng.choice(["MAXIMIZE", "MINIMIZE"])
+    # Drawn last, so adding them left every earlier choice of a seed as it was.
+    if rng.random() < 0.1:
+        source = _empty_source(source)
+    if rng.random() < 0.08:
+        clauses.append(rng.choice(_S1_IMPOSSIBLE_BOUNDS))
+    if rng.random() < 0.12:
+        clauses.append(rng.choice(_S1_STRICT_FRACTION_BOUNDS))
     sql = (
         f"WITH r AS (SELECT * FROM {source} DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)} "
         f"{sense} {objective}) SELECT count(*), {objectives[objective]} FROM r"
@@ -107,6 +129,13 @@ def test_direct_s1_seeded_fuzz_matches_solver_path(decidb_cli, seed):
 # ---------------------------------------------------------------------------
 # A1: independent bounded decisions
 # ---------------------------------------------------------------------------
+
+
+_A1_IMPOSSIBLE_BOUNDS = {
+    "REAL": ["x <= -1", "x <= -0.5"],
+    "INT": ["x <= -1", "x < 0"],
+    "BOOL": ["x >= 2", "x > 1", "x BETWEEN 2 AND 3", "x <= -1"],
+}
 
 
 def _a1_rows(rng):
@@ -189,6 +218,11 @@ def _a1_query(rng):
         objective = f"{sense} SUM({body}){when}"
         if near_miss == "two_squares":
             objective += " + SUM(POWER(x - c, 2))"
+    # Drawn last, so adding them left every earlier choice of a seed as it was.
+    if rng.random() < 0.1:
+        source = _empty_source(source)
+    if rng.random() < 0.08:
+        clauses.append(rng.choice(_A1_IMPOSSIBLE_BOUNDS[domain]))
     sql = (
         f"WITH r AS (SELECT * FROM {source} DECIDE x({domain}) SUCH THAT {' AND '.join(clauses)} {objective}) "
         f"SELECT count(*), sum({per_row}) FROM r"

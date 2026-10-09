@@ -848,8 +848,8 @@ private:
 				columns.has_when = true;
 				columns.when = p1.Add(DirectActiveWhen(clause.when.get()));
 			}
-			checks.push_back(DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, columns.coefficient,
-			                                           clause.coefficient_text));
+			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, columns.coefficient,
+			                                            clause.coefficient_text, DirectNumberKind::CONSTRAINT));
 			checks.push_back(DirectValidBoundPredicate(optimizer, columns.rhs, clause.rhs_column));
 			raw.clauses.push_back(columns);
 		}
@@ -908,12 +908,13 @@ private:
 				square.decision = term.decision;
 				square.scale = term.sign * term.square_scale;
 				square.linear = p1.Add(SumOf(term.inner_linear));
-				checks.push_back(DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, square.linear,
-				                                           TextOf(term.inner_linear)));
+				checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.linear,
+				                                            TextOf(term.inner_linear), DirectNumberKind::OBJECTIVE));
 				if (!term.inner_constant.empty()) {
 					square.constant = p1.Add(SumOf(term.inner_constant));
-					checks.push_back(DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, square.constant,
-					                                           TextOf(term.inner_constant)));
+					checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.constant,
+					                                            TextOf(term.inner_constant),
+					                                            DirectNumberKind::OBJECTIVE));
 				} else {
 					square.constant = p1.Add(make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)));
 				}
@@ -925,15 +926,17 @@ private:
 				continue;
 			}
 			auto binding = p1.Add(std::move(linear_sums[d]));
-			checks.push_back(DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, binding,
-			                                           linear_count[d] == 1 ? linear_text[d] : string()));
+			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding,
+			                                            linear_count[d] == 1 ? linear_text[d] : string(),
+			                                            DirectNumberKind::OBJECTIVE));
 			columns.linear_decision.push_back(d);
 			columns.linear.push_back(binding);
 		}
 		if (constant_sum) {
 			auto binding = p1.Add(std::move(constant_sum));
-			checks.push_back(DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, binding,
-			                                           constant_count == 1 ? constant_text : string()));
+			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding,
+			                                            constant_count == 1 ? constant_text : string(),
+			                                            DirectNumberKind::OBJECTIVE));
 		}
 	}
 
@@ -1136,8 +1139,10 @@ private:
 			auto value = [&]() {
 				return DirectColumn(LogicalType::DOUBLE, answers.value[d]);
 			};
-			checks.push_back(DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, answers.a[d], string()));
-			checks.push_back(DirectValidScorePredicate(optimizer, LogicalType::DOUBLE, answers.b[d], string()));
+			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.a[d], string(),
+			                                            DirectNumberKind::OBJECTIVE));
+			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.b[d], string(),
+			                                            DirectNumberKind::OBJECTIVE));
 			checks.push_back(make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, answers.infeasible[d]),
 			                                                DirectInfeasibleErrorPredicate(optimizer),
 			                                                DirectConstantBool(true)));

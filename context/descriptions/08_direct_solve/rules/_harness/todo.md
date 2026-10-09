@@ -4,16 +4,17 @@ The engine is everything that is not one problem class: facts, coordinator, buil
 tasks live here. When a task ships, its result moves to `done.md` and the task is deleted from this file. H-01 (a second
 rule) shipped on 2026-10-06. Old IDs are in parentheses so earlier notes still make sense.
 
-H-04 to H-13 come from a full review of the direct-solve layer on 2026-10-07. S1 and A1 tasks from the same review are in
-`../s1/todo.md` (S1-10 to S1-13) and `../a1/todo.md` (A1-05 to A1-07).
+H-04 to H-13 come from a full review of the direct-solve layer on 2026-10-07; H-04, H-05 and H-06 shipped on 2026-10-09
+(session 2, with A1-06 and S1-14). S1 and A1 tasks from the same review are in `../s1/todo.md` (S1-10 to S1-13) and
+`../a1/todo.md` (A1-05 and A1-07).
 
 ## How to work any task in these three todo files
 
 - Each task stands alone. Read its **Problem**, make the change, run the checks, then move the result to `done.md`.
-- Baseline on 2026-10-09 (working tree on top of `00c08dfb7e`, not committed): `make decide-test`,
-  `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each give 2,269 passed
-  (no failures, no expected failures). `DECIDB_FORCE_SOLVER=highs make decide-test` gives 2,268 passed and the one
-  expected failure. C++ `build/release/test/unittest "[decidb]"` passes (1,227 assertions in 39 cases). Any other
+- Baseline on 2026-10-09 (working tree on top of `82715d43b0`, not committed, after session 2): `make decide-test`,
+  `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each give 2,314 passed
+  (no failures, no expected failures). `DECIDB_FORCE_SOLVER=highs make decide-test` gives 2,313 passed and the one
+  expected failure. C++ `build/release/test/unittest "[decidb]"` passes (1,247 assertions in 40 cases). Any other
   failure after your change is yours.
 - Checks that every code task runs (from the repository root, about 30 seconds each): `make decide-test`,
   `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
@@ -31,90 +32,10 @@ H-04 to H-13 come from a full review of the direct-solve layer on 2026-10-07. S1
 | Batch | Tasks | What it gets you |
 |---|---|---|
 | 1. Green and honest | A1-05 (re-stamp only; A1-01 and A1-04 shipped on 2026-10-09) | The A1 stamps match a run. About 15 minutes. |
-| 2. Safety | H-04, H-05, H-06, A1-06 | Closes the test gap that hid a bug, removes a way for the optional layer to break a query, fixes one wrong error message. About 3 hours. |
+| 2. Safety | done 2026-10-09 (H-04, H-05, H-06, A1-06, S1-14) | The empty-source test gap is closed, reading facts cannot throw, the NaN message names the right clause. |
 | 3. Trim | H-09, H-10, H-11, S1-11, A1-07 | Removes code nobody uses, with no behavior change. About 3 hours. |
 | 4. Structure | H-07 part 2 (needs a decision), H-08, S1-10 (needs a decision), S1-13, H-12 | One mechanism for the solver's quirks, reusable tests, current measurements. Larger diffs. |
 | Later | S1-12, H-13, A1-03 | Wait for a third per-row rule, or for one measurement. |
-
-## H-04 — No test makes a rule face an empty source
-
-- **Problem.** Every rule must give the solver's outcome on an empty source: no rows, or the same error. Nothing in the
-  shared tests checks this. The fuzz generators (`test_direct_fuzz.py`) never produce an empty table or an impossible
-  constant bound (`x <= -1` on a decision that cannot be negative). That is how a bug in A1 passed every test: a check
-  meant to hand such problems to the solver did nothing, so on an empty table the direct path returned 0 rows while the
-  solver raised an error. The check is fixed now (2026-10-07). The test gap that hid it is not.
-- **Why it matters.** The next rule will have the same blind spot. A wrong answer on an empty input is silent.
-- **Where.** `test/decide/tests/_direct_rule_fixtures.py` (`RuleFixture`, one per rule), `test_direct_rule_contract.py`
-  (the checks every rule owes), `test_direct_fuzz.py` and its generators, `_direct_differential.py`.
-- **Plan.**
-  1. Add a field `empty_hit` to `RuleFixture`: the fixture's `hit` query over a source with no rows (`WHERE false` on the
-     same VALUES), and one for each rule (S1 and A1).
-  2. In `test_direct_rule_contract.py`, add a test that runs `empty_hit` under `auto`, `off` and `require`. All three must
-     end the same way: the same (empty) rows, or an error of the same kind. Use `error_class` from `_direct_differential.py`.
-  3. In each fuzz generator, make about one query in ten run over an empty source (add `WHERE false` to the source), and
-     make the A1 generator emit a constant bound that contradicts the default domain (`x <= -1`, `BOOL x >= 2`) now and then.
-     `compare_direct_with_solver` already requires both paths to succeed or fail together; it needs no change.
-  4. Confirm the new tests would have caught the old bug: temporarily make A1's domain check never fire (the vectors
-     `solver_lower` and `solver_upper` in `A1BoundedRule::ProveBounds`), see the test fail, and put the code back.
-- **Done when.** The contract test runs for every registered rule, the fuzz reaches empty sources and impossible bounds,
-  and the temporary break in step 4 made a test fail. About 1 hour.
-
-## H-05 — Reading the facts can throw, and several facts have no reader
-
-- **Problem.** Before any rule runs, every DECIDE query goes through `DirectProblemFacts::Read` (`direct_problem.cpp`).
-  Two lines there can throw instead of reporting "not modelled": `ReadReducer` raises an `InternalException` for an
-  unexpected `norm` tag (`DECIDE norm of order %s reached direct-solve facts`) and calls `std::stod` on a number cut from
-  the tag, which throws on a malformed string. Separately, the adapter fills in facts that no rule reads. A census on
-  2026-10-07 found no reader outside the adapter, the header and the tests for: `DirectConstraintFact::rhs_provenance`
-  (and the `DirectProvenance` enum and the `QUERY_WIDE_BOUND_TAG` check that feeds it), `DirectPart::l0_tolerance`,
-  `DirectPart::l0_bound`, `DirectReducer::COUNT_NONZERO`, and `DirectConstraintFact::members`.
-- **Why it matters.** Direct solve is an optional shortcut; no query the solver can answer should fail because the shortcut
-  could not read it. And every unused fact is code that has to stay correct as the language changes, tested only by tests
-  written for it.
-- **Where.** `src/optimizer/decide/direct/direct_problem.cpp` (`ReadReducer`, `ReadConstraint`),
-  `src/include/duckdb/optimizer/decide/direct/direct_rule.hpp`, `test/common/test_decidb_direct_facts.cpp`.
-- **Plan.**
-  1. Make `ReadReducer` never throw. A norm tag it does not expect, or a payload that does not parse, becomes
-     `MarkUnknown(part.status, part.reason, "...")` with a plain reason. Rules already decline on an unknown part.
-  2. For each field above, re-run the census before deleting it:
-     `grep -rn --include='*.cpp' --include='*.hpp' -e FIELD src` and delete it only if every hit is in
-     `direct_problem.cpp` or `direct_rule.hpp`. A norm of order 0 then becomes an unknown part (reason: "norm of order 0
-     is not modelled"), not a `COUNT_NONZERO` reducer.
-  3. Update `test_decidb_direct_facts.cpp`: delete assertions about removed fields, and add one case that feeds a bad norm
-     tag and expects an unknown part, not an exception.
-  4. Leave the entity-scope facts alone. Rules only check that there are none, but they are small and the D1 class needs them.
-- **Done when.** Reading facts cannot raise for any input the binder produces, the five fields are gone (or each has a
-  recorded reader), and all five checks pass. About 1 hour. Adding a fact back later costs a few lines.
-
-## H-06 — One error helper names the wrong thing
-
-- **Problem.** `DirectValidScorePredicate` (`direct_builder.cpp`) checks that a number is not NULL, NaN or infinite. It was
-  written for S1's objective score, but A1 also uses it for constraint coefficients, square weights and derived values. The
-  NaN message always begins `DECIDE objective coefficient contains invalid value (NaN or Infinity)`. Reproduce:
-
-  ```sql
-  CREATE TABLE t AS SELECT i AS id, i*1.0 AS s, CASE WHEN i=2 THEN 'NaN'::DOUBLE ELSE 1.0 END AS w FROM range(1,4) r(i);
-  SET decide_direct_solve='auto';
-  SELECT id,x FROM t DECIDE x(REAL) SUCH THAT w*x <= 5 MAXIMIZE SUM(s*x);
-  -- direct: "DECIDE objective coefficient contains invalid value ..."   (w is in a constraint)
-  SET decide_direct_solve='off';
-  -- solver: "DECIDE constraint coefficient contains invalid value ... at row 1"
-  ```
-
-- **Why it matters.** The message names an object the user did not write. `architecture/rules.md` says to name the object
-  the user wrote. The function's name ("score") also misleads the next rule's author.
-- **Where.** `direct_builder.cpp` and `direct_builder.hpp` (`DirectValidScorePredicate`); callers in `s1_rule.cpp`
-  (`RankAndFilterFeasibility`) and `a1_rule.cpp` (`LayoutRawValues`, `AddObjectiveValues`, `ValidAnswers`).
-- **Plan.**
-  1. Rename it `DirectValidNumberPredicate` and add a parameter `kind` (an enum: `OBJECTIVE`, `CONSTRAINT`). The text
-     `objective` or `constraint` in the NaN and infinity message comes from it. Leave the NULL message and the "Common
-     causes" text as they are: `policy.md` keeps the solver's fixed wording there and tests match `is NULL`.
-  2. S1 passes `OBJECTIVE`. A1 passes `CONSTRAINT` for clause coefficients and `OBJECTIVE` for objective values and for
-     the derived `a` and `b` of a decision.
-  3. Update the name in `rules/_harness/done.md` (the "NULL score message" bullet).
-  4. The test for the A1 case is task A1-06; do it right after this one.
-- **Done when.** The query above says `constraint coefficient` under `auto`, S1's messages are unchanged, all checks pass.
-  About 30 minutes.
 
 ## H-07 — The solver's "rejected before any row is read" rule is copied three ways
 
@@ -134,7 +55,7 @@ that does not include optimizer headers, so they were left alone.
   `SOLVER_UPPER_UNSET` in `a1_rule.cpp`, `ProveBounds`); and S1, which avoids the problem by declining some spellings
   (`ConstantPinDomain` in `s1_rule.cpp`, condition `!fact.scope.when`). The strict-bound shift was also copied
   into A1 (now shared, part 1).
-- **Why it matters.** The copy in A1 was silently dead once (see H-04), and nothing would notice if the solver's check
+- **Why it matters.** The copy in A1 was silently dead once (the empty-source tests that now guard it are in `done.md`), and nothing would notice if the solver's check
   changed. The strict-bound copy had to change in the same commit as the solver's rounding fix (A1-02), which it did.
 - **Decision needed.** Two ways to get one source of truth:
   1. *Small:* put a pure function `DecideBoxContradictsDomain(lower, upper, is_bool)` next to `DecideStrictBound` and

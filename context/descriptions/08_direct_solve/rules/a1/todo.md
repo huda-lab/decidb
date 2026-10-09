@@ -8,8 +8,8 @@ task" section first.
 **A1 is built (2026-10-06).** The class definition is met; the tasks below are decisions and follow-ups, not missing shapes.
 A review on 2026-10-07 found one wrong answer (an empty source with a bound the solver rejects before reading rows); it
 is fixed (`ProveBounds` records the box the solver sees, and the declined shapes are tested in `DECLINED_CASES` in
-`test_direct_a1.py`). A1-01, A1-02 and A1-04 shipped on 2026-10-09 and are in `done.md`. A1-05 (re-stamp) and A1-06 and
-A1-07 remain.
+`test_direct_a1.py`). A1-01, A1-02 and A1-04 shipped on 2026-10-09 and are in `done.md`. A1-06 shipped on the same day. A1-05
+(re-stamp) and A1-07 remain.
 
 ## A1-03 — A wide column read back costs memory in proportion to the input
 
@@ -34,16 +34,6 @@ A1-07 remain.
   (`test_norm_combined_l1_l2_objective`); C++ `[decidb]` 1,227 assertions in 39 cases.
 - **Done when.** No doc mentions the seven failing tests, the expected failures or A1-01, and the stamp matches a run you
   made.
-
-## A1-06 — A NaN constraint coefficient must name a constraint
-
-- **Problem.** See `../_harness/todo.md` H-06. Today A1 reports a NaN or infinite coefficient on the left of a bound as an
-  *objective* coefficient. No test checks which noun the message uses, which is how it went unnoticed.
-- **Plan.** After H-06 lands, add one test in `test_direct_user_facing.py`: a table where one row has `w = 'NaN'::DOUBLE`
-  and the query `DECIDE x(REAL) SUCH THAT w*x <= 5 MAXIMIZE SUM(s*x)`; under `require` the error must contain
-  `constraint coefficient`, and a second query with a NaN in the objective (`MAXIMIZE SUM(w*x)`) must contain
-  `objective coefficient`. Do not compare the whole message with the solver's: `at row N` is left out on purpose.
-- **Done when.** Both assertions pass.
 
 ## A1-07 — An equality bound is split in two by copying every field by hand
 

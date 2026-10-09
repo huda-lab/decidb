@@ -139,23 +139,31 @@ static unique_ptr<Expression> DirectIsNull(unique_ptr<Expression> value) {
 	return std::move(is_null);
 }
 
-//! The NULL message for a score, as an expression over the row it is evaluated on. It spells out what the solver
-//! prints for the same row: the NULL column, or the NULL columns, or the score's own text when no column is NULL.
-unique_ptr<Expression> DirectValidScorePredicate(Optimizer &optimizer, const LogicalType &score_type,
-                                                 ColumnBinding score_binding, const string &score_text) {
+//! The error for a NaN or infinite number, naming the kind of coefficient the user wrote it in.
+static unique_ptr<Expression> DirectInvalidNumberError(Optimizer &optimizer, DirectNumberKind kind) {
+	return DirectErrorPredicate(optimizer,
+	                            StringUtil::Format("DECIDE %s coefficient contains invalid value (NaN or "
+	                                               "Infinity). Common causes:\n"
+	                                               "  • Division by zero in the expression\n"
+	                                               "  • Arithmetic overflow in calculations\n"
+	                                               "  • NULL values that propagated through math "
+	                                               "operations\n"
+	                                               "Check your expressions and input data.",
+	                                               kind == DirectNumberKind::OBJECTIVE ? "objective" : "constraint"));
+}
+
+//! The NULL message for a number, as an expression over the row it is evaluated on. It spells out what the solver
+//! prints for the same row: the NULL column, or the NULL columns, or the number's own text when no column is NULL.
+unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
+                                                  ColumnBinding number_binding, const string &number_text,
+                                                  DirectNumberKind kind) {
 	const string advice = "Impute it with COALESCE(), or filter those rows out with a WHERE clause.";
-	auto null_message = score_text.empty() ? "DECIDE: a value used in the optimization is NULL. " + advice
-	                                       : StringUtil::Format("DECIDE: %s is NULL. %s", score_text, advice);
-	auto is_null = DirectIsNull(DirectColumn(score_type, score_binding));
-	auto is_finite = optimizer.BindScalarFunction("isfinite", DirectColumn(score_type, score_binding));
-	auto finite_or_error = make_uniq<BoundCaseExpression>(
-	    std::move(is_finite), DirectConstantBool(true),
-	    DirectErrorPredicate(optimizer, "DECIDE objective coefficient contains invalid value (NaN or Infinity). "
-	                                    "Common causes:\n"
-	                                    "  • Division by zero in the expression\n"
-	                                    "  • Arithmetic overflow in calculations\n"
-	                                    "  • NULL values that propagated through math operations\n"
-	                                    "Check your expressions and input data."));
+	auto null_message = number_text.empty() ? "DECIDE: a value used in the optimization is NULL. " + advice
+	                                        : StringUtil::Format("DECIDE: %s is NULL. %s", number_text, advice);
+	auto is_null = DirectIsNull(DirectColumn(number_type, number_binding));
+	auto is_finite = optimizer.BindScalarFunction("isfinite", DirectColumn(number_type, number_binding));
+	auto finite_or_error = make_uniq<BoundCaseExpression>(std::move(is_finite), DirectConstantBool(true),
+	                                                      DirectInvalidNumberError(optimizer, kind));
 	return make_uniq<BoundCaseExpression>(std::move(is_null), DirectErrorPredicate(optimizer, null_message),
 	                                      std::move(finite_or_error));
 }

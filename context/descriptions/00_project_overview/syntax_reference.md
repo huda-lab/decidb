@@ -654,8 +654,8 @@ What you may notice:
 
 - When several assignments are equally optimal, you can get a different one than the solver
   would have chosen. The objective value is the same.
-- A strict bound against a fraction on an `INT` (`x > 0.5` with no `WHEN`) is read correctly
-  (`x >= 1`); the solver currently reads it as `x >= 2`, so the two paths differ on that one shape.
+- A strict bound against a fraction on an `INT` or `BOOL` (`x > 0.5` with no `WHEN`) is read as
+  `x >= 1` on both paths.
 - `EXPLAIN` of a query it answers shows a window plan with `Direct solve` rows naming the
   rule. `EXPLAIN` of every other DECIDE query is exactly as before.
 - Errors (infeasible, NULL bound, empty `WHEN`) are raised in the same situations and worded
