@@ -30,10 +30,9 @@ path prints. To learn why a query missed, set `require`.
 
 - **Ties.** A tied query can return a different, equally optimal assignment than the solver. Tests compare row count
   and primary objective, never the tied vector.
-- **Strict bounds against a fraction.** A bare `x > 0.5` or `x < 2.5` on an `INT` or `BOOL` (no `WHEN`) is read correctly by
-  A1 (`x >= 1`, `x <= 2`). The solver reads it a whole unit off, so on that one shape `auto` and `off` return different
-  answers until the solver is fixed (`rules/a1/todo.md`, A1-02). It is the only place direct solve is right and the
-  solver is wrong.
+- **Strict bounds against a fraction.** A bare `x > 0.5` or `x < 2.5` on an `INT` or `BOOL` (no `WHEN`) gives `x >= 1`
+  and `x <= 2` on the solver and in A1, which take the shift from one function (`DecideStrictBound`). Fixed 2026-10-09;
+  before that the solver moved the bound a whole unit and `auto` and `off` differed on this shape.
 - **Error wording and error choice.** Decided 2026-10-05: direct solve owes an error on the same inputs, not the
   solver's text or the solver's pick among several errors (see `rules.md`). S1 keeps the solver's fixed messages (empty
   aggregate, non-finite score, infeasible) and words the rest plainly: a NULL score quotes the score expression, and a

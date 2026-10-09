@@ -5,15 +5,16 @@ tasks live here. When a task ships, its result moves to `done.md` and the task i
 rule) shipped on 2026-10-06. Old IDs are in parentheses so earlier notes still make sense.
 
 H-04 to H-13 come from a full review of the direct-solve layer on 2026-10-07. S1 and A1 tasks from the same review are in
-`../s1/todo.md` (S1-10 to S1-13) and `../a1/todo.md` (A1-01, A1-04 to A1-07).
+`../s1/todo.md` (S1-10 to S1-13) and `../a1/todo.md` (A1-05 to A1-07).
 
 ## How to work any task in these three todo files
 
 - Each task stands alone. Read its **Problem**, make the change, run the checks, then move the result to `done.md`.
-- Baseline on 2026-10-07 (working tree on top of `db4fc9d4f3`, not committed): `make decide-test` gives 2,260 passed,
-  6 expected failures (strict-bound cases, A1-02) and **1 failure**, `test_a1_reads_a_fractional_strict_bound_correctly[bool_strict_lower_fraction]`
-  (task A1-01 in `../a1/todo.md` explains it). `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` gives the same. C++
-  `build/release/test/unittest "[decidb]"` passes (1,227 assertions in 39 cases). Any other failure after your change is yours.
+- Baseline on 2026-10-09 (working tree on top of `00c08dfb7e`, not committed): `make decide-test`,
+  `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each give 2,269 passed
+  (no failures, no expected failures). `DECIDB_FORCE_SOLVER=highs make decide-test` gives 2,268 passed and the one
+  expected failure. C++ `build/release/test/unittest "[decidb]"` passes (1,227 assertions in 39 cases). Any other
+  failure after your change is yours.
 - Checks that every code task runs (from the repository root, about 30 seconds each): `make decide-test`,
   `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
   `DECIDB_FORCE_SOLVER=highs make decide-test` (one failure that needs Gurobi is expected: `test_norm_combined_l1_l2_objective`),
@@ -29,10 +30,10 @@ H-04 to H-13 come from a full review of the direct-solve layer on 2026-10-07. S1
 
 | Batch | Tasks | What it gets you |
 |---|---|---|
-| 1. Green and honest | A1-04 (needs a decision), A1-01, A1-05 | The suite is green again and the A1 docs match the code. About 1 hour. |
+| 1. Green and honest | A1-05 (re-stamp only; A1-01 and A1-04 shipped on 2026-10-09) | The A1 stamps match a run. About 15 minutes. |
 | 2. Safety | H-04, H-05, H-06, A1-06 | Closes the test gap that hid a bug, removes a way for the optional layer to break a query, fixes one wrong error message. About 3 hours. |
 | 3. Trim | H-09, H-10, H-11, S1-11, A1-07 | Removes code nobody uses, with no behavior change. About 3 hours. |
-| 4. Structure | H-07 (needs a decision), H-08, S1-10 (needs a decision), S1-13, H-12 | One mechanism for the solver's quirks, reusable tests, current measurements. Larger diffs. |
+| 4. Structure | H-07 part 2 (needs a decision), H-08, S1-10 (needs a decision), S1-13, H-12 | One mechanism for the solver's quirks, reusable tests, current measurements. Larger diffs. |
 | Later | S1-12, H-13, A1-03 | Wait for a third per-row rule, or for one measurement. |
 
 ## H-04 — No test makes a rule face an empty source
@@ -117,29 +118,35 @@ H-04 to H-13 come from a full review of the direct-solve layer on 2026-10-07. S1
 
 ## H-07 — The solver's "rejected before any row is read" rule is copied three ways
 
+**Part 1 done (2026-10-09), part 2 remains.** Part 1 is the strict-bound shift: `DecideStrictBound` in
+`decide_bound_absorption.{hpp,cpp}` is the one copy, and the solver (comparisons and BETWEEN sides), A1 and S1 call it.
+Part 2 is the domain test and the sentinels below: `DecideBoxContradictsDomain`, `SOLVER_LOWER_UNSET` and
+`SOLVER_UPPER_UNSET`, and S1's `ConstantPinDomain` conditions. The rest of this entry is still the plan for part 2. The
+model builder (`ilp_model_builder.cpp`, `ApplyComparisonSense` and the quadratic path) has three more hand-written
+`floor(rhs) + 1` / `ceil(rhs) - 1` copies for strict constraint rows; they are correct, and they are in a lower layer
+that does not include optimizer headers, so they were left alone.
+
 - **Problem.** The solver, before it reads any row, raises an error for a decision whose box contradicts its built-in
   domain: an upper bound below the default floor of 0, or a `BOOL` lower bound above 1
   (`physical_decide.cpp`, constructor of `DecideGlobalSinkState`, about lines 1273–1320). It raises even on an empty
   table. A rule that answered such a query itself would be wrong on an empty input. Today three places know this:
   the solver itself; A1, which copies the test and the solver's internal sentinel values (`SOLVER_LOWER_UNSET` and
   `SOLVER_UPPER_UNSET` in `a1_rule.cpp`, `ProveBounds`); and S1, which avoids the problem by declining some spellings
-  (`ConstantPinDomain` in `s1_rule.cpp`, condition `!fact.scope.when`). The solver's strict-bound shift (`x < 10` becomes
-  `x <= 9`, `x > 0.5` becomes `x >= 1.5`) is also copied into A1.
+  (`ConstantPinDomain` in `s1_rule.cpp`, condition `!fact.scope.when`). The strict-bound shift was also copied
+  into A1 (now shared, part 1).
 - **Why it matters.** The copy in A1 was silently dead once (see H-04), and nothing would notice if the solver's check
-  changed. When A1-02 fixes the solver's strict-bound rounding, A1's copy must change in the same commit or the two paths
-  disagree.
+  changed. The strict-bound copy had to change in the same commit as the solver's rounding fix (A1-02), which it did.
 - **Decision needed.** Two ways to get one source of truth:
-  1. *Small:* put two pure functions next to `DecideBoundIsAbsorbed` in `decide_bound_absorption.{hpp,cpp}`: one that
-     applies the strict shift to a bound, and one `DecideBoxContradictsDomain(lower, upper, is_bool)` that does the test.
-     `physical_decide.cpp`, A1 and S1 all call them. The sentinels live there too. About 2 hours.
+  1. *Small:* put a pure function `DecideBoxContradictsDomain(lower, upper, is_bool)` next to `DecideStrictBound` and
+     `DecideBoundIsAbsorbed` in `decide_bound_absorption.{hpp,cpp}`. `physical_decide.cpp`, A1 and S1 all call it. The
+     sentinels live there too. About 1 hour.
   2. *Large:* the facts adapter computes each decision's box and a `static_conflict` flag from the same code, so a rule
      only reads the flag. About 4 hours and changes the facts contract.
   Recommendation: option 1. It removes the copies without growing the facts. Do option 2 only if a third rule needs the box.
 - **Where.** `src/optimizer/decide/decide_bound_absorption.cpp`, `src/execution/operator/decide/physical_decide.cpp`,
   `a1_rule.cpp` (`ProveBounds`), `s1_rule.cpp` (`ConstantPinDomain`).
-- **Plan (option 1).** Add the functions; make the solver and A1 call them with no change in behavior; then make S1's
-  `ConstantPinDomain` use them in place of its hand-written conditions. Every suite stays green at each step. Do A1-04 first
-  or together, because it is the case where the copy changes visible behavior.
+- **Plan (option 1).** Add the function; make the solver and A1 call them with no change in behavior; then make S1's
+  `ConstantPinDomain` use them in place of its hand-written conditions. Every suite stays green at each step.
 - **Done when.** The sentinel values and the domain test exist once, the solver, A1 and S1 call them, and all checks pass.
 
 ## H-08 — The three-way test file is S1-only, so A1 copied it

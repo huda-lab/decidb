@@ -147,7 +147,7 @@ def _a1_bound(rng, domain):
     ]
     if domain == "INT":
         # Strict bounds against whole constants and against columns are where the solver and direct solve agree;
-        # a fractional literal is the solver's off-by-one and is left to the three-way table.
+        # a strict bound against a fractional literal is covered by the table in test_direct_a1.py.
         options += [f"x < {int(upper) + 1}", f"x > {lower - 1}", "x < c", "x > lo", "2*x < c"]
     if domain in ("BOOL", "INT"):
         options += ["x <= f", "x >= f WHEN (id > 1)"]

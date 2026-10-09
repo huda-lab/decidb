@@ -113,6 +113,9 @@ What the implementation settles beyond the catalogue text:
 > • **Objective.** `MINIMIZE`, `MAXIMIZE` or none; signed `SUM` parts with constant factors, optional `WHEN`, at most one
 > squared term whose inner weight and offset may be row-valued.
 >
+> • **Declined bound.** A bound the solver rejects before it reads any row (an upper bound below the default floor of 0,
+> or a `BOOL` lower bound above 1) is declined, so the solver reports it, on an empty source too.
+>
 > • **Errors.** An empty box on any row is infeasible; an improving direction with no finite limit on any row is unbounded;
 > an `INT` answer beyond 2^53 cannot be returned; NULL, NaN or infinite values raise on every row, including rows a
 > `WHEN` excludes.

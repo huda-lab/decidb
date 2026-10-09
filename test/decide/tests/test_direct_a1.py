@@ -14,10 +14,10 @@ constant lower bound (`x >= -3`) replaces the variable's default lower bound of 
 (a column, a WHEN, a coefficient on x) only intersects with it. `Bound.replaces_default` pins that, and the cases that
 use it are the ones that would notice if the two paths ever disagreed about it.
 
-A bare strict bound against a fractional literal on a whole-numbered decision (`x > 0.5`, `x < 2.5`) is where the solver
-is wrong: it moves the bound by a whole unit before rounding, so `x > 0.5` gives 2 and `x < 2.5` gives 1. Direct solve
-returns the right answer. Those cases are checked on the direct path against the oracle (must pass) and on the solver
-path against the oracle, where they are expected to fail until the solver is fixed (`xfail`, strict).
+A bare strict bound against a fractional literal on a whole-numbered decision (`x > 0.5`, `x < 2.5`) rounds to the first
+whole value inside the bound: `x > 0.5` gives 1 and `x < 2.5` gives 2. The solver once moved the bound by a whole unit
+before rounding and got 2 and 1; both paths now share one function for the shift (`DecideStrictBound`). Those cases are
+checked against the oracle on the direct path and on the solver path.
 
 What a result comparison cannot see (which plan ran, EXPLAIN, prepared plans, DIAGNOSE, pruning) stays in
 `test_direct_rule_contract.py`.
@@ -783,9 +783,8 @@ A1_CASES["two_decisions_one_infeasible"] = Case(
     (("x", "REAL"), ("y", "INT")),
 )
 
-# The solver is off by one on a bare strict bound against a fractional literal on a whole-numbered decision. Direct
-# solve reads these correctly, so they are checked against the oracle on the direct path (a normal test) and on the
-# solver path (an expected failure).
+# A bare strict bound against a fractional literal on a whole-numbered decision (the solver once moved it by a whole unit
+# before rounding). Checked against the oracle on the direct path and on the solver path.
 SOLVER_OFF_BY_ONE = {
     "int_strict_lower_fraction": case(
         "INT", [clause("x > 0.5", gt, const(0.5), replaces=True), clause("x <= 9", le, const(9.0))], "lin_min"
@@ -825,19 +824,7 @@ def test_a1_reads_a_fractional_strict_bound_correctly(decidb_cli, oracle_solver,
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-@pytest.mark.parametrize(
-    "name",
-    [
-        pytest.param(
-            name,
-            marks=pytest.mark.xfail(
-                strict=True,
-                reason="the solver is off by one on a bare fractional strict bound on a whole-numbered decision",
-            ),
-        )
-        for name in sorted(SOLVER_OFF_BY_ONE)
-    ],
-)
+@pytest.mark.parametrize("name", sorted(SOLVER_OFF_BY_ONE))
 def test_a1_solver_off_by_one_on_a_fractional_strict_bound(decidb_cli, oracle_solver, name):
     _agree(decidb_cli, oracle_solver, SOLVER_OFF_BY_ONE[name], modes=("off",))
 

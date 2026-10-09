@@ -142,7 +142,7 @@ class TestInfeasibleModels:
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(REAL) SUCH THAT x <= -1 MAXIMIZE SUM(x)",
-            match=r"(?i)x <= -1 cannot hold.*non-negative|DECIDE optimization is infeasible",
+            match=r"(?i)x <= -1 cannot hold.*non-negative",
         )
         oracle_solver.create_model("infeas_real_upper_below_zero")
         oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=-1.0)
@@ -158,13 +158,48 @@ class TestInfeasibleModels:
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(BOOL) SUCH THAT x >= 2 MAXIMIZE SUM(x)",
-            match=r"(?i)x >= 2 cannot hold.*BOOLEAN|DECIDE optimization is infeasible",
+            match=r"(?i)x >= 2 cannot hold.*BOOLEAN",
         )
         oracle_solver.create_model("infeas_boolean_lower_above_one")
         oracle_solver.add_variable("x", VarType.BINARY, lb=0.0, ub=1.0)
         oracle_solver.add_constraint({"x": 1.0}, ">=", 2.0, name="x_ge_2")
         oracle_solver.set_objective({"x": 1.0}, ObjSense.MAXIMIZE)
         assert oracle_solver.solve().status == SolverStatus.INFEASIBLE
+
+    def test_strict_bound_is_quoted_as_typed_in_domain_rejection(self, decidb_cli):
+        """The pre-solve rejection of a bound against the type domain quotes the clause as the
+        user wrote it. A strict `x < 0` is normalized to `x <= -1` inside the solver, but the
+        message says `x < 0`, and a strict BOOLEAN `x > 1.5` says `x > 1.5`, not `x >= 2`."""
+        decidb_cli.assert_error(
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x(INT) SUCH THAT x < 0 MAXIMIZE SUM(x)",
+            match=r"(?i)x < 0 cannot hold.*non-negative",
+        )
+        decidb_cli.assert_error(
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x(BOOL) SUCH THAT x > 1 MAXIMIZE SUM(x)",
+            match=r"(?i)x > 1 cannot hold.*BOOLEAN",
+        )
+        decidb_cli.assert_error(
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x(BOOL) SUCH THAT x > 1.5 MAXIMIZE SUM(x)",
+            match=r"(?i)x > 1\.5 cannot hold.*BOOLEAN",
+        )
+
+    def test_strict_fraction_inside_domain_is_not_rejected(self, decidb_cli):
+        """A strict bound against a fraction rounds to the first whole value inside it, so
+        `BOOL x > 0.5` is the pin x = 1 and `INT x < 0.5` is x <= 0; neither is a domain
+        conflict."""
+        rows, _ = decidb_cli.execute(
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x(BOOL) SUCH THAT x > 0.5 MINIMIZE SUM(x)"
+        )
+        assert [tuple(r) for r in rows] == [(1,)]
+        rows, _ = decidb_cli.execute(
+            "SELECT x FROM (VALUES (1)) t(id) "
+            "DECIDE x(INT) SUCH THAT x < 0.5 MAXIMIZE SUM(x)"
+        )
+        assert [tuple(r) for r in rows] == [(0,)]
 
     def test_equal_bound_varying_per_group_is_infeasible(self, decidb_cli):
         """C2: a reduced `=` constraint whose bound varies within a group contradicts

@@ -26,7 +26,11 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   the solver; an infinite data value is no bound on that side.
 - **Whole-number rounding.** `INT` and `BOOL` bounds round inward, strict bounds included, and the rounding is tested
   in `DOUBLE` arithmetic against the clause as written, so `0.1*x <= 0.3` does not lose an integer to a quotient that
-  rounds the wrong way.
+  rounds the wrong way. A strict bound against a fraction (`x > 0.5`, `x < 2.5`, no `WHEN`) rounds to the first whole
+  value inside it (1 and 2). The solver and A1 take that shift from one function (`DecideStrictBound`), so they agree;
+  on a `BOOL`, A1 and the solver now both answer `BOOL x > 0.5` with `x = 1`. The six cases are in `SOLVER_OFF_BY_ONE`
+  (`test_direct_a1.py`), checked against the oracle on both paths. S1 still leaves a strict bound against a fraction on
+  a `BOOL` to the solver.
 - **Objective.** `MINIMIZE`, `MAXIMIZE`, or none (the lowest allowed value). Signed `SUM` parts, each with an optional
   constant factor or divisor and an optional `WHEN`, plus an optional objective-level `WHEN`. Terms: a row-valued
   coefficient times a decision, a per-row constant, and at most one square `k*(w*x + t)^2`, where `k` is a nonzero
@@ -56,23 +60,17 @@ A miss never changes the answer: the query runs on the solver and `require` name
 | `random()`, a correlated subquery, a parameter, in a bound, a coefficient or a `WHEN` | Not a deterministic source value. A scalar subquery that does not depend on the row is read as a source column and is admitted. |
 | A second squared term, a data weight outside a square (`w*POWER(...)`), `w*x*x` | The solver rejects these itself, with the same message, on both paths. |
 | Strict bounds on a `REAL` | The binder rejects them before any rule runs. |
+| A bound that contradicts the variable's built-in domain (`x <= -1` on a non-negative decision, `BOOL x >= 2`) | The solver rejects it before it reads a row, even on an empty source, so the solver reports it. |
 
 ## Where it differs from the solver
 
-- **A bare strict bound against a fraction on a whole-numbered decision** (`x > 0.5`, `x < 2.5` with no `WHEN`). The
-  solver folds the bound into the variable and moves it by a whole unit before rounding, so `x > 0.5` gives 2 and
-  `x < 2.5` gives 1. Direct solve returns the right answer (1 and 2), so `auto` and `off` differ on exactly this shape.
-  The same bound against a column, with a `WHEN`, or inside an affine form (`2*x < 5`) is right on both paths. On a
-  `BOOL` the solver raises `x >= 1.5 cannot hold` for `x > 0.5`. The six cases are in `SOLVER_OFF_BY_ONE`
-  (`test_direct_a1.py`): checked against the oracle on the direct path (a normal test) and on the solver path (an
-  `xfail(strict=True)` test), so fixing the solver turns them into failures that say to remove the tag.
 - **Values within the solver's tolerance of an integer** (`INT x <= 1.9999999`). Direct solve reads every bound exactly,
   as S1 decided; the solver accepts a violation of about 1e-6 and returns 2. The tests and the fuzz use values that are
   exact in a double, so they never sit in that band.
-- **Error wording.** A bound that cannot hold reads `DECIDE optimization is infeasible. Prefix the query with DIAGNOSE
-  ...` here, where the solver words two constant cases itself (`x <= -1 cannot hold because x is non-negative`,
-  `x >= 2 cannot hold because x is BOOLEAN`). A NULL value names its source column. The "at row N" suffix is left out.
-  See A1-01 in `todo.md`.
+- **Error wording.** An empty box on a row reads `DECIDE optimization is infeasible. Prefix the query with DIAGNOSE
+  ...` here. A bound that contradicts the built-in domain is left to the solver (see above), so its own message appears
+  and quotes the clause as typed (`x < 0 cannot hold because x is non-negative`). A NULL value names its source column.
+  The "at row N" suffix is left out.
 - **Ties.** The smaller value, which matches the solver in every case checked, but nothing promises it.
 - **A decision that appears in no objective term** takes the lowest value its box allows.
 
@@ -96,10 +94,11 @@ parent reads does, so reading a wide column back costs memory in proportion to t
 
 | Check | What it covers |
 |---|---|
-| `test_direct_a1.py` (258 tests, 6 expected failures) | The answers. 138 cases run on the independent oracle (`oracle_solver`, built from the raw rows and the per-row bounds each case states in Python), on the solver path (`off`) and on the direct path (`require`): constant boxes, the default-lower rule in every spelling that does and does not replace it, row-valued bounds with and without `WHEN`, coefficient forms (positive, negative, zero), `INT` rounding and strict bounds, `BOOL` pins and Boolean-column bounds, every objective spelling, objective `WHEN`, infeasible and unbounded problems, ties, and three decisions of different types. 28 parent-query contexts. 39 error cases that must fail on both paths. 23 boundary cases against the solver path only (infinities, the 1e20 and 2^53 limits, every numeric source type). 6 random-row tests against exact `Fraction` arithmetic. The constant-problem tests (streaming plan, errors under `LIMIT 1`, `COUNT(*)` and a filter, empty source), a nested `DECIDE`, and duplicate rows |
+| `test_direct_a1.py` (268 tests) | The answers. 138 cases run on the independent oracle (`oracle_solver`, built from the raw rows and the per-row bounds each case states in Python), on the solver path (`off`) and on the direct path (`require`): constant boxes, the default-lower rule in every spelling that does and does not replace it, row-valued bounds with and without `WHEN`, coefficient forms (positive, negative, zero), `INT` rounding and strict bounds, `BOOL` pins and Boolean-column bounds, every objective spelling, objective `WHEN`, infeasible and unbounded problems, ties, and three decisions of different types. 28 parent-query contexts. 39 error cases that must fail on both paths. 23 boundary cases against the solver path only (infinities, the 1e20 and 2^53 limits, every numeric source type). 6 random-row tests against exact `Fraction` arithmetic. The constant-problem tests (streaming plan, errors under `LIMIT 1`, `COUNT(*)` and a filter, empty source), a nested `DECIDE`, and duplicate rows |
 | `test_direct_rule_contract.py` | The checks every rule owes, with A1's fixture: schema and rows, all-rows read for 10 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced HiGHS, `DIAGNOSE`, and 17 near misses that must name their reason and answer under `auto` as under `off` |
 | `test_direct_fuzz.py` | 8 seeds of 30 random A1 queries: direct against solver over domains, bounds, objectives, `WHEN`, `NULL` and infinite values |
 | `test_direct_user_facing.py` | A 200-byte unused payload column stays out of the scan and the barrier; a computed column that can raise is not pruned |
+| Five tests pinned to the solver path | `test_canonicalize_idempotence.py` (three cases) and `test_implied_bounds.py` (two cases) inspect the solver's model dump. Direct solve builds no model, so they run with `DECIDB_TEST_DIRECT_SOLVE=off` on purpose. |
 | C++ `[decidb]` | `variable_bound` over 19 spellings, the facts for every objective spelling, A1's proof and each decline reason, S1 and A1 never both proving, and the coordinator choosing the right real rule for each shape |
 
 ## Performance
@@ -135,3 +134,15 @@ python3 benchmark/decide/profile_direct_a1.py --rows 5000000 --repeats 3 --db-di
 The runner pins `require` for direct and `off` for the solver, and runs the solver at a size only if its previous size
 took at most `--solver-budget` seconds. The 5,000,000-row database needs only the narrow table; build it by hand to skip
 the wide one.
+
+## Settled follow-ups (2026-10-09)
+
+- **Strict bound against a fraction.** The solver's bound absorption and A1 share one function for the strict shift,
+  `DecideStrictBound` (`decide_bound_absorption.{hpp,cpp}`): `floor(k) + 1` for `>` and `ceil(k) - 1` for `<`. The solver
+  once moved the bound by a whole unit before rounding (`INT x > 0.5` gave 2, `INT x < 2.5` gave 1, and `BOOL x > 0.5`
+  raised an error). All six cases in `SOLVER_OFF_BY_ONE` now agree with the oracle on the direct and the solver path.
+  A1 has no special case for `BOOL`.
+- **Domain rejection wording.** The solver's check of a bound against the built-in domain quotes the clause as typed
+  (`x < 0`, not the shifted `x <= -1`; `BOOL x > 1.5`, not `x >= 2`). `test_error_infeasible.py` asserts the original
+  patterns again (`x <= -1 cannot hold ... non-negative`, `x >= 2 cannot hold ... BOOLEAN`) and has new cases for the
+  strict spellings.

@@ -11,8 +11,9 @@ from dataclasses import dataclass
 
 # Per-row bounds on x with no WHEN that S1 leaves on the solver, as (comparison, constant). The solver reads these as
 # bounds on the variable, not as arithmetic on a Boolean: a negative lower bound makes x signed (the result holds
-# -3, -1, ...), a strict bound against a fraction moves by a whole unit, and a bound that cannot hold raises a message
-# naming the clause. The same bounds with a WHEN are plain arithmetic and are admitted.
+# -3, -1, ...), and a bound that cannot hold raises a message naming the clause. A strict bound against a fraction is
+# also left there (the solver rounds it correctly now; S1 has not been widened to admit it). The same bounds with a
+# WHEN are plain arithmetic and are admitted.
 S1_SOLVER_ONLY_ROW_BOUNDS = {
     ("<=", "-3"),
     ("<=", "-1"),

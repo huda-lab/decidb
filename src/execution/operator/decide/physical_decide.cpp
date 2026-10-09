@@ -1304,18 +1304,29 @@ public:
             }
             const string vname = op.decide_variables[var]->GetName();
             const char *domain = is_bool ? "BOOLEAN (0 or 1)" : "non-negative (>= 0)";
+            // Quote the clause as the user typed it: a strict `x < 0` is absorbed as `U = -1`,
+            // but the message says `x < 0`, not the normalized `x <= -1`.
+            auto QuoteBound = [&](bool upper, double value) {
+                for (const auto &bound : user_absorbed_bounds) {
+                    if (bound.decide_var_idx == var && bound.strict && bound.sense == (upper ? '<' : '>') &&
+                        bound.k == value) {
+                        return StringUtil::Format("%s %s %g", vname, upper ? "<" : ">", bound.typed_k);
+                    }
+                }
+                return StringUtil::Format("%s %s %g", vname, upper ? "<=" : ">=", value);
+            };
             if (U < 0.0 && L >= 0.0) {
                 throw InvalidInputException(StringUtil::Format(
-                    "DECIDE optimization is infeasible: %s <= %g cannot hold because %s is %s. "
-                    "%s", vname, U, vname, domain,
+                    "DECIDE optimization is infeasible: %s cannot hold because %s is %s. "
+                    "%s", QuoteBound(true, U), vname, domain,
                     is_bool ? "Drop the bound or change the variable's type."
                             : "Add an explicit lower bound if it may be negative."));
             }
             if (is_bool && L > 1.0) {
                 throw InvalidInputException(StringUtil::Format(
-                    "DECIDE optimization is infeasible: %s >= %g cannot hold because %s is "
+                    "DECIDE optimization is infeasible: %s cannot hold because %s is "
                     "BOOLEAN (0 or 1). Drop the bound or change the variable's type.",
-                    vname, L, vname));
+                    QuoteBound(false, L), vname));
             }
         }
 

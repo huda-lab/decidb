@@ -153,7 +153,7 @@ static bool TryReadAbsorbableBound(ClientContext &context, LogicalDecide &decide
 	// `=` intersects both sides rather than assigning, so `x = 5 AND x = 10` inverts
 	// the box and the conflict is caught instead of resolving to whichever was
 	// written last. A strict `<` / `>` normalizes into the bound for an integer
-	// (`x < 10` is `x <= 9`), carrying the user's literal as `typed_k` so the
+	// (`x < 10` is `x <= 9`, `x > 0.5` is `x >= 1`), carrying the user's literal as `typed_k` so the
 	// diagnosis re-quotes `< 10`. A REAL has no such normalization, so it declines
 	// and the constraint path rejects it with a message naming the clause.
 	switch (comp.type) {
@@ -168,13 +168,13 @@ static bool TryReadAbsorbableBound(ClientContext &context, LogicalDecide &decide
 		return true;
 	case ExpressionType::COMPARE_LESSTHAN:
 		out.sense = '<';
-		out.k = k - 1.0;
+		out.k = DecideStrictBound(false, k);
 		out.strict = true;
 		out.typed_k = k;
 		return out.target.is_integer;
 	case ExpressionType::COMPARE_GREATERTHAN:
 		out.sense = '>';
-		out.k = k + 1.0;
+		out.k = DecideStrictBound(true, k);
 		out.strict = true;
 		out.typed_k = k;
 		return out.target.is_integer;
@@ -186,6 +186,10 @@ static bool TryReadAbsorbableBound(ClientContext &context, LogicalDecide &decide
 bool DecideBoundIsAbsorbed(ClientContext &context, LogicalDecide &decide, const BoundComparisonExpression &comparison) {
 	AbsorbableBound bound;
 	return TryReadAbsorbableBound(context, decide, comparison, bound);
+}
+
+double DecideStrictBound(bool is_lower, double k) {
+	return is_lower ? std::floor(k) + 1.0 : std::ceil(k) - 1.0;
 }
 
 void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &decide) {
@@ -249,13 +253,13 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		double lo = ExtractBound(*between.lower);
 		if (!std::isnan(lo)) {
 			bool strict = !between.lower_inclusive && target.is_integer;
-			target.Absorb('>', strict ? lo + 1.0 : lo, strict, lo, DConstants::INVALID_INDEX,
+			target.Absorb('>', strict ? DecideStrictBound(true, lo) : lo, strict, lo, DConstants::INVALID_INDEX,
 			              DConstants::INVALID_INDEX);
 		}
 		double hi = ExtractBound(*between.upper);
 		if (!std::isnan(hi)) {
 			bool strict = !between.upper_inclusive && target.is_integer;
-			target.Absorb('<', strict ? hi - 1.0 : hi, strict, hi, DConstants::INVALID_INDEX,
+			target.Absorb('<', strict ? DecideStrictBound(false, hi) : hi, strict, hi, DConstants::INVALID_INDEX,
 			              DConstants::INVALID_INDEX);
 		}
 		break;

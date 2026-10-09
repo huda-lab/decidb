@@ -7,6 +7,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
 #include "duckdb/optimizer/decide/direct/direct_builder.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
@@ -372,8 +373,8 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 				return false;
 			}
 			if (DirectIsLowerBound(comparison)) {
-				solver_lower[decision] = std::max(solver_lower[decision], strict ? k + 1.0 : k);
-				double value = strict ? std::floor(k) + 1.0 : (whole ? std::ceil(k) : k);
+				solver_lower[decision] = std::max(solver_lower[decision], strict ? DecideStrictBound(true, k) : k);
+				double value = strict ? DecideStrictBound(true, k) : (whole ? std::ceil(k) : k);
 				if (value <= -INFINITE_BOUND) {
 					value = NEGATIVE_INFINITY;
 				}
@@ -381,8 +382,8 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 				absorbed_lower[decision] = std::max(absorbed_lower[decision], value);
 			}
 			if (DirectIsUpperBound(comparison)) {
-				solver_upper[decision] = std::min(solver_upper[decision], strict ? k - 1.0 : k);
-				double value = strict ? std::ceil(k) - 1.0 : (whole ? std::floor(k) : k);
+				solver_upper[decision] = std::min(solver_upper[decision], strict ? DecideStrictBound(false, k) : k);
+				double value = strict ? DecideStrictBound(false, k) : (whole ? std::floor(k) : k);
 				if (value >= INFINITE_BOUND) {
 					value = POSITIVE_INFINITY;
 				}

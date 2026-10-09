@@ -7,6 +7,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
+#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
 #include "duckdb/optimizer/decide/direct/direct_builder.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -199,9 +200,10 @@ bool SatisfiesComparison(ExpressionType comparison, double value, double bound) 
 //!
 //! The solver reads a bound with a WHEN as a per-row constraint and applies plain arithmetic to it. A bound without a
 //! WHEN is a bound on the variable itself, and the solver reads some spellings of those differently from arithmetic on
-//! a Boolean: a negative lower bound makes `x` signed, so the result can hold -3; a strict bound against a fraction
-//! moves by a whole unit (`x > 0.5` becomes `x >= 1.5`); and a bound that cannot hold raises a message naming the
-//! clause rather than DECIDE's infeasible error. Those spellings stay on the solver. False for them.
+//! a Boolean: a negative lower bound makes `x` signed, so the result can hold -3, and a bound that cannot hold raises a
+//! message naming the clause rather than DECIDE's infeasible error. Those spellings stay on the solver. A strict bound
+//! against a fraction (`x > 0.5`) also stays there: the solver now rounds it to the right whole value, but this rule
+//! has not been widened to admit it. False for all of them.
 bool ConstantPinDomain(const DirectConstraintFact &fact, double bound, PinDomain &domain) {
 	auto comparison = fact.comparison;
 	if (!fact.scope.when && comparison != ExpressionType::COMPARE_NOTEQUAL) {
@@ -216,8 +218,8 @@ bool ConstantPinDomain(const DirectConstraintFact &fact, double bound, PinDomain
 		bool has_upper = comparison == ExpressionType::COMPARE_LESSTHAN ||
 		                 comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 		                 comparison == ExpressionType::COMPARE_EQUAL;
-		double lower = comparison == ExpressionType::COMPARE_GREATERTHAN ? bound + 1.0 : bound;
-		double upper = comparison == ExpressionType::COMPARE_LESSTHAN ? bound - 1.0 : bound;
+		double lower = comparison == ExpressionType::COMPARE_GREATERTHAN ? DecideStrictBound(true, bound) : bound;
+		double upper = comparison == ExpressionType::COMPARE_LESSTHAN ? DecideStrictBound(false, bound) : bound;
 		if ((has_lower && (lower < 0.0 || lower > 1.0)) || (has_upper && upper < 0.0)) {
 			return false;
 		}
