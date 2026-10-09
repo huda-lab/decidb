@@ -57,6 +57,8 @@ The shared engine (facts, coordinator, builders, result boundary) is in [rules/_
 - Each folder under `rules/` has a `todo.md` (open work, atomic tasks) and, once something ships, a `done.md` (what is true
   now, in present tense, with the tests that verify it and a summary of measurements).
 - A finished task leaves `todo.md` and becomes a line in `done.md`. Nothing appears in both.
+- A `done.md` states only what is true now, with no history (no "was", "shipped", "fixed on"). A `todo.md` holds only work
+  still to do, plus the open decisions that block it.
 - Each `done.md` starts with a stamp: the commit, date and command last used to verify it. Re-run and update the stamp when
   you change the behavior it describes.
 - These docs are a high-level map. For detail, read the code in `src/optimizer/decide/direct/`.

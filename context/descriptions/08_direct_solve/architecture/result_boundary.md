@@ -28,18 +28,15 @@ rank sort. The validation slots stay live even when no parent reads any output.
 ## Validation barrier
 
 Runtime checks (NULL or non-finite scores, bad bounds) must run over every input row whenever the DECIDE result is
-consumed, even if `x` is unused or the capacity is zero. A standalone filter is not enough; the experiment showed it can
+consumed, even if `x` is unused or the capacity is zero. A standalone filter is not enough: it can
 skip a late bad row under `LIMIT 1`. S1's rank window reads every row before it emits one. A rule whose plan could
 stream uses `DirectValidationBarrier`: a projected truth-or-error column plus a whole-input window. That holds the rows
-in memory. Holding was first chosen over reading the input twice without a measurement; the section below records
-the measurement and a recommendation to reverse that choice for wide columns.
+in memory, and the rows include any wide column the parent reads. The section below records what that costs. Whether
+to read the input twice instead is open (`../rules/_harness/todo.md`, H-14).
 
-### Memory of holding rows (H-13, measured 2026-10-09)
+### Memory of holding rows
 
-**Question.** Does the barrier cost memory in proportion to the input when a parent reads a wide column, and should the
-plan read the source twice instead?
-
-**Setup.** Binary at commit `de90502e4b`; a stored database with a narrow table `src` (id, t, cap, score, f) and
+**Setup** (measured 2026-10-09 with the binary at `de90502e4b`). A stored database with a narrow table `src` (id, t, cap, score, f) and
 `src_wide` (the same plus `repeat('p', 512) AS payload`), the same shapes as `benchmark/decide/profile_direct_a1.py`.
 Each cell is a fresh `decidb -readonly` process with `decide_direct_solve='require'`, peak memory from `/usr/bin/time -l`,
 one aggregate row read back. A1 is `x(REAL) ... BETWEEN 0 AND cap MINIMIZE SUM(POWER(x - t, 2))`; S1 is
@@ -50,7 +47,7 @@ The footprint column is the macOS peak memory footprint; maximum resident size c
 pages (A1 held at 5,000,000 rows gave 2,524 and 3,320 MiB resident in two runs against 5,212 MiB footprint both times),
 so the footprint is the number to read.
 
-| Peak footprint, MiB | Rows | No DECIDE | Unused (control) | Held (now) | Read twice |
+| Peak footprint, MiB | Rows | No DECIDE | Unused (control) | Held | Read twice |
 |---|---:|---:|---:|---:|---:|
 | A1 | 1,000,000 | 7 | 32 | 1,049 | 80 |
 | A1 | 5,000,000 | 14 | 131 | 5,212 | 316 |
@@ -69,18 +66,18 @@ Where two values are given they are two runs. The 512-byte payload is 488 MiB pe
   the narrow plan plus the join. That is 3.4 to 16.5 times less than holding at 5,000,000 rows.
 - The wide column is the cause. Without it nothing grows (control), and a plain scan of the same payload streams
   in 6 to 14 MiB.
-- Peak memory was the only thing measured. The machine was busy with a build, so the wall times (0.3 to 1.9 s) are
-  indicative only and no timing conclusion is drawn. Why a wide result is slow to collect is not isolated here.
+- Peak memory is the only thing measured here. The machine was busy with a build, so the wall times (0.3 to 1.9 s) are
+  indicative only. Why a wide result is slow to collect is not isolated.
 
-**Decision.** The earlier assumption that holding is cheap is not supported for wide parent-read columns: it costs
-memory in proportion to the input, 5.2 GiB at 5,000,000 rows for A1. Read twice costs a few hundred MiB.
+**Current behavior.** Holding rows costs memory in proportion to the input for wide parent-read columns: 5.2 GiB at
+5,000,000 rows for A1. Reading the source twice would cost a few hundred MiB. The solver path holds more than direct solve
+on the same query (A1 at 1,000,000 rows: 1,655 MiB against 1,049; S1: 1,012 MiB against 652).
 
-**Recommendation (not implemented; no code changed).** Read the source twice when the parent reads a column the rule does
-not need and the source can be read twice safely, and keep holding otherwise. The hand-written join above used a unique
-`id`; the plan has to carry its own row key. A stored table has `rowid`; a join, a subquery with `random()` or an
-aggregate has none, and reading it twice could change the rows or double the cost, so those must keep holding. The check
-must still run over every input row in the first read, which the narrow DECIDE query already does. This needs an owner
-decision and a build of the join-back plan before it ships.
+**Option not built.** Read the source twice when the parent reads a column the rule does not need and the source can be
+read twice safely, and keep holding otherwise. The hand-written join above used a unique `id`; the plan would carry its own
+row key. A stored table has `rowid`; a join, a subquery with `random()` or an aggregate has none, and reading it twice
+could change the rows or double the cost, so those keep holding. The check must still run over every input row in the
+first read, which the narrow DECIDE query already does. The decision is in `../rules/_harness/todo.md` (H-14).
 
 ## Result types
 

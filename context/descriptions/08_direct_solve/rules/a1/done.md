@@ -1,11 +1,9 @@
 # A1 (independent bounded decisions) — what works today
 
-Verified on 2026-10-06 on top of `db4fc9d4f3` (working tree, not yet committed):
-`make decide-test` 2,250 passed and 6 expected failures, plus the 7 existing tests listed in `todo.md` (A1-01);
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` 2,257 passed, 6 expected failures, none failing;
-`DECIDB_VERIFY_SERIALIZER=1 make decide-test` the same as `auto`;
-`DECIDB_FORCE_SOLVER=highs make decide-test` 2,256 passed, 6 expected failures, 1 unrelated failure that needs Gurobi;
-`build/release/test/unittest "[decidb]"` 1,227 assertions in 39 cases.
+Verified on 2026-10-09 at `7196cb03f9`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and
+`DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,322 passed (no failures, no expected failures);
+`DECIDB_FORCE_SOLVER=highs make decide-test` 2,321 passed and one failure that needs Gurobi
+(`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 1,276 assertions in 44 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -30,7 +28,7 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   in `DOUBLE` arithmetic against the clause as written, so `0.1*x <= 0.3` does not lose an integer to a quotient that
   rounds the wrong way. A strict bound against a fraction (`x > 0.5`, `x < 2.5`, no `WHEN`) rounds to the first whole
   value inside it (1 and 2). The solver and A1 take that shift from one function (`DecideStrictBound`), so they agree;
-  on a `BOOL`, A1 and the solver now both answer `BOOL x > 0.5` with `x = 1`. The six cases are in `SOLVER_OFF_BY_ONE`
+  on a `BOOL`, A1 and the solver both answer `BOOL x > 0.5` with `x = 1`. The six cases are in `SOLVER_OFF_BY_ONE`
   (`test_direct_a1.py`), checked against the oracle on both paths. S1 admits the same bounds on a `BOOL`
   (`x > 0.5`, `x < 1.5`) with the same shift.
 - **Objective.** `MINIMIZE`, `MAXIMIZE`, or none (the lowest allowed value). Signed `SUM` parts, each with an optional
@@ -99,7 +97,8 @@ parent reads does, so reading a wide column back costs memory in proportion to t
 | `test_direct_a1.py` (268 tests) | The answers. 138 cases run on the independent oracle (`oracle_solver`, built from the raw rows and the per-row bounds each case states in Python), on the solver path (`off`) and on the direct path (`require`): constant boxes, the default-lower rule in every spelling that does and does not replace it, row-valued bounds with and without `WHEN`, coefficient forms (positive, negative, zero), `INT` rounding and strict bounds, `BOOL` pins and Boolean-column bounds, every objective spelling, objective `WHEN`, infeasible and unbounded problems, ties, and three decisions of different types. 28 parent-query contexts. 39 error cases that must fail on both paths. 23 boundary cases against the solver path only (infinities, the 1e20 and 2^53 limits, every numeric source type). 6 random-row tests against exact `Fraction` arithmetic. The constant-problem tests (streaming plan, errors under `LIMIT 1`, `COUNT(*)` and a filter, empty source), a nested `DECIDE`, and duplicate rows |
 | `test_direct_rule_contract.py` | The checks every rule owes, with A1's fixture: schema and rows, all-rows read for 10 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced HiGHS, `DIAGNOSE`, and 17 near misses that must name their reason and answer under `auto` as under `off` |
 | `test_direct_fuzz.py` | 8 seeds of 30 random A1 queries: direct against solver over domains, bounds, objectives, `WHEN`, `NULL` and infinite values |
-| `test_direct_user_facing.py` | A 200-byte unused payload column stays out of the scan and the barrier; a computed column that can raise is not pruned |
+| `test_direct_user_facing.py` | A 200-byte unused payload column stays out of the scan and the barrier; a computed column that can raise is not pruned; a NaN in a constraint coefficient says "constraint coefficient" and in the objective "objective coefficient" |
+| `test_error_infeasible.py` | The solver's rejection of a bound against the built-in domain quotes the clause as typed: `x <= -1 cannot hold ... non-negative`, `x >= 2 cannot hold ... BOOLEAN`, and for strict spellings `x < 0`, `x > 1.5` |
 | Five tests pinned to the solver path | `test_canonicalize_idempotence.py` (three cases) and `test_implied_bounds.py` (two cases) inspect the solver's model dump. Direct solve builds no model, so they run with `DECIDB_TEST_DIRECT_SOLVE=off` on purpose. |
 | C++ `[decidb]` | `variable_bound` over 19 spellings, the facts for every objective spelling, A1's proof and each decline reason, S1 and A1 never both proving, and the coordinator choosing the right real rule for each shape |
 
@@ -121,11 +120,11 @@ At 1,000,000 rows the same shapes are 4.5 to 8x faster and use 31 to 73 MiB agai
 paths finish in under 0.1 s.
 
 **Weak spots.** A parent that reads a wide column back makes the barrier hold it: with a 512-byte payload read at
-1,000,000 rows direct peaks at 1.06 GiB (0.26 s against 0.59 s, 2.3x) instead of 47 MiB. The speedup is smaller than
-S1's because the solver is already cheap on a bound-only problem. Measured again on 2026-10-09 at 1,000,000 and
-5,000,000 rows: the peak footprint is 1,049 MiB and 5,212 MiB held, against 32 and 131 MiB for an unused payload and 80
-and 316 MiB when the source is read twice. The numbers, the decision and the recommendation to read twice are in
-`../../architecture/result_boundary.md` ("Memory of holding rows").
+1,000,000 rows direct is 2.3x faster than the solver (0.26 s against 0.59 s). The speedup is smaller than S1's because the
+solver is already cheap on a bound-only problem. Peak memory footprint (measured 2026-10-09) is 1,049 MiB at 1,000,000
+rows and 5,212 MiB at 5,000,000 with the payload read, against 32 and 131 MiB for an unused payload; the solver path holds
+1,655 MiB at 1,000,000 rows. Whether to read the source twice instead is open (`../_harness/todo.md`, H-14); the numbers
+are in `../../architecture/result_boundary.md` ("Memory of holding rows").
 
 **Reproduce** (after `make release`; the sweeps above took under a minute in total, building the databases included):
 
@@ -138,15 +137,3 @@ python3 benchmark/decide/profile_direct_a1.py --rows 5000000 --repeats 3 --db-di
 The runner pins `require` for direct and `off` for the solver, and runs the solver at a size only if its previous size
 took at most `--solver-budget` seconds. The 5,000,000-row database needs only the narrow table; build it by hand to skip
 the wide one.
-
-## Settled follow-ups (2026-10-09)
-
-- **Strict bound against a fraction.** The solver's bound absorption and A1 share one function for the strict shift,
-  `DecideStrictBound` (`decide_bound_absorption.{hpp,cpp}`): `floor(k) + 1` for `>` and `ceil(k) - 1` for `<`. The solver
-  once moved the bound by a whole unit before rounding (`INT x > 0.5` gave 2, `INT x < 2.5` gave 1, and `BOOL x > 0.5`
-  raised an error). All six cases in `SOLVER_OFF_BY_ONE` now agree with the oracle on the direct and the solver path.
-  A1 has no special case for `BOOL`.
-- **Domain rejection wording.** The solver's check of a bound against the built-in domain quotes the clause as typed
-  (`x < 0`, not the shifted `x <= -1`; `BOOL x > 1.5`, not `x >= 2`). `test_error_infeasible.py` asserts the original
-  patterns again (`x <= -1 cannot hold ... non-negative`, `x >= 2 cannot hold ... BOOLEAN`) and has new cases for the
-  strict spellings.
