@@ -132,4 +132,9 @@ public:
 private:
 	FunctionExpression();
 };
+
+//! DecidB: every child of a DECIDE parser marker after the one it marks, as written and
+//! comma-separated -- a PER or BY key, or the relations qualifying a reducer.
+string DecideKeyToString(const FunctionExpression &marker);
+
 } // namespace duckdb

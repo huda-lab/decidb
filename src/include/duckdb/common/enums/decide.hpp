@@ -29,9 +29,9 @@ enum class DecideExpression : uint8_t {
 };
 
 //! How one DECIDE declaration maps onto solver columns.
-//!   ROW    — `x(INT)`        one column per result row
-//!   ENTITY — `T.x(INT)`      one column per distinct entity of table T
-//!   SCALAR — `scalar x(INT)` one column for the whole query
+//!   ROW    — `x(INT)`                    one column per result row
+//!   ENTITY — `T.x(INT)`, `per K: x(INT)` one column per distinct value of a key scope
+//!   SCALAR — `scalar x(INT)`, `per (): x(INT)` one column for the whole query
 enum class DecideVarScope : uint8_t {
     ROW = 0,
     ENTITY = 1,
@@ -46,6 +46,9 @@ struct DecideVarScopeInfo {
     //! Index into entity_scopes / entity_mappings. Meaningful only when
     //! scope == ENTITY; INVALID_INDEX otherwise.
     idx_t entity_scope_idx = DConstants::INVALID_INDEX;
+    //! The key written after `per`, as written (`D.depotID, S.customerID`), so a message
+    //! can name the decision the way it was declared. Empty for every other spelling.
+    string declared_key;
 
     DecideVarScopeInfo() = default;
     DecideVarScopeInfo(DecideVarScope scope_p, idx_t entity_scope_idx_p)
@@ -58,6 +61,12 @@ struct DecideVarScopeInfo {
     static DecideVarScopeInfo Entity(idx_t entity_scope_idx_p) {
         return DecideVarScopeInfo(DecideVarScope::ENTITY, entity_scope_idx_p);
     }
+    //! `per K: x(TYPE)`: an entity scope whose key is the columns K names.
+    static DecideVarScopeInfo Keyed(idx_t entity_scope_idx_p, string declared_key_p) {
+        DecideVarScopeInfo result(DecideVarScope::ENTITY, entity_scope_idx_p);
+        result.declared_key = std::move(declared_key_p);
+        return result;
+    }
     static DecideVarScopeInfo Scalar() {
         return DecideVarScopeInfo(DecideVarScope::SCALAR, DConstants::INVALID_INDEX);
     }
@@ -67,6 +76,10 @@ struct DecideVarScopeInfo {
     }
     bool IsScalar() const {
         return scope == DecideVarScope::SCALAR;
+    }
+    //! Declared `per K: x(TYPE)` rather than `T.x(TYPE)`.
+    bool IsKeyed() const {
+        return !declared_key.empty();
     }
 
     //! Generated from `storage/serialization/nodes.json`.

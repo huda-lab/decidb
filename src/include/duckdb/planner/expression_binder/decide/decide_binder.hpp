@@ -37,6 +37,16 @@ idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &t
                               vector<EntityScopeInfo> &entity_scopes,
                               case_insensitive_map_t<idx_t> &table_scope_map);
 
+//! Find or create the key scope of `per K: ...`, given the parser's `SCOPE_PER_TAG` marker
+//! (children: the body, then the elements of K). Each element resolves against the FROM
+//! clause alone, never an outer query: a declared decision is an error; otherwise it is a
+//! column, else a relation standing for its stored columns. Equal keys -- order and
+//! repetition aside -- share one scope, marked `exact_key` so it is never refined and never
+//! shared with a `T.x` scope. `key_text` is the key as written, kept for display.
+idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
+                           const case_insensitive_set_t &decision_names, const string &key_text,
+                           vector<EntityScopeInfo> &entity_scopes);
+
 //! Peels the parser's qualified-reducer wrapper so checks that key off the
 //! aggregate's name see the aggregate: `sum(D: e)` reads as `sum(e)`. Returns
 //! `expr` unchanged when it is not a qualified reducer.
@@ -81,8 +91,9 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
                                            const case_insensitive_map_t<idx_t> &variables);
 
 //! Reject the scope spellings -- `WHEN condition:`, `PER key:` and a reducer's
-//! `BY (key)` -- which parse but are not bound yet. A spelling leaves this check when
-//! its binding lands, and the check goes with the last of them.
+//! `BY (key)` -- which parse but are not bound yet. Run on the constraints and the
+//! objective; a declaration's `PER key:` binds through FindOrCreateKeyScope. A spelling
+//! leaves this check when its binding lands, and the check goes with the last of them.
 void ValidateDecideNoUnsupportedScope(const ParsedExpression &expr);
 
 bool IsDecideAggregateName(const string &name);
@@ -228,7 +239,7 @@ protected:
     //! reference a DECIDE variable.
     bool binding_when_condition = false;
     case_insensitive_map_t<idx_t> variables;
-    //! Subset of `variables` declared with the `scalar` keyword.
+    //! Subset of `variables` that are query-wide (`scalar x` or `per (): x`).
     case_insensitive_set_t scalar_variables;
     //! Null when the caller cannot resolve qualifiers (relation-qualified
     //! reducers are then rejected rather than silently ignored).

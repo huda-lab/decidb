@@ -35,9 +35,7 @@ FunctionExpression::FunctionExpression(const string &function_name, vector<uniqu
                          std::move(order_bys), distinct, is_operator, export_state_p) {
 }
 
-//! Every child of a DECIDE marker after the one it marks, comma-separated: a PER or BY
-//! key, or the relations qualifying a reducer.
-static string DecideKeyToString(const FunctionExpression &marker) {
+string DecideKeyToString(const FunctionExpression &marker) {
 	string result;
 	for (idx_t i = 1; i < marker.children.size(); i++) {
 		result += (i > 1 ? ", " : "") + marker.children[i]->ToString();

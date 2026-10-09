@@ -10,6 +10,7 @@
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -20,6 +21,7 @@
 #include "duckdb/planner/table_binding.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
+#include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include <unordered_set>
 #include <algorithm>
@@ -131,6 +133,160 @@ idx_t FindOrCreateEntityScope(BindContext &bind_context, const string &table_nam
 	return FindOrCreateEntityScope(bind_context, vector<string> {table_name}, entity_scopes, table_scope_map);
 }
 
+//! Column `column_index` of `binding` as a key column. A base table's goes through
+//! GetColumnBinding, which also forces the column into the scan and returns its
+//! position there; any other relation's binding is (table index, column).
+static ColumnBinding RegisterKeyColumn(Binding &binding, column_t column_index) {
+	if (binding.binding_type == BindingType::TABLE) {
+		return binding.Cast<TableBinding>().GetColumnBinding(column_index);
+	}
+	return ColumnBinding(binding.index, column_index);
+}
+
+//! Whether column `column_index` of `binding` stores a value per row: false for `rowid`
+//! and for a generated column, which a key would only repeat.
+static bool IsStoredColumn(Binding &binding, column_t column_index) {
+	if (column_index == COLUMN_IDENTIFIER_ROW_ID) {
+		return false;
+	}
+	auto entry = binding.GetStandardEntry();
+	if (!entry || entry->type != CatalogType::TABLE_ENTRY) {
+		return true;
+	}
+	return !entry->Cast<TableCatalogEntry>().GetColumn(LogicalIndex(column_index)).Generated();
+}
+
+using KeyColumns = vector<std::pair<ColumnBinding, LogicalType>>;
+
+//! Adds column `column_index` of `binding`, which `element` names, to `columns`.
+static void AddKeyColumn(const ColumnRefExpression &element, Binding &binding, column_t column_index,
+                         KeyColumns &columns) {
+	if (!IsStoredColumn(binding, column_index)) {
+		throw BinderException(element,
+		                      "DECIDE: %s is not a stored column; a per key lists columns or relations of the "
+		                      "FROM clause",
+		                      element.ToString());
+	}
+	columns.emplace_back(RegisterKeyColumn(binding, column_index), binding.types[column_index]);
+}
+
+//! The relation named by up to three parts: `alias`, `schema.alias`, `catalog.schema.alias`.
+static BindingAlias RelationAlias(const vector<string> &parts) {
+	switch (parts.size()) {
+	case 1:
+		return BindingAlias(parts[0]);
+	case 2:
+		return BindingAlias(parts[0], parts[1]);
+	default:
+		D_ASSERT(parts.size() == 3);
+		return BindingAlias(parts[0], parts[1], parts[2]);
+	}
+}
+
+//! The column `name` written unqualified, as it binds anywhere else in the query: a USING
+//! column means its primary relation's, and after a FULL OUTER JOIN, which has none, the
+//! key must say which side it means. Null when no relation has the column.
+static optional_ptr<Binding> UnqualifiedColumnBinding(BindContext &bind_context, const ColumnRefExpression &element) {
+	auto &name = element.GetColumnName();
+	auto using_set = bind_context.GetUsingBinding(name);
+	if (!using_set) {
+		return bind_context.GetMatchingBinding(name);
+	}
+	if (!using_set->primary_binding.IsSet()) {
+		vector<string> choices;
+		for (auto &side : using_set->bindings) {
+			choices.push_back(KeywordHelper::WriteOptionallyQuoted(side.GetAlias()) + "." +
+			                  KeywordHelper::WriteOptionallyQuoted(name));
+		}
+		throw BinderException(element, "DECIDE: %s is merged by a FULL OUTER JOIN USING; write %s in the per key",
+		                      element.ToString(), StringUtil::Join(choices, " or "));
+	}
+	ErrorData error;
+	return bind_context.GetBinding(using_set->primary_binding, error);
+}
+
+//! Resolves one element of a `per` key into `columns`, against the FROM clause alone and
+//! the way SQL resolves the same name: a column (`c`, `R.c`, `S.R.c`, `C.S.R.c`), else a
+//! relation (`R`, `S.R`, `C.S.R`), standing for every column it stores.
+static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpression &element,
+                              const case_insensitive_set_t &decision_names, KeyColumns &columns) {
+	auto &names = element.column_names;
+	if (decision_names.count(StringUtil::Join(names, "."))) {
+		throw BinderException(element, "DECIDE: %s is a decision; when, per and by may only use data",
+		                      element.ToString());
+	}
+	ErrorData error;
+	optional_ptr<Binding> binding;
+	if (names.size() == 1) {
+		binding = UnqualifiedColumnBinding(bind_context, element);
+	} else if (names.size() <= 4) {
+		binding = bind_context.GetBinding(RelationAlias(vector<string>(names.begin(), names.end() - 1)), names.back(),
+		                                   error);
+	}
+	if (binding) {
+		AddKeyColumn(element, *binding, binding->GetBindingIndex(names.back()), columns);
+		return;
+	}
+	auto relation = names.size() <= 3 ? bind_context.GetBinding(RelationAlias(names), error) : nullptr;
+	if (!relation) {
+		throw BinderException(element, "DECIDE: %s is neither a column nor a relation of the FROM clause",
+		                      element.ToString());
+	}
+	for (column_t column_index = 0; column_index < relation->names.size(); column_index++) {
+		if (IsStoredColumn(*relation, column_index)) {
+			columns.emplace_back(RegisterKeyColumn(*relation, column_index), relation->types[column_index]);
+		}
+	}
+}
+
+idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
+                           const case_insensitive_set_t &decision_names, const string &key_text,
+                           vector<EntityScopeInfo> &entity_scopes) {
+	KeyColumns columns;
+	for (idx_t i = 1; i < per.children.size(); i++) {
+		auto &element = *per.children[i];
+		if (element.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+			throw InternalException("DECIDE per key element '%s' is not a name", element.ToString());
+		}
+		ResolveKeyElement(bind_context, element.Cast<ColumnRefExpression>(), decision_names, columns);
+	}
+	if (columns.empty()) {
+		throw InternalException("DECIDE per key '%s' resolved to no column", key_text);
+	}
+	// A key is a set: order and repetition do not change which rows share a decision.
+	std::sort(columns.begin(), columns.end(), [](const KeyColumns::value_type &a, const KeyColumns::value_type &b) {
+		return a.first.table_index != b.first.table_index ? a.first.table_index < b.first.table_index
+		                                                  : a.first.column_index < b.first.column_index;
+	});
+	columns.erase(std::unique(columns.begin(), columns.end(),
+	                          [](const KeyColumns::value_type &a, const KeyColumns::value_type &b) {
+		                          return a.first == b.first;
+	                          }),
+	              columns.end());
+	vector<ColumnBinding> bindings;
+	for (auto &column : columns) {
+		bindings.push_back(column.first);
+	}
+	for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
+		if (entity_scopes[scope_idx].exact_key && entity_scopes[scope_idx].entity_key_bindings == bindings) {
+			return scope_idx;
+		}
+	}
+	EntityScopeInfo scope_info;
+	scope_info.table_alias = key_text;
+	scope_info.exact_key = true;
+	scope_info.entity_key_bindings = std::move(bindings);
+	for (auto &column : columns) {
+		scope_info.entity_key_column_types.push_back(column.second);
+		auto &tables = scope_info.source_table_indices;
+		if (std::find(tables.begin(), tables.end(), column.first.table_index) == tables.end()) {
+			tables.push_back(column.first.table_index);
+		}
+	}
+	entity_scopes.push_back(std::move(scope_info));
+	return entity_scopes.size() - 1;
+}
+
 idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &table_names,
                               vector<EntityScopeInfo> &entity_scopes,
                               case_insensitive_map_t<idx_t> &table_scope_map) {
@@ -153,21 +309,9 @@ idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &t
 		auto binding = bind_context.GetBinding(table_name, error);
 		D_ASSERT(binding); // callers resolve the name first so they can word their own error
 		scope_info.source_table_indices.push_back(binding->index);
-		// Register every source-table column via GetColumnBinding. This forces the
-		// columns into the scan's column_ids and returns the correct ColumnBinding
-		// (table_index, position-in-col_ids).
-		if (binding->binding_type == BindingType::TABLE) {
-			auto &tbl_binding = binding->Cast<TableBinding>();
-			for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
-				scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
-				scope_info.entity_key_bindings.push_back(tbl_binding.GetColumnBinding(col_idx));
-			}
-		} else {
-			// Non-base table (e.g., subquery): fall back to raw bindings.
-			for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
-				scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
-				scope_info.entity_key_bindings.push_back(ColumnBinding(binding->index, col_idx));
-			}
+		for (idx_t col_idx = 0; col_idx < binding->names.size(); col_idx++) {
+			scope_info.entity_key_column_types.push_back(binding->types[col_idx]);
+			scope_info.entity_key_bindings.push_back(RegisterKeyColumn(*binding, col_idx));
 		}
 	}
 	idx_t scope_idx = entity_scopes.size();
@@ -1338,6 +1482,13 @@ static string CheckQualifiedReducerBody(const Expression &expr, const vector<str
 		if (colref.binding.table_index == ctx.decide_index) {
 			idx_t var_idx = colref.binding.column_index;
 			auto &scopes = *ctx.variable_scopes;
+			if (var_idx < scopes.size() && scopes[var_idx].IsKeyed()) {
+				// A `per` key may span columns that D does not determine, which would make
+				// the kept row an arbitrary choice. Refused until a data check settles it.
+				return StringUtil::Format("DECIDE: '%s' is declared with per; using it inside %s(%s: ...) is not "
+				                          "supported yet",
+				                          name, StringUtil::Upper(agg_name), relation_list);
+			}
 			if (var_idx < scopes.size() && scopes[var_idx].IsEntity() &&
 			    ScopeTablesIntersect((*ctx.entity_scopes)[scopes[var_idx].entity_scope_idx], qualifier_scope)) {
 				return "";

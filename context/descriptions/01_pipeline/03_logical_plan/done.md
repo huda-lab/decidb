@@ -119,7 +119,10 @@ Grouped by who writes it:
 **From the binder** — `decide_index`, `decide_variables`, `decide_constraints`,
 `decide_sense`, `decide_objective`, `num_auxiliary_vars`, `is_boolean_var`,
 `variable_scopes`, `entity_scopes`, `entity_key_expressions`,
-`constraint_sources`.
+`constraint_sources`. `entity_scopes` holds every key scope — of `T.x`, of
+`SUM(T: …)`, and of `per K:` (`exact_key`, possibly spanning several relations) — and
+`variable_scopes` points each decision at one; a `per K:` decision also carries its key
+as written (`declared_key`).
 
 **From the canonicalizer** — `objective_constant_offset`.
 
@@ -234,7 +237,8 @@ it names — `EntityScopeInfo`, `DecideVarScopeInfo`, `ConstraintSourceInfo`,
 `DecideSourceColumnName` — have their own entries in `nodes.json`, and both
 directions are generated into `src/storage/serialization/serialize_*.cpp`. There is
 no hand-written copy. Adding a field means adding one JSON entry, not two mirrored
-lines in two functions that can drift apart.
+lines in two functions that can drift apart; `python3 scripts/generate_serialization.py`
+with no arguments rewrites the generated files in place (`--target` alone is ignored).
 
 Nothing is flattened into parallel vectors. `entity_key_bindings` is serialized as
 `vector<ColumnBinding>`, using the `ColumnBinding` entry `nodes.json` already had.

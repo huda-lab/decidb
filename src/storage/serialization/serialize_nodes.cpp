@@ -451,12 +451,14 @@ DecideSourceColumnName DecideSourceColumnName::Deserialize(Deserializer &deseria
 void DecideVarScopeInfo::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty<DecideVarScope>(100, "scope", scope);
 	serializer.WritePropertyWithDefault<idx_t>(101, "entity_scope_idx", entity_scope_idx);
+	serializer.WritePropertyWithDefault<string>(102, "declared_key", declared_key);
 }
 
 DecideVarScopeInfo DecideVarScopeInfo::Deserialize(Deserializer &deserializer) {
 	DecideVarScopeInfo result;
 	deserializer.ReadProperty<DecideVarScope>(100, "scope", result.scope);
 	deserializer.ReadPropertyWithDefault<idx_t>(101, "entity_scope_idx", result.entity_scope_idx);
+	deserializer.ReadPropertyWithDefault<string>(102, "declared_key", result.declared_key);
 	return result;
 }
 
@@ -466,6 +468,7 @@ void EntityScopeInfo::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<LogicalType>>(102, "entity_key_column_types", entity_key_column_types);
 	serializer.WritePropertyWithDefault<vector<ColumnBinding>>(103, "entity_key_bindings", entity_key_bindings);
 	serializer.WritePropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", scoped_variable_indices);
+	serializer.WritePropertyWithDefault<bool>(105, "exact_key", exact_key);
 }
 
 EntityScopeInfo EntityScopeInfo::Deserialize(Deserializer &deserializer) {
@@ -475,6 +478,7 @@ EntityScopeInfo EntityScopeInfo::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<vector<LogicalType>>(102, "entity_key_column_types", result.entity_key_column_types);
 	deserializer.ReadPropertyWithDefault<vector<ColumnBinding>>(103, "entity_key_bindings", result.entity_key_bindings);
 	deserializer.ReadPropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", result.scoped_variable_indices);
+	deserializer.ReadPropertyWithDefault<bool>(105, "exact_key", result.exact_key);
 	return result;
 }
 

@@ -1,12 +1,13 @@
 # ANR Language Extension — `per`, `when`, `by`
 
-> **Target behaviour — settled 2026-10-05, not implemented yet.**
+> **Target behaviour — settled 2026-10-05. Items 1 and 2 are implemented
+> (`syntax_reference.md` §1.1, §2.3); the rest is not.**
 >
-> This file specifies what the planned scoping language does. Until it ships,
-> `syntax_reference.md` remains the description of what the engine accepts today; as
-> each milestone lands, the matching sections move there and are deleted here. The work
-> plan — layers, tests, order — is [`../09_anr_language/todo.md`](../09_anr_language/todo.md)
-> and is not restated.
+> This file specifies what the planned scoping language does. `syntax_reference.md`
+> describes what the engine accepts today: as an item lands, what it delivers is written
+> there, and this file stays whole until item 7 folds it in. The work plan — layers,
+> tests, order — is [`../09_anr_language/todo.md`](../09_anr_language/todo.md) and is not
+> restated.
 >
 > Sources: the user's checklist and decisions of 2026-10-05 (cited as D1–D8, as numbered
 > in the plan), and the reference notes in `~/Desktop/Capstone` — `ANR Implementation.pdf`
@@ -52,7 +53,7 @@ reducer     ::= agg '(' [scope ':'] expression ')' ['by' '(' [expression, ...] '
               | agg '(' relation, ... ':' expression ')' ['by' ...]   -- same as per relation, ...
 
 key         ::= '(' ')'  |  'row'  |  element (',' element)*
-element     ::= column | relation            -- a relation stands for all of its columns
+element     ::= column | relation            -- a relation stands for all of its stored columns
 ```
 
 | Omitted | Means |
@@ -81,8 +82,9 @@ DECIDE ship(INT), per D: open(BOOL), per (): cap(INT)   -- three keys in one cla
 ```
 
 - **Key elements** are columns and relations of the `FROM` clause, in any mix. A
-  relation stands for all of its columns: `per D` is `per D.depotID, D.stock,
-  D.opening_cost`. Expressions and decisions are not allowed in a key.
+  relation stands for all of its stored columns: `per D` is `per D.depotID, D.stock,
+  D.opening_cost`. Expressions and decisions are not allowed in a key, nor `rowid` or a
+  generated column, which only repeat stored ones.
 - **A key is a set.** Order and repetition do not matter; `per a, b` and `per b, a`
   are the same key.
 - **Each declarator has its own key** (D7). A `per` applies only to the name right
@@ -381,6 +383,8 @@ per (): sum(ship) <= networkCapacity
 | A decision in `when`, in a key, or in `by` | bind | `x is a decision; when, per and by may only use data` |
 | An expression in a `per` key | parse | `a per key lists columns or relations; put expressions in by (...)` |
 | Unknown key element | bind | `depot is neither a column nor a relation of the FROM clause` |
+| `rowid` or a generated column in a key | bind | `g.b is not a stored column; a per key lists columns or relations of the FROM clause` |
+| An unqualified `FULL OUTER JOIN USING` column in a key | bind | `depotID is merged by a FULL OUTER JOIN USING; write S.depotID or D.depotID in the per key` |
 | A reducer inside a reducer (other than §6) | bind | `an aggregate inside an aggregate is not supported yet` |
 | A removed spelling | parse | names the new spelling (§10) |
 

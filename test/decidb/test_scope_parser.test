@@ -1,5 +1,5 @@
 # name: test/decidb/test_scope_parser.test
-# description: The scope spellings of the planned DECIDE extension parse (PER key:, WHEN condition:, BY (key)); nothing binds them yet
+# description: The scope spellings of the planned DECIDE extension parse (PER key:, WHEN condition:, BY (key)); a declaration's PER binds, the others answer not supported yet
 # group: [decidb]
 
 statement ok
@@ -21,39 +21,50 @@ statement ok
 INSERT INTO kw VALUES (1, 2, 3, 1, 5), (4, 5, 6, 2, 7);
 
 # ---------------------------------------------------------------------------
-# New spellings parse. Binding them is a later step, so each answers
-# "not supported yet" -- a Binder Error, which proves the parser accepted it.
+# New spellings parse. A declaration's PER binds and runs (the keyed declarations
+# themselves are tested in test/decide/tests/test_scope_declare.py). Every other
+# scope answers "not supported yet" -- a Binder Error, which proves the parser
+# accepted it.
 # ---------------------------------------------------------------------------
 
 # declaration: column key
-statement error
+query IR rowsort
 SELECT shipmentID, reserve FROM Shipment S JOIN Depot D USING (depotID) DECIDE per D.depotID: reserve(REAL) SUCH THAT reserve <= 5 MAXIMIZE SUM(reserve);
 ----
-Binder Error: DECIDE: 'PER key:' is not supported yet
+1	5.0
+2	5.0
+3	5.0
 
 # declaration: relation key, mixed key, and per () in one list
-statement error
+query I rowsort
 SELECT shipmentID FROM Shipment S JOIN Depot D USING (depotID) DECIDE per D: open(BOOL), per D.region, S.customerID: q(INT), per (): cap(INT) SUCH THAT cap <= 5 MAXIMIZE cap;
 ----
-Binder Error: DECIDE: 'PER key:' is not supported yet
+1
+2
+3
 
 # declaration: per () alone
-statement error
+query I rowsort
 SELECT shipmentID FROM Shipment DECIDE per (): cap(INT) SUCH THAT cap <= 5 MAXIMIZE cap;
 ----
-Binder Error: DECIDE: 'PER ():' is not supported yet
+1
+2
+3
 
-# declaration: per() and per ( ) are per ()
+# declaration: per() and per ( ) are per (): two query-wide decisions, so a <= b
+# with nothing bounding b is unbounded
 statement error
 SELECT shipmentID FROM Shipment DECIDE per(): a(INT), per ( ): b(INT) SUCH THAT a <= b MAXIMIZE a;
 ----
-Binder Error: DECIDE: 'PER ():' is not supported yet
+Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 
 # declaration before FROM (the paper's clause order)
-statement error
+query IR rowsort
 SELECT shipmentID, reserve DECIDE per D.depotID: reserve(REAL) FROM Shipment S JOIN Depot D USING (depotID) SUCH THAT reserve <= 5 MAXIMIZE SUM(reserve);
 ----
-Binder Error: DECIDE: 'PER key:' is not supported yet
+1	5.0
+2	5.0
+3	5.0
 
 # constraint: when in front, condition without parentheses
 statement error
@@ -192,7 +203,14 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIM
 ----
 Binder Error: DECIDE: 'PER ():' is not supported yet
 
-# quoted keywords are ordinary names inside a DECIDE clause
+# quoted keywords are ordinary names inside a DECIDE clause: as a declaration key ...
+query II
+SELECT g, x FROM kw DECIDE per "per": x(INT) SUCH THAT x <= v MAXIMIZE SUM(x) ORDER BY g;
+----
+1	5
+2	7
+
+# ... and in a constraint's key and a reducer's by, which are not bound yet
 statement error
 SELECT g, x FROM kw DECIDE per "per": x(INT) SUCH THAT per "row", "by": sum(x) by ("per") <= "row" MAXIMIZE SUM(x);
 ----

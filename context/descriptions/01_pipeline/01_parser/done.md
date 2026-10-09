@@ -39,7 +39,7 @@ a generic syntax error.
 x(TYPE)             row-scoped     — one decision per result row
 T.x(TYPE)           table-scoped   — one decision per entity in T
 scalar x(TYPE)      query-wide     — one decision for the whole query
-PER key: x(TYPE)    keyed          — parses; see "Scope spellings" below
+PER key: x(TYPE)    keyed          — one decision per key value; see "Scope spellings" below
 ```
 
 All build a `PG_AEXPR_OF` node pairing a `PGColumnRef` (one field, or two for the
@@ -84,14 +84,16 @@ precedence. That precedence is above `AND`, so `A AND B WHEN c` and
 comparison operators, so the body and condition retain their SQL expression
 shape. No parsed-tree association repair is needed.
 
-### Scope spellings — parsed, not yet bound
+### Scope spellings
 
 The planned extension ([`../../00_project_overview/anr_language_extension.md`](../../00_project_overview/anr_language_extension.md))
-writes a scope *in front* of what it governs. The grammar accepts all of it; the
-binder refuses every scope with *"DECIDE: 'PER key:' is not supported yet"*
+writes a scope *in front* of what it governs. The grammar accepts all of it. A
+declaration's `PER key:` binds (`../02_binder/done.md`, "Keyed declarations"); the
+binder refuses every other scope with *"DECIDE: 'PER key:' is not supported yet"* (or
+`PER ():`, `WHEN condition:`, `BY (key)`, whichever was written)
 (`ValidateDecideNoUnsupportedScope`, `decide_binder.cpp`, run first by
-`DecideDeclarationsBinder::BindDeclarations`, looking inside subqueries too) until
-the item that binds it lands.
+`DecideDeclarationsBinder::BindDeclarations` over the constraints and the objective,
+looking inside subqueries too) until the item that binds it lands.
 
 ```
 decide_scope  ::= decide_when | decide_when decide_per | decide_per

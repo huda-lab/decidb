@@ -7,10 +7,11 @@ choose a solver formulation.
 
 **Key source files**
 
-- `src/planner/binder/query_node/bind_select_node.cpp` — declaration handling and
-  the DECIDE section of `BindSelectNode`
+- `src/planner/expression_binder/decide/decide_declarations_binder.cpp` —
+  declarations, scopes, types, key trimming (`BindDeclarations`; the DECIDE section of
+  `BindSelectNode` in `bind_select_node.cpp` only calls it)
 - `src/planner/expression_binder/decide/decide_binder.cpp` — shared DECIDE expression
-  rules (reducers, degree, qualified reducers, aggregate-local `WHEN`)
+  rules (reducers, degree, qualified reducers, aggregate-local `WHEN`, key scopes)
 - `src/planner/expression_binder/decide/decide_constraints_binder.cpp` — `SUCH THAT`
 - `src/planner/expression_binder/decide/decide_objective_binder.cpp` — `MAXIMIZE` / `MINIMIZE`
 
@@ -19,8 +20,11 @@ choose a solver formulation.
 ## 1. Variable declarations
 
 Each entry of `statement.decide_variables` arrives as a `PG_AEXPR_OF` comparison
-pairing a `ColumnRefExpression` with a type marker string. The binder reads name,
-optional table qualifier, and type, then:
+pairing a `ColumnRefExpression` with a type marker string; with a `per`, the name is
+wrapped in the parser's `SCOPE_PER_TAG` marker (children: the name, then the key).
+`SplitDeclaration` reads name, optional table qualifier, `per` marker and type. Every
+declaration's name is checked and collected before any key resolves, so a key can be
+told from a decision declared before or after it. The checks:
 
 | Check | Message |
 |---|---|
@@ -37,9 +41,13 @@ Three scopes, recorded per variable in `variable_scopes` as a `DecideVarScopeInf
 
 | Declaration | Scope | Meaning |
 |---|---|---|
-| `x(TYPE)` | `Row()` | one decision per result row |
+| `x(TYPE)`, `per row: x(TYPE)` | `Row()` | one decision per result row |
+| `per K: x(TYPE)` | `Keyed(scope_idx, K as written)` | one decision per distinct value of `K` |
 | `T.x(TYPE)` | `Entity(scope_idx)` | one decision per distinct entity in `T` |
-| `scalar x(TYPE)` | `Scalar()` | one decision for the whole query |
+| `scalar x(TYPE)`, `per (): x(TYPE)` | `Scalar()` | one decision for the whole query |
+
+`Keyed` is an `ENTITY` scope that also records `declared_key`, so a message can name
+the decision as it was declared; everything past the binder treats it as `ENTITY`.
 
 The grammar flags the query-wide form by prefixing the type marker with
 `scalar_`, which the binder strips so the type comparison stays scope-agnostic.
@@ -48,10 +56,47 @@ For a table-scoped variable, `FindOrCreateEntityScope` resolves the alias in the
 bind context and either reuses or creates an `EntityScopeInfo`. The scope is keyed
 by table, so several variables — and a relation-qualified reducer `SUM(T: ...)` —
 share one scope, since the tuple-identity key is the same either way.
-`EntityScopeInfo` carries `table_alias`, `source_table_index`,
-`entity_key_bindings`, `scoped_variable_indices` and
-`entity_key_column_types`; `entity_key_physical_indices` is filled in later, at
-physical-plan creation.
+`EntityScopeInfo` carries `table_alias`, `source_table_indices`,
+`entity_key_bindings`, `scoped_variable_indices`, `entity_key_column_types` and
+`exact_key`; `entity_key_physical_indices` is filled in later, at physical-plan
+creation.
+
+After the clauses bind, a table scope (and a `SUM(T: ...)` scope) drops from its key
+every column of its tables that the constraints or the objective read — a coefficient,
+a bound, a `WHEN` or `PER` column — unless none would be left, so a CTE whose rows
+carry data beside an identity still groups by the identity. A keyed scope is never
+trimmed.
+
+### Keyed declarations
+
+`FindOrCreateKeyScope` (`decide_binder.cpp`) builds the scope of `per K:` from the
+parser's marker. Each key element resolves against the query's own bind context —
+never an outer query, whose column would be one constant per run of this one:
+
+1. A declared decision, by its name or, for `T.x`, by that spelling: *"DECIDE: x is
+   a decision; when, per and by may only use data"*. A decision named like a column
+   was already refused by the conflict check (a `USING` column escapes it, a logged
+   bug), so a name never means both.
+2. A column, resolved as SQL resolves it (`BindContext::GetBinding(alias, column)`):
+   `R.c`, `S.R.c`, `C.S.R.c`, or an unqualified `c` — the `USING` primary relation's
+   for a `USING` column (a `FULL OUTER JOIN USING` column has none: *"... write
+   S.depotID or D.depotID in the per key"*), else the one relation that has it
+   (DuckDB's ambiguity error otherwise).
+3. A relation (`R`, `S.R`, `C.S.R`), standing for its stored columns.
+4. Otherwise *"DECIDE: depot is neither a column nor a relation of the FROM clause"*
+   — also for `D.open` when `open` is a `per` or query-wide decision, which only its
+   bare name references.
+
+`rowid` and a generated column are not stored columns: named, they are an error;
+inside a relation, they are skipped. Columns are registered like a table scope's —
+through `TableBinding::GetColumnBinding` for a base table, so the scan keeps them —
+then sorted and de-duplicated by binding. A scope with the same bindings and
+`exact_key` is reused, so equal keys share one grouping however they were written; a
+keyed scope is never shared with a table scope, whose key may be trimmed.
+
+A keyed decision inside the old `SUM(D: e)` is refused by `CheckQualifiedReducerBody`
+(*"DECIDE: 'open' is declared with per; using it inside SUM(D: ...) is not supported
+yet"*): its key may span columns `D` does not determine.
 
 ### Types and domains
 
@@ -124,7 +169,7 @@ Q matrix, and false when two *different* decisions were multiplied (`x*y`),
 which feeds McCormick envelopes.
 
 `ValidateDecideConstraintDegree` and `ValidateDecideObjectiveDegree` run in
-`bind_select_node.cpp` immediately after the constraint and objective binders,
+`decide_declarations_binder.cpp` immediately after the constraint and objective binders,
 and they are **total**: the constraint validator descends conjunctions and
 `WHEN` / `PER` wrappers to every comparison that becomes a model row, and checks
 both sides. That totality is the point. The rule previously lived inside
@@ -402,8 +447,8 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 
 | Concern | Location |
 |---|---|
-| Declarations, scopes, types, aux pruning | `src/planner/binder/query_node/bind_select_node.cpp` |
-| Shared DECIDE expression rules, reducers | `src/planner/expression_binder/decide/decide_binder.cpp` |
+| Declarations, scopes, types, key trimming (`BindDeclarations`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
+| Shared DECIDE expression rules, reducers, key scopes (`FindOrCreateEntityScope`, `FindOrCreateKeyScope`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
 | `SUCH THAT` binding and `PER` gate | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
 | Objective binding | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |

@@ -739,6 +739,13 @@ void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpre
 			idx_t var_idx = DConstants::INVALID_INDEX;
 			const BoundColumnRefExpression *var_ref = nullptr;
 			if (FindNonScalarDecideVar(*atom.expr, var_idx, var_ref)) {
+				if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsKeyed()) {
+					throw BinderException(
+					    "DECIDE constraint: decision '%s' (declared per %s) cannot appear outside a reducer in an "
+					    "aggregate constraint. Put it inside SUM/AVG/MIN/MAX, or declare it per () when one "
+					    "query-wide value is intended.",
+					    UserFacingName(*var_ref), variable_scopes[var_idx].declared_key);
+				}
 				bool is_entity = var_idx < variable_scopes.size() && variable_scopes[var_idx].IsEntity();
 				throw BinderException(
 				    "DECIDE constraint: %s decision '%s' cannot appear outside a reducer in an "

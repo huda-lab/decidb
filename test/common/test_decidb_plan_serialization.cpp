@@ -300,6 +300,65 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	REQUIRE(after->decide_objective != nullptr);
 }
 
+TEST_CASE("Keyed declarations share one scope per key and survive a serialization round trip", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+
+	// a and b write one key two ways; d's old table scope comes first, then c's relation
+	// key with the same columns; e is query-wide and f is per row.
+	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
+	                            "DECIDE per region.r_name, site.cap: a(INT), per site.cap, r_name, r_name: b(INT), "
+	                            "region.d(INT), per region: c(INT), per (): e(INT), f(INT) "
+	                            "SUCH THAT a + b + c + d + e + f <= 10 MAXIMIZE SUM(a)");
+	auto *before = FindDecide(*plan);
+	REQUIRE(before != nullptr);
+
+	auto &scopes = before->entity_scopes;
+	auto &vars = before->variable_scopes;
+	REQUIRE(scopes.size() == 3);
+	REQUIRE(vars.size() == 6);
+	// Equal keys share one scope, however they are written.
+	REQUIRE(vars[0].IsKeyed());
+	REQUIRE(vars[0].declared_key == "region.r_name, site.cap");
+	REQUIRE(vars[1].declared_key == "site.cap, r_name, r_name");
+	REQUIRE(vars[0].entity_scope_idx == vars[1].entity_scope_idx);
+	auto &shared = scopes[vars[0].entity_scope_idx];
+	REQUIRE(shared.exact_key);
+	REQUIRE(shared.entity_key_bindings.size() == 2);
+	REQUIRE(shared.source_table_indices.size() == 2);
+	// A per key never reuses a T.x scope on the same columns: only the old table scope
+	// drops the columns its clause reads as data.
+	REQUIRE_FALSE(vars[2].IsKeyed());
+	REQUIRE(vars[2].IsEntity());
+	REQUIRE(vars[3].IsKeyed());
+	REQUIRE(vars[2].entity_scope_idx != vars[3].entity_scope_idx);
+	REQUIRE_FALSE(scopes[vars[2].entity_scope_idx].exact_key);
+	REQUIRE(scopes[vars[3].entity_scope_idx].exact_key);
+	REQUIRE(scopes[vars[2].entity_scope_idx].entity_key_bindings ==
+	        scopes[vars[3].entity_scope_idx].entity_key_bindings);
+	REQUIRE(vars[4].IsScalar());
+	REQUIRE(vars[5].scope == DecideVarScope::ROW);
+
+	auto copied = RoundTrip(con, *plan);
+	auto *after = FindDecide(*copied);
+	REQUIRE(after != nullptr);
+	REQUIRE(after->entity_scopes.size() == scopes.size());
+	for (idx_t i = 0; i < scopes.size(); i++) {
+		REQUIRE(after->entity_scopes[i].exact_key == scopes[i].exact_key);
+		REQUIRE(after->entity_scopes[i].table_alias == scopes[i].table_alias);
+		REQUIRE(after->entity_scopes[i].entity_key_bindings == scopes[i].entity_key_bindings);
+		REQUIRE(after->entity_scopes[i].source_table_indices == scopes[i].source_table_indices);
+	}
+	REQUIRE(after->variable_scopes.size() == vars.size());
+	for (idx_t i = 0; i < vars.size(); i++) {
+		REQUIRE(after->variable_scopes[i].scope == vars[i].scope);
+		REQUIRE(after->variable_scopes[i].entity_scope_idx == vars[i].entity_scope_idx);
+		REQUIRE(after->variable_scopes[i].declared_key == vars[i].declared_key);
+	}
+	REQUIRE(after->entity_key_expressions.size() == before->entity_key_expressions.size());
+}
+
 TEST_CASE("DIAGNOSE survives a serialization round trip", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);

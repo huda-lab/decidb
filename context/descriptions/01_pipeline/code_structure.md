@@ -281,19 +281,27 @@ constraint.
 
 ---
 
-## 4. Table-scoped variables end to end
+## 4. Table-scoped and keyed variables end to end
+
+`T.x(TYPE)` and `per K: x(TYPE)` take the same path from the logical plan on; the
+grammar and binder steps differ.
 
 | Struct | Where | What |
 |---|---|---|
-| `EntityScopeInfo` | `logical_decide.hpp` | `table_alias`, `source_table_index`, `entity_key_bindings`, `entity_key_physical_indices`, `scoped_variable_indices` |
+| `EntityScopeInfo` | `logical_decide.hpp` | `table_alias`, `source_table_indices`, `entity_key_column_types`, `entity_key_bindings`, `entity_key_physical_indices`, `scoped_variable_indices`, `exact_key` |
 | `EntityMapping` | `solver_input.hpp` | `num_entities`, `row_to_entity` — built at execution |
 | `VarIndexer` | `ilp_model.hpp` | The four-block layout and `Get` / `InstanceColumn` / `NumInstances` |
 
 The path:
 
-1. **Grammar** — `ColId '.' ColId '(' variable_type ')'` in `select.y`.
-2. **Binder** — resolves the alias, creates or reuses the scope via
-   `FindOrCreateEntityScope`, records `DecideVarScopeInfo::Entity(idx)`.
+1. **Grammar** — `ColId '.' ColId '(' variable_type ')'` in `select.y`; for `per K:`,
+   `decide_per ':' ColId '(' variable_type ')'`, which wraps the name in the
+   `SCOPE_PER` marker.
+2. **Binder** — `T.x`: resolves the alias, creates or reuses the scope via
+   `FindOrCreateEntityScope`, records `DecideVarScopeInfo::Entity(idx)`, and later
+   trims the key of the columns the clause reads as data. `per K:`: resolves each
+   key element via `FindOrCreateKeyScope` (an `exact_key` scope, never trimmed) and
+   records `DecideVarScopeInfo::Keyed(idx, K)`.
 3. **Logical plan** — `entity_key_expressions` keeps the key columns alive through
    column pruning.
 4. **Plan creation** — `plan_decide.cpp` resolves logical bindings to physical

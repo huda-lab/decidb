@@ -60,10 +60,10 @@ inside the clause are untouched.
 
 The scope spellings of the planned extension —
 [`anr_language_extension.md`](anr_language_extension.md): `PER key:`, `WHEN
-condition:`, `BY (key)` — parse today but are refused with *"not supported yet"*,
-wherever they appear in the clause, until the item that binds each one lands. On a
-declaration, a constraint or inside a reducer, `PER ROW` is the default written out
-and runs as if it were omitted. An objective takes only `PER ()`: any other `PER`
+condition:`, `BY (key)` — parse today. A declaration's `PER key:` runs (§2.3); every
+other one is refused with *"not supported yet"*, wherever it appears in the clause,
+until the item that binds it lands. On a declaration, a constraint or inside a
+reducer, `PER ROW` is the default written out and runs as if it were omitted. An objective takes only `PER ()`: any other `PER`
 there, `PER ROW` included, is the parse error *"an objective is produced once: write
 per (): or leave per out"*.
 
@@ -73,14 +73,14 @@ per (): or leave per out"*.
   written in parentheses after the name, `x(INT)`. There are exactly three type
   names — `INT`, `BOOL`, `REAL`.
 - Scope: Available in `SUCH THAT`, `MAXIMIZE/MINIMIZE`, and the `SELECT` list.
-- There are three **variable scopes**, which decide how many solver columns one
-  declaration yields:
+- A declaration's **scope** decides how many solver columns it yields:
 
   | Spelling | Scope | Columns |
   |---|---|---|
-  | `x(INT)` | row-scoped (default) | one per result row |
+  | `x(INT)`, `per row: x(INT)` | row-scoped (default) | one per result row |
+  | `per K: x(INT)` | keyed | one per distinct value of the key `K` (§2.3) |
   | `T.x(INT)` | table-scoped | one per distinct entity of `T` (§2.1) |
-  | `scalar x(INT)` | query-wide | exactly one, for the whole query (§2.2) |
+  | `scalar x(INT)`, `per (): x(INT)` | query-wide | exactly one, for the whole query (§2.2) |
 - **Type Declarations** (in DECIDE clause):
   - `x(INT)`: $x \in \{0, 1, 2, ...\}$ by default
   - `x(BOOL)`: $x \in \{0, 1\}$ (automatically adds bounds constraints)
@@ -119,7 +119,11 @@ By default, decision variables are **row-scoped**: the solver creates one variab
 **Table-scoped** variables are declared with a table qualifier: `DECIDE Table.var(TYPE)`. A table-scoped variable has ONE value per unique entity in the named source table. All result rows originating from the same entity share the same variable value (entity consistency).
 
 - The table qualifier must match a table alias or table name in the `FROM` clause.
-- Entity identification uses all columns from the source table as a composite key.
+- Entity identification uses the source table's columns as a composite key, minus
+  every column the constraints or the objective read as data (a coefficient, a bound,
+  a `WHEN` or `PER` column) — unless that would leave no column. So whether two rows
+  are one entity can depend on the rest of the query; `per K:` (§2.3) keys on exactly
+  the columns written, and `per T:` on all of `T`'s stored columns.
 - Mixed queries can declare both row-scoped and table-scoped variables.
 - Reduces solver variable count from `num_rows` (join result size) to `num_entities` (distinct entities in the source table).
 
@@ -138,7 +142,8 @@ MINIMIZE max_shortfall - SUM(ship)
 
 - **Spelling.** The `scalar` keyword precedes the name; the type is still
   mandatory. `scalar` is an unreserved keyword, so it remains usable as an
-  ordinary column, alias, or table name.
+  ordinary column, alias, or table name. `per (): name(TYPE)` is the same
+  declaration (§2.3).
 - **Never table-qualified.** `scalar T.x(INT)` is a contradiction and is
   rejected at parse time — a query-wide decision has no entity to attach to.
 - **Output.** The assigned value is repeated on every output row, the same way a
@@ -190,7 +195,51 @@ Here `n.keepN` is table-scoped to `nurses`: if nurse Alice appears in 5 shift ro
 
 **Limitations:**
 - The table qualifier must refer to a table or alias present in the `FROM` clause.
-- Entity keys are derived from all columns of the source table. There is no syntax to specify a custom key subset.
+- Entity keys are derived from the source table's columns (§2.1). For a key of your
+  choosing, write `per K:` (§2.3).
+
+### 2.3 Keyed Variables — `per K: x(TYPE)`
+
+```sql
+DECIDE per D.depotID: reserve(REAL)              -- one per distinct depotID
+DECIDE per D: open(BOOL)                         -- one per distinct tuple of D
+DECIDE per D.region, S.customerID: stock(INT)    -- one per distinct pair, across two relations
+DECIDE per (): cap(INT)                          -- one for the whole query (= scalar cap(INT))
+DECIDE ship(INT), per D: open(BOOL), per (): cap(INT)   -- each declarator its own key
+```
+
+- **Key elements** are columns and relations of the `FROM` clause, in any mix,
+  spelled as anywhere else in the query: `region`, `D.region`, `main.D.region`;
+  `D`, `main.D`. An unqualified `USING` column is the kept side's, as in SQL. A
+  relation stands for all its stored columns; a generated column is left out, since it
+  only repeats the columns it is computed from. The key is exactly what is written:
+  unlike `T.x` (§2.1), no column leaves it because the clause also reads it.
+- **A key is a set**: order and repetition do not matter, and declarators with equal
+  keys share one grouping.
+- **Each declarator has its own key**: `per D: open(BOOL), ship(INT)` leaves `ship`
+  one per row.
+- **Count**: one decision per distinct key value among the result rows; rows with a
+  NULL key share one decision. Every row shows its class's value.
+- **Reference** by the bare name; `D.open` names nothing.
+- **Errors** (Binder Errors naming the element as written, except the last):
+  - a declared decision in the key, by its name or, for `T.x`, by that spelling:
+    *"DECIDE: x is a decision; when, per and by may only use data"*;
+  - a name that is neither: *"DECIDE: depot is neither a column nor a relation of the
+    FROM clause"* — a key resolves in its own query's `FROM` only, never an outer
+    query's;
+  - `rowid` or a generated column: *"DECIDE: g.b is not a stored column; ..."*;
+  - an unqualified `USING` column of a `FULL OUTER JOIN`, which comes from both sides:
+    *"DECIDE: depotID is merged by a FULL OUTER JOIN USING; write S.depotID or
+    D.depotID in the per key"*;
+  - an expression in the key is a Parser Error: *"a per key lists columns or
+    relations; put expressions in by (...)"*.
+- **Not supported yet**: a keyed decision inside the old `SUM(D: e)` is refused (*"DECIDE: 'open' is declared with per; using it inside
+  SUM(D: ...) is not supported yet"*), and beside a reducer in an aggregate constraint
+  it is refused as a table-scoped one is, named as declared (*"decision 'open'
+  (declared per D.depotID) cannot appear outside a reducer ... or declare it per ()
+  ..."*).
+
+Tests: `test/decide/tests/test_scope_declare.py`.
 
 ## 3. Constraints
 

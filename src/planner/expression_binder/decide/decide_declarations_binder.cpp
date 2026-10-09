@@ -5,6 +5,7 @@
 #include "duckdb/parser/expression/columnref_expression.hpp"
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
@@ -56,6 +57,43 @@ static void RewriteScopedVarRefs(unique_ptr<ParsedExpression> &expr,
 	});
 }
 
+//! One declaration `[per K:] [T.]name(TYPE)` as the parser leaves it: the comparison
+//! `name = 'type_marker'`, its name wrapped in the `SCOPE_PER_TAG` marker when a `per`
+//! was written.
+struct ParsedDeclaration {
+	const ColumnRefExpression *name = nullptr;
+	//! The `per` marker, or null when none was written. One child means `per ()`.
+	const FunctionExpression *per = nullptr;
+	string type_marker;
+};
+
+static ParsedDeclaration SplitDeclaration(const ParsedExpression &declaration) {
+	if (declaration.GetExpressionClass() != ExpressionClass::COMPARISON) {
+		throw BinderException(declaration, "Invalid DECIDE variable declaration.");
+	}
+	auto &comp = declaration.Cast<ComparisonExpression>();
+	ParsedDeclaration result;
+	auto *name = comp.left.get();
+	if (name->GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &marker = name->Cast<FunctionExpression>();
+		if (marker.is_operator && marker.function_name == SCOPE_PER_TAG && !marker.children.empty()) {
+			result.per = &marker;
+			name = marker.children[0].get();
+		}
+	}
+	if (name->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+		throw BinderException(declaration, "Invalid DECIDE variable declaration: expected variable name on left side.");
+	}
+	result.name = &name->Cast<ColumnRefExpression>();
+	if (comp.right->GetExpressionClass() == ExpressionClass::CONSTANT) {
+		auto &type = comp.right->Cast<ConstantExpression>();
+		if (type.value.type() == LogicalType::VARCHAR) {
+			result.type_marker = type.value.ToString();
+		}
+	}
+	return result;
+}
+
 DecideDeclarationsBinder::DecideDeclarationsBinder(Binder &binder, ClientContext &context)
     : binder(binder), context(context) {
 }
@@ -63,9 +101,8 @@ DecideDeclarationsBinder::DecideDeclarationsBinder(Binder &binder, ClientContext
 void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSelectNode &result) {
 	auto &bind_context = binder.bind_context;
 
-	for (auto &variable : statement.decide_variables) {
-		ValidateDecideNoUnsupportedScope(*variable);
-	}
+	// A declaration's `per` binds below; the scopes of constraints and the objective
+	// are still refused.
 	if (statement.decide_constraints) {
 		ValidateDecideNoUnsupportedScope(*statement.decide_constraints);
 	}
@@ -85,35 +122,30 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // Map table alias → entity_scopes index (to share scope info for multiple vars on same table)
         case_insensitive_map_t<idx_t> table_scope_map;
 
-        for (const auto& expr_ptr : statement.decide_variables) {
-            string name;
-            string table_name;  // empty for row-scoped variables
-            string type_marker;
-
-            // Handle typed variable declarations (ComparisonExpression from "x IS INTEGER")
-            if (expr_ptr->GetExpressionClass() == ExpressionClass::COMPARISON) {
-                const auto& comp = expr_ptr->Cast<duckdb::ComparisonExpression>();
-
-                // LHS should be the variable name (ColumnRefExpression)
-                if (comp.left->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-                    throw BinderException(*expr_ptr, "Invalid DECIDE variable declaration: expected variable name on left side.");
-                }
-                const auto& colref = comp.left->Cast<duckdb::ColumnRefExpression>();
-                name = colref.GetColumnName();
-                if (colref.IsQualified()) {
-                    table_name = colref.GetTableName();
-                }
-
-                // RHS should be the type marker (ConstantExpression with string value)
-                if (comp.right->GetExpressionClass() == ExpressionClass::CONSTANT) {
-                    const auto& const_expr = comp.right->Cast<duckdb::ConstantExpression>();
-                    if (const_expr.value.type() == LogicalType::VARCHAR) {
-                        type_marker = const_expr.value.ToString();
-                    }
-                }
-            } else {
-                throw BinderException(*expr_ptr, "Invalid DECIDE variable declaration.");
+        // Every declared name, checked and collected before any key resolves, so a key
+        // element can be told from a decision declared before or after it. A `T.x(TYPE)`
+        // decision is also named by that spelling.
+        case_insensitive_set_t declared_names;
+        for (const auto &expr_ptr : statement.decide_variables) {
+            auto &declared = *SplitDeclaration(*expr_ptr).name;
+            auto &name = declared.GetColumnName();
+            if (bind_context.GetMatchingBinding(name)) {
+                throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
             }
+            if (!declared_names.insert(name).second) {
+                throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
+            }
+            if (declared.IsQualified()) {
+                declared_names.insert(declared.GetTableName() + "." + name);
+            }
+        }
+
+        for (const auto& expr_ptr : statement.decide_variables) {
+            auto declaration = SplitDeclaration(*expr_ptr);
+            string name = declaration.name->GetColumnName();
+            // Empty for every spelling but `T.x(TYPE)`.
+            string table_name = declaration.name->IsQualified() ? declaration.name->GetTableName() : string();
+            string type_marker = declaration.type_marker;
 
             // The grammar flags a query-wide declaration by prefixing the type
             // marker (see scalar_variable_type in select.y). Strip it so the type
@@ -122,13 +154,6 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             bool is_scalar = StringUtil::StartsWith(type_marker, scalar_prefix);
             if (is_scalar) {
                 type_marker = type_marker.substr(scalar_prefix.size());
-            }
-
-            if (bind_context.GetMatchingBinding(name)) {
-                throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
-            }
-            if (decide_variable_names.count(name)) {
-                throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
             }
 
             idx_t var_idx = var_names.size();
@@ -158,10 +183,16 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
             }
 
-            // A scalar is query-wide, so it never carries an entity scope; the
-            // grammar already rejects the table-qualified spelling.
-            if (is_scalar) {
+            // A query-wide decision -- `scalar x` or `per (): x` -- carries no key scope;
+            // the grammar rejects `scalar` together with a table or a `per`.
+            if (is_scalar || (declaration.per && declaration.per->children.size() == 1)) {
                 variable_scopes.push_back(DecideVarScopeInfo::Scalar());
+            } else if (declaration.per) {
+                auto key_text = DecideKeyToString(*declaration.per);
+                scope_idx = FindOrCreateKeyScope(bind_context, *declaration.per, declared_names, key_text,
+                                                 entity_scopes);
+                entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
+                variable_scopes.push_back(DecideVarScopeInfo::Keyed(scope_idx, key_text));
             } else if (scope_idx != DConstants::INVALID_INDEX) {
                 variable_scopes.push_back(DecideVarScopeInfo::Entity(scope_idx));
             } else {
@@ -258,8 +289,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         }
 
         bind_context.AddGenericBinding(result.decide_index, "decide_variables", var_names, var_types);
-        // Names declared with `scalar`, so the constraint and objective binders can
-        // tell a query-wide decision from a row-scoped one.
+        // Query-wide decisions (`scalar x` or `per (): x`), so the constraint and objective
+        // binders can tell a query-wide decision from a row-scoped one.
         case_insensitive_set_t scalar_variable_names;
         for (idx_t v = 0; v < variable_scopes.size() && v < var_names.size(); v++) {
             if (variable_scopes[v].IsScalar()) {
@@ -325,6 +356,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // data in constraints/objectives. These are dependent data columns, not identity columns.
         // Without this refinement, CTEs with multiple columns would use ALL columns as
         // entity key, making every row its own entity and defeating table-scoping.
+        // Only `T.x` and `sum(T: ...)` scopes are refined: a `per` key is exactly as written.
         if (!entity_scopes.empty()) {
             // Collect column bindings from scoped tables that appear in bound expressions
             unordered_set<uint64_t> data_columns;  // encode as (table_index << 32) | col_index
@@ -334,6 +366,9 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                     auto &binding = col_ref.binding;
                     // Check if this column belongs to any scoped table
                     for (auto &scope : entity_scopes) {
+                        if (scope.exact_key) {
+                            continue;
+                        }
                         bool in_scope = false;
                         for (auto scope_table_index : scope.source_table_indices) {
                             if (binding.table_index == scope_table_index) {
@@ -357,6 +392,9 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 
             // Remove data columns from entity keys (keep at least one key column)
             for (auto &scope : entity_scopes) {
+                if (scope.exact_key) {
+                    continue;
+                }
                 vector<ColumnBinding> refined_bindings;
                 vector<LogicalType> refined_types;
                 for (idx_t k = 0; k < scope.entity_key_bindings.size(); k++) {

@@ -1067,6 +1067,11 @@
         "id": 101,
         "name": "entity_scope_idx",
         "type": "idx_t"
+      },
+      {
+        "id": 102,
+        "name": "declared_key",
+        "type": "string"
       }
     ],
     "pointer_type": "none"
@@ -1074,7 +1079,7 @@
   {
     "class": "EntityScopeInfo",
     "includes": [
-      "duckdb/planner/operator/logical_decide.hpp"
+      "duckdb/planner/operator/decide/logical_decide.hpp"
     ],
     "members": [
       {
@@ -1101,6 +1106,11 @@
         "id": 104,
         "name": "scoped_variable_indices",
         "type": "vector<idx_t>"
+      },
+      {
+        "id": 105,
+        "name": "exact_key",
+        "type": "bool"
       }
     ],
     "pointer_type": "none"
@@ -1108,7 +1118,7 @@
   {
     "class": "DecideSourceColumnName",
     "includes": [
-      "duckdb/planner/operator/logical_decide.hpp"
+      "duckdb/planner/operator/decide/logical_decide.hpp"
     ],
     "members": [
       {

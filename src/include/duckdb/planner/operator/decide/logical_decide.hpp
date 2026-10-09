@@ -16,20 +16,17 @@
 
 namespace duckdb {
 
-//! Tracks entity-scope metadata for decision variables scoped to a base table, or
-//! for a reducer qualifier scoped to a set of relations at once (`sum(D, T: e)`).
-//! When a variable is declared as "T.x IS BOOLEAN", it has one value per unique
-//! row in table T, not per join result row. A multi-relation qualifier extends the
-//! same idea: its tuple identity is the concatenation of every named relation's
-//! own key, so de-duplication collapses only the fan-out contributed by relations
-//! it does *not* name.
+//! A key scope: the columns whose values decide which result rows share one decision.
+//! `per K: x(TYPE)` keys on exactly the columns K names, possibly across relations.
+//! `T.x(TYPE)` keys on table T, and a reducer qualifier on the relations it names
+//! (`sum(D, T: e)`): one value per distinct tuple, so de-duplication collapses only the
+//! fan-out contributed by relations the qualifier does *not* name.
 struct EntityScopeInfo {
-    //! Table alias or name used in the DECIDE declaration (e.g., "S" or "Sensors").
-    //! For a multi-relation qualifier, the named relations joined by ",", e.g. "D,T".
+    //! What the user wrote: the relation for `T.x`, the named relations joined by ","
+    //! for a qualifier ("D,T"), the key for `per K:` ("D.depotID, S.customerID").
     string table_alias;
-    //! DuckDB table index/indices from the bind context (Binding::index). A
-    //! declaration scope always has exactly one; a qualifier scope has one per
-    //! named relation.
+    //! DuckDB table index/indices from the bind context (Binding::index): every
+    //! relation a key column comes from.
     vector<idx_t> source_table_indices;
     //! Column types for the entity key columns
     vector<LogicalType> entity_key_column_types;
@@ -39,8 +36,12 @@ struct EntityScopeInfo {
     vector<idx_t> entity_key_physical_indices;
     //! Logical column bindings (table_index, col_index) — used to resolve physical indices
     vector<ColumnBinding> entity_key_bindings;
-    //! Which decide_variables indices are scoped to this table
+    //! Which decide_variables indices this scope keys
     vector<idx_t> scoped_variable_indices;
+    //! True for a `per K:` scope, whose key is exactly the columns K names. A `T.x` or
+    //! `sum(T: ...)` scope (false) drops the columns its clause reads as data
+    //! (`DecideDeclarationsBinder::BindDeclarations`), and the two never share a scope.
+    bool exact_key = false;
 
     //! Generated from `storage/serialization/nodes.json`. `entity_key_physical_indices`
     //! is deliberately absent: it is resolved at physical planning, after the only point
@@ -278,10 +279,10 @@ public:
     // True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
     bool per_inner_was_avg = false;
 
-    // --- Table-scoped variable metadata ---
+    // --- Key scopes ---
 
-    //! Entity scope info for each source table with table-scoped variables.
-    //! Empty if all variables are row-scoped (default behavior).
+    //! Every key scope: of `T.x`, of `sum(T: ...)`, and of `per K:` (`exact_key`).
+    //! Empty when no decision or reducer is keyed.
     vector<EntityScopeInfo> entity_scopes;
 
     //! Per-variable scope assignment (row / entity / query-wide scalar).
