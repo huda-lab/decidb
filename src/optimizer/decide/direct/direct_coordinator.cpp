@@ -22,7 +22,6 @@ InsertionOrderPreservingMap<string> DirectSolveDecisionRecord::Render() const {
 	result["Direct solve mode"] = mode;
 	result["Direct solve rule"] = rule;
 	result["Direct solve proof"] = proof;
-	result["Direct solve guards"] = guards;
 	return result;
 }
 

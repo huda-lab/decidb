@@ -13,13 +13,12 @@ class Optimizer;
 
 enum class DirectSolveMode : uint8_t { OFF, AUTO, REQUIRE };
 
-//! What EXPLAIN shows for a plan the direct solver built: the setting, the rule that was proved, and the proof and
-//! runtime guards it carries. A query the rules do not prove keeps its solver plan and has no record.
+//! What EXPLAIN shows for a plan the direct solver built: the setting, the rule that was proved, and one fixed line
+//! naming the problem class. A query the rules do not prove keeps its solver plan and has no record.
 struct DirectSolveDecisionRecord {
 	string mode;
 	string rule;
 	string proof;
-	string guards;
 
 	InsertionOrderPreservingMap<string> Render() const;
 };

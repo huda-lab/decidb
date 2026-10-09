@@ -63,7 +63,6 @@ public:
 	}
 	void Explain(const DirectRuleProof &, DirectSolveDecisionRecord &record) const override {
 		record.proof = "stub";
-		record.guards = "none";
 	}
 	DirectRelationalProposal Rewrite(duckdb::unique_ptr<LogicalOperator> source, Optimizer &optimizer,
 	                                 const DirectRuleProof &) const override {

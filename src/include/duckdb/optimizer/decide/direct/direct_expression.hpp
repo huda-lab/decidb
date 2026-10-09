@@ -12,6 +12,10 @@ class BoundColumnRefExpression;
 class ClientContext;
 struct DirectPart;
 
+//! The largest whole number a DOUBLE holds exactly (2^53). A count limit or an INT answer beyond it cannot be read or
+//! returned exactly.
+constexpr double DIRECT_MAX_EXACT_INTEGER = 9007199254740992.0;
+
 //! Rule-independent questions about a bound expression. A rule asks them while proving that an expression may be
 //! evaluated per source row; none of them knows which problem class it is serving.
 

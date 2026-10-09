@@ -77,7 +77,6 @@ public:
 		serializer.WriteProperty(206, "mode", record.mode);
 		serializer.WriteProperty(207, "rule", record.rule);
 		serializer.WriteProperty(209, "proof", record.proof);
-		serializer.WriteProperty(210, "guards", record.guards);
 		serializer.WriteProperty(213, "prunable_outputs", prunable_outputs);
 	}
 	static unique_ptr<LogicalExtensionOperator> Read(Deserializer &deserializer) {
@@ -90,7 +89,6 @@ public:
 		result->record.mode = deserializer.ReadProperty<string>(206, "mode");
 		result->record.rule = deserializer.ReadProperty<string>(207, "rule");
 		result->record.proof = deserializer.ReadProperty<string>(209, "proof");
-		result->record.guards = deserializer.ReadProperty<string>(210, "guards");
 		result->prunable_outputs = deserializer.ReadProperty<vector<uint8_t>>(213, "prunable_outputs");
 		return std::move(result);
 	}

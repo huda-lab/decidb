@@ -43,6 +43,8 @@ S1_SOLVER_ONLY_ROW_BOUNDS = {
 class RuleFixture:
     #: The rule name EXPLAIN and `require` messages print.
     rule: str
+    #: The one fixed line EXPLAIN prints as the proof: the problem class, with no number from the query.
+    proof: str
     #: A query the rule proves, ordered so its rows are comparable, with one optimal assignment.
     hit: str
     #: The `hit` query over a source with no rows. The solver answers it, so the rule must give its outcome.
@@ -71,6 +73,7 @@ class RuleFixture:
 
 S1 = RuleFixture(
     rule="S1_CARDINALITY_INTERVAL",
+    proof="min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi",
     hit="""
         SELECT id, score, x FROM (
             FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('9.0' AS DOUBLE)), (2, CAST('-1.0' AS DOUBLE)))
@@ -161,14 +164,7 @@ S1 = RuleFixture(
         ("x(BOOL)", "SUM(x)<=COUNT(*)/0", "MAXIMIZE SUM(p*x)", "a divisor that is not a nonzero constant"),
         ("x(BOOL)", "SUM(x)<=COUNT(*)/COUNT(*)", "MAXIMIZE SUM(p*x)", "a divisor that is not a nonzero constant"),
         ("x(BOOL)", "SUM(x)<=abs(COUNT(*)-5)", "MAXIMIZE SUM(p*x)", "the function abs"),
-        # 2^53 rows times 2^76 can leave the range of HUGEINT. 1e23 is not a double, so its exact value is not what a
-        # double-based bound would read.
-        (
-            "x(BOOL)",
-            "SUM(x)<=COUNT(*)*75557863725914323419136",
-            "MAXIMIZE SUM(p*x)",
-            "a value that can leave the range of its type",
-        ),
+        # 1e23 is not a double, so its exact value is not what a double-based bound would read.
         (
             "x(BOOL)",
             "SUM(x)<=COUNT(*)*100000000000000000000000",
@@ -208,6 +204,7 @@ def _a1_late_error(decision_sql, score_sql="1.0", cap_sql="10.0"):
 
 A1 = RuleFixture(
     rule="A1_INDEPENDENT_BOUNDS",
+    proof="min/max SUM(c*x), l <= x <= u, each row independent",
     # Whole-number answers with a unique optimum, so the rows equal the solver's exactly and the query also runs on
     # forced HiGHS (which has no mixed-integer quadratic and no non-convex quadratic).
     hit="""

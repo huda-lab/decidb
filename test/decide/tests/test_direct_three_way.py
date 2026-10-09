@@ -967,6 +967,49 @@ def test_s1_boundary_values_read_like_the_solver(decidb_cli, name):
     assert direct == _outcome(decidb_cli, sql, "off")
 
 
+# A bound built from COUNT(*) is evaluated by DuckDB's own arithmetic, so it can overflow. The solver evaluates it once
+# per group that has a row the clause covers: a row whose WHEN holds and whose PER key is not NULL. The direct plan must
+# raise on exactly those queries. Groups: a = 2 rows (1 flagged), b = 2 (both flagged), c = 4 (none flagged),
+# NULL key = 3 (all flagged). With a factor of 3e18, a count of 3 or more overflows INT64.
+_OVERFLOW_ROWS = (
+    "(1,'a',9.0,true),(2,'a',8.0,false),(3,'b',7.0,true),(4,'b',6.0,true),"
+    "(5,'c',5.0,false),(6,'c',4.0,false),(7,'c',3.0,false),(8,'c',2.0,false),"
+    "(9,NULL,3.0,true),(10,NULL,2.0,true),(11,NULL,1.0,true)"
+)
+_BIG = "3000000000000000000"
+# name -> (constraint, outcome on both paths)
+COUNT_OVERFLOW_CASES = {
+    # The NULL-key group counts three flagged rows; the solver never evaluates the bound for it.
+    "null_key_group_with_when": (f"SUM(x) <= COUNT(*) * {_BIG} WHEN flag PER g", "ok"),
+    # Group c has four rows but none where the local WHEN holds, so the clause covers nothing there.
+    "uncovered_group_with_local_when": (f"SUM(x) WHEN flag <= COUNT(*) * {_BIG} PER g", "ok"),
+    "uncovered_group_negative_factor": (f"SUM(x) >= COUNT(*) * -{_BIG} WHEN flag PER g", "ok"),
+    "infinite_bound": ("SUM(x) <= COUNT(*) * 1e308 WHEN flag PER g", "ok"),
+    # Covered groups that do overflow: both paths raise.
+    "group_overflow": (f"SUM(x) <= COUNT(*) * {_BIG} PER g", "error"),
+    "group_overflow_negative_factor": (f"SUM(x) >= COUNT(*) * -{_BIG} PER g", "error"),
+    "global_overflow": (f"SUM(x) <= COUNT(*) * {_BIG}", "error"),
+    "global_when_overflow": (f"SUM(x) <= COUNT(*) * {_BIG} WHEN flag", "error"),
+    "local_when_overflow": (f"SUM(x) WHEN NOT flag <= COUNT(*) * {_BIG} PER g", "error"),
+}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(COUNT_OVERFLOW_CASES))
+def test_s1_count_bound_raises_only_where_the_solver_does(decidb_cli, name):
+    constraint, expected = COUNT_OVERFLOW_CASES[name]
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {_OVERFLOW_ROWS}) t(id, g, score, flag) "
+        f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    solver = _outcome(decidb_cli, sql, "off")
+    direct = _outcome(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_miss"), f"direct solve declined:\n{sql}"
+    assert solver[0] == expected, f"the solver gave {solver}, so this case no longer tests what it says"
+    assert direct == solver
+
+
 # Each set has one best score; with room for one row the best is the only row worth selecting. The solvers
 # disagree with each other near 1e-9, so the reference is the exact finite DOUBLE, not a solver.
 TINY_SCORES = [(5e-324, -5e-324, 0.0), (1e-6, 9e-7, 1e-9), (2e-300, 1e-300, 0.0), (1e-12, 5e-13, 0.0)]

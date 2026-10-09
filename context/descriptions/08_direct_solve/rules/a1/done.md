@@ -17,7 +17,8 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   over source columns. The decision may carry a coefficient and an offset (`2*x + 1 <= cap`, `-x >= -cap`, `w*x <= cap`);
   a row-valued coefficient picks the side by its sign, and a zero coefficient leaves the row alone or infeasible. Each
   clause may carry its own `WHEN`. The value expressions may raise at run time (an overflowing cast, a division by
-  zero): the plan evaluates them on every row, as the solver does.
+  zero): the plan evaluates them on every row, as the solver does. An equality is an at-least clause and an at-most
+  clause; the second is `A1Clause::Copy()` of the first with its comparison changed, so no field can differ.
 - **Default box.** `BOOL` is [0, 1]; `INT` and `REAL` are [0, ∞). A bare unconditional constant lower bound (`x >= -3`)
   replaces the default 0 on the solver, so it does here. Every other lower bound (a column, a `WHEN`, a coefficient or
   offset on `x`, an arithmetic constant such as `0 - 3`) only intersects with it. The solver and direct solve ask one

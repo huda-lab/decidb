@@ -5,16 +5,16 @@ tasks live here. When a task ships, its result moves to `done.md` and the task i
 rule) shipped on 2026-10-06. Old IDs are in parentheses so earlier notes still make sense.
 
 H-04 to H-13 come from a full review of the direct-solve layer on 2026-10-07; H-04, H-05 and H-06 shipped on 2026-10-09
-(session 2, with A1-06 and S1-14). S1 and A1 tasks from the same review are in `../s1/todo.md` (S1-10 to S1-13) and
-`../a1/todo.md` (A1-05 and A1-07).
+(session 2, with A1-06 and S1-14), and H-09, H-10 and H-11 on the same day (session 3, with S1-10, S1-11 and A1-07).
+S1 and A1 tasks from the same review are in `../s1/todo.md` (S1-12 and S1-13) and `../a1/todo.md` (A1-05).
 
 ## How to work any task in these three todo files
 
 - Each task stands alone. Read its **Problem**, make the change, run the checks, then move the result to `done.md`.
-- Baseline on 2026-10-09 (working tree on top of `82715d43b0`, not committed, after session 2): `make decide-test`,
-  `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each give 2,314 passed
-  (no failures, no expected failures). `DECIDB_FORCE_SOLVER=highs make decide-test` gives 2,313 passed and the one
-  expected failure. C++ `build/release/test/unittest "[decidb]"` passes (1,247 assertions in 40 cases). Any other
+- Baseline on 2026-10-09 (working tree on top of `191789b282`, not committed, after session 3): `make decide-test`,
+  `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each give 2,322 passed
+  (no failures, no expected failures). `DECIDB_FORCE_SOLVER=highs make decide-test` gives 2,321 passed and the one
+  expected failure. C++ `build/release/test/unittest "[decidb]"` passes (1,241 assertions in 40 cases). Any other
   failure after your change is yours.
 - Checks that every code task runs (from the repository root, about 30 seconds each): `make decide-test`,
   `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
@@ -33,8 +33,8 @@ H-04 to H-13 come from a full review of the direct-solve layer on 2026-10-07; H-
 |---|---|---|
 | 1. Green and honest | A1-05 (re-stamp only; A1-01 and A1-04 shipped on 2026-10-09) | The A1 stamps match a run. About 15 minutes. |
 | 2. Safety | done 2026-10-09 (H-04, H-05, H-06, A1-06, S1-14) | The empty-source test gap is closed, reading facts cannot throw, the NaN message names the right clause. |
-| 3. Trim | H-09, H-10, H-11, S1-11, A1-07 | Removes code nobody uses, with no behavior change. About 3 hours. |
-| 4. Structure | H-07 part 2 (needs a decision), H-08, S1-10 (needs a decision), S1-13, H-12 | One mechanism for the solver's quirks, reusable tests, current measurements. Larger diffs. |
+| 3. Trim | done 2026-10-09 (S1-10, S1-11, H-10, H-11, A1-07, H-09) | Removes code nobody uses. |
+| 4. Structure | H-07 part 2 (needs a decision), H-08, S1-13, H-12 | One mechanism for the solver's quirks, reusable tests, current measurements. Larger diffs. |
 | Later | S1-12, H-13, A1-03 | Wait for a third per-row rule, or for one measurement. |
 
 ## H-07 — The solver's "rejected before any row is read" rule is copied three ways
@@ -92,63 +92,6 @@ that does not include optimizer headers, so they were left alone.
 - **Done when.** The two files share one scaffold, the number of tests is unchanged (2,267 including xfails today), and no
   oracle result had to be recomputed. About 1–2 hours.
 
-## H-09 — Every direct hit pays for a cost estimate nobody reads
-
-- **Problem.** The coordinator (`direct_coordinator.cpp`, `MakeCostContext`) builds a `DirectCostContext` the first time any
-  rule proves a query. It saves every operator's cached row estimate, calls `EstimateCardinality` on the whole source
-  plan, and restores the cache. Both rules return `0.0` from `Cost` and neither reads `estimated_source_rows`, so the
-  work is thrown away on every direct hit. It exists for H-03 (two rules competing), which has no real case yet.
-- **Why it matters.** Planning-time work on every query for a number nothing uses; on a deep join source the estimate walks the whole tree.
-- **Decision needed.** (a) Compute the context lazily, only when a second candidate has proved and a tie must be broken
-  (keeps the interface for H-03). (b) Delete `Cost`, `DirectCostContext` and `MakeCostContext` until H-03 is real and
-  re-add them then. (c) Leave it. Recommendation: first measure. Time `EXPLAIN` of a DECIDE query over a source with
-  several joins, with `decide_direct_solve='auto'` against `'off'`. If the difference is under about 1 ms, choose (c) and
-  close this task with the numbers. Otherwise choose (a).
-- **Where.** `direct_coordinator.cpp`, `test/common/test_decidb_direct_coordinator.cpp` (stub-rule tests: "picks the
-  cheapest proved rule", "gives Cost the estimated source row count", "non-finite cost").
-- **Done when.** Either the measurement is written in `done.md` and nothing changed, or a single proved rule never causes an estimate and the coordinator tests (updated where they assumed `Cost` always runs) pass.
-
-## H-10 — Helpers in the "shared" builders that only S1 uses
-
-- **Problem.** `architecture/rules.md` says to keep a helper inside its rule until a second rule needs it. These live in
-  `direct_builder.{hpp,cpp}` and only S1 calls them: `DirectProjectScope` (with `DirectScopeState`),
-  `DirectValidateBounds` (with `DirectBoundSpec`, `DirectNotNullSpec`, `DirectBoundValidation`; about 130 lines),
-  `DirectWindowExtremum` and `DirectAnyCondition`. Two things that are really shared are written out several times:
-  the "is NULL" expression is built by hand three times in `direct_builder.cpp` (in `DirectProjectScope` and
-  `DirectValidateBounds`) although a static `DirectIsNull` exists there, and the number 2^53 (`9007199254740992`) appears in `s1_rule.cpp` three times and as `MAX_EXACT_INTEGER` in
-  `a1_rule.cpp`. Two comments in `direct_builder.hpp` still describe error order the solver's wording decision dropped
-  (`DirectGuardEmptyAggregate`: "raises before any value of the clause is validated"; `DirectValidateBounds`: "the first
-  failing clause raises in source-clause order").
-- **Why it matters.** The shared layer claims more generality than it has earned, and its stale comments tell the next
-  author that order matters when it does not (policy.md, 2026-10-05).
-- **Plan.**
-  1. Create `s1_support.hpp` and `s1_support.cpp` in `src/optimizer/decide/direct/` (add the `.cpp` to that folder's
-     `CMakeLists.txt`), namespace `direct_s1` as S1 already does for its helpers. Move the helpers above into it.
-     `DirectGuardEmptyAggregate`, `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBarrier`,
-     `DirectScaledTerm` and the error predicates have two users or are engine, so they stay.
-  2. Fix the two comments as you move or keep them: say that which failing check is reported is not specified.
-  3. Replace the three hand-built IS NULL expressions with calls to `DirectIsNull`, and add one named constant for 2^53 in
-     `direct_expression.hpp` used by S1 and A1.
-  4. Unity builds merge anonymous namespaces; keep names unique (see the note at the top of `a1_rule.cpp`).
-- **Done when.** `direct_builder.hpp` lists only helpers with two or more users, no behavior changed, all five checks pass. About 1–2 hours.
-
-## H-11 — The decision record is presentation code with no reader but the tests
-
-- **Problem.** On a hit, each rule's `Explain` fills `DirectSolveDecisionRecord` (`mode`, `rule`, `proof`, `guards`).
-  S1's version is about 45 lines and 8 branches that assemble sentences from the proof; A1's is about 20. The strings
-  are serialized into the plan (`LogicalDirectSolveResult`) and shown in `EXPLAIN`. Only tests read them
-  (`test_direct_rule_contract.py::test_serializer_explain_and_model_dump` checks that `Direct solve rule` and `Direct
-  solve proof` appear).
-- **Why it matters.** Every branch can drift from what the plan does, and nothing enforces that the text is true.
-- **Decision needed.** Keep the sentences, or shrink them to one fixed line per rule. Recommendation: keep `mode` and
-  `rule`; make `proof` one fixed sentence per rule (S1: "count bounds on one BOOL decision, ranked by score"; A1: "each
-  row solved on its own inside its bounds"); drop `guards`. `require` already explains a miss in detail, which is where users look.
-- **Plan (if shrinking).** Grep the tests for `guards` and `Direct solve proof` first (`grep -rn --include='*.py' --include='*.cpp' -e guards test`). Remove
-  the `guards` field from the record, `Render`, the serializer (leave the property ids as they are; the gaps already there
-  are fine) and `Read`. Check that nothing persists a serialized plan across versions; if so, bump
-  `DIRECT_RESULT_EXTENSION` (`decidb_direct_solve_result_v3`).
-- **Done when.** `EXPLAIN` of an S1 and an A1 hit each shows rule and one proof line, the serializer check passes, and `Explain` in each rule is a few lines.
-
 ## H-12 — Docs that point at nothing, and a matrix that is slow to stamp
 
 - **Problem.** (1) `src/include/duckdb/optimizer/decide/direct/direct_rule.hpp` (the comment above `DirectDomain`) says
@@ -189,7 +132,8 @@ that does not include optimizer headers, so they were left alone.
 - **Goal.** Choose between two proved direct plans by cost. The coordinator already picks the cheapest proved
   candidate, but the two rules so far (S1, A1) never prove the same query.
 - **Done when.** Two proved plans compete on a real workload and cost decides. Cost never repairs a missing proof.
-- **Note.** H-09 may make the cost estimate lazy. Do not build H-03 on a context the coordinator computes eagerly.
+- **Note.** H-09 measured the eager cost context at under 0.5 ms of planning (`done.md`) and left it. If H-03 becomes real,
+  re-measure on the workload that needs it.
 
 ## Reviewed on 2026-10-07 and left alone (do not redo)
 

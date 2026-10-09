@@ -17,6 +17,7 @@
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
+#include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
@@ -25,6 +26,7 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
+#include "s1_support.hpp"
 
 namespace duckdb {
 
@@ -139,7 +141,7 @@ bool NormalizeCapacity(ClientContext &context, const Expression &expr, Expressio
 		inclusive = std::ceil(as_double);
 		break;
 	case ExpressionType::COMPARE_GREATERTHAN:
-		if (as_double >= 9007199254740992.0) {
+		if (as_double >= DIRECT_MAX_EXACT_INTEGER) {
 			return false;
 		}
 		inclusive = std::floor(as_double) + 1.0;
@@ -163,7 +165,7 @@ bool NormalizeCapacity(ClientContext &context, const Expression &expr, Expressio
 		capacity = 0;
 		return true;
 	}
-	if (!std::isfinite(inclusive) || inclusive > 9007199254740992.0) {
+	if (!std::isfinite(inclusive) || inclusive > DIRECT_MAX_EXACT_INTEGER) {
 		return false;
 	}
 	capacity = static_cast<idx_t>(inclusive);
@@ -264,65 +266,32 @@ bool IsPlainCountStar(const Expression &expr) {
 	       !TryParseQualifiedReducerTag(aggregate.GetAlias(), qualifier);
 }
 
-//! The largest value a type can hold, or 0 for a type the proof below does not reason about.
-long double TypeCapacity(const LogicalType &type) {
-	switch (type.id()) {
-	case LogicalTypeId::TINYINT:
-		return 127.0L;
-	case LogicalTypeId::SMALLINT:
-		return 32767.0L;
-	case LogicalTypeId::INTEGER:
-		return 2147483647.0L;
-	case LogicalTypeId::BIGINT:
-		return 9223372036854775807.0L;
-	case LogicalTypeId::HUGEINT:
-		return 1.7e38L;
-	case LogicalTypeId::FLOAT:
-		return 3.4e38L;
-	case LogicalTypeId::DOUBLE:
-		return 1.7e308L;
-	case LogicalTypeId::DECIMAL:
-		return powl(10.0L, static_cast<long double>(DecimalType::GetWidth(type) - DecimalType::GetScale(type)));
-	default:
-		return 0.0L;
-	}
-}
-
-//! Why a bound is not a row-count expression, or empty when it is one: plain `COUNT(*)`, finite constants, numeric
-//! casts, and `+ - * / //` over them, where a divisor is a nonzero constant. `magnitude` is an upper bound on the value
-//! of `expr` for any row count. The expression can only raise by leaving the range of one of its types, and the proof
-//! is that no node can: a group has at most 2^53 rows (the limit this rule already puts on every count; that many rows
-//! would need petabytes of memory), and every node's bound stays inside its own type.
-string RowCountBoundProblem(ClientContext &context, const Expression &expr, bool &has_count, long double &magnitude) {
-	auto fits = [&]() {
-		return magnitude <= TypeCapacity(expr.return_type) ? string() : "a value that can leave the range of its type";
-	};
+//! Why a bound is not a row-count expression, or empty when it is one: plain `COUNT(*)`, finite exact constants,
+//! numeric casts that cannot throw, and `+ - * / //` over them, where a divisor is a nonzero constant. The plan
+//! evaluates such a bound with DuckDB's own operators, on the rows the solver evaluates it for (see
+//! `S1Rewriter::OnlyWhereCovered`), so an overflow raises on both paths or on neither and no range is proved here.
+string RowCountBoundProblem(ClientContext &context, const Expression &expr) {
 	if (IsPlainCountStar(expr)) {
-		has_count = true;
-		magnitude = 9007199254740992.0L;
-		return fits();
+		return string();
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		return "an aggregate other than a plain COUNT(*)";
 	}
 	double constant;
 	if (expr.IsFoldable() && !expr.IsAggregate()) {
-		if (!DirectFiniteFoldableDouble(context, expr, constant)) {
-			return "a constant that is not finite or not exact";
-		}
-		magnitude = std::fabs(constant);
-		return string();
+		return DirectFiniteFoldableDouble(context, expr, constant) ? string()
+		                                                           : "a constant that is not finite or not exact";
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 		auto &cast = expr.Cast<BoundCastExpression>();
 		if (!expr.return_type.IsNumeric() || !cast.child->return_type.IsNumeric()) {
 			return "a cast that is not numeric";
 		}
-		auto problem = RowCountBoundProblem(context, *cast.child, has_count, magnitude);
+		auto problem = RowCountBoundProblem(context, *cast.child);
 		if (!problem.empty()) {
 			return problem;
 		}
-		return DirectCastMayThrow(cast) ? "a narrowing cast" : fits();
+		return DirectCastMayThrow(cast) ? "a narrowing cast" : string();
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &function = expr.Cast<BoundFunctionExpression>();
@@ -332,24 +301,16 @@ string RowCountBoundProblem(ClientContext &context, const Expression &expr, bool
 		if (!negation && (function.children.size() != 2 || (!division && name != "+" && name != "-" && name != "*"))) {
 			return "the function " + name;
 		}
-		vector<long double> magnitudes(function.children.size());
-		for (idx_t i = 0; i < function.children.size(); i++) {
-			auto problem = RowCountBoundProblem(context, *function.children[i], has_count, magnitudes[i]);
+		for (auto &child : function.children) {
+			auto problem = RowCountBoundProblem(context, *child);
 			if (!problem.empty()) {
 				return problem;
 			}
 		}
-		if (division) {
-			if (!DirectFiniteFoldableDouble(context, *function.children[1], constant) || constant == 0.0) {
-				return "a divisor that is not a nonzero constant";
-			}
-			magnitude = magnitudes[0] / std::fabs(constant);
-		} else if (negation) {
-			magnitude = magnitudes[0];
-		} else {
-			magnitude = name == "*" ? magnitudes[0] * magnitudes[1] : magnitudes[0] + magnitudes[1];
+		if (division && (!DirectFiniteFoldableDouble(context, *function.children[1], constant) || constant == 0.0)) {
+			return "a divisor that is not a nonzero constant";
 		}
-		return fits();
+		return string();
 	}
 	return "an expression other than COUNT(*), constants and arithmetic";
 }
@@ -449,50 +410,8 @@ public:
 		// The first rule has no competing proved alternative yet.
 		return 0.0;
 	}
-	void Explain(const DirectRuleProof &candidate, DirectSolveDecisionRecord &record) const override {
-		auto &proof = static_cast<const S1Proof &>(candidate);
-		auto has_fixes = !proof.fixed_one_conditions.empty() || !proof.fixed_zero_conditions.empty();
-		auto scope = proof.group_key_slots.empty() ? (proof.when_condition ? "WHEN-scoped" : "global")
-		                                           : (proof.when_condition ? "grouped WHEN-scoped" : "grouped");
-		auto direction = proof.sense == DecideSense::MAXIMIZE ? "maximizing" : "minimizing";
-		const char *pin_guard = "; pin conflicts checked";
-		if (!proof.source_bounds.empty()) {
-			record.proof = StringUtil::Format("one row-scoped Boolean; exact %s source-numeric cardinality "
-			                                  "bounds with any constant interval", scope);
-			for (auto &bound : proof.source_bounds) {
-				if (bound.rhs_all_group_rows) {
-					record.proof += "; aggregate-local count filter with full-group RHS reduction";
-					break;
-				}
-			}
-			for (auto &bound : proof.source_bounds) {
-				if (bound.counts_rows) {
-					record.proof += "; bound from the group's row count";
-					break;
-				}
-			}
-			record.guards = "active membership checked; every source bound checked for NULL/NaN before score; "
-			                "rank and feasibility retained";
-		} else if (proof.impossible) {
-			record.proof = StringUtil::Format("one row-scoped Boolean; exact %s cardinality bounds "
-			                                  "infeasible for a nonempty eligible group", scope);
-			record.guards = "score checked on all rows; active membership checked; rank retained";
-		} else {
-			auto lower = static_cast<unsigned long long>(proof.lower);
-			record.proof = proof.has_upper
-			                   ? StringUtil::Format("one row-scoped Boolean; exact %s cardinality interval "
-			                                        "[%llu, %llu]; %s linear score", scope, lower,
-			                                        static_cast<unsigned long long>(proof.upper), direction)
-			                   : StringUtil::Format("one row-scoped Boolean; exact %s lower bound %llu; "
-			                                        "%s linear score", scope, lower, direction);
-			record.guards = proof.lower ? "score checked on all rows; active count checked; rank retained"
-			                            : "score NULL/non-finite checked on all input rows; rank retained";
-			pin_guard = "; pin conflicts and residual counts checked";
-		}
-		if (has_fixes) {
-			record.proof += "; source-only Boolean pins";
-			record.guards += pin_guard;
-		}
+	void Explain(const DirectRuleProof &, DirectSolveDecisionRecord &record) const override {
+		record.proof = "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi";
 	}
 	DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
 	                                 const DirectRuleProof &candidate) const override;
@@ -667,9 +586,7 @@ bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Mat
 		bool source_column = DirectSourceNumericColumn(bound, facts.source_bindings, source_slot, source_type,
 		                                              source_name);
 		if (!bound.IsFoldable() && bound.IsAggregate()) {
-			bool counts_rows = false;
-			long double magnitude = 0;
-			auto problem = RowCountBoundProblem(context, bound, counts_rows, magnitude);
+			auto problem = RowCountBoundProblem(context, bound);
 			if (!problem.empty()) {
 				reason = "constraint_shape: a bound with an aggregate must be COUNT(*) combined with constants by + - "
 				         "* / // (" +
@@ -963,6 +880,21 @@ private:
 		return std::move(window);
 	}
 
+	//! The solver evaluates a count bound once per group that has a row the clause covers: a row whose WHEN holds and
+	//! whose PER keys are not NULL. The window that reduces the bound reads every row, so a bound that can raise (an
+	//! overflow in `COUNT(*) * k`) would be evaluated for groups the solver never evaluates it for. The bound is
+	//! therefore read as the harmless 0 on a row that is not eligible, and the extremum ignores those rows (the
+	//! caller leaves `all_group_rows` unset for a count bound, which has one value per group).
+	unique_ptr<Expression> OnlyWhereCovered(unique_ptr<Expression> value, const ScopeState &scope) const {
+		if (!proof.scoped) {
+			return value;
+		}
+		return make_uniq<BoundCaseExpression>(
+		    DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding),
+		    BoundCastExpression::AddCastToType(optimizer.context, std::move(value), LogicalType::DOUBLE),
+		    make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)));
+	}
+
 	//! Stage 3: validate source-valued bounds and pins on every row, and reduce each bound to its group extremum.
 	unique_ptr<LogicalOperator> ValidateBounds(unique_ptr<LogicalOperator> source, const ScopeState &scope,
 	                                           const RowCounts &counts, BoundChecks &bounds) const {
@@ -979,13 +911,14 @@ private:
 			if (bound.counts_rows) {
 				auto slot = bound.rhs_all_group_rows ? counts.group_slot : counts.eligible_slot;
 				spec.value = ReplaceCountStar(std::move(spec.value), ColumnBinding(counts.window_index, slot));
+				spec.value = OnlyWhereCovered(std::move(spec.value), scope);
 			}
 			if (bound.source_slot != DConstants::INVALID_INDEX) {
 				spec.is_column = true;
 				spec.column = scope.input_bindings[bound.source_slot];
 				spec.column_type = bound.source_type;
 			}
-			spec.all_group_rows = bound.rhs_all_group_rows;
+			spec.all_group_rows = bound.rhs_all_group_rows && !bound.counts_rows;
 			spec.invalid_message = DirectInvalidBoundMessage(bound.column_name);
 			specs.push_back(std::move(spec));
 		}
@@ -1204,72 +1137,87 @@ private:
 		return result;
 	}
 
-	//! The nested predicate of stage 5. Checks wrap outward, so the outermost one (a pin conflict) fires first.
+	//! The feasibility predicate of stage 5: a list of checks, each true when it passes and DECIDE's infeasible error
+	//! when it fails. Which failing check raises is not specified, and all of them raise the same error. The checks on
+	//! the rows of a group apply to eligible rows only; a pin conflict applies to every row.
 	unique_ptr<Expression> FeasiblePredicate(const RankedRows &ranked, idx_t free_count_slot,
 	                                         const BoundChecks &bounds) const {
-		auto infeasible_error = [&]() {
-			return DirectInfeasibleErrorPredicate(optimizer);
+		// `ok` must hold; a NULL `ok` fails.
+		auto must_hold = [&](unique_ptr<Expression> ok) -> unique_ptr<Expression> {
+			return make_uniq<BoundCaseExpression>(std::move(ok), DirectConstantBool(true),
+			                                      DirectInfeasibleErrorPredicate(optimizer));
 		};
-		auto &rank_binding = ranked.rank_binding;
-		auto fixed_count_slot = ranked.fixed_count_slot;
-		unique_ptr<Expression> feasible_predicate = DirectConstantBool(true);
+		// `bad` must not hold; a NULL `bad` passes.
+		auto must_not_hold = [&](unique_ptr<Expression> bad) -> unique_ptr<Expression> {
+			return make_uniq<BoundCaseExpression>(std::move(bad), DirectInfeasibleErrorPredicate(optimizer),
+			                                      DirectConstantBool(true));
+		};
+		auto fixed_count = [&]() {
+			return DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, ranked.fixed_count_slot));
+		};
+		vector<unique_ptr<Expression>> group_checks;
 		if (proof.impossible) {
-			auto has_row = make_uniq<BoundComparisonExpression>(
-			    ExpressionType::COMPARE_GREATERTHANOREQUALTO, DirectColumn(LogicalType::BIGINT, rank_binding),
-			    make_uniq<BoundConstantExpression>(Value::BIGINT(1)));
-			feasible_predicate =
-			    make_uniq<BoundCaseExpression>(std::move(has_row), infeasible_error(), DirectConstantBool(true));
-		} else if (has_lower) {
-			unique_ptr<Expression> available_rows =
-			    has_fixes
-			        ? optimizer.BindScalarFunction(
-			              "+", DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, fixed_count_slot)),
-			              DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, free_count_slot)))
-			        : DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, 1));
-			auto enough_rows = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-			                                                        std::move(available_rows), LowerLimit(bounds));
-			feasible_predicate =
-			    make_uniq<BoundCaseExpression>(std::move(enough_rows), DirectConstantBool(true), infeasible_error());
-		}
-		if (!proof.impossible && (source_lower || source_upper) && has_upper) {
-			auto interval_valid = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
-			                                                           LowerLimit(bounds), UpperLimit(bounds));
-			feasible_predicate = make_uniq<BoundCaseExpression>(std::move(interval_valid),
-			                                                    std::move(feasible_predicate), infeasible_error());
-		}
-		if (!proof.impossible && source_lower) {
-			for (auto &slots : bounds.slots) {
-				if (slots.max_score == DConstants::INVALID_INDEX) {
-					continue;
+			// No bound can hold, so a group with any row is infeasible.
+			group_checks.push_back(must_not_hold(make_uniq<BoundComparisonExpression>(
+			    ExpressionType::COMPARE_GREATERTHANOREQUALTO, DirectColumn(LogicalType::BIGINT, ranked.rank_binding),
+			    make_uniq<BoundConstantExpression>(Value::BIGINT(1)))));
+		} else {
+			if (has_lower) {
+				unique_ptr<Expression> available_rows =
+				    has_fixes ? optimizer.BindScalarFunction(
+				                    "+", fixed_count(),
+				                    DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, free_count_slot)))
+				              : DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, 1));
+				group_checks.push_back(must_hold(make_uniq<BoundComparisonExpression>(
+				    ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(available_rows), LowerLimit(bounds))));
+			}
+			if ((source_lower || source_upper) && has_upper) {
+				group_checks.push_back(must_hold(make_uniq<BoundComparisonExpression>(
+				    ExpressionType::COMPARE_LESSTHANOREQUALTO, LowerLimit(bounds), UpperLimit(bounds))));
+			}
+			if (source_lower) {
+				for (auto &slots : bounds.slots) {
+					if (slots.max_score == DConstants::INVALID_INDEX) {
+						continue;
+					}
+					group_checks.push_back(must_not_hold(make_uniq<BoundComparisonExpression>(
+					    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+					    DirectColumn(LogicalType::DOUBLE, ColumnBinding(score_index, slots.max_score)),
+					    make_uniq<BoundConstantExpression>(Value::DOUBLE(9223372036854775808.0)))));
 				}
-				auto too_large = make_uniq<BoundComparisonExpression>(
-				    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-				    DirectColumn(LogicalType::DOUBLE, ColumnBinding(score_index, slots.max_score)),
-				    make_uniq<BoundConstantExpression>(Value::DOUBLE(9223372036854775808.0)));
-				feasible_predicate = make_uniq<BoundCaseExpression>(std::move(too_large), infeasible_error(),
-				                                                    std::move(feasible_predicate));
+			}
+			if (has_fixes && has_upper) {
+				group_checks.push_back(must_hold(make_uniq<BoundComparisonExpression>(
+				    ExpressionType::COMPARE_LESSTHANOREQUALTO, fixed_count(), UpperLimit(bounds))));
 			}
 		}
-		if (!proof.impossible && has_fixes && has_upper) {
-			auto fixed_within_upper = make_uniq<BoundComparisonExpression>(
-			    ExpressionType::COMPARE_LESSTHANOREQUALTO,
-			    DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, fixed_count_slot)), UpperLimit(bounds));
-			feasible_predicate = make_uniq<BoundCaseExpression>(std::move(fixed_within_upper),
-			                                                    std::move(feasible_predicate), infeasible_error());
-		}
-		if (proof.scoped) {
-			feasible_predicate = make_uniq<BoundCaseExpression>(
-			    DirectColumn(LogicalType::BOOLEAN, eligible_binding), std::move(feasible_predicate),
-			    DirectConstantBool(true));
+		vector<unique_ptr<Expression>> checks;
+		if (!group_checks.empty()) {
+			unique_ptr<Expression> group = std::move(group_checks[0]);
+			for (idx_t i = 1; i < group_checks.size(); i++) {
+				group = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(group),
+				                                              std::move(group_checks[i]));
+			}
+			checks.push_back(proof.scoped
+			                     ? make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, eligible_binding),
+			                                                      std::move(group), DirectConstantBool(true))
+			                     : std::move(group));
 		}
 		if (has_fixes) {
-			auto conflict = make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, fixed_one_binding),
-			                                               DirectColumn(LogicalType::BOOLEAN, fixed_zero_binding),
-			                                               DirectConstantBool(false));
-			feasible_predicate =
-			    make_uniq<BoundCaseExpression>(std::move(conflict), infeasible_error(), std::move(feasible_predicate));
+			// A row pinned to both values.
+			checks.push_back(must_not_hold(make_uniq<BoundCaseExpression>(
+			    DirectColumn(LogicalType::BOOLEAN, fixed_one_binding),
+			    DirectColumn(LogicalType::BOOLEAN, fixed_zero_binding), DirectConstantBool(false))));
 		}
-		return feasible_predicate;
+		if (checks.empty()) {
+			return DirectConstantBool(true);
+		}
+		unique_ptr<Expression> predicate = std::move(checks[0]);
+		for (idx_t i = 1; i < checks.size(); i++) {
+			predicate = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(predicate),
+			                                                  std::move(checks[i]));
+		}
+		return predicate;
 	}
 
 	//! Stage 6: the 0/1 assignment (pins, then scope, then upper and lower rank limits, then score sign), the

@@ -8,5 +8,6 @@ add_library_unity(
   direct_problem.cpp
   direct_registry.cpp
   direct_result_boundary.cpp
-  s1_rule.cpp)
+  s1_rule.cpp
+  s1_support.cpp)
 set(ALL_OBJECT_FILES ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_optimizer_decide_direct> PARENT_SCOPE)

@@ -8,8 +8,8 @@ task" section first.
 **A1 is built (2026-10-06).** The class definition is met; the tasks below are decisions and follow-ups, not missing shapes.
 A review on 2026-10-07 found one wrong answer (an empty source with a bound the solver rejects before reading rows); it
 is fixed (`ProveBounds` records the box the solver sees, and the declined shapes are tested in `DECLINED_CASES` in
-`test_direct_a1.py`). A1-01, A1-02 and A1-04 shipped on 2026-10-09 and are in `done.md`. A1-06 shipped on the same day. A1-05
-(re-stamp) and A1-07 remain.
+`test_direct_a1.py`). A1-01, A1-02 and A1-04 shipped on 2026-10-09 and are in `done.md`. A1-06 and A1-07 shipped on the same day. A1-05
+(re-stamp) remains.
 
 ## A1-03 — A wide column read back costs memory in proportion to the input
 
@@ -34,18 +34,6 @@ is fixed (`ProveBounds` records the box the solver sees, and the declined shapes
   (`test_norm_combined_l1_l2_objective`); C++ `[decidb]` 1,227 assertions in 39 cases.
 - **Done when.** No doc mentions the seven failing tests, the expected failures or A1-01, and the stamp matches a run you
   made.
-
-## A1-07 — An equality bound is split in two by copying every field by hand
-
-- **Problem.** In `A1BoundedRule::ProveBounds`, an equality (`x = k`, `w*x = k`) becomes two clauses (at least and at
-  most). The code builds the second by copying `decision`, `coefficient`, `coefficient_text`, `rhs`, `rhs_column` and
-  `when` one by one (the block that starts "An equality is a lower and an upper bound that may not agree").
-- **Why it matters.** A field added to `A1Clause` later is silently missing from the upper half and nobody notices until a
-  wrong answer.
-- **Plan.** Add `A1Clause Copy() const` to the struct, build the upper clause with it, then change the comparison of each
-  half. No behavior change.
-- **Done when.** The block is a few lines, and `test_direct_a1.py` and `test_direct_fuzz.py` pass unchanged.
-  About 15 minutes.
 
 ## Out of the class, no task
 

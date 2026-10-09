@@ -8,46 +8,9 @@ not measurements. How to run the checks, and the batches that group tasks across
 **S1 is closed (2026-10-05).** The class definition is met and nothing is needed to close it. A review on 2026-10-07 found
 no wrong answer in S1 (an empty source with `BOOL x <= -1` raised the solver's error under both paths, and the S1 fuzz,
 three-way and contract suites pass). The
-open tasks below are clean-up and decisions: S1-10 to S1-13 are new from that review, the deferred list is older. This
+open tasks below are clean-up and decisions: S1-12 and S1-13 are new from that review, the deferred list is older. This
 layer stays lean (`../../architecture/rules.md`), so a deferred task comes off the list only when there is evidence a user
 needs it.
-
-## S1-10 — Row-count bounds (`COUNT(*)` arithmetic) carry a long proof and no recorded demand
-
-- **Problem.** S1 admits a bound such as `SUM(x) <= COUNT(*) / 2` or `>= COUNT(*) * 0.1`. To be sure the plan can never
-  raise an overflow the solver would not, S1 proves that every step of the bound's arithmetic stays inside its own type,
-  taking a group to have at most 2^53 rows. That proof is `RowCountBoundProblem` and `TypeCapacity` (about 80 lines),
-  plus `ReplaceCountStar` and the `CountRows` plan stage (about 50 lines), a branch in `ProveBounds`, and a set of tests
-  ("exact decimal arithmetic" and row-count cases in `test_direct_three_way.py`). Elsewhere in this file, S1-08 is
-  deferred because "no evidence anyone writes these"; nothing in the docs records why row-count bounds were different.
-- **Why it matters.** `architecture/rules.md` says to decline a shape when admitting it needs a long proof or a new range
-  argument. A mistake in a proof gives a wrong answer, not a slow one. One plausible demand is a top-fraction query
-  ("the best 10% of each group"), which is the natural way to write that.
-- **Decision needed.** (a) *Keep it*, and write the use case and who needs it into `done.md` so the cost is justified.
-  (b) *Narrow it*: admit only `COUNT(*)` times or divided by a positive foldable constant, optionally plus a constant, and
-  decline everything else; the type-capacity table can then shrink to the types that arithmetic can produce.
-  (c) *Cut it*: decline every aggregate on the right; the solver answers those queries as before. Recommendation:
-  (a), unless the owner says nobody writes top-fraction bounds, in which case (c). Do not widen it (see S1-08).
-- **Where.** `src/optimizer/decide/direct/s1_rule.cpp` (`RowCountBoundProblem`, `TypeCapacity`, `ReplaceCountStar`,
-  `S1CardinalityRule::ProveBounds`, `S1Rewriter::CountRows`), `done.md` ("Bounds that count rows"), near-miss list in
-  `test/decide/tests/_direct_rule_fixtures.py`.
-- **Done when.** The choice is recorded in `done.md`. For (b) or (c): the code is gone, the removed shapes appear as near
-  misses that name their reason and answer under `auto` as under `off`, and all five checks pass.
-
-## S1-11 — The feasibility check keeps an error order nobody is owed
-
-- **Problem.** On 2026-10-05 the policy changed: direct solve owes an error on the same inputs, not the solver's wording or
-  its choice among several errors (`../../architecture/policy.md`). `S1Rewriter::FeasiblePredicate` in `s1_rule.cpp`
-  still builds about 65 lines of nested `CASE` so that "the outermost one (a pin conflict) fires first", wrapping each
-  check around the last in a fixed order.
-- **Why it matters.** It is complexity that protects nothing the policy requires, and it makes the next change to the
-  feasibility rules harder to read. The comment above it says order matters when it does not.
-- **Plan.** Rewrite it as a flat list of checks, each of which is true or raises; combine them into one predicate that
-  raises on the first failing check in any order. Keep every check that exists today (pin conflict, interval validity,
-  enough rows, fixed count within the upper limit, an unrepresentable limit). Rewrite the comment to say the order is
-  not specified. `policy.md` says no test pins the order; if one fails, stop and report it.
-- **Done when.** `FeasiblePredicate` is a flat sequence with no ordering comment, no behavior test changed, and all five
-  checks pass. About 1 hour.
 
 ## S1-12 — S1 reads a per-row bound on `x` in its own way, and so does A1
 
@@ -69,7 +32,7 @@ needs it.
 - **Problem.** `done.md` records the performance table from `7d6f97e880` ("before the NULL-score message change, and not
   re-run since"), says the cost on clean data of the per-row NULL message is "not measured", and stamps verification at
   `8c9420edb2` with 1,957 tests. The 15 to 100 times speedups are part of the reason `auto` is the default.
-- **Plan.** After the changes in H-05, H-06 and S1-10/11 (whichever are done), run the sweep in `done.md` "Reproduce" once
+- **Plan.** After the changes in H-05, H-06, S1-10 and S1-11 (all done), run the sweep in `done.md` "Reproduce" once
   (about 4.5 minutes; it needs the 5,000,000-row and wide databases, about 3 GiB), plus one run with and without NULLs in
   the score column to measure the message cost. Rebuild first with `make release`. Run the five checks (use
   `test/decide/run_direct_matrix.sh` if H-12 has landed). Rewrite the stamp and the table.
@@ -93,14 +56,14 @@ needs it.
   aggregate-local to that aggregate: the count is over the active rows while the left side sums every row. The same `WHEN`
   on `COUNT(*) / 2` is clause-level. S1 declines the bare form today, so it cannot be misread.
 - **Plan.** The count stage (`CountRows` in `s1_rule.cpp`) is one window per count flavor. Another reducer is one more window
-  aggregate over the same partitions, with a `FILTER` for the right-hand `WHEN`. The bound expression, its range proof,
-  and the per-group limit are reused.
+  aggregate over the same partitions, with a `FILTER` for the right-hand `WHEN`. The bound expression and the per-group
+  limit are reused.
 - **Not known.** How the solver treats NULLs inside `SUM`, `AVG`, `MIN` and `MAX`; an empty group; DECIMAL and integer
-  typing of `SUM(col)` (the range proof needs a bound on the column, which a count does not); and relation-qualified
+  typing of `SUM(col)`; and relation-qualified
   reducers (`SUM(D: cost)`), which stay out. Check each on the solver before coding.
-- **Done when.** Each admitted reducer matches the solver for every comparison and scope, the range proof covers its
-  value, and the ones left on the solver have a named reason. About 1 day. Worth doing if users write "at most the group's
-  average" style bounds; not needed to close S1. Settle S1-10 first: it decides whether the range proof stays.
+- **Done when.** Each admitted reducer matches the solver for every comparison and scope (an overflow raises on both
+  paths or neither, as for `COUNT(*)` bounds), and the ones left on the solver have a named reason. About 1 day. Worth doing if users write "at most the group's
+  average" style bounds; not needed to close S1.
 
 ### S1-04 — Wider keyed application (was NEXT-03)
 

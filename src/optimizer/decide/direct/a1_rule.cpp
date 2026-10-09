@@ -27,8 +27,6 @@ namespace duckdb {
 namespace direct_a1 {
 
 constexpr const char *A1_RULE = "A1_INDEPENDENT_BOUNDS";
-//! The largest whole number a DOUBLE holds exactly. An INT answer beyond it cannot be returned.
-constexpr double MAX_EXACT_INTEGER = 9007199254740992.0;
 //! Below this magnitude a DOUBLE can still carry a fraction, so a rounded bound is worth testing.
 constexpr double FRACTION_LIMIT = 4503599627370496.0;
 //! The solver reads a bound of this magnitude as no bound at all: an upper bound of 1e20 or more, or a lower bound of
@@ -61,6 +59,23 @@ struct A1Clause {
 	//! The source column the right side is exactly, for the error that names it; empty for a computed bound.
 	string rhs_column;
 	unique_ptr<Expression> when;
+
+	//! A deep copy of every field, so a field added later cannot be missing from a clause split in two.
+	A1Clause Copy() const {
+		A1Clause result;
+		result.decision = decision;
+		result.comparison = comparison;
+		for (auto &value : coefficient) {
+			result.coefficient.push_back({value.sign, value.expr->Copy()});
+		}
+		result.coefficient_text = coefficient_text;
+		result.rhs = rhs->Copy();
+		result.rhs_column = rhs_column;
+		if (when) {
+			result.when = when->Copy();
+		}
+		return result;
+	}
 };
 
 struct A1Term {
@@ -264,24 +279,8 @@ public:
 		return 0.0;
 	}
 
-	void Explain(const DirectRuleProof &candidate, DirectSolveDecisionRecord &record) const override {
-		auto &proof = static_cast<const A1Proof &>(candidate);
-		idx_t whole = 0;
-		for (auto &decision : proof.decisions) {
-			whole += IsWholeNumbered(decision.domain) ? 1 : 0;
-		}
-		string kinds = whole == proof.decisions.size() ? "whole-number" : (whole == 0 ? "continuous" : "mixed");
-		const char *objective = proof.sense == DecideSense::FEASIBILITY ? "no objective"
-		                        : proof.has_square                      ? "quadratic objective"
-		                                                                : "linear objective";
-		record.proof = StringUtil::Format("%llu independent row-scoped %s decision(s); %llu per-row bound(s); %s; each "
-		                                  "row takes an endpoint or the clamped turning point",
-		                                  static_cast<unsigned long long>(proof.decisions.size()), kinds,
-		                                  static_cast<unsigned long long>(proof.clauses.size()), objective);
-		record.guards = proof.constant_problem
-		                    ? "constants checked on every row; infeasible, unbounded and out-of-range problems raise"
-		                    : "every bound and coefficient checked for NULL, NaN and infinity on all rows; infeasible, "
-		                      "unbounded and out-of-range rows raise; all rows read before any is released";
+	void Explain(const DirectRuleProof &, DirectSolveDecisionRecord &record) const override {
+		record.proof = "min/max SUM(c*x), l <= x <= u, each row independent";
 	}
 
 	DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
@@ -412,21 +411,8 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 		if (comparison == ExpressionType::COMPARE_EQUAL) {
 			// An equality is a lower and an upper bound that may not agree: a fractional value for a whole-numbered
 			// decision then leaves no row.
-			A1Clause upper;
-			upper.decision = clause.decision;
+			auto upper = clause.Copy();
 			upper.comparison = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-			for (auto &value : clause.coefficient) {
-				A1Value copy;
-				copy.sign = value.sign;
-				copy.expr = value.expr->Copy();
-				upper.coefficient.push_back(std::move(copy));
-			}
-			upper.coefficient_text = clause.coefficient_text;
-			upper.rhs = clause.rhs->Copy();
-			upper.rhs_column = clause.rhs_column;
-			if (clause.when) {
-				upper.when = clause.when->Copy();
-			}
 			clause.comparison = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
 			proof.clauses.push_back(std::move(clause));
 			proof.clauses.push_back(std::move(upper));
@@ -1152,7 +1138,7 @@ private:
 			if (IsWholeNumbered(proof.decisions[d].domain)) {
 				auto within = make_uniq<BoundComparisonExpression>(
 				    ExpressionType::COMPARE_LESSTHANOREQUALTO, optimizer.BindScalarFunction("abs", value()),
-				    make_uniq<BoundConstantExpression>(Value::DOUBLE(MAX_EXACT_INTEGER)));
+				    make_uniq<BoundConstantExpression>(Value::DOUBLE(DIRECT_MAX_EXACT_INTEGER)));
 				checks.push_back(make_uniq<BoundCaseExpression>(
 				    std::move(within), DirectConstantBool(true),
 				    DirectErrorPredicate(optimizer, "DECIDE: a decision solves to a whole number beyond the range "
@@ -1179,7 +1165,7 @@ private:
 		auto within = make_uniq<BoundComparisonExpression>(
 		    ExpressionType::COMPARE_LESSTHANOREQUALTO,
 		    optimizer.BindScalarFunction("abs", DirectColumn(LogicalType::DOUBLE, value)),
-		    make_uniq<BoundConstantExpression>(Value::DOUBLE(MAX_EXACT_INTEGER)));
+		    make_uniq<BoundConstantExpression>(Value::DOUBLE(DIRECT_MAX_EXACT_INTEGER)));
 		auto finite = make_uniq<BoundCaseExpression>(
 		    optimizer.BindScalarFunction("isfinite", DirectColumn(LogicalType::DOUBLE, value)), std::move(within),
 		    DirectConstantBool(false));

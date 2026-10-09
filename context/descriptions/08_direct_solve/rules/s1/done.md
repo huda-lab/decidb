@@ -3,7 +3,7 @@
 Verified on 2026-10-05 at `8c9420edb2`: `make decide-test` (1,957 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off` and
 `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (1,956 passed, 1 unrelated failure that needs
 Gurobi), and `build/release/test/unittest "[decidb]"` (907 assertions). Later commits touch only a comment and docs.
-Code: `src/optimizer/decide/direct/s1_rule.cpp`. Class definition: [definition.md](definition.md).
+Code: `src/optimizer/decide/direct/s1_rule.cpp`, with the helpers only S1 uses in `s1_support.{hpp,cpp}`. Class definition: [definition.md](definition.md).
 
 ## What it admits
 
@@ -18,8 +18,13 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   each group: a clause-level `WHEN` or a NULL `PER` key narrows it, while an aggregate-local `WHEN` on the left
   (`SUM(x) WHEN active <= COUNT(*) / 2`) does not narrow the right, which counts every row of the group. The expression is
   evaluated in its own types (a bound of `COUNT(*) * 0.57` over 100 rows is exactly 57) and then read as any source bound.
-  A divisor must be a nonzero constant, and the proof bounds every node's value inside its own type, taking a group to have
-  at most 2^53 rows (the limit counts already have; that many rows would need petabytes of memory).
+  A divisor must be a nonzero constant. The use case is a top-fraction query ("the best 10% of each group":
+  `SUM(x) <= COUNT(*) * 0.1 PER g`), which is the natural way to write it. The rule proves only the shape (plain `COUNT(*)`,
+  exact finite constants, casts that cannot throw, `+ - * / //`). It proves no range. The plan evaluates the bound with
+  DuckDB's own operators, so an overflow (`COUNT(*) * 4611686018427387904` over 3 rows) raises the same error as on the
+  solver path, and it evaluates the bound only for the groups the solver evaluates it for: a group with a row the clause
+  covers (WHEN holds, PER key not NULL). A row outside that reads the bound as 0 and the group extremum ignores it, so a
+  NULL-key group or a group the `WHEN` excludes cannot raise where the solver does not.
 - **Count bodies:** `SUM(x)` or any body whose terms add up to exactly one `x`, such as `SUM(1*x)` or `SUM(2*x - x)`.
 - **Scope:** global, or `PER` one or more source columns, optionally with a deterministic source-only `WHEN` (top level or
   inside the aggregate). All count clauses must share identical membership. Rows with a NULL `PER` key or a false aggregate
@@ -45,7 +50,9 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
 It raises an error wherever the solver does: empty scoped aggregate, invalid or NULL bounds (including on bypassed rows),
 NULL or non-finite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1` or
 `COUNT(*)`. When a query has several errors, direct may report a different one than the solver. When scores tie it may pick
-different rows than the solver, with the same objective.
+different rows than the solver, with the same objective. The feasibility check is a flat list of independent checks (a
+pin conflict, a valid interval, enough rows, a fixed count within the upper limit, an unrepresentable limit), each true or
+the infeasible error; which failing one raises is not specified, and all of them say the same thing.
 
 **Known difference, decided 2026-10-05: values within the solver's tolerance of an integer.** Direct solve reads every
 bound exactly: counts, constants and column values. The solver accepts a violation of about 1e-6, and the two backends
@@ -91,7 +98,7 @@ different `PER` or `WHEN` membership (S2); `SUM(x) <> k` (not an interval); boun
 
 | Check | What it covers |
 |---|---|
-| `test_direct_three_way.py` (245 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so a miss fails); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. 170 cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `PER` and NULL keys, top and aggregate-local `WHEN`, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic), pins and per-row bounds on `x` (a generated grid with and without `WHEN`), column pins, 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, tied scores, and infeasible problems. 10 parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. 23 error cases that must fail on both paths (bad scores, empty aggregates, bad bounds on rows the problem does not read, late rows under `LIMIT` and `COUNT`, pins). 27 boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum |
+| `test_direct_three_way.py` (245 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so a miss fails); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. 170 cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `PER` and NULL keys, top and aggregate-local `WHEN`, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic, and `test_s1_count_bound_raises_only_where_the_solver_does` for where an overflow may raise), pins and per-row bounds on `x` (a generated grid with and without `WHEN`), column pins, 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, tied scores, and infeasible problems. 10 parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. 23 error cases that must fail on both paths (bad scores, empty aggregates, bad bounds on rows the problem does not read, late rows under `LIMIT` and `COUNT`, pins). 27 boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum |
 | `test_direct_rule_contract.py` (73 tests) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced backend, `DIAGNOSE`, and 64 near misses, each of which must name its reason, keep the solver plan, and answer under `auto` as under `off` (this is where the shapes S1 leaves on the solver are tested) |
 | `test_direct_fuzz.py` (8 tests) | Seeded differential fuzz: random small S1 queries, direct (`require`) against solver (`off`), over per-row bounds, scaled objectives and row-count bounds. Finds interactions the tables do not list |
 | `test_direct_user_facing.py` (10 tests) | What a SQL user sees besides the answer: direct solve on by default, the pinned exact reading of a bound near an integer (`S1-09`), error wording that names the column, unused wide columns pruned, forced-backend and binder-error policy |

@@ -22,7 +22,9 @@ answer, not a slow one, so the guard is the test suite: run it with direct on an
 
 ## EXPLAIN and profiling
 
-A hit carries one **decision record**: mode, rule, proof summary, guards. It shows in logical and physical `EXPLAIN` and
+A hit carries one **decision record**: mode, rule, and one fixed `proof` line per rule that names the problem class
+(S1: `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`; A1: `min/max SUM(c*x), l <= x <= u, each row independent`). It
+holds no number from the query and no list of runtime checks. It shows in logical and physical `EXPLAIN` and
 in profiling. A miss under `auto` prints nothing, so `EXPLAIN` of an ordinary DECIDE query is exactly what the solver
 path prints. To learn why a query missed, set `require`.
 

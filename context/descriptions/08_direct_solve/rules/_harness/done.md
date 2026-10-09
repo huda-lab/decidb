@@ -21,10 +21,14 @@ which needs Gurobi; C++ `[decidb]` 1,227 assertions in 39 cases. Design: `../../
 - **Result boundary.** Keeps original bindings and types, serializes, prunes outputs only when skipping is proved safe,
   and always keeps the rule's validation slots live. `DirectValidationBarrier` builds the all-rows read for a plan that
   could stream.
-- **Shared builders.** `DirectProjectScope`, `DirectGuardEmptyAggregate` and `DirectValidateBounds` give every aggregate
-  rule the solver's `PER`/`WHEN`, NULL-key bypass, empty-aggregate and bound-validation behavior and error order. The
-  per-row rules share `DirectActiveWhen`, `DirectScaledTerm` (sign and constant factor of a coefficient),
-  `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate` and `DirectValidBoundPredicate`.
+- **Shared builders.** `direct_builder.hpp` lists only helpers with two or more users: `DirectGuardEmptyAggregate`,
+  `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBarrier`, `DirectScaledTerm` (sign and constant
+  factor of a coefficient), `DirectIsNull`, `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`,
+  `DirectValidBoundPredicate` and `DirectValidNumberPredicate`. Which of several errors a query reports is not
+  specified. The helpers only S1 uses (the scope projection `DirectProjectScope`, the bound validation
+  `DirectValidateBounds`, `DirectWindowExtremum`, `DirectAnyCondition`) live in `src/optimizer/decide/direct/s1_support.{hpp,cpp}`
+  in `namespace direct_s1`, and move to the builders when a second rule needs them. `DIRECT_MAX_EXACT_INTEGER` (2^53) in
+  `direct_expression.hpp` is the one copy of the exactness limit, used by S1 and A1.
 - **Shared admission predicates.** `DirectIsNumericDecisionFree`, `DirectSourceNumericColumn`,
   `DirectIsSourceOnlyNumeric`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
   `DirectFoldableDouble` and `DirectConstraintFact::PlainSum` answer "may a rule use this value" once for all rules.
@@ -39,8 +43,21 @@ which needs Gurobi; C++ `[decidb]` 1,227 assertions in 39 cases. Design: `../../
   `test_computed_score_null_error_names_the_columns`, `test_null_score_no_column_explains_quotes_the_score`,
   `test_null_score_message_is_not_built_when_no_row_is_null` in `test_direct_user_facing.py`. The cost on clean data is not
   measured.
-- **Decision record.** On a hit, mode, rule, proof and guards appear in logical and physical `EXPLAIN` and profiling. A
+- **Decision record.** On a hit, mode, rule and one fixed proof line per rule appear in logical and physical `EXPLAIN` and
+  profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x <= u, each row
+  independent`. There is no guards line and no number from the query. `require` explains a miss. Nothing persists a
+  serialized plan across versions, so `DIRECT_RESULT_EXTENSION` did not change (the removed property id 210 stays a gap).
+  `test_serializer_explain_and_model_dump` checks the rule and the proof line in the logical, physical and profiled
+  plans. A
   miss under `auto` prints nothing.
+
+- **Cost estimate (H-09, closed 2026-10-09, no code change).** The coordinator builds the cost context (a cardinality
+  estimate of the source plan) on the first proved rule, although both rules return `0.0` from `Cost`. Measured on `EXPLAIN`
+  of an A1 query over a six-way join of 100,000-row tables, 400 runs per mode: `decide_direct_solve='off'` 1.005 ms,
+  `'auto'` 1.470 ms. Direct solve adds about 0.47 ms of planning in total, which covers rule matching, the proof and the
+  estimate together, so the estimate costs at most that. That is under the task's threshold of about 1 ms, so the estimate
+  stays eager. One query shape; the estimate grows with the number of operators in the source plan. H-03 is unaffected and
+  stays unscheduled.
 
 ## Verified by
 
