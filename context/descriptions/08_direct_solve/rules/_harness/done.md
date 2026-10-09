@@ -4,7 +4,7 @@ Verified on 2026-10-06 on top of `db4fc9d4f3` with S1 and A1 registered (working
 `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` 2,257 passed and 6 expected failures (the strict-bound cases in
 `../a1/done.md`); `make decide-test` and the serializer run the same, plus seven existing tests that assert something only
 the solver path produces (`../a1/todo.md`, A1-01); the forced-HiGHS run has one failure, `test_norm_combined_l1_l2_objective`,
-which needs Gurobi; C++ `[decidb]` 1,227 assertions in 39 cases. Design: `../../architecture/`.
+which needs Gurobi; C++ `[decidb]` 1,227 assertions in 39 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check). Design: `../../architecture/`.
 
 ## What it does
 
@@ -50,6 +50,23 @@ which needs Gurobi; C++ `[decidb]` 1,227 assertions in 39 cases. Design: `../../
   `test_serializer_explain_and_model_dump` checks the rule and the proof line in the logical, physical and profiled
   plans. A
   miss under `auto` prints nothing.
+
+- **The solver's domain check, once (H-07).** The solver raises, before it reads any row, for a decision whose box
+  contradicts its built-in domain (an upper bound below the default floor of 0, or a `BOOL` lower bound above 1). That test
+  is `DecideBoxContradictsDomain(lower, upper, is_bool)` in `decide_bound_absorption.{hpp,cpp}`, next to `DecideStrictBound`.
+  The solver's pre-check (`DecideGlobalSinkState`), A1 (`ProveBounds`) and S1 (`ConstantPinDomain`) call it. The starting
+  box is `LogicalDecide::ABSORBED_LOWER_UNSET` and `ABSORBED_UPPER_UNSET`, defined once; the solver, the absorption pass and
+  A1 read them there. Direct solve still only declines these queries and lets the solver raise the error. S1 adds one
+  condition of its own, a negative lower bound (it makes `x` signed on the solver path). The model builder's own strict
+  shifts stay as they are (lower layer).
+- **One test scaffold (H-08).** `test/decide/tests/_direct_oracle_common.py` holds what the oracle suites share: the autouse
+  fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, and `agree_with_oracle` (oracle model, `off`, `require`,
+  then a rule-supplied check of one assignment). `test_direct_three_way.py` (S1) and `test_direct_a1.py` keep their case
+  tables, oracle-model builders and assignment checks, and every test keeps its name and body, so no oracle result was
+  recomputed. A new rule's suite imports the scaffold (`architecture/rules.md`, item 2).
+- **Matrix script (H-12).** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
+  example `auto: 2322 passed, 0 xfailed, 0 failed`. The comment above `DirectDomain` in `direct_rule.hpp` points at
+  `architecture/facts.md`.
 
 - **Cost estimate (H-09, closed 2026-10-09, no code change).** The coordinator builds the cost context (a cardinality
   estimate of the source plan) on the first proved rule, although both rules return `0.0` from `Cost`. Measured on `EXPLAIN`

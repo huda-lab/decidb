@@ -80,10 +80,14 @@ test, adding one is a task in that rule's `todo.md`.
    schema and rows, the all-rows read, prepared-plan selection, serializer round trip, `EXPLAIN` and profiling,
    `require` reasons, `off`, a forced backend, `DIAGNOSE`, and near misses. Each near miss must also answer under `auto`
    exactly as it does under `off`.
-2. **Three-way table** (`test_direct_three_way.py`): add rows for the rule's shapes. Each row runs on an independent
-   solver (`oracle_solver`) built straight from the rows, on the solver path (`off`), and on the direct path
-   (`require`, so a miss fails). All three must agree: both DeciDB runs must satisfy every constraint and reach the
-   oracle's objective, or all must say infeasible. Inputs with no oracle model (bad data) go in the error table, where
+2. **Three-way table** (`test_direct_<rule>.py`; S1's is `test_direct_three_way.py`, A1's is `test_direct_a1.py`): the rule
+   adds its own file with its own case table, a function that builds the oracle model from the rows, and a function
+   that checks one DeciDB assignment against its constraints. The shared scaffold is `_direct_oracle_common.py`: the
+   fixture that lifts a forced backend, `run` and `outcome`, the `VALUES` list builder, and `agree_with_oracle`, which
+   runs the oracle model, the solver path (`off`) and the direct path (`require`, so a miss fails) and compares them.
+   Keep test names stable, because the oracle cache is keyed on the test node id and the test function's source. All
+   three must agree: both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say
+   infeasible. Inputs with no oracle model (bad data) go in the error table, where
    `off` and `require` must both fail (the message and the choice among several errors need not match), and values
    the oracle cannot hold (infinities, 2^53) go in the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
 3. **Differential fuzz** (`test_direct_fuzz.py`, comparator in `_direct_differential.py`): supply a seeded query
@@ -93,4 +97,7 @@ test, adding one is a task in that rule's `todo.md`.
 
 Run after any change: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` (the solver path alone),
 `DECIDB_VERIFY_SERIALIZER=1 make decide-test`, `DECIDB_FORCE_SOLVER=highs make decide-test`, and
-`build/release/test/unittest "[decidb]"`. Each takes about 30 seconds.
+`build/release/test/unittest "[decidb]"`. Each takes about 30 seconds. `test/decide/run_direct_matrix.sh` runs all five
+and prints one summary line each (`auto: 2322 passed, 0 xfailed, 0 failed`); run `make release` first. The forced-HiGHS
+line shows the one failure that needs Gurobi (`test_norm_combined_l1_l2_objective`), and the script's exit code allows
+exactly that one.

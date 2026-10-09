@@ -28,8 +28,7 @@ is fixed (`ProveBounds` records the box the solver sees, and the declined shapes
   existing tests listed in `todo.md` (A1-01)") and the one in `../_harness/done.md` (first paragraph, same sentence)
   describe the suite before the strict-bound fix: they list 6 expected failures and seven solver-only tests, which no
   longer exist. The doc text itself is current.
-- **Plan.** Rerun all five checks (`../_harness/todo.md` lists them; `test/decide/run_direct_matrix.sh` does it if H-12
-  has landed) and rewrite both stamps (date, commit, counts). On 2026-10-09 the counts were: `make decide-test`, the
+- **Plan.** Rerun all five checks (`../_harness/todo.md` lists them; `test/decide/run_direct_matrix.sh` does it) and rewrite both stamps (date, commit, counts). On 2026-10-09 the counts were: `make decide-test`, the
   `off` run and the serializer run 2,269 passed; the forced-HiGHS run 2,268 passed and 1 failure that needs Gurobi
   (`test_norm_combined_l1_l2_objective`); C++ `[decidb]` 1,227 assertions in 39 cases.
 - **Done when.** No doc mentions the seven failing tests, the expected failures or A1-01, and the stamp matches a run you

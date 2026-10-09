@@ -6,6 +6,7 @@ Verified on 2026-10-06 on top of `db4fc9d4f3` (working tree, not yet committed):
 `DECIDB_VERIFY_SERIALIZER=1 make decide-test` the same as `auto`;
 `DECIDB_FORCE_SOLVER=highs make decide-test` 2,256 passed, 6 expected failures, 1 unrelated failure that needs Gurobi;
 `build/release/test/unittest "[decidb]"` 1,227 assertions in 39 cases.
+`test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_rule.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits

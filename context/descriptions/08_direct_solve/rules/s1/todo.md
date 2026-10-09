@@ -20,8 +20,8 @@ needs it.
   They also treat the solver's reading of a bare constant bound differently: S1 declines some spellings by inspecting
   them, A1 asks the `variable_bound` fact, which S1 never reads.
 - **Why it matters.** Two readings of one rule can drift apart, and a third per-row rule (A3, A5, A6) would write a third.
-- **Plan.** Do not start this until H-07 (one source for the solver's pre-check) has landed, and not before a third rule needs
-  per-row bounds: S1 is closed and heavily tested, so changing its pins has to earn its risk. Then: move A1's
+- **Plan.** H-07 (one source for the solver's pre-check, `DecideBoxContradictsDomain`) has landed. Do not start this
+  before a third rule needs per-row bounds: S1 is closed and heavily tested, so changing its pins has to earn its risk. Then: move A1's
   per-row bound algebra to a shared builder that yields a lower and an upper bound per row; give S1's pins that builder
   with the domain {0, 1}; keep S1's rank and count logic as it is.
 - **Done when.** S1's pin code is a call to the shared builder, S1's suites (three-way, contract, fuzz) pass unchanged, and
@@ -34,8 +34,8 @@ needs it.
   `8c9420edb2` with 1,957 tests. The 15 to 100 times speedups are part of the reason `auto` is the default.
 - **Plan.** After the changes in H-05, H-06, S1-10 and S1-11 (all done), run the sweep in `done.md` "Reproduce" once
   (about 4.5 minutes; it needs the 5,000,000-row and wide databases, about 3 GiB), plus one run with and without NULLs in
-  the score column to measure the message cost. Rebuild first with `make release`. Run the five checks (use
-  `test/decide/run_direct_matrix.sh` if H-12 has landed). Rewrite the stamp and the table.
+  the score column to measure the message cost. Rebuild first with `make release`. Run the five checks with
+  `test/decide/run_direct_matrix.sh`. Rewrite the stamp and the table.
 - **Done when.** `done.md` has current numbers, the commit and the test counts, and says what the NULL message costs.
 
 ## Deferred

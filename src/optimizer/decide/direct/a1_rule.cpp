@@ -18,6 +18,7 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 
 namespace duckdb {
@@ -32,10 +33,6 @@ constexpr double FRACTION_LIMIT = 4503599627370496.0;
 //! The solver reads a bound of this magnitude as no bound at all: an upper bound of 1e20 or more, or a lower bound of
 //! -1e20 or less.
 constexpr double INFINITE_BOUND = 1e20;
-//! The solver's starting box for a decision before any bound is folded (LogicalDecide::ABSORBED_LOWER_UNSET and the
-//! initial absorbed upper bound), so the domain check below sees what the solver sees.
-constexpr double SOLVER_LOWER_UNSET = -1e30;
-constexpr double SOLVER_UPPER_UNSET = 1e30;
 constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
 constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 
@@ -341,8 +338,8 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 	vector<double> absorbed_upper(decision_count, POSITIVE_INFINITY);
 	// The same box as the solver folds it, from the raw values it reads (no rounding, no mapping to infinity), kept
 	// only to apply the solver's check of the box against the variable's built-in domain below.
-	vector<double> solver_lower(decision_count, SOLVER_LOWER_UNSET);
-	vector<double> solver_upper(decision_count, SOLVER_UPPER_UNSET);
+	vector<double> solver_lower(decision_count, LogicalDecide::ABSORBED_LOWER_UNSET);
+	vector<double> solver_upper(decision_count, LogicalDecide::ABSORBED_UPPER_UNSET);
 	for (auto &fact : facts.constraints) {
 		idx_t decision = fact.lhs[0].terms[0].var_a;
 		auto domain = proof.decisions[decision].domain;
@@ -421,14 +418,11 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 		}
 	}
 	for (idx_t decision = 0; decision < decision_count; decision++) {
-		// The solver rejects, before it reads any row, a box that contradicts the variable's built-in domain: an upper
-		// bound below the default floor of 0 (when no lower bound is written, or the one written is still at or above
-		// 0), or a BOOL lower bound above 1 (DecideGlobalSinkState in physical_decide.cpp). It says so on an empty
-		// source too, so the query is left to the solver, which reports it, rather than proved here and answered with
-		// no rows. The test reads the raw bounds exactly as that check does.
-		bool boolean = proof.decisions[decision].domain == DirectDomain::BOOL;
-		double floor = solver_lower[decision] <= SOLVER_LOWER_UNSET ? 0.0 : solver_lower[decision];
-		if ((solver_upper[decision] < 0.0 && floor >= 0.0) || (boolean && floor > 1.0)) {
+		// The solver rejects, before it reads any row, a box that contradicts the variable's built-in domain
+		// (DecideBoxContradictsDomain). It says so on an empty source too, so the query is left to the solver, which
+		// reports it, rather than proved here and answered with no rows.
+		if (DecideBoxContradictsDomain(solver_lower[decision], solver_upper[decision],
+		                               proof.decisions[decision].domain == DirectDomain::BOOL)) {
 			reason =
 			    "variable_bound: a bound contradicts the decision's built-in domain (non-negative, or BOOL 0 or 1); "
 			    "the solver reports it";

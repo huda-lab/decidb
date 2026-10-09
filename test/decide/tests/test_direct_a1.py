@@ -36,15 +36,11 @@ from fractions import Fraction
 import pytest
 
 from decidb_cli import DecidBCliError
-from solver.types import ObjSense, SolverStatus, VarType
+from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
-
-
-@pytest.fixture(autouse=True)
-def _allow_direct_path(monkeypatch):
-    # The suite also runs with a process-wide forced HiGHS backend, which `require` rejects.
-    monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
+from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
+from ._direct_oracle_common import agree_with_oracle, outcome as _run_all, run as _run, values_clause
 
 
 INF = math.inf
@@ -94,8 +90,7 @@ def _literal(value, sql_type):
 
 
 def _values(rows):
-    types = dict(COLUMNS)
-    return ", ".join("(" + ", ".join(_literal(row[n], types[n]) for n in NAMES) + ")" for row in rows)
+    return values_clause(rows, NAMES, dict(COLUMNS), _literal)
 
 
 # ---------------------------------------------------------------------------
@@ -294,13 +289,7 @@ def _sql(case_, wrap="plain"):
 
 
 def _values_without(rows, dropped):
-    types = dict(COLUMNS)
-    keep = [n for n in NAMES if n != dropped]
-    return ", ".join("(" + ", ".join(_literal(row[n], types[n]) for n in keep) + ")" for row in rows)
-
-
-def _run(cli, sql, mode):
-    return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
+    return values_clause(rows, [n for n in NAMES if n != dropped], dict(COLUMNS), _literal)
 
 
 def _solve_with_oracle(oracle_solver, case_):
@@ -353,23 +342,11 @@ def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "requir
     """Runs the case on the oracle and on the chosen DeciDB paths, and checks they agree."""
     sql = _sql(case_, wrap)
     oracle = _solve_with_oracle(oracle_solver, case_)
-    if oracle.status == SolverStatus.INFEASIBLE:
-        for mode in modes:
-            with pytest.raises(DecidBCliError, match=r"(?i)infeasible"):
-                _run(decidb_cli, sql, mode)
-        return
-    if oracle.status == SolverStatus.UNBOUNDED:
-        for mode in modes:
-            with pytest.raises(DecidBCliError, match=r"(?i)unbounded"):
-                _run(decidb_cli, sql, mode)
-        return
-    assert oracle.status == SolverStatus.OPTIMAL, oracle.status
-    for mode in modes:
-        rows, columns = _run(decidb_cli, sql, mode)
-        try:
-            _check_assignment(case_, rows, columns, oracle, mode)
-        except AssertionError as error:
-            raise AssertionError(f"[{mode}] {error}") from None
+
+    def check_assignment(rows, columns, mode):
+        _check_assignment(case_, rows, columns, oracle, mode)
+
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes)
 
 
 # ---------------------------------------------------------------------------
@@ -1146,14 +1123,6 @@ def test_a1_boundary_values_read_like_the_solver(decidb_cli, name):
         direct[0] != "error" or "decide_direct_solve=require" not in direct[1]
     ), "direct solve did not prove the query"
     assert _all_close(direct, solver), (direct, solver)
-
-
-def _run_all(cli, sql, mode):
-    try:
-        rows, _ = cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
-    except DecidBCliError as error:
-        return ("error", error_class(str(error)))
-    return ("ok", rows)
 
 
 def _all_close(left, right):

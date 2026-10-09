@@ -2,7 +2,7 @@
 
 Verified on 2026-10-05 at `8c9420edb2`: `make decide-test` (1,957 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off` and
 `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (1,956 passed, 1 unrelated failure that needs
-Gurobi), and `build/release/test/unittest "[decidb]"` (907 assertions). Later commits touch only a comment and docs.
+Gurobi), and `build/release/test/unittest "[decidb]"` (907 assertions). Later commits touch only a comment and docs. `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/s1_rule.cpp`, with the helpers only S1 uses in `s1_support.{hpp,cpp}`. Class definition: [definition.md](definition.md).
 
 ## What it admits

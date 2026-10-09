@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+# run_direct_matrix.sh -- run the five direct-solve checks and print one summary line each.
+#
+# Usage (from anywhere; run `make release` first so the binary is current):
+#   test/decide/run_direct_matrix.sh
+#
+# The checks are the ones architecture/rules.md lists:
+#   auto        make decide-test
+#   off         DECIDB_TEST_DIRECT_SOLVE=off make decide-test
+#   serializer  DECIDB_VERIFY_SERIALIZER=1 make decide-test
+#   highs       DECIDB_FORCE_SOLVER=highs make decide-test (one failure that needs Gurobi is expected:
+#               test_norm_combined_l1_l2_objective)
+#   C++         build/release/test/unittest "[decidb]"
+#
+# Each pytest line reads `auto: 2322 passed, 0 xfailed, 0 failed`. A golden-model difference or a run that
+# prints no pytest summary shows as `FAILED TO RUN` with the log path. Full logs go to $MATRIX_LOG_DIR
+# (default: a fresh temp directory). The exit code is 0 only when every pytest check has no failure
+# except the expected highs one, and the C++ run passes.
+
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+LOG_DIR="${MATRIX_LOG_DIR:-$(mktemp -d)}"
+mkdir -p "${LOG_DIR}"
+cd "${REPO_ROOT}"
+
+status=0
+
+# count LABEL WORD: the number before WORD on pytest's final summary line (0 when absent).
+count() {
+    local n
+    n="$(tail -n 5 "$1" | grep -E '(passed|failed|xfailed)' | tail -n 1 | grep -oE "[0-9]+ $2" | head -n 1 | cut -d' ' -f1)"
+    echo "${n:-0}"
+}
+
+run_pytest() {
+    local label="$1"
+    shift
+    local log="${LOG_DIR}/${label}.log"
+    env "$@" make decide-test >"${log}" 2>&1
+    if ! tail -n 5 "${log}" | grep -qE '[0-9]+ (passed|failed)'; then
+        echo "${label}: FAILED TO RUN (see ${log})"
+        status=1
+        return
+    fi
+    local passed xfailed failed
+    passed="$(count "${log}" passed)"
+    xfailed="$(count "${log}" xfailed)"
+    failed="$(( $(count "${log}" failed) + $(count "${log}" errors?) ))"
+    echo "${label}: ${passed} passed, ${xfailed} xfailed, ${failed} failed"
+    local expected=0
+    if [[ "${label}" == "highs" ]]; then
+        expected=1
+    fi
+    if [[ "${failed}" -ne "${expected}" ]]; then
+        status=1
+    fi
+}
+
+run_pytest auto
+run_pytest off DECIDB_TEST_DIRECT_SOLVE=off
+run_pytest serializer DECIDB_VERIFY_SERIALIZER=1
+run_pytest highs DECIDB_FORCE_SOLVER=highs
+
+cpp_log="${LOG_DIR}/cpp.log"
+build/release/test/unittest "[decidb]" >"${cpp_log}" 2>&1
+cpp_rc=$?
+cpp_line="$(grep -E 'assertions? in [0-9]+ test case' "${cpp_log}" | tail -n 1)"
+if [[ -n "${cpp_line}" ]]; then
+    echo "C++: $(echo "${cpp_line}" | grep -oE '[0-9]+ assertions? in [0-9]+ test cases?')$([[ ${cpp_rc} -eq 0 ]] || echo ' (FAILED)')"
+else
+    echo "C++: FAILED TO RUN (see ${cpp_log})"
+fi
+if [[ ${cpp_rc} -ne 0 ]]; then
+    status=1
+fi
+
+exit ${status}

@@ -34,16 +34,12 @@ import pytest
 
 from comparison.compare import compare_solutions
 from decidb_cli import DecidBCliError
-from solver.types import ObjSense, SolverStatus, VarType
+from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
+from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
+from ._direct_oracle_common import agree_with_oracle, outcome as _outcome, run as _run, values_clause
 from ._direct_rule_fixtures import S1_SOLVER_ONLY_ROW_BOUNDS
-
-
-@pytest.fixture(autouse=True)
-def _allow_direct_path(monkeypatch):
-    # The suite also runs with a process-wide forced HiGHS backend, which `require` rejects.
-    monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
 
 
 # ---------------------------------------------------------------------------
@@ -154,8 +150,7 @@ def _literal(value, sql_type):
 
 
 def _values(records, names=NAMES):
-    types = dict(COLUMNS)
-    return ", ".join("(" + ", ".join(_literal(r[n], types[n]) for n in names) + ")" for r in records)
+    return values_clause(records, names, dict(COLUMNS), _literal)
 
 
 # ---------------------------------------------------------------------------
@@ -537,43 +532,30 @@ def _solve_with_oracle(oracle_solver, case):
     return constraints, oracle_solver.solve()
 
 
-def _run(cli, sql, mode):
-    return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
-
-
 def _agree(decidb_cli, oracle_solver, case, wrap="plain"):
     """Runs the case on the oracle, the solver path and the direct path, and checks they agree."""
     sql = _wrapped_sql(case, wrap)
     rows_data = _dataset(case)
     constraints, oracle = _solve_with_oracle(oracle_solver, case)
-
-    if oracle.status == SolverStatus.INFEASIBLE:
-        for mode in ("off", "require"):
-            with pytest.raises(DecidBCliError, match=r"(?i)infeasible"):
-                _run(decidb_cli, sql, mode)
-        return
-
     by_id = {r["id"]: i for i, r in enumerate(rows_data)}
     coefficient = OBJECTIVES[case.get("objective", "score")][1]
-    for mode in ("off", "require"):
-        rows, columns = _run(decidb_cli, sql, mode)
+
+    def check_assignment(rows, columns, mode):
         assert columns == ["id", "g", "score", "x"], mode
         assert [row[0] for row in rows] == [r["id"] for r in rows_data], mode
         assert all(type(row[3]) is int and row[3] in (0, 1) for row in rows), mode
-
         values = {f"x_{by_id[row[0]]}": row[3] for row in rows}
         assert not _violations(constraints, values), (mode, _violations(constraints, values))
-        try:
-            compare_solutions(
-                rows,
-                columns,
-                oracle,
-                [(r["id"], r["g"], float(r["score"])) for r in rows_data],
-                ["x"],
-                coeff_fn=lambda row: {"x": float(coefficient(rows_data[by_id[row[0]]]))},
-            )
-        except AssertionError as error:
-            raise AssertionError(f"[{mode}] {error}") from None
+        compare_solutions(
+            rows,
+            columns,
+            oracle,
+            [(r["id"], r["g"], float(r["score"])) for r in rows_data],
+            ["x"],
+            coeff_fn=lambda row: {"x": float(coefficient(rows_data[by_id[row[0]]]))},
+        )
+
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
 
 
 @pytest.mark.var_boolean
@@ -948,13 +930,6 @@ BOUNDARY_CASES = {
                         ("1.5", "<="), ("0.5", ">=")]
     },
 }
-
-
-def _outcome(cli, sql, mode):
-    try:
-        return "ok", _run(cli, sql, mode)[0]
-    except DecidBCliError as error:
-        return "error", error_class(str(error))
 
 
 @pytest.mark.var_boolean

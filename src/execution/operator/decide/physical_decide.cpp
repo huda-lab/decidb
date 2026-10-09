@@ -21,6 +21,7 @@
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp"
 #include "duckdb/decidb/diagnostics/decide_router.hpp"
 #include "duckdb/common/enums/decide.hpp"
@@ -1272,9 +1273,9 @@ public:
         // match and proceeds to the elastic engine, which reports a least-change loosen.
         for (idx_t var = 0; var < num_decide_vars; var++) {
             bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
-            double L = (absorbed_lower_bounds[var] <= ABSORBED_LOWER_UNSET)
-                           ? 0.0
-                           : absorbed_lower_bounds[var];
+            // The raw box: an unwritten lower bound stays at ABSORBED_LOWER_UNSET, which
+            // DecideBoxContradictsDomain reads as the default floor of 0.
+            double L = absorbed_lower_bounds[var];
             double U = absorbed_upper_bounds[var];
             bool has_removable_bound = false;
             for (const auto &bound : user_absorbed_bounds) {
@@ -1290,7 +1291,7 @@ public:
                 // (non-removable) bounds; the actual primary solve still receives the
                 // full box and therefore still proves the original query infeasible.
                 double retained_l = is_bool ? 0.0 : ABSORBED_LOWER_UNSET;
-                double retained_u = is_bool ? 1.0 : 1e30;
+                double retained_u = is_bool ? 1.0 : LogicalDecide::ABSORBED_UPPER_UNSET;
                 for (const auto &bound : user_absorbed_bounds) {
                     if (bound.decide_var_idx != var ||
                         bound.removal_group_id != DConstants::INVALID_INDEX) {
@@ -1299,7 +1300,7 @@ public:
                     if (bound.sense != '<') retained_l = std::max(retained_l, bound.k);
                     if (bound.sense != '>') retained_u = std::min(retained_u, bound.k);
                 }
-                L = retained_l <= ABSORBED_LOWER_UNSET ? 0.0 : retained_l;
+                L = retained_l;
                 U = retained_u;
             }
             const string vname = op.decide_variables[var]->GetName();
@@ -1315,19 +1316,21 @@ public:
                 }
                 return StringUtil::Format("%s %s %g", vname, upper ? "<=" : ">=", value);
             };
-            if (U < 0.0 && L >= 0.0) {
+            if (!DecideBoxContradictsDomain(L, U, is_bool)) {
+                continue;
+            }
+            // Both sides can contradict at once (a BOOLEAN with `x <= -1 AND x >= 2`); the upper bound is reported.
+            if (U < 0.0) {
                 throw InvalidInputException(StringUtil::Format(
                     "DECIDE optimization is infeasible: %s cannot hold because %s is %s. "
                     "%s", QuoteBound(true, U), vname, domain,
                     is_bool ? "Drop the bound or change the variable's type."
                             : "Add an explicit lower bound if it may be negative."));
             }
-            if (is_bool && L > 1.0) {
-                throw InvalidInputException(StringUtil::Format(
-                    "DECIDE optimization is infeasible: %s cannot hold because %s is "
-                    "BOOLEAN (0 or 1). Drop the bound or change the variable's type.",
-                    QuoteBound(false, L), vname));
-            }
+            throw InvalidInputException(StringUtil::Format(
+                "DECIDE optimization is infeasible: %s cannot hold because %s is "
+                "BOOLEAN (0 or 1). Drop the bound or change the variable's type.",
+                QuoteBound(false, L), vname));
         }
 
         // Minimal: keep constructor lean; detailed solver output comes from HiGHS

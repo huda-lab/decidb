@@ -23,6 +23,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
@@ -206,7 +207,8 @@ bool SatisfiesComparison(ExpressionType comparison, double value, double bound) 
 //! message naming the clause rather than DECIDE's infeasible error. Those spellings stay on the solver: false for all
 //! of them. A strict bound is shifted to a whole number first, with the solver's own function, so `x > 0.5` is the
 //! lower bound 1 and `x < 1.5` the upper bound 1 here as there; for a variable that is 0 or 1 that is the same as the
-//! comparison itself.
+//! comparison itself. Whether the box contradicts the built-in domain of a Boolean is the solver's own test
+//! (DecideBoxContradictsDomain); the negative lower bound is the one condition that is S1's.
 bool ConstantPinDomain(const DirectConstraintFact &fact, double bound, PinDomain &domain) {
 	auto comparison = fact.comparison;
 	if (!fact.scope.when && comparison != ExpressionType::COMPARE_NOTEQUAL) {
@@ -218,7 +220,9 @@ bool ConstantPinDomain(const DirectConstraintFact &fact, double bound, PinDomain
 		                 comparison == ExpressionType::COMPARE_EQUAL;
 		double lower = comparison == ExpressionType::COMPARE_GREATERTHAN ? DecideStrictBound(true, bound) : bound;
 		double upper = comparison == ExpressionType::COMPARE_LESSTHAN ? DecideStrictBound(false, bound) : bound;
-		if ((has_lower && (lower < 0.0 || lower > 1.0)) || (has_upper && upper < 0.0)) {
+		if (DecideBoxContradictsDomain(has_lower ? lower : LogicalDecide::ABSORBED_LOWER_UNSET,
+		                               has_upper ? upper : LogicalDecide::ABSORBED_UPPER_UNSET, true) ||
+		    (has_lower && lower < 0.0)) {
 			return false;
 		}
 	}

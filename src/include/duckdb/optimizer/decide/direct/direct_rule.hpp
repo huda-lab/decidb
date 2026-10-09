@@ -25,9 +25,9 @@ enum class DirectFactStatus : uint8_t { KNOWN, UNKNOWN };
 //===--------------------------------------------------------------------===//
 //
 // What a rule may know about a DECIDE problem, read once from the bound, canonical
-// tree before any DECIDE rewrite (00_design/architecture.md#semantic-facts). The
-// adapter is the only code that knows LogicalDecide's layout and the bound-tree
-// spelling of DECIDE constructs; rules read meaning. Data-valued expressions
+// tree before any DECIDE rewrite (see context/descriptions/08_direct_solve/architecture/
+// facts.md). The adapter is the only code that knows LogicalDecide's layout and the
+// bound-tree spelling of DECIDE constructs; rules read meaning. Data-valued expressions
 // (coefficients, bounds, WHEN predicates) stay DuckDB expressions over the source.
 // Facts own everything they hold. Anything the adapter cannot model is UNKNOWN with
 // a reason, per constraint and per objective part.

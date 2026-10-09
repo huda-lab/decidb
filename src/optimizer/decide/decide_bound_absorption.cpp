@@ -192,6 +192,11 @@ double DecideStrictBound(bool is_lower, double k) {
 	return is_lower ? std::floor(k) + 1.0 : std::ceil(k) - 1.0;
 }
 
+bool DecideBoxContradictsDomain(double lower, double upper, bool is_bool) {
+	double floor = lower <= LogicalDecide::ABSORBED_LOWER_UNSET ? 0.0 : lower;
+	return (upper < 0.0 && floor >= 0.0) || (is_bool && floor > 1.0);
+}
+
 void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &decide) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CONJUNCTION: {
@@ -279,7 +284,7 @@ void DecideOptimizer::AbsorbVariableBounds(LogicalDecide &decide) {
 	// preceding passes is already counted.
 	idx_t num_decide_vars = decide.decide_variables.size();
 	decide.absorbed_lower_bounds.assign(num_decide_vars, LogicalDecide::ABSORBED_LOWER_UNSET);
-	decide.absorbed_upper_bounds.assign(num_decide_vars, 1e30);
+	decide.absorbed_upper_bounds.assign(num_decide_vars, LogicalDecide::ABSORBED_UPPER_UNSET);
 
 	// Seed a BOOLEAN's intrinsic ceiling here rather than leaving every variable at
 	// 1e30 and repairing it at model-build time. The box travels to stage 06 as

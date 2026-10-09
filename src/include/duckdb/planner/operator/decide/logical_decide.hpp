@@ -254,6 +254,8 @@ public:
     //! tightest of several `>=` bounds, and physical Finalize resolves anything still at
     //! the sentinel to the default 0 floor.
     static constexpr double ABSORBED_LOWER_UNSET = -1e30;
+    //! The matching starting point of the upper side: no explicit upper bound was written.
+    static constexpr double ABSORBED_UPPER_UNSET = 1e30;
 
     //! Per-decision-variable box, sized to decide_variables. Physical execution copies
     //! these into SolverInput instead of re-walking the constraint tree.
