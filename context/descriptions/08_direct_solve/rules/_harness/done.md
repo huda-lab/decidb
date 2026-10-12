@@ -1,8 +1,8 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-12 on top of `a6db94b5a1` with the second read, with S1 and A1 registered: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,344 passed (no
-failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,343 passed and one failure,
+Verified on 2026-10-13 on top of `95ee8bf58c` with the second read, with S1 and A1 registered: `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,346 passed (no
+failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,345 passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,319 assertions in
 46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../../architecture/`.
@@ -28,7 +28,9 @@ check). Design: `../../architecture/`.
   it as a hidden trailing dependency. Right after unused-column removal, when it is known which outputs a parent reads,
   a late step moves each parent-read output that is a plain stored column the rule's plan only forwards to a second scan
   of the table, joined (inner, on `rowid`) under the boundary, and prunes again so the column leaves the held rows. The
-  first read still checks every row. Any such column moves, narrow or wide. Joins, aggregates, volatile or computed
+  first read still checks every row. Only a variable-width column moves (a physical type that is not constant-size:
+  `VARCHAR`, `BLOB`, nested types); a fixed-width one is cheaper held than read back, so it stays in the single read
+  (measurements in `../../architecture/result_boundary.md`). Joins, aggregates, volatile or computed
   columns, a source that already reads `rowid`, and a rule plan that streams (`DirectRelationalProposal::streams_rows`,
   set by A1's constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
   `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep

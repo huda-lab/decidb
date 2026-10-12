@@ -482,6 +482,33 @@ def test_second_read_only_for_a_stored_table_and_a_column_the_rule_does_not_use(
 
 
 @pytest.mark.correctness
+@pytest.mark.parametrize("rule", ["s1", "a1"])
+def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
+    setup = _second_read_setup(rule)
+    decide = _second_read_decide(rule)
+
+    def scans(query):
+        plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
+        assert "Direct solve rule" in plan
+        return _table_scans(plan)
+
+    # A fixed-width stored column the parent reads stays in the single read.
+    narrow_query = f"SELECT id, x FROM ({decide}) q ORDER BY id"
+    assert scans(narrow_query) == 1
+    # A VARCHAR one moves to the second read, and so does one next to a fixed-width column that stays.
+    wide_query = f"SELECT payload, x FROM ({decide}) q ORDER BY payload"
+    assert scans(wide_query) == 2
+    mixed_query = f"SELECT id, payload, x FROM ({decide}) q ORDER BY id"
+    assert scans(mixed_query) == 2
+
+    for query in (narrow_query, wide_query, mixed_query):
+        direct, _ = _run(decidb_cli, setup + query)
+        solver, _ = _run(decidb_cli, setup + query, mode="off")
+        assert len(direct) == _SECOND_READ_ROWS
+        _same_answers(direct, solver)
+
+
+@pytest.mark.correctness
 def test_a1_plan_that_streams_does_not_read_twice(decidb_cli):
     setup = _second_read_setup("a1")
     # Every row sees the same bounds and coefficients, so the plan holds nothing and a second read would only add a join.

@@ -129,15 +129,15 @@ different `PER` or `WHEN` membership (S2); `SUM(x) <> k` (not an interval); boun
 
 ## Performance
 
-Measured 2026-10-13 at `7a480a1a71` (macOS arm64, 11 cores). 5,000,000 stored rows; every query ran in a fresh process
+Measured 2026-10-13 (macOS arm64, 11 cores): the global narrow rows on top of `95ee8bf58c` with only variable-width columns taking the second read, the rest at `7a480a1a71`, where those shapes plan the same way. 5,000,000 stored rows; every query ran in a fresh process
 that only opens the database file, so peak memory is the query's own. Times are median query-plus-collection seconds
-(direct 1 or 2 runs, Gurobi 1 or 2). In all 36 runs direct and Gurobi agreed on selected count and objective. HiGHS was
+(direct 1 to 3 runs, Gurobi 1 or 2). In all 36 runs direct and Gurobi agreed on selected count and objective. HiGHS was
 not re-run; earlier it took about 43 s on the global shape.
 
 | Shape | Direct | Gurobi | Speedup | Direct peak | Gurobi peak |
 |---|---:|---:|---:|---:|---:|
-| Global top-K, narrow, full output | 0.28 s | 2.89 s | 10x | 1.1 GiB | 2.3 GiB |
-| Global top-K, narrow, every column reduced in the query | 0.28 s | 2.84 s | 10x | 1.1 GiB | 2.2 GiB |
+| Global top-K, narrow, full output | 0.18 s | 2.89 s | 16x | 1.0 GiB | 2.3 GiB |
+| Global top-K, narrow, every column reduced in the query | 0.17 s | 2.84 s | 17x | 0.9 GiB | 2.2 GiB |
 | Global top-K, unused 512 B payload (pruned) | 0.16 s | 3.00 s | 19x | 0.8 GiB | 5.3 GiB |
 | 100 `PER` groups, fixed pins | 0.33 s | 32.4 s | 98x | 0.5 GiB | 6.6 GiB |
 | 100 groups, aggregate-local `WHEN` | 0.30 s | 28.4 s | 95x | 0.5 GiB | 6.0 GiB |
@@ -146,9 +146,8 @@ not re-run; earlier it took about 43 s on the global shape.
 | 100 groups, paired source-valued bounds | 0.66 s | 29.6 s | 45x | 0.8 GiB | 6.3 GiB |
 | 100 groups, `COALESCE` source-valued bound | 0.57 s | 29.5 s | 52x | 0.6 GiB | 6.3 GiB |
 
-The two global narrow rows read the key `i` back through the second read of the stored table, which costs about 0.07 s
-here and saves no memory; with one read the same query takes 0.21 s (`../../architecture/result_boundary.md` § Second
-read of a stored table). Gurobi's peak varies by about 2 GiB between identical runs (4.6 to 6.5 GiB on the 100-group
+The two global narrow rows return the `BIGINT` key `i`, which stays in the single read (only a variable-width column
+takes the second read; `../../architecture/result_boundary.md` § Second read of a stored table). Gurobi's peak varies by about 2 GiB between identical runs (4.6 to 6.5 GiB on the 100-group
 shape over four runs): the model it receives is the same in every run, and the peak is reached inside its presolve, which
 takes 32 of the 33 s. DeciDB's own part of those runs peaks at 1.2 GiB.
 

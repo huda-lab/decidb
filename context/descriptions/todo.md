@@ -6,9 +6,6 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `08_direct_solve/README.md`, `08_direct_solve/architecture/rules.md`.
 Checks: `08_direct_solve/rules/_harness/todo.md` § How to work any task.
 
-## 4. Second read
-- [ ] H-17 only variable-width columns take the second read — 08_direct_solve/rules/_harness/todo.md § H-17
-
 ## 5. New problem classes
 - [ ] R-A3-01 A3 fixed-small multi-affine box — 08_direct_solve/rules/a3/todo.md § R-A3-01
 - [ ] R-A5-01 A5 objective-aligned monotone corner — 08_direct_solve/rules/a5/todo.md § R-A5-01

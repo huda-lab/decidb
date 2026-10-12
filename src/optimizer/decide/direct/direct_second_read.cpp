@@ -226,7 +226,9 @@ void SecondReadOneBoundary(unique_ptr<LogicalOperator> &slot, Optimizer &optimiz
 	auto scan = FindScan(*boundary.children[0], boundary.scan_table_index);
 	bool supported = scan && IsRepeatableTableScan(*scan) && CollectPlanOperators(boundary, operators) &&
 	                 rowid_type == scan->GetRowIdType();
-	// Outputs a parent reads, whose stored column nothing else in the plan uses.
+	// Outputs a parent reads, whose stored column nothing else in the plan uses. Only a variable-width column moves
+	// (VARCHAR, BLOB, BIT, lists, arrays, structs, maps, unions), because holding one is what costs memory. A
+	// fixed-width column is cheaper held than read back, so it stays in the single read.
 	vector<idx_t> moved_outputs;
 	vector<idx_t> moved_columns;
 	if (supported) {
@@ -234,6 +236,9 @@ void SecondReadOneBoundary(unique_ptr<LogicalOperator> &slot, Optimizer &optimiz
 		for (idx_t i = 0; i < boundary.output_types.size(); i++) {
 			if (i >= boundary.stored_columns.size() || boundary.stored_columns[i] == DConstants::INVALID_INDEX ||
 			    boundary.expressions[i]->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+				continue;
+			}
+			if (TypeIsConstantSize(boundary.output_types[i].InternalType())) {
 				continue;
 			}
 			auto stored = boundary.stored_columns[i];

@@ -80,12 +80,15 @@ When the source is one DuckDB base table under non-volatile projections and filt
 `rowid` as a hidden column. After unused-column removal, when it is known what the parent reads, each parent-read output
 that is a plain stored column the rule's plan only forwards comes from a second scan of the table, joined on `rowid`
 under the boundary. That column never enters the barrier or the rank, and the first read still checks every row, so a
-bad last row under `LIMIT 1` still raises. Any such column moves, narrow or wide. For a narrow one the effect depends on the rule. Measured
-2026-10-13 on tables that hold only the columns in play, so that `SET disabled_optimizers = 'unused_columns'` (one read,
-rows held) keeps nothing extra: with a parent that reads a `BIGINT` key, A1 took 0.12 against 0.13 s (71 against 80 MiB)
-at 1,000,000 rows and 0.44 against 0.52 s (346 against 370 MiB) at 5,000,000, so the second read is faster; S1's global
-top-K at 5,000,000 rows took 0.28 to 0.33 s against 0.21 to 0.25 s with the same memory, so the second read is about 30%
-slower. Narrowing the step to variable-width columns is `../rules/_harness/todo.md` § H-17. A join, an aggregate, a volatile or computed column, or a source that already reads `rowid` keeps the single
+bad last row under `LIMIT 1` still raises. Only a variable-width column moves (`VARCHAR`, `BLOB`, `BIT`, lists,
+arrays, structs, maps, unions: a physical type that is not constant-size); a fixed-width one stays in the single read,
+and a boundary with nothing to move plans one scan. Holding a variable-width column is what costs memory, so that is
+where the second read pays. For a fixed-width column the effect depends on the rule, measured 2026-10-13 on tables that
+hold only the columns in play, so that `SET disabled_optimizers = 'unused_columns'` (one read, rows held) keeps nothing
+extra. With a parent that reads a `BIGINT` key, A1 took 0.12 s moved against 0.13 s held (71 against 80 MiB) at
+1,000,000 rows and 0.44 against 0.52 s (346 against 370 MiB) at 5,000,000; S1's global top-K at 5,000,000 rows took
+0.28 to 0.33 s moved against 0.21 to 0.25 s held, with the same memory. The fixed-width rule gives up A1's small gain to
+avoid S1's 30% loss, and needs no tuning number. A join, an aggregate, a volatile or computed column, or a source that already reads `rowid` keeps the single
 read: those have no stable row key, or reading them twice could change the rows. A plan that streams (A1's constant
 problem) also keeps one read, since it holds nothing.
 

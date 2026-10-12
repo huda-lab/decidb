@@ -20,8 +20,9 @@ class Optimizer;
 bool DirectExposeStoredRowId(LogicalOperator &source, DirectSecondRead &second_read);
 
 //! Step two, once unused columns are removed and the parents' reads are known: for every result boundary whose parent
-//! reads a stored column that nothing else in the rule's plan uses, read that column from a second scan of the table
-//! joined to the plan on the row id, then prune again so the column leaves the rule's plan. A boundary whose row id is
+//! reads a variable-width stored column (VARCHAR, BLOB, a nested type) that nothing else in the rule's plan uses, read
+//! that column from a second scan of the table joined to the plan on the row id, then prune again so the column leaves
+//! the rule's plan. A boundary whose row id is
 //! not needed lets go of it. Knows nothing about any rule.
 unique_ptr<LogicalOperator> ApplyDirectSecondRead(unique_ptr<LogicalOperator> plan, Optimizer &optimizer);
 
