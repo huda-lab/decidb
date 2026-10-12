@@ -184,7 +184,9 @@ bool DecideBoundIsAbsorbed(ClientContext &context, LogicalDecide &decide, const 
 
 bool DecideBoxContradictsDomain(const DecideBoundBox &box, bool is_bool) {
 	double floor = box.EffectiveLower();
-	return (box.upper < 0.0 && floor >= 0.0) || (is_bool && floor > 1.0);
+	// A BOOLEAN's floor is 0 whatever lower bound was written (a lower bound below 0 changes nothing), so an upper
+	// bound below 0 contradicts it even when the written lower bound is negative (`x = -1`).
+	return (box.upper < 0.0 && (floor >= 0.0 || is_bool)) || (is_bool && floor > 1.0);
 }
 
 void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &decide) {
@@ -292,6 +294,11 @@ void DecideOptimizer::AbsorbVariableBounds(LogicalDecide &decide) {
 	for (idx_t i = 0; i < num_decide_vars; i++) {
 		if (i < decide.is_boolean_var.size() && decide.is_boolean_var[i]) {
 			decide.absorbed_boxes[i].upper = 1.0;
+			// The floor is just as rigid. A written lower bound only ever raises it (`max`), so `x >= -3`
+			// leaves the box at [0,1] and a bound that cannot hold (`x >= 2`, `x <= -1`) inverts it, which
+			// the solve reports as infeasible. Without this the box would widen to [-3,1], and x would
+			// take a value that is not a Boolean.
+			DecideAbsorbBound(decide.absorbed_boxes[i], '>', 0.0);
 		}
 	}
 

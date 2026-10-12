@@ -10,6 +10,10 @@ import pytest
 
 from solver.types import ObjSense, SolverStatus, VarType
 
+_USUAL_INFEASIBLE = (
+    r"DECIDE optimization is infeasible\. Prefix the query with DIAGNOSE to see which clause to change\."
+)
+
 
 @pytest.mark.error_infeasible
 @pytest.mark.error
@@ -152,13 +156,13 @@ class TestInfeasibleModels:
     def test_boolean_lower_above_domain_is_rejected(
         self, decidb_cli, oracle_solver
     ):
-        """Bug 1 / Part C: a user lower bound above the BOOLEAN 0/1 ceiling (`x >= 2`)
-        is a type-domain conflict, rejected with a precise static error naming the
-        domain. The 0/1 box is intrinsic and never loosened."""
+        """A user lower bound above the BOOLEAN 0/1 ceiling (`x >= 2`) is Boolean
+        arithmetic that cannot hold, so the query is infeasible with DECIDE's usual
+        error. The 0/1 box is intrinsic and never loosened."""
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(BOOL) SUCH THAT x >= 2 MAXIMIZE SUM(x)",
-            match=r"(?i)x >= 2 cannot hold.*BOOLEAN",
+            match=_USUAL_INFEASIBLE,
         )
         oracle_solver.create_model("infeas_boolean_lower_above_one")
         oracle_solver.add_variable("x", VarType.BINARY, lb=0.0, ub=1.0)
@@ -169,7 +173,8 @@ class TestInfeasibleModels:
     def test_strict_bound_is_quoted_as_typed_in_domain_rejection(self, decidb_cli):
         """The pre-solve rejection of a bound against the type domain quotes the clause as the
         user wrote it. A strict `x < 0` is normalized to `x <= -1` inside the solver, but the
-        message says `x < 0`, and a strict BOOLEAN `x > 1.5` says `x > 1.5`, not `x >= 2`."""
+        message says `x < 0`. A strict BOOLEAN bound outside 0 and 1 (`x > 1`, `x > 1.5`) is infeasible
+        with DECIDE's usual error."""
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(INT) SUCH THAT x < 0 MAXIMIZE SUM(x)",
@@ -178,12 +183,12 @@ class TestInfeasibleModels:
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(BOOL) SUCH THAT x > 1 MAXIMIZE SUM(x)",
-            match=r"(?i)x > 1 cannot hold.*BOOLEAN",
+            match=_USUAL_INFEASIBLE,
         )
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(BOOL) SUCH THAT x > 1.5 MAXIMIZE SUM(x)",
-            match=r"(?i)x > 1\.5 cannot hold.*BOOLEAN",
+            match=_USUAL_INFEASIBLE,
         )
 
     def test_strict_fraction_inside_domain_is_not_rejected(self, decidb_cli):

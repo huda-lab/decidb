@@ -6,8 +6,8 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `08_direct_solve/README.md`, `08_direct_solve/architecture/rules.md`.
 Checks: `08_direct_solve/rules/_harness/todo.md` § How to work any task.
 
-## 3. Solver
-- [ ] `BOOL` decision returns values outside 0 and 1 — 06_issues/bugs/todo.md § A `BOOL` decision takes a value outside 0 and 1
+## 3. S1
+- [ ] S1-14 admit a no-`WHEN` bound outside {0, 1} — 08_direct_solve/rules/s1/todo.md § S1-14
 
 ## 4. Measurements, quiet machine
 - [ ] H-16 re-measure memory with the built read-twice plan — 08_direct_solve/rules/_harness/todo.md § H-16

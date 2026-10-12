@@ -9,11 +9,11 @@ suite checks all of it. Adding a rule means adding one `RuleFixture` to `RULE_FI
 
 from dataclasses import dataclass
 
-# Per-row bounds on x with no WHEN that S1 leaves on the solver, as (comparison, constant). The solver reads these as
-# bounds on the variable, not as arithmetic on a Boolean: a negative lower bound makes x signed (the result holds
-# -3, -1, ...), and a bound that cannot hold raises a message naming the clause. A strict bound against a fraction is
-# admitted when it shifts to a whole bound inside {0, 1} (`x > 0.5`, `x < 1.5`, `x < 0.5`, `x > -0.5`): the solver
-# shifts it with the same function. The same bounds with a WHEN are plain arithmetic and are admitted.
+# Per-row bounds on x with no WHEN that S1 leaves on the solver, as (comparison, constant). The solver reads them as
+# Boolean arithmetic: one that always holds changes nothing, and one that cannot hold makes the query infeasible, before
+# it reads a row. S1 does not admit them yet (`08_direct_solve/rules/s1/todo.md` § S1-14). A strict bound against a
+# fraction is admitted when it shifts to a whole bound inside {0, 1} (`x > 0.5`, `x < 1.5`, `x < 0.5`, `x > -0.5`): the
+# solver shifts it with the same function. The same bounds with a WHEN are plain arithmetic and are admitted.
 S1_SOLVER_ONLY_ROW_BOUNDS = {
     ("<=", "-3"),
     ("<=", "-1"),

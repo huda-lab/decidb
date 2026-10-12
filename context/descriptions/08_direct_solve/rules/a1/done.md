@@ -1,9 +1,9 @@
 # A1 (independent bounded decisions) — what works today
 
-Verified on 2026-10-12 on top of `6cb51edfb1`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`
-and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,286 passed (no failures, no expected failures);
-`DECIDB_FORCE_SOLVER=highs make decide-test` 3,285 passed and one failure that needs Gurobi
-(`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 1,287 assertions in 45 cases.
+Verified on 2026-10-12 on top of `658b51d6ac`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`
+and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,339 passed (no failures, no expected failures);
+`DECIDB_FORCE_SOLVER=highs make decide-test` 3,338 passed and one failure that needs Gurobi
+(`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 1,319 assertions in 46 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -70,8 +70,9 @@ A miss never changes the answer: the query runs on the solver and `require` name
   as S1 decided; the solver accepts a violation of about 1e-6 and returns 2. The tests and the fuzz use values that are
   exact in a double, so they never sit in that band.
 - **Error wording.** An empty box on a row reads `DECIDE optimization is infeasible. Prefix the query with DIAGNOSE
-  ...` here. A bound that contradicts the built-in domain is left to the solver (see above), so its own message appears
-  and quotes the clause as typed (`x < 0 cannot hold because x is non-negative`). A NULL value names its source column.
+  ...` here. A bound that contradicts the built-in domain is left to the solver (see above), so its own message appears:
+  for a non-negative decision it quotes the clause as typed (`x < 0 cannot hold because x is non-negative`), and for a
+  `BOOL` it is the usual infeasible error. A NULL value names its source column.
   The "at row N" suffix is left out.
 - **Ties.** The smaller value, which matches the solver in every case checked, but nothing promises it.
 - **A decision that appears in no objective term** takes the lowest value its box allows.
@@ -100,7 +101,7 @@ parent reads does, so reading a wide column back costs memory in proportion to t
 | `test_direct_rule_contract.py` | The checks every rule owes, with A1's fixture: schema and rows, all-rows read for 10 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced HiGHS, `DIAGNOSE`, and 17 near misses that must name their reason and answer under `auto` as under `off` |
 | `test_direct_fuzz.py` | 8 seeds of 30 random A1 queries: direct against solver over domains, bounds, objectives, `WHEN`, `NULL` and infinite values |
 | `test_direct_user_facing.py` | A 200-byte unused payload column stays out of the scan and the barrier; a computed column that can raise is not pruned; a NaN in a constraint coefficient says "constraint coefficient" and in the objective "objective coefficient" |
-| `test_error_infeasible.py` | The solver's rejection of a bound against the built-in domain quotes the clause as typed: `x <= -1 cannot hold ... non-negative`, `x >= 2 cannot hold ... BOOLEAN`, and for strict spellings `x < 0`, `x > 1.5` |
+| `test_error_infeasible.py` | The solver's rejection of a bound against the built-in domain quotes the clause as typed for a non-negative decision (`x <= -1 cannot hold ... non-negative`, strict `x < 0`); for a `BOOL` (`x >= 2`, `x > 1`, `x > 1.5`) it is the usual infeasible error |
 | Five tests pinned to the solver path | `test_canonicalize_idempotence.py` (three cases) and `test_implied_bounds.py` (two cases) inspect the solver's model dump. Direct solve builds no model, so they run with `DECIDB_TEST_DIRECT_SOLVE=off` on purpose. |
 | C++ `[decidb]` | `variable_bound` over 19 spellings, the facts for every objective spelling, A1's proof and each decline reason, S1 and A1 never both proving, and the coordinator choosing the right real rule for each shape |
 

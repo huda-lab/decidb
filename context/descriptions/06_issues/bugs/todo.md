@@ -26,18 +26,6 @@
   the query hang indefinitely on HiGHS once the model is large enough; there
   is no DeciDB-level safety net.
 
-## A `BOOL` decision takes a value outside 0 and 1 under a bound with no `WHEN`
-
-- **Location:** not traced; the solver path's reading of a variable bound.
-- **Observed:** a bound on a `BOOL` decision with no `WHEN` that lies outside 0 and 1 is read as a bound on the variable,
-  not as Boolean arithmetic. A lower bound below 0 (`x >= -3`, `x > -3`, `x = -1`) makes `x` signed, so the result holds
-  -3, -1 or -2. A bound that cannot hold (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`) raises a message naming the clause
-  instead of DECIDE's infeasible error. The same bound with a `WHEN` is plain arithmetic and behaves correctly.
-- **Expected:** a `BOOL` decision only ever takes 0 or 1. A bound outside that range is Boolean arithmetic: one that
-  always holds changes nothing, and one that cannot hold makes the problem infeasible with DECIDE's usual error.
-- **Impact:** a user can get a non-Boolean value back from a `BOOL` decision. Direct solve declines these bounds
-  (`08_direct_solve/rules/s1/done.md` § Explicitly out of scope) and can admit them once this is fixed.
-
 ## Direct solve fails to bind a parent-read column when the source ends in `ORDER BY`
 
 - **Location:** not traced; the direct-solve plan or its unused-column pruning

@@ -29,6 +29,25 @@ What S1 does today is in `done.md`; the class is in `definition.md`. How to work
   constraints-only query compares with the solver. Machine
   load changes timings, so run nothing else meanwhile.
 
+## S1-14 — Admit a bound on `x` with no `WHEN` outside {0, 1}
+
+- **Decision needed.**
+- **Problem.** S1 declines a constant bound on `x` with no `WHEN` outside {0, 1} (`done.md` § Explicitly out of scope,
+  `S1_SOLVER_ONLY_ROW_BOUNDS` in `test/decide/tests/_direct_rule_fixtures.py`). The solver reads these as Boolean
+  arithmetic: one that always holds (`x >= -3`, `x > -3`) changes nothing, and one that cannot hold (`x >= 2`, `x <= -1`,
+  `x < 0`, `x > 1.5`, `x = -1`) raises DECIDE's usual infeasible error before it reads a row, on an empty source too. So a
+  query like `x >= -3 AND SUM(x) <= 3` goes to the solver for no reason.
+- **Options.**
+  1. Admit only the bounds that always hold, as no constraint. Bounds that cannot hold stay declined through
+     `DecideBoxContradictsDomain`, and the solver raises. Small; no new error path in S1.
+  2. Also admit the bounds that cannot hold, with S1 raising the same error before it reads a row. Needs a plan-time
+     error matching the solver's text and `DIAGNOSE` skip. No speed to win on a query that only errors.
+- **Recommendation.** Option 1.
+- **Change.** Read a lower bound below 0 as "both values allowed" in S1's pins. Check whether A1 declines the same
+  bounds on a `BOOL` and give it the same reading, or record why not.
+- **Done when.** The always-hold spellings leave `S1_SOLVER_ONLY_ROW_BOUNDS`, S1's three-way, contract and fuzz suites
+  cover them against the oracle, and the S1 exit gate below is met.
+
 ## Exit gate for any S1 widening
 
 An independent proof, behavior tests (the standard tests in `../../architecture/rules.md`), and end-to-end measurement that

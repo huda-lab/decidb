@@ -1,8 +1,8 @@
 # S1 (top-k and cardinality intervals) — what works today
 
-Verified on 2026-10-12 on top of `6cb51edfb1`: `make decide-test` (3,286 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off`
-and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,285 passed, 1 unrelated failure that
-needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,287 assertions in 45 cases). `test/decide/run_direct_matrix.sh`
+Verified on 2026-10-12 on top of `658b51d6ac`: `make decide-test` (3,339 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off`
+and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,338 passed, 1 unrelated failure that
+needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,319 assertions in 46 cases). `test/decide/run_direct_matrix.sh`
 renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/s1_rule.cpp`, with the helpers only S1 uses in `s1_support.{hpp,cpp}`. Class definition: [definition.md](definition.md).
 
@@ -53,8 +53,8 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   an optional source-only `WHEN`. Each row's value is read as the set of {0, 1} it allows. Both allowed means no
   constraint (`x <= 1`, `x >= 0`, `x BETWEEN 0 AND 1`, `x <> 2`); one allowed fixes the row to that value (`x >= 0.5`
   fixes to 1); none allowed makes the row infeasible. A bound with a `WHEN` takes any constant. A constant bound without a
-  `WHEN` takes only the spellings where the solver's own reading matches Boolean arithmetic (see the out-of-scope table). A
-  strict bound against a fraction is one of them: it is shifted to a whole number by `DecideStrictBound`, the function the
+  `WHEN` takes only a whole bound inside {0, 1} (see the out-of-scope table). A strict bound against a fraction counts
+  when its shift lands there: it is shifted to a whole number by `DecideStrictBound`, the function the
   solver uses (`x > 0.5` is `x >= 1`, `x < 1.5` is `x <= 1`, `x < 0.5` is `x <= 0`, `x > -0.5` is `x >= 0`), and then read
   like any other bound;
   a column value is read as arithmetic with or without a `WHEN`, as the solver does. A source Boolean column is also a pin
@@ -109,7 +109,7 @@ A miss never changes the answer: the query runs on the solver and `require` name
 | A count body whose added term is not a usable constant: a column (`SUM(x + bonus)`), NULL, NaN, an infinity, a constant above 2^21 in magnitude, or a weight on `x` other than 1 or -1 (`SUM(2*x + 1)`) | A column term adds a different amount per row, so the shift is not `n*c`. A non-finite or NULL term raises on the solver. Above 2^21 the plan cannot prove `n*c` exact. A weight other than ±1 is a weighted constraint (S3, S4) | Raise the 2^21 cap with a run-time check of `n` |
 | A bound expression that can raise at runtime, such as a narrowing `CAST` | The solver raises on every row, including rows a `WHEN` or NULL `PER` key excludes, and direct solve must raise on the same inputs. Admitting it means proving DuckDB does not skip the check on a row the solver reads. Nonthrowing forms (`COALESCE`, `TRY_CAST`) are admitted, so `TRY_CAST` is the workaround. A multi-term objective whose coefficient can throw misses for the same reason | Prove the validation stage evaluates every row, then admit expressions that can only raise a cast or overflow error. Low value and costly |
 | A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor, a NULL factor, or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. The solver reads a NULL factor as an objective of zeros, which is not a result worth copying. A subquery factor has no sign when the plan is built, and the sign decides whether the sense reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
-| A bound on `x` with no `WHEN` that the solver reads as a bound on the variable, not as Boolean arithmetic: a lower bound below 0 (`x >= -3`, `x > -3`, `x = -1`), an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`; a strict bound counts after its shift to a whole number) | A negative lower bound makes `x` signed, so the solver's result holds -3, -1 or -2 where direct would give 0 or 1. A bound that cannot hold raises a message naming the clause, not DECIDE's infeasible error. Direct solve cannot match the other two without copying the quirks. The same bound with a `WHEN` is plain arithmetic on the solver and is admitted | Fix the solver to treat these as Boolean arithmetic (`../../../06_issues/bugs/todo.md`), then admit them |
+| A bound on `x` with no `WHEN` outside {0, 1}: a lower bound below 0 (`x >= -3`, `x > -3`, `x = -1`), an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`; a strict bound counts after its shift to a whole number) | The solver reads these as Boolean arithmetic: one that always holds changes nothing, and one that cannot hold raises DECIDE's usual infeasible error before it reads a row, so an empty source raises it too. S1 has no proof for that early error yet. The same bound with a `WHEN` is admitted | `todo.md` § S1-14 |
 
 **Belongs to another problem class or is intentional:** weighted constraints such as `SUM(w * x) <= B` (S3 and S4 cover two special cases of them); `INT` and
 `REAL` variables (A1 and the R classes); more than one decision, entity or scalar decisions (D1); lower and upper bounds with

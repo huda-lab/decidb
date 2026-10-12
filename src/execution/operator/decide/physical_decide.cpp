@@ -1262,16 +1262,22 @@ public:
         // A user bound that contradicts the variable's INTRINSIC domain (a non-negative
         // REAL/INTEGER's `>= 0` floor, or a BOOLEAN's `0/1` box) is a deterministic semantic
         // error, not a constraint conflict to diagnose — loosening can't help, the type can.
-        // Raise a precise static error here (the main pipeline) so it never reaches the
-        // elastic engine, and so it supersedes Build's generic "conflicting bounds" throw.
+        // It is raised here (the main pipeline), before any row is read, so it never reaches the
+        // elastic engine and supersedes Build's generic "conflicting bounds" throw.
         //   - `x <= -1` (REAL): upper below the non-negativity floor → infeasible. But
         //     `x = -1` or `x <= -1 AND x >= -5` explicitly lower the floor below 0, so the
         //     guard is `U < 0 AND L >= 0` (floor still at/above the intrinsic 0).
-        //   - `x >= 2` / `x = 2` (BOOLEAN): lower above the 0/1 ceiling → infeasible.
+        //   - `x >= 2` / `x <= -1` (BOOLEAN): outside the 0/1 box. This is Boolean arithmetic, not
+        //     a wider variable, so the box stays [0,1] and the query is infeasible. It raises
+        //     DECIDE's usual infeasible error. Under DIAGNOSE it is not raised here: the
+        //     elastic engine names the clause and suggests an edit, as for the form with a WHEN.
         // A purely user-vs-user inverted box (e.g. `x >= 5 AND x <= 1`, both >= 0) does NOT
         // match and proceeds to the elastic engine, which reports a least-change loosen.
         for (idx_t var = 0; var < num_decide_vars; var++) {
             bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
+            if (is_bool && op.diagnose) {
+                continue;
+            }
             // The raw box: an unwritten lower bound is the default floor of 0 to
             // DecideBoxContradictsDomain.
             DecideBoundBox box = absorbed_boxes[var];
@@ -1302,8 +1308,15 @@ public:
                 }
                 box = retained;
             }
+            if (!DecideBoxContradictsDomain(box, is_bool)) {
+                continue;
+            }
+            if (is_bool) {
+                SolverResult infeasible;
+                infeasible.status = SolverStatus::INFEASIBLE;
+                ThrowDecideSolveError(infeasible);
+            }
             const string vname = op.decide_variables[var]->GetName();
-            const char *domain = is_bool ? "BOOLEAN (0 or 1)" : "non-negative (>= 0)";
             // Quote the clause as the user typed it: a strict `x < 0` is absorbed as `U = -1`,
             // but the message says `x < 0`, not the normalized `x <= -1`.
             auto QuoteBound = [&](bool upper, double value) {
@@ -1315,23 +1328,10 @@ public:
                 }
                 return StringUtil::Format("%s %s %g", vname, upper ? "<=" : ">=", value);
             };
-            if (!DecideBoxContradictsDomain(box, is_bool)) {
-                continue;
-            }
-            const double L = box.lower;
-            const double U = box.upper;
-            // Both sides can contradict at once (a BOOLEAN with `x <= -1 AND x >= 2`); the upper bound is reported.
-            if (U < 0.0) {
-                throw InvalidInputException(StringUtil::Format(
-                    "DECIDE optimization is infeasible: %s cannot hold because %s is %s. "
-                    "%s", QuoteBound(true, U), vname, domain,
-                    is_bool ? "Drop the bound or change the variable's type."
-                            : "Add an explicit lower bound if it may be negative."));
-            }
             throw InvalidInputException(StringUtil::Format(
-                "DECIDE optimization is infeasible: %s cannot hold because %s is "
-                "BOOLEAN (0 or 1). Drop the bound or change the variable's type.",
-                QuoteBound(false, L), vname));
+                "DECIDE optimization is infeasible: %s cannot hold because %s is non-negative (>= 0). "
+                "Add an explicit lower bound if it may be negative.",
+                QuoteBound(true, box.upper), vname));
         }
 
         // Minimal: keep constructor lean; detailed solver output comes from HiGHS
