@@ -432,8 +432,8 @@ semantics.
 `x <= 10` is one fact about a column, so it belongs in that column's box rather than
 in `num_rows` identical model rows. A box is also strictly better for the solver:
 smaller model, tighter presolve. The pass folds every simple `x OP const` and
-`x BETWEEN a AND b` into `absorbed_lower_bounds` / `absorbed_upper_bounds` on
-`LogicalDecide`, and tags the comparison `ABSORBED_BOUND_TAG` so physical extraction
+`x BETWEEN a AND b` into one `DecideBoundBox` per decision (`absorbed_boxes` on
+`LogicalDecide`), and tags the comparison `ABSORBED_BOUND_TAG` so physical extraction
 skips it.
 
 A bound qualifies when the LHS is a bare decision variable — not inside a reducer —
@@ -452,9 +452,12 @@ absorbed**: it is conditional per row, not a domain.
 - A non-finite constant is **not** absorbed either: the box has one sentinel per
   direction and cannot hold it.
 
-Lower bounds start at `ABSORBED_LOWER_UNSET` (-1e30) rather than 0, so an explicit
-negative bound is honored instead of clamped up. Stage 08 resolves anything still at
-the sentinel to the default 0 floor.
+Every bound goes through `DecideAbsorbBound` (`decide_numeric_policy.hpp`), the same
+combiner A1 and S1 call. Lower bounds start at -1e30 rather than 0, so an explicit
+negative bound is honored instead of clamped up. Whether a lower bound was written is a
+separate flag (`lower_written`), not a reserved value: stage 08 gives the default 0
+floor only to a decision with no lower bound written, and a written `x >= -1e30` is no
+bound, like any bound of magnitude 1e20 or more.
 
 **Upper bounds start at the declared type's ceiling**, not uniformly at 1e30: a
 BOOLEAN variable is seeded to `1.0`. The box is what stage 06 receives as

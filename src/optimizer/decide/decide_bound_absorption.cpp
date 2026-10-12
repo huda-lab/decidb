@@ -81,14 +81,7 @@ struct AbsorptionTarget {
 	//! the intrinsic box), record only when ShouldRecord agrees.
 	void Absorb(char sense, double k, bool strict, double typed_k, idx_t source_clause_id,
 	            idx_t removal_group_id) const {
-		auto &lower = decide->absorbed_lower_bounds[var_idx];
-		auto &upper = decide->absorbed_upper_bounds[var_idx];
-		if (sense != '>') {
-			upper = std::min(upper, k); // '<' and '='
-		}
-		if (sense != '<') {
-			lower = std::max(lower, k); // '>' and '='
-		}
+		DecideAbsorbBound(decide->absorbed_boxes[var_idx], sense, k);
 		if (ShouldRecord(sense, k)) {
 			decide->user_absorbed_bounds.push_back(
 			    {var_idx, sense, k, strict, typed_k, source_clause_id, removal_group_id});
@@ -189,9 +182,9 @@ bool DecideBoundIsAbsorbed(ClientContext &context, LogicalDecide &decide, const 
 	return TryReadAbsorbableBound(context, decide, comparison, bound);
 }
 
-bool DecideBoxContradictsDomain(double lower, double upper, bool is_bool) {
-	double floor = lower <= LogicalDecide::ABSORBED_LOWER_UNSET ? 0.0 : lower;
-	return (upper < 0.0 && floor >= 0.0) || (is_bool && floor > 1.0);
+bool DecideBoxContradictsDomain(const DecideBoundBox &box, bool is_bool) {
+	double floor = box.EffectiveLower();
+	return (box.upper < 0.0 && floor >= 0.0) || (is_bool && floor > 1.0);
 }
 
 void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &decide) {
@@ -280,8 +273,7 @@ void DecideOptimizer::AbsorbVariableBounds(LogicalDecide &decide) {
 	// Sized here rather than at construction so every auxiliary variable created by the
 	// preceding passes is already counted.
 	idx_t num_decide_vars = decide.decide_variables.size();
-	decide.absorbed_lower_bounds.assign(num_decide_vars, LogicalDecide::ABSORBED_LOWER_UNSET);
-	decide.absorbed_upper_bounds.assign(num_decide_vars, LogicalDecide::ABSORBED_UPPER_UNSET);
+	decide.absorbed_boxes.assign(num_decide_vars, DecideBoundBox());
 
 	// Seed a BOOLEAN's intrinsic ceiling here rather than leaving every variable at
 	// 1e30 and repairing it at model-build time. The box travels to stage 06 as
@@ -299,7 +291,7 @@ void DecideOptimizer::AbsorbVariableBounds(LogicalDecide &decide) {
 	// seeding it changes nothing about how a written bound is recorded.
 	for (idx_t i = 0; i < num_decide_vars; i++) {
 		if (i < decide.is_boolean_var.size() && decide.is_boolean_var[i]) {
-			decide.absorbed_upper_bounds[i] = 1.0;
+			decide.absorbed_boxes[i].upper = 1.0;
 		}
 	}
 

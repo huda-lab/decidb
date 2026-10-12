@@ -65,7 +65,7 @@ private:
 	void FindNotEqualConstraints(Expression &expr, LogicalDecide &decide);
 
 	//! Fold every simple `x OP const` / `x BETWEEN a AND b` constraint into the decision
-	//! column's box (`absorbed_lower_bounds` / `absorbed_upper_bounds`) rather than leaving
+	//! column's box (`absorbed_boxes`, combined by `DecideAbsorbBound`) rather than leaving
 	//! it to become a model row: a box is smaller and tighter for the solver than one row
 	//! per data row. Absorbed comparisons are tagged ABSORBED_BOUND_TAG so physical term
 	//! extraction skips them, and recorded in `user_absorbed_bounds` so the infeasible

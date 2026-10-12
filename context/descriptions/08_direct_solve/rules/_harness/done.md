@@ -1,8 +1,8 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-12 on top of `4f3040f016`, with S1 and A1 registered: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,538 passed (no
-failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,537 passed and one failure,
+Verified on 2026-10-12 on top of `6cb51edfb1`, with S1 and A1 registered: `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,286 passed (no
+failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,285 passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,287 assertions in
 45 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../../architecture/`.
@@ -88,11 +88,17 @@ check). Design: `../../architecture/`.
   `test_serializer_explain_and_model_dump` checks the rule and the proof line in the logical, physical and profiled plans.
 - **The solver's domain check, once.** The solver raises, before it reads any row, for a decision whose box
   contradicts its built-in domain (an upper bound below the default floor of 0, or a `BOOL` lower bound above 1). That test
-  is `DecideBoxContradictsDomain(lower, upper, is_bool)` in `decide_bound_absorption.{hpp,cpp}`.
-  The solver's pre-check (`DecideGlobalSinkState`), A1 (`ProveBounds`) and S1 (`ConstantPinDomain`) call it. The starting
-  box is `LogicalDecide::ABSORBED_LOWER_UNSET` and `ABSORBED_UPPER_UNSET`, defined once; the solver, the absorption pass and
-  A1 read them there. Direct solve still only declines these queries and lets the solver raise the error. S1 adds one
-  condition of its own, a negative lower bound (it makes `x` signed on the solver path).
+  is `DecideBoxContradictsDomain(box, is_bool)` in `decide_bound_absorption.{hpp,cpp}`.
+  The solver's pre-check (`DecideGlobalSinkState`), A1 (`ProveBounds`) and S1 (`ConstantPinDomain`) call it. Direct solve
+  only declines these queries and lets the solver raise the error. S1 adds one condition of its own, a negative lower
+  bound (it makes `x` signed on the solver path).
+- **One box, one way to combine bounds.** A decision's unconditional bounds fold into a `DecideBoundBox`
+  (`decide_numeric_policy.hpp`) through `DecideAbsorbBound`, which keeps the tightest value on each side. The solver's
+  absorption pass, the elastic engine's retained box, A1 (`ProveBounds`) and S1 (`ConstantPinDomain`) all call it, so
+  the paths cannot combine bounds differently. The box keeps a `lower_written` flag apart from the value: a written lower
+  bound of -1e30 or below is no bound, like any bound of magnitude 1e20 or more, and only a decision with no lower bound
+  written takes the default floor of 0 (`EffectiveLower`). No value is reserved to mean "unset", so a value the user
+  writes can never be mistaken for one.
 - **One test scaffold.** `test/decide/tests/_direct_oracle_common.py` holds what the oracle suites share: the autouse
   fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, and `agree_with_oracle` (oracle model, `off`, `require`,
   then a rule-supplied check of one assignment). `test_direct_three_way.py` (S1) and `test_direct_a1.py` keep their case

@@ -19,6 +19,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cmath>
 #include <string>
 
@@ -66,6 +67,34 @@ inline bool DecideIsWithinExactRange(double value) {
 //! from here so that they cannot disagree.
 inline double DecideStrictBound(bool is_lower, double k) {
 	return is_lower ? std::floor(k) + 1.0 : std::ceil(k) - 1.0;
+}
+
+//! The box the solver path folds a decision's unconditional bounds into, in the raw values it reads them (after
+//! `DecideStrictBound`, before any rounding of a fraction). `lower_written` records that some lower bound was written,
+//! so a written bound of -1e30 or below ("no bound") is told apart from no bound written at all, which leaves the
+//! decision at its default floor of 0. The unset upper side starts at the solver sentinel, which reads as infinite.
+struct DecideBoundBox {
+	double lower = -DECIDE_SOLVER_INFINITY;
+	double upper = DECIDE_SOLVER_INFINITY;
+	bool lower_written = false;
+
+	//! The lower bound the decision has: the written one, else the default floor of 0.
+	double EffectiveLower() const {
+		return lower_written ? lower : 0.0;
+	}
+};
+
+//! Folds one bound into a decision's box: `sense` is '<' (an upper bound), '>' (a lower bound) or '=' (both), `k` the
+//! raw value. Each side keeps the tightest value written. This is the one place that says how bounds combine; the
+//! solver's absorption pass, the elastic engine's retained box and direct solve's A1 rule all call it.
+inline void DecideAbsorbBound(DecideBoundBox &box, char sense, double k) {
+	if (sense != '>') {
+		box.upper = std::min(box.upper, k);
+	}
+	if (sense != '<') {
+		box.lower = std::max(box.lower, k);
+		box.lower_written = true;
+	}
 }
 
 //! True when a solved value, rounded to the nearest whole number (half away from zero, as `std::round`), lies in

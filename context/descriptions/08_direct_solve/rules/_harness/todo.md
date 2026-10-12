@@ -46,14 +46,6 @@ today is in `done.md`.
   date.
 - **Done when.** The "Read twice" numbers come from the built plan.
 
-## N-04 — A1's bound absorption and the solver's are one function
-
-- **Problem.** A1's `ProveBounds` (`a1_rule.cpp`) absorbs a per-row bound into a variable's interval with its own code; the
-  solver path absorbs the same bound with other code. Only the differential tests guard that they agree.
-- **Change.** One absorb function that both call. No behavior change. Keep to the absorption step: moving A1's per-row
-  bound reading into a shared builder is S1-12 (`../s1/todo.md`).
-- **Done when.** Both paths call the one function and the checks give the stamp's numbers.
-
 ## H-02 — Adapter for the new language
 
 - **Needs.** A stable language branch.

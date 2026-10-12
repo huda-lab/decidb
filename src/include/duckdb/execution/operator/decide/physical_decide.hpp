@@ -133,8 +133,7 @@ public:
     // The decision column box, already resolved upstream. Finalize copies these into
     // SolverInput; comparisons folded into them carry ABSORBED_BOUND_TAG so term
     // extraction skips them. Execution consumes this, it does not re-derive it.
-    vector<double> absorbed_lower_bounds;
-    vector<double> absorbed_upper_bounds;
+    vector<DecideBoundBox> absorbed_boxes;
     // Every absorbed user bound, kept so the infeasible diagnosis can re-emit it as a
     // slackable row and quote it as written. A BETWEEN contributes two entries.
     vector<LogicalDecide::UserBoundSpec> user_absorbed_bounds;

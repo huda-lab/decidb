@@ -222,9 +222,14 @@ bool ConstantPinDomain(const DirectConstraintFact &fact, double bound, PinDomain
 		                 comparison == ExpressionType::COMPARE_EQUAL;
 		double lower = comparison == ExpressionType::COMPARE_GREATERTHAN ? DecideStrictBound(true, bound) : bound;
 		double upper = comparison == ExpressionType::COMPARE_LESSTHAN ? DecideStrictBound(false, bound) : bound;
-		if (DecideBoxContradictsDomain(has_lower ? lower : LogicalDecide::ABSORBED_LOWER_UNSET,
-		                               has_upper ? upper : LogicalDecide::ABSORBED_UPPER_UNSET, true) ||
-		    (has_lower && lower < 0.0)) {
+		DecideBoundBox box;
+		if (has_lower) {
+			DecideAbsorbBound(box, '>', lower);
+		}
+		if (has_upper) {
+			DecideAbsorbBound(box, '<', upper);
+		}
+		if (DecideBoxContradictsDomain(box, true) || (has_lower && lower < 0.0)) {
 			return false;
 		}
 	}

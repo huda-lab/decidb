@@ -1243,10 +1243,9 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 //===--------------------------------------------------------------------===//
 
 //! Bound absorption is decided at layer 05 (DecideOptimizer::AbsorbVariableBounds).
-//! `UserBoundSpec` and the `ABSORBED_LOWER_UNSET` sentinel live on LogicalDecide with
-//! it; execution reads the resulting box rather than deriving one.
+//! `UserBoundSpec` lives on LogicalDecide with it; execution reads the resulting box
+//! rather than deriving one.
 using UserBoundSpec = LogicalDecide::UserBoundSpec;
-static constexpr double ABSORBED_LOWER_UNSET = LogicalDecide::ABSORBED_LOWER_UNSET;
 
 class DecideGlobalSinkState : public GlobalSinkState {
 public:
@@ -1254,11 +1253,10 @@ public:
 	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
 	      canonicalizer(context, op.decide_index, op.variable_scopes) {
         // The decision column box was resolved by DecideOptimizer::AbsorbVariableBounds.
-        // A variable still at ABSORBED_LOWER_UNSET is one the query never lowered, and
-        // Finalize resolves it to the default 0 floor.
+        // A variable whose box never had a lower bound written is one the query never
+        // lowered, and Finalize resolves it to the default 0 floor.
         idx_t num_decide_vars = op.decide_variables.size();
-        absorbed_lower_bounds = op.absorbed_lower_bounds;
-        absorbed_upper_bounds = op.absorbed_upper_bounds;
+        absorbed_boxes = op.absorbed_boxes;
         user_absorbed_bounds = op.user_absorbed_bounds;
 
         // A user bound that contradicts the variable's INTRINSIC domain (a non-negative
@@ -1274,10 +1272,9 @@ public:
         // match and proceeds to the elastic engine, which reports a least-change loosen.
         for (idx_t var = 0; var < num_decide_vars; var++) {
             bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
-            // The raw box: an unwritten lower bound stays at ABSORBED_LOWER_UNSET, which
-            // DecideBoxContradictsDomain reads as the default floor of 0.
-            double L = absorbed_lower_bounds[var];
-            double U = absorbed_upper_bounds[var];
+            // The raw box: an unwritten lower bound is the default floor of 0 to
+            // DecideBoxContradictsDomain.
+            DecideBoundBox box = absorbed_boxes[var];
             bool has_removable_bound = false;
             for (const auto &bound : user_absorbed_bounds) {
                 has_removable_bound = has_removable_bound ||
@@ -1291,18 +1288,19 @@ public:
                 // error. Reconstruct the box from intrinsic domain plus only retained
                 // (non-removable) bounds; the actual primary solve still receives the
                 // full box and therefore still proves the original query infeasible.
-                double retained_l = is_bool ? 0.0 : ABSORBED_LOWER_UNSET;
-                double retained_u = is_bool ? 1.0 : LogicalDecide::ABSORBED_UPPER_UNSET;
+                DecideBoundBox retained;
+                if (is_bool) {
+                    DecideAbsorbBound(retained, '=', 0.0);
+                    retained.upper = 1.0;
+                }
                 for (const auto &bound : user_absorbed_bounds) {
                     if (bound.decide_var_idx != var ||
                         bound.removal_group_id != DConstants::INVALID_INDEX) {
                         continue;
                     }
-                    if (bound.sense != '<') retained_l = std::max(retained_l, bound.k);
-                    if (bound.sense != '>') retained_u = std::min(retained_u, bound.k);
+                    DecideAbsorbBound(retained, bound.sense, bound.k);
                 }
-                L = retained_l;
-                U = retained_u;
+                box = retained;
             }
             const string vname = op.decide_variables[var]->GetName();
             const char *domain = is_bool ? "BOOLEAN (0 or 1)" : "non-negative (>= 0)";
@@ -1317,9 +1315,11 @@ public:
                 }
                 return StringUtil::Format("%s %s %g", vname, upper ? "<=" : ">=", value);
             };
-            if (!DecideBoxContradictsDomain(L, U, is_bool)) {
+            if (!DecideBoxContradictsDomain(box, is_bool)) {
                 continue;
             }
+            const double L = box.lower;
+            const double U = box.upper;
             // Both sides can contradict at once (a BOOLEAN with `x <= -1 AND x >= 2`); the upper bound is reported.
             if (U < 0.0) {
                 throw InvalidInputException(StringUtil::Format(
@@ -1356,8 +1356,7 @@ public:
     //! Local copies of the decision column box and the absorbed-bound records that
     //! DecideOptimizer::AbsorbVariableBounds resolved. Finalize copies the box into
     //! solver_input; the infeasible diagnosis re-emits the records as slackable rows.
-    vector<double> absorbed_lower_bounds;
-    vector<double> absorbed_upper_bounds;
+    vector<DecideBoundBox> absorbed_boxes;
     vector<UserBoundSpec> user_absorbed_bounds;
 
     //===--------------------------------------------------------------------===//
@@ -3017,19 +3016,18 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // Bounds were absorbed in the gstate constructor from simple
     // `x OP const` / BETWEEN constraints; those comparisons were skipped in
     // AnalyzeConstraint so we don't re-emit them as per-row model rows.
-    solver_input.lower_bounds = gstate.absorbed_lower_bounds;
     solver_input.constraint_sources = constraint_sources;
-    // Resolve the "unset" sentinel to the default lower bound 0: a variable the
-    // query never explicitly lowered stays non-negative. Variables with an
-    // explicit (possibly negative) lower-bound constraint keep their absorbed
-    // value. Must run before any consumer of lower_bounds (implied-bound
-    // propagation, Big-M, McCormick, model builder).
-    for (auto &lb : solver_input.lower_bounds) {
-        if (lb <= ABSORBED_LOWER_UNSET) {
-            lb = 0.0;
-        }
+    // A variable the query never explicitly lowered gets the default lower bound 0 and
+    // stays non-negative. A variable with an explicit (possibly negative) lower bound
+    // keeps it, and a written bound of -1e30 or below is no bound, as -1e29 is. Must
+    // run before any consumer of lower_bounds (implied-bound propagation, Big-M,
+    // McCormick, model builder).
+    solver_input.lower_bounds.resize(gstate.absorbed_boxes.size());
+    solver_input.upper_bounds.resize(gstate.absorbed_boxes.size());
+    for (idx_t var = 0; var < gstate.absorbed_boxes.size(); var++) {
+        solver_input.lower_bounds[var] = gstate.absorbed_boxes[var].EffectiveLower();
+        solver_input.upper_bounds[var] = gstate.absorbed_boxes[var].upper;
     }
-    solver_input.upper_bounds = gstate.absorbed_upper_bounds;
 
     // Everything below this point is stage 06 working on the evaluated model, so
     // hand the constraints and the formulation links over before the first pass.

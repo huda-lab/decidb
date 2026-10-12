@@ -249,19 +249,11 @@ public:
         idx_t removal_group_id = DConstants::INVALID_INDEX;
     };
 
-    //! Sentinel for "no explicit lower bound was written". Not 0, so that an explicit
-    //! negative lower bound (`x >= -5`, `BETWEEN -10 AND 10`, a negative IN minimum) is
-    //! honored instead of being clamped up to 0. The std::max combiner still picks the
-    //! tightest of several `>=` bounds, and physical Finalize resolves anything still at
-    //! the sentinel to the default 0 floor.
-    static constexpr double ABSORBED_LOWER_UNSET = -DECIDE_SOLVER_INFINITY;
-    //! The matching starting point of the upper side: no explicit upper bound was written.
-    static constexpr double ABSORBED_UPPER_UNSET = DECIDE_SOLVER_INFINITY;
-
     //! Per-decision-variable box, sized to decide_variables. Physical execution copies
-    //! these into SolverInput instead of re-walking the constraint tree.
-    vector<double> absorbed_lower_bounds;
-    vector<double> absorbed_upper_bounds;
+    //! these into SolverInput instead of re-walking the constraint tree. A box whose
+    //! lower side was never written resolves to the default 0 floor; an explicit negative
+    //! lower bound (`x >= -5`, `BETWEEN -10 AND 10`, a negative IN minimum) is honored.
+    vector<DecideBoundBox> absorbed_boxes;
     //! Every absorbed user bound, in absorption order. A BETWEEN contributes two specs.
     vector<UserBoundSpec> user_absorbed_bounds;
 

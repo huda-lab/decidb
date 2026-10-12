@@ -70,12 +70,12 @@ Whether a simple bound (`x <= 10`) becomes a column box or a model row is decide
 at stage 05 — see [`../05_optimizer/done.md`](../05_optimizer/done.md), "Bound
 absorption". This stage consumes that decision and does not re-derive it.
 
-The sink state copies `op.absorbed_lower_bounds`, `op.absorbed_upper_bounds` and
-`op.user_absorbed_bounds` in its constructor. Three consumers read them:
+The sink state copies `op.absorbed_boxes` and `op.user_absorbed_bounds` in its
+constructor. Three consumers read them:
 
-- `Finalize` copies the box into `SolverInput`, resolving any lower bound still at
-  `ABSORBED_LOWER_UNSET` to the default 0 floor — non-negative unless the query
-  explicitly said otherwise.
+- `Finalize` copies each box into `SolverInput` through `EffectiveLower`: a decision
+  with no lower bound written takes the default 0 floor, so it is non-negative unless
+  the query explicitly said otherwise.
 - The domain-contradiction guard below reads the box to reject a user bound that
   contradicts a variable's intrinsic domain.
 - The infeasible diagnosis re-emits each `UserBoundSpec` as a loosenable row, after

@@ -332,13 +332,9 @@ bool ProveValues(const DirectProblemFacts &facts, const vector<DecideSplitTerm> 
 bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &context, A1Proof &proof,
                                 string &reason) const {
 	idx_t decision_count = facts.decisions.size();
-	vector<bool> lower_written(decision_count, false);
-	vector<double> absorbed_lower(decision_count, NEGATIVE_INFINITY);
-	vector<double> absorbed_upper(decision_count, POSITIVE_INFINITY);
-	// The same box as the solver folds it, from the raw values it reads (no rounding, no mapping to infinity), kept
-	// only to apply the solver's check of the box against the variable's built-in domain below.
-	vector<double> solver_lower(decision_count, LogicalDecide::ABSORBED_LOWER_UNSET);
-	vector<double> solver_upper(decision_count, LogicalDecide::ABSORBED_UPPER_UNSET);
+	// The box as the solver folds it: the raw values it reads (after the strict shift, before any rounding or mapping
+	// to infinity), combined by the one function the solver's own absorption pass calls.
+	vector<DecideBoundBox> boxes(decision_count);
 	for (auto &fact : facts.constraints) {
 		idx_t decision = fact.lhs[0].terms[0].var_a;
 		auto domain = proof.decisions[decision].domain;
@@ -367,23 +363,10 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 				reason = "constraint_shape: a strict bound on a continuous decision";
 				return false;
 			}
-			if (DirectIsLowerBound(comparison)) {
-				solver_lower[decision] = std::max(solver_lower[decision], strict ? DecideStrictBound(true, k) : k);
-				double value = strict ? DecideStrictBound(true, k) : (whole ? std::ceil(k) : k);
-				if (DecideIsOpenBelow(value)) {
-					value = NEGATIVE_INFINITY;
-				}
-				lower_written[decision] = true;
-				absorbed_lower[decision] = std::max(absorbed_lower[decision], value);
-			}
-			if (DirectIsUpperBound(comparison)) {
-				solver_upper[decision] = std::min(solver_upper[decision], strict ? DecideStrictBound(false, k) : k);
-				double value = strict ? DecideStrictBound(false, k) : (whole ? std::floor(k) : k);
-				if (DecideIsOpenAbove(value)) {
-					value = POSITIVE_INFINITY;
-				}
-				absorbed_upper[decision] = std::min(absorbed_upper[decision], value);
-			}
+			bool lower = DirectIsLowerBound(comparison);
+			bool upper = DirectIsUpperBound(comparison);
+			DecideAbsorbBound(boxes[decision], lower && upper ? '=' : (lower ? '>' : '<'),
+			                  strict ? DecideStrictBound(lower, k) : k);
 			continue;
 		}
 		A1Clause clause;
@@ -420,8 +403,7 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 		// The solver rejects, before it reads any row, a box that contradicts the variable's built-in domain
 		// (DecideBoxContradictsDomain). It says so on an empty source too, so the query is left to the solver, which
 		// reports it, rather than proved here and answered with no rows.
-		if (DecideBoxContradictsDomain(solver_lower[decision], solver_upper[decision],
-		                               proof.decisions[decision].domain == DirectDomain::BOOL)) {
+		if (DecideBoxContradictsDomain(boxes[decision], proof.decisions[decision].domain == DirectDomain::BOOL)) {
 			reason =
 			    "variable_bound: a bound contradicts the decision's built-in domain (non-negative, or BOOL 0 or 1); "
 			    "the solver reports it";
@@ -431,13 +413,20 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 	for (idx_t decision = 0; decision < decision_count; decision++) {
 		auto &prepared = proof.decisions[decision];
 		bool boolean = prepared.domain == DirectDomain::BOOL;
-		// A written lower bound replaces the default of 0, except that a BOOL never leaves {0, 1}.
-		if (lower_written[decision]) {
-			prepared.lower = boolean ? std::max(0.0, absorbed_lower[decision]) : absorbed_lower[decision];
-		} else {
-			prepared.lower = 0.0;
+		// A written lower bound replaces the default of 0, except that a BOOL never leaves {0, 1}. A whole-numbered
+		// decision rounds each bound inward, and a bound of magnitude 1e20 or more (a written -1e30 included) is no
+		// bound.
+		bool whole = IsWholeNumbered(prepared.domain);
+		double lower = boxes[decision].lower;
+		double upper = boxes[decision].upper;
+		if (whole) {
+			lower = std::ceil(lower);
+			upper = std::floor(upper);
 		}
-		prepared.upper = boolean ? std::min(1.0, absorbed_upper[decision]) : absorbed_upper[decision];
+		lower = DecideIsOpenBelow(lower) ? NEGATIVE_INFINITY : lower;
+		upper = DecideIsOpenAbove(upper) ? POSITIVE_INFINITY : upper;
+		prepared.lower = boxes[decision].lower_written ? (boolean ? std::max(0.0, lower) : lower) : 0.0;
+		prepared.upper = boolean ? std::min(1.0, upper) : upper;
 	}
 	return true;
 }

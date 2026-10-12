@@ -1285,3 +1285,51 @@ def test_a1_duplicate_rows_stay_separate_rows(decidb_cli):
     rows, _ = _run(decidb_cli, sql, "require")
     assert rows == [(1, 5.0), (2, 4.0), (2, 4.0), (3, 6.0)]
     assert rows == _run(decidb_cli, sql, "off")[0]
+
+
+# ---------------------------------------------------------------------------
+# A lower bound written as "no bound" (1e30 or more in magnitude) is read as no bound
+# ---------------------------------------------------------------------------
+#
+# Both paths fold unconditional bounds into a decision's box with one function (`DecideAbsorbBound`). A lower bound that
+# was written is a bound even when it is -1e30 or below: it removes the default floor of 0, as -1e29 does, and leaves the
+# decision unbounded below. Only a decision with no lower bound written at all keeps the floor.
+LOWER_BOUND_AS_NO_BOUND_CASES = {
+    f"{domain}_{_tag}_{objective.lower()}": (domain, constraint, objective, expected)
+    for domain in ("REAL", "INT")
+    for _tag, bound in (("1e30", "-1e30"), ("1e31", "-1e31"), ("1e29", "-1e29"))
+    for objective, constraint, expected in (
+        # MINIMIZE has nothing to stop it from going down: unbounded.
+        ("MINIMIZE", f"x >= {bound} AND x <= 5", ("error", "unbounded")),
+        # A second, tighter lower bound decides the answer, as it does without the -1e30.
+        ("MINIMIZE", f"x >= {bound} AND x >= 1 AND x <= 5", ("ok", [(1, 1), (2, 1)])),
+    )
+}
+LOWER_BOUND_AS_NO_BOUND_CASES.update(
+    {
+        # No lower bound written: the floor of 0 holds.
+        "REAL_none_written": ("REAL", "x <= 5", "MINIMIZE", ("ok", [(1, 0.0), (2, 0.0)])),
+        "INT_none_written": ("INT", "x <= 5", "MINIMIZE", ("ok", [(1, 0), (2, 0)])),
+        # A written lower bound of -1e30 with an upper bound below 0 is a valid box, not a contradiction of the floor.
+        "REAL_upper_below_zero": ("REAL", "x >= -1e31 AND x <= -1", "MAXIMIZE", ("ok", [(1, -1.0), (2, -1.0)])),
+        "INT_upper_below_zero": ("INT", "x >= -1e30 AND x <= -1", "MAXIMIZE", ("ok", [(1, -1), (2, -1)])),
+        "REAL_upper_below_zero_minimized": ("REAL", "x >= -1e31 AND x <= -1", "MINIMIZE", ("error", "unbounded")),
+        # An ordinary written bound still replaces the floor.
+        "REAL_written_below_zero": ("REAL", "x >= -3 AND x <= 5", "MINIMIZE", ("ok", [(1, -3.0), (2, -3.0)])),
+    }
+)
+
+
+@pytest.mark.var_real
+@pytest.mark.var_integer
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(LOWER_BOUND_AS_NO_BOUND_CASES))
+def test_a1_written_lower_bound_of_no_bound_matches_the_solver(decidb_cli, name):
+    domain, constraint, objective, expected = LOWER_BOUND_AS_NO_BOUND_CASES[name]
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES (1, 2.0), (2, 3.0)) t(id, s) "
+        f"DECIDE x({domain}) SUCH THAT {constraint} {objective} SUM(s * x)) q ORDER BY id"
+    )
+    for mode in ("off", "require"):
+        assert _run_all(decidb_cli, sql, mode) == expected, mode

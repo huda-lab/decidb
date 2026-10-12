@@ -1,8 +1,8 @@
 # A1 (independent bounded decisions) — what works today
 
-Verified on 2026-10-12 on top of `4f3040f016`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`
-and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,538 passed (no failures, no expected failures);
-`DECIDB_FORCE_SOLVER=highs make decide-test` 2,537 passed and one failure that needs Gurobi
+Verified on 2026-10-12 on top of `6cb51edfb1`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`
+and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,286 passed (no failures, no expected failures);
+`DECIDB_FORCE_SOLVER=highs make decide-test` 3,285 passed and one failure that needs Gurobi
 (`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 1,287 assertions in 45 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_rule.cpp`. Class definition: [definition.md](definition.md).
@@ -22,8 +22,9 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   replaces the default 0 on the solver, so it does here. Every other lower bound (a column, a `WHEN`, a coefficient or
   offset on `x`, an arithmetic constant such as `0 - 3`) only intersects with it. The solver and direct solve ask one
   shared predicate which clauses are folded into the variable (`DecideBoundIsAbsorbed`, surfaced as
-  `DirectConstraintFact::variable_bound`), so they cannot disagree. A bound of magnitude 1e20 or more is no bound, as on
-  the solver; an infinite data value is no bound on that side.
+  `DirectConstraintFact::variable_bound`), and combine the folded values with one function (`DecideAbsorbBound`), so they
+  cannot disagree. A bound of magnitude 1e20 or more is no bound, as on the solver, including a written -1e30; an
+  infinite data value is no bound on that side.
 - **Whole-number rounding.** `INT` and `BOOL` bounds round inward, strict bounds included, and the rounding is tested
   in `DOUBLE` arithmetic against the clause as written, so `0.1*x <= 0.3` does not lose an integer to a quotient that
   rounds the wrong way. A strict bound against a fraction (`x > 0.5`, `x < 2.5`, no `WHEN`) rounds to the first whole
@@ -95,7 +96,7 @@ parent reads does, so reading a wide column back costs memory in proportion to t
 
 | Check | What it covers |
 |---|---|
-| `test_direct_a1.py` (268 tests) | The answers. 138 cases run on the independent oracle (`oracle_solver`, built from the raw rows and the per-row bounds each case states in Python), on the solver path (`off`) and on the direct path (`require`): constant boxes, the default-lower rule in every spelling that does and does not replace it, row-valued bounds with and without `WHEN`, coefficient forms (positive, negative, zero), `INT` rounding and strict bounds, `BOOL` pins and Boolean-column bounds, every objective spelling, objective `WHEN`, infeasible and unbounded problems, ties, and three decisions of different types. 28 parent-query contexts. 39 error cases that must fail on both paths. 23 boundary cases against the solver path only (infinities, the 1e20 and 2^53 limits, every numeric source type). 6 random-row tests against exact `Fraction` arithmetic. The constant-problem tests (streaming plan, errors under `LIMIT 1`, `COUNT(*)` and a filter, empty source), a nested `DECIDE`, and duplicate rows |
+| `test_direct_a1.py` (280 tests) | The answers. 138 cases run on the independent oracle (`oracle_solver`, built from the raw rows and the per-row bounds each case states in Python), on the solver path (`off`) and on the direct path (`require`): constant boxes, the default-lower rule in every spelling that does and does not replace it, row-valued bounds with and without `WHEN`, coefficient forms (positive, negative, zero), `INT` rounding and strict bounds, `BOOL` pins and Boolean-column bounds, every objective spelling, objective `WHEN`, infeasible and unbounded problems, ties, and three decisions of different types. 28 parent-query contexts. 39 error cases that must fail on both paths. 23 boundary cases against the solver path only (infinities, the 1e20 and 2^53 limits, every numeric source type). 12 cases on how bounds combine, on both paths: a written lower bound of -1e30 or -1e31 is no bound for `INT` and `REAL`, a second lower bound beside it still applies, and no written lower bound leaves the floor at 0. 6 random-row tests against exact `Fraction` arithmetic. The constant-problem tests (streaming plan, errors under `LIMIT 1`, `COUNT(*)` and a filter, empty source), a nested `DECIDE`, and duplicate rows |
 | `test_direct_rule_contract.py` | The checks every rule owes, with A1's fixture: schema and rows, all-rows read for 10 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced HiGHS, `DIAGNOSE`, and 17 near misses that must name their reason and answer under `auto` as under `off` |
 | `test_direct_fuzz.py` | 8 seeds of 30 random A1 queries: direct against solver over domains, bounds, objectives, `WHEN`, `NULL` and infinite values |
 | `test_direct_user_facing.py` | A 200-byte unused payload column stays out of the scan and the barrier; a computed column that can raise is not pruned; a NaN in a constraint coefficient says "constraint coefficient" and in the objective "objective coefficient" |
