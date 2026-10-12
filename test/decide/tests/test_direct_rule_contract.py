@@ -14,14 +14,8 @@ import pytest
 from decidb_cli import DecidBCliError
 
 from ._direct_differential import error_class
+from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._direct_rule_fixtures import RULE_FIXTURES, late_error_cases, near_miss_cases
-
-
-@pytest.fixture(autouse=True)
-def _allow_direct_path(monkeypatch):
-    # The suite also runs with a process-wide forced HiGHS backend. These tests opt
-    # into the direct path; forced-backend cases use their own CLI wrapper.
-    monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
 
 
 def _run(cli, sql, mode="require"):

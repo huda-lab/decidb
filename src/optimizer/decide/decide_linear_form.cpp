@@ -387,7 +387,7 @@ private:
 			return;
 		}
 		double factor;
-		if (!TryEvaluateFoldableDouble(context, scale, factor)) {
+		if (!TryEvaluateFoldableDouble(context, scale, factor, FOLD_PLAIN)) {
 			throw InvalidInputException(
 			    "DECIDE objective: a squared term cannot be multiplied by '%s', whose value is "
 			    "not known until the query runs. Use a constant factor, or move it inside the "

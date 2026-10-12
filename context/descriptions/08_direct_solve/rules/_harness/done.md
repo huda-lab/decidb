@@ -1,10 +1,10 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-09 at `7196cb03f9`, with S1 and A1 registered: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,322 passed (no
-failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,321 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,276 assertions in
-44 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+Verified on 2026-10-12 on top of `4f3040f016`, with S1 and A1 registered: `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,538 passed (no
+failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,537 passed and one failure,
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,287 assertions in
+45 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../../architecture/`.
 
 ## What it does
@@ -38,18 +38,33 @@ check). Design: `../../architecture/`.
   row), the reading margin `DECIDE_EFFECTIVE_INFINITY` (1e20) with `DecideIsOpenAbove` and `DecideIsOpenBelow`,
   `DECIDE_MAX_EXACT_INTEGER` (2^53) with `DecideIsWithinExactRange`, `DECIDE_MAX_FRACTIONAL_MAGNITUDE` (2^52),
   `DECIDE_FIRST_DOUBLE_BEYOND_BIGINT` (2^63), and `DecideIsExactFiniteDouble` (a converted double is exact when it is
-  finite and converts back to the original value; `DirectFiniteFoldableDouble` calls it). `LogicalDecide::ABSORBED_*_UNSET`
-  are the sentinel under the names the planner uses. A1 builds its `abs(answer) <= 2^53` check once (`WithinExactRange`).
+  finite and converts back to the original value), and `DecideStrictBound` (`x > 0.5` means `x >= 1`: the solver's
+  absorption, its model builder's linear and quadratic rows, A1 and S1 all shift a strict bound with it, so none of them
+  reads a strict comparison differently). `LogicalDecide::ABSORBED_*_UNSET`
+  are the sentinel under the names the planner uses. An integer answer is returnable when, rounded half away from zero, it
+  lies within the column's range (`DecideRoundedAnswerWithin`); beyond it both paths raise one message,
+  `DecideWholeNumberRangeMessage`, which names the variable and its rounded value. A1 spells the test in SQL once
+  (`WithinExactRange`, `abs(round(answer)) <= 2^53`) and builds the message at run time from its two halves around
+  `printf('%.0f', round(answer))`, so the text matches the solver's character for character.
   What stays outside the header on purpose: bare `std::isfinite` and `std::isinf` that only reject NaN or infinity in
   input, a report or a diagnostic (they state no exactness policy); HiGHS's own infinite bound and large-matrix limits in
   `deterministic_naive.cpp`; Gurobi's 1e100; `INTEGER_SOLVER_CEILING` and the ray epsilon in `diagnostic_constants.hpp`
   (diagnostic-only thresholds). No hand-written range proof of DuckDB's overflow is left; the copies of DuckDB's absorption and
   numeric logic that remain are tasks in `todo.md`. `DirectCastMayThrow` and `DirectMayThrow` copy DuckDB's `CanThrow`
   on purpose: DuckDB's counts `TRY_CAST` as throwing, and fixing that would change DuckDB itself. Test: `test/common/test_decidb_numeric_policy.cpp`
-  (`[numeric_policy]`, 4 cases).
+  (`[numeric_policy]`, 5 cases).
 - **Shared admission predicates.** `DirectIsNumericDecisionFree`, `DirectSourceNumericColumn`,
   `DirectIsSourceOnlyNumeric`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
-  `DirectFoldableDouble` and `DirectConstraintFact::PlainSum` answer "may a rule use this value" once for all rules.
+  `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT` and `DirectConstraintFact::PlainSum` answer "may a rule use this value"
+  once for all rules.
+- **One evaluate-to-DOUBLE function.** `TryEvaluateFoldableDouble(context, expr, out, flags)` (`decide_cast_policy.hpp`)
+  is the only code that folds a constant expression to a `DOUBLE`, for the planner, the rewrites and the direct rules.
+  Callers differ only in the flags they pass, each one difference stated by name: `FOLD_STABLE` (no row, parameter or
+  subquery can change it), `FOLD_ALLOW_BOOLEAN`, `FOLD_EXACT_FINITE` (through `DecideIsExactFiniteDouble`),
+  `FOLD_CATCH_DUCKDB_ERRORS` and `FOLD_CATCH_ALL`. The planner passes `FOLD_PLAIN` and lets a conversion error reach its
+  own error policy; the sign test for a scale factor and the `IN` rewrite catch everything; direct rules pass
+  `DIRECT_CONSTANT` or `DIRECT_FINITE_CONSTANT`. One function means one path cannot accept a constant another rejects
+  without a flag that says so.
 - **Number messages.** A NULL number names the NULL source columns on the failing row, in the solver's wordings: one
   column (`column "a" is NULL. Impute it with COALESCE(a, 0)...`), several (`columns "a", "b" and "c" are NULL`), or,
   when no column is NULL, the score's own text (`TRY_CAST(s AS DOUBLE) is NULL`). The message is a per-row expression
@@ -57,7 +72,12 @@ check). Design: `../../architecture/`.
   with no NULL column stays generic, since the solver quotes one failing term and direct sums the terms. A NaN or infinite
   number raises the solver's fixed message, whose first words name the clause the user wrote it in: `objective
   coefficient` or `constraint coefficient`, from the `DirectNumberKind` the rule passes (S1 and A1's objective values:
-  objective; A1's coefficient on the left of a bound: constraint). Tests:
+  objective; A1's coefficient on the left of a bound: constraint). A source value read as a coefficient must be finite;
+  one read as a bound (a count limit, a pin, a per-row lower or upper bound) only has to be a number, because an
+  infinite bound means "no bound" or "nothing satisfies it". NaN and NULL raise in every slot. Direct applies this in SQL
+  (`DirectValidNumberPredicate`, `DirectValidBoundPredicate`) and the solver in C++ (`ExtractDoubleColumn`); the two
+  cannot share code, so `test_direct_source_values.py` puts NaN, both infinities and NULL in each of 27 slots S1 and A1
+  read and asserts the same error or rows on `require`, `off` and forced HiGHS. Tests:
   `test_computed_score_null_error_names_the_columns`, `test_null_score_no_column_explains_quotes_the_score`,
   `test_null_score_message_is_not_built_when_no_row_is_null` in `test_direct_user_facing.py`. The cost on clean data is not
   measured.
@@ -68,17 +88,17 @@ check). Design: `../../architecture/`.
   `test_serializer_explain_and_model_dump` checks the rule and the proof line in the logical, physical and profiled plans.
 - **The solver's domain check, once.** The solver raises, before it reads any row, for a decision whose box
   contradicts its built-in domain (an upper bound below the default floor of 0, or a `BOOL` lower bound above 1). That test
-  is `DecideBoxContradictsDomain(lower, upper, is_bool)` in `decide_bound_absorption.{hpp,cpp}`, next to `DecideStrictBound`.
+  is `DecideBoxContradictsDomain(lower, upper, is_bool)` in `decide_bound_absorption.{hpp,cpp}`.
   The solver's pre-check (`DecideGlobalSinkState`), A1 (`ProveBounds`) and S1 (`ConstantPinDomain`) call it. The starting
   box is `LogicalDecide::ABSORBED_LOWER_UNSET` and `ABSORBED_UPPER_UNSET`, defined once; the solver, the absorption pass and
   A1 read them there. Direct solve still only declines these queries and lets the solver raise the error. S1 adds one
-  condition of its own, a negative lower bound (it makes `x` signed on the solver path). The model builder's own strict
-  shifts stay as they are (lower layer).
+  condition of its own, a negative lower bound (it makes `x` signed on the solver path).
 - **One test scaffold.** `test/decide/tests/_direct_oracle_common.py` holds what the oracle suites share: the autouse
   fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, and `agree_with_oracle` (oracle model, `off`, `require`,
   then a rule-supplied check of one assignment). `test_direct_three_way.py` (S1) and `test_direct_a1.py` keep their case
-  tables, oracle-model builders and assignment checks. A new rule's suite imports the scaffold (`architecture/rules.md`,
-  item 2).
+  tables, oracle-model builders and assignment checks. Every direct suite imports the autouse fixture by name from the
+  scaffold (pytest applies an autouse fixture only in a file that can see it), and none defines its own. A new rule's
+  suite imports the scaffold (`architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
   example `auto: 2322 passed, 0 xfailed, 0 failed`. The comment above `DirectDomain` in `direct_rule.hpp` points at
   `architecture/facts.md`.

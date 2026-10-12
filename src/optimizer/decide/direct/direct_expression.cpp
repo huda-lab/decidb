@@ -98,52 +98,10 @@ bool DirectIsSourceOnlyPredicate(const Expression &expr, idx_t decide_index,
 	       DirectIsDecisionFreeDeterministic(expr, decide_index) && DirectReferencesOnlySource(expr, source_bindings);
 }
 
-//! The value of a foldable expression that no row, parameter or subquery can change. False when it cannot be evaluated
-//! or is NULL.
-static bool DirectFoldableValue(ClientContext &context, const Expression &expr, Value &value) {
-	if (!expr.IsFoldable() || !expr.IsConsistent() || expr.HasParameter() || expr.HasSubquery() || expr.IsAggregate() ||
-	    expr.IsWindow()) {
-		return false;
-	}
-	try {
-		return ExpressionExecutor::TryEvaluateScalar(context, expr, value) && !value.IsNull();
-	} catch (Exception &) {
-		return false;
-	}
-}
-
-bool DirectFoldableDouble(ClientContext &context, const Expression &expr, double &result) {
-	Value value;
-	if (!DirectFoldableValue(context, expr, value) ||
-	    (!value.type().IsNumeric() && value.type() != LogicalType::BOOLEAN)) {
-		return false;
-	}
-	try {
-		result = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		return true;
-	} catch (Exception &) {
-		return false;
-	}
-}
-
-bool DirectFiniteFoldableDouble(ClientContext &context, const Expression &expr, double &result) {
-	Value value;
-	if (!DirectFoldableValue(context, expr, value) || !value.type().IsNumeric()) {
-		return false;
-	}
-	try {
-		result = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
-		return DecideIsExactFiniteDouble(
-		    result, value, [&](double converted) { return Value::DOUBLE(converted).DefaultCastAs(value.type()); });
-	} catch (Exception &) {
-		return false;
-	}
-}
-
 bool DirectPartScale(ClientContext &context, const DirectPart &part, double &scale) {
 	scale = 1.0;
-	return !part.scale ||
-	       (DirectFiniteFoldableDouble(context, *part.scale, scale) && !(part.scale_divides && scale == 0.0));
+	return !part.scale || (TryEvaluateFoldableDouble(context, *part.scale, scale, DIRECT_FINITE_CONSTANT) &&
+	                       !(part.scale_divides && scale == 0.0));
 }
 
 const BoundColumnRefExpression *DirectBareNumericColumn(const Expression &expr) {

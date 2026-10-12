@@ -107,7 +107,8 @@ bool IsUnitContribution(ClientContext &context, const vector<DecideSplitTerm> &t
 	double total = 0;
 	for (auto &term : terms) {
 		double value;
-		if (!term.coefficient || !DirectFiniteFoldableDouble(context, *term.coefficient, value)) {
+		if (!term.coefficient ||
+		    !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
 			return false;
 		}
 		total += term.sign * value;
@@ -134,7 +135,7 @@ const vector<DecideSplitTerm> *PinTerms(const DirectConstraintFact &fact) {
 bool NormalizeCapacity(ClientContext &context, const Expression &expr, ExpressionType comparison, idx_t &capacity,
                        bool &impossible) {
 	double as_double;
-	if (!DirectFiniteFoldableDouble(context, expr, as_double)) {
+	if (!TryEvaluateFoldableDouble(context, expr, as_double, DIRECT_FINITE_CONSTANT)) {
 		return false;
 	}
 	double inclusive;
@@ -146,13 +147,13 @@ bool NormalizeCapacity(ClientContext &context, const Expression &expr, Expressio
 		if (as_double >= DECIDE_MAX_EXACT_INTEGER) {
 			return false;
 		}
-		inclusive = std::floor(as_double) + 1.0;
+		inclusive = DecideStrictBound(true, as_double);
 		break;
 	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
 		inclusive = std::floor(as_double);
 		break;
 	case ExpressionType::COMPARE_LESSTHAN:
-		inclusive = std::ceil(as_double) - 1.0;
+		inclusive = DecideStrictBound(false, as_double);
 		break;
 	default:
 		return false;
@@ -284,8 +285,9 @@ string RowCountBoundProblem(ClientContext &context, const Expression &expr) {
 	}
 	double constant;
 	if (expr.IsFoldable() && !expr.IsAggregate()) {
-		return DirectFiniteFoldableDouble(context, expr, constant) ? string()
-		                                                           : "a constant that is not finite or not exact";
+		return TryEvaluateFoldableDouble(context, expr, constant, DIRECT_FINITE_CONSTANT)
+		           ? string()
+		           : "a constant that is not finite or not exact";
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 		auto &cast = expr.Cast<BoundCastExpression>();
@@ -312,7 +314,8 @@ string RowCountBoundProblem(ClientContext &context, const Expression &expr) {
 				return problem;
 			}
 		}
-		if (division && (!DirectFiniteFoldableDouble(context, *function.children[1], constant) || constant == 0.0)) {
+		if (division && (!TryEvaluateFoldableDouble(context, *function.children[1], constant, DIRECT_FINITE_CONSTANT) ||
+		                 constant == 0.0)) {
 			return "a divisor that is not a nonzero constant";
 		}
 		return string();
@@ -343,9 +346,11 @@ public:
 			reason = "variable_shape: expected one row-scoped BOOL";
 			return nullptr;
 		}
+		// No objective (`DecideSense::FEASIBILITY`) is admitted: every score is 0.
 		if (!std::isfinite(facts.objective.offset) ||
-		    (facts.objective.sense != DecideSense::MAXIMIZE && facts.objective.sense != DecideSense::MINIMIZE)) {
-			reason = "problem_shape: expected one linear objective and cardinality bounds";
+		    (facts.objective.sense != DecideSense::MAXIMIZE && facts.objective.sense != DecideSense::MINIMIZE &&
+		     facts.objective.sense != DecideSense::FEASIBILITY)) {
+			reason = "problem_shape: expected a linear objective or no objective, and cardinality bounds";
 			return nullptr;
 		}
 		if (facts.constraints_status != DirectFactStatus::KNOWN) {
@@ -393,7 +398,7 @@ public:
 			reason = "objective_scope: expected an objective without WHEN or PER";
 			return nullptr;
 		}
-		if (facts.objective.parts.empty()) {
+		if (facts.objective.parts.empty() && facts.objective.sense != DecideSense::FEASIBILITY) {
 			reason = "objective_shape: expected additive SUM(coefficient * x) terms";
 			return nullptr;
 		}
@@ -488,7 +493,7 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 			return false;
 		}
 		double constant;
-		if (DirectFiniteFoldableDouble(context, *factor->rhs, constant)) {
+		if (TryEvaluateFoldableDouble(context, *factor->rhs, constant, DIRECT_FINITE_CONSTANT)) {
 			PinDomain domain;
 			if (!ConstantPinDomain(*factor, constant, domain)) {
 				reason =
@@ -963,7 +968,8 @@ private:
 			score_expressions.push_back(DirectColumn(source_types[i], scope.input_bindings[i]));
 		}
 		unique_ptr<Expression> combined_score;
-		if (proof.objective_parts.size() > 1 || proof.objective_parts[0].sign < 0) {
+		// Without an objective there are no parts and every row scores 0.
+		if (proof.objective_parts.size() != 1 || proof.objective_parts[0].sign < 0) {
 			combined_score = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
 		}
 		for (auto &part : proof.objective_parts) {
@@ -1291,7 +1297,7 @@ private:
 DirectRelationalProposal S1CardinalityRule::Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
                                                     const DirectRuleProof &candidate) const {
 	auto &proof = static_cast<const S1Proof &>(candidate);
-	if (proof.objective_parts.empty()) {
+	if (proof.objective_parts.empty() && proof.sense != DecideSense::FEASIBILITY) {
 		throw InternalException("S1 direct solve received a proof without an objective");
 	}
 	S1Rewriter rewriter(proof, optimizer, *source);

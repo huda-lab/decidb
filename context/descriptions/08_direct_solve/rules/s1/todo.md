@@ -22,16 +22,6 @@ What S1 does today is in `done.md`; the class is in `definition.md`. How to work
 - **Done when.** Each admitted reducer matches the solver for `<=`, `>=`, `=`, with and without `PER` and `WHEN`, including
   the `NULL`, `NaN`, infinity and empty-group errors; each form kept on the solver has a declined-reason test.
 
-## S1-14 — Queries with no objective
-
-- **Problem.** A constraints-only query (no `MAXIMIZE`/`MINIMIZE`) is declined because the definition requires a linear
-  objective (`done.md` § Explicitly out of scope).
-- **Change.** Accept a missing objective in `Match` and treat every score as 0, so the plan picks only the rows a lower
-  bound requires. Which rows are picked when scores tie is a decision: stop and report if the solver's choice cannot be
-  matched or is unspecified.
-- **Done when.** Constraints-only queries match the solver's objective value and feasibility under every count bound
-  shape, with and without `PER` and `WHEN`.
-
 ## S1-15 — Offset or negated count body
 
 - **Problem.** `SUM(x + c)` and `SUM(1 - x)` are declined (`done.md` § Explicitly out of scope). A constant term makes the
@@ -63,8 +53,9 @@ What S1 does today is in `done.md`; the class is in `definition.md`. How to work
   NULL message on clean data is not measured. The 15 to 100 times speedups are part of the reason `auto` is the default.
 - **Change.** After `make release`, on a quiet machine with a Gurobi licence, run the sweep under "Reproduce" in `done.md`
   (about 4.5 minutes; it builds the 5,000,000-row and wide databases, about 3 GiB), plus one run with and without NULLs in
-  the score column to measure the message cost. Rewrite the table and its date.
-- **Done when.** `done.md` has numbers from a run you made, with their date, and says what the NULL message costs. Machine
+  the score column to measure the message cost, and a constraints-only query (no objective) at each size. Rewrite the table and its date.
+- **Done when.** `done.md` has numbers from a run you made, with their date, and says what the NULL message costs and how a
+  constraints-only query compares with the solver. Machine
   load changes timings, so run nothing else meanwhile.
 
 ## Exit gate for any S1 widening

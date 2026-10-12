@@ -44,10 +44,6 @@ string DescendSourceAlias(const Expression &expr, const string &inherited);
 //! A TRUE placeholder standing in for a clause a rewrite has consumed.
 unique_ptr<Expression> MakeTrueExpression(const string &source_alias = string());
 
-//! Constant-fold `expr` to a double at plan time, returning false instead of
-//! throwing when it is not foldable.
-bool TryEvaluateFoldableDoubleNoThrow(ClientContext &context, const Expression &expr, double &out);
-
 //! Sign of a scale factor resolved at plan time: -1, +1, or 0 when unknown.
 int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides);
 

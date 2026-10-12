@@ -20,6 +20,7 @@
 #pragma once
 
 #include <cmath>
+#include <string>
 
 namespace duckdb {
 
@@ -56,6 +57,41 @@ inline bool DecideIsOpenBelow(double lower_bound) {
 //! number, is held exactly by a DOUBLE. NaN and the infinities are outside it.
 inline bool DecideIsWithinExactRange(double value) {
 	return std::isfinite(value) && std::fabs(value) <= DECIDE_MAX_EXACT_INTEGER;
+}
+
+//! The inclusive bound a strict `>` (`is_lower`) or `<` against `k` means on a whole-numbered decision: the first whole
+//! value above `k` (`floor(k) + 1`) or below it (`ceil(k) - 1`). `x > 0.5` is `x >= 1` and `x < 2.5` is `x <= 2`, while
+//! `x > 1` is `x >= 2` and `x < 3` is `x <= 2`. Moving the bound a whole unit before rounding is wrong against a
+//! fraction. The solver's absorption, its model builder (linear and quadratic rows) and direct solve all take the shift
+//! from here so that they cannot disagree.
+inline double DecideStrictBound(bool is_lower, double k) {
+	return is_lower ? std::floor(k) + 1.0 : std::ceil(k) - 1.0;
+}
+
+//! True when a solved value, rounded to the nearest whole number (half away from zero, as `std::round`), lies in
+//! `[lo, hi]`, both ends included. NaN is outside every range. The solver path checks an answer on its way into an
+//! integer column with this; A1 spells the same test in SQL (`abs(round(value)) <= 2^53`).
+inline bool DecideRoundedAnswerWithin(double solution_value, double lo, double hi) {
+	double rounded = std::round(solution_value);
+	return rounded >= lo && rounded <= hi;
+}
+
+//! The text before the value in the error for a whole-numbered answer that cannot be returned exactly. The value text
+//! (`%.0f` of the rounded answer) goes between the two halves, so a plan that formats the value at run time builds the
+//! same message as `DecideWholeNumberRangeMessage`.
+inline std::string DecideWholeNumberRangeMessageBefore(const std::string &name) {
+	return "DECIDE variable '" + name + "' solves to ";
+}
+
+//! The text after the value in that error.
+inline std::string DecideWholeNumberRangeMessageAfter(const std::string &name) {
+	return ", which is beyond the range DeciDB can return as a whole number. Tighten the bound on '" + name +
+	       "', or declare it '" + name + "(REAL)' to read the value approximately.";
+}
+
+//! The whole error: the variable's name and its rounded answer as `value_text`.
+inline std::string DecideWholeNumberRangeMessage(const std::string &name, const std::string &value_text) {
+	return DecideWholeNumberRangeMessageBefore(name) + value_text + DecideWholeNumberRangeMessageAfter(name);
 }
 
 //! True when a value that was converted to a DOUBLE is usable as an exact number: the double is finite and

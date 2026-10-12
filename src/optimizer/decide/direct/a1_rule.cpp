@@ -94,6 +94,8 @@ struct A1Part {
 };
 
 struct A1Decision {
+	//! The declared name, which the whole-number range error quotes.
+	string name;
 	DirectDomain domain = DirectDomain::REAL;
 	LogicalType output_type;
 	//! The decision's box before any per-row bound: its default, replaced or tightened by the bounds the solver folds
@@ -256,6 +258,7 @@ public:
 		proof->sense = facts.objective.sense;
 		for (auto &decision : facts.decisions) {
 			A1Decision prepared;
+			prepared.name = decision.name;
 			prepared.domain = decision.domain;
 			prepared.output_type = decision.output_type;
 			proof->decisions.push_back(std::move(prepared));
@@ -353,7 +356,7 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 		}
 		if (fact.variable_bound) {
 			double k;
-			if (!DirectFoldableDouble(context, rhs, k)) {
+			if (!TryEvaluateFoldableDouble(context, rhs, k, DIRECT_CONSTANT | FOLD_ALLOW_BOOLEAN)) {
 				reason = "constraint_shape: expected a finite constant on the right of a bound on the decision";
 				return false;
 			}
@@ -1107,13 +1110,29 @@ private:
 		answers.valid_data = p4.Add(DirectColumn(LogicalType::BOOLEAN, box.valid_data));
 	}
 
-	//! `abs(value) <= 2^53`, the SQL spelling of the range half of DecideIsWithinExactRange. Callers test finiteness
-	//! first, so an infinite or NaN value never reaches it.
+	//! The answer rounded as the solver rounds it (`round`, half away from zero).
+	unique_ptr<Expression> RoundedAnswer(ColumnBinding value) const {
+		return optimizer.BindScalarFunction("round", DirectColumn(LogicalType::DOUBLE, value));
+	}
+
+	//! `abs(round(value)) <= 2^53`, the SQL spelling of `DecideRoundedAnswerWithin(value, -2^53, 2^53)`, the test the
+	//! solver path applies to an answer on its way into a BIGINT column. Callers test finiteness first, so an infinite
+	//! or NaN value never reaches it.
 	unique_ptr<Expression> WithinExactRange(ColumnBinding value) const {
 		return make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_LESSTHANOREQUALTO,
-		    optimizer.BindScalarFunction("abs", DirectColumn(LogicalType::DOUBLE, value)),
+		    ExpressionType::COMPARE_LESSTHANOREQUALTO, optimizer.BindScalarFunction("abs", RoundedAnswer(value)),
 		    make_uniq<BoundConstantExpression>(Value::DOUBLE(DECIDE_MAX_EXACT_INTEGER)));
+	}
+
+	//! The solver's error for an answer beyond the exact range, character for character: the name is filled in now and
+	//! the value (`%.0f` of the rounded answer, as the solver prints it) at run time.
+	unique_ptr<Expression> OutOfRangeError(const string &name, ColumnBinding value) const {
+		vector<unique_ptr<Expression>> parts;
+		parts.push_back(make_uniq<BoundConstantExpression>(Value(DecideWholeNumberRangeMessageBefore(name))));
+		parts.push_back(optimizer.BindScalarFunction("printf", make_uniq<BoundConstantExpression>(Value("%.0f")),
+		                                             RoundedAnswer(value)));
+		parts.push_back(make_uniq<BoundConstantExpression>(Value(DecideWholeNumberRangeMessageAfter(name))));
+		return DirectErrorPredicate(optimizer, optimizer.BindScalarFunction("concat", std::move(parts)));
 	}
 
 	//! The condition the barrier evaluates on every row. It is true, or the row raises the error that applies: a
@@ -1136,11 +1155,9 @@ private:
 			                                                DirectConstantBool(true),
 			                                                DirectUnboundedErrorPredicate(optimizer)));
 			if (IsWholeNumbered(proof.decisions[d].domain)) {
-				checks.push_back(make_uniq<BoundCaseExpression>(
-				    WithinExactRange(answers.value[d]), DirectConstantBool(true),
-				    DirectErrorPredicate(optimizer, "DECIDE: a decision solves to a whole number beyond the range "
-				                                    "DeciDB can return. Tighten its bounds, or declare it REAL to read "
-				                                    "the value approximately.")));
+				checks.push_back(
+				    make_uniq<BoundCaseExpression>(WithinExactRange(answers.value[d]), DirectConstantBool(true),
+				                                   OutOfRangeError(proof.decisions[d].name, answers.value[d])));
 			}
 		}
 		unique_ptr<Expression> chain = DirectConstantBool(true);

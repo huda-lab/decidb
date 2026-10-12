@@ -172,8 +172,8 @@ def _values(records, names=NAMES):
 #   rowbounds [(op, number, ids|None[, lhs])]  lhs op number on the given ids (None: every row, no WHEN)
 #   noop      [SQL]                    clauses that restate the BOOL domain and change nothing
 #   colpins   True                     x >= lo AND x <= hi, the bounds read from each row
-#   objective key of OBJECTIVES (default "score")
-#   sense     "MAXIMIZE" (default) or "MINIMIZE"
+#   objective key of OBJECTIVES (default "score"), or "none" for a query with no objective (every score is 0)
+#   sense     "MAXIMIZE" (default) or "MINIMIZE"; unused when there is no objective
 
 S1_CASES = {
     # --- count bounds, constant ---
@@ -337,6 +337,60 @@ for _op, _constant in itertools.product(_OPNAMES, _ROWBOUND_CONSTANTS):
             "rowbounds": [(_op, float(_constant), None)],
         }
 
+# No objective: every score is 0, so the problem is feasibility under the count bounds. Each bound shape meets every
+# scope, so a shape that only fails under one scope shows up. The oracle minimizes a zero objective.
+_NO_OBJECTIVE_BOUNDS = {
+    "ge_whole": [(">=", 2)],
+    "ge_fraction": [(">=", 1.5)],
+    "gt_fraction": [(">", 1.5)],
+    "le_whole": [("<=", 2)],
+    "lt_fraction": [("<", 2.5)],
+    "eq_whole": [("=", 2)],
+    "interval": [(">=", 1), ("<=", 2)],
+    "impossible_lower": [(">=", 5)],
+    "source_lower": [(">=", "cap2")],
+    "source_upper": [("<=", "cap")],
+    "source_equality": [("=", "geq")],
+    "coalesce_interval": [(">=", "COALESCE(nlo, 1.0)"), ("<=", "COALESCE(nhi, 2.0)")],
+    "count_star_lower": [(">=", "COUNT(*) / 2")],
+    "count_star_upper": [("<=", "COUNT(*) - 1")],
+}
+_NO_OBJECTIVE_SCOPES = {
+    "global": {},
+    "per": {"per": True},
+    "top_when": {"when": "top"},
+    "top_when_per": {"when": "top", "per": True},
+    "local_when": {"when": "local"},
+    "local_when_per": {"when": "local", "per": True},
+}
+for _shape, _scope in itertools.product(_NO_OBJECTIVE_BOUNDS, _NO_OBJECTIVE_SCOPES):
+    if _shape == "source_equality" and not _NO_OBJECTIVE_SCOPES[_scope].get("per"):
+        continue  # the equality bound is constant within a group only, so a global scope sees it vary and raises
+    S1_CASES[f"no_objective_{_shape}_{_scope}"] = {
+        "bounds": _NO_OBJECTIVE_BOUNDS[_shape],
+        "objective": "none",
+        **_NO_OBJECTIVE_SCOPES[_scope],
+    }
+S1_CASES["no_objective_with_pins_per"] = {
+    "bounds": [(">=", 1), ("<=", 2)],
+    "per": True,
+    "pins": [(1, [4]), (0, [0, 8])],
+    "objective": "none",
+}
+S1_CASES["no_objective_pins_force_the_lower_bound_past_its_rows"] = {
+    "bounds": [(">=", 2)],
+    "per": True,
+    "pins": [(0, [0, 1])],
+    "objective": "none",
+}
+S1_CASES["no_objective_column_pins_global"] = {"bounds": [(">=", 2)], "colpins": True, "objective": "none"}
+S1_CASES["no_objective_infeasible_pin_against_upper"] = {
+    "bounds": [("<=", 1)],
+    "pins": [(1, [0, 3])],
+    "objective": "none",
+}
+S1_CASES["no_objective_ties_dataset"] = {"data": "ties", "bounds": [(">=", 3)], "objective": "none"}
+
 # One representative objective shape per sense, over an interval so that both senses bind.
 for _name in NEW_OBJECTIVES:
     for _sense in ("MAXIMIZE", "MINIMIZE"):
@@ -377,8 +431,15 @@ def _decide_clause(case):
     clauses.extend(case.get("noop", ()))
     if case.get("colpins"):
         clauses.extend(["x >= lo", "x <= hi"])
-    objective_sql = OBJECTIVES[case.get("objective", "score")][0]
-    return f"DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)} {case.get('sense', 'MAXIMIZE')} {objective_sql}"
+    objective = case.get("objective", "score")
+    tail = "" if objective == "none" else f" {case.get('sense', 'MAXIMIZE')} {OBJECTIVES[objective][0]}"
+    return f"DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)}{tail}"
+
+
+def _coefficient(case):
+    """The per-row coefficient of x in the case's objective; 0 for a query with no objective."""
+    objective = case.get("objective", "score")
+    return (lambda r: 0.0) if objective == "none" else OBJECTIVES[objective][1]
 
 
 # The DECIDE query is wrapped in a context. Each context returns every row (id, g, score, x),
@@ -526,7 +587,7 @@ def _solve_with_oracle(oracle_solver, case):
         oracle_solver.add_variable(name, VarType.BINARY)
     for coefficients, op, rhs in constraints:
         oracle_solver.add_constraint(coefficients, op, rhs)
-    coefficient = OBJECTIVES[case.get("objective", "score")][1]
+    coefficient = _coefficient(case)
     sense = ObjSense.MAXIMIZE if case.get("sense", "MAXIMIZE") == "MAXIMIZE" else ObjSense.MINIMIZE
     oracle_solver.set_objective({names[i]: float(coefficient(r)) for i, r in enumerate(rows)}, sense)
     return constraints, oracle_solver.solve()
@@ -538,7 +599,7 @@ def _agree(decidb_cli, oracle_solver, case, wrap="plain"):
     rows_data = _dataset(case)
     constraints, oracle = _solve_with_oracle(oracle_solver, case)
     by_id = {r["id"]: i for i, r in enumerate(rows_data)}
-    coefficient = OBJECTIVES[case.get("objective", "score")][1]
+    coefficient = _coefficient(case)
 
     def check_assignment(rows, columns, mode):
         assert columns == ["id", "g", "score", "x"], mode
@@ -604,6 +665,10 @@ CONTEXT_CASES = [("global_upper_max", wrap) for wrap in (
     ("per_interval", "wide_source"),
     ("local_when_interval", "recombined_filters"),
     ("pins_with_group_bounds", "joined_source"),
+    ("no_objective_interval_per", "wide_source"),
+    ("no_objective_ge_whole_global", "joined_source"),
+    ("no_objective_source_lower_local_when_per", "recombined_filters"),
+    ("no_objective_count_star_lower_top_when_per", "parent_join"),
 ]
 
 
@@ -825,6 +890,37 @@ S1_ERROR_CASES = {
         "null_bound",
         None,
     ),
+    # --- no objective: the bounds and pins are still read on every row and still decide feasibility ---
+    "no_objective_late_null_bound_under_limit": (
+        "SELECT x FROM (FROM (SELECT i AS id, 1.0::DOUBLE AS lo, "
+        "CASE WHEN i=4999 THEN NULL ELSE 1.0 END::DOUBLE AS hi FROM range(5000) t(i)) s "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) >= lo AND SUM(x) <= hi) q LIMIT 1",
+        "null_bound",
+        None,
+    ),
+    "no_objective_late_nan_pin_column_under_count": (
+        "SELECT COUNT(*) FROM (FROM (SELECT i AS id, "
+        "CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END AS pin FROM range(5000) t(i)) s "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) >= 1 AND x <= pin) q",
+        "null_bound",
+        None,
+    ),
+    "no_objective_empty_top_when": (
+        "SELECT x FROM (FROM (VALUES (1, false)) t(id, flag) DECIDE x(BOOL) SUCH THAT SUM(x) >= 1 WHEN flag) q",
+        "empty_aggregate",
+        None,
+    ),
+    "no_objective_lower_bound_exceeds_the_rows": (
+        "SELECT x FROM (FROM (VALUES (1), (2)) t(id) DECIDE x(BOOL) SUCH THAT SUM(x) >= 3) q",
+        "infeasible",
+        None,
+    ),
+    "no_objective_late_pin_conflict_survives_limit": (
+        "SELECT x FROM (FROM (VALUES (1), (2), (3)) t(id) "
+        "DECIDE x(BOOL) SUCH THAT x = 1 WHEN id = 3 AND x = 0 WHEN id = 3 AND SUM(x) >= 1) q LIMIT 1",
+        "infeasible",
+        None,
+    ),
     # --- pins ---
     "late_pin_conflict_survives_limit": (
         _problem(
@@ -867,6 +963,21 @@ def test_s1_error_cases_fail_on_both_paths(decidb_cli, name):
         assert error_class(messages["require"]) == expected, messages
     if needle is not None:
         assert all(needle in message for message in messages.values()), messages
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_s1_without_an_objective_reads_no_score_column(decidb_cli):
+    """With no objective nothing is a score, so a bad value in a column the query never uses raises on neither path."""
+    sql = (
+        "SELECT id, x FROM (FROM (VALUES (1, 'NaN'::DOUBLE), (2, NULL::DOUBLE), (3, 'Infinity'::DOUBLE)) t(id, score) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) >= 2) q ORDER BY id"
+    )
+    for mode in ("off", "require"):
+        rows, columns = _run(decidb_cli, sql, mode)
+        assert columns == ["id", "x"], mode
+        assert [row[0] for row in rows] == [1, 2, 3] and sum(row[1] for row in rows) >= 2, mode
 
 
 # ---------------------------------------------------------------------------

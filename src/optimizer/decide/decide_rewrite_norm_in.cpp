@@ -175,8 +175,8 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		idx_t k = in.children.size() - 1;
 		if (target->binding.column_index < decide.is_boolean_var.size() && decide.is_boolean_var[target->binding.column_index] && k == 2) {
 			double a, b;
-			if (TryEvaluateFoldableDoubleNoThrow(optimizer.context, *in.children[1], a) &&
-			    TryEvaluateFoldableDoubleNoThrow(optimizer.context, *in.children[2], b) &&
+			if (TryEvaluateFoldableDouble(optimizer.context, *in.children[1], a, FOLD_CATCH_ALL) &&
+			    TryEvaluateFoldableDouble(optimizer.context, *in.children[2], b, FOLD_CATCH_ALL) &&
 			    ((a == 0.0 && b == 1.0) || (a == 1.0 && b == 0.0))) {
 				emit(make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 				                                   in.children[0]->Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(0))), when, clause_alias);
@@ -211,7 +211,8 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		double min_value = 0.0;
 		for (idx_t i = 0; i < k; i++) {
 			double value;
-			if (!TryEvaluateFoldableDoubleNoThrow(optimizer.context, *in.children[i + 1], value)) all_constant = false;
+			if (!TryEvaluateFoldableDouble(optimizer.context, *in.children[i + 1], value, FOLD_CATCH_ALL))
+				all_constant = false;
 			else min_value = std::min(min_value, value);
 			auto negative = optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::INTEGER(0)), in.children[i + 1]->Copy());
 			linking = optimizer.BindScalarFunction("+", std::move(linking), optimizer.BindScalarFunction("*", std::move(negative), indicators[i]->Copy()));

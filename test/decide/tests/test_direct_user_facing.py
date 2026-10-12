@@ -8,12 +8,7 @@ import re
 import math
 import pytest
 
-
-@pytest.fixture(autouse=True)
-def _allow_direct_path(monkeypatch):
-    # The suite also runs with a process-wide forced HiGHS backend. This file
-    # opts into the direct path; forced-backend cases use their own CLI wrapper.
-    monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
+from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 
 
 def _source_query(scores, capacity, sense="MAXIMIZE"):
@@ -102,6 +97,40 @@ def test_invalid_score_error_matches_solver_wording(decidb_cli, score):
     direct = _raw(decidb_cli, sql, mode="require").stderr
     assert "Error" in direct, direct
     assert re.sub(r" at row \d+", "", solver) == direct
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "name,bounds,objective",
+    [
+        ("x", "x >= 0 AND x <= 1e17", "MAXIMIZE SUM(x)"),
+        ("x", "x >= -1e17 AND x <= 0", "MINIMIZE SUM(x)"),
+        ("x", "x >= 0 AND x <= 9007199254740994", "MAXIMIZE SUM(x)"),
+        (
+            "quantity_ordered",
+            "quantity_ordered >= 0 AND quantity_ordered <= 12345678901234567890",
+            "MAXIMIZE SUM(quantity_ordered)",
+        ),
+        ("x", "x >= 0 AND x <= cap", "MAXIMIZE SUM(x)"),
+    ],
+)
+def test_a1_whole_number_range_error_is_the_solvers_error_word_for_word(
+    decidb_cli, decidb_cli_highs, name, bounds, objective
+):
+    # One template in `decide_numeric_policy.hpp` serves both paths: the variable's name, the answer printed as the solver
+    # prints it, and the advice. The full text is compared across `require` and `off` on both backends, never against a
+    # hand-written string. The last case reads the bound from a column, so the answer is formatted at run time per row.
+    sql = f"""
+        SELECT id, {name} FROM (
+            FROM (VALUES (1, 10.0), (2, 1e17)) t(id, cap)
+            DECIDE {name}(INT) SUCH THAT {bounds} {objective}
+        ) q
+    """
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert "beyond the range DeciDB can return as a whole number" in direct, direct
+    assert f"DECIDE variable '{name}' solves to " in direct, direct
+    assert _raw(decidb_cli, sql, mode="off").stderr == direct
+    assert _raw(decidb_cli_highs, sql, mode="off").stderr == direct
 
 
 @pytest.mark.correctness

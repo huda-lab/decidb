@@ -254,14 +254,6 @@ unique_ptr<Expression> decide_rewrite::MakeTrueExpression(const string &source_a
 	return placeholder;
 }
 
-bool decide_rewrite::TryEvaluateFoldableDoubleNoThrow(ClientContext &context, const Expression &expr, double &out) {
-	try {
-		return TryEvaluateFoldableDouble(context, expr, out);
-	} catch (...) {
-		return false;
-	}
-}
-
 //! The sign a factor contributes: +1, -1, or 0 when it is not known until the query
 //! runs. Any foldable numeric expression is decidable here; a scalar subquery is not.
 //!
@@ -273,7 +265,7 @@ int decide_rewrite::ScaleSignAtPlanTime(ClientContext &context, const Expression
 		return 1;
 	}
 	double d;
-	if (!TryEvaluateFoldableDoubleNoThrow(context, *scale, d)) {
+	if (!TryEvaluateFoldableDouble(context, *scale, d, FOLD_CATCH_ALL)) {
 		return 0;
 	}
 	if (d == 0.0) {

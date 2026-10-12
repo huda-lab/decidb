@@ -112,7 +112,7 @@ static void TagAbsForBigM(Expression &expr, idx_t decide_index) {
 // Returns false when the expression is not a statically-known number.
 static bool TryGetConstantSign(ClientContext &context, const Expression &expr, int &out_sign) {
 	double value;
-	if (!TryEvaluateFoldableDoubleNoThrow(context, expr, value)) {
+	if (!TryEvaluateFoldableDouble(context, expr, value, FOLD_CATCH_ALL)) {
 		return false;
 	}
 	out_sign = value < 0 ? -1 : 1;

@@ -1,9 +1,9 @@
 # A1 (independent bounded decisions) — what works today
 
-Verified on 2026-10-09 at `7196cb03f9`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and
-`DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,322 passed (no failures, no expected failures);
-`DECIDB_FORCE_SOLVER=highs make decide-test` 2,321 passed and one failure that needs Gurobi
-(`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 1,276 assertions in 44 cases.
+Verified on 2026-10-12 on top of `4f3040f016`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`
+and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,538 passed (no failures, no expected failures);
+`DECIDB_FORCE_SOLVER=highs make decide-test` 2,537 passed and one failure that needs Gurobi
+(`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 1,287 assertions in 45 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_rule.cpp`. Class definition: [definition.md](definition.md).
 
@@ -42,7 +42,8 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
 
 It raises an error wherever the solver does: NULL, NaN or infinite coefficients and NULL or NaN bounds (including on
 rows a `WHEN` excludes), an empty box on any row (infeasible), an improving direction with no finite limit on any row
-(unbounded), an `INT` answer beyond 2^53, an objective `WHEN` that matches no row of a non-empty source, and any
+(unbounded), an `INT` answer beyond 2^53 after rounding (with the solver's message word for word, naming the variable
+and its rounded value), an objective `WHEN` that matches no row of a non-empty source, and any
 expression that raises. Every input row is read before one is released, so a late bad row raises under `LIMIT 1`,
 `COUNT(*)` or a filter; only `LIMIT 0` skips it. An empty source returns no rows.
 

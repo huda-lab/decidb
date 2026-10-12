@@ -7,13 +7,7 @@ comparator and its rules are in `_direct_differential.py`.
 import random
 import pytest
 from ._direct_differential import compare_direct_with_solver
-
-
-@pytest.fixture(autouse=True)
-def _allow_direct_path(monkeypatch):
-    # The suite also runs with a process-wide forced HiGHS backend; this file
-    # needs the direct path, and ``off`` runs use the default backend.
-    monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
+from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 
 
 _OBJECTIVES = {
@@ -68,8 +62,12 @@ def _fuzz_rowbound(rng):
     return f"x {op} {rng.choice(['-1', '-0.5', '0', '0.5', '1', '1.5', '2'])} WHEN id = {row}"
 
 
-def _fuzz_query(rng):
-    """Returns the query and whether it was built as an S1 shape rather than a near miss."""
+def _fuzz_query(rng, with_objective=True):
+    """Returns the query and whether it was built as an S1 shape rather than a near miss.
+
+    Without an objective the query reports its row count and a constant: which rows a feasibility problem selects is
+    the backend's choice, so no score of the selection can be compared. Every random choice is drawn either way.
+    """
     near_miss = rng.choice([None] * 8 + ["clause", "objective"])
     rows = []
     for i in range(rng.randint(1, 9)):
@@ -105,6 +103,12 @@ def _fuzz_query(rng):
         clauses.append(rng.choice(_S1_IMPOSSIBLE_BOUNDS))
     if rng.random() < 0.12:
         clauses.append(rng.choice(_S1_STRICT_FRACTION_BOUNDS))
+    if not with_objective:
+        sql = (
+            f"WITH r AS (SELECT * FROM {source} DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)}) "
+            "SELECT count(*), 0 FROM r"
+        )
+        return sql, near_miss != "clause"
     sql = (
         f"WITH r AS (SELECT * FROM {source} DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)} "
         f"{sense} {objective}) SELECT count(*), {objectives[objective]} FROM r"
@@ -124,6 +128,16 @@ _FUZZ_CASES_PER_SEED = 30
 @pytest.mark.parametrize("seed", _FUZZ_SEEDS)
 def test_direct_s1_seeded_fuzz_matches_solver_path(decidb_cli, seed):
     compare_direct_with_solver(decidb_cli, _fuzz_query, random.Random(seed), _FUZZ_CASES_PER_SEED)
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("seed", _FUZZ_SEEDS)
+def test_direct_s1_no_objective_seeded_fuzz_matches_solver_path(decidb_cli, seed):
+    compare_direct_with_solver(
+        decidb_cli, lambda rng: _fuzz_query(rng, with_objective=False), random.Random(seed), _FUZZ_CASES_PER_SEED
+    )
 
 
 # ---------------------------------------------------------------------------

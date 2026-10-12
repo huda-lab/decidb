@@ -1,4 +1,6 @@
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/common/exception.hpp"
 
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -55,17 +57,46 @@ const Expression *StripCastsForIdentity(const Expression &expr) {
 	return current;
 }
 
-bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, double &out) {
+static bool EvaluateFoldableDouble(ClientContext &context, const Expression &expr, double &out, uint32_t flags) {
 	if (!expr.IsFoldable()) {
 		return false;
 	}
+	if ((flags & FOLD_STABLE) &&
+	    (!expr.IsConsistent() || expr.HasParameter() || expr.HasSubquery() || expr.IsAggregate() || expr.IsWindow())) {
+		return false;
+	}
 	Value value;
-	if (!ExpressionExecutor::TryEvaluateScalar(context, expr, value) || value.IsNull() ||
-	    !value.type().IsNumeric()) {
+	if (!ExpressionExecutor::TryEvaluateScalar(context, expr, value) || value.IsNull()) {
+		return false;
+	}
+	bool readable = value.type().IsNumeric() || ((flags & FOLD_ALLOW_BOOLEAN) && value.type() == LogicalType::BOOLEAN);
+	if (!readable) {
 		return false;
 	}
 	out = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
+	if (flags & FOLD_EXACT_FINITE) {
+		return DecideIsExactFiniteDouble(
+		    out, value, [&](double converted) { return Value::DOUBLE(converted).DefaultCastAs(value.type()); });
+	}
 	return true;
+}
+
+bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, double &out, uint32_t flags) {
+	if ((flags & FOLD_CATCH_ALL) == FOLD_CATCH_ALL) {
+		try {
+			return EvaluateFoldableDouble(context, expr, out, flags);
+		} catch (...) {
+			return false;
+		}
+	}
+	if (flags & FOLD_CATCH_DUCKDB_ERRORS) {
+		try {
+			return EvaluateFoldableDouble(context, expr, out, flags);
+		} catch (Exception &) {
+			return false;
+		}
+	}
+	return EvaluateFoldableDouble(context, expr, out, flags);
 }
 
 bool IsCastWrappedConstant(const Expression &expr) {

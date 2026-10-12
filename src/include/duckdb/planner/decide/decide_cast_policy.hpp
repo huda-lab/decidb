@@ -115,11 +115,30 @@ const BoundColumnRefExpression *GetBareDecideColumnRef(const Expression &expr, i
 //! function.
 const Expression *StripCastsForIdentity(const Expression &expr);
 
-//! Evaluate a complete foldable SQL expression and convert its result to DOUBLE.
-//! Data-only casts remain part of the computation. Returns false for a non-foldable,
-//! NULL, non-numeric, or otherwise non-evaluable expression; conversion exceptions
-//! are deliberately left to the caller's layer-specific error policy.
-bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, double &out);
+//! How `TryEvaluateFoldableDouble` judges an expression and its value. Each flag is one difference between the callers
+//! that evaluate a constant to a DOUBLE; a caller names the ones it needs and gets nothing else.
+enum FoldableDoubleFlag : uint32_t {
+	//! Foldable, non-NULL and numeric, with the result converted as DuckDB casts it. The result may be infinite or NaN,
+	//! and a conversion error propagates to the caller's own error policy.
+	FOLD_PLAIN = 0,
+	//! Also demand a constant no row, parameter or subquery can change: consistent, and free of parameters,
+	//! subqueries, aggregates and windows.
+	FOLD_STABLE = 1,
+	//! Also accept a BOOLEAN value (read as 0 or 1).
+	FOLD_ALLOW_BOOLEAN = 2,
+	//! Also demand a finite result that survives a round trip back to the expression's own type.
+	FOLD_EXACT_FINITE = 4,
+	//! Report a DuckDB error raised by the evaluation or the conversion as false.
+	FOLD_CATCH_DUCKDB_ERRORS = 8,
+	//! Report any exception whatever as false (implies `FOLD_CATCH_DUCKDB_ERRORS`).
+	FOLD_CATCH_ALL = 8 | 16
+};
+
+//! Evaluate a complete foldable SQL expression and convert its result to DOUBLE. Data-only casts remain part of the
+//! computation. Returns false for a non-foldable, NULL, non-numeric (or, unless allowed, BOOLEAN) expression, and for
+//! whatever else `flags` (a combination of `FoldableDoubleFlag`) rules out. `out` is written once the value is
+//! converted, before the finite and round-trip check, so it is meaningful only when the call returns true.
+bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, double &out, uint32_t flags);
 
 //! True for a literal under any number of cast wrappers.
 //!

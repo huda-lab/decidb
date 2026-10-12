@@ -22,13 +22,6 @@ class LogicalDecide;
 //! carries one.
 bool DecideBoundIsAbsorbed(ClientContext &context, LogicalDecide &decide, const BoundComparisonExpression &comparison);
 
-//! The inclusive bound a strict `>` (`is_lower`) or `<` against `k` means on a whole-numbered decision: the first whole
-//! value above `k` (`floor(k) + 1`) or below it (`ceil(k) - 1`). `x > 0.5` is `x >= 1` and `x < 2.5` is `x <= 2`, while
-//! `x > 1` is `x >= 2` and `x < 3` is `x <= 2`. Moving the bound a whole unit before rounding is wrong against a
-//! fraction. The solver's absorption (comparisons and BETWEEN sides) and direct solve all take the shift from here so
-//! that they cannot disagree.
-double DecideStrictBound(bool is_lower, double k);
-
 //! True when a decision's folded box contradicts its built-in domain, which the solver rejects with an error before it
 //! reads any row (so on an empty table too). `lower` and `upper` are the box the solver folds, from the bounds as it
 //! reads them (after `DecideStrictBound`, before any rounding of a fraction); an unwritten side is

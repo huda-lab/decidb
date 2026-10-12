@@ -786,7 +786,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 		// foldable case; a row-varying or query-executed term has no single value to
 		// fold and does not belong in an objective at all.
 		double value = 0;
-		if (!TryEvaluateFoldableDouble(context, *atom.expr, value)) {
+		if (!TryEvaluateFoldableDouble(context, *atom.expr, value, FOLD_PLAIN)) {
 			throw BinderException(
 			    "MAXIMIZE/MINIMIZE: '%s' does not reference a decision, so it cannot be part of "
 			    "the objective. Remove it, or move it to the SELECT list.",

@@ -3,6 +3,7 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/planner/column_binding.hpp"
+#include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/expression.hpp"
 
 namespace duckdb {
@@ -42,13 +43,13 @@ bool DirectCastMayThrow(const BoundCastExpression &cast);
 bool DirectIsSourceOnlyPredicate(const Expression &expr, idx_t decide_index,
                                  const vector<ColumnBinding> &source_bindings);
 
-//! Evaluates a foldable numeric or Boolean expression to a DOUBLE as DuckDB reads the cast, without judging the value.
-//! False when it is not foldable, NULL, or neither numeric nor Boolean. The result may be infinite or NaN.
-bool DirectFoldableDouble(ClientContext &context, const Expression &expr, double &result);
+//! What a direct rule demands of a constant it reads with `TryEvaluateFoldableDouble` (`decide_cast_policy.hpp`): one
+//! that no row, parameter or subquery can change, with an evaluation error read as "not a constant". The value may be
+//! infinite or NaN; a rule that reads a Boolean adds `FOLD_ALLOW_BOOLEAN`.
+constexpr uint32_t DIRECT_CONSTANT = FOLD_STABLE | FOLD_CATCH_DUCKDB_ERRORS;
 
-//! Evaluates a foldable numeric expression to a DOUBLE. False when it is not foldable, NULL, non-numeric, not
-//! finite, or does not survive a round trip through DOUBLE.
-bool DirectFiniteFoldableDouble(ClientContext &context, const Expression &expr, double &result);
+//! The same, for a numeric constant that must also be finite and survive a round trip through DOUBLE.
+constexpr uint32_t DIRECT_FINITE_CONSTANT = DIRECT_CONSTANT | FOLD_EXACT_FINITE;
 
 //! The factor a query-wide `2 * SUM(...)` or `SUM(...) / 2` puts on a reducer: 1 without one. False unless it is a
 //! finite foldable constant, and nonzero when it divides.

@@ -46,15 +46,6 @@ today is in `done.md`.
   date.
 - **Done when.** The "Read twice" numbers come from the built plan.
 
-## N-03 — The model builder's strict-bound shifts call the shared function
-
-- **Problem.** `ilp_model_builder.cpp` shifts a strict bound to a whole number (`x > 0.5` becomes `x >= 1`) by hand at four
-  sites, while `DecideStrictBound` does the same for the direct rules. If the copies drift, the solver and direct solve
-  read `x > 0.5` differently.
-- **Change.** Move `DecideStrictBound` into `src/include/duckdb/common/decide_numeric_policy.hpp` (it is pure double math)
-  and call it from all four sites. No behavior change.
-- **Done when.** No hand-written shift remains and the checks give the stamp's numbers.
-
 ## N-04 — A1's bound absorption and the solver's are one function
 
 - **Problem.** A1's `ProveBounds` (`a1_rule.cpp`) absorbs a per-row bound into a variable's interval with its own code; the
@@ -62,39 +53,6 @@ today is in `done.md`.
 - **Change.** One absorb function that both call. No behavior change. Keep to the absorption step: moving A1's per-row
   bound reading into a shared builder is S1-12 (`../s1/todo.md`).
 - **Done when.** Both paths call the one function and the checks give the stamp's numbers.
-
-## N-05 — One evaluate-to-DOUBLE function
-
-- **Problem.** Four helpers evaluate a constant expression to a `DOUBLE`: `TryEvaluateFoldableDouble`, its no-throw
-  variant, `DirectFoldableDouble` and `DirectFiniteFoldableDouble`. They differ on `BOOL`, finiteness and whether they
-  catch errors, so one path can accept a constant another rejects.
-- **Change.** One function, with each difference an explicit parameter; every caller keeps its current behavior.
-- **Done when.** The four are one function and the checks give the stamp's numbers.
-
-## N-06 — A test that both paths reject the same source values
-
-- **Problem.** The direct path rejects bad source values in SQL (`DirectValidNumberPredicate`, `direct_builder.cpp`); the
-  solver path rejects them in C++ (`physical_decide.cpp`, near line 298). One rejects only `NaN`, the other every value
-  that is not finite. They cannot share code.
-- **Change.** A test that feeds `NaN`, `+inf`, `-inf` and `NULL` through each place either path reads a source value and
-  asserts the same outcome. If the paths differ today, stop and report; do not change either side.
-- **Done when.** The test exists and passes on both solvers.
-
-## N-07 — One message and range check for "beyond the range DeciDB can return"
-
-- **Problem.** A1's error text and its 2^53 range test copy `DecideSolutionToInteger` in `physical_decide.cpp`. The
-  wording or the range can diverge.
-- **Change.** One message string and one range helper, in the numeric-policy header, used by both.
-- **Done when.** A test asserts the same message on both paths.
-
-## H-15 — Three test files define the shared autouse fixture themselves
-
-- **Problem.** `test/decide/tests/_direct_oracle_common.py` holds the autouse fixture that lifts a forced backend
-  (`_allow_direct_path`). `test_direct_fuzz.py`, `test_direct_rule_contract.py` and `test_direct_user_facing.py` each
-  define the same fixture again, so a fix has to be made four times.
-- **Change.** Import the fixture from `_direct_oracle_common.py` in the three files and delete their copies. Keep every
-  test function's name and file.
-- **Done when.** The fixture is defined once and the checks give the stamp's numbers.
 
 ## H-02 — Adapter for the new language
 

@@ -108,6 +108,7 @@ private:
 				return;
 			}
 			DirectDecisionFact decision;
+			decision.name = variable->GetName();
 			decision.output_type = variable->return_type;
 			decision.scope = decide.variable_scopes[i].scope;
 			if (decision.scope == DecideVarScope::ENTITY) {

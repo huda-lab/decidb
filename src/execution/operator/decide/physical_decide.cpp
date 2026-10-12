@@ -4163,14 +4163,11 @@ static int64_t DecideSolutionToInteger(double solution_value, const LogicalType 
     double hi = var_type == LogicalType::INTEGER
                     ? static_cast<double>(NumericLimits<int32_t>::Maximum())
                     : DECIDE_MAX_EXACT_INTEGER;
-    // Negated so a NaN — which compares false against everything — is refused rather
-    // than passed through to the cast this exists to protect.
-    if (!(rounded >= lo && rounded <= hi)) {
-        throw InvalidInputException(
-            "DECIDE variable '%s' solves to %s, which is beyond the range DeciDB can "
-            "return as a whole number. Tighten the bound on '%s', or declare it "
-            "'%s(REAL)' to read the value approximately.",
-            var_name, StringUtil::Format("%.0f", rounded), var_name, var_name);
+    // The helper refuses a NaN, which compares false against everything, rather than
+    // passing it through to the cast this exists to protect.
+    if (!DecideRoundedAnswerWithin(solution_value, lo, hi)) {
+        // The wording is shared with A1's direct plan (`decide_numeric_policy.hpp`).
+        throw InvalidInputException(DecideWholeNumberRangeMessage(var_name, StringUtil::Format("%.0f", rounded)));
     }
     return static_cast<int64_t>(rounded);
 }

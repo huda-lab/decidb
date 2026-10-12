@@ -633,7 +633,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
             // δ site: `> K` becomes `>= floor(K)+1`. Remember the user's typed K so
             // diagnosis can re-quote a suggestion against `> K`, not the δ-adjusted rhs.
-            constr.sense = '>'; constr.rhs = std::floor(rhs) + 1.0;
+            constr.sense = '>'; constr.rhs = DecideStrictBound(true, rhs);
             constr.provenance.strict = true; constr.provenance.typed_k = rhs;
         } else if (cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
             constr.sense = '<'; constr.rhs = rhs;
@@ -642,7 +642,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 RejectStrictOnNonIntegerLhs(lhs_integrality, "<", "<=");
             }
             // δ site: `< K` becomes `<= ceil(K)-1`. Remember the user's typed K.
-            constr.sense = '<'; constr.rhs = std::ceil(rhs) - 1.0;
+            constr.sense = '<'; constr.rhs = DecideStrictBound(false, rhs);
             constr.provenance.strict = true; constr.provenance.typed_k = rhs;
         } else if (cmp == ExpressionType::COMPARE_EQUAL) {
             constr.sense = '='; constr.rhs = rhs;
@@ -1194,7 +1194,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 RejectStrictOnNonIntegerLhs(lhs_integrality, "<", "<=");
             }
             qc.sense = '<';
-            qc.rhs = std::ceil(adjusted_rhs) - 1.0;
+            qc.rhs = DecideStrictBound(false, adjusted_rhs);
             qc.provenance.strict = true;
             qc.provenance.typed_k = adjusted_rhs;
             break;
@@ -1203,7 +1203,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 RejectStrictOnNonIntegerLhs(lhs_integrality, ">", ">=");
             }
             qc.sense = '>';
-            qc.rhs = std::floor(adjusted_rhs) + 1.0;
+            qc.rhs = DecideStrictBound(true, adjusted_rhs);
             qc.provenance.strict = true;
             qc.provenance.typed_k = adjusted_rhs;
             break;

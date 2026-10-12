@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 
@@ -144,7 +145,7 @@ static bool TryReadAbsorbableBound(ClientContext &context, LogicalDecide &decide
 	// but not a lower one — the same infinity silently vanishing in one direction and
 	// reaching the model validator as an internal error in the other.
 	double k;
-	if (!IsCastWrappedConstant(*comp.right) || !TryEvaluateFoldableDouble(context, *comp.right, k) ||
+	if (!IsCastWrappedConstant(*comp.right) || !TryEvaluateFoldableDouble(context, *comp.right, k, FOLD_PLAIN) ||
 	    !std::isfinite(k)) {
 		return false;
 	}
@@ -186,10 +187,6 @@ static bool TryReadAbsorbableBound(ClientContext &context, LogicalDecide &decide
 bool DecideBoundIsAbsorbed(ClientContext &context, LogicalDecide &decide, const BoundComparisonExpression &comparison) {
 	AbsorbableBound bound;
 	return TryReadAbsorbableBound(context, decide, comparison, bound);
-}
-
-double DecideStrictBound(bool is_lower, double k) {
-	return is_lower ? std::floor(k) + 1.0 : std::ceil(k) - 1.0;
 }
 
 bool DecideBoxContradictsDomain(double lower, double upper, bool is_bool) {
@@ -246,7 +243,7 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 
 		auto ExtractBound = [&](const Expression &e) -> double {
 			double value;
-			return IsCastWrappedConstant(e) && TryEvaluateFoldableDouble(optimizer.context, e, value)
+			return IsCastWrappedConstant(e) && TryEvaluateFoldableDouble(optimizer.context, e, value, FOLD_PLAIN)
 			           ? value
 			           : std::numeric_limits<double>::quiet_NaN();
 		};

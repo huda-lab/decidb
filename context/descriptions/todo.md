@@ -6,14 +6,6 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `08_direct_solve/README.md`, `08_direct_solve/architecture/rules.md`.
 Checks: `08_direct_solve/rules/_harness/todo.md` § How to work any task.
 
-## 1. Quick
-- [ ] H-15 shared test fixture defined once — 08_direct_solve/rules/_harness/todo.md § H-15
-- [ ] N-03 strict-bound shifts call the shared function — 08_direct_solve/rules/_harness/todo.md § N-03
-- [ ] N-07 one message and range check for 2^53 — 08_direct_solve/rules/_harness/todo.md § N-07
-- [ ] N-05 one evaluate-to-DOUBLE function — 08_direct_solve/rules/_harness/todo.md § N-05
-- [ ] N-06 test that both paths reject the same values — 08_direct_solve/rules/_harness/todo.md § N-06
-- [ ] S1-14 S1 queries with no objective — 08_direct_solve/rules/s1/todo.md § S1-14
-
 ## 2. Larger
 - [ ] S1-15 S1 offset or negated count body — 08_direct_solve/rules/s1/todo.md § S1-15
 - [ ] S1-08 S1 limits from MIN, MAX, SUM, AVG, COUNT(col) — 08_direct_solve/rules/s1/todo.md § S1-08

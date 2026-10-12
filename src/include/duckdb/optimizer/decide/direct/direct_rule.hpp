@@ -35,6 +35,8 @@ enum class DirectFactStatus : uint8_t { KNOWN, UNKNOWN };
 enum class DirectDomain : uint8_t { BOOL, INT, REAL };
 
 struct DirectDecisionFact {
+	//! The name the user declared, as the solver quotes it.
+	string name;
 	DirectDomain domain;
 	//! The SQL type of the decision's output column (INTEGER for BOOL, BIGINT for INT, DOUBLE for REAL).
 	LogicalType output_type;

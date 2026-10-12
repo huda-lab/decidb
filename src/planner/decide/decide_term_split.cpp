@@ -365,7 +365,7 @@ DecideTermSplitter::QuadraticPattern DecideTermSplitter::DetectQuadraticPattern(
 	if (fname == "*" && func.children.size() == 2) {
 		for (idx_t side = 0; side < 2; side++) {
 			double cval;
-			if (TryEvaluateFoldableDouble(context, *func.children[side], cval) && cval != 0.0) {
+			if (TryEvaluateFoldableDouble(context, *func.children[side], cval, FOLD_PLAIN) && cval != 0.0) {
 				auto inner = DetectQuadraticPattern(*func.children[1 - side]);
 				if (inner.inner_linear_expr) {
 					inner.sign *= cval;
@@ -378,7 +378,7 @@ DecideTermSplitter::QuadraticPattern DecideTermSplitter::DetectQuadraticPattern(
 	// POWER / POW / **  with literal exponent 2
 	if ((fname == "power" || fname == "pow" || fname == "**") && func.children.size() == 2) {
 		double exponent;
-		if (TryEvaluateFoldableDouble(context, *func.children[1], exponent) && exponent == 2.0) {
+		if (TryEvaluateFoldableDouble(context, *func.children[1], exponent, FOLD_PLAIN) && exponent == 2.0) {
 			const Expression *inner = UnwrapDecideCasts(*func.children[0], decide_index);
 			if (FindVariable(*inner) != DConstants::INVALID_INDEX) {
 				return {inner, 1.0, IsLinear(*inner) ? nullptr : "POWER(..., 2)"};

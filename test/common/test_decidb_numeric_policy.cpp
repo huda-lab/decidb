@@ -50,6 +50,28 @@ TEST_CASE("DECIDE exact range ends at 2^53 and excludes NaN and infinity", "[dec
 	REQUIRE_FALSE(DecideIsWithinExactRange(std::numeric_limits<double>::quiet_NaN()));
 }
 
+TEST_CASE("DECIDE whole-number answers round first and the range includes both ends", "[decidb][numeric_policy]") {
+	const double lo = -DECIDE_MAX_EXACT_INTEGER;
+	const double hi = DECIDE_MAX_EXACT_INTEGER;
+	REQUIRE(DecideRoundedAnswerWithin(0.4, lo, hi));
+	REQUIRE(DecideRoundedAnswerWithin(hi, lo, hi));
+	REQUIRE(DecideRoundedAnswerWithin(lo, lo, hi));
+	REQUIRE_FALSE(DecideRoundedAnswerWithin(hi * 2.0, lo, hi));
+	REQUIRE_FALSE(DecideRoundedAnswerWithin(lo * 2.0, lo, hi));
+	REQUIRE_FALSE(DecideRoundedAnswerWithin(std::numeric_limits<double>::infinity(), lo, hi));
+	REQUIRE_FALSE(DecideRoundedAnswerWithin(std::numeric_limits<double>::quiet_NaN(), lo, hi));
+	// A value is rounded before it is compared: 2.5 rounds to 3 (half away from zero), which a range ending at 2
+	// refuses.
+	REQUIRE_FALSE(DecideRoundedAnswerWithin(2.5, 0.0, 2.0));
+	REQUIRE(DecideRoundedAnswerWithin(2.4, 0.0, 2.0));
+	// The message is the two halves around the value text.
+	REQUIRE(DecideWholeNumberRangeMessageBefore("x") + "100" + DecideWholeNumberRangeMessageAfter("x") ==
+	        DecideWholeNumberRangeMessage("x", "100"));
+	REQUIRE(DecideWholeNumberRangeMessage("n", "-7") ==
+	        "DECIDE variable 'n' solves to -7, which is beyond the range DeciDB can return as a whole number. Tighten "
+	        "the bound on 'n', or declare it 'n(REAL)' to read the value approximately.");
+}
+
 TEST_CASE("DECIDE exact finite double needs a finite double that converts back", "[decidb][numeric_policy]") {
 	auto to_int64 = [](double converted) {
 		return static_cast<int64_t>(std::llround(converted));
