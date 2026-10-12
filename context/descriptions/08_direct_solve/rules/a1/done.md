@@ -123,7 +123,7 @@ paths finish in under 0.1 s.
 1,000,000 rows direct is 2.3x faster than the solver (0.26 s against 0.59 s). The speedup is smaller than S1's because the
 solver is already cheap on a bound-only problem. Peak memory footprint (measured 2026-10-09) is 1,049 MiB at 1,000,000
 rows and 5,212 MiB at 5,000,000 with the payload read, against 32 and 131 MiB for an unused payload; the solver path holds
-1,655 MiB at 1,000,000 rows. Whether to read the source twice instead is open (`../_harness/todo.md`, H-14); the numbers
+1,655 MiB at 1,000,000 rows. Reading the source twice is planned (`../_harness/todo.md`, H-14); the numbers
 are in `../../architecture/result_boundary.md` ("Memory of holding rows").
 
 **Reproduce** (after `make release`; the sweeps above took under a minute in total, building the databases included):

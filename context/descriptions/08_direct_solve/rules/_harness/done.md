@@ -43,8 +43,9 @@ check). Design: `../../architecture/`.
   What stays outside the header on purpose: bare `std::isfinite` and `std::isinf` that only reject NaN or infinity in
   input, a report or a diagnostic (they state no exactness policy); HiGHS's own infinite bound and large-matrix limits in
   `deterministic_naive.cpp`; Gurobi's 1e100; `INTEGER_SOLVER_CEILING` and the ray epsilon in `diagnostic_constants.hpp`
-  (diagnostic-only thresholds). No hand-written range proof of DuckDB's overflow is left; the copies of DuckDB's may-throw
-  and absorption logic that remain are listed in `todo.md` (N-02). Test: `test/common/test_decidb_numeric_policy.cpp`
+  (diagnostic-only thresholds). No hand-written range proof of DuckDB's overflow is left; the copies of DuckDB's absorption and
+  numeric logic that remain are tasks in `todo.md`. `DirectCastMayThrow` and `DirectMayThrow` copy DuckDB's `CanThrow`
+  on purpose: DuckDB's counts `TRY_CAST` as throwing, and fixing that would change DuckDB itself. Test: `test/common/test_decidb_numeric_policy.cpp`
   (`[numeric_policy]`, 4 cases).
 - **Shared admission predicates.** `DirectIsNumericDecisionFree`, `DirectSourceNumericColumn`,
   `DirectIsSourceOnlyNumeric`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,

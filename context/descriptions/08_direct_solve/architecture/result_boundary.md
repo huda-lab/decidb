@@ -73,11 +73,11 @@ Where two values are given they are two runs. The 512-byte payload is 488 MiB pe
 5,000,000 rows for A1. Reading the source twice would cost a few hundred MiB. The solver path holds more than direct solve
 on the same query (A1 at 1,000,000 rows: 1,655 MiB against 1,049; S1: 1,012 MiB against 652).
 
-**Option not built.** Read the source twice when the parent reads a column the rule does not need and the source can be
+**Planned for stored tables.** Read the source twice when the parent reads a column the rule does not need and the source can be
 read twice safely, and keep holding otherwise. The hand-written join above used a unique `id`; the plan would carry its own
 row key. A stored table has `rowid`; a join, a subquery with `random()` or an aggregate has none, and reading it twice
 could change the rows or double the cost, so those keep holding. The check must still run over every input row in the
-first read, which the narrow DECIDE query already does. The decision is in `../rules/_harness/todo.md` (H-14).
+first read, which the narrow DECIDE query already does. Building it is H-14 in `../rules/_harness/todo.md`.
 
 ## Result types
 
