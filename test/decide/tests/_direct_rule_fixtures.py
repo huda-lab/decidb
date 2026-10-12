@@ -121,9 +121,10 @@ S1 = RuleFixture(
         ("x(BOOL)", "SUM(x)<=1 AND x<=cap+1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=1 PER id AND SUM(x)>=1 PER cap", "MAXIMIZE SUM(p*x)", "constraint_scope"),
         ("x(BOOL)", "SUM(x)<>1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x+1)<=3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        # Out of scope by decision: a negated count body, and a bound that can raise (use TRY_CAST).
-        ("x(BOOL)", "SUM(1-x)<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        # A count body with an offset or a negation is admitted (`SUM(x+1)`, `SUM(1-x)`); one with a column in it, or a
+        # weight on x other than 1 or -1, is not. A bound that can raise stays out by decision (use TRY_CAST).
+        ("x(BOOL)", "SUM(x+cap)<=3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(BOOL)", "SUM(2*x+1)<=3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=CAST(cap AS TINYINT)", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(id*x)<=2", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=cap+1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
@@ -151,15 +152,20 @@ S1 = RuleFixture(
         ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE CAST(NULL AS DOUBLE)*SUM(p*x)", "objective_shape"),
         ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT 2)*SUM(p*x)", "objective_shape"),
         ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT -2)*SUM(p*x)", "objective_shape"),
-        # A bound that counts rows, but not as a plain COUNT(*) over a constant nonzero divisor.
+        # A bound that reads the group through aggregates, but not the ones admitted over a constant nonzero divisor.
         (
             "x(BOOL)",
             "SUM(x)<=(COUNT(*) WHEN (id>0))/2",
             "MAXIMIZE SUM(p*x)",
-            "an aggregate other than a plain COUNT(*)",
+            "a WHEN on the right-hand aggregate",
         ),
-        ("x(BOOL)", "SUM(x)<=COUNT(p)/2", "MAXIMIZE SUM(p*x)", "an aggregate other than a plain COUNT(*)"),
-        ("x(BOOL)", "SUM(x)<=AVG(p)", "MAXIMIZE SUM(p*x)", "an aggregate other than a plain COUNT(*)"),
+        (
+            "x(BOOL)",
+            "SUM(x)<=MIN(p+1)/2",
+            "MAXIMIZE SUM(p*x)",
+            "an aggregate over something other than a numeric column",
+        ),
+        ("x(BOOL)", "SUM(x)<=AVG(p)", "MAXIMIZE SUM(p*x)", "SUM or AVG of a column that is not TINYINT"),
         ("x(BOOL)", "SUM(x)<=COUNT(*)/0", "MAXIMIZE SUM(p*x)", "a divisor that is not a nonzero constant"),
         ("x(BOOL)", "SUM(x)<=COUNT(*)/COUNT(*)", "MAXIMIZE SUM(p*x)", "a divisor that is not a nonzero constant"),
         ("x(BOOL)", "SUM(x)<=abs(COUNT(*)-5)", "MAXIMIZE SUM(p*x)", "the function abs"),

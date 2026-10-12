@@ -3,35 +3,6 @@
 What S1 does today is in `done.md`; the class is in `definition.md`. How to work and the checks are in
 `../_harness/todo.md` § How to work any task. Every widening also meets the exit gate at the end of this file.
 
-## S1-08 — Limits read from a data column through an aggregate
-
-- **Problem.** A count bound's right side admits only plain `COUNT(*)`. The solver also accepts `MIN`, `MAX`, `SUM`, `AVG`
-  and `COUNT(col)` of a data column, one value per group (`SUM(x) <= MIN(capacity) PER warehouse`). Those queries take
-  the solver path.
-- **Decision made.** Admit `MIN`, `MAX` and `COUNT(col)` of any numeric column, and `SUM` and `AVG` of integer columns. Keep
-  on the solver: `SUM`/`AVG` of non-integer columns (the solver adds row by row in `DOUBLE`, a window may add in another
-  order, and a last-digit difference can flip a floored limit), a `WHEN` on the right-hand aggregate alone, and
-  relation-qualified reducers (`SUM(D: cost)`).
-- **Solver behavior to match** (`EvaluateRhsReducerPerGroup`, `physical_decide.cpp`): values are read as `DOUBLE`;
-  `NaN` raises and infinity is a value; an empty group raises; the reducer follows the clause's `WHEN` and `PER` but not a
-  left-side aggregate-local `WHEN`; `AVG` is the `DOUBLE` sum over the count. Confirm on the CLI how a `NULL` in the
-  column behaves and that integer sums past 2^53 are already refused, before coding.
-- **Change.** The count stage (`CountRows` in `s1_rule.cpp`) adds one window aggregate per admitted reducer over the same
-  partitions; `IsPlainCountStar`, `RowCountBoundProblem` and `ReplaceCountStar` widen to the admitted reducers. Reuse
-  the existing source-bound `NULL`/`NaN` check and `DirectGuardEmptyAggregate` for the errors.
-- **Done when.** Each admitted reducer matches the solver for `<=`, `>=`, `=`, with and without `PER` and `WHEN`, including
-  the `NULL`, `NaN`, infinity and empty-group errors; each form kept on the solver has a declined-reason test.
-
-## S1-15 — Offset or negated count body
-
-- **Problem.** `SUM(x + c)` and `SUM(1 - x)` are declined (`done.md` § Explicitly out of scope). A constant term makes the
-  bound depend on the group size (`count + n*c <= B`), and `1 - x` flips its direction. Users can write `SUM(x) >= n - k`
-  instead.
-- **Change.** Admit a body `a*x + c` with `a = ±1` and a constant `c`: shift the per-group limit by `n*c`, where `n` is
-  the group's covered row count, and flip the side when `a = -1`.
-- **Done when.** Both forms match the solver for every comparison, with and without `PER` and `WHEN`, including a `c`
-  that makes the limit unreachable.
-
 ## S1-12 — S1 reads a per-row bound on `x` in its own way, and so does A1
 
 - **Needs.** A third rule that reads per-row bounds (A3, A5 or A6). S1 is heavily tested, so changing its pins has to earn

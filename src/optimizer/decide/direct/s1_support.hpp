@@ -18,7 +18,7 @@ namespace direct_s1 {
 //! True when any condition is true (false for an empty list), as nested CASE expressions.
 unique_ptr<Expression> DirectAnyCondition(const vector<unique_ptr<Expression>> &conditions);
 
-//! MIN or MAX (by function name) of the value over the whole partition.
+//! A one-argument aggregate (MIN, MAX or SUM, by function name) of the value over the whole partition.
 unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, const char *name,
                                                        unique_ptr<Expression> value);
 

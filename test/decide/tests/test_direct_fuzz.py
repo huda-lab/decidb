@@ -103,6 +103,12 @@ def _fuzz_query(rng, with_objective=True):
         clauses.append(rng.choice(_S1_IMPOSSIBLE_BOUNDS))
     if rng.random() < 0.12:
         clauses.append(rng.choice(_S1_STRICT_FRACTION_BOUNDS))
+    if rng.random() < 0.3:
+        # A constant term or a negation in the count body. The comparison and the bound are left as drawn.
+        body = rng.choice(["x + 1", "x - 1", "x + 0.5", "1 - x", "-x", "0.5 - x", "x + 2 - 1"])
+        clauses = [
+            clause.replace("SUM(x)", f"SUM({body})", 1) if clause.startswith("SUM(x)") else clause for clause in clauses
+        ]
     if not with_objective:
         sql = (
             f"WITH r AS (SELECT * FROM {source} DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)}) "

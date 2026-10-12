@@ -7,9 +7,6 @@ Read first: `.claude/CLAUDE.md`, `08_direct_solve/README.md`, `08_direct_solve/a
 Checks: `08_direct_solve/rules/_harness/todo.md` § How to work any task.
 
 ## 2. Larger
-- [ ] S1-15 S1 offset or negated count body — 08_direct_solve/rules/s1/todo.md § S1-15
-- [ ] S1-08 S1 limits from MIN, MAX, SUM, AVG, COUNT(col) — 08_direct_solve/rules/s1/todo.md § S1-08
-- [ ] N-04 A1 and solver bound absorption are one function — 08_direct_solve/rules/_harness/todo.md § N-04
 - [ ] H-14 read a stored table twice instead of holding rows — 08_direct_solve/rules/_harness/todo.md § H-14
 
 ## 3. Solver
