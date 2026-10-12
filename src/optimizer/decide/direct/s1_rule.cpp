@@ -318,13 +318,14 @@ bool SatisfiesComparison(ExpressionType comparison, double value, double bound) 
 //! Reads `x <comparison> bound` as the values of {0, 1} it allows.
 //!
 //! The solver reads a bound with a WHEN as a per-row constraint and applies plain arithmetic to it. A bound without a
-//! WHEN is a bound on the variable itself, and the solver reads some spellings of those differently from arithmetic on
-//! a Boolean: a negative lower bound makes `x` signed, so the result can hold -3, and a bound that cannot hold raises a
-//! message naming the clause rather than DECIDE's infeasible error. Those spellings stay on the solver: false for all
-//! of them. A strict bound is shifted to a whole number first, with the solver's own function, so `x > 0.5` is the
-//! lower bound 1 and `x < 1.5` the upper bound 1 here as there; for a variable that is 0 or 1 that is the same as the
-//! comparison itself. Whether the box contradicts the built-in domain of a Boolean is the solver's own test
-//! (DecideBoxContradictsDomain); the negative lower bound is the one condition that is S1's.
+//! WHEN is a bound on the variable itself. The solver seeds the box of a Boolean at [0, 1] and a written bound only
+//! narrows it, so a bound that always holds (`x >= -3`, `x > -3`) changes nothing and reads here as both values
+//! allowed, which is what comparing 0 and 1 against it gives. A bound that cannot hold makes the solver raise DECIDE's
+//! usual infeasible error before it reads a row; that early error is not S1's to reproduce, so false for those. A
+//! strict bound is shifted to a whole number first, with the solver's own function, so `x > 0.5` is the lower bound 1
+//! and `x < 1.5` the upper bound 1 here as there; for a variable that is 0 or 1 that is the same as the comparison
+//! itself. Whether the box contradicts the built-in domain of a Boolean is the solver's own test
+//! (DecideBoxContradictsDomain).
 bool ConstantPinDomain(const DirectConstraintFact &fact, double bound, PinDomain &domain) {
 	auto comparison = fact.comparison;
 	if (!fact.scope.when && comparison != ExpressionType::COMPARE_NOTEQUAL) {
@@ -343,7 +344,7 @@ bool ConstantPinDomain(const DirectConstraintFact &fact, double bound, PinDomain
 		if (has_upper) {
 			DecideAbsorbBound(box, '<', upper);
 		}
-		if (DecideBoxContradictsDomain(box, true) || (has_lower && lower < 0.0)) {
+		if (DecideBoxContradictsDomain(box, true)) {
 			return false;
 		}
 	}

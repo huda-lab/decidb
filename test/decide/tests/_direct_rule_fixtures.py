@@ -10,10 +10,11 @@ suite checks all of it. Adding a rule means adding one `RuleFixture` to `RULE_FI
 from dataclasses import dataclass
 
 # Per-row bounds on x with no WHEN that S1 leaves on the solver, as (comparison, constant). The solver reads them as
-# Boolean arithmetic: one that always holds changes nothing, and one that cannot hold makes the query infeasible, before
-# it reads a row. S1 does not admit them yet (`08_direct_solve/rules/s1/todo.md` § S1-14). A strict bound against a
-# fraction is admitted when it shifts to a whole bound inside {0, 1} (`x > 0.5`, `x < 1.5`, `x < 0.5`, `x > -0.5`): the
-# solver shifts it with the same function. The same bounds with a WHEN are plain arithmetic and are admitted.
+# Boolean arithmetic, and each one here cannot hold, so the query is infeasible before the solver reads a row. S1 does
+# not reproduce that early error. A bound that always holds (`x >= -3`, `x > -3`) changes nothing and S1 admits it. A
+# strict bound against a fraction is admitted when it shifts to a whole bound inside {0, 1} (`x > 0.5`, `x < 1.5`,
+# `x < 0.5`, `x > -0.5`): the solver shifts it with the same function. The same bounds with a WHEN are plain arithmetic
+# and are admitted.
 S1_SOLVER_ONLY_ROW_BOUNDS = {
     ("<=", "-3"),
     ("<=", "-1"),
@@ -22,12 +23,8 @@ S1_SOLVER_ONLY_ROW_BOUNDS = {
     ("<", "-1"),
     ("<", "-0.5"),
     ("<", "0"),
-    (">=", "-3"),
-    (">=", "-1"),
-    (">=", "-0.5"),
     (">=", "1.5"),
     (">=", "2"),
-    (">", "-3"),
     (">", "1"),
     (">", "1.5"),
     (">", "2"),
@@ -117,7 +114,6 @@ S1 = RuleFixture(
     near_miss_column="id",
     near_misses=(
         ("x(BOOL), y(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
-        ("x(BOOL)", "SUM(x)<=1 AND x>=-3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=1 AND x<=cap+1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
         ("x(BOOL)", "SUM(x)<=1 PER id AND SUM(x)>=1 PER cap", "MAXIMIZE SUM(p*x)", "constraint_scope"),
         ("x(BOOL)", "SUM(x)<>1", "MAXIMIZE SUM(p*x)", "constraint_shape"),

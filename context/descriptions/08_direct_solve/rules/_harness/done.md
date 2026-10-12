@@ -1,8 +1,8 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-12 on top of `658b51d6ac` with the second read, with S1 and A1 registered: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,339 passed (no
-failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,338 passed and one failure,
+Verified on 2026-10-12 on top of `a6db94b5a1` with the second read, with S1 and A1 registered: `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,344 passed (no
+failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,343 passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,319 assertions in
 46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../../architecture/`.
@@ -102,8 +102,7 @@ check). Design: `../../architecture/`.
   `DecideBoxContradictsDomain(box, is_bool)` in `decide_bound_absorption.{hpp,cpp}`. For a non-negative `INT` or `REAL`
   the error quotes the clause; for a `BOOL` it is DECIDE's usual infeasible error, and under `DIAGNOSE` the check skips a
   `BOOL` so the elastic engine names the clause. The solver's pre-check (`DecideGlobalSinkState`), A1 (`ProveBounds`) and
-  S1 (`ConstantPinDomain`) call it. Direct solve only declines these queries and lets the solver raise the error. S1 also
-  declines a negative lower bound on `x` with no `WHEN`, which the solver reads as a bound that always holds.
+  S1 (`ConstantPinDomain`) call it. Direct solve only declines these queries and lets the solver raise the error.
 - **One box, one way to combine bounds.** A decision's unconditional bounds fold into a `DecideBoundBox`
   (`decide_numeric_policy.hpp`) through `DecideAbsorbBound`, which keeps the tightest value on each side. The solver's
   absorption pass, the elastic engine's retained box, A1 (`ProveBounds`) and S1 (`ConstantPinDomain`) all call it, so

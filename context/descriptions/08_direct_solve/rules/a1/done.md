@@ -1,8 +1,8 @@
 # A1 (independent bounded decisions) — what works today
 
-Verified on 2026-10-12 on top of `658b51d6ac`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`
-and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,339 passed (no failures, no expected failures);
-`DECIDB_FORCE_SOLVER=highs make decide-test` 3,338 passed and one failure that needs Gurobi
+Verified on 2026-10-12 on top of `a6db94b5a1`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`
+and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,344 passed (no failures, no expected failures);
+`DECIDB_FORCE_SOLVER=highs make decide-test` 3,343 passed and one failure that needs Gurobi
 (`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 1,319 assertions in 46 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_rule.cpp`. Class definition: [definition.md](definition.md).

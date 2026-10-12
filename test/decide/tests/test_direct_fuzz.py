@@ -45,6 +45,10 @@ _S1_IMPOSSIBLE_BOUNDS = ["x <= -1", "x >= 2", "x < 0", "x > 1"]
 # the lower bound 1, 1.5 and 0.5 give the upper bounds 1 and 0.
 _S1_STRICT_FRACTION_BOUNDS = ["x > 0.5", "x < 1.5", "x < 0.5", "x > -0.5"]
 
+# Lower bounds below 0 with no WHEN. A Boolean's box starts at [0, 1] and a written bound only narrows it, so each
+# always holds and S1 reads it as no constraint.
+_S1_ALWAYS_HOLD_BOUNDS = ["x >= -3", "x > -3", "x >= -1", "x >= -0.5"]
+
 
 def _fuzz_rowbound(rng):
     """One per-row bound on x: a 0/1 pin, a restated domain, or any constant bound on one row."""
@@ -109,6 +113,8 @@ def _fuzz_query(rng, with_objective=True):
         clauses = [
             clause.replace("SUM(x)", f"SUM({body})", 1) if clause.startswith("SUM(x)") else clause for clause in clauses
         ]
+    if rng.random() < 0.12:
+        clauses.append(rng.choice(_S1_ALWAYS_HOLD_BOUNDS))
     if not with_objective:
         sql = (
             f"WITH r AS (SELECT * FROM {source} DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)}) "

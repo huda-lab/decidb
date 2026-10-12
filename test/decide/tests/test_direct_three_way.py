@@ -692,6 +692,24 @@ def test_s1_strict_bound_against_a_fraction_agrees_under_every_mode(
     assert "S1_CARDINALITY_INTERVAL" in plan, plan
 
 
+# A bound on x with no WHEN that always holds changes nothing: the solver seeds a Boolean's box at [0, 1] and a written
+# bound only narrows it, so `x >= -3` leaves both values allowed. S1 reads it that way, so the query is proved by S1
+# (`require` would fail on a miss) and gives the oracle's answer.
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("op,constant", [(">=", "-3"), (">", "-3"), (">=", "-1"), (">=", "-0.5")])
+@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
+def test_s1_proves_a_bound_that_always_holds_in_require_mode(decidb_cli, oracle_solver, op, constant, sense):
+    limit = ("<=", 3) if sense == "MAXIMIZE" else (">=", 2)
+    case = {"bounds": [limit], "rowbounds": [(op, constant, None)], "sense": sense}
+    _agree(decidb_cli, oracle_solver, case)
+    sql = _wrapped_sql(case, "plain")
+    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
+    assert "S1_CARDINALITY_INTERVAL" in plan, plan
+    assert _outcome(decidb_cli, sql, "require") == _outcome(decidb_cli, sql, "off")
+
+
 # The same problem inside a parent query. The first base case meets every context; the others meet one each,
 # since a context does not interact with the kind of bound.
 CONTEXT_CASES = [("global_upper_max", wrap) for wrap in (
