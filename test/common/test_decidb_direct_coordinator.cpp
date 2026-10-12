@@ -307,3 +307,48 @@ TEST_CASE("With both real rules registered each query shape reaches the rule tha
 	REQUIRE(miss->GetError().find("S1_CARDINALITY_INTERVAL: ") != string::npos);
 	REQUIRE(miss->GetError().find("A1_INDEPENDENT_BOUNDS: ") != string::npos);
 }
+
+TEST_CASE("The second read happens only for a stored table and a column the rule does not use", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE sr AS SELECT i AS id, ((i * 37) % 100)::DOUBLE AS score, "
+	                          "'payload-' || i::VARCHAR AS payload FROM range(100) t(i)"));
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE sr_one AS SELECT 1 AS k"));
+	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='require'"));
+	const string decide = " DECIDE x(BOOL) SUCH THAT SUM(x) <= 10 MAXIMIZE SUM(score * x)";
+	auto scans = [&](const string &select, const string &relation) {
+		auto plan = Explain(con, select + " FROM (FROM " + relation + decide + ") q");
+		REQUIRE(plan.find("Direct solve rule") != string::npos);
+		idx_t count = 0;
+		for (auto position = plan.find("Table: sr"); position != string::npos;
+		     position = plan.find("Table: sr", position + 1)) {
+			// "sr_one" is a different table.
+			if (plan.compare(position, 13, "Table: sr_one") != 0) {
+				count++;
+			}
+		}
+		return count;
+	};
+	// Nothing outside the rule is read, or only what the rule already needs: one scan.
+	REQUIRE(scans("SELECT COUNT(*), SUM(x)", "sr") == 1);
+	REQUIRE(scans("SELECT score, x", "sr") == 1);
+	// A stored column the rule does not use is read from a second scan.
+	REQUIRE(scans("SELECT payload, x", "sr") == 2);
+	REQUIRE(scans("SELECT id, payload, x", "(SELECT * FROM sr WHERE id % 2 = 0) s") == 2);
+	// A join, a volatile column, an aggregate and a computed column have no stable row key to read again by.
+	REQUIRE(scans("SELECT payload, x", "(SELECT s.* FROM sr s JOIN sr_one o ON o.k = 1) s") == 1);
+	REQUIRE(scans("SELECT payload, r, x", "(SELECT *, random() AS r FROM sr) s") == 1);
+	REQUIRE(scans("SELECT payload, x",
+	              "(SELECT id, MAX(score) AS score, MAX(payload) AS payload FROM sr GROUP BY id) s") == 1);
+	REQUIRE(scans("SELECT payload, x", "(SELECT id, score, payload || '!' AS payload FROM sr) s") == 1);
+
+	// The second read returns the rows the solver returns.
+	const string query = "SELECT id, payload, x FROM (FROM sr" + decide + ") q ORDER BY id";
+	auto second_read = con.Query(query);
+	REQUIRE_NO_FAIL(*second_read);
+	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='off'"));
+	auto solver = con.Query(query);
+	REQUIRE_NO_FAIL(*solver);
+	REQUIRE(second_read->RowCount() == 100);
+	REQUIRE(second_read->ToString() == solver->ToString());
+}

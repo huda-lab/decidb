@@ -12,6 +12,7 @@
 #include "duckdb/optimizer/decide/direct/direct_builder.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_boundary.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
+#include "duckdb/optimizer/decide/direct/direct_second_read.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -193,9 +194,28 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 		throw InternalException("Direct solve derived bindings differ from the DECIDE output");
 	}
 	auto decide_index = decide.decide_index;
+	// A stored source carries its row id as one more source column, so a column the rule never uses can be read again
+	// later, past the plan that holds rows. The rule passes it along like any other source column.
+	auto source_columns = prunable_sources.size();
+	DirectSecondRead second_read;
+	bool carries_rowid = DirectExposeStoredRowId(source, second_read);
+	if (carries_rowid) {
+		source.ResolveOperatorTypes();
+	}
 	auto proposal = selected->rule->Rewrite(std::move(decide.children[0]), optimizer, *selected->proof);
+	if (carries_rowid) {
+		if (proposal.output_slots.size() != output_bindings.size() + 1) {
+			throw InternalException("Direct solve rule did not pass the source row id through");
+		}
+		second_read.rowid_slot = proposal.output_slots[source_columns];
+		proposal.output_slots.erase(proposal.output_slots.begin() + NumericCast<int64_t>(source_columns));
+		if (proposal.streams_rows) {
+			// Nothing is held, so there is nothing to gain from a second read.
+			second_read = DirectSecondRead();
+		}
+	}
 	return MapDirectResult(std::move(proposal), std::move(output_bindings), std::move(output_types),
-	                       std::move(prunable_sources), decide_index, std::move(record));
+	                       std::move(prunable_sources), decide_index, std::move(record), second_read);
 }
 
 } // namespace duckdb

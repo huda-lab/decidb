@@ -31,8 +31,8 @@ Runtime checks (NULL or non-finite scores, bad bounds) must run over every input
 consumed, even if `x` is unused or the capacity is zero. A standalone filter is not enough: it can
 skip a late bad row under `LIMIT 1`. S1's rank window reads every row before it emits one. A rule whose plan could
 stream uses `DirectValidationBarrier`: a projected truth-or-error column plus a whole-input window. That holds the rows
-in memory, and the rows include any wide column the parent reads. The section below records what that costs. Whether
-to read the input twice instead is open (`../rules/_harness/todo.md`, H-14).
+in memory. For a stored table, a wide column the parent reads is kept out of those rows by a second read (below); for
+any other source the held rows include it. The section below records what holding costs.
 
 ### Memory of holding rows
 
@@ -73,17 +73,27 @@ Where two values are given they are two runs. The 512-byte payload is 488 MiB pe
 5,000,000 rows for A1. Reading the source twice would cost a few hundred MiB. The solver path holds more than direct solve
 on the same query (A1 at 1,000,000 rows: 1,655 MiB against 1,049; S1: 1,012 MiB against 652).
 
-**Planned for stored tables.** Read the source twice when the parent reads a column the rule does not need and the source can be
-read twice safely, and keep holding otherwise. The hand-written join above used a unique `id`; the plan would carry its own
-row key. A stored table has `rowid`; a join, a subquery with `random()` or an aggregate has none, and reading it twice
-could change the rows or double the cost, so those keep holding. The check must still run over every input row in the
-first read, which the narrow DECIDE query already does. Building it is H-14 in `../rules/_harness/todo.md`.
+### Second read of a stored table
+
+When the source is one DuckDB base table under non-volatile projections and filters, the plan carries the table's
+`rowid` as a hidden column. After unused-column removal, when it is known what the parent reads, each parent-read output
+that is a plain stored column the rule's plan only forwards comes from a second scan of the table, joined on `rowid`
+under the boundary. That column never enters the barrier or the rank, and the first read still checks every row, so a
+bad last row under `LIMIT 1` still raises. Any such column moves, narrow or wide; a narrow one pays the join for little
+memory. A join, an aggregate, a volatile or computed column, or a source that already reads `rowid` keeps the single
+read: those have no stable row key, or reading them twice could change the rows. A plan that streams (A1's constant
+problem) also keeps one read, since it holds nothing. The "Read twice" column above comes from a hand-written join on a
+unique `id`, not this plan; re-measuring it is H-16 in `../rules/_harness/todo.md`.
+
+The step runs inside the `UNUSED_COLUMNS` pass, right after removal, not beside DuckDB's `LATE_MATERIALIZATION` (which
+uses the same `rowid` join for Top-N). The passes in between add projection maps that unused-column removal does not keep
+up to date, so pruning again after them is unsafe. With that pass disabled the row id is dropped and the plan holds rows.
 
 ## Result types
 
 A declared `BOOL` decision has a 0/1 domain but returns SQL `INTEGER`, as on the solver path.
 
-Details: `direct_result_boundary.cpp` (map checks, serialization, pruning hook) and `direct_builder.cpp` (barrier and
+Details: `direct_result_boundary.cpp` (map checks, serialization, pruning hook), `direct_second_read.cpp` (second read) and `direct_builder.cpp` (barrier and
 pruning proof). The optimizer passes that run after DECIDE were audited for parent filter, join, aggregate, nested, and
 serializer cases; the parent-context rows in `test_direct_three_way.py` and the pruning tests in
 `test_direct_user_facing.py` keep those guarded.

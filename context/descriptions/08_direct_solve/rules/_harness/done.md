@@ -1,10 +1,10 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-12 on top of `6cb51edfb1`, with S1 and A1 registered: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,286 passed (no
-failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,285 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,287 assertions in
-45 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+Verified on 2026-10-12 on top of `ac52b73be2` with the second read, with S1 and A1 registered: `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,293 passed (no
+failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,292 passed and one failure,
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,319 assertions in
+46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../../architecture/`.
 
 ## What it does
@@ -23,6 +23,16 @@ check). Design: `../../architecture/`.
   and always keeps the rule's validation slots live. `DirectValidationBarrier` builds the all-rows read for a plan that
   could stream. Because every row is checked before any is released, rows are held in memory, wide parent-read columns
   included (`../../architecture/result_boundary.md`, "Memory of holding rows").
+- **Second read of a stored table** (`direct_second_read.cpp`). When the DECIDE source is one DuckDB base table under
+  non-volatile projections and filters, the coordinator appends the table's `rowid` to the source and the boundary keeps
+  it as a hidden trailing dependency. Right after unused-column removal, when it is known which outputs a parent reads,
+  a late step moves each parent-read output that is a plain stored column the rule's plan only forwards to a second scan
+  of the table, joined (inner, on `rowid`) under the boundary, and prunes again so the column leaves the held rows. The
+  first read still checks every row. Any such column moves, narrow or wide. Joins, aggregates, volatile or computed
+  columns, a source that already reads `rowid`, and a rule plan that streams (`DirectRelationalProposal::streams_rows`,
+  set by A1's constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
+  `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep
+  up to date; with that pass disabled the row id is computed and dropped and the plan holds rows as before.
 - **Shared builders.** `direct_builder.hpp` lists only helpers with two or more users: `DirectGuardEmptyAggregate`,
   `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBarrier`, `DirectScaledTerm` (sign and constant
   factor of a coefficient), `DirectIsNull`, `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`,

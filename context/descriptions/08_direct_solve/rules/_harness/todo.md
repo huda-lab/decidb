@@ -19,32 +19,32 @@ today is in `done.md`.
   function or move it to another file unless the task says so; a miss re-runs Gurobi, which needs a licence.
 - The Bash tool is zsh. In `grep`, put `--include` flags before `-e PATTERN`; after a `--` they are read as file names.
 
-## H-14 — Read a stored table twice instead of holding wide rows
-
-- **Problem.** Direct solve gives the solver's outcome, which includes raising on a bad value in any input row even when the
-  parent stops early (`LIMIT 1`: both paths raise on a `NaN` in row 4,999 of 5,000). So it checks every row before it
-  releases any (`DirectValidationBarrier`: an ordinary projection plus a whole-input window) and holds the rows meanwhile.
-  When the parent reads a wide column, that column is held too. A1 with a 512-byte payload read back peaks at 5,212 MiB at
-  5,000,000 rows against 131 MiB for an unused payload (`../../architecture/result_boundary.md`).
-- **Decision made.** Read twice, for stored tables only. Holding everything and relaxing the error promise were rejected.
-- **Change.** When the source is a stored table and the parent reads columns the rule does not need, the plan reads the
-  table twice: the first read carries only the columns the rule and the check need, plus `rowid`; the second reads the
-  other columns and is joined to the answers on `rowid`. The plan stays ordinary DuckDB operators (scans, a join,
-  projections); no DuckDB optimizer or execution code changes. The check still covers every input row in the first read.
-  Joins, subqueries, aggregates and volatile sources have no stable row key and keep holding.
-- **Done when.** For A1 and S1: results and errors match the solver with and without the second read, including a
-  `LIMIT 1` query with a bad value in the last row; a source over a join still holds; the plan reads twice only for a
-  stored table with a parent-read column the rule does not need. If this does not fit one sitting, propose a split before
-  coding.
-
 ## H-16 — Re-measure memory with the built read-twice plan
 
-- **Needs.** H-14.
 - **Problem.** The "Read twice" column in `../../architecture/result_boundary.md` comes from a hand-written join, not the
-  plan H-14 builds.
+  built second read (`direct_second_read.cpp`).
 - **Change.** On a quiet machine, re-run that table with the built plan and replace the column, its description and the
-  date.
-- **Done when.** The "Read twice" numbers come from the built plan.
+  date. Also time a narrow parent-read column (`SELECT id, x` on `src`) under `require` with the second read and with
+  `SET disabled_optimizers = 'unused_columns'` (single read, rows held), at 1,000,000 and 5,000,000 rows. H-17 uses it.
+- **Done when.** The "Read twice" numbers come from the built plan, and the narrow-column timing is recorded next to them.
+
+## H-17 — Which parent-read columns take the second read
+
+- **Decision needed.**
+- **Needs.** H-16's narrow-column timing.
+- **Problem.** Any stored column a parent reads and the rule does not use comes from the second read, whatever its width
+  (`direct_second_read.cpp`). For a wide payload that saves most of the held memory. For a 4-byte `id` it saves about 4
+  MB per 1,000,000 rows and adds a second scan and a join over every row, which may make the query slower.
+- **Options.**
+  1. Keep any column. Simplest; a narrow column pays the join.
+  2. Only variable-width types (`VARCHAR`, `BLOB`, lists, structs, maps). No tuning number; fixed-width columns stay
+     held.
+  3. A byte threshold on the estimated width. Needs a number chosen from measurements.
+- **Recommendation.** Option 2 if H-16 shows the narrow case measurably slower; option 1 if the difference is
+  negligible.
+- **Change.** Apply the chosen filter in the late step's choice of moved outputs; the rest of the plan is unchanged.
+- **Done when.** A test shows a column of the excluded kind stays in the single read (one scan in `EXPLAIN`) and a
+  wide column still moves; the matrix is at baseline.
 
 ## H-02 — Adapter for the new language
 

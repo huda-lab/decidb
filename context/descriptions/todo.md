@@ -6,16 +6,14 @@ this file when it is empty.
 Read first: `.claude/CLAUDE.md`, `08_direct_solve/README.md`, `08_direct_solve/architecture/rules.md`.
 Checks: `08_direct_solve/rules/_harness/todo.md` § How to work any task.
 
-## 2. Larger
-- [ ] H-14 read a stored table twice instead of holding rows — 08_direct_solve/rules/_harness/todo.md § H-14
-
 ## 3. Solver
 - [ ] `BOOL` decision returns values outside 0 and 1 — 06_issues/bugs/todo.md § A `BOOL` decision takes a value outside 0 and 1
 
-## 4. Measurements, quiet machine (needs: 2)
-- [ ] H-16 re-measure memory with the built read-twice plan — 08_direct_solve/rules/_harness/todo.md § H-16 (needs: H-14)
+## 4. Measurements, quiet machine
+- [ ] H-16 re-measure memory with the built read-twice plan — 08_direct_solve/rules/_harness/todo.md § H-16
 - [ ] A1-05 refresh A1 performance table — 08_direct_solve/rules/a1/todo.md § A1-05
 - [ ] S1-13 refresh S1 performance table — 08_direct_solve/rules/s1/todo.md § S1-13
+- [ ] H-17 which parent-read columns take the second read — 08_direct_solve/rules/_harness/todo.md § H-17 (needs: H-16)
 
 ## 5. New problem classes
 - [ ] R-A3-01 A3 fixed-small multi-affine box — 08_direct_solve/rules/a3/todo.md § R-A3-01

@@ -178,6 +178,10 @@ struct DirectRelationalProposal {
 	//! before it releases one (the solver's obligation) declares the column that forces that read here, typically
 	//! the barrier from DirectValidationBarrier. Empty when the plan has nothing to keep live.
 	vector<idx_t> validation_slots;
+	//! True when the plan streams rows through without holding the input, so a column a parent reads costs no memory
+	//! to carry. The coordinator then never reads a stored column a second time for it. Leave false for a plan that
+	//! holds every row (a barrier, a rank).
+	bool streams_rows = false;
 };
 
 //! The lifecycle the coordinator drives: Match, Prove, Cost, Explain, Rewrite. A miss in Match or Prove leaves the

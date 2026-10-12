@@ -700,6 +700,7 @@ public:
 			}
 			p5.Add(ValidAnswers(answers));
 			proposal.child = p5.Finish(std::move(plan));
+			proposal.streams_rows = true;
 			return proposal;
 		}
 		auto barrier = DirectValidationBarrier(binder, std::move(plan), ValidAnswers(answers));
