@@ -18,17 +18,6 @@ What S1 does today is in `done.md`; the class is in `definition.md`. How to work
 - **Done when.** S1's pin code is a call to the shared builder, S1's suites (three-way, contract, fuzz) pass unchanged, and
   the A1 suites still pass. About 1 day.
 
-## S1-13 — Refresh S1's performance table
-
-- **Problem.** The performance table in `done.md` was measured on 2026-10-05, and `done.md` says the cost of the per-row
-  NULL message on clean data is not measured. The 15 to 100 times speedups are part of the reason `auto` is the default.
-- **Change.** After `make release`, on a quiet machine with a Gurobi licence, run the sweep under "Reproduce" in `done.md`
-  (about 4.5 minutes; it builds the 5,000,000-row and wide databases, about 3 GiB), plus one run with and without NULLs in
-  the score column to measure the message cost, and a constraints-only query (no objective) at each size. Rewrite the table and its date.
-- **Done when.** `done.md` has numbers from a run you made, with their date, and says what the NULL message costs and how a
-  constraints-only query compares with the solver. Machine
-  load changes timings, so run nothing else meanwhile.
-
 ## Exit gate for any S1 widening
 
 An independent proof, behavior tests (the standard tests in `../../architecture/rules.md`), and end-to-end measurement that

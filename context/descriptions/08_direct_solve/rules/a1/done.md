@@ -107,27 +107,27 @@ parent reads does, so reading a wide column back costs memory in proportion to t
 
 ## Performance
 
-Measured 2026-10-06 on this machine, with `benchmark/decide/profile_direct_a1.py`. Each run is a fresh `decidb` process
-that opens the stored database; peak memory is the process's own. Direct 2 to 3 runs, solver (Gurobi) 1 run. The result is
-one aggregate row, so the time is the plan, not the transfer.
+Measured 2026-10-13 at `7a480a1a71` on this machine, with `benchmark/decide/profile_direct_a1.py`. Each run is a fresh
+`decidb` process that opens the stored database; peak memory is the process's own. Direct 3 runs, solver (Gurobi) 1 run.
+The result is one aggregate row, so the time is the plan, not the transfer.
 
 | Shape, 5,000,000 rows | Direct | Direct peak | Solver | Solver peak | Speedup |
 |---|---:|---:|---:|---:|---:|
-| `REAL`, quadratic, per-row bounds | 0.31 s | 146 MiB | 2.88 s | 5.6 GiB | 9.2x |
-| the same with a `WHEN` on the objective | 0.49 s | 270 MiB | 2.62 s | 5.0 GiB | 5.3x |
-| `INT`, linear, per-row bounds | 0.39 s | 137 MiB | 2.69 s | 4.4 GiB | 6.9x |
-| `BOOL`, linear, bounds only | 0.22 s | 135 MiB | 0.97 s | 1.0 GiB | 4.4x |
-| constants only (no barrier) | 0.03 s | 34 MiB | 0.80 s | 1.4 GiB | 29x |
+| `REAL`, quadratic, per-row bounds | 0.32 s | 146 MiB | 3.22 s | 5.5 GiB | 10x |
+| the same, parent reads only `COUNT(*)` | 0.29 s | 106 MiB | 3.00 s | 5.5 GiB | 10x |
+| the same with a `WHEN` on the objective | 0.51 s | 271 MiB | 2.73 s | 4.9 GiB | 5.4x |
+| `INT`, linear, per-row bounds | 0.40 s | 137 MiB | 2.75 s | 4.3 GiB | 6.9x |
+| `BOOL`, linear, bounds only | 0.23 s | 136 MiB | 0.99 s | 1.0 GiB | 4.3x |
+| constants only (no barrier) | 0.03 s | 34 MiB | 0.82 s | 1.4 GiB | 29x |
 
-At 1,000,000 rows the same shapes are 4.5 to 8x faster and use 31 to 73 MiB against 0.2 to 1.7 GiB. At 100,000 rows both
-paths finish in under 0.1 s.
+At 1,000,000 rows the same shapes are 3.5 to 8.3x faster and use 31 to 73 MiB against 0.2 to 1.1 GiB. At 100,000 rows
+both paths finish in under 0.1 s.
 
-**Weak spots.** A parent that reads a wide column back makes the barrier hold it: with a 512-byte payload read at
-1,000,000 rows direct is 2.3x faster than the solver (0.26 s against 0.59 s). The speedup is smaller than S1's because the
-solver is already cheap on a bound-only problem. Peak memory footprint (measured 2026-10-09) is 1,049 MiB at 1,000,000
-rows and 5,212 MiB at 5,000,000 with the payload read, against 32 and 131 MiB for an unused payload; the solver path holds
-1,655 MiB at 1,000,000 rows. Reading the source twice is planned (`../_harness/todo.md`, H-14); the numbers
-are in `../../architecture/result_boundary.md` ("Memory of holding rows").
+**Wide parent-read columns.** A 512-byte payload the parent reads back comes from a second read of the stored table, so
+it never enters the barrier: at 1,000,000 rows direct takes 0.12 s and 88 MiB against the solver's 0.63 s and 1.7 GiB
+(5.2x), and an unused payload takes 0.08 s and 47 MiB. The speedup is smaller than S1's because the solver is already
+cheap on a bound-only problem. Footprint numbers for both rules are in `../../architecture/result_boundary.md`
+("Memory of holding rows").
 
 **Reproduce** (after `make release`; the sweeps above took under a minute in total, building the databases included):
 

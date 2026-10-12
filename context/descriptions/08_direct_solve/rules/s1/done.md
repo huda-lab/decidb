@@ -129,31 +129,45 @@ different `PER` or `WHEN` membership (S2); `SUM(x) <> k` (not an interval); boun
 
 ## Performance
 
-Measured 2026-10-05 at `7d6f97e880` (macOS arm64, 11 cores); the table has not been refreshed since, and the cost of the per-row NULL message on clean data is not measured (`todo.md`, S1-13). 5,000,000 stored rows; every query ran in a fresh process
+Measured 2026-10-13 at `7a480a1a71` (macOS arm64, 11 cores). 5,000,000 stored rows; every query ran in a fresh process
 that only opens the database file, so peak memory is the query's own. Times are median query-plus-collection seconds
-(direct 2 to 4 runs, Gurobi 1 or 2). In all 50 runs direct and Gurobi agreed on row count, selected count and objective.
-HiGHS was not re-run; earlier it took about 43 s on the global shape.
+(direct 1 or 2 runs, Gurobi 1 or 2). In all 36 runs direct and Gurobi agreed on selected count and objective. HiGHS was
+not re-run; earlier it took about 43 s on the global shape.
 
 | Shape | Direct | Gurobi | Speedup | Direct peak | Gurobi peak |
 |---|---:|---:|---:|---:|---:|
-| Global top-K, narrow, full output | 0.20 s | 2.85 s | 14x | 1.0 GiB | 1.7 to 2.3 GiB |
-| Global top-K, narrow, aggregate output | 0.17 s | 2.72 s | 16x | 0.9 GiB | 2.2 GiB |
-| Global top-K, unused 512 B payload (pruned) | 0.16 s | 3.17 s | 20x | 0.8 GiB | 3.6 GiB |
-| 100 `PER` groups, fixed pins | 0.32 s | 33.7 s | 104x | 0.5 GiB | 3.7 GiB |
-| 100 groups, aggregate-local `WHEN` | 0.30 s | 28.3 s | 95x | 0.5 GiB | 3.4 GiB |
-| 100 groups, local `WHEN`, source-valued bound | 0.55 s | 27.8 s | 50x | 0.7 GiB | 3.4 GiB |
-| 100 groups, source-valued bounds | 0.51 s | 30.8 s | 61x | 0.7 GiB | 4.0 GiB |
-| 100 groups, paired source-valued bounds | 0.65 s | 31.3 s | 48x | 0.8 GiB | 3.8 GiB |
-| 100 groups, `COALESCE` source-valued bound | 0.58 s | 35.4 s | 62x | 0.7 GiB | 2.5 GiB |
+| Global top-K, narrow, full output | 0.28 s | 2.89 s | 10x | 1.1 GiB | 2.3 GiB |
+| Global top-K, narrow, every column reduced in the query | 0.28 s | 2.84 s | 10x | 1.1 GiB | 2.2 GiB |
+| Global top-K, unused 512 B payload (pruned) | 0.16 s | 3.00 s | 19x | 0.8 GiB | 5.3 GiB |
+| 100 `PER` groups, fixed pins | 0.33 s | 32.4 s | 98x | 0.5 GiB | 6.6 GiB |
+| 100 groups, aggregate-local `WHEN` | 0.30 s | 28.4 s | 95x | 0.5 GiB | 6.0 GiB |
+| 100 groups, local `WHEN`, source-valued bound | 0.55 s | 27.4 s | 50x | 0.7 GiB | 3.7 GiB |
+| 100 groups, source-valued bounds | 0.50 s | 29.6 s | 59x | 0.7 GiB | 6.3 GiB |
+| 100 groups, paired source-valued bounds | 0.66 s | 29.6 s | 45x | 0.8 GiB | 6.3 GiB |
+| 100 groups, `COALESCE` source-valued bound | 0.57 s | 29.5 s | 52x | 0.6 GiB | 6.3 GiB |
+
+The two global narrow rows read the key `i` back through the second read of the stored table, which costs about 0.07 s
+here and saves no memory; with one read the same query takes 0.21 s (`../../architecture/result_boundary.md` § Second
+read of a stored table). Gurobi's peak varies by about 2 GiB between identical runs (4.6 to 6.5 GiB on the 100-group
+shape over four runs): the model it receives is the same in every run, and the peak is reached inside its presolve, which
+takes 32 of the 33 s. DeciDB's own part of those runs peaks at 1.2 GiB.
 
 The speedup comes mostly from the solver being slow here: it builds a model with millions of variables, which direct solve
 skips. A shape whose solver model is cheap would show a smaller win.
+
+**Without an objective** (`SUM(x) BETWEEN rows/20 AND rows/10`, one aggregate row, direct 3 runs, solver 1): 0.05 against
+0.07 s at 100,000 rows, 0.06 against 0.28 s (85 against 325 MiB) at 1,000,000, and 0.16 against 1.23 s (541 to 657 MiB
+against 1.6 GiB) at 5,000,000.
+
+**The NULL check.** Every score is checked for NULL on every run, and the check cannot be switched off, so its cost on
+clean data is part of every number above and is not measured apart. With one NULL score on the last row, direct raises
+in 0.04 s at 1,000,000 rows and 0.07 s at 5,000,000 (clean: 0.06 and 0.19 s), and the solver in 0.06 and 0.12 s.
 
 **Weak spots**
 
 | Case | Result |
 |---|---|
-| Wide rows (512 B) returned in full | Direct 1.1 to 2.0 s (two runs: 1.99 s then 1.08 s) versus Gurobi 3.5 to 3.7 s, so 1.8 to 3.4x. Direct's plan itself takes about 0.4 to 0.5 s; the rest is result collection, roughly 0.6 to 1.5 s against about 0.5 s for Gurobi. Memory 2.8 to 3.6 GiB versus 3.8 to 4.3 GiB. Held wide rows cost memory in proportion to the input (3.35 GiB against 0.73 GiB for an unused payload at 5,000,000 rows; reading the source twice gives about 1 GiB). The numbers are in `../../architecture/result_boundary.md`; reading the source twice is planned (`../_harness/todo.md`, H-14). The time cause is not isolated |
+| Wide rows (512 B) returned in full | Direct 0.46 s versus Gurobi 3.40 s, 7.4x; reduced inside the query, 0.46 against 2.95 s. The payload comes from a second read of the stored table, so it never enters the rank. Memory 3.9 GiB versus 6.2 GiB with the full result collected, 1.4 GiB versus 5.4 GiB when reduced. Footprint numbers are in `../../architecture/result_boundary.md` |
 | Small inputs, up to 10,000 rows | Everything finishes in about 20 ms, so no real difference (earlier measurement, not re-run) |
 | 100,000 wide rows, trivial capacity | Direct about 5% slower than Gurobi, two runs (earlier measurement, not re-run). The only measured loss |
 | Capacity 0 or all rows, 5M narrow | Still wins, by 3 to 4x instead of 16x (earlier measurement, not re-run) |

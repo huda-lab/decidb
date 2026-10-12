@@ -19,32 +19,19 @@ today is in `done.md`.
   function or move it to another file unless the task says so; a miss re-runs Gurobi, which needs a licence.
 - The Bash tool is zsh. In `grep`, put `--include` flags before `-e PATTERN`; after a `--` they are read as file names.
 
-## H-16 — Re-measure memory with the built read-twice plan
+## H-17 — Only variable-width parent-read columns take the second read
 
-- **Problem.** The "Read twice" column in `../../architecture/result_boundary.md` comes from a hand-written join, not the
-  built second read (`direct_second_read.cpp`).
-- **Change.** On a quiet machine, re-run that table with the built plan and replace the column, its description and the
-  date. Also time a narrow parent-read column (`SELECT id, x` on `src`) under `require` with the second read and with
-  `SET disabled_optimizers = 'unused_columns'` (single read, rows held), at 1,000,000 and 5,000,000 rows. H-17 uses it.
-- **Done when.** The "Read twice" numbers come from the built plan, and the narrow-column timing is recorded next to them.
-
-## H-17 — Which parent-read columns take the second read
-
-- **Decision needed.**
-- **Needs.** H-16's narrow-column timing.
 - **Problem.** Any stored column a parent reads and the rule does not use comes from the second read, whatever its width
-  (`direct_second_read.cpp`). For a wide payload that saves most of the held memory. For a 4-byte `id` it saves about 4
-  MB per 1,000,000 rows and adds a second scan and a join over every row, which may make the query slower.
-- **Options.**
-  1. Keep any column. Simplest; a narrow column pays the join.
-  2. Only variable-width types (`VARCHAR`, `BLOB`, lists, structs, maps). No tuning number; fixed-width columns stay
-     held.
-  3. A byte threshold on the estimated width. Needs a number chosen from measurements.
-- **Recommendation.** Option 2 if H-16 shows the narrow case measurably slower; option 1 if the difference is
-  negligible.
-- **Change.** Apply the chosen filter in the late step's choice of moved outputs; the rest of the plan is unchanged.
-- **Done when.** A test shows a column of the excluded kind stays in the single read (one scan in `EXPLAIN`) and a
-  wide column still moves; the matrix is at baseline.
+  (`direct_second_read.cpp`). For a narrow column that costs S1 about 30% with no memory saved: its global top-K at
+  5,000,000 rows takes 0.28 to 0.33 s reading a `BIGINT` key back, against 0.21 to 0.25 s with one read
+  (`../../architecture/result_boundary.md` § Second read of a stored table). The owner chose to move only
+  variable-width columns. A1 is a little faster with a narrow column moved (0.44 against 0.52 s at 5,000,000 rows) and
+  gives that up; it stays about 6x faster than the solver.
+- **Change.** In the late step's choice of moved outputs, move a column only when its type is variable-width
+  (`VARCHAR`, `BLOB`, `BIT`, lists, arrays, structs, maps, unions); every fixed-width column stays in the single read.
+  The rest of the plan is unchanged.
+- **Done when.** A test shows a fixed-width parent-read column stays in the single read (one scan in `EXPLAIN`) and a
+  `VARCHAR` column still moves (two scans); the existing second-read tests pass, and the matrix is at baseline.
 
 ## H-02 — Adapter for the new language
 

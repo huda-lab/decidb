@@ -36,23 +36,23 @@ any other source the held rows include it. The section below records what holdin
 
 ### Memory of holding rows
 
-**Setup** (measured 2026-10-09 with the binary at `de90502e4b`). A stored database with a narrow table `src` (id, t, cap, score, f) and
+**Setup** (measured 2026-10-09 with the binary at `de90502e4b`; "Read twice" 2026-10-13 at `7a480a1a71`). A stored database with a narrow table `src` (id, t, cap, score, f) and
 `src_wide` (the same plus `repeat('p', 512) AS payload`), the same shapes as `benchmark/decide/profile_direct_a1.py`.
 Each cell is a fresh `decidb -readonly` process with `decide_direct_solve='require'`, peak memory from `/usr/bin/time -l`,
 one aggregate row read back. A1 is `x(REAL) ... BETWEEN 0 AND cap MINIMIZE SUM(POWER(x - t, 2))`; S1 is
 `x(BOOL) ... SUM(x) <= rows/10 MAXIMIZE SUM(score * x)`. "Unused" reads `COUNT(*), SUM(x)` (payload pruned, the control).
-"Held" adds `SUM(length(payload))`. "Read twice" joins `src_wide` to the DECIDE result of the narrow `src` on `id`, so the
-payload never enters the barrier or the rank. "No DECIDE" is `SELECT COUNT(*), SUM(length(payload)) FROM src_wide`.
+"Held" adds `SUM(length(payload))`, measured before the second read existed, so the rows are held. "Read twice" is the same query on the built plan, which
+reads the payload in a second scan of `src_wide` (two scans in `EXPLAIN`), so it never enters the barrier or the rank. "No DECIDE" is `SELECT COUNT(*), SUM(length(payload)) FROM src_wide`.
 The footprint column is the macOS peak memory footprint; maximum resident size can read lower once the system compresses
 pages (A1 held at 5,000,000 rows gave 2,524 and 3,320 MiB resident in two runs against 5,212 MiB footprint both times),
 so the footprint is the number to read.
 
 | Peak footprint, MiB | Rows | No DECIDE | Unused (control) | Held | Read twice |
 |---|---:|---:|---:|---:|---:|
-| A1 | 1,000,000 | 7 | 32 | 1,049 | 80 |
-| A1 | 5,000,000 | 14 | 131 | 5,212 | 316 |
-| S1 | 1,000,000 | 6 | 99 | 651 and 661 | 153 and 156 |
-| S1 | 5,000,000 | 14 | 725 | 3,362 and 3,351 | 945 and 993 |
+| A1 | 1,000,000 | 7 | 32 | 1,049 | 73 and 73 |
+| A1 | 5,000,000 | 14 | 131 | 5,212 | 353 and 353 |
+| S1 | 1,000,000 | 6 | 99 | 651 and 661 | 145 and 149 |
+| S1 | 5,000,000 | 14 | 725 | 3,362 and 3,351 | 811 and 829 |
 
 Where two values are given they are two runs. The 512-byte payload is 488 MiB per 1,000,000 rows and 2,441 MiB per
 5,000,000.
@@ -62,15 +62,16 @@ Where two values are given they are two runs. The 512-byte payload is 488 MiB pe
 - Held rows cost memory in proportion to the input, for both rules. Over the control, A1 adds 1,017 MiB at 1,000,000
   rows and 5,081 MiB at 5,000,000 (about two payload copies per row), and S1 adds about 560 MiB and about 2,630 MiB
   (about one copy; the rank's sort buffer is the likely reason, not isolated). The control itself grows only with the narrow columns.
-- Reading the source twice stays near the control: 80 and 316 MiB for A1, 153 to 156 and 945 to 993 MiB for S1, which is
-  the narrow plan plus the join. That is 3.4 to 16.5 times less than holding at 5,000,000 rows.
+- Reading the source twice stays near the control: 73 and 353 MiB for A1, 145 to 149 and 811 to 829 MiB for S1, which is
+  the narrow plan plus the join. That is 4.0 to 14.8 times less than holding at 5,000,000 rows.
 - The wide column is the cause. Without it nothing grows (control), and a plain scan of the same payload streams
   in 6 to 14 MiB.
 - Peak memory is the only thing measured here. The machine was busy with a build, so the wall times (0.3 to 1.9 s) are
   indicative only. Why a wide result is slow to collect is not isolated.
 
-**Current behavior.** Holding rows costs memory in proportion to the input for wide parent-read columns: 5.2 GiB at
-5,000,000 rows for A1. Reading the source twice would cost a few hundred MiB. The solver path holds more than direct solve
+**Current behavior.** For a stored table, a wide parent-read column comes from the second read (below), which costs a
+few hundred MiB at 5,000,000 rows. Any other source holds its rows, which costs memory in proportion to the input: 5.2 GiB
+at 5,000,000 rows for A1. The solver path holds more than direct solve
 on the same query (A1 at 1,000,000 rows: 1,655 MiB against 1,049; S1: 1,012 MiB against 652).
 
 ### Second read of a stored table
@@ -79,11 +80,14 @@ When the source is one DuckDB base table under non-volatile projections and filt
 `rowid` as a hidden column. After unused-column removal, when it is known what the parent reads, each parent-read output
 that is a plain stored column the rule's plan only forwards comes from a second scan of the table, joined on `rowid`
 under the boundary. That column never enters the barrier or the rank, and the first read still checks every row, so a
-bad last row under `LIMIT 1` still raises. Any such column moves, narrow or wide; a narrow one pays the join for little
-memory. A join, an aggregate, a volatile or computed column, or a source that already reads `rowid` keeps the single
+bad last row under `LIMIT 1` still raises. Any such column moves, narrow or wide. For a narrow one the effect depends on the rule. Measured
+2026-10-13 on tables that hold only the columns in play, so that `SET disabled_optimizers = 'unused_columns'` (one read,
+rows held) keeps nothing extra: with a parent that reads a `BIGINT` key, A1 took 0.12 against 0.13 s (71 against 80 MiB)
+at 1,000,000 rows and 0.44 against 0.52 s (346 against 370 MiB) at 5,000,000, so the second read is faster; S1's global
+top-K at 5,000,000 rows took 0.28 to 0.33 s against 0.21 to 0.25 s with the same memory, so the second read is about 30%
+slower. Narrowing the step to variable-width columns is `../rules/_harness/todo.md` § H-17. A join, an aggregate, a volatile or computed column, or a source that already reads `rowid` keeps the single
 read: those have no stable row key, or reading them twice could change the rows. A plan that streams (A1's constant
-problem) also keeps one read, since it holds nothing. The "Read twice" column above comes from a hand-written join on a
-unique `id`, not this plan; re-measuring it is H-16 in `../rules/_harness/todo.md`.
+problem) also keeps one read, since it holds nothing.
 
 The step runs inside the `UNUSED_COLUMNS` pass, right after removal, not beside DuckDB's `LATE_MATERIALIZATION` (which
 uses the same `rowid` join for Top-N). The passes in between add projection maps that unused-column removal does not keep
