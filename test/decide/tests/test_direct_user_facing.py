@@ -149,6 +149,201 @@ def test_null_score_error_quotes_the_score(decidb_cli):
     assert solver == direct
 
 
+_NULL_ERROR_CASES = {
+    # S1: the score, a pin and a count bound.
+    "s1_score_column": (
+        "FROM (VALUES (1, 1.0), (2, NULL::DOUBLE)) t(id, score) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(score * x)"
+    ),
+    "s1_score_expression_one_null_column": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, 3.0, NULL::DOUBLE)) t(id, a, b) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM((a + b) * x)"
+    ),
+    "s1_score_expression_two_null_columns": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, NULL::DOUBLE)) t(id, a, b) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM((a + b) * x)"
+    ),
+    "s1_score_terms_added_like_terms": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, NULL::DOUBLE)) t(id, a, b) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(a * x + b * x)"
+    ),
+    "s1_score_per_group": (
+        "FROM (VALUES (1, 1.0, 1), (2, NULL::DOUBLE, 1)) t(id, score, g) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 PER g MAXIMIZE SUM(score * x)"
+    ),
+    "s1_score_no_null_column": (
+        "FROM (VALUES (1, '2.0'), (2, 'bad')) t(id, s) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(TRY_CAST(s AS DOUBLE) * x)"
+    ),
+    "s1_integer_count_bound_column": (
+        "FROM (VALUES (1, 1.0, 2), (2, 3.0, NULL::INTEGER)) t(id, score, cap) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= cap MAXIMIZE SUM(score * x)"
+    ),
+    "s1_double_count_bound_column": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, 3.0, NULL::DOUBLE)) t(id, score, cap) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= cap MAXIMIZE SUM(score * x)"
+    ),
+    "s1_numeric_pin_column": (
+        "FROM (VALUES (1, 1.0, 1), (2, 3.0, NULL::INTEGER)) t(id, score, p) "
+        "DECIDE x(BOOL) SUCH THAT x <= p AND SUM(x) <= 1 MAXIMIZE SUM(score * x)"
+    ),
+    "s1_boolean_pin_column": (
+        "FROM (VALUES (1, 1.0, true), (2, 3.0, NULL::BOOLEAN)) t(id, score, p) "
+        "DECIDE x(BOOL) SUCH THAT x <= p AND SUM(x) <= 1 MAXIMIZE SUM(score * x)"
+    ),
+    # A1: the objective, a square, a bound and a constraint coefficient.
+    "a1_linear_coefficient": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, 2.0)) t(id, score, cap) "
+        "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score * x)"
+    ),
+    "a1_square_target": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, 2.0)) t(id, target, cap) "
+        "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(x - target, 2))"
+    ),
+    "a1_square_weight": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, 2.0)) t(id, s, cap) "
+        "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(s * x - 1, 2))"
+    ),
+    "a1_like_terms": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, NULL::DOUBLE)) t(id, a, b) "
+        "DECIDE x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x - b * x)"
+    ),
+    "a1_bound_column": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, 1.0, NULL::DOUBLE)) t(id, score, capacity) "
+        "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND capacity MAXIMIZE SUM(score * x)"
+    ),
+    "a1_bound_column_on_an_integer_decision": (
+        "FROM (VALUES (1, 1.0, 2), (2, 1.0, NULL::INTEGER)) t(id, score, cap) "
+        "DECIDE x(INT) SUCH THAT x <= cap MAXIMIZE SUM(score * x)"
+    ),
+    "a1_bound_expression": (
+        "FROM (VALUES (1, 1.0, 2.0, 1.0), (2, 1.0, NULL::DOUBLE, 1.0)) t(id, score, cap, k) "
+        "DECIDE x(REAL) SUCH THAT x <= cap * k MAXIMIZE SUM(score * x)"
+    ),
+    "a1_constraint_coefficient": (
+        "FROM (VALUES (1, 1.0, 1.0), (2, 1.0, NULL::DOUBLE)) t(id, s, w) "
+        "DECIDE x(REAL) SUCH THAT w * x <= 5 MAXIMIZE SUM(s * x)"
+    ),
+}
+
+# A NaN or infinite value: the same text, except that the solver adds the position of the row, which the plan cannot name.
+_INVALID_VALUE_CASES = {
+    "s1_score_nan": (
+        "FROM (VALUES (1, 1.0), (2, 'NaN'::DOUBLE)) t(id, score) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(score * x)"
+    ),
+    "s1_score_infinity": (
+        "FROM (VALUES (1, 1.0), (2, 'Infinity'::DOUBLE)) t(id, score) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(score * x)"
+    ),
+    "s1_count_bound_column_nan": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, 3.0, 'NaN'::DOUBLE)) t(id, score, cap) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= cap MAXIMIZE SUM(score * x)"
+    ),
+    "s1_pin_column_nan": (
+        "FROM (VALUES (1, 1.0, 1.0), (2, 3.0, 'NaN'::DOUBLE)) t(id, score, p) "
+        "DECIDE x(BOOL) SUCH THAT x <= p AND SUM(x) <= 1 MAXIMIZE SUM(score * x)"
+    ),
+    "a1_objective_coefficient_nan": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, 'NaN'::DOUBLE, 2.0)) t(id, score, cap) "
+        "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score * x)"
+    ),
+    "a1_square_weight_infinity": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, 'Infinity'::DOUBLE, 2.0)) t(id, s, cap) "
+        "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(s * x - 1, 2))"
+    ),
+    "a1_constraint_coefficient_nan": (
+        "FROM (VALUES (1, 1.0, 1.0), (2, 2.0, 'NaN'::DOUBLE)) t(id, s, w) "
+        "DECIDE x(REAL) SUCH THAT w * x <= 5 MAXIMIZE SUM(s * x)"
+    ),
+    "a1_bound_column_nan": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, 1.0, 'NaN'::DOUBLE)) t(id, score, capacity) "
+        "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND capacity MAXIMIZE SUM(score * x)"
+    ),
+}
+
+
+def _errors(cli, decide):
+    sql = f"SELECT id, x FROM ({decide}) q"
+    return _raw(cli, sql, mode="require").stderr, _raw(cli, sql, mode="off").stderr
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", list(_NULL_ERROR_CASES))
+def test_null_value_error_is_the_solvers_error_word_for_word(decidb_cli, name):
+    # One function in `decide_value_messages.hpp` builds the NULL message for both paths, and the direct plan names the
+    # columns that are NULL on the failing row as the solver does. The full text is compared, never a hand-written string.
+    direct, solver = _errors(decidb_cli, _NULL_ERROR_CASES[name])
+    assert "is NULL" in direct or "are NULL" in direct, direct
+    assert direct == solver
+
+
+# A value that names many columns: the message must name exactly the columns that are NULL on the failing row, however
+# many the value has, and the plan stays one that direct solve proves (it is not capped at a few names).
+_WIDE_NULL_SUBSETS = {
+    "one_null_first": (0,),
+    "one_null_last": (-1,),
+    "two_nulls": (1, 3),
+    "all_null": "all",
+    "non_leading_subset": (2, 4, 5),
+}
+
+
+def _wide_null_columns(width, subset):
+    return set(range(width)) if subset == "all" else {i % width for i in subset}
+
+
+def _wide_null_decide(shape, width, subset):
+    columns = [f"c{i}" for i in range(width)]
+    nulls = _wide_null_columns(width, subset)
+    # DOUBLE throughout: a sum of DECIMAL literals can overflow, which direct solve does not take.
+    good = ", ".join(["1", "1.0::DOUBLE"] + ["1.0::DOUBLE"] * width)
+    bad = ", ".join(["2", "1.0::DOUBLE"] + ["NULL::DOUBLE" if i in nulls else "1.0::DOUBLE" for i in range(width)])
+    source = f"FROM (VALUES ({good}), ({bad})) t(id, score, {', '.join(columns)})"
+    total = " + ".join(columns)
+    if shape == "s1":
+        return f"{source} DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(({total}) * x)"
+    return f"{source} DECIDE x(REAL) SUCH THAT x <= {total} MAXIMIZE SUM(score * x)"
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("shape", ["s1", "a1"])
+@pytest.mark.parametrize("width", [7, 8])
+@pytest.mark.parametrize("subset", list(_WIDE_NULL_SUBSETS))
+def test_null_error_of_a_wide_value_is_the_solvers_error_word_for_word(decidb_cli, shape, width, subset):
+    decide = _wide_null_decide(shape, width, _WIDE_NULL_SUBSETS[subset])
+    direct, solver = _errors(decidb_cli, decide)
+    # `require` raises the NULL error, not a "direct solve could not prove this" error, so the plan was proved.
+    assert "is NULL" in direct or "are NULL" in direct, direct
+    assert "Direct solve" not in direct and "direct solve" not in direct, direct
+    assert direct == solver
+    # The text really names the NULL columns, and only them.
+    named = {int(i) for i in re.findall(r'"c(\d+)"', direct)}
+    assert named == _wide_null_columns(width, _WIDE_NULL_SUBSETS[subset]), direct
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("shape", ["s1", "a1"])
+def test_wide_value_is_proved_by_direct_solve_and_answers_like_the_solver(decidb_cli, shape):
+    decide = _wide_null_decide(shape, 8, ())
+    sql = f"SELECT id, x FROM ({decide}) q ORDER BY id"
+    plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="require").stdout
+    assert "Direct solve rule" in plan and not _has_decide_operator(plan), plan
+    direct, _ = _run(decidb_cli, sql, mode="require")
+    solver, _ = _run(decidb_cli, sql, mode="off")
+    assert direct == solver
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", list(_INVALID_VALUE_CASES))
+def test_invalid_value_error_is_the_solvers_error_without_the_row_position(decidb_cli, name):
+    # The solver adds ` at row N`, the position of the value in its scan; a plan has no such position to report.
+    direct, solver = _errors(decidb_cli, _INVALID_VALUE_CASES[name])
+    assert "contains invalid value" in direct, direct
+    assert " at row " in solver, solver
+    assert re.sub(r" at row \d+", "", solver) == direct
+
+
 @pytest.mark.correctness
 @pytest.mark.parametrize("bad", ["'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
 def test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in(decidb_cli, bad):
@@ -173,8 +368,8 @@ def test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in(decidb_cli
 
 
 @pytest.mark.correctness
-def test_s1_null_source_bound_error_names_the_column(decidb_cli):
-    """A NULL or NaN bound is reported with the column, then COALESCE or WHERE. The wording is direct solve's own."""
+def test_s1_source_bound_error_for_a_column_is_the_solvers_and_for_a_computed_bound_is_direct_solves_own(decidb_cli):
+    """A bound that is one column raises the solver's NULL and NaN errors. A computed bound has no single column to name."""
 
     def error(cap_type, cap, bound="cap"):
         sql = f"""
@@ -183,11 +378,16 @@ def test_s1_null_source_bound_error_names_the_column(decidb_cli):
                 DECIDE x(BOOL) SUCH THAT SUM(x)<={bound} MAXIMIZE SUM(score*x)
             ) q
         """
-        return _raw(decidb_cli, sql, mode="require").stderr
+        return _raw(decidb_cli, sql, mode="require").stderr, _raw(decidb_cli, sql, mode="off").stderr
 
-    for message in (error("INTEGER", "NULL"), error("DOUBLE", "NULL"), error("DOUBLE", "'NaN'")):
-        assert 'column "cap"' in message and "COALESCE(cap, 0)" in message and "WHERE" in message, message
-    computed = error("VARCHAR", "'bad'", bound="TRY_CAST(cap AS INTEGER)")
+    for cap_type in ("INTEGER", "DOUBLE"):
+        direct, solver = error(cap_type, "NULL")
+        assert 'column "cap" is NULL' in direct and "COALESCE(cap, 0)" in direct and "WHERE" in direct, direct
+        assert direct == solver
+    direct, solver = error("DOUBLE", "'NaN'")
+    assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
+    assert re.sub(r" at row \d+", "", solver) == direct
+    computed, _ = error("VARCHAR", "'bad'", bound="TRY_CAST(cap AS INTEGER)")
     assert "the bound expression" in computed and "COALESCE()" in computed, computed
 
 

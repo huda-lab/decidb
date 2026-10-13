@@ -94,7 +94,10 @@ DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<Logi
 	// One window computes, per bound, the invalid-value count over all rows and the group extrema.
 	result.window_index = optimizer.binder.GenerateTableIndex();
 	auto window = make_uniq<LogicalWindow>(result.window_index);
+	// Per bound, the window slot that counts its NULL rows (or NULL and NaN rows, for a bound with one message), and
+	// the slot that counts its NaN rows when NaN has a message of its own.
 	vector<idx_t> invalid_slots;
+	vector<idx_t> nan_slots(bounds.size(), DConstants::INVALID_INDEX);
 	for (idx_t i = 0; i < bounds.size(); i++) {
 		auto &bound = bounds[i];
 		auto value = [&]() {
@@ -102,12 +105,19 @@ DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<Logi
 		};
 		unique_ptr<Expression> is_invalid =
 		    DirectIsNull(bound.is_column ? DirectColumn(bound.column_type, bound.column) : value());
-		if (!bound.is_column || bound.column_type == LogicalType::FLOAT || bound.column_type == LogicalType::DOUBLE) {
+		// A bound with its own NULL message counts NULL rows here and NaN rows apart; any other counts both together.
+		bool own_messages = !bound.null_message.empty();
+		if (!own_messages &&
+		    (!bound.is_column || bound.column_type == LogicalType::FLOAT || bound.column_type == LogicalType::DOUBLE)) {
 			is_invalid = make_uniq<BoundCaseExpression>(std::move(is_invalid), DirectConstantBool(true),
 			                                            optimizer.BindScalarFunction("isnan", value()));
 		}
 		invalid_slots.push_back(window->expressions.size());
 		window->expressions.push_back(DirectWindowMatchingCount(std::move(is_invalid)));
+		if (!bound.nan_message.empty()) {
+			nan_slots[i] = window->expressions.size();
+			window->expressions.push_back(DirectWindowMatchingCount(optimizer.BindScalarFunction("isnan", value())));
+		}
 		auto add_extremum = [&](const char *name) {
 			unique_ptr<Expression> reduced = value();
 			bool masked = eligible && !bound.all_group_rows;
@@ -135,9 +145,17 @@ DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<Logi
 		}
 	}
 	vector<idx_t> null_slots;
-	for (auto &check : not_null) {
+	vector<idx_t> not_null_nan_slots(not_null.size(), DConstants::INVALID_INDEX);
+	for (idx_t i = 0; i < not_null.size(); i++) {
+		auto &check = not_null[i];
 		unique_ptr<Expression> is_invalid = DirectIsNull(check.value->Copy());
-		if (check.reject_nan) {
+		if (!check.nan_message.empty()) {
+			auto as_double =
+			    BoundCastExpression::AddCastToType(optimizer.context, check.value->Copy(), LogicalType::DOUBLE);
+			not_null_nan_slots[i] = window->expressions.size();
+			window->expressions.push_back(
+			    DirectWindowMatchingCount(optimizer.BindScalarFunction("isnan", std::move(as_double))));
+		} else if (check.reject_nan) {
 			auto as_double =
 			    BoundCastExpression::AddCastToType(optimizer.context, check.value->Copy(), LogicalType::DOUBLE);
 			is_invalid = make_uniq<BoundCaseExpression>(std::move(is_invalid), DirectConstantBool(true),
@@ -191,13 +209,25 @@ DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<Logi
 			    none(equality_window_index, equality_slots[i]), DirectConstantBool(true),
 			    DirectErrorPredicate(optimizer, "DECIDE source-valued equality bound varies within a group"));
 		}
-		clause_checks.push_back(
-		    make_uniq<BoundCaseExpression>(none(result.window_index, invalid_slots[i]), std::move(equality_valid),
-		                                   DirectErrorPredicate(optimizer, bounds[i].invalid_message)));
+		if (nan_slots[i] != DConstants::INVALID_INDEX) {
+			equality_valid =
+			    make_uniq<BoundCaseExpression>(none(result.window_index, nan_slots[i]), std::move(equality_valid),
+			                                   DirectErrorPredicate(optimizer, bounds[i].nan_message));
+		}
+		const auto &null_message = bounds[i].null_message.empty() ? bounds[i].invalid_message : bounds[i].null_message;
+		clause_checks.push_back(make_uniq<BoundCaseExpression>(none(result.window_index, invalid_slots[i]),
+		                                                       std::move(equality_valid),
+		                                                       DirectErrorPredicate(optimizer, null_message)));
 	}
 	for (idx_t i = 0; i < not_null.size(); i++) {
+		unique_ptr<Expression> not_nan = DirectConstantBool(true);
+		if (not_null_nan_slots[i] != DConstants::INVALID_INDEX) {
+			not_nan = make_uniq<BoundCaseExpression>(none(result.window_index, not_null_nan_slots[i]),
+			                                         DirectConstantBool(true),
+			                                         DirectErrorPredicate(optimizer, not_null[i].nan_message));
+		}
 		clause_checks.push_back(make_uniq<BoundCaseExpression>(none(result.window_index, null_slots[i]),
-		                                                       DirectConstantBool(true),
+		                                                       std::move(not_nan),
 		                                                       DirectErrorPredicate(optimizer, not_null[i].message)));
 	}
 	unique_ptr<Expression> valid = DirectConstantBool(true);

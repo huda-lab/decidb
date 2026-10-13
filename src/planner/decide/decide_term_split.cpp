@@ -37,6 +37,14 @@ unique_ptr<Expression> DecideRebindOperator(ClientContext &context, const string
 	return result;
 }
 
+unique_ptr<Expression> DecideMergeLikeCoefficients(ClientContext &context, int first_sign, unique_ptr<Expression> first,
+                                                   int next_sign, unique_ptr<Expression> next) {
+	vector<unique_ptr<Expression>> children;
+	children.push_back(std::move(first));
+	children.push_back(std::move(next));
+	return DecideRebindOperator(context, first_sign == next_sign ? "+" : "-", std::move(children));
+}
+
 static unique_ptr<Expression> RebindMultiply(ClientContext &context, unique_ptr<Expression> lhs,
                                              unique_ptr<Expression> rhs) {
 	vector<unique_ptr<Expression>> children;

@@ -311,14 +311,14 @@ A1 = RuleFixture(
                 "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
                 cap_sql="CASE WHEN i=4999 THEN NULL ELSE 10.0 END",
             ),
-            "invalid value (NULL or NaN)",
+            "is NULL",
         ),
         (
             _a1_late_error(
                 "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
                 cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 10.0 END",
             ),
-            "invalid value (NULL or NaN)",
+            "invalid value (NaN)",
         ),
         (
             _a1_late_error(

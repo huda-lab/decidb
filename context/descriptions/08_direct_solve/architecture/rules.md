@@ -48,16 +48,21 @@ for production use. If any required condition cannot be proved, the query stays 
 - **An error on the same inputs.** Where the solver raises, direct solve raises: empty scoped aggregate; invalid
   data-valued bounds and pins (including rows a `WHEN` or NULL `PER` key excludes); invalid objective coefficients
   (NULL, NaN, infinity); infeasibility. Silently answering where the solver refuses is a wrong answer. What the rule
-  does **not** owe: the solver's message text, or the solver's choice among several errors in one query. Any one
-  of the applicable errors is enough, and a generic message that names the clause is enough.
+  does **not** owe: the solver's choice among several errors in one query (any one of the applicable errors is
+  enough), or the ` at row N` the solver adds to a NaN or infinite value, because N is a scan position a plan cannot
+  name. Every other message the solver words for the user is the solver's text (see User-facing wording).
 - **One numeric domain.** Values are evaluated with DuckDB's semantics, then converted to DOUBLE. Counts are exact only
   up to 2^53, and a rule declines anything it cannot represent exactly.
 - **Results.** Every source column in order, then one column per decision: `INTEGER` 0/1 for `BOOL`, `BIGINT` for
   `INT`, `DOUBLE` for `REAL`. Duplicate rows stay separate rows. When several assignments are optimal, a rule may
   return a different one than the solver.
 - **User-facing wording.** Name the object the user wrote and the smallest edit. Internal detail belongs in `require`
-  reasons and `EXPLAIN`. Wording is not copied from the solver. If a message needs a plan of its own to build (for
-  example, one that names which columns of a computed value are NULL), use the plainer message.
+  reasons and `EXPLAIN`. A runtime error uses the solver's text, built by the function the solver calls, never a copy of
+  the string: `decide_value_messages.hpp` (NULL, and NaN or infinite, values), `decide_numeric_policy.hpp` (a whole
+  number beyond the exact range). A NULL value names the columns that are NULL on the failing row, so the plan carries
+  the value's source columns to its check and builds the message per row. A new rule builds its errors with these
+  functions and adds a test that compares the full text of `require` with `off`
+  (`test_direct_user_facing.py`).
 
 ## Keep the layer lean
 
@@ -90,7 +95,7 @@ test, adding one is a task in that rule's `todo.md`.
    Keep test names stable, because the oracle cache is keyed on the test node id and the test function's source. All
    three must agree: both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say
    infeasible. Inputs with no oracle model (bad data) go in the error table, where
-   `off` and `require` must both fail (the message and the choice among several errors need not match), and values
+   `off` and `require` must both fail (the choice among several errors need not match; a NULL or NaN message must, apart from ` at row N`), and values
    the oracle cannot hold (infinities, 2^53) go in the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
 3. **Differential fuzz** (`test_direct_fuzz.py`, comparator in `_direct_differential.py`): supply a seeded query
    generator. Direct (`require`) and solver (`off`) must succeed or fail together (any error counts) and agree on

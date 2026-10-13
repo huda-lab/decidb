@@ -40,4 +40,18 @@
 - **Expected:** the same answer as the solver path.
 - **Impact:** a valid query fails with an internal error in the default mode instead of answering.
 
+## The solver path ignores a `WHEN` on a `BETWEEN` constraint
+
+- **Location:** not traced; the solver path's handling of a `BETWEEN` clause with `WHEN` (its expansion into two
+  bounds, or the bound folding into the decision's box). Direct solve is not affected.
+- **Observed:** on `(VALUES (1,1.0,2.0),(2,1.0,3.0)) t(id,s,cap)`, no row has `id > 5`, so the bound applies to no row:
+  - `DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap WHEN id>5 MAXIMIZE SUM(s*x)` with `decide_direct_solve = 'off'`
+    answers x = 2.0 and 3.0 on Gurobi and on HiGHS (`DECIDB_FORCE_SOLVER=highs`): the `WHEN` is dropped and
+    `x <= cap` holds on every row. Direct solve (`require`) raises `DECIDE optimization is unbounded`.
+  - The same clause written as `x <= cap WHEN id>5` is unbounded on both paths.
+- **Expected:** a `WHEN` on a `BETWEEN` excludes the rows where it does not hold, as it does for `<=`; this query is
+  unbounded.
+- **Impact:** a wrong answer with no error: the solver applies a bound the user made conditional. Under the default
+  `auto`, an A1-shaped query takes direct solve and is right, so the solver and direct paths disagree on the same query.
+
 Resolved behavior is documented by its owning `done.md`.

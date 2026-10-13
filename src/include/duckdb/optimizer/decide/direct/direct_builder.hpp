@@ -48,17 +48,31 @@ unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer);
 unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer);
 
 //! Evaluates to true for a DOUBLE bound that is neither NULL nor NaN, and raises the bound error otherwise. Infinity is
-//! a valid bound (no bound on that side). `column_name` names the source column the bound is exactly, or is empty.
+//! a valid bound (no bound on that side). `source_value` is the bound as the user wrote it, over the columns the check
+//! reads, so a NULL names the column it came from.
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
-                                                 const string &column_name);
+                                                 const Expression &source_value);
+
+//! The errors a source column used as a bound raises, for a plan that counts the bad rows and raises one fixed message
+//! (the column is the same on every row): NULL, and NaN. Both are the solver's text, built by the function the solver
+//! uses; the NaN message lacks the solver's row position.
+string DirectBoundNullMessage(const string &column_name);
+string DirectBoundNaNMessage();
+
+//! A copy of a value re-pointed at a projection that carries the source (see DirectRemapSourceReferences), for the
+//! check above that projection to name the value's source columns.
+unique_ptr<Expression> DirectOverProjection(const Expression &value, const vector<ColumnBinding> &source_bindings,
+                                            idx_t projection_index);
 
 //! Which clause a number belongs to, so an error names the object the user wrote.
 enum class DirectNumberKind : uint8_t { OBJECTIVE, CONSTRAINT };
 
-//! Evaluates to true for a finite number and raises an error for a NULL or non-finite one. A NULL number's message
-//! quotes `number_text`, or stays generic when that is empty. The NaN and infinity message names `kind`.
+//! Evaluates to true for a finite number and raises an error for a NULL or non-finite one. A NULL number's message is
+//! the solver's: it names the columns that are NULL in `source`, the expression the number is made of as the solver
+//! evaluates it, over the columns the check reads, and quotes `source` when no column is NULL. A null `source` makes
+//! the message generic. The NaN and infinity message names `kind`.
 unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
-                                                  ColumnBinding number_binding, const string &number_text,
+                                                  ColumnBinding number_binding, const Expression *source,
                                                   DirectNumberKind kind);
 
 //! A plan that releases no row before `valid` has been evaluated on every input row.
@@ -90,9 +104,9 @@ unique_ptr<Expression> DirectActiveWhen(const Expression *when);
 unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
                                                       ColumnBinding eligible, const string &clause = "constraint");
 
-//! The error for a NULL or NaN source-valued bound: name the column when the bound is one, otherwise point at the
-//! bound expression.
-string DirectInvalidBoundMessage(const string &column_name);
+//! The error for a NULL or NaN bound that is not exactly one source column. Which column is NULL depends on the row,
+//! and a plan that counts bad rows has no single row to name, so it points at the bound expression.
+string DirectInvalidBoundMessage();
 
 //! The solver consumes every source output. Skipping an unreferenced output must not suppress a computed error
 //! or volatile expression. This proves only stored columns, constants, and their passthrough aliases safe,
@@ -114,10 +128,14 @@ struct DirectSignedValue {
 	unique_ptr<Expression> expr;
 };
 
-//! What a NULL or non-finite value quotes: the source column when the value is exactly one, otherwise the expression.
+//! What a NULL value quotes when none of its columns is NULL: the source column when the value is exactly one,
+//! otherwise the expression.
 string DirectTextOf(const Expression &expr);
-//! The same for a sum of values: the one value's text, or empty when there are several.
-string DirectTextOf(const vector<DirectSignedValue> &values);
+
+//! The values summed into one coefficient as the solver sums like terms (`DecideMergeLikeCoefficients`), re-pointed at
+//! a projection over the source. Null for no values.
+unique_ptr<Expression> DirectMergedOverProjection(ClientContext &context, const vector<DirectSignedValue> &values,
+                                                  const vector<ColumnBinding> &source_bindings, idx_t projection_index);
 
 //! True for an INT or BOOL decision, whose bounds round to whole numbers.
 bool DirectIsWholeNumbered(DirectDomain domain);
@@ -132,11 +150,7 @@ struct DirectBoundClause {
 	idx_t decision = 0;
 	ExpressionType comparison = ExpressionType::INVALID;
 	vector<DirectSignedValue> coefficient;
-	//! The coefficient as the user wrote it, which a NULL or non-finite one quotes.
-	string coefficient_text;
 	unique_ptr<Expression> rhs;
-	//! The source column the right side is exactly, for the error that names it; empty for a computed bound.
-	string rhs_column;
 	unique_ptr<Expression> when;
 
 	//! A deep copy of every field, so a field added later cannot be missing from a clause split in two.

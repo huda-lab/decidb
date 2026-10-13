@@ -5,11 +5,14 @@
 #include <cmath>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
+#include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
@@ -119,44 +122,172 @@ unique_ptr<Expression> DirectIsNull(unique_ptr<Expression> value) {
 	return std::move(is_null);
 }
 
-//! The error for a NaN or infinite number, naming the kind of coefficient the user wrote it in.
+//! The error for a NaN or infinite number, naming the kind of coefficient the user wrote it in. The solver adds the
+//! position of the row; a plan has no row position to name.
 static unique_ptr<Expression> DirectInvalidNumberError(Optimizer &optimizer, DirectNumberKind kind) {
-	return DirectErrorPredicate(optimizer,
-	                            StringUtil::Format("DECIDE %s coefficient contains invalid value (NaN or "
-	                                               "Infinity). Common causes:\n"
-	                                               "  • Division by zero in the expression\n"
-	                                               "  • Arithmetic overflow in calculations\n"
-	                                               "  • NULL values that propagated through math "
-	                                               "operations\n"
-	                                               "Check your expressions and input data.",
-	                                               kind == DirectNumberKind::OBJECTIVE ? "objective" : "constraint"));
+	return DirectErrorPredicate(optimizer, DecideInvalidValueMessage(kind == DirectNumberKind::OBJECTIVE
+	                                                                     ? "objective coefficient"
+	                                                                     : "constraint coefficient",
+	                                                                 "NaN or Infinity", string()));
 }
 
-//! The NULL message for a number, as an expression over the row it is evaluated on. It spells out what the solver
-//! prints for the same row: the NULL column, or the NULL columns, or the number's own text when no column is NULL.
+string DirectBoundNullMessage(const string &column_name) {
+	return DecideNullValueMessage({column_name}, string());
+}
+
+string DirectBoundNaNMessage() {
+	return DecideInvalidValueMessage("constraint right-hand side", "NaN", string());
+}
+
+static unique_ptr<Expression> DirectNullVarchar() {
+	return make_uniq<BoundConstantExpression>(Value(LogicalType::VARCHAR));
+}
+
+static unique_ptr<Expression> DirectConcat(Optimizer &optimizer, vector<unique_ptr<Expression>> parts) {
+	return optimizer.BindScalarFunction("concat", std::move(parts));
+}
+
+static unique_ptr<Expression> DirectMinus(Optimizer &optimizer, unique_ptr<Expression> value, idx_t amount) {
+	return optimizer.BindScalarFunction("-", std::move(value), DirectBigint(NumericCast<int64_t>(amount)));
+}
+
+//! The NULL message of one value, as a VARCHAR expression over the row it is evaluated on: it names the columns of the
+//! value that are NULL on that row, and quotes the value when none is. The wording comes from the pieces in
+//! `decide_value_messages.hpp`, the ones `DecideNullValueMessage` joins for the solver.
+//!
+//! The expression grows with the number of columns, not with the number of sets of NULL columns. Each column
+//! contributes `piece_i`, its quoted name when it is NULL on the row and NULL otherwise. Then
+//!   last  = COALESCE(piece_n, ..., piece_1)         the last NULL column, in the order the solver names them
+//!   all   = concat_ws(', ', piece_1, ..., piece_n)   every NULL column, comma-joined (concat_ws skips NULL pieces)
+//! and the text follows from them: no NULL column when `last` is NULL, one when `all = last`, otherwise the names
+//! before the last one, ` and `, and the last one.
+static unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expression &value) {
+	vector<const Expression *> leaves;
+	DecideCollectNamedColumns(value, leaves);
+	vector<string> names;
+	vector<const Expression *> columns;
+	for (auto leaf : leaves) {
+		if (std::find(names.begin(), names.end(), leaf->GetAlias()) == names.end()) {
+			names.push_back(leaf->GetAlias());
+			columns.push_back(leaf);
+		}
+	}
+	auto text = DirectTextOf(value);
+	auto no_column = DecideNullValueMessage({}, text);
+	if (names.empty()) {
+		return DirectVarchar(no_column);
+	}
+	if (names.size() == 1) {
+		return make_uniq<BoundCaseExpression>(DirectIsNull(columns[0]->Copy()),
+		                                      DirectVarchar(DecideNullValueMessage(names, text)),
+		                                      DirectVarchar(no_column));
+	}
+	auto piece = [&](idx_t i) {
+		return unique_ptr<Expression>(make_uniq<BoundCaseExpression>(
+		    DirectIsNull(columns[i]->Copy()), DirectVarchar(DecideNullNameQuote() + names[i] + DecideNullNameQuote()),
+		    DirectNullVarchar()));
+	};
+	auto last = [&]() {
+		auto coalesce = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, LogicalType::VARCHAR);
+		for (idx_t i = names.size(); i > 0; i--) {
+			coalesce->children.push_back(piece(i - 1));
+		}
+		return unique_ptr<Expression>(std::move(coalesce));
+	};
+	auto all = [&]() {
+		vector<unique_ptr<Expression>> parts;
+		parts.push_back(DirectVarchar(DecideNullNameSeparator()));
+		for (idx_t i = 0; i < names.size(); i++) {
+			parts.push_back(piece(i));
+		}
+		return optimizer.BindScalarFunction("concat_ws", std::move(parts));
+	};
+	auto length_of = [&](unique_ptr<Expression> text_value) {
+		return optimizer.BindScalarFunction("length", std::move(text_value));
+	};
+	auto substr = [&](unique_ptr<Expression> text_value, unique_ptr<Expression> from, unique_ptr<Expression> count) {
+		vector<unique_ptr<Expression>> args;
+		args.push_back(std::move(text_value));
+		args.push_back(std::move(from));
+		args.push_back(std::move(count));
+		return optimizer.BindScalarFunction("substr", std::move(args));
+	};
+	// One NULL column: its quoted name, without the quotes, goes in twice.
+	auto one_column_name = substr(last(), DirectBigint(NumericCast<int64_t>(1 + DecideNullNameQuote().size())),
+	                              DirectMinus(optimizer, length_of(last()), 2 * DecideNullNameQuote().size()));
+	vector<unique_ptr<Expression>> one_column;
+	one_column.push_back(DirectVarchar(DecideNullOneColumnBefore()));
+	one_column.push_back(one_column_name->Copy());
+	one_column.push_back(DirectVarchar(DecideNullOneColumnMiddle()));
+	one_column.push_back(std::move(one_column_name));
+	one_column.push_back(DirectVarchar(DecideNullOneColumnAfter()));
+	// Several: the comma-joined names without the last one (and the comma before it), then the last.
+	auto leading_names =
+	    substr(all(), DirectBigint(1),
+	           DirectMinus(optimizer, optimizer.BindScalarFunction("-", length_of(all()), length_of(last())),
+	                       DecideNullNameSeparator().size()));
+	vector<unique_ptr<Expression>> joined_names;
+	joined_names.push_back(std::move(leading_names));
+	joined_names.push_back(DirectVarchar(DecideNullLastNameSeparator()));
+	joined_names.push_back(last());
+	vector<unique_ptr<Expression>> several;
+	several.push_back(DirectVarchar(DecideNullColumnsBefore()));
+	several.push_back(DirectConcat(optimizer, std::move(joined_names)));
+	several.push_back(DirectVarchar(DecideNullColumnsAfter()));
+	auto exactly_one = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, all(), last());
+	auto some = make_uniq<BoundCaseExpression>(std::move(exactly_one), DirectConcat(optimizer, std::move(one_column)),
+	                                           DirectConcat(optimizer, std::move(several)));
+	return make_uniq<BoundCaseExpression>(DirectIsNull(last()), DirectVarchar(no_column), std::move(some));
+}
+
 unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
-                                                  ColumnBinding number_binding, const string &number_text,
+                                                  ColumnBinding number_binding, const Expression *source,
                                                   DirectNumberKind kind) {
-	const string advice = "Impute it with COALESCE(), or filter those rows out with a WHERE clause.";
-	auto null_message = number_text.empty() ? "DECIDE: a value used in the optimization is NULL. " + advice
-	                                        : StringUtil::Format("DECIDE: %s is NULL. %s", number_text, advice);
 	auto is_null = DirectIsNull(DirectColumn(number_type, number_binding));
 	auto is_finite = optimizer.BindScalarFunction("isfinite", DirectColumn(number_type, number_binding));
 	auto finite_or_error = make_uniq<BoundCaseExpression>(std::move(is_finite), DirectConstantBool(true),
 	                                                      DirectInvalidNumberError(optimizer, kind));
-	return make_uniq<BoundCaseExpression>(std::move(is_null), DirectErrorPredicate(optimizer, null_message),
+	auto null_message =
+	    source
+	        ? DirectNullMessageOf(optimizer, *source)
+	        : unique_ptr<Expression>(make_uniq<BoundConstantExpression>(Value(DecideNullValueMessage({}, string()))));
+	return make_uniq<BoundCaseExpression>(std::move(is_null), DirectErrorPredicate(optimizer, std::move(null_message)),
 	                                      std::move(finite_or_error));
 }
 
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
-                                                 const string &column_name) {
-	auto message = [&]() {
-		return DirectErrorPredicate(optimizer, DirectInvalidBoundMessage(column_name));
-	};
+                                                 const Expression &source_value) {
 	auto is_nan = optimizer.BindScalarFunction("isnan", DirectColumn(LogicalType::DOUBLE, bound_binding));
-	auto not_nan = make_uniq<BoundCaseExpression>(std::move(is_nan), message(), DirectConstantBool(true));
-	return make_uniq<BoundCaseExpression>(DirectIsNull(DirectColumn(LogicalType::DOUBLE, bound_binding)), message(),
+	auto not_nan = make_uniq<BoundCaseExpression>(
+	    std::move(is_nan), DirectErrorPredicate(optimizer, DirectBoundNaNMessage()), DirectConstantBool(true));
+	return make_uniq<BoundCaseExpression>(DirectIsNull(DirectColumn(LogicalType::DOUBLE, bound_binding)),
+	                                      DirectErrorPredicate(optimizer, DirectNullMessageOf(optimizer, source_value)),
 	                                      std::move(not_nan));
+}
+
+unique_ptr<Expression> DirectOverProjection(const Expression &value, const vector<ColumnBinding> &source_bindings,
+                                            idx_t projection_index) {
+	auto copy = value.Copy();
+	if (!DirectRemapSourceReferences(*copy, source_bindings, projection_index)) {
+		throw InternalException("Direct solve could not re-point a value at the projection that carries the source");
+	}
+	return copy;
+}
+
+unique_ptr<Expression> DirectMergedOverProjection(ClientContext &context, const vector<DirectSignedValue> &values,
+                                                  const vector<ColumnBinding> &source_bindings,
+                                                  idx_t projection_index) {
+	unique_ptr<Expression> merged;
+	int first_sign = 1;
+	for (auto &value : values) {
+		if (!merged) {
+			merged = value.expr->Copy();
+			first_sign = value.sign;
+			continue;
+		}
+		merged = DecideMergeLikeCoefficients(context, first_sign, std::move(merged), value.sign, value.expr->Copy());
+	}
+	return merged ? DirectOverProjection(*merged, source_bindings, projection_index) : nullptr;
 }
 
 bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
@@ -237,14 +368,9 @@ unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, uniq
 	return std::move(active_guard);
 }
 
-string DirectInvalidBoundMessage(const string &column_name) {
-	const string advice = "or filter those rows out with a WHERE clause.";
-	if (column_name.empty()) {
-		return "DECIDE: the bound expression has an invalid value (NULL or NaN). Impute it with COALESCE(), " + advice;
-	}
-	return StringUtil::Format("DECIDE: column \"%s\" has an invalid value (NULL or NaN). Impute it with "
-	                          "COALESCE(%s, 0), %s",
-	                          column_name, column_name, advice);
+string DirectInvalidBoundMessage() {
+	return "DECIDE: the bound expression has an invalid value (NULL or NaN). Impute it with COALESCE(), or filter "
+	       "those rows out with a WHERE clause.";
 }
 
 //===--------------------------------------------------------------------===//
@@ -254,10 +380,6 @@ string DirectInvalidBoundMessage(const string &column_name) {
 string DirectTextOf(const Expression &expr) {
 	auto column = DirectBareNumericColumn(expr);
 	return column ? column->GetAlias() : expr.ToString();
-}
-
-string DirectTextOf(const vector<DirectSignedValue> &values) {
-	return values.size() == 1 ? DirectTextOf(*values[0].expr) : string();
 }
 
 bool DirectIsWholeNumbered(DirectDomain domain) {
@@ -290,9 +412,7 @@ DirectBoundClause DirectBoundClause::Copy() const {
 	for (auto &value : coefficient) {
 		result.coefficient.push_back({value.sign, value.expr->Copy()});
 	}
-	result.coefficient_text = coefficient_text;
 	result.rhs = rhs->Copy();
-	result.rhs_column = rhs_column;
 	if (when) {
 		result.when = when->Copy();
 	}
@@ -351,14 +471,7 @@ bool DirectReadBounds(const DirectProblemFacts &facts, ClientContext &context, D
 			reason = "coefficient_shape: expected a deterministic numeric coefficient over the source columns";
 			return false;
 		}
-		clause.coefficient_text = DirectTextOf(clause.coefficient);
 		clause.rhs = fact.rhs->Copy();
-		idx_t slot;
-		LogicalType type;
-		string name;
-		if (DirectSourceNumericColumn(rhs, facts.source_bindings, slot, type, name)) {
-			clause.rhs_column = name;
-		}
 		if (fact.scope.when) {
 			clause.when = fact.scope.when->Copy();
 		}

@@ -6,6 +6,7 @@
 #include <cmath>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/optimizer/optimizer.hpp"

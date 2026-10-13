@@ -82,13 +82,24 @@ check). Design: `../../architecture/`.
   own error policy; the sign test for a scale factor and the `IN` rewrite catch everything; direct rules pass
   `DIRECT_CONSTANT` or `DIRECT_FINITE_CONSTANT`. One function means one path cannot accept a constant another rejects
   without a flag that says so.
-- **Number messages.** A NULL number names the NULL source columns on the failing row, in the solver's wordings: one
-  column (`column "a" is NULL. Impute it with COALESCE(a, 0)...`), several (`columns "a", "b" and "c" are NULL`), or,
-  when no column is NULL, the score's own text (`TRY_CAST(s AS DOUBLE) is NULL`). The message is a per-row expression
-  (`DirectValidNumberPredicate` in `direct_builder.cpp`) that `error()` evaluates only on the failing row. A multi-term score
-  with no NULL column stays generic, since the solver quotes one failing term and direct sums the terms. A NaN or infinite
-  number raises the solver's fixed message, whose first words name the clause the user wrote it in: `objective
-  coefficient` or `constraint coefficient`, from the `DirectNumberKind` the rule passes (S1 and A1's objective values:
+- **Number messages.** The NULL and NaN texts have one author for both paths, `decide_value_messages.hpp`
+  (`DecideNullValueMessage`, `DecideInvalidValueMessage`, and `DecideCollectNamedColumns`, which decides which columns of a
+  value are named). A NULL number names the NULL source columns on the failing row: one column (`column "a" is NULL.
+  Impute it with COALESCE(a, 0)...`), several (`columns "a", "b" and "c" are NULL`), or, when no column is NULL, the
+  value's own text (`TRY_CAST(s AS DOUBLE) is NULL`). The value is the coefficient as the solver evaluates it: terms of
+  one decision are merged by `DecideMergeLikeCoefficients`, the function the solver's like-term collection calls, so
+  `SUM(a*x + b*x)` names `a` and `b` together. The message is a per-row expression (`DirectNullMessageOf`, used by `DirectValidNumberPredicate` and
+  `DirectValidBoundPredicate` in `direct_builder.cpp`) that `error()` evaluates only on the failing row; its size grows with
+  the number of named columns, so a value may name any number of them. Each column gives its quoted name when it is NULL on
+  the row (else NULL); `COALESCE` over them, last column first, is the last NULL column, and `concat_ws(', ', ...)` is all of
+  them. No last column means no NULL column (the value's own text), `concat_ws = last` means one, and otherwise the text is
+  the leading names (cut off by length), ` and ` and the last name. Every piece of wording comes from the small functions in
+  `decide_value_messages.hpp` that `DecideNullValueMessage` also joins. A value's source columns are read from the stage
+  above the one that carries the source (`DirectOverProjection`). An S1 count bound or pin that is exactly one column raises the same fixed NULL and NaN
+  messages (the column is the same on every row); a computed one keeps `DirectInvalidBoundMessage`. A NaN or infinite
+  number raises the solver's message, whose first words name the clause the user wrote it in: `objective
+  coefficient`, `constraint coefficient` or `constraint right-hand side`, without the solver's ` at row N`. The first
+  two come from the `DirectNumberKind` the rule passes (S1 and A1's objective values:
   objective; A1's coefficient on the left of a bound: constraint). A source value read as a coefficient must be finite;
   one read as a bound (a count limit, a pin, a per-row lower or upper bound) only has to be a number, because an
   infinite bound means "no bound" or "nothing satisfies it". NaN and NULL raise in every slot. Direct applies this in SQL
@@ -96,8 +107,9 @@ check). Design: `../../architecture/`.
   cannot share code, so `test_direct_source_values.py` puts NaN, both infinities and NULL in each of 27 slots S1 and A1
   read and asserts the same error or rows on `require`, `off` and forced HiGHS. Tests:
   `test_computed_score_null_error_names_the_columns`, `test_null_score_no_column_explains_quotes_the_score`,
-  `test_null_score_message_is_not_built_when_no_row_is_null` in `test_direct_user_facing.py`. The cost on clean data is not
-  measured.
+  `test_null_score_message_is_not_built_when_no_row_is_null`, `test_null_value_error_is_the_solvers_error_word_for_word`
+  and `test_invalid_value_error_is_the_solvers_error_without_the_row_position` in `test_direct_user_facing.py` (the last
+  two compare the full text of `require` with `off` for S1 and A1). The cost on clean data is not measured.
 - **Decision record.** On a hit, mode, rule and one fixed proof line per rule appear in logical and physical `EXPLAIN` and
   profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x <= u, each row
   independent`. There is no guards line and no number from the query. `require` explains a miss; a miss under `auto`

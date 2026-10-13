@@ -82,6 +82,9 @@ struct S1Proof final : DirectRuleProof {
 	//! A pin whose value comes from the row: it must be neither NULL nor, for a floating point value, NaN.
 	struct SourcePin {
 		unique_ptr<Expression> value;
+		//! The source column the value is exactly; empty for a computed value.
+		string column_name;
+		//! The error a computed value raises when it is NULL (or NaN, when `reject_nan`).
 		string invalid_message;
 		bool reject_nan;
 	};
@@ -101,8 +104,6 @@ struct S1Proof final : DirectRuleProof {
 	bool impossible = false;
 	DecideSense sense;
 	vector<ObjectivePart> objective_parts;
-	//! For a single-term score, the term as the user wrote it, which a NULL score quotes.
-	string score_text;
 	vector<idx_t> group_key_slots;
 	unique_ptr<Expression> when_condition;
 	vector<unique_ptr<Expression>> fixed_one_conditions;
@@ -697,8 +698,12 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 				    make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, source_value->Copy(),
 				                                         make_uniq<BoundConstantExpression>(Value::BOOLEAN(false)))));
 			}
+			string column_name;
+			if (source_value->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+				column_name = source_value->GetAlias();
+			}
 			proof.source_pins.push_back(
-			    {source_value->Copy(), "DECIDE per-row Boolean bound contains NULL", false});
+			    {source_value->Copy(), column_name, "DECIDE per-row Boolean bound contains NULL", false});
 			continue;
 		}
 		// A numeric value from the row: the row allows 0 when `0 <comparison> value` holds and 1 when `1 <comparison>
@@ -724,7 +729,7 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 		};
 		proof.fixed_one_conditions.push_back(active(disallows(0.0)));
 		proof.fixed_zero_conditions.push_back(active(disallows(1.0)));
-		proof.source_pins.push_back({value.Copy(), DirectInvalidBoundMessage(is_column ? column_name : string()),
+		proof.source_pins.push_back({value.Copy(), is_column ? column_name : string(), DirectInvalidBoundMessage(),
 		                             invalid_type == LogicalType::FLOAT || invalid_type == LogicalType::DOUBLE});
 	}
 	return true;
@@ -878,9 +883,6 @@ bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, ClientCo
 			proof.objective_parts.push_back(
 			    {part.sign * term.sign, term.coefficient->Copy(), part.scale != nullptr, scale, part.scale_divides});
 		}
-	}
-	if (proof.objective_parts.size() == 1) {
-		proof.score_text = proof.objective_parts[0].coefficient->ToString();
 	}
 	return true;
 }
@@ -1251,12 +1253,31 @@ private:
 				spec.column_type = bound.source_type;
 			}
 			spec.all_group_rows = bound.rhs_all_group_rows && !bound.counts_rows;
-			spec.invalid_message = DirectInvalidBoundMessage(bound.column_name);
+			if (bound.column_name.empty()) {
+				spec.invalid_message = DirectInvalidBoundMessage();
+			} else {
+				// The same column on every row, so the solver's message is known before any row is read.
+				spec.null_message = DirectBoundNullMessage(bound.column_name);
+				if (bound.source_type == LogicalType::FLOAT || bound.source_type == LogicalType::DOUBLE) {
+					spec.nan_message = DirectBoundNaNMessage();
+				}
+			}
 			specs.push_back(std::move(spec));
 		}
 		vector<DirectNotNullSpec> pins;
 		for (auto &pin : proof.source_pins) {
-			pins.push_back({CopyIntoState(*pin.value, scope, "per-row pin"), pin.invalid_message, pin.reject_nan});
+			DirectNotNullSpec spec;
+			spec.value = CopyIntoState(*pin.value, scope, "per-row pin");
+			spec.reject_nan = pin.reject_nan;
+			if (pin.column_name.empty()) {
+				spec.message = pin.invalid_message;
+			} else {
+				spec.message = DirectBoundNullMessage(pin.column_name);
+				if (pin.reject_nan) {
+					spec.nan_message = DirectBoundNaNMessage();
+				}
+			}
+			pins.push_back(std::move(spec));
 		}
 		// A column an aggregate on the right reduces is read on every row, as the solver reads it: NULL and NaN raise
 		// on every row, including rows the clause does not cover; infinity is a value.
@@ -1270,9 +1291,14 @@ private:
 				}
 				checked_columns.push_back(reducer.source_slot);
 				auto type = source_types[reducer.source_slot];
-				pins.push_back({DirectColumn(type, scope.input_bindings[reducer.source_slot]),
-				                DirectInvalidBoundMessage(reducer.column_name),
-				                type == LogicalType::FLOAT || type == LogicalType::DOUBLE});
+				DirectNotNullSpec spec;
+				spec.value = DirectColumn(type, scope.input_bindings[reducer.source_slot]);
+				spec.reject_nan = type == LogicalType::FLOAT || type == LogicalType::DOUBLE;
+				spec.message = DirectBoundNullMessage(reducer.column_name);
+				if (spec.reject_nan) {
+					spec.nan_message = DirectBoundNaNMessage();
+				}
+				pins.push_back(std::move(spec));
 			}
 		}
 		vector<ColumnBinding> keys;
@@ -1439,8 +1465,14 @@ private:
 	//! Stage 5: validate the score, rank rows within their scope, and raise the infeasibility error when the
 	//! bounds, pins, and row counts cannot all hold.
 	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score, const BoundChecks &bounds) const {
+		// The score is checked above the score projection, which carries the source columns a NULL names.
+		vector<DirectSignedValue> score_terms;
+		for (auto &part : proof.objective_parts) {
+			score_terms.push_back({part.sign, part.coefficient->Copy()});
+		}
+		auto score_source = DirectMergedOverProjection(optimizer.context, score_terms, source_bindings, score_index);
 		auto guard = make_uniq<LogicalFilter>(DirectValidNumberPredicate(
-		    optimizer, LogicalType::DOUBLE, score_binding, proof.score_text, DirectNumberKind::OBJECTIVE));
+		    optimizer, LogicalType::DOUBLE, score_binding, score_source.get(), DirectNumberKind::OBJECTIVE));
 		guard->children.push_back(std::move(score));
 		auto rank = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr,
 		                                             nullptr);

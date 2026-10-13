@@ -1,5 +1,6 @@
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/execution/executor.hpp"
 #include "duckdb/common/types/column/column_data_collection.hpp"
 #include "duckdb/common/vector_operations/vector_operations.hpp"
@@ -189,75 +190,37 @@ struct NullSourceContext {
 //! Names the columns inside `expr` that are NULL on chunk row `row`, skipping duplicates.
 //! Reached only when an extraction has already failed, so it reads values one at a time
 //! rather than making every successful scan carry per-leaf bookkeeping.
+//!
+//! A coefficient reaches execution already lowered to positional BoundReferenceExpressions in
+//! the common case, and a BoundColumnRefExpression survives on the paths that never went through
+//! that lowering. The two carry the chunk column in different fields, so each is read from its
+//! own. Which leaves are named, and the message built from them, are shared with the direct-solve
+//! plans (`decide_value_messages.hpp`).
 static void CollectNullColumnsAtRow(const Expression &expr, const DataChunk &chunk, idx_t row,
                                     vector<string> &out) {
-	// Both leaf spellings appear here. A coefficient reaches execution already lowered to
-	// positional BoundReferenceExpressions in the common case, and it is only their retained
-	// alias that makes the message readable; a BoundColumnRefExpression survives on the paths
-	// that never went through that lowering. The two carry the chunk column in different
-	// fields, so each is read from its own, and a leaf with no name to print is left to the
-	// caller's expression-quoting fallback rather than reported as `#3`.
-	idx_t col = DConstants::INVALID_INDEX;
-	string name;
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		auto &colref = expr.Cast<BoundColumnRefExpression>();
-		col = colref.binding.column_index;
-		name = colref.GetAlias();
-	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
-		auto &ref = expr.Cast<BoundReferenceExpression>();
-		col = ref.index;
-		name = ref.GetAlias();
-	} else {
-		ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-			CollectNullColumnsAtRow(child, chunk, row, out);
-		});
-		return;
-	}
-	if (name.empty() || col >= chunk.ColumnCount() || !chunk.data[col].GetValue(row).IsNull()) {
-		return;
-	}
-	for (auto &seen : out) {
-		if (seen == name) {
-			return;
+	vector<const Expression *> leaves;
+	DecideCollectNamedColumns(expr, leaves);
+	for (auto leaf : leaves) {
+		idx_t col = leaf->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF
+		                ? leaf->Cast<BoundColumnRefExpression>().binding.column_index
+		                : leaf->Cast<BoundReferenceExpression>().index;
+		auto name = leaf->GetAlias();
+		if (col >= chunk.ColumnCount() || !chunk.data[col].GetValue(row).IsNull()) {
+			continue;
+		}
+		if (std::find(out.begin(), out.end(), name) == out.end()) {
+			out.push_back(std::move(name));
 		}
 	}
-	out.push_back(std::move(name));
 }
 
-//! The NULL message, in the terms the user wrote the query in: name the column that is
-//! NULL, and give the two ways out — impute a value, or drop the row.
-//!
-//! A NULL that no column explains is possible (`NULLIF`, a TRY_CAST that failed): there
-//! is no column to name then, so the expression is quoted instead. The advice is the same
-//! either way, which is why the two branches differ only in what they point at.
+//! The NULL message, in the terms the user wrote the query in (`DecideNullValueMessage`).
 static string DescribeNullSource(const NullSourceContext *ctx, idx_t row) {
 	vector<string> null_columns;
 	if (ctx && ctx->source_expr && ctx->input_chunk) {
 		CollectNullColumnsAtRow(*ctx->source_expr, *ctx->input_chunk, row, null_columns);
 	}
-	if (null_columns.empty()) {
-		string what = (ctx && ctx->source_expr) ? ctx->source_expr->ToString() : string();
-		if (what.empty()) {
-			return "DECIDE: a value used in the optimization is NULL. Impute it with COALESCE(), "
-			       "or filter those rows out with a WHERE clause.";
-		}
-		return StringUtil::Format("DECIDE: %s is NULL. Impute it with COALESCE(), or filter those "
-		                          "rows out with a WHERE clause.", what);
-	}
-	if (null_columns.size() == 1) {
-		return StringUtil::Format("DECIDE: column \"%s\" is NULL. Impute it with COALESCE(%s, 0) "
-		                          "or filter those rows out with a WHERE clause.", null_columns[0],
-		                          null_columns[0]);
-	}
-	string names;
-	for (idx_t i = 0; i < null_columns.size(); i++) {
-		if (i > 0) {
-			names += (i + 1 == null_columns.size()) ? " and " : ", ";
-		}
-		names += "\"" + null_columns[i] + "\"";
-	}
-	return StringUtil::Format("DECIDE: columns %s are NULL. Impute them with COALESCE(), or filter "
-	                          "those rows out with a WHERE clause.", names);
+	return DecideNullValueMessage(null_columns, (ctx && ctx->source_expr) ? ctx->source_expr->ToString() : string());
 }
 
 //! Vectorized extraction of a chunk-result column into a vector<double>, multiplied by `sign`.
@@ -297,14 +260,9 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
 		}
 		double dv = data[idx];
 		if (allow_infinite ? std::isnan(dv) : !std::isfinite(dv)) {
-			throw InvalidInputException(
-				"DECIDE %s contains invalid value (%s) at row %llu. "
-				"Common causes:\n"
-				"  • Division by zero in the expression\n"
-				"  • Arithmetic overflow in calculations\n"
-				"  • NULL values that propagated through math operations\n"
-				"Check your expressions and input data.",
-				err_context, allow_infinite ? "NaN" : "NaN or Infinity", out.size());
+			throw InvalidInputException(DecideInvalidValueMessage(err_context,
+			                                                      allow_infinite ? "NaN" : "NaN or Infinity",
+			                                                      StringUtil::Format(" at row %llu", out.size())));
 		}
 		out.push_back(dv * sign);
 	}

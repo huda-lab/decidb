@@ -564,9 +564,12 @@ private:
 				columns.has_when = true;
 				columns.when = p1.Add(DirectActiveWhen(clause.when.get()));
 			}
+			auto coefficient_source =
+			    DirectMergedOverProjection(optimizer.context, clause.coefficient, source_bindings, p1.index);
 			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, columns.coefficient,
-			                                            clause.coefficient_text, DirectNumberKind::CONSTRAINT));
-			checks.push_back(DirectValidBoundPredicate(optimizer, columns.rhs, clause.rhs_column));
+			                                            coefficient_source.get(), DirectNumberKind::CONSTRAINT));
+			checks.push_back(DirectValidBoundPredicate(optimizer, columns.rhs,
+			                                           *DirectOverProjection(*clause.rhs, source_bindings, p1.index)));
 			raw.clauses.push_back(columns);
 		}
 		bool has_shared_mask = false;
@@ -600,38 +603,37 @@ private:
 	                        Raw::PartColumns &columns) const {
 		// Linear coefficients add up per decision; a constant adds nothing to the answer but must still be valid.
 		vector<unique_ptr<Expression>> linear_sums(proof.decisions.size());
-		vector<string> linear_text(proof.decisions.size());
-		vector<idx_t> linear_count(proof.decisions.size(), 0);
+		// The values each sum is made of, so a NULL in P2's check names the column it came from.
+		vector<vector<DirectSignedValue>> linear_terms(proof.decisions.size());
 		unique_ptr<Expression> constant_sum;
-		idx_t constant_count = 0;
-		string constant_text;
+		vector<DirectSignedValue> constant_terms;
 		for (auto &term : part.terms) {
 			if (term.kind == A1Term::Kind::LINEAR) {
 				auto value = DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false);
 				auto &sum = linear_sums[term.decision];
 				sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value)) : std::move(value);
-				linear_text[term.decision] = DirectTextOf(*term.value);
-				linear_count[term.decision]++;
+				linear_terms[term.decision].push_back({term.sign, term.value->Copy()});
 			} else if (term.kind == A1Term::Kind::CONSTANT) {
 				auto value = DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false);
 				constant_sum = constant_sum
 				                   ? optimizer.BindScalarFunction("+", std::move(constant_sum), std::move(value))
 				                   : std::move(value);
-				constant_text = DirectTextOf(*term.value);
-				constant_count++;
+				constant_terms.push_back({term.sign, term.value->Copy()});
 			} else {
 				Raw::SquareColumns square;
 				square.decision = term.decision;
 				square.scale = term.sign * term.square_scale;
 				square.linear = p1.Add(SumOf(term.inner_linear));
+				auto linear_source =
+				    DirectMergedOverProjection(optimizer.context, term.inner_linear, source_bindings, p1.index);
 				checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.linear,
-				                                            DirectTextOf(term.inner_linear),
-				                                            DirectNumberKind::OBJECTIVE));
+				                                            linear_source.get(), DirectNumberKind::OBJECTIVE));
 				if (!term.inner_constant.empty()) {
 					square.constant = p1.Add(SumOf(term.inner_constant));
+					auto constant_source =
+					    DirectMergedOverProjection(optimizer.context, term.inner_constant, source_bindings, p1.index);
 					checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.constant,
-					                                            DirectTextOf(term.inner_constant),
-					                                            DirectNumberKind::OBJECTIVE));
+					                                            constant_source.get(), DirectNumberKind::OBJECTIVE));
 				} else {
 					square.constant = p1.Add(make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)));
 				}
@@ -643,16 +645,18 @@ private:
 				continue;
 			}
 			auto binding = p1.Add(std::move(linear_sums[d]));
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding,
-			                                            linear_count[d] == 1 ? linear_text[d] : string(),
+			auto linear_source =
+			    DirectMergedOverProjection(optimizer.context, linear_terms[d], source_bindings, p1.index);
+			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding, linear_source.get(),
 			                                            DirectNumberKind::OBJECTIVE));
 			columns.linear_decision.push_back(d);
 			columns.linear.push_back(binding);
 		}
 		if (constant_sum) {
 			auto binding = p1.Add(std::move(constant_sum));
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding,
-			                                            constant_count == 1 ? constant_text : string(),
+			auto constant_source =
+			    DirectMergedOverProjection(optimizer.context, constant_terms, source_bindings, p1.index);
+			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding, constant_source.get(),
 			                                            DirectNumberKind::OBJECTIVE));
 		}
 	}
@@ -826,9 +830,10 @@ private:
 			auto value = [&]() {
 				return DirectColumn(LogicalType::DOUBLE, answers.value[d]);
 			};
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.a[d], string(),
+			// Raw values were named in P2; these are derived, so a NULL here has no source to name.
+			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.a[d], nullptr,
 			                                            DirectNumberKind::OBJECTIVE));
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.b[d], string(),
+			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.b[d], nullptr,
 			                                            DirectNumberKind::OBJECTIVE));
 			checks.push_back(make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, answers.infeasible[d]),
 			                                                DirectInfeasibleErrorPredicate(optimizer),

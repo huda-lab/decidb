@@ -56,14 +56,21 @@ struct DirectBoundSpec {
 	//! Reduce over every group row rather than only the eligible ones (a source-valued bound under an
 	//! aggregate-local WHEN, as the solver reduces it).
 	bool all_group_rows = false;
-	//! The error a NULL or NaN value raises.
+	//! The error a NULL or NaN value raises, for a bound that is not exactly one source column.
 	string invalid_message;
+	//! For a bound that is exactly one source column: the error a NULL raises, and the error a NaN raises (empty when
+	//! the column cannot hold NaN). The column is the same on every row, so each message is fixed.
+	string null_message;
+	string nan_message;
 };
 
 //! One clause's data-valued expression that must not be NULL on any row, nor NaN when `reject_nan` is set.
 struct DirectNotNullSpec {
 	unique_ptr<Expression> value;
+	//! The error a NULL raises, and a NaN too when `nan_message` is empty.
 	string message;
+	//! The error a NaN raises, when it differs from the NULL error.
+	string nan_message;
 	bool reject_nan = false;
 };
 

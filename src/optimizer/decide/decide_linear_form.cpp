@@ -259,11 +259,8 @@ private:
 				out.push_back(std::move(term));
 				continue;
 			}
-			vector<unique_ptr<Expression>> children;
-			children.push_back(std::move(out[target].coefficient));
-			children.push_back(std::move(term.coefficient));
-			out[target].coefficient =
-			    DecideRebindOperator(context, out[target].sign == term.sign ? "+" : "-", std::move(children));
+			out[target].coefficient = DecideMergeLikeCoefficients(
+			    context, out[target].sign, std::move(out[target].coefficient), term.sign, std::move(term.coefficient));
 		}
 		terms = std::move(out);
 	}

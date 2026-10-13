@@ -35,11 +35,13 @@ path prints. To learn why a query missed, set `require`.
 - **Strict bounds against a fraction.** A bare `x > 0.5` or `x < 2.5` on an `INT` or `BOOL` (no `WHEN`) gives `x >= 1`
   and `x <= 2` on the solver, in A1 and in S1, which take the shift from one function (`DecideStrictBound`), so `auto` and
   `off` agree on this shape.
-- **Error wording and error choice.** Direct solve owes an error on the same inputs, not the
-  solver's text or the solver's pick among several errors (see `rules.md`). S1 keeps the solver's fixed messages (empty
-  aggregate, non-finite score, infeasible) and words the rest plainly: a NULL score quotes the score expression, and a
-  bad bound names its column. Direct omits the solver's "at row N" on purpose: N is a position in scan order, not a
-  key. New rules do not copy wording.
+- **Error wording and error choice.** Direct solve owes an error on the same inputs, and the solver's text for it
+  (see `rules.md`), not the solver's pick among several errors. The NULL and NaN messages come from the functions the
+  solver calls (`decide_value_messages.hpp`), so a NULL score, target, coefficient or bound names the NULL columns on
+  the failing row as the solver does. Direct omits the solver's "at row N" on purpose: N is a position in scan order,
+  not a key. Two messages stay direct solve's own: an S1 bound or pin that is a computed expression rather than one
+  column (the plan counts bad rows over the whole input and has no failing row to name columns from), and an `=` bound
+  that varies within a group (the solver names the first two values it meets in scan order).
 - **Numeric edge cases.** Scores are compared to zero in the finite DOUBLE domain with no epsilon. Both solvers
   disagreed with each other near 1e-9, so the oracle and exact enumeration are the reference, and backend comparisons
   allow a measured gap.

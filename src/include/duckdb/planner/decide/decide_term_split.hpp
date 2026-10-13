@@ -70,6 +70,12 @@ struct DecideSplitTerm {
 unique_ptr<Expression> DecideRebindOperator(ClientContext &context, const string &name,
                                             vector<unique_ptr<Expression>> children);
 
+//! The coefficient of two like terms summed into one: `sign_first * (first ± next)`, taking `-` exactly when the terms'
+//! signs differ. The solver's like-term collection and the direct-solve plans both build their merged coefficient here,
+//! so a NULL message quotes the same expression on both paths.
+unique_ptr<Expression> DecideMergeLikeCoefficients(ClientContext &context, int first_sign, unique_ptr<Expression> first,
+                                                   int next_sign, unique_ptr<Expression> next);
+
 class DecideTermSplitter {
 public:
 	DecideTermSplitter(ClientContext &context, idx_t decide_index,
