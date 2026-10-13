@@ -127,3 +127,35 @@ Every selected segment stays within its capacity. Continuous decisions allow the
 > • Inconsistent bounds or an unreachable exact resource requirement produce DECIDE infeasibility.
 >
 > • WHEN, PER, NULL, numeric, tie, decision-identity, and output-mapping semantics are preserved.
+
+## Admitted class
+
+What DeciDB admits beyond, or in place of, the catalogue text. Where the two differ, this section holds.
+
+> • **Weights of any sign.** A weight may be a column or expression and zero or negative on some rows; the plan cannot
+> prove it positive before it reads the rows (column statistics do not help: the DECIDE pass runs before DuckDB
+> propagates them, most weights are expressions or come from joins or files without them, and a prepared plan keeps
+> its choice while rows change). One price per unit of budget settles every row: a row goes to its upper
+> bound when its value beats price × weight, and to its lower bound otherwise. A row with a nonpositive weight and a
+> positive value takes its upper bound without competing for the budget.
+>
+> • **Bounds of any size.** A bound, constant or per row, of magnitude 1e20 or more is no bound, as on the solver. An
+> uncapped row needs its value no more than price × weight and a floorless row needs it no less; when no price meets
+> all of them, the problem is unbounded. That is decided after every row is read, as infeasibility is.
+>
+> • **Pieces.** DECIDE has no piecewise syntax. Pieces written as rows are plain R1. Pieces written as several `REAL`
+> decisions on one row sharing the budget are admitted, each (row, decision) an item in the ranking; nothing in the
+> query orders or recombines them, so the ranking matches the solver whatever the piece values. Concavity is not
+> required, pending the check in `todo.md` § R1-06. A constraint or objective term that links decisions stays on the
+> solver.
+>
+> • **Budget direction.** `<=`, `=`, `>=` and `BETWEEN`. Each row starts at its own best end; when that spend misses
+> the budget, rows move toward it in order of least value lost per unit of budget. `BETWEEN` binds on at most one side.
+> A required spend outside what the boxes can reach is infeasible.
+>
+> • **Budget scope.** `PER` gives each group its own budget and price. A `WHEN` on the budget, on the clause or on the
+> aggregate (the same meaning for a constant budget), and a NULL `PER` key, leave a row out of every budget; such a
+> row takes its own best end, as an A1 row does. A budget whose `WHEN` covers no row of a nonempty source raises the
+> empty-aggregate error, as the solver does.
+>
+> • **Errors.** An empty box on any row is infeasible; NULL or NaN values raise as they do on the solver.

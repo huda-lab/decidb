@@ -2,49 +2,23 @@
 
 R1 splits one shared budget among `REAL` decisions by filling the best value per unit of budget first. The class is in
 [definition.md](definition.md). How to work and the checks are in `../_harness/todo.md` § How to work any task. The goal
-is the full definition; R1-00 settles where the build goes past it or stops short of it.
-
-## R1-00 — Settle R1's scope
-
-- **Decision needed.**
-- **Problem.** The definition assumes facts a plan cannot prove before it reads the rows, and leaves some DECIDE shapes
-  unstated. Each question below changes what R1-02 to R1-06 build.
-  1. **Weight from a column.** The definition requires every weight `w` in `SUM(w*x)` to be strictly positive. A column
-     weight (`unit_resource * amount`, the worked example) can be zero or negative on some row, and the plan is fixed
-     before the rows are read. Raising an error there is a wrong answer, because the solver answers.
-  2. **Bound from a column.** The definition requires finite bounds. A column bound of 1e20 or more, or an infinite
-     value, is no bound on the solver, so the plan meets it at run time.
-  3. **Shrinking returns.** DECIDE has no piecewise syntax. A user writes pieces as one row each (plain R1) or as several
-     decisions in one budget (`SUM(w1*x1 + w2*x2) <= B`, with each `xi` boxed to its piece).
-  4. **Budget direction.** The definition admits `<=` and `=`. `>=` and `BETWEEN` are not stated.
-  5. **Budget scope.** The definition admits independent groups (`PER`). A `WHEN` on the budget, where rows outside it use
-     no budget, is not stated.
-- **Options.**
-  - Q1: (a) one-price construction for any sign: one price per unit of budget, each row at its upper bound when its value
-    beats price × weight, else at its lower; the price comes from one sort by value per weight. A short duality proof,
-    and `definition.md` is corrected to match. (b) Constant positive weights only; a column weight goes to the solver.
-    No new proof, loses the worked example.
-  - Q2: (a) handle no-bound rows in the same plan: a positive-weight row is capped by the budget, any other improving
-    row raises unbounded as on the solver. (b) Decline when any bound is a column.
-  - Q3: (a) admit several decisions in one budget with per-piece proof of shrinking returns. Needs multi-decision
-    facts and a concavity check. (b) One decision only; pieces as rows already work.
-  - Q4: (a) admit `>=`, `=` and `BETWEEN` (the one-price construction covers them with a price of either sign).
-    (b) `<=` and `=` only.
-  - Q5: (a) admit `PER` and a clause `WHEN`. (b) `PER` only.
-- **Recommendation.** (a) on every question, which is the most complete R1. Q3 is the largest and the least used; if it
-  proves long, it drops to (b) without touching the rest.
-- **Done when.** Each answer is written into the task it affects, and `definition.md` states the admitted class.
+is the full definition with its § Admitted class.
 
 ## R1-02 — The core rule: one decision, one `<=` budget
 
-- **Needs.** R1-00.
 - **Problem.** `DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND available AND SUM(w*amount) <= B MAXIMIZE
   SUM(v*amount)` runs on the solver.
 - **Change.** `r1_rule.cpp`, registered in `direct_registry.cpp`. One row-scoped `REAL` decision; per-row ranges from
   the shared reader (`DirectReadBounds`, `DirectClauseBounds` and `DirectRowBox` in `direct_builder.cpp`; the shape
   check that a bound reads one decision, `ReadsOneDecision`, is still A1's own), positive lower bounds included (the baseline is taken first); one `SUM(w*x) <= B` with a constant or foldable
-  `B`; a linear objective (`MAXIMIZE`, `MINIMIZE` or none). Weights and bounds per R1-00 Q1 and Q2. Infeasible when
-  the baseline exceeds the budget, unbounded where the solver says so, every row read before one is released.
+  `B`; a linear objective (`MAXIMIZE`, `MINIMIZE` or none). A weight of any sign, read per row
+  (`definition.md` § Admitted class): one price per unit of budget, each row at its upper bound when its value beats price × weight, else at
+  its lower. A bound of magnitude 1e20 or
+  more, constant or per row, is no bound (`definition.md` § Admitted class): the price must leave an uncapped row's value no more than price ×
+  weight and a floorless row's value no less, and when no price does, the plan raises unbounded, in the same
+  pass that finds the price. Tests cover a lone free row, an improving pair, and both under `MINIMIZE`. Infeasible when a
+  row's box is empty (A1's test in its answer stage, which moves next to `DirectRowBox` so both rules share it) or the
+  baseline exceeds the budget, unbounded where the solver says so, every row read before one is released.
 - **Done when.** `test_direct_r1.py` (three-way table, error table, boundary table, the shape inside parent queries)
   and C++ proof cases pass; `rules/r1/done.md` exists with its stamp; the README status row says R1 works.
 
@@ -58,27 +32,40 @@ is the full definition; R1-00 settles where the build goes past it or stops shor
 
 ## R1-04 — Budget as `=`, `>=` or `BETWEEN`
 
-- **Needs.** R1-02, R1-00 Q4.
+- **Needs.** R1-02.
 - **Problem.** An exact-fill or minimum-spend budget runs on the solver.
-- **Change.** Admit the directions R1-00 Q4 chose. An exact fill continues past nonpositive values; a required amount
-  outside the range the boxes can reach is infeasible.
-- **Done when.** Three-way and error cases for each direction pass, including an unreachable fill.
+- **Change.** Admit `=`, `>=` and `BETWEEN` (`definition.md` § Admitted class). One walk serves every direction: put each row at its own best
+  end and total the spend; when that meets the budget, the budget does not bind; when it is over a limit, pull rows back
+  giving up the least value per unit of budget first; when it is under a minimum, push rows up losing the least value
+  per unit first (a negative price). `BETWEEN` binds on at most one side. An exact fill continues past nonpositive
+  values; a required amount outside the range the boxes can reach is infeasible.
+- **Done when.** Three-way and error cases for each direction pass, under `MAXIMIZE` and `MINIMIZE`, including a
+  budget that does not bind and an unreachable fill; the minimum-cost cover (`MINIMIZE SUM(c*x)`, `SUM(x) >= d`) is
+  among them.
 
 ## R1-05 — Budget per group and under `WHEN`
 
-- **Needs.** R1-02, R1-00 Q5.
+- **Needs.** R1-02.
 - **Problem.** `SUM(w*x) <= B PER region` and a budget clause with `WHEN` run on the solver.
-- **Change.** Rank and fill within each group. Under `WHEN`, rows outside the clause use no budget and take their own
-  best value in their range. A NULL `PER` key follows the solver.
-- **Done when.** Three-way cases for `PER`, `WHEN`, a NULL key and an empty group pass; the fuzz generator draws them.
+- **Change.** Rank and fill within each group, one price per group. A `WHEN` on the budget, written on the clause or
+  on the aggregate, and a NULL `PER` key leave a row out of every budget; that row takes its own best end, and an
+  uncapped improving one is unbounded (`definition.md` § Admitted class). A `WHEN` that covers no row of a nonempty source raises the
+  empty-aggregate error through `DirectGuardEmptyAggregate`, as S1 does.
+- **Done when.** Three-way cases for `PER`, `WHEN` in both spellings, `PER` with `WHEN`, a NULL key, a group with no
+  covered row and a `WHEN` covering no row pass; the fuzz generator draws them.
 
 ## R1-06 — Shrinking returns across several decisions
 
-- **Needs.** R1-02, R1-00 Q3.
+- **Needs.** R1-02.
 - **Problem.** A piecewise benefit written as several decisions in one budget runs on the solver.
-- **Change.** Admit several `REAL` decisions in one budget when each piece's value per unit of budget does not increase
-  from one piece to the next. Each piece becomes a row in the ranking; the pieces of one decision sum back to it.
-- **Done when.** Three-way cases with two and three pieces pass, and a non-concave set of pieces stays on the solver.
+- **Change.** First, the concavity check the owner asked for: confirm, by argument and by three-way cases with
+  increasing piece values, that the solver's model holds no ordering or linking between the decisions of one row, so
+  the greedy fill over every (row, decision) item matches it with or without concavity. Bring the result to the owner
+  before building. Then admit several `REAL` decisions in one budget, each (row, decision) an item in the ranking with
+  its own weight, value and box, each decision answered in its own column. A per-row constraint or objective term that
+  links decisions stays on the solver.
+- **Done when.** The concavity result is settled with the owner; three-way cases with two and three decisions pass,
+  concave and not (or, if the check fails, a non-concave set stays on the solver); a linking constraint is a near miss.
 
 ## R1-07 — Performance table
 
