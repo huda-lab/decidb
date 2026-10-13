@@ -1,6 +1,6 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-13 on top of `95ee8bf58c` with the second read, with S1 and A1 registered: `make decide-test`,
+Verified on 2026-10-13 on top of `161ba4dbf0`, with S1 and A1 registered: `make decide-test`,
 `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,346 passed (no
 failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,345 passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,319 assertions in
@@ -39,7 +39,12 @@ check). Design: `../../architecture/`.
   `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBarrier`, `DirectScaledTerm` (sign and constant
   factor of a coefficient), `DirectIsNull`, `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`,
   `DirectValidBoundPredicate` and `DirectValidNumberPredicate`. Which of several errors a query reports is not
-  specified. The helpers only S1 uses (the scope projection `DirectProjectScope`, the bound validation
+  specified. The per-row bound reader is also here, though A1 is its only user until R1 is built on it, so that the two
+  rules cannot read a bound differently: `DirectReadBounds` folds `variable_bound`s into each decision's static box
+  (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude 1e20 or more infinite) and lists every other bound
+  as a per-row clause, an equality split into its two halves; `DirectClauseBounds` turns one clause's row values into a
+  lower and an upper bound as the solver reads them; `DirectRowBox` intersects them with the box. Its expressions
+  are built with `Calc` (`direct_expression.hpp`), a small arithmetic helper over bound expressions. The helpers only S1 uses (the scope projection `DirectProjectScope`, the bound validation
   `DirectValidateBounds`, `DirectWindowExtremum`, `DirectAnyCondition`) live in `src/optimizer/decide/direct/s1_support.{hpp,cpp}`
   in `namespace direct_s1`, and move to the builders when a second rule needs them. The exactness limit (2^53) is
   `DECIDE_MAX_EXACT_INTEGER` in the numeric-policy header (next bullet).

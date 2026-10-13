@@ -1,31 +1,25 @@
-# Work queue: finish direct-solve S1, A1 and the engine, then new classes
+# Work queue: direct-solve R1, the full definition
 
 Scratchpad. Each line points to a task in a nested todo; details live there. Delete a line when its task ships; delete
 this file when it is empty.
 
-Read first: `.claude/CLAUDE.md`, `08_direct_solve/README.md`, `08_direct_solve/architecture/rules.md`.
-Checks: `08_direct_solve/rules/_harness/todo.md` § How to work any task.
+Read first: `.claude/CLAUDE.md`, `08_direct_solve/README.md`, `08_direct_solve/architecture/rules.md`,
+`08_direct_solve/rules/r1/definition.md`. Checks: `08_direct_solve/rules/_harness/todo.md` § How to work any task.
 
-## 5. New problem classes
-- [ ] R-A3-01 A3 fixed-small multi-affine box — 08_direct_solve/rules/a3/todo.md § R-A3-01
-- [ ] R-A5-01 A5 objective-aligned monotone corner — 08_direct_solve/rules/a5/todo.md § R-A5-01
-- [ ] R-A6-01 A6 one squared residual over a box — 08_direct_solve/rules/a6/todo.md § R-A6-01
-- [ ] R-A2-01 A2 one shared mean, median, midpoint or mode — 08_direct_solve/rules/a2/todo.md § R-A2-01
-- [ ] R-A4-01 A4 bounded two-parameter least squares — 08_direct_solve/rules/a4/todo.md § R-A4-01
-- [ ] R-S2-01 S2 nested upper quotas — 08_direct_solve/rules/s2/todo.md § R-S2-01
-- [ ] R-S3-01 S3 maximum item count under one budget — 08_direct_solve/rules/s3/todo.md § R-S3-01
-- [ ] R-S4-01 S4 exact count and budget, best item — 08_direct_solve/rules/s4/todo.md § R-S4-01
-- [ ] R-R1-01 R1 continuous piecewise-linear allocation — 08_direct_solve/rules/r1/todo.md § R-R1-01
-- [ ] R-R2-01 R2 bounded integer marginal units — 08_direct_solve/rules/r2/todo.md § R-R2-01
-- [ ] R-R3-01 R3 strictly convex quadratic allocation — 08_direct_solve/rules/r3/todo.md § R-R3-01
-- [ ] R-R4-01 R4 proportional max-min fairness — 08_direct_solve/rules/r4/todo.md § R-R4-01
-- [ ] R-N1-01 N1 projection under one sum-of-squares bound — 08_direct_solve/rules/n1/todo.md § R-N1-01
-- [ ] R-N2-01 N2 linear support over a diagonal ellipsoid — 08_direct_solve/rules/n2/todo.md § R-N2-01
-- [ ] R-O1-01 O1 ordered complete assignment — 08_direct_solve/rules/o1/todo.md § R-O1-01
-- [ ] R-O2-01 O2 balanced one-dimensional Monge transport — 08_direct_solve/rules/o2/todo.md § R-O2-01
-- [ ] R-D1-01 D1 exact keyed decomposition — 08_direct_solve/rules/d1/todo.md § R-D1-01
+## 1. Owner decisions
+- [ ] R1-00 settle R1's scope — 08_direct_solve/rules/r1/todo.md § R1-00
 
-## 6. Blocked
-- [ ] S1-12 one per-row bound builder for S1 and A1 — 08_direct_solve/rules/s1/todo.md § S1-12 (needs: R-A3-01, R-A5-01 or R-A6-01 built)
-- [ ] H-03 cost choice among competing direct plans — 08_direct_solve/rules/_harness/todo.md § H-03 (needs: two rules proving one query)
-- [ ] H-02 adapter for the new language — 08_direct_solve/rules/_harness/todo.md § H-02 (needs: a stable language branch)
+## 3. Core rule (needs: 1)
+- [ ] R1-02 one decision, one `<=` budget — 08_direct_solve/rules/r1/todo.md § R1-02
+- [ ] R1-03 contract fixture and fuzz generator — 08_direct_solve/rules/r1/todo.md § R1-03 (needs: R1-02)
+
+## 4. Widenings (needs: 3)
+- [ ] R1-04 budget as `=`, `>=` or `BETWEEN` — 08_direct_solve/rules/r1/todo.md § R1-04
+- [ ] R1-05 budget per group and under `WHEN` — 08_direct_solve/rules/r1/todo.md § R1-05
+- [ ] R1-06 shrinking returns across several decisions — 08_direct_solve/rules/r1/todo.md § R1-06
+
+## 5. Unblocked by R1 (needs: R1-02)
+- [ ] S1-12 S1's pins use the shared range reader — 08_direct_solve/rules/s1/todo.md § S1-12
+
+## 6. Measurement (needs: 4)
+- [ ] R1-07 performance table — 08_direct_solve/rules/r1/todo.md § R1-07

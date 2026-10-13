@@ -1,6 +1,10 @@
 #pragma once
 
+#include <limits>
+
 #include "duckdb/common/common.hpp"
+#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
+#include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/planner/bound_result_modifier.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -94,5 +98,90 @@ string DirectInvalidBoundMessage(const string &column_name);
 //! or volatile expression. This proves only stored columns, constants, and their passthrough aliases safe,
 //! including passthrough bindings from one child of an inner comparison join.
 bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding);
+
+//===--------------------------------------------------------------------===//
+// Per-row bounds on one decision
+//===--------------------------------------------------------------------===//
+//
+// A bound `coefficient * x  comparison  rhs` on one decision reads, on each row, as a lower and an upper bound on x.
+// The reader has two halves that a rule composes. At plan time, DirectReadBounds proves the bounds and separates what
+// the solver folds into the decision's static box from the clauses the plan evaluates per row. In the plan,
+// DirectClauseBounds turns one clause's raw values into its two bounds and DirectRowBox intersects them with the box.
+
+//! A numeric expression over the source, read as DOUBLE and multiplied by `sign`.
+struct DirectSignedValue {
+	int sign = 1;
+	unique_ptr<Expression> expr;
+};
+
+//! What a NULL or non-finite value quotes: the source column when the value is exactly one, otherwise the expression.
+string DirectTextOf(const Expression &expr);
+//! The same for a sum of values: the one value's text, or empty when there are several.
+string DirectTextOf(const vector<DirectSignedValue> &values);
+
+//! True for an INT or BOOL decision, whose bounds round to whole numbers.
+bool DirectIsWholeNumbered(DirectDomain domain);
+
+//! A coefficient or value the plan evaluates per row: numeric, deterministic, independent of the decisions, over the
+//! source. It may raise when evaluated; the plan evaluates it on every row, as the solver does.
+bool DirectProveValue(const DirectProblemFacts &facts, const Expression &expr);
+
+//! One bound the plan evaluates per row: `coefficient * x  comparison  rhs`, under an optional WHEN. A bound the solver
+//! folds into the variable's box is not a clause, it is part of the decision's static box.
+struct DirectBoundClause {
+	idx_t decision = 0;
+	ExpressionType comparison = ExpressionType::INVALID;
+	vector<DirectSignedValue> coefficient;
+	//! The coefficient as the user wrote it, which a NULL or non-finite one quotes.
+	string coefficient_text;
+	unique_ptr<Expression> rhs;
+	//! The source column the right side is exactly, for the error that names it; empty for a computed bound.
+	string rhs_column;
+	unique_ptr<Expression> when;
+
+	//! A deep copy of every field, so a field added later cannot be missing from a clause split in two.
+	DirectBoundClause Copy() const;
+};
+
+//! A decision's box before any per-row bound: its default, replaced or tightened by the bounds the solver folds into
+//! the variable. An end of magnitude 1e20 or more is infinite.
+struct DirectDecisionBox {
+	double lower = 0.0;
+	double upper = std::numeric_limits<double>::infinity();
+};
+
+struct DirectBoundReading {
+	//! The per-row clauses, in the order the constraints came. An equality is split into its lower and its upper half.
+	vector<DirectBoundClause> clauses;
+	//! One static box per decision.
+	vector<DirectDecisionBox> boxes;
+};
+
+//! Reads every non-aggregate constraint of `facts` as a bound on one decision (a constraint of the form `a*x
+//! <comparison> value`; the rule's Match has already checked the shape). A bound the solver folds into the variable
+//! (`variable_bound`: an unconditional comparison of the bare decision against a constant) replaces the default lower
+//! bound of 0 and tightens the upper one; every other bound is a clause. Returns false with a `reason` when a bound
+//! cannot be proved, or when the folded box contradicts the decision's built-in domain, which the solver reports.
+bool DirectReadBounds(const DirectProblemFacts &facts, ClientContext &context, DirectBoundReading &reading,
+                      string &reason);
+
+//! The columns of one clause's raw values, evaluated on every row.
+struct DirectBoundColumns {
+	ColumnBinding coefficient;
+	ColumnBinding rhs;
+	bool has_when = false;
+	ColumnBinding when;
+};
+
+//! The lower and upper bound one clause puts on its decision on one row, as the solver reads it: a clause holds
+//! `coefficient * x  comparison  rhs`, so the coefficient's sign picks the side, a zero coefficient leaves the row
+//! alone or infeasible, and a whole-numbered decision rounds to the integer DOUBLE arithmetic accepts.
+void DirectClauseBounds(const Calc &calc, ExpressionType comparison, bool whole, const DirectBoundColumns &columns,
+                        Ex &lower, Ex &upper);
+
+//! A decision's box on one row: the static box intersected with the bounds of its clauses.
+void DirectRowBox(const Calc &calc, double static_lower, double static_upper,
+                  const vector<ColumnBinding> &clause_lowers, const vector<ColumnBinding> &clause_uppers, Ex &lower,
+                  Ex &upper);
 
 } // namespace duckdb

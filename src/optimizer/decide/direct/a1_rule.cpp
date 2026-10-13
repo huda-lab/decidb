@@ -8,7 +8,6 @@
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
 #include "duckdb/optimizer/decide/direct/direct_builder.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
@@ -34,43 +33,6 @@ constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 
 struct A1Match final : DirectRuleMatch {};
 
-//! A numeric expression over the source, read as DOUBLE and multiplied by `sign`.
-struct A1Value {
-	int sign = 1;
-	unique_ptr<Expression> expr;
-};
-
-//! One bound the plan evaluates per row: `coefficient * x  comparison  rhs`, under an optional WHEN. A bound the solver
-//! folds into the variable's box is not a clause, it is part of the decision's static box.
-struct A1Clause {
-	idx_t decision = 0;
-	ExpressionType comparison = ExpressionType::INVALID;
-	vector<A1Value> coefficient;
-	//! The coefficient as the user wrote it, which a NULL or non-finite one quotes.
-	string coefficient_text;
-	unique_ptr<Expression> rhs;
-	//! The source column the right side is exactly, for the error that names it; empty for a computed bound.
-	string rhs_column;
-	unique_ptr<Expression> when;
-
-	//! A deep copy of every field, so a field added later cannot be missing from a clause split in two.
-	A1Clause Copy() const {
-		A1Clause result;
-		result.decision = decision;
-		result.comparison = comparison;
-		for (auto &value : coefficient) {
-			result.coefficient.push_back({value.sign, value.expr->Copy()});
-		}
-		result.coefficient_text = coefficient_text;
-		result.rhs = rhs->Copy();
-		result.rhs_column = rhs_column;
-		if (when) {
-			result.when = when->Copy();
-		}
-		return result;
-	}
-};
-
 struct A1Term {
 	enum class Kind : uint8_t { LINEAR, CONSTANT, SQUARE };
 	Kind kind = Kind::LINEAR;
@@ -80,8 +42,8 @@ struct A1Term {
 	unique_ptr<Expression> value;
 	//! SQUARE: `square_scale * (inner)^2`, where the inner expression is linear in one decision.
 	double square_scale = 1.0;
-	vector<A1Value> inner_linear;
-	vector<A1Value> inner_constant;
+	vector<DirectSignedValue> inner_linear;
+	vector<DirectSignedValue> inner_constant;
 };
 
 struct A1Part {
@@ -108,7 +70,7 @@ struct A1Proof final : DirectRuleProof {
 	idx_t decide_index = 0;
 	DecideSense sense = DecideSense::FEASIBILITY;
 	vector<A1Decision> decisions;
-	vector<A1Clause> clauses;
+	vector<DirectBoundClause> clauses;
 	unique_ptr<Expression> objective_when;
 	vector<A1Part> parts;
 	bool has_square = false;
@@ -116,26 +78,12 @@ struct A1Proof final : DirectRuleProof {
 	bool constant_problem = false;
 };
 
-bool IsWholeNumbered(DirectDomain domain) {
-	return domain != DirectDomain::REAL;
-}
-
-//! What a NULL or non-finite value quotes: the source column when the value is exactly one, otherwise the expression.
-string TextOfExpression(const Expression &expr) {
-	auto column = DirectBareNumericColumn(expr);
-	return column ? column->GetAlias() : expr.ToString();
-}
-
-string TextOf(const vector<A1Value> &values) {
-	return values.size() == 1 ? TextOfExpression(*values[0].expr) : string();
-}
-
 //! No value reads a source column and nothing is conditional: every row sees the same bounds and coefficients.
 bool IsConstantProblem(const A1Proof &proof) {
 	auto constant = [](const Expression &expr) {
 		return expr.IsFoldable();
 	};
-	auto constant_values = [&](const vector<A1Value> &values) {
+	auto constant_values = [&](const vector<DirectSignedValue> &values) {
 		for (auto &value : values) {
 			if (!constant(*value.expr)) {
 				return false;
@@ -306,127 +254,17 @@ private:
 	bool ProveObjective(const DirectProblemFacts &facts, ClientContext &context, A1Proof &proof, string &reason) const;
 };
 
-//! A coefficient or value the plan evaluates per row: numeric, deterministic, independent of the decisions, over the
-//! source. It may raise when evaluated; the plan evaluates it on every row, as the solver does.
-bool ProveValue(const DirectProblemFacts &facts, const Expression &expr) {
-	return expr.return_type.IsNumeric() && DirectIsNumericDecisionFree(expr, facts.decide_index) &&
-	       DirectReferencesOnlySource(expr, facts.source_bindings);
-}
-
-bool ProveValues(const DirectProblemFacts &facts, const vector<DecideSplitTerm> &terms, vector<A1Value> &out) {
-	for (auto &term : terms) {
-		if (!term.coefficient || !ProveValue(facts, *term.coefficient)) {
-			return false;
-		}
-		A1Value value;
-		value.sign = term.sign;
-		value.expr = term.coefficient->Copy();
-		out.push_back(std::move(value));
-	}
-	return true;
-}
-
-//! The decision's box before any per-row bound. A bound the solver folds into the variable (an unconditional comparison
-//! of the bare decision against a constant) replaces the default lower bound of 0 and tightens the upper one; every
-//! other bound only intersects with the default, so it never reaches the box.
+//! The decision's box before any per-row bound, and the clauses the plan evaluates per row, from the shared reader.
 bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &context, A1Proof &proof,
                                 string &reason) const {
-	idx_t decision_count = facts.decisions.size();
-	// The box as the solver folds it: the raw values it reads (after the strict shift, before any rounding or mapping
-	// to infinity), combined by the one function the solver's own absorption pass calls.
-	vector<DecideBoundBox> boxes(decision_count);
-	for (auto &fact : facts.constraints) {
-		idx_t decision = fact.lhs[0].terms[0].var_a;
-		auto domain = proof.decisions[decision].domain;
-		auto &rhs = *fact.rhs;
-		auto comparison = fact.comparison;
-		if (!DirectIsSourceOnlyValue(rhs, facts.decide_index, facts.source_bindings)) {
-			reason = "coefficient_shape: expected a deterministic numeric expression over the source columns on the "
-			         "right of a bound";
-			return false;
-		}
-		if (fact.scope.when &&
-		    !DirectIsSourceOnlyPredicate(*fact.scope.when, facts.decide_index, facts.source_bindings)) {
-			reason = "constraint_scope: WHEN must be a deterministic source-only predicate";
-			return false;
-		}
-		if (fact.variable_bound) {
-			double k;
-			if (!TryEvaluateFoldableDouble(context, rhs, k, DIRECT_CONSTANT | FOLD_ALLOW_BOOLEAN)) {
-				reason = "constraint_shape: expected a finite constant on the right of a bound on the decision";
-				return false;
-			}
-			bool whole = IsWholeNumbered(domain);
-			bool strict =
-			    comparison == ExpressionType::COMPARE_LESSTHAN || comparison == ExpressionType::COMPARE_GREATERTHAN;
-			if (strict && !whole) {
-				reason = "constraint_shape: a strict bound on a continuous decision";
-				return false;
-			}
-			bool lower = DirectIsLowerBound(comparison);
-			bool upper = DirectIsUpperBound(comparison);
-			DecideAbsorbBound(boxes[decision], lower && upper ? '=' : (lower ? '>' : '<'),
-			                  strict ? DecideStrictBound(lower, k) : k);
-			continue;
-		}
-		A1Clause clause;
-		clause.decision = decision;
-		clause.comparison = comparison;
-		if (!ProveValues(facts, fact.lhs[0].terms, clause.coefficient)) {
-			reason = "coefficient_shape: expected a deterministic numeric coefficient over the source columns";
-			return false;
-		}
-		clause.coefficient_text = TextOf(clause.coefficient);
-		clause.rhs = fact.rhs->Copy();
-		idx_t slot;
-		LogicalType type;
-		string name;
-		if (DirectSourceNumericColumn(rhs, facts.source_bindings, slot, type, name)) {
-			clause.rhs_column = name;
-		}
-		if (fact.scope.when) {
-			clause.when = fact.scope.when->Copy();
-		}
-		if (comparison == ExpressionType::COMPARE_EQUAL) {
-			// An equality is a lower and an upper bound that may not agree: a fractional value for a whole-numbered
-			// decision then leaves no row.
-			auto upper = clause.Copy();
-			upper.comparison = ExpressionType::COMPARE_LESSTHANOREQUALTO;
-			clause.comparison = ExpressionType::COMPARE_GREATERTHANOREQUALTO;
-			proof.clauses.push_back(std::move(clause));
-			proof.clauses.push_back(std::move(upper));
-		} else {
-			proof.clauses.push_back(std::move(clause));
-		}
+	DirectBoundReading reading;
+	if (!DirectReadBounds(facts, context, reading, reason)) {
+		return false;
 	}
-	for (idx_t decision = 0; decision < decision_count; decision++) {
-		// The solver rejects, before it reads any row, a box that contradicts the variable's built-in domain
-		// (DecideBoxContradictsDomain). It says so on an empty source too, so the query is left to the solver, which
-		// reports it, rather than proved here and answered with no rows.
-		if (DecideBoxContradictsDomain(boxes[decision], proof.decisions[decision].domain == DirectDomain::BOOL)) {
-			reason =
-			    "variable_bound: a bound contradicts the decision's built-in domain (non-negative, or BOOL 0 or 1); "
-			    "the solver reports it";
-			return false;
-		}
-	}
-	for (idx_t decision = 0; decision < decision_count; decision++) {
-		auto &prepared = proof.decisions[decision];
-		bool boolean = prepared.domain == DirectDomain::BOOL;
-		// A written lower bound replaces the default of 0, except that a BOOL never leaves {0, 1}. A whole-numbered
-		// decision rounds each bound inward, and a bound of magnitude 1e20 or more (a written -1e30 included) is no
-		// bound.
-		bool whole = IsWholeNumbered(prepared.domain);
-		double lower = boxes[decision].lower;
-		double upper = boxes[decision].upper;
-		if (whole) {
-			lower = std::ceil(lower);
-			upper = std::floor(upper);
-		}
-		lower = DecideIsOpenBelow(lower) ? NEGATIVE_INFINITY : lower;
-		upper = DecideIsOpenAbove(upper) ? POSITIVE_INFINITY : upper;
-		prepared.lower = boxes[decision].lower_written ? (boolean ? std::max(0.0, lower) : lower) : 0.0;
-		prepared.upper = boolean ? std::min(1.0, upper) : upper;
+	proof.clauses = std::move(reading.clauses);
+	for (idx_t decision = 0; decision < proof.decisions.size(); decision++) {
+		proof.decisions[decision].lower = reading.boxes[decision].lower;
+		proof.decisions[decision].upper = reading.boxes[decision].upper;
 	}
 	return true;
 }
@@ -470,7 +308,7 @@ bool A1BoundedRule::ProveObjective(const DirectProblemFacts &facts, ClientContex
 					}
 					built.decision = term.var_a;
 				}
-				if (!term.coefficient || !ProveValue(facts, *term.coefficient)) {
+				if (!term.coefficient || !DirectProveValue(facts, *term.coefficient)) {
 					reason = "coefficient_shape: expected a deterministic numeric expression over the source columns";
 					return false;
 				}
@@ -506,12 +344,12 @@ bool A1BoundedRule::ProveObjective(const DirectProblemFacts &facts, ClientContex
 					return false;
 				}
 				for (auto &inner : term.inner) {
-					if (!inner.coefficient || !ProveValue(facts, *inner.coefficient)) {
+					if (!inner.coefficient || !DirectProveValue(facts, *inner.coefficient)) {
 						reason = "coefficient_shape: expected a deterministic numeric expression over the source "
 						         "columns";
 						return false;
 					}
-					A1Value value;
+					DirectSignedValue value;
 					value.sign = inner.sign;
 					value.expr = inner.coefficient->Copy();
 					(inner.kind == DecideTermKind::LINEAR ? built.inner_linear : built.inner_constant)
@@ -528,86 +366,6 @@ bool A1BoundedRule::ProveObjective(const DirectProblemFacts &facts, ClientContex
 //===--------------------------------------------------------------------===//
 // Plan
 //===--------------------------------------------------------------------===//
-
-//! Expressions as values, so the per-row algebra reads like the algebra. Each operation copies its operands.
-using Ex = std::shared_ptr<Expression>;
-
-class Calc {
-public:
-	explicit Calc(Optimizer &optimizer_p) : optimizer(optimizer_p) {
-	}
-
-	Ex Wrap(unique_ptr<Expression> expr) const {
-		return Ex(expr.release());
-	}
-	unique_ptr<Expression> Out(const Ex &expr) const {
-		return expr->Copy();
-	}
-	Ex Num(double value) const {
-		return Wrap(make_uniq<BoundConstantExpression>(Value::DOUBLE(value)));
-	}
-	Ex Bool(bool value) const {
-		return Wrap(DirectConstantBool(value));
-	}
-	Ex Col(const LogicalType &type, ColumnBinding binding) const {
-		return Wrap(DirectColumn(type, binding));
-	}
-	Ex Fn(const string &name, const Ex &a) const {
-		return Wrap(optimizer.BindScalarFunction(name, a->Copy()));
-	}
-	Ex Fn(const string &name, const Ex &a, const Ex &b) const {
-		return Wrap(optimizer.BindScalarFunction(name, a->Copy(), b->Copy()));
-	}
-	Ex Add(const Ex &a, const Ex &b) const {
-		return Fn("+", a, b);
-	}
-	Ex Sub(const Ex &a, const Ex &b) const {
-		return Fn("-", a, b);
-	}
-	Ex Mul(const Ex &a, const Ex &b) const {
-		return Fn("*", a, b);
-	}
-	Ex Div(const Ex &a, const Ex &b) const {
-		return Fn("/", a, b);
-	}
-	Ex Neg(const Ex &a) const {
-		return Mul(a, Num(-1.0));
-	}
-	Ex Cmp(ExpressionType type, const Ex &a, const Ex &b) const {
-		return Wrap(make_uniq<BoundComparisonExpression>(type, a->Copy(), b->Copy()));
-	}
-	Ex If(const Ex &condition, const Ex &then_value, const Ex &else_value) const {
-		return Wrap(make_uniq<BoundCaseExpression>(condition->Copy(), then_value->Copy(), else_value->Copy()));
-	}
-	Ex Min(const vector<Ex> &values) const {
-		return Extremum("least", values);
-	}
-	Ex Max(const vector<Ex> &values) const {
-		return Extremum("greatest", values);
-	}
-	//! True when any condition is true; false for none.
-	Ex Any(const vector<Ex> &conditions) const {
-		Ex result = Bool(false);
-		for (idx_t i = conditions.size(); i > 0; i--) {
-			result = If(conditions[i - 1], Bool(true), result);
-		}
-		return result;
-	}
-
-private:
-	Optimizer &optimizer;
-
-	Ex Extremum(const char *name, const vector<Ex> &values) const {
-		if (values.size() == 1) {
-			return values[0];
-		}
-		vector<unique_ptr<Expression>> children;
-		for (auto &value : values) {
-			children.push_back(value->Copy());
-		}
-		return Wrap(optimizer.BindScalarFunction(name, std::move(children)));
-	}
-};
 
 //! One projection being assembled.
 struct Stage {
@@ -719,13 +477,7 @@ private:
 	//! Columns of P1.
 	struct Raw {
 		vector<ColumnBinding> source;
-		struct ClauseColumns {
-			ColumnBinding coefficient;
-			ColumnBinding rhs;
-			bool has_when = false;
-			ColumnBinding when;
-		};
-		vector<ClauseColumns> clauses;
+		vector<DirectBoundColumns> clauses;
 		struct SquareColumns {
 			idx_t decision = 0;
 			double scale = 1.0;
@@ -792,7 +544,7 @@ private:
 	}
 
 	//! `sum(sign * value)` over the proved values, read as DOUBLE. Null for none.
-	unique_ptr<Expression> SumOf(const vector<A1Value> &values) const {
+	unique_ptr<Expression> SumOf(const vector<DirectSignedValue> &values) const {
 		unique_ptr<Expression> total;
 		for (auto &value : values) {
 			auto term = DirectScaledTerm(optimizer, value.expr->Copy(), value.sign, false, 1.0, false);
@@ -810,7 +562,7 @@ private:
 			raw.source.push_back(p1.Add(DirectColumn(source_types[i], source_bindings[i])));
 		}
 		for (auto &clause : proof.clauses) {
-			Raw::ClauseColumns columns;
+			DirectBoundColumns columns;
 			columns.coefficient = p1.Add(SumOf(clause.coefficient));
 			columns.rhs = p1.Add(AsDouble(clause.rhs->Copy()));
 			if (clause.when) {
@@ -863,14 +615,14 @@ private:
 				auto value = DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false);
 				auto &sum = linear_sums[term.decision];
 				sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value)) : std::move(value);
-				linear_text[term.decision] = TextOfExpression(*term.value);
+				linear_text[term.decision] = DirectTextOf(*term.value);
 				linear_count[term.decision]++;
 			} else if (term.kind == A1Term::Kind::CONSTANT) {
 				auto value = DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false);
 				constant_sum = constant_sum
 				                   ? optimizer.BindScalarFunction("+", std::move(constant_sum), std::move(value))
 				                   : std::move(value);
-				constant_text = TextOfExpression(*term.value);
+				constant_text = DirectTextOf(*term.value);
 				constant_count++;
 			} else {
 				Raw::SquareColumns square;
@@ -878,11 +630,12 @@ private:
 				square.scale = term.sign * term.square_scale;
 				square.linear = p1.Add(SumOf(term.inner_linear));
 				checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.linear,
-				                                            TextOf(term.inner_linear), DirectNumberKind::OBJECTIVE));
+				                                            DirectTextOf(term.inner_linear),
+				                                            DirectNumberKind::OBJECTIVE));
 				if (!term.inner_constant.empty()) {
 					square.constant = p1.Add(SumOf(term.inner_constant));
 					checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.constant,
-					                                            TextOf(term.inner_constant),
+					                                            DirectTextOf(term.inner_constant),
 					                                            DirectNumberKind::OBJECTIVE));
 				} else {
 					square.constant = p1.Add(make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)));
@@ -916,7 +669,9 @@ private:
 	void ComputeBounds(Stage &p2, const Raw &raw, vector<unique_ptr<Expression>> &checks, Bounds &bounds) const {
 		for (idx_t j = 0; j < proof.clauses.size(); j++) {
 			Ex lower, upper;
-			ClauseBounds(proof.clauses[j], raw.clauses[j], lower, upper);
+			DirectClauseBounds(calc, proof.clauses[j].comparison,
+			                   DirectIsWholeNumbered(proof.decisions[proof.clauses[j].decision].domain), raw.clauses[j],
+			                   lower, upper);
 			bounds.lower.push_back(p2.Add(calc.Out(lower)));
 			bounds.upper.push_back(p2.Add(calc.Out(upper)));
 		}
@@ -974,82 +729,24 @@ private:
 		bounds.valid_data = p2.Add(std::move(valid));
 	}
 
-	//! The lower and upper bound one clause puts on its decision on one row, as the solver reads it: a clause holds
-	//! `coefficient * x  comparison  rhs`, so the coefficient's sign picks the side, a zero coefficient leaves the row
-	//! alone or infeasible, and a whole-numbered decision rounds to the integer DOUBLE arithmetic accepts.
-	void ClauseBounds(const A1Clause &clause, const Raw::ClauseColumns &columns, Ex &lower, Ex &upper) const {
-		auto a = calc.Col(LogicalType::DOUBLE, columns.coefficient);
-		auto r = calc.Col(LogicalType::DOUBLE, columns.rhs);
-		auto zero = calc.Num(0.0);
-		auto positive_infinity = calc.Num(POSITIVE_INFINITY);
-		auto negative_infinity = calc.Num(NEGATIVE_INFINITY);
-		auto comparison = clause.comparison;
-		bool at_most =
-		    comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO || comparison == ExpressionType::COMPARE_LESSTHAN;
-		bool whole = IsWholeNumbered(proof.decisions[clause.decision].domain);
-
-		auto feasible = [&](const Ex &k) {
-			return calc.Cmp(comparison, calc.Mul(a, k), r);
-		};
-		auto v = calc.Div(r, a);
-		Ex upper_candidate = v;
-		Ex lower_candidate = v;
-		if (whole) {
-			auto huge = calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Fn("abs", v),
-			                     calc.Num(DECIDE_MAX_FRACTIONAL_MAGNITUDE));
-			auto floored = calc.Fn("floor", v);
-			auto up_one = calc.Add(floored, calc.Num(1.0));
-			auto down_one = calc.Sub(floored, calc.Num(1.0));
-			upper_candidate = calc.If(huge, floored,
-			                          calc.If(feasible(up_one), up_one, calc.If(feasible(floored), floored, down_one)));
-			auto ceiled = calc.Fn("ceil", v);
-			auto ceil_up = calc.Add(ceiled, calc.Num(1.0));
-			auto ceil_down = calc.Sub(ceiled, calc.Num(1.0));
-			lower_candidate = calc.If(
-			    huge, ceiled, calc.If(feasible(ceil_down), ceil_down, calc.If(feasible(ceiled), ceiled, ceil_up)));
-		}
-		auto positive = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, zero);
-		auto negative = calc.Cmp(ExpressionType::COMPARE_LESSTHAN, a, zero);
-		// `at most` clauses bound x above when the coefficient is positive and below when it is negative; `at least`
-		// clauses do the opposite.
-		auto upper_by_sign = at_most ? calc.If(positive, upper_candidate, positive_infinity)
-		                             : calc.If(negative, upper_candidate, positive_infinity);
-		auto lower_by_sign = at_most ? calc.If(negative, lower_candidate, negative_infinity)
-		                             : calc.If(positive, lower_candidate, negative_infinity);
-		// A zero coefficient says `0 comparison rhs`: it holds for every x, or for none.
-		auto holds = calc.Cmp(comparison, zero, r);
-		auto zero_coefficient = calc.Cmp(ExpressionType::COMPARE_EQUAL, a, zero);
-		auto row_upper = calc.If(zero_coefficient, positive_infinity, upper_by_sign);
-		auto row_lower = calc.If(zero_coefficient, calc.If(holds, negative_infinity, positive_infinity), lower_by_sign);
-		// A right side the solver reads as infinite binds nothing.
-		auto vacuous =
-		    at_most ? calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, r, calc.Num(DECIDE_EFFECTIVE_INFINITY))
-		            : calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, r, calc.Num(-DECIDE_EFFECTIVE_INFINITY));
-		upper = calc.If(vacuous, positive_infinity, row_upper);
-		lower = calc.If(vacuous, negative_infinity, row_lower);
-		if (columns.has_when) {
-			auto active = calc.Col(LogicalType::BOOLEAN, columns.when);
-			upper = calc.If(active, upper, positive_infinity);
-			lower = calc.If(active, lower, negative_infinity);
-		}
-	}
-
 	//===------------------------------------------------------------------===//
 	// P3: each decision's box
 	//===------------------------------------------------------------------===//
 
 	void ComputeBox(Stage &p3, const Bounds &bounds, Box &box) const {
 		for (idx_t d = 0; d < proof.decisions.size(); d++) {
-			vector<Ex> lowers {calc.Num(proof.decisions[d].lower)};
-			vector<Ex> uppers {calc.Num(proof.decisions[d].upper)};
+			vector<ColumnBinding> clause_lowers, clause_uppers;
 			for (idx_t j = 0; j < proof.clauses.size(); j++) {
 				if (proof.clauses[j].decision == d) {
-					lowers.push_back(calc.Col(LogicalType::DOUBLE, bounds.lower[j]));
-					uppers.push_back(calc.Col(LogicalType::DOUBLE, bounds.upper[j]));
+					clause_lowers.push_back(bounds.lower[j]);
+					clause_uppers.push_back(bounds.upper[j]);
 				}
 			}
-			box.lower.push_back(p3.Add(calc.Out(calc.Max(lowers))));
-			box.upper.push_back(p3.Add(calc.Out(calc.Min(uppers))));
+			Ex lower, upper;
+			DirectRowBox(calc, proof.decisions[d].lower, proof.decisions[d].upper, clause_lowers, clause_uppers, lower,
+			             upper);
+			box.lower.push_back(p3.Add(calc.Out(lower)));
+			box.upper.push_back(p3.Add(calc.Out(upper)));
 			box.a.push_back(p3.Add(DirectColumn(LogicalType::DOUBLE, bounds.a[d])));
 			box.b.push_back(p3.Add(DirectColumn(LogicalType::DOUBLE, bounds.b[d])));
 		}
@@ -1067,7 +764,7 @@ private:
 			auto a = calc.Col(LogicalType::DOUBLE, box.a[d]);
 			auto b = calc.Col(LogicalType::DOUBLE, box.b[d]);
 			auto zero = calc.Num(0.0);
-			bool whole = IsWholeNumbered(proof.decisions[d].domain);
+			bool whole = DirectIsWholeNumbered(proof.decisions[d].domain);
 
 			// No row holds when the box is empty; the answer is then never read.
 			auto infeasible = calc.Any({calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, lower, upper),
@@ -1144,7 +841,7 @@ private:
 			checks.push_back(make_uniq<BoundCaseExpression>(optimizer.BindScalarFunction("isfinite", value()),
 			                                                DirectConstantBool(true),
 			                                                DirectUnboundedErrorPredicate(optimizer)));
-			if (IsWholeNumbered(proof.decisions[d].domain)) {
+			if (DirectIsWholeNumbered(proof.decisions[d].domain)) {
 				checks.push_back(
 				    make_uniq<BoundCaseExpression>(WithinExactRange(answers.value[d]), DirectConstantBool(true),
 				                                   OutOfRangeError(proof.decisions[d].name, answers.value[d])));
@@ -1163,7 +860,7 @@ private:
 	//! not exactly representable, so the guard only keeps the cast from raising on its own if that ever changed.
 	unique_ptr<Expression> TypedAnswer(idx_t decision, ColumnBinding value) const {
 		auto &prepared = proof.decisions[decision];
-		if (!IsWholeNumbered(prepared.domain)) {
+		if (!DirectIsWholeNumbered(prepared.domain)) {
 			return DirectColumn(LogicalType::DOUBLE, value);
 		}
 		auto finite = make_uniq<BoundCaseExpression>(

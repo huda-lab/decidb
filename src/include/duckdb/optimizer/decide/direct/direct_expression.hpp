@@ -1,5 +1,7 @@
 #pragma once
 
+#include <memory>
+
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/planner/column_binding.hpp"
@@ -11,6 +13,7 @@ namespace duckdb {
 class BoundCastExpression;
 class BoundColumnRefExpression;
 class ClientContext;
+class Optimizer;
 struct DirectPart;
 
 //! Rule-independent questions about a bound expression. A rule asks them while proving that an expression may be
@@ -82,5 +85,37 @@ bool DirectIsSourceOnlyValue(const Expression &expr, idx_t decide_index, const v
 //! `x >= v`, `x > v`, and `x = v` all bound a count from below; `x <= v`, `x < v`, and `x = v` from above.
 bool DirectIsLowerBound(ExpressionType comparison);
 bool DirectIsUpperBound(ExpressionType comparison);
+
+//! Expressions as values, so the per-row algebra reads like the algebra. Each operation copies its operands.
+using Ex = std::shared_ptr<Expression>;
+
+class Calc {
+public:
+	explicit Calc(Optimizer &optimizer_p);
+
+	Ex Wrap(unique_ptr<Expression> expr) const;
+	unique_ptr<Expression> Out(const Ex &expr) const;
+	Ex Num(double value) const;
+	Ex Bool(bool value) const;
+	Ex Col(const LogicalType &type, ColumnBinding binding) const;
+	Ex Fn(const string &name, const Ex &a) const;
+	Ex Fn(const string &name, const Ex &a, const Ex &b) const;
+	Ex Add(const Ex &a, const Ex &b) const;
+	Ex Sub(const Ex &a, const Ex &b) const;
+	Ex Mul(const Ex &a, const Ex &b) const;
+	Ex Div(const Ex &a, const Ex &b) const;
+	Ex Neg(const Ex &a) const;
+	Ex Cmp(ExpressionType type, const Ex &a, const Ex &b) const;
+	Ex If(const Ex &condition, const Ex &then_value, const Ex &else_value) const;
+	Ex Min(const vector<Ex> &values) const;
+	Ex Max(const vector<Ex> &values) const;
+	//! True when any condition is true; false for none.
+	Ex Any(const vector<Ex> &conditions) const;
+
+private:
+	Optimizer &optimizer;
+
+	Ex Extremum(const char *name, const vector<Ex> &values) const;
+};
 
 } // namespace duckdb

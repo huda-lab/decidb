@@ -31,8 +31,8 @@ for production use. If any required condition cannot be proved, the query stays 
 2. Register it with one line in `direct_registry.cpp`. No other engine file changes.
 3. Read only the facts (`direct_rule.hpp`). Use `FirstUnknownReason()` to name a blocking clause.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible, and
-   the shared builders in `direct_builder.cpp` for the empty-aggregate error, the number checks and the all-rows
-   barrier. A builder only your rule uses (S1's scope projection and bound validation are in `s1_support.cpp`) stays in
+   the shared builders in `direct_builder.cpp` for the empty-aggregate error, the number checks, the all-rows
+   barrier and the per-row bounds on a decision (`DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`). A builder only your rule uses (S1's scope projection and bound validation are in `s1_support.cpp`) stays in
    your rule's own files until a second rule needs it.
 5. State the plan's output slots, which decision outputs may be skipped, and its validation slots.
 6. Add the standard tests (below), then `rules/<name>/done.md`. The class's `definition.md` already exists; correct it
