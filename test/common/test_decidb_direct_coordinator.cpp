@@ -2,7 +2,6 @@
 #include "test_helpers.hpp"
 
 #include <functional>
-#include <limits>
 
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/optimizer/decide/direct/direct_builder.hpp"
@@ -33,10 +32,8 @@ enum class StubValidation : uint8_t {
 //! A rule with fixed answers. Its plan assigns every row `value`.
 class StubRule final : public DirectSolveRule {
 public:
-	StubRule(string name_p, bool proves_p, double cost_p, int32_t value_p,
-	         StubValidation validation_p = StubValidation::NONE, idx_t *seen_rows_p = nullptr)
-	    : name(std::move(name_p)), proves(proves_p), cost(cost_p), value(value_p), validation(validation_p),
-	      seen_rows(seen_rows_p) {
+	StubRule(string name_p, bool proves_p, int32_t value_p, StubValidation validation_p = StubValidation::NONE)
+	    : name(std::move(name_p)), proves(proves_p), value(value_p), validation(validation_p) {
 	}
 
 	bool wrong_output_slot = false;
@@ -54,12 +51,6 @@ public:
 			return nullptr;
 		}
 		return make_uniq<StubProof>();
-	}
-	double Cost(const DirectRuleProof &, const DirectCostContext &context) const override {
-		if (seen_rows) {
-			*seen_rows = context.estimated_source_rows;
-		}
-		return cost;
 	}
 	void Explain(const DirectRuleProof &, DirectSolveDecisionRecord &record) const override {
 		record.proof = "stub";
@@ -112,10 +103,8 @@ public:
 private:
 	string name;
 	bool proves;
-	double cost;
 	int32_t value;
 	StubValidation validation;
-	idx_t *seen_rows;
 };
 
 using RuleList = duckdb::vector<duckdb::unique_ptr<DirectSolveRule>>;
@@ -145,7 +134,7 @@ TEST_CASE("Direct coordinator commits a proved stub rule", "[decidb]") {
 	Connection con(db);
 	InstallRules(con, [] {
 		RuleList rules;
-		rules.push_back(make_uniq<StubRule>("STUB_ONE", true, 0.0, 1));
+		rules.push_back(make_uniq<StubRule>("STUB_ONE", true, 1));
 		return rules;
 	});
 	auto result = con.Query(QUERY);
@@ -159,8 +148,8 @@ TEST_CASE("Direct coordinator falls back to the solver and lists every miss unde
 	Connection con(db);
 	InstallRules(con, [] {
 		RuleList rules;
-		rules.push_back(make_uniq<StubRule>("STUB_A", false, 0.0, 1));
-		rules.push_back(make_uniq<StubRule>("STUB_B", false, 0.0, 1));
+		rules.push_back(make_uniq<StubRule>("STUB_A", false, 1));
+		rules.push_back(make_uniq<StubRule>("STUB_B", false, 1));
 		return rules;
 	});
 	auto result = con.Query(QUERY);
@@ -177,65 +166,93 @@ TEST_CASE("Direct coordinator falls back to the solver and lists every miss unde
 	REQUIRE(message.find("solver skipped=true") != string::npos);
 }
 
-TEST_CASE("Direct coordinator picks the cheapest proved rule, then the first registered", "[decidb]") {
+TEST_CASE("Direct coordinator runs the rule that proves when another misses", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	SECTION("cheaper wins") {
+	SECTION("the missing rule is registered first") {
 		InstallRules(con, [] {
 			RuleList rules;
-			rules.push_back(make_uniq<StubRule>("STUB_COSTLY", true, 2.0, 0));
-			rules.push_back(make_uniq<StubRule>("STUB_CHEAP", true, 1.0, 1));
+			rules.push_back(make_uniq<StubRule>("STUB_MISS", false, 0));
+			rules.push_back(make_uniq<StubRule>("STUB_PROVES", true, 1));
 			return rules;
 		});
 		auto result = con.Query(QUERY);
 		REQUIRE(CHECK_COLUMN(result, 1, {1, 1, 1}));
-		REQUIRE(Explain(con, QUERY).find("STUB_CHEAP") != string::npos);
+		auto plan = Explain(con, QUERY);
+		REQUIRE(plan.find("STUB_PROVES") != string::npos);
+		REQUIRE(plan.find("STUB_MISS") == string::npos);
 	}
-	SECTION("tie goes to the first registered") {
+	SECTION("the missing rule is registered last") {
 		InstallRules(con, [] {
 			RuleList rules;
-			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 1.0, 0));
-			rules.push_back(make_uniq<StubRule>("STUB_SECOND", true, 1.0, 1));
+			rules.push_back(make_uniq<StubRule>("STUB_PROVES", true, 1));
+			rules.push_back(make_uniq<StubRule>("STUB_MISS", false, 0));
 			return rules;
 		});
 		auto result = con.Query(QUERY);
-		REQUIRE(CHECK_COLUMN(result, 1, {0, 0, 0}));
-		REQUIRE(Explain(con, QUERY).find("STUB_FIRST") != string::npos);
+		REQUIRE(CHECK_COLUMN(result, 1, {1, 1, 1}));
+		auto plan = Explain(con, QUERY);
+		REQUIRE(plan.find("STUB_PROVES") != string::npos);
+		REQUIRE(plan.find("STUB_MISS") == string::npos);
 	}
 }
 
-TEST_CASE("Direct coordinator gives Cost the estimated source row count", "[decidb]") {
+TEST_CASE("Direct coordinator treats two rules that prove one query as an internal error", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	idx_t seen_rows = 0;
-	InstallRules(con, [&seen_rows] {
-		RuleList rules;
-		rules.push_back(make_uniq<StubRule>("STUB_SEEN", true, 0.0, 1, StubValidation::NONE, &seen_rows));
-		return rules;
-	});
-	REQUIRE_NO_FAIL(con.Query(QUERY));
-	REQUIRE(seen_rows == 3);
-}
-
-TEST_CASE("Direct coordinator treats a broken rule as an internal error", "[decidb]") {
-	SECTION("non-finite cost") {
-		DuckDB db(nullptr);
-		Connection con(db);
+	SECTION("two proving rules are named") {
 		InstallRules(con, [] {
 			RuleList rules;
-			rules.push_back(make_uniq<StubRule>("STUB_NAN", true, std::numeric_limits<double>::quiet_NaN(), 1));
+			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
+			rules.push_back(make_uniq<StubRule>("STUB_SECOND", true, 1));
 			return rules;
 		});
 		auto result = con.Query(QUERY);
 		REQUIRE(result->HasError());
-		REQUIRE(result->GetError().find("non-finite cost") != string::npos);
+		auto &message = result->GetError();
+		REQUIRE(message.find("STUB_FIRST") != string::npos);
+		REQUIRE(message.find("STUB_SECOND") != string::npos);
+		REQUIRE(message.find("rules must be disjoint") != string::npos);
 	}
+	SECTION("a rule that misses is not named") {
+		InstallRules(con, [] {
+			RuleList rules;
+			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
+			rules.push_back(make_uniq<StubRule>("STUB_MISS", false, 0));
+			rules.push_back(make_uniq<StubRule>("STUB_SECOND", true, 1));
+			return rules;
+		});
+		auto result = con.Query(QUERY);
+		REQUIRE(result->HasError());
+		auto &message = result->GetError();
+		REQUIRE(message.find("STUB_FIRST") != string::npos);
+		REQUIRE(message.find("STUB_SECOND") != string::npos);
+		REQUIRE(message.find("STUB_MISS") == string::npos);
+	}
+	SECTION("every proving rule is named when more than two prove") {
+		InstallRules(con, [] {
+			RuleList rules;
+			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
+			rules.push_back(make_uniq<StubRule>("STUB_SECOND", true, 1));
+			rules.push_back(make_uniq<StubRule>("STUB_THIRD", true, 1));
+			return rules;
+		});
+		auto result = con.Query(QUERY);
+		REQUIRE(result->HasError());
+		auto &message = result->GetError();
+		REQUIRE(message.find("STUB_FIRST") != string::npos);
+		REQUIRE(message.find("STUB_SECOND") != string::npos);
+		REQUIRE(message.find("STUB_THIRD") != string::npos);
+	}
+}
+
+TEST_CASE("Direct coordinator treats a broken rule as an internal error", "[decidb]") {
 	SECTION("output slot that does not match the DECIDE output") {
 		DuckDB db(nullptr);
 		Connection con(db);
 		InstallRules(con, [] {
 			RuleList rules;
-			auto rule = make_uniq<StubRule>("STUB_WRONG_SLOT", true, 0.0, 1);
+			auto rule = make_uniq<StubRule>("STUB_WRONG_SLOT", true, 1);
 			rule->wrong_output_slot = true;
 			rules.push_back(std::move(rule));
 			return rules;
@@ -254,7 +271,7 @@ TEST_CASE("Direct validation barrier reads every row before an outer LIMIT or CO
 	auto install = [&](StubValidation validation) {
 		InstallRules(con, [validation] {
 			RuleList rules;
-			rules.push_back(make_uniq<StubRule>("STUB_VALIDATING", true, 0.0, 1, validation));
+			rules.push_back(make_uniq<StubRule>("STUB_VALIDATING", true, 1, validation));
 			return rules;
 		});
 	};

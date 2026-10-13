@@ -156,14 +156,6 @@ struct DirectRuleProof {
 	virtual ~DirectRuleProof() = default;
 };
 
-//! What Cost may see about the input. Only an estimate of the source's size, never its data, so no estimate can
-//! decide whether a rule applies.
-struct DirectCostContext {
-	//! DuckDB's estimate for the DECIDE input before join ordering. Reading it leaves the plan's own estimates as
-	//! they were.
-	idx_t estimated_source_rows = 0;
-};
-
 //! A complete relational child plus an explicit map back to DECIDE outputs: the source columns in order, then one
 //! output per decision variable. The coordinator derives the external bindings and which source columns may be
 //! skipped; the rule states where each output lives and whether evaluating each decision can be skipped.
@@ -184,8 +176,9 @@ struct DirectRelationalProposal {
 	bool streams_rows = false;
 };
 
-//! The lifecycle the coordinator drives: Match, Prove, Cost, Explain, Rewrite. A miss in Match or Prove leaves the
-//! DECIDE node untouched and reports `reason`.
+//! The lifecycle the coordinator drives: Match, Prove, Explain, Rewrite. A miss in Match or Prove leaves the DECIDE
+//! node untouched and reports `reason`. Rules are disjoint: each requires facts the others forbid, so at most one
+//! proves a query, and the coordinator raises an internal error when two do.
 class DirectSolveRule {
 public:
 	virtual ~DirectSolveRule() = default;
@@ -193,9 +186,6 @@ public:
 	virtual unique_ptr<DirectRuleMatch> Match(const DirectProblemFacts &facts, string &reason) const = 0;
 	virtual unique_ptr<DirectRuleProof> Prove(const DirectProblemFacts &facts, const DirectRuleMatch &match,
 	                                          ClientContext &context, string &reason) const = 0;
-	//! Called only for proved candidates; must be finite. The cheapest proved rule is chosen, and among equal costs
-	//! the first registered. Estimates must never certify a proof.
-	virtual double Cost(const DirectRuleProof &proof, const DirectCostContext &context) const = 0;
 	virtual void Explain(const DirectRuleProof &proof, DirectSolveDecisionRecord &record) const = 0;
 	//! `source` is the DECIDE input with its types resolved.
 	virtual DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,

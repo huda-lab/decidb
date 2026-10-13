@@ -16,9 +16,9 @@ check). Design: `../../architecture/`.
   reducer, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Unmodeled parts are *unknown* with a
   reason, and reading the facts never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the reader does
   not expect are unknown parts. No fact is kept that no rule reads. It uses the same term splitter as the solver path.
-- **Rule contract.** Match, Prove, Cost, Explain, Rewrite, plus a shared Map step that checks the output slots. Rules are
-  listed in `direct_registry.cpp`; tests can replace the list per connection. The cheapest proved rule wins, ties go to
-  the first registered. `Cost` sees the estimated source row count without disturbing cached estimates.
+- **Rule contract.** Match, Prove, Explain, Rewrite, plus a shared Map step that checks the output slots. Rules are
+  listed in `direct_registry.cpp`; tests can replace the list per connection. The coordinator runs Match and Prove for
+  every rule. Rules are disjoint, so at most one proves a query; two proofs raise an internal error naming both rules.
 - **Result boundary.** Keeps original bindings and types, serializes, prunes outputs only when skipping is proved safe,
   and always keeps the rule's validation slots live. `DirectValidationBarrier` builds the all-rows read for a plan that
   could stream. Because every row is checked before any is released, rows are held in memory, wide parent-read columns
@@ -126,17 +126,12 @@ check). Design: `../../architecture/`.
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
   example `auto: 2322 passed, 0 xfailed, 0 failed`. The comment above `DirectDomain` in `direct_rule.hpp` points at
   `architecture/facts.md`.
-- **Cost estimate.** The coordinator builds the cost context (a cardinality estimate of the source plan) on the first
-  proved rule, although both rules return `0.0` from `Cost`. Measured on `EXPLAIN` of an A1 query over a six-way join of
-  100,000-row tables, 400 runs per mode: `decide_direct_solve='off'` 1.005 ms, `'auto'` 1.470 ms. Direct solve adds about
-  0.47 ms of planning in total, which covers rule matching, the proof and the estimate together, so the estimate costs at
-  most that. One query shape; the estimate grows with the number of operators in the source plan.
 
 ## Verified by
 
 - C++: `test_decidb_direct_facts.cpp` (every fact kind and unknowns, and a norm tag it does not expect reading as an
-  unknown part, not an exception), `test_decidb_direct_coordinator.cpp` (stub rules: hit,
-  fallback with every reason, cheaper rule, tie, cost context, non-finite cost, mismatched slot, barrier under
+  unknown part, not an exception), `test_decidb_direct_coordinator.cpp` (stub rules: hit, fallback with every reason,
+  a proving rule beside a missing one, two proving rules as an internal error, mismatched slot, barrier under
   `LIMIT 1` and `COUNT(*)`).
 - Python: `test_direct_rule_contract.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read, serializer, prepared
   plans, near misses, `off`, forced backend, `DIAGNOSE`, an empty source, and constant bounds that contradict the decision's
@@ -166,4 +161,4 @@ the solver's code, not a copy: `DirectConstraintFact::variable_bound` is the pre
 
 ## Not built
 
-- No second language adapter, and cost has never chosen between two real rules: S1 and A1 never prove the same query.
+- No second language adapter.

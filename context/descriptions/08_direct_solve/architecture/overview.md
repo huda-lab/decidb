@@ -14,7 +14,7 @@ bound, canonical LogicalDecide
    -> facts          read the problem into a neutral summary          (facts.md)
    -> Match / Prove  each rule checks the shape and every detail      (rules.md)
         miss: the solver path runs as before
-   -> Cost           pick the cheapest proved rule
+        two proofs: internal error, the rules must be disjoint
    -> Rewrite        build the relational plan
    -> result boundary  keep DECIDE's output columns and bindings      (result_boundary.md)
    -> ordinary DuckDB optimizer and execution

@@ -583,10 +583,6 @@ public:
 		}
 		return std::move(proof);
 	}
-	double Cost(const DirectRuleProof &, const DirectCostContext &) const override {
-		// The first rule has no competing proved alternative yet.
-		return 0.0;
-	}
 	void Explain(const DirectRuleProof &, DirectSolveDecisionRecord &record) const override {
 		record.proof = "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi";
 	}

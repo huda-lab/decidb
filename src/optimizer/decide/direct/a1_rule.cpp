@@ -218,11 +218,6 @@ public:
 		return std::move(proof);
 	}
 
-	double Cost(const DirectRuleProof &, const DirectCostContext &) const override {
-		// A1 needs no aggregate constraint and S1 needs one, so two proved rules never compete for one query.
-		return 0.0;
-	}
-
 	void Explain(const DirectRuleProof &, DirectSolveDecisionRecord &record) const override {
 		record.proof = "min/max SUM(c*x), l <= x <= u, each row independent";
 	}

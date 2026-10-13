@@ -27,11 +27,3 @@ today is in `done.md`.
 - **Change.** A second adapter produces the same facts from the new syntax. Extend the facts when semantics change; do not
   teach a rule parser spelling.
 - **Done when.** The facts contract and the direct/solver tests run on both syntaxes where comparable.
-
-## H-03 — Cost choice among competing direct plans
-
-- **Needs.** Two rules that prove the same query on a real workload.
-- **Problem.** The coordinator picks the cheapest proved candidate, but S1 and A1 never prove the same query, so the cost
-  estimate is untested. The eager cost context costs under 0.5 ms of planning (`done.md`).
-- **Change.** Re-measure the cost estimate on the workload that needs it. Cost never repairs a missing proof.
-- **Done when.** Two proved plans compete on that workload and cost decides.

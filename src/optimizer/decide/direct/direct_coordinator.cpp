@@ -1,7 +1,5 @@
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 
-#include <algorithm>
-#include <cmath>
 #include <cstdlib>
 
 #include "duckdb/common/decide_profile.hpp"
@@ -66,34 +64,6 @@ vector<unique_ptr<DirectSolveRule>> RulesFor(ClientContext &context) {
 	return override_rules ? override_rules->make_rules() : RegisteredDirectRules();
 }
 
-struct CachedEstimate {
-	LogicalOperator *op;
-	bool has_estimate;
-	idx_t estimate;
-};
-
-void SaveEstimates(LogicalOperator &op, vector<CachedEstimate> &saved) {
-	saved.push_back({&op, op.has_estimated_cardinality, op.estimated_cardinality});
-	for (auto &child : op.children) {
-		SaveEstimates(*child, saved);
-	}
-}
-
-//! DuckDB's row estimate for the DECIDE input. Estimating caches a value on every operator it visits; this runs
-//! before join ordering, so a cached value would outlive the plan it described and reach EXPLAIN and physical
-//! planning. The cache is put back as it was.
-DirectCostContext MakeCostContext(ClientContext &context, LogicalOperator &source) {
-	vector<CachedEstimate> saved;
-	SaveEstimates(source, saved);
-	DirectCostContext result;
-	result.estimated_source_rows = source.EstimateCardinality(context);
-	for (auto &entry : saved) {
-		entry.op->has_estimated_cardinality = entry.has_estimate;
-		entry.op->estimated_cardinality = entry.estimate;
-	}
-	return result;
-}
-
 } // namespace
 
 void RegisterDirectSolve(DBConfig &config) {
@@ -129,11 +99,9 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	struct ProvedCandidate {
 		const DirectSolveRule *rule;
 		unique_ptr<DirectRuleProof> proof;
-		double cost;
 	};
 	vector<ProvedCandidate> proved;
 	vector<string> misses;
-	unique_ptr<DirectCostContext> cost_context;
 	auto rules = RulesFor(optimizer.context);
 	for (auto &rule : rules) {
 		string reason;
@@ -147,14 +115,7 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 			misses.push_back(rule->Name() + string(": ") + reason);
 			continue;
 		}
-		if (!cost_context) {
-			cost_context = make_uniq<DirectCostContext>(MakeCostContext(optimizer.context, source));
-		}
-		auto cost = rule->Cost(*proof, *cost_context);
-		if (!std::isfinite(cost)) {
-			throw InternalException("Direct solve rule %s returned a non-finite cost", rule->Name());
-		}
-		proved.push_back({rule.get(), std::move(proof), cost});
+		proved.push_back({rule.get(), std::move(proof)});
 	}
 	if (proved.empty()) {
 		if (mode == DirectSolveMode::REQUIRE) {
@@ -165,15 +126,21 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 		// `require` is how a user asks why a query was not proved.
 		return op;
 	}
-	// min_element keeps the first of equal costs, which is the earlier registered rule.
-	auto selected = std::min_element(proved.begin(), proved.end(),
-	                                 [](const ProvedCandidate &left, const ProvedCandidate &right) {
-		                                 return left.cost < right.cost;
-	                                 });
+	// Every rule ran, so a second proof is seen. Rules tell queries apart by the facts they require; two proofs of one
+	// query mean the rules overlap, which no ordering or cost can settle safely.
+	if (proved.size() > 1) {
+		vector<string> names;
+		for (auto &candidate : proved) {
+			names.push_back(candidate.rule->Name());
+		}
+		throw InternalException("Direct solve rules %s %s proved one query; rules must be disjoint",
+		                        StringUtil::Join(names, ", "), names.size() == 2 ? "both" : "all");
+	}
+	auto &selected = proved[0];
 	DirectSolveDecisionRecord record;
 	record.mode = ModeName(mode);
-	record.rule = selected->rule->Name();
-	selected->rule->Explain(*selected->proof, record);
+	record.rule = selected.rule->Name();
+	selected.rule->Explain(*selected.proof, record);
 	direct_profile.Next("optimizer.direct.construct");
 	// The replacement answers to the DECIDE node's identity: every source column, then one column per decision.
 	source.ResolveOperatorTypes();
@@ -202,7 +169,7 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	if (carries_rowid) {
 		source.ResolveOperatorTypes();
 	}
-	auto proposal = selected->rule->Rewrite(std::move(decide.children[0]), optimizer, *selected->proof);
+	auto proposal = selected.rule->Rewrite(std::move(decide.children[0]), optimizer, *selected.proof);
 	if (carries_rowid) {
 		if (proposal.output_slots.size() != output_bindings.size() + 1) {
 			throw InternalException("Direct solve rule did not pass the source row id through");

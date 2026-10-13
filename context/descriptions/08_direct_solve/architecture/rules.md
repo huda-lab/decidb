@@ -15,13 +15,14 @@ for production use. If any required condition cannot be proved, the query stays 
 
 ## Lifecycle
 
-**Match → Prove → Cost → Explain → Rewrite**, then the engine maps the result onto DECIDE's output slots.
+**Match → Prove → Explain → Rewrite**, then the engine maps the result onto DECIDE's output slots.
 
 - **Match** binds the shape. **Prove** certifies every constraint, objective part, decision, runtime value check
   and output. An unknown fact is a miss, not an error.
-- **Cost** sees only the estimated source row count and runs after proof. The cheapest proved rule wins; a tie goes
-  to the first registered. S1 and A1 are disjoint (S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint), so
-  cost has never chosen between two real rules; the coordinator test with stub rules covers it.
+- **Rules are disjoint.** The coordinator runs Match and Prove for every rule, and the rules are told apart by the
+  facts they require: S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint. At most one rule proves a
+  query. If two or more do, the coordinator raises an internal error naming them, because the overlap is a bug in the
+  rules and no ordering is safe to pick. The coordinator test covers this with stub rules.
 - **Rewrite** builds the relational plan. An unexpected failure here is an internal error, never a silent fallback.
 
 ## Adding a rule
@@ -29,7 +30,8 @@ for production use. If any required condition cannot be proved, the query stays 
 1. Create `src/optimizer/decide/direct/<name>_rule.cpp`. Keep helpers in `namespace direct_<name>` (unity builds
    merge anonymous namespaces). Declare `Make<Name>Rule()` in a header, list the file in the folder's `CMakeLists.txt`.
 2. Register it with one line in `direct_registry.cpp`. No other engine file changes.
-3. Read only the facts (`direct_rule.hpp`). Use `FirstUnknownReason()` to name a blocking clause.
+3. Read only the facts (`direct_rule.hpp`). Use `FirstUnknownReason()` to name a blocking clause. The rule must be
+   disjoint from every registered rule: it requires a fact that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible, and
    the shared builders in `direct_builder.cpp` for the empty-aggregate error, the number checks, the all-rows
    barrier and the per-row bounds on a decision (`DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`). A builder only your rule uses (S1's scope projection and bound validation are in `s1_support.cpp`) stays in
