@@ -68,8 +68,8 @@ for production use. If any required condition cannot be proved, the query stays 
 
 A rule exists to be a light shortcut. Before adding code to a rule or to the shared engine, check it against these:
 
-- **Does it protect the answer or the speedup?** If not (error order, message wording, a nicer diagnostic), leave
-  it out.
+- **Does it protect the answer or the speedup?** If not (error order, a nicer diagnostic), leave it out. Error text is
+  the exception: it comes from the solver's own functions (see User-facing wording).
 - **Is the proof short?** If admitting a shape needs a long proof, a new range argument or a parity check against
   solver quirks, decline the shape. The solver handles it correctly, only more slowly. A decline is cheap and a bug
   in a proof is a wrong answer.
