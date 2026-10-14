@@ -8,6 +8,15 @@ DECIDE Python tests live in `test/decide/tests/`, model baselines in `test/decid
 
 For direct-solve prototype work, start with `context/descriptions/08_direct_solve/README.md`. Its navigation table points to the architecture notes and to each rule's `todo.md` and `done.md`.
 
+## Design: Prefer Standard Patterns and Names
+
+Before designing a component or naming a layer, look for the established pattern that already solves it: GoF design
+patterns (*Design Patterns: Elements of Reusable Object-Oriented Software*), query-optimizer practice (Volcano/Cascades
+transformation rules, pipeline breakers, late materialization), compiler practice (front end, IR, back end), and what
+DuckDB already does. Use the standard name for the standard idea. Invent a mechanism or a term only when no standard one
+fits, and say in the docs which standard idea it departs from and why. When proposing a design, name the pattern it
+follows.
+
 ## Build, Test, and Development Commands
 
 Run commands from the repository root:
