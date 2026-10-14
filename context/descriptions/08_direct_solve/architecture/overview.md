@@ -46,6 +46,28 @@ and the test-only `DECIDB_FORCE_SOLVER` always use the solver. Details: `policy.
 - **Rules are separate from the engine.** The shared engine knows nothing about any problem class. A new class is a
   new rule, registered in one place.
 
+## Patterns used
+
+Names follow [glossary.md](glossary.md).
+
+- **Front end and IR** (compiler practice). The front end reads `LogicalDecide` once into an intermediate
+  representation. Rules read only the IR, so no rule depends on the bound tree's layout.
+- **Conservative analysis.** The IR records "not proved" for anything it cannot read exactly, and no rule applies on
+  a "not proved" input.
+- **Strategy.** Each rule implements one interface: check its applicability condition, then apply its substitute.
+- **Registry and Factory Method.** One registry lists the rules; each rule has a factory function.
+- **Template Method.** The rule driver runs the same steps for every rule: build the IR, offer it to each rule, accept
+  at most one, apply it, wrap the substitute.
+- **Transformation rules** (Volcano, Cascades). A rule replaces the DECIDE node with an equivalent relational plan.
+- **Adapter with an optimization fence.** The result adapter presents the substitute under the DECIDE node's bindings
+  and keeps parent filters and limits from crossing it.
+- **Pipeline breaker and late materialization** (DuckDB, column stores). Inputs the solver path would reject are
+  validated before any row is emitted, and wide columns are fetched by row id after the plan has chosen its rows.
+
+**Departure from Cascades: rules are disjoint, not chosen by cost.** Cascades lets several rules apply and keeps the
+cheapest plan. Here, rules are told apart by the IR they require, and two rules applying to one query is an internal
+error naming both: the overlap is a bug in the rules, and no ordering is safe to pick (`rules.md`).
+
 ## Code
 
 `src/optimizer/decide/direct/`, headers in `src/include/duckdb/optimizer/decide/direct/`. Start with

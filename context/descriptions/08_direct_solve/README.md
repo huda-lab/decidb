@@ -16,6 +16,7 @@ with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 
 | I want to... | Go to |
 |---|---|
 | Understand how it works | [architecture/overview.md](architecture/overview.md), then the other files there |
+| Look up a term, its standard name and the identifiers it covers | [architecture/glossary.md](architecture/glossary.md) |
 | Add a new problem class | [architecture/rules.md](architecture/rules.md), then a new folder under `rules/` |
 | Move the design onto standard patterns and names | [architecture/todo.md](architecture/todo.md) |
 | See what S1 covers, how it is tested, how fast it is | [rules/s1/done.md](rules/s1/done.md) |
