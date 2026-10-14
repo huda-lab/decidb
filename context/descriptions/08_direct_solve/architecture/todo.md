@@ -10,94 +10,12 @@ Rules for every rename task in this file:
 
 - Use the names `glossary.md` fixes (P-06). Do not choose a new name inside a rename task.
 - Text a user sees does not change: the `EXPLAIN` keys and lines, error messages, `require` reasons and the
-  `decide_direct_solve` setting, unless P-01 decides otherwise.
+  `decide_direct_solve` setting, unless a decision under P-06 says otherwise (P-03, P-20).
 - Do not rename a Python test function or move it to another file (the oracle cache is keyed on the node id). C++ test
   files and case names may change.
 - A rename is behavior-neutral: the checks give the same pass counts before and after the task. Run them
   first for the baseline; the stamp in `../rules/_harness/done.md` can lag behind later commits.
 - The commit of a rename also updates every doc in `08_direct_solve/` that uses the old term.
-
-## P-01 — Name of the feature and its setting
-
-- **Decision needed.**
-- **Problem.** "Direct solve" is our phrase. The standard ideas are a specialized (problem-specific) algorithm in
-  operations research, and a rule-based plan rewrite in databases. The name appears in the setting
-  `decide_direct_solve`, `EXPLAIN` keys (`Direct solve mode`), every `Direct*` identifier, file and doc folder.
-- **Options.**
-  1. Keep "direct solve" and define it once in the glossary as "rule-based rewrite of a DECIDE query into a relational
-     plan that computes the optimum". Cost: none.
-  2. Rename the concept in docs only (for example "specialized solve"), keep the setting and identifiers. Cost: docs
-     and code disagree.
-  3. Rename everywhere, including the setting. Cost: a user-facing break and every `Direct*` identifier.
-- **Recommendation.** 1. The term is short and only needs a standard definition; show it to the supervisor.
-- **Done when.** The chosen option is one line under P-06 § Change.
-
-## P-02 — Name of the shared-engine folder and the docs tree
-
-- **Decision needed.**
-- **Problem.** `rules/_harness/` holds the shared engine's todo and done. "Harness" means test harness in standard
-  usage, and the folder sits among the problem classes it is not one of. The docs call each class a "class" and the code
-  calls it a "rule"; the folder `rules/` holds classes.
-- **Options.**
-  1. `08_direct_solve/engine/` beside `architecture/` and `rules/`. Cost: update 4 linking files and the queue.
-  2. `08_direct_solve/framework/` (the standard name for shared code that calls plug-ins). Same cost.
-  3. Merge into `architecture/` (design and engine status in one folder). Cost: mixes design notes with todo/done.
-- **Recommendation.** 2. "Framework" is the textbook name for code that drives Strategy plug-ins it does not know.
-  Keep `rules/` and state in the glossary that one rule implements one catalogue class.
-- **Done when.** The chosen option is one line under P-06 § Change.
-
-## P-03 — Rule-framework vocabulary
-
-- **Decision needed.**
-- **Problem.** The rule framework is a Cascades-style transformation-rule optimizer behind a Strategy interface, but
-  uses its own words. Each row needs a pick.
-
-  | Ours (code) | Standard candidate | Source |
-  |---|---|---|
-  | Match / Prove / Rewrite | pattern / condition / apply (substitute) | Volcano, Cascades |
-  | proof (`DirectRuleProof`) | applicability condition; witness | Cascades; type-driven design |
-  | proposal (`DirectRelationalProposal`) | substitute (plan) | Cascades |
-  | coordinator (`direct_coordinator.cpp`, `TryDirectSolve`) | rule driver; rule engine | optimizer texts |
-  | registry (`direct_registry.cpp`) | registry + factory method | Fowler; GoF |
-  | hit / miss | rule applies / does not apply | optimizer texts |
-  | `DirectRuleOverride` | test seam (dependency injection) | Feathers |
-  | `S1Rewriter`, `A1Rewriter` | plan builder | GoF Builder |
-
-  Two terms reach beyond direct solve and are out of this file's scope: "reducer" (55 files across the planner and
-  solver; DuckDB says "aggregate") and "absorbed bound" (shared with the solver; operations research says "singleton
-  row folded into a variable bound").
-- **Options.** Per row: adopt the candidate, or keep ours with a glossary line naming the standard term.
-- **Recommendation.** Adopt the Cascades lifecycle words, "substitute", "rule driver" and "test seam". Keep "proof":
-  the rule must prove optimality, which is stronger than a Cascades condition; the glossary says so. Keep "reducer" and
-  "absorbed" and list their standard names in the glossary.
-- **Done when.** The chosen options are one line per row under P-06 § Change.
-
-## P-04 — Rule lifecycle: merge Match and Prove, fold Explain
-
-- **Decision needed.**
-- **Problem.** Cascades splits pattern from condition because a cheap pattern is shared across many candidate
-  subtrees. Direct solve has one candidate (the DECIDE node), and the driver always runs Match and then Prove, treating a
-  miss in either the same way. `A1Match` is an empty struct (`a1_rule.cpp`). Explain writes one fixed line per rule.
-- **Options.**
-  1. One `Prove(facts, context, reason)` that returns the proof; Explain becomes a `Summary()` on the rule. The rule
-     interface has two methods (Prove, Rewrite) and one name. Cost: S1, A1, the stub rules and `rules.md` change.
-  2. Merge Match and Prove only.
-  3. Keep the four steps and say in the glossary why they differ from Cascades.
-- **Recommendation.** 1. Nothing uses the split, and a smaller interface is easier to explain as a Strategy.
-- **Done when.** The chosen option is one line under P-06 § Change.
-
-## P-05 — Code naming convention: `Direct` prefix or a namespace
-
-- **Decision needed.**
-- **Problem.** About 60 free functions and types carry a `Direct` prefix (`DirectColumn`, `DirectIsNull`,
-  `DirectRowBox`) inside `namespace duckdb`. Rule-local helpers use `namespace direct_s1` and `direct_a1`, which also
-  carry `Direct` names (`direct_s1::DirectProjectScope`).
-- **Options.**
-  1. Keep the prefix, the DuckDB convention for a feature inside `namespace duckdb`. Drop it inside `direct_s1` and
-     `direct_a1`. Cost: small.
-  2. Move everything into `namespace duckdb::direct` and drop the prefix. Cost: every file; unity builds need care.
-- **Recommendation.** 1. It matches the surrounding code, and the rule-local double prefix is the only real oddity.
-- **Done when.** The chosen option is one line under P-06 § Change.
 
 ## P-06 — Glossary: one standard name per concept
 
@@ -113,7 +31,30 @@ Rules for every rename task in this file:
   driver's fixed steps), Adapter, the IR, and the one departure: rules must be disjoint instead of chosen by cost, and
   why. Link the glossary from `README.md`.
   Decisions:
-- **Needs.** P-01 to P-05 and P-16.
+  - P-01: keep "direct solve"; the glossary defines it as a rule-based rewrite of a DECIDE query into a relational
+    plan that computes the optimum. The setting, `EXPLAIN` keys and `Direct*` identifiers stay.
+  - P-02: the shared-engine folder becomes `08_direct_solve/framework/`. `rules/` stays; one rule implements one
+    catalogue class.
+  - P-03: adopt every standard candidate. Match/Prove/Rewrite become pattern/condition/apply; proof becomes
+    applicability condition (`DirectRuleProof` takes that name); proposal becomes substitute; coordinator becomes rule
+    driver; registry stays registry + factory method; hit/miss become applies/does not apply; `DirectRuleOverride`
+    becomes a test seam; `*Rewriter` becomes plan builder. "Reducer" and "absorbed bound" are renamed too (P-19).
+    The `EXPLAIN` key `Direct solve proof` stays (user-facing).
+  - P-04: one `Prove` that returns the applicability condition, and `Summary()` on the rule in place of Explain. The
+    interface has two steps, Prove and Rewrite.
+  - P-05: keep the `Direct` prefix in `namespace duckdb`; drop it inside `direct_s1` and `direct_a1`.
+  - P-16: rename the test files to the standard names. Exception to the no-rename rule above, for P-18 only; the
+    orchestrator measures the cost and runs the oracle re-run itself.
+  - P-20: each class keeps its id and takes the textbook name of its problem (not of its algorithm; the optimization
+    term wins over the database term): A1 separable box-constrained problem; A2 single-facility location (1-D); A3
+    multilinear optimization over a box; A4 bounded-variable least squares; A5 monotone optimization; A6 rank-one
+    bounded least squares; N1 Euclidean-ball projection and support function; N2 ellipsoid support function; S1
+    uniform-matroid optimization; S2 laminar-matroid optimization; S3 maximum-cardinality knapsack; S4
+    cardinality-constrained bottleneck knapsack; R1 continuous (fractional) knapsack; R2 discrete separable convex
+    resource allocation; R3 continuous quadratic knapsack; R4 weighted max-min fair allocation; O1 Monge assignment;
+    O2 Monge transportation problem; D1 block-diagonal decomposition. The glossary gives each one's source and its
+    folder, file, identifier and `EXPLAIN` slug.
+- **Needs.** P-01 to P-05, P-16 and P-20 (all decided).
 - **Done when.** Every term in the P-03 table and the list above has one row with exact old and new identifiers.
 
 ## P-07 — Facts layer becomes the IR
@@ -130,8 +71,8 @@ Rules for every rename task in this file:
 
 ## P-08 — Rule interface: one Prove, a summary instead of Explain
 
-- **Problem.** See P-04.
-- **Change.** Apply the P-04 choice to `DirectSolveRule`, `s1_rule.cpp`, `a1_rule.cpp`, the stub rules in
+- **Problem.** Decision P-04 under P-06 § Change.
+- **Change.** Apply decision P-04 to `DirectSolveRule`, `s1_rule.cpp`, `a1_rule.cpp`, the stub rules in
   `test_decidb_direct_coordinator.cpp`, and the lifecycle text in `rules.md` and `overview.md`. A Prove miss keeps its
   `require` reason text. `EXPLAIN` output is unchanged.
 - **Needs.** P-06.
@@ -140,7 +81,7 @@ Rules for every rename task in this file:
 
 ## P-09 — Rule-framework renames
 
-- **Problem.** See P-03.
+- **Problem.** Decision P-03 under P-06 § Change.
 - **Change.** Rename per the glossary: `DirectRuleProof`, `DirectRelationalProposal`, `direct_coordinator.cpp` and
   `TryDirectSolve`, `DirectRuleOverride` and `DIRECT_RULE_OVERRIDE_KEY`, the `*Rewriter` classes, and "hit"/"miss" in
   `overview.md`, `rules.md`, `policy.md` and the code comments.
@@ -202,32 +143,46 @@ Rules for every rename task in this file:
 
 ## P-15 — Shared-engine folder rename
 
-- **Problem.** See P-02.
+- **Problem.** Decision P-02 under P-06 § Change.
 - **Change.** Move `rules/_harness/` to the chosen name with `git mv`. Update every link: `README.md`, the todo files
   of S1, A1 and R1, this file, and `context/descriptions/todo.md`. Rename "harness" in prose where it means the shared
   engine.
 - **Needs.** P-06. Run it alone: every other task in this file links to the folder.
 - **Done when.** `grep -rn "_harness" context .claude` finds nothing; doc-only, no checks.
 
-## P-16 — Test vocabulary: files renamed or not
-
-- **Decision needed.**
-- **Problem.** The docs call the test kinds "three-way table", "contract suite" and "matrix". The standard names are
-  differential oracle testing and conformance suite ("test matrix" is standard). Renaming the Python files re-runs
-  every oracle case through Gurobi, because the cache is keyed on the node id, which includes the file name.
-- **Options.**
-  1. Docs use the standard names; files keep theirs; the glossary lists the file for each. Cost: names differ.
-  2. Rename the files too and re-run the oracle once. Cost: a Gurobi run of the whole suite.
-- **Recommendation.** 1.
-- **Done when.** The chosen option is one line under P-06 § Change.
-
 ## P-18 — Test vocabulary in the docs
 
-- **Problem.** See P-16.
-- **Change.** Apply the P-16 choice to `rules.md` § The standard tests every rule ships and the "Verified by" text of
+- **Problem.** Decision P-16 under P-06 § Change.
+- **Change.** Apply decision P-16 to `rules.md` § The standard tests every rule ships and the "Verified by" text of
   `../rules/_harness/done.md`.
 - **Needs.** P-06.
-- **Done when.** Both files use the glossary names; doc-only unless P-16 chose option 2.
+- **Done when.** Both files use the glossary names. P-16 chose to rename the files: `git mv` the direct-solve test
+  files to their glossary names, then run the oracle once. The orchestrator estimates the Gurobi cost and runs it on a
+  quiet machine. This is the one task allowed to rename a Python test file.
+
+## P-19 — Rename "reducer" and "absorbed bound"
+
+- **Problem.** P-03 adopted the standard names for both. They reach about 55 files across the planner and solver,
+  outside direct solve.
+- **Change.** Rename per the glossary: "reducer" to the DuckDB term "aggregate", and "absorbed bound" to the
+  operations-research term for a singleton row folded into a variable bound. Cover identifiers, comments and docs
+  outside `08_direct_solve/` too. Text a user sees does not change.
+- **Needs.** P-06. Run it alone: it touches the planner and solver.
+- **Done when.** Neither old term greps under `src/` or `test/`; `make decide-test` and the forced-HiGHS run give the
+  baseline counts.
+
+## P-21 — Problem classes take their textbook names
+
+- **Problem.** Classes are known by id alone in code and folders (`s1_rule.cpp`, `S1Rewriter`, `direct_s1`,
+  `rules/s1/`), and by home-made phrases in the docs. P-20 chose a textbook name per class.
+- **Change.** Apply the glossary names everywhere, keeping the id as a prefix: `rules/<id>/` folders (`git mv`), each
+  `definition.md` title, the `README.md` table, rule source files, types and namespaces, the rule's `EXPLAIN` value
+  (`S1_CARDINALITY_INTERVAL`, `A1_*`; a user-facing change chosen by the owner) and the tests that assert it. The S1
+  and A1 Python test files are renamed in P-18's single oracle re-run, not here. Classes without code are renamed in
+  docs only.
+- **Needs.** P-06. After P-09 and P-14 (rule-local renames in the same files), before P-15 and P-18.
+- **Done when.** No class is named by its old phrase or by a bare id in a file or folder name; the checks give the
+  baseline counts with the new `EXPLAIN` value.
 
 ## P-17 — Sweep for retired terms
 
