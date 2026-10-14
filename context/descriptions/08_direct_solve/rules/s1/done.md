@@ -130,7 +130,7 @@ different `PER` or `WHEN` membership (S2); `SUM(x) <> k` (not an interval); boun
 | `test_direct_rule_contract.py` (107 tests, shared with A1) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced backend, `DIAGNOSE`, an empty source, constant bounds that contradict the built-in domain, and near misses, each of which must name its reason, keep the solver plan, and answer under `auto` as under `off` (this is where the shapes S1 leaves on the solver are tested) |
 | `test_direct_fuzz.py` (24 tests, 8 seeds per rule) | Seeded differential fuzz: random small S1 queries with and without an objective, direct (`require`) against solver (`off`), over per-row bounds (including lower bounds below 0 with no `WHEN`), scaled objectives, row-count bounds and offset or negated count bodies. Finds interactions the tables do not list |
 | `test_direct_user_facing.py` (53 tests, shared with A1) | What a SQL user sees besides the answer: direct solve on by default, the pinned exact reading of a bound near an integer, the full text of every NULL and NaN error compared with the solver's, unused wide columns pruned, forced-backend and binder-error policy |
-| C++ `[decidb]` | S1 proof contract, facts, coordinator |
+| C++ `[decidb]` | S1 proof contract, IR, coordinator |
 
 ## Performance
 

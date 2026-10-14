@@ -142,7 +142,7 @@ bool DirectIsWholeNumbered(DirectDomain domain);
 
 //! A coefficient or value the plan evaluates per row: numeric, deterministic, independent of the decisions, over the
 //! source. It may raise when evaluated; the plan evaluates it on every row, as the solver does.
-bool DirectProveValue(const DirectProblemFacts &facts, const Expression &expr);
+bool DirectProveValue(const DirectIR &ir, const Expression &expr);
 
 //! One bound the plan evaluates per row: `coefficient * x  comparison  rhs`, under an optional WHEN. A bound the solver
 //! folds into the variable's box is not a clause, it is part of the decision's static box.
@@ -171,13 +171,12 @@ struct DirectBoundReading {
 	vector<DirectDecisionBox> boxes;
 };
 
-//! Reads every non-aggregate constraint of `facts` as a bound on one decision (a constraint of the form `a*x
+//! Reads every non-aggregate constraint of `ir` as a bound on one decision (a constraint of the form `a*x
 //! <comparison> value`; the rule's Match has already checked the shape). A bound the solver folds into the variable
 //! (`variable_bound`: an unconditional comparison of the bare decision against a constant) replaces the default lower
 //! bound of 0 and tightens the upper one; every other bound is a clause. Returns false with a `reason` when a bound
 //! cannot be proved, or when the folded box contradicts the decision's built-in domain, which the solver reports.
-bool DirectReadBounds(const DirectProblemFacts &facts, ClientContext &context, DirectBoundReading &reading,
-                      string &reason);
+bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading, string &reason);
 
 //! The columns of one clause's raw values, evaluated on every row.
 struct DirectBoundColumns {

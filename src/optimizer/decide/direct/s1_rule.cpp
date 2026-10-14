@@ -42,8 +42,8 @@ namespace direct_s1 {
 constexpr const char *S1_RULE = "S1_CARDINALITY_INTERVAL";
 
 struct S1Match final : DirectRuleMatch {
-	vector<const DirectConstraintFact *> bound_factors;
-	vector<const DirectConstraintFact *> local_fixes;
+	vector<const DirectIRConstraint *> bound_factors;
+	vector<const DirectIRConstraint *> local_fixes;
 };
 
 //! An aggregate on the right of a count bound, in the order a walk of the bound meets them: `COUNT(*)`, or COUNT, MIN,
@@ -230,11 +230,11 @@ ExpressionType FlipComparison(ExpressionType comparison) {
 
 //! The decision's terms on a per-row left side, as in a pin `x = 1`; null otherwise. Prove checks that they add up
 //! to exactly one `x`.
-const vector<DecideSplitTerm> *PinTerms(const DirectConstraintFact &fact) {
-	if (fact.aggregate || fact.comparison == ExpressionType::COMPARE_IN || fact.lhs.size() != 1) {
+const vector<DecideSplitTerm> *PinTerms(const DirectIRConstraint &ir_node) {
+	if (ir_node.aggregate || ir_node.comparison == ExpressionType::COMPARE_IN || ir_node.lhs.size() != 1) {
 		return nullptr;
 	}
-	auto &part = fact.lhs[0];
+	auto &part = ir_node.lhs[0];
 	if (part.sign != 1 || part.reducer != DirectReducer::NONE || part.scale || !OnlyDecisionTerms(part.terms)) {
 		return nullptr;
 	}
@@ -327,9 +327,9 @@ bool SatisfiesComparison(ExpressionType comparison, double value, double bound) 
 //! and `x < 1.5` the upper bound 1 here as there; for a variable that is 0 or 1 that is the same as the comparison
 //! itself. Whether the box contradicts the built-in domain of a Boolean is the solver's own test
 //! (DecideBoxContradictsDomain).
-bool ConstantPinDomain(const DirectConstraintFact &fact, double bound, PinDomain &domain) {
-	auto comparison = fact.comparison;
-	if (!fact.scope.when && comparison != ExpressionType::COMPARE_NOTEQUAL) {
+bool ConstantPinDomain(const DirectIRConstraint &ir_node, double bound, PinDomain &domain) {
+	auto comparison = ir_node.comparison;
+	if (!ir_node.scope.when && comparison != ExpressionType::COMPARE_NOTEQUAL) {
 		bool has_lower = comparison == ExpressionType::COMPARE_GREATERTHAN ||
 		                 comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
 		                 comparison == ExpressionType::COMPARE_EQUAL;
@@ -370,13 +370,13 @@ const Expression *SourceBooleanPinValue(const Expression &expr, idx_t decide_ind
 
 //! The membership filter of one bound factor: the aggregate-local WHEN on `SUM(x)` or the clause-level WHEN, never
 //! both. Null when the bound has none; `ok` is false when the factor is not a plain `SUM(x)` with one filter.
-const Expression *BoundMembership(const DirectConstraintFact &fact, bool &ok) {
-	auto sum = fact.PlainSum(true);
-	ok = sum && !(sum->filter && fact.scope.when);
+const Expression *BoundMembership(const DirectIRConstraint &ir_node, bool &ok) {
+	auto sum = ir_node.PlainSum(true);
+	ok = sum && !(sum->filter && ir_node.scope.when);
 	if (!ok) {
 		return nullptr;
 	}
-	return sum->filter ? sum->filter.get() : fact.scope.when.get();
+	return sum->filter ? sum->filter.get() : ir_node.scope.when.get();
 }
 
 //! `COUNT(*)` with nothing attached: no DISTINCT, ORDER BY, FILTER or qualifier. A FILTER on the right-hand count
@@ -506,80 +506,80 @@ public:
 	const char *Name() const override {
 		return S1_RULE;
 	}
-	unique_ptr<DirectRuleMatch> Match(const DirectProblemFacts &facts, string &reason) const override {
-		if (facts.decisions_status != DirectFactStatus::KNOWN || facts.decisions.size() != 1 ||
-		    facts.decisions[0].domain != DirectDomain::BOOL || facts.decisions[0].scope != DecideVarScope::ROW ||
-		    facts.decisions[0].output_type != LogicalType::INTEGER || !facts.entity_scopes.empty() ||
-		    facts.source_status != DirectFactStatus::KNOWN) {
+	unique_ptr<DirectRuleMatch> Match(const DirectIR &ir, string &reason) const override {
+		if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.decisions.size() != 1 ||
+		    ir.decisions[0].domain != DirectDomain::BOOL || ir.decisions[0].scope != DecideVarScope::ROW ||
+		    ir.decisions[0].output_type != LogicalType::INTEGER || !ir.entity_scopes.empty() ||
+		    ir.source_status != DirectAnalysisStatus::PROVED) {
 			reason = "variable_shape: expected one row-scoped BOOL";
 			return nullptr;
 		}
 		// No objective (`DecideSense::FEASIBILITY`) is admitted: every score is 0.
-		if (!std::isfinite(facts.objective.offset) ||
-		    (facts.objective.sense != DecideSense::MAXIMIZE && facts.objective.sense != DecideSense::MINIMIZE &&
-		     facts.objective.sense != DecideSense::FEASIBILITY)) {
+		if (!std::isfinite(ir.objective.offset) ||
+		    (ir.objective.sense != DecideSense::MAXIMIZE && ir.objective.sense != DecideSense::MINIMIZE &&
+		     ir.objective.sense != DecideSense::FEASIBILITY)) {
 			reason = "problem_shape: expected a linear objective or no objective, and cardinality bounds";
 			return nullptr;
 		}
-		if (facts.constraints_status != DirectFactStatus::KNOWN) {
-			reason = "constraint_facts_unknown: " + facts.constraints_reason;
+		if (ir.constraints_status != DirectAnalysisStatus::PROVED) {
+			reason = "constraints_not_proved: " + ir.constraints_reason;
 			return nullptr;
 		}
-		if (facts.constraints.empty() || facts.source_clause_count != facts.constraints.size()) {
+		if (ir.constraints.empty() || ir.source_clause_count != ir.constraints.size()) {
 			reason = "constraint_shape: expected attributed cardinality bounds and optional Boolean pins";
 			return nullptr;
 		}
 		auto result = make_uniq<S1Match>();
-		vector<uint8_t> seen_sources(facts.source_clause_count, 0);
-		for (auto &fact : facts.constraints) {
-			if (fact.source_clause_id >= seen_sources.size() || seen_sources[fact.source_clause_id]++) {
+		vector<uint8_t> seen_sources(ir.source_clause_count, 0);
+		for (auto &ir_node : ir.constraints) {
+			if (ir_node.source_clause_id >= seen_sources.size() || seen_sources[ir_node.source_clause_id]++) {
 				reason = "constraint_provenance: expected one distinct attributed source clause per factor";
 				return nullptr;
 			}
-			if (fact.status != DirectFactStatus::KNOWN) {
-				reason = "constraint_facts_unknown: " + facts.FirstUnknownReason();
+			if (ir_node.status != DirectAnalysisStatus::PROVED) {
+				reason = "constraints_not_proved: " + ir.FirstNotProvedReason();
 				return nullptr;
 			}
-			if (fact.comparison == ExpressionType::COMPARE_IN) {
+			if (ir_node.comparison == ExpressionType::COMPARE_IN) {
 				reason = "constraint_shape: expected SUM(x) bounds or Boolean pins";
 				return nullptr;
 			}
-			if (PinTerms(fact)) {
-				result->local_fixes.push_back(&fact);
+			if (PinTerms(ir_node)) {
+				result->local_fixes.push_back(&ir_node);
 				continue;
 			}
-			if (!DirectIsLowerBound(fact.comparison) && !DirectIsUpperBound(fact.comparison)) {
+			if (!DirectIsLowerBound(ir_node.comparison) && !DirectIsUpperBound(ir_node.comparison)) {
 				reason = "constraint_shape: expected SUM(x) cardinality bounds";
 				return nullptr;
 			}
-			result->bound_factors.push_back(&fact);
+			result->bound_factors.push_back(&ir_node);
 		}
 		if (result->bound_factors.empty()) {
 			reason = "constraint_shape: expected a SUM(x) cardinality bound";
 			return nullptr;
 		}
-		if (facts.objective.status != DirectFactStatus::KNOWN) {
-			reason = "objective_facts_unknown: " + facts.objective.reason;
+		if (ir.objective.status != DirectAnalysisStatus::PROVED) {
+			reason = "objective_not_proved: " + ir.objective.reason;
 			return nullptr;
 		}
-		if (facts.objective.scope.when || !facts.objective.scope.per_key_slots.empty()) {
+		if (ir.objective.scope.when || !ir.objective.scope.per_key_slots.empty()) {
 			reason = "objective_scope: expected an objective without WHEN or PER";
 			return nullptr;
 		}
-		if (facts.objective.parts.empty() && facts.objective.sense != DecideSense::FEASIBILITY) {
+		if (ir.objective.parts.empty() && ir.objective.sense != DecideSense::FEASIBILITY) {
 			reason = "objective_shape: expected additive SUM(coefficient * x) terms";
 			return nullptr;
 		}
 		return std::move(result);
 	}
-	unique_ptr<DirectRuleProof> Prove(const DirectProblemFacts &facts, const DirectRuleMatch &candidate,
-	                                  ClientContext &context, string &reason) const override {
+	unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, const DirectRuleMatch &candidate, ClientContext &context,
+	                                  string &reason) const override {
 		auto &match = static_cast<const S1Match &>(candidate);
 		auto proof = make_uniq<S1Proof>();
-		proof->decide_index = facts.decide_index;
-		proof->sense = facts.objective.sense;
-		if (!ProveScope(facts, match, *proof, reason) || !ProvePins(facts, match, context, *proof, reason) ||
-		    !ProveBounds(facts, match, context, *proof, reason) || !ProveObjective(facts, context, *proof, reason)) {
+		proof->decide_index = ir.decide_index;
+		proof->sense = ir.objective.sense;
+		if (!ProveScope(ir, match, *proof, reason) || !ProvePins(ir, match, context, *proof, reason) ||
+		    !ProveBounds(ir, match, context, *proof, reason) || !ProveObjective(ir, context, *proof, reason)) {
 			return nullptr;
 		}
 		return std::move(proof);
@@ -591,18 +591,17 @@ public:
 	                                 const DirectRuleProof &candidate) const override;
 
 private:
-	bool ProveScope(const DirectProblemFacts &facts, const S1Match &match, S1Proof &proof, string &reason) const;
-	bool ProvePins(const DirectProblemFacts &facts, const S1Match &match, ClientContext &context, S1Proof &proof,
+	bool ProveScope(const DirectIR &ir, const S1Match &match, S1Proof &proof, string &reason) const;
+	bool ProvePins(const DirectIR &ir, const S1Match &match, ClientContext &context, S1Proof &proof,
 	               string &reason) const;
-	bool ProveBounds(const DirectProblemFacts &facts, const S1Match &match, ClientContext &context, S1Proof &proof,
+	bool ProveBounds(const DirectIR &ir, const S1Match &match, ClientContext &context, S1Proof &proof,
 	                 string &reason) const;
-	bool ProveObjective(const DirectProblemFacts &facts, ClientContext &context, S1Proof &proof, string &reason) const;
+	bool ProveObjective(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const;
 };
 
 //! Every bound counts the same rows: one `SUM(x)` per bound with the same PER keys and the same WHEN membership.
 //! Records the group keys and membership the plan scopes by.
-bool S1CardinalityRule::ProveScope(const DirectProblemFacts &facts, const S1Match &match, S1Proof &proof,
-                                   string &reason) const {
+bool S1CardinalityRule::ProveScope(const DirectIR &ir, const S1Match &match, S1Proof &proof, string &reason) const {
 	const auto &first_scope = *match.bound_factors.front();
 	bool ok;
 	const Expression *first_when = BoundMembership(first_scope, ok);
@@ -628,7 +627,7 @@ bool S1CardinalityRule::ProveScope(const DirectProblemFacts &facts, const S1Matc
 	}
 	proof.group_key_slots = first_scope.scope.per_key_slots;
 	if (first_when) {
-		if (!DirectIsSourceOnlyPredicate(*first_when, facts.decide_index, facts.source_bindings)) {
+		if (!DirectIsSourceOnlyPredicate(*first_when, ir.decide_index, ir.source_bindings)) {
 			reason = "constraint_scope: WHEN must be a deterministic source-only predicate";
 			return false;
 		}
@@ -640,8 +639,8 @@ bool S1CardinalityRule::ProveScope(const DirectProblemFacts &facts, const S1Matc
 
 //! Per-row Boolean pins: `x = 0/1` and its one-sided forms against a constant, or against a source Boolean. Each
 //! becomes a condition under which the row is fixed to one or to zero.
-bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match &match, ClientContext &context,
-                                  S1Proof &proof, string &reason) const {
+bool S1CardinalityRule::ProvePins(const DirectIR &ir, const S1Match &match, ClientContext &context, S1Proof &proof,
+                                  string &reason) const {
 	for (auto factor : match.local_fixes) {
 		if (!factor->scope.per_key_slots.empty()) {
 			reason = "constraint_scope: Boolean pins must be per-row without PER keys";
@@ -652,7 +651,7 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 			return false;
 		}
 		auto &when = factor->scope.when;
-		if (when && !DirectIsSourceOnlyPredicate(*when, facts.decide_index, facts.source_bindings)) {
+		if (when && !DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
 			reason = "constraint_scope: Boolean pin WHEN must be deterministic and source-only";
 			return false;
 		}
@@ -686,7 +685,7 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 			                                             make_uniq<BoundConstantExpression>(Value::BOOLEAN(false)))
 			            : std::move(value);
 		};
-		auto source_value = SourceBooleanPinValue(*factor->rhs, facts.decide_index, facts.source_bindings);
+		auto source_value = SourceBooleanPinValue(*factor->rhs, ir.decide_index, ir.source_bindings);
 		if (source_value &&
 		    (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 		     type == ExpressionType::COMPARE_GREATERTHANOREQUALTO)) {
@@ -710,7 +709,7 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 		// value` holds, as the solver reads it (with a WHEN or not), so the row is fixed to the one value it allows
 		// and is infeasible when it allows neither.
 		auto &value = *factor->rhs;
-		if (value.IsFoldable() || !DirectIsSourceOnlyNumeric(value, facts.decide_index, facts.source_bindings)) {
+		if (value.IsFoldable() || !DirectIsSourceOnlyNumeric(value, ir.decide_index, ir.source_bindings)) {
 			reason = "constraint_shape: a bound on x must be a finite constant, a source column, or a deterministic "
 			         "nonthrowing numeric expression over source columns";
 			return false;
@@ -718,7 +717,7 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 		idx_t column_slot;
 		LogicalType column_type;
 		string column_name;
-		bool is_column = DirectSourceNumericColumn(value, facts.source_bindings, column_slot, column_type, column_name);
+		bool is_column = DirectSourceNumericColumn(value, ir.source_bindings, column_slot, column_type, column_name);
 		auto invalid_type = is_column ? column_type : value.return_type;
 		auto disallows = [&](double allowed_value) -> unique_ptr<Expression> {
 			auto as_double = BoundCastExpression::AddCastToType(context, value.Copy(), LogicalType::DOUBLE);
@@ -740,8 +739,8 @@ bool S1CardinalityRule::ProvePins(const DirectProblemFacts &facts, const S1Match
 //! `SUM(x) <op> B - n*c` and `SUM(c - x) <op> B` is `SUM(x) <flipped op> n*c - B`, where n is the number of rows the
 //! SUM covers in the group. A constant bound without a constant term in the body folds here; every other bound is
 //! shifted per group by the plan.
-bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Match &match, ClientContext &context,
-                                    S1Proof &proof, string &reason) const {
+bool S1CardinalityRule::ProveBounds(const DirectIR &ir, const S1Match &match, ClientContext &context, S1Proof &proof,
+                                    string &reason) const {
 	auto fold_bound = [&](const Expression &bound, ExpressionType side, idx_t &target, bool negate) {
 		bool impossible = false;
 		if (!NormalizeCapacity(context, bound, side, target, impossible, negate)) {
@@ -768,8 +767,8 @@ bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Mat
 		idx_t source_slot = DConstants::INVALID_INDEX;
 		LogicalType source_type;
 		string source_name;
-		bool source_column = DirectSourceNumericColumn(bound, facts.source_bindings, source_slot, source_type,
-		                                              source_name);
+		bool source_column =
+		    DirectSourceNumericColumn(bound, ir.source_bindings, source_slot, source_type, source_name);
 		auto add_source_bound = [&](idx_t slot, const LogicalType &bound_type, string column_name,
 		                            vector<S1Reducer> reducers) {
 			bool counts_rows = !reducers.empty();
@@ -786,7 +785,7 @@ bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Mat
 		};
 		if (!bound.IsFoldable() && bound.IsAggregate()) {
 			vector<S1Reducer> reducers;
-			auto problem = RowCountBoundProblem(context, bound, facts.source_bindings, reducers);
+			auto problem = RowCountBoundProblem(context, bound, ir.source_bindings, reducers);
 			if (!problem.empty()) {
 				reason = "constraint_shape: a bound with an aggregate must combine COUNT(*), COUNT, MIN or MAX of a "
 				         "numeric column, or SUM or AVG of a small integer column, with constants by + - * / // (" +
@@ -797,7 +796,7 @@ bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Mat
 			continue;
 		}
 		if (!bound.IsFoldable() &&
-		    (source_column || DirectIsSourceOnlyNumeric(bound, facts.decide_index, facts.source_bindings))) {
+		    (source_column || DirectIsSourceOnlyNumeric(bound, ir.decide_index, ir.source_bindings))) {
 			add_source_bound(source_slot, source_column ? source_type : bound.return_type,
 			                 source_column ? source_name : string(), {});
 			continue;
@@ -842,11 +841,11 @@ bool S1CardinalityRule::ProveBounds(const DirectProblemFacts &facts, const S1Mat
 }
 
 //! The objective: a signed sum of `SUM(coefficient * x)` terms. Each coefficient must be evaluable per source row.
-bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, ClientContext &context, S1Proof &proof,
+bool S1CardinalityRule::ProveObjective(const DirectIR &ir, ClientContext &context, S1Proof &proof,
                                        string &reason) const {
 	// Every linear term in x scores separately: `SUM((p + q) * x)` splits into `p * x` and `q * x`, and the score
 	// adds the signed coefficients in order, as the solver's like-term collection does.
-	auto &parts = facts.objective.parts;
+	auto &parts = ir.objective.parts;
 	idx_t term_count = 0;
 	for (auto &part : parts) {
 		if (part.reducer != DirectReducer::SUM || part.filter || part.inner ||
@@ -871,11 +870,11 @@ bool S1CardinalityRule::ProveObjective(const DirectProblemFacts &facts, ClientCo
 			return false;
 		}
 		for (auto &term : part.terms) {
-			if (!DirectIsNumericDecisionFree(*term.coefficient, facts.decide_index)) {
+			if (!DirectIsNumericDecisionFree(*term.coefficient, ir.decide_index)) {
 				reason = "coefficient_shape: expected a deterministic numeric expression without decisions";
 				return false;
 			}
-			if (!DirectReferencesOnlySource(*term.coefficient, facts.source_bindings) ||
+			if (!DirectReferencesOnlySource(*term.coefficient, ir.source_bindings) ||
 			    (term_count > 1 && DirectMayThrow(*term.coefficient))) {
 				reason = "coefficient_shape: multiple terms need nonthrowing source-only numeric coefficients";
 				return false;

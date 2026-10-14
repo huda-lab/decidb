@@ -18,9 +18,9 @@ for production use. If any required condition cannot be proved, the query stays 
 **Match → Prove → Explain → Rewrite**, then the engine maps the result onto DECIDE's output slots.
 
 - **Match** binds the shape. **Prove** certifies every constraint, objective part, decision, runtime value check
-  and output. An unknown fact is a miss, not an error.
+  and output. A not-proved IR node is a miss, not an error.
 - **Rules are disjoint.** The coordinator runs Match and Prove for every rule, and the rules are told apart by the
-  facts they require: S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint. At most one rule proves a
+  IR they require: S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint. At most one rule proves a
   query. If two or more do, the coordinator raises an internal error naming them, because the overlap is a bug in the
   rules and no ordering is safe to pick. The coordinator test covers this with stub rules.
 - **Rewrite** builds the relational plan. An unexpected failure here is an internal error, never a silent fallback.
@@ -30,8 +30,8 @@ for production use. If any required condition cannot be proved, the query stays 
 1. Create `src/optimizer/decide/direct/<name>_rule.cpp`. Keep helpers in `namespace direct_<name>` (unity builds
    merge anonymous namespaces). Declare `Make<Name>Rule()` in a header, list the file in the folder's `CMakeLists.txt`.
 2. Register it with one line in `direct_registry.cpp`. No other engine file changes.
-3. Read only the facts (`direct_rule.hpp`). Use `FirstUnknownReason()` to name a blocking clause. The rule must be
-   disjoint from every registered rule: it requires a fact that rules proving a nearby shape forbid.
+3. Read only the IR (`direct_rule.hpp`). Use `FirstNotProvedReason()` to name a blocking clause. The rule must be
+   disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible, and
    the shared builders in `direct_builder.cpp` for the empty-aggregate error, the number checks, the all-rows
    barrier and the per-row bounds on a decision (`DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`). A builder only your rule uses (S1's scope projection and bound validation are in `s1_support.cpp`) stays in
@@ -100,7 +100,7 @@ test, adding one is a task in that rule's `todo.md`.
 3. **Differential fuzz** (`test_direct_fuzz.py`, comparator in `_direct_differential.py`): supply a seeded query
    generator. Direct (`require`) and solver (`off`) must succeed or fail together (any error counts) and agree on
    row count and primary objective. It finds interactions between shapes that no table lists.
-4. **C++ cases** (`test/common/`) for the rule's proof and for facts it relies on.
+4. **C++ cases** (`test/common/`) for the rule's proof and for the IR it relies on.
 
 Run after any change: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` (the solver path alone),
 `DECIDB_VERIFY_SERIALIZER=1 make decide-test`, `DECIDB_FORCE_SOLVER=highs make decide-test`, and

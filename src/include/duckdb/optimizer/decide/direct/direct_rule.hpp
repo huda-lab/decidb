@@ -17,41 +17,41 @@ class LogicalOperator;
 class Optimizer;
 struct DirectSolveDecisionRecord;
 
-//! UNKNOWN means the adapter cannot certify this fact; a rule must decline it.
-enum class DirectFactStatus : uint8_t { KNOWN, UNKNOWN };
+//! NOT_PROVED means the front end cannot certify this IR node; a rule must decline it.
+enum class DirectAnalysisStatus : uint8_t { PROVED, NOT_PROVED };
 
 //===--------------------------------------------------------------------===//
-// Semantic facts
+// Intermediate representation
 //===--------------------------------------------------------------------===//
 //
 // What a rule may know about a DECIDE problem, read once from the bound, canonical
 // tree before any DECIDE rewrite (see context/descriptions/08_direct_solve/architecture/
-// facts.md). The adapter is the only code that knows LogicalDecide's layout and the
+// ir.md). The front end is the only code that knows LogicalDecide's layout and the
 // bound-tree spelling of DECIDE constructs; rules read meaning. Data-valued expressions
 // (coefficients, bounds, WHEN predicates) stay DuckDB expressions over the source.
-// Facts own everything they hold. Anything the adapter cannot model is UNKNOWN with
+// The IR owns everything it holds. Anything the front end cannot model is NOT_PROVED with
 // a reason, per constraint and per objective part.
 
 enum class DirectDomain : uint8_t { BOOL, INT, REAL };
 
-struct DirectDecisionFact {
+struct DirectIRDecision {
 	//! The name the user declared, as the solver quotes it.
 	string name;
 	DirectDomain domain;
 	//! The SQL type of the decision's output column (INTEGER for BOOL, BIGINT for INT, DOUBLE for REAL).
 	LogicalType output_type;
 	DecideVarScope scope;
-	//! Index into DirectProblemFacts::entity_scopes for an ENTITY decision.
+	//! Index into DirectIR::entity_scopes for an ENTITY decision.
 	idx_t entity_scope = DConstants::INVALID_INDEX;
 };
 
 //! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or a reducer qualifier
 //! (`SUM(D: e)`).
-struct DirectEntityScopeFact {
+struct DirectIREntityScope {
 	vector<idx_t> relations;
 	//! Source slots of the identity key columns.
 	vector<idx_t> key_slots;
-	DirectFactStatus status = DirectFactStatus::KNOWN;
+	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 };
 
 enum class DirectReducer : uint8_t {
@@ -65,7 +65,7 @@ enum class DirectReducer : uint8_t {
 
 //! One additive part of a constraint's left side or of the objective: `sign * scale * reducer(terms)`.
 struct DirectPart {
-	DirectFactStatus status = DirectFactStatus::KNOWN;
+	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 	string reason;
 	int sign = 1;
 	//! A query-wide factor canonicalization left on the reducer; null for none.
@@ -83,13 +83,13 @@ struct DirectPart {
 
 //! Which rows a constraint or objective applies to. PER keys exclude NULL rows; WHEN false or NULL rows do not
 //! join.
-struct DirectScopeFact {
+struct DirectIRScope {
 	vector<idx_t> per_key_slots;
 	unique_ptr<Expression> when;
 };
 
-struct DirectConstraintFact {
-	DirectFactStatus status = DirectFactStatus::KNOWN;
+struct DirectIRConstraint {
+	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 	string reason;
 	//! Index into the source-clause registry: the user's clause this constraint came from, shared by the constraints
 	//! one clause expands into.
@@ -106,7 +106,7 @@ struct DirectConstraintFact {
 	//! unconditional comparison of one bare decision against a finite constant. Such a bound replaces the variable's
 	//! default lower bound of 0, where every other bound only intersects with it.
 	bool variable_bound = false;
-	DirectScopeFact scope;
+	DirectIRScope scope;
 	idx_t degree = 0;
 
 	//! The reduced left side when it is one plain `SUM(...)`: unsigned, unscaled, unqualified, not nested; null
@@ -114,36 +114,36 @@ struct DirectConstraintFact {
 	const DirectPart *PlainSum(bool allow_filter) const;
 };
 
-struct DirectObjectiveFact {
-	DirectFactStatus status = DirectFactStatus::KNOWN;
+struct DirectIRObjective {
+	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 	string reason;
 	DecideSense sense = DecideSense::FEASIBILITY;
 	//! Decision-free additive constant canonicalization folded out of the objective.
 	double offset = 0;
 	vector<DirectPart> parts;
-	DirectScopeFact scope;
+	DirectIRScope scope;
 };
 
-struct DirectProblemFacts {
-	static DirectProblemFacts Read(ClientContext &context, LogicalDecide &decide);
+struct DirectIR {
+	static DirectIR Read(ClientContext &context, LogicalDecide &decide);
 
 	idx_t decide_index;
-	DirectFactStatus decisions_status = DirectFactStatus::UNKNOWN;
-	vector<DirectDecisionFact> decisions;
-	vector<DirectEntityScopeFact> entity_scopes;
-	DirectFactStatus source_status = DirectFactStatus::UNKNOWN;
+	DirectAnalysisStatus decisions_status = DirectAnalysisStatus::NOT_PROVED;
+	vector<DirectIRDecision> decisions;
+	vector<DirectIREntityScope> entity_scopes;
+	DirectAnalysisStatus source_status = DirectAnalysisStatus::NOT_PROVED;
 	vector<ColumnBinding> source_bindings;
 	//! Number of entries in the source-clause registry.
 	idx_t source_clause_count = 0;
-	//! UNKNOWN only when the constraint tree's wrappers themselves cannot be read; one unmodelled clause leaves it
-	//! KNOWN and marks that constraint.
-	DirectFactStatus constraints_status = DirectFactStatus::UNKNOWN;
+	//! NOT_PROVED only when the constraint tree's wrappers themselves cannot be read; one unmodelled clause leaves it
+	//! PROVED and marks that constraint.
+	DirectAnalysisStatus constraints_status = DirectAnalysisStatus::NOT_PROVED;
 	string constraints_reason;
-	vector<DirectConstraintFact> constraints;
-	DirectObjectiveFact objective;
+	vector<DirectIRConstraint> constraints;
+	DirectIRObjective objective;
 
-	//! The first unknown constraint or objective part, as a `require` reason; empty when every fact is known.
-	string FirstUnknownReason() const;
+	//! The first not-proved constraint or objective part, as a `require` reason; empty when every IR node is proved.
+	string FirstNotProvedReason() const;
 };
 
 struct DirectRuleMatch {
@@ -177,15 +177,15 @@ struct DirectRelationalProposal {
 };
 
 //! The lifecycle the coordinator drives: Match, Prove, Explain, Rewrite. A miss in Match or Prove leaves the DECIDE
-//! node untouched and reports `reason`. Rules are disjoint: each requires facts the others forbid, so at most one
+//! node untouched and reports `reason`. Rules are disjoint: each requires IR the others forbid, so at most one
 //! proves a query, and the coordinator raises an internal error when two do.
 class DirectSolveRule {
 public:
 	virtual ~DirectSolveRule() = default;
 	virtual const char *Name() const = 0;
-	virtual unique_ptr<DirectRuleMatch> Match(const DirectProblemFacts &facts, string &reason) const = 0;
-	virtual unique_ptr<DirectRuleProof> Prove(const DirectProblemFacts &facts, const DirectRuleMatch &match,
-	                                          ClientContext &context, string &reason) const = 0;
+	virtual unique_ptr<DirectRuleMatch> Match(const DirectIR &ir, string &reason) const = 0;
+	virtual unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, const DirectRuleMatch &match, ClientContext &context,
+	                                          string &reason) const = 0;
 	virtual void Explain(const DirectRuleProof &proof, DirectSolveDecisionRecord &record) const = 0;
 	//! `source` is the DECIDE input with its types resolved.
 	virtual DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,

@@ -95,7 +95,7 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 		throw InternalException("Direct solve expected one DECIDE input");
 	}
 	auto &source = *decide.children[0];
-	auto facts = DirectProblemFacts::Read(optimizer.context, decide);
+	auto ir = DirectIR::Read(optimizer.context, decide);
 	struct ProvedCandidate {
 		const DirectSolveRule *rule;
 		unique_ptr<DirectRuleProof> proof;
@@ -105,12 +105,12 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	auto rules = RulesFor(optimizer.context);
 	for (auto &rule : rules) {
 		string reason;
-		auto match = rule->Match(facts, reason);
+		auto match = rule->Match(ir, reason);
 		if (!match) {
 			misses.push_back(rule->Name() + string(": ") + reason);
 			continue;
 		}
-		auto proof = rule->Prove(facts, *match, optimizer.context, reason);
+		auto proof = rule->Prove(ir, *match, optimizer.context, reason);
 		if (!proof) {
 			misses.push_back(rule->Name() + string(": ") + reason);
 			continue;
@@ -126,7 +126,7 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 		// `require` is how a user asks why a query was not proved.
 		return op;
 	}
-	// Every rule ran, so a second proof is seen. Rules tell queries apart by the facts they require; two proofs of one
+	// Every rule ran, so a second proof is seen. Rules tell queries apart by the IR they require; two proofs of one
 	// query mean the rules overlap, which no ordering or cost can settle safely.
 	if (proved.size() > 1) {
 		vector<string> names;

@@ -41,11 +41,11 @@ public:
 	const char *Name() const override {
 		return name.c_str();
 	}
-	duckdb::unique_ptr<DirectRuleMatch> Match(const DirectProblemFacts &, string &) const override {
+	duckdb::unique_ptr<DirectRuleMatch> Match(const DirectIR &, string &) const override {
 		return make_uniq<StubMatch>();
 	}
-	duckdb::unique_ptr<DirectRuleProof> Prove(const DirectProblemFacts &, const DirectRuleMatch &, ClientContext &,
-	                                  string &reason) const override {
+	duckdb::unique_ptr<DirectRuleProof> Prove(const DirectIR &, const DirectRuleMatch &, ClientContext &,
+	                                          string &reason) const override {
 		if (!proves) {
 			reason = "stub_miss: " + name;
 			return nullptr;

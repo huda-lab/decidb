@@ -5,7 +5,7 @@ add_library_unity(
   direct_builder.cpp
   direct_coordinator.cpp
   direct_expression.cpp
-  direct_problem.cpp
+  direct_ir.cpp
   direct_registry.cpp
   direct_result_boundary.cpp
   direct_second_read.cpp

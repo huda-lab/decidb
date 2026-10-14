@@ -11,7 +11,7 @@ What S1 does today is in `done.md`; the class is in `definition.md`. How to work
   `ConstantPinDomain`, `SourceBooleanPinValue`, and the numeric-pin code in `ProvePins`, about 140 lines). A1 decides
   "what interval may this row take" for the same kind of bound with different code (`ClauseBounds` in `a1_rule.cpp`).
   They also treat the solver's reading of a bare constant bound differently: S1 declines some spellings by inspecting
-  them, A1 asks the `variable_bound` fact, which S1 never reads.
+  them, A1 asks the `variable_bound` IR flag, which S1 never reads.
   Two readings of one rule can drift apart, and a third per-row rule would write a third.
 - **Change.** Give S1's pins the shared reader with the domain {0, 1}; keep S1's rank and count logic as it is.
 - **Done when.** S1's pin code is a call to the shared builder, S1's suites (three-way, contract, fuzz) pass unchanged, and

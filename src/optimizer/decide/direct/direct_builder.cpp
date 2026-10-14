@@ -386,15 +386,15 @@ bool DirectIsWholeNumbered(DirectDomain domain) {
 	return domain != DirectDomain::REAL;
 }
 
-bool DirectProveValue(const DirectProblemFacts &facts, const Expression &expr) {
-	return expr.return_type.IsNumeric() && DirectIsNumericDecisionFree(expr, facts.decide_index) &&
-	       DirectReferencesOnlySource(expr, facts.source_bindings);
+bool DirectProveValue(const DirectIR &ir, const Expression &expr) {
+	return expr.return_type.IsNumeric() && DirectIsNumericDecisionFree(expr, ir.decide_index) &&
+	       DirectReferencesOnlySource(expr, ir.source_bindings);
 }
 
-static bool DirectProveValues(const DirectProblemFacts &facts, const vector<DecideSplitTerm> &terms,
+static bool DirectProveValues(const DirectIR &ir, const vector<DecideSplitTerm> &terms,
                               vector<DirectSignedValue> &out) {
 	for (auto &term : terms) {
-		if (!term.coefficient || !DirectProveValue(facts, *term.coefficient)) {
+		if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
 			return false;
 		}
 		DirectSignedValue value;
@@ -419,33 +419,32 @@ DirectBoundClause DirectBoundClause::Copy() const {
 	return result;
 }
 
-bool DirectReadBounds(const DirectProblemFacts &facts, ClientContext &context, DirectBoundReading &reading,
-                      string &reason) {
+bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading, string &reason) {
 	constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
 	constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
-	idx_t decision_count = facts.decisions.size();
+	idx_t decision_count = ir.decisions.size();
 	// The box as the solver folds it: the raw values it reads (after the strict shift, before any rounding or mapping
 	// to infinity), combined by the one function the solver's own absorption pass calls.
 	vector<DecideBoundBox> boxes(decision_count);
-	for (auto &fact : facts.constraints) {
-		if (fact.aggregate) {
+	for (auto &ir_node : ir.constraints) {
+		if (ir_node.aggregate) {
 			continue;
 		}
-		idx_t decision = fact.lhs[0].terms[0].var_a;
-		auto domain = facts.decisions[decision].domain;
-		auto &rhs = *fact.rhs;
-		auto comparison = fact.comparison;
-		if (!DirectIsSourceOnlyValue(rhs, facts.decide_index, facts.source_bindings)) {
+		idx_t decision = ir_node.lhs[0].terms[0].var_a;
+		auto domain = ir.decisions[decision].domain;
+		auto &rhs = *ir_node.rhs;
+		auto comparison = ir_node.comparison;
+		if (!DirectIsSourceOnlyValue(rhs, ir.decide_index, ir.source_bindings)) {
 			reason = "coefficient_shape: expected a deterministic numeric expression over the source columns on the "
 			         "right of a bound";
 			return false;
 		}
-		if (fact.scope.when &&
-		    !DirectIsSourceOnlyPredicate(*fact.scope.when, facts.decide_index, facts.source_bindings)) {
+		if (ir_node.scope.when &&
+		    !DirectIsSourceOnlyPredicate(*ir_node.scope.when, ir.decide_index, ir.source_bindings)) {
 			reason = "constraint_scope: WHEN must be a deterministic source-only predicate";
 			return false;
 		}
-		if (fact.variable_bound) {
+		if (ir_node.variable_bound) {
 			double k;
 			if (!TryEvaluateFoldableDouble(context, rhs, k, DIRECT_CONSTANT | FOLD_ALLOW_BOOLEAN)) {
 				reason = "constraint_shape: expected a finite constant on the right of a bound on the decision";
@@ -467,13 +466,13 @@ bool DirectReadBounds(const DirectProblemFacts &facts, ClientContext &context, D
 		DirectBoundClause clause;
 		clause.decision = decision;
 		clause.comparison = comparison;
-		if (!DirectProveValues(facts, fact.lhs[0].terms, clause.coefficient)) {
+		if (!DirectProveValues(ir, ir_node.lhs[0].terms, clause.coefficient)) {
 			reason = "coefficient_shape: expected a deterministic numeric coefficient over the source columns";
 			return false;
 		}
-		clause.rhs = fact.rhs->Copy();
-		if (fact.scope.when) {
-			clause.when = fact.scope.when->Copy();
+		clause.rhs = ir_node.rhs->Copy();
+		if (ir_node.scope.when) {
+			clause.when = ir_node.scope.when->Copy();
 		}
 		if (comparison == ExpressionType::COMPARE_EQUAL) {
 			// An equality is a lower and an upper bound that may not agree: a fractional value for a whole-numbered
@@ -491,7 +490,7 @@ bool DirectReadBounds(const DirectProblemFacts &facts, ClientContext &context, D
 		// The solver rejects, before it reads any row, a box that contradicts the variable's built-in domain
 		// (DecideBoxContradictsDomain). It says so on an empty source too, so the query is left to the solver, which
 		// reports it, rather than proved here and answered with no rows.
-		if (DecideBoxContradictsDomain(boxes[decision], facts.decisions[decision].domain == DirectDomain::BOOL)) {
+		if (DecideBoxContradictsDomain(boxes[decision], ir.decisions[decision].domain == DirectDomain::BOOL)) {
 			reason =
 			    "variable_bound: a bound contradicts the decision's built-in domain (non-negative, or BOOL 0 or 1); "
 			    "the solver reports it";
@@ -500,11 +499,11 @@ bool DirectReadBounds(const DirectProblemFacts &facts, ClientContext &context, D
 	}
 	reading.boxes.resize(decision_count);
 	for (idx_t decision = 0; decision < decision_count; decision++) {
-		bool boolean = facts.decisions[decision].domain == DirectDomain::BOOL;
+		bool boolean = ir.decisions[decision].domain == DirectDomain::BOOL;
 		// A written lower bound replaces the default of 0, except that a BOOL never leaves {0, 1}. A whole-numbered
 		// decision rounds each bound inward, and a bound of magnitude 1e20 or more (a written -1e30 included) is no
 		// bound.
-		bool whole = DirectIsWholeNumbered(facts.decisions[decision].domain);
+		bool whole = DirectIsWholeNumbered(ir.decisions[decision].domain);
 		double lower = boxes[decision].lower;
 		double upper = boxes[decision].upper;
 		if (whole) {

@@ -126,64 +126,65 @@ public:
 		return A1_RULE;
 	}
 
-	unique_ptr<DirectRuleMatch> Match(const DirectProblemFacts &facts, string &reason) const override {
-		if (facts.decisions_status != DirectFactStatus::KNOWN || facts.decisions.empty() ||
-		    !facts.entity_scopes.empty() || facts.source_status != DirectFactStatus::KNOWN) {
+	unique_ptr<DirectRuleMatch> Match(const DirectIR &ir, string &reason) const override {
+		if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.decisions.empty() || !ir.entity_scopes.empty() ||
+		    ir.source_status != DirectAnalysisStatus::PROVED) {
 			reason = "variable_shape: expected row-scoped BOOL, INT or REAL decisions";
 			return nullptr;
 		}
-		for (auto &decision : facts.decisions) {
+		for (auto &decision : ir.decisions) {
 			if (decision.scope != DecideVarScope::ROW) {
 				reason = "variable_shape: expected row-scoped BOOL, INT or REAL decisions";
 				return nullptr;
 			}
 		}
-		if (!std::isfinite(facts.objective.offset) ||
-		    (facts.objective.sense != DecideSense::MAXIMIZE && facts.objective.sense != DecideSense::MINIMIZE &&
-		     facts.objective.sense != DecideSense::FEASIBILITY)) {
+		if (!std::isfinite(ir.objective.offset) ||
+		    (ir.objective.sense != DecideSense::MAXIMIZE && ir.objective.sense != DecideSense::MINIMIZE &&
+		     ir.objective.sense != DecideSense::FEASIBILITY)) {
 			reason = "problem_shape: expected a finite objective constant and MINIMIZE, MAXIMIZE or no objective";
 			return nullptr;
 		}
-		if (facts.constraints_status != DirectFactStatus::KNOWN) {
-			reason = "constraint_facts_unknown: " + facts.constraints_reason;
+		if (ir.constraints_status != DirectAnalysisStatus::PROVED) {
+			reason = "constraints_not_proved: " + ir.constraints_reason;
 			return nullptr;
 		}
-		for (auto &fact : facts.constraints) {
-			if (fact.status != DirectFactStatus::KNOWN) {
-				reason = "constraint_facts_unknown: " + facts.FirstUnknownReason();
+		for (auto &ir_node : ir.constraints) {
+			if (ir_node.status != DirectAnalysisStatus::PROVED) {
+				reason = "constraints_not_proved: " + ir.FirstNotProvedReason();
 				return nullptr;
 			}
-			if (fact.aggregate) {
+			if (ir_node.aggregate) {
 				reason = "constraint_shape: expected a bound on one decision, found an aggregate constraint";
 				return nullptr;
 			}
-			if (fact.comparison == ExpressionType::COMPARE_IN || fact.comparison == ExpressionType::COMPARE_NOTEQUAL) {
+			if (ir_node.comparison == ExpressionType::COMPARE_IN ||
+			    ir_node.comparison == ExpressionType::COMPARE_NOTEQUAL) {
 				reason = "constraint_shape: expected an interval bound, found <> or IN";
 				return nullptr;
 			}
-			if (fact.comparison != ExpressionType::COMPARE_EQUAL && !DirectIsLowerBound(fact.comparison) &&
-			    !DirectIsUpperBound(fact.comparison)) {
+			if (ir_node.comparison != ExpressionType::COMPARE_EQUAL && !DirectIsLowerBound(ir_node.comparison) &&
+			    !DirectIsUpperBound(ir_node.comparison)) {
 				reason = "constraint_shape: expected an interval bound";
 				return nullptr;
 			}
-			if (!fact.scope.per_key_slots.empty()) {
+			if (!ir_node.scope.per_key_slots.empty()) {
 				reason = "constraint_scope: PER does not apply to a bound on one row";
 				return nullptr;
 			}
-			if (!ReadsOneDecision(fact, facts.decisions.size())) {
+			if (!ReadsOneDecision(ir_node, ir.decisions.size())) {
 				reason = "constraint_shape: expected a bound of the form a*x <comparison> value on one decision";
 				return nullptr;
 			}
 		}
-		if (facts.objective.status != DirectFactStatus::KNOWN) {
-			reason = "objective_facts_unknown: " + facts.objective.reason;
+		if (ir.objective.status != DirectAnalysisStatus::PROVED) {
+			reason = "objective_not_proved: " + ir.objective.reason;
 			return nullptr;
 		}
-		if (!facts.objective.scope.per_key_slots.empty()) {
+		if (!ir.objective.scope.per_key_slots.empty()) {
 			reason = "objective_scope: expected an objective without PER";
 			return nullptr;
 		}
-		for (auto &part : facts.objective.parts) {
+		for (auto &part : ir.objective.parts) {
 			if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX) {
 				reason = "objective_shape: expected SUM(...) terms";
 				return nullptr;
@@ -199,19 +200,19 @@ public:
 		return make_uniq<A1Match>();
 	}
 
-	unique_ptr<DirectRuleProof> Prove(const DirectProblemFacts &facts, const DirectRuleMatch &, ClientContext &context,
+	unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, const DirectRuleMatch &, ClientContext &context,
 	                                  string &reason) const override {
 		auto proof = make_uniq<A1Proof>();
-		proof->decide_index = facts.decide_index;
-		proof->sense = facts.objective.sense;
-		for (auto &decision : facts.decisions) {
+		proof->decide_index = ir.decide_index;
+		proof->sense = ir.objective.sense;
+		for (auto &decision : ir.decisions) {
 			A1Decision prepared;
 			prepared.name = decision.name;
 			prepared.domain = decision.domain;
 			prepared.output_type = decision.output_type;
 			proof->decisions.push_back(std::move(prepared));
 		}
-		if (!ProveBounds(facts, context, *proof, reason) || !ProveObjective(facts, context, *proof, reason)) {
+		if (!ProveBounds(ir, context, *proof, reason) || !ProveObjective(ir, context, *proof, reason)) {
 			return nullptr;
 		}
 		proof->constant_problem = IsConstantProblem(*proof);
@@ -227,11 +228,11 @@ public:
 
 private:
 	//! One unfiltered per-row left side: only linear terms, in one decision, and no constant.
-	static bool ReadsOneDecision(const DirectConstraintFact &fact, idx_t decision_count) {
-		if (fact.lhs.size() != 1 || fact.degree != 1) {
+	static bool ReadsOneDecision(const DirectIRConstraint &ir_node, idx_t decision_count) {
+		if (ir_node.lhs.size() != 1 || ir_node.degree != 1) {
 			return false;
 		}
-		auto &part = fact.lhs[0];
+		auto &part = ir_node.lhs[0];
 		if (part.sign != 1 || part.reducer != DirectReducer::NONE || part.scale || part.filter || part.inner ||
 		    part.terms.empty()) {
 			return false;
@@ -245,15 +246,14 @@ private:
 		return decision < decision_count;
 	}
 
-	bool ProveBounds(const DirectProblemFacts &facts, ClientContext &context, A1Proof &proof, string &reason) const;
-	bool ProveObjective(const DirectProblemFacts &facts, ClientContext &context, A1Proof &proof, string &reason) const;
+	bool ProveBounds(const DirectIR &ir, ClientContext &context, A1Proof &proof, string &reason) const;
+	bool ProveObjective(const DirectIR &ir, ClientContext &context, A1Proof &proof, string &reason) const;
 };
 
 //! The decision's box before any per-row bound, and the clauses the plan evaluates per row, from the shared reader.
-bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &context, A1Proof &proof,
-                                string &reason) const {
+bool A1BoundedRule::ProveBounds(const DirectIR &ir, ClientContext &context, A1Proof &proof, string &reason) const {
 	DirectBoundReading reading;
-	if (!DirectReadBounds(facts, context, reading, reason)) {
+	if (!DirectReadBounds(ir, context, reading, reason)) {
 		return false;
 	}
 	proof.clauses = std::move(reading.clauses);
@@ -264,17 +264,16 @@ bool A1BoundedRule::ProveBounds(const DirectProblemFacts &facts, ClientContext &
 	return true;
 }
 
-bool A1BoundedRule::ProveObjective(const DirectProblemFacts &facts, ClientContext &context, A1Proof &proof,
-                                   string &reason) const {
-	auto &objective = facts.objective;
+bool A1BoundedRule::ProveObjective(const DirectIR &ir, ClientContext &context, A1Proof &proof, string &reason) const {
+	auto &objective = ir.objective;
 	if (objective.scope.when) {
-		if (!DirectIsSourceOnlyPredicate(*objective.scope.when, facts.decide_index, facts.source_bindings)) {
+		if (!DirectIsSourceOnlyPredicate(*objective.scope.when, ir.decide_index, ir.source_bindings)) {
 			reason = "objective_scope: WHEN must be a deterministic source-only predicate";
 			return false;
 		}
 		proof.objective_when = objective.scope.when->Copy();
 	}
-	idx_t decision_count = facts.decisions.size();
+	idx_t decision_count = ir.decisions.size();
 	for (auto &part : objective.parts) {
 		A1Part prepared;
 		prepared.sign = part.sign;
@@ -285,7 +284,7 @@ bool A1BoundedRule::ProveObjective(const DirectProblemFacts &facts, ClientContex
 		}
 		prepared.divides = part.scale_divides;
 		if (part.filter) {
-			if (!DirectIsSourceOnlyPredicate(*part.filter, facts.decide_index, facts.source_bindings)) {
+			if (!DirectIsSourceOnlyPredicate(*part.filter, ir.decide_index, ir.source_bindings)) {
 				reason = "objective_scope: WHEN must be a deterministic source-only predicate";
 				return false;
 			}
@@ -303,7 +302,7 @@ bool A1BoundedRule::ProveObjective(const DirectProblemFacts &facts, ClientContex
 					}
 					built.decision = term.var_a;
 				}
-				if (!term.coefficient || !DirectProveValue(facts, *term.coefficient)) {
+				if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
 					reason = "coefficient_shape: expected a deterministic numeric expression over the source columns";
 					return false;
 				}
@@ -339,7 +338,7 @@ bool A1BoundedRule::ProveObjective(const DirectProblemFacts &facts, ClientContex
 					return false;
 				}
 				for (auto &inner : term.inner) {
-					if (!inner.coefficient || !DirectProveValue(facts, *inner.coefficient)) {
+					if (!inner.coefficient || !DirectProveValue(ir, *inner.coefficient)) {
 						reason = "coefficient_shape: expected a deterministic numeric expression over the source "
 						         "columns";
 						return false;

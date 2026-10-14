@@ -11,7 +11,7 @@ Example: `SUM(x) <= 1 MAXIMIZE SUM(score * x)` is "pick the best row". The plan 
 
 ```text
 bound, canonical LogicalDecide
-   -> facts          read the problem into a neutral summary          (facts.md)
+   -> IR             the front end reads the problem into one form    (ir.md)
    -> Match / Prove  each rule checks the shape and every detail      (rules.md)
         miss: the solver path runs as before
         two proofs: internal error, the rules must be disjoint
@@ -72,5 +72,5 @@ error naming both: the overlap is a bug in the rules, and no ordering is safe to
 
 `src/optimizer/decide/direct/`, headers in `src/include/duckdb/optimizer/decide/direct/`. Start with
 `direct_coordinator.cpp` (the flow above), then `s1_rule.cpp` (a rule built on a window) and `a1_rule.cpp` (a rule built
-on a chain of projections and the validation barrier). The rest of the folder is named for what it does: facts,
+on a chain of projections and the validation barrier). The rest of the folder is named for what it does: IR,
 builders, result boundary, expression predicates, registry.

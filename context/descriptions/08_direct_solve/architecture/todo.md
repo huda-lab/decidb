@@ -48,17 +48,6 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
   and the website. The setting `decide_direct_solve` and serialized names stay.
 
-## P-07 — Facts layer becomes the IR
-
-- **Problem.** "Facts" and "adapter" are our words for a compiler-style intermediate representation built by a front
-  end.
-- **Change.** Rename per the glossary: `DirectProblemFacts`, the `Direct*Fact` types, `DirectFactStatus` (and its
-  `UNKNOWN`), `FactReader`, `direct_problem.cpp`, `FirstUnknownReason`, `test_decidb_direct_facts.cpp` and its tag,
-  and `architecture/facts.md` (file name and text). Update H-02 in `../rules/_harness/todo.md`, which calls the second
-  front end an adapter.
-- **Done when.** `grep -rn Fact src/optimizer/decide/direct src/include/duckdb/optimizer/decide/direct` finds
-  nothing; the checks give the baseline counts.
-
 ## P-08 — Rule interface: one Prove, a summary instead of Explain
 
 - **Problem.** Decision P-04 in § Decisions.

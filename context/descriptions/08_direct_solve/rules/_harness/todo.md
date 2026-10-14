@@ -1,6 +1,6 @@
 # Shared engine — open work
 
-The engine is everything that is not one problem class: facts, coordinator, builders, result boundary, policy. What exists
+The engine is everything that is not one problem class: IR, coordinator, builders, result boundary, policy. What exists
 today is in `done.md`.
 
 ## How to work any task in these todo files
@@ -19,11 +19,11 @@ today is in `done.md`.
   function or move it to another file unless the task says so; a miss re-runs Gurobi, which needs a licence.
 - The Bash tool is zsh. In `grep`, put `--include` flags before `-e PATTERN`; after a `--` they are read as file names.
 
-## H-02 — Adapter for the new language
+## H-02 — Front end for the new language
 
 - **Needs.** A stable language branch.
-- **Problem.** The rules read facts produced from the current syntax only (`direct_problem.cpp`;
-  `../../architecture/facts.md`).
-- **Change.** A second adapter produces the same facts from the new syntax. Extend the facts when semantics change; do not
+- **Problem.** The rules read an IR built from the current syntax only (`direct_ir.cpp`;
+  `../../architecture/ir.md`).
+- **Change.** A second front end builds the same IR from the new syntax. Extend the IR when semantics change; do not
   teach a rule parser spelling.
-- **Done when.** The facts contract and the direct/solver tests run on both syntaxes where comparable.
+- **Done when.** The IR contract and the direct/solver tests run on both syntaxes where comparable.

@@ -1,9 +1,9 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-13 on top of `161ba4dbf0`, with S1 and A1 registered: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,346 passed (no
-failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,345 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,319 assertions in
+Verified on 2026-10-14 on top of `5fb3b76b90`, with S1 and A1 registered: `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,394 passed (no
+failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,393 passed and one failure,
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,329 assertions in
 46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../../architecture/`.
 
@@ -12,10 +12,10 @@ check). Design: `../../architecture/`.
 - **Setting and fallback.** `decide_direct_solve` is `auto` (default), `off` or `require`. A hit replaces the DECIDE node
   before solver selection; a miss leaves it for the solver. `DIAGNOSE` and a forced backend use the solver and conflict
   with `require`. A prepared plan keeps its selection until rebound. `require` also fails when the DECIDE optimizer is off.
-- **Facts.** One read-only adapter turns the bound tree into facts: decision domains and scopes, each constraint with
-  reducer, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Unmodeled parts are *unknown* with a
-  reason, and reading the facts never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the reader does
-  not expect are unknown parts. No fact is kept that no rule reads. It uses the same term splitter as the solver path.
+- **IR.** One read-only front end turns the bound tree into the IR: decision domains and scopes, each constraint with
+  reducer, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Unmodeled parts are *not proved* with a
+  reason, and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the front end
+  does not expect are not-proved parts. No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
 - **Rule contract.** Match, Prove, Explain, Rewrite, plus a shared Map step that checks the output slots. Rules are
   listed in `direct_registry.cpp`; tests can replace the list per connection. The coordinator runs Match and Prove for
   every rule. Rules are disjoint, so at most one proves a query; two proofs raise an internal error naming both rules.
@@ -137,12 +137,12 @@ check). Design: `../../architecture/`.
   suite imports the scaffold (`architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
   example `auto: 2322 passed, 0 xfailed, 0 failed`. The comment above `DirectDomain` in `direct_rule.hpp` points at
-  `architecture/facts.md`.
+  `architecture/ir.md`.
 
 ## Verified by
 
-- C++: `test_decidb_direct_facts.cpp` (every fact kind and unknowns, and a norm tag it does not expect reading as an
-  unknown part, not an exception), `test_decidb_direct_coordinator.cpp` (stub rules: hit, fallback with every reason,
+- C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts, and a norm tag it does not expect reading
+  as a not-proved part, not an exception), `test_decidb_direct_coordinator.cpp` (stub rules: hit, fallback with every reason,
   a proving rule beside a missing one, two proving rules as an internal error, mismatched slot, barrier under
   `LIMIT 1` and `COUNT(*)`).
 - Python: `test_direct_rule_contract.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read, serializer, prepared
@@ -157,8 +157,8 @@ check). Design: `../../architecture/`.
 A rule registers with one line in `direct_registry.cpp` and one in the folder's `CMakeLists.txt`. The coordinator
 (`direct_coordinator.cpp`) and the result boundary (`direct_result_boundary.cpp`) hold no rule-specific code. S1 and A1 are
 materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a barrier
-or a streaming plan) and run on the same two central files. A fact a rule needs about the solver's own reading comes from
-the solver's code, not a copy: `DirectConstraintFact::variable_bound` is the predicate `DecideBoundIsAbsorbed`
+or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own reading comes
+from the solver's code, not a copy: `DirectIRConstraint::variable_bound` is the predicate `DecideBoundIsAbsorbed`
 (`decide_bound_absorption.cpp`), so a rule can ask which bounds replace a variable's default box.
 
 ## Checked and fine
@@ -173,4 +173,4 @@ the solver's code, not a copy: `DirectConstraintFact::variable_bound` is the pre
 
 ## Not built
 
-- No second language adapter.
+- No second language front end.
