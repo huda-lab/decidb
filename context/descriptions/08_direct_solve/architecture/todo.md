@@ -3,6 +3,8 @@
 Direct solve's design mostly follows known patterns under names we made up. These tasks settle one standard name per
 concept, apply it to code and docs, and remove the parts of the rule lifecycle that a standard design does not need.
 How to work and the shared checks: `../rules/_harness/todo.md` § How to work any task (the folder name itself is P-02).
+This folder has no `done.md`: a shipped task is recorded in the architecture note it names and in
+`../rules/_harness/done.md`. A decision is recorded as one line under P-06 § Change.
 
 Rules for every rename task in this file:
 
@@ -11,8 +13,9 @@ Rules for every rename task in this file:
   `decide_direct_solve` setting, unless P-01 decides otherwise.
 - Do not rename a Python test function or move it to another file (the oracle cache is keyed on the node id). C++ test
   files and case names may change.
-- A rename is behavior-neutral: the checks give the same counts as the stamp in `../rules/_harness/done.md`.
-- Each rename updates every doc in `08_direct_solve/` that uses the old term, in the same commit.
+- A rename is behavior-neutral: the checks give the same pass counts before and after the task. Run them
+  first for the baseline; the stamp in `../rules/_harness/done.md` can lag behind later commits.
+- The commit of a rename also updates every doc in `08_direct_solve/` that uses the old term.
 
 ## P-01 — Name of the feature and its setting
 
@@ -27,7 +30,7 @@ Rules for every rename task in this file:
      and code disagree.
   3. Rename everywhere, including the setting. Cost: a user-facing break and every `Direct*` identifier.
 - **Recommendation.** 1. The term is short and only needs a standard definition; show it to the supervisor.
-- **Done when.** The choice is recorded in `glossary.md` (P-06).
+- **Done when.** The chosen option is one line under P-06 § Change.
 
 ## P-02 — Name of the shared-engine folder and the docs tree
 
@@ -41,7 +44,7 @@ Rules for every rename task in this file:
   3. Merge into `architecture/` (design and engine status in one folder). Cost: mixes design notes with todo/done.
 - **Recommendation.** 2. "Framework" is the textbook name for code that drives Strategy plug-ins it does not know.
   Keep `rules/` and state in the glossary that one rule implements one catalogue class.
-- **Done when.** The choice is recorded in `glossary.md` (P-06).
+- **Done when.** The chosen option is one line under P-06 § Change.
 
 ## P-03 — Rule-framework vocabulary
 
@@ -67,7 +70,7 @@ Rules for every rename task in this file:
 - **Recommendation.** Adopt the Cascades lifecycle words, "substitute", "rule driver" and "test seam". Keep "proof":
   the rule must prove optimality, which is stronger than a Cascades condition; the glossary says so. Keep "reducer" and
   "absorbed" and list their standard names in the glossary.
-- **Done when.** The choices are recorded in `glossary.md` (P-06).
+- **Done when.** The chosen options are one line per row under P-06 § Change.
 
 ## P-04 — Rule lifecycle: merge Match and Prove, fold Explain
 
@@ -81,7 +84,7 @@ Rules for every rename task in this file:
   2. Merge Match and Prove only.
   3. Keep the four steps and say in the glossary why they differ from Cascades.
 - **Recommendation.** 1. Nothing uses the split, and a smaller interface is easier to explain as a Strategy.
-- **Done when.** The choice is recorded in `glossary.md` (P-06).
+- **Done when.** The chosen option is one line under P-06 § Change.
 
 ## P-05 — Code naming convention: `Direct` prefix or a namespace
 
@@ -94,22 +97,23 @@ Rules for every rename task in this file:
      `direct_a1`. Cost: small.
   2. Move everything into `namespace duckdb::direct` and drop the prefix. Cost: every file; unity builds need care.
 - **Recommendation.** 1. It matches the surrounding code, and the rule-local double prefix is the only real oddity.
-- **Done when.** The choice is recorded in `glossary.md` (P-06).
+- **Done when.** The chosen option is one line under P-06 § Change.
 
 ## P-06 — Glossary: one standard name per concept
 
 - **Problem.** No page maps our terms to the standard ones, so every rename task would have to pick names itself.
 - **Change.** Write `architecture/glossary.md`: one row per concept with the chosen name, the standard term and its
   source (GoF, Cascades, compiler texts, DuckDB), and the code identifiers it covers. Include the decisions of P-01 to
-  P-05, plus the uncontested rows: facts → intermediate representation (IR); "unknown fails closed" → conservative
-  (sound) analysis; validation barrier → pipeline breaker; second read → late materialization; result boundary →
-  adapter with an optimization fence; decision record → `EXPLAIN` annotation (a "decision record" means an architecture
-  decision record elsewhere); builders → plan factory functions; `Calc`/`Ex` → expression builder; pins → fixed
-  variables; three-way table → differential oracle test; contract suite → conformance suite. Add a "Patterns used"
-  section to `overview.md` that names Strategy, Factory Method, Template Method (the driver's fixed steps), Adapter, the
-  IR, and the one departure: rules must be disjoint instead of chosen by cost, and why. Link the glossary from
-  `README.md`.
-- **Needs.** P-01 to P-05.
+  P-05 and P-16 (one line each below), plus the uncontested rows: facts → intermediate representation (IR); "unknown
+  fails closed" → conservative (sound) analysis; validation barrier → pipeline breaker; second read → late
+  materialization; result boundary → adapter with an optimization fence; decision record → `EXPLAIN` annotation (a
+  "decision record" means an architecture decision record elsewhere); builders → plan factory functions; `Calc`/`Ex` →
+  expression builder; pins → fixed variables; three-way table → differential oracle test; contract suite → conformance
+  suite. Add a "Patterns used" section to `overview.md` that names Strategy, Factory Method, Template Method (the
+  driver's fixed steps), Adapter, the IR, and the one departure: rules must be disjoint instead of chosen by cost, and
+  why. Link the glossary from `README.md`.
+  Decisions:
+- **Needs.** P-01 to P-05 and P-16.
 - **Done when.** Every term in the P-03 table and the list above has one row with exact old and new identifiers.
 
 ## P-07 — Facts layer becomes the IR
@@ -121,8 +125,8 @@ Rules for every rename task in this file:
   and `architecture/facts.md` (file name and text). Update H-02 in `../rules/_harness/todo.md`, which calls the second
   front end an adapter.
 - **Needs.** P-06.
-- **Done when.** `grep -rnw -e Facts -e FactReader src/optimizer/decide/direct src/include/duckdb/optimizer/decide/direct`
-  finds nothing; the checks pass at the stamp's counts.
+- **Done when.** `grep -rn Fact src/optimizer/decide/direct src/include/duckdb/optimizer/decide/direct` finds
+  nothing; the checks give the baseline counts.
 
 ## P-08 — Rule interface: one Prove, a summary instead of Explain
 
@@ -132,7 +136,7 @@ Rules for every rename task in this file:
   `require` reason text. `EXPLAIN` output is unchanged.
 - **Needs.** P-06.
 - **Done when.** `DirectRuleMatch` (if merged) has no references; the coordinator tests cover hit, miss and two proofs;
-  the checks pass at the stamp's counts.
+  the checks give the baseline counts.
 
 ## P-09 — Rule-framework renames
 
@@ -141,7 +145,7 @@ Rules for every rename task in this file:
   `TryDirectSolve`, `DirectRuleOverride` and `DIRECT_RULE_OVERRIDE_KEY`, the `*Rewriter` classes, and "hit"/"miss" in
   `overview.md`, `rules.md`, `policy.md` and the code comments.
 - **Needs.** P-08 (both edit the rule interface).
-- **Done when.** None of the retired identifiers appears under `src/` or `test/`; the checks pass at the stamp's counts.
+- **Done when.** None of the retired identifiers appears under `src/` or `test/`; the checks give the baseline counts.
 
 ## P-10 — Validation barrier becomes a pipeline breaker
 
@@ -151,7 +155,7 @@ Rules for every rename task in this file:
   section of `result_boundary.md`.
 - **Needs.** P-06.
 - **Done when.** `grep -rn -i barrier src/optimizer/decide/direct src/include/duckdb/optimizer/decide/direct` finds
-  nothing; the checks pass at the stamp's counts.
+  nothing; the checks give the baseline counts.
 
 ## P-11 — Second read becomes late materialization
 
@@ -163,7 +167,7 @@ Rules for every rename task in this file:
   `Direct` prefix), and the docs keep the reason it runs inside `UNUSED_COLUMNS`.
 - **Needs.** P-06.
 - **Done when.** `grep -rn -i "second.read" src test context/descriptions/08_direct_solve` finds nothing; the checks
-  pass at the stamp's counts.
+  give the baseline counts.
 
 ## P-12 — Result boundary becomes the result adapter
 
@@ -175,7 +179,7 @@ Rules for every rename task in this file:
   stay, so a serialized plan still reads back.
 - **Needs.** P-06; after P-10 and P-11, which edit the same files.
 - **Done when.** None of the retired identifiers appears under `src/` or `test/`; `DECIDB_VERIFY_SERIALIZER=1 make
-  decide-test` passes at the stamp's counts.
+  decide-test` gives the baseline counts.
 
 ## P-13 — Decision record becomes the EXPLAIN annotation
 
@@ -194,7 +198,7 @@ Rules for every rename task in this file:
   `s1_support.{hpp,cpp}`, and the prefix inside `direct_s1` and `direct_a1`. Update `rules.md` § Adding a rule and the
   "Shared builders" text in `../rules/_harness/done.md`.
 - **Needs.** P-06; after P-10, which edits `direct_builder`.
-- **Done when.** The new names compile under a unity build (`make release`); the checks pass at the stamp's counts.
+- **Done when.** The new names compile under a unity build (`make release`); the checks give the baseline counts.
 
 ## P-15 — Shared-engine folder rename
 
@@ -215,7 +219,7 @@ Rules for every rename task in this file:
   1. Docs use the standard names; files keep theirs; the glossary lists the file for each. Cost: names differ.
   2. Rename the files too and re-run the oracle once. Cost: a Gurobi run of the whole suite.
 - **Recommendation.** 1.
-- **Done when.** The choice is recorded in `glossary.md` (P-06).
+- **Done when.** The chosen option is one line under P-06 § Change.
 
 ## P-18 — Test vocabulary in the docs
 
@@ -232,5 +236,5 @@ Rules for every rename task in this file:
 - **Change.** For every retired term in `glossary.md`, grep `src/`, `test/`, `benchmark/decide/`, `context/` and
   `.claude/`, and fix what remains. Leave git history and the frozen paper alone.
 - **Needs.** Every other task in this file.
-- **Done when.** Each retired term greps to zero outside history; `test/decide/run_direct_matrix.sh` gives the stamp's
+- **Done when.** Each retired term greps to zero outside history; `test/decide/run_direct_matrix.sh` gives the baseline
   counts, and the stamp in the shared-engine `done.md` is renewed.

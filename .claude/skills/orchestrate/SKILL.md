@@ -9,8 +9,8 @@ You (Opus) do not implement queue items yourself. You write the brief, Sonnet do
 review the result against the tree. Keep your own context small: read the diff and summary test lines, not build logs
 or exploration.
 
-The queue is `context/descriptions/todo.md`, an untracked scratchpad. Its contents change from project to project, so
-nothing below assumes a particular feature area. Everything specific to the area (state, reading list, owner rules,
+The queue is `context/descriptions/todo.md`, a scratchpad tracked in git. Its contents change from project to project,
+so nothing below assumes a particular feature area. Everything specific to the area (state, reading list, owner rules,
 checks, where results are recorded) comes from the queue itself and the docs it points to.
 
 ## Arguments
@@ -64,7 +64,7 @@ Exit gate: <the exact checks that must pass, plus new regressions to add>
 Records: <the todo task you will delete and the done.md section you will update>
 ```
 
-Copy the item's text into the brief; do not just point at the untracked queue file. Wait for approval or edits.
+Copy the item's text into the brief; do not just point at the queue file. Wait for approval or edits.
 
 ### 2. Launch
 
@@ -119,7 +119,7 @@ SendMessage to the same agent (it keeps its own context).
      paragraph that covers the behavior rather than appending; no changelog wording;
    - delete the item's line from `context/descriptions/todo.md` (and the file, if it is now empty).
    Show the owner the doc diff.
-3. Propose a commit: the exact file list (this item's code, tests and docs; never the untracked queue) and a subject in the repo's
-   style (`decide:`, `docs:`, ...). **Ask for permission and wait.** Commit only after a yes. No `Co-Authored-By` or
-   other generated-by trailer.
+3. Propose a commit: the exact file list (this item's code, tests and docs, including its queue edit) and a subject
+   in the repo's style (`decide:`, `docs:`, ...). **Ask for permission and wait.** Commit only after a yes. No
+   `Co-Authored-By` or other generated-by trailer.
 4. Offer the next item.
