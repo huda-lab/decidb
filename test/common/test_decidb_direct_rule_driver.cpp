@@ -86,10 +86,10 @@ public:
 		auto projection = make_uniq<LogicalProjection>(index, std::move(expressions));
 		projection->children.push_back(std::move(plan));
 		for (idx_t i = 0; i <= input.size(); i++) {
-			substitute.output_slots.push_back(i);
+			substitute.slot_map.push_back(i);
 		}
 		if (wrong_output_slot) {
-			substitute.output_slots.back() = 0;
+			substitute.slot_map.back() = 0;
 		}
 		substitute.prunable_decisions.push_back(1);
 		substitute.child = std::move(projection);

@@ -933,7 +933,7 @@ public:
 		// The rank window reads every row before it emits one, so the hidden rank is this plan's validation breaker.
 		substitute.validated_columns.push_back(source_bindings.size() + 1);
 		for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
-			substitute.output_slots.push_back(i);
+			substitute.slot_map.push_back(i);
 		}
 		substitute.child = std::move(result);
 		return substitute;

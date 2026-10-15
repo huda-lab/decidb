@@ -1,7 +1,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
-#include "duckdb/optimizer/decide/direct/direct_result_boundary.hpp"
+#include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
 
 namespace duckdb {
 
@@ -21,10 +21,10 @@ class Optimizer;
 //! aggregate or a limit, a volatile expression, a table function).
 bool DirectExposeStoredRowId(LogicalOperator &source, DirectLateMaterialization &late_materialization);
 
-//! Step two, once unused columns are removed and the parents' reads are known: for every result boundary whose parent
+//! Step two, once unused columns are removed and the parents' reads are known: for every result adapter whose parent
 //! reads a variable-width stored column (VARCHAR, BLOB, a nested type) that nothing else in the rule's plan uses, read
 //! that column from a second scan of the table joined to the plan on the row id, then prune again so the column leaves
-//! the rule's plan. A boundary whose row id is not needed lets go of it. Knows nothing about any rule.
+//! the rule's plan. An adapter whose row id is not needed lets go of it. Knows nothing about any rule.
 unique_ptr<LogicalOperator> ApplyDirectLateMaterialization(unique_ptr<LogicalOperator> plan, Optimizer &optimizer);
 
 } // namespace duckdb

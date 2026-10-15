@@ -1,13 +1,18 @@
-# Result boundary: keeping DECIDE's output intact
+# Result adapter: keeping DECIDE's output intact
 
 The replacement plan must look exactly like the DECIDE node it replaces: every source column, then one column per
 decision, with the same bindings and types. A small **logical-only** operator wraps the generated plan to guarantee
 that. It has no problem-specific logic and lowers to ordinary projections, so there is no new physical operator.
 
+It is two standard ideas in one operator. It is a GoF **Adapter**: the substitute presents the interface (bindings and
+types) of the DECIDE node it replaces. It is also an **optimization fence**: parent filters and limits cannot cross it.
+In `EXPLAIN` it shows as `DIRECT_RESULT_ADAPTER`; the code is `LogicalDirectResultAdapter`, built by
+`AdaptDirectResult`.
+
 ## What it does
 
-- **Explicit slot map.** Each original output slot maps to one slot of the generated child. Parents keep reading the
-  old bindings.
+- **Explicit slot map.** Each DECIDE output maps to one slot of the generated child (`DirectSubstitute::slot_map`).
+  Parents keep reading the old bindings.
 - **Blocks parent work from crossing it.** A filter or limit above the DECIDE result cannot move into the rank input,
   since that would change which rows are ranked. Optimizing inside the child is fine.
 - **Carries the decision record** that `EXPLAIN` and profiling show when a rule applies (see `policy.md`).
@@ -84,10 +89,10 @@ has a separate step, `ApplyDirectLateMaterialization`, for the reason at the end
 When the source is one DuckDB base table under non-volatile projections and filters, the plan carries the table's
 `rowid` as a hidden column. After unused-column removal, when it is known what the parent reads, each parent-read output
 that is a plain stored column the rule's plan only forwards comes from a second scan of the table, joined on `rowid`
-under the boundary. That column never enters the breaker or the rank, and the first read still checks every row, so a
+under the adapter. That column never enters the breaker or the rank, and the first read still checks every row, so a
 bad last row under `LIMIT 1` still raises. Only a variable-width column moves (`VARCHAR`, `BLOB`, `BIT`, lists,
 arrays, structs, maps, unions: a physical type that is not constant-size); a fixed-width one stays in the single read,
-and a boundary with nothing to move plans one scan. Holding a variable-width column is what costs memory, so that is
+and an adapter with nothing to move plans one scan. Holding a variable-width column is what costs memory, so that is
 where late materialization pays. For a fixed-width column the effect depends on the rule, measured 2026-10-13 on tables that
 hold only the columns in play, so that `SET disabled_optimizers = 'unused_columns'` (one read, rows held) keeps nothing
 extra. With a parent that reads a `BIGINT` key, A1 took 0.12 s moved against 0.13 s held (71 against 80 MiB) at
@@ -105,7 +110,7 @@ up to date, so pruning again after them is unsafe. With that pass disabled the r
 
 A declared `BOOL` decision has a 0/1 domain but returns SQL `INTEGER`, as on the solver path.
 
-Details: `direct_result_boundary.cpp` (map checks, serialization, pruning hook), `direct_late_materialization.cpp` (late materialization) and `direct_builder.cpp` (breaker and
-pruning proof). The optimizer passes that run after DECIDE were audited for parent filter, join, aggregate, nested, and
-serializer cases; the parent-context rows in `test_direct_three_way.py` and the pruning tests in
-`test_direct_user_facing.py` keep those guarded.
+Details: `direct_result_adapter.cpp` (map checks, serialization, pruning hook), `direct_late_materialization.cpp` (late
+materialization) and `direct_builder.cpp` (breaker and pruning proof). The optimizer passes that run after DECIDE were
+audited for parent filter, join, aggregate, nested, and serializer cases; the parent-context rows in
+`test_direct_three_way.py` and the pruning tests in `test_direct_user_facing.py` keep those guarded.

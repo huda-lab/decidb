@@ -156,8 +156,8 @@ struct DirectApplicabilityCondition {
 //! skipped; the rule states where each output lives and whether evaluating each decision can be skipped.
 struct DirectSubstitute {
 	unique_ptr<LogicalOperator> child;
-	//! Child slot of every DECIDE output.
-	vector<idx_t> output_slots;
+	//! The slot map: the child slot that carries each DECIDE output, in output order.
+	vector<idx_t> slot_map;
 	//! Per decision variable: true when no parent reading it leaves nothing unchecked, so its evaluation may be
 	//! skipped. Validation the rule needs must then hang off a validated column.
 	vector<uint8_t> prunable_decisions;

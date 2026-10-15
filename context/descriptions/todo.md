@@ -10,8 +10,7 @@ at its top). Checks: `08_direct_solve/rules/_harness/todo.md` § How to work any
 ## 1. Batch A: IR and rule framework, one agent, in order
 
 ## 2. Batch B: plan and output, one agent, in order
-- [ ] P-12 result boundary becomes an adapter — 08_direct_solve/architecture/todo.md § P-12
-- [ ] P-13 decision record becomes the EXPLAIN annotation — 08_direct_solve/architecture/todo.md § P-13 (needs: P-12)
+- [ ] P-13 decision record becomes the EXPLAIN annotation — 08_direct_solve/architecture/todo.md § P-13
 - [ ] P-14 builders, `Calc` and rule-local helpers — 08_direct_solve/architecture/todo.md § P-14
 
 ## 3. Class names, run alone (needs: 1, 2)

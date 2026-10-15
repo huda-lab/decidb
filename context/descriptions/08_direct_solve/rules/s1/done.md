@@ -151,10 +151,11 @@ not re-run; earlier it took about 43 s on the global shape.
 | 100 groups, paired source-valued bounds | 0.66 s | 29.6 s | 45x | 0.8 GiB | 6.3 GiB |
 | 100 groups, `COALESCE` source-valued bound | 0.57 s | 29.5 s | 52x | 0.6 GiB | 6.3 GiB |
 
-The two global narrow rows return the `BIGINT` key `i`, which stays in the single read (only a variable-width column
-is late-materialized; `../../architecture/result_boundary.md` § Late materialization of a stored table). Gurobi's peak varies by about 2 GiB between identical runs (4.6 to 6.5 GiB on the 100-group
-shape over four runs): the model it receives is the same in every run, and the peak is reached inside its presolve, which
-takes 32 of the 33 s. DeciDB's own part of those runs peaks at 1.2 GiB.
+The two global narrow rows return the `BIGINT` key `i`, which stays in the single read (only a variable-width column is
+late-materialized; `../../architecture/result_adapter.md` § Late materialization of a stored table). Gurobi's peak
+varies by about 2 GiB between identical runs (4.6 to 6.5 GiB on the 100-group shape over four runs): the model it
+receives is the same in every run, and the peak is reached inside its presolve, which takes 32 of the 33 s. DeciDB's own
+part of those runs peaks at 1.2 GiB.
 
 The speedup comes mostly from the solver being slow here: it builds a model with millions of variables, which direct solve
 skips. A shape whose solver model is cheap would show a smaller win.
@@ -171,7 +172,7 @@ in 0.04 s at 1,000,000 rows and 0.07 s at 5,000,000 (clean: 0.06 and 0.19 s), an
 
 | Case | Result |
 |---|---|
-| Wide rows (512 B) returned in full | Direct 0.46 s versus Gurobi 3.40 s, 7.4x; reduced inside the query, 0.46 against 2.95 s. The payload is late-materialized from the stored table, so it never enters the rank. Memory 3.9 GiB versus 6.2 GiB with the full result collected, 1.4 GiB versus 5.4 GiB when reduced. Footprint numbers are in `../../architecture/result_boundary.md` |
+| Wide rows (512 B) returned in full | Direct 0.46 s versus Gurobi 3.40 s, 7.4x; reduced inside the query, 0.46 against 2.95 s. The payload is late-materialized from the stored table, so it never enters the rank. Memory 3.9 GiB versus 6.2 GiB with the full result collected, 1.4 GiB versus 5.4 GiB when reduced. Footprint numbers are in `../../architecture/result_adapter.md` |
 | Small inputs, up to 10,000 rows | Everything finishes in about 20 ms, so no real difference (earlier measurement, not re-run) |
 | 100,000 wide rows, trivial capacity | Direct about 5% slower than Gurobi, two runs (earlier measurement, not re-run). The only measured loss |
 | Capacity 0 or all rows, 5M narrow | Still wins, by 3 to 4x instead of 16x (earlier measurement, not re-run) |

@@ -15,8 +15,8 @@ for production use. If any required condition cannot be proved, the query stays 
 
 ## Lifecycle
 
-**CheckCondition → Apply**, then the engine maps the substitute onto DECIDE's output slots. A rule also has a
-`Summary()`, the fixed line `EXPLAIN` shows for it.
+**CheckCondition → Apply**, then the engine maps the substitute onto DECIDE's outputs through its slot map. A rule also
+has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 
 - **CheckCondition** checks the shape first, then certifies every constraint, objective part, decision, runtime value
   check and output. It returns the applicability condition `Apply` reads, or a reason. A not-proved IR node means the
@@ -41,7 +41,8 @@ for production use. If any required condition cannot be proved, the query stays 
    the shared builders in `direct_builder.cpp` for the empty-aggregate error, the number checks, the all-rows
    breaker and the per-row bounds on a decision (`DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`). A builder only your rule uses (S1's scope projection and bound validation are in `s1_support.cpp`) stays in
    your rule's own files until a second rule needs it.
-5. State the plan's output slots, which decision outputs may be skipped, and its validated columns.
+5. State the plan's slot map (where each DECIDE output lives), which decision outputs may be skipped, and its validated
+   columns.
 6. Add the standard tests (below), then `rules/<name>/done.md`. The class's `definition.md` already exists; correct it
    where the code proves something different, and leave the rest as the definition.
 

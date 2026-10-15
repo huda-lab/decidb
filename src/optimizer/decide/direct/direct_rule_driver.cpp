@@ -8,7 +8,7 @@
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
 #include "duckdb/optimizer/decide/direct/direct_builder.hpp"
-#include "duckdb/optimizer/decide/direct/direct_result_boundary.hpp"
+#include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -71,7 +71,7 @@ void RegisterDirectSolve(DBConfig &config) {
 	                          "DECIDE direct solve mode: auto (default) uses a proved relational plan and otherwise the "
 	                          "solver; off always uses the solver; require errors when no relational plan is proved",
 	                          LogicalType::VARCHAR, Value("auto"), DirectSolveModeSetCallback);
-	config.operator_extensions.push_back(MakeDirectResultExtension());
+	config.operator_extensions.push_back(MakeDirectResultAdapterExtension());
 }
 
 unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op, Optimizer &optimizer,
@@ -167,18 +167,18 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 	}
 	auto substitute = selected.rule->Apply(std::move(decide.children[0]), optimizer, *selected.condition);
 	if (carries_rowid) {
-		if (substitute.output_slots.size() != output_bindings.size() + 1) {
+		if (substitute.slot_map.size() != output_bindings.size() + 1) {
 			throw InternalException("Direct solve rule did not pass the source row id through");
 		}
-		late_materialization.rowid_slot = substitute.output_slots[source_columns];
-		substitute.output_slots.erase(substitute.output_slots.begin() + NumericCast<int64_t>(source_columns));
+		late_materialization.rowid_slot = substitute.slot_map[source_columns];
+		substitute.slot_map.erase(substitute.slot_map.begin() + NumericCast<int64_t>(source_columns));
 		if (substitute.pipelined) {
 			// Nothing is held, so there is nothing to gain from a late materialization.
 			late_materialization = DirectLateMaterialization();
 		}
 	}
-	return MapDirectResult(std::move(substitute), std::move(output_bindings), std::move(output_types),
-	                       std::move(prunable_sources), decide_index, std::move(record), late_materialization);
+	return AdaptDirectResult(std::move(substitute), std::move(output_bindings), std::move(output_types),
+	                         std::move(prunable_sources), decide_index, std::move(record), late_materialization);
 }
 
 } // namespace duckdb

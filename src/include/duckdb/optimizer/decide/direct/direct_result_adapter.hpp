@@ -9,7 +9,7 @@
 
 namespace duckdb {
 
-//! What the rule driver learned about a DECIDE source that reads one stored table, so the result boundary can later
+//! What the rule driver learned about a DECIDE source that reads one stored table, so the result adapter can later
 //! move a column the rule never uses out of the rule's plan and read it from the table again
 //! (direct_late_materialization.hpp).
 struct DirectLateMaterialization {
@@ -30,12 +30,12 @@ struct DirectLateMaterialization {
 //! dependencies; an optional last one carries the stored table's row id for the late materialization. Unused outputs
 //! can become typed NULL placeholders without dropping the validation suffix. Physical planning lowers this to an
 //! ordinary projection.
-class LogicalDirectSolveResult final : public LogicalExtensionOperator {
+class LogicalDirectResultAdapter final : public LogicalExtensionOperator {
 public:
-	LogicalDirectSolveResult() = default;
-	LogicalDirectSolveResult(idx_t decide_index_p, vector<ColumnBinding> output_bindings_p,
-	                         vector<LogicalType> output_types_p, idx_t required_dependency_count_p,
-	                         vector<uint8_t> prunable_outputs_p, DirectSolveDecisionRecord record_p);
+	LogicalDirectResultAdapter() = default;
+	LogicalDirectResultAdapter(idx_t decide_index_p, vector<ColumnBinding> output_bindings_p,
+	                           vector<LogicalType> output_types_p, idx_t required_dependency_count_p,
+	                           vector<uint8_t> prunable_outputs_p, DirectSolveDecisionRecord record_p);
 
 	idx_t decide_index;
 	vector<ColumnBinding> output_bindings;
@@ -69,20 +69,20 @@ protected:
 	void ResolveTypes() override;
 };
 
-//! Wraps a rule's relational substitute in the result boundary. The boundary keeps DECIDE's external bindings and
+//! Wraps a rule's relational substitute in the result adapter. The adapter keeps DECIDE's external bindings and
 //! types, checks the substitute's output-slot map against its child, and pins validation-only slots as live.
 //! `prunable_sources` says, per source column, whether a parent that does not read it may skip evaluating it.
 //! An enabled `late_materialization` also carries the source row id as a dependency that a parent-read stored column
 //! can use.
-unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
-                                            vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
-                                            idx_t decide_index, DirectSolveDecisionRecord record,
-                                            const DirectLateMaterialization &late_materialization);
+unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
+                                              vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
+                                              idx_t decide_index, DirectSolveDecisionRecord record,
+                                              const DirectLateMaterialization &late_materialization);
 
-//! Lets a serialized plan containing the result boundary be read back.
-unique_ptr<OperatorExtension> MakeDirectResultExtension();
+//! Lets a serialized plan containing the result adapter be read back.
+unique_ptr<OperatorExtension> MakeDirectResultAdapterExtension();
 
-//! The extension name of the result boundary, to recognize it in a plan.
+//! The extension name of the result adapter, to recognize it in a plan.
 const char *DirectResultExtensionName();
 
 } // namespace duckdb

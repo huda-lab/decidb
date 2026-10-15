@@ -18,21 +18,22 @@ check). Design: `../../architecture/`.
   reason, and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the front end
   does not expect are not-proved parts. No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
 - **Rule contract.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
-  checks the output slots. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
+  checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
   rule driver runs CheckCondition for every rule. Rules are disjoint, so at most one applies to a query; two that apply
   raise an internal error naming both rules.
-- **Result boundary.** Keeps original bindings and types, serializes, prunes outputs only when skipping is proved safe,
-  and always keeps the rule's validated columns live. `DirectValidationBreaker` builds the all-rows read for a plan that
-  could stream. Because every row is checked before any is released, rows are held in memory, wide parent-read columns
-  included (`../../architecture/result_boundary.md`, "Memory of holding rows").
+- **Result adapter** (`DIRECT_RESULT_ADAPTER` in `EXPLAIN`). Keeps original bindings and types, serializes, prunes
+  outputs only when skipping is proved safe, and always keeps the rule's validated columns live.
+  `DirectValidationBreaker` builds the all-rows read for a plan that could stream. Because every row is checked before
+  any is released, rows are held in memory, wide parent-read columns included (`../../architecture/result_adapter.md`,
+  "Memory of holding rows").
 - **Late materialization of a stored table** (`direct_late_materialization.cpp`). When the DECIDE source is one DuckDB
   base table under non-volatile projections and filters, the rule driver appends the table's `rowid` to the source and
-  the boundary keeps it as a hidden trailing dependency. Right after unused-column removal, when it is known which
+  the adapter keeps it as a hidden trailing dependency. Right after unused-column removal, when it is known which
   outputs a parent reads, a late step moves each parent-read output that is a plain stored column the rule's plan only
-  forwards to a second scan of the table, joined (inner, on `rowid`) under the boundary, and prunes again so the column
+  forwards to a second scan of the table, joined (inner, on `rowid`) under the adapter, and prunes again so the column
   leaves the held rows. The first read still checks every row. Only a variable-width column moves (a physical type that
   is not constant-size: `VARCHAR`, `BLOB`, nested types); a fixed-width one is cheaper held than read back, so it stays
-  in the single read (measurements in `../../architecture/result_boundary.md`). Joins, aggregates, volatile or computed
+  in the single read (measurements in `../../architecture/result_adapter.md`). Joins, aggregates, volatile or computed
   columns, a source that already reads `rowid`, and a rule plan that streams (`DirectSubstitute::pipelined`, set by A1's
   constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
   `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep up
@@ -158,7 +159,7 @@ check). Design: `../../architecture/`.
 ## Registering a rule
 
 A rule registers with one line in `direct_registry.cpp` and one in the folder's `CMakeLists.txt`. The rule driver
-(`direct_rule_driver.cpp`) and the result boundary (`direct_result_boundary.cpp`) hold no rule-specific code. S1 and A1
+(`direct_rule_driver.cpp`) and the result adapter (`direct_result_adapter.cpp`) hold no rule-specific code. S1 and A1
 are materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a
 breaker or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own
 reading comes from the solver's code, not a copy: `DirectIRConstraint::variable_bound` is the predicate
@@ -167,7 +168,7 @@ box.
 
 ## Checked and fine
 
-- **Result boundary** (`direct_result_boundary.cpp`): the extension operator, serialization and pruning hook keep DECIDE's
+- **Result adapter** (`direct_result_adapter.cpp`): the extension operator, serialization and pruning hook keep DECIDE's
   bindings. These parent contexts give identical results under `auto`, `off` and `require`: `CREATE TABLE AS`,
   `INSERT ... SELECT`, a view, a window over the result, `UNION ALL` of an S1 and an A1 query, a joined source with a filter
   above, a self-join of results, an empty source and a prepared statement with a parameter.

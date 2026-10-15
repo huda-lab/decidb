@@ -16,7 +16,7 @@ bound, canonical LogicalDecide
         no rule applies: the solver path runs as before
         two rules apply: internal error, the rules must be disjoint
    -> Apply          build the substitute, a relational plan
-   -> result boundary  keep DECIDE's output columns and bindings      (result_boundary.md)
+   -> result adapter   keep DECIDE's output columns and bindings      (result_adapter.md)
    -> ordinary DuckDB optimizer and execution
 ```
 
@@ -73,4 +73,4 @@ error naming both: the overlap is a bug in the rules, and no ordering is safe to
 `src/optimizer/decide/direct/`, headers in `src/include/duckdb/optimizer/decide/direct/`. Start with
 `direct_rule_driver.cpp` (the flow above), then `s1_rule.cpp` (a rule built on a window) and `a1_rule.cpp` (a rule built
 on a chain of projections and the pipeline breaker). The rest of the folder is named for what it does: IR,
-builders, result boundary, expression predicates, registry.
+builders, result adapter, expression predicates, registry.

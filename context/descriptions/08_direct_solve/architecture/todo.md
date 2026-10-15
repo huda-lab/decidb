@@ -48,23 +48,11 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
   and the website. The setting `decide_direct_solve` and serialized names stay.
 
-## P-12 — Result boundary becomes the result adapter
-
-- **Problem.** The boundary is a GoF Adapter (the substitute presents the DECIDE node's bindings) and an optimization
-  fence (parent filters and limits cannot cross it).
-- **Change.** Rename per the glossary: `LogicalDirectSolveResult`, `MapDirectResult`, `DirectResultExtension`,
-  `MakeDirectResultExtension`, `direct_result_boundary.{hpp,cpp}`, `output_slots` ("slot map"), `prunable_*`, and
-  `architecture/result_boundary.md` (file name and text). `DIRECT_RESULT_EXTENSION` and the extension's serialized name
-  stay, so a serialized plan still reads back.
-- **Done when.** None of the retired identifiers appears under `src/` or `test/`; `DECIDB_VERIFY_SERIALIZER=1 make
-  decide-test` gives the baseline counts.
-
 ## P-13 — Decision record becomes the EXPLAIN annotation
 
 - **Problem.** "Decision record" usually means an architecture decision record.
 - **Change.** Rename per the glossary: `DirectSolveDecisionRecord`, its `Render`, `record` fields, and the "decision
   record" text in `policy.md`, `overview.md` and `../rules/_harness/done.md`. The rendered `EXPLAIN` keys stay.
-- **Needs.** after P-12, which edits the same files.
 - **Done when.** `grep -rn DecisionRecord src test` finds nothing; `test_serializer_explain_and_model_dump` passes.
 
 ## P-14 — Builders, `Calc` and rule-local helpers
@@ -111,7 +99,7 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 
 ## P-21 — Problem classes take their textbook names
 
-- **Problem.** Classes are known by id alone in code and folders (`s1_rule.cpp`, `S1Rewriter`, `direct_s1`,
+- **Problem.** Classes are known by id alone in code and folders (`s1_rule.cpp`, `S1PlanBuilder`, `direct_s1`,
   `rules/s1/`), and by home-made phrases in the docs. P-20 chose a textbook name per class.
 - **Change.** Apply the glossary names everywhere, keeping the id as a prefix: `rules/<id>/` folders (`git mv`), each
   `definition.md` title, the `README.md` table, rule source files, types and namespaces, the rule's `EXPLAIN` value
@@ -128,7 +116,7 @@ Owner decisions every task below follows. The names they lead to are in `glossar
   use old terms.
 - **Change.** For every retired term in `glossary.md`, grep `src/`, `test/`, `benchmark/decide/`, `context/` and
   `.claude/`, and fix what remains. Leave git history and the frozen paper alone.
-- **Allowed leftovers.** The serializer property name `"proof"` (id 209, `direct_result_boundary.cpp`), because
+- **Allowed leftovers.** The serializer property name `"proof"` (id 209, `direct_result_adapter.cpp`), because
   serialized names stay (P-22); the field behind it is `condition`. Oracle test names keep old terms, because a
   test's name is its cache key: `test_a1_unused_wide_columns_stay_out_of_the_barrier...` and the four
   `test_second_read_*` tests in `test_direct_user_facing.py`. "Second read" in its everyday sense

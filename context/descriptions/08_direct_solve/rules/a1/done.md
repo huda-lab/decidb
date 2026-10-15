@@ -128,7 +128,7 @@ both paths finish in under 0.1 s.
 **Wide parent-read columns.** A 512-byte payload the parent reads back is late-materialized from the stored table, so
 it never enters the breaker: at 1,000,000 rows direct takes 0.12 s and 88 MiB against the solver's 0.63 s and 1.7 GiB
 (5.2x), and an unused payload takes 0.08 s and 47 MiB. The speedup is smaller than S1's because the solver is already
-cheap on a bound-only problem. Footprint numbers for both rules are in `../../architecture/result_boundary.md`
+cheap on a bound-only problem. Footprint numbers for both rules are in `../../architecture/result_adapter.md`
 ("Memory of holding rows").
 
 **Reproduce** (after `make release`; the sweeps above took under a minute in total, building the databases included):

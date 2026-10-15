@@ -430,7 +430,7 @@ public:
 			substitute.prunable_decisions.push_back(1);
 		}
 		for (idx_t i = 0; i < source_bindings.size() + condition.decisions.size(); i++) {
-			substitute.output_slots.push_back(i);
+			substitute.slot_map.push_back(i);
 		}
 		substitute.validated_columns.push_back(source_bindings.size() + condition.decisions.size());
 

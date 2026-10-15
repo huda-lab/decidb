@@ -7,7 +7,7 @@ add_library_unity(
   direct_expression.cpp
   direct_ir.cpp
   direct_registry.cpp
-  direct_result_boundary.cpp
+  direct_result_adapter.cpp
   direct_late_materialization.cpp
   s1_rule.cpp
   s1_support.cpp)

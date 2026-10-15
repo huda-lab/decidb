@@ -104,10 +104,10 @@ bool CollectPlanOperators(LogicalOperator &op, vector<reference<LogicalOperator>
 	return true;
 }
 
-//! True when the stored column `column`, read at `source_binding` by the scan, reaches the boundary output only by
+//! True when the stored column `column`, read at `source_binding` by the scan, reaches the adapter output only by
 //! being forwarded: every use of it or of an alias of it in the plan is a projection that passes it on unchanged, and
-//! the boundary's output `output` is the only dependency that reads it.
-bool IsOnlyForwarded(LogicalDirectSolveResult &boundary, idx_t output, ColumnBinding source_binding,
+//! the adapter's output `output` is the only dependency that reads it.
+bool IsOnlyForwarded(LogicalDirectResultAdapter &adapter, idx_t output, ColumnBinding source_binding,
                      const vector<reference<LogicalOperator>> &operators) {
 	column_binding_set_t aliases;
 	aliases.insert(source_binding);
@@ -133,14 +133,14 @@ bool IsOnlyForwarded(LogicalDirectSolveResult &boundary, idx_t output, ColumnBin
 			}
 		}
 	}
-	// The boundary must read the column through an alias, and read it for this output alone.
-	auto &dependency = *boundary.expressions[output];
+	// The adapter must read the column through an alias, and read it for this output alone.
+	auto &dependency = *adapter.expressions[output];
 	if (dependency.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF ||
 	    aliases.find(dependency.Cast<BoundColumnRefExpression>().binding) == aliases.end()) {
 		return false;
 	}
-	for (idx_t i = 0; i < boundary.expressions.size(); i++) {
-		if (i != output && RefersToAny(*boundary.expressions[i], aliases)) {
+	for (idx_t i = 0; i < adapter.expressions.size(); i++) {
+		if (i != output && RefersToAny(*adapter.expressions[i], aliases)) {
 			return false;
 		}
 	}
@@ -183,48 +183,48 @@ LogicalGet *FindScan(LogicalOperator &op, idx_t table_index) {
 	return nullptr;
 }
 
-//! Removes unused columns again below a boundary, as if a parent read every output it still computes. The boundary
+//! Removes unused columns again below an adapter, as if a parent read every output it still computes. The adapter
 //! stays where it is.
-void PruneBelowBoundary(unique_ptr<LogicalOperator> &boundary_slot, Optimizer &optimizer) {
-	auto &boundary = boundary_slot->Cast<LogicalDirectSolveResult>();
-	auto bindings = boundary.GetColumnBindings();
+void PruneBelowAdapter(unique_ptr<LogicalOperator> &adapter_slot, Optimizer &optimizer) {
+	auto &adapter = adapter_slot->Cast<LogicalDirectResultAdapter>();
+	auto bindings = adapter.GetColumnBindings();
 	vector<unique_ptr<Expression>> reads;
 	for (idx_t i = 0; i < bindings.size(); i++) {
-		reads.push_back(DirectColumn(boundary.output_types[i], bindings[i]));
+		reads.push_back(DirectColumn(adapter.output_types[i], bindings[i]));
 	}
 	auto reader = make_uniq<LogicalProjection>(optimizer.binder.GenerateTableIndex(), std::move(reads));
-	reader->children.push_back(std::move(boundary_slot));
+	reader->children.push_back(std::move(adapter_slot));
 	RemoveUnusedColumns unused(optimizer.binder, optimizer.context, true);
 	unused.VisitOperator(*reader);
-	boundary_slot = std::move(reader->children[0]);
+	adapter_slot = std::move(reader->children[0]);
 }
 
-void LetGoOfRowId(LogicalDirectSolveResult &boundary) {
-	boundary.expressions.pop_back();
-	boundary.has_rowid_dependency = false;
-	boundary.scan_table_index = DConstants::INVALID_INDEX;
-	boundary.stored_columns.clear();
+void LetGoOfRowId(LogicalDirectResultAdapter &adapter) {
+	adapter.expressions.pop_back();
+	adapter.has_rowid_dependency = false;
+	adapter.scan_table_index = DConstants::INVALID_INDEX;
+	adapter.stored_columns.clear();
 }
 
 void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &optimizer) {
-	auto &boundary = slot->Cast<LogicalDirectSolveResult>();
-	if (!boundary.has_rowid_dependency) {
+	auto &adapter = slot->Cast<LogicalDirectResultAdapter>();
+	if (!adapter.has_rowid_dependency) {
 		return;
 	}
-	if (boundary.expressions.size() != boundary.ExpectedDependencyCount() || boundary.children.size() != 1) {
-		throw InternalException("Direct solve result boundary has invalid output dependencies");
+	if (adapter.expressions.size() != adapter.ExpectedDependencyCount() || adapter.children.size() != 1) {
+		throw InternalException("Direct solve result adapter has invalid output dependencies");
 	}
-	auto &rowid_dependency = *boundary.expressions.back();
+	auto &rowid_dependency = *adapter.expressions.back();
 	if (rowid_dependency.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		// No parent read a column that could move; the row id was already dropped.
-		LetGoOfRowId(boundary);
+		LetGoOfRowId(adapter);
 		return;
 	}
 	auto rowid_binding = rowid_dependency.Cast<BoundColumnRefExpression>().binding;
 	auto rowid_type = rowid_dependency.return_type;
 	vector<reference<LogicalOperator>> operators;
-	auto scan = FindScan(*boundary.children[0], boundary.scan_table_index);
-	bool supported = scan && IsRepeatableTableScan(*scan) && CollectPlanOperators(boundary, operators) &&
+	auto scan = FindScan(*adapter.children[0], adapter.scan_table_index);
+	bool supported = scan && IsRepeatableTableScan(*scan) && CollectPlanOperators(adapter, operators) &&
 	                 rowid_type == scan->GetRowIdType();
 	// Outputs a parent reads, whose stored column nothing else in the plan uses. Only a variable-width column moves
 	// (VARCHAR, BLOB, BIT, lists, arrays, structs, maps, unions), because holding one is what costs memory. A
@@ -233,16 +233,16 @@ void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &opt
 	vector<idx_t> moved_columns;
 	if (supported) {
 		auto scan_bindings = scan->GetColumnBindings();
-		for (idx_t i = 0; i < boundary.output_types.size(); i++) {
-			if (i >= boundary.stored_columns.size() || boundary.stored_columns[i] == DConstants::INVALID_INDEX ||
-			    boundary.expressions[i]->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		for (idx_t i = 0; i < adapter.output_types.size(); i++) {
+			if (i >= adapter.stored_columns.size() || adapter.stored_columns[i] == DConstants::INVALID_INDEX ||
+			    adapter.expressions[i]->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 				continue;
 			}
-			if (TypeIsConstantSize(boundary.output_types[i].InternalType())) {
+			if (TypeIsConstantSize(adapter.output_types[i].InternalType())) {
 				continue;
 			}
-			auto stored = boundary.stored_columns[i];
-			if (stored >= scan->returned_types.size() || scan->returned_types[stored] != boundary.output_types[i]) {
+			auto stored = adapter.stored_columns[i];
+			if (stored >= scan->returned_types.size() || scan->returned_types[stored] != adapter.output_types[i]) {
 				continue;
 			}
 			bool found = false;
@@ -255,16 +255,16 @@ void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &opt
 					break;
 				}
 			}
-			if (found && IsOnlyForwarded(boundary, i, source_binding, operators)) {
+			if (found && IsOnlyForwarded(adapter, i, source_binding, operators)) {
 				moved_outputs.push_back(i);
 				moved_columns.push_back(stored);
 			}
 		}
 	}
 	if (moved_outputs.empty()) {
-		boundary.expressions.back() = make_uniq<BoundConstantExpression>(Value(rowid_type));
-		LetGoOfRowId(boundary);
-		PruneBelowBoundary(slot, optimizer);
+		adapter.expressions.back() = make_uniq<BoundConstantExpression>(Value(rowid_type));
+		LetGoOfRowId(adapter);
+		PruneBelowAdapter(slot, optimizer);
 		return;
 	}
 
@@ -289,8 +289,8 @@ void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &opt
 	for (idx_t k = 0; k < moved_outputs.size(); k++) {
 		auto position = NumericCast<idx_t>(std::find(second_columns.begin(), second_columns.end(), moved_columns[k]) -
 		                                   second_columns.begin());
-		boundary.expressions[moved_outputs[k]] =
-		    DirectColumn(boundary.output_types[moved_outputs[k]], ColumnBinding(second_index, position));
+		adapter.expressions[moved_outputs[k]] =
+		    DirectColumn(adapter.output_types[moved_outputs[k]], ColumnBinding(second_index, position));
 	}
 
 	auto join = make_uniq<LogicalComparisonJoin>(JoinType::INNER);
@@ -300,19 +300,19 @@ void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &opt
 	condition.right = DirectColumn(rowid_type, rowid_binding);
 	join->conditions.push_back(std::move(condition));
 	join->children.push_back(std::move(second));
-	join->children.push_back(std::move(boundary.children[0]));
-	boundary.children[0] = std::move(join);
-	LetGoOfRowId(boundary);
-	PruneBelowBoundary(slot, optimizer);
+	join->children.push_back(std::move(adapter.children[0]));
+	adapter.children[0] = std::move(join);
+	LetGoOfRowId(adapter);
+	PruneBelowAdapter(slot, optimizer);
 }
 
-void VisitForBoundaries(unique_ptr<LogicalOperator> &op, Optimizer &optimizer) {
+void VisitForAdapters(unique_ptr<LogicalOperator> &op, Optimizer &optimizer) {
 	if (op->type == LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR &&
 	    op->Cast<LogicalExtensionOperator>().GetExtensionName() == DirectResultExtensionName()) {
 		LateMaterializeOneAdapter(op, optimizer);
 	}
 	for (auto &child : op->children) {
-		VisitForBoundaries(child, optimizer);
+		VisitForAdapters(child, optimizer);
 	}
 }
 
@@ -378,7 +378,7 @@ bool DirectExposeStoredRowId(LogicalOperator &source, DirectLateMaterialization 
 }
 
 unique_ptr<LogicalOperator> ApplyDirectLateMaterialization(unique_ptr<LogicalOperator> plan, Optimizer &optimizer) {
-	VisitForBoundaries(plan, optimizer);
+	VisitForAdapters(plan, optimizer);
 	return plan;
 }
 

@@ -1,4 +1,4 @@
-#include "duckdb/optimizer/decide/direct/direct_result_boundary.hpp"
+#include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/serializer/deserializer.hpp"
@@ -17,18 +17,20 @@ namespace {
 
 constexpr const char *DIRECT_RESULT_EXTENSION = "decidb_direct_solve_result_v3";
 
-class DirectResultExtension final : public OperatorExtension {
+class DirectResultAdapterExtension final : public OperatorExtension {
 public:
-	DirectResultExtension() {
+	DirectResultAdapterExtension() {
 		// Planner calls every registered operator extension on a binding error.
-		// This extension only deserializes the internal result boundary.
-		Bind = [](ClientContext &, Binder &, OperatorExtensionInfo *, SQLStatement &) { return BoundStatement(); };
+		// This extension only deserializes the internal result adapter.
+		Bind = [](ClientContext &, Binder &, OperatorExtensionInfo *, SQLStatement &) {
+			return BoundStatement();
+		};
 	}
 	string GetName() override {
 		return DIRECT_RESULT_EXTENSION;
 	}
 	unique_ptr<LogicalExtensionOperator> Deserialize(Deserializer &deserializer) override {
-		return LogicalDirectSolveResult::Read(deserializer);
+		return LogicalDirectResultAdapter::Read(deserializer);
 	}
 };
 
@@ -38,24 +40,24 @@ const char *DirectResultExtensionName() {
 	return DIRECT_RESULT_EXTENSION;
 }
 
-LogicalDirectSolveResult::LogicalDirectSolveResult(idx_t decide_index_p, vector<ColumnBinding> output_bindings_p,
-                                                   vector<LogicalType> output_types_p,
-                                                   idx_t required_dependency_count_p,
-                                                   vector<uint8_t> prunable_outputs_p,
-                                                   DirectSolveDecisionRecord record_p)
+LogicalDirectResultAdapter::LogicalDirectResultAdapter(idx_t decide_index_p, vector<ColumnBinding> output_bindings_p,
+                                                       vector<LogicalType> output_types_p,
+                                                       idx_t required_dependency_count_p,
+                                                       vector<uint8_t> prunable_outputs_p,
+                                                       DirectSolveDecisionRecord record_p)
     : decide_index(decide_index_p), output_bindings(std::move(output_bindings_p)),
       output_types(std::move(output_types_p)), required_dependency_count(required_dependency_count_p),
       prunable_outputs(std::move(prunable_outputs_p)), record(std::move(record_p)) {
 }
 
-vector<ColumnBinding> LogicalDirectSolveResult::GetColumnBindings() {
+vector<ColumnBinding> LogicalDirectResultAdapter::GetColumnBindings() {
 	return output_bindings;
 }
 
-void LogicalDirectSolveResult::PruneUnusedOutputs(const vector<bool> &referenced_outputs) {
+void LogicalDirectResultAdapter::PruneUnusedOutputs(const vector<bool> &referenced_outputs) {
 	if (referenced_outputs.size() != output_types.size() || prunable_outputs.size() != output_types.size() ||
 	    expressions.size() != ExpectedDependencyCount()) {
-		throw InternalException("Direct solve result boundary has invalid output dependencies");
+		throw InternalException("Direct solve result adapter has invalid output dependencies");
 	}
 	bool movable_output_read = false;
 	for (idx_t i = 0; i < referenced_outputs.size(); i++) {
@@ -73,25 +75,25 @@ void LogicalDirectSolveResult::PruneUnusedOutputs(const vector<bool> &referenced
 	}
 }
 
-vector<idx_t> LogicalDirectSolveResult::GetTableIndex() const {
+vector<idx_t> LogicalDirectResultAdapter::GetTableIndex() const {
 	return {decide_index};
 }
 
-string LogicalDirectSolveResult::GetName() const {
-	return "DIRECT_SOLVE_RESULT";
+string LogicalDirectResultAdapter::GetName() const {
+	return "DIRECT_RESULT_ADAPTER";
 }
 
-string LogicalDirectSolveResult::GetExtensionName() const {
+string LogicalDirectResultAdapter::GetExtensionName() const {
 	return DIRECT_RESULT_EXTENSION;
 }
 
-InsertionOrderPreservingMap<string> LogicalDirectSolveResult::ParamsToString() const {
+InsertionOrderPreservingMap<string> LogicalDirectResultAdapter::ParamsToString() const {
 	auto result = record.Render();
 	SetParamsEstimatedCardinality(result);
 	return result;
 }
 
-void LogicalDirectSolveResult::Serialize(Serializer &serializer) const {
+void LogicalDirectResultAdapter::Serialize(Serializer &serializer) const {
 	LogicalExtensionOperator::Serialize(serializer);
 	serializer.WriteProperty(201, "decide_index", decide_index);
 	serializer.WriteProperty(202, "output_bindings", output_bindings);
@@ -107,8 +109,8 @@ void LogicalDirectSolveResult::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty(216, "stored_columns", stored_columns);
 }
 
-unique_ptr<LogicalExtensionOperator> LogicalDirectSolveResult::Read(Deserializer &deserializer) {
-	auto result = make_uniq<LogicalDirectSolveResult>();
+unique_ptr<LogicalExtensionOperator> LogicalDirectResultAdapter::Read(Deserializer &deserializer) {
+	auto result = make_uniq<LogicalDirectResultAdapter>();
 	result->decide_index = deserializer.ReadProperty<idx_t>(201, "decide_index");
 	result->output_bindings = deserializer.ReadProperty<vector<ColumnBinding>>(202, "output_bindings");
 	result->output_types = deserializer.ReadProperty<vector<LogicalType>>(203, "output_types");
@@ -124,10 +126,10 @@ unique_ptr<LogicalExtensionOperator> LogicalDirectSolveResult::Read(Deserializer
 	return std::move(result);
 }
 
-unique_ptr<PhysicalOperator> LogicalDirectSolveResult::CreatePlan(ClientContext &, PhysicalPlanGenerator &generator) {
+unique_ptr<PhysicalOperator> LogicalDirectResultAdapter::CreatePlan(ClientContext &, PhysicalPlanGenerator &generator) {
 	if (children.size() != 1 || output_bindings.size() != output_types.size() ||
 	    prunable_outputs.size() != output_types.size() || expressions.size() != ExpectedDependencyCount()) {
-		throw InternalException("Direct solve result boundary has an invalid output map");
+		throw InternalException("Direct solve result adapter has an invalid output map");
 	}
 	auto child = generator.CreatePlanChild(*children[0]);
 	vector<unique_ptr<Expression>> select_list;
@@ -158,20 +160,20 @@ unique_ptr<PhysicalOperator> LogicalDirectSolveResult::CreatePlan(ClientContext 
 	return std::move(result);
 }
 
-void LogicalDirectSolveResult::ResolveTypes() {
+void LogicalDirectResultAdapter::ResolveTypes() {
 	types = output_types;
 }
 
-unique_ptr<OperatorExtension> MakeDirectResultExtension() {
-	return make_uniq<DirectResultExtension>();
+unique_ptr<OperatorExtension> MakeDirectResultAdapterExtension() {
+	return make_uniq<DirectResultAdapterExtension>();
 }
 
-unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
-                                            vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
-                                            idx_t decide_index, DirectSolveDecisionRecord record,
-                                            const DirectLateMaterialization &late_materialization) {
+unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
+                                              vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
+                                              idx_t decide_index, DirectSolveDecisionRecord record,
+                                              const DirectLateMaterialization &late_materialization) {
 	if (!substitute.child || output_bindings.size() != output_types.size() ||
-	    substitute.output_slots.size() != output_bindings.size() ||
+	    substitute.slot_map.size() != output_bindings.size() ||
 	    prunable_sources.size() + substitute.prunable_decisions.size() != output_bindings.size()) {
 		throw InternalException("Direct solve rule returned an incomplete result substitute");
 	}
@@ -184,15 +186,15 @@ unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<
 	if (child_bindings.size() != child_types.size()) {
 		throw InternalException("Direct solve child bindings and types differ");
 	}
-	for (idx_t i = 0; i < substitute.output_slots.size(); i++) {
-		auto slot = substitute.output_slots[i];
+	for (idx_t i = 0; i < substitute.slot_map.size(); i++) {
+		auto slot = substitute.slot_map[i];
 		if (slot >= child_types.size() || child_types[slot] != output_types[i]) {
 			throw InternalException("Direct solve rule returned a mismatched output slot");
 		}
 	}
 	for (auto slot : substitute.validated_columns) {
 		if (slot >= child_types.size()) {
-			throw InternalException("Direct solve rule lost a required validation slot");
+			throw InternalException("Direct solve rule lost a required validated column");
 		}
 	}
 	if (late_materialization.Enabled() &&
@@ -200,27 +202,27 @@ unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<
 	     late_materialization.stored_columns.size() + substitute.prunable_decisions.size() != output_bindings.size())) {
 		throw InternalException("Direct solve rule lost the source row id");
 	}
-	auto boundary = make_uniq<LogicalDirectSolveResult>(decide_index, std::move(output_bindings),
-	                                                    std::move(output_types), substitute.validated_columns.size(),
-	                                                    std::move(prunable_outputs), std::move(record));
+	auto adapter = make_uniq<LogicalDirectResultAdapter>(decide_index, std::move(output_bindings),
+	                                                     std::move(output_types), substitute.validated_columns.size(),
+	                                                     std::move(prunable_outputs), std::move(record));
 	// The positional map is materialized as one dependency per advertised output.
 	// The required suffix stays live even when all outputs are unused by a parent.
-	for (auto slot : substitute.output_slots) {
-		boundary->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
+	for (auto slot : substitute.slot_map) {
+		adapter->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
 	}
 	for (auto slot : substitute.validated_columns) {
-		boundary->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
+		adapter->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
 	}
 	if (late_materialization.Enabled()) {
-		boundary->has_rowid_dependency = true;
-		boundary->scan_table_index = late_materialization.scan_table_index;
-		boundary->stored_columns = late_materialization.stored_columns;
-		boundary->stored_columns.resize(boundary->output_types.size(), DConstants::INVALID_INDEX);
-		boundary->expressions.push_back(DirectColumn(child_types[late_materialization.rowid_slot],
-		                                             child_bindings[late_materialization.rowid_slot]));
+		adapter->has_rowid_dependency = true;
+		adapter->scan_table_index = late_materialization.scan_table_index;
+		adapter->stored_columns = late_materialization.stored_columns;
+		adapter->stored_columns.resize(adapter->output_types.size(), DConstants::INVALID_INDEX);
+		adapter->expressions.push_back(DirectColumn(child_types[late_materialization.rowid_slot],
+		                                            child_bindings[late_materialization.rowid_slot]));
 	}
-	boundary->children.push_back(std::move(substitute.child));
-	return std::move(boundary);
+	adapter->children.push_back(std::move(substitute.child));
+	return std::move(adapter);
 }
 
 } // namespace duckdb
