@@ -2,9 +2,9 @@
 
 Direct solve's design mostly follows known patterns under names we made up. These tasks settle one standard name per
 concept, apply it to code and docs, and remove the parts of the rule lifecycle that a standard design does not need.
-How to work and the shared checks: `../rules/_harness/todo.md` § How to work any task (the folder name itself is P-02).
+How to work and the shared checks: `../framework/todo.md` § How to work any task.
 This folder has no `done.md`: a shipped task is recorded in the architecture note it names and in
-`../rules/_harness/done.md`. A decision is recorded as one line in § Decisions.
+`../framework/done.md`. A decision is recorded as one line in § Decisions.
 
 Rules for every rename task in this file:
 
@@ -15,7 +15,7 @@ Rules for every rename task in this file:
 - Do not rename a Python test function or move it to another file (the oracle cache is keyed on the node id). C++ test
   files and case names may change.
 - A rename is behavior-neutral: the checks give the same pass counts before and after the task. Run them
-  first for the baseline; the stamp in `../rules/_harness/done.md` can lag behind later commits.
+  first for the baseline; the stamp in `../framework/done.md` can lag behind later commits.
 - The commit of a rename also updates every doc in `08_direct_solve/` that uses the old term.
 
 ## Decisions
@@ -50,20 +50,11 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
   and the website. The setting `decide_direct_solve` and serialized names stay.
 
-## P-15 — Shared-engine folder rename
-
-- **Problem.** Decision P-02 in § Decisions.
-- **Change.** Move `rules/_harness/` to the chosen name with `git mv`. Update every link: `README.md`, the todo files
-  of S1, A1 and R1, this file, and `context/descriptions/todo.md`. Rename "harness" in prose where it means the shared
-  engine.
-- **Needs.** Run it alone: every other task in this file links to the folder.
-- **Done when.** `grep -rn "_harness" context .claude` finds nothing; doc-only, no checks.
-
 ## P-18 — Test vocabulary in the docs
 
 - **Problem.** Decision P-16 in § Decisions.
 - **Change.** Apply decision P-16 to `rules.md` § The standard tests every rule ships and the "Verified by" text of
-  `../rules/_harness/done.md`.
+  `../framework/done.md`.
 - **Done when.** Both files use the glossary names. P-16 chose to rename the files: `git mv` the direct-solve test
   files to their glossary names, then run the oracle once. The orchestrator estimates the Gurobi cost and runs it on a
   quiet machine. This is the one task allowed to rename a Python test file.

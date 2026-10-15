@@ -23,7 +23,7 @@ today is in `done.md`.
 
 - **Needs.** A stable language branch.
 - **Problem.** The rules read an IR built from the current syntax only (`direct_ir.cpp`;
-  `../../architecture/ir.md`).
+  `../architecture/ir.md`).
 - **Change.** A second front end builds the same IR from the new syntax. Extend the IR when semantics change; do not
   teach a rule parser spelling.
 - **Done when.** The IR contract and the direct/solver tests run on both syntaxes where comparable.

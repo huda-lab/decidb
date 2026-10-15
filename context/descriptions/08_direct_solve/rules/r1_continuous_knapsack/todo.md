@@ -1,8 +1,8 @@
 # R1 — Continuous (fractional) knapsack — open work
 
 R1 splits one shared budget among `REAL` decisions by filling the best value per unit of budget first. The class is in
-[definition.md](definition.md). How to work and the checks are in `../_harness/todo.md` § How to work any task. The goal
-is the full definition with its § Admitted class.
+[definition.md](definition.md). How to work and the checks are in `../../framework/todo.md` § How to work any task. The
+goal is the full definition with its § Admitted class.
 
 ## R1-02 — The core rule: one decision, one `<=` budget
 

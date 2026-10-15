@@ -22,7 +22,7 @@ with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 
 | See what S1 covers, how it is tested, how fast it is | [rules/s1_uniform_matroid/done.md](rules/s1_uniform_matroid/done.md) |
 | See what A1 covers, where it differs from the solver, how fast it is | [rules/a1_separable_box/done.md](rules/a1_separable_box/done.md) |
 | See what is open for S1 or A1 | [rules/s1_uniform_matroid/todo.md](rules/s1_uniform_matroid/todo.md), [rules/a1_separable_box/todo.md](rules/a1_separable_box/todo.md) |
-| Work on the shared engine, a third rule, error wording | [rules/_harness/](rules/_harness/) |
+| Work on the shared engine, a third rule, error wording | [framework/](framework/) |
 | See a class that is not built yet | `rules/<id>_<slug>/todo.md` (table below) |
 | Know why `auto` is the default, or what a user can notice | [architecture/policy.md](architecture/policy.md) |
 | Read the definition and correctness argument of a class | `rules/<id>_<slug>/definition.md` |
@@ -52,7 +52,7 @@ with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 
 | [O2](rules/o2_monge_transportation/) | Monge transportation problem | Prototype | Not started |
 | [D1](rules/d1_block_decomposition/) | Block-diagonal decomposition | Exact | Not started |
 
-The shared engine (IR, rule driver, plan factory functions, result adapter) is in [rules/_harness/](rules/_harness/).
+The shared engine (IR, rule driver, plan factory functions, result adapter) is in [framework/](framework/).
 
 ## How these docs are kept
 

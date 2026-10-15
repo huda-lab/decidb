@@ -1,7 +1,7 @@
 # S1 (uniform-matroid optimization) — open work
 
 What S1 does today is in `done.md`; the class is in `definition.md`. How to work and the checks are in
-`../_harness/todo.md` § How to work any task. Every widening also meets the exit gate at the end of this file.
+`../../framework/todo.md` § How to work any task. Every widening also meets the exit gate at the end of this file.
 
 ## S1-12 — S1 reads a per-row bound on `x` in its own way, and so does A1
 

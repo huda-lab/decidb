@@ -5,7 +5,7 @@ Verified on 2026-10-14 on top of `5fb3b76b90`, with S1 and A1 registered: `make 
 failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,393 passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,329 assertions in
 46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
-check). Design: `../../architecture/`.
+check). Design: `../architecture/`.
 
 ## What it does
 
@@ -25,7 +25,7 @@ check). Design: `../../architecture/`.
 - **Result adapter** (`DIRECT_RESULT_ADAPTER` in `EXPLAIN`). Keeps original bindings and types, serializes, prunes
   outputs only when skipping is proved safe, and always keeps the rule's validated columns live.
   `DirectValidationBreaker` builds the all-rows read for a plan that could stream. Because every row is checked before
-  any is released, rows are held in memory, wide parent-read columns included (`../../architecture/result_adapter.md`,
+  any is released, rows are held in memory, wide parent-read columns included (`../architecture/result_adapter.md`,
   "Memory of holding rows").
 - **Late materialization of a stored table** (`direct_late_materialization.cpp`). When the DECIDE source is one DuckDB
   base table under non-volatile projections and filters, the rule driver appends the table's `rowid` to the source and
@@ -34,7 +34,7 @@ check). Design: `../../architecture/`.
   forwards to a second scan of the table, joined (inner, on `rowid`) under the adapter, and prunes again so the column
   leaves the held rows. The first read still checks every row. Only a variable-width column moves (a physical type that
   is not constant-size: `VARCHAR`, `BLOB`, nested types); a fixed-width one is cheaper held than read back, so it stays
-  in the single read (measurements in `../../architecture/result_adapter.md`). Joins, aggregates, volatile or computed
+  in the single read (measurements in `../architecture/result_adapter.md`). Joins, aggregates, volatile or computed
   columns, a source that already reads `rowid`, and a rule plan that streams (`DirectSubstitute::pipelined`, set by A1's
   constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
   `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep up
