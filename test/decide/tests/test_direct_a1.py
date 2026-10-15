@@ -1,4 +1,4 @@
-"""A1 (independent bounded decisions), checked three ways: the independent oracle, the solver path, the direct path.
+"""A1 (separable box-constrained problem), checked three ways: the independent oracle, the solver path, the direct path.
 
 Every case is one DECIDE query over rows whose decisions do not interact. The oracle builds its own model from the
 raw rows, from the bounds and objective coefficients each case states in Python (never from DeciDB's reading of the
@@ -827,7 +827,7 @@ def test_a1_declines_a_bound_that_contradicts_the_built_in_domain(decidb_cli, or
     _agree(decidb_cli, oracle_solver, case_, modes=("off", "auto"))
     with pytest.raises(DecidBCliError, match="decide_direct_solve=require") as declined:
         _run(decidb_cli, _sql(case_), "require")
-    assert "A1_INDEPENDENT_BOUNDS: variable_bound" in str(declined.value)
+    assert "A1_SEPARABLE_BOX: variable_bound" in str(declined.value)
 
 
 @pytest.mark.error
@@ -1224,14 +1224,14 @@ def test_a1_a_constant_problem_streams_and_matches_the_solver(decidb_cli, name, 
     sql = _constant_query(decision, CONSTANT_PROBLEMS[name])
     assert _run(decidb_cli, sql, "require") == _run(decidb_cli, sql, "off")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
-    assert "A1_INDEPENDENT_BOUNDS" in plan and "WINDOW" not in plan, plan
+    assert "A1_SEPARABLE_BOX" in plan and "WINDOW" not in plan, plan
 
 
 @pytest.mark.correctness
 def test_a1_a_problem_that_reads_a_column_waits_for_every_row(decidb_cli):
     sql = _constant_query("x(REAL)", "x BETWEEN 0 AND id MAXIMIZE SUM(3*x)")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
-    assert "A1_INDEPENDENT_BOUNDS" in plan and "WINDOW" in plan, plan
+    assert "A1_SEPARABLE_BOX" in plan and "WINDOW" in plan, plan
     conditional = _constant_query("x(REAL)", "x BETWEEN 0 AND 10 WHEN (id > 1) MAXIMIZE SUM(3*x)")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {conditional}").stdout
     assert "WINDOW" in plan, plan
@@ -1273,7 +1273,7 @@ def test_a1_nested_decisions_agree(decidb_cli):
     """
     assert _run(decidb_cli, sql, "require") == _run(decidb_cli, sql, "off")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
-    assert plan.count("A1_INDEPENDENT_BOUNDS") >= 2, plan
+    assert plan.count("A1_SEPARABLE_BOX") >= 2, plan
 
 
 @pytest.mark.correctness

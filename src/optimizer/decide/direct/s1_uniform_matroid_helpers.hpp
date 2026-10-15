@@ -13,7 +13,7 @@ class Optimizer;
 
 //! Plan-building helpers that only S1 uses. A helper moves to `direct_plan_factory.hpp` when a second rule needs it
 //! (`architecture/rules.md`).
-namespace direct_s1 {
+namespace direct_s1_uniform_matroid {
 
 //! True when any condition is true (false for an empty list), as nested CASE expressions.
 unique_ptr<Expression> AnyCondition(const vector<unique_ptr<Expression>> &conditions);
@@ -89,5 +89,5 @@ BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator>
                                vector<NotNullSpec> &not_null, const ColumnBinding *eligible,
                                const vector<ColumnBinding> &keys, const vector<LogicalType> &key_types);
 
-} // namespace direct_s1
+} // namespace direct_s1_uniform_matroid
 } // namespace duckdb

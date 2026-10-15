@@ -69,7 +69,7 @@ class RuleFixture:
 
 
 S1 = RuleFixture(
-    rule="S1_CARDINALITY_INTERVAL",
+    rule="S1_UNIFORM_MATROID",
     condition="min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi",
     hit="""
         SELECT id, score, x FROM (
@@ -204,7 +204,7 @@ def _a1_late_error(decision_sql, score_sql="1.0", cap_sql="10.0"):
 
 
 A1 = RuleFixture(
-    rule="A1_INDEPENDENT_BOUNDS",
+    rule="A1_SEPARABLE_BOX",
     condition="min/max SUM(c*x), l <= x <= u, each row independent",
     # Whole-number answers with a unique optimum, so the rows equal the solver's exactly and the query also runs on
     # forced HiGHS (which has no mixed-integer quadratic and no non-convex quadratic).

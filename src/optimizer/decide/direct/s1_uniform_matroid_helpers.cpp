@@ -15,7 +15,7 @@
 #include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
-namespace direct_s1 {
+namespace direct_s1_uniform_matroid {
 
 unique_ptr<Expression> AnyCondition(const vector<unique_ptr<Expression>> &conditions) {
 	unique_ptr<Expression> result = DirectConstantBool(false);
@@ -238,5 +238,5 @@ BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator>
 	return result;
 }
 
-} // namespace direct_s1
+} // namespace direct_s1_uniform_matroid
 } // namespace duckdb

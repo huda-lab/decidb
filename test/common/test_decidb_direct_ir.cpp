@@ -70,7 +70,7 @@ DirectSolveRule *FindRuleByName(duckdb::vector<duckdb::unique_ptr<DirectSolveRul
 }
 
 DirectSolveRule *FindS1Rule(duckdb::vector<duckdb::unique_ptr<DirectSolveRule>> &rules) {
-	return FindRuleByName(rules, "S1_CARDINALITY_INTERVAL");
+	return FindRuleByName(rules, "S1_UNIFORM_MATROID");
 }
 
 //! Whether `rule` proves the query, and why not when it does not. A rule that does not apply comes back as false.
@@ -511,11 +511,11 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	REQUIRE(types.ir.decisions[2].output_type == LogicalType::INTEGER);
 }
 
-TEST_CASE("A1 proves independent bounded decisions and names why it declines anything else", "[decidb]") {
+TEST_CASE("A1 proves a separable box-constrained problem and names why it declines anything else", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	auto rules = RegisteredDirectRules();
-	auto *a1 = FindRuleByName(rules, "A1_INDEPENDENT_BOUNDS");
+	auto *a1 = FindRuleByName(rules, "A1_SEPARABLE_BOX");
 	REQUIRE(a1 != nullptr);
 	string reason, condition;
 
@@ -563,7 +563,7 @@ TEST_CASE("S1 and A1 never both prove one query", "[decidb]") {
 	Connection con(db);
 	auto rules = RegisteredDirectRules();
 	auto *s1 = FindS1Rule(rules);
-	auto *a1 = FindRuleByName(rules, "A1_INDEPENDENT_BOUNDS");
+	auto *a1 = FindRuleByName(rules, "A1_SEPARABLE_BOX");
 	REQUIRE(s1 != nullptr);
 	REQUIRE(a1 != nullptr);
 	string reason;

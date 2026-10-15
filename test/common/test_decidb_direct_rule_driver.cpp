@@ -306,20 +306,20 @@ TEST_CASE("With both real rules registered each query shape reaches the rule tha
 	// A count bound is S1's; per-row bounds on any decision type are A1's. Neither needs a line of engine code that
 	// knows the other exists.
 	auto s1_plan = plan_of("SELECT id, x FROM items DECIDE x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(score*x)");
-	REQUIRE(s1_plan.find("S1_CARDINALITY_INTERVAL") != string::npos);
-	REQUIRE(s1_plan.find("A1_INDEPENDENT_BOUNDS") == string::npos);
+	REQUIRE(s1_plan.find("S1_UNIFORM_MATROID") != string::npos);
+	REQUIRE(s1_plan.find("A1_SEPARABLE_BOX") == string::npos);
 	for (string declaration : {"x(REAL)", "x(INT)", "x(BOOL)"}) {
 		auto a1_plan =
 		    plan_of("SELECT id, x FROM items DECIDE " + declaration + " SUCH THAT x <= 1 MAXIMIZE SUM(score*x)");
 		INFO(declaration);
-		REQUIRE(a1_plan.find("A1_INDEPENDENT_BOUNDS") != string::npos);
-		REQUIRE(a1_plan.find("S1_CARDINALITY_INTERVAL") == string::npos);
+		REQUIRE(a1_plan.find("A1_SEPARABLE_BOX") != string::npos);
+		REQUIRE(a1_plan.find("S1_UNIFORM_MATROID") == string::npos);
 	}
 	// A query neither proves lists both rules' reasons and leaves the solver to run.
 	auto no_rule = con.Query("SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 5 MAXIMIZE SUM(score*x)");
 	REQUIRE(no_rule->HasError());
-	REQUIRE(no_rule->GetError().find("S1_CARDINALITY_INTERVAL: ") != string::npos);
-	REQUIRE(no_rule->GetError().find("A1_INDEPENDENT_BOUNDS: ") != string::npos);
+	REQUIRE(no_rule->GetError().find("S1_UNIFORM_MATROID: ") != string::npos);
+	REQUIRE(no_rule->GetError().find("A1_SEPARABLE_BOX: ") != string::npos);
 }
 
 TEST_CASE("The late materialization happens only for a stored table and a column the rule does not use", "[decidb]") {

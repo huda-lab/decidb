@@ -7,19 +7,12 @@ Read first: `.claude/CLAUDE.md` § Design, `08_direct_solve/architecture/overvie
 `08_direct_solve/architecture/glossary.md`, `08_direct_solve/architecture/todo.md` (the rename rules and § Decisions
 at its top). Checks: `08_direct_solve/rules/_harness/todo.md` § How to work any task.
 
-## 1. Batch A: IR and rule framework, one agent, in order
-
-## 2. Batch B: plan and output, one agent, in order
-
-## 3. Class names, run alone (needs: 1, 2)
-- [ ] P-21 problem classes take their textbook names — 08_direct_solve/architecture/todo.md § P-21
-
-## 4. Reducer and absorbed bound, run alone
+## 1. Reducer and absorbed bound, run alone
 - [ ] P-19 rename across planner and solver — 08_direct_solve/architecture/todo.md § P-19
 
-## 5. Batch C: docs and test files (needs: 1, 2, 3)
+## 2. Batch C: docs and test files
 - [ ] P-18 test vocabulary in the docs — 08_direct_solve/architecture/todo.md § P-18
 - [ ] P-15 shared-engine folder rename, run alone — 08_direct_solve/architecture/todo.md § P-15
 
-## 6. Sweep (needs: every group above)
+## 3. Sweep (needs: every group above)
 - [ ] P-17 sweep for retired terms — 08_direct_solve/architecture/todo.md § P-17

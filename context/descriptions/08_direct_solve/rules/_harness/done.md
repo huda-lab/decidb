@@ -51,9 +51,9 @@ check). Design: `../../architecture/`.
   expressions are built with `ExpressionBuilder` (`direct_expression.hpp`; Fowler's Expression Builder), a small fluent
   helper over bound expressions that passes them as `ExprPtr`. The helpers only S1 uses (the scope projection
   `ProjectScope`, the bound validation `ValidateBounds`, `WindowExtremum`, `AnyCondition`) live in
-  `src/optimizer/decide/direct/s1_uniform_matroid_helpers.{hpp,cpp}` in `namespace direct_s1`, and move to the plan
-  factory functions when a second rule needs them. Inside a rule's namespace, names drop the `Direct` and class
-  prefixes. The exactness limit (2^53) is `DECIDE_MAX_EXACT_INTEGER` in the numeric-policy header (next bullet).
+  `src/optimizer/decide/direct/s1_uniform_matroid_helpers.{hpp,cpp}` in `namespace direct_s1_uniform_matroid`, and move
+  to the plan factory functions when a second rule needs them. Inside a rule's namespace, names drop the `Direct` and
+  class prefixes. The exactness limit (2^53) is `DECIDE_MAX_EXACT_INTEGER` in the numeric-policy header (next bullet).
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
   DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
   rules, the model builder and the solver backends all read it without including each other. It names the solver's

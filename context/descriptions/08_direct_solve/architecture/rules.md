@@ -1,9 +1,9 @@
 # Rules: what a rule is, how to add one, what it must match
 
-A rule is one problem class from the catalogue (S1, A1, ...). Each lives in `rules/<class>/` in these docs and in
-its own `<name>_rule.cpp` in the code. The folder holds `definition.md` (the class: worked example, recognition,
-supported variants, relational construction, correctness argument, eligibility conditions), `todo.md` and, once
-something ships, `done.md`.
+A rule is one problem class from the catalogue (S1, A1, ...). Each lives in `rules/<class>/` in these docs and in its
+own `<id>_<slug>_rule.cpp` in the code (`s1_uniform_matroid_rule.cpp`; the slugs are in `glossary.md` § Problem
+classes). The folder holds `definition.md` (the class: worked example, recognition, supported variants, relational
+construction, correctness argument, eligibility conditions), `todo.md` and, once something ships, `done.md`.
 
 ## Catalogue status
 
@@ -32,8 +32,10 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 
 ## Adding a rule
 
-1. Create `src/optimizer/decide/direct/<name>_rule.cpp`. Keep helpers in `namespace direct_<name>` (unity builds
-   merge anonymous namespaces). Declare `Make<Name>Rule()` in a header, list the file in the folder's `CMakeLists.txt`.
+1. Create `src/optimizer/decide/direct/<id>_<slug>_rule.cpp`. Keep the rule and its helpers in `namespace
+   direct_<id>_<slug>` (unity builds merge anonymous namespaces); inside it the class is `Rule` and its `EXPLAIN` value
+   is `RULE_NAME`, the upper-cased `<ID>_<SLUG>`. Declare `Make<Id><Slug>Rule()` (`MakeS1UniformMatroidRule()`) in a
+   header, list the file in the folder's `CMakeLists.txt`.
 2. Register it with one line in `direct_registry.cpp`. No other engine file changes.
 3. Read only the IR (`direct_rule.hpp`). Use `FirstNotProvedReason()` to name a blocking clause. The rule must be
    disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
@@ -46,8 +48,8 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    `PlanBuilder`); names in `namespace duckdb` keep `Direct`.
 5. State the plan's slot map (where each DECIDE output lives), which decision outputs may be skipped, and its validated
    columns.
-6. Add the standard tests (below), then `rules/<name>/done.md`. The class's `definition.md` already exists; correct it
-   where the code proves something different, and leave the rest as the definition.
+6. Add the standard tests (below), then `rules/<id>_<slug>/done.md`. The class's `definition.md` already exists; correct
+   it where the code proves something different, and leave the rest as the definition.
 
 ## What every rule must match from the solver
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Times direct solve against the solver on A1 shapes (independent bounded decisions).
+"""Times direct solve against the solver on A1 shapes (separable box-constrained problem).
 
 Each measured run is a fresh `decidb` process that only opens the stored database, so its peak memory
 (`maximum resident set size`, from `/usr/bin/time -l`) is the query's own. `direct` pins

@@ -33,7 +33,8 @@ Owner decisions every task below follows. The names they lead to are in `glossar
   The `EXPLAIN` key `Direct solve proof` becomes `Direct solve condition` (P-22 below).
 - P-04: one `Prove` that returns the applicability condition, and `Summary()` on the rule in place of Explain. The
   interface has two steps, Prove and Rewrite.
-- P-05: keep the `Direct` prefix in `namespace duckdb`; drop it inside `direct_s1` and `direct_a1`.
+- P-05: keep the `Direct` prefix in `namespace duckdb`; drop it inside a rule's namespace (`direct_s1_uniform_matroid`,
+  `direct_a1_separable_box`).
 - P-16: rename the test files to the standard names. Exception to the no-rename rule above, for P-18 only; the
   orchestrator measures the cost and runs the oracle re-run itself.
 - P-20: each class keeps its id and takes the textbook name of its problem (not of its algorithm; the optimization
@@ -78,19 +79,6 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - **Needs.** Run it alone: it touches the planner and solver.
 - **Done when.** Neither old term greps under `src/` or `test/`; `make decide-test` and the forced-HiGHS run give the
   baseline counts.
-
-## P-21 — Problem classes take their textbook names
-
-- **Problem.** Classes are known by id alone in code and folders (`s1_rule.cpp`, `S1PlanBuilder`, `direct_s1`,
-  `rules/s1/`), and by home-made phrases in the docs. P-20 chose a textbook name per class.
-- **Change.** Apply the glossary names everywhere, keeping the id as a prefix: `rules/<id>/` folders (`git mv`), each
-  `definition.md` title, the `README.md` table, rule source files, types and namespaces, the rule's `EXPLAIN` value
-  (`S1_CARDINALITY_INTERVAL`, `A1_*`; a user-facing change chosen by the owner) and the tests that assert it. The S1
-  and A1 Python test files are renamed in P-18's single oracle re-run, not here. Classes without code are renamed in
-  docs only.
-- **Needs.** Before P-15 and P-18.
-- **Done when.** No class is named by its old phrase or by a bare id in a file or folder name; the checks give the
-  baseline counts with the new `EXPLAIN` value.
 
 ## P-17 — Sweep for retired terms
 

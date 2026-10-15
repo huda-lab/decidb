@@ -61,7 +61,12 @@ def test_direct_solve_is_on_by_default(decidb_cli):
 
     s1 = _source_query((2.0, 9.0, -1.0), 1)
     plan = decidb_cli.execute_raw(f"EXPLAIN {s1}").stdout
-    assert "Direct solve rule" in plan and "S1_CARDINALITY_INTERVAL" in plan and "WINDOW" in plan and not _has_decide_operator(plan)
+    assert (
+        "Direct solve rule" in plan
+        and "S1_UNIFORM_MATROID" in plan
+        and "WINDOW" in plan
+        and not _has_decide_operator(plan)
+    )
     rows, _ = decidb_cli.execute(s1)
     assert sum(row[2] for row in rows) == 1 and sum(row[1] * row[2] for row in rows) == 9.0
 
@@ -457,7 +462,7 @@ def test_a1_unused_wide_columns_stay_out_of_the_barrier_and_computed_errors_stay
     aggregate = f"SELECT COUNT(*), SUM(x), SUM(POWER(x - score, 2)) FROM ({decide}) q"
     plan = _raw(decidb_cli, setup + f"EXPLAIN {aggregate}").stdout
     scan = plan.rsplit("SEQ_SCAN", 1)[-1]
-    assert "A1_INDEPENDENT_BOUNDS" in plan and "WINDOW" in plan
+    assert "A1_SEPARABLE_BOX" in plan and "WINDOW" in plan
     assert "score" in scan and "payload" not in scan
 
     rows, _ = _run(decidb_cli.with_verify_serializer(), setup + aggregate)
@@ -718,7 +723,7 @@ def test_a1_plan_that_streams_does_not_read_twice(decidb_cli):
     decide = "FROM rr_src DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 10 MAXIMIZE SUM(2 * x)"
     query = f"SELECT id, payload, x FROM ({decide}) q ORDER BY id"
     plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
-    assert "A1_INDEPENDENT_BOUNDS" in plan and _table_scans(plan) == 1
+    assert "A1_SEPARABLE_BOX" in plan and _table_scans(plan) == 1
     rows, _ = _run(decidb_cli, setup + query)
     solver, _ = _run(decidb_cli, setup + query, mode="off")
     _same_answers(rows, solver)

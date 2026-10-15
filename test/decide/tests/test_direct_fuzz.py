@@ -153,7 +153,7 @@ def test_direct_s1_no_objective_seeded_fuzz_matches_solver_path(decidb_cli, seed
 
 
 # ---------------------------------------------------------------------------
-# A1: independent bounded decisions
+# A1: separable box-constrained problem
 # ---------------------------------------------------------------------------
 
 

@@ -689,7 +689,7 @@ def test_s1_strict_bound_against_a_fraction_agrees_under_every_mode(
     assert outcome("auto") == outcome("require")
     assert outcome("auto")[0] == outcome("off")[0]
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='auto'; EXPLAIN {sql}").stdout
-    assert "S1_CARDINALITY_INTERVAL" in plan, plan
+    assert "S1_UNIFORM_MATROID" in plan, plan
 
 
 # A bound on x with no WHEN that always holds changes nothing: the solver seeds a Boolean's box at [0, 1] and a written
@@ -706,7 +706,7 @@ def test_s1_proves_a_bound_that_always_holds_in_require_mode(decidb_cli, oracle_
     _agree(decidb_cli, oracle_solver, case)
     sql = _wrapped_sql(case, "plain")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
-    assert "S1_CARDINALITY_INTERVAL" in plan, plan
+    assert "S1_UNIFORM_MATROID" in plan, plan
     assert _outcome(decidb_cli, sql, "require") == _outcome(decidb_cli, sql, "off")
 
 

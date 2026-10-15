@@ -71,6 +71,6 @@ error naming both: the overlap is a bug in the rules, and no ordering is safe to
 ## Code
 
 `src/optimizer/decide/direct/`, headers in `src/include/duckdb/optimizer/decide/direct/`. Start with
-`direct_rule_driver.cpp` (the flow above), then `s1_rule.cpp` (a rule built on a window) and `a1_rule.cpp` (a rule built
-on a chain of projections and the pipeline breaker). The rest of the folder is named for what it does: IR,
-builders, result adapter, expression predicates, registry.
+`direct_rule_driver.cpp` (the flow above), then `s1_uniform_matroid_rule.cpp` (a rule built on a window) and
+`a1_separable_box_rule.cpp` (a rule built on a chain of projections and the pipeline breaker). The rest of the folder is
+named for what it does: IR, builders, result adapter, expression predicates, registry.

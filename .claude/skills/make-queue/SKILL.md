@@ -11,7 +11,7 @@ The queue orders work and points to it. All task detail lives in nested `todo.md
 ## Arguments
 
 `$ARGUMENTS`:
-- a goal and/or folders (`direct-solve: finish S1 and A1`, `08_direct_solve/rules/s1 a1`): build a queue for it.
+- a goal and/or folders (`direct-solve: finish S1 and A1`, `08_direct_solve/rules/s1_uniform_matroid a1_separable_box`): build a queue for it.
 - `refresh`: rebuild the existing queue against the nested todos as they are now (drop shipped lines, add new tasks).
 - *(empty)*: ask what the goal is and which folders it covers. Do not guess.
 
