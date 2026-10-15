@@ -15,11 +15,14 @@ for production use. If any required condition cannot be proved, the query stays 
 
 ## Lifecycle
 
-**Match → Prove → Explain → Rewrite**, then the engine maps the result onto DECIDE's output slots.
+**Prove → Rewrite**, then the engine maps the result onto DECIDE's output slots. A rule also has a `Summary()`, the
+fixed line `EXPLAIN` shows for it.
 
-- **Match** binds the shape. **Prove** certifies every constraint, objective part, decision, runtime value check
-  and output. A not-proved IR node is a miss, not an error.
-- **Rules are disjoint.** The coordinator runs Match and Prove for every rule, and the rules are told apart by the
+- **Prove** checks the shape first, then certifies every constraint, objective part, decision, runtime value check
+  and output. It returns the proof `Rewrite` reads, or a reason. A not-proved IR node is a miss, not an error. Shape
+  and certification are one step because a DECIDE query offers each rule a single node, so a separate cheap pattern
+  step (as in Cascades, where one pattern is tried on many subtrees) saves nothing.
+- **Rules are disjoint.** The coordinator runs Prove for every rule, and the rules are told apart by the
   IR they require: S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint. At most one rule proves a
   query. If two or more do, the coordinator raises an internal error naming them, because the overlap is a bug in the
   rules and no ordering is safe to pick. The coordinator test covers this with stub rules.

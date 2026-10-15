@@ -16,9 +16,9 @@ check). Design: `../../architecture/`.
   reducer, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Unmodeled parts are *not proved* with a
   reason, and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the front end
   does not expect are not-proved parts. No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
-- **Rule contract.** Match, Prove, Explain, Rewrite, plus a shared Map step that checks the output slots. Rules are
-  listed in `direct_registry.cpp`; tests can replace the list per connection. The coordinator runs Match and Prove for
-  every rule. Rules are disjoint, so at most one proves a query; two proofs raise an internal error naming both rules.
+- **Rule contract.** Prove, Rewrite and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that checks the
+  output slots. Rules are listed in `direct_registry.cpp`; tests can replace the list per connection. The coordinator
+  runs Prove for every rule. Rules are disjoint, so at most one proves a query; two proofs raise an internal error naming both rules.
 - **Result boundary.** Keeps original bindings and types, serializes, prunes outputs only when skipping is proved safe,
   and always keeps the rule's validation slots live. `DirectValidationBarrier` builds the all-rows read for a plan that
   could stream. Because every row is checked before any is released, rows are held in memory, wide parent-read columns

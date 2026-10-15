@@ -41,11 +41,6 @@ namespace direct_s1 {
 
 constexpr const char *S1_RULE = "S1_CARDINALITY_INTERVAL";
 
-struct S1Match final : DirectRuleMatch {
-	vector<const DirectIRConstraint *> bound_factors;
-	vector<const DirectIRConstraint *> local_fixes;
-};
-
 //! An aggregate on the right of a count bound, in the order a walk of the bound meets them: `COUNT(*)`, or COUNT, MIN,
 //! MAX, SUM or AVG of one numeric source column. The plan replaces each by a window over the clause's group.
 struct S1Reducer {
@@ -96,6 +91,10 @@ struct S1Proof final : DirectRuleProof {
 		double scale = 1.0;
 		bool divides = false;
 	};
+
+	//! The constraints of the IR, which outlives the proof: the count bounds, and the Boolean pins.
+	vector<const DirectIRConstraint *> bound_factors;
+	vector<const DirectIRConstraint *> local_fixes;
 
 	idx_t decide_index;
 	idx_t lower = 0;
@@ -506,7 +505,7 @@ public:
 	const char *Name() const override {
 		return S1_RULE;
 	}
-	unique_ptr<DirectRuleMatch> Match(const DirectIR &ir, string &reason) const override {
+	unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, ClientContext &context, string &reason) const override {
 		if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.decisions.size() != 1 ||
 		    ir.decisions[0].domain != DirectDomain::BOOL || ir.decisions[0].scope != DecideVarScope::ROW ||
 		    ir.decisions[0].output_type != LogicalType::INTEGER || !ir.entity_scopes.empty() ||
@@ -529,7 +528,7 @@ public:
 			reason = "constraint_shape: expected attributed cardinality bounds and optional Boolean pins";
 			return nullptr;
 		}
-		auto result = make_uniq<S1Match>();
+		auto proof = make_uniq<S1Proof>();
 		vector<uint8_t> seen_sources(ir.source_clause_count, 0);
 		for (auto &ir_node : ir.constraints) {
 			if (ir_node.source_clause_id >= seen_sources.size() || seen_sources[ir_node.source_clause_id]++) {
@@ -545,16 +544,16 @@ public:
 				return nullptr;
 			}
 			if (PinTerms(ir_node)) {
-				result->local_fixes.push_back(&ir_node);
+				proof->local_fixes.push_back(&ir_node);
 				continue;
 			}
 			if (!DirectIsLowerBound(ir_node.comparison) && !DirectIsUpperBound(ir_node.comparison)) {
 				reason = "constraint_shape: expected SUM(x) cardinality bounds";
 				return nullptr;
 			}
-			result->bound_factors.push_back(&ir_node);
+			proof->bound_factors.push_back(&ir_node);
 		}
-		if (result->bound_factors.empty()) {
+		if (proof->bound_factors.empty()) {
 			reason = "constraint_shape: expected a SUM(x) cardinality bound";
 			return nullptr;
 		}
@@ -570,46 +569,38 @@ public:
 			reason = "objective_shape: expected additive SUM(coefficient * x) terms";
 			return nullptr;
 		}
-		return std::move(result);
-	}
-	unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, const DirectRuleMatch &candidate, ClientContext &context,
-	                                  string &reason) const override {
-		auto &match = static_cast<const S1Match &>(candidate);
-		auto proof = make_uniq<S1Proof>();
 		proof->decide_index = ir.decide_index;
 		proof->sense = ir.objective.sense;
-		if (!ProveScope(ir, match, *proof, reason) || !ProvePins(ir, match, context, *proof, reason) ||
-		    !ProveBounds(ir, match, context, *proof, reason) || !ProveObjective(ir, context, *proof, reason)) {
+		if (!ProveScope(ir, *proof, reason) || !ProvePins(ir, context, *proof, reason) ||
+		    !ProveBounds(ir, context, *proof, reason) || !ProveObjective(ir, context, *proof, reason)) {
 			return nullptr;
 		}
 		return std::move(proof);
 	}
-	void Explain(const DirectRuleProof &, DirectSolveDecisionRecord &record) const override {
-		record.proof = "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi";
+	string Summary() const override {
+		return "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi";
 	}
 	DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
 	                                 const DirectRuleProof &candidate) const override;
 
 private:
-	bool ProveScope(const DirectIR &ir, const S1Match &match, S1Proof &proof, string &reason) const;
-	bool ProvePins(const DirectIR &ir, const S1Match &match, ClientContext &context, S1Proof &proof,
-	               string &reason) const;
-	bool ProveBounds(const DirectIR &ir, const S1Match &match, ClientContext &context, S1Proof &proof,
-	                 string &reason) const;
+	bool ProveScope(const DirectIR &ir, S1Proof &proof, string &reason) const;
+	bool ProvePins(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const;
+	bool ProveBounds(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const;
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const;
 };
 
 //! Every bound counts the same rows: one `SUM(x)` per bound with the same PER keys and the same WHEN membership.
 //! Records the group keys and membership the plan scopes by.
-bool S1CardinalityRule::ProveScope(const DirectIR &ir, const S1Match &match, S1Proof &proof, string &reason) const {
-	const auto &first_scope = *match.bound_factors.front();
+bool S1CardinalityRule::ProveScope(const DirectIR &ir, S1Proof &proof, string &reason) const {
+	const auto &first_scope = *proof.bound_factors.front();
 	bool ok;
 	const Expression *first_when = BoundMembership(first_scope, ok);
 	if (!ok) {
 		reason = "constraint_shape: expected one SUM(x) membership filter";
 		return false;
 	}
-	for (auto factor : match.bound_factors) {
+	for (auto factor : proof.bound_factors) {
 		const Expression *when = BoundMembership(*factor, ok);
 		if (!ok) {
 			reason = "constraint_shape: expected one SUM(x) membership filter";
@@ -639,9 +630,8 @@ bool S1CardinalityRule::ProveScope(const DirectIR &ir, const S1Match &match, S1P
 
 //! Per-row Boolean pins: `x = 0/1` and its one-sided forms against a constant, or against a source Boolean. Each
 //! becomes a condition under which the row is fixed to one or to zero.
-bool S1CardinalityRule::ProvePins(const DirectIR &ir, const S1Match &match, ClientContext &context, S1Proof &proof,
-                                  string &reason) const {
-	for (auto factor : match.local_fixes) {
+bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const {
+	for (auto factor : proof.local_fixes) {
 		if (!factor->scope.per_key_slots.empty()) {
 			reason = "constraint_scope: Boolean pins must be per-row without PER keys";
 			return false;
@@ -739,8 +729,7 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, const S1Match &match, Clie
 //! `SUM(x) <op> B - n*c` and `SUM(c - x) <op> B` is `SUM(x) <flipped op> n*c - B`, where n is the number of rows the
 //! SUM covers in the group. A constant bound without a constant term in the body folds here; every other bound is
 //! shifted per group by the plan.
-bool S1CardinalityRule::ProveBounds(const DirectIR &ir, const S1Match &match, ClientContext &context, S1Proof &proof,
-                                    string &reason) const {
+bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const {
 	auto fold_bound = [&](const Expression &bound, ExpressionType side, idx_t &target, bool negate) {
 		bool impossible = false;
 		if (!NormalizeCapacity(context, bound, side, target, impossible, negate)) {
@@ -752,7 +741,7 @@ bool S1CardinalityRule::ProveBounds(const DirectIR &ir, const S1Match &match, Cl
 		proof.impossible |= impossible;
 		return true;
 	};
-	for (auto factor : match.bound_factors) {
+	for (auto factor : proof.bound_factors) {
 		auto sum = factor->PlainSum(true);
 		CountBody body;
 		string problem;

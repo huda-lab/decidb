@@ -73,23 +73,17 @@ DirectSolveRule *FindS1Rule(duckdb::vector<duckdb::unique_ptr<DirectSolveRule>> 
 	return FindRuleByName(rules, "S1_CARDINALITY_INTERVAL");
 }
 
-//! Whether `rule` proves the query, and why not when it does not. A miss in Match or in Prove both come back as false.
+//! Whether `rule` proves the query, and why not when it does not. A miss comes back as false.
 bool RuleProves(DirectSolveRule &rule, Connection &con, const string &declaration, const string &constraints,
                 const string &objective, string &reason, string *proof_text = nullptr) {
 	QueryIR query(con, IRQuery(declaration, constraints, objective));
 	reason.clear();
-	auto match = rule.Match(query.ir, reason);
-	if (!match) {
-		return false;
-	}
-	auto proof = rule.Prove(query.ir, *match, *con.context, reason);
+	auto proof = rule.Prove(query.ir, *con.context, reason);
 	if (!proof) {
 		return false;
 	}
 	if (proof_text) {
-		DirectSolveDecisionRecord record;
-		rule.Explain(*proof, record);
-		*proof_text = record.proof;
+		*proof_text = rule.Summary();
 	}
 	return true;
 }
@@ -125,13 +119,9 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
 	string reason;
-	auto match = s1->Match(ir, reason);
-	REQUIRE(match != nullptr);
-	auto proof = s1->Prove(ir, *match, *con.context, reason);
+	auto proof = s1->Prove(ir, *con.context, reason);
 	REQUIRE(proof != nullptr);
-	DirectSolveDecisionRecord record;
-	s1->Explain(*proof, record);
-	REQUIRE(record.proof == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
+	REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 
 	// Missing provenance must become a not-proved IR node, never an invented source id.
 	decide->decide_constraints->SetAlias("");
@@ -141,7 +131,7 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(damaged.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
 	REQUIRE(damaged.constraints[0].source_clause_id == DConstants::INVALID_INDEX);
 	reason.clear();
-	REQUIRE(s1->Match(damaged, reason) == nullptr);
+	REQUIRE(s1->Prove(damaged, *con.context, reason) == nullptr);
 	REQUIRE(reason.find("constraint_provenance") != string::npos);
 }
 
@@ -164,13 +154,9 @@ TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]")
 		REQUIRE(ir.constraints_status == DirectAnalysisStatus::PROVED);
 		REQUIRE(ir.constraints.size() == ir.source_clause_count);
 		string reason;
-		auto match = s1->Match(ir, reason);
-		REQUIRE(match != nullptr);
-		auto proof = s1->Prove(ir, *match, *con.context, reason);
+		auto proof = s1->Prove(ir, *con.context, reason);
 		REQUIRE(proof != nullptr);
-		DirectSolveDecisionRecord record;
-		s1->Explain(*proof, record);
-		REQUIRE(record.proof == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
+		REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 	}
 }
 
@@ -191,13 +177,9 @@ TEST_CASE("S1 proof normalizes finite count bounds", "[decidb]") {
 		REQUIRE(decide != nullptr);
 		auto ir = DirectIR::Read(*con.context, *decide);
 		string reason;
-		auto match = s1->Match(ir, reason);
-		REQUIRE(match != nullptr);
-		auto proof = s1->Prove(ir, *match, *con.context, reason);
+		auto proof = s1->Prove(ir, *con.context, reason);
 		REQUIRE(proof != nullptr);
-		DirectSolveDecisionRecord record;
-		s1->Explain(*proof, record);
-		REQUIRE(record.proof == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
+		REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 	}
 }
 
@@ -209,22 +191,30 @@ TEST_CASE("S1 proof rejects an unrepresentable bound and volatile coefficient", 
 	auto rules = RegisteredDirectRules();
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
-	const duckdb::vector<duckdb::pair<string, string>> cases = {
-	    {"SUM(x)<=9007199254740993", "SUM(score*x)"},
-	    {"SUM(x)<=1", "SUM((score+random())*x)"},
+	struct RejectedCase {
+		string constraint;
+		string objective;
+		//! What the check this case is about writes, so an early shape check cannot pass for it.
+		string reason_prefix;
+	};
+	const duckdb::vector<RejectedCase> cases = {
+	    {"SUM(x)<=9007199254740993", "SUM(score*x)",
+	     "constraint_shape: cardinality bound must be a finite consistent foldable numeric expression"},
+	    {"SUM(x)<=1", "SUM((score+random())*x)",
+	     "coefficient_shape: expected a deterministic numeric expression without decisions"},
 	};
 	for (auto &test : cases) {
 		auto plan = con.ExtractPlan("SELECT id, x FROM ("
 		                            " FROM (VALUES (1, 9.0::DOUBLE)) s(id,score)"
 		                            " DECIDE x(BOOL) SUCH THAT " +
-		                            test.first + " MAXIMIZE " + test.second + ") q");
+		                            test.constraint + " MAXIMIZE " + test.objective + ") q");
 		auto *decide = FindDirectIRInput(*plan);
 		REQUIRE(decide != nullptr);
 		auto ir = DirectIR::Read(*con.context, *decide);
 		string reason;
-		auto match = s1->Match(ir, reason);
-		REQUIRE(match != nullptr);
-		REQUIRE(s1->Prove(ir, *match, *con.context, reason) == nullptr);
+		REQUIRE(s1->Prove(ir, *con.context, reason) == nullptr);
+		INFO(reason);
+		REQUIRE(reason.find(test.reason_prefix) == 0);
 	}
 }
 

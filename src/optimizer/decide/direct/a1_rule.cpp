@@ -31,8 +31,6 @@ constexpr const char *A1_RULE = "A1_INDEPENDENT_BOUNDS";
 constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
 constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 
-struct A1Match final : DirectRuleMatch {};
-
 struct A1Term {
 	enum class Kind : uint8_t { LINEAR, CONSTANT, SQUARE };
 	Kind kind = Kind::LINEAR;
@@ -126,7 +124,7 @@ public:
 		return A1_RULE;
 	}
 
-	unique_ptr<DirectRuleMatch> Match(const DirectIR &ir, string &reason) const override {
+	unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, ClientContext &context, string &reason) const override {
 		if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.decisions.empty() || !ir.entity_scopes.empty() ||
 		    ir.source_status != DirectAnalysisStatus::PROVED) {
 			reason = "variable_shape: expected row-scoped BOOL, INT or REAL decisions";
@@ -197,11 +195,6 @@ public:
 				}
 			}
 		}
-		return make_uniq<A1Match>();
-	}
-
-	unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, const DirectRuleMatch &, ClientContext &context,
-	                                  string &reason) const override {
 		auto proof = make_uniq<A1Proof>();
 		proof->decide_index = ir.decide_index;
 		proof->sense = ir.objective.sense;
@@ -219,8 +212,8 @@ public:
 		return std::move(proof);
 	}
 
-	void Explain(const DirectRuleProof &, DirectSolveDecisionRecord &record) const override {
-		record.proof = "min/max SUM(c*x), l <= x <= u, each row independent";
+	string Summary() const override {
+		return "min/max SUM(c*x), l <= x <= u, each row independent";
 	}
 
 	DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,

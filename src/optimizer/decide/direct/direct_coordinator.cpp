@@ -105,12 +105,7 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	auto rules = RulesFor(optimizer.context);
 	for (auto &rule : rules) {
 		string reason;
-		auto match = rule->Match(ir, reason);
-		if (!match) {
-			misses.push_back(rule->Name() + string(": ") + reason);
-			continue;
-		}
-		auto proof = rule->Prove(ir, *match, optimizer.context, reason);
+		auto proof = rule->Prove(ir, optimizer.context, reason);
 		if (!proof) {
 			misses.push_back(rule->Name() + string(": ") + reason);
 			continue;
@@ -140,7 +135,7 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	DirectSolveDecisionRecord record;
 	record.mode = ModeName(mode);
 	record.rule = selected.rule->Name();
-	selected.rule->Explain(*selected.proof, record);
+	record.proof = selected.rule->Summary();
 	direct_profile.Next("optimizer.direct.construct");
 	// The replacement answers to the DECIDE node's identity: every source column, then one column per decision.
 	source.ResolveOperatorTypes();

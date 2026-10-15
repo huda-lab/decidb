@@ -48,22 +48,12 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
   and the website. The setting `decide_direct_solve` and serialized names stay.
 
-## P-08 — Rule interface: one Prove, a summary instead of Explain
-
-- **Problem.** Decision P-04 in § Decisions.
-- **Change.** Apply decision P-04 to `DirectSolveRule`, `s1_rule.cpp`, `a1_rule.cpp`, the stub rules in
-  `test_decidb_direct_coordinator.cpp`, and the lifecycle text in `rules.md` and `overview.md`. A Prove miss keeps its
-  `require` reason text. `EXPLAIN` output is unchanged.
-- **Done when.** `DirectRuleMatch` (if merged) has no references; the coordinator tests cover hit, miss and two proofs;
-  the checks give the baseline counts.
-
 ## P-09 — Rule-framework renames
 
 - **Problem.** Decision P-03 in § Decisions.
 - **Change.** Rename per the glossary: `DirectRuleProof`, `DirectRelationalProposal`, `direct_coordinator.cpp` and
   `TryDirectSolve`, `DirectRuleOverride` and `DIRECT_RULE_OVERRIDE_KEY`, the `*Rewriter` classes, and "hit"/"miss" in
   `overview.md`, `rules.md`, `policy.md` and the code comments.
-- **Needs.** P-08 (both edit the rule interface).
 - **Done when.** None of the retired identifiers appears under `src/` or `test/`; the checks give the baseline counts.
 
 ## P-10 — Validation barrier becomes a pipeline breaker

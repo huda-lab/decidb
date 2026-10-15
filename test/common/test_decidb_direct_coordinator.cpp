@@ -17,7 +17,6 @@ using namespace duckdb;
 
 namespace {
 
-struct StubMatch final : DirectRuleMatch {};
 struct StubProof final : DirectRuleProof {};
 
 //! How a stub plan reads its input before it releases rows.
@@ -41,19 +40,15 @@ public:
 	const char *Name() const override {
 		return name.c_str();
 	}
-	duckdb::unique_ptr<DirectRuleMatch> Match(const DirectIR &, string &) const override {
-		return make_uniq<StubMatch>();
-	}
-	duckdb::unique_ptr<DirectRuleProof> Prove(const DirectIR &, const DirectRuleMatch &, ClientContext &,
-	                                          string &reason) const override {
+	duckdb::unique_ptr<DirectRuleProof> Prove(const DirectIR &, ClientContext &, string &reason) const override {
 		if (!proves) {
 			reason = "stub_miss: " + name;
 			return nullptr;
 		}
 		return make_uniq<StubProof>();
 	}
-	void Explain(const DirectRuleProof &, DirectSolveDecisionRecord &record) const override {
-		record.proof = "stub";
+	string Summary() const override {
+		return "stub";
 	}
 	DirectRelationalProposal Rewrite(duckdb::unique_ptr<LogicalOperator> source, Optimizer &optimizer,
 	                                 const DirectRuleProof &) const override {
@@ -121,7 +116,7 @@ void InstallRules(Connection &con, std::function<RuleList()> make_rules) {
 const char *QUERY = "SELECT v, x FROM (FROM (SELECT i AS v FROM range(3) t(i))"
                     " DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(v*x)) q ORDER BY v";
 
-string Explain(Connection &con, const string &sql) {
+string ExplainText(Connection &con, const string &sql) {
 	auto result = con.Query("EXPLAIN " + sql);
 	REQUIRE_NO_FAIL(*result);
 	return result->ToString();
@@ -139,7 +134,7 @@ TEST_CASE("Direct coordinator commits a proved stub rule", "[decidb]") {
 	});
 	auto result = con.Query(QUERY);
 	REQUIRE(CHECK_COLUMN(result, 1, {1, 1, 1}));
-	auto plan = Explain(con, QUERY);
+	auto plan = ExplainText(con, QUERY);
 	REQUIRE(plan.find("STUB_ONE") != string::npos);
 }
 
@@ -154,7 +149,7 @@ TEST_CASE("Direct coordinator falls back to the solver and lists every miss unde
 	});
 	auto result = con.Query(QUERY);
 	REQUIRE(CHECK_COLUMN(result, 1, {0, 0, 1}));
-	auto plan = Explain(con, QUERY);
+	auto plan = ExplainText(con, QUERY);
 	REQUIRE(plan.find("Direct solve") == string::npos);
 
 	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='require'"));
@@ -178,7 +173,7 @@ TEST_CASE("Direct coordinator runs the rule that proves when another misses", "[
 		});
 		auto result = con.Query(QUERY);
 		REQUIRE(CHECK_COLUMN(result, 1, {1, 1, 1}));
-		auto plan = Explain(con, QUERY);
+		auto plan = ExplainText(con, QUERY);
 		REQUIRE(plan.find("STUB_PROVES") != string::npos);
 		REQUIRE(plan.find("STUB_MISS") == string::npos);
 	}
@@ -191,7 +186,7 @@ TEST_CASE("Direct coordinator runs the rule that proves when another misses", "[
 		});
 		auto result = con.Query(QUERY);
 		REQUIRE(CHECK_COLUMN(result, 1, {1, 1, 1}));
-		auto plan = Explain(con, QUERY);
+		auto plan = ExplainText(con, QUERY);
 		REQUIRE(plan.find("STUB_PROVES") != string::npos);
 		REQUIRE(plan.find("STUB_MISS") == string::npos);
 	}
@@ -334,7 +329,7 @@ TEST_CASE("The second read happens only for a stored table and a column the rule
 	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='require'"));
 	const string decide = " DECIDE x(BOOL) SUCH THAT SUM(x) <= 10 MAXIMIZE SUM(score * x)";
 	auto scans = [&](const string &select, const string &relation) {
-		auto plan = Explain(con, select + " FROM (FROM " + relation + decide + ") q");
+		auto plan = ExplainText(con, select + " FROM (FROM " + relation + decide + ") q");
 		REQUIRE(plan.find("Direct solve rule") != string::npos);
 		idx_t count = 0;
 		for (auto position = plan.find("Table: sr"); position != string::npos;

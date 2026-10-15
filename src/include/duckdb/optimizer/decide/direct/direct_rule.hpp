@@ -15,7 +15,6 @@ class ClientContext;
 class LogicalDecide;
 class LogicalOperator;
 class Optimizer;
-struct DirectSolveDecisionRecord;
 
 //! NOT_PROVED means the front end cannot certify this IR node; a rule must decline it.
 enum class DirectAnalysisStatus : uint8_t { PROVED, NOT_PROVED };
@@ -146,10 +145,6 @@ struct DirectIR {
 	string FirstNotProvedReason() const;
 };
 
-struct DirectRuleMatch {
-	virtual ~DirectRuleMatch() = default;
-};
-
 //! Only Prove can construct a rule proof. The relational builder receives this
 //! object, never an unverified shape match.
 struct DirectRuleProof {
@@ -176,17 +171,16 @@ struct DirectRelationalProposal {
 	bool streams_rows = false;
 };
 
-//! The lifecycle the coordinator drives: Match, Prove, Explain, Rewrite. A miss in Match or Prove leaves the DECIDE
-//! node untouched and reports `reason`. Rules are disjoint: each requires IR the others forbid, so at most one
-//! proves a query, and the coordinator raises an internal error when two do.
+//! The lifecycle the coordinator drives: Prove, then Rewrite. Prove checks the query's shape and then proves what the
+//! plan relies on; a miss leaves the DECIDE node untouched and reports `reason`. Summary is the one line the rule adds
+//! to the EXPLAIN annotation. Rules are disjoint: each requires IR the others forbid, so at most one proves a query,
+//! and the coordinator raises an internal error when two do.
 class DirectSolveRule {
 public:
 	virtual ~DirectSolveRule() = default;
 	virtual const char *Name() const = 0;
-	virtual unique_ptr<DirectRuleMatch> Match(const DirectIR &ir, string &reason) const = 0;
-	virtual unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, const DirectRuleMatch &match, ClientContext &context,
-	                                          string &reason) const = 0;
-	virtual void Explain(const DirectRuleProof &proof, DirectSolveDecisionRecord &record) const = 0;
+	virtual unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, ClientContext &context, string &reason) const = 0;
+	virtual string Summary() const = 0;
 	//! `source` is the DECIDE input with its types resolved.
 	virtual DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
 	                                         const DirectRuleProof &proof) const = 0;

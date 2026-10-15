@@ -12,7 +12,7 @@ Example: `SUM(x) <= 1 MAXIMIZE SUM(score * x)` is "pick the best row". The plan 
 ```text
 bound, canonical LogicalDecide
    -> IR             the front end reads the problem into one form    (ir.md)
-   -> Match / Prove  each rule checks the shape and every detail      (rules.md)
+   -> Prove          each rule checks the shape and every detail      (rules.md)
         miss: the solver path runs as before
         two proofs: internal error, the rules must be disjoint
    -> Rewrite        build the relational plan

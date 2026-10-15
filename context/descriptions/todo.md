@@ -8,8 +8,7 @@ Read first: `.claude/CLAUDE.md` § Design, `08_direct_solve/architecture/overvie
 at its top). Checks: `08_direct_solve/rules/_harness/todo.md` § How to work any task.
 
 ## 1. Batch A: IR and rule framework, one agent, in order
-- [ ] P-08 one Prove, a summary instead of Explain — 08_direct_solve/architecture/todo.md § P-08
-- [ ] P-09 rule-framework renames — 08_direct_solve/architecture/todo.md § P-09 (needs: P-08)
+- [ ] P-09 rule-framework renames — 08_direct_solve/architecture/todo.md § P-09
 
 ## 2. Batch B: plan and output, one agent, in order
 - [ ] P-10 validation barrier becomes a pipeline breaker — 08_direct_solve/architecture/todo.md § P-10
