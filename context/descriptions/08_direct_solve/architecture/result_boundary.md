@@ -15,7 +15,7 @@ that. It has no problem-specific logic and lowers to ordinary projections, so th
 ## Why it is explicit
 
 An early spike used a transparent wrapper. The optimizer then pruned the child to one column while a parent still read
-column 2, and the query returned wrong data. Declaring one dependency per output, plus the rule's validation slots,
+column 2, and the query returned wrong data. Declaring one dependency per output, plus the rule's validated columns,
 fixed it. Never substitute table indexes globally or re-resolve bindings while lowering.
 
 ## Pruning unused columns
@@ -23,14 +23,15 @@ fixed it. Never substitute table indexes globally or re-resolve bindings while l
 An unreferenced output is replaced by a typed NULL placeholder only when skipping it is proved safe: stored columns,
 constants, and passthrough aliases through projections, filters, or inner comparison joins. A computed column that could
 raise an error stays live, because the solver would have raised it. This is what lets a wide unused payload leave the
-rank sort. The validation slots stay live even when no parent reads any output.
+rank sort. The validated columns stay live even when no parent reads any output.
 
-## Validation barrier
+## Pipeline breaker
 
 Runtime checks (NULL or non-finite scores, bad bounds) must run over every input row whenever the DECIDE result is
 consumed, even if `x` is unused or the capacity is zero. A standalone filter is not enough: it can
-skip a late bad row under `LIMIT 1`. S1's rank window reads every row before it emits one. A rule whose plan could
-stream uses `DirectValidationBarrier`: a projected truth-or-error column plus a whole-input window. That holds the rows
+skip a late bad row under `LIMIT 1`. S1's rank window reads every row before it emits one, so it is already a pipeline
+breaker. A rule whose plan is pipelined (each row flows straight through) adds one with `DirectValidationBreaker`: a
+projected truth-or-error column plus a whole-input window. That holds the rows
 in memory. For a stored table, a wide column the parent reads is kept out of those rows by a second read (below); for
 any other source the held rows include it. The section below records what holding costs.
 
@@ -42,7 +43,7 @@ Each cell is a fresh `decidb -readonly` process with `decide_direct_solve='requi
 one aggregate row read back. A1 is `x(REAL) ... BETWEEN 0 AND cap MINIMIZE SUM(POWER(x - t, 2))`; S1 is
 `x(BOOL) ... SUM(x) <= rows/10 MAXIMIZE SUM(score * x)`. "Unused" reads `COUNT(*), SUM(x)` (payload pruned, the control).
 "Held" adds `SUM(length(payload))`, measured before the second read existed, so the rows are held. "Read twice" is the same query on the built plan, which
-reads the payload in a second scan of `src_wide` (two scans in `EXPLAIN`), so it never enters the barrier or the rank. "No DECIDE" is `SELECT COUNT(*), SUM(length(payload)) FROM src_wide`.
+reads the payload in a second scan of `src_wide` (two scans in `EXPLAIN`), so it never enters the breaker or the rank. "No DECIDE" is `SELECT COUNT(*), SUM(length(payload)) FROM src_wide`.
 The footprint column is the macOS peak memory footprint; maximum resident size can read lower once the system compresses
 pages (A1 held at 5,000,000 rows gave 2,524 and 3,320 MiB resident in two runs against 5,212 MiB footprint both times),
 so the footprint is the number to read.
@@ -79,7 +80,7 @@ on the same query (A1 at 1,000,000 rows: 1,655 MiB against 1,049; S1: 1,012 MiB 
 When the source is one DuckDB base table under non-volatile projections and filters, the plan carries the table's
 `rowid` as a hidden column. After unused-column removal, when it is known what the parent reads, each parent-read output
 that is a plain stored column the rule's plan only forwards comes from a second scan of the table, joined on `rowid`
-under the boundary. That column never enters the barrier or the rank, and the first read still checks every row, so a
+under the boundary. That column never enters the breaker or the rank, and the first read still checks every row, so a
 bad last row under `LIMIT 1` still raises. Only a variable-width column moves (`VARCHAR`, `BLOB`, `BIT`, lists,
 arrays, structs, maps, unions: a physical type that is not constant-size); a fixed-width one stays in the single read,
 and a boundary with nothing to move plans one scan. Holding a variable-width column is what costs memory, so that is
@@ -100,7 +101,7 @@ up to date, so pruning again after them is unsafe. With that pass disabled the r
 
 A declared `BOOL` decision has a 0/1 domain but returns SQL `INTEGER`, as on the solver path.
 
-Details: `direct_result_boundary.cpp` (map checks, serialization, pruning hook), `direct_second_read.cpp` (second read) and `direct_builder.cpp` (barrier and
+Details: `direct_result_boundary.cpp` (map checks, serialization, pruning hook), `direct_second_read.cpp` (second read) and `direct_builder.cpp` (breaker and
 pruning proof). The optimizer passes that run after DECIDE were audited for parent filter, join, aggregate, nested, and
 serializer cases; the parent-context rows in `test_direct_three_way.py` and the pruning tests in
 `test_direct_user_facing.py` keep those guarded.

@@ -190,7 +190,7 @@ unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<
 			throw InternalException("Direct solve rule returned a mismatched output slot");
 		}
 	}
-	for (auto slot : substitute.validation_slots) {
+	for (auto slot : substitute.validated_columns) {
 		if (slot >= child_types.size()) {
 			throw InternalException("Direct solve rule lost a required validation slot");
 		}
@@ -201,14 +201,14 @@ unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<
 		throw InternalException("Direct solve rule lost the source row id");
 	}
 	auto boundary = make_uniq<LogicalDirectSolveResult>(decide_index, std::move(output_bindings),
-	                                                    std::move(output_types), substitute.validation_slots.size(),
+	                                                    std::move(output_types), substitute.validated_columns.size(),
 	                                                    std::move(prunable_outputs), std::move(record));
 	// The positional map is materialized as one dependency per advertised output.
 	// The required suffix stays live even when all outputs are unused by a parent.
 	for (auto slot : substitute.output_slots) {
 		boundary->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
 	}
-	for (auto slot : substitute.validation_slots) {
+	for (auto slot : substitute.validated_columns) {
 		boundary->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
 	}
 	if (second_read.Enabled()) {

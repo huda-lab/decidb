@@ -48,14 +48,6 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
   and the website. The setting `decide_direct_solve` and serialized names stay.
 
-## P-10 — Validation barrier becomes a pipeline breaker
-
-- **Problem.** "Barrier" is our word for a blocking operator that reads every row before it emits one.
-- **Change.** Rename per the glossary: `DirectValidationBarrier`, `DirectBarrier` and its `barrier` field,
-  `validation_slots`, `streams_rows` (the standard opposite of blocking is pipelined), and the "Validation barrier"
-  section of `result_boundary.md`.
-- **Done when.** `grep -rn -i barrier src/optimizer/decide/direct src/include/duckdb/optimizer/decide/direct` finds
-  nothing; the checks give the baseline counts.
 
 ## P-11 — Second read becomes late materialization
 

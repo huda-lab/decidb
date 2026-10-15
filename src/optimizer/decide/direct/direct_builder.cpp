@@ -49,13 +49,14 @@ unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(unique_ptr<Expressio
 	return count;
 }
 
-DirectBarrier DirectValidationBarrier(Binder &binder, unique_ptr<LogicalOperator> input, unique_ptr<Expression> valid) {
+DirectPipelineBreaker DirectValidationBreaker(Binder &binder, unique_ptr<LogicalOperator> input,
+                                              unique_ptr<Expression> valid) {
 	input->ResolveOperatorTypes();
 	auto bindings = input->GetColumnBindings();
 	if (bindings.size() != input->types.size() || valid->return_type != LogicalType::BOOLEAN) {
-		throw InternalException("Direct solve validation barrier received an invalid input");
+		throw InternalException("Direct solve validation breaker received an invalid input");
 	}
-	DirectBarrier result;
+	DirectPipelineBreaker result;
 	auto projection_index = binder.GenerateTableIndex();
 	vector<unique_ptr<Expression>> expressions;
 	for (idx_t i = 0; i < bindings.size(); i++) {
@@ -70,7 +71,7 @@ DirectBarrier DirectValidationBarrier(Binder &binder, unique_ptr<LogicalOperator
 	window->expressions.push_back(
 	    DirectWindowMatchingCount(DirectColumn(LogicalType::BOOLEAN, ColumnBinding(projection_index, bindings.size()))));
 	window->children.push_back(std::move(projection));
-	result.barrier = ColumnBinding(window_index, 0);
+	result.breaker = ColumnBinding(window_index, 0);
 	result.plan = std::move(window);
 	return result;
 }

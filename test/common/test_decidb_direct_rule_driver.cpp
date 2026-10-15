@@ -24,8 +24,8 @@ enum class StubValidation : uint8_t {
 	NONE,
 	//! Checks the first source column for NULL in a projection that streams.
 	STREAMING,
-	//! The same check behind DirectValidationBarrier.
-	BARRIER
+	//! The same check behind DirectValidationBreaker.
+	BREAKER
 };
 
 //! A rule with fixed answers. Its plan assigns every row `value`.
@@ -64,11 +64,11 @@ public:
 		duckdb::vector<ColumnBinding> input = bindings;
 		duckdb::unique_ptr<LogicalOperator> plan = std::move(source);
 		duckdb::unique_ptr<Expression> check;
-		if (validation == StubValidation::BARRIER) {
-			auto barrier = DirectValidationBarrier(optimizer.binder, std::move(plan), valid(bindings));
-			plan = std::move(barrier.plan);
-			input = barrier.input_bindings;
-			check = DirectColumn(LogicalType::BIGINT, barrier.barrier);
+		if (validation == StubValidation::BREAKER) {
+			auto breaker = DirectValidationBreaker(optimizer.binder, std::move(plan), valid(bindings));
+			plan = std::move(breaker.plan);
+			input = breaker.input_bindings;
+			check = DirectColumn(LogicalType::BIGINT, breaker.breaker);
 		} else if (validation == StubValidation::STREAMING) {
 			check = valid(bindings);
 		}
@@ -80,7 +80,7 @@ public:
 		expressions.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(value)));
 		DirectSubstitute substitute;
 		if (check) {
-			substitute.validation_slots.push_back(expressions.size());
+			substitute.validated_columns.push_back(expressions.size());
 			expressions.push_back(std::move(check));
 		}
 		auto projection = make_uniq<LogicalProjection>(index, std::move(expressions));
@@ -260,7 +260,7 @@ TEST_CASE("Direct rule driver treats a broken rule as an internal error", "[deci
 	}
 }
 
-TEST_CASE("Direct validation barrier reads every row before an outer LIMIT or COUNT returns", "[decidb]") {
+TEST_CASE("Direct validation breaker reads every row before an outer LIMIT or COUNT returns", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	// One thread, so a streaming plan under LIMIT 1 deterministically stops after its first chunk.
@@ -275,12 +275,12 @@ TEST_CASE("Direct validation barrier reads every row before an outer LIMIT or CO
 	const string decide = "FROM (SELECT CASE WHEN i = 4999 THEN NULL ELSE i END AS v FROM range(5000) t(i))"
 	                      " DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(v*x)";
 
-	// Without the barrier the late NULL is never read: the check is only as eager as the parent.
+	// Without the breaker the late NULL is never read: the check is only as eager as the parent.
 	install(StubValidation::STREAMING);
 	auto streaming = con.Query("SELECT v FROM (" + decide + ") q LIMIT 1");
 	REQUIRE_NO_FAIL(*streaming);
 
-	install(StubValidation::BARRIER);
+	install(StubValidation::BREAKER);
 	for (auto &outer : {"SELECT v FROM (" + decide + ") q LIMIT 1", "SELECT COUNT(*) FROM (" + decide + ") q"}) {
 		auto result = con.Query(outer);
 		REQUIRE(result->HasError());

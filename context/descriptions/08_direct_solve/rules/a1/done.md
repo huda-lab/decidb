@@ -88,11 +88,11 @@ One projection per stage, with no sort, no window and no join:
    every raw value;
 3. each decision's box;
 4. each decision's answer and whether its box is empty;
-5. the rows are held until the check has run on all of them (`DirectValidationBarrier`), then the typed answers are
+5. the rows are held until the check has run on all of them (`DirectValidationBreaker`), then the typed answers are
    projected: `INTEGER` for `BOOL`, `BIGINT` for `INT`, `DOUBLE` for `REAL`.
 
-A problem made only of constants, with no `WHEN`, fails the same way on every row, so it needs no barrier: the check is
-a projected validation column and the plan streams. Unreferenced source columns never reach the barrier; a column the
+A problem made only of constants, with no `WHEN`, fails the same way on every row, so it needs no breaker: the check is
+a projected validation column and the plan streams. Unreferenced source columns never reach the breaker; a column the
 parent reads does, so reading a wide column back costs memory in proportion to the input.
 
 ## Verified by
@@ -102,7 +102,7 @@ parent reads does, so reading a wide column back costs memory in proportion to t
 | `test_direct_a1.py` (280 tests) | The answers. 138 cases run on the independent oracle (`oracle_solver`, built from the raw rows and the per-row bounds each case states in Python), on the solver path (`off`) and on the direct path (`require`): constant boxes, the default-lower rule in every spelling that does and does not replace it, row-valued bounds with and without `WHEN`, coefficient forms (positive, negative, zero), `INT` rounding and strict bounds, `BOOL` pins and Boolean-column bounds, every objective spelling, objective `WHEN`, infeasible and unbounded problems, ties, and three decisions of different types. 28 parent-query contexts. 39 error cases that must fail on both paths. 23 boundary cases against the solver path only (infinities, the 1e20 and 2^53 limits, every numeric source type). 12 cases on how bounds combine, on both paths: a written lower bound of -1e30 or -1e31 is no bound for `INT` and `REAL`, a second lower bound beside it still applies, and no written lower bound leaves the floor at 0. 6 random-row tests against exact `Fraction` arithmetic. The constant-problem tests (streaming plan, errors under `LIMIT 1`, `COUNT(*)` and a filter, empty source), a nested `DECIDE`, and duplicate rows |
 | `test_direct_rule_contract.py` | The checks every rule owes, with A1's fixture: schema and rows, all-rows read for 10 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced HiGHS, `DIAGNOSE`, and 17 near misses that must name their reason and answer under `auto` as under `off` |
 | `test_direct_fuzz.py` | 8 seeds of 30 random A1 queries: direct against solver over domains, bounds, objectives, `WHEN`, `NULL` and infinite values |
-| `test_direct_user_facing.py` | A 200-byte unused payload column stays out of the scan and the barrier; a computed column that can raise is not pruned; a NaN in a constraint coefficient says "constraint coefficient" and in the objective "objective coefficient"; every NULL and NaN error reads as the solver's, compared in full |
+| `test_direct_user_facing.py` | A 200-byte unused payload column stays out of the scan and the breaker; a computed column that can raise is not pruned; a NaN in a constraint coefficient says "constraint coefficient" and in the objective "objective coefficient"; every NULL and NaN error reads as the solver's, compared in full |
 | `test_error_infeasible.py` | The solver's rejection of a bound against the built-in domain quotes the clause as typed for a non-negative decision (`x <= -1 cannot hold ... non-negative`, strict `x < 0`); for a `BOOL` (`x >= 2`, `x > 1`, `x > 1.5`) it is the usual infeasible error |
 | Five tests pinned to the solver path | `test_canonicalize_idempotence.py` (three cases) and `test_implied_bounds.py` (two cases) inspect the solver's model dump. Direct solve builds no model, so they run with `DECIDB_TEST_DIRECT_SOLVE=off` on purpose. |
 | C++ `[decidb]` | `variable_bound` over 19 spellings, the IR for every objective spelling, A1's applicability condition and each decline reason, S1 and A1 never both applying, and the rule driver choosing the right real rule for each shape |
@@ -120,13 +120,13 @@ The result is one aggregate row, so the time is the plan, not the transfer.
 | the same with a `WHEN` on the objective | 0.51 s | 271 MiB | 2.73 s | 4.9 GiB | 5.4x |
 | `INT`, linear, per-row bounds | 0.40 s | 137 MiB | 2.75 s | 4.3 GiB | 6.9x |
 | `BOOL`, linear, bounds only | 0.23 s | 136 MiB | 0.99 s | 1.0 GiB | 4.3x |
-| constants only (no barrier) | 0.03 s | 34 MiB | 0.82 s | 1.4 GiB | 29x |
+| constants only (no breaker) | 0.03 s | 34 MiB | 0.82 s | 1.4 GiB | 29x |
 
 At 1,000,000 rows the same shapes are 3.5 to 8.3x faster and use 31 to 73 MiB against 0.2 to 1.1 GiB. At 100,000 rows
 both paths finish in under 0.1 s.
 
 **Wide parent-read columns.** A 512-byte payload the parent reads back comes from a second read of the stored table, so
-it never enters the barrier: at 1,000,000 rows direct takes 0.12 s and 88 MiB against the solver's 0.63 s and 1.7 GiB
+it never enters the breaker: at 1,000,000 rows direct takes 0.12 s and 88 MiB against the solver's 0.63 s and 1.7 GiB
 (5.2x), and an unused payload takes 0.08 s and 47 MiB. The speedup is smaller than S1's because the solver is already
 cheap on a bound-only problem. Footprint numbers for both rules are in `../../architecture/result_boundary.md`
 ("Memory of holding rows").

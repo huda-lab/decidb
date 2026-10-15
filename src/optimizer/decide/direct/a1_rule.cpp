@@ -383,8 +383,8 @@ struct Stage {
 //!   P2 per-clause bounds, per-decision objective coefficients, and the check on every raw value
 //!   P3 each decision's box
 //!   P4 each decision's answer and whether its row is infeasible
-//!   barrier: every row is validated before one is released
-//!   P5 the source columns, the typed answers, and the barrier
+//!   breaker: every row is validated before one is released
+//!   P5 the source columns, the typed answers, and the breaker
 class A1PlanBuilder {
 public:
 	A1PlanBuilder(const A1Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
@@ -432,7 +432,7 @@ public:
 		for (idx_t i = 0; i < source_bindings.size() + condition.decisions.size(); i++) {
 			substitute.output_slots.push_back(i);
 		}
-		substitute.validation_slots.push_back(source_bindings.size() + condition.decisions.size());
+		substitute.validated_columns.push_back(source_bindings.size() + condition.decisions.size());
 
 		Stage p5(binder.GenerateTableIndex());
 		if (condition.constant_problem) {
@@ -448,18 +448,18 @@ public:
 			}
 			p5.Add(ValidAnswers(answers));
 			substitute.child = p5.Finish(std::move(plan));
-			substitute.streams_rows = true;
+			substitute.pipelined = true;
 			return substitute;
 		}
-		auto barrier = DirectValidationBarrier(binder, std::move(plan), ValidAnswers(answers));
+		auto breaker = DirectValidationBreaker(binder, std::move(plan), ValidAnswers(answers));
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			p5.Add(DirectColumn(source_types[i], barrier.input_bindings[i]));
+			p5.Add(DirectColumn(source_types[i], breaker.input_bindings[i]));
 		}
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
-			p5.Add(TypedAnswer(d, barrier.input_bindings[answers.value[d].column_index]));
+			p5.Add(TypedAnswer(d, breaker.input_bindings[answers.value[d].column_index]));
 		}
-		p5.Add(DirectColumn(LogicalType::BIGINT, barrier.barrier));
-		substitute.child = p5.Finish(std::move(barrier.plan));
+		p5.Add(DirectColumn(LogicalType::BIGINT, breaker.breaker));
+		substitute.child = p5.Finish(std::move(breaker.plan));
 		return substitute;
 	}
 
@@ -816,7 +816,7 @@ private:
 		return DirectErrorPredicate(optimizer, optimizer.BindScalarFunction("concat", std::move(parts)));
 	}
 
-	//! The condition the barrier evaluates on every row. It is true, or the row raises the error that applies: a
+	//! The condition the breaker evaluates on every row. It is true, or the row raises the error that applies: a
 	//! coefficient the arithmetic made non-finite, an empty box, an improvement without limit, or a whole number the
 	//! answer cannot hold exactly. Every raw value was checked in P2 and arrives as `valid_data`.
 	unique_ptr<Expression> ValidAnswers(const Answers &answers) const {
@@ -851,7 +851,7 @@ private:
 		                                      DirectConstantBool(false));
 	}
 
-	//! The answer in the decision's own output type. The barrier has already raised for anything that is not finite or
+	//! The answer in the decision's own output type. The breaker has already raised for anything that is not finite or
 	//! not exactly representable, so the guard only keeps the cast from raising on its own if that ever changed.
 	unique_ptr<Expression> TypedAnswer(idx_t decision, ColumnBinding value) const {
 		auto &prepared = condition.decisions[decision];

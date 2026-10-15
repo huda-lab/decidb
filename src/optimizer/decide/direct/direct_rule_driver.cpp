@@ -172,7 +172,7 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 		}
 		second_read.rowid_slot = substitute.output_slots[source_columns];
 		substitute.output_slots.erase(substitute.output_slots.begin() + NumericCast<int64_t>(source_columns));
-		if (substitute.streams_rows) {
+		if (substitute.pipelined) {
 			// Nothing is held, so there is nothing to gain from a second read.
 			second_read = DirectSecondRead();
 		}

@@ -76,12 +76,12 @@ unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const Lo
                                                   DirectNumberKind kind);
 
 //! A plan that releases no row before `valid` has been evaluated on every input row.
-struct DirectBarrier {
+struct DirectPipelineBreaker {
 	unique_ptr<LogicalOperator> plan;
 	//! Where each input column lives in `plan`, in input order.
 	vector<ColumnBinding> input_bindings;
-	//! Carry this column to the rule's output and declare it as a validation slot, so pruning keeps the barrier.
-	ColumnBinding barrier;
+	//! Carry this column to the rule's output and declare it as a validated column, so pruning keeps the breaker.
+	ColumnBinding breaker;
 };
 
 //! The solver reads every input row before it returns, so a bad value on the last row raises even under an outer
@@ -89,7 +89,8 @@ struct DirectBarrier {
 //! columns, returns true or raises the row's error; a projection evaluates it on every row and a window counting the
 //! whole input cannot emit until all of them are read. The predicate is a projected column rather than a filter, so
 //! filter pushdown cannot move it below a join onto rows the DECIDE input never sees.
-DirectBarrier DirectValidationBarrier(Binder &binder, unique_ptr<LogicalOperator> input, unique_ptr<Expression> valid);
+DirectPipelineBreaker DirectValidationBreaker(Binder &binder, unique_ptr<LogicalOperator> input,
+                                              unique_ptr<Expression> valid);
 
 //===--------------------------------------------------------------------===//
 // DECIDE semantics every aggregate rule shares

@@ -39,16 +39,16 @@ for production use. If any required condition cannot be proved, the query stays 
    disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible, and
    the shared builders in `direct_builder.cpp` for the empty-aggregate error, the number checks, the all-rows
-   barrier and the per-row bounds on a decision (`DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`). A builder only your rule uses (S1's scope projection and bound validation are in `s1_support.cpp`) stays in
+   breaker and the per-row bounds on a decision (`DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`). A builder only your rule uses (S1's scope projection and bound validation are in `s1_support.cpp`) stays in
    your rule's own files until a second rule needs it.
-5. State the plan's output slots, which decision outputs may be skipped, and its validation slots.
+5. State the plan's output slots, which decision outputs may be skipped, and its validated columns.
 6. Add the standard tests (below), then `rules/<name>/done.md`. The class's `definition.md` already exists; correct it
    where the code proves something different, and leave the rest as the definition.
 
 ## What every rule must match from the solver
 
 - **Every input row is read.** A bad value on the last of 5,000 rows must raise even under `LIMIT 1` or
-  `COUNT(*)`. A plan that could stream wraps its checks in `DirectValidationBarrier`; a rank window already reads
+  `COUNT(*)`. A plan that could stream wraps its checks in `DirectValidationBreaker`; a rank window already reads
   everything. Only `LIMIT 0` may skip the read.
 - **An error on the same inputs.** Where the solver raises, direct solve raises: empty scoped aggregate; invalid
   data-valued bounds and pins (including rows a `WHEN` or NULL `PER` key excludes); invalid objective coefficients

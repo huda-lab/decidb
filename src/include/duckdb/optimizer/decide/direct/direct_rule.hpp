@@ -159,16 +159,16 @@ struct DirectSubstitute {
 	//! Child slot of every DECIDE output.
 	vector<idx_t> output_slots;
 	//! Per decision variable: true when no parent reading it leaves nothing unchecked, so its evaluation may be
-	//! skipped. Validation the rule needs must then hang off a validation slot.
+	//! skipped. Validation the rule needs must then hang off a validated column.
 	vector<uint8_t> prunable_decisions;
 	//! Child slots kept live even when no parent reads any output. A rule whose plan must read every input row
 	//! before it releases one (the solver's obligation) declares the column that forces that read here, typically
-	//! the barrier from DirectValidationBarrier. Empty when the plan has nothing to keep live.
-	vector<idx_t> validation_slots;
+	//! the breaker from DirectValidationBreaker. Empty when the plan has nothing to keep live.
+	vector<idx_t> validated_columns;
 	//! True when the plan streams rows through without holding the input, so a column a parent reads costs no memory
 	//! to carry. The rule driver then never reads a stored column a second time for it. Leave false for a plan that
-	//! holds every row (a barrier, a rank).
-	bool streams_rows = false;
+	//! holds every row (a breaker, a rank).
+	bool pipelined = false;
 };
 
 //! The lifecycle the rule driver runs: CheckCondition, then Apply. CheckCondition checks the query's shape and then

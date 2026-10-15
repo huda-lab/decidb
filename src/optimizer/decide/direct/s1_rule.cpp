@@ -930,8 +930,8 @@ public:
 
 		DirectSubstitute substitute;
 		substitute.prunable_decisions.push_back(1); // x is pure once score validation and ranking remain live
-		// The rank window reads every row before it emits one, so the hidden rank is this plan's validation barrier.
-		substitute.validation_slots.push_back(source_bindings.size() + 1);
+		// The rank window reads every row before it emits one, so the hidden rank is this plan's validation breaker.
+		substitute.validated_columns.push_back(source_bindings.size() + 1);
 		for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
 			substitute.output_slots.push_back(i);
 		}

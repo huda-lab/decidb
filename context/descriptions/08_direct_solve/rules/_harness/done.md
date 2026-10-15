@@ -22,7 +22,7 @@ check). Design: `../../architecture/`.
   rule driver runs CheckCondition for every rule. Rules are disjoint, so at most one applies to a query; two that apply
   raise an internal error naming both rules.
 - **Result boundary.** Keeps original bindings and types, serializes, prunes outputs only when skipping is proved safe,
-  and always keeps the rule's validation slots live. `DirectValidationBarrier` builds the all-rows read for a plan that
+  and always keeps the rule's validated columns live. `DirectValidationBreaker` builds the all-rows read for a plan that
   could stream. Because every row is checked before any is released, rows are held in memory, wide parent-read columns
   included (`../../architecture/result_boundary.md`, "Memory of holding rows").
 - **Second read of a stored table** (`direct_second_read.cpp`). When the DECIDE source is one DuckDB base table under
@@ -33,12 +33,12 @@ check). Design: `../../architecture/`.
   first read still checks every row. Only a variable-width column moves (a physical type that is not constant-size:
   `VARCHAR`, `BLOB`, nested types); a fixed-width one is cheaper held than read back, so it stays in the single read
   (measurements in `../../architecture/result_boundary.md`). Joins, aggregates, volatile or computed
-  columns, a source that already reads `rowid`, and a rule plan that streams (`DirectSubstitute::streams_rows`,
+  columns, a source that already reads `rowid`, and a rule plan that streams (`DirectSubstitute::pipelined`,
   set by A1's constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
   `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep
   up to date; with that pass disabled the row id is computed and dropped and the plan holds rows as before.
 - **Shared builders.** `direct_builder.hpp` lists only helpers with two or more users: `DirectGuardEmptyAggregate`,
-  `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBarrier`, `DirectScaledTerm` (sign and constant
+  `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBreaker`, `DirectScaledTerm` (sign and constant
   factor of a coefficient), `DirectIsNull`, `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`,
   `DirectValidBoundPredicate` and `DirectValidNumberPredicate`. Which of several errors a query reports is not
   specified. The per-row bound reader is also here, though A1 is its only user until R1 is built on it, so that the two
@@ -147,7 +147,7 @@ check). Design: `../../architecture/`.
 - C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts, and a norm tag it does not expect reading
   as a not-proved part, not an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
   with every reason, a rule that applies beside one that does not, two rules applying as an internal error, mismatched
-  slot, barrier under `LIMIT 1` and `COUNT(*)`).
+  slot, breaker under `LIMIT 1` and `COUNT(*)`).
 - Python: `test_direct_rule_contract.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read, serializer, prepared
   plans, near misses, `off`, forced backend, `DIAGNOSE`, an empty source, and constant bounds that contradict the decision's
   built-in domain: under `auto`, `off` and `require` each gives the solver's outcome, or `require` declines) and the
@@ -160,7 +160,7 @@ check). Design: `../../architecture/`.
 A rule registers with one line in `direct_registry.cpp` and one in the folder's `CMakeLists.txt`. The rule driver
 (`direct_rule_driver.cpp`) and the result boundary (`direct_result_boundary.cpp`) hold no rule-specific code. S1 and A1
 are materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a
-barrier or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own
+breaker or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own
 reading comes from the solver's code, not a copy: `DirectIRConstraint::variable_bound` is the predicate
 `DecideBoundIsAbsorbed` (`decide_bound_absorption.cpp`), so a rule can ask which bounds replace a variable's default
 box.
