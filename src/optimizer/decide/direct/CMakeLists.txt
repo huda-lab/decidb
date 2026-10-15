@@ -3,7 +3,7 @@ add_library_unity(
   OBJECT
   a1_rule.cpp
   direct_builder.cpp
-  direct_coordinator.cpp
+  direct_rule_driver.cpp
   direct_expression.cpp
   direct_ir.cpp
   direct_registry.cpp

@@ -52,7 +52,7 @@ struct S1Reducer {
 	string column_name;
 };
 
-struct S1Proof final : DirectRuleProof {
+struct S1Condition final : DirectApplicabilityCondition {
 	struct SourceBound {
 		idx_t source_slot;
 		LogicalType source_type;
@@ -92,7 +92,7 @@ struct S1Proof final : DirectRuleProof {
 		bool divides = false;
 	};
 
-	//! The constraints of the IR, which outlives the proof: the count bounds, and the Boolean pins.
+	//! The constraints of the IR, which outlives the condition: the count bounds, and the Boolean pins.
 	vector<const DirectIRConstraint *> bound_factors;
 	vector<const DirectIRConstraint *> local_fixes;
 
@@ -227,8 +227,8 @@ ExpressionType FlipComparison(ExpressionType comparison) {
 	}
 }
 
-//! The decision's terms on a per-row left side, as in a pin `x = 1`; null otherwise. Prove checks that they add up
-//! to exactly one `x`.
+//! The decision's terms on a per-row left side, as in a pin `x = 1`; null otherwise. CheckCondition checks that they
+//! add up to exactly one `x`.
 const vector<DecideSplitTerm> *PinTerms(const DirectIRConstraint &ir_node) {
 	if (ir_node.aggregate || ir_node.comparison == ExpressionType::COMPARE_IN || ir_node.lhs.size() != 1) {
 		return nullptr;
@@ -448,7 +448,7 @@ string ReducerProblem(const Expression &expr, const vector<ColumnBinding> &sourc
 //! Why a bound is not a group-aggregate expression, or empty when it is one: the aggregates `ReducerProblem` admits,
 //! finite exact constants, numeric casts that cannot throw, and `+ - * / //` over them, where a divisor is a nonzero
 //! constant. The plan evaluates such a bound with DuckDB's own operators, on the rows the solver evaluates it for (see
-//! `S1Rewriter::OnlyWhereCovered`), so an overflow raises on both paths or on neither and no range is proved here.
+//! `S1PlanBuilder::OnlyWhereCovered`), so an overflow raises on both paths or on neither and no range is proved here.
 //! Appends the aggregates it meets to `reducers`, in walk order.
 string RowCountBoundProblem(ClientContext &context, const Expression &expr,
                             const vector<ColumnBinding> &source_bindings, vector<S1Reducer> &reducers) {
@@ -505,7 +505,8 @@ public:
 	const char *Name() const override {
 		return S1_RULE;
 	}
-	unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, ClientContext &context, string &reason) const override {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context,
+	                                                        string &reason) const override {
 		if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.decisions.size() != 1 ||
 		    ir.decisions[0].domain != DirectDomain::BOOL || ir.decisions[0].scope != DecideVarScope::ROW ||
 		    ir.decisions[0].output_type != LogicalType::INTEGER || !ir.entity_scopes.empty() ||
@@ -528,7 +529,7 @@ public:
 			reason = "constraint_shape: expected attributed cardinality bounds and optional Boolean pins";
 			return nullptr;
 		}
-		auto proof = make_uniq<S1Proof>();
+		auto condition = make_uniq<S1Condition>();
 		vector<uint8_t> seen_sources(ir.source_clause_count, 0);
 		for (auto &ir_node : ir.constraints) {
 			if (ir_node.source_clause_id >= seen_sources.size() || seen_sources[ir_node.source_clause_id]++) {
@@ -544,16 +545,16 @@ public:
 				return nullptr;
 			}
 			if (PinTerms(ir_node)) {
-				proof->local_fixes.push_back(&ir_node);
+				condition->local_fixes.push_back(&ir_node);
 				continue;
 			}
 			if (!DirectIsLowerBound(ir_node.comparison) && !DirectIsUpperBound(ir_node.comparison)) {
 				reason = "constraint_shape: expected SUM(x) cardinality bounds";
 				return nullptr;
 			}
-			proof->bound_factors.push_back(&ir_node);
+			condition->bound_factors.push_back(&ir_node);
 		}
-		if (proof->bound_factors.empty()) {
+		if (condition->bound_factors.empty()) {
 			reason = "constraint_shape: expected a SUM(x) cardinality bound";
 			return nullptr;
 		}
@@ -569,38 +570,38 @@ public:
 			reason = "objective_shape: expected additive SUM(coefficient * x) terms";
 			return nullptr;
 		}
-		proof->decide_index = ir.decide_index;
-		proof->sense = ir.objective.sense;
-		if (!ProveScope(ir, *proof, reason) || !ProvePins(ir, context, *proof, reason) ||
-		    !ProveBounds(ir, context, *proof, reason) || !ProveObjective(ir, context, *proof, reason)) {
+		condition->decide_index = ir.decide_index;
+		condition->sense = ir.objective.sense;
+		if (!ProveScope(ir, *condition, reason) || !ProvePins(ir, context, *condition, reason) ||
+		    !ProveBounds(ir, context, *condition, reason) || !ProveObjective(ir, context, *condition, reason)) {
 			return nullptr;
 		}
-		return std::move(proof);
+		return std::move(condition);
 	}
 	string Summary() const override {
 		return "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi";
 	}
-	DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                                 const DirectRuleProof &candidate) const override;
+	DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveScope(const DirectIR &ir, S1Proof &proof, string &reason) const;
-	bool ProvePins(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const;
-	bool ProveBounds(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const;
+	bool ProveScope(const DirectIR &ir, S1Condition &condition, string &reason) const;
+	bool ProvePins(const DirectIR &ir, ClientContext &context, S1Condition &condition, string &reason) const;
+	bool ProveBounds(const DirectIR &ir, ClientContext &context, S1Condition &condition, string &reason) const;
+	bool ProveObjective(const DirectIR &ir, ClientContext &context, S1Condition &condition, string &reason) const;
 };
 
 //! Every bound counts the same rows: one `SUM(x)` per bound with the same PER keys and the same WHEN membership.
 //! Records the group keys and membership the plan scopes by.
-bool S1CardinalityRule::ProveScope(const DirectIR &ir, S1Proof &proof, string &reason) const {
-	const auto &first_scope = *proof.bound_factors.front();
+bool S1CardinalityRule::ProveScope(const DirectIR &ir, S1Condition &condition, string &reason) const {
+	const auto &first_scope = *condition.bound_factors.front();
 	bool ok;
 	const Expression *first_when = BoundMembership(first_scope, ok);
 	if (!ok) {
 		reason = "constraint_shape: expected one SUM(x) membership filter";
 		return false;
 	}
-	for (auto factor : proof.bound_factors) {
+	for (auto factor : condition.bound_factors) {
 		const Expression *when = BoundMembership(*factor, ok);
 		if (!ok) {
 			reason = "constraint_shape: expected one SUM(x) membership filter";
@@ -616,22 +617,23 @@ bool S1CardinalityRule::ProveScope(const DirectIR &ir, S1Proof &proof, string &r
 			return false;
 		}
 	}
-	proof.group_key_slots = first_scope.scope.per_key_slots;
+	condition.group_key_slots = first_scope.scope.per_key_slots;
 	if (first_when) {
 		if (!DirectIsSourceOnlyPredicate(*first_when, ir.decide_index, ir.source_bindings)) {
 			reason = "constraint_scope: WHEN must be a deterministic source-only predicate";
 			return false;
 		}
-		proof.when_condition = first_when->Copy();
+		condition.when_condition = first_when->Copy();
 	}
-	proof.scoped = !proof.group_key_slots.empty() || proof.when_condition != nullptr;
+	condition.scoped = !condition.group_key_slots.empty() || condition.when_condition != nullptr;
 	return true;
 }
 
 //! Per-row Boolean pins: `x = 0/1` and its one-sided forms against a constant, or against a source Boolean. Each
 //! becomes a condition under which the row is fixed to one or to zero.
-bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const {
-	for (auto factor : proof.local_fixes) {
+bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1Condition &condition,
+                                  string &reason) const {
+	for (auto factor : condition.local_fixes) {
 		if (!factor->scope.per_key_slots.empty()) {
 			reason = "constraint_scope: Boolean pins must be per-row without PER keys";
 			return false;
@@ -657,14 +659,14 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1
 			// Both values allowed is no constraint. Neither allowed fixes the row to both, which the plan reports as
 			// DECIDE's infeasible error.
 			if (!domain.zero || !domain.one) {
-				auto condition = [&]() {
+				auto row_condition = [&]() {
 					return when ? when->Copy() : make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
 				};
 				if (!domain.zero) {
-					proof.fixed_one_conditions.push_back(condition());
+					condition.fixed_one_conditions.push_back(row_condition());
 				}
 				if (!domain.one) {
-					proof.fixed_zero_conditions.push_back(condition());
+					condition.fixed_zero_conditions.push_back(row_condition());
 				}
 			}
 			continue;
@@ -680,10 +682,10 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1
 		    (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 		     type == ExpressionType::COMPARE_GREATERTHANOREQUALTO)) {
 			if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-				proof.fixed_one_conditions.push_back(active(source_value->Copy()));
+				condition.fixed_one_conditions.push_back(active(source_value->Copy()));
 			}
 			if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-				proof.fixed_zero_conditions.push_back(active(
+				condition.fixed_zero_conditions.push_back(active(
 				    make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, source_value->Copy(),
 				                                         make_uniq<BoundConstantExpression>(Value::BOOLEAN(false)))));
 			}
@@ -691,7 +693,7 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1
 			if (source_value->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 				column_name = source_value->GetAlias();
 			}
-			proof.source_pins.push_back(
+			condition.source_pins.push_back(
 			    {source_value->Copy(), column_name, "DECIDE per-row Boolean bound contains NULL", false});
 			continue;
 		}
@@ -716,10 +718,10 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1
 			return make_uniq<BoundCaseExpression>(std::move(allowed), DirectConstantBool(false),
 			                                      DirectConstantBool(true));
 		};
-		proof.fixed_one_conditions.push_back(active(disallows(0.0)));
-		proof.fixed_zero_conditions.push_back(active(disallows(1.0)));
-		proof.source_pins.push_back({value.Copy(), is_column ? column_name : string(), DirectInvalidBoundMessage(),
-		                             invalid_type == LogicalType::FLOAT || invalid_type == LogicalType::DOUBLE});
+		condition.fixed_one_conditions.push_back(active(disallows(0.0)));
+		condition.fixed_zero_conditions.push_back(active(disallows(1.0)));
+		condition.source_pins.push_back({value.Copy(), is_column ? column_name : string(), DirectInvalidBoundMessage(),
+		                                 invalid_type == LogicalType::FLOAT || invalid_type == LogicalType::DOUBLE});
 	}
 	return true;
 }
@@ -729,7 +731,8 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1
 //! `SUM(x) <op> B - n*c` and `SUM(c - x) <op> B` is `SUM(x) <flipped op> n*c - B`, where n is the number of rows the
 //! SUM covers in the group. A constant bound without a constant term in the body folds here; every other bound is
 //! shifted per group by the plan.
-bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, S1Proof &proof, string &reason) const {
+bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, S1Condition &condition,
+                                    string &reason) const {
 	auto fold_bound = [&](const Expression &bound, ExpressionType side, idx_t &target, bool negate) {
 		bool impossible = false;
 		if (!NormalizeCapacity(context, bound, side, target, impossible, negate)) {
@@ -738,10 +741,10 @@ bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, 
 			         "numeric expression";
 			return false;
 		}
-		proof.impossible |= impossible;
+		condition.impossible |= impossible;
 		return true;
 	};
-	for (auto factor : proof.bound_factors) {
+	for (auto factor : condition.bound_factors) {
 		auto sum = factor->PlainSum(true);
 		CountBody body;
 		string problem;
@@ -761,7 +764,7 @@ bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, 
 		auto add_source_bound = [&](idx_t slot, const LogicalType &bound_type, string column_name,
 		                            vector<S1Reducer> reducers) {
 			bool counts_rows = !reducers.empty();
-			S1Proof::SourceBound source_bound {
+			S1Condition::SourceBound source_bound {
 			    slot, bound_type, type, bound.Copy(), sum->filter != nullptr, std::move(column_name), counts_rows};
 			for (auto &reducer : reducers) {
 				source_bound.needs_count |=
@@ -770,7 +773,7 @@ bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, 
 			source_bound.reducers = std::move(reducers);
 			source_bound.negated = negated;
 			source_bound.offset = std::move(body.offset);
-			proof.source_bounds.push_back(std::move(source_bound));
+			condition.source_bounds.push_back(std::move(source_bound));
 		};
 		if (!bound.IsFoldable() && bound.IsAggregate()) {
 			vector<S1Reducer> reducers;
@@ -810,7 +813,7 @@ bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, 
 			                lower, negated)) {
 				return false;
 			}
-			proof.lower = std::max(proof.lower, lower);
+			condition.lower = std::max(condition.lower, lower);
 		}
 		if (DirectIsUpperBound(type)) {
 			idx_t upper;
@@ -819,18 +822,18 @@ bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, 
 			                upper, negated)) {
 				return false;
 			}
-			proof.upper = proof.has_upper ? std::min(proof.upper, upper) : upper;
-			proof.has_upper = true;
+			condition.upper = condition.has_upper ? std::min(condition.upper, upper) : upper;
+			condition.has_upper = true;
 		}
 	}
-	if (proof.has_upper && proof.lower > proof.upper) {
-		proof.impossible = true;
+	if (condition.has_upper && condition.lower > condition.upper) {
+		condition.impossible = true;
 	}
 	return true;
 }
 
 //! The objective: a signed sum of `SUM(coefficient * x)` terms. Each coefficient must be evaluable per source row.
-bool S1CardinalityRule::ProveObjective(const DirectIR &ir, ClientContext &context, S1Proof &proof,
+bool S1CardinalityRule::ProveObjective(const DirectIR &ir, ClientContext &context, S1Condition &condition,
                                        string &reason) const {
 	// Every linear term in x scores separately: `SUM((p + q) * x)` splits into `p * x` and `q * x`, and the score
 	// adds the signed coefficients in order, as the solver's like-term collection does.
@@ -868,7 +871,7 @@ bool S1CardinalityRule::ProveObjective(const DirectIR &ir, ClientContext &contex
 				reason = "coefficient_shape: multiple terms need nonthrowing source-only numeric coefficients";
 				return false;
 			}
-			proof.objective_parts.push_back(
+			condition.objective_parts.push_back(
 			    {part.sign * term.sign, term.coefficient->Copy(), part.scale != nullptr, scale, part.scale_divides});
 		}
 	}
@@ -880,11 +883,11 @@ bool S1CardinalityRule::ProveObjective(const DirectIR &ir, ClientContext &contex
 //!
 //!   ProjectScopeState -> GuardEmptyAggregate -> ValidateBounds -> ProjectScore
 //!     -> RankAndFilterFeasibility -> ProjectAssignment
-class S1Rewriter {
+class S1PlanBuilder {
 public:
-	S1Rewriter(const S1Proof &proof_p, Optimizer &optimizer_p, LogicalOperator &source)
-	    : proof(proof_p), optimizer(optimizer_p), binder(optimizer_p.binder) {
-		// The coordinator hands the input over with its types resolved.
+	S1PlanBuilder(const S1Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
+	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder) {
+		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
 		source_types = source.types;
 		if (source_bindings.size() != source_types.size()) {
@@ -893,18 +896,18 @@ public:
 		score_index = binder.GenerateTableIndex();
 		window_index = binder.GenerateTableIndex();
 		result_index = binder.GenerateTableIndex();
-		has_fixes = !proof.fixed_one_conditions.empty() || !proof.fixed_zero_conditions.empty();
-		for (auto &bound : proof.source_bounds) {
+		has_fixes = !condition.fixed_one_conditions.empty() || !condition.fixed_zero_conditions.empty();
+		for (auto &bound : condition.source_bounds) {
 			source_lower |= DirectIsLowerBound(bound.comparison);
 			source_upper |= DirectIsUpperBound(bound.comparison);
 		}
-		has_lower = proof.lower || source_lower;
-		has_upper = proof.has_upper || source_upper;
+		has_lower = condition.lower || source_lower;
+		has_upper = condition.has_upper || source_upper;
 		// Slots of the score projection, which every later stage reads. This is the one place that lays them out;
 		// ProjectScore appends its columns in this order and checks each against it.
 		idx_t next_slot = source_bindings.size();
 		score_binding = ColumnBinding(score_index, next_slot++);
-		if (proof.scoped) {
+		if (condition.scoped) {
 			eligible_binding = ColumnBinding(score_index, next_slot++);
 		}
 		if (has_fixes) {
@@ -913,27 +916,27 @@ public:
 		}
 	}
 
-	DirectRelationalProposal Build(unique_ptr<LogicalOperator> source) const {
+	DirectSubstitute Build(unique_ptr<LogicalOperator> source) const {
 		ScopeState scope;
 		source = ProjectScopeState(std::move(source), scope);
 		source = GuardEmptyAggregate(std::move(source), scope);
 		RowCounts counts;
 		source = CountRows(std::move(source), scope, counts);
-		BoundChecks bounds(proof.source_bounds.size());
+		BoundChecks bounds(condition.source_bounds.size());
 		source = ValidateBounds(std::move(source), scope, counts, bounds);
 		source = ProjectScore(std::move(source), scope, bounds);
 		auto ranked = RankAndFilterFeasibility(std::move(source), bounds);
 		auto result = ProjectAssignment(std::move(ranked), bounds);
 
-		DirectRelationalProposal proposal;
-		proposal.prunable_decisions.push_back(1); // x is pure once score validation and ranking remain live
+		DirectSubstitute substitute;
+		substitute.prunable_decisions.push_back(1); // x is pure once score validation and ranking remain live
 		// The rank window reads every row before it emits one, so the hidden rank is this plan's validation barrier.
-		proposal.validation_slots.push_back(source_bindings.size() + 1);
+		substitute.validation_slots.push_back(source_bindings.size() + 1);
 		for (idx_t i = 0; i < source_bindings.size() + 1; i++) {
-			proposal.output_slots.push_back(i);
+			substitute.output_slots.push_back(i);
 		}
-		proposal.child = std::move(result);
-		return proposal;
+		substitute.child = std::move(result);
+		return substitute;
 	}
 
 private:
@@ -985,7 +988,7 @@ private:
 		idx_t fixed_count_slot = DConstants::INVALID_INDEX;
 	};
 
-	const S1Proof &proof;
+	const S1Condition &condition;
 	Optimizer &optimizer;
 	Binder &binder;
 	vector<ColumnBinding> source_bindings;
@@ -1017,11 +1020,11 @@ private:
 	unique_ptr<LogicalOperator> ProjectScopeState(unique_ptr<LogicalOperator> source, ScopeState &scope) const {
 		vector<unique_ptr<Expression>> pins;
 		if (has_fixes) {
-			pins.push_back(DirectAnyCondition(proof.fixed_one_conditions));
-			pins.push_back(DirectAnyCondition(proof.fixed_zero_conditions));
+			pins.push_back(DirectAnyCondition(condition.fixed_one_conditions));
+			pins.push_back(DirectAnyCondition(condition.fixed_zero_conditions));
 		}
-		auto state = DirectProjectScope(binder, std::move(source), proof.scoped, proof.when_condition.get(),
-		                                proof.group_key_slots, std::move(pins));
+		auto state = DirectProjectScope(binder, std::move(source), condition.scoped, condition.when_condition.get(),
+		                                condition.group_key_slots, std::move(pins));
 		scope.input_bindings = std::move(state.input_bindings);
 		scope.state_index = state.state_index;
 		scope.eligible_binding = state.eligible;
@@ -1034,7 +1037,7 @@ private:
 
 	//! Stage 2: a scoped aggregate over no eligible row is DECIDE's empty-aggregate error.
 	unique_ptr<LogicalOperator> GuardEmptyAggregate(unique_ptr<LogicalOperator> source, const ScopeState &scope) const {
-		if (!proof.scoped) {
+		if (!condition.scoped) {
 			return source;
 		}
 		return DirectGuardEmptyAggregate(optimizer, std::move(source), scope.eligible_binding);
@@ -1051,7 +1054,7 @@ private:
 		bool group_needed = false;
 		bool covered_needed = false;
 		bool reducers_needed = false;
-		for (auto &bound : proof.source_bounds) {
+		for (auto &bound : condition.source_bounds) {
 			if (bound.needs_count) {
 				(bound.rhs_all_group_rows ? group_needed : eligible_needed) = true;
 			}
@@ -1072,10 +1075,10 @@ private:
 			                                     make_uniq<AggregateFunction>(CountStarFun::GetFunction()), nullptr);
 			count->start = WindowBoundary::UNBOUNDED_PRECEDING;
 			count->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-			if (narrowed_by_eligibility && proof.scoped) {
+			if (narrowed_by_eligibility && condition.scoped) {
 				count->partitions.push_back(DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
 			}
-			for (auto slot : proof.group_key_slots) {
+			for (auto slot : condition.group_key_slots) {
 				count->partitions.push_back(DirectColumn(source_types[slot], scope.input_bindings[slot]));
 			}
 			window->expressions.push_back(std::move(count));
@@ -1089,7 +1092,7 @@ private:
 		}
 		if (reducers_needed) {
 			// MIN, MAX and SUM of a column over the same group the counts cover. AVG is its SUM over the group's count.
-			for (auto &bound : proof.source_bounds) {
+			for (auto &bound : condition.source_bounds) {
 				for (auto &reducer : bound.reducers) {
 					bool sum = reducer.function == "sum" || reducer.function == "avg";
 					bool extremum = reducer.function == "min" || reducer.function == "max";
@@ -1104,10 +1107,10 @@ private:
 					auto value =
 					    DirectColumn(source_types[reducer.source_slot], scope.input_bindings[reducer.source_slot]);
 					auto reduced = DirectWindowExtremum(optimizer, function.c_str(), std::move(value));
-					if (!bound.rhs_all_group_rows && proof.scoped) {
+					if (!bound.rhs_all_group_rows && condition.scoped) {
 						reduced->partitions.push_back(DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
 					}
-					for (auto slot : proof.group_key_slots) {
+					for (auto slot : condition.group_key_slots) {
 						reduced->partitions.push_back(DirectColumn(source_types[slot], scope.input_bindings[slot]));
 					}
 					counts.reducers[key] = {window->expressions.size(), reduced->return_type};
@@ -1118,11 +1121,11 @@ private:
 		if (covered_needed) {
 			// Counted over the whole group, so a row the SUM does not cover (and a bound reduced over every group row)
 			// reads the same n as the rows it does cover.
-			if (!proof.scoped) {
+			if (!condition.scoped) {
 				counts.covered_slot = add_count(false);
 			} else {
 				auto covered = DirectWindowMatchingCount(DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
-				for (auto slot : proof.group_key_slots) {
+				for (auto slot : condition.group_key_slots) {
 					covered->partitions.push_back(DirectColumn(source_types[slot], scope.input_bindings[slot]));
 				}
 				counts.covered_slot = window->expressions.size();
@@ -1135,9 +1138,9 @@ private:
 
 	//! The bound with each aggregate replaced by its value over the clause's group. The solver reads a reducer as a
 	//! DOUBLE and hands it back to the surrounding expression as the aggregate's own type, so the same two casts are
-	//! made here. AVG is the DOUBLE sum over the DOUBLE count. `next` walks `bound.reducers`, which the proof listed in
-	//! the same order.
-	unique_ptr<Expression> ReplaceAggregates(unique_ptr<Expression> expr, const S1Proof::SourceBound &bound,
+	//! made here. AVG is the DOUBLE sum over the DOUBLE count. `next` walks `bound.reducers`, which the condition
+	//! listed in the same order.
+	unique_ptr<Expression> ReplaceAggregates(unique_ptr<Expression> expr, const S1Condition::SourceBound &bound,
 	                                         const RowCounts &counts, idx_t &next) const {
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 			ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
@@ -1182,7 +1185,7 @@ private:
 	//! therefore read as the harmless 0 on a row that is not eligible, and the extremum ignores those rows (the
 	//! caller leaves `all_group_rows` unset for a count bound, which has one value per group).
 	unique_ptr<Expression> OnlyWhereCovered(unique_ptr<Expression> value, const ScopeState &scope) const {
-		if (!proof.scoped) {
+		if (!condition.scoped) {
 			return value;
 		}
 		return make_uniq<BoundCaseExpression>(
@@ -1195,7 +1198,7 @@ private:
 	unique_ptr<LogicalOperator> ValidateBounds(unique_ptr<LogicalOperator> source, const ScopeState &scope,
 	                                           const RowCounts &counts, BoundChecks &bounds) const {
 		vector<DirectBoundSpec> specs;
-		for (auto &bound : proof.source_bounds) {
+		for (auto &bound : condition.source_bounds) {
 			if (!bound.value || (bound.source_slot != DConstants::INVALID_INDEX &&
 			                     (bound.source_slot >= source_types.size() ||
 			                      source_types[bound.source_slot] != bound.source_type))) {
@@ -1253,7 +1256,7 @@ private:
 			specs.push_back(std::move(spec));
 		}
 		vector<DirectNotNullSpec> pins;
-		for (auto &pin : proof.source_pins) {
+		for (auto &pin : condition.source_pins) {
 			DirectNotNullSpec spec;
 			spec.value = CopyIntoState(*pin.value, scope, "per-row pin");
 			spec.reject_nan = pin.reject_nan;
@@ -1270,7 +1273,7 @@ private:
 		// A column an aggregate on the right reduces is read on every row, as the solver reads it: NULL and NaN raise
 		// on every row, including rows the clause does not cover; infinity is a value.
 		vector<idx_t> checked_columns;
-		for (auto &bound : proof.source_bounds) {
+		for (auto &bound : condition.source_bounds) {
 			for (auto &reducer : bound.reducers) {
 				if (reducer.source_slot == DConstants::INVALID_INDEX ||
 				    std::find(checked_columns.begin(), checked_columns.end(), reducer.source_slot) !=
@@ -1291,12 +1294,12 @@ private:
 		}
 		vector<ColumnBinding> keys;
 		vector<LogicalType> key_types;
-		for (auto slot : proof.group_key_slots) {
+		for (auto slot : condition.group_key_slots) {
 			keys.push_back(scope.input_bindings[slot]);
 			key_types.push_back(source_types[slot]);
 		}
 		auto validation = DirectValidateBounds(optimizer, std::move(source), specs, pins,
-		                                       proof.scoped ? &scope.eligible_binding : nullptr, keys, key_types);
+		                                       condition.scoped ? &scope.eligible_binding : nullptr, keys, key_types);
 		bounds.window_index = validation.window_index;
 		for (idx_t i = 0; i < bounds.slots.size(); i++) {
 			bounds.slots[i].min_window = validation.min_slots[i];
@@ -1322,10 +1325,10 @@ private:
 		}
 		unique_ptr<Expression> combined_score;
 		// Without an objective there are no parts and every row scores 0.
-		if (proof.objective_parts.size() != 1 || proof.objective_parts[0].sign < 0) {
+		if (condition.objective_parts.size() != 1 || condition.objective_parts[0].sign < 0) {
 			combined_score = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
 		}
-		for (auto &part : proof.objective_parts) {
+		for (auto &part : condition.objective_parts) {
 			auto coefficient = CopyIntoState(*part.coefficient, scope, "coefficient");
 			auto term =
 			    DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.scaled, part.scale, part.divides);
@@ -1333,7 +1336,7 @@ private:
 			                                : std::move(term);
 		}
 		append_at(score_binding, std::move(combined_score));
-		if (proof.scoped) {
+		if (condition.scoped) {
 			append_at(eligible_binding, DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
 		}
 		if (has_fixes) {
@@ -1361,7 +1364,7 @@ private:
 	//! Inclusive count limit of one source-valued bound, as BIGINT: its group extremum rounded, clamped to the
 	//! BIGINT range, and -1 (upper) or 0 (lower) when the value is below zero.
 	unique_ptr<Expression> SourceLimit(idx_t index, bool upper, const BoundChecks &bounds) const {
-		auto &bound = proof.source_bounds[index];
+		auto &bound = condition.source_bounds[index];
 		auto &slots = bounds.slots[index];
 		auto slot = upper ? slots.min_score : slots.max_score;
 		if (slot == DConstants::INVALID_INDEX) {
@@ -1395,7 +1398,7 @@ private:
 	//! Largest lower limit across the constant and source-valued bounds.
 	unique_ptr<Expression> LowerLimit(const BoundChecks &bounds) const {
 		vector<unique_ptr<Expression>> limits;
-		limits.push_back(make_uniq<BoundConstantExpression>(Value::BIGINT(NumericCast<int64_t>(proof.lower))));
+		limits.push_back(make_uniq<BoundConstantExpression>(Value::BIGINT(NumericCast<int64_t>(condition.lower))));
 		for (idx_t i = 0; i < bounds.slots.size(); i++) {
 			if (bounds.slots[i].max_score != DConstants::INVALID_INDEX) {
 				limits.push_back(SourceLimit(i, false, bounds));
@@ -1407,8 +1410,8 @@ private:
 	//! Smallest upper limit across the constant and source-valued bounds; null when there is none.
 	unique_ptr<Expression> UpperLimit(const BoundChecks &bounds) const {
 		vector<unique_ptr<Expression>> limits;
-		if (proof.has_upper) {
-			limits.push_back(make_uniq<BoundConstantExpression>(Value::BIGINT(NumericCast<int64_t>(proof.upper))));
+		if (condition.has_upper) {
+			limits.push_back(make_uniq<BoundConstantExpression>(Value::BIGINT(NumericCast<int64_t>(condition.upper))));
 		}
 		for (idx_t i = 0; i < bounds.slots.size(); i++) {
 			if (bounds.slots[i].min_score != DConstants::INVALID_INDEX) {
@@ -1423,11 +1426,11 @@ private:
 
 	//! Partition a rank or count window by eligibility and PER key.
 	void AddScope(BoundWindowExpression &expression) const {
-		if (!proof.scoped) {
+		if (!condition.scoped) {
 			return;
 		}
 		expression.partitions.push_back(DirectColumn(LogicalType::BOOLEAN, eligible_binding));
-		for (auto slot : proof.group_key_slots) {
+		for (auto slot : condition.group_key_slots) {
 			expression.partitions.push_back(DirectColumn(source_types[slot], ColumnBinding(score_index, slot)));
 		}
 	}
@@ -1445,9 +1448,9 @@ private:
 		if (has_fixes) {
 			expression.orders.emplace_back(OrderType::DESCENDING, OrderByNullType::NULLS_LAST, FreeRow());
 		}
-		expression.orders.emplace_back(
-		    proof.sense == DecideSense::MAXIMIZE ? OrderType::DESCENDING : OrderType::ASCENDING,
-		    OrderByNullType::NULLS_LAST, DirectColumn(LogicalType::DOUBLE, score_binding));
+		expression.orders.emplace_back(condition.sense == DecideSense::MAXIMIZE ? OrderType::DESCENDING
+		                                                                        : OrderType::ASCENDING,
+		                               OrderByNullType::NULLS_LAST, DirectColumn(LogicalType::DOUBLE, score_binding));
 	}
 
 	//! Stage 5: validate the score, rank rows within their scope, and raise the infeasibility error when the
@@ -1455,7 +1458,7 @@ private:
 	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score, const BoundChecks &bounds) const {
 		// The score is checked above the score projection, which carries the source columns a NULL names.
 		vector<DirectSignedValue> score_terms;
-		for (auto &part : proof.objective_parts) {
+		for (auto &part : condition.objective_parts) {
 			score_terms.push_back({part.sign, part.coefficient->Copy()});
 		}
 		auto score_source = DirectMergedOverProjection(optimizer.context, score_terms, source_bindings, score_index);
@@ -1478,14 +1481,14 @@ private:
 			AddOrder(*count);
 			AddScope(*count);
 			window->expressions.push_back(std::move(count));
-			if (has_lower && !proof.impossible) {
+			if (has_lower && !condition.impossible) {
 				free_count_slot = window->expressions.size();
 				auto free_count = DirectWindowMatchingCount(FreeRow());
 				AddOrder(*free_count);
 				AddScope(*free_count);
 				window->expressions.push_back(std::move(free_count));
 			}
-		} else if (has_lower && !proof.impossible) {
+		} else if (has_lower && !condition.impossible) {
 			// Match the rank's order so the full-partition count can share its sort.
 			auto count = make_uniq<BoundWindowExpression>(
 			    ExpressionType::WINDOW_AGGREGATE, LogicalType::BIGINT,
@@ -1499,7 +1502,7 @@ private:
 		window->children.push_back(std::move(guard));
 		result.rank_binding = ColumnBinding(window_index, 0);
 		result.plan = std::move(window);
-		if (proof.impossible || has_lower || has_fixes || source_upper) {
+		if (condition.impossible || has_lower || has_fixes || source_upper) {
 			auto feasible = make_uniq<LogicalFilter>(FeasiblePredicate(result, free_count_slot, bounds));
 			feasible->children.push_back(std::move(result.plan));
 			result.plan = std::move(feasible);
@@ -1526,7 +1529,7 @@ private:
 			return DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, ranked.fixed_count_slot));
 		};
 		vector<unique_ptr<Expression>> group_checks;
-		if (proof.impossible) {
+		if (condition.impossible) {
 			// No bound can hold, so a group with any row is infeasible.
 			group_checks.push_back(must_not_hold(make_uniq<BoundComparisonExpression>(
 			    ExpressionType::COMPARE_GREATERTHANOREQUALTO, DirectColumn(LogicalType::BIGINT, ranked.rank_binding),
@@ -1568,7 +1571,7 @@ private:
 				group = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(group),
 				                                              std::move(group_checks[i]));
 			}
-			checks.push_back(proof.scoped
+			checks.push_back(condition.scoped
 			                     ? make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, eligible_binding),
 			                                                      std::move(group), DirectConstantBool(true))
 			                     : std::move(group));
@@ -1600,8 +1603,8 @@ private:
 			result_expressions.push_back(DirectColumn(source_types[i], ColumnBinding(score_index, i)));
 		}
 		auto improving = make_uniq<BoundComparisonExpression>(
-		    proof.sense == DecideSense::MAXIMIZE ? ExpressionType::COMPARE_GREATERTHAN
-		                                         : ExpressionType::COMPARE_LESSTHAN,
+		    condition.sense == DecideSense::MAXIMIZE ? ExpressionType::COMPARE_GREATERTHAN
+		                                             : ExpressionType::COMPARE_LESSTHAN,
 		    DirectColumn(LogicalType::DOUBLE, score_binding), make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)));
 		auto free_choose = improving->Copy();
 		unique_ptr<Expression> choose = std::move(improving);
@@ -1631,7 +1634,7 @@ private:
 			choose =
 			    make_uniq<BoundCaseExpression>(std::move(within_upper), std::move(choose), DirectConstantBool(false));
 		}
-		if (proof.scoped) {
+		if (condition.scoped) {
 			choose = make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, eligible_binding),
 			                                        std::move(choose), std::move(free_choose));
 		}
@@ -1653,14 +1656,14 @@ private:
 	}
 };
 
-DirectRelationalProposal S1CardinalityRule::Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-                                                    const DirectRuleProof &candidate) const {
-	auto &proof = static_cast<const S1Proof &>(candidate);
-	if (proof.objective_parts.empty() && proof.sense != DecideSense::FEASIBILITY) {
-		throw InternalException("S1 direct solve received a proof without an objective");
+DirectSubstitute S1CardinalityRule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+                                          const DirectApplicabilityCondition &candidate) const {
+	auto &condition = static_cast<const S1Condition &>(candidate);
+	if (condition.objective_parts.empty() && condition.sense != DecideSense::FEASIBILITY) {
+		throw InternalException("S1 direct solve received a condition without an objective");
 	}
-	S1Rewriter rewriter(proof, optimizer, *source);
-	return rewriter.Build(std::move(source));
+	S1PlanBuilder plan_builder(condition, optimizer, *source);
+	return plan_builder.Build(std::move(source));
 }
 
 } // namespace direct_s1

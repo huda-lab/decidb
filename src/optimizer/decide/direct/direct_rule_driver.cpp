@@ -20,7 +20,7 @@ InsertionOrderPreservingMap<string> DirectSolveDecisionRecord::Render() const {
 	InsertionOrderPreservingMap<string> result;
 	result["Direct solve mode"] = mode;
 	result["Direct solve rule"] = rule;
-	result["Direct solve proof"] = proof;
+	result["Direct solve condition"] = condition;
 	return result;
 }
 
@@ -41,7 +41,7 @@ DirectSolveMode GetDirectSolveMode(ClientContext &context) {
 
 namespace {
 
-//! The `require` error for a query no rule proved: why each rule missed, and that no solver ran.
+//! The `require` error for a query no rule proved: why each rule does not apply, and that no solver ran.
 string RequireMissText(const string &reason) {
 	return StringUtil::Format("%s (rule=none; solver skipped=true)", reason);
 }
@@ -58,9 +58,9 @@ void DirectSolveModeSetCallback(ClientContext &, SetScope, Value &parameter) {
 	parameter = Value(value);
 }
 
-//! The rules this connection tries: the registered ones, unless a coordinator test installed its own.
+//! The rules this connection tries: the registered ones, unless a rule driver test installed its own.
 vector<unique_ptr<DirectSolveRule>> RulesFor(ClientContext &context) {
-	auto override_rules = context.registered_state->Get<DirectRuleOverride>(DIRECT_RULE_OVERRIDE_KEY);
+	auto override_rules = context.registered_state->Get<DirectRuleTestSeam>(DIRECT_RULE_TEST_SEAM_KEY);
 	return override_rules ? override_rules->make_rules() : RegisteredDirectRules();
 }
 
@@ -74,7 +74,8 @@ void RegisterDirectSolve(DBConfig &config) {
 	config.operator_extensions.push_back(MakeDirectResultExtension());
 }
 
-unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optimizer &optimizer, DirectSolveMode mode) {
+unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op, Optimizer &optimizer,
+                                                  DirectSolveMode mode) {
 	if (mode == DirectSolveMode::OFF) {
 		return op;
 	}
@@ -98,31 +99,31 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	auto ir = DirectIR::Read(optimizer.context, decide);
 	struct ProvedCandidate {
 		const DirectSolveRule *rule;
-		unique_ptr<DirectRuleProof> proof;
+		unique_ptr<DirectApplicabilityCondition> condition;
 	};
 	vector<ProvedCandidate> proved;
 	vector<string> misses;
 	auto rules = RulesFor(optimizer.context);
 	for (auto &rule : rules) {
 		string reason;
-		auto proof = rule->Prove(ir, optimizer.context, reason);
-		if (!proof) {
+		auto condition = rule->CheckCondition(ir, optimizer.context, reason);
+		if (!condition) {
 			misses.push_back(rule->Name() + string(": ") + reason);
 			continue;
 		}
-		proved.push_back({rule.get(), std::move(proof)});
+		proved.push_back({rule.get(), std::move(condition)});
 	}
 	if (proved.empty()) {
 		if (mode == DirectSolveMode::REQUIRE) {
 			throw InvalidInputException("decide_direct_solve=require: %s",
 			                            RequireMissText(StringUtil::Join(misses, "; ")));
 		}
-		// A miss under auto leaves the DECIDE node, and its EXPLAIN output, exactly as the solver path has it.
-		// `require` is how a user asks why a query was not proved.
+		// A query no rule applies to under auto leaves the DECIDE node, and its EXPLAIN output, exactly as the solver
+		// path has it. `require` is how a user asks why a query was not proved.
 		return op;
 	}
-	// Every rule ran, so a second proof is seen. Rules tell queries apart by the IR they require; two proofs of one
-	// query mean the rules overlap, which no ordering or cost can settle safely.
+	// Every rule ran, so a second rule that applies is seen. Rules tell queries apart by the IR they require; two rules
+	// that apply to one query mean the rules overlap, which no ordering or cost can settle safely.
 	if (proved.size() > 1) {
 		vector<string> names;
 		for (auto &candidate : proved) {
@@ -135,7 +136,7 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	DirectSolveDecisionRecord record;
 	record.mode = ModeName(mode);
 	record.rule = selected.rule->Name();
-	record.proof = selected.rule->Summary();
+	record.condition = selected.rule->Summary();
 	direct_profile.Next("optimizer.direct.construct");
 	// The replacement answers to the DECIDE node's identity: every source column, then one column per decision.
 	source.ResolveOperatorTypes();
@@ -164,19 +165,19 @@ unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optim
 	if (carries_rowid) {
 		source.ResolveOperatorTypes();
 	}
-	auto proposal = selected.rule->Rewrite(std::move(decide.children[0]), optimizer, *selected.proof);
+	auto substitute = selected.rule->Apply(std::move(decide.children[0]), optimizer, *selected.condition);
 	if (carries_rowid) {
-		if (proposal.output_slots.size() != output_bindings.size() + 1) {
+		if (substitute.output_slots.size() != output_bindings.size() + 1) {
 			throw InternalException("Direct solve rule did not pass the source row id through");
 		}
-		second_read.rowid_slot = proposal.output_slots[source_columns];
-		proposal.output_slots.erase(proposal.output_slots.begin() + NumericCast<int64_t>(source_columns));
-		if (proposal.streams_rows) {
+		second_read.rowid_slot = substitute.output_slots[source_columns];
+		substitute.output_slots.erase(substitute.output_slots.begin() + NumericCast<int64_t>(source_columns));
+		if (substitute.streams_rows) {
 			// Nothing is held, so there is nothing to gain from a second read.
 			second_read = DirectSecondRead();
 		}
 	}
-	return MapDirectResult(std::move(proposal), std::move(output_bindings), std::move(output_types),
+	return MapDirectResult(std::move(substitute), std::move(output_bindings), std::move(output_types),
 	                       std::move(prunable_sources), decide_index, std::move(record), second_read);
 }
 

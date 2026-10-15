@@ -10,7 +10,7 @@ that. It has no problem-specific logic and lowers to ordinary projections, so th
   old bindings.
 - **Blocks parent work from crossing it.** A filter or limit above the DECIDE result cannot move into the rank input,
   since that would change which rows are ranked. Optimizing inside the child is fine.
-- **Carries the decision record** that `EXPLAIN` and profiling show on a hit (see `policy.md`).
+- **Carries the decision record** that `EXPLAIN` and profiling show when a rule applies (see `policy.md`).
 
 ## Why it is explicit
 

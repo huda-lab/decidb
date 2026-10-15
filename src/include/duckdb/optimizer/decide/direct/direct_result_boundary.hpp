@@ -9,7 +9,7 @@
 
 namespace duckdb {
 
-//! What the coordinator learned about a DECIDE source that reads one stored table, so the result boundary can later
+//! What the rule driver learned about a DECIDE source that reads one stored table, so the result boundary can later
 //! move a column the rule never uses out of the rule's plan and read it from the table again (direct_second_read.hpp).
 struct DirectSecondRead {
 	//! Child slot of the rule's plan that carries the table's row id. Invalid when there is no second read.
@@ -68,11 +68,11 @@ protected:
 	void ResolveTypes() override;
 };
 
-//! Wraps a rule's relational proposal in the result boundary. The boundary keeps DECIDE's external bindings and
-//! types, checks the proposal's output-slot map against its child, and pins validation-only slots as live.
+//! Wraps a rule's relational substitute in the result boundary. The boundary keeps DECIDE's external bindings and
+//! types, checks the substitute's output-slot map against its child, and pins validation-only slots as live.
 //! `prunable_sources` says, per source column, whether a parent that does not read it may skip evaluating it.
 //! An enabled `second_read` also carries the source row id as a dependency that a parent-read stored column can use.
-unique_ptr<LogicalOperator> MapDirectResult(DirectRelationalProposal proposal, vector<ColumnBinding> output_bindings,
+unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
                                             vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
                                             idx_t decide_index, DirectSolveDecisionRecord record,
                                             const DirectSecondRead &second_read);

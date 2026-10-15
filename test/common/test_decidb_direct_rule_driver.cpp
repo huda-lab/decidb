@@ -17,7 +17,7 @@ using namespace duckdb;
 
 namespace {
 
-struct StubProof final : DirectRuleProof {};
+struct StubCondition final : DirectApplicabilityCondition {};
 
 //! How a stub plan reads its input before it releases rows.
 enum class StubValidation : uint8_t {
@@ -40,18 +40,19 @@ public:
 	const char *Name() const override {
 		return name.c_str();
 	}
-	duckdb::unique_ptr<DirectRuleProof> Prove(const DirectIR &, ClientContext &, string &reason) const override {
+	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &, ClientContext &,
+	                                                                string &reason) const override {
 		if (!proves) {
 			reason = "stub_miss: " + name;
 			return nullptr;
 		}
-		return make_uniq<StubProof>();
+		return make_uniq<StubCondition>();
 	}
 	string Summary() const override {
 		return "stub";
 	}
-	DirectRelationalProposal Rewrite(duckdb::unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                                 const DirectRuleProof &) const override {
+	DirectSubstitute Apply(duckdb::unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+	                       const DirectApplicabilityCondition &) const override {
 		auto bindings = source->GetColumnBindings();
 		auto types = source->types;
 		auto valid = [&](const duckdb::vector<ColumnBinding> &input) {
@@ -77,22 +78,22 @@ public:
 			expressions.push_back(DirectColumn(types[i], input[i]));
 		}
 		expressions.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(value)));
-		DirectRelationalProposal proposal;
+		DirectSubstitute substitute;
 		if (check) {
-			proposal.validation_slots.push_back(expressions.size());
+			substitute.validation_slots.push_back(expressions.size());
 			expressions.push_back(std::move(check));
 		}
 		auto projection = make_uniq<LogicalProjection>(index, std::move(expressions));
 		projection->children.push_back(std::move(plan));
 		for (idx_t i = 0; i <= input.size(); i++) {
-			proposal.output_slots.push_back(i);
+			substitute.output_slots.push_back(i);
 		}
 		if (wrong_output_slot) {
-			proposal.output_slots.back() = 0;
+			substitute.output_slots.back() = 0;
 		}
-		proposal.prunable_decisions.push_back(1);
-		proposal.child = std::move(projection);
-		return proposal;
+		substitute.prunable_decisions.push_back(1);
+		substitute.child = std::move(projection);
+		return substitute;
 	}
 
 private:
@@ -105,11 +106,11 @@ private:
 using RuleList = duckdb::vector<duckdb::unique_ptr<DirectSolveRule>>;
 
 void InstallRules(Connection &con, std::function<RuleList()> make_rules) {
-	auto state = make_shared_ptr<DirectRuleOverride>();
+	auto state = make_shared_ptr<DirectRuleTestSeam>();
 	state->make_rules = std::move(make_rules);
 	// Insert keeps an existing entry, so a test that swaps rules removes the old set first.
-	con.context->registered_state->Remove(DIRECT_RULE_OVERRIDE_KEY);
-	con.context->registered_state->Insert(DIRECT_RULE_OVERRIDE_KEY, std::move(state));
+	con.context->registered_state->Remove(DIRECT_RULE_TEST_SEAM_KEY);
+	con.context->registered_state->Insert(DIRECT_RULE_TEST_SEAM_KEY, std::move(state));
 }
 
 //! Three rows; the solver picks only v = 2.
@@ -124,7 +125,7 @@ string ExplainText(Connection &con, const string &sql) {
 
 } // namespace
 
-TEST_CASE("Direct coordinator commits a proved stub rule", "[decidb]") {
+TEST_CASE("Direct rule driver commits a stub rule that applies", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	InstallRules(con, [] {
@@ -138,7 +139,8 @@ TEST_CASE("Direct coordinator commits a proved stub rule", "[decidb]") {
 	REQUIRE(plan.find("STUB_ONE") != string::npos);
 }
 
-TEST_CASE("Direct coordinator falls back to the solver and lists every miss under require", "[decidb]") {
+TEST_CASE("Direct rule driver falls back to the solver and lists why each rule does not apply under require",
+          "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	InstallRules(con, [] {
@@ -161,7 +163,7 @@ TEST_CASE("Direct coordinator falls back to the solver and lists every miss unde
 	REQUIRE(message.find("solver skipped=true") != string::npos);
 }
 
-TEST_CASE("Direct coordinator runs the rule that proves when another misses", "[decidb]") {
+TEST_CASE("Direct rule driver runs the rule that applies when another does not", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	SECTION("the missing rule is registered first") {
@@ -192,7 +194,7 @@ TEST_CASE("Direct coordinator runs the rule that proves when another misses", "[
 	}
 }
 
-TEST_CASE("Direct coordinator treats two rules that prove one query as an internal error", "[decidb]") {
+TEST_CASE("Direct rule driver treats two rules that apply to one query as an internal error", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	SECTION("two proving rules are named") {
@@ -209,7 +211,7 @@ TEST_CASE("Direct coordinator treats two rules that prove one query as an intern
 		REQUIRE(message.find("STUB_SECOND") != string::npos);
 		REQUIRE(message.find("rules must be disjoint") != string::npos);
 	}
-	SECTION("a rule that misses is not named") {
+	SECTION("a rule that does not apply is not named") {
 		InstallRules(con, [] {
 			RuleList rules;
 			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
@@ -241,7 +243,7 @@ TEST_CASE("Direct coordinator treats two rules that prove one query as an intern
 	}
 }
 
-TEST_CASE("Direct coordinator treats a broken rule as an internal error", "[decidb]") {
+TEST_CASE("Direct rule driver treats a broken rule as an internal error", "[decidb]") {
 	SECTION("output slot that does not match the DECIDE output") {
 		DuckDB db(nullptr);
 		Connection con(db);
@@ -314,10 +316,10 @@ TEST_CASE("With both real rules registered each query shape reaches the rule tha
 		REQUIRE(a1_plan.find("S1_CARDINALITY_INTERVAL") == string::npos);
 	}
 	// A query neither proves lists both rules' reasons and leaves the solver to run.
-	auto miss = con.Query("SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 5 MAXIMIZE SUM(score*x)");
-	REQUIRE(miss->HasError());
-	REQUIRE(miss->GetError().find("S1_CARDINALITY_INTERVAL: ") != string::npos);
-	REQUIRE(miss->GetError().find("A1_INDEPENDENT_BOUNDS: ") != string::npos);
+	auto no_rule = con.Query("SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 5 MAXIMIZE SUM(score*x)");
+	REQUIRE(no_rule->HasError());
+	REQUIRE(no_rule->GetError().find("S1_CARDINALITY_INTERVAL: ") != string::npos);
+	REQUIRE(no_rule->GetError().find("A1_INDEPENDENT_BOUNDS: ") != string::npos);
 }
 
 TEST_CASE("The second read happens only for a stored table and a column the rule does not use", "[decidb]") {

@@ -145,16 +145,16 @@ struct DirectIR {
 	string FirstNotProvedReason() const;
 };
 
-//! Only Prove can construct a rule proof. The relational builder receives this
+//! Only CheckCondition can construct an applicability condition. Apply receives this
 //! object, never an unverified shape match.
-struct DirectRuleProof {
-	virtual ~DirectRuleProof() = default;
+struct DirectApplicabilityCondition {
+	virtual ~DirectApplicabilityCondition() = default;
 };
 
 //! A complete relational child plus an explicit map back to DECIDE outputs: the source columns in order, then one
-//! output per decision variable. The coordinator derives the external bindings and which source columns may be
+//! output per decision variable. The rule driver derives the external bindings and which source columns may be
 //! skipped; the rule states where each output lives and whether evaluating each decision can be skipped.
-struct DirectRelationalProposal {
+struct DirectSubstitute {
 	unique_ptr<LogicalOperator> child;
 	//! Child slot of every DECIDE output.
 	vector<idx_t> output_slots;
@@ -166,34 +166,35 @@ struct DirectRelationalProposal {
 	//! the barrier from DirectValidationBarrier. Empty when the plan has nothing to keep live.
 	vector<idx_t> validation_slots;
 	//! True when the plan streams rows through without holding the input, so a column a parent reads costs no memory
-	//! to carry. The coordinator then never reads a stored column a second time for it. Leave false for a plan that
+	//! to carry. The rule driver then never reads a stored column a second time for it. Leave false for a plan that
 	//! holds every row (a barrier, a rank).
 	bool streams_rows = false;
 };
 
-//! The lifecycle the coordinator drives: Prove, then Rewrite. Prove checks the query's shape and then proves what the
-//! plan relies on; a miss leaves the DECIDE node untouched and reports `reason`. Summary is the one line the rule adds
-//! to the EXPLAIN annotation. Rules are disjoint: each requires IR the others forbid, so at most one proves a query,
-//! and the coordinator raises an internal error when two do.
+//! The lifecycle the rule driver runs: CheckCondition, then Apply. CheckCondition checks the query's shape and then
+//! proves what the plan relies on; when the condition does not hold it leaves the DECIDE node untouched and reports
+//! `reason`. Summary is the one line the rule adds to the EXPLAIN annotation. Rules are disjoint: each requires IR
+//! the others forbid, so at most one applies to a query, and the rule driver raises an internal error when two do.
 class DirectSolveRule {
 public:
 	virtual ~DirectSolveRule() = default;
 	virtual const char *Name() const = 0;
-	virtual unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, ClientContext &context, string &reason) const = 0;
+	virtual unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context,
+	                                                                string &reason) const = 0;
 	virtual string Summary() const = 0;
 	//! `source` is the DECIDE input with its types resolved.
-	virtual DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                                         const DirectRuleProof &proof) const = 0;
+	virtual DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+	                               const DirectApplicabilityCondition &condition) const = 0;
 };
 
-//! Every rule the coordinator tries, in registration order (direct_registry.cpp). A new problem class adds one line
+//! Every rule the rule driver tries, in registration order (direct_registry.cpp). A new problem class adds one line
 //! there and changes nothing in policy, fallback, or output mapping.
 vector<unique_ptr<DirectSolveRule>> RegisteredDirectRules();
 
-//! Replaces the registered rules for one connection. Coordinator tests install it to drive the whole path with stub
+//! Replaces the registered rules for one connection. Rule driver tests install it to drive the whole path with stub
 //! rules; nothing else does.
-static constexpr const char *DIRECT_RULE_OVERRIDE_KEY = "decidb_direct_rule_override";
-struct DirectRuleOverride : public ClientContextState {
+static constexpr const char *DIRECT_RULE_TEST_SEAM_KEY = "decidb_direct_rule_test_seam";
+struct DirectRuleTestSeam : public ClientContextState {
 	std::function<vector<unique_ptr<DirectSolveRule>>()> make_rules;
 };
 

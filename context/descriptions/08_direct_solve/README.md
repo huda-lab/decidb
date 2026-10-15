@@ -52,7 +52,7 @@ with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 
 | [O2](rules/o2/) | Balanced one-dimensional Monge transport | Prototype | Not started |
 | [D1](rules/d1/) | Exact keyed decomposition | Exact | Not started |
 
-The shared engine (IR, coordinator, builders, result boundary) is in [rules/_harness/](rules/_harness/).
+The shared engine (IR, rule driver, builders, result boundary) is in [rules/_harness/](rules/_harness/).
 
 ## How these docs are kept
 

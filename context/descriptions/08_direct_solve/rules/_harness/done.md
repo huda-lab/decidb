@@ -9,29 +9,31 @@ check). Design: `../../architecture/`.
 
 ## What it does
 
-- **Setting and fallback.** `decide_direct_solve` is `auto` (default), `off` or `require`. A hit replaces the DECIDE node
-  before solver selection; a miss leaves it for the solver. `DIAGNOSE` and a forced backend use the solver and conflict
-  with `require`. A prepared plan keeps its selection until rebound. `require` also fails when the DECIDE optimizer is off.
+- **Setting and fallback.** `decide_direct_solve` is `auto` (default), `off` or `require`. When a rule applies, its
+  substitute replaces the DECIDE node before solver selection; otherwise the node is left for the solver. `DIAGNOSE` and
+  a forced backend use the solver and conflict with `require`. A prepared plan keeps its selection until rebound.
+  `require` also fails when the DECIDE optimizer is off.
 - **IR.** One read-only front end turns the bound tree into the IR: decision domains and scopes, each constraint with
   reducer, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Unmodeled parts are *not proved* with a
   reason, and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the front end
   does not expect are not-proved parts. No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
-- **Rule contract.** Prove, Rewrite and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that checks the
-  output slots. Rules are listed in `direct_registry.cpp`; tests can replace the list per connection. The coordinator
-  runs Prove for every rule. Rules are disjoint, so at most one proves a query; two proofs raise an internal error naming both rules.
+- **Rule contract.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
+  checks the output slots. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
+  rule driver runs CheckCondition for every rule. Rules are disjoint, so at most one applies to a query; two that apply
+  raise an internal error naming both rules.
 - **Result boundary.** Keeps original bindings and types, serializes, prunes outputs only when skipping is proved safe,
   and always keeps the rule's validation slots live. `DirectValidationBarrier` builds the all-rows read for a plan that
   could stream. Because every row is checked before any is released, rows are held in memory, wide parent-read columns
   included (`../../architecture/result_boundary.md`, "Memory of holding rows").
 - **Second read of a stored table** (`direct_second_read.cpp`). When the DECIDE source is one DuckDB base table under
-  non-volatile projections and filters, the coordinator appends the table's `rowid` to the source and the boundary keeps
+  non-volatile projections and filters, the rule driver appends the table's `rowid` to the source and the boundary keeps
   it as a hidden trailing dependency. Right after unused-column removal, when it is known which outputs a parent reads,
   a late step moves each parent-read output that is a plain stored column the rule's plan only forwards to a second scan
   of the table, joined (inner, on `rowid`) under the boundary, and prunes again so the column leaves the held rows. The
   first read still checks every row. Only a variable-width column moves (a physical type that is not constant-size:
   `VARCHAR`, `BLOB`, nested types); a fixed-width one is cheaper held than read back, so it stays in the single read
   (measurements in `../../architecture/result_boundary.md`). Joins, aggregates, volatile or computed
-  columns, a source that already reads `rowid`, and a rule plan that streams (`DirectRelationalProposal::streams_rows`,
+  columns, a source that already reads `rowid`, and a rule plan that streams (`DirectSubstitute::streams_rows`,
   set by A1's constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
   `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep
   up to date; with that pass disabled the row id is computed and dropped and the plan holds rows as before.
@@ -110,11 +112,12 @@ check). Design: `../../architecture/`.
   `test_null_score_message_is_not_built_when_no_row_is_null`, `test_null_value_error_is_the_solvers_error_word_for_word`
   and `test_invalid_value_error_is_the_solvers_error_without_the_row_position` in `test_direct_user_facing.py` (the last
   two compare the full text of `require` with `off` for S1 and A1). The cost on clean data is not measured.
-- **Decision record.** On a hit, mode, rule and one fixed proof line per rule appear in logical and physical `EXPLAIN` and
-  profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x <= u, each row
-  independent`. There is no guards line and no number from the query. `require` explains a miss; a miss under `auto`
-  prints nothing. Nothing persists a serialized plan across versions, so `DIRECT_RESULT_EXTENSION` is unchanged.
-  `test_serializer_explain_and_model_dump` checks the rule and the proof line in the logical, physical and profiled plans.
+- **Decision record.** When a rule applies, mode, rule and one fixed condition line per rule appear in logical and
+  physical `EXPLAIN` and profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x
+  <= u, each row independent`. There is no guards line and no number from the query. `require` explains why no rule
+  applied; under `auto` nothing is printed. Nothing persists a serialized plan across versions, so
+  `DIRECT_RESULT_EXTENSION` is unchanged. `test_serializer_explain_and_model_dump` checks the rule and the condition
+  line in the logical, physical and profiled plans.
 - **The solver's domain check, once.** The solver raises, before it reads any row, for a decision whose box
   contradicts its built-in domain: an upper bound below the default floor of 0, any upper bound below 0 on a `BOOL` (its
   floor stays 0 whatever lower bound is written), or a `BOOL` lower bound above 1. That test is
@@ -142,9 +145,9 @@ check). Design: `../../architecture/`.
 ## Verified by
 
 - C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts, and a norm tag it does not expect reading
-  as a not-proved part, not an exception), `test_decidb_direct_coordinator.cpp` (stub rules: hit, fallback with every reason,
-  a proving rule beside a missing one, two proving rules as an internal error, mismatched slot, barrier under
-  `LIMIT 1` and `COUNT(*)`).
+  as a not-proved part, not an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
+  with every reason, a rule that applies beside one that does not, two rules applying as an internal error, mismatched
+  slot, barrier under `LIMIT 1` and `COUNT(*)`).
 - Python: `test_direct_rule_contract.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read, serializer, prepared
   plans, near misses, `off`, forced backend, `DIAGNOSE`, an empty source, and constant bounds that contradict the decision's
   built-in domain: under `auto`, `off` and `require` each gives the solver's outcome, or `require` declines) and the
@@ -154,12 +157,13 @@ check). Design: `../../architecture/`.
 
 ## Registering a rule
 
-A rule registers with one line in `direct_registry.cpp` and one in the folder's `CMakeLists.txt`. The coordinator
-(`direct_coordinator.cpp`) and the result boundary (`direct_result_boundary.cpp`) hold no rule-specific code. S1 and A1 are
-materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a barrier
-or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own reading comes
-from the solver's code, not a copy: `DirectIRConstraint::variable_bound` is the predicate `DecideBoundIsAbsorbed`
-(`decide_bound_absorption.cpp`), so a rule can ask which bounds replace a variable's default box.
+A rule registers with one line in `direct_registry.cpp` and one in the folder's `CMakeLists.txt`. The rule driver
+(`direct_rule_driver.cpp`) and the result boundary (`direct_result_boundary.cpp`) hold no rule-specific code. S1 and A1
+are materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a
+barrier or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own
+reading comes from the solver's code, not a copy: `DirectIRConstraint::variable_bound` is the predicate
+`DecideBoundIsAbsorbed` (`decide_bound_absorption.cpp`), so a rule can ask which bounds replace a variable's default
+box.
 
 ## Checked and fine
 
@@ -167,7 +171,7 @@ from the solver's code, not a copy: `DirectIRConstraint::variable_bound` is the 
   bindings. These parent contexts give identical results under `auto`, `off` and `require`: `CREATE TABLE AS`,
   `INSERT ... SELECT`, a view, a window over the result, `UNION ALL` of an S1 and an A1 query, a joined source with a filter
   above, a self-join of results, an empty source and a prepared statement with a parameter.
-- **Test-only hook:** `DirectRuleOverride` lets coordinator tests install stub rules.
+- **Test-only hook:** the test seam `DirectRuleTestSeam` lets rule driver tests install stub rules.
 - **A1 plan size:** each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s,
   3 clauses 0.13 s, 8 clauses with `WHEN` 0.26 s, 3 decisions and 8 clauses 0.29 s.
 

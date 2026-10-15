@@ -12,26 +12,26 @@ Example: `SUM(x) <= 1 MAXIMIZE SUM(score * x)` is "pick the best row". The plan 
 ```text
 bound, canonical LogicalDecide
    -> IR             the front end reads the problem into one form    (ir.md)
-   -> Prove          each rule checks the shape and every detail      (rules.md)
-        miss: the solver path runs as before
-        two proofs: internal error, the rules must be disjoint
-   -> Rewrite        build the relational plan
+   -> CheckCondition each rule checks its applicability condition     (rules.md)
+        no rule applies: the solver path runs as before
+        two rules apply: internal error, the rules must be disjoint
+   -> Apply          build the substitute, a relational plan
    -> result boundary  keep DECIDE's output columns and bindings      (result_boundary.md)
    -> ordinary DuckDB optimizer and execution
 ```
 
 ## Where it hooks in
 
-`DecideOptimizer::Optimize` (`src/optimizer/decide/decide_optimizer.cpp`) calls `TryDirectSolve` before
+`DecideOptimizer::Optimize` (`src/optimizer/decide/decide_optimizer.cpp`) calls `ApplyDirectSolveRules` before
 `OptimizeDecide` marks the node solver-specific. If it returns a replacement, the DECIDE node is gone. If it
 returns the node unchanged, the solver path continues. There is no retry through a solver once a direct plan starts
-executing, so a rule's proof has to be complete before it fires.
+executing, so a rule's condition has to be complete before it applies.
 
 ## Modes
 
-`SET decide_direct_solve = 'auto' | 'off' | 'require'`. `auto` is the default: try direct, fall back silently.
-`off` always uses the solver. `require` raises an error naming the clause that blocked a hit. `DIAGNOSE` queries
-and the test-only `DECIDB_FORCE_SOLVER` always use the solver. Details: `policy.md`.
+`SET decide_direct_solve = 'auto' | 'off' | 'require'`. `auto` is the default: try direct, fall back silently. `off`
+always uses the solver. `require` raises an error naming the clause that kept each rule from applying. `DIAGNOSE`
+queries and the test-only `DECIDB_FORCE_SOLVER` always use the solver. Details: `policy.md`.
 
 ## Principles
 
@@ -71,6 +71,6 @@ error naming both: the overlap is a bug in the rules, and no ordering is safe to
 ## Code
 
 `src/optimizer/decide/direct/`, headers in `src/include/duckdb/optimizer/decide/direct/`. Start with
-`direct_coordinator.cpp` (the flow above), then `s1_rule.cpp` (a rule built on a window) and `a1_rule.cpp` (a rule built
+`direct_rule_driver.cpp` (the flow above), then `s1_rule.cpp` (a rule built on a window) and `a1_rule.cpp` (a rule built
 on a chain of projections and the validation barrier). The rest of the folder is named for what it does: IR,
 builders, result boundary, expression predicates, registry.

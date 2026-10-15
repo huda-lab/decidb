@@ -73,17 +73,17 @@ DirectSolveRule *FindS1Rule(duckdb::vector<duckdb::unique_ptr<DirectSolveRule>> 
 	return FindRuleByName(rules, "S1_CARDINALITY_INTERVAL");
 }
 
-//! Whether `rule` proves the query, and why not when it does not. A miss comes back as false.
+//! Whether `rule` proves the query, and why not when it does not. A rule that does not apply comes back as false.
 bool RuleProves(DirectSolveRule &rule, Connection &con, const string &declaration, const string &constraints,
-                const string &objective, string &reason, string *proof_text = nullptr) {
+                const string &objective, string &reason, string *condition_text = nullptr) {
 	QueryIR query(con, IRQuery(declaration, constraints, objective));
 	reason.clear();
-	auto proof = rule.Prove(query.ir, *con.context, reason);
-	if (!proof) {
+	auto condition = rule.CheckCondition(query.ir, *con.context, reason);
+	if (!condition) {
 		return false;
 	}
-	if (proof_text) {
-		*proof_text = rule.Summary();
+	if (condition_text) {
+		*condition_text = rule.Summary();
 	}
 	return true;
 }
@@ -119,8 +119,8 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
 	string reason;
-	auto proof = s1->Prove(ir, *con.context, reason);
-	REQUIRE(proof != nullptr);
+	auto condition = s1->CheckCondition(ir, *con.context, reason);
+	REQUIRE(condition != nullptr);
 	REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 
 	// Missing provenance must become a not-proved IR node, never an invented source id.
@@ -131,7 +131,7 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(damaged.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
 	REQUIRE(damaged.constraints[0].source_clause_id == DConstants::INVALID_INDEX);
 	reason.clear();
-	REQUIRE(s1->Prove(damaged, *con.context, reason) == nullptr);
+	REQUIRE(s1->CheckCondition(damaged, *con.context, reason) == nullptr);
 	REQUIRE(reason.find("constraint_provenance") != string::npos);
 }
 
@@ -154,13 +154,13 @@ TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]")
 		REQUIRE(ir.constraints_status == DirectAnalysisStatus::PROVED);
 		REQUIRE(ir.constraints.size() == ir.source_clause_count);
 		string reason;
-		auto proof = s1->Prove(ir, *con.context, reason);
-		REQUIRE(proof != nullptr);
+		auto condition = s1->CheckCondition(ir, *con.context, reason);
+		REQUIRE(condition != nullptr);
 		REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 	}
 }
 
-TEST_CASE("S1 proof normalizes finite count bounds", "[decidb]") {
+TEST_CASE("S1 condition normalizes finite count bounds", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
@@ -177,13 +177,13 @@ TEST_CASE("S1 proof normalizes finite count bounds", "[decidb]") {
 		REQUIRE(decide != nullptr);
 		auto ir = DirectIR::Read(*con.context, *decide);
 		string reason;
-		auto proof = s1->Prove(ir, *con.context, reason);
-		REQUIRE(proof != nullptr);
+		auto condition = s1->CheckCondition(ir, *con.context, reason);
+		REQUIRE(condition != nullptr);
 		REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 	}
 }
 
-TEST_CASE("S1 proof rejects an unrepresentable bound and volatile coefficient", "[decidb]") {
+TEST_CASE("S1 condition rejects an unrepresentable bound and volatile coefficient", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
@@ -212,7 +212,7 @@ TEST_CASE("S1 proof rejects an unrepresentable bound and volatile coefficient", 
 		REQUIRE(decide != nullptr);
 		auto ir = DirectIR::Read(*con.context, *decide);
 		string reason;
-		REQUIRE(s1->Prove(ir, *con.context, reason) == nullptr);
+		REQUIRE(s1->CheckCondition(ir, *con.context, reason) == nullptr);
 		INFO(reason);
 		REQUIRE(reason.find(test.reason_prefix) == 0);
 	}
@@ -517,11 +517,12 @@ TEST_CASE("A1 proves independent bounded decisions and names why it declines any
 	auto rules = RegisteredDirectRules();
 	auto *a1 = FindRuleByName(rules, "A1_INDEPENDENT_BOUNDS");
 	REQUIRE(a1 != nullptr);
-	string reason, proof;
+	string reason, condition;
 
 	// What it proves.
-	REQUIRE(RuleProves(*a1, con, "x(REAL)", "x BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(x - w, 2))", reason, &proof));
-	REQUIRE(proof == "min/max SUM(c*x), l <= x <= u, each row independent");
+	REQUIRE(
+	    RuleProves(*a1, con, "x(REAL)", "x BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(x - w, 2))", reason, &condition));
+	REQUIRE(condition == "min/max SUM(c*x), l <= x <= u, each row independent");
 	REQUIRE(RuleProves(*a1, con, "x(INT)", "x <= cap AND x >= 0", "MAXIMIZE SUM(w*x)", reason));
 	REQUIRE(RuleProves(*a1, con, "x(BOOL)", "x <= flag", "MAXIMIZE SUM(w*x)", reason));
 	REQUIRE(RuleProves(*a1, con, "x(REAL), y(INT)", "x <= cap AND y <= 5", "MINIMIZE SUM(x) + SUM(w*y)", reason));

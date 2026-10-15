@@ -48,14 +48,6 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
   and the website. The setting `decide_direct_solve` and serialized names stay.
 
-## P-09 — Rule-framework renames
-
-- **Problem.** Decision P-03 in § Decisions.
-- **Change.** Rename per the glossary: `DirectRuleProof`, `DirectRelationalProposal`, `direct_coordinator.cpp` and
-  `TryDirectSolve`, `DirectRuleOverride` and `DIRECT_RULE_OVERRIDE_KEY`, the `*Rewriter` classes, and "hit"/"miss" in
-  `overview.md`, `rules.md`, `policy.md` and the code comments.
-- **Done when.** None of the retired identifiers appears under `src/` or `test/`; the checks give the baseline counts.
-
 ## P-10 — Validation barrier becomes a pipeline breaker
 
 - **Problem.** "Barrier" is our word for a blocking operator that reads every row before it emits one.
@@ -147,7 +139,7 @@ Owner decisions every task below follows. The names they lead to are in `glossar
   (`S1_CARDINALITY_INTERVAL`, `A1_*`; a user-facing change chosen by the owner) and the tests that assert it. The S1
   and A1 Python test files are renamed in P-18's single oracle re-run, not here. Classes without code are renamed in
   docs only.
-- **Needs.** After P-09 and P-14 (rule-local renames in the same files), before P-15 and P-18.
+- **Needs.** After P-14 (rule-local renames in the same files), before P-15 and P-18.
 - **Done when.** No class is named by its old phrase or by a bare id in a file or folder name; the checks give the
   baseline counts with the new `EXPLAIN` value.
 
@@ -157,6 +149,9 @@ Owner decisions every task below follows. The names they lead to are in `glossar
   use old terms.
 - **Change.** For every retired term in `glossary.md`, grep `src/`, `test/`, `benchmark/decide/`, `context/` and
   `.claude/`, and fix what remains. Leave git history and the frozen paper alone.
+- **Allowed leftovers.** The serializer property name `"proof"` (id 209, `direct_result_boundary.cpp`), because
+  serialized names stay (P-22); the field behind it is `condition`. The test name
+  `test_a1_unused_wide_columns_stay_out_of_the_barrier...`, because an oracle test name is its cache key.
 - **Needs.** Every other task in this file.
 - **Done when.** Each retired term greps to zero outside history; `test/decide/run_direct_matrix.sh` gives the baseline
   counts, and the stamp in the shared-engine `done.md` is renewed.

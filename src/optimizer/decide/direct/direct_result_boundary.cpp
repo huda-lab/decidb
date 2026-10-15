@@ -100,7 +100,7 @@ void LogicalDirectSolveResult::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty(205, "dependencies", expressions);
 	serializer.WriteProperty(206, "mode", record.mode);
 	serializer.WriteProperty(207, "rule", record.rule);
-	serializer.WriteProperty(209, "proof", record.proof);
+	serializer.WriteProperty(209, "proof", record.condition);
 	serializer.WriteProperty(213, "prunable_outputs", prunable_outputs);
 	serializer.WriteProperty(214, "has_rowid_dependency", has_rowid_dependency);
 	serializer.WriteProperty(215, "scan_table_index", scan_table_index);
@@ -116,7 +116,7 @@ unique_ptr<LogicalExtensionOperator> LogicalDirectSolveResult::Read(Deserializer
 	result->expressions = deserializer.ReadProperty<vector<unique_ptr<Expression>>>(205, "dependencies");
 	result->record.mode = deserializer.ReadProperty<string>(206, "mode");
 	result->record.rule = deserializer.ReadProperty<string>(207, "rule");
-	result->record.proof = deserializer.ReadProperty<string>(209, "proof");
+	result->record.condition = deserializer.ReadProperty<string>(209, "proof");
 	result->prunable_outputs = deserializer.ReadProperty<vector<uint8_t>>(213, "prunable_outputs");
 	result->has_rowid_dependency = deserializer.ReadProperty<bool>(214, "has_rowid_dependency");
 	result->scan_table_index = deserializer.ReadProperty<idx_t>(215, "scan_table_index");
@@ -166,49 +166,49 @@ unique_ptr<OperatorExtension> MakeDirectResultExtension() {
 	return make_uniq<DirectResultExtension>();
 }
 
-unique_ptr<LogicalOperator> MapDirectResult(DirectRelationalProposal proposal, vector<ColumnBinding> output_bindings,
+unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
                                             vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
                                             idx_t decide_index, DirectSolveDecisionRecord record,
                                             const DirectSecondRead &second_read) {
-	if (!proposal.child || output_bindings.size() != output_types.size() ||
-	    proposal.output_slots.size() != output_bindings.size() ||
-	    prunable_sources.size() + proposal.prunable_decisions.size() != output_bindings.size()) {
-		throw InternalException("Direct solve rule returned an incomplete result proposal");
+	if (!substitute.child || output_bindings.size() != output_types.size() ||
+	    substitute.output_slots.size() != output_bindings.size() ||
+	    prunable_sources.size() + substitute.prunable_decisions.size() != output_bindings.size()) {
+		throw InternalException("Direct solve rule returned an incomplete result substitute");
 	}
 	auto prunable_outputs = std::move(prunable_sources);
-	prunable_outputs.insert(prunable_outputs.end(), proposal.prunable_decisions.begin(),
-	                        proposal.prunable_decisions.end());
-	proposal.child->ResolveOperatorTypes();
-	auto child_bindings = proposal.child->GetColumnBindings();
-	auto &child_types = proposal.child->types;
+	prunable_outputs.insert(prunable_outputs.end(), substitute.prunable_decisions.begin(),
+	                        substitute.prunable_decisions.end());
+	substitute.child->ResolveOperatorTypes();
+	auto child_bindings = substitute.child->GetColumnBindings();
+	auto &child_types = substitute.child->types;
 	if (child_bindings.size() != child_types.size()) {
 		throw InternalException("Direct solve child bindings and types differ");
 	}
-	for (idx_t i = 0; i < proposal.output_slots.size(); i++) {
-		auto slot = proposal.output_slots[i];
+	for (idx_t i = 0; i < substitute.output_slots.size(); i++) {
+		auto slot = substitute.output_slots[i];
 		if (slot >= child_types.size() || child_types[slot] != output_types[i]) {
 			throw InternalException("Direct solve rule returned a mismatched output slot");
 		}
 	}
-	for (auto slot : proposal.validation_slots) {
+	for (auto slot : substitute.validation_slots) {
 		if (slot >= child_types.size()) {
 			throw InternalException("Direct solve rule lost a required validation slot");
 		}
 	}
 	if (second_read.Enabled() &&
 	    (second_read.rowid_slot >= child_types.size() ||
-	     second_read.stored_columns.size() + proposal.prunable_decisions.size() != output_bindings.size())) {
+	     second_read.stored_columns.size() + substitute.prunable_decisions.size() != output_bindings.size())) {
 		throw InternalException("Direct solve rule lost the source row id");
 	}
 	auto boundary = make_uniq<LogicalDirectSolveResult>(decide_index, std::move(output_bindings),
-	                                                   std::move(output_types), proposal.validation_slots.size(),
-	                                                   std::move(prunable_outputs), std::move(record));
+	                                                    std::move(output_types), substitute.validation_slots.size(),
+	                                                    std::move(prunable_outputs), std::move(record));
 	// The positional map is materialized as one dependency per advertised output.
 	// The required suffix stays live even when all outputs are unused by a parent.
-	for (auto slot : proposal.output_slots) {
+	for (auto slot : substitute.output_slots) {
 		boundary->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
 	}
-	for (auto slot : proposal.validation_slots) {
+	for (auto slot : substitute.validation_slots) {
 		boundary->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
 	}
 	if (second_read.Enabled()) {
@@ -219,7 +219,7 @@ unique_ptr<LogicalOperator> MapDirectResult(DirectRelationalProposal proposal, v
 		boundary->expressions.push_back(
 		    DirectColumn(child_types[second_read.rowid_slot], child_bindings[second_read.rowid_slot]));
 	}
-	boundary->children.push_back(std::move(proposal.child));
+	boundary->children.push_back(std::move(substitute.child));
 	return std::move(boundary);
 }
 

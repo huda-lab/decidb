@@ -18,7 +18,7 @@ enum class DirectSolveMode : uint8_t { OFF, AUTO, REQUIRE };
 struct DirectSolveDecisionRecord {
 	string mode;
 	string rule;
-	string proof;
+	string condition;
 
 	InsertionOrderPreservingMap<string> Render() const;
 };
@@ -26,9 +26,9 @@ struct DirectSolveDecisionRecord {
 DirectSolveMode GetDirectSolveMode(ClientContext &context);
 void RegisterDirectSolve(DBConfig &config);
 
-//! Leaves the original DECIDE node intact on a miss. A hit owns a complete
+//! Leaves the original DECIDE node intact when no rule applies. When one does, it owns a complete
 //! relational replacement with its external bindings and runtime obligations.
-unique_ptr<LogicalOperator> TryDirectSolve(unique_ptr<LogicalOperator> op, Optimizer &optimizer,
-                                           DirectSolveMode mode);
+unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op, Optimizer &optimizer,
+                                                  DirectSolveMode mode);
 
 } // namespace duckdb

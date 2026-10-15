@@ -64,7 +64,7 @@ struct A1Decision {
 	double upper = POSITIVE_INFINITY;
 };
 
-struct A1Proof final : DirectRuleProof {
+struct A1Condition final : DirectApplicabilityCondition {
 	idx_t decide_index = 0;
 	DecideSense sense = DecideSense::FEASIBILITY;
 	vector<A1Decision> decisions;
@@ -77,7 +77,7 @@ struct A1Proof final : DirectRuleProof {
 };
 
 //! No value reads a source column and nothing is conditional: every row sees the same bounds and coefficients.
-bool IsConstantProblem(const A1Proof &proof) {
+bool IsConstantProblem(const A1Condition &condition) {
 	auto constant = [](const Expression &expr) {
 		return expr.IsFoldable();
 	};
@@ -89,15 +89,15 @@ bool IsConstantProblem(const A1Proof &proof) {
 		}
 		return true;
 	};
-	if (proof.objective_when) {
+	if (condition.objective_when) {
 		return false;
 	}
-	for (auto &clause : proof.clauses) {
+	for (auto &clause : condition.clauses) {
 		if (clause.when || !constant(*clause.rhs) || !constant_values(clause.coefficient)) {
 			return false;
 		}
 	}
-	for (auto &part : proof.parts) {
+	for (auto &part : condition.parts) {
 		if (part.filter) {
 			return false;
 		}
@@ -124,7 +124,8 @@ public:
 		return A1_RULE;
 	}
 
-	unique_ptr<DirectRuleProof> Prove(const DirectIR &ir, ClientContext &context, string &reason) const override {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context,
+	                                                        string &reason) const override {
 		if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.decisions.empty() || !ir.entity_scopes.empty() ||
 		    ir.source_status != DirectAnalysisStatus::PROVED) {
 			reason = "variable_shape: expected row-scoped BOOL, INT or REAL decisions";
@@ -195,29 +196,29 @@ public:
 				}
 			}
 		}
-		auto proof = make_uniq<A1Proof>();
-		proof->decide_index = ir.decide_index;
-		proof->sense = ir.objective.sense;
+		auto condition = make_uniq<A1Condition>();
+		condition->decide_index = ir.decide_index;
+		condition->sense = ir.objective.sense;
 		for (auto &decision : ir.decisions) {
 			A1Decision prepared;
 			prepared.name = decision.name;
 			prepared.domain = decision.domain;
 			prepared.output_type = decision.output_type;
-			proof->decisions.push_back(std::move(prepared));
+			condition->decisions.push_back(std::move(prepared));
 		}
-		if (!ProveBounds(ir, context, *proof, reason) || !ProveObjective(ir, context, *proof, reason)) {
+		if (!ProveBounds(ir, context, *condition, reason) || !ProveObjective(ir, context, *condition, reason)) {
 			return nullptr;
 		}
-		proof->constant_problem = IsConstantProblem(*proof);
-		return std::move(proof);
+		condition->constant_problem = IsConstantProblem(*condition);
+		return std::move(condition);
 	}
 
 	string Summary() const override {
 		return "min/max SUM(c*x), l <= x <= u, each row independent";
 	}
 
-	DirectRelationalProposal Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                                 const DirectRuleProof &candidate) const override;
+	DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
 	//! One unfiltered per-row left side: only linear terms, in one decision, and no constant.
@@ -239,32 +240,34 @@ private:
 		return decision < decision_count;
 	}
 
-	bool ProveBounds(const DirectIR &ir, ClientContext &context, A1Proof &proof, string &reason) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, A1Proof &proof, string &reason) const;
+	bool ProveBounds(const DirectIR &ir, ClientContext &context, A1Condition &condition, string &reason) const;
+	bool ProveObjective(const DirectIR &ir, ClientContext &context, A1Condition &condition, string &reason) const;
 };
 
 //! The decision's box before any per-row bound, and the clauses the plan evaluates per row, from the shared reader.
-bool A1BoundedRule::ProveBounds(const DirectIR &ir, ClientContext &context, A1Proof &proof, string &reason) const {
+bool A1BoundedRule::ProveBounds(const DirectIR &ir, ClientContext &context, A1Condition &condition,
+                                string &reason) const {
 	DirectBoundReading reading;
 	if (!DirectReadBounds(ir, context, reading, reason)) {
 		return false;
 	}
-	proof.clauses = std::move(reading.clauses);
-	for (idx_t decision = 0; decision < proof.decisions.size(); decision++) {
-		proof.decisions[decision].lower = reading.boxes[decision].lower;
-		proof.decisions[decision].upper = reading.boxes[decision].upper;
+	condition.clauses = std::move(reading.clauses);
+	for (idx_t decision = 0; decision < condition.decisions.size(); decision++) {
+		condition.decisions[decision].lower = reading.boxes[decision].lower;
+		condition.decisions[decision].upper = reading.boxes[decision].upper;
 	}
 	return true;
 }
 
-bool A1BoundedRule::ProveObjective(const DirectIR &ir, ClientContext &context, A1Proof &proof, string &reason) const {
+bool A1BoundedRule::ProveObjective(const DirectIR &ir, ClientContext &context, A1Condition &condition,
+                                   string &reason) const {
 	auto &objective = ir.objective;
 	if (objective.scope.when) {
 		if (!DirectIsSourceOnlyPredicate(*objective.scope.when, ir.decide_index, ir.source_bindings)) {
 			reason = "objective_scope: WHEN must be a deterministic source-only predicate";
 			return false;
 		}
-		proof.objective_when = objective.scope.when->Copy();
+		condition.objective_when = objective.scope.when->Copy();
 	}
 	idx_t decision_count = ir.decisions.size();
 	for (auto &part : objective.parts) {
@@ -307,11 +310,11 @@ bool A1BoundedRule::ProveObjective(const DirectIR &ir, ClientContext &context, A
 					reason = "objective_shape: the factor on a squared term must be a finite nonzero constant";
 					return false;
 				}
-				if (proof.has_square) {
+				if (condition.has_square) {
 					reason = "objective_shape: expected at most one squared term, as the solver accepts";
 					return false;
 				}
-				proof.has_square = true;
+				condition.has_square = true;
 				bool has_decision = false;
 				for (auto &inner : term.inner) {
 					if (inner.kind == DecideTermKind::LINEAR) {
@@ -345,7 +348,7 @@ bool A1BoundedRule::ProveObjective(const DirectIR &ir, ClientContext &context, A
 			}
 			prepared.terms.push_back(std::move(built));
 		}
-		proof.parts.push_back(std::move(prepared));
+		condition.parts.push_back(std::move(prepared));
 	}
 	return true;
 }
@@ -382,11 +385,11 @@ struct Stage {
 //!   P4 each decision's answer and whether its row is infeasible
 //!   barrier: every row is validated before one is released
 //!   P5 the source columns, the typed answers, and the barrier
-class A1Rewriter {
+class A1PlanBuilder {
 public:
-	A1Rewriter(const A1Proof &proof_p, Optimizer &optimizer_p, LogicalOperator &source)
-	    : proof(proof_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p) {
-		// The coordinator hands the input over with its types resolved.
+	A1PlanBuilder(const A1Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
+	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p) {
+		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
 		source_types = source.types;
 		if (source_bindings.size() != source_types.size()) {
@@ -394,7 +397,7 @@ public:
 		}
 	}
 
-	DirectRelationalProposal Build(unique_ptr<LogicalOperator> source) const {
+	DirectSubstitute Build(unique_ptr<LogicalOperator> source) const {
 		Stage p1(binder.GenerateTableIndex());
 		vector<unique_ptr<Expression>> checks;
 		Raw raw;
@@ -422,17 +425,17 @@ public:
 		ComputeAnswers(p4, box, answers);
 		plan = p4.Finish(std::move(plan));
 
-		DirectRelationalProposal proposal;
-		for (idx_t d = 0; d < proof.decisions.size(); d++) {
-			proposal.prunable_decisions.push_back(1);
+		DirectSubstitute substitute;
+		for (idx_t d = 0; d < condition.decisions.size(); d++) {
+			substitute.prunable_decisions.push_back(1);
 		}
-		for (idx_t i = 0; i < source_bindings.size() + proof.decisions.size(); i++) {
-			proposal.output_slots.push_back(i);
+		for (idx_t i = 0; i < source_bindings.size() + condition.decisions.size(); i++) {
+			substitute.output_slots.push_back(i);
 		}
-		proposal.validation_slots.push_back(source_bindings.size() + proof.decisions.size());
+		substitute.validation_slots.push_back(source_bindings.size() + condition.decisions.size());
 
 		Stage p5(binder.GenerateTableIndex());
-		if (proof.constant_problem) {
+		if (condition.constant_problem) {
 			// Every row sees the same values, so the first row raises whatever the others would, and nothing has to be
 			// held back: the plan streams, and the validation column raises wherever a row is read. An empty source
 			// has no row to raise on and returns no rows. A bound the solver rejects outright (against the variable's
@@ -440,24 +443,24 @@ public:
 			for (idx_t i = 0; i < source_bindings.size(); i++) {
 				p5.Add(DirectColumn(source_types[i], passthrough4[i]));
 			}
-			for (idx_t d = 0; d < proof.decisions.size(); d++) {
+			for (idx_t d = 0; d < condition.decisions.size(); d++) {
 				p5.Add(TypedAnswer(d, answers.value[d]));
 			}
 			p5.Add(ValidAnswers(answers));
-			proposal.child = p5.Finish(std::move(plan));
-			proposal.streams_rows = true;
-			return proposal;
+			substitute.child = p5.Finish(std::move(plan));
+			substitute.streams_rows = true;
+			return substitute;
 		}
 		auto barrier = DirectValidationBarrier(binder, std::move(plan), ValidAnswers(answers));
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			p5.Add(DirectColumn(source_types[i], barrier.input_bindings[i]));
 		}
-		for (idx_t d = 0; d < proof.decisions.size(); d++) {
+		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			p5.Add(TypedAnswer(d, barrier.input_bindings[answers.value[d].column_index]));
 		}
 		p5.Add(DirectColumn(LogicalType::BIGINT, barrier.barrier));
-		proposal.child = p5.Finish(std::move(barrier.plan));
-		return proposal;
+		substitute.child = p5.Finish(std::move(barrier.plan));
+		return substitute;
 	}
 
 private:
@@ -511,7 +514,7 @@ private:
 		ColumnBinding valid_data;
 	};
 
-	const A1Proof &proof;
+	const A1Condition &condition;
 	Optimizer &optimizer;
 	Binder &binder;
 	Calc calc;
@@ -548,7 +551,7 @@ private:
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
 			raw.source.push_back(p1.Add(DirectColumn(source_types[i], source_bindings[i])));
 		}
-		for (auto &clause : proof.clauses) {
+		for (auto &clause : condition.clauses) {
 			DirectBoundColumns columns;
 			columns.coefficient = p1.Add(SumOf(clause.coefficient));
 			columns.rhs = p1.Add(AsDouble(clause.rhs->Copy()));
@@ -566,14 +569,14 @@ private:
 		}
 		bool has_shared_mask = false;
 		ColumnBinding shared_mask;
-		for (auto &part : proof.parts) {
+		for (auto &part : condition.parts) {
 			Raw::PartColumns columns;
-			if (proof.objective_when || part.filter) {
+			if (condition.objective_when || part.filter) {
 				columns.has_mask = true;
 				if (!part.filter && has_shared_mask) {
 					columns.mask = shared_mask;
 				} else {
-					auto base = DirectActiveWhen(proof.objective_when.get());
+					auto base = DirectActiveWhen(condition.objective_when.get());
 					if (part.filter) {
 						base = make_uniq<BoundCaseExpression>(std::move(base), DirectActiveWhen(part.filter.get()),
 						                                      DirectConstantBool(false));
@@ -594,9 +597,9 @@ private:
 	void AddObjectiveValues(Stage &p1, vector<unique_ptr<Expression>> &checks, const A1Part &part,
 	                        Raw::PartColumns &columns) const {
 		// Linear coefficients add up per decision; a constant adds nothing to the answer but must still be valid.
-		vector<unique_ptr<Expression>> linear_sums(proof.decisions.size());
+		vector<unique_ptr<Expression>> linear_sums(condition.decisions.size());
 		// The values each sum is made of, so a NULL in P2's check names the column it came from.
-		vector<vector<DirectSignedValue>> linear_terms(proof.decisions.size());
+		vector<vector<DirectSignedValue>> linear_terms(condition.decisions.size());
 		unique_ptr<Expression> constant_sum;
 		vector<DirectSignedValue> constant_terms;
 		for (auto &term : part.terms) {
@@ -632,7 +635,7 @@ private:
 				columns.squares.push_back(square);
 			}
 		}
-		for (idx_t d = 0; d < proof.decisions.size(); d++) {
+		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			if (!linear_sums[d]) {
 				continue;
 			}
@@ -658,20 +661,20 @@ private:
 	//===------------------------------------------------------------------===//
 
 	void ComputeBounds(Stage &p2, const Raw &raw, vector<unique_ptr<Expression>> &checks, Bounds &bounds) const {
-		for (idx_t j = 0; j < proof.clauses.size(); j++) {
+		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			Ex lower, upper;
-			DirectClauseBounds(calc, proof.clauses[j].comparison,
-			                   DirectIsWholeNumbered(proof.decisions[proof.clauses[j].decision].domain), raw.clauses[j],
-			                   lower, upper);
+			DirectClauseBounds(calc, condition.clauses[j].comparison,
+			                   DirectIsWholeNumbered(condition.decisions[condition.clauses[j].decision].domain),
+			                   raw.clauses[j], lower, upper);
 			bounds.lower.push_back(p2.Add(calc.Out(lower)));
 			bounds.upper.push_back(p2.Add(calc.Out(upper)));
 		}
-		double sense = proof.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
-		for (idx_t d = 0; d < proof.decisions.size(); d++) {
+		double sense = condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
+		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			Ex a_total = calc.Num(0.0);
 			Ex b_total = calc.Num(0.0);
-			for (idx_t p = 0; p < proof.parts.size(); p++) {
-				auto &part = proof.parts[p];
+			for (idx_t p = 0; p < condition.parts.size(); p++) {
+				auto &part = condition.parts[p];
 				auto &columns = raw.parts[p];
 				Ex a_part = calc.Num(0.0);
 				Ex b_part = calc.Num(0.0);
@@ -725,17 +728,17 @@ private:
 	//===------------------------------------------------------------------===//
 
 	void ComputeBox(Stage &p3, const Bounds &bounds, Box &box) const {
-		for (idx_t d = 0; d < proof.decisions.size(); d++) {
+		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			vector<ColumnBinding> clause_lowers, clause_uppers;
-			for (idx_t j = 0; j < proof.clauses.size(); j++) {
-				if (proof.clauses[j].decision == d) {
+			for (idx_t j = 0; j < condition.clauses.size(); j++) {
+				if (condition.clauses[j].decision == d) {
 					clause_lowers.push_back(bounds.lower[j]);
 					clause_uppers.push_back(bounds.upper[j]);
 				}
 			}
 			Ex lower, upper;
-			DirectRowBox(calc, proof.decisions[d].lower, proof.decisions[d].upper, clause_lowers, clause_uppers, lower,
-			             upper);
+			DirectRowBox(calc, condition.decisions[d].lower, condition.decisions[d].upper, clause_lowers, clause_uppers,
+			             lower, upper);
 			box.lower.push_back(p3.Add(calc.Out(lower)));
 			box.upper.push_back(p3.Add(calc.Out(upper)));
 			box.a.push_back(p3.Add(DirectColumn(LogicalType::DOUBLE, bounds.a[d])));
@@ -749,13 +752,13 @@ private:
 	//===------------------------------------------------------------------===//
 
 	void ComputeAnswers(Stage &p4, const Box &box, Answers &answers) const {
-		for (idx_t d = 0; d < proof.decisions.size(); d++) {
+		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			auto lower = calc.Col(LogicalType::DOUBLE, box.lower[d]);
 			auto upper = calc.Col(LogicalType::DOUBLE, box.upper[d]);
 			auto a = calc.Col(LogicalType::DOUBLE, box.a[d]);
 			auto b = calc.Col(LogicalType::DOUBLE, box.b[d]);
 			auto zero = calc.Num(0.0);
-			bool whole = DirectIsWholeNumbered(proof.decisions[d].domain);
+			bool whole = DirectIsWholeNumbered(condition.decisions[d].domain);
 
 			// No row holds when the box is empty; the answer is then never read.
 			auto infeasible = calc.Any({calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, lower, upper),
@@ -818,7 +821,7 @@ private:
 	//! answer cannot hold exactly. Every raw value was checked in P2 and arrives as `valid_data`.
 	unique_ptr<Expression> ValidAnswers(const Answers &answers) const {
 		vector<unique_ptr<Expression>> checks;
-		for (idx_t d = 0; d < proof.decisions.size(); d++) {
+		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			auto value = [&]() {
 				return DirectColumn(LogicalType::DOUBLE, answers.value[d]);
 			};
@@ -833,10 +836,10 @@ private:
 			checks.push_back(make_uniq<BoundCaseExpression>(optimizer.BindScalarFunction("isfinite", value()),
 			                                                DirectConstantBool(true),
 			                                                DirectUnboundedErrorPredicate(optimizer)));
-			if (DirectIsWholeNumbered(proof.decisions[d].domain)) {
+			if (DirectIsWholeNumbered(condition.decisions[d].domain)) {
 				checks.push_back(
 				    make_uniq<BoundCaseExpression>(WithinExactRange(answers.value[d]), DirectConstantBool(true),
-				                                   OutOfRangeError(proof.decisions[d].name, answers.value[d])));
+				                                   OutOfRangeError(condition.decisions[d].name, answers.value[d])));
 			}
 		}
 		unique_ptr<Expression> chain = DirectConstantBool(true);
@@ -851,7 +854,7 @@ private:
 	//! The answer in the decision's own output type. The barrier has already raised for anything that is not finite or
 	//! not exactly representable, so the guard only keeps the cast from raising on its own if that ever changed.
 	unique_ptr<Expression> TypedAnswer(idx_t decision, ColumnBinding value) const {
-		auto &prepared = proof.decisions[decision];
+		auto &prepared = condition.decisions[decision];
 		if (!DirectIsWholeNumbered(prepared.domain)) {
 			return DirectColumn(LogicalType::DOUBLE, value);
 		}
@@ -865,11 +868,11 @@ private:
 	}
 };
 
-DirectRelationalProposal A1BoundedRule::Rewrite(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-                                                const DirectRuleProof &candidate) const {
-	auto &proof = static_cast<const A1Proof &>(candidate);
-	A1Rewriter rewriter(proof, optimizer, *source);
-	return rewriter.Build(std::move(source));
+DirectSubstitute A1BoundedRule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+                                      const DirectApplicabilityCondition &candidate) const {
+	auto &condition = static_cast<const A1Condition &>(candidate);
+	A1PlanBuilder plan_builder(condition, optimizer, *source);
+	return plan_builder.Build(std::move(source));
 }
 
 } // namespace direct_a1

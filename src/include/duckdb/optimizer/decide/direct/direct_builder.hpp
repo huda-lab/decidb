@@ -172,7 +172,8 @@ struct DirectBoundReading {
 };
 
 //! Reads every non-aggregate constraint of `ir` as a bound on one decision (a constraint of the form `a*x
-//! <comparison> value`; the rule's Prove has already checked the shape). A bound the solver folds into the variable
+//! <comparison> value`; the rule's CheckCondition has already checked the shape). A bound the solver folds into the
+//! variable
 //! (`variable_bound`: an unconditional comparison of the bare decision against a constant) replaces the default lower
 //! bound of 0 and tightens the upper one; every other bound is a clause. Returns false with a `reason` when a bound
 //! cannot be proved, or when the folded box contradicts the decision's built-in domain, which the solver reports.

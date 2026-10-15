@@ -133,10 +133,10 @@ def test_serializer_explain_and_model_dump(decidb_cli, fixture, tmp_path):
     physical = _raw(decidb_cli, f"EXPLAIN {fixture.hit}").stdout
     profile = _raw(decidb_cli, f"EXPLAIN ANALYZE {fixture.hit}").stdout
     for plan in (logical, physical, profile):
-        assert "Direct solve rule" in plan and "Direct solve proof" in plan
+        assert "Direct solve rule" in plan and "Direct solve condition" in plan
         # The box wraps long lines, even inside a word, so compare with the spaces removed.
         text = "".join(plan.replace("│", " ").split())
-        assert fixture.rule in text and "".join(fixture.proof.split()) in text, plan
+        assert fixture.rule in text and "".join(fixture.condition.split()) in text, plan
         assert "Direct solve guards" not in plan
 
     # A direct plan builds no solver model, so there is nothing to dump.

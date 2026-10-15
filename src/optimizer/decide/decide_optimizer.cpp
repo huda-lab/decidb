@@ -54,7 +54,7 @@ unique_ptr<LogicalOperator> DecideOptimizer::Optimize(unique_ptr<LogicalOperator
 
 	// If this is a LogicalDecide node, apply DECIDE-specific optimizations
 	if (op->type == LogicalOperatorType::LOGICAL_DECIDE) {
-		op = TryDirectSolve(std::move(op), optimizer, GetDirectSolveMode(optimizer.context));
+		op = ApplyDirectSolveRules(std::move(op), optimizer, GetDirectSolveMode(optimizer.context));
 		if (op->type != LogicalOperatorType::LOGICAL_DECIDE) {
 			return op;
 		}

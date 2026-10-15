@@ -22,11 +22,11 @@ answer, not a slow one, so the guard is the test suite: run it with direct on an
 
 ## EXPLAIN and profiling
 
-A hit carries one **decision record**: mode, rule, and one fixed `proof` line per rule that names the problem class
-(S1: `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`; A1: `min/max SUM(c*x), l <= x <= u, each row independent`). It
-holds no number from the query and no list of runtime checks. It shows in logical and physical `EXPLAIN` and
-in profiling. A miss under `auto` prints nothing, so `EXPLAIN` of an ordinary DECIDE query is exactly what the solver
-path prints. To learn why a query missed, set `require`.
+When a rule applies, the plan carries one **decision record**: mode, rule, and one fixed `condition` line per rule that
+names the problem class (S1: `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`; A1: `min/max SUM(c*x), l <= x <= u,
+each row independent`). It holds no number from the query and no list of runtime checks. It shows in logical and
+physical `EXPLAIN` and in profiling. When no rule applies under `auto`, nothing is printed, so `EXPLAIN` of an ordinary
+DECIDE query is exactly what the solver path prints. To learn why no rule applied, set `require`.
 
 ## What a user can notice
 
@@ -48,6 +48,6 @@ path prints. To learn why a query missed, set `require`.
 
 ## Test controls
 
-`DECIDB_TEST_DIRECT_SOLVE=off` runs the whole suite on the solver path. Tests that assert a hit pin `require`; the
-solver side of a differential test pins `off`; benchmarks pin one or the other so a measurement never silently uses the
-other path.
+`DECIDB_TEST_DIRECT_SOLVE=off` runs the whole suite on the solver path. Tests that assert a rule applies pin `require`;
+the solver side of a differential test pins `off`; benchmarks pin one or the other so a measurement never silently uses
+the other path.

@@ -51,7 +51,7 @@ expression that raises. Every input row is read before one is released, so a lat
 
 ## What it does not admit (falls back to the solver)
 
-A miss never changes the answer: the query runs on the solver and `require` names the clause.
+A query A1 does not apply to keeps its answer: it runs on the solver and `require` names the clause.
 
 | Shape | Why |
 |---|---|
@@ -105,7 +105,7 @@ parent reads does, so reading a wide column back costs memory in proportion to t
 | `test_direct_user_facing.py` | A 200-byte unused payload column stays out of the scan and the barrier; a computed column that can raise is not pruned; a NaN in a constraint coefficient says "constraint coefficient" and in the objective "objective coefficient"; every NULL and NaN error reads as the solver's, compared in full |
 | `test_error_infeasible.py` | The solver's rejection of a bound against the built-in domain quotes the clause as typed for a non-negative decision (`x <= -1 cannot hold ... non-negative`, strict `x < 0`); for a `BOOL` (`x >= 2`, `x > 1`, `x > 1.5`) it is the usual infeasible error |
 | Five tests pinned to the solver path | `test_canonicalize_idempotence.py` (three cases) and `test_implied_bounds.py` (two cases) inspect the solver's model dump. Direct solve builds no model, so they run with `DECIDB_TEST_DIRECT_SOLVE=off` on purpose. |
-| C++ `[decidb]` | `variable_bound` over 19 spellings, the IR for every objective spelling, A1's proof and each decline reason, S1 and A1 never both proving, and the coordinator choosing the right real rule for each shape |
+| C++ `[decidb]` | `variable_bound` over 19 spellings, the IR for every objective spelling, A1's applicability condition and each decline reason, S1 and A1 never both applying, and the rule driver choosing the right real rule for each shape |
 
 ## Performance
 

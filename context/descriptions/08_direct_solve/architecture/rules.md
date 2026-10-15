@@ -15,18 +15,20 @@ for production use. If any required condition cannot be proved, the query stays 
 
 ## Lifecycle
 
-**Prove → Rewrite**, then the engine maps the result onto DECIDE's output slots. A rule also has a `Summary()`, the
-fixed line `EXPLAIN` shows for it.
+**CheckCondition → Apply**, then the engine maps the substitute onto DECIDE's output slots. A rule also has a
+`Summary()`, the fixed line `EXPLAIN` shows for it.
 
-- **Prove** checks the shape first, then certifies every constraint, objective part, decision, runtime value check
-  and output. It returns the proof `Rewrite` reads, or a reason. A not-proved IR node is a miss, not an error. Shape
-  and certification are one step because a DECIDE query offers each rule a single node, so a separate cheap pattern
-  step (as in Cascades, where one pattern is tried on many subtrees) saves nothing.
-- **Rules are disjoint.** The coordinator runs Prove for every rule, and the rules are told apart by the
-  IR they require: S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint. At most one rule proves a
-  query. If two or more do, the coordinator raises an internal error naming them, because the overlap is a bug in the
-  rules and no ordering is safe to pick. The coordinator test covers this with stub rules.
-- **Rewrite** builds the relational plan. An unexpected failure here is an internal error, never a silent fallback.
+- **CheckCondition** checks the shape first, then certifies every constraint, objective part, decision, runtime value
+  check and output. It returns the applicability condition `Apply` reads, or a reason. A not-proved IR node means the
+  rule does not apply; it is not an error. Shape and certification are one step because a DECIDE query offers each
+  rule a single node, so a separate cheap pattern step (as in Cascades, where one pattern is tried on many subtrees)
+  saves nothing.
+- **Rules are disjoint.** The rule driver runs CheckCondition for every rule, and the rules are told apart by the
+  IR they require: S1 needs a `SUM(x)` count bound, A1 forbids any aggregate constraint. At most one rule applies to a
+  query. If two or more do, the rule driver raises an internal error naming them, because the overlap is a bug in the
+  rules and no ordering is safe to pick. The rule driver test covers this with stub rules.
+- **Apply** builds the substitute, a relational plan. An unexpected failure here is an internal error, never a silent
+  fallback.
 
 ## Adding a rule
 
@@ -90,20 +92,21 @@ test, adding one is a task in that rule's `todo.md`.
    schema and rows, the all-rows read, prepared-plan selection, serializer round trip, `EXPLAIN` and profiling,
    `require` reasons, `off`, a forced backend, `DIAGNOSE`, and near misses. Each near miss must also answer under `auto`
    exactly as it does under `off`.
-2. **Three-way table** (`test_direct_<rule>.py`; S1's is `test_direct_three_way.py`, A1's is `test_direct_a1.py`): the rule
-   adds its own file with its own case table, a function that builds the oracle model from the rows, and a function
+2. **Three-way table** (`test_direct_<rule>.py`; S1's is `test_direct_three_way.py`, A1's is `test_direct_a1.py`): the
+   rule adds its own file with its own case table, a function that builds the oracle model from the rows, and a function
    that checks one DeciDB assignment against its constraints. The shared scaffold is `_direct_oracle_common.py`: the
    fixture that lifts a forced backend, `run` and `outcome`, the `VALUES` list builder, and `agree_with_oracle`, which
-   runs the oracle model, the solver path (`off`) and the direct path (`require`, so a miss fails) and compares them.
-   Keep test names stable, because the oracle cache is keyed on the test node id and the test function's source. All
-   three must agree: both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say
-   infeasible. Inputs with no oracle model (bad data) go in the error table, where
-   `off` and `require` must both fail (the choice among several errors need not match; a NULL or NaN message must, apart from ` at row N`), and values
-   the oracle cannot hold (infinities, 2^53) go in the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
+   runs the oracle model, the solver path (`off`) and the direct path (`require`, so a query the rule does not apply to
+   fails) and compares them. Keep test names stable, because the oracle cache is keyed on the test node id and the test
+   function's source. All three must agree: both DeciDB runs must satisfy every constraint and reach the oracle's
+   objective, or all must say infeasible. Inputs with no oracle model (bad data) go in the error table, where `off` and
+   `require` must both fail (the choice among several errors need not match; a NULL or NaN message must, apart from ` at
+   row N`), and values the oracle cannot hold (infinities, 2^53) go in the boundary table, where direct is compared with
+   the solver only. Add the shape inside parent queries too.
 3. **Differential fuzz** (`test_direct_fuzz.py`, comparator in `_direct_differential.py`): supply a seeded query
    generator. Direct (`require`) and solver (`off`) must succeed or fail together (any error counts) and agree on
    row count and primary objective. It finds interactions between shapes that no table lists.
-4. **C++ cases** (`test/common/`) for the rule's proof and for the IR it relies on.
+4. **C++ cases** (`test/common/`) for the rule's applicability condition and for the IR it relies on.
 
 Run after any change: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` (the solver path alone),
 `DECIDB_VERIFY_SERIALIZER=1 make decide-test`, `DECIDB_FORCE_SOLVER=highs make decide-test`, and
