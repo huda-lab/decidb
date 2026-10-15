@@ -4,7 +4,7 @@
 #include <functional>
 
 #include "duckdb/main/client_context.hpp"
-#include "duckdb/optimizer/decide/direct/direct_builder.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/optimizer/optimizer.hpp"

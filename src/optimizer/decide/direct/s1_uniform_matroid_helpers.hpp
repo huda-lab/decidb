@@ -11,21 +11,20 @@ namespace duckdb {
 class Binder;
 class Optimizer;
 
-//! Plan-building helpers that only S1 uses. A helper moves to `direct_builder.hpp` when a second rule needs it
+//! Plan-building helpers that only S1 uses. A helper moves to `direct_plan_factory.hpp` when a second rule needs it
 //! (`architecture/rules.md`).
 namespace direct_s1 {
 
 //! True when any condition is true (false for an empty list), as nested CASE expressions.
-unique_ptr<Expression> DirectAnyCondition(const vector<unique_ptr<Expression>> &conditions);
+unique_ptr<Expression> AnyCondition(const vector<unique_ptr<Expression>> &conditions);
 
 //! A one-argument aggregate (MIN, MAX or SUM, by function name) of the value over the whole partition.
-unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, const char *name,
-                                                       unique_ptr<Expression> value);
+unique_ptr<BoundWindowExpression> WindowExtremum(Optimizer &optimizer, const char *name, unique_ptr<Expression> value);
 
 //! The per-row state of a scoped aggregate, projected once over the input: every input column, then whether the
 //! row is eligible (its WHEN holds and no PER key is NULL), then any per-row columns the rule adds. With no scope
 //! and no extra columns the input passes through unchanged.
-struct DirectScopeState {
+struct ScopeState {
 	unique_ptr<LogicalOperator> plan;
 	//! Where each input column lives in `plan`, in input order.
 	vector<ColumnBinding> input_bindings;
@@ -39,13 +38,12 @@ struct DirectScopeState {
 
 //! A WHEN false or NULL row does not join the clause, and neither does a row with a NULL PER key. `key_slots` index
 //! the input's columns; `extra` are expressions over the input.
-DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
-                                    const Expression *when, const vector<idx_t> &key_slots,
-                                    vector<unique_ptr<Expression>> extra);
+ScopeState ProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped, const Expression *when,
+                        const vector<idx_t> &key_slots, vector<unique_ptr<Expression>> extra);
 
 //! One clause's data-valued bound, reduced per group: an upper bound takes the group MIN, a lower bound the group
 //! MAX, and an equality both, which must agree.
-struct DirectBoundSpec {
+struct BoundSpec {
 	ExpressionType comparison;
 	//! The bound over the plan's columns, in its own SQL type.
 	unique_ptr<Expression> value;
@@ -65,7 +63,7 @@ struct DirectBoundSpec {
 };
 
 //! One clause's data-valued expression that must not be NULL on any row, nor NaN when `reject_nan` is set.
-struct DirectNotNullSpec {
+struct NotNullSpec {
 	unique_ptr<Expression> value;
 	//! The error a NULL raises, and a NaN too when `nan_message` is empty.
 	string message;
@@ -75,7 +73,7 @@ struct DirectNotNullSpec {
 };
 
 //! Where the validated group extrema live.
-struct DirectBoundValidation {
+struct BoundValidation {
 	unique_ptr<LogicalOperator> plan;
 	idx_t window_index = DConstants::INVALID_INDEX;
 	//! Per bound, the window slot of its group MIN or MAX, or INVALID_INDEX when its comparison needs none.
@@ -87,10 +85,9 @@ struct DirectBoundValidation {
 //! row, including rows the clause does not apply to; and equality bounds must not vary within a group. Which failing
 //! check is reported is not specified. `eligible` is set for a scoped clause, and the extrema are partitioned by it
 //! and by `keys`. Nothing is added when there is nothing to validate.
-DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
-                                           vector<DirectBoundSpec> &bounds, vector<DirectNotNullSpec> &not_null,
-                                           const ColumnBinding *eligible, const vector<ColumnBinding> &keys,
-                                           const vector<LogicalType> &key_types);
+BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input, vector<BoundSpec> &bounds,
+                               vector<NotNullSpec> &not_null, const ColumnBinding *eligible,
+                               const vector<ColumnBinding> &keys, const vector<LogicalType> &key_types);
 
 } // namespace direct_s1
 } // namespace duckdb

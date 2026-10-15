@@ -7,7 +7,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
-#include "duckdb/optimizer/decide/direct/direct_builder.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"

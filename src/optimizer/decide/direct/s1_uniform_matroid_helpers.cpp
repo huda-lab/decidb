@@ -1,7 +1,7 @@
-#include "s1_support.hpp"
+#include "s1_uniform_matroid_helpers.hpp"
 
 #include "duckdb/function/aggregate/distributive_functions.hpp"
-#include "duckdb/optimizer/decide/direct/direct_builder.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
@@ -17,7 +17,7 @@
 namespace duckdb {
 namespace direct_s1 {
 
-unique_ptr<Expression> DirectAnyCondition(const vector<unique_ptr<Expression>> &conditions) {
+unique_ptr<Expression> AnyCondition(const vector<unique_ptr<Expression>> &conditions) {
 	unique_ptr<Expression> result = DirectConstantBool(false);
 	for (auto &condition : conditions) {
 		result = make_uniq<BoundCaseExpression>(condition->Copy(), DirectConstantBool(true), std::move(result));
@@ -25,8 +25,7 @@ unique_ptr<Expression> DirectAnyCondition(const vector<unique_ptr<Expression>> &
 	return result;
 }
 
-unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, const char *name,
-                                                       unique_ptr<Expression> value) {
+unique_ptr<BoundWindowExpression> WindowExtremum(Optimizer &optimizer, const char *name, unique_ptr<Expression> value) {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(value));
 	auto bound = optimizer.BindAggregateFunction(name, std::move(children));
@@ -40,13 +39,12 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 	return result;
 }
 
-DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
-                                    const Expression *when, const vector<idx_t> &key_slots,
-                                    vector<unique_ptr<Expression>> extra) {
+ScopeState ProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped, const Expression *when,
+                        const vector<idx_t> &key_slots, vector<unique_ptr<Expression>> extra) {
 	input->ResolveOperatorTypes();
 	auto bindings = input->GetColumnBindings();
 	auto &types = input->types;
-	DirectScopeState state;
+	ScopeState state;
 	state.input_bindings = bindings;
 	if (!scoped && extra.empty()) {
 		state.plan = std::move(input);
@@ -80,11 +78,10 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 	return state;
 }
 
-DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
-                                           vector<DirectBoundSpec> &bounds, vector<DirectNotNullSpec> &not_null,
-                                           const ColumnBinding *eligible, const vector<ColumnBinding> &keys,
-                                           const vector<LogicalType> &key_types) {
-	DirectBoundValidation result;
+BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input, vector<BoundSpec> &bounds,
+                               vector<NotNullSpec> &not_null, const ColumnBinding *eligible,
+                               const vector<ColumnBinding> &keys, const vector<LogicalType> &key_types) {
+	BoundValidation result;
 	result.min_slots.assign(bounds.size(), DConstants::INVALID_INDEX);
 	result.max_slots.assign(bounds.size(), DConstants::INVALID_INDEX);
 	if (bounds.empty() && not_null.empty()) {
@@ -126,7 +123,7 @@ DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<Logi
 				    make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, *eligible), std::move(reduced),
 				                                   make_uniq<BoundConstantExpression>(Value(LogicalType::DOUBLE)));
 			}
-			auto extremum = DirectWindowExtremum(optimizer, name, std::move(reduced));
+			auto extremum = WindowExtremum(optimizer, name, std::move(reduced));
 			if (masked) {
 				extremum->partitions.push_back(DirectColumn(LogicalType::BOOLEAN, *eligible));
 			}

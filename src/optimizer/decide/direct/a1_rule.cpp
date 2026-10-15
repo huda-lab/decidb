@@ -8,7 +8,7 @@
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/optimizer/decide/direct/direct_builder.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -31,7 +31,7 @@ constexpr const char *A1_RULE = "A1_INDEPENDENT_BOUNDS";
 constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
 constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 
-struct A1Term {
+struct Term {
 	enum class Kind : uint8_t { LINEAR, CONSTANT, SQUARE };
 	Kind kind = Kind::LINEAR;
 	idx_t decision = 0;
@@ -44,16 +44,16 @@ struct A1Term {
 	vector<DirectSignedValue> inner_constant;
 };
 
-struct A1Part {
+struct Part {
 	int sign = 1;
 	bool scaled = false;
 	double scale = 1.0;
 	bool divides = false;
 	unique_ptr<Expression> filter;
-	vector<A1Term> terms;
+	vector<Term> terms;
 };
 
-struct A1Decision {
+struct Decision {
 	//! The declared name, which the whole-number range error quotes.
 	string name;
 	DirectDomain domain = DirectDomain::REAL;
@@ -64,20 +64,20 @@ struct A1Decision {
 	double upper = POSITIVE_INFINITY;
 };
 
-struct A1Condition final : DirectApplicabilityCondition {
+struct Condition final : DirectApplicabilityCondition {
 	idx_t decide_index = 0;
 	DecideSense sense = DecideSense::FEASIBILITY;
-	vector<A1Decision> decisions;
+	vector<Decision> decisions;
 	vector<DirectBoundClause> clauses;
 	unique_ptr<Expression> objective_when;
-	vector<A1Part> parts;
+	vector<Part> parts;
 	bool has_square = false;
 	//! Every value is a constant and nothing is conditional, so a check that fails on one row fails on all of them.
 	bool constant_problem = false;
 };
 
 //! No value reads a source column and nothing is conditional: every row sees the same bounds and coefficients.
-bool IsConstantProblem(const A1Condition &condition) {
+bool IsConstantProblem(const Condition &condition) {
 	auto constant = [](const Expression &expr) {
 		return expr.IsFoldable();
 	};
@@ -102,7 +102,7 @@ bool IsConstantProblem(const A1Condition &condition) {
 			return false;
 		}
 		for (auto &term : part.terms) {
-			if (term.kind == A1Term::Kind::SQUARE) {
+			if (term.kind == Term::Kind::SQUARE) {
 				if (!constant_values(term.inner_linear) || !constant_values(term.inner_constant)) {
 					return false;
 				}
@@ -196,11 +196,11 @@ public:
 				}
 			}
 		}
-		auto condition = make_uniq<A1Condition>();
+		auto condition = make_uniq<Condition>();
 		condition->decide_index = ir.decide_index;
 		condition->sense = ir.objective.sense;
 		for (auto &decision : ir.decisions) {
-			A1Decision prepared;
+			Decision prepared;
 			prepared.name = decision.name;
 			prepared.domain = decision.domain;
 			prepared.output_type = decision.output_type;
@@ -240,12 +240,12 @@ private:
 		return decision < decision_count;
 	}
 
-	bool ProveBounds(const DirectIR &ir, ClientContext &context, A1Condition &condition, string &reason) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, A1Condition &condition, string &reason) const;
+	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const;
+	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const;
 };
 
 //! The decision's box before any per-row bound, and the clauses the plan evaluates per row, from the shared reader.
-bool A1BoundedRule::ProveBounds(const DirectIR &ir, ClientContext &context, A1Condition &condition,
+bool A1BoundedRule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition,
                                 string &reason) const {
 	DirectBoundReading reading;
 	if (!DirectReadBounds(ir, context, reading, reason)) {
@@ -259,7 +259,7 @@ bool A1BoundedRule::ProveBounds(const DirectIR &ir, ClientContext &context, A1Co
 	return true;
 }
 
-bool A1BoundedRule::ProveObjective(const DirectIR &ir, ClientContext &context, A1Condition &condition,
+bool A1BoundedRule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition,
                                    string &reason) const {
 	auto &objective = ir.objective;
 	if (objective.scope.when) {
@@ -271,7 +271,7 @@ bool A1BoundedRule::ProveObjective(const DirectIR &ir, ClientContext &context, A
 	}
 	idx_t decision_count = ir.decisions.size();
 	for (auto &part : objective.parts) {
-		A1Part prepared;
+		Part prepared;
 		prepared.sign = part.sign;
 		prepared.scaled = part.scale != nullptr;
 		if (!DirectPartScale(context, part, prepared.scale)) {
@@ -287,10 +287,10 @@ bool A1BoundedRule::ProveObjective(const DirectIR &ir, ClientContext &context, A
 			prepared.filter = part.filter->Copy();
 		}
 		for (auto &term : part.terms) {
-			A1Term built;
+			Term built;
 			built.sign = term.sign;
 			if (term.kind == DecideTermKind::LINEAR || term.kind == DecideTermKind::CONSTANT) {
-				built.kind = term.kind == DecideTermKind::LINEAR ? A1Term::Kind::LINEAR : A1Term::Kind::CONSTANT;
+				built.kind = term.kind == DecideTermKind::LINEAR ? Term::Kind::LINEAR : Term::Kind::CONSTANT;
 				if (term.kind == DecideTermKind::LINEAR) {
 					if (term.var_a >= decision_count) {
 						reason = "objective_shape: expected a coefficient times one decision";
@@ -304,7 +304,7 @@ bool A1BoundedRule::ProveObjective(const DirectIR &ir, ClientContext &context, A
 				}
 				built.value = term.coefficient->Copy();
 			} else {
-				built.kind = A1Term::Kind::SQUARE;
+				built.kind = Term::Kind::SQUARE;
 				built.square_scale = term.square_scale;
 				if (!std::isfinite(term.square_scale) || term.square_scale == 0.0) {
 					reason = "objective_shape: the factor on a squared term must be a finite nonzero constant";
@@ -385,9 +385,9 @@ struct Stage {
 //!   P4 each decision's answer and whether its row is infeasible
 //!   breaker: every row is validated before one is released
 //!   P5 the source columns, the typed answers, and the breaker
-class A1PlanBuilder {
+class PlanBuilder {
 public:
-	A1PlanBuilder(const A1Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
+	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p) {
 		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
@@ -514,10 +514,10 @@ private:
 		ColumnBinding valid_data;
 	};
 
-	const A1Condition &condition;
+	const Condition &condition;
 	Optimizer &optimizer;
 	Binder &binder;
-	Calc calc;
+	ExpressionBuilder calc;
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
 
@@ -594,7 +594,7 @@ private:
 		}
 	}
 
-	void AddObjectiveValues(Stage &p1, vector<unique_ptr<Expression>> &checks, const A1Part &part,
+	void AddObjectiveValues(Stage &p1, vector<unique_ptr<Expression>> &checks, const Part &part,
 	                        Raw::PartColumns &columns) const {
 		// Linear coefficients add up per decision; a constant adds nothing to the answer but must still be valid.
 		vector<unique_ptr<Expression>> linear_sums(condition.decisions.size());
@@ -603,12 +603,12 @@ private:
 		unique_ptr<Expression> constant_sum;
 		vector<DirectSignedValue> constant_terms;
 		for (auto &term : part.terms) {
-			if (term.kind == A1Term::Kind::LINEAR) {
+			if (term.kind == Term::Kind::LINEAR) {
 				auto value = DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false);
 				auto &sum = linear_sums[term.decision];
 				sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value)) : std::move(value);
 				linear_terms[term.decision].push_back({term.sign, term.value->Copy()});
-			} else if (term.kind == A1Term::Kind::CONSTANT) {
+			} else if (term.kind == Term::Kind::CONSTANT) {
 				auto value = DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false);
 				constant_sum = constant_sum
 				                   ? optimizer.BindScalarFunction("+", std::move(constant_sum), std::move(value))
@@ -662,7 +662,7 @@ private:
 
 	void ComputeBounds(Stage &p2, const Raw &raw, vector<unique_ptr<Expression>> &checks, Bounds &bounds) const {
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
-			Ex lower, upper;
+			ExprPtr lower, upper;
 			DirectClauseBounds(calc, condition.clauses[j].comparison,
 			                   DirectIsWholeNumbered(condition.decisions[condition.clauses[j].decision].domain),
 			                   raw.clauses[j], lower, upper);
@@ -671,13 +671,13 @@ private:
 		}
 		double sense = condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
-			Ex a_total = calc.Num(0.0);
-			Ex b_total = calc.Num(0.0);
+			ExprPtr a_total = calc.Num(0.0);
+			ExprPtr b_total = calc.Num(0.0);
 			for (idx_t p = 0; p < condition.parts.size(); p++) {
 				auto &part = condition.parts[p];
 				auto &columns = raw.parts[p];
-				Ex a_part = calc.Num(0.0);
-				Ex b_part = calc.Num(0.0);
+				ExprPtr a_part = calc.Num(0.0);
+				ExprPtr b_part = calc.Num(0.0);
 				bool touched = false;
 				for (idx_t i = 0; i < columns.linear.size(); i++) {
 					if (columns.linear_decision[i] == d) {
@@ -736,7 +736,7 @@ private:
 					clause_uppers.push_back(bounds.upper[j]);
 				}
 			}
-			Ex lower, upper;
+			ExprPtr lower, upper;
 			DirectRowBox(calc, condition.decisions[d].lower, condition.decisions[d].upper, clause_lowers, clause_uppers,
 			             lower, upper);
 			box.lower.push_back(p3.Add(calc.Out(lower)));
@@ -767,8 +767,8 @@ private:
 
 			// Convex: the turning point, clamped into the box (for whole numbers, the first integer whose next step
 			// no longer improves, which keeps the smaller one on a tie).
-			Ex turning = whole ? calc.Fn("ceil", calc.Div(calc.Sub(calc.Neg(b), a), calc.Mul(calc.Num(2.0), a)))
-			                   : calc.Div(calc.Neg(b), calc.Mul(calc.Num(2.0), a));
+			ExprPtr turning = whole ? calc.Fn("ceil", calc.Div(calc.Sub(calc.Neg(b), a), calc.Mul(calc.Num(2.0), a)))
+			                        : calc.Div(calc.Neg(b), calc.Mul(calc.Num(2.0), a));
 			auto convex = calc.Min({calc.Max({turning, lower}), upper});
 			// Concave: the better endpoint, from the sign of f(upper) - f(lower) = (upper - lower) * s.
 			auto s = calc.Add(calc.Mul(a, calc.Add(upper, lower)), b);
@@ -870,8 +870,8 @@ private:
 
 DirectSubstitute A1BoundedRule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
                                       const DirectApplicabilityCondition &candidate) const {
-	auto &condition = static_cast<const A1Condition &>(candidate);
-	A1PlanBuilder plan_builder(condition, optimizer, *source);
+	auto &condition = static_cast<const Condition &>(candidate);
+	PlanBuilder plan_builder(condition, optimizer, *source);
 	return plan_builder.Build(std::move(source));
 }
 

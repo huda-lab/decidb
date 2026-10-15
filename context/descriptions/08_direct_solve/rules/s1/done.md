@@ -1,10 +1,11 @@
 # S1 (top-k and cardinality intervals) — what works today
 
-Verified on 2026-10-13 on top of `161ba4dbf0`: `make decide-test` (3,346 passed, also with `DECIDB_TEST_DIRECT_SOLVE=off`
-and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,345 passed, 1 unrelated failure that
-needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,319 assertions in 46 cases). `test/decide/run_direct_matrix.sh`
-renews these numbers in one command (it prints one line per check).
-Code: `src/optimizer/decide/direct/s1_rule.cpp`, with the helpers only S1 uses in `s1_support.{hpp,cpp}`. Class definition: [definition.md](definition.md).
+Verified on 2026-10-13 on top of `161ba4dbf0`: `make decide-test` (3,346 passed, also with
+`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,345
+passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,319 assertions in 46
+cases). `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check). Code:
+`src/optimizer/decide/direct/s1_rule.cpp`, with the helpers only S1 uses in `s1_uniform_matroid_helpers.{hpp,cpp}`.
+Class definition: [definition.md](definition.md).
 
 ## What it admits
 

@@ -9,7 +9,7 @@ is the full definition with its § Admitted class.
 - **Problem.** `DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND available AND SUM(w*amount) <= B MAXIMIZE
   SUM(v*amount)` runs on the solver.
 - **Change.** `r1_rule.cpp`, registered in `direct_registry.cpp`. One row-scoped `REAL` decision; per-row ranges from
-  the shared reader (`DirectReadBounds`, `DirectClauseBounds` and `DirectRowBox` in `direct_builder.cpp`; the shape
+  the shared reader (`DirectReadBounds`, `DirectClauseBounds` and `DirectRowBox` in `direct_plan_factory.cpp`; the shape
   check that a bound reads one decision, `ReadsOneDecision`, is still A1's own), positive lower bounds included (the baseline is taken first); one `SUM(w*x) <= B` with a constant or foldable
   `B`; a linear objective (`MAXIMIZE`, `MINIMIZE` or none). A weight of any sign, read per row
   (`definition.md` § Admitted class): one price per unit of budget, each row at its upper bound when its value beats price × weight, else at

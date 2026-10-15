@@ -1,5 +1,5 @@
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
-#include "duckdb/optimizer/decide/direct/direct_builder.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 
 #include <algorithm>
@@ -167,66 +167,66 @@ bool DirectIsUpperBound(ExpressionType comparison) {
 	       comparison == ExpressionType::COMPARE_EQUAL;
 }
 
-Calc::Calc(Optimizer &optimizer_p) : optimizer(optimizer_p) {
+ExpressionBuilder::ExpressionBuilder(Optimizer &optimizer_p) : optimizer(optimizer_p) {
 }
 
-Ex Calc::Wrap(unique_ptr<Expression> expr) const {
-	return Ex(expr.release());
+ExprPtr ExpressionBuilder::Wrap(unique_ptr<Expression> expr) const {
+	return ExprPtr(expr.release());
 }
-unique_ptr<Expression> Calc::Out(const Ex &expr) const {
+unique_ptr<Expression> ExpressionBuilder::Out(const ExprPtr &expr) const {
 	return expr->Copy();
 }
-Ex Calc::Num(double value) const {
+ExprPtr ExpressionBuilder::Num(double value) const {
 	return Wrap(make_uniq<BoundConstantExpression>(Value::DOUBLE(value)));
 }
-Ex Calc::Bool(bool value) const {
+ExprPtr ExpressionBuilder::Bool(bool value) const {
 	return Wrap(DirectConstantBool(value));
 }
-Ex Calc::Col(const LogicalType &type, ColumnBinding binding) const {
+ExprPtr ExpressionBuilder::Col(const LogicalType &type, ColumnBinding binding) const {
 	return Wrap(DirectColumn(type, binding));
 }
-Ex Calc::Fn(const string &name, const Ex &a) const {
+ExprPtr ExpressionBuilder::Fn(const string &name, const ExprPtr &a) const {
 	return Wrap(optimizer.BindScalarFunction(name, a->Copy()));
 }
-Ex Calc::Fn(const string &name, const Ex &a, const Ex &b) const {
+ExprPtr ExpressionBuilder::Fn(const string &name, const ExprPtr &a, const ExprPtr &b) const {
 	return Wrap(optimizer.BindScalarFunction(name, a->Copy(), b->Copy()));
 }
-Ex Calc::Add(const Ex &a, const Ex &b) const {
+ExprPtr ExpressionBuilder::Add(const ExprPtr &a, const ExprPtr &b) const {
 	return Fn("+", a, b);
 }
-Ex Calc::Sub(const Ex &a, const Ex &b) const {
+ExprPtr ExpressionBuilder::Sub(const ExprPtr &a, const ExprPtr &b) const {
 	return Fn("-", a, b);
 }
-Ex Calc::Mul(const Ex &a, const Ex &b) const {
+ExprPtr ExpressionBuilder::Mul(const ExprPtr &a, const ExprPtr &b) const {
 	return Fn("*", a, b);
 }
-Ex Calc::Div(const Ex &a, const Ex &b) const {
+ExprPtr ExpressionBuilder::Div(const ExprPtr &a, const ExprPtr &b) const {
 	return Fn("/", a, b);
 }
-Ex Calc::Neg(const Ex &a) const {
+ExprPtr ExpressionBuilder::Neg(const ExprPtr &a) const {
 	return Mul(a, Num(-1.0));
 }
-Ex Calc::Cmp(ExpressionType type, const Ex &a, const Ex &b) const {
+ExprPtr ExpressionBuilder::Cmp(ExpressionType type, const ExprPtr &a, const ExprPtr &b) const {
 	return Wrap(make_uniq<BoundComparisonExpression>(type, a->Copy(), b->Copy()));
 }
-Ex Calc::If(const Ex &condition, const Ex &then_value, const Ex &else_value) const {
+ExprPtr ExpressionBuilder::If(const ExprPtr &condition, const ExprPtr &then_value, const ExprPtr &else_value) const {
 	return Wrap(make_uniq<BoundCaseExpression>(condition->Copy(), then_value->Copy(), else_value->Copy()));
 }
-Ex Calc::Min(const vector<Ex> &values) const {
+ExprPtr ExpressionBuilder::Min(const vector<ExprPtr> &values) const {
 	return Extremum("least", values);
 }
-Ex Calc::Max(const vector<Ex> &values) const {
+ExprPtr ExpressionBuilder::Max(const vector<ExprPtr> &values) const {
 	return Extremum("greatest", values);
 }
-Ex Calc::Any(const vector<Ex> &conditions) const {
-	Ex result = Bool(false);
+ExprPtr ExpressionBuilder::Any(const vector<ExprPtr> &conditions) const {
+	ExprPtr result = Bool(false);
 	for (idx_t i = conditions.size(); i > 0; i--) {
 		result = If(conditions[i - 1], Bool(true), result);
 	}
 	return result;
 }
 
-Ex Calc::Extremum(const char *name, const vector<Ex> &values) const {
+ExprPtr ExpressionBuilder::Extremum(const char *name, const vector<ExprPtr> &values) const {
 	if (values.size() == 1) {
 		return values[0];
 	}

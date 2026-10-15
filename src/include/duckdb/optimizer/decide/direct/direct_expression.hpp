@@ -87,35 +87,35 @@ bool DirectIsLowerBound(ExpressionType comparison);
 bool DirectIsUpperBound(ExpressionType comparison);
 
 //! Expressions as values, so the per-row algebra reads like the algebra. Each operation copies its operands.
-using Ex = std::shared_ptr<Expression>;
+using ExprPtr = std::shared_ptr<Expression>;
 
-class Calc {
+class ExpressionBuilder {
 public:
-	explicit Calc(Optimizer &optimizer_p);
+	explicit ExpressionBuilder(Optimizer &optimizer_p);
 
-	Ex Wrap(unique_ptr<Expression> expr) const;
-	unique_ptr<Expression> Out(const Ex &expr) const;
-	Ex Num(double value) const;
-	Ex Bool(bool value) const;
-	Ex Col(const LogicalType &type, ColumnBinding binding) const;
-	Ex Fn(const string &name, const Ex &a) const;
-	Ex Fn(const string &name, const Ex &a, const Ex &b) const;
-	Ex Add(const Ex &a, const Ex &b) const;
-	Ex Sub(const Ex &a, const Ex &b) const;
-	Ex Mul(const Ex &a, const Ex &b) const;
-	Ex Div(const Ex &a, const Ex &b) const;
-	Ex Neg(const Ex &a) const;
-	Ex Cmp(ExpressionType type, const Ex &a, const Ex &b) const;
-	Ex If(const Ex &condition, const Ex &then_value, const Ex &else_value) const;
-	Ex Min(const vector<Ex> &values) const;
-	Ex Max(const vector<Ex> &values) const;
+	ExprPtr Wrap(unique_ptr<Expression> expr) const;
+	unique_ptr<Expression> Out(const ExprPtr &expr) const;
+	ExprPtr Num(double value) const;
+	ExprPtr Bool(bool value) const;
+	ExprPtr Col(const LogicalType &type, ColumnBinding binding) const;
+	ExprPtr Fn(const string &name, const ExprPtr &a) const;
+	ExprPtr Fn(const string &name, const ExprPtr &a, const ExprPtr &b) const;
+	ExprPtr Add(const ExprPtr &a, const ExprPtr &b) const;
+	ExprPtr Sub(const ExprPtr &a, const ExprPtr &b) const;
+	ExprPtr Mul(const ExprPtr &a, const ExprPtr &b) const;
+	ExprPtr Div(const ExprPtr &a, const ExprPtr &b) const;
+	ExprPtr Neg(const ExprPtr &a) const;
+	ExprPtr Cmp(ExpressionType type, const ExprPtr &a, const ExprPtr &b) const;
+	ExprPtr If(const ExprPtr &condition, const ExprPtr &then_value, const ExprPtr &else_value) const;
+	ExprPtr Min(const vector<ExprPtr> &values) const;
+	ExprPtr Max(const vector<ExprPtr> &values) const;
 	//! True when any condition is true; false for none.
-	Ex Any(const vector<Ex> &conditions) const;
+	ExprPtr Any(const vector<ExprPtr> &conditions) const;
 
 private:
 	Optimizer &optimizer;
 
-	Ex Extremum(const char *name, const vector<Ex> &values) const;
+	ExprPtr Extremum(const char *name, const vector<ExprPtr> &values) const;
 };
 
 } // namespace duckdb

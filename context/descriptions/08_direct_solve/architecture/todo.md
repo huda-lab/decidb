@@ -48,17 +48,6 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
   and the website. The setting `decide_direct_solve` and serialized names stay.
 
-## P-14 — Builders, `Calc` and rule-local helpers
-
-- **Problem.** "Builders" are free factory functions, not GoF Builders; `Calc`/`Ex` is an expression builder with a
-  name that hides it; `s1_support` is a vague file name; rule-local helpers carry a double prefix
-  (`direct_s1::DirectProjectScope`).
-- **Change.** Rename per the glossary and P-05: `direct_builder.{hpp,cpp}` and its header comment, `Calc`, `Ex`,
-  `s1_support.{hpp,cpp}`, and the prefix inside `direct_s1` and `direct_a1`. Update `rules.md` § Adding a rule and the
-  "Shared builders" text in `../rules/_harness/done.md`.
-- **Needs.** after P-10, which edits `direct_builder`.
-- **Done when.** The new names compile under a unity build (`make release`); the checks give the baseline counts.
-
 ## P-15 — Shared-engine folder rename
 
 - **Problem.** Decision P-02 in § Decisions.
@@ -99,7 +88,7 @@ Owner decisions every task below follows. The names they lead to are in `glossar
   (`S1_CARDINALITY_INTERVAL`, `A1_*`; a user-facing change chosen by the owner) and the tests that assert it. The S1
   and A1 Python test files are renamed in P-18's single oracle re-run, not here. Classes without code are renamed in
   docs only.
-- **Needs.** After P-14 (rule-local renames in the same files), before P-15 and P-18.
+- **Needs.** Before P-15 and P-18.
 - **Done when.** No class is named by its old phrase or by a bare id in a file or folder name; the checks give the
   baseline counts with the new `EXPLAIN` value.
 

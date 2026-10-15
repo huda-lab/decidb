@@ -16,8 +16,9 @@ namespace duckdb {
 class Binder;
 class Optimizer;
 
-//! Rule-independent building blocks for direct-solve relational plans. A rule composes these into its own
-//! construction; none of them knows which problem class it is serving.
+//! Plan factory functions for direct-solve relational plans: free functions that each return one plan fragment (a
+//! factory method in function form, not a builder). A rule composes these into its own construction; none of them
+//! knows which problem class it is serving.
 
 //! Typed reference to a child column.
 unique_ptr<Expression> DirectColumn(const LogicalType &type, ColumnBinding binding);
@@ -191,12 +192,12 @@ struct DirectBoundColumns {
 //! The lower and upper bound one clause puts on its decision on one row, as the solver reads it: a clause holds
 //! `coefficient * x  comparison  rhs`, so the coefficient's sign picks the side, a zero coefficient leaves the row
 //! alone or infeasible, and a whole-numbered decision rounds to the integer DOUBLE arithmetic accepts.
-void DirectClauseBounds(const Calc &calc, ExpressionType comparison, bool whole, const DirectBoundColumns &columns,
-                        Ex &lower, Ex &upper);
+void DirectClauseBounds(const ExpressionBuilder &calc, ExpressionType comparison, bool whole,
+                        const DirectBoundColumns &columns, ExprPtr &lower, ExprPtr &upper);
 
 //! A decision's box on one row: the static box intersected with the bounds of its clauses.
-void DirectRowBox(const Calc &calc, double static_lower, double static_upper,
-                  const vector<ColumnBinding> &clause_lowers, const vector<ColumnBinding> &clause_uppers, Ex &lower,
-                  Ex &upper);
+void DirectRowBox(const ExpressionBuilder &calc, double static_lower, double static_upper,
+                  const vector<ColumnBinding> &clause_lowers, const vector<ColumnBinding> &clause_uppers,
+                  ExprPtr &lower, ExprPtr &upper);
 
 } // namespace duckdb

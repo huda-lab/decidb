@@ -38,19 +38,22 @@ check). Design: `../../architecture/`.
   constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
   `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep up
   to date; with that pass disabled the row id is computed and dropped and the plan holds rows as before.
-- **Shared builders.** `direct_builder.hpp` lists only helpers with two or more users: `DirectGuardEmptyAggregate`,
-  `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBreaker`, `DirectScaledTerm` (sign and constant
-  factor of a coefficient), `DirectIsNull`, `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`,
-  `DirectValidBoundPredicate` and `DirectValidNumberPredicate`. Which of several errors a query reports is not
-  specified. The per-row bound reader is also here, though A1 is its only user until R1 is built on it, so that the two
-  rules cannot read a bound differently: `DirectReadBounds` folds `variable_bound`s into each decision's static box
-  (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude 1e20 or more infinite) and lists every other bound
-  as a per-row clause, an equality split into its two halves; `DirectClauseBounds` turns one clause's row values into a
-  lower and an upper bound as the solver reads them; `DirectRowBox` intersects them with the box. Its expressions
-  are built with `Calc` (`direct_expression.hpp`), a small arithmetic helper over bound expressions. The helpers only S1 uses (the scope projection `DirectProjectScope`, the bound validation
-  `DirectValidateBounds`, `DirectWindowExtremum`, `DirectAnyCondition`) live in `src/optimizer/decide/direct/s1_support.{hpp,cpp}`
-  in `namespace direct_s1`, and move to the builders when a second rule needs them. The exactness limit (2^53) is
-  `DECIDE_MAX_EXACT_INTEGER` in the numeric-policy header (next bullet).
+- **Plan factory functions.** `direct_plan_factory.hpp` holds free functions that each return one plan fragment (the
+  function form of a factory method; they are not GoF Builders). It lists only helpers with two or more users:
+  `DirectGuardEmptyAggregate`, `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBreaker`,
+  `DirectScaledTerm` (sign and constant factor of a coefficient), `DirectIsNull`, `DirectInfeasibleErrorPredicate`,
+  `DirectUnboundedErrorPredicate`, `DirectValidBoundPredicate` and `DirectValidNumberPredicate`. Which of several errors
+  a query reports is not specified. The per-row bound reader is also here, though A1 is its only user until R1 is built
+  on it, so that the two rules cannot read a bound differently: `DirectReadBounds` folds `variable_bound`s into each
+  decision's static box (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude 1e20 or more infinite) and lists
+  every other bound as a per-row clause, an equality split into its two halves; `DirectClauseBounds` turns one clause's
+  row values into a lower and an upper bound as the solver reads them; `DirectRowBox` intersects them with the box. Its
+  expressions are built with `ExpressionBuilder` (`direct_expression.hpp`; Fowler's Expression Builder), a small fluent
+  helper over bound expressions that passes them as `ExprPtr`. The helpers only S1 uses (the scope projection
+  `ProjectScope`, the bound validation `ValidateBounds`, `WindowExtremum`, `AnyCondition`) live in
+  `src/optimizer/decide/direct/s1_uniform_matroid_helpers.{hpp,cpp}` in `namespace direct_s1`, and move to the plan
+  factory functions when a second rule needs them. Inside a rule's namespace, names drop the `Direct` and class
+  prefixes. The exactness limit (2^53) is `DECIDE_MAX_EXACT_INTEGER` in the numeric-policy header (next bullet).
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
   DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
   rules, the model builder and the solver backends all read it without including each other. It names the solver's
@@ -86,33 +89,34 @@ check). Design: `../../architecture/`.
   `DIRECT_CONSTANT` or `DIRECT_FINITE_CONSTANT`. One function means one path cannot accept a constant another rejects
   without a flag that says so.
 - **Number messages.** The NULL and NaN texts have one author for both paths, `decide_value_messages.hpp`
-  (`DecideNullValueMessage`, `DecideInvalidValueMessage`, and `DecideCollectNamedColumns`, which decides which columns of a
-  value are named). A NULL number names the NULL source columns on the failing row: one column (`column "a" is NULL.
-  Impute it with COALESCE(a, 0)...`), several (`columns "a", "b" and "c" are NULL`), or, when no column is NULL, the
-  value's own text (`TRY_CAST(s AS DOUBLE) is NULL`). The value is the coefficient as the solver evaluates it: terms of
-  one decision are merged by `DecideMergeLikeCoefficients`, the function the solver's like-term collection calls, so
-  `SUM(a*x + b*x)` names `a` and `b` together. The message is a per-row expression (`DirectNullMessageOf`, used by `DirectValidNumberPredicate` and
-  `DirectValidBoundPredicate` in `direct_builder.cpp`) that `error()` evaluates only on the failing row; its size grows with
-  the number of named columns, so a value may name any number of them. Each column gives its quoted name when it is NULL on
-  the row (else NULL); `COALESCE` over them, last column first, is the last NULL column, and `concat_ws(', ', ...)` is all of
-  them. No last column means no NULL column (the value's own text), `concat_ws = last` means one, and otherwise the text is
-  the leading names (cut off by length), ` and ` and the last name. Every piece of wording comes from the small functions in
-  `decide_value_messages.hpp` that `DecideNullValueMessage` also joins. A value's source columns are read from the stage
-  above the one that carries the source (`DirectOverProjection`). An S1 count bound or pin that is exactly one column raises the same fixed NULL and NaN
-  messages (the column is the same on every row); a computed one keeps `DirectInvalidBoundMessage`. A NaN or infinite
-  number raises the solver's message, whose first words name the clause the user wrote it in: `objective
+  (`DecideNullValueMessage`, `DecideInvalidValueMessage`, and `DecideCollectNamedColumns`, which decides which columns
+  of a value are named). A NULL number names the NULL source columns on the failing row: one column (`column "a" is
+  NULL. Impute it with COALESCE(a, 0)...`), several (`columns "a", "b" and "c" are NULL`), or, when no column is NULL,
+  the value's own text (`TRY_CAST(s AS DOUBLE) is NULL`). The value is the coefficient as the solver evaluates it: terms
+  of one decision are merged by `DecideMergeLikeCoefficients`, the function the solver's like-term collection calls, so
+  `SUM(a*x + b*x)` names `a` and `b` together. The message is a per-row expression (`DirectNullMessageOf`, used by
+  `DirectValidNumberPredicate` and `DirectValidBoundPredicate` in `direct_plan_factory.cpp`) that `error()` evaluates
+  only on the failing row; its size grows with the number of named columns, so a value may name any number of them. Each
+  column gives its quoted name when it is NULL on the row (else NULL); `COALESCE` over them, last column first, is the
+  last NULL column, and `concat_ws(', ', ...)` is all of them. No last column means no NULL column (the value's own
+  text), `concat_ws = last` means one, and otherwise the text is the leading names (cut off by length), ` and ` and the
+  last name. Every piece of wording comes from the small functions in `decide_value_messages.hpp` that
+  `DecideNullValueMessage` also joins. A value's source columns are read from the stage above the one that carries the
+  source (`DirectOverProjection`). An S1 count bound or pin that is exactly one column raises the same fixed NULL and
+  NaN messages (the column is the same on every row); a computed one keeps `DirectInvalidBoundMessage`. A NaN or
+  infinite number raises the solver's message, whose first words name the clause the user wrote it in: `objective
   coefficient`, `constraint coefficient` or `constraint right-hand side`, without the solver's ` at row N`. The first
-  two come from the `DirectNumberKind` the rule passes (S1 and A1's objective values:
-  objective; A1's coefficient on the left of a bound: constraint). A source value read as a coefficient must be finite;
-  one read as a bound (a count limit, a pin, a per-row lower or upper bound) only has to be a number, because an
-  infinite bound means "no bound" or "nothing satisfies it". NaN and NULL raise in every slot. Direct applies this in SQL
-  (`DirectValidNumberPredicate`, `DirectValidBoundPredicate`) and the solver in C++ (`ExtractDoubleColumn`); the two
-  cannot share code, so `test_direct_source_values.py` puts NaN, both infinities and NULL in each of 27 slots S1 and A1
-  read and asserts the same error or rows on `require`, `off` and forced HiGHS. Tests:
-  `test_computed_score_null_error_names_the_columns`, `test_null_score_no_column_explains_quotes_the_score`,
-  `test_null_score_message_is_not_built_when_no_row_is_null`, `test_null_value_error_is_the_solvers_error_word_for_word`
-  and `test_invalid_value_error_is_the_solvers_error_without_the_row_position` in `test_direct_user_facing.py` (the last
-  two compare the full text of `require` with `off` for S1 and A1). The cost on clean data is not measured.
+  two come from the `DirectNumberKind` the rule passes (S1 and A1's objective values: objective; A1's coefficient on the
+  left of a bound: constraint). A source value read as a coefficient must be finite; one read as a bound (a count limit,
+  a pin, a per-row lower or upper bound) only has to be a number, because an infinite bound means "no bound" or "nothing
+  satisfies it". NaN and NULL raise in every slot. Direct applies this in SQL (`DirectValidNumberPredicate`,
+  `DirectValidBoundPredicate`) and the solver in C++ (`ExtractDoubleColumn`); the two cannot share code, so
+  `test_direct_source_values.py` puts NaN, both infinities and NULL in each of 27 slots S1 and A1 read and asserts the
+  same error or rows on `require`, `off` and forced HiGHS. Tests: `test_computed_score_null_error_names_the_columns`,
+  `test_null_score_no_column_explains_quotes_the_score`, `test_null_score_message_is_not_built_when_no_row_is_null`,
+  `test_null_value_error_is_the_solvers_error_word_for_word` and
+  `test_invalid_value_error_is_the_solvers_error_without_the_row_position` in `test_direct_user_facing.py` (the last two
+  compare the full text of `require` with `off` for S1 and A1). The cost on clean data is not measured.
 - **`EXPLAIN` annotation.** When a rule applies, mode, rule and one fixed condition line per rule appear in logical and
   physical `EXPLAIN` and profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x
   <= u, each row independent`. There is no guards line and no number from the query. `require` explains why no rule
@@ -125,10 +129,10 @@ check). Design: `../../architecture/`.
   `DecideBoxContradictsDomain(box, is_bool)` in `decide_bound_absorption.{hpp,cpp}`. For a non-negative `INT` or `REAL`
   the error quotes the clause; for a `BOOL` it is DECIDE's usual infeasible error, and under `DIAGNOSE` the check skips a
   `BOOL` so the elastic engine names the clause. The solver's pre-check (`DecideGlobalSinkState`), A1 (`ProveBounds`) and
-  S1 (`ConstantPinDomain`) call it. Direct solve only declines these queries and lets the solver raise the error.
+  S1 (`ConstantFixedDomain`) call it. Direct solve only declines these queries and lets the solver raise the error.
 - **One box, one way to combine bounds.** A decision's unconditional bounds fold into a `DecideBoundBox`
   (`decide_numeric_policy.hpp`) through `DecideAbsorbBound`, which keeps the tightest value on each side. The solver's
-  absorption pass, the elastic engine's retained box, A1 (`ProveBounds`) and S1 (`ConstantPinDomain`) all call it, so
+  absorption pass, the elastic engine's retained box, A1 (`ProveBounds`) and S1 (`ConstantFixedDomain`) all call it, so
   the paths cannot combine bounds differently. The box keeps a `lower_written` flag apart from the value: a written lower
   bound of -1e30 or below is no bound, like any bound of magnitude 1e20 or more, and only a decision with no lower bound
   written takes the default floor of 0 (`EffectiveLower`). No value is reserved to mean "unset", so a value the user

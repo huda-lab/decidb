@@ -37,10 +37,13 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 2. Register it with one line in `direct_registry.cpp`. No other engine file changes.
 3. Read only the IR (`direct_rule.hpp`). Use `FirstNotProvedReason()` to name a blocking clause. The rule must be
    disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
-4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible, and
-   the shared builders in `direct_builder.cpp` for the empty-aggregate error, the number checks, the all-rows
-   breaker and the per-row bounds on a decision (`DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`). A builder only your rule uses (S1's scope projection and bound validation are in `s1_support.cpp`) stays in
-   your rule's own files until a second rule needs it.
+4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible, and the
+   plan factory functions in `direct_plan_factory.cpp` for the empty-aggregate error, the number checks, the all-rows
+   breaker and the per-row bounds on a decision (`DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`). Build
+   expressions with the `ExpressionBuilder` (`direct_expression.hpp`). A helper only your rule uses (S1's scope
+   projection and bound validation are in `s1_uniform_matroid_helpers.cpp`) stays in your rule's own files until a
+   second rule needs it. Inside the rule's namespace, names carry no `Direct` or class prefix (`Condition`,
+   `PlanBuilder`); names in `namespace duckdb` keep `Direct`.
 5. State the plan's slot map (where each DECIDE output lives), which decision outputs may be skipped, and its validated
    columns.
 6. Add the standard tests (below), then `rules/<name>/done.md`. The class's `definition.md` already exists; correct it
@@ -80,7 +83,7 @@ A rule exists to be a light shortcut. Before adding code to a rule or to the sha
   solver quirks, decline the shape. The solver handles it correctly, only more slowly. A decline is cheap and a bug
   in a proof is a wrong answer.
 - **Does a second rule need it?** Keep helpers inside the rule until a second rule uses them, then move them to the
-  shared builders.
+  plan factory functions.
 - **Is the test proportionate?** One test per behavior. Do not pin an incidental detail, such as which of two errors
   comes first.
 

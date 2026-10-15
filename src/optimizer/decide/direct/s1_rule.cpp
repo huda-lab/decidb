@@ -11,7 +11,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
-#include "duckdb/optimizer/decide/direct/direct_builder.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
@@ -31,7 +31,7 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
-#include "s1_support.hpp"
+#include "s1_uniform_matroid_helpers.hpp"
 
 namespace duckdb {
 
@@ -43,7 +43,7 @@ constexpr const char *S1_RULE = "S1_CARDINALITY_INTERVAL";
 
 //! An aggregate on the right of a count bound, in the order a walk of the bound meets them: `COUNT(*)`, or COUNT, MIN,
 //! MAX, SUM or AVG of one numeric source column. The plan replaces each by a window over the clause's group.
-struct S1Reducer {
+struct Reducer {
 	//! The aggregate function's name: `count_star`, `count`, `min`, `max`, `sum` or `avg`.
 	string function;
 	//! The source column it reduces; invalid for `count_star`.
@@ -52,7 +52,7 @@ struct S1Reducer {
 	string column_name;
 };
 
-struct S1Condition final : DirectApplicabilityCondition {
+struct Condition final : DirectApplicabilityCondition {
 	struct SourceBound {
 		idx_t source_slot;
 		LogicalType source_type;
@@ -64,7 +64,7 @@ struct S1Condition final : DirectApplicabilityCondition {
 		//! The bound holds aggregates over the clause's group (`reducers`), which the plan replaces by windows.
 		bool counts_rows = false;
 		//! The aggregates in the bound, in walk order.
-		vector<S1Reducer> reducers;
+		vector<Reducer> reducers;
 		//! One of them needs the row count of the group: `COUNT(*)`, COUNT(col) or AVG.
 		bool needs_count = false;
 		//! The count body is `c - x`, so `comparison` is already flipped and the value to compare against is `n*c - B`
@@ -75,7 +75,7 @@ struct S1Condition final : DirectApplicabilityCondition {
 		unique_ptr<Expression> offset;
 	};
 	//! A pin whose value comes from the row: it must be neither NULL nor, for a floating point value, NaN.
-	struct SourcePin {
+	struct SourceFixedValue {
 		unique_ptr<Expression> value;
 		//! The source column the value is exactly; empty for a computed value.
 		string column_name;
@@ -108,7 +108,7 @@ struct S1Condition final : DirectApplicabilityCondition {
 	vector<unique_ptr<Expression>> fixed_one_conditions;
 	vector<unique_ptr<Expression>> fixed_zero_conditions;
 	vector<SourceBound> source_bounds;
-	vector<SourcePin> source_pins;
+	vector<SourceFixedValue> source_fixed_values;
 	bool scoped = false;
 };
 
@@ -144,7 +144,7 @@ bool IsUnitContribution(ClientContext &context, const vector<DecideSplitTerm> &t
 //! `n` is the number of rows the SUM covers, known only at run time. A constant this small keeps `|n*c|` within 2^53
 //! (exact in a DOUBLE and in BIGINT) for any `n` up to 2^32 rows, so DuckDB's own arithmetic and the solver's DOUBLE
 //! arithmetic read the same shifted bound. A larger constant stays on the solver.
-constexpr double S1_MAX_OFFSET = 2097152.0;
+constexpr double MAX_OFFSET = 2097152.0;
 
 //! What the sum counts: `direction * (number of selected rows) + n * offset`, where n is the number of rows the sum
 //! covers in the group.
@@ -157,7 +157,7 @@ struct CountBody {
 
 //! Reads a reducer body as `a*x + c`. The signed constant coefficients of `x` must add up to exactly +1 or -1, as the
 //! solver's like-term collection sums them, and every other term must be a finite foldable constant of at most
-//! S1_MAX_OFFSET in magnitude. False with `problem` filled otherwise.
+//! MAX_OFFSET in magnitude. False with `problem` filled otherwise.
 bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms, CountBody &body, string &problem) {
 	const string not_a_count = "expected SUM(x) with unit contribution";
 	double slope = 0;
@@ -189,7 +189,7 @@ bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms,
 			problem = "a term added to x in the count must be a finite constant, not a column or NULL";
 			return false;
 		}
-		if (std::fabs(value) > S1_MAX_OFFSET) {
+		if (std::fabs(value) > MAX_OFFSET) {
 			problem = "a constant added to x in the count is larger than 2097152";
 			return false;
 		}
@@ -229,7 +229,7 @@ ExpressionType FlipComparison(ExpressionType comparison) {
 
 //! The decision's terms on a per-row left side, as in a pin `x = 1`; null otherwise. CheckCondition checks that they
 //! add up to exactly one `x`.
-const vector<DecideSplitTerm> *PinTerms(const DirectIRConstraint &ir_node) {
+const vector<DecideSplitTerm> *FixedTerms(const DirectIRConstraint &ir_node) {
 	if (ir_node.aggregate || ir_node.comparison == ExpressionType::COMPARE_IN || ir_node.lhs.size() != 1) {
 		return nullptr;
 	}
@@ -291,7 +291,7 @@ bool NormalizeCapacity(ClientContext &context, const Expression &expr, Expressio
 
 //! Which of the values 0 and 1 a per-row bound on `x` leaves allowed. Neither allowed means no row it covers can
 //! satisfy it.
-struct PinDomain {
+struct FixedDomain {
 	bool zero = true;
 	bool one = true;
 };
@@ -326,7 +326,7 @@ bool SatisfiesComparison(ExpressionType comparison, double value, double bound) 
 //! and `x < 1.5` the upper bound 1 here as there; for a variable that is 0 or 1 that is the same as the comparison
 //! itself. Whether the box contradicts the built-in domain of a Boolean is the solver's own test
 //! (DecideBoxContradictsDomain).
-bool ConstantPinDomain(const DirectIRConstraint &ir_node, double bound, PinDomain &domain) {
+bool ConstantFixedDomain(const DirectIRConstraint &ir_node, double bound, FixedDomain &domain) {
 	auto comparison = ir_node.comparison;
 	if (!ir_node.scope.when && comparison != ExpressionType::COMPARE_NOTEQUAL) {
 		bool has_lower = comparison == ExpressionType::COMPARE_GREATERTHAN ||
@@ -353,8 +353,8 @@ bool ConstantPinDomain(const DirectIRConstraint &ir_node, double bound, PinDomai
 	return true;
 }
 
-const Expression *SourceBooleanPinValue(const Expression &expr, idx_t decide_index,
-                                        const vector<ColumnBinding> &source_bindings) {
+const Expression *SourceBooleanFixedValue(const Expression &expr, idx_t decide_index,
+                                          const vector<ColumnBinding> &source_bindings) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CAST) {
 		return nullptr;
 	}
@@ -411,9 +411,9 @@ bool IsSmallIntegerType(const LogicalType &type) {
 //! Why an aggregate on the right of a count bound is not one this rule reads, or empty when it is: plain `COUNT(*)`,
 //! or COUNT, MIN or MAX of one numeric source column, or SUM or AVG of one small integer source column, with no WHEN
 //! of its own, DISTINCT, ORDER BY or relation qualifier. Fills `reducer` when it is one.
-string ReducerProblem(const Expression &expr, const vector<ColumnBinding> &source_bindings, S1Reducer &reducer) {
+string ReducerProblem(const Expression &expr, const vector<ColumnBinding> &source_bindings, Reducer &reducer) {
 	if (IsPlainCountStar(expr)) {
-		reducer = S1Reducer();
+		reducer = Reducer();
 		reducer.function = "count_star";
 		return string();
 	}
@@ -433,7 +433,7 @@ string ReducerProblem(const Expression &expr, const vector<ColumnBinding> &sourc
 	    aggregate.children.size() != 1) {
 		return "an aggregate other than COUNT(*), COUNT, MIN, MAX, SUM or AVG";
 	}
-	reducer = S1Reducer();
+	reducer = Reducer();
 	reducer.function = name;
 	if (!DirectSourceNumericColumn(*aggregate.children[0], source_bindings, reducer.source_slot, reducer.column_type,
 	                               reducer.column_name)) {
@@ -448,12 +448,12 @@ string ReducerProblem(const Expression &expr, const vector<ColumnBinding> &sourc
 //! Why a bound is not a group-aggregate expression, or empty when it is one: the aggregates `ReducerProblem` admits,
 //! finite exact constants, numeric casts that cannot throw, and `+ - * / //` over them, where a divisor is a nonzero
 //! constant. The plan evaluates such a bound with DuckDB's own operators, on the rows the solver evaluates it for (see
-//! `S1PlanBuilder::OnlyWhereCovered`), so an overflow raises on both paths or on neither and no range is proved here.
+//! `PlanBuilder::OnlyWhereCovered`), so an overflow raises on both paths or on neither and no range is proved here.
 //! Appends the aggregates it meets to `reducers`, in walk order.
 string RowCountBoundProblem(ClientContext &context, const Expression &expr,
-                            const vector<ColumnBinding> &source_bindings, vector<S1Reducer> &reducers) {
+                            const vector<ColumnBinding> &source_bindings, vector<Reducer> &reducers) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		S1Reducer reducer;
+		Reducer reducer;
 		auto problem = ReducerProblem(expr, source_bindings, reducer);
 		if (problem.empty()) {
 			reducers.push_back(std::move(reducer));
@@ -529,7 +529,7 @@ public:
 			reason = "constraint_shape: expected attributed cardinality bounds and optional Boolean pins";
 			return nullptr;
 		}
-		auto condition = make_uniq<S1Condition>();
+		auto condition = make_uniq<Condition>();
 		vector<uint8_t> seen_sources(ir.source_clause_count, 0);
 		for (auto &ir_node : ir.constraints) {
 			if (ir_node.source_clause_id >= seen_sources.size() || seen_sources[ir_node.source_clause_id]++) {
@@ -544,7 +544,7 @@ public:
 				reason = "constraint_shape: expected SUM(x) bounds or Boolean pins";
 				return nullptr;
 			}
-			if (PinTerms(ir_node)) {
+			if (FixedTerms(ir_node)) {
 				condition->local_fixes.push_back(&ir_node);
 				continue;
 			}
@@ -572,7 +572,7 @@ public:
 		}
 		condition->decide_index = ir.decide_index;
 		condition->sense = ir.objective.sense;
-		if (!ProveScope(ir, *condition, reason) || !ProvePins(ir, context, *condition, reason) ||
+		if (!ProveScope(ir, *condition, reason) || !ProveFixedVariables(ir, context, *condition, reason) ||
 		    !ProveBounds(ir, context, *condition, reason) || !ProveObjective(ir, context, *condition, reason)) {
 			return nullptr;
 		}
@@ -585,15 +585,15 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveScope(const DirectIR &ir, S1Condition &condition, string &reason) const;
-	bool ProvePins(const DirectIR &ir, ClientContext &context, S1Condition &condition, string &reason) const;
-	bool ProveBounds(const DirectIR &ir, ClientContext &context, S1Condition &condition, string &reason) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, S1Condition &condition, string &reason) const;
+	bool ProveScope(const DirectIR &ir, Condition &condition, string &reason) const;
+	bool ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const;
+	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const;
+	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const;
 };
 
 //! Every bound counts the same rows: one `SUM(x)` per bound with the same PER keys and the same WHEN membership.
 //! Records the group keys and membership the plan scopes by.
-bool S1CardinalityRule::ProveScope(const DirectIR &ir, S1Condition &condition, string &reason) const {
+bool S1CardinalityRule::ProveScope(const DirectIR &ir, Condition &condition, string &reason) const {
 	const auto &first_scope = *condition.bound_factors.front();
 	bool ok;
 	const Expression *first_when = BoundMembership(first_scope, ok);
@@ -631,14 +631,14 @@ bool S1CardinalityRule::ProveScope(const DirectIR &ir, S1Condition &condition, s
 
 //! Per-row Boolean pins: `x = 0/1` and its one-sided forms against a constant, or against a source Boolean. Each
 //! becomes a condition under which the row is fixed to one or to zero.
-bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1Condition &condition,
-                                  string &reason) const {
+bool S1CardinalityRule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condition &condition,
+                                            string &reason) const {
 	for (auto factor : condition.local_fixes) {
 		if (!factor->scope.per_key_slots.empty()) {
 			reason = "constraint_scope: Boolean pins must be per-row without PER keys";
 			return false;
 		}
-		if (!IsUnitContribution(context, *PinTerms(*factor))) {
+		if (!IsUnitContribution(context, *FixedTerms(*factor))) {
 			reason = "constraint_shape: expected a Boolean pin on x itself";
 			return false;
 		}
@@ -649,8 +649,8 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1
 		}
 		double constant;
 		if (TryEvaluateFoldableDouble(context, *factor->rhs, constant, DIRECT_FINITE_CONSTANT)) {
-			PinDomain domain;
-			if (!ConstantPinDomain(*factor, constant, domain)) {
+			FixedDomain domain;
+			if (!ConstantFixedDomain(*factor, constant, domain)) {
 				reason =
 				    "constraint_shape: an unconditional bound on x that the solver reads differently from a Boolean "
 				    "(negative lower bound, or a bound that cannot hold)";
@@ -677,7 +677,7 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1
 			                                             make_uniq<BoundConstantExpression>(Value::BOOLEAN(false)))
 			            : std::move(value);
 		};
-		auto source_value = SourceBooleanPinValue(*factor->rhs, ir.decide_index, ir.source_bindings);
+		auto source_value = SourceBooleanFixedValue(*factor->rhs, ir.decide_index, ir.source_bindings);
 		if (source_value &&
 		    (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 		     type == ExpressionType::COMPARE_GREATERTHANOREQUALTO)) {
@@ -693,7 +693,7 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1
 			if (source_value->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 				column_name = source_value->GetAlias();
 			}
-			condition.source_pins.push_back(
+			condition.source_fixed_values.push_back(
 			    {source_value->Copy(), column_name, "DECIDE per-row Boolean bound contains NULL", false});
 			continue;
 		}
@@ -720,8 +720,9 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1
 		};
 		condition.fixed_one_conditions.push_back(active(disallows(0.0)));
 		condition.fixed_zero_conditions.push_back(active(disallows(1.0)));
-		condition.source_pins.push_back({value.Copy(), is_column ? column_name : string(), DirectInvalidBoundMessage(),
-		                                 invalid_type == LogicalType::FLOAT || invalid_type == LogicalType::DOUBLE});
+		condition.source_fixed_values.push_back(
+		    {value.Copy(), is_column ? column_name : string(), DirectInvalidBoundMessage(),
+		     invalid_type == LogicalType::FLOAT || invalid_type == LogicalType::DOUBLE});
 	}
 	return true;
 }
@@ -731,7 +732,7 @@ bool S1CardinalityRule::ProvePins(const DirectIR &ir, ClientContext &context, S1
 //! `SUM(x) <op> B - n*c` and `SUM(c - x) <op> B` is `SUM(x) <flipped op> n*c - B`, where n is the number of rows the
 //! SUM covers in the group. A constant bound without a constant term in the body folds here; every other bound is
 //! shifted per group by the plan.
-bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, S1Condition &condition,
+bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition,
                                     string &reason) const {
 	auto fold_bound = [&](const Expression &bound, ExpressionType side, idx_t &target, bool negate) {
 		bool impossible = false;
@@ -762,9 +763,9 @@ bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, 
 		bool source_column =
 		    DirectSourceNumericColumn(bound, ir.source_bindings, source_slot, source_type, source_name);
 		auto add_source_bound = [&](idx_t slot, const LogicalType &bound_type, string column_name,
-		                            vector<S1Reducer> reducers) {
+		                            vector<Reducer> reducers) {
 			bool counts_rows = !reducers.empty();
-			S1Condition::SourceBound source_bound {
+			Condition::SourceBound source_bound {
 			    slot, bound_type, type, bound.Copy(), sum->filter != nullptr, std::move(column_name), counts_rows};
 			for (auto &reducer : reducers) {
 				source_bound.needs_count |=
@@ -776,7 +777,7 @@ bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, 
 			condition.source_bounds.push_back(std::move(source_bound));
 		};
 		if (!bound.IsFoldable() && bound.IsAggregate()) {
-			vector<S1Reducer> reducers;
+			vector<Reducer> reducers;
 			auto problem = RowCountBoundProblem(context, bound, ir.source_bindings, reducers);
 			if (!problem.empty()) {
 				reason = "constraint_shape: a bound with an aggregate must combine COUNT(*), COUNT, MIN or MAX of a "
@@ -833,7 +834,7 @@ bool S1CardinalityRule::ProveBounds(const DirectIR &ir, ClientContext &context, 
 }
 
 //! The objective: a signed sum of `SUM(coefficient * x)` terms. Each coefficient must be evaluable per source row.
-bool S1CardinalityRule::ProveObjective(const DirectIR &ir, ClientContext &context, S1Condition &condition,
+bool S1CardinalityRule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition,
                                        string &reason) const {
 	// Every linear term in x scores separately: `SUM((p + q) * x)` splits into `p * x` and `q * x`, and the score
 	// adds the signed coefficients in order, as the solver's like-term collection does.
@@ -881,11 +882,11 @@ bool S1CardinalityRule::ProveObjective(const DirectIR &ir, ClientContext &contex
 //! Builds the relational plan for one proved S1 problem. The constructor derives what every stage shares; each stage
 //! takes the plan built so far and returns it extended. Data a later stage needs travels in explicit structs.
 //!
-//!   ProjectScopeState -> GuardEmptyAggregate -> ValidateBounds -> ProjectScore
+//!   ProjectScopeState -> GuardEmptyAggregate -> AddBoundValidation -> ProjectScore
 //!     -> RankAndFilterFeasibility -> ProjectAssignment
-class S1PlanBuilder {
+class PlanBuilder {
 public:
-	S1PlanBuilder(const S1Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
+	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
 	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder) {
 		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
@@ -917,13 +918,13 @@ public:
 	}
 
 	DirectSubstitute Build(unique_ptr<LogicalOperator> source) const {
-		ScopeState scope;
+		ScopeBindings scope;
 		source = ProjectScopeState(std::move(source), scope);
 		source = GuardEmptyAggregate(std::move(source), scope);
 		RowCounts counts;
 		source = CountRows(std::move(source), scope, counts);
 		BoundChecks bounds(condition.source_bounds.size());
-		source = ValidateBounds(std::move(source), scope, counts, bounds);
+		source = AddBoundValidation(std::move(source), scope, counts, bounds);
 		source = ProjectScore(std::move(source), scope, bounds);
 		auto ranked = RankAndFilterFeasibility(std::move(source), bounds);
 		auto result = ProjectAssignment(std::move(ranked), bounds);
@@ -941,7 +942,7 @@ public:
 
 private:
 	//! Where the source columns and per-row flags live once the optional state projection has run.
-	struct ScopeState {
+	struct ScopeBindings {
 		vector<ColumnBinding> input_bindings;
 		idx_t state_index = DConstants::INVALID_INDEX;
 		ColumnBinding eligible_binding;
@@ -988,7 +989,7 @@ private:
 		idx_t fixed_count_slot = DConstants::INVALID_INDEX;
 	};
 
-	const S1Condition &condition;
+	const Condition &condition;
 	Optimizer &optimizer;
 	Binder &binder;
 	vector<ColumnBinding> source_bindings;
@@ -1007,7 +1008,7 @@ private:
 	ColumnBinding fixed_zero_binding;
 
 	//! Copy of a proved expression whose source references follow the state projection, when there is one.
-	unique_ptr<Expression> CopyIntoState(const Expression &expr, const ScopeState &scope, const char *what) const {
+	unique_ptr<Expression> CopyIntoState(const Expression &expr, const ScopeBindings &scope, const char *what) const {
 		auto value = expr.Copy();
 		if (scope.state_index != DConstants::INVALID_INDEX &&
 		    !DirectRemapSourceReferences(*value, source_bindings, scope.state_index)) {
@@ -1017,14 +1018,14 @@ private:
 	}
 
 	//! Stage 1: pass the source through and append the per-row scope flags (group eligibility, pins).
-	unique_ptr<LogicalOperator> ProjectScopeState(unique_ptr<LogicalOperator> source, ScopeState &scope) const {
+	unique_ptr<LogicalOperator> ProjectScopeState(unique_ptr<LogicalOperator> source, ScopeBindings &scope) const {
 		vector<unique_ptr<Expression>> pins;
 		if (has_fixes) {
-			pins.push_back(DirectAnyCondition(condition.fixed_one_conditions));
-			pins.push_back(DirectAnyCondition(condition.fixed_zero_conditions));
+			pins.push_back(AnyCondition(condition.fixed_one_conditions));
+			pins.push_back(AnyCondition(condition.fixed_zero_conditions));
 		}
-		auto state = DirectProjectScope(binder, std::move(source), condition.scoped, condition.when_condition.get(),
-		                                condition.group_key_slots, std::move(pins));
+		auto state = ProjectScope(binder, std::move(source), condition.scoped, condition.when_condition.get(),
+		                          condition.group_key_slots, std::move(pins));
 		scope.input_bindings = std::move(state.input_bindings);
 		scope.state_index = state.state_index;
 		scope.eligible_binding = state.eligible;
@@ -1036,7 +1037,8 @@ private:
 	}
 
 	//! Stage 2: a scoped aggregate over no eligible row is DECIDE's empty-aggregate error.
-	unique_ptr<LogicalOperator> GuardEmptyAggregate(unique_ptr<LogicalOperator> source, const ScopeState &scope) const {
+	unique_ptr<LogicalOperator> GuardEmptyAggregate(unique_ptr<LogicalOperator> source,
+	                                                const ScopeBindings &scope) const {
 		if (!condition.scoped) {
 			return source;
 		}
@@ -1048,7 +1050,7 @@ private:
 	//! and counts every row of the group. A bound shifted by a constant term in the count body (`SUM(x + c)`) needs the
 	//! number of rows the SUM itself covers, which an aggregate-local WHEN does narrow. Nothing is added when no bound
 	//! reads a count.
-	unique_ptr<LogicalOperator> CountRows(unique_ptr<LogicalOperator> source, const ScopeState &scope,
+	unique_ptr<LogicalOperator> CountRows(unique_ptr<LogicalOperator> source, const ScopeBindings &scope,
 	                                      RowCounts &counts) const {
 		bool eligible_needed = false;
 		bool group_needed = false;
@@ -1106,7 +1108,7 @@ private:
 					}
 					auto value =
 					    DirectColumn(source_types[reducer.source_slot], scope.input_bindings[reducer.source_slot]);
-					auto reduced = DirectWindowExtremum(optimizer, function.c_str(), std::move(value));
+					auto reduced = WindowExtremum(optimizer, function.c_str(), std::move(value));
 					if (!bound.rhs_all_group_rows && condition.scoped) {
 						reduced->partitions.push_back(DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
 					}
@@ -1140,7 +1142,7 @@ private:
 	//! DOUBLE and hands it back to the surrounding expression as the aggregate's own type, so the same two casts are
 	//! made here. AVG is the DOUBLE sum over the DOUBLE count. `next` walks `bound.reducers`, which the condition
 	//! listed in the same order.
-	unique_ptr<Expression> ReplaceAggregates(unique_ptr<Expression> expr, const S1Condition::SourceBound &bound,
+	unique_ptr<Expression> ReplaceAggregates(unique_ptr<Expression> expr, const Condition::SourceBound &bound,
 	                                         const RowCounts &counts, idx_t &next) const {
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 			ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
@@ -1184,7 +1186,7 @@ private:
 	//! overflow in `COUNT(*) * k`) would be evaluated for groups the solver never evaluates it for. The bound is
 	//! therefore read as the harmless 0 on a row that is not eligible, and the extremum ignores those rows (the
 	//! caller leaves `all_group_rows` unset for a count bound, which has one value per group).
-	unique_ptr<Expression> OnlyWhereCovered(unique_ptr<Expression> value, const ScopeState &scope) const {
+	unique_ptr<Expression> OnlyWhereCovered(unique_ptr<Expression> value, const ScopeBindings &scope) const {
 		if (!condition.scoped) {
 			return value;
 		}
@@ -1195,16 +1197,16 @@ private:
 	}
 
 	//! Stage 3: validate source-valued bounds and pins on every row, and reduce each bound to its group extremum.
-	unique_ptr<LogicalOperator> ValidateBounds(unique_ptr<LogicalOperator> source, const ScopeState &scope,
-	                                           const RowCounts &counts, BoundChecks &bounds) const {
-		vector<DirectBoundSpec> specs;
+	unique_ptr<LogicalOperator> AddBoundValidation(unique_ptr<LogicalOperator> source, const ScopeBindings &scope,
+	                                               const RowCounts &counts, BoundChecks &bounds) const {
+		vector<BoundSpec> specs;
 		for (auto &bound : condition.source_bounds) {
 			if (!bound.value || (bound.source_slot != DConstants::INVALID_INDEX &&
 			                     (bound.source_slot >= source_types.size() ||
 			                      source_types[bound.source_slot] != bound.source_type))) {
 				throw InternalException("S1 direct solve received an invalid source bound slot");
 			}
-			DirectBoundSpec spec;
+			BoundSpec spec;
 			spec.comparison = bound.comparison;
 			spec.value = CopyIntoState(*bound.value, scope, "bound");
 			if (bound.counts_rows) {
@@ -1255,9 +1257,9 @@ private:
 			}
 			specs.push_back(std::move(spec));
 		}
-		vector<DirectNotNullSpec> pins;
-		for (auto &pin : condition.source_pins) {
-			DirectNotNullSpec spec;
+		vector<NotNullSpec> pins;
+		for (auto &pin : condition.source_fixed_values) {
+			NotNullSpec spec;
 			spec.value = CopyIntoState(*pin.value, scope, "per-row pin");
 			spec.reject_nan = pin.reject_nan;
 			if (pin.column_name.empty()) {
@@ -1282,7 +1284,7 @@ private:
 				}
 				checked_columns.push_back(reducer.source_slot);
 				auto type = source_types[reducer.source_slot];
-				DirectNotNullSpec spec;
+				NotNullSpec spec;
 				spec.value = DirectColumn(type, scope.input_bindings[reducer.source_slot]);
 				spec.reject_nan = type == LogicalType::FLOAT || type == LogicalType::DOUBLE;
 				spec.message = DirectBoundNullMessage(reducer.column_name);
@@ -1298,8 +1300,8 @@ private:
 			keys.push_back(scope.input_bindings[slot]);
 			key_types.push_back(source_types[slot]);
 		}
-		auto validation = DirectValidateBounds(optimizer, std::move(source), specs, pins,
-		                                       condition.scoped ? &scope.eligible_binding : nullptr, keys, key_types);
+		auto validation = ValidateBounds(optimizer, std::move(source), specs, pins,
+		                                 condition.scoped ? &scope.eligible_binding : nullptr, keys, key_types);
 		bounds.window_index = validation.window_index;
 		for (idx_t i = 0; i < bounds.slots.size(); i++) {
 			bounds.slots[i].min_window = validation.min_slots[i];
@@ -1311,7 +1313,7 @@ private:
 	//! Stage 4: the score projection. It forwards the source columns, the combined linear score, the scope and pin
 	//! flags, and the per-group bound extrema, so every later stage reads one projection. The constructor laid out
 	//! the score and flag slots; each is appended here at exactly that position.
-	unique_ptr<LogicalOperator> ProjectScore(unique_ptr<LogicalOperator> source, const ScopeState &scope,
+	unique_ptr<LogicalOperator> ProjectScore(unique_ptr<LogicalOperator> source, const ScopeBindings &scope,
 	                                         BoundChecks &bounds) const {
 		vector<unique_ptr<Expression>> score_expressions;
 		auto append_at = [&](const ColumnBinding &slot, unique_ptr<Expression> expression) {
@@ -1658,11 +1660,11 @@ private:
 
 DirectSubstitute S1CardinalityRule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
                                           const DirectApplicabilityCondition &candidate) const {
-	auto &condition = static_cast<const S1Condition &>(candidate);
+	auto &condition = static_cast<const Condition &>(candidate);
 	if (condition.objective_parts.empty() && condition.sense != DecideSense::FEASIBILITY) {
 		throw InternalException("S1 direct solve received a condition without an objective");
 	}
-	S1PlanBuilder plan_builder(condition, optimizer, *source);
+	PlanBuilder plan_builder(condition, optimizer, *source);
 	return plan_builder.Build(std::move(source));
 }
 

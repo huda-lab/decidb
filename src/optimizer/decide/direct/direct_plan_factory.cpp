@@ -1,4 +1,4 @@
-#include "duckdb/optimizer/decide/direct/direct_builder.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 
 #include <algorithm>
@@ -43,9 +43,9 @@ unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(unique_ptr<Expressio
 	    make_uniq<AggregateFunction>(CountFun::GetFunctions().GetFunctionByOffset(0)), nullptr);
 	count->start = WindowBoundary::UNBOUNDED_PRECEDING;
 	count->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-	count->children.push_back(make_uniq<BoundCaseExpression>(
-	    std::move(predicate), make_uniq<BoundConstantExpression>(Value::INTEGER(1)),
-	    make_uniq<BoundConstantExpression>(Value(LogicalType::INTEGER))));
+	count->children.push_back(
+	    make_uniq<BoundCaseExpression>(std::move(predicate), make_uniq<BoundConstantExpression>(Value::INTEGER(1)),
+	                                   make_uniq<BoundConstantExpression>(Value(LogicalType::INTEGER))));
 	return count;
 }
 
@@ -68,8 +68,8 @@ DirectPipelineBreaker DirectValidationBreaker(Binder &binder, unique_ptr<Logical
 	projection->children.push_back(std::move(input));
 	auto window_index = binder.GenerateTableIndex();
 	auto window = make_uniq<LogicalWindow>(window_index);
-	window->expressions.push_back(
-	    DirectWindowMatchingCount(DirectColumn(LogicalType::BOOLEAN, ColumnBinding(projection_index, bindings.size()))));
+	window->expressions.push_back(DirectWindowMatchingCount(
+	    DirectColumn(LogicalType::BOOLEAN, ColumnBinding(projection_index, bindings.size()))));
 	window->children.push_back(std::move(projection));
 	result.breaker = ColumnBinding(window_index, 0);
 	result.plan = std::move(window);
@@ -519,8 +519,8 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 	return true;
 }
 
-void DirectClauseBounds(const Calc &calc, ExpressionType comparison, bool whole, const DirectBoundColumns &columns,
-                        Ex &lower, Ex &upper) {
+void DirectClauseBounds(const ExpressionBuilder &calc, ExpressionType comparison, bool whole,
+                        const DirectBoundColumns &columns, ExprPtr &lower, ExprPtr &upper) {
 	constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
 	constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 	auto a = calc.Col(LogicalType::DOUBLE, columns.coefficient);
@@ -531,12 +531,12 @@ void DirectClauseBounds(const Calc &calc, ExpressionType comparison, bool whole,
 	bool at_most =
 	    comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO || comparison == ExpressionType::COMPARE_LESSTHAN;
 
-	auto feasible = [&](const Ex &k) {
+	auto feasible = [&](const ExprPtr &k) {
 		return calc.Cmp(comparison, calc.Mul(a, k), r);
 	};
 	auto v = calc.Div(r, a);
-	Ex upper_candidate = v;
-	Ex lower_candidate = v;
+	ExprPtr upper_candidate = v;
+	ExprPtr lower_candidate = v;
 	if (whole) {
 		auto huge = calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, calc.Fn("abs", v),
 		                     calc.Num(DECIDE_MAX_FRACTIONAL_MAGNITUDE));
@@ -577,11 +577,11 @@ void DirectClauseBounds(const Calc &calc, ExpressionType comparison, bool whole,
 	}
 }
 
-void DirectRowBox(const Calc &calc, double static_lower, double static_upper,
-                  const vector<ColumnBinding> &clause_lowers, const vector<ColumnBinding> &clause_uppers, Ex &lower,
-                  Ex &upper) {
-	vector<Ex> lowers {calc.Num(static_lower)};
-	vector<Ex> uppers {calc.Num(static_upper)};
+void DirectRowBox(const ExpressionBuilder &calc, double static_lower, double static_upper,
+                  const vector<ColumnBinding> &clause_lowers, const vector<ColumnBinding> &clause_uppers,
+                  ExprPtr &lower, ExprPtr &upper) {
+	vector<ExprPtr> lowers {calc.Num(static_lower)};
+	vector<ExprPtr> uppers {calc.Num(static_upper)};
 	for (auto &binding : clause_lowers) {
 		lowers.push_back(calc.Col(LogicalType::DOUBLE, binding));
 	}
