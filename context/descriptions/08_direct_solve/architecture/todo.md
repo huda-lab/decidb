@@ -50,15 +50,6 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
   and the website. The setting `decide_direct_solve` and serialized names stay.
 
-## P-18 — Test vocabulary in the docs
-
-- **Problem.** Decision P-16 in § Decisions.
-- **Change.** Apply decision P-16 to `rules.md` § The standard tests every rule ships and the "Verified by" text of
-  `../framework/done.md`.
-- **Done when.** Both files use the glossary names. P-16 chose to rename the files: `git mv` the direct-solve test
-  files to their glossary names, then run the oracle once. The orchestrator estimates the Gurobi cost and runs it on a
-  quiet machine. This is the one task allowed to rename a Python test file.
-
 ## P-17 — Sweep for retired terms
 
 - **Problem.** A rename task covers the files it knows of. Comments, other doc areas and `.claude/` skills may still
@@ -72,8 +63,7 @@ Owner decisions every task below follows. The names they lead to are in `glossar
   `test_decidb_diagnostic_engines.cpp`) is not the retired term. From P-19: the parser tag's string
   `__qualified_reducer__` (`QUALIFIED_AGGREGATE_TAG`), because a saved view stores it; the test files
   `test_qualified_reducer.py`, `test_nested_product_in_reducer.py` and `test_null_coalesce_reducer.py`, test function
-  and class names, the `reducer_*` and `qualified_reducer` parameter ids, and `S1_REDUCER_CASES` and
-  `REDUCER_CONTEXT_CASES` in `test_direct_three_way.py` (oracle decorators use them); comments and strings inside oracle
+  and class names and parameter ids outside the direct-solve suites; comments and strings inside oracle
   test bodies (the body is part of the cache key), in `test_canonicalize_cast.py`, `test_canonicalize_side_agnostic.py`,
   `test_canonicalize_sign.py`, `test_cons_correlated_subquery.py`, `test_infinite_bounds.py`,
   `test_nested_product_in_reducer.py`, `test_null_coalesce_reducer.py`, `test_quadratic_constraints.py`,

@@ -94,21 +94,21 @@ A rule exists to be a light shortcut. Before adding code to a rule or to the sha
 All run in `test/decide/tests/`. The output of any rule must be checkable by these; if a query shape has no standard
 test, adding one is a task in that rule's `todo.md`.
 
-1. **Contract suite** (`test_direct_rule_contract.py`): add a `RuleFixture` in `_direct_rule_fixtures.py`. It checks
-   schema and rows, the all-rows read, prepared-plan selection, serializer round trip, `EXPLAIN` and profiling,
+1. **Conformance suite** (`test_direct_rule_conformance.py`): add a `RuleFixture` in `_direct_rule_fixtures.py`. It
+   checks schema and rows, the all-rows read, prepared-plan selection, serializer round trip, `EXPLAIN` and profiling,
    `require` reasons, `off`, a forced backend, `DIAGNOSE`, and near misses. Each near miss must also answer under `auto`
    exactly as it does under `off`.
-2. **Three-way table** (`test_direct_<rule>.py`; S1's is `test_direct_three_way.py`, A1's is `test_direct_a1.py`): the
-   rule adds its own file with its own case table, a function that builds the oracle model from the rows, and a function
-   that checks one DeciDB assignment against its constraints. The shared scaffold is `_direct_oracle_common.py`: the
-   fixture that lifts a forced backend, `run` and `outcome`, the `VALUES` list builder, and `agree_with_oracle`, which
-   runs the oracle model, the solver path (`off`) and the direct path (`require`, so a query the rule does not apply to
-   fails) and compares them. Keep test names stable, because the oracle cache is keyed on the test node id and the test
-   function's source. All three must agree: both DeciDB runs must satisfy every constraint and reach the oracle's
-   objective, or all must say infeasible. Inputs with no oracle model (bad data) go in the error table, where `off` and
-   `require` must both fail (the choice among several errors need not match; a NULL or NaN message must, apart from ` at
-   row N`), and values the oracle cannot hold (infinities, 2^53) go in the boundary table, where direct is compared with
-   the solver only. Add the shape inside parent queries too.
+2. **Differential oracle test** (`test_direct_<id>_<slug>.py`: `test_direct_s1_uniform_matroid.py`,
+   `test_direct_a1_separable_box.py`): the rule adds its own file with its own case table, a function that builds the
+   oracle model from the rows, and a function that checks one DeciDB assignment against its constraints. The shared
+   scaffold is `_direct_oracle_common.py`: the fixture that lifts a forced backend, `run` and `outcome`, the `VALUES`
+   list builder, and `agree_with_oracle`, which runs the oracle model, the solver path (`off`) and the direct path
+   (`require`, so a query the rule does not apply to fails) and compares them. Keep test names stable, because the
+   oracle cache is keyed on the test node id and the test function's source. All three must agree: both DeciDB runs must
+   satisfy every constraint and reach the oracle's objective, or all must say infeasible. Inputs with no oracle model
+   (bad data) go in the error table, where `off` and `require` must both fail (the choice among several errors need not
+   match; a NULL or NaN message must, apart from ` at row N`), and values the oracle cannot hold (infinities, 2^53) go
+   in the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
 3. **Differential fuzz** (`test_direct_fuzz.py`, comparator in `_direct_differential.py`): supply a seeded query
    generator. Direct (`require`) and solver (`off`) must succeed or fail together (any error counts) and agree on
    row count and primary objective. It finds interactions between shapes that no table lists.

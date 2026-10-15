@@ -1,4 +1,4 @@
-"""Per-rule fixtures for the direct-solve contract suite (`test_direct_rule_contract.py`).
+"""Per-rule fixtures for the direct-solve contract suite (`test_direct_rule_conformance.py`).
 
 The contract a direct-solve rule owes the user is the same for every rule: the DECIDE
 schema and rows, the solver's read of every input row before any row is released,
@@ -270,7 +270,7 @@ A1 = RuleFixture(
         ("x(REAL)", "x<=cap", "MAXIMIZE SUM(random()*x)", "coefficient_shape"),
         ("x(REAL)", "x<=cap WHEN (random()<2)", "MAXIMIZE SUM(p*x)", "constraint_scope"),
         ("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x) WHEN (random()<2)", "objective_scope"),
-        # Objectives outside the class. Ones the solver itself rejects are in test_direct_a1.py.
+        # Objectives outside the class. Ones the solver itself rejects are in test_direct_a1_separable_box.py.
         ("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x) PER id", "objective_scope"),
         ("x(REAL)", "x<=cap", "MAXIMIZE AVG(p*x)", "objective_shape"),
         ("x(REAL)", "x<=cap", "MAXIMIZE MIN(p*x)", "objective_shape"),

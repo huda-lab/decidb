@@ -18,7 +18,7 @@ check). Design: `../architecture/`.
   with a reason, and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the
   front end does not expect are not-proved parts. No IR node is kept that no rule reads. It uses the same term splitter
   as the solver path.
-- **Rule contract.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
+- **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
   rule driver runs CheckCondition for every rule. Rules are disjoint, so at most one applies to a query; two that apply
   raise an internal error naming both rules.
@@ -138,11 +138,11 @@ check). Design: `../architecture/`.
   no lower bound written takes the default floor of 0 (`EffectiveLower`). No value is reserved to mean "unset", so a
   value the user writes can never be mistaken for one.
 - **One test scaffold.** `test/decide/tests/_direct_oracle_common.py` holds what the oracle suites share: the autouse
-  fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, and `agree_with_oracle` (oracle model, `off`, `require`,
-  then a rule-supplied check of one assignment). `test_direct_three_way.py` (S1) and `test_direct_a1.py` keep their case
-  tables, oracle-model builders and assignment checks. Every direct suite imports the autouse fixture by name from the
-  scaffold (pytest applies an autouse fixture only in a file that can see it), and none defines its own. A new rule's
-  suite imports the scaffold (`architecture/rules.md`, item 2).
+  fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, and `agree_with_oracle` (oracle model, `off`,
+  `require`, then a rule-supplied check of one assignment). `test_direct_s1_uniform_matroid.py` and
+  `test_direct_a1_separable_box.py` keep their case tables, oracle-model builders and assignment checks. Every direct
+  suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can
+  see it), and none defines its own. A new rule's suite imports the scaffold (`architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
   example `auto: 2322 passed, 0 xfailed, 0 failed`. The comment above `DirectDomain` in `direct_rule.hpp` points at
   `architecture/ir.md`.
@@ -153,12 +153,13 @@ check). Design: `../architecture/`.
   as a not-proved part, not an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
   with every reason, a rule that applies beside one that does not, two rules applying as an internal error, mismatched
   slot, breaker under `LIMIT 1` and `COUNT(*)`).
-- Python: `test_direct_rule_contract.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read, serializer, prepared
-  plans, near misses, `off`, forced backend, `DIAGNOSE`, an empty source, and constant bounds that contradict the decision's
-  built-in domain: under `auto`, `off` and `require` each gives the solver's outcome, or `require` declines) and the
-  parent-context rows of `test_direct_three_way.py`. Both fuzz generators in `test_direct_fuzz.py` run about one query in ten
-  over an empty source and add an impossible constant bound now and then; with A1's domain check disabled, the contract test
-  and the A1 fuzz fail. `test_direct_user_facing.py` checks which noun a NaN or infinite coefficient names.
+- Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read,
+  serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE`, an empty source, and constant bounds that
+  contradict the decision's built-in domain: under `auto`, `off` and `require` each gives the solver's outcome, or
+  `require` declines) and the parent-context rows of `test_direct_s1_uniform_matroid.py`. Both fuzz generators in
+  `test_direct_fuzz.py` run about one query in ten over an empty source and add an impossible constant bound now and
+  then; with A1's domain check disabled, the conformance test and the A1 fuzz fail. `test_direct_user_facing.py` checks
+  which noun a NaN or infinite coefficient names.
 
 ## Registering a rule
 

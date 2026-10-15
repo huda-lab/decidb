@@ -1,7 +1,7 @@
 """What a SQL user sees of direct solve besides the answer: the default mode, error wording, memory use, and policy.
 
-The answers themselves are checked in `test_direct_three_way.py` and the per-rule contract in
-`test_direct_rule_contract.py`.
+The answers themselves are checked in `test_direct_s1_uniform_matroid.py` and the per-rule contract in
+`test_direct_rule_conformance.py`.
 """
 
 import re
@@ -531,7 +531,7 @@ def test_inner_join_passthrough_prunes_stored_payload_but_keeps_computed_errors(
 
 @pytest.mark.correctness
 def test_invalid_forced_solver_and_disabled_optimizer_policy(decidb_cli):
-    # DIAGNOSE and a valid forced backend are part of every rule's contract (test_direct_rule_contract.py).
+    # DIAGNOSE and a valid forced backend are part of every rule's contract (test_direct_rule_conformance.py).
     sql = _source_query((2.0, 9.0), 1)
     invalid = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "unknown_backend"})
     error = _raw(invalid, sql, mode="auto").stderr

@@ -20,7 +20,7 @@ before rounding and got 2 and 1; both paths now share one function for the shift
 checked against the oracle on the direct path and on the solver path.
 
 What a result comparison cannot see (which plan ran, EXPLAIN, prepared plans, DIAGNOSE, pruning) stays in
-`test_direct_rule_contract.py`.
+`test_direct_rule_conformance.py`.
 
 Note: `oracle_solver` caches each result under the test node id plus a hash of the test function's source. The case
 tables live outside that source, so editing a case does not invalidate the cache; a stale value fails loudly with an

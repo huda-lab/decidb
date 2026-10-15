@@ -1,4 +1,4 @@
-"""The scaffold every direct-solve oracle suite shares (`test_direct_three_way.py`, `test_direct_a1.py`).
+"""The scaffold every direct-solve oracle suite shares (`test_direct_s1_uniform_matroid.py`, `test_direct_a1_separable_box.py`).
 
 A rule's suite supplies its own case table, its own function that builds the oracle model, and its own check of one
 DeciDB assignment. This module supplies the rest: the fixture that keeps a forced backend out of the way, running a

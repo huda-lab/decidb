@@ -1,6 +1,6 @@
 """Seeded differential fuzz: random small S1 and A1 queries, run on the solver path (`off`) and the direct path (`require`).
 
-Where `test_direct_three_way.py` lists the cases a person thought of, this finds the interactions nobody listed. The
+Where `test_direct_s1_uniform_matroid.py` lists the cases a person thought of, this finds the interactions nobody listed. The
 comparator and its rules are in `_direct_differential.py`.
 """
 
@@ -202,7 +202,7 @@ def _a1_bound(rng, domain):
     ]
     if domain == "INT":
         # Strict bounds against whole constants and against columns are where the solver and direct solve agree;
-        # a strict bound against a fractional literal is covered by the table in test_direct_a1.py.
+        # a strict bound against a fractional literal is covered by the table in test_direct_a1_separable_box.py.
         options += [f"x < {int(upper) + 1}", f"x > {lower - 1}", "x < c", "x > lo", "2*x < c"]
     if domain in ("BOOL", "INT"):
         options += ["x <= f", "x >= f WHEN (id > 1)"]
