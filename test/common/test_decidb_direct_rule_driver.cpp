@@ -22,8 +22,8 @@ struct StubCondition final : DirectApplicabilityCondition {};
 //! How a stub plan reads its input before it releases rows.
 enum class StubValidation : uint8_t {
 	NONE,
-	//! Checks the first source column for NULL in a projection that streams.
-	STREAMING,
+	//! Checks the first source column for NULL in a pipelined projection.
+	PIPELINED,
 	//! The same check behind DirectValidationBreaker.
 	BREAKER
 };
@@ -31,19 +31,19 @@ enum class StubValidation : uint8_t {
 //! A rule with fixed answers. Its plan assigns every row `value`.
 class StubRule final : public DirectSolveRule {
 public:
-	StubRule(string name_p, bool proves_p, int32_t value_p, StubValidation validation_p = StubValidation::NONE)
-	    : name(std::move(name_p)), proves(proves_p), value(value_p), validation(validation_p) {
+	StubRule(string name_p, bool applies_p, int32_t value_p, StubValidation validation_p = StubValidation::NONE)
+	    : name(std::move(name_p)), applies(applies_p), value(value_p), validation(validation_p) {
 	}
 
-	bool wrong_output_slot = false;
+	bool wrong_slot_map = false;
 
 	const char *Name() const override {
 		return name.c_str();
 	}
 	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &, ClientContext &,
 	                                                                string &reason) const override {
-		if (!proves) {
-			reason = "stub_miss: " + name;
+		if (!applies) {
+			reason = "stub_not_applied: " + name;
 			return nullptr;
 		}
 		return make_uniq<StubCondition>();
@@ -69,7 +69,7 @@ public:
 			plan = std::move(breaker.plan);
 			input = breaker.input_bindings;
 			check = DirectColumn(LogicalType::BIGINT, breaker.breaker);
-		} else if (validation == StubValidation::STREAMING) {
+		} else if (validation == StubValidation::PIPELINED) {
 			check = valid(bindings);
 		}
 		auto index = optimizer.binder.GenerateTableIndex();
@@ -88,7 +88,7 @@ public:
 		for (idx_t i = 0; i <= input.size(); i++) {
 			substitute.slot_map.push_back(i);
 		}
-		if (wrong_output_slot) {
+		if (wrong_slot_map) {
 			substitute.slot_map.back() = 0;
 		}
 		substitute.prunable_decisions.push_back(1);
@@ -98,7 +98,7 @@ public:
 
 private:
 	string name;
-	bool proves;
+	bool applies;
 	int32_t value;
 	StubValidation validation;
 };
@@ -158,8 +158,8 @@ TEST_CASE("Direct rule driver falls back to the solver and lists why each rule d
 	auto required = con.Query(QUERY);
 	REQUIRE(required->HasError());
 	auto &message = required->GetError();
-	REQUIRE(message.find("STUB_A: stub_miss: STUB_A") != string::npos);
-	REQUIRE(message.find("STUB_B: stub_miss: STUB_B") != string::npos);
+	REQUIRE(message.find("STUB_A: stub_not_applied: STUB_A") != string::npos);
+	REQUIRE(message.find("STUB_B: stub_not_applied: STUB_B") != string::npos);
 	REQUIRE(message.find("solver skipped=true") != string::npos);
 }
 
@@ -169,35 +169,35 @@ TEST_CASE("Direct rule driver runs the rule that applies when another does not",
 	SECTION("the missing rule is registered first") {
 		InstallRules(con, [] {
 			RuleList rules;
-			rules.push_back(make_uniq<StubRule>("STUB_MISS", false, 0));
-			rules.push_back(make_uniq<StubRule>("STUB_PROVES", true, 1));
+			rules.push_back(make_uniq<StubRule>("STUB_NOT_APPLIED", false, 0));
+			rules.push_back(make_uniq<StubRule>("STUB_APPLIES", true, 1));
 			return rules;
 		});
 		auto result = con.Query(QUERY);
 		REQUIRE(CHECK_COLUMN(result, 1, {1, 1, 1}));
 		auto plan = ExplainText(con, QUERY);
-		REQUIRE(plan.find("STUB_PROVES") != string::npos);
-		REQUIRE(plan.find("STUB_MISS") == string::npos);
+		REQUIRE(plan.find("STUB_APPLIES") != string::npos);
+		REQUIRE(plan.find("STUB_NOT_APPLIED") == string::npos);
 	}
 	SECTION("the missing rule is registered last") {
 		InstallRules(con, [] {
 			RuleList rules;
-			rules.push_back(make_uniq<StubRule>("STUB_PROVES", true, 1));
-			rules.push_back(make_uniq<StubRule>("STUB_MISS", false, 0));
+			rules.push_back(make_uniq<StubRule>("STUB_APPLIES", true, 1));
+			rules.push_back(make_uniq<StubRule>("STUB_NOT_APPLIED", false, 0));
 			return rules;
 		});
 		auto result = con.Query(QUERY);
 		REQUIRE(CHECK_COLUMN(result, 1, {1, 1, 1}));
 		auto plan = ExplainText(con, QUERY);
-		REQUIRE(plan.find("STUB_PROVES") != string::npos);
-		REQUIRE(plan.find("STUB_MISS") == string::npos);
+		REQUIRE(plan.find("STUB_APPLIES") != string::npos);
+		REQUIRE(plan.find("STUB_NOT_APPLIED") == string::npos);
 	}
 }
 
 TEST_CASE("Direct rule driver treats two rules that apply to one query as an internal error", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	SECTION("two proving rules are named") {
+	SECTION("two rules that apply are named") {
 		InstallRules(con, [] {
 			RuleList rules;
 			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
@@ -215,7 +215,7 @@ TEST_CASE("Direct rule driver treats two rules that apply to one query as an int
 		InstallRules(con, [] {
 			RuleList rules;
 			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
-			rules.push_back(make_uniq<StubRule>("STUB_MISS", false, 0));
+			rules.push_back(make_uniq<StubRule>("STUB_NOT_APPLIED", false, 0));
 			rules.push_back(make_uniq<StubRule>("STUB_SECOND", true, 1));
 			return rules;
 		});
@@ -224,9 +224,9 @@ TEST_CASE("Direct rule driver treats two rules that apply to one query as an int
 		auto &message = result->GetError();
 		REQUIRE(message.find("STUB_FIRST") != string::npos);
 		REQUIRE(message.find("STUB_SECOND") != string::npos);
-		REQUIRE(message.find("STUB_MISS") == string::npos);
+		REQUIRE(message.find("STUB_NOT_APPLIED") == string::npos);
 	}
-	SECTION("every proving rule is named when more than two prove") {
+	SECTION("every rule that applies is named when more than two apply") {
 		InstallRules(con, [] {
 			RuleList rules;
 			rules.push_back(make_uniq<StubRule>("STUB_FIRST", true, 0));
@@ -244,26 +244,26 @@ TEST_CASE("Direct rule driver treats two rules that apply to one query as an int
 }
 
 TEST_CASE("Direct rule driver treats a broken rule as an internal error", "[decidb]") {
-	SECTION("output slot that does not match the DECIDE output") {
+	SECTION("slot map that does not match the DECIDE outputs") {
 		DuckDB db(nullptr);
 		Connection con(db);
 		InstallRules(con, [] {
 			RuleList rules;
 			auto rule = make_uniq<StubRule>("STUB_WRONG_SLOT", true, 1);
-			rule->wrong_output_slot = true;
+			rule->wrong_slot_map = true;
 			rules.push_back(std::move(rule));
 			return rules;
 		});
 		auto result = con.Query(QUERY);
 		REQUIRE(result->HasError());
-		REQUIRE(result->GetError().find("mismatched output slot") != string::npos);
+		REQUIRE(result->GetError().find("slot map that does not match") != string::npos);
 	}
 }
 
 TEST_CASE("Direct validation breaker reads every row before an outer LIMIT or COUNT returns", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	// One thread, so a streaming plan under LIMIT 1 deterministically stops after its first chunk.
+	// One thread, so a pipelined plan under LIMIT 1 deterministically stops after its first chunk.
 	REQUIRE_NO_FAIL(con.Query("SET threads=1"));
 	auto install = [&](StubValidation validation) {
 		InstallRules(con, [validation] {
@@ -276,9 +276,9 @@ TEST_CASE("Direct validation breaker reads every row before an outer LIMIT or CO
 	                      " DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(v*x)";
 
 	// Without the breaker the late NULL is never read: the check is only as eager as the parent.
-	install(StubValidation::STREAMING);
-	auto streaming = con.Query("SELECT v FROM (" + decide + ") q LIMIT 1");
-	REQUIRE_NO_FAIL(*streaming);
+	install(StubValidation::PIPELINED);
+	auto pipelined = con.Query("SELECT v FROM (" + decide + ") q LIMIT 1");
+	REQUIRE_NO_FAIL(*pipelined);
 
 	install(StubValidation::BREAKER);
 	for (auto &outer : {"SELECT v FROM (" + decide + ") q LIMIT 1", "SELECT COUNT(*) FROM (" + decide + ") q"}) {
@@ -291,7 +291,7 @@ TEST_CASE("Direct validation breaker reads every row before an outer LIMIT or CO
 	REQUIRE(nothing->RowCount() == 0);
 }
 
-TEST_CASE("With both real rules registered each query shape reaches the rule that proves it", "[decidb]") {
+TEST_CASE("With both real rules registered each query shape reaches the rule that applies to it", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(
@@ -315,7 +315,7 @@ TEST_CASE("With both real rules registered each query shape reaches the rule tha
 		REQUIRE(a1_plan.find("A1_SEPARABLE_BOX") != string::npos);
 		REQUIRE(a1_plan.find("S1_UNIFORM_MATROID") == string::npos);
 	}
-	// A query neither proves lists both rules' reasons and leaves the solver to run.
+	// A query neither rule applies to lists both rules' reasons and leaves the solver to run.
 	auto no_rule = con.Query("SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 5 MAXIMIZE SUM(score*x)");
 	REQUIRE(no_rule->HasError());
 	REQUIRE(no_rule->GetError().find("S1_UNIFORM_MATROID: ") != string::npos);

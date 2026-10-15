@@ -57,9 +57,9 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
   `COUNT(*)`. A plan that could stream wraps its checks in `DirectValidationBreaker`; a rank window already reads
   everything. Only `LIMIT 0` may skip the read.
 - **An error on the same inputs.** Where the solver raises, direct solve raises: empty scoped aggregate; invalid
-  data-valued bounds and pins (including rows a `WHEN` or NULL `PER` key excludes); invalid objective coefficients
-  (NULL, NaN, infinity); infeasibility. Silently answering where the solver refuses is a wrong answer. What the rule
-  does **not** owe: the solver's choice among several errors in one query (any one of the applicable errors is
+  data-valued bounds and fixed values (including rows a `WHEN` or NULL `PER` key excludes); invalid objective
+  coefficients (NULL, NaN, infinity); infeasibility. Silently answering where the solver refuses is a wrong answer. What
+  the rule does **not** owe: the solver's choice among several errors in one query (any one of the applicable errors is
   enough), or the ` at row N` the solver adds to a NaN or infinite value, because N is a scan position a plan cannot
   name. Every other message the solver words for the user is the solver's text (see User-facing wording).
 - **One numeric domain.** Values are evaluated with DuckDB's semantics, then converted to DOUBLE. Counts are exact only

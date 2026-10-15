@@ -41,8 +41,8 @@ DirectSolveMode GetDirectSolveMode(ClientContext &context) {
 
 namespace {
 
-//! The `require` error for a query no rule proved: why each rule does not apply, and that no solver ran.
-string RequireMissText(const string &reason) {
+//! The `require` error for a query no rule applies to: why each rule does not apply, and that no solver ran.
+string RequireNotAppliedText(const string &reason) {
 	return StringUtil::Format("%s (rule=none; solver skipped=true)", reason);
 }
 
@@ -60,17 +60,18 @@ void DirectSolveModeSetCallback(ClientContext &, SetScope, Value &parameter) {
 
 //! The rules this connection tries: the registered ones, unless a rule driver test installed its own.
 vector<unique_ptr<DirectSolveRule>> RulesFor(ClientContext &context) {
-	auto override_rules = context.registered_state->Get<DirectRuleTestSeam>(DIRECT_RULE_TEST_SEAM_KEY);
-	return override_rules ? override_rules->make_rules() : RegisteredDirectRules();
+	auto seam_rules = context.registered_state->Get<DirectRuleTestSeam>(DIRECT_RULE_TEST_SEAM_KEY);
+	return seam_rules ? seam_rules->make_rules() : RegisteredDirectRules();
 }
 
 } // namespace
 
 void RegisterDirectSolve(DBConfig &config) {
-	config.AddExtensionOption("decide_direct_solve",
-	                          "DECIDE direct solve mode: auto (default) uses a proved relational plan and otherwise the "
-	                          "solver; off always uses the solver; require errors when no relational plan is proved",
-	                          LogicalType::VARCHAR, Value("auto"), DirectSolveModeSetCallback);
+	config.AddExtensionOption(
+	    "decide_direct_solve",
+	    "DECIDE direct solve mode: auto (default) uses a relational plan from a rule that applies and "
+	    "otherwise the solver; off always uses the solver; require errors when no rule applies",
+	    LogicalType::VARCHAR, Value("auto"), DirectSolveModeSetCallback);
 	config.operator_extensions.push_back(MakeDirectResultAdapterExtension());
 }
 
@@ -87,7 +88,8 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 			auto reason = decide.diagnose ? "policy_diagnose: DIAGNOSE requires the solver"
 			                              : "policy_forced_solver: DECIDB_FORCE_SOLVER is set";
 			throw InvalidInputException("decide_direct_solve=require conflicts with %s: %s",
-			                            decide.diagnose ? "DIAGNOSE" : "DECIDB_FORCE_SOLVER", RequireMissText(reason));
+			                            decide.diagnose ? "DIAGNOSE" : "DECIDB_FORCE_SOLVER",
+			                            RequireNotAppliedText(reason));
 		}
 		// A DIAGNOSE query or a forced backend keeps the solver path; there is nothing to report.
 		return op;
@@ -97,42 +99,42 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 	}
 	auto &source = *decide.children[0];
 	auto ir = DirectIR::Read(optimizer.context, decide);
-	struct ProvedCandidate {
+	struct AppliedCandidate {
 		const DirectSolveRule *rule;
 		unique_ptr<DirectApplicabilityCondition> condition;
 	};
-	vector<ProvedCandidate> proved;
-	vector<string> misses;
+	vector<AppliedCandidate> applied;
+	vector<string> not_applied;
 	auto rules = RulesFor(optimizer.context);
 	for (auto &rule : rules) {
 		string reason;
 		auto condition = rule->CheckCondition(ir, optimizer.context, reason);
 		if (!condition) {
-			misses.push_back(rule->Name() + string(": ") + reason);
+			not_applied.push_back(rule->Name() + string(": ") + reason);
 			continue;
 		}
-		proved.push_back({rule.get(), std::move(condition)});
+		applied.push_back({rule.get(), std::move(condition)});
 	}
-	if (proved.empty()) {
+	if (applied.empty()) {
 		if (mode == DirectSolveMode::REQUIRE) {
 			throw InvalidInputException("decide_direct_solve=require: %s",
-			                            RequireMissText(StringUtil::Join(misses, "; ")));
+			                            RequireNotAppliedText(StringUtil::Join(not_applied, "; ")));
 		}
 		// A query no rule applies to under auto leaves the DECIDE node, and its EXPLAIN output, exactly as the solver
-		// path has it. `require` is how a user asks why a query was not proved.
+		// path has it. `require` is how a user asks why no rule applied to a query.
 		return op;
 	}
 	// Every rule ran, so a second rule that applies is seen. Rules tell queries apart by the IR they require; two rules
 	// that apply to one query mean the rules overlap, which no ordering or cost can settle safely.
-	if (proved.size() > 1) {
+	if (applied.size() > 1) {
 		vector<string> names;
-		for (auto &candidate : proved) {
+		for (auto &candidate : applied) {
 			names.push_back(candidate.rule->Name());
 		}
-		throw InternalException("Direct solve rules %s %s proved one query; rules must be disjoint",
+		throw InternalException("Direct solve rules %s %s applied to one query; rules must be disjoint",
 		                        StringUtil::Join(names, ", "), names.size() == 2 ? "both" : "all");
 	}
-	auto &selected = proved[0];
+	auto &selected = applied[0];
 	DirectExplainAnnotation annotation;
 	annotation.mode = ModeName(mode);
 	annotation.rule = selected.rule->Name();

@@ -1,7 +1,7 @@
 """What a SQL user sees of direct solve besides the answer: the default mode, error wording, memory use, and policy.
 
-The answers themselves are checked in `test_direct_s1_uniform_matroid.py` and the per-rule contract in
-`test_direct_rule_conformance.py`.
+The answers themselves are checked in `test_direct_s1_uniform_matroid.py` and what every rule owes the user in
+the conformance suite, `test_direct_rule_conformance.py`.
 """
 
 import re
@@ -70,7 +70,7 @@ def test_direct_solve_is_on_by_default(decidb_cli):
     rows, _ = decidb_cli.execute(s1)
     assert sum(row[2] for row in rows) == 1 and sum(row[1] * row[2] for row in rows) == 9.0
 
-    # A shape direct solve does not prove keeps the solver plan and prints nothing about direct solve.
+    # A shape no rule applies to keeps the solver plan and prints nothing about direct solve.
     weighted = """
         SELECT id, x FROM (
             FROM (VALUES (1, 2.0, 3), (2, 9.0, 2)) t(id, score, weight)
@@ -155,7 +155,7 @@ def test_null_score_error_quotes_the_score(decidb_cli):
 
 
 _NULL_ERROR_CASES = {
-    # S1: the score, a pin and a count bound.
+    # S1: the score, a fixed value and a count bound.
     "s1_score_column": (
         "FROM (VALUES (1, 1.0), (2, NULL::DOUBLE)) t(id, score) "
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(score * x)"
@@ -188,11 +188,11 @@ _NULL_ERROR_CASES = {
         "FROM (VALUES (1, 1.0, 2.0), (2, 3.0, NULL::DOUBLE)) t(id, score, cap) "
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= cap MAXIMIZE SUM(score * x)"
     ),
-    "s1_numeric_pin_column": (
+    "s1_numeric_fixed_column": (
         "FROM (VALUES (1, 1.0, 1), (2, 3.0, NULL::INTEGER)) t(id, score, p) "
         "DECIDE x(BOOL) SUCH THAT x <= p AND SUM(x) <= 1 MAXIMIZE SUM(score * x)"
     ),
-    "s1_boolean_pin_column": (
+    "s1_boolean_fixed_column": (
         "FROM (VALUES (1, 1.0, true), (2, 3.0, NULL::BOOLEAN)) t(id, score, p) "
         "DECIDE x(BOOL) SUCH THAT x <= p AND SUM(x) <= 1 MAXIMIZE SUM(score * x)"
     ),
@@ -245,7 +245,7 @@ _INVALID_VALUE_CASES = {
         "FROM (VALUES (1, 1.0, 2.0), (2, 3.0, 'NaN'::DOUBLE)) t(id, score, cap) "
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= cap MAXIMIZE SUM(score * x)"
     ),
-    "s1_pin_column_nan": (
+    "s1_fixed_column_nan": (
         "FROM (VALUES (1, 1.0, 1.0), (2, 3.0, 'NaN'::DOUBLE)) t(id, score, p) "
         "DECIDE x(BOOL) SUCH THAT x <= p AND SUM(x) <= 1 MAXIMIZE SUM(score * x)"
     ),
@@ -284,7 +284,7 @@ def test_null_value_error_is_the_solvers_error_word_for_word(decidb_cli, name):
 
 
 # A value that names many columns: the message must name exactly the columns that are NULL on the failing row, however
-# many the value has, and the plan stays one that direct solve proves (it is not capped at a few names).
+# many the value has, and a rule still applies to the query (it is not capped at a few names).
 _WIDE_NULL_SUBSETS = {
     "one_null_first": (0,),
     "one_null_last": (-1,),
@@ -318,7 +318,7 @@ def _wide_null_decide(shape, width, subset):
 def test_null_error_of_a_wide_value_is_the_solvers_error_word_for_word(decidb_cli, shape, width, subset):
     decide = _wide_null_decide(shape, width, _WIDE_NULL_SUBSETS[subset])
     direct, solver = _errors(decidb_cli, decide)
-    # `require` raises the NULL error, not a "direct solve could not prove this" error, so the plan was proved.
+    # `require` raises the NULL error, not a "no rule applied" error, so a rule applied.
     assert "is NULL" in direct or "are NULL" in direct, direct
     assert "Direct solve" not in direct and "direct solve" not in direct, direct
     assert direct == solver
@@ -531,7 +531,8 @@ def test_inner_join_passthrough_prunes_stored_payload_but_keeps_computed_errors(
 
 @pytest.mark.correctness
 def test_invalid_forced_solver_and_disabled_optimizer_policy(decidb_cli):
-    # DIAGNOSE and a valid forced backend are part of every rule's contract (test_direct_rule_conformance.py).
+    # DIAGNOSE and a valid forced backend are checked for every rule in the conformance suite
+    # (test_direct_rule_conformance.py).
     sql = _source_query((2.0, 9.0), 1)
     invalid = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "unknown_backend"})
     error = _raw(invalid, sql, mode="auto").stderr
@@ -653,9 +654,9 @@ def test_second_read_only_for_a_stored_table_and_a_column_the_rule_does_not_use(
     setup = _late_materialization_setup(rule)
     decide = _late_materialization_decide(rule)
 
-    def scans(sql, expected_rule_hit=True):
+    def scans(sql, expected_rule_applies=True):
         plan = _raw(decidb_cli, setup + f"EXPLAIN {sql}").stdout
-        assert ("Direct solve rule" in plan) == expected_rule_hit
+        assert ("Direct solve rule" in plan) == expected_rule_applies
         return _table_scans(plan)
 
     # Nothing the rule does not use is read: no second scan.
@@ -717,7 +718,7 @@ def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
 
 
 @pytest.mark.correctness
-def test_a1_plan_that_streams_does_not_read_twice(decidb_cli):
+def test_a1_pipelined_plan_does_not_read_twice(decidb_cli):
     setup = _late_materialization_setup("a1")
     # Every row sees the same bounds and coefficients, so the plan holds nothing and a late materialization would only add a join.
     decide = "FROM rr_src DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 10 MAXIMIZE SUM(2 * x)"

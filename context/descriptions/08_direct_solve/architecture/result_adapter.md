@@ -71,7 +71,7 @@ Where two values are given they are two runs. The 512-byte payload is 488 MiB pe
   (about one copy; the rank's sort buffer is the likely reason, not isolated). The control itself grows only with the narrow columns.
 - Reading the source twice stays near the control: 73 and 353 MiB for A1, 145 to 149 and 811 to 829 MiB for S1, which is
   the narrow plan plus the join. That is 4.0 to 14.8 times less than holding at 5,000,000 rows.
-- The wide column is the cause. Without it nothing grows (control), and a plain scan of the same payload streams
+- The wide column is the cause. Without it nothing grows (control), and a plain scan of the same payload is pipelined
   in 6 to 14 MiB.
 - Peak memory is the only thing measured here. The machine was busy with a build, so the wall times (0.3 to 1.9 s) are
   indicative only. Why a wide result is slow to collect is not isolated.
@@ -100,7 +100,7 @@ extra. With a parent that reads a `BIGINT` key, A1 took 0.12 s moved against 0.1
 1,000,000 rows and 0.44 against 0.52 s (346 against 370 MiB) at 5,000,000; S1's global top-K at 5,000,000 rows took
 0.28 to 0.33 s moved against 0.21 to 0.25 s held, with the same memory. The fixed-width rule gives up A1's small gain to
 avoid S1's 30% loss, and needs no tuning number. A join, an aggregate, a volatile or computed column, or a source that already reads `rowid` keeps the single
-read: those have no stable row key, or reading them twice could change the rows. A plan that streams (A1's constant
+read: those have no stable row key, or reading them twice could change the rows. A pipelined plan (A1's constant
 problem) also keeps one read, since it holds nothing.
 
 The step runs inside the `UNUSED_COLUMNS` pass, right after removal, not beside DuckDB's `LATE_MATERIALIZATION` (which

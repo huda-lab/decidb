@@ -36,11 +36,11 @@ set `require`.
 - **Strict bounds against a fraction.** A bare `x > 0.5` or `x < 2.5` on an `INT` or `BOOL` (no `WHEN`) gives `x >= 1`
   and `x <= 2` on the solver, in A1 and in S1, which take the shift from one function (`DecideStrictBound`), so `auto` and
   `off` agree on this shape.
-- **Error wording and error choice.** Direct solve owes an error on the same inputs, and the solver's text for it
-  (see `rules.md`), not the solver's pick among several errors. The NULL and NaN messages come from the functions the
-  solver calls (`decide_value_messages.hpp`), so a NULL score, target, coefficient or bound names the NULL columns on
-  the failing row as the solver does. Direct omits the solver's "at row N" on purpose: N is a position in scan order,
-  not a key. Two messages stay direct solve's own: an S1 bound or pin that is a computed expression rather than one
+- **Error wording and error choice.** Direct solve owes an error on the same inputs, and the solver's text for it (see
+  `rules.md`), not the solver's pick among several errors. The NULL and NaN messages come from the functions the solver
+  calls (`decide_value_messages.hpp`), so a NULL score, target, coefficient or bound names the NULL columns on the
+  failing row as the solver does. Direct omits the solver's "at row N" on purpose: N is a position in scan order, not a
+  key. Two messages stay direct solve's own: an S1 bound or fixed value that is a computed expression rather than one
   column (the plan counts bad rows over the whole input and has no failing row to name columns from), and an `=` bound
   that varies within a group (the solver names the first two values it meets in scan order).
 - **Numeric edge cases.** Scores are compared to zero in the finite DOUBLE domain with no epsilon. Both solvers

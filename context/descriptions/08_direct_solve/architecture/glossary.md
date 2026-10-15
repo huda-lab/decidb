@@ -26,7 +26,7 @@ Conventions that apply to every row:
 
 | Name | Standard idea | Source | Covers | Retired |
 |---|---|---|---|---|
-| IR | Intermediate representation: a neutral form of the program that later passes read instead of the source tree | Compiler texts (front end, IR, back end) | `DirectProblemFacts` → `DirectIR`; `DirectDecisionFact` → `DirectIRDecision`; `DirectConstraintFact` → `DirectIRConstraint`; `DirectObjectiveFact` → `DirectIRObjective`; `DirectScopeFact` → `DirectIRScope`; `DirectEntityScopeFact` → `DirectIREntityScope`; `FindDirectFactsInput` → `FindDirectIRInput`; variables `facts` → `ir`, `fact` → `ir_node`; test helpers `QueryFacts` → `QueryIR`, `FactsQuery` → `IRQuery`; `direct_problem.cpp` → `direct_ir.cpp`; `architecture/facts.md` → `architecture/ir.md` | facts, fact, `*Fact`, `Facts` |
+| IR | Intermediate representation: a neutral form of the program that later passes read instead of the source tree | Compiler texts (front end, IR, back end) | `DirectProblemFacts` → `DirectIR`; `DirectDecisionFact` → `DirectIRDecision`; `DirectIRConstraint` → `DirectIRConstraint`; `DirectObjectiveFact` → `DirectIRObjective`; `DirectScopeFact` → `DirectIRScope`; `DirectEntityScopeFact` → `DirectIREntityScope`; `FindDirectFactsInput` → `FindDirectIRInput`; variables `facts` → `ir`, `fact` → `ir_node`; test helpers `QueryFacts` → `QueryIR`, `FactsQuery` → `IRQuery`; `direct_problem.cpp` → `direct_ir.cpp`; `architecture/facts.md` → `architecture/ir.md` | facts, fact, `*Fact`, `Facts` |
 | front end | The pass that reads the source tree and builds the IR; the only code that knows `LogicalDecide`'s layout | Compiler texts | `FactReader` → `DirectFrontEnd` | fact reader, adapter (for the second front end) |
 | conservative analysis | An analysis that reports only what it can prove, and "not proved" for anything else, so a wrong rewrite cannot follow from it | Static analysis (soundness) | `DirectFactStatus` → `DirectAnalysisStatus` with `PROVED` / `NOT_PROVED`; `FirstUnknownReason` → `FirstNotProvedReason`; `MarkUnknown` → `MarkNotProved`; `require` reasons `constraint_facts_unknown:` → `constraints_not_proved:`, `objective_facts_unknown:` → `objective_not_proved:`. Not the canonicalizer's `DecideTermKind::UNKNOWN` | unknown fails closed, `KNOWN`, `UNKNOWN` |
 | aggregate | An aggregate function call over decision expressions (`SUM`, `AVG`, `MIN`, `MAX`, `COUNT`) | DuckDB (`BoundAggregateExpression`), SQL | `DirectReducer` → `DirectAggregate`; `S1Reducer` → `Aggregate` (in its namespace); `QUALIFIED_REDUCER_TAG` → `QUALIFIED_AGGREGATE_TAG` (`__qualified_aggregate__`); `ContainsReducer`, `ReadReducer`, `ClassifyReducerCall`, `IsIntegerValuedReducer`, `UnwrapQualifiedReducer`, `TryParseQualifiedReducerTag`, `EvaluateRhsReducerPerGroup`, `rhs_reducers`, `reducers_needed`, `reducer_result`, `reducer_values`, `ReducerProblem` → the same names with `Aggregate`; `04_testing/qualified_reducer/` → `04_testing/qualified_aggregate/`; `require` reasons and docs that say "reducer". Not DuckDB's own `ExpressionDepthReducer` | reducer, reducers |
@@ -100,3 +100,24 @@ value. Classes without code take the name in docs only until their code exists.
 | conformance suite | One suite every rule must pass, fed by a fixture per rule | Conformance testing | `test_direct_rule_contract.py` → `test_direct_rule_conformance.py`; `_direct_rule_fixtures.py` (name kept) | contract suite |
 | test matrix | The checks run under every setting combination | Standard | `test/decide/run_direct_matrix.sh` (name kept) | none |
 | C++ regressions | Unit tests of the IR and the rule driver | none | `test_decidb_direct_facts.cpp` → `test_decidb_direct_ir.cpp`; `test_decidb_direct_coordinator.cpp` → `test_decidb_direct_rule_driver.cpp` | facts, coordinator in test names |
+
+## Where a retired word stays
+
+A retired word survives only where changing it would break something or where it means something else.
+
+- **Saved or serialized names.** The plan serializer's property `"proof"` (id 209, `direct_result_adapter.cpp`; the
+  field behind it is `condition`) and the parser tag string `__qualified_reducer__` (`QUALIFIED_AGGREGATE_TAG`), which
+  a saved view stores. Renaming either would stop older plans or database files from reading back.
+- **Oracle cache keys.** A Python test's cached oracle answer is keyed on its node id and its function's source, so
+  outside the direct-solve suites the old words stay in test file names (`test_qualified_reducer.py`,
+  `test_nested_product_in_reducer.py`, `test_null_coalesce_reducer.py`), test function and class names, parameter ids,
+  and comments or strings inside oracle test bodies. In `test_direct_user_facing.py` the same holds for
+  `test_a1_unused_wide_columns_stay_out_of_the_barrier_and_computed_errors_stay_in` and the four `test_second_read_*`
+  tests. Changing any of them means re-solving those tests with Gurobi.
+- **Recorded benchmark commands.** `--pins` and the JSON key `pins` in `benchmark/decide/profile_direct_s1_api.*`,
+  because the measurement commands in `rules/s1_uniform_matroid/done.md` use them.
+- **Other meanings.** DuckDB's own `ExpressionDepthReducer` and aggregate-state `Absorb`; `AbsorbAdditive`
+  (`decide_degree.cpp`, merging a child's degree into its parent); `DecideTermKind::UNKNOWN`; "absorb", "second read",
+  "pin" (a test pins `require`) and "boundary" in their everyday senses; "near miss" (a testing term); a cache "miss";
+  "proof" and "prove" in the mathematical sense and in the `Prove*` helpers that certify one part of the IR; the
+  variable name `calc` for an `ExpressionBuilder`.

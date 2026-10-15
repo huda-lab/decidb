@@ -1,11 +1,11 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-14 on top of `5fb3b76b90`, with S1 and A1 registered: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,394 passed (no
-failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,393 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,329 assertions in
-46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
-check). Design: `../architecture/`.
+Verified on 2026-10-15 on top of `178ccd13f2` with the retired-term sweep applied, with S1 and A1 registered: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each
+3,394 passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,393 passed and one
+failure, `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,322
+assertions in 46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it
+prints one line per check). Design: `../architecture/`.
 
 ## What it does
 
@@ -35,8 +35,8 @@ check). Design: `../architecture/`.
   leaves the held rows. The first read still checks every row. Only a variable-width column moves (a physical type that
   is not constant-size: `VARCHAR`, `BLOB`, nested types); a fixed-width one is cheaper held than read back, so it stays
   in the single read (measurements in `../architecture/result_adapter.md`). Joins, aggregates, volatile or computed
-  columns, a source that already reads `rowid`, and a rule plan that streams (`DirectSubstitute::pipelined`, set by A1's
-  constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
+  columns, a source that already reads `rowid`, and a rule plan that is pipelined (`DirectSubstitute::pipelined`, set by
+  A1's constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
   `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep up
   to date; with that pass disabled the row id is computed and dropped and the plan holds rows as before.
 - **Plan factory functions.** `direct_plan_factory.hpp` holds free functions that each return one plan fragment (the
@@ -78,7 +78,7 @@ check). Design: `../architecture/`.
   `test/common/test_decidb_numeric_policy.cpp` (`[numeric_policy]`, 5 cases).
 - **Shared admission predicates.** `DirectIsNumericDecisionFree`, `DirectSourceNumericColumn`,
   `DirectIsSourceOnlyNumeric`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
-  `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT` and `DirectConstraintFact::PlainSum` answer "may a rule use this value"
+  `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT` and `DirectIRConstraint::PlainSum` answer "may a rule use this value"
   once for all rules.
 - **One evaluate-to-DOUBLE function.** `TryEvaluateFoldableDouble(context, expr, out, flags)` (`decide_cast_policy.hpp`)
   is the only code that folds a constant expression to a `DOUBLE`, for the planner, the rewrites and the direct rules.
@@ -102,14 +102,14 @@ check). Design: `../architecture/`.
   text), `concat_ws = last` means one, and otherwise the text is the leading names (cut off by length), ` and ` and the
   last name. Every piece of wording comes from the small functions in `decide_value_messages.hpp` that
   `DecideNullValueMessage` also joins. A value's source columns are read from the stage above the one that carries the
-  source (`DirectOverProjection`). An S1 count bound or pin that is exactly one column raises the same fixed NULL and
-  NaN messages (the column is the same on every row); a computed one keeps `DirectInvalidBoundMessage`. A NaN or
-  infinite number raises the solver's message, whose first words name the clause the user wrote it in: `objective
+  source (`DirectOverProjection`). An S1 count bound or fixed value that is exactly one column raises the same fixed
+  NULL and NaN messages (the column is the same on every row); a computed one keeps `DirectInvalidBoundMessage`. A NaN
+  or infinite number raises the solver's message, whose first words name the clause the user wrote it in: `objective
   coefficient`, `constraint coefficient` or `constraint right-hand side`, without the solver's ` at row N`. The first
   two come from the `DirectNumberKind` the rule passes (S1 and A1's objective values: objective; A1's coefficient on the
   left of a bound: constraint). A source value read as a coefficient must be finite; one read as a bound (a count limit,
-  a pin, a per-row lower or upper bound) only has to be a number, because an infinite bound means "no bound" or "nothing
-  satisfies it". NaN and NULL raise in every slot. Direct applies this in SQL (`DirectValidNumberPredicate`,
+  a fixed value, a per-row lower or upper bound) only has to be a number, because an infinite bound means "no bound" or
+  "nothing satisfies it". NaN and NULL raise in every slot. Direct applies this in SQL (`DirectValidNumberPredicate`,
   `DirectValidBoundPredicate`) and the solver in C++ (`ExtractDoubleColumn`); the two cannot share code, so
   `test_direct_source_values.py` puts NaN, both infinities and NULL in each of 27 slots S1 and A1 read and asserts the
   same error or rows on `require`, `off` and forced HiGHS. Tests: `test_computed_score_null_error_names_the_columns`,

@@ -73,9 +73,9 @@ DirectSolveRule *FindS1Rule(duckdb::vector<duckdb::unique_ptr<DirectSolveRule>> 
 	return FindRuleByName(rules, "S1_UNIFORM_MATROID");
 }
 
-//! Whether `rule` proves the query, and why not when it does not. A rule that does not apply comes back as false.
-bool RuleProves(DirectSolveRule &rule, Connection &con, const string &declaration, const string &constraints,
-                const string &objective, string &reason, string *condition_text = nullptr) {
+//! Whether `rule` applies to the query, and why not when it does not. A rule that does not apply comes back as false.
+bool RuleApplies(DirectSolveRule &rule, Connection &con, const string &declaration, const string &constraints,
+                 const string &objective, string &reason, string *condition_text = nullptr) {
 	QueryIR query(con, IRQuery(declaration, constraints, objective));
 	reason.clear();
 	auto condition = rule.CheckCondition(query.ir, *con.context, reason);
@@ -218,7 +218,7 @@ TEST_CASE("S1 condition rejects an unrepresentable bound and volatile coefficien
 	}
 }
 
-TEST_CASE("Direct-solve IR retains WHEN and fail closed on unresolved PER keys", "[decidb]") {
+TEST_CASE("Direct-solve IR retains WHEN and declines unresolved PER keys", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
@@ -249,7 +249,7 @@ TEST_CASE("Direct-solve IR retains WHEN and fail closed on unresolved PER keys",
 	// ExtractPlan precedes the optimizer's reference resolution. Its PER key is
 	// still a positional BoundReferenceExpression; do not invent a binding. The
 	// clause is not proved and says why; the rest of the problem is still read.
-	// End-to-end direct tests exercise the resolved key at the DECIDE boundary.
+	// End-to-end direct tests exercise the resolved key at the DECIDE operator.
 	REQUIRE(per_ir.constraints_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(per_ir.constraints.size() == 1);
 	REQUIRE(per_ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
@@ -511,7 +511,7 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	REQUIRE(types.ir.decisions[2].output_type == LogicalType::INTEGER);
 }
 
-TEST_CASE("A1 proves a separable box-constrained problem and names why it declines anything else", "[decidb]") {
+TEST_CASE("A1 accepts a separable box-constrained problem and names why it declines anything else", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	auto rules = RegisteredDirectRules();
@@ -519,25 +519,25 @@ TEST_CASE("A1 proves a separable box-constrained problem and names why it declin
 	REQUIRE(a1 != nullptr);
 	string reason, condition;
 
-	// What it proves.
+	// What it accepts.
 	REQUIRE(
-	    RuleProves(*a1, con, "x(REAL)", "x BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(x - w, 2))", reason, &condition));
+	    RuleApplies(*a1, con, "x(REAL)", "x BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(x - w, 2))", reason, &condition));
 	REQUIRE(condition == "min/max SUM(c*x), l <= x <= u, each row independent");
-	REQUIRE(RuleProves(*a1, con, "x(INT)", "x <= cap AND x >= 0", "MAXIMIZE SUM(w*x)", reason));
-	REQUIRE(RuleProves(*a1, con, "x(BOOL)", "x <= flag", "MAXIMIZE SUM(w*x)", reason));
-	REQUIRE(RuleProves(*a1, con, "x(REAL), y(INT)", "x <= cap AND y <= 5", "MINIMIZE SUM(x) + SUM(w*y)", reason));
-	REQUIRE(RuleProves(*a1, con, "x(REAL)", "x <= cap", "", reason));
+	REQUIRE(RuleApplies(*a1, con, "x(INT)", "x <= cap AND x >= 0", "MAXIMIZE SUM(w*x)", reason));
+	REQUIRE(RuleApplies(*a1, con, "x(BOOL)", "x <= flag", "MAXIMIZE SUM(w*x)", reason));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL), y(INT)", "x <= cap AND y <= 5", "MINIMIZE SUM(x) + SUM(w*y)", reason));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= cap", "", reason));
 	REQUIRE(
-	    RuleProves(*a1, con, "x(REAL)", "2*x <= cap AND w*x >= -1 AND x >= -3 WHEN flag", "MAXIMIZE SUM(x)", reason));
-	REQUIRE(RuleProves(*a1, con, "x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 3, 2)) WHEN flag", reason));
+	    RuleApplies(*a1, con, "x(REAL)", "2*x <= cap AND w*x >= -1 AND x >= -3 WHEN flag", "MAXIMIZE SUM(x)", reason));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 3, 2)) WHEN flag", reason));
 	// A cast that can throw is read per row and raises as the solver does, so it is admitted.
-	REQUIRE(RuleProves(*a1, con, "x(REAL)", "x <= CAST(cap AS TINYINT)", "MAXIMIZE SUM(x)", reason));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= CAST(cap AS TINYINT)", "MAXIMIZE SUM(x)", reason));
 
 	// What it declines, and the reason it names.
 	auto declines = [&](const string &declaration, const string &constraints, const string &objective,
 	                    const string &expected) {
 		INFO(declaration << " | " << constraints << " | " << objective);
-		REQUIRE(!RuleProves(*a1, con, declaration, constraints, objective, reason));
+		REQUIRE(!RuleApplies(*a1, con, declaration, constraints, objective, reason));
 		REQUIRE(reason.find(expected) != string::npos);
 	};
 	declines("x(REAL)", "SUM(x) <= 5", "MAXIMIZE SUM(w*x)", "found an aggregate constraint");
@@ -558,7 +558,7 @@ TEST_CASE("A1 proves a separable box-constrained problem and names why it declin
 	         "at most one squared term");
 }
 
-TEST_CASE("S1 and A1 never both prove one query", "[decidb]") {
+TEST_CASE("S1 and A1 never both apply to one query", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	auto rules = RegisteredDirectRules();
@@ -587,10 +587,10 @@ TEST_CASE("S1 and A1 never both prove one query", "[decidb]") {
 	};
 	for (auto &shape : shapes) {
 		INFO(shape.declaration << " | " << shape.constraints << " | " << shape.objective);
-		bool proves_s1 = RuleProves(*s1, con, shape.declaration, shape.constraints, shape.objective, reason);
-		bool proves_a1 = RuleProves(*a1, con, shape.declaration, shape.constraints, shape.objective, reason);
-		REQUIRE(!(proves_s1 && proves_a1));
-		REQUIRE(proves_s1 == shape.s1);
-		REQUIRE(proves_a1 == shape.a1);
+		bool applies_s1 = RuleApplies(*s1, con, shape.declaration, shape.constraints, shape.objective, reason);
+		bool applies_a1 = RuleApplies(*a1, con, shape.declaration, shape.constraints, shape.objective, reason);
+		REQUIRE(!(applies_s1 && applies_a1));
+		REQUIRE(applies_s1 == shape.s1);
+		REQUIRE(applies_a1 == shape.a1);
 	}
 }

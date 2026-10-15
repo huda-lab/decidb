@@ -20,14 +20,14 @@ goal is the full definition with its § Admitted class.
   improving pair, and both under `MINIMIZE`. Infeasible when a row's box is empty (A1's test in its answer stage, which
   moves next to `DirectRowBox` so both rules share it) or the baseline exceeds the budget, unbounded where the solver
   says so, every row read before one is released.
-- **Done when.** `test_direct_r1_continuous_knapsack.py` (three-way table, error table, boundary table, the shape inside
-  parent queries) and C++ proof cases pass; `rules/r1_continuous_knapsack/done.md` exists with its stamp; the README
-  status row says R1 works.
+- **Done when.** `test_direct_r1_continuous_knapsack.py` (differential oracle table, error table, boundary table, the
+  shape inside parent queries) and C++ applicability-condition cases pass; `rules/r1_continuous_knapsack/done.md` exists
+  with its stamp; the README status row says R1 works.
 
 ## R1-03 — Contract fixture and fuzz generator
 
 - **Needs.** R1-02.
-- **Problem.** The standard contract and fuzz suites do not exercise R1.
+- **Problem.** The conformance and fuzz suites do not exercise R1.
 - **Change.** A `RuleFixture` in `_direct_rule_fixtures.py` with R1's near misses (an `INT` decision, two budgets, a
   coupled objective term); a seeded R1 generator in `test_direct_fuzz.py`.
 - **Done when.** Both suites run R1 and pass in all five checks.
@@ -60,14 +60,15 @@ goal is the full definition with its § Admitted class.
 
 - **Needs.** R1-02.
 - **Problem.** A piecewise benefit written as several decisions in one budget runs on the solver.
-- **Change.** First, the concavity check the owner asked for: confirm, by argument and by three-way cases with
+- **Change.** First, the concavity check the owner asked for: confirm, by argument and by differential oracle cases with
   increasing piece values, that the solver's model holds no ordering or linking between the decisions of one row, so
   the greedy fill over every (row, decision) item matches it with or without concavity. Bring the result to the owner
   before building. Then admit several `REAL` decisions in one budget, each (row, decision) an item in the ranking with
   its own weight, value and box, each decision answered in its own column. A per-row constraint or objective term that
   links decisions stays on the solver.
-- **Done when.** The concavity result is settled with the owner; three-way cases with two and three decisions pass,
-  concave and not (or, if the check fails, a non-concave set stays on the solver); a linking constraint is a near miss.
+- **Done when.** The concavity result is settled with the owner; differential oracle cases with two and three decisions
+  pass, concave and not (or, if the check fails, a non-concave set stays on the solver); a linking constraint is a near
+  miss.
 
 ## R1-07 — Performance table
 

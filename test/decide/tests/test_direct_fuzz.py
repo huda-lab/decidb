@@ -1,7 +1,8 @@
-"""Seeded differential fuzz: random small S1 and A1 queries, run on the solver path (`off`) and the direct path (`require`).
+"""Seeded differential fuzz: random small S1 and A1 queries, run on the solver path (`off`) and the direct path
+(`require`).
 
-Where `test_direct_s1_uniform_matroid.py` lists the cases a person thought of, this finds the interactions nobody listed. The
-comparator and its rules are in `_direct_differential.py`.
+Where `test_direct_s1_uniform_matroid.py` lists the cases a person thought of, this finds the interactions nobody
+listed. The comparator and its rules are in `_direct_differential.py`.
 """
 
 import random
@@ -51,8 +52,8 @@ _S1_ALWAYS_HOLD_BOUNDS = ["x >= -3", "x > -3", "x >= -1", "x >= -0.5"]
 
 
 def _fuzz_rowbound(rng):
-    """One per-row bound on x: a 0/1 pin, a restated domain, or any constant bound on one row."""
-    kind = rng.choice(["pin", "pin", "restate", "constant", "column"])
+    """One per-row bound on x: a fixed 0/1 value, a restated domain, or any constant bound on one row."""
+    kind = rng.choice(["fixed", "fixed", "restate", "constant", "column"])
     if kind == "restate":
         return rng.choice(_DOMAIN_RESTATEMENTS)
     if kind == "column":
@@ -60,7 +61,7 @@ def _fuzz_rowbound(rng):
         when = " WHEN flag" if rng.random() < 0.4 else ""
         return f"x {rng.choice(['<=', '<', '>=', '>', '=', '<>'])} cap{when}"
     row = rng.randint(0, 5)
-    if kind == "pin":
+    if kind == "fixed":
         return f"x = {rng.choice([0, 1])} WHEN id = {row}"
     op = rng.choice(["<=", "<", ">=", ">", "=", "<>"])
     return f"x {op} {rng.choice(['-1', '-0.5', '0', '0.5', '1', '1.5', '2'])} WHEN id = {row}"

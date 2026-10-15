@@ -74,7 +74,7 @@ struct Condition final : DirectApplicabilityCondition {
 		//! term. The plan shifts the bound by `n*c`, where `n` is the number of rows the SUM covers in the group.
 		unique_ptr<Expression> offset;
 	};
-	//! A pin whose value comes from the row: it must be neither NULL nor, for a floating point value, NaN.
+	//! A fixed value that comes from the row: it must be neither NULL nor, for a floating point value, NaN.
 	struct SourceFixedValue {
 		unique_ptr<Expression> value;
 		//! The source column the value is exactly; empty for a computed value.
@@ -92,7 +92,7 @@ struct Condition final : DirectApplicabilityCondition {
 		bool divides = false;
 	};
 
-	//! The constraints of the IR, which outlives the condition: the count bounds, and the Boolean pins.
+	//! The constraints of the IR, which outlives the condition: the count bounds, and the fixed Boolean values.
 	vector<const DirectIRConstraint *> bound_factors;
 	vector<const DirectIRConstraint *> local_fixes;
 
@@ -227,8 +227,8 @@ ExpressionType FlipComparison(ExpressionType comparison) {
 	}
 }
 
-//! The decision's terms on a per-row left side, as in a pin `x = 1`; null otherwise. CheckCondition checks that they
-//! add up to exactly one `x`.
+//! The decision's terms on a per-row left side, as in a fixed value `x = 1`; null otherwise. CheckCondition checks that
+//! they add up to exactly one `x`.
 const vector<DecideSplitTerm> *FixedTerms(const DirectIRConstraint &ir_node) {
 	if (ir_node.aggregate || ir_node.comparison == ExpressionType::COMPARE_IN || ir_node.lhs.size() != 1) {
 		return nullptr;
@@ -311,7 +311,7 @@ bool SatisfiesComparison(ExpressionType comparison, double value, double bound) 
 	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
 		return value >= bound;
 	default:
-		throw InternalException("S1 direct solve received a pin comparison it did not match");
+		throw InternalException("S1 direct solve received a fixed-value comparison it did not match");
 	}
 }
 
@@ -526,7 +526,7 @@ public:
 			return nullptr;
 		}
 		if (ir.constraints.empty() || ir.source_clause_count != ir.constraints.size()) {
-			reason = "constraint_shape: expected attributed cardinality bounds and optional Boolean pins";
+			reason = "constraint_shape: expected attributed cardinality bounds and optional fixed Boolean values";
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
@@ -541,7 +541,7 @@ public:
 				return nullptr;
 			}
 			if (ir_node.comparison == ExpressionType::COMPARE_IN) {
-				reason = "constraint_shape: expected SUM(x) bounds or Boolean pins";
+				reason = "constraint_shape: expected SUM(x) bounds or fixed Boolean values";
 				return nullptr;
 			}
 			if (FixedTerms(ir_node)) {
@@ -629,21 +629,21 @@ bool Rule::ProveScope(const DirectIR &ir, Condition &condition, string &reason) 
 	return true;
 }
 
-//! Per-row Boolean pins: `x = 0/1` and its one-sided forms against a constant, or against a source Boolean. Each
-//! becomes a condition under which the row is fixed to one or to zero.
+//! Per-row fixed Boolean values: `x = 0/1` and its one-sided forms against a constant, or against a source Boolean.
+//! Each becomes a condition under which the row is fixed to one or to zero.
 bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const {
 	for (auto factor : condition.local_fixes) {
 		if (!factor->scope.per_key_slots.empty()) {
-			reason = "constraint_scope: Boolean pins must be per-row without PER keys";
+			reason = "constraint_scope: fixed Boolean values must be per-row without PER keys";
 			return false;
 		}
 		if (!IsUnitContribution(context, *FixedTerms(*factor))) {
-			reason = "constraint_shape: expected a Boolean pin on x itself";
+			reason = "constraint_shape: expected a fixed Boolean value on x itself";
 			return false;
 		}
 		auto &when = factor->scope.when;
 		if (when && !DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
-			reason = "constraint_scope: Boolean pin WHEN must be deterministic and source-only";
+			reason = "constraint_scope: fixed Boolean value WHEN must be deterministic and source-only";
 			return false;
 		}
 		double constant;
@@ -876,8 +876,9 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	return true;
 }
 
-//! Builds the relational plan for one proved S1 problem. The constructor derives what every stage shares; each stage
-//! takes the plan built so far and returns it extended. Data a later stage needs travels in explicit structs.
+//! Builds the relational plan for one S1 problem whose condition holds. The constructor derives what every stage
+//! shares; each stage takes the plan built so far and returns it extended. Data a later stage needs travels in explicit
+//! structs.
 //!
 //!   ProjectScopeState -> GuardEmptyAggregate -> AddBoundValidation -> ProjectScore
 //!     -> RankAndFilterFeasibility -> ProjectAssignment
@@ -1014,15 +1015,15 @@ private:
 		return value;
 	}
 
-	//! Stage 1: pass the source through and append the per-row scope flags (group eligibility, pins).
+	//! Stage 1: pass the source through and append the per-row scope flags (group eligibility, fixed values).
 	unique_ptr<LogicalOperator> ProjectScopeState(unique_ptr<LogicalOperator> source, ScopeBindings &scope) const {
-		vector<unique_ptr<Expression>> pins;
+		vector<unique_ptr<Expression>> fixed_flags;
 		if (has_fixes) {
-			pins.push_back(AnyCondition(condition.fixed_one_conditions));
-			pins.push_back(AnyCondition(condition.fixed_zero_conditions));
+			fixed_flags.push_back(AnyCondition(condition.fixed_one_conditions));
+			fixed_flags.push_back(AnyCondition(condition.fixed_zero_conditions));
 		}
 		auto state = ProjectScope(binder, std::move(source), condition.scoped, condition.when_condition.get(),
-		                          condition.group_key_slots, std::move(pins));
+		                          condition.group_key_slots, std::move(fixed_flags));
 		scope.input_bindings = std::move(state.input_bindings);
 		scope.state_index = state.state_index;
 		scope.eligible_binding = state.eligible;
@@ -1193,7 +1194,8 @@ private:
 		    make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)));
 	}
 
-	//! Stage 3: validate source-valued bounds and pins on every row, and reduce each bound to its group extremum.
+	//! Stage 3: validate source-valued bounds and fixed values on every row, and reduce each bound to its group
+	//! extremum.
 	unique_ptr<LogicalOperator> AddBoundValidation(unique_ptr<LogicalOperator> source, const ScopeBindings &scope,
 	                                               const RowCounts &counts, BoundChecks &bounds) const {
 		vector<BoundSpec> specs;
@@ -1254,20 +1256,20 @@ private:
 			}
 			specs.push_back(std::move(spec));
 		}
-		vector<NotNullSpec> pins;
-		for (auto &pin : condition.source_fixed_values) {
+		vector<NotNullSpec> not_null;
+		for (auto &fixed : condition.source_fixed_values) {
 			NotNullSpec spec;
-			spec.value = CopyIntoState(*pin.value, scope, "per-row pin");
-			spec.reject_nan = pin.reject_nan;
-			if (pin.column_name.empty()) {
-				spec.message = pin.invalid_message;
+			spec.value = CopyIntoState(*fixed.value, scope, "per-row fixed value");
+			spec.reject_nan = fixed.reject_nan;
+			if (fixed.column_name.empty()) {
+				spec.message = fixed.invalid_message;
 			} else {
-				spec.message = DirectBoundNullMessage(pin.column_name);
-				if (pin.reject_nan) {
+				spec.message = DirectBoundNullMessage(fixed.column_name);
+				if (fixed.reject_nan) {
 					spec.nan_message = DirectBoundNaNMessage();
 				}
 			}
-			pins.push_back(std::move(spec));
+			not_null.push_back(std::move(spec));
 		}
 		// A column an aggregate on the right reduces is read on every row, as the solver reads it: NULL and NaN raise
 		// on every row, including rows the clause does not cover; infinity is a value.
@@ -1288,7 +1290,7 @@ private:
 				if (spec.reject_nan) {
 					spec.nan_message = DirectBoundNaNMessage();
 				}
-				pins.push_back(std::move(spec));
+				not_null.push_back(std::move(spec));
 			}
 		}
 		vector<ColumnBinding> keys;
@@ -1297,7 +1299,7 @@ private:
 			keys.push_back(scope.input_bindings[slot]);
 			key_types.push_back(source_types[slot]);
 		}
-		auto validation = ValidateBounds(optimizer, std::move(source), specs, pins,
+		auto validation = ValidateBounds(optimizer, std::move(source), specs, not_null,
 		                                 condition.scoped ? &scope.eligible_binding : nullptr, keys, key_types);
 		bounds.window_index = validation.window_index;
 		for (idx_t i = 0; i < bounds.slots.size(); i++) {
@@ -1307,9 +1309,9 @@ private:
 		return std::move(validation.plan);
 	}
 
-	//! Stage 4: the score projection. It forwards the source columns, the combined linear score, the scope and pin
-	//! flags, and the per-group bound extrema, so every later stage reads one projection. The constructor laid out
-	//! the score and flag slots; each is appended here at exactly that position.
+	//! Stage 4: the score projection. It forwards the source columns, the combined linear score, the scope and
+	//! fixed-value flags, and the per-group bound extrema, so every later stage reads one projection. The constructor
+	//! laid out the score and flag slots; each is appended here at exactly that position.
 	unique_ptr<LogicalOperator> ProjectScore(unique_ptr<LogicalOperator> source, const ScopeBindings &scope,
 	                                         BoundChecks &bounds) const {
 		vector<unique_ptr<Expression>> score_expressions;
@@ -1437,7 +1439,7 @@ private:
 		}
 	}
 
-	//! A row no pin fixes to either value.
+	//! A row with no fixed value, neither to one nor to zero.
 	unique_ptr<Expression> FreeRow() const {
 		return make_uniq<BoundCaseExpression>(
 		    DirectColumn(LogicalType::BOOLEAN, fixed_one_binding), DirectConstantBool(false),
@@ -1445,7 +1447,7 @@ private:
 		                                   DirectConstantBool(false), DirectConstantBool(true)));
 	}
 
-	//! Order a window: free rows first when pins exist, then best score first.
+	//! Order a window: free rows first when fixed values exist, then best score first.
 	void AddOrder(BoundWindowExpression &expression) const {
 		if (has_fixes) {
 			expression.orders.emplace_back(OrderType::DESCENDING, OrderByNullType::NULLS_LAST, FreeRow());
@@ -1456,7 +1458,7 @@ private:
 	}
 
 	//! Stage 5: validate the score, rank rows within their scope, and raise the infeasibility error when the
-	//! bounds, pins, and row counts cannot all hold.
+	//! bounds, fixed values, and row counts cannot all hold.
 	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score, const BoundChecks &bounds) const {
 		// The score is checked above the score projection, which carries the source columns a NULL names.
 		vector<DirectSignedValue> score_terms;
@@ -1514,7 +1516,7 @@ private:
 
 	//! The feasibility predicate of stage 5: a list of checks, each true when it passes and DECIDE's infeasible error
 	//! when it fails. Which failing check raises is not specified, and all of them raise the same error. The checks on
-	//! the rows of a group apply to eligible rows only; a pin conflict applies to every row.
+	//! the rows of a group apply to eligible rows only; a fixed-value conflict applies to every row.
 	unique_ptr<Expression> FeasiblePredicate(const RankedRows &ranked, idx_t free_count_slot,
 	                                         const BoundChecks &bounds) const {
 		// `ok` must hold; a NULL `ok` fails.
@@ -1579,7 +1581,7 @@ private:
 			                     : std::move(group));
 		}
 		if (has_fixes) {
-			// A row pinned to both values.
+			// A row fixed to both values.
 			checks.push_back(must_not_hold(make_uniq<BoundCaseExpression>(
 			    DirectColumn(LogicalType::BOOLEAN, fixed_one_binding),
 			    DirectColumn(LogicalType::BOOLEAN, fixed_zero_binding), DirectConstantBool(false))));
@@ -1595,7 +1597,7 @@ private:
 		return predicate;
 	}
 
-	//! Stage 6: the 0/1 assignment (pins, then scope, then upper and lower rank limits, then score sign), the
+	//! Stage 6: the 0/1 assignment (fixed values, then scope, then upper and lower rank limits, then score sign), the
 	//! source columns, and the hidden rank that keeps score validation live.
 	unique_ptr<LogicalOperator> ProjectAssignment(RankedRows ranked, const BoundChecks &bounds) const {
 		auto &rank_binding = ranked.rank_binding;

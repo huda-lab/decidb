@@ -13,8 +13,8 @@ class Optimizer;
 
 enum class DirectSolveMode : uint8_t { OFF, AUTO, REQUIRE };
 
-//! What EXPLAIN shows for a plan the direct solver built: the setting, the rule that was proved, and one fixed line
-//! naming the problem class. A query the rules do not prove keeps its solver plan and has no annotation.
+//! What EXPLAIN shows for a plan the direct solver built: the setting, the rule that applied, and one fixed line
+//! naming the problem class. A query no rule applies to keeps its solver plan and has no annotation.
 struct DirectExplainAnnotation {
 	string mode;
 	string rule;

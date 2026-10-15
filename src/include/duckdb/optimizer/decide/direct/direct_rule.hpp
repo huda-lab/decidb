@@ -146,7 +146,7 @@ struct DirectIR {
 };
 
 //! Only CheckCondition can construct an applicability condition. Apply receives this
-//! object, never an unverified shape match.
+//! object, never an unverified query shape.
 struct DirectApplicabilityCondition {
 	virtual ~DirectApplicabilityCondition() = default;
 };
@@ -165,16 +165,16 @@ struct DirectSubstitute {
 	//! before it releases one (the solver's obligation) declares the column that forces that read here, typically
 	//! the breaker from DirectValidationBreaker. Empty when the plan has nothing to keep live.
 	vector<idx_t> validated_columns;
-	//! True when the plan streams rows through without holding the input, so a column a parent reads costs no memory
-	//! to carry. The rule driver then never reads a stored column a second time for it. Leave false for a plan that
-	//! holds every row (a breaker, a rank).
+	//! True when the plan is pipelined: it passes rows through without holding the input, so a column a parent reads
+	//! costs no memory to carry. The rule driver then never reads a stored column a second time for it. Leave false for
+	//! a plan that holds every row (a breaker, a rank).
 	bool pipelined = false;
 };
 
 //! The lifecycle the rule driver runs: CheckCondition, then Apply. CheckCondition checks the query's shape and then
-//! proves what the plan relies on; when the condition does not hold it leaves the DECIDE node untouched and reports
-//! `reason`. Summary is the one line the rule adds to the EXPLAIN annotation. Rules are disjoint: each requires IR
-//! the others forbid, so at most one applies to a query, and the rule driver raises an internal error when two do.
+//! establishes what the plan relies on; when the condition does not hold it leaves the DECIDE node untouched and
+//! reports `reason`. Summary is the one line the rule adds to the EXPLAIN annotation. Rules are disjoint: each requires
+//! IR the others forbid, so at most one applies to a query, and the rule driver raises an internal error when two do.
 class DirectSolveRule {
 public:
 	virtual ~DirectSolveRule() = default;

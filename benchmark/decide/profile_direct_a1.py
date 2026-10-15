@@ -3,7 +3,7 @@
 
 Each measured run is a fresh `decidb` process that only opens the stored database, so its peak memory
 (`maximum resident set size`, from `/usr/bin/time -l`) is the query's own. `direct` pins
-`decide_direct_solve='require'`, so a query the rule does not prove fails instead of using the solver; `solver` pins
+`decide_direct_solve='require'`, so a query the rule does not apply to fails instead of using the solver; `solver` pins
 `'off'`. Results are read back as one aggregate row, so the time is the plan, not the transfer of millions of rows.
 
 Machine-heat rule: shapes run one at a time, smallest size first, and a size runs on the solver only when the

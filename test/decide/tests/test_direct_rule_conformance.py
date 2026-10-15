@@ -1,8 +1,8 @@
-"""The contract every direct-solve rule owes the user, checked for every registered rule.
+"""The conformance suite: what every direct-solve rule owes the user, checked for every registered rule.
 
 Each rule supplies a `RuleFixture` (`_direct_rule_fixtures.py`). Its own mathematics is
-tested in its own file; this suite checks what must hold whichever rule proved the
-query: the DECIDE schema and rows, the all-rows read, prepared plans, serialization,
+tested in its own file; this suite checks what must hold whichever rule applied to
+the query: the DECIDE schema and rows, the all-rows read, prepared plans, serialization,
 EXPLAIN, `require` reasons, and the solver path under `off`, a forced backend and
 `DIAGNOSE`.
 """
@@ -59,30 +59,30 @@ _LATE_ERRORS = late_error_cases()
 
 @pytest.mark.correctness
 @_RULES
-def test_hit_keeps_the_decide_schema_and_rows(decidb_cli, fixture):
-    direct_rows, direct_columns = _run(decidb_cli, fixture.hit)
-    solver_rows, solver_columns = _run(decidb_cli, fixture.hit, mode="off")
+def test_applying_rule_keeps_the_decide_schema_and_rows(decidb_cli, fixture):
+    direct_rows, direct_columns = _run(decidb_cli, fixture.applies)
+    solver_rows, solver_columns = _run(decidb_cli, fixture.applies, mode="off")
     assert direct_columns == solver_columns
     assert direct_rows == solver_rows
-    plan = _raw(decidb_cli, f"EXPLAIN {fixture.hit}").stdout
+    plan = _raw(decidb_cli, f"EXPLAIN {fixture.applies}").stdout
     assert f"{fixture.rule}" in plan and not _has_decide_operator(plan)
 
 
 @pytest.mark.correctness
 @_RULES
 def test_empty_source_gives_the_solvers_outcome(decidb_cli, fixture):
-    # The solver answers an empty source, and it must also give the same outcome under every mode. The rule proves
+    # The solver answers an empty source, and it must also give the same outcome under every mode. The rule applies to
     # this query, so `require` is not allowed to decline it.
-    solver = _outcome(decidb_cli, fixture.empty_hit, "off")
+    solver = _outcome(decidb_cli, fixture.empty_applies, "off")
     assert solver == ("ok", []), solver
-    assert _outcome(decidb_cli, fixture.empty_hit, "auto") == solver
-    assert _outcome(decidb_cli, fixture.empty_hit, "require") == solver
-    plan = _raw(decidb_cli, f"EXPLAIN {fixture.empty_hit}").stdout
+    assert _outcome(decidb_cli, fixture.empty_applies, "auto") == solver
+    assert _outcome(decidb_cli, fixture.empty_applies, "require") == solver
+    plan = _raw(decidb_cli, f"EXPLAIN {fixture.empty_applies}").stdout
     assert f"{fixture.rule}" in plan and not _has_decide_operator(plan)
 
 
 def _impossible_bound_cases():
-    return [(fixture, sql) for fixture in RULE_FIXTURES for sql in fixture.impossible_bound_hits]
+    return [(fixture, sql) for fixture in RULE_FIXTURES for sql in fixture.impossible_bound_cases]
 
 
 _IMPOSSIBLE_BOUNDS = _impossible_bound_cases()
@@ -98,13 +98,13 @@ def test_impossible_constant_bound_gives_the_solvers_outcome(decidb_cli, fixture
     assert solver[0] == "error", (sql, solver)
     assert _outcome(decidb_cli, sql, "auto") == solver, sql
     required = _outcome(decidb_cli, sql, "require")
-    assert required in (solver, ("error", "direct_miss")), (sql, required, solver)
+    assert required in (solver, ("error", "direct_not_applied")), (sql, required, solver)
 
 
 @pytest.mark.correctness
 @_RULES
 def test_unused_outputs_keep_the_row_count(decidb_cli, fixture):
-    count = f"SELECT COUNT(*) FROM ({fixture.hit}) q"
+    count = f"SELECT COUNT(*) FROM ({fixture.applies}) q"
     assert _run(decidb_cli, count)[0] == _run(decidb_cli, count, mode="off")[0]
 
 
@@ -127,11 +127,11 @@ def test_every_input_row_is_read_before_any_row_is_released(decidb_cli, fixture,
 @pytest.mark.correctness
 @_RULES
 def test_serializer_explain_and_model_dump(decidb_cli, fixture, tmp_path):
-    rows, _ = _run(decidb_cli.with_verify_serializer(), fixture.hit)
-    assert rows == _run(decidb_cli, fixture.hit, mode="off")[0]
-    logical = _raw(decidb_cli, f"PRAGMA explain_output='optimized_only'; EXPLAIN {fixture.hit}").stdout
-    physical = _raw(decidb_cli, f"EXPLAIN {fixture.hit}").stdout
-    profile = _raw(decidb_cli, f"EXPLAIN ANALYZE {fixture.hit}").stdout
+    rows, _ = _run(decidb_cli.with_verify_serializer(), fixture.applies)
+    assert rows == _run(decidb_cli, fixture.applies, mode="off")[0]
+    logical = _raw(decidb_cli, f"PRAGMA explain_output='optimized_only'; EXPLAIN {fixture.applies}").stdout
+    physical = _raw(decidb_cli, f"EXPLAIN {fixture.applies}").stdout
+    profile = _raw(decidb_cli, f"EXPLAIN ANALYZE {fixture.applies}").stdout
     for plan in (logical, physical, profile):
         assert "Direct solve rule" in plan and "Direct solve condition" in plan
         # The box wraps long lines, even inside a word, so compare with the spaces removed.
@@ -141,7 +141,7 @@ def test_serializer_explain_and_model_dump(decidb_cli, fixture, tmp_path):
 
     # A direct plan builds no solver model, so there is nothing to dump.
     dump_path = tmp_path / "direct_model.txt"
-    _run(decidb_cli.with_env({"DECIDB_DUMP_MODEL": str(dump_path)}), fixture.hit)
+    _run(decidb_cli.with_env({"DECIDB_DUMP_MODEL": str(dump_path)}), fixture.applies)
     assert not dump_path.exists()
 
 
@@ -149,19 +149,19 @@ def test_serializer_explain_and_model_dump(decidb_cli, fixture, tmp_path):
 @_RULES
 def test_prepared_plan_keeps_its_selection_until_rebound(decidb_cli, fixture):
     prepared = _raw(decidb_cli, f"""
-        PREPARE direct_contract AS {fixture.hit};
+        PREPARE direct_conformance AS {fixture.applies};
         SET decide_direct_solve='off';
-        EXPLAIN EXECUTE direct_contract;
+        EXPLAIN EXECUTE direct_conformance;
     """).stdout
     assert "Direct solve rule" in prepared and "require" in prepared
 
     rebound = decidb_cli.execute_raw(f"""
         {fixture.table_setup}
         SET decide_direct_solve='require';
-        PREPARE direct_contract_table AS {fixture.table_hit};
+        PREPARE direct_conformance_table AS {fixture.table_applies};
         SET decide_direct_solve='off';
         {fixture.table_change}
-        EXPLAIN EXECUTE direct_contract_table;
+        EXPLAIN EXECUTE direct_conformance_table;
     """).stdout
     assert _has_decide_operator(rebound) and "Direct solve" not in rebound
 
@@ -192,19 +192,19 @@ def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixt
 @pytest.mark.correctness
 @_RULES
 def test_off_and_a_forced_backend_keep_the_solver_path(decidb_cli, decidb_cli_highs, fixture):
-    off = _raw(decidb_cli, f"EXPLAIN {fixture.hit}", mode="off").stdout
+    off = _raw(decidb_cli, f"EXPLAIN {fixture.applies}", mode="off").stdout
     assert _has_decide_operator(off) and "Direct solve" not in off
 
-    forced = _raw(decidb_cli_highs, f"EXPLAIN {fixture.hit}", mode="auto").stdout
+    forced = _raw(decidb_cli_highs, f"EXPLAIN {fixture.applies}", mode="auto").stdout
     assert _has_decide_operator(forced) and "Direct solve" not in forced
-    rows, _ = _run(decidb_cli_highs, fixture.hit, mode="auto")
-    assert rows == _run(decidb_cli, fixture.hit, mode="off")[0]
-    assert "conflicts with DECIDB_FORCE_SOLVER" in _raw(decidb_cli_highs, fixture.hit).stderr
+    rows, _ = _run(decidb_cli_highs, fixture.applies, mode="auto")
+    assert rows == _run(decidb_cli, fixture.applies, mode="off")[0]
+    assert "conflicts with DECIDB_FORCE_SOLVER" in _raw(decidb_cli_highs, fixture.applies).stderr
 
 
 @pytest.mark.correctness
 @_RULES
 def test_diagnose_keeps_the_solver_path(decidb_cli, fixture):
-    assert "conflicts with DIAGNOSE" in _raw(decidb_cli, f"DIAGNOSE {fixture.hit}").stderr
-    diagnose_plan = _raw(decidb_cli, f"EXPLAIN DIAGNOSE {fixture.hit}", mode="auto").stdout
+    assert "conflicts with DIAGNOSE" in _raw(decidb_cli, f"DIAGNOSE {fixture.applies}").stderr
+    diagnose_plan = _raw(decidb_cli, f"EXPLAIN DIAGNOSE {fixture.applies}", mode="auto").stdout
     assert "DECIDE_DIAGNOSE" in diagnose_plan and "Direct solve" not in diagnose_plan

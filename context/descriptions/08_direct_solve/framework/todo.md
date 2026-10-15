@@ -1,7 +1,7 @@
 # Shared engine — open work
 
-The engine is everything that is not one problem class: IR, rule driver, builders, result adapter, policy. What exists
-today is in `done.md`.
+The engine is everything that is not one problem class: IR, rule driver, plan factory functions, result adapter, policy.
+What exists today is in `done.md`.
 
 ## How to work any task in these todo files
 

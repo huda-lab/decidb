@@ -1,11 +1,12 @@
 """Both paths read a bad source value the same way: NaN, +inf, -inf and NULL in every slot a rule reads.
 
-The direct path rejects bad values in SQL (`DirectValidNumberPredicate` for coefficients, `DirectValidBoundPredicate` for
-bounds, `direct_builder.cpp`); the solver path rejects them in C++ (`ExtractDoubleColumn`, `physical_decide.cpp`). The
-two cannot share code, and they do not apply the same test: a coefficient must be finite, while a bound only has to be
-a number, because an infinite bound means "no bound" or "nothing satisfies it". This file puts one bad value on one row
-of a four-row source, in each place a rule reads a source value, and asserts that `require` (direct), `off` (solver, the
-default backend) and `off` on a forced HiGHS backend give the same outcome: the same error class, or the same rows.
+The direct path rejects bad values in SQL (`DirectValidNumberPredicate` for coefficients, `DirectValidBoundPredicate`
+for bounds, `direct_plan_factory.cpp`); the solver path rejects them in C++ (`ExtractDoubleColumn`,
+`physical_decide.cpp`). The two cannot share code, and they do not apply the same test: a coefficient must be finite,
+while a bound only has to be a number, because an infinite bound means "no bound" or "nothing satisfies it". This file
+puts one bad value on one row of a four-row source, in each place a rule reads a source value, and asserts that
+`require` (direct), `off` (solver, the default backend) and `off` on a forced HiGHS backend give the same outcome: the
+same error class, or the same rows.
 
 A slot's `strict` field also pins what the solver contract owes, so a change that made both paths accept a value would
 not pass unnoticed. "coefficient" slots raise for all four values; "bound" slots raise for NaN and NULL.
@@ -25,7 +26,7 @@ _LITERALS = {
 }
 
 # Column -> its value on an ordinary row i is `base + i * 0.5`.
-_BASES = {"score": 1.0, "cap": 2.0, "lo": 0.0, "t": 1.0, "w": 1.0, "pin": 1.0}
+_BASES = {"score": 1.0, "cap": 2.0, "lo": 0.0, "t": 1.0, "w": 1.0, "fixed_value": 1.0}
 _COLUMNS = ["id", "g", "f"] + list(_BASES)
 _BAD_ROW = 1
 
@@ -91,11 +92,11 @@ SLOTS = {
         "cap", "x(BOOL)", "SUM(x) <= cap WHEN f", _PICK, "bound", when_holds=False
     ),
     "s1_limit_per_key_is_null": _slot("cap", "x(BOOL)", "SUM(x) <= cap PER g", _PICK, "bound", key_is_null=True),
-    "s1_pin_upper": _slot("pin", "x(BOOL)", "SUM(x) <= 2 AND x <= pin", _PICK, "bound"),
-    "s1_pin_lower": _slot("pin", "x(BOOL)", "SUM(x) <= 2 AND x >= pin", _PICK, "bound"),
-    "s1_pin_equal": _slot("pin", "x(BOOL)", "SUM(x) <= 2 AND x = pin", _PICK, "bound"),
-    "s1_pin_when_excludes_row": _slot(
-        "pin", "x(BOOL)", "SUM(x) <= 2 AND x >= pin WHEN f", _PICK, "bound", when_holds=False
+    "s1_fixed_upper": _slot("fixed_value", "x(BOOL)", "SUM(x) <= 2 AND x <= fixed_value", _PICK, "bound"),
+    "s1_fixed_lower": _slot("fixed_value", "x(BOOL)", "SUM(x) <= 2 AND x >= fixed_value", _PICK, "bound"),
+    "s1_fixed_equal": _slot("fixed_value", "x(BOOL)", "SUM(x) <= 2 AND x = fixed_value", _PICK, "bound"),
+    "s1_fixed_when_excludes_row": _slot(
+        "fixed_value", "x(BOOL)", "SUM(x) <= 2 AND x >= fixed_value WHEN f", _PICK, "bound", when_holds=False
     ),
     "a1_upper": _slot("cap", "x(REAL)", _BOX, _PULL, "bound"),
     "a1_upper_float_column": _slot("cap", "x(REAL)", _BOX, _PULL, "bound", type="FLOAT"),

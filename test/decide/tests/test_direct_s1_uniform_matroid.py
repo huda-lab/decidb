@@ -3,7 +3,7 @@
 Every case is one DECIDE query in the shape of a direct-solve class. The oracle builds its
 own model from the raw rows (never from DeciDB's reading of the SQL). DeciDB then runs the
 query twice, with `decide_direct_solve='off'` (the solver) and `'require'` (direct solve;
-a query the rule does not prove fails instead of quietly using the solver). The case passes
+a query the rule does not apply to fails instead of quietly using the solver). The case passes
 when all three agree:
 
 - the oracle finds the problem feasible: both DeciDB runs return an assignment that
@@ -54,7 +54,7 @@ COLUMNS = (
     ("cap2", "DOUBLE"),  # a second per-row count bound
     ("geq", "DOUBLE"),  # a count bound that is constant within each group, for equalities
     ("flag", "BOOLEAN"),  # WHEN membership
-    ("pin", "BOOLEAN"),  # nullable WHEN membership for a pin
+    ("fixed_value", "BOOLEAN"),  # nullable WHEN membership for a fixed value
     ("lo", "DOUBLE"),  # per-row bounds on x itself
     ("hi", "DOUBLE"),
     ("nlo", "DOUBLE"),  # nullable count bounds, read through COALESCE
@@ -67,7 +67,7 @@ NAMES = [name for name, _ in COLUMNS]
 
 
 def _row(id, g, score, cap, flag, **extra):
-    row = dict(id=id, g=g, score=score, cap=cap, flag=flag, pin=False, cap2=1.0, geq=1.0, lo=0.0, hi=1.0,
+    row = dict(id=id, g=g, score=score, cap=cap, flag=flag, fixed_value=False, cap2=1.0, geq=1.0, lo=0.0, hi=1.0,
                nlo=None, nhi=None, ncap=None, fb=1.0, sm=(id * 3) % 7 - 2)
     row.update(extra)
     return row
@@ -77,14 +77,14 @@ def _row(id, g, score, cap, flag, **extra):
 # Rows 1, 2 and 4 carry per-row bounds on x (lo/hi): row 1 is fixed to 1, row 2 to 0, row 4 to 1.
 MAIN = [
     _row(0, "a", 9.0, 2, True, cap2=2.0, nhi=2.0, ncap=1.0, fb=0.5),
-    _row(1, "a", 5.5, 1, True, cap2=2.0, lo=0.5, hi=2.0, nlo=1.0, fb=2.0, pin=None),
+    _row(1, "a", 5.5, 1, True, cap2=2.0, lo=0.5, hi=2.0, nlo=1.0, fb=2.0, fixed_value=None),
     _row(2, "a", -1.0, 3, False, lo=0.0, hi=0.5, nlo=0.0, nhi=3.0, ncap=2.0),
-    _row(3, "b", 8.0, 2, True, cap2=2.0, geq=2.0, lo=-1.0, hi=5.0, nlo=1.0, nhi=2.5, pin=True),
-    _row(4, "b", 4.0, 2, True, geq=2.0, lo=1.0, hi=1.0, nlo=1.0, nhi=2.0, ncap=2.0, pin=None),
+    _row(3, "b", 8.0, 2, True, cap2=2.0, geq=2.0, lo=-1.0, hi=5.0, nlo=1.0, nhi=2.5, fixed_value=True),
+    _row(4, "b", 4.0, 2, True, geq=2.0, lo=1.0, hi=1.0, nlo=1.0, nhi=2.0, ncap=2.0, fixed_value=None),
     _row(5, "b", 3.5, 1, False, geq=2.0, nhi=2.0, fb=3.0),
     _row(6, "c", -2.5, 2, False, cap2=2.0, nlo=0.0, ncap=3.0),
-    _row(7, "c", 0.5, 3, False, cap2=2.0, nhi=2.0, pin=True),
-    _row(8, None, 6.0, 1, True, fb=2.0, pin=None),
+    _row(7, "c", 0.5, 3, False, cap2=2.0, nhi=2.0, fixed_value=True),
+    _row(8, None, 6.0, 1, True, fb=2.0, fixed_value=None),
     _row(9, None, -3.0, 2, False, fb=0.5),
 ]
 
@@ -195,12 +195,12 @@ def _values(records, names=NAMES):
 #   when      "top"                    WHEN flag after the bound: rows outside it are out of the problem
 #             "local"                  WHEN flag inside the aggregate: only flagged rows are counted,
 #                                      but every row of the group still states a bound
-#   pins      [(value, [ids])]         x = value WHEN id = i
-#   pinwhen   True                     x = 1 WHEN pin (the column is NULL on some rows: those are not pinned)
-#   flagpin_below N                    x = flag WHEN id < N
+#   fixed     [(value, [ids])]         x = value WHEN id = i
+#   fixedwhen True                     x = 1 WHEN fixed_value (the column is NULL on some rows: those are not fixed)
+#   flagfixed_below N                  x = flag WHEN id < N
 #   rowbounds [(op, number, ids|None[, lhs])]  lhs op number on the given ids (None: every row, no WHEN)
 #   noop      [SQL]                    clauses that restate the BOOL domain and change nothing
-#   colpins   True                     x >= lo AND x <= hi, the bounds read from each row
+#   colfixed  True                     x >= lo AND x <= hi, the bounds read from each row
 #   objective key of OBJECTIVES (default "score"), or "none" for a query with no objective (every score is 0)
 #   sense     "MAXIMIZE" (default) or "MINIMIZE"; unused when there is no objective
 
@@ -256,10 +256,10 @@ S1_CASES = {
     "three_global_source_bounds": {
         "bounds": [(">=", "COALESCE(nlo, 1.0)"), ("<=", "COALESCE(nhi, 2.0)"), ("<=", "cap2")]
     },
-    "source_bounds_with_pin": {
+    "source_bounds_with_fixed": {
         "bounds": [(">=", "COALESCE(nlo, 1.0)"), ("<=", "cap")],
         "per": True,
-        "pins": [(1, [5])],
+        "fixed": [(1, [5])],
     },
     # --- bounds that count rows: COUNT(*) is the rows the clause covers in each group ---
     "count_star_half_global": {"bounds": [("<=", "COUNT(*) / 2")]},
@@ -284,18 +284,18 @@ S1_CASES = {
     "count_star_interval_local_when_per": {
         "bounds": [(">=", "COUNT(*) / 2"), ("<=", "COUNT(*) - 1")], "per": True, "when": "local"
     },
-    "count_star_with_pins": {
-        "bounds": [("<=", "COUNT(*) / 2")], "per": True, "pins": [(1, [2]), (0, [0])]
+    "count_star_with_fixed": {
+        "bounds": [("<=", "COUNT(*) / 2")], "per": True, "fixed": [(1, [2]), (0, [0])]
     },
     "count_star_with_shifted_scores": {
         "bounds": [("<=", "COUNT(*) / 2")], "per": True, "objective": "score_minus_cap", "sense": "MINIMIZE"
     },
-    # --- pins and per-row bounds on x ---
-    "pins_with_group_bounds": {"bounds": [("<=", 2)], "per": True, "pins": [(1, [4]), (0, [0, 8])]},
-    "pins_with_source_bound": {"bounds": [(">=", 1), ("<=", "cap")], "per": True, "pins": [(1, [2]), (0, [1])]},
-    "pin_by_nullable_boolean_column": {"bounds": [("<=", 3)], "pinwhen": True},
-    "pin_to_boolean_column": {"bounds": [("<=", 5)], "flagpin_below": 5},
-    "pin_written_as_unit_body": {"bounds": [("<=", 2)], "rowbounds": [("<=", 0, [1], "1*x")]},
+    # --- fixed values and per-row bounds on x ---
+    "fixed_with_group_bounds": {"bounds": [("<=", 2)], "per": True, "fixed": [(1, [4]), (0, [0, 8])]},
+    "fixed_with_source_bound": {"bounds": [(">=", 1), ("<=", "cap")], "per": True, "fixed": [(1, [2]), (0, [1])]},
+    "fixed_by_nullable_boolean_column": {"bounds": [("<=", 3)], "fixedwhen": True},
+    "fixed_to_boolean_column": {"bounds": [("<=", 5)], "flagfixed_below": 5},
+    "fixed_written_as_unit_body": {"bounds": [("<=", 2)], "rowbounds": [("<=", 0, [1], "1*x")]},
     "domain_restatements": {
         "bounds": [("<=", 3)],
         "noop": ["x <= 1", "x >= 0", "x < 2", "x > -1", "x <> 2", "x BETWEEN 0 AND 1"],
@@ -306,9 +306,9 @@ S1_CASES = {
         "rowbounds": [("=", 1, [2]), ("<=", 0.5, [0]), ("<=", 1, None)],
         "sense": "MINIMIZE",
     },
-    "column_pins_global": {"bounds": [("<=", 3)], "colpins": True},
-    "column_pins_global_min": {"bounds": [("<=", 3)], "colpins": True, "sense": "MINIMIZE"},
-    "column_pins_per_interval": {"bounds": [(">=", 1), ("<=", 2)], "per": True, "colpins": True},
+    "column_fixed_global": {"bounds": [("<=", 3)], "colfixed": True},
+    "column_fixed_global_min": {"bounds": [("<=", 3)], "colfixed": True, "sense": "MINIMIZE"},
+    "column_fixed_per_interval": {"bounds": [(">=", 1), ("<=", 2)], "per": True, "colfixed": True},
     # --- tied scores: a plan that ranks with ties selects too many rows ---
     "ties_top_k": {"data": "ties", "bounds": [("<=", 2)]},
     "ties_one_per_group": {"data": "ties", "bounds": [(">=", 1), ("<=", 1)], "per": True},
@@ -323,9 +323,12 @@ S1_CASES = {
     },
     "infeasible_count_star_bound_below_zero": {"bounds": [("<=", "COUNT(*) - 20")]},
     "infeasible_rowbound_fraction_equal": {"bounds": [("<=", 5)], "rowbounds": [("=", 0.5, [1])]},
-    "infeasible_contradicting_pins": {"bounds": [("<=", 5)], "pins": [(1, [3]), (0, [3])]},
-    "infeasible_pin_against_upper": {"bounds": [("<=", 1)], "pins": [(1, [0, 3])]},
-    "infeasible_pins_against_lower": {"bounds": [(">=", 3), ("<=", 5)], "pins": [(0, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])]},
+    "infeasible_contradicting_fixed": {"bounds": [("<=", 5)], "fixed": [(1, [3]), (0, [3])]},
+    "infeasible_fixed_against_upper": {"bounds": [("<=", 1)], "fixed": [(1, [0, 3])]},
+    "infeasible_fixed_against_lower": {
+        "bounds": [(">=", 3), ("<=", 5)],
+        "fixed": [(0, [0, 1, 2, 3, 4, 5, 6, 7, 8, 9])],
+    },
 }
 
 _OPNAMES = {"<=": "le", "<": "lt", ">=": "ge", ">": "gt", "=": "eq", "<>": "ne"}
@@ -400,22 +403,22 @@ for _shape, _scope in itertools.product(_NO_OBJECTIVE_BOUNDS, _NO_OBJECTIVE_SCOP
         "objective": "none",
         **_NO_OBJECTIVE_SCOPES[_scope],
     }
-S1_CASES["no_objective_with_pins_per"] = {
+S1_CASES["no_objective_with_fixed_per"] = {
     "bounds": [(">=", 1), ("<=", 2)],
     "per": True,
-    "pins": [(1, [4]), (0, [0, 8])],
+    "fixed": [(1, [4]), (0, [0, 8])],
     "objective": "none",
 }
-S1_CASES["no_objective_pins_force_the_lower_bound_past_its_rows"] = {
+S1_CASES["no_objective_fixed_force_the_lower_bound_past_its_rows"] = {
     "bounds": [(">=", 2)],
     "per": True,
-    "pins": [(0, [0, 1])],
+    "fixed": [(0, [0, 1])],
     "objective": "none",
 }
-S1_CASES["no_objective_column_pins_global"] = {"bounds": [(">=", 2)], "colpins": True, "objective": "none"}
-S1_CASES["no_objective_infeasible_pin_against_upper"] = {
+S1_CASES["no_objective_column_fixed_global"] = {"bounds": [(">=", 2)], "colfixed": True, "objective": "none"}
+S1_CASES["no_objective_infeasible_fixed_against_upper"] = {
     "bounds": [("<=", 1)],
-    "pins": [(1, [0, 3])],
+    "fixed": [(1, [0, 3])],
     "objective": "none",
 }
 S1_CASES["no_objective_ties_dataset"] = {"data": "ties", "bounds": [(">=", 3)], "objective": "none"}
@@ -444,12 +447,12 @@ def _decide_clause(case):
             clauses.append(f"SUM({body}) {op} {limit} WHEN flag{per}")
         else:
             clauses.append(f"SUM({body}) {op} {limit}{per}")
-    for value, ids in case.get("pins", ()):
+    for value, ids in case.get("fixed", ()):
         clauses.extend(f"x = {value} WHEN id = {i}" for i in ids)
-    if case.get("pinwhen"):
-        clauses.append("x = 1 WHEN pin")
-    if case.get("flagpin_below") is not None:
-        clauses.append(f"x = flag WHEN id < {case['flagpin_below']}")
+    if case.get("fixedwhen"):
+        clauses.append("x = 1 WHEN fixed_value")
+    if case.get("flagfixed_below") is not None:
+        clauses.append(f"x = flag WHEN id < {case['flagfixed_below']}")
     for rowbound in case.get("rowbounds", ()):
         op, constant, ids = rowbound[:3]
         lhs = rowbound[3] if len(rowbound) > 3 else "x"
@@ -458,7 +461,7 @@ def _decide_clause(case):
         else:
             clauses.extend(f"{lhs} {op} {constant} WHEN id = {i}" for i in ids)
     clauses.extend(case.get("noop", ()))
-    if case.get("colpins"):
+    if case.get("colfixed"):
         clauses.extend(["x >= lo", "x <= hi"])
     objective = case.get("objective", "score")
     tail = "" if objective == "none" else f" {case.get('sense', 'MAXIMIZE')} {OBJECTIVES[objective][0]}"
@@ -582,22 +585,22 @@ def _s1_constraints(case):
                 sum_op, rhs = _inclusive(op, rhs)
                 constraints.append((coefficients, sum_op, rhs))
 
-    for value, ids in case.get("pins", ()):
+    for value, ids in case.get("fixed", ()):
         for i in (i for i in ids if i < len(rows)):  # an id no row has is not bound
             constraints.append(({names[i]: 1.0}, "=", float(value)))
-    if case.get("pinwhen"):
-        constraints.extend(({names[i]: 1.0}, "=", 1.0) for i, row in enumerate(rows) if row["pin"] is True)
-    if case.get("flagpin_below") is not None:
+    if case.get("fixedwhen"):
+        constraints.extend(({names[i]: 1.0}, "=", 1.0) for i, row in enumerate(rows) if row["fixed_value"] is True)
+    if case.get("flagfixed_below") is not None:
         constraints.extend(
             ({names[i]: 1.0}, "=", 1.0 if row["flag"] else 0.0)
             for i, row in enumerate(rows)
-            if row["id"] < case["flagpin_below"]
+            if row["id"] < case["flagfixed_below"]
         )
     for rowbound in case.get("rowbounds", ()):
         op, constant, ids = rowbound[:3]
         for i in range(len(rows)) if ids is None else (i for i in ids if i < len(rows)):
             constraints.extend(_row_bound(names[i], op, constant))
-    if case.get("colpins"):
+    if case.get("colfixed"):
         for i, row in enumerate(rows):
             constraints.append(({names[i]: 1.0}, ">=", float(row["lo"])))
             constraints.append(({names[i]: 1.0}, "<=", float(row["hi"])))
@@ -618,7 +621,7 @@ def _violations(constraints, values, tolerance=1e-9):
 def _solve_with_oracle(oracle_solver, case):
     names, constraints = _s1_constraints(case)
     rows = _dataset(case)
-    oracle_solver.create_model("direct_three_way")
+    oracle_solver.create_model("direct_s1_uniform_matroid")
     for name in names:
         oracle_solver.add_variable(name, VarType.BINARY)
     for coefficients, op, rhs in constraints:
@@ -693,14 +696,14 @@ def test_s1_strict_bound_against_a_fraction_agrees_under_every_mode(
 
 
 # A bound on x with no WHEN that always holds changes nothing: the solver seeds a Boolean's box at [0, 1] and a written
-# bound only narrows it, so `x >= -3` leaves both values allowed. S1 reads it that way, so the query is proved by S1
-# (`require` would fail on a miss) and gives the oracle's answer.
+# bound only narrows it, so `x >= -3` leaves both values allowed. S1 reads it that way, so S1 applies to the query
+# (`require` would fail if it did not) and gives the oracle's answer.
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 @pytest.mark.parametrize("op,constant", [(">=", "-3"), (">", "-3"), (">=", "-1"), (">=", "-0.5")])
 @pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
-def test_s1_proves_a_bound_that_always_holds_in_require_mode(decidb_cli, oracle_solver, op, constant, sense):
+def test_s1_applies_when_a_bound_always_holds_in_require_mode(decidb_cli, oracle_solver, op, constant, sense):
     limit = ("<=", 3) if sense == "MAXIMIZE" else (">=", 2)
     case = {"bounds": [limit], "rowbounds": [(op, constant, None)], "sense": sense}
     _agree(decidb_cli, oracle_solver, case)
@@ -718,7 +721,7 @@ CONTEXT_CASES = [("global_upper_max", wrap) for wrap in (
 )] + [
     ("per_interval", "wide_source"),
     ("local_when_interval", "recombined_filters"),
-    ("pins_with_group_bounds", "joined_source"),
+    ("fixed_with_group_bounds", "joined_source"),
     ("no_objective_interval_per", "wide_source"),
     ("no_objective_ge_whole_global", "joined_source"),
     ("no_objective_source_lower_local_when_per", "recombined_filters"),
@@ -755,7 +758,7 @@ def test_s1_nested_decisions_agree(decidb_cli, oracle_solver):
     first = _solve_with_oracle(oracle_solver, case)[1]
     chosen = [round(first.variable_values[name]) for name in names]
 
-    oracle_solver.create_model("direct_three_way_second")
+    oracle_solver.create_model("direct_s1_uniform_matroid_second")
     ys = [f"y_{i}" for i in range(len(rows_data))]
     for name in ys:
         oracle_solver.add_variable(name, VarType.BINARY)
@@ -944,7 +947,7 @@ S1_ERROR_CASES = {
         "null_bound",
         None,
     ),
-    # --- no objective: the bounds and pins are still read on every row and still decide feasibility ---
+    # --- no objective: the bounds and fixed values are still read on every row and still decide feasibility ---
     "no_objective_late_null_bound_under_limit": (
         "SELECT x FROM (FROM (SELECT i AS id, 1.0::DOUBLE AS lo, "
         "CASE WHEN i=4999 THEN NULL ELSE 1.0 END::DOUBLE AS hi FROM range(5000) t(i)) s "
@@ -952,10 +955,10 @@ S1_ERROR_CASES = {
         "null_bound",
         None,
     ),
-    "no_objective_late_nan_pin_column_under_count": (
+    "no_objective_late_nan_fixed_column_under_count": (
         "SELECT COUNT(*) FROM (FROM (SELECT i AS id, "
-        "CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END AS pin FROM range(5000) t(i)) s "
-        "DECIDE x(BOOL) SUCH THAT SUM(x) >= 1 AND x <= pin) q",
+        "CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END AS fixed_value FROM range(5000) t(i)) s "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) >= 1 AND x <= fixed_value) q",
         "null_bound",
         None,
     ),
@@ -969,14 +972,14 @@ S1_ERROR_CASES = {
         "infeasible",
         None,
     ),
-    "no_objective_late_pin_conflict_survives_limit": (
+    "no_objective_late_fixed_conflict_survives_limit": (
         "SELECT x FROM (FROM (VALUES (1), (2), (3)) t(id) "
         "DECIDE x(BOOL) SUCH THAT x = 1 WHEN id = 3 AND x = 0 WHEN id = 3 AND SUM(x) >= 1) q LIMIT 1",
         "infeasible",
         None,
     ),
-    # --- pins ---
-    "late_pin_conflict_survives_limit": (
+    # --- fixed values ---
+    "late_fixed_conflict_survives_limit": (
         _problem(
             "(1, 9.0), (2, 5.0), (3, -1.0)",
             "id, score",
@@ -986,15 +989,21 @@ S1_ERROR_CASES = {
         "infeasible",
         None,
     ),
-    "pin_column_null_outside_when": (
+    "fixed_column_null_outside_when": (
         _problem(
-            "(1, 9.0, 1.0::DOUBLE), (2, 5.0, NULL::DOUBLE)", "id, score, pin", "SUM(x) <= 2 AND x <= pin WHEN id = 1"
+            "(1, 9.0, 1.0::DOUBLE), (2, 5.0, NULL::DOUBLE)",
+            "id, score, fixed_value",
+            "SUM(x) <= 2 AND x <= fixed_value WHEN id = 1",
         ),
         "null_bound",
-        'column "pin"',
+        'column "fixed_value"',
     ),
-    "pin_column_nan": (
-        _problem("(1, 9.0, 'NaN'::DOUBLE), (2, 5.0, 1.0::DOUBLE)", "id, score, pin", "SUM(x) <= 2 AND x <= pin"),
+    "fixed_column_nan": (
+        _problem(
+            "(1, 9.0, 'NaN'::DOUBLE), (2, 5.0, 1.0::DOUBLE)",
+            "id, score, fixed_value",
+            "SUM(x) <= 2 AND x <= fixed_value",
+        ),
         "null_bound",
         None,
     ),
@@ -1046,10 +1055,10 @@ def _bound_column_problem(cap, op):
     )
 
 
-def _pin_column_problem(pin, op):
+def _fixed_column_problem(fixed_value, op):
     return (
-        f"SELECT id, x FROM (FROM (VALUES (1, 9.0, {pin}), (2, 5.0, {pin})) t(id, score, pin) "
-        f"DECIDE x(BOOL) SUCH THAT SUM(x) <= 2 AND x {op} pin MAXIMIZE SUM(score*x)) q ORDER BY id"
+        f"SELECT id, x FROM (FROM (VALUES (1, 9.0, {fixed_value}), (2, 5.0, {fixed_value})) t(id, score, fixed_value) "
+        f"DECIDE x(BOOL) SUCH THAT SUM(x) <= 2 AND x {op} fixed_value MAXIMIZE SUM(score*x)) q ORDER BY id"
     )
 
 
@@ -1090,9 +1099,11 @@ BOUNDARY_CASES = {
         for op, score in [("<=", "1.0 + i"), (">=", "-1.0 - i")]
     },
     **{
-        f"pin_{_OPNAMES[op]}_{_tag(pin)}": _pin_column_problem(pin, op)
-        for pin, op in [("'Infinity'", "<="), ("'-Infinity'", "<="), ("'Infinity'", ">="), ("'-Infinity'", ">="),
-                        ("1.5", "<="), ("0.5", ">=")]
+        f"fixed_{_OPNAMES[op]}_{_tag(fixed_value)}": _fixed_column_problem(fixed_value, op)
+        for fixed_value, op in [
+            ("'Infinity'", "<="), ("'-Infinity'", "<="), ("'Infinity'", ">="), ("'-Infinity'", ">="),
+            ("1.5", "<="), ("0.5", ">="),
+        ]
     },
 }
 
@@ -1103,7 +1114,7 @@ BOUNDARY_CASES = {
 def test_s1_boundary_values_read_like_the_solver(decidb_cli, name):
     sql = BOUNDARY_CASES[name]
     direct = _outcome(decidb_cli, sql, "require")
-    assert direct != ("error", "direct_miss"), f"direct solve declined:\n{sql}"
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
     assert direct == _outcome(decidb_cli, sql, "off")
 
 
@@ -1145,7 +1156,7 @@ def test_s1_count_bound_raises_only_where_the_solver_does(decidb_cli, name):
     )
     solver = _outcome(decidb_cli, sql, "off")
     direct = _outcome(decidb_cli, sql, "require")
-    assert direct != ("error", "direct_miss"), f"direct solve declined:\n{sql}"
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
     assert solver[0] == expected, f"the solver gave {solver}, so this case no longer tests what it says"
     assert direct == solver
 
@@ -1306,8 +1317,8 @@ S1_OFFSET_CASES.update(
         ),
         "offset_count_star_global_local_when": _offset_case(1, "1", [("<=", "COUNT(*)")], "local"),
         "offset_count_star_with_source_bound": _offset_case(1, "1", [("<=", "COUNT(*)"), ("<=", "cap")], "per"),
-        # Pins and per-row bounds beside the offset bound.
-        "offset_with_pins": _offset_case(1, "1", [("<=", 4)], "per", pins=[(1, [4]), (0, [0, 8])]),
+        # Fixed values and per-row bounds beside the offset bound.
+        "offset_with_fixed": _offset_case(1, "1", [("<=", 4)], "per", fixed=[(1, [4]), (0, [0, 8])]),
         "offset_no_objective": _offset_case(1, "1", [(">=", 4)], "per", objective="none"),
         "offset_no_objective_negated_local": _offset_case(-1, "1", [("<=", 1)], "local_per", objective="none"),
         "offset_ties": _offset_case(1, "1", [("<=", 4)], "per", data="ties"),
@@ -1358,7 +1369,7 @@ def test_s1_offset_is_read_exactly_in_decimal_arithmetic(decidb_cli, op, body):
             f"DECIDE x(BOOL) SUCH THAT SUM({body}) {op} {limit} MAXIMIZE SUM(score * x)) q"
         )
         direct = _outcome(decidb_cli, sql, "require")
-        assert direct != ("error", "direct_miss"), f"direct solve declined:\n{sql}"
+        assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
         # Exact arithmetic over 100 rows: a*count + 57 <op> limit.
         a = 1 if body.startswith("x") else -1
         wanted = [
@@ -1441,7 +1452,7 @@ def test_s1_offset_bound_near_the_bigint_limit_matches_the_solver(decidb_cli, co
         f"DECIDE x(BOOL) SUCH THAT SUM({body}) {op} cap MAXIMIZE SUM(score*x)) q ORDER BY id"
     )
     direct = _outcome(decidb_cli, sql, "require")
-    assert direct != ("error", "direct_miss"), f"direct solve declined:\n{sql}"
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
     assert direct == _outcome(decidb_cli, sql, "off")
 
 
@@ -1465,7 +1476,8 @@ for _base, _op, _scope in itertools.product(_AGGREGATE_BASES, _AGGREGATE_OPS, _C
         "sense": "MINIMIZE" if _op in (">", ">=") else "MAXIMIZE",
     }
 
-# Bodies with an offset or a negation against an aggregate bound, intervals, several bounds, pins, and no objective.
+# Bodies with an offset or a negation against an aggregate bound, intervals, several bounds, fixed values, and no
+# objective.
 S1_AGGREGATE_CASES.update(
     {
         "aggregate_interval_min_max_per": {"bounds": [(">=", "MIN(cap)"), ("<=", "MAX(cap)")], "per": True},
@@ -1488,7 +1500,7 @@ S1_AGGREGATE_CASES.update(
             "bounds": [(">=", "COALESCE(nlo, 1.0)"), ("<=", "MAX(cap)")],
             "per": True,
         },
-        "aggregate_with_pins": {"bounds": [("<=", "MAX(cap)")], "per": True, "pins": [(1, [4]), (0, [0, 8])]},
+        "aggregate_with_fixed": {"bounds": [("<=", "MAX(cap)")], "per": True, "fixed": [(1, [4]), (0, [0, 8])]},
         "aggregate_no_objective_lower": {"bounds": [(">=", "MIN(cap)")], "per": True, "objective": "none"},
         "aggregate_no_objective_local_when": {
             "bounds": [(">=", "AVG(sm)")],
@@ -1611,7 +1623,7 @@ def test_s1_aggregate_bound_reads_infinity_like_the_solver(decidb_cli, name):
         f"DECIDE x(BOOL) SUCH THAT SUM(x) {op} {aggregate} MAXIMIZE SUM(score*x)) q ORDER BY id"
     )
     direct = _outcome(decidb_cli, sql, "require")
-    assert direct != ("error", "direct_miss"), f"direct solve declined:\n{sql}"
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
     assert direct == _outcome(decidb_cli, sql, "off")
 
 

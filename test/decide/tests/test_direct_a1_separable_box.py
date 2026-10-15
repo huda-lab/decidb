@@ -3,7 +3,7 @@
 Every case is one DECIDE query over rows whose decisions do not interact. The oracle builds its own model from the
 raw rows, from the bounds and objective coefficients each case states in Python (never from DeciDB's reading of the
 SQL). DeciDB then runs the query with `decide_direct_solve='off'` (the solver) and `'require'` (direct solve; a query
-the rule does not prove fails instead of quietly using the solver). The case passes when all three agree:
+the rule does not apply to fails instead of quietly using the solver). The case passes when all three agree:
 
 - the oracle finds the problem feasible: both DeciDB runs return an assignment inside every row's box, whole-numbered
   for INT and BOOL, that reaches the oracle's objective (rows may differ on ties);
@@ -293,7 +293,7 @@ def _values_without(rows, dropped):
 
 
 def _solve_with_oracle(oracle_solver, case_):
-    oracle_solver.create_model("direct_a1")
+    oracle_solver.create_model("direct_a1_separable_box")
     domains = _domains(case_)
     linear, quadratic = {}, {}
     for decision, domain in case_.decisions:
@@ -698,10 +698,10 @@ add(
 BOOL_BOX = [clause("x <= 1", le, const(1.0))]
 for objective_name in ("lin_min", "lin_max", "lin_when", "sq", "sq_lin", "sq_inner_w", "sq_neg_max", "none"):
     add(f"bool_objective_{objective_name}", "BOOL", BOOL_BOX, objective_name)
-add("bool_pin_one", "BOOL", [clause("x = 1", eq, const(1.0), replaces=True)], "lin_min")
-add("bool_pin_zero", "BOOL", [clause("x <= 0", le, const(0.0))], "lin_max")
+add("bool_fixed_one", "BOOL", [clause("x = 1", eq, const(1.0), replaces=True)], "lin_min")
+add("bool_fixed_zero", "BOOL", [clause("x <= 0", le, const(0.0))], "lin_max")
 add(
-    "bool_pin_when",
+    "bool_fixed_when",
     "BOOL",
     [clause("x = 1 WHEN (f)", eq, const(1.0), when=col("f"), replaces=False), clause("x <= 1", le, const(1.0))],
     "lin_min",
@@ -807,7 +807,7 @@ def test_a1_solver_off_by_one_on_a_fractional_strict_bound(decidb_cli, oracle_so
 
 
 # A bound that contradicts the variable's built-in domain (an upper bound below the default floor of 0, or a BOOL lower
-# bound above 1) is rejected by the solver before it reads any row, on an empty source too. Direct solve does not prove
+# bound above 1) is rejected by the solver before it reads any row, on an empty source too. No rule applies to
 # such a query, so it reaches the solver and raises the solver's message whatever the table holds.
 DECLINED_CASES = {
     "real_upper_below_default": case("REAL", [clause("x <= -1", le, const(-1.0))], "lin_min"),
@@ -823,7 +823,7 @@ DECLINED_CASES = {
 def test_a1_declines_a_bound_that_contradicts_the_built_in_domain(decidb_cli, oracle_solver, name):
     case_ = DECLINED_CASES[name]
     # The oracle agrees the problem is infeasible; the solver and the default path raise it, and `require` reports
-    # that direct solve does not prove the query.
+    # that no rule applies to the query.
     _agree(decidb_cli, oracle_solver, case_, modes=("off", "auto"))
     with pytest.raises(DecidBCliError, match="decide_direct_solve=require") as declined:
         _run(decidb_cli, _sql(case_), "require")
@@ -1021,7 +1021,7 @@ def test_a1_error_cases_fail_on_both_paths(decidb_cli, name):
         _run(decidb_cli, sql, "off")
     with pytest.raises(DecidBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "direct solve did not prove the query"
+    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
     if expected is not None:
         assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
 
@@ -1121,7 +1121,7 @@ def test_a1_boundary_values_read_like_the_solver(decidb_cli, name):
     solver = _run_all(decidb_cli, sql, "off")
     assert (
         direct[0] != "error" or "decide_direct_solve=require" not in direct[1]
-    ), "direct solve did not prove the query"
+    ), "no rule applied to the query"
     assert _all_close(direct, solver), (direct, solver)
 
 
@@ -1201,7 +1201,7 @@ def test_a1_matches_exact_arithmetic_on_random_rows(decidb_cli, domain, seed):
 
 
 # ---------------------------------------------------------------------------
-# A problem made only of constants streams; any other problem reads every row before releasing one
+# A problem made only of constants is pipelined; any other problem reads every row before releasing one
 # ---------------------------------------------------------------------------
 
 CONSTANT_PROBLEMS = {
@@ -1220,7 +1220,7 @@ def _constant_query(decision, problem, parent="SELECT id, x FROM ({}) q ORDER BY
 @pytest.mark.correctness
 @pytest.mark.parametrize("name", sorted(CONSTANT_PROBLEMS))
 @pytest.mark.parametrize("decision", ["x(REAL)", "x(INT)"])
-def test_a1_a_constant_problem_streams_and_matches_the_solver(decidb_cli, name, decision):
+def test_a1_a_constant_problem_is_pipelined_and_matches_the_solver(decidb_cli, name, decision):
     sql = _constant_query(decision, CONSTANT_PROBLEMS[name])
     assert _run(decidb_cli, sql, "require") == _run(decidb_cli, sql, "off")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout

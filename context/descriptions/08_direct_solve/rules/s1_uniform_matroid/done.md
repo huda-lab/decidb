@@ -48,34 +48,35 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   fractional bounds included.
 - **Scope:** global, or `PER` one or more source columns, optionally with a deterministic source-only `WHEN` (top level or
   inside the aggregate). All count clauses must share identical membership. Rows with a NULL `PER` key or a false aggregate
-  `WHEN` bypass the bound but still obey per-row pins.
-- **Per-row bounds on `x`:** any comparison (`=`, `<>`, `<`, `<=`, `>`, `>=`) against a foldable constant, a numeric source
-  column, or a deterministic nonthrowing numeric expression over source columns (`COALESCE`, `TRY_CAST` of a column), with
-  an optional source-only `WHEN`. Each row's value is read as the set of {0, 1} it allows. Both allowed means no
-  constraint (`x <= 1`, `x >= 0`, `x BETWEEN 0 AND 1`, `x <> 2`); one allowed fixes the row to that value (`x >= 0.5`
-  fixes to 1); none allowed makes the row infeasible. A bound with a `WHEN` takes any constant. A constant bound without a
-  `WHEN` is read the same way when it can hold: a lower bound below 0 (`x >= -3`, `x > -3`) allows both values, because
-  the solver keeps a Boolean's box at [0, 1] and a written bound only narrows it. One that cannot hold is left to the
-  solver (see the out-of-scope table). A strict bound against a fraction is first shifted to a whole number by
-  `DecideStrictBound`, the function the solver uses (`x > 0.5` is `x >= 1`, `x < 1.5` is `x <= 1`, `x < 0.5` is `x <= 0`, `x > -0.5` is `x >= 0`), and then read
-  like any other bound;
-  a column value is read as arithmetic with or without a `WHEN`, as the solver does. A source Boolean column is also a pin
-  value (`x = flag`). Contradictory active bounds are infeasible. A NULL or NaN column value raises on every row,
-  including rows the `WHEN` excludes, and names the column.
+  `WHEN` bypass the bound but still obey per-row fixed values.
+- **Per-row bounds on `x`:** any comparison (`=`, `<>`, `<`, `<=`, `>`, `>=`) against a foldable constant, a numeric
+  source column, or a deterministic nonthrowing numeric expression over source columns (`COALESCE`, `TRY_CAST` of a
+  column), with an optional source-only `WHEN`. Each row's value is read as the set of {0, 1} it allows. Both allowed
+  means no constraint (`x <= 1`, `x >= 0`, `x BETWEEN 0 AND 1`, `x <> 2`); one allowed fixes the row to that value (`x
+  >= 0.5` fixes to 1); none allowed makes the row infeasible. A bound with a `WHEN` takes any constant. A constant bound
+  without a `WHEN` is read the same way when it can hold: a lower bound below 0 (`x >= -3`, `x > -3`) allows both
+  values, because the solver keeps a Boolean's box at [0, 1] and a written bound only narrows it. One that cannot hold
+  is left to the solver (see the out-of-scope table). A strict bound against a fraction is first shifted to a whole
+  number by `DecideStrictBound`, the function the solver uses (`x > 0.5` is `x >= 1`, `x < 1.5` is `x <= 1`, `x < 0.5`
+  is `x <= 0`, `x > -0.5` is `x >= 0`), and then read like any other bound; a column value is read as arithmetic with or
+  without a `WHEN`, as the solver does. A source Boolean column is also a fixed value value (`x = flag`). Contradictory
+  active bounds are infeasible. A NULL or NaN column value raises on every row, including rows the `WHEN` excludes, and
+  names the column.
 - **Objective:** a signed sum of per-row coefficients times `x`, `MAXIMIZE` or `MINIMIZE`, plus an optional finite constant,
-  or none. Without one every row scores 0, so the plan picks only the rows the lower limits and pins require.
+  or none. Without one every row scores 0, so the plan picks only the rows the lower limits and fixed values require.
   Coefficients are numeric, decision-free, deterministic; several terms must be non-throwing. Each `SUM(...)` may carry a
   constant factor or divisor (`2 * SUM(score*x)`, `SUM(score*x) / 2`, `-1.5 * SUM(...)`, `(1 + 1) * SUM(...)`) that scales
   that part's coefficients: a negative one reverses the part, zero makes every row score 0, and each part keeps its own.
   The factor must be a finite foldable constant, and a divisor must not be zero.
 
-It raises an error wherever the solver does: empty scoped aggregate, invalid or NULL bounds (including on bypassed rows),
-NULL or non-finite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1` or
-`COUNT(*)`. When a query has several errors, direct may report a different one than the solver. When scores tie it may pick
-different rows than the solver, with the same objective. Without an objective every feasible assignment is optimal, so
-which rows it picks is not specified; Gurobi and HiGHS pick different ones as well. The feasibility check is a flat list of independent checks (a
-pin conflict, a valid interval, enough rows, a fixed count within the upper limit, an unrepresentable limit), each true or
-the infeasible error; which failing one raises is not specified, and all of them say the same thing.
+It raises an error wherever the solver does: empty scoped aggregate, invalid or NULL bounds (including on bypassed
+rows), NULL or non-finite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1`
+or `COUNT(*)`. When a query has several errors, direct may report a different one than the solver. When scores tie it
+may pick different rows than the solver, with the same objective. Without an objective every feasible assignment is
+optimal, so which rows it picks is not specified; Gurobi and HiGHS pick different ones as well. The feasibility check is
+a flat list of independent checks (a fixed-value conflict, a valid interval, enough rows, a fixed count within the upper
+limit, an unrepresentable limit), each true or the infeasible error; which failing one raises is not specified, and all
+of them say the same thing.
 
 **Known difference: values within the solver's tolerance of an integer.** Direct solve reads every
 bound exactly: counts, constants and column values. The solver accepts a violation of about 1e-6, and the two backends
@@ -93,13 +94,13 @@ answers. Accepted rather than declined because no realistic limit is that large.
 solver as `DOUBLE` and cannot overflow.
 
 **Error wording** (`../../architecture/policy.md`). The messages are the solver's, built by the same functions. A NULL
-count bound, pin or `SUM` source column that is one column raises `DECIDE: column "cap" is NULL. Impute it with
-COALESCE(cap, 0) or filter those rows out with a WHERE clause.`, and a NaN one `DECIDE constraint right-hand side contains
-invalid value (NaN)...`; the solver adds `at row N` to the second. A NULL score names the NULL columns of the score as
-the solver does (`column "score"`, or `columns "a" and "b"`), and quotes the score only when no column is NULL. The
-empty-aggregate, non-finite score and infeasible messages are the solver's too. Two cases keep direct solve's own
-wording: a bound or pin that is a computed expression (`TRY_CAST(cap AS INTEGER)`) raises `the bound expression has an
-invalid value (NULL or NaN)`, since the check counts bad rows over the whole input and has no failing row to name
+count bound, fixed value or `SUM` source column that is one column raises `DECIDE: column "cap" is NULL. Impute it with
+COALESCE(cap, 0) or filter those rows out with a WHERE clause.`, and a NaN one `DECIDE constraint right-hand side
+contains invalid value (NaN)...`; the solver adds `at row N` to the second. A NULL score names the NULL columns of the
+score as the solver does (`column "score"`, or `columns "a" and "b"`), and quotes the score only when no column is NULL.
+The empty-aggregate, non-finite score and infeasible messages are the solver's too. Two cases keep direct solve's own
+wording: a bound or fixed value that is a computed expression (`TRY_CAST(cap AS INTEGER)`) raises `the bound expression
+has an invalid value (NULL or NaN)`, since the check counts bad rows over the whole input and has no failing row to name
 columns from; and an `=` bound that varies within a group raises `source-valued equality bound varies within a group`,
 where the solver names the first two values it meets. Both paths raise on the same inputs.
 
@@ -145,7 +146,7 @@ not re-run; earlier it took about 43 s on the global shape.
 | Global top-K, narrow, full output | 0.18 s | 2.89 s | 16x | 1.0 GiB | 2.3 GiB |
 | Global top-K, narrow, every column reduced in the query | 0.17 s | 2.84 s | 17x | 0.9 GiB | 2.2 GiB |
 | Global top-K, unused 512 B payload (pruned) | 0.16 s | 3.00 s | 19x | 0.8 GiB | 5.3 GiB |
-| 100 `PER` groups, fixed pins | 0.33 s | 32.4 s | 98x | 0.5 GiB | 6.6 GiB |
+| 100 `PER` groups, fixed values | 0.33 s | 32.4 s | 98x | 0.5 GiB | 6.6 GiB |
 | 100 groups, aggregate-local `WHEN` | 0.30 s | 28.4 s | 95x | 0.5 GiB | 6.0 GiB |
 | 100 groups, local `WHEN`, source-valued bound | 0.55 s | 27.4 s | 50x | 0.7 GiB | 3.7 GiB |
 | 100 groups, source-valued bounds | 0.50 s | 29.6 s | 59x | 0.7 GiB | 6.3 GiB |

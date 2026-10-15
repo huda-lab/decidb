@@ -23,7 +23,7 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   replaces the default 0 on the solver, so it does here. Every other lower bound (a column, a `WHEN`, a coefficient or
   offset on `x`, an arithmetic constant such as `0 - 3`) only intersects with it. The solver and direct solve ask one
   shared predicate which clauses are folded into the variable (`DecideIsSingletonRowBound`, surfaced as
-  `DirectConstraintFact::variable_bound`), and combine the folded values with one function (`DecideFoldSingletonRow`),
+  `DirectIRConstraint::variable_bound`), and combine the folded values with one function (`DecideFoldSingletonRow`),
   so they cannot disagree. A bound of magnitude 1e20 or more is no bound, as on the solver, including a written -1e30;
   an infinite data value is no bound on that side.
 - **Whole-number rounding.** `INT` and `BOOL` bounds round inward, strict bounds included, and the rounding is tested
@@ -92,8 +92,8 @@ One projection per stage, with no sort, no window and no join:
    projected: `INTEGER` for `BOOL`, `BIGINT` for `INT`, `DOUBLE` for `REAL`.
 
 A problem made only of constants, with no `WHEN`, fails the same way on every row, so it needs no breaker: the check is
-a projected validation column and the plan streams. Unreferenced source columns never reach the breaker; a column the
-parent reads does, so reading a wide column back costs memory in proportion to the input.
+a projected validation column and the plan is pipelined. Unreferenced source columns never reach the breaker; a column
+the parent reads does, so reading a wide column back costs memory in proportion to the input.
 
 ## Verified by
 

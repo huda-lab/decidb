@@ -1,6 +1,6 @@
-"""Per-rule fixtures for the direct-solve contract suite (`test_direct_rule_conformance.py`).
+"""Per-rule fixtures for the direct-solve conformance suite (`test_direct_rule_conformance.py`).
 
-The contract a direct-solve rule owes the user is the same for every rule: the DECIDE
+What a direct-solve rule owes the user is the same for every rule: the DECIDE
 schema and rows, the solver's read of every input row before any row is released,
 prepared plans, plan serialization, EXPLAIN, `require` reasons, and the solver path
 under `off`, a forced backend, and `DIAGNOSE`. A rule supplies the queries below and the
@@ -42,21 +42,21 @@ class RuleFixture:
     rule: str
     #: The one fixed line EXPLAIN prints as the condition: the problem class, with no number from the query.
     condition: str
-    #: A query the rule proves, ordered so its rows are comparable, with one optimal assignment.
-    hit: str
-    #: The `hit` query over a source with no rows. The solver answers it, so the rule must give its outcome.
-    empty_hit: str
+    #: A query the rule applies to, ordered so its rows are comparable, with one optimal assignment.
+    applies: str
+    #: The `applies` query over a source with no rows. The solver answers it, so the rule must give its outcome.
+    empty_applies: str
     #: Queries whose constant bound contradicts the decision's built-in domain (`x <= -1` on a decision that cannot
     #: be negative, `BOOL x >= 2`), over an empty source and over a source with rows. The solver rejects every one
     #: before it reads a row. A rule either declines them or gives the solver's outcome.
-    impossible_bound_hits: tuple
-    #: SQL that creates a temporary table, then a query the rule proves over it. The suite
+    impossible_bound_cases: tuple
+    #: SQL that creates a temporary table, then a query the rule applies to over it. The suite
     #: prepares the query, changes the table, and checks the plan is rebuilt.
     table_setup: str
-    table_hit: str
+    table_applies: str
     table_change: str
     #: (declaration, constraints, objective, reason substring) over the source in `near_miss_source`, each one
-    #: condition away from a hit. The rule must decline it with that reason.
+    #: condition away from applying. The rule must decline it with that reason.
     near_misses: tuple
     near_miss_source: str
     #: A column of `near_miss_source` the near-miss queries select.
@@ -71,7 +71,7 @@ class RuleFixture:
 S1 = RuleFixture(
     rule="S1_UNIFORM_MATROID",
     condition="min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi",
-    hit="""
+    applies="""
         SELECT id, score, x FROM (
             FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('9.0' AS DOUBLE)), (2, CAST('-1.0' AS DOUBLE)))
                 t(id, score)
@@ -79,7 +79,7 @@ S1 = RuleFixture(
             MAXIMIZE SUM(score * x)
         ) q ORDER BY id
     """,
-    empty_hit="""
+    empty_applies="""
         SELECT id, score, x FROM (
             FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('9.0' AS DOUBLE))) t(id, score)
                   WHERE false) t
@@ -87,7 +87,7 @@ S1 = RuleFixture(
             MAXIMIZE SUM(score * x)
         ) q ORDER BY id
     """,
-    impossible_bound_hits=tuple(
+    impossible_bound_cases=tuple(
         f"""
         SELECT id, score, x FROM (
             FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('9.0' AS DOUBLE))) t(id, score)
@@ -103,7 +103,7 @@ S1 = RuleFixture(
         CREATE TEMP TABLE direct_life(id INTEGER, score DOUBLE);
         INSERT INTO direct_life VALUES (1,2),(2,9);
     """,
-    table_hit="""
+    table_applies="""
         SELECT id,x FROM (
             FROM direct_life DECIDE x(BOOL)
             SUCH THAT SUM(x)<=1 MAXIMIZE SUM(score*x)
@@ -208,7 +208,7 @@ A1 = RuleFixture(
     condition="min/max SUM(c*x), l <= x <= u, each row independent",
     # Whole-number answers with a unique optimum, so the rows equal the solver's exactly and the query also runs on
     # forced HiGHS (which has no mixed-integer quadratic and no non-convex quadratic).
-    hit="""
+    applies="""
         SELECT id, score, cap, x FROM (
             FROM (VALUES (0, CAST('2.0' AS DOUBLE), 3), (1, CAST('-1.0' AS DOUBLE), 5), (2, CAST('4.0' AS DOUBLE), 2))
                 t(id, score, cap)
@@ -216,7 +216,7 @@ A1 = RuleFixture(
             MAXIMIZE SUM(score * x)
         ) q ORDER BY id
     """,
-    empty_hit="""
+    empty_applies="""
         SELECT id, score, cap, x FROM (
             FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE), 3), (1, CAST('-1.0' AS DOUBLE), 5)) t(id, score, cap)
                   WHERE false) t
@@ -224,7 +224,7 @@ A1 = RuleFixture(
             MAXIMIZE SUM(score * x)
         ) q ORDER BY id
     """,
-    impossible_bound_hits=tuple(
+    impossible_bound_cases=tuple(
         f"""
         SELECT id, score, cap, x FROM (
             FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE), 3), (1, CAST('-1.0' AS DOUBLE), 5)) t(id, score, cap)
@@ -244,7 +244,7 @@ A1 = RuleFixture(
         CREATE TEMP TABLE direct_a1_life(id INTEGER, score DOUBLE, cap INTEGER);
         INSERT INTO direct_a1_life VALUES (1,2,3),(2,-1,5);
     """,
-    table_hit="""
+    table_applies="""
         SELECT id,x FROM (
             FROM direct_a1_life DECIDE x(INT)
             SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)

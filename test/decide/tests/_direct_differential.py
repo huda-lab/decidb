@@ -16,7 +16,7 @@ from decidb_cli import DecidBCliError
 # (pattern, class). The first match wins; anything unmatched compares by text.
 ERROR_CLASSES = [
     (r"(?i)parser error|syntax error", "parser"),
-    (r"decide_direct_solve=require", "direct_miss"),
+    (r"decide_direct_solve=require", "direct_not_applied"),
     # Before "infeasible": the solver's wording for this error ends "so this DECIDE query is infeasible".
     # The direct path says "varies"; the solver path says "more than one value".
     (r"(?i)varies|more than one value", "equality_varies"),
@@ -47,23 +47,23 @@ def outcome(cli, mode, sql):
     return "ok", rows[0]
 
 
-def compare_direct_with_solver(cli, generate, rng, cases, min_hit_share=0.7, min_compared_share=0.2):
+def compare_direct_with_solver(cli, generate, rng, cases, min_applies_share=0.7, min_compared_share=0.2):
     """Runs `cases` generated queries on both paths and asserts they agree.
 
-    A query the rule does not prove is skipped: the solver path stays authoritative.
+    A query the rule does not apply to is skipped: the solver path stays authoritative.
     Otherwise both paths succeed or fail together (any error counts), and
     successes agree on row count and primary objective. The selected count is not
     compared, because a tied zero-contribution row may be chosen by only one path.
     """
-    shaped = shaped_hits = compared = 0
+    shaped = shaped_applied = compared = 0
     for _ in range(cases):
         sql, rule_shaped = generate(rng)
         shaped += rule_shaped
         direct = outcome(cli, "require", sql)
         assert direct != ("error", "parser"), f"generator produced invalid syntax:\n{sql}"
-        if direct == ("error", "direct_miss"):
+        if direct == ("error", "direct_not_applied"):
             continue
-        shaped_hits += rule_shaped
+        shaped_applied += rule_shaped
         solver = outcome(cli, "off", sql)
         assert solver != ("error", "parser"), f"generator produced invalid syntax:\n{sql}"
         assert direct[0] == solver[0], f"direct {direct} vs solver {solver}\n{sql}"
@@ -81,5 +81,7 @@ def compare_direct_with_solver(cli, generate, rng, cases, min_hit_share=0.7, min
             )
     # Guard against a generator drifting into vacuity: most rule-shaped queries must
     # reach the direct path and a meaningful share must succeed on both paths.
-    assert shaped_hits >= min_hit_share * shaped, f"only {shaped_hits} of {shaped} rule-shaped queries hit"
+    assert (
+        shaped_applied >= min_applies_share * shaped
+    ), f"only {shaped_applied} of {shaped} rule-shaped queries the rule applies to"
     assert compared >= min_compared_share * cases, f"only {compared} successful comparisons"

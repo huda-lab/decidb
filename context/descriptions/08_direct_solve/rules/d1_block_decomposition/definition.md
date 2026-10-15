@@ -52,7 +52,8 @@ FROM candidates c
 JOIN assignments a USING (id);
 ```
 
-The partitioned ranking is the S1 rewrite. D1 provides the proof that each department may use it independently and that the results may be joined safely.
+The partitioned ranking is the S1 construction. D1 provides the proof that each department may use it independently and
+that the results may be joined safely.
 
 ## Recognition
 
@@ -77,7 +78,7 @@ A query does not belong to D1 when a shared decision, resource constraint, scala
 | **Variant** | **Handling** |
 |----|----|
 | One leaf class across many keys | Apply one partitioned SQL rewrite, as in the department example. |
-| Different leaf classes | Rewrite each component with its matching rule, then union the assignment relations. |
+| Different leaf classes | Apply each component's matching rule, then union the assignment relations. |
 | Split created by fixed decisions | Substitute the fixed values, rebuild the components, and rewrite the remaining pieces. |
 | Additive objective | Optimize every component in the objective's requested direction. |
 | Outer MIN or MAX | Compose only when improving every component in one proved direction cannot worsen the outer objective. |

@@ -70,7 +70,7 @@ protected:
 };
 
 //! Wraps a rule's relational substitute in the result adapter. The adapter keeps DECIDE's external bindings and
-//! types, checks the substitute's output-slot map against its child, and pins validation-only slots as live.
+//! types, checks the substitute's slot map against its child, and pins validation-only slots as live.
 //! `prunable_sources` says, per source column, whether a parent that does not read it may skip evaluating it.
 //! An enabled `late_materialization` also carries the source row id as a dependency that a parent-read stored column
 //! can use.

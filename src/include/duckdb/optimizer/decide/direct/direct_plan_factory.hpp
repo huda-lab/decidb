@@ -86,7 +86,7 @@ struct DirectPipelineBreaker {
 };
 
 //! The solver reads every input row before it returns, so a bad value on the last row raises even under an outer
-//! LIMIT 1. A rule whose plan could otherwise stream rows out keeps that obligation here: `valid`, over `input`'s
+//! LIMIT 1. A rule whose plan would otherwise be pipelined keeps that obligation here: `valid`, over `input`'s
 //! columns, returns true or raises the row's error; a projection evaluates it on every row and a window counting the
 //! whole input cannot emit until all of them are read. The predicate is a projected column rather than a filter, so
 //! filter pushdown cannot move it below a join onto rows the DECIDE input never sees.

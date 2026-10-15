@@ -14,7 +14,7 @@ class Optimizer;
 //! late materialization, the technique behind DuckDB's own LATE_MATERIALIZATION pass; it is a separate step, and it
 //! runs inside the UNUSED_COLUMNS pass (see optimizer.cpp).
 //!
-//! Step one, at rewrite time, before the rule builds its plan: if the source is a chain of non-volatile projections
+//! Step one, in the rule driver before the rule applies: if the source is a chain of non-volatile projections
 //! and filters over one scan of a DuckDB base table, append that table's row id to the source as a trailing column and
 //! record which source columns forward a stored column unchanged. The rule passes the row id along like any other
 //! source column. Returns false and leaves the source untouched for any other source (a join, a subquery with an

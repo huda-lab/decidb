@@ -189,7 +189,7 @@ unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vecto
 	for (idx_t i = 0; i < substitute.slot_map.size(); i++) {
 		auto slot = substitute.slot_map[i];
 		if (slot >= child_types.size() || child_types[slot] != output_types[i]) {
-			throw InternalException("Direct solve rule returned a mismatched output slot");
+			throw InternalException("Direct solve rule returned a slot map that does not match the DECIDE outputs");
 		}
 	}
 	for (auto slot : substitute.validated_columns) {

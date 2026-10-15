@@ -374,8 +374,8 @@ struct Stage {
 	}
 };
 
-//! Builds the relational plan for one proved A1 problem, stage by stage. Each stage is one projection that reads only
-//! the columns of the stage before it:
+//! Builds the relational plan for one A1 problem whose condition holds, stage by stage. Each stage is one projection
+//! that reads only the columns of the stage before it:
 //!
 //!   P1 raw values (every coefficient, bound and mask, evaluated unconditionally on every row)
 //!   P2 per-clause bounds, per-decision objective coefficients, and the check on every raw value
@@ -435,9 +435,9 @@ public:
 		Stage p5(binder.GenerateTableIndex());
 		if (condition.constant_problem) {
 			// Every row sees the same values, so the first row raises whatever the others would, and nothing has to be
-			// held back: the plan streams, and the validation column raises wherever a row is read. An empty source
-			// has no row to raise on and returns no rows. A bound the solver rejects outright (against the variable's
-			// built-in domain) is never proved, so it cannot differ on an empty input.
+			// held back: the plan is pipelined, and the validation column raises wherever a row is read. An empty
+			// source has no row to raise on and returns no rows. A bound the solver rejects outright (against the
+			// variable's built-in domain) is never proved, so it cannot differ on an empty input.
 			for (idx_t i = 0; i < source_bindings.size(); i++) {
 				p5.Add(DirectColumn(source_types[i], passthrough4[i]));
 			}

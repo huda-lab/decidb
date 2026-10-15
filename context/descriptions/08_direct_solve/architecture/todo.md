@@ -1,75 +1,45 @@
-# Architecture — open work: standard patterns and names
+# Architecture — report: standard patterns and names
 
-Direct solve's design mostly follows known patterns under names we made up. These tasks settle one standard name per
-concept, apply it to code and docs, and remove the parts of the rule lifecycle that a standard design does not need.
-How to work and the shared checks: `../framework/todo.md` § How to work any task.
-This folder has no `done.md`: a shipped task is recorded in the architecture note it names and in
-`../framework/done.md`. A decision is recorded as one line in § Decisions.
+This goal is finished. Direct solve's design already followed known patterns, but under names we had made up. Every
+concept now carries the standard name from database, compiler or optimization practice, and the code, tests, docs,
+`EXPLAIN` output and website use it. `glossary.md` lists each name, the standard idea behind it, where it comes from,
+and the old words it replaced; its last section lists the few places an old word had to stay and why.
 
-Rules for every rename task in this file:
+## What changed
 
-- Use the names `glossary.md` fixes. Do not choose a new name inside a rename task.
-- Text a user sees follows the glossary names (`EXPLAIN` keys and values, `require` reasons, the syntax reference,
-  the website), and the tests that assert it change with it. The `decide_direct_solve` setting and serialized names
-  stay.
-- Do not rename a Python test function or move it to another file (the oracle cache is keyed on the node id). C++ test
-  files and case names may change.
-- A rename is behavior-neutral: the checks give the same pass counts before and after the task. Run them
-  first for the baseline; the stamp in `../framework/done.md` can lag behind later commits.
-- The commit of a rename also updates every doc in `08_direct_solve/` that uses the old term.
+- **One word per idea.** "Facts" became the IR (intermediate representation), as compilers call the neutral form later
+  passes read. The rule steps Match, Prove and Rewrite became one `CheckCondition` that returns the applicability
+  condition and one `Apply` that builds the substitute plan, the words Volcano and Cascades optimizers use for
+  transformation rules. The coordinator became the rule driver, the override a test seam, the proposal the substitute,
+  "hit and miss" became "applies and does not apply".
+- **The plan.** The validation barrier became a pipeline breaker, the second read became late materialization, and the
+  result boundary became the result adapter, all standard query-engine terms. The shared helpers that return plan pieces
+  are plan factory functions (they were called builders, which means something else in the design-patterns book), and
+  the small helper that builds expressions is an `ExpressionBuilder`. The bundle of `EXPLAIN` lines a direct plan
+  carries is the `EXPLAIN` annotation, not a "decision record".
+- **The problem classes.** Each class keeps its id and adds the textbook name of its problem: S1 is uniform-matroid
+  optimization and A1 is a separable box-constrained problem, and likewise for the other 17. Folders, rule files,
+  namespaces, test files and the `EXPLAIN` value follow (`S1_UNIFORM_MATROID`, `A1_SEPARABLE_BOX`).
+- **Outside direct solve.** "Reducer" became "aggregate", DuckDB's own word, across the parser, planner, solver, error
+  messages, docs and website. An "absorbed bound" became a singleton-row bound folded into the variable's box, the
+  presolve term.
+- **Tests.** The S1 and A1 suites are differential oracle tests (`test_direct_s1_uniform_matroid.py`,
+  `test_direct_a1_separable_box.py`), and the suite every rule must pass is the conformance suite
+  (`test_direct_rule_conformance.py`). Their oracle answers were solved again once under the new names, with identical
+  results.
+- **Docs.** The shared-engine notes moved from `rules/_harness/` to `framework/`.
 
-## Decisions
+## What a SQL user notices
 
-Owner decisions every task below follows. The names they lead to are in `glossary.md`.
+Only wording. `EXPLAIN` shows the new class names and a `Direct solve condition` line where it said `Direct solve
+proof`; `require` reasons and error messages say "aggregate" and "fixed value" where they said "reducer" and "pin"; the
+`decide_direct_solve` setting description says "a rule that applies". Answers, plans and speed are unchanged. The
+setting's name, its values, and every serialized name stayed, so saved plans and database files still read back.
 
-- P-01: keep "direct solve"; the glossary defines it as a rule-based rewrite of a DECIDE query into a relational
-  plan that computes the optimum. The setting, `EXPLAIN` keys and `Direct*` identifiers stay.
-- P-02: the shared-engine folder becomes `08_direct_solve/framework/`. `rules/` stays; one rule implements one
-  catalogue class.
-- P-03: adopt every standard candidate. Match/Prove/Rewrite become pattern/condition/apply; proof becomes applicability
-  condition (`DirectRuleProof` takes that name); proposal becomes substitute; coordinator becomes rule driver; registry
-  stays registry + factory method; hit/miss become applies/does not apply; `DirectRuleOverride` becomes a test seam;
-  `*Rewriter` becomes plan builder. Two planner and solver terms move to their standard names too (P-19; `glossary.md`
-  rows "aggregate" and "singleton-row bound"). The `EXPLAIN` key `Direct solve proof` becomes `Direct solve condition`
-  (P-22 below).
-- P-04: one `Prove` that returns the applicability condition, and `Summary()` on the rule in place of Explain. The
-  interface has two steps, Prove and Rewrite.
-- P-05: keep the `Direct` prefix in `namespace duckdb`; drop it inside a rule's namespace (`direct_s1_uniform_matroid`,
-  `direct_a1_separable_box`).
-- P-16: rename the test files to the standard names. Exception to the no-rename rule above, for P-18 only; the
-  orchestrator measures the cost and runs the oracle re-run itself.
-- P-20: each class keeps its id and takes the textbook name of its problem (not of its algorithm; the optimization
-  term wins over the database term): A1 separable box-constrained problem; A2 single-facility location (1-D); A3
-  multilinear optimization over a box; A4 bounded-variable least squares; A5 monotone optimization; A6 rank-one
-  bounded least squares; N1 Euclidean-ball projection and support function; N2 ellipsoid support function; S1
-  uniform-matroid optimization; S2 laminar-matroid optimization; S3 maximum-cardinality knapsack; S4
-  cardinality-constrained bottleneck knapsack; R1 continuous (fractional) knapsack; R2 discrete separable convex
-  resource allocation; R3 continuous quadratic knapsack; R4 weighted max-min fair allocation; O1 Monge assignment;
-  O2 Monge transportation problem; D1 block-diagonal decomposition. The glossary gives each one's source and its
-  folder, file, identifier and `EXPLAIN` slug.
-- P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
-  and the website. The setting `decide_direct_solve` and serialized names stay.
+## Decisions the owner made
 
-## P-17 — Sweep for retired terms
-
-- **Problem.** A rename task covers the files it knows of. Comments, other doc areas and `.claude/` skills may still
-  use old terms.
-- **Change.** For every retired term in `glossary.md`, grep `src/`, `test/`, `benchmark/decide/`, `context/` and
-  `.claude/`, and fix what remains. Leave git history and the frozen paper alone.
-- **Allowed leftovers.** The serializer property name `"proof"` (id 209, `direct_result_adapter.cpp`), because
-  serialized names stay (P-22); the field behind it is `condition`. Oracle test names keep old terms, because a test's
-  name is its cache key: `test_a1_unused_wide_columns_stay_out_of_the_barrier...` and the four `test_second_read_*`
-  tests in `test_direct_user_facing.py`. "Second read" in its everyday sense (`_diagnose_relation.py`,
-  `test_decidb_diagnostic_engines.cpp`) is not the retired term. From P-19: the parser tag's string
-  `__qualified_reducer__` (`QUALIFIED_AGGREGATE_TAG`), because a saved view stores it; the test files
-  `test_qualified_reducer.py`, `test_nested_product_in_reducer.py` and `test_null_coalesce_reducer.py`, test function
-  and class names and parameter ids outside the direct-solve suites; comments and strings inside oracle
-  test bodies (the body is part of the cache key), in `test_canonicalize_cast.py`, `test_canonicalize_side_agnostic.py`,
-  `test_canonicalize_sign.py`, `test_cons_correlated_subquery.py`, `test_infinite_bounds.py`,
-  `test_nested_product_in_reducer.py`, `test_null_coalesce_reducer.py`, `test_quadratic_constraints.py`,
-  `test_qualified_reducer.py`, `test_scalar_scope.py`, `test_bilinear.py` and `test_per_objective.py`. DuckDB's own
-  words stay: `ExpressionDepthReducer` and the aggregate-state `Absorb`. So do "absorb" in its everyday sense and
-  `AbsorbAdditive` (`decide_degree.cpp`, which merges a child's degree into its parent, not a bound).
-- **Needs.** Every other task in this file.
-- **Done when.** Each retired term greps to zero outside history; `test/decide/run_direct_matrix.sh` gives the baseline
-  counts, and the stamp in the shared-engine `done.md` is renewed.
+P-01 keep "direct solve" as the feature's name; P-02 the shared-engine folder is `framework/`; P-03 adopt every standard
+name the review found; P-04 one condition step and one apply step per rule, with a fixed `Summary()` line for
+`EXPLAIN`; P-05 keep the `Direct` prefix in `namespace duckdb` and drop it inside a rule's own namespace; P-16 rename
+the test files once, with one oracle re-run; P-20 the textbook class names; P-22 user-visible text follows every rename
+except the setting and serialized names.
