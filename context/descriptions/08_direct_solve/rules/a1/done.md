@@ -125,7 +125,7 @@ The result is one aggregate row, so the time is the plan, not the transfer.
 At 1,000,000 rows the same shapes are 3.5 to 8.3x faster and use 31 to 73 MiB against 0.2 to 1.1 GiB. At 100,000 rows
 both paths finish in under 0.1 s.
 
-**Wide parent-read columns.** A 512-byte payload the parent reads back comes from a second read of the stored table, so
+**Wide parent-read columns.** A 512-byte payload the parent reads back is late-materialized from the stored table, so
 it never enters the breaker: at 1,000,000 rows direct takes 0.12 s and 88 MiB against the solver's 0.63 s and 1.7 GiB
 (5.2x), and an unused payload takes 0.08 s and 47 MiB. The speedup is smaller than S1's because the solver is already
 cheap on a bound-only problem. Footprint numbers for both rules are in `../../architecture/result_boundary.md`

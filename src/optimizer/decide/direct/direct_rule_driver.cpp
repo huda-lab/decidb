@@ -10,7 +10,7 @@
 #include "duckdb/optimizer/decide/direct/direct_builder.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_boundary.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
-#include "duckdb/optimizer/decide/direct/direct_second_read.hpp"
+#include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
@@ -160,8 +160,8 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 	// A stored source carries its row id as one more source column, so a column the rule never uses can be read again
 	// later, past the plan that holds rows. The rule passes it along like any other source column.
 	auto source_columns = prunable_sources.size();
-	DirectSecondRead second_read;
-	bool carries_rowid = DirectExposeStoredRowId(source, second_read);
+	DirectLateMaterialization late_materialization;
+	bool carries_rowid = DirectExposeStoredRowId(source, late_materialization);
 	if (carries_rowid) {
 		source.ResolveOperatorTypes();
 	}
@@ -170,15 +170,15 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 		if (substitute.output_slots.size() != output_bindings.size() + 1) {
 			throw InternalException("Direct solve rule did not pass the source row id through");
 		}
-		second_read.rowid_slot = substitute.output_slots[source_columns];
+		late_materialization.rowid_slot = substitute.output_slots[source_columns];
 		substitute.output_slots.erase(substitute.output_slots.begin() + NumericCast<int64_t>(source_columns));
 		if (substitute.pipelined) {
-			// Nothing is held, so there is nothing to gain from a second read.
-			second_read = DirectSecondRead();
+			// Nothing is held, so there is nothing to gain from a late materialization.
+			late_materialization = DirectLateMaterialization();
 		}
 	}
 	return MapDirectResult(std::move(substitute), std::move(output_bindings), std::move(output_types),
-	                       std::move(prunable_sources), decide_index, std::move(record), second_read);
+	                       std::move(prunable_sources), decide_index, std::move(record), late_materialization);
 }
 
 } // namespace duckdb

@@ -34,8 +34,8 @@
   use, direct solve raises an internal error, for S1 and A1 alike and under the default `auto`:
   `SELECT SUM(length(payload)) FROM (SELECT * FROM s ORDER BY id DESC) t DECIDE x(BOOL) SUCH THAT SUM(x) <= 3 MAXIMIZE SUM(score * x)`
   gives `INTERNAL Error: Failed to bind column reference "payload"`. The same query with `decide_direct_solve = 'off'`
-  answers, and so does the direct path when the parent reads only `x` or the source is a `WHERE` filter. The second read
-  of a stored table does not apply to this source (an `ORDER BY` is neither a projection nor a filter), and the error
+  answers, and so does the direct path when the parent reads only `x` or the source is a `WHERE` filter. Late
+  materialization of a stored table does not apply to this source (an `ORDER BY` is neither a projection nor a filter), and the error
   also occurs with that step disabled.
 - **Expected:** the same answer as the solver path.
 - **Impact:** a valid query fails with an internal error in the default mode instead of answering.

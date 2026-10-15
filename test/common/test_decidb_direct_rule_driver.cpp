@@ -322,7 +322,7 @@ TEST_CASE("With both real rules registered each query shape reaches the rule tha
 	REQUIRE(no_rule->GetError().find("A1_INDEPENDENT_BOUNDS: ") != string::npos);
 }
 
-TEST_CASE("The second read happens only for a stored table and a column the rule does not use", "[decidb]") {
+TEST_CASE("The late materialization happens only for a stored table and a column the rule does not use", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("CREATE TABLE sr AS SELECT i AS id, ((i * 37) % 100)::DOUBLE AS score, "
@@ -356,13 +356,13 @@ TEST_CASE("The second read happens only for a stored table and a column the rule
 	              "(SELECT id, MAX(score) AS score, MAX(payload) AS payload FROM sr GROUP BY id) s") == 1);
 	REQUIRE(scans("SELECT payload, x", "(SELECT id, score, payload || '!' AS payload FROM sr) s") == 1);
 
-	// The second read returns the rows the solver returns.
+	// The late materialization returns the rows the solver returns.
 	const string query = "SELECT id, payload, x FROM (FROM sr" + decide + ") q ORDER BY id";
-	auto second_read = con.Query(query);
-	REQUIRE_NO_FAIL(*second_read);
+	auto late_materialization = con.Query(query);
+	REQUIRE_NO_FAIL(*late_materialization);
 	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='off'"));
 	auto solver = con.Query(query);
 	REQUIRE_NO_FAIL(*solver);
-	REQUIRE(second_read->RowCount() == 100);
-	REQUIRE(second_read->ToString() == solver->ToString());
+	REQUIRE(late_materialization->RowCount() == 100);
+	REQUIRE(late_materialization->ToString() == solver->ToString());
 }

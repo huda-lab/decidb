@@ -1,4 +1,4 @@
-#include "duckdb/optimizer/decide/direct/direct_second_read.hpp"
+#include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 
 #include <algorithm>
 
@@ -22,8 +22,8 @@ namespace duckdb {
 
 namespace {
 
-//! A scan the second read can repeat: a DuckDB base table read through the ordinary table scan, with nothing that
-//! changes which rows it returns from one read to the next.
+//! A scan the late materialization can repeat: a DuckDB base table read through the ordinary table scan, with nothing
+//! that changes which rows it returns from one read to the next.
 bool IsRepeatableTableScan(LogicalGet &get) {
 	if (get.function.function != TableScanFunction::GetFunction().function || !get.GetTable() ||
 	    !get.GetTable()->IsDuckTable()) {
@@ -206,7 +206,7 @@ void LetGoOfRowId(LogicalDirectSolveResult &boundary) {
 	boundary.stored_columns.clear();
 }
 
-void SecondReadOneBoundary(unique_ptr<LogicalOperator> &slot, Optimizer &optimizer) {
+void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &optimizer) {
 	auto &boundary = slot->Cast<LogicalDirectSolveResult>();
 	if (!boundary.has_rowid_dependency) {
 		return;
@@ -268,7 +268,7 @@ void SecondReadOneBoundary(unique_ptr<LogicalOperator> &slot, Optimizer &optimiz
 		return;
 	}
 
-	// The second read: the moved columns and the row id, from a fresh scan of the same table.
+	// The late materialization: the moved columns and the row id, from a fresh scan of the same table.
 	auto second_index = optimizer.binder.GenerateTableIndex();
 	auto second = make_uniq<LogicalGet>(second_index, scan->function, scan->bind_data->Copy(), scan->returned_types,
 	                                    scan->names, scan->GetRowIdType());
@@ -309,7 +309,7 @@ void SecondReadOneBoundary(unique_ptr<LogicalOperator> &slot, Optimizer &optimiz
 void VisitForBoundaries(unique_ptr<LogicalOperator> &op, Optimizer &optimizer) {
 	if (op->type == LogicalOperatorType::LOGICAL_EXTENSION_OPERATOR &&
 	    op->Cast<LogicalExtensionOperator>().GetExtensionName() == DirectResultExtensionName()) {
-		SecondReadOneBoundary(op, optimizer);
+		LateMaterializeOneAdapter(op, optimizer);
 	}
 	for (auto &child : op->children) {
 		VisitForBoundaries(child, optimizer);
@@ -318,7 +318,7 @@ void VisitForBoundaries(unique_ptr<LogicalOperator> &op, Optimizer &optimizer) {
 
 } // namespace
 
-bool DirectExposeStoredRowId(LogicalOperator &source, DirectSecondRead &second_read) {
+bool DirectExposeStoredRowId(LogicalOperator &source, DirectLateMaterialization &late_materialization) {
 	vector<reference<LogicalOperator>> chain;
 	reference<LogicalOperator> current = source;
 	while (current.get().type != LogicalOperatorType::LOGICAL_GET) {
@@ -352,11 +352,11 @@ bool DirectExposeStoredRowId(LogicalOperator &source, DirectSecondRead &second_r
 		}
 	}
 	auto bindings = source.GetColumnBindings();
-	second_read.stored_columns.clear();
+	late_materialization.stored_columns.clear();
 	for (auto &binding : bindings) {
-		second_read.stored_columns.push_back(StoredColumnOf(chain, get, binding));
+		late_materialization.stored_columns.push_back(StoredColumnOf(chain, get, binding));
 	}
-	second_read.scan_table_index = get.table_index;
+	late_materialization.scan_table_index = get.table_index;
 
 	// Carry the table's row id up the chain as a trailing column of every operator on the way.
 	column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
@@ -377,7 +377,7 @@ bool DirectExposeStoredRowId(LogicalOperator &source, DirectSecondRead &second_r
 	return true;
 }
 
-unique_ptr<LogicalOperator> ApplyDirectSecondRead(unique_ptr<LogicalOperator> plan, Optimizer &optimizer) {
+unique_ptr<LogicalOperator> ApplyDirectLateMaterialization(unique_ptr<LogicalOperator> plan, Optimizer &optimizer) {
 	VisitForBoundaries(plan, optimizer);
 	return plan;
 }

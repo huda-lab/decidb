@@ -25,18 +25,18 @@ check). Design: `../../architecture/`.
   and always keeps the rule's validated columns live. `DirectValidationBreaker` builds the all-rows read for a plan that
   could stream. Because every row is checked before any is released, rows are held in memory, wide parent-read columns
   included (`../../architecture/result_boundary.md`, "Memory of holding rows").
-- **Second read of a stored table** (`direct_second_read.cpp`). When the DECIDE source is one DuckDB base table under
-  non-volatile projections and filters, the rule driver appends the table's `rowid` to the source and the boundary keeps
-  it as a hidden trailing dependency. Right after unused-column removal, when it is known which outputs a parent reads,
-  a late step moves each parent-read output that is a plain stored column the rule's plan only forwards to a second scan
-  of the table, joined (inner, on `rowid`) under the boundary, and prunes again so the column leaves the held rows. The
-  first read still checks every row. Only a variable-width column moves (a physical type that is not constant-size:
-  `VARCHAR`, `BLOB`, nested types); a fixed-width one is cheaper held than read back, so it stays in the single read
-  (measurements in `../../architecture/result_boundary.md`). Joins, aggregates, volatile or computed
-  columns, a source that already reads `rowid`, and a rule plan that streams (`DirectSubstitute::pipelined`,
-  set by A1's constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
-  `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep
-  up to date; with that pass disabled the row id is computed and dropped and the plan holds rows as before.
+- **Late materialization of a stored table** (`direct_late_materialization.cpp`). When the DECIDE source is one DuckDB
+  base table under non-volatile projections and filters, the rule driver appends the table's `rowid` to the source and
+  the boundary keeps it as a hidden trailing dependency. Right after unused-column removal, when it is known which
+  outputs a parent reads, a late step moves each parent-read output that is a plain stored column the rule's plan only
+  forwards to a second scan of the table, joined (inner, on `rowid`) under the boundary, and prunes again so the column
+  leaves the held rows. The first read still checks every row. Only a variable-width column moves (a physical type that
+  is not constant-size: `VARCHAR`, `BLOB`, nested types); a fixed-width one is cheaper held than read back, so it stays
+  in the single read (measurements in `../../architecture/result_boundary.md`). Joins, aggregates, volatile or computed
+  columns, a source that already reads `rowid`, and a rule plan that streams (`DirectSubstitute::pipelined`, set by A1's
+  constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
+  `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep up
+  to date; with that pass disabled the row id is computed and dropped and the plan holds rows as before.
 - **Shared builders.** `direct_builder.hpp` lists only helpers with two or more users: `DirectGuardEmptyAggregate`,
   `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBreaker`, `DirectScaledTerm` (sign and constant
   factor of a coefficient), `DirectIsNull`, `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`,

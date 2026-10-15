@@ -34,7 +34,7 @@
 #include "duckdb/optimizer/unnest_rewriter.hpp"
 #include "duckdb/optimizer/late_materialization.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
-#include "duckdb/optimizer/decide/direct/direct_second_read.hpp"
+#include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 #include "duckdb/catalog/catalog.hpp"
 #include "duckdb/catalog/catalog_entry/aggregate_function_catalog_entry.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
@@ -195,10 +195,11 @@ void Optimizer::RunBuiltInOptimizers() {
 		RemoveUnusedColumns unused(binder, context, true);
 		unused.VisitOperator(*plan);
 		// Only now do we know which columns a parent reads from a direct-solve result, so a stored column the rule
-		// does not use can move to a second read of its table (and unused columns are removed once more). This runs
-		// here rather than beside LATE_MATERIALIZATION because the passes between add positional projection maps that
-		// unused-column removal does not maintain.
-		plan = ApplyDirectSecondRead(std::move(plan), *this);
+		// does not use can be late-materialized: read from a second scan of its table, joined on the row id (and
+		// unused columns are removed once more). This is direct solve's own step, distinct from DuckDB's
+		// LATE_MATERIALIZATION pass below. It runs here, inside UNUSED_COLUMNS, rather than beside that pass because
+		// the passes between add positional projection maps that unused-column removal does not maintain.
+		plan = ApplyDirectLateMaterialization(std::move(plan), *this);
 	});
 
 	// Remove duplicate groups from aggregates

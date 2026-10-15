@@ -67,7 +67,7 @@ void LogicalDirectSolveResult::PruneUnusedOutputs(const vector<bool> &referenced
 		}
 	}
 	if (has_rowid_dependency && !movable_output_read) {
-		// No parent reads a stored column the second read could take over, so the row id has no use.
+		// No parent reads a stored column the late materialization could take over, so the row id has no use.
 		auto &rowid = expressions.back();
 		rowid = make_uniq<BoundConstantExpression>(Value(rowid->return_type));
 	}
@@ -169,7 +169,7 @@ unique_ptr<OperatorExtension> MakeDirectResultExtension() {
 unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
                                             vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
                                             idx_t decide_index, DirectSolveDecisionRecord record,
-                                            const DirectSecondRead &second_read) {
+                                            const DirectLateMaterialization &late_materialization) {
 	if (!substitute.child || output_bindings.size() != output_types.size() ||
 	    substitute.output_slots.size() != output_bindings.size() ||
 	    prunable_sources.size() + substitute.prunable_decisions.size() != output_bindings.size()) {
@@ -195,9 +195,9 @@ unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<
 			throw InternalException("Direct solve rule lost a required validation slot");
 		}
 	}
-	if (second_read.Enabled() &&
-	    (second_read.rowid_slot >= child_types.size() ||
-	     second_read.stored_columns.size() + substitute.prunable_decisions.size() != output_bindings.size())) {
+	if (late_materialization.Enabled() &&
+	    (late_materialization.rowid_slot >= child_types.size() ||
+	     late_materialization.stored_columns.size() + substitute.prunable_decisions.size() != output_bindings.size())) {
 		throw InternalException("Direct solve rule lost the source row id");
 	}
 	auto boundary = make_uniq<LogicalDirectSolveResult>(decide_index, std::move(output_bindings),
@@ -211,13 +211,13 @@ unique_ptr<LogicalOperator> MapDirectResult(DirectSubstitute substitute, vector<
 	for (auto slot : substitute.validated_columns) {
 		boundary->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
 	}
-	if (second_read.Enabled()) {
+	if (late_materialization.Enabled()) {
 		boundary->has_rowid_dependency = true;
-		boundary->scan_table_index = second_read.scan_table_index;
-		boundary->stored_columns = second_read.stored_columns;
+		boundary->scan_table_index = late_materialization.scan_table_index;
+		boundary->stored_columns = late_materialization.stored_columns;
 		boundary->stored_columns.resize(boundary->output_types.size(), DConstants::INVALID_INDEX);
-		boundary->expressions.push_back(
-		    DirectColumn(child_types[second_read.rowid_slot], child_bindings[second_read.rowid_slot]));
+		boundary->expressions.push_back(DirectColumn(child_types[late_materialization.rowid_slot],
+		                                             child_bindings[late_materialization.rowid_slot]));
 	}
 	boundary->children.push_back(std::move(substitute.child));
 	return std::move(boundary);

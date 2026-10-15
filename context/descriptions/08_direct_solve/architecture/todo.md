@@ -48,18 +48,6 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
   and the website. The setting `decide_direct_solve` and serialized names stay.
 
-
-## P-11 — Second read becomes late materialization
-
-- **Problem.** The second read is late materialization, the technique DuckDB's own `LATE_MATERIALIZATION` pass uses,
-  under another name.
-- **Change.** Rename per the glossary: `DirectSecondRead`, `second_read` fields and variables,
-  `direct_second_read.{hpp,cpp}`, `DirectExposeStoredRowId`, `ApplyDirectSecondRead`, and the "Second read" text in
-  `result_boundary.md` and `../rules/_harness/done.md`. The name must stay distinct from DuckDB's pass (for example a
-  `Direct` prefix), and the docs keep the reason it runs inside `UNUSED_COLUMNS`.
-- **Done when.** `grep -rn -i "second.read" src test context/descriptions/08_direct_solve` finds nothing; the checks
-  give the baseline counts.
-
 ## P-12 — Result boundary becomes the result adapter
 
 - **Problem.** The boundary is a GoF Adapter (the substitute presents the DECIDE node's bindings) and an optimization
@@ -68,7 +56,6 @@ Owner decisions every task below follows. The names they lead to are in `glossar
   `MakeDirectResultExtension`, `direct_result_boundary.{hpp,cpp}`, `output_slots` ("slot map"), `prunable_*`, and
   `architecture/result_boundary.md` (file name and text). `DIRECT_RESULT_EXTENSION` and the extension's serialized name
   stay, so a serialized plan still reads back.
-- **Needs.** after P-10 and P-11, which edit the same files.
 - **Done when.** None of the retired identifiers appears under `src/` or `test/`; `DECIDB_VERIFY_SERIALIZER=1 make
   decide-test` gives the baseline counts.
 
@@ -142,8 +129,10 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - **Change.** For every retired term in `glossary.md`, grep `src/`, `test/`, `benchmark/decide/`, `context/` and
   `.claude/`, and fix what remains. Leave git history and the frozen paper alone.
 - **Allowed leftovers.** The serializer property name `"proof"` (id 209, `direct_result_boundary.cpp`), because
-  serialized names stay (P-22); the field behind it is `condition`. The test name
-  `test_a1_unused_wide_columns_stay_out_of_the_barrier...`, because an oracle test name is its cache key.
+  serialized names stay (P-22); the field behind it is `condition`. Oracle test names keep old terms, because a
+  test's name is its cache key: `test_a1_unused_wide_columns_stay_out_of_the_barrier...` and the four
+  `test_second_read_*` tests in `test_direct_user_facing.py`. "Second read" in its everyday sense
+  (`_diagnose_relation.py`, `test_decidb_diagnostic_engines.cpp`) is not the retired term.
 - **Needs.** Every other task in this file.
 - **Done when.** Each retired term greps to zero outside history; `test/decide/run_direct_matrix.sh` gives the baseline
   counts, and the stamp in the shared-engine `done.md` is renewed.

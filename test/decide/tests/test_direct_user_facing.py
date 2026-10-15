@@ -555,10 +555,10 @@ def test_extension_registration_preserves_binder_errors(decidb_cli):
 # Direct solve checks every input row before it releases one, so its plan holds the rows. A stored column the parent
 # reads and the rule never uses is read from a second scan of the table, joined on the row id, so it is not held.
 
-_SECOND_READ_ROWS = 5000
+_LATE_MATERIALIZATION_ROWS = 5000
 
 # (decision clause, score of row i, how a bad last row is spelled). Scores are distinct for S1, so its optimum is unique.
-_SECOND_READ_RULES = {
+_LATE_MATERIALIZATION_RULES = {
     "s1": (
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= 500 MAXIMIZE SUM(score * x)",
         "((i * 37) % 5000)::DOUBLE",
@@ -570,20 +570,20 @@ _SECOND_READ_RULES = {
 }
 
 
-def _second_read_setup(rule, bad_last=False):
-    _, score = _SECOND_READ_RULES[rule]
+def _late_materialization_setup(rule, bad_last=False):
+    _, score = _LATE_MATERIALIZATION_RULES[rule]
     if bad_last:
-        score = f"CASE WHEN i = {_SECOND_READ_ROWS - 1} THEN 'NaN'::DOUBLE ELSE {score} END"
+        score = f"CASE WHEN i = {_LATE_MATERIALIZATION_ROWS - 1} THEN 'NaN'::DOUBLE ELSE {score} END"
     return f"""
         CREATE TEMP TABLE rr_src AS
         SELECT i AS id, {score} AS score, (5 + i % 7)::DOUBLE AS cap, 'payload-' || i::VARCHAR AS payload
-        FROM range({_SECOND_READ_ROWS}) t(i);
+        FROM range({_LATE_MATERIALIZATION_ROWS}) t(i);
         CREATE TEMP TABLE rr_one AS SELECT 1 AS k;
     """
 
 
-def _second_read_decide(rule, relation="rr_src"):
-    return f"FROM {relation} {_SECOND_READ_RULES[rule][0]}"
+def _late_materialization_decide(rule, relation="rr_src"):
+    return f"FROM {relation} {_LATE_MATERIALIZATION_RULES[rule][0]}"
 
 
 def _table_scans(plan, table="rr_src"):
@@ -600,8 +600,8 @@ def _same_answers(left, right):
 @pytest.mark.correctness
 @pytest.mark.parametrize("rule", ["s1", "a1"])
 def test_second_read_returns_the_solvers_answers_and_the_plan_reads_the_table_twice(decidb_cli, rule):
-    setup = _second_read_setup(rule)
-    decide = _second_read_decide(rule)
+    setup = _late_materialization_setup(rule)
+    decide = _late_materialization_decide(rule)
     query = f"SELECT id, payload, x FROM ({decide}) q ORDER BY id"
 
     plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
@@ -610,25 +610,28 @@ def test_second_read_returns_the_solvers_answers_and_the_plan_reads_the_table_tw
 
     # The same plan with the table round-tripped through a plan serializer, the solver, and a source that is held
     # because it sits over a join.
-    second_read, _ = _run(decidb_cli.with_verify_serializer(), setup + query)
+    late_materialization, _ = _run(decidb_cli.with_verify_serializer(), setup + query)
     solver, _ = _run(decidb_cli, setup + query, mode="off")
-    joined = _second_read_decide(rule, "(SELECT s.* FROM rr_src s JOIN rr_one o ON o.k = 1) s")
+    joined = _late_materialization_decide(rule, "(SELECT s.* FROM rr_src s JOIN rr_one o ON o.k = 1) s")
     held_query = f"SELECT id, payload, x FROM ({joined}) q ORDER BY id"
     held_plan = _raw(decidb_cli, setup + f"EXPLAIN {held_query}").stdout
     assert "Direct solve rule" in held_plan and _table_scans(held_plan) == 1
     held, _ = _run(decidb_cli, setup + held_query)
 
-    assert len(second_read) == _SECOND_READ_ROWS
-    assert second_read[0][1] == "payload-0" and second_read[-1][1] == f"payload-{_SECOND_READ_ROWS - 1}"
-    _same_answers(second_read, solver)
+    assert len(late_materialization) == _LATE_MATERIALIZATION_ROWS
+    assert (
+        late_materialization[0][1] == "payload-0"
+        and late_materialization[-1][1] == f"payload-{_LATE_MATERIALIZATION_ROWS - 1}"
+    )
+    _same_answers(late_materialization, solver)
     _same_answers(held, solver)
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("rule", ["s1", "a1"])
 def test_second_read_still_raises_on_a_bad_value_in_the_last_row_under_limit(decidb_cli, rule):
-    setup = _second_read_setup(rule, bad_last=True)
-    decide = _second_read_decide(rule)
+    setup = _late_materialization_setup(rule, bad_last=True)
+    decide = _late_materialization_decide(rule)
     query = f"SELECT id, payload, x FROM ({decide}) q LIMIT 1"
     plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
     assert "Direct solve rule" in plan and _table_scans(plan) == 2
@@ -642,8 +645,8 @@ def test_second_read_still_raises_on_a_bad_value_in_the_last_row_under_limit(dec
 @pytest.mark.correctness
 @pytest.mark.parametrize("rule", ["s1", "a1"])
 def test_second_read_only_for_a_stored_table_and_a_column_the_rule_does_not_use(decidb_cli, rule):
-    setup = _second_read_setup(rule)
-    decide = _second_read_decide(rule)
+    setup = _late_materialization_setup(rule)
+    decide = _late_materialization_decide(rule)
 
     def scans(sql, expected_rule_hit=True):
         plan = _raw(decidb_cli, setup + f"EXPLAIN {sql}").stdout
@@ -658,34 +661,34 @@ def test_second_read_only_for_a_stored_table_and_a_column_the_rule_does_not_use(
     assert scans(f"SELECT SUM(length(payload)), SUM(x) FROM ({decide}) q") == 2
 
     # A computed column keeps holding, and so does a column of a volatile or aggregated source.
-    volatile = _second_read_decide(rule, "(SELECT *, random() AS r FROM rr_src) s")
+    volatile = _late_materialization_decide(rule, "(SELECT *, random() AS r FROM rr_src) s")
     assert scans(f"SELECT payload, r, x FROM ({volatile}) q") == 1
-    grouped = _second_read_decide(
+    grouped = _late_materialization_decide(
         rule, "(SELECT id, MAX(score) AS score, MAX(cap) AS cap, MAX(payload) AS payload FROM rr_src GROUP BY id) s"
     )
     assert scans(f"SELECT payload, x FROM ({grouped}) q") == 1
-    computed = _second_read_decide(rule, "(SELECT id, score, cap, payload || '!' AS payload FROM rr_src) s")
+    computed = _late_materialization_decide(rule, "(SELECT id, score, cap, payload || '!' AS payload FROM rr_src) s")
     assert scans(f"SELECT payload, x FROM ({computed}) q") == 1
 
     # A source over a join keeps holding.
-    joined = _second_read_decide(rule, "(SELECT s.* FROM rr_src s JOIN rr_one o ON o.k = 1) s")
+    joined = _late_materialization_decide(rule, "(SELECT s.* FROM rr_src s JOIN rr_one o ON o.k = 1) s")
     assert scans(f"SELECT payload, x FROM ({joined}) q") == 1
 
-    # A filter on the table is read twice too, and the second read returns only the rows the first one kept.
-    filtered = _second_read_decide(rule, "(SELECT * FROM rr_src WHERE id % 2 = 0) s")
+    # A filter on the table is read twice too, and the late materialization returns only the rows the first one kept.
+    filtered = _late_materialization_decide(rule, "(SELECT * FROM rr_src WHERE id % 2 = 0) s")
     filtered_query = f"SELECT id, payload, x FROM ({filtered}) q ORDER BY id"
     assert scans(filtered_query) == 2
     kept, _ = _run(decidb_cli, setup + filtered_query)
     solver, _ = _run(decidb_cli, setup + filtered_query, mode="off")
-    assert len(kept) == _SECOND_READ_ROWS // 2
+    assert len(kept) == _LATE_MATERIALIZATION_ROWS // 2
     _same_answers(kept, solver)
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("rule", ["s1", "a1"])
 def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
-    setup = _second_read_setup(rule)
-    decide = _second_read_decide(rule)
+    setup = _late_materialization_setup(rule)
+    decide = _late_materialization_decide(rule)
 
     def scans(query):
         plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
@@ -695,7 +698,7 @@ def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
     # A fixed-width stored column the parent reads stays in the single read.
     narrow_query = f"SELECT id, x FROM ({decide}) q ORDER BY id"
     assert scans(narrow_query) == 1
-    # A VARCHAR one moves to the second read, and so does one next to a fixed-width column that stays.
+    # A VARCHAR one moves to the late materialization, and so does one next to a fixed-width column that stays.
     wide_query = f"SELECT payload, x FROM ({decide}) q ORDER BY payload"
     assert scans(wide_query) == 2
     mixed_query = f"SELECT id, payload, x FROM ({decide}) q ORDER BY id"
@@ -704,14 +707,14 @@ def test_second_read_moves_only_variable_width_columns(decidb_cli, rule):
     for query in (narrow_query, wide_query, mixed_query):
         direct, _ = _run(decidb_cli, setup + query)
         solver, _ = _run(decidb_cli, setup + query, mode="off")
-        assert len(direct) == _SECOND_READ_ROWS
+        assert len(direct) == _LATE_MATERIALIZATION_ROWS
         _same_answers(direct, solver)
 
 
 @pytest.mark.correctness
 def test_a1_plan_that_streams_does_not_read_twice(decidb_cli):
-    setup = _second_read_setup("a1")
-    # Every row sees the same bounds and coefficients, so the plan holds nothing and a second read would only add a join.
+    setup = _late_materialization_setup("a1")
+    # Every row sees the same bounds and coefficients, so the plan holds nothing and a late materialization would only add a join.
     decide = "FROM rr_src DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 10 MAXIMIZE SUM(2 * x)"
     query = f"SELECT id, payload, x FROM ({decide}) q ORDER BY id"
     plan = _raw(decidb_cli, setup + f"EXPLAIN {query}").stdout
