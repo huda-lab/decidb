@@ -113,7 +113,7 @@ check). Design: `../../architecture/`.
   `test_null_score_message_is_not_built_when_no_row_is_null`, `test_null_value_error_is_the_solvers_error_word_for_word`
   and `test_invalid_value_error_is_the_solvers_error_without_the_row_position` in `test_direct_user_facing.py` (the last
   two compare the full text of `require` with `off` for S1 and A1). The cost on clean data is not measured.
-- **Decision record.** When a rule applies, mode, rule and one fixed condition line per rule appear in logical and
+- **`EXPLAIN` annotation.** When a rule applies, mode, rule and one fixed condition line per rule appear in logical and
   physical `EXPLAIN` and profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x
   <= u, each row independent`. There is no guards line and no number from the query. `require` explains why no rule
   applied; under `auto` nothing is printed. Nothing persists a serialized plan across versions, so

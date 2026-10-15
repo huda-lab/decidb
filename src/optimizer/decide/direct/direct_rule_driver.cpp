@@ -16,7 +16,7 @@
 
 namespace duckdb {
 
-InsertionOrderPreservingMap<string> DirectSolveDecisionRecord::Render() const {
+InsertionOrderPreservingMap<string> DirectExplainAnnotation::Render() const {
 	InsertionOrderPreservingMap<string> result;
 	result["Direct solve mode"] = mode;
 	result["Direct solve rule"] = rule;
@@ -133,10 +133,10 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 		                        StringUtil::Join(names, ", "), names.size() == 2 ? "both" : "all");
 	}
 	auto &selected = proved[0];
-	DirectSolveDecisionRecord record;
-	record.mode = ModeName(mode);
-	record.rule = selected.rule->Name();
-	record.condition = selected.rule->Summary();
+	DirectExplainAnnotation annotation;
+	annotation.mode = ModeName(mode);
+	annotation.rule = selected.rule->Name();
+	annotation.condition = selected.rule->Summary();
 	direct_profile.Next("optimizer.direct.construct");
 	// The replacement answers to the DECIDE node's identity: every source column, then one column per decision.
 	source.ResolveOperatorTypes();
@@ -178,7 +178,7 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 		}
 	}
 	return AdaptDirectResult(std::move(substitute), std::move(output_bindings), std::move(output_types),
-	                         std::move(prunable_sources), decide_index, std::move(record), late_materialization);
+	                         std::move(prunable_sources), decide_index, std::move(annotation), late_materialization);
 }
 
 } // namespace duckdb

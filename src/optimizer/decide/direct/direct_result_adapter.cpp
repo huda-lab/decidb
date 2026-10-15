@@ -44,10 +44,10 @@ LogicalDirectResultAdapter::LogicalDirectResultAdapter(idx_t decide_index_p, vec
                                                        vector<LogicalType> output_types_p,
                                                        idx_t required_dependency_count_p,
                                                        vector<uint8_t> prunable_outputs_p,
-                                                       DirectSolveDecisionRecord record_p)
+                                                       DirectExplainAnnotation annotation_p)
     : decide_index(decide_index_p), output_bindings(std::move(output_bindings_p)),
       output_types(std::move(output_types_p)), required_dependency_count(required_dependency_count_p),
-      prunable_outputs(std::move(prunable_outputs_p)), record(std::move(record_p)) {
+      prunable_outputs(std::move(prunable_outputs_p)), annotation(std::move(annotation_p)) {
 }
 
 vector<ColumnBinding> LogicalDirectResultAdapter::GetColumnBindings() {
@@ -88,7 +88,7 @@ string LogicalDirectResultAdapter::GetExtensionName() const {
 }
 
 InsertionOrderPreservingMap<string> LogicalDirectResultAdapter::ParamsToString() const {
-	auto result = record.Render();
+	auto result = annotation.Render();
 	SetParamsEstimatedCardinality(result);
 	return result;
 }
@@ -100,9 +100,9 @@ void LogicalDirectResultAdapter::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty(203, "output_types", output_types);
 	serializer.WriteProperty(204, "required_dependency_count", required_dependency_count);
 	serializer.WriteProperty(205, "dependencies", expressions);
-	serializer.WriteProperty(206, "mode", record.mode);
-	serializer.WriteProperty(207, "rule", record.rule);
-	serializer.WriteProperty(209, "proof", record.condition);
+	serializer.WriteProperty(206, "mode", annotation.mode);
+	serializer.WriteProperty(207, "rule", annotation.rule);
+	serializer.WriteProperty(209, "proof", annotation.condition);
 	serializer.WriteProperty(213, "prunable_outputs", prunable_outputs);
 	serializer.WriteProperty(214, "has_rowid_dependency", has_rowid_dependency);
 	serializer.WriteProperty(215, "scan_table_index", scan_table_index);
@@ -116,9 +116,9 @@ unique_ptr<LogicalExtensionOperator> LogicalDirectResultAdapter::Read(Deserializ
 	result->output_types = deserializer.ReadProperty<vector<LogicalType>>(203, "output_types");
 	result->required_dependency_count = deserializer.ReadProperty<idx_t>(204, "required_dependency_count");
 	result->expressions = deserializer.ReadProperty<vector<unique_ptr<Expression>>>(205, "dependencies");
-	result->record.mode = deserializer.ReadProperty<string>(206, "mode");
-	result->record.rule = deserializer.ReadProperty<string>(207, "rule");
-	result->record.condition = deserializer.ReadProperty<string>(209, "proof");
+	result->annotation.mode = deserializer.ReadProperty<string>(206, "mode");
+	result->annotation.rule = deserializer.ReadProperty<string>(207, "rule");
+	result->annotation.condition = deserializer.ReadProperty<string>(209, "proof");
 	result->prunable_outputs = deserializer.ReadProperty<vector<uint8_t>>(213, "prunable_outputs");
 	result->has_rowid_dependency = deserializer.ReadProperty<bool>(214, "has_rowid_dependency");
 	result->scan_table_index = deserializer.ReadProperty<idx_t>(215, "scan_table_index");
@@ -155,7 +155,7 @@ unique_ptr<PhysicalOperator> LogicalDirectResultAdapter::CreatePlan(ClientContex
 		}
 	}
 	auto result = make_uniq<PhysicalProjection>(output_types, std::move(select_list), estimated_cardinality);
-	result->explain_metadata = make_uniq<InsertionOrderPreservingMap<string>>(record.Render());
+	result->explain_metadata = make_uniq<InsertionOrderPreservingMap<string>>(annotation.Render());
 	result->children.push_back(std::move(child));
 	return std::move(result);
 }
@@ -170,7 +170,7 @@ unique_ptr<OperatorExtension> MakeDirectResultAdapterExtension() {
 
 unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
                                               vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
-                                              idx_t decide_index, DirectSolveDecisionRecord record,
+                                              idx_t decide_index, DirectExplainAnnotation annotation,
                                               const DirectLateMaterialization &late_materialization) {
 	if (!substitute.child || output_bindings.size() != output_types.size() ||
 	    substitute.slot_map.size() != output_bindings.size() ||
@@ -204,7 +204,7 @@ unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vecto
 	}
 	auto adapter = make_uniq<LogicalDirectResultAdapter>(decide_index, std::move(output_bindings),
 	                                                     std::move(output_types), substitute.validated_columns.size(),
-	                                                     std::move(prunable_outputs), std::move(record));
+	                                                     std::move(prunable_outputs), std::move(annotation));
 	// The positional map is materialized as one dependency per advertised output.
 	// The required suffix stays live even when all outputs are unused by a parent.
 	for (auto slot : substitute.slot_map) {

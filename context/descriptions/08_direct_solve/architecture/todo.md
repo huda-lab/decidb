@@ -48,13 +48,6 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - P-22: user-visible text follows every rename: `EXPLAIN` keys and values, `require` reasons, the syntax reference
   and the website. The setting `decide_direct_solve` and serialized names stay.
 
-## P-13 — Decision record becomes the EXPLAIN annotation
-
-- **Problem.** "Decision record" usually means an architecture decision record.
-- **Change.** Rename per the glossary: `DirectSolveDecisionRecord`, its `Render`, `record` fields, and the "decision
-  record" text in `policy.md`, `overview.md` and `../rules/_harness/done.md`. The rendered `EXPLAIN` keys stay.
-- **Done when.** `grep -rn DecisionRecord src test` finds nothing; `test_serializer_explain_and_model_dump` passes.
-
 ## P-14 — Builders, `Calc` and rule-local helpers
 
 - **Problem.** "Builders" are free factory functions, not GoF Builders; `Calc`/`Ex` is an expression builder with a

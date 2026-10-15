@@ -35,14 +35,14 @@ public:
 	LogicalDirectResultAdapter() = default;
 	LogicalDirectResultAdapter(idx_t decide_index_p, vector<ColumnBinding> output_bindings_p,
 	                           vector<LogicalType> output_types_p, idx_t required_dependency_count_p,
-	                           vector<uint8_t> prunable_outputs_p, DirectSolveDecisionRecord record_p);
+	                           vector<uint8_t> prunable_outputs_p, DirectExplainAnnotation annotation_p);
 
 	idx_t decide_index;
 	vector<ColumnBinding> output_bindings;
 	vector<LogicalType> output_types;
 	idx_t required_dependency_count = 0;
 	vector<uint8_t> prunable_outputs;
-	DirectSolveDecisionRecord record;
+	DirectExplainAnnotation annotation;
 	//! True while `expressions` ends with the source row id. It stays live only while a parent reads an output that
 	//! `stored_columns` marks as movable; the late-materialization step removes it either way.
 	bool has_rowid_dependency = false;
@@ -76,7 +76,7 @@ protected:
 //! can use.
 unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
                                               vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
-                                              idx_t decide_index, DirectSolveDecisionRecord record,
+                                              idx_t decide_index, DirectExplainAnnotation annotation,
                                               const DirectLateMaterialization &late_materialization);
 
 //! Lets a serialized plan containing the result adapter be read back.

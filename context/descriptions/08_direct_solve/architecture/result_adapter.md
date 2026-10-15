@@ -15,7 +15,8 @@ In `EXPLAIN` it shows as `DIRECT_RESULT_ADAPTER`; the code is `LogicalDirectResu
   Parents keep reading the old bindings.
 - **Blocks parent work from crossing it.** A filter or limit above the DECIDE result cannot move into the rank input,
   since that would change which rows are ranked. Optimizing inside the child is fine.
-- **Carries the decision record** that `EXPLAIN` and profiling show when a rule applies (see `policy.md`).
+- **Carries the `EXPLAIN` annotation**: the mode, rule and condition lines that `EXPLAIN` and profiling show when a
+  rule applies (see `policy.md`).
 
 ## Why it is explicit
 
