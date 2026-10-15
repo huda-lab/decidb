@@ -17,11 +17,11 @@
 // algebraically. It decomposes each side additively and asks one question of each
 // resulting term -- "does it reference a decision variable?" -- then moves terms
 // across the relation accordingly. It does not expand, combine like terms, fold
-// constants, or distribute. Validation subsequently inspects reducer placement,
+// constants, or distribute. Validation subsequently inspects aggregate placement,
 // variable scope, and query-wide provenance without rewriting the term.
 //
 // ONE SPELLING PER MEANING. Two inputs that mean the same thing leave this pass
-// spelled the same way, so no consumer has to know both. A reducer factor is always
+// spelled the same way, so no consumer has to know both. An aggregate factor is always
 // `factor * AGG` or `AGG / factor` (see PeelScale). `norm(e, p)` arrives from the
 // binder as a SUM(e) aggregate whose alias names the order -- an aggregate whose
 // meaning is not what it says -- and leaves as its definition: `SUM(ABS(e))` for
@@ -69,17 +69,17 @@
 // cast descent is also required for the pass to remain a fixed point.
 //
 // SCALE IS PART OF THE ATOM, NOT OF THE TREE SHAPE. The additive spine peels a
-// query-wide factor outward off a decision-bearing reducer, so a term is
+// query-wide factor outward off a decision-bearing aggregate, so a term is
 // {sign, scale, expr} and every consumer reads one spelling: `scale * term`, with
 // the scale on the left (or `term / scale` for a division, which is left as a
 // division rather than reciprocated). This replaced a parsed-level fold that
 // pushed the factor INWARD, which was unsound for MIN/MAX under a negative factor.
-// Peeling is also where the scale-specific rule "a factor on a reducer must be
+// Peeling is also where the scale-specific rule "a factor on an aggregate must be
 // one value for the whole query" is enforced.
 //
 // K3 IS ENFORCED AT THIS BOUNDARY. After rebuilding, validation classifies the
-// whole comparison as per-row or aggregate using reducer placement plus DECIDE
-// variable scope. Row/entity-varying algebra beside a reducer is rejected here;
+// whole comparison as per-row or aggregate using aggregate placement plus DECIDE
+// variable scope. Row/entity-varying algebra beside an aggregate is rejected here;
 // query-wide scalar decisions remain legal top-level aggregate terms.
 //
 // K1 is now load-bearing rather than advisory. The physical operator's duplicate
@@ -87,7 +87,7 @@
 // the canonicalization refactor after being verified unreachable across the golden corpus
 // and the full suite; what stands in its place is a check that throws when a
 // decision variable reaches the RHS. So a rewrite that breaks K1 now fails
-// loudly instead of being silently absorbed -- but it does fail. Any new
+// loudly instead of being silently folded -- but it does fail. Any new
 // optimizer pass that mutates a constraint in place must go through
 // LogicalDecide::AddConstraint (which canonicalizes) rather than editing the
 // tree directly.
@@ -108,7 +108,7 @@ class BoundComparisonExpression;
 class BoundColumnRefExpression;
 class BoundFunctionExpression;
 
-//! One-level reducer scale consumed after canonicalization. Exactly two spellings
+//! One-level aggregate scale consumed after canonicalization. Exactly two spellings
 //! reach any consumer -- `factor * AGG` and `AGG / factor` -- because BuildAdditive
 //! re-attaches every peeled factor on the LEFT. Objectives used to additionally admit
 //! `AGG * factor`, which is what an unnormalized clause looks like; they go through
@@ -127,7 +127,7 @@ struct CanonicalAtom {
 	int sign;
 	//! Borrowed from the side that was read.
 	const Expression *term;
-	//! True when canonicalization left a factor on a reducer; `scale` then names the reducer and the factor.
+	//! True when canonicalization left a factor on an aggregate; `scale` then names the aggregate and the factor.
 	bool scaled = false;
 	ScaledAggregateMatch scale;
 };
@@ -185,7 +185,7 @@ public:
 	//! orient and no bound to separate, so the two side-partitioning rules (decisions
 	//! left, data right) have no analogue here. Everything else this boundary owns
 	//! applies unchanged -- wrapper recursion, additive decomposition, decision-aware
-	//! cast transparency, and one spelling for a reducer scale -- and is SHARED with
+	//! cast transparency, and one spelling for an aggregate scale -- and is SHARED with
 	//! CanonicalizeComparison rather than reimplemented, which is the whole reason
 	//! objectives get a boundary instead of their own normalizer.
 	//!
@@ -235,9 +235,9 @@ private:
 	//! Where a term is required to sit.
 	//!   LEFT    decision-bearing -- must be on the model side
 	//!   RIGHT   everything else: constants, per-row columns, and data-only
-	//!           reducers alike -- must be on the bound side
+	//!           aggregates alike -- must be on the bound side
 	//!
-	//! There used to be a third case, NEUTRAL, for a data-only reducer: it carries
+	//! There used to be a third case, NEUTRAL, for a data-only aggregate: it carries
 	//! no decision variable so it need not be on the left, but it collapses rows to
 	//! one value so it is a legitimate bound and need not be on the right either.
 	//! That was scaffolding for a right-hand side that could not evaluate one
@@ -250,7 +250,7 @@ private:
 	//! tree and is only ever copied, never mutated. Binder-inserted casts over the
 	//! decision spine are transparent; data-only casts remain inside `expr`.
 	//!
-	//! `scale` is a factor peeled off a reducer-bearing term: `2 * SUM(x)` becomes
+	//! `scale` is a factor peeled off an aggregate-bearing term: `2 * SUM(x)` becomes
 	//! {scale=2, expr=SUM(x)} rather than one opaque term. Peeling moves the factor
 	//! OUTWARD and is the opposite of the fold it replaces -- folding inward
 	//! (`2 * MAX(x)` -> `MAX(2*x)`) is unsound for MIN/MAX under a negative factor,
@@ -276,8 +276,8 @@ private:
 	void Decompose(const Expression &expr, int sign, vector<Atom> &out,
 	               Clause clause = Clause::CONSTRAINT) const;
 
-	//! If `expr` is a decision-bearing reducer with factors on it, split them out into
-	//! `out_scale` / `out_divides` and return the bare reducer term. Returns `expr`
+	//! If `expr` is a decision-bearing aggregate with factors on it, split them out into
+	//! `out_scale` / `out_divides` and return the bare aggregate term. Returns `expr`
 	//! unchanged when there is nothing to peel.
 	//!
 	//! Peels to exhaustion, not one level: `2 * (3 * SUM(x))` and `(SUM(x) / 2) / 3`
@@ -289,14 +289,14 @@ private:
 	//! the model is double end to end and the difference is last-ULP.
 	//!
 	//! Throws when a factor is not a legal scale, which is the single place that
-	//! judgement is made. A factor multiplying a reducer must be ONE value for the
+	//! judgement is made. A factor multiplying an aggregate must be ONE value for the
 	//! whole query: `weight * SUM(x)` asks which row's weight scales a number that has
 	//! no row, and `s * SUM(x)` is a product of two decisions (bilinear), not a scale.
 	const Expression &PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale, bool &out_divides,
 	                            Clause clause = Clause::CONSTRAINT) const;
 
 	//! True when `expr` evaluates to a single value for the entire query, so it may
-	//! scale a reducer. Constants qualify by folding; a column ref qualifies only by
+	//! scale an aggregate. Constants qualify by folding; a column ref qualifies only by
 	//! being listed in `query_wide_table_indexes`, because after flattening a
 	//! `(SELECT max(w) FROM p)` is shape-identical to `weight` -- and, importantly, to
 	//! a CORRELATED subquery, which is per-row and must not qualify.
@@ -319,7 +319,7 @@ private:
 	Placement Classify(const Expression &expr) const;
 
 	bool ReferencesDecideVar(const Expression &expr) const;
-	static bool ContainsReducer(const Expression &expr);
+	static bool ContainsAggregate(const Expression &expr);
 	bool FindNonScalarDecideVar(const Expression &expr, idx_t &out_var_idx,
 	                            const BoundColumnRefExpression *&out_ref) const;
 	void ValidateCanonicalTree(const Expression &constraints) const;

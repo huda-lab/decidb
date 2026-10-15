@@ -1,6 +1,6 @@
 # Stage 02 — Binder
 
-Resolves names, scopes and types; recognizes reducers; and decides whether a
+Resolves names, scopes and types; recognizes aggregates; and decides whether a
 DECIDE clause is *semantically valid*. It produces a bound representation and
 nothing else — it does not move terms across a comparison, flip a relation, or
 choose a solver formulation.
@@ -10,7 +10,7 @@ choose a solver formulation.
 - `src/planner/binder/query_node/bind_select_node.cpp` — declaration handling and
   the DECIDE section of `BindSelectNode`
 - `src/planner/expression_binder/decide/decide_binder.cpp` — shared DECIDE expression
-  rules (reducers, degree, qualified reducers, aggregate-local `WHEN`)
+  rules (aggregates, degree, qualified aggregates, aggregate-local `WHEN`)
 - `src/planner/expression_binder/decide/decide_constraints_binder.cpp` — `SUCH THAT`
 - `src/planner/expression_binder/decide/decide_objective_binder.cpp` — `MAXIMIZE` / `MINIMIZE`
 
@@ -46,7 +46,7 @@ The grammar flags the query-wide form by prefixing the type marker with
 
 For a table-scoped variable, `FindOrCreateEntityScope` resolves the alias in the
 bind context and either reuses or creates an `EntityScopeInfo`. The scope is keyed
-by table, so several variables — and a relation-qualified reducer `SUM(T: ...)` —
+by table, so several variables — and a relation-qualified aggregate `SUM(T: ...)` —
 share one scope, since the tuple-identity key is the same either way.
 `EntityScopeInfo` carries `table_alias`, `source_table_index`,
 `entity_key_bindings`, `scoped_variable_indices` and
@@ -103,7 +103,7 @@ shapes produced it.
 decision column              -> 1
 data column / constant       -> 0
 cast                         -> degree(child)
-reducer (SUM/AVG/MIN/MAX)    -> degree(argument)   (combines rows, does not
+aggregate (SUM/AVG/MIN/MAX)    -> degree(argument)   (combines rows, does not
                                                     multiply them)
 ABS(e)                       -> degree(e)          (linearized at stage 05;
                                                     changes magnitude, not degree)
@@ -128,7 +128,7 @@ which feeds McCormick envelopes.
 and they are **total**: the constraint validator descends conjunctions and
 `WHEN` / `PER` wrappers to every comparison that becomes a model row, and checks
 both sides. That totality is the point. The rule previously lived inside
-`ValidateSumArgumentInternal`, whose name scoped it to reducer arguments, so
+`ValidateSumArgumentInternal`, whose name scoped it to aggregate arguments, so
 nothing ever applied it to a bare per-row constraint — `SUM(POWER(x*y,2)) <= 10`
 was a `Binder Error` while the identical `POWER(x*y,2) <= 5` bound cleanly and
 was refused at plan time by term extraction, in extractor vocabulary and with no
@@ -160,9 +160,9 @@ useful to pass.
 
 ---
 
-## 3. Reducers
+## 3. Aggregates
 
-`IsDecideAggregateName` recognizes `SUM`, `AVG`, `MIN`, `MAX` as DECIDE reducers.
+`IsDecideAggregateName` recognizes `SUM`, `AVG`, `MIN`, `MAX` as DECIDE aggregates.
 `DecideBinder::BindAggregate` binds them; the optimizer, not the binder, decides
 their formulation.
 
@@ -177,21 +177,21 @@ Dispatch: a top-level `WHEN_CONSTRAINT_TAG` is expression-level; a nested one is
 aggregate-local. An expression-level `WHEN` whose child already contains an
 aggregate-local `WHEN` is rejected — the double-filter semantics are ambiguous.
 
-### Relation-qualified reducers
+### Relation-qualified aggregates
 
-`DecideBinder::BindQualifiedReducer` handles `SUM(D: expr)`, which reduces over
+`DecideBinder::BindQualifiedAggregate` handles `SUM(D: expr)`, which reduces over
 one contribution per tuple identity of relation `D` rather than per join-output
-row. `CheckQualifiedReducerBody` validates the body against that relation. The
+row. `CheckQualifiedAggregateBody` validates the body against that relation. The
 scope is looked up through the same `FindOrCreateEntityScope` used by
 table-scoped variables.
 
-A reducer may name more than one relation, `SUM(D, T: expr)` (batch E). The
+An aggregate may name more than one relation, `SUM(D, T: expr)` (batch E). The
 composite scope's tuple identity is the concatenation of every named relation's
 own key — the same "all columns of the table" key a single-relation scope
 already uses, just for each relation in the list — so a row is a duplicate only
 when it repeats on **every** named relation's key at once. Concretely: naming a
 relation removes the fan-out it would otherwise contribute; a relation left
-unnamed still contributes its fan-out, uncollapsed. `CheckQualifiedReducerBody`'s
+unnamed still contributes its fan-out, uncollapsed. `CheckQualifiedAggregateBody`'s
 "must come from the qualifier" rule generalizes the same way — a column must
 come from *one of* the named relations, not from a single fixed one, and a
 decision variable must be scoped to a relation in that set (or be a query-wide
@@ -199,7 +199,7 @@ scalar, as before).
 
 This has one consequence worth stating plainly: naming every relation a query
 joins is a no-op. With exactly two relations in the query, `SUM(D, T: expr)`
-and unqualified `SUM(expr)` are the same reducer, because the composite key
+and unqualified `SUM(expr)` are the same aggregate, because the composite key
 already *is* the join-result row — there is no third, unnamed relation left to
 contribute fan-out for the qualifier to collapse. The two forms only diverge
 once a relation is left out of the list while still appearing in the join.
@@ -226,12 +226,12 @@ Dedicated binding methods: `BindComparison`, `BindOperator`, `BindBetween`,
 `BindConjunction`, `BindWhenConstraint`, `BindPerConstraint`.
 
 `GetExpressionType`'s `norm`/`SUM`/`AVG`/`MIN`/`MAX` classification is shared with
-`DecideObjectiveBinder` through `DecideBinder::ClassifyReducerCall` — the base class
+`DecideObjectiveBinder` through `DecideBinder::ClassifyAggregateCall` — the base class
 both subclasses already derive from. The one real difference between a constraint and
-an objective reducer stays a parameter rather than getting flattened: constraints pass
+an objective aggregate stays a parameter rather than getting flattened: constraints pass
 `allow_bilinear=true` to the argument validator, objectives don't, since a bilinear
 term is accepted in a `SUCH THAT` clause and refused in `MAXIMIZE`/`MINIMIZE`. Each
-subclass keeps its own fallthrough for a non-reducer function — the shapes a
+subclass keeps its own fallthrough for a non-aggregate function — the shapes a
 constraint's left-hand side and an objective body accept past that point diverge.
 
 ### What may be a bound
@@ -239,7 +239,7 @@ constraint's left-hand side and an objective body accept past that point diverge
 When one side reduces (`SUM`, `AVG`, `MIN`, `MAX`), the other side must reduce to a
 single value too, and `IsAllowedDecisionFreeBoundExpression` decides which shapes
 qualify: constants, operators and functions over allowed operands, casts, scalar
-subqueries, and data-only reducers with their own `WHEN`. A bare column does not
+subqueries, and data-only aggregates with their own `WHEN`. A bare column does not
 qualify — it has one value per row, not one per group. Arithmetic composes freely,
 `-` included: a bound is evaluated as an expression over the row, so subtraction is
 no different from addition. (`-` alone was refused for a while, a leftover from the
@@ -290,7 +290,7 @@ wrote it.
 
 **The rule is stated on the type of the compared quantity, not on every type beneath
 it.** `norm(e, 0, M)` counts nonzeros, so its value lands on the integer lattice however
-`e` is declared, and the integer step is exact over it. `IsIntegerValuedReducer` stops the
+`e` is declared, and the integer step is exact over it. `IsIntegerValuedAggregate` stops the
 search there, so `norm(x, 0, M) < 3` and `norm(x, 0, M) <> 3` are both **accepted** over a
 REAL `x`. Only p=0 qualifies: `norm(e, 1)` sums magnitudes, `norm(e, 2)` is a length and
 `norm(e, 'inf')` a maximum, each as continuous as `e`.
@@ -298,14 +298,14 @@ REAL `x`. Only p=0 qualifies: `norm(e, 1)` sums magnitudes, `norm(e, 2)` is a le
 > Reversed 2026-08-17. The rule first shipped stated on the declared type of `e`, so that
 > what DECIDE accepts would not depend on which linearization a term receives. That
 > principle stands — L0 integrality simply is not a linearization choice, it is the
-> definition of the reducer, so the earlier rule was type-checking the wrong quantity.
+> definition of the aggregate, so the earlier rule was type-checking the wrong quantity.
 > Settled alongside the `<>` split so both operators answer alike; before it, `<` refused
 > `norm(x, 0, M)` over a REAL decision and `<>` accepted it.
 
 ### The rest of the compared expression
 
 `ValidateDecideIntegralComparisonOperands` completes the same refusal for every operand
-that is not a decision: data columns, literals, and the reducers over them. It runs on the
+that is not a decision: data columns, literals, and the aggregates over them. It runs on the
 **bound** tree, immediately after `DecideConstraintsBinder`, because a parsed tree carries
 no types yet.
 
@@ -371,7 +371,7 @@ to read back as the PER key.
 `DecideObjectiveBinder` binds `MAXIMIZE` / `MINIMIZE` bodies through the same
 `DecideBinder` rules. It knows the sense (`decide_sense`) because a few checks
 depend on it. It performs no algebraic rewriting: the objective's shape — its
-additive spine, its reducer scales, its constant offset — is decided once by
+additive spine, its aggregate scales, its constant offset — is decided once by
 `DecideCanonicalizer::CanonicalizeObjective` on the bound tree, alongside
 constraints.
 
@@ -403,7 +403,7 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 | Concern | Location |
 |---|---|
 | Declarations, scopes, types, aux pruning | `src/planner/binder/query_node/bind_select_node.cpp` |
-| Shared DECIDE expression rules, reducers | `src/planner/expression_binder/decide/decide_binder.cpp` |
+| Shared DECIDE expression rules, aggregates | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
 | `SUCH THAT` binding and `PER` gate | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
 | Objective binding | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |

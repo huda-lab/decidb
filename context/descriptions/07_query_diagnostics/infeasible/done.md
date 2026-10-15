@@ -134,10 +134,10 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
 `Expression` types, so the work splits across the I0 boundary:
 
 - **Operator (`physical_decide.cpp`).** Knows the `Expression`s and the sink state, so it
-  handles **absorbed bounds (decision 1a)**. A user `x <= 10` / `x BETWEEN a AND b` is
-  pre-absorbed into the column-bound arrays (never a row), so it carries no provenance and
+  handles **singleton-row bounds (decision 1a)**. A user `x <= 10` / `x BETWEEN a AND b` is
+  pre-folded into the column-bound arrays (never a row), so it carries no provenance and
   the row-based engine can't see it. `TraverseBoundsConstraints` now also records each
-  absorbed user bound as a `UserBoundSpec {decide_var_idx, sense, k}` (COMPARISON → one
+  folded user bound as a `UserBoundSpec {decide_var_idx, sense, k}` (COMPARISON → one
   spec; **BETWEEN → two**, the previously-untracked side now captured). In the
   `DiagnosisTerminal::INFEASIBLE` arm, for each spec the operator appends a `USER_PARAMETER`
   row (`coeff 1·x sense k`) to the retained model and **relaxes the rigid column bound** for
@@ -159,7 +159,7 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
   loosenable while the 0/1 domain itself stays rigid. (Erasing pins wholesale made the
   elastic model diverge from the user's query: silently missing diagnoses, or edits that
   left the real query infeasible.) Reversed user bounds such as `5 >= x` are flipped by
-  `DecideCanonicalizer` before this pass, so they follow the same absorption and re-emission
+  `DecideCanonicalizer` before this pass, so they follow the same folding and re-emission
   path as `x <= 5`. (Until the canonicalization refactor the constraint binder flipped them first, at
   the parsed level; that duplicate was deleted and the canonicalizer's own mirror branch is
   now the only thing that swaps a comparison's sides.) `has_unhandled_user_bounds` is now computed for real by the re-emission
@@ -193,7 +193,7 @@ is governed by the slack-scope pragma — see "Slack-scope policy: query vs expa
 reaches rigid rows → `BuildElasticInfeasibleDiagnostic` renders a distinct outcome: one
 finding, `edit_source='rigid_conflict'`, naming no clause and saying that loosening your
 SUCH THAT limits cannot fix it. This is claimed **only** when every user constraint was actually made
-relaxable: the `has_unhandled_user_bounds` flag (set when the operator absorbed a user bound it
+relaxable: the `has_unhandled_user_bounds` flag (set when the operator folded a user bound it
 could not re-emit) suppresses the rigid-conflict verdict rather than wrongly declaring the
 query unfixable. The operator then returns an `undiagnosed` finding. As of I2.a multi-instance bounds *are* re-emitted, so the
 flag stays `false` in practice and remains as a defensive guard. Likewise, when there are no
@@ -253,7 +253,7 @@ group, same clause text, with the key in `group`.
 
 **easy-MAX + PER is one global cap, correctly.** `MAX(x) <= K PER g` is mathematically
 `x <= K` for **every** row, so the optimizer's easy-MIN/MAX rewrite strips the (vacuous) PER
-wrapper (`decide_rewrite_minmax.cpp`, `RewriteMinMaxInConstraint`) and the cap is absorbed as one
+wrapper (`decide_rewrite_minmax.cpp`, `RewriteMinMaxInConstraint`) and the cap is folded as one
 uniform column bound. There is genuinely no per-group *cap* to break out — the diagnosis
 reports the single global edit (`x <= K` → `x <= K + max overshoot`) in **both** modes, which
 is exactly right. (This resolves the former "easy-MAX+PER collapses" note: it was not a bug,
@@ -292,14 +292,14 @@ per-group **data** RHS (`x <= col`). Set in `ilp_model_builder.cpp`: linear and 
 builder sites read `EvaluatedConstraint::rhs_is_shared_scalar`. Physical evaluation sets it
 directly for constants and otherwise consumes the canonical RHS's `QUERY_WIDE_BOUND_TAG`;
 foldable composite expressions receive that tag at canonicalization. Other bounds are stamped
-`PER_ROW_DATA`; the absorbed-bound re-emission uses `SHARED_SCALAR`.
+`PER_ROW_DATA`; the singleton-row-bound re-emission uses `SHARED_SCALAR`.
 
 **Grouping (mode-aware — see "Slack-scope policy" above).** `BuildElasticModel` groups
 relaxable rows into blocks via `folds()` + `block_key()`. A `SHARED_SCALAR` block gets **one
 shared slack** wired into all N rows (`=` blocks get one shared `s⁺` and one shared `s⁻`); with
 `eᵢ − s ≤ K` on every row the single `s` is driven to the **max overshoot**, so the reported
 edit is the max (not the per-row sum) and the "which clause to relax" race is not skewed ≈N×.
-This covers **easy MIN/MAX** (`MAX(e) ≤ K` → per-row `eᵢ ≤ K`, absorbed as a shared cap),
+This covers **easy MIN/MAX** (`MAX(e) ≤ K` → per-row `eᵢ ≤ K`, folded as a shared cap),
 **per-row literal** constraints, and **multi-instance bounds** (`x ≤ K` over N instances).
 For **PER**, the block key depends on the mode: **query** keys by `clause_id` alone, so all
 groups of `SUM(x) ≥ K PER g` fold into one slack = the single literal edit; **expanded** keys
@@ -311,7 +311,7 @@ policy").
 **The grouping id has to be fresh, and is read off the model to make sure of it.**
 `block_key()` groups by `repair_group_id`, so two clauses sharing an id share a slack —
 and a slack spanning two unrelated clauses can be spent on one of them and billed to the
-other. The re-emitted absorbed bounds need ids no row already holds. They are minted from
+other. The re-emitted singleton-row bounds need ids no row already holds. They are minted from
 `max(repair_group_id over the retained model) + 1` rather than from any count, because no
 count is the id space: a regular constraint takes its index in `solver_input.constraints`
 and a global one takes `constraints.size() + its own index`, so the two ranges sit
@@ -407,13 +407,13 @@ preferred when it can restore feasibility. Two parts:
   degeneracy; coefficient-magnitude does. Structural weight assertion in
   `test_decidb_diagnostic_engines.cpp`; end-to-end flip on real TPC-H data in
   `test_query_diagnostics_tpch.py::test_E_loosen_should_not_be_degenerate` (both backends).
-- **Boolean bound-absorption revert (bundled with T1).** T1's weights are only *reachable* once the
+- **Boolean bound-folding revert (bundled with T1).** T1's weights are only *reachable* once the
   diagnosis model can actually exercise the loosened constraint. `DecidePropagateImpliedBounds`
-  tightens a variable's column box by absorbing a user row — e.g. `SUM(buy * price) <= 100` implies
+  tightens a variable's column box by folding a user row — e.g. `SUM(buy * price) <= 100` implies
   `buyᵢ ≤ 100/priceᵢ`. For a BOOLEAN (lowered to INTEGER with a `[0,1]` box) a fractional upper
   (`≤ 0.1`) silently pins the variable to **0**, so the (now-relaxable) budget can never be
   exercised and the only "fix" is gutting the *other* clause — the same degenerate symptom, from a
-  different cause. The diagnosis bound-reset loop (`physical_decide.cpp`) already reverts absorbed
+  different cause. The diagnosis bound-reset loop (`physical_decide.cpp`) already reverts folded
   tightenings for non-boolean columns; it now also reverts them for booleans — resetting the box to
   `[0,1]` (upper → 1 if `< 1`, lower → 0 if `> 0`) instead of skipping them — so the slackable row
   is the sole enforcer. Never opens past 1 (that would unbound the variable). With this, E loosens
@@ -591,7 +591,7 @@ a single-row `SUM(x) >= 99 WHEN grp='a'` keeps its `SUM(...)` wrapper and clean 
 BOOLEAN model loosens its SUM target, never its 0/1 domain (regression guard); a data-RHS clause
 reports a named virtual offset (query) / per-row profile (expanded); a data-offset row defers
 to an editable edit; reversed bounds are
-reported as their canonical absorbed form; AVG/strict re-quote (single-row SUM keeps its wrapper:
+reported as their canonical folded form; AVG/strict re-quote (single-row SUM keeps its wrapper:
 `SUM(x) > 10`, including strict quadratic); quadratic and McCormick gated to Gurobi; `<>` and
 McCormick rows stay rigid.
 
@@ -601,7 +601,7 @@ I4 handles clauses that cannot be meaningfully loosened: `<>`, `IN (...)`, and e
 constraint-side comparison containing an L0 `norm`. The optimizer assigns one
 written-order `removal_group_id` to the source comparison before any rewrite. Objective-side
 L0 is deliberately excluded. Every descendant row or native construct copies that identity,
-including IN cardinality/link rows, absorbed-bound re-emission, ABS/McCormick descendants,
+including IN cardinality/link rows, singleton-row-bound re-emission, ABS/McCormick descendants,
 composed MIN/MAX extraction, and backend lowering.
 
 `source_clause_id`, `repair_group_id`, and `removal_group_id` are separate namespaces:
@@ -686,7 +686,7 @@ exact tie there is rarer still).
 under the lexicographic tier budgets above and, when stage 2 succeeds, the best achievable user
 objective under those budgets. It does **not** promise a canonical repair-set identity when
 multiple sets have the same tier budgets and achievable objective. Equal-rank multi-edit sets,
-quadratic-objective ties, and ties involving absorbed bounds may therefore name different but
+quadratic-objective ties, and ties involving singleton-row bounds may therefore name different but
 equally good repairs across solver backends. This is accepted behavior: source order has no
 semantic priority, and a total order would add metadata, serialization risk, and diagnostic
 re-solves without improving repair quality. Stage 2b remains a useful preference for common
@@ -844,7 +844,7 @@ deactivated arm of a disjunction, whereas a too-small one cuts off legal answers
   before setting `link.abs_range` and the auxiliary's ceiling. Both consumers follow: the
   ceiling, and the `2M` envelope `LinearizeAbsMaximize` emits off `abs_range`. The demand is
   usually **not** a row — `ABS(x) >= 5` is a simple `var OP const` comparison, so
-  `AbsorbVariableBounds` folds it into the auxiliary's own box — which is why the helper reads
+  `FoldSingletonRows` folds it into the auxiliary's own box — which is why the helper reads
   `lower_bounds[aux]` first and only then walks the rows. Without that, the ceiling was set
   *under* the floor: an empty column no widening of `x` could repair.
 - **MIN/MAX** — `LinearizeMinMaxConstraints` widens `group.family` to cover the clause's bound
@@ -997,13 +997,13 @@ too.
 
 A user limit can live in a variable's **column bounds** instead of a matrix row, where the
 row-only elastic engine can't relax it. The built `SolverModel`'s `col_lower`/`col_upper` is a
-*fused* product — intrinsic domain (REAL/INT `[0,+∞)`, BOOLEAN `[0,1]`) + absorbed user bounds +
+*fused* product — intrinsic domain (REAL/INT `[0,+∞)`, BOOLEAN `[0,1]`) + folded user bounds +
 implied tightenings from `DecidePropagateImpliedBounds` (a presolve pass with no provenance).
 Three mechanisms make every column-derived user limit diagnosable while keeping the intrinsic
 domain rigid:
 
 - **Intrinsic reset (the elastic box carries only the intrinsic domain).** In the
-  `DiagnosisTerminal::INFEASIBLE` arm, after re-emitting absorbed bounds as slackable rows (the
+  `DiagnosisTerminal::INFEASIBLE` arm, after re-emitting singleton-row bounds as slackable rows (the
   decision-1a loop above), a second pass resets every decide column's *implied* tightenings back
   to intrinsic — non-BOOLEAN: `col_lower > 0 → 0`, `col_upper < +∞ → +∞`; BOOLEAN: back to
   `[0,1]` (`col_lower > 0 → 0`, `col_upper < 1 → 1`), never past 1. This is safe —
@@ -1018,9 +1018,9 @@ domain rigid:
   `DecidePropagateImpliedBounds`) and wrong for a BOOLEAN-domain variable, which can be
   implied-tightened below 1 (the budget example) and needs the active `[0,1]` reset. Checking
   `is_boolean_var` first preserves that. The decision-1a re-emission loop uses the same signal: an
-  absorbed BOOLEAN pin's column opens only to `[0,1]` for the pinned direction (a non-BOOLEAN opens
+  folded BOOLEAN pin's column opens only to `[0,1]` for the pinned direction (a non-BOOLEAN opens
   to ±1e30).
-- **Inverted-box survival (`SolverInput::tolerate_infeasible_bounds`).** Two opposite absorbed
+- **Inverted-box survival (`SolverInput::tolerate_infeasible_bounds`).** Two opposite folded
   bounds (`x <= 4 AND x >= 10`) invert the box (`col_lower > col_upper`). Without help,
   `SolverModel::Build` throws before `retained_model` is populated, so the engine never sees the
   model. Under `DIAGNOSE` the flag (set in `Finalize`, same trigger as the unbounded-ray extraction)
@@ -1031,7 +1031,7 @@ domain rigid:
 - **Type-domain conflicts are a static error, not an elastic edit.** A user bound that
   contradicts the *intrinsic* domain — `x <= -1` on a non-negative REAL, `x >= 2` / `x = 2` on a
   BOOLEAN — can't be fixed by loosening (only by changing the type or dropping the bound), so it
-  never reaches the engine. A post-absorption check in the sink constructor (right after
+  never reaches the engine. A post-folding check in the sink constructor (right after
   `TraverseBoundsConstraints`) throws a precise static `InvalidInputException`
   (`"x >= 2 cannot hold because x is BOOLEAN (0 or 1). …"`). The guard is `U < 0 AND L >= 0`
   (upper below the non-negativity floor) or `is_boolean AND L > 1` (lower above the 0/1 ceiling),
@@ -1123,7 +1123,7 @@ equality row loosens via its two-sided slack (`x = 5` → `x = 8`); a rigid-only
 with a non-helping relaxable row renders the elastic-infeasible row; the
 `has_unhandled_user_bounds` flag suppresses that claim (invalid → `undiagnosed` at the
 operator); and an all-rigid model returns invalid for the same treatment. End-to-end differential coverage (both backends, vs
-`oracle_solver`, including absorbed-bound and BETWEEN cases) is in
+`oracle_solver`, including singleton-row-bound and BETWEEN cases) is in
 `test/decide/tests/test_query_diagnostics_relation.py`. That file's `_apply_reported_fix`
 harness (E1) guards the core least-change promise mechanically: for each asserted infeasible
 diagnosis it applies every reported edit to the SQL (loosen → replace the clause with its

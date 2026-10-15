@@ -10,7 +10,7 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
-#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
+#include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -43,7 +43,7 @@ constexpr const char *RULE_NAME = "S1_UNIFORM_MATROID";
 
 //! An aggregate on the right of a count bound, in the order a walk of the bound meets them: `COUNT(*)`, or COUNT, MIN,
 //! MAX, SUM or AVG of one numeric source column. The plan replaces each by a window over the clause's group.
-struct Reducer {
+struct Aggregate {
 	//! The aggregate function's name: `count_star`, `count`, `min`, `max`, `sum` or `avg`.
 	string function;
 	//! The source column it reduces; invalid for `count_star`.
@@ -61,10 +61,10 @@ struct Condition final : DirectApplicabilityCondition {
 		bool rhs_all_group_rows;
 		//! Name of the source column when the bound is exactly one; empty for a computed bound.
 		string column_name;
-		//! The bound holds aggregates over the clause's group (`reducers`), which the plan replaces by windows.
+		//! The bound holds aggregates over the clause's group (`aggregates`), which the plan replaces by windows.
 		bool counts_rows = false;
 		//! The aggregates in the bound, in walk order.
-		vector<Reducer> reducers;
+		vector<Aggregate> aggregates;
 		//! One of them needs the row count of the group: `COUNT(*)`, COUNT(col) or AVG.
 		bool needs_count = false;
 		//! The count body is `c - x`, so `comparison` is already flipped and the value to compare against is `n*c - B`
@@ -155,8 +155,8 @@ struct CountBody {
 	unique_ptr<Expression> offset;
 };
 
-//! Reads a reducer body as `a*x + c`. The signed constant coefficients of `x` must add up to exactly +1 or -1, as the
-//! solver's like-term collection sums them, and every other term must be a finite foldable constant of at most
+//! Reads an aggregate body as `a*x + c`. The signed constant coefficients of `x` must add up to exactly +1 or -1, as
+//! the solver's like-term collection sums them, and every other term must be a finite foldable constant of at most
 //! MAX_OFFSET in magnitude. False with `problem` filled otherwise.
 bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms, CountBody &body, string &problem) {
 	const string not_a_count = "expected SUM(x) with unit contribution";
@@ -234,7 +234,7 @@ const vector<DecideSplitTerm> *FixedTerms(const DirectIRConstraint &ir_node) {
 		return nullptr;
 	}
 	auto &part = ir_node.lhs[0];
-	if (part.sign != 1 || part.reducer != DirectReducer::NONE || part.scale || !OnlyDecisionTerms(part.terms)) {
+	if (part.sign != 1 || part.aggregate != DirectAggregate::NONE || part.scale || !OnlyDecisionTerms(part.terms)) {
 		return nullptr;
 	}
 	return &part.terms;
@@ -339,10 +339,10 @@ bool ConstantFixedDomain(const DirectIRConstraint &ir_node, double bound, FixedD
 		double upper = comparison == ExpressionType::COMPARE_LESSTHAN ? DecideStrictBound(false, bound) : bound;
 		DecideBoundBox box;
 		if (has_lower) {
-			DecideAbsorbBound(box, '>', lower);
+			DecideFoldSingletonRow(box, '>', lower);
 		}
 		if (has_upper) {
-			DecideAbsorbBound(box, '<', upper);
+			DecideFoldSingletonRow(box, '<', upper);
 		}
 		if (DecideBoxContradictsDomain(box, true)) {
 			return false;
@@ -389,7 +389,7 @@ bool IsPlainCountStar(const Expression &expr) {
 	idx_t qualifier;
 	return aggregate.function.name == "count_star" && aggregate.children.empty() && !aggregate.filter &&
 	       !aggregate.IsDistinct() && !aggregate.order_bys &&
-	       !TryParseQualifiedReducerTag(aggregate.GetAlias(), qualifier);
+	       !TryParseQualifiedAggregateTag(aggregate.GetAlias(), qualifier);
 }
 
 //! The column types whose DOUBLE running sum is always exact (|sum| < 2^53 for any realistic row count), so that the
@@ -410,53 +410,53 @@ bool IsSmallIntegerType(const LogicalType &type) {
 
 //! Why an aggregate on the right of a count bound is not one this rule reads, or empty when it is: plain `COUNT(*)`,
 //! or COUNT, MIN or MAX of one numeric source column, or SUM or AVG of one small integer source column, with no WHEN
-//! of its own, DISTINCT, ORDER BY or relation qualifier. Fills `reducer` when it is one.
-string ReducerProblem(const Expression &expr, const vector<ColumnBinding> &source_bindings, Reducer &reducer) {
+//! of its own, DISTINCT, ORDER BY or relation qualifier. Fills `aggregate` when it is one.
+string AggregateProblem(const Expression &expr, const vector<ColumnBinding> &source_bindings, Aggregate &aggregate) {
 	if (IsPlainCountStar(expr)) {
-		reducer = Reducer();
-		reducer.function = "count_star";
+		aggregate = Aggregate();
+		aggregate.function = "count_star";
 		return string();
 	}
-	auto &aggregate = expr.Cast<BoundAggregateExpression>();
+	auto &call = expr.Cast<BoundAggregateExpression>();
 	idx_t qualifier;
-	if (TryParseQualifiedReducerTag(aggregate.GetAlias(), qualifier)) {
+	if (TryParseQualifiedAggregateTag(call.GetAlias(), qualifier)) {
 		return "a relation-qualified aggregate";
 	}
-	if (aggregate.filter) {
+	if (call.filter) {
 		return "a WHEN on the right-hand aggregate";
 	}
-	if (aggregate.IsDistinct() || aggregate.order_bys) {
+	if (call.IsDistinct() || call.order_bys) {
 		return "DISTINCT or ORDER BY in an aggregate";
 	}
-	auto &name = aggregate.function.name;
+	auto &name = call.function.name;
 	if ((name != "count" && name != "min" && name != "max" && name != "sum" && name != "avg") ||
-	    aggregate.children.size() != 1) {
+	    call.children.size() != 1) {
 		return "an aggregate other than COUNT(*), COUNT, MIN, MAX, SUM or AVG";
 	}
-	reducer = Reducer();
-	reducer.function = name;
-	if (!DirectSourceNumericColumn(*aggregate.children[0], source_bindings, reducer.source_slot, reducer.column_type,
-	                               reducer.column_name)) {
+	aggregate = Aggregate();
+	aggregate.function = name;
+	if (!DirectSourceNumericColumn(*call.children[0], source_bindings, aggregate.source_slot, aggregate.column_type,
+	                               aggregate.column_name)) {
 		return "an aggregate over something other than a numeric column";
 	}
-	if ((name == "sum" || name == "avg") && !IsSmallIntegerType(reducer.column_type)) {
+	if ((name == "sum" || name == "avg") && !IsSmallIntegerType(aggregate.column_type)) {
 		return "SUM or AVG of a column that is not TINYINT, SMALLINT, UTINYINT or USMALLINT";
 	}
 	return string();
 }
 
-//! Why a bound is not a group-aggregate expression, or empty when it is one: the aggregates `ReducerProblem` admits,
+//! Why a bound is not a group-aggregate expression, or empty when it is one: the aggregates `AggregateProblem` admits,
 //! finite exact constants, numeric casts that cannot throw, and `+ - * / //` over them, where a divisor is a nonzero
 //! constant. The plan evaluates such a bound with DuckDB's own operators, on the rows the solver evaluates it for (see
 //! `PlanBuilder::OnlyWhereCovered`), so an overflow raises on both paths or on neither and no range is proved here.
-//! Appends the aggregates it meets to `reducers`, in walk order.
+//! Appends the aggregates it meets to `aggregates`, in walk order.
 string RowCountBoundProblem(ClientContext &context, const Expression &expr,
-                            const vector<ColumnBinding> &source_bindings, vector<Reducer> &reducers) {
+                            const vector<ColumnBinding> &source_bindings, vector<Aggregate> &aggregates) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		Reducer reducer;
-		auto problem = ReducerProblem(expr, source_bindings, reducer);
+		Aggregate aggregate;
+		auto problem = AggregateProblem(expr, source_bindings, aggregate);
 		if (problem.empty()) {
-			reducers.push_back(std::move(reducer));
+			aggregates.push_back(std::move(aggregate));
 		}
 		return problem;
 	}
@@ -471,7 +471,7 @@ string RowCountBoundProblem(ClientContext &context, const Expression &expr,
 		if (!expr.return_type.IsNumeric() || !cast.child->return_type.IsNumeric()) {
 			return "a cast that is not numeric";
 		}
-		auto problem = RowCountBoundProblem(context, *cast.child, source_bindings, reducers);
+		auto problem = RowCountBoundProblem(context, *cast.child, source_bindings, aggregates);
 		if (!problem.empty()) {
 			return problem;
 		}
@@ -486,7 +486,7 @@ string RowCountBoundProblem(ClientContext &context, const Expression &expr,
 			return "the function " + name;
 		}
 		for (auto &child : function.children) {
-			auto problem = RowCountBoundProblem(context, *child, source_bindings, reducers);
+			auto problem = RowCountBoundProblem(context, *child, source_bindings, aggregates);
 			if (!problem.empty()) {
 				return problem;
 			}
@@ -761,29 +761,29 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 		bool source_column =
 		    DirectSourceNumericColumn(bound, ir.source_bindings, source_slot, source_type, source_name);
 		auto add_source_bound = [&](idx_t slot, const LogicalType &bound_type, string column_name,
-		                            vector<Reducer> reducers) {
-			bool counts_rows = !reducers.empty();
+		                            vector<Aggregate> aggregates) {
+			bool counts_rows = !aggregates.empty();
 			Condition::SourceBound source_bound {
 			    slot, bound_type, type, bound.Copy(), sum->filter != nullptr, std::move(column_name), counts_rows};
-			for (auto &reducer : reducers) {
+			for (auto &aggregate : aggregates) {
 				source_bound.needs_count |=
-				    reducer.function == "count_star" || reducer.function == "count" || reducer.function == "avg";
+				    aggregate.function == "count_star" || aggregate.function == "count" || aggregate.function == "avg";
 			}
-			source_bound.reducers = std::move(reducers);
+			source_bound.aggregates = std::move(aggregates);
 			source_bound.negated = negated;
 			source_bound.offset = std::move(body.offset);
 			condition.source_bounds.push_back(std::move(source_bound));
 		};
 		if (!bound.IsFoldable() && bound.IsAggregate()) {
-			vector<Reducer> reducers;
-			auto problem = RowCountBoundProblem(context, bound, ir.source_bindings, reducers);
+			vector<Aggregate> aggregates;
+			auto problem = RowCountBoundProblem(context, bound, ir.source_bindings, aggregates);
 			if (!problem.empty()) {
 				reason = "constraint_shape: a bound with an aggregate must combine COUNT(*), COUNT, MIN or MAX of a "
 				         "numeric column, or SUM or AVG of a small integer column, with constants by + - * / // (" +
 				         problem + ")";
 				return false;
 			}
-			add_source_bound(DConstants::INVALID_INDEX, bound.return_type, string(), std::move(reducers));
+			add_source_bound(DConstants::INVALID_INDEX, bound.return_type, string(), std::move(aggregates));
 			continue;
 		}
 		if (!bound.IsFoldable() &&
@@ -838,7 +838,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	auto &parts = ir.objective.parts;
 	idx_t term_count = 0;
 	for (auto &part : parts) {
-		if (part.reducer != DirectReducer::SUM || part.filter || part.inner ||
+		if (part.aggregate != DirectAggregate::SUM || part.filter || part.inner ||
 		    part.qualifier != DConstants::INVALID_INDEX) {
 			reason = "objective_shape: expected unfiltered SUM(coefficient * x) terms";
 			return false;
@@ -852,7 +852,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		term_count += part.terms.size();
 	}
 	for (auto &part : parts) {
-		// A query-wide factor on the reducer (`2 * SUM(...)`, `SUM(...) / 2`) scales every term of that part and no
+		// A query-wide factor on the aggregate (`2 * SUM(...)`, `SUM(...) / 2`) scales every term of that part and no
 		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
 		double scale;
 		if (!DirectPartScale(context, part, scale)) {
@@ -965,7 +965,7 @@ private:
 		idx_t group_slot = DConstants::INVALID_INDEX;
 		//! The window slot and type of each MIN, MAX or SUM a bound reads: (function, source column, reduced over every
 		//! group row) -> slot.
-		std::map<std::tuple<string, idx_t, bool>, std::pair<idx_t, LogicalType>> reducers;
+		std::map<std::tuple<string, idx_t, bool>, std::pair<idx_t, LogicalType>> aggregates;
 		//! The rows the SUM itself covers in each group, whatever row reads it: the rows whose WHEN holds (the clause's
 		//! or the aggregate-local one) and whose PER keys are not NULL. A bound shifted by a constant term reads it.
 		idx_t covered_slot = DConstants::INVALID_INDEX;
@@ -1052,18 +1052,18 @@ private:
 		bool eligible_needed = false;
 		bool group_needed = false;
 		bool covered_needed = false;
-		bool reducers_needed = false;
+		bool aggregates_needed = false;
 		for (auto &bound : condition.source_bounds) {
 			if (bound.needs_count) {
 				(bound.rhs_all_group_rows ? group_needed : eligible_needed) = true;
 			}
 			covered_needed |= bound.offset != nullptr;
-			for (auto &reducer : bound.reducers) {
-				reducers_needed |= reducer.function == "min" || reducer.function == "max" ||
-				                   reducer.function == "sum" || reducer.function == "avg";
+			for (auto &aggregate : bound.aggregates) {
+				aggregates_needed |= aggregate.function == "min" || aggregate.function == "max" ||
+				                     aggregate.function == "sum" || aggregate.function == "avg";
 			}
 		}
-		if (!eligible_needed && !group_needed && !covered_needed && !reducers_needed) {
+		if (!eligible_needed && !group_needed && !covered_needed && !aggregates_needed) {
 			return source;
 		}
 		counts.window_index = binder.GenerateTableIndex();
@@ -1089,22 +1089,22 @@ private:
 		if (group_needed) {
 			counts.group_slot = add_count(false);
 		}
-		if (reducers_needed) {
+		if (aggregates_needed) {
 			// MIN, MAX and SUM of a column over the same group the counts cover. AVG is its SUM over the group's count.
 			for (auto &bound : condition.source_bounds) {
-				for (auto &reducer : bound.reducers) {
-					bool sum = reducer.function == "sum" || reducer.function == "avg";
-					bool extremum = reducer.function == "min" || reducer.function == "max";
+				for (auto &aggregate : bound.aggregates) {
+					bool sum = aggregate.function == "sum" || aggregate.function == "avg";
+					bool extremum = aggregate.function == "min" || aggregate.function == "max";
 					if (!sum && !extremum) {
 						continue;
 					}
-					auto function = sum ? string("sum") : reducer.function;
-					auto key = std::make_tuple(function, reducer.source_slot, bound.rhs_all_group_rows);
-					if (counts.reducers.count(key)) {
+					auto function = sum ? string("sum") : aggregate.function;
+					auto key = std::make_tuple(function, aggregate.source_slot, bound.rhs_all_group_rows);
+					if (counts.aggregates.count(key)) {
 						continue;
 					}
 					auto value =
-					    DirectColumn(source_types[reducer.source_slot], scope.input_bindings[reducer.source_slot]);
+					    DirectColumn(source_types[aggregate.source_slot], scope.input_bindings[aggregate.source_slot]);
 					auto reduced = WindowExtremum(optimizer, function.c_str(), std::move(value));
 					if (!bound.rhs_all_group_rows && condition.scoped) {
 						reduced->partitions.push_back(DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
@@ -1112,7 +1112,7 @@ private:
 					for (auto slot : condition.group_key_slots) {
 						reduced->partitions.push_back(DirectColumn(source_types[slot], scope.input_bindings[slot]));
 					}
-					counts.reducers[key] = {window->expressions.size(), reduced->return_type};
+					counts.aggregates[key] = {window->expressions.size(), reduced->return_type};
 					window->expressions.push_back(std::move(reduced));
 				}
 			}
@@ -1135,9 +1135,9 @@ private:
 		return std::move(window);
 	}
 
-	//! The bound with each aggregate replaced by its value over the clause's group. The solver reads a reducer as a
+	//! The bound with each aggregate replaced by its value over the clause's group. The solver reads an aggregate as a
 	//! DOUBLE and hands it back to the surrounding expression as the aggregate's own type, so the same two casts are
-	//! made here. AVG is the DOUBLE sum over the DOUBLE count. `next` walks `bound.reducers`, which the condition
+	//! made here. AVG is the DOUBLE sum over the DOUBLE count. `next` walks `bound.aggregates`, which the condition
 	//! listed in the same order.
 	unique_ptr<Expression> ReplaceAggregates(unique_ptr<Expression> expr, const Condition::SourceBound &bound,
 	                                         const RowCounts &counts, idx_t &next) const {
@@ -1147,23 +1147,23 @@ private:
 			});
 			return expr;
 		}
-		if (next >= bound.reducers.size() ||
-		    bound.reducers[next].function != expr->Cast<BoundAggregateExpression>().function.name) {
+		if (next >= bound.aggregates.size() ||
+		    bound.aggregates[next].function != expr->Cast<BoundAggregateExpression>().function.name) {
 			throw InternalException("S1 direct solve met an aggregate it did not prove");
 		}
-		auto &reducer = bound.reducers[next++];
+		auto &aggregate = bound.aggregates[next++];
 		auto type = expr->return_type;
 		auto count_slot = bound.rhs_all_group_rows ? counts.group_slot : counts.eligible_slot;
 		auto count = [&]() {
 			return DirectColumn(LogicalType::BIGINT, ColumnBinding(counts.window_index, count_slot));
 		};
-		if (reducer.function == "count_star" || reducer.function == "count") {
+		if (aggregate.function == "count_star" || aggregate.function == "count") {
 			return count();
 		}
-		bool average = reducer.function == "avg";
-		auto found = counts.reducers.find(
-		    std::make_tuple(average ? string("sum") : reducer.function, reducer.source_slot, bound.rhs_all_group_rows));
-		if (found == counts.reducers.end()) {
+		bool average = aggregate.function == "avg";
+		auto found = counts.aggregates.find(std::make_tuple(average ? string("sum") : aggregate.function,
+		                                                    aggregate.source_slot, bound.rhs_all_group_rows));
+		if (found == counts.aggregates.end()) {
 			throw InternalException("S1 direct solve lost the window of an aggregate it proved");
 		}
 		auto reduced = BoundCastExpression::AddCastToType(
@@ -1209,7 +1209,7 @@ private:
 			if (bound.counts_rows) {
 				idx_t next = 0;
 				spec.value = ReplaceAggregates(std::move(spec.value), bound, counts, next);
-				if (next != bound.reducers.size()) {
+				if (next != bound.aggregates.size()) {
 					throw InternalException("S1 direct solve found a different number of aggregates than it proved");
 				}
 			}
@@ -1273,18 +1273,18 @@ private:
 		// on every row, including rows the clause does not cover; infinity is a value.
 		vector<idx_t> checked_columns;
 		for (auto &bound : condition.source_bounds) {
-			for (auto &reducer : bound.reducers) {
-				if (reducer.source_slot == DConstants::INVALID_INDEX ||
-				    std::find(checked_columns.begin(), checked_columns.end(), reducer.source_slot) !=
+			for (auto &aggregate : bound.aggregates) {
+				if (aggregate.source_slot == DConstants::INVALID_INDEX ||
+				    std::find(checked_columns.begin(), checked_columns.end(), aggregate.source_slot) !=
 				        checked_columns.end()) {
 					continue;
 				}
-				checked_columns.push_back(reducer.source_slot);
-				auto type = source_types[reducer.source_slot];
+				checked_columns.push_back(aggregate.source_slot);
+				auto type = source_types[aggregate.source_slot];
 				NotNullSpec spec;
-				spec.value = DirectColumn(type, scope.input_bindings[reducer.source_slot]);
+				spec.value = DirectColumn(type, scope.input_bindings[aggregate.source_slot]);
 				spec.reject_nan = type == LogicalType::FLOAT || type == LogicalType::DOUBLE;
-				spec.message = DirectBoundNullMessage(reducer.column_name);
+				spec.message = DirectBoundNullMessage(aggregate.column_name);
 				if (spec.reject_nan) {
 					spec.nan_message = DirectBoundNaNMessage();
 				}

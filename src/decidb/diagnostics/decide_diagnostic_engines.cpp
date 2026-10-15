@@ -687,7 +687,7 @@ static SolverModel BuildStage2Model(const SolverModel &elastic, const vector<Blo
 //! still hit it under the frozen tier budgets, minimize a rank-weighted repair sum — every
 //! knob keeps its tier coefficient (editable slacks: the T1 scale weight) scaled by its
 //! 1-based rank in emission order (`removals` ascend by indicator column and `slacks` by
-//! row: matrix rows in declaration order, then re-emitted absorbed bounds, whose original
+//! row: matrix rows in declaration order, then re-emitted singleton-row bounds, whose original
 //! declaration position is not recorded). Under a pinned tier budget, concentrating the
 //! repair on the lowest-ranked clause is then the unique optimum, so both backends report
 //! the same edit.

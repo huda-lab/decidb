@@ -1,7 +1,7 @@
 # IR: how a query becomes something a rule can read
 
 A rule never reads the bound DECIDE tree or the SQL text. One front end reads the tree into an intermediate
-representation (**IR**): the decision variables and their scopes, every constraint with its comparison, reducer,
+representation (**IR**): the decision variables and their scopes, every constraint with its comparison, aggregate,
 `PER`/`WHEN` scope and right-hand side, and the objective's terms and scope. This is the compiler split of front end,
 IR and back end; the rules are the back end.
 
@@ -26,7 +26,7 @@ so a wrong rewrite cannot follow from a gap in the front end. `require` mode pri
 - A per-row bound has `variable_bound` set when the solver path folds it into its decision's box instead of emitting a
   model row (an unconditional comparison of the bare decision against a constant). Such a bound replaces the
   variable's default lower bound of 0; every other bound only intersects with it. The flag comes from one predicate
-  shared with the solver (`DecideBoundIsAbsorbed`), so the two cannot disagree.
+  shared with the solver (`DecideIsSingletonRowBound`), so the two cannot disagree.
 - The term splitter that breaks `SUM(2*x - x)` into linear terms is shared with the solver path
   (`src/planner/decide/decide_term_split.cpp`), so the two paths cannot read one term differently.
 - `norm(e, p)` is replaced by its definition when the query is canonicalized (L0 stays a marker). Before this,

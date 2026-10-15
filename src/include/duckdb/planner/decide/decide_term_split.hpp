@@ -8,7 +8,7 @@
 //
 // WHY THIS IS NOT THE CANONICALIZER. Canonicalization never opens a term: it splits
 // a side additively, moves whole terms across the relation, and is total and pure
-// because of it. Splitting a reducer body or a row-level expression into
+// because of it. Splitting an aggregate body or a row-level expression into
 // `coefficient * variable` pieces does open terms. It distributes `K * (1 - x)`,
 // recognises squares and products, rebuilds coefficients, and can fail. So it lives
 // beside the canonicalizer and reads what canonicalization produced: the additive
@@ -81,7 +81,7 @@ public:
 	DecideTermSplitter(ClientContext &context, idx_t decide_index,
 	                   const vector<unique_ptr<Expression>> &decide_variables);
 
-	//! Split a reducer body or a row-level decision expression into constant, linear, product, square and
+	//! Split an aggregate body or a row-level decision expression into constant, linear, product, square and
 	//! absolute-value terms, appending to `out` in reading order with `sign` applied.
 	void Split(const Expression &expr, int sign, vector<DecideSplitTerm> &out) const;
 	//! Split an expression that must be linear: every term is CONSTANT or LINEAR, or UNKNOWN when it is not.

@@ -1,6 +1,6 @@
-"""Tests for relation-qualified reducers, ``agg(D: expr)``.
+"""Tests for relation-qualified aggregates, ``agg(D: expr)``.
 
-A qualified reducer contributes one term per tuple identity of the qualified
+A qualified aggregate contributes one term per tuple identity of the qualified
 relation instead of one per join-result row (paper §3.2.2). The join repeats each
 ``nation`` row once per customer, so an unqualified ``SUM`` over a nation-scoped
 decision weights that decision by the nation's customer count; the qualified form
@@ -10,13 +10,13 @@ Covers:
   - SUM qualified: oracle verification, and divergence from the unqualified form
   - AVG qualified: denominator is the distinct-identity count, not the row count
   - MIN / MAX qualified
-  - Qualified reducer on the constraint side
-  - PER composed with a qualified reducer (de-duplication runs inside the partition)
-  - Mixed qualified and unqualified reducers in one objective
+  - Qualified aggregate on the constraint side
+  - PER composed with a qualified aggregate (de-duplication runs inside the partition)
+  - Mixed qualified and unqualified aggregates in one objective
   - A scalar decision multiplied by the qualified relation's own data (batch D):
     weighted and de-duplicated the same as an entity-scoped term
   - Errors: multi-relation qualifier, foreign column, foreign / row-scoped decision
-    inside the reducer, a query-wide decision standing alone (row-invariant),
+    inside the aggregate, a query-wide decision standing alone (row-invariant),
     unknown relation
 """
 
@@ -85,7 +85,7 @@ def _customer_order_chain_data(duckdb_conn, nation_key):
     """Per-customer acctbal, distinct order count, and total (order, lineitem) row
     count for one nation's customer/orders/lineitem chain. `order_count` differing
     from `row_count` (which also differs across customers) is what makes the
-    composite, single-relation and unqualified qualified reducers diverge: the
+    composite, single-relation and unqualified qualified aggregates diverge: the
     composite scope's tuple identity is (customer, order), so it weights by
     `order_count`; the single-relation scope's is customer alone, weight 1; the
     unqualified form has no identity at all, weight `row_count`."""
@@ -346,12 +346,12 @@ def test_qualified_minmax(decidb_cli, duckdb_conn, agg, sense, perf_tracker):
         WHERE n.n_regionkey = 0 AND n.n_nationkey > 0
         DECIDE n.keepN(BOOL)
         SUCH THAT SUM(keepN) >= 1
-        {sense} {agg}({reducer})
+        {sense} {agg}({aggregate})
     """
     qualified, _ = decidb_cli.execute(template.format(
-        sense=sense, agg=agg, reducer="n: n.n_nationkey * keepN"))
+        sense=sense, agg=agg, aggregate="n: n.n_nationkey * keepN"))
     unqualified, _ = decidb_cli.execute(template.format(
-        sense=sense, agg=agg, reducer="n.n_nationkey * keepN"))
+        sense=sense, agg=agg, aggregate="n.n_nationkey * keepN"))
 
     nation_ids = [int(r[0]) for r in duckdb_conn.execute("""
         SELECT DISTINCT CAST(n.n_nationkey AS BIGINT)
@@ -368,7 +368,7 @@ def test_qualified_minmax(decidb_cli, duckdb_conn, agg, sense, perf_tracker):
 
 
 # ---------------------------------------------------------------------------
-# Test 5: qualified reducer on the constraint side
+# Test 5: qualified aggregate on the constraint side
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
@@ -441,7 +441,7 @@ def test_qualified_reducer_with_per(decidb_cli, duckdb_conn, perf_tracker):
 
 
 # ---------------------------------------------------------------------------
-# Test 7: mixing qualified and unqualified reducers in one objective
+# Test 7: mixing qualified and unqualified aggregates in one objective
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
@@ -552,10 +552,10 @@ def test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only
         WHERE n.n_regionkey = 0
         DECIDE n.keepN(BOOL)
         SUCH THAT SUM(keepN * c.c_acctbal) >= 700000
-        MINIMIZE SUM({reducer})
+        MINIMIZE SUM({aggregate})
     """
-    composite, _ = decidb_cli.execute(template.format(reducer="n,c: n.n_nationkey * keepN"))
-    unqualified, _ = decidb_cli.execute(template.format(reducer="n.n_nationkey * keepN"))
+    composite, _ = decidb_cli.execute(template.format(aggregate="n,c: n.n_nationkey * keepN"))
+    unqualified, _ = decidb_cli.execute(template.format(aggregate="n.n_nationkey * keepN"))
 
     # Row-for-row identical output, not just the same objective: every (customer,
     # nation) row keeps the same keepN either way.
@@ -596,8 +596,8 @@ def test_row_scoped_decision_inside_qualified_reducer_rejected(decidb_cli):
 
 @pytest.mark.error_binder
 def test_query_wide_decision_alone_inside_qualified_reducer_rejected(decidb_cli):
-    """A `scalar` decision standing *alone* inside a qualified reducer is still
-    rejected: the body is row-invariant, so there is nothing for the reducer to
+    """A `scalar` decision standing *alone* inside a qualified aggregate is still
+    rejected: the body is row-invariant, so there is nothing for the aggregate to
     de-duplicate or sum over (batch D: "row-invariant", not "contains a scalar" --
     a scalar *combined with* the qualified relation's own data is legal instead,
     see test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated)."""
@@ -642,12 +642,12 @@ def test_qualified_hard_max_objective(decidb_cli, duckdb_conn, perf_tracker):
         WHERE n.n_regionkey = 0 AND n.n_nationkey > 0
         DECIDE n.keepN(BOOL)
         SUCH THAT SUM(n: keepN) <= 2
-        MAXIMIZE MAX({reducer})
+        MAXIMIZE MAX({aggregate})
     """
     qualified, _ = decidb_cli.execute(
-        template.format(reducer="n: n.n_nationkey * keepN"))
+        template.format(aggregate="n: n.n_nationkey * keepN"))
     unqualified, _ = decidb_cli.execute(
-        template.format(reducer="n.n_nationkey * keepN"))
+        template.format(aggregate="n.n_nationkey * keepN"))
 
     nation_ids = [int(r[0]) for r in duckdb_conn.execute("""
         SELECT DISTINCT CAST(n.n_nationkey AS BIGINT)
@@ -718,7 +718,7 @@ def test_qualified_reducer_with_aggregate_local_when_in_objective(
         WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
         DECIDE n.keepN(BOOL)
         SUCH THAT SUM(n: keepN) <= 1
-        MAXIMIZE SUM({reducer}) WHEN (n.n_nationkey > 1)
+        MAXIMIZE SUM({aggregate}) WHEN (n.n_nationkey > 1)
     """
     counts = {
         int(r[0]): int(r[1]) for r in duckdb_conn.execute("""
@@ -732,9 +732,9 @@ def test_qualified_reducer_with_aggregate_local_when_in_objective(
         "fixture no longer inverts the ranking; pick different nations"
 
     qualified, _ = decidb_cli.execute(
-        template.format(reducer="n: n.n_nationkey * keepN"))
+        template.format(aggregate="n: n.n_nationkey * keepN"))
     unqualified, _ = decidb_cli.execute(
-        template.format(reducer="n.n_nationkey * keepN"))
+        template.format(aggregate="n.n_nationkey * keepN"))
 
     q_keep = _keep_by_nation(qualified, 1, 2)
     u_keep = _keep_by_nation(unqualified, 1, 2)
@@ -802,7 +802,7 @@ def test_qualified_reducer_with_aggregate_local_when_in_constraint(
 @pytest.mark.correctness
 def test_composed_minmax_preserves_the_qualifier(decidb_cli, duckdb_conn,
                                                  perf_tracker):
-    """Adding `+ MAX(keepN)` to a qualified reducer must not change what the
+    """Adding `+ MAX(keepN)` to a qualified aggregate must not change what the
     qualifier means.
 
     Same inverting fixture as the WHEN test: with a one-nation budget the
@@ -811,7 +811,7 @@ def test_composed_minmax_preserves_the_qualifier(decidb_cli, duckdb_conn,
 
     Regression for the dropped-qualifier bug: `ComposedMinMaxTerm` carried no
     `qualifier_scope_idx`, so the de-duplication mask never reached the composed
-    path and the reducer silently reverted to row semantics — answering 5. The
+    path and the aggregate silently reverted to row semantics — answering 5. The
     control is the same query without the composed term, which is what makes a
     failure here a dropped qualifier rather than a different problem.
     """
@@ -852,13 +852,13 @@ def test_composed_minmax_preserves_the_qualifier_in_a_constraint(decidb_cli,
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
         DECIDE n.keepN(BOOL)
-        SUCH THAT SUM({reducer}) + MAX(keepN) <= 20
+        SUCH THAT SUM({aggregate}) + MAX(keepN) <= 20
         MAXIMIZE SUM(n: keepN)
     """
     qualified, _ = decidb_cli.execute(
-        template.format(reducer="n: n.n_nationkey * keepN"))
+        template.format(aggregate="n: n.n_nationkey * keepN"))
     unqualified, _ = decidb_cli.execute(
-        template.format(reducer="n.n_nationkey * keepN"))
+        template.format(aggregate="n.n_nationkey * keepN"))
 
     q_keep = _keep_by_nation(qualified, 1, 2)
     u_keep = _keep_by_nation(unqualified, 1, 2)
@@ -870,7 +870,7 @@ def test_composed_minmax_preserves_the_qualifier_in_a_constraint(decidb_cli,
 
 
 # ---------------------------------------------------------------------------
-# Test 13: a qualified reducer as the BOUND, not the model side
+# Test 13: a qualified aggregate as the BOUND, not the model side
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness

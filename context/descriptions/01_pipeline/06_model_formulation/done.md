@@ -149,11 +149,11 @@ linear_term_reductions`; objective side: `SolverInput::objective_term_reductions
 carried the same way):
 
 - **`LinearTermReduction::NONE`** — the term is a bare additive sibling of a
-  reducer, not inside one (`SUM(x) - max_shortfall <= cap`). It is row-invariant
+  aggregate, not inside one (`SUM(x) - max_shortfall <= cap`). It is row-invariant
   by construction, so it contributes its coefficient **once** — read from row 0 (or
   the group's first row under `PER`), never summed across rows. Multiplying it by
   the row count would silently change the problem.
-- **`LinearTermReduction::SUM`** — the term came from inside a real reducer's body
+- **`LinearTermReduction::SUM`** — the term came from inside a real aggregate's body
   (`SUM(opening_cost * cap)`), stamped by `ApplyAggregateMetadata` on the
   constraint side and by the matching inline stamp in
   `ExtractAggregateObjectiveTerms` / `AnalyzeObjective` on the objective side. It
@@ -166,7 +166,7 @@ rejection: reading a `SUM`-reduced scalar term as `NONE` drops every row's
 contribution but one; reading a `NONE` term as `SUM` multiplies a row-invariant
 sibling term by the row count it was never supposed to scale by. See
 `03_expressivity/sql_functions/done.md` → "A Query-Wide Decision Multiplied by a
-Vector, Inside a Reducer (Batch D)" for the binder-side rule this implements, and
+Vector, Inside an Aggregate (Batch D)" for the binder-side rule this implements, and
 why a scalar was never previously reachable through the `SUM`-reduced path.
 
 ### Path 1 — aggregate, ungrouped
@@ -203,7 +203,7 @@ Every path pushes through `PushNormalizedConstraint()` rather than
 `model.constraints.push_back()`. It drops empty-LHS tautologies (`0 <= k` for
 `k>=0`, `0 >= k` for `k<=0`, `0 = 0`).
 
-A *violated* empty-LHS row — `0 <= -1` after bounds absorption and term
+A *violated* empty-LHS row — `0 <= -1` after bounds folding and term
 cancellation, as written by `SUM(0 * x) <= -1` or `x - x <= -1` — is **kept**, and
 sets `model.build_proven_infeasible`. The row stays coefficient-free and keeps its
 own `source_clause_id`, which is what lets the infeasible-diagnosis engine name the
@@ -252,7 +252,7 @@ instead of silently stepping a bound that is not on the lattice.
 > depend on the table's contents, so inserting one fractional row could make a working
 > query illegal. See `02_binder/done.md` §4 for the rule and what it costs.
 
-A strict `<` / `>` over a REAL variable is also deliberately not absorbed into
+A strict `<` / `>` over a REAL variable is also deliberately not folded into
 column bounds upstream (stage 05), for the same reason the step is unsafe.
 
 ---
@@ -321,7 +321,7 @@ each site repeating them:
   `group_label`. All six sites call this.
 - `StampAggregateProvenance(provenance, eval_const)` sets `is_aggregate` and
   `qualifier`. Only the four aggregate sites (linear and quadratic, ungrouped and
-  grouped) call this; a per-row constraint has no reducer to name.
+  grouped) call this; a per-row constraint has no aggregate to name.
 
 `avg_scaled`, `weight_labels` and `folded_terms` stay hand-stamped at exactly the
 two **linear**-aggregate sites and are never set on the quadratic ones. That is
@@ -374,7 +374,7 @@ which is what makes a finite and tight Big-M possible. Only provably-implied
 bounds are applied, so the feasible region and the optimum are unchanged.
 
 `a_r` is the variable's **combined** coefficient at that row. A variable can hold
-several additive terms of one constraint (`2*ship + 3*ship <= 10`, or two reducers
+several additive terms of one constraint (`2*ship + 3*ship <= 10`, or two aggregates
 over the same decision), and all of them name the same solver column, so the pass
 walks distinct variables and sums every term naming each one — `10/5 = 2`, not
 `10/3`. The addition belongs here rather than in canonicalization because
@@ -398,7 +398,7 @@ the box the solved model declares.
 The three used to read `SolverInput::lower_bounds` / `upper_bounds` directly, which made
 "which box is this constant valid for?" a question about call order rather than one the
 call site answers. It matters because the box does move: an infeasibility diagnosis
-re-opens every user-absorbed and implied bound (`OpenElasticColumnBox`, stage 08) and
+re-opens every user-folded and implied bound (`OpenElasticColumnBox`, stage 08) and
 then runs against a strictly larger box than the retained constants assume.
 
 Three cases, kept distinct:
@@ -541,7 +541,7 @@ of every row's reach and the group is re-emitted as a plain per-row constraint c
 that bound — an ordinary infeasibility naming the user's clause, not a refusal. MIN is
 the mirror image. The verdict is per group because `ReduceAggregateRhsPerGroup` has
 already collapsed a row-varying bound to the tightest one, which is also what settles a
-group whose rows mix finite and infinite bounds. A bound-side reducer is what reaches
+group whose rows mix finite and infinite bounds. A bound-side aggregate is what reaches
 the mixed case from SQL — `MIN(x) <= MAX(cap) PER g` where `cap` holds an infinity in
 one group and finite values in another — so one group drops while the group beside it
 still linearizes. A literal bound gives every group the same verdict.
@@ -602,7 +602,7 @@ and the coefficients arrive evaluated.
 
 ### Composed MIN/MAX
 
-A composed clause mixes reducers additively — `SUM(a) + 2*MAX(b) <= K`, or the same
+A composed clause mixes aggregates additively — `SUM(a) + 2*MAX(b) <= K`, or the same
 in an objective. `LinearizeComposedMinMaxConstraint()` and
 `LinearizeComposedMinMaxObjective()` give every MIN/MAX term its own global `z_k`,
 pinned by the same `EmitExtremumLink` every other MIN/MAX uses, then compose: the constraint
@@ -613,8 +613,8 @@ the objective writes the same composition into `global_obj_coeffs` and
 than an internal column.
 
 Terms arrive as `ComposedMinMaxTermData`: everything data-dependent — per-row
-coefficients, the query-wide factor the canonicalizer peeled off the reducer, the
-row mask the reducer runs over — is already evaluated by stage 08, and an empty row
+coefficients, the query-wide factor the canonicalizer peeled off the aggregate, the
+row mask the aggregate runs over — is already evaluated by stage 08, and an empty row
 set is refused there before these functions see it.
 
 A composed term needs **both** sides of its link in the hard direction, and that is the
@@ -699,7 +699,7 @@ licenses `>= K+1`.
 
 **The collapse may only read the rigid box** (`SolverInput::rigid_lower_bounds`), meaning a
 variable's intrinsic domain — BOOLEAN 0/1, default non-negativity — and nothing else. The
-column box also accumulates user bounds absorbed by stage 05 and implied tightenings from
+column box also accumulates user bounds folded by stage 05 and implied tightenings from
 `DecidePropagateImpliedBounds`, and both are backed by rows the elastic engine *reverts*
 during infeasibility diagnosis so the loosenable row is the sole enforcer. A Big-M constant
 may read the full box, since a loosened bound only makes it conservative; a rewrite that

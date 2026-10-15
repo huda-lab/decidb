@@ -236,8 +236,8 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		result->is_operator = true;
 		return std::move(result);
 	}
-	case duckdb_libpgquery::PG_AEXPR_QUALIFIED_REDUCER: {
-		// DecidB: relation-qualified reducer, sum(D: expr) or sum(D, T: expr).
+	case duckdb_libpgquery::PG_AEXPR_QUALIFIED_AGGREGATE: {
+		// DecidB: relation-qualified aggregate, sum(D: expr) or sum(D, T: expr).
 		// children[0] = the aggregate, children[1..] = one column ref per named
 		// relation. rexpr is a PGList (mirrors multi-column PER's transform above)
 		// whenever the qualifier names more than one relation.
@@ -252,7 +252,7 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		} else {
 			children.push_back(TransformExpression(root.rexpr));
 		}
-		auto result = make_uniq<FunctionExpression>(QUALIFIED_REDUCER_TAG, std::move(children));
+		auto result = make_uniq<FunctionExpression>(QUALIFIED_AGGREGATE_TAG, std::move(children));
 		result->is_operator = true;
 		return std::move(result);
 	}

@@ -139,7 +139,7 @@ def test_user_written_bound_does_not_license_a_collapse(decidb_cli, tmp_path):
     row when diagnosing infeasibility. A collapse reading it would still be enforcing
     `SUM(x) >= 1` in a repaired model where the user's floor had been relaxed away.
 
-    So this must keep the disjunction. If a future change makes absorbed user bounds
+    So this must keep the disjunction. If a future change makes folded user bounds
     rigid under diagnosis, this test should be revisited rather than deleted.
     """
     dump = _lowering(decidb_cli).dump_model(

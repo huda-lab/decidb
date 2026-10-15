@@ -493,7 +493,7 @@ struct MinMaxObjectiveSpec {
     ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
     bool per_inner_is_easy = false;
     bool per_outer_is_easy = false;
-    //! Inner reducer was AVG, rewritten to SUM with a per-group 1/n_g scale.
+    //! Inner aggregate was AVG, rewritten to SUM with a per-group 1/n_g scale.
     bool per_inner_was_avg = false;
     bool has_when = false;
     vector<bool> when_mask;
@@ -512,19 +512,19 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                               const MinMaxObjectiveSpec &spec, const vector<string> &var_names,
                               NativeConstructPolicy native_min_max);
 
-//! One reducer term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
+//! One aggregate term of a *composed* (additive) MIN/MAX clause — `SUM(a) + MAX(b) <= K`
 //! or the objective spelling — with everything data-dependent already evaluated by the
 //! physical layer. `inner_terms` is non-owning: the flattened terms live on the logical
 //! operator's `ComposedMinMaxTerm`, prepared at stage 05, and `per_term_coefs[t][row]`
 //! is that term's evaluated coefficient. `z_idx` is filled in by the linearizer.
 struct ComposedMinMaxTermData {
-    //! MIN/MAX reducer (gets a global auxiliary) vs SUM/AVG (folds into the outer row).
+    //! MIN/MAX aggregate (gets a global auxiliary) vs SUM/AVG (folds into the outer row).
     bool is_minmax = false;
-    //! Lowercase reducer name: "min", "max", "sum" or "avg".
+    //! Lowercase aggregate name: "min", "max", "sum" or "avg".
     string agg_name;
     //! Sign this term carries in the additive composition.
     int sign = 1;
-    //! Factor the canonicalizer peeled off this reducer, already evaluated. It stays
+    //! Factor the canonicalizer peeled off this aggregate, already evaluated. It stays
     //! outside the aggregate all the way to here, which is what makes its sign
     //! irrelevant to correctness.
     double scale = 1.0;

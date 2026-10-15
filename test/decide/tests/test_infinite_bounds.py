@@ -10,7 +10,7 @@ the solver's, not a new DeciDB convention: a right-hand side may be infinite, an
 the model builder has always accepted that and rejected only NaN. What direction
 the infinity points still decides the outcome — ``<= +inf`` constrains nothing,
 ``>= +inf`` cannot be satisfied — and that is the solver's answer to give, not a
-guard's. A bare bound is not absorbed into the column box when it is infinite, for
+guard's. A bare bound is not folded into the column box when it is infinite, for
 that reason: the box has one sentinel per direction and would have kept the
 infinity in one and lost it in the other.
 
@@ -40,7 +40,7 @@ Covers:
 A bound can also be reduced from a column instead of typed, and that path kept the
 strict guard for longer: one infinite row in ``cap`` refused ``MIN(x) <= MAX(cap)``
 outright, while the same bound written as a literal was accepted and classified.
-The reducer's input is on the way to a model row's ``rhs`` like any other bound, so
+The aggregate's input is on the way to a model row's ``rhs`` like any other bound, so
 it follows the same rule; the direction still decides the outcome, now per group.
 
   - test_data_reducer_bound_agrees_with_the_literal_spelling: the bug
@@ -134,7 +134,7 @@ def test_infinite_bound_wrong_direction_is_infeasible(decidb_cli):
     (``SUM(x) >= 1e1000``) has always produced.
 
     The bare spelling is checked with the rebuilt one because it takes a different
-    route: a bare ``x >= K`` is absorbed into the column box instead of becoming a
+    route: a bare ``x >= K`` is folded into the column box instead of becoming a
     model row. The box clamps an upper bound to a large sentinel but had no such
     floor for a lower one, so ``+inf`` was written straight into it and the model
     validator raised an internal error — which also invalidated the connection, so
@@ -303,7 +303,7 @@ def test_infinite_value_inside_abs_is_named(decidb_cli):
 # also be *reduced from a column* — ``MIN(x) <= MAX(cap) PER g`` — and that path
 # read its input through the strict finiteness guard, so one infinite row in
 # ``cap`` refused the whole query. The two spellings describe the same bound, so
-# they get the same answer: the reducer's input is on the way to a model row's
+# they get the same answer: the aggregate's input is on the way to a model row's
 # ``rhs``, and ±inf is a value there. What the infinity *means* is still decided
 # downstream, per group, by the direction it points.
 
@@ -336,7 +336,7 @@ def _by_group(rows, cols):
 def test_data_reducer_bound_agrees_with_the_literal_spelling(decidb_cli):
     """``MAX(cap)`` folding to +inf is the same bound as a typed ``1e1000``.
 
-    This is the bug at its smallest: the reducer's input was extracted under the
+    This is the bug at its smallest: the aggregate's input was extracted under the
     strict guard, so the query died at the first infinite row — before grouping,
     before folding, before anything knew which group that row belonged to. The
     literal spelling was accepted and classified. Both are run over the same data
@@ -357,7 +357,7 @@ def test_data_reducer_bound_agrees_with_the_literal_spelling(decidb_cli):
     reduced = _by_group(*decidb_cli.execute(data.format(bound="MAX(cap)")))
     literal = _by_group(*decidb_cli.execute(data.format(bound="1e1000::DOUBLE")))
     assert reduced == literal, \
-        f"data reducer and literal disagree: {reduced} vs {literal}"
+        f"data aggregate and literal disagree: {reduced} vs {literal}"
     # Both vacuous, so nothing but `x <= 6` is left holding x down.
     assert reduced == {0: [6, 6], 1: [6, 6]}
 
@@ -415,7 +415,7 @@ def test_data_reducer_bound_is_classified_per_group(decidb_cli, oracle_solver):
 @pytest.mark.when_constraint
 @pytest.mark.edge_case
 def test_data_reducer_ignores_an_infinity_it_never_reads(decidb_cli):
-    """A row the reducer's own ``WHEN`` excludes cannot poison the bound.
+    """A row the aggregate's own ``WHEN`` excludes cannot poison the bound.
 
     The guard ran during extraction, ahead of the ``WHEN`` mask and the
     relation-qualified dedup, so it judged rows that go on to contribute to
@@ -470,10 +470,10 @@ def test_data_reducer_unreachable_bound_is_infeasible(decidb_cli):
 @pytest.mark.edge_case
 @pytest.mark.error
 def test_nan_from_reducer_arithmetic_is_still_rejected(decidb_cli):
-    """Relaxing the reducer's guard must not let NaN through with the infinities.
+    """Relaxing the aggregate's guard must not let NaN through with the infinities.
 
     ``MAX(cap) + MIN(cap)`` over a group holding both signs is ``inf + -inf``.
-    The reducer now hands both values on, and the per-row extraction that reads
+    The aggregate now hands both values on, and the per-row extraction that reads
     the combined bound back is where the NaN is caught — so the relaxation costs
     nothing here.
     """

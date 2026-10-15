@@ -1291,7 +1291,7 @@ def test_a1_duplicate_rows_stay_separate_rows(decidb_cli):
 # A lower bound written as "no bound" (1e30 or more in magnitude) is read as no bound
 # ---------------------------------------------------------------------------
 #
-# Both paths fold unconditional bounds into a decision's box with one function (`DecideAbsorbBound`). A lower bound that
+# Both paths fold unconditional bounds into a decision's box with one function (`DecideFoldSingletonRow`). A lower bound that
 # was written is a bound even when it is -1e30 or below: it removes the default floor of 0, as -1e29 does, and leaves the
 # decision unbounded below. Only a decision with no lower bound written at all keeps the floor.
 LOWER_BOUND_AS_NO_BOUND_CASES = {

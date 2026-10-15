@@ -22,10 +22,10 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
 - **Default box.** `BOOL` is [0, 1]; `INT` and `REAL` are [0, ∞). A bare unconditional constant lower bound (`x >= -3`)
   replaces the default 0 on the solver, so it does here. Every other lower bound (a column, a `WHEN`, a coefficient or
   offset on `x`, an arithmetic constant such as `0 - 3`) only intersects with it. The solver and direct solve ask one
-  shared predicate which clauses are folded into the variable (`DecideBoundIsAbsorbed`, surfaced as
-  `DirectConstraintFact::variable_bound`), and combine the folded values with one function (`DecideAbsorbBound`), so they
-  cannot disagree. A bound of magnitude 1e20 or more is no bound, as on the solver, including a written -1e30; an
-  infinite data value is no bound on that side.
+  shared predicate which clauses are folded into the variable (`DecideIsSingletonRowBound`, surfaced as
+  `DirectConstraintFact::variable_bound`), and combine the folded values with one function (`DecideFoldSingletonRow`),
+  so they cannot disagree. A bound of magnitude 1e20 or more is no bound, as on the solver, including a written -1e30;
+  an infinite data value is no bound on that side.
 - **Whole-number rounding.** `INT` and `BOOL` bounds round inward, strict bounds included, and the rounding is tested
   in `DOUBLE` arithmetic against the clause as written, so `0.1*x <= 0.3` does not lose an integer to a quotient that
   rounds the wrong way. A strict bound against a fraction (`x > 0.5`, `x < 2.5`, no `WHEN`) rounds to the first whole

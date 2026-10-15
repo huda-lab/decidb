@@ -141,7 +141,7 @@ class TestCaseExpressionRejection:
         decidb_cli.assert_error(sql, match=self._FRIENDLY)
 
     def test_case_outside_a_reducer_shares_the_friendly_message(self, decidb_cli):
-        """A CASE written outside any reducer used to miss the friendly arm.
+        """A CASE written outside any aggregate used to miss the friendly arm.
 
         Every case above puts the CASE inside SUM/AVG/MIN/MAX, which routes
         through `ValidateSumArgument`. A CASE sitting directly in the

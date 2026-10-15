@@ -1,7 +1,7 @@
 add_library_unity(
   duckdb_optimizer_decide
   OBJECT
-  decide_bound_absorption.cpp
+  decide_singleton_row_folding.cpp
   decide_linear_form.cpp
   decide_optimizer.cpp
   decide_rewrite_abs.cpp

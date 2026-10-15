@@ -44,7 +44,7 @@ struct DirectIRDecision {
 	idx_t entity_scope = DConstants::INVALID_INDEX;
 };
 
-//! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or a reducer qualifier
+//! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or an aggregate qualifier
 //! (`SUM(D: e)`).
 struct DirectIREntityScope {
 	vector<idx_t> relations;
@@ -53,8 +53,8 @@ struct DirectIREntityScope {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 };
 
-enum class DirectReducer : uint8_t {
-	//! A row-level part: per-row constraint algebra, or a query-wide decision beside reducers.
+enum class DirectAggregate : uint8_t {
+	//! A row-level part: per-row constraint algebra, or a query-wide decision beside aggregates.
 	NONE,
 	SUM,
 	AVG,
@@ -62,20 +62,20 @@ enum class DirectReducer : uint8_t {
 	MAX
 };
 
-//! One additive part of a constraint's left side or of the objective: `sign * scale * reducer(terms)`.
+//! One additive part of a constraint's left side or of the objective: `sign * scale * aggregate(terms)`.
 struct DirectPart {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 	string reason;
 	int sign = 1;
-	//! A query-wide factor canonicalization left on the reducer; null for none.
+	//! A query-wide factor canonicalization left on the aggregate; null for none.
 	unique_ptr<Expression> scale;
 	bool scale_divides = false;
-	DirectReducer reducer = DirectReducer::NONE;
+	DirectAggregate aggregate = DirectAggregate::NONE;
 	//! Aggregate-local WHEN.
 	unique_ptr<Expression> filter;
-	//! Entity scope the reducer is qualified by (`SUM(D: e)`), or INVALID_INDEX.
+	//! Entity scope the aggregate is qualified by (`SUM(D: e)`), or INVALID_INDEX.
 	idx_t qualifier = DConstants::INVALID_INDEX;
-	//! The body's terms. Empty when `inner` holds a nested reducer (`OUTER(INNER(e)) PER k` objectives).
+	//! The body's terms. Empty when `inner` holds a nested aggregate (`OUTER(INNER(e)) PER k` objectives).
 	vector<DecideSplitTerm> terms;
 	unique_ptr<DirectPart> inner;
 };
@@ -101,7 +101,7 @@ struct DirectIRConstraint {
 	ExpressionType comparison = ExpressionType::INVALID;
 	vector<DirectPart> lhs;
 	unique_ptr<Expression> rhs;
-	//! True when the solver path folds this clause into its decision's box (see DecideBoundIsAbsorbed): an
+	//! True when the solver path folds this clause into its decision's box (see DecideIsSingletonRowBound): an
 	//! unconditional comparison of one bare decision against a finite constant. Such a bound replaces the variable's
 	//! default lower bound of 0, where every other bound only intersects with it.
 	bool variable_bound = false;

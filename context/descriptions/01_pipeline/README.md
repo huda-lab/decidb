@@ -30,9 +30,9 @@ Cross-cutting issues that do not belong to a single stage live in
 | # | Stage | Owns | Primary source |
 |---|---|---|---|
 | 01 | [parser/](01_parser/) | Grammar, DECIDE `WHEN` lexing, the transformer, source-preserving parsed validation | `third_party/libpg_query/grammar/statements/select.y`, `src/planner/binder/query_node/bind_select_node.cpp` |
-| 02 | [binder/](02_binder/) | Variable declarations, scope, types, polynomial degree, reducer recognition, DECIDE validity | `src/planner/expression_binder/decide_*.cpp` |
+| 02 | [binder/](02_binder/) | Variable declarations, scope, types, polynomial degree, aggregate recognition, DECIDE validity | `src/planner/expression_binder/decide_*.cpp` |
 | 03 | [logical_plan/](03_logical_plan/) | `LogicalDecide`, subquery flattening and provenance, `AddConstraint` / `SetObjective`, serialization | `src/planner/operator/decide/logical_decide.cpp`, `src/planner/binder/query_node/plan_select_node.cpp` |
-| 04 | [canonicalizer/](04_canonicalizer/) | The one shape boundary: decisions left, bound right, one spelling for a reducer scale, C0–C7 / O0–O5 | `src/planner/decide/decide_canonicalizer.cpp` |
+| 04 | [canonicalizer/](04_canonicalizer/) | The one shape boundary: decisions left, bound right, one spelling for an aggregate scale, C0–C7 / O0–O5 | `src/planner/decide/decide_canonicalizer.cpp` |
 | 05 | [optimizer/](05_optimizer/) | Formulation choice: NORM, DECIDE-variable IN, ABS, MIN/MAX easy/hard, AVG→SUM, `<>`, bilinear McCormick, composed MIN/MAX | `src/optimizer/decide/decide_optimizer.cpp` |
 | 06 | [model_formulation/](06_model_formulation/) | `SolverInput` → `SolverModel`: variable layout, coefficient accumulation, bounds | `src/decidb/formulation/ilp_model_builder.cpp` |
 | 07 | [solver/](07_solver/) | Backend dispatch, Gurobi and HiGHS translation, status normalization, time limits | `src/decidb/solver/ilp_solver.cpp`, `src/decidb/gurobi/` |
@@ -47,7 +47,7 @@ SQL text
    |  01 parser — grammar, DECIDE WHEN gating, transformer, desugaring
    v
 parsed SelectNode with decide_variables / decide_constraints / decide_objective
-   |  02 binder — names, scopes, types, degree, reducers; produces bound expressions
+   |  02 binder — names, scopes, types, degree, aggregates; produces bound expressions
    v
 BoundSelectNode
    |  03 logical plan — PlanSubqueries, correlation provenance

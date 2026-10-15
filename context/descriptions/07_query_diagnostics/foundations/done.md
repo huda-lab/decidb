@@ -331,7 +331,7 @@ inline branches in `PhysicalDecide::Finalize`.
   that keeps the elastic-infeasible verdict honest when a user bound could not be
   re-emitted. The flag is computed by the operator's re-emission loop: it turns `true`
   only if a recorded bound's column is missing from the retained model — expected never
-  in practice, since every absorbed user bound is re-emitted (multi-instance bounds as a
+  in practice, since every folded user bound is re-emitted (multi-instance bounds as a
   shared-slack block per I2.a, BOOLEAN pins like `x <= 0` / `x >= 1` / `x = 1` with the
   column opened only to its intrinsic `[0,1]`). Only bounds that merely restate a
   variable's intrinsic domain (the BOOLEAN 0/1 box, default non-negativity) are excluded

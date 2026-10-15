@@ -219,7 +219,7 @@ struct EvaluatedConstraint {
     //! symbolically instead of dumping the per-row numeric fan-out. Empty entries (constant
     //! coefficients / non-aggregate rows) fall back to the numeric reconstruction.
     vector<string> coefficient_labels;
-    //! Parallel to variable_indices. Records which canonical reducer owns each
+    //! Parallel to variable_indices. Records which canonical aggregate owns each
     //! linear term so fixed LHS offsets cannot silently acquire generic SUM semantics.
     vector<LinearTermReduction> linear_term_reductions;
     CoefficientColumn rhs_values;                // RHS column (logical size = num_rows)
@@ -336,7 +336,7 @@ struct EvaluatedConstraint {
 };
 
 //! Sum decision-free LHS terms over a row range after checking that each one is
-//! explicitly owned by a canonical SUM reducer.
+//! explicitly owned by a canonical SUM aggregate.
 double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
                                   const vector<idx_t> *rows, idx_t begin, idx_t end,
                                   const char *error_context);
@@ -459,10 +459,10 @@ struct SolverInput {
     //! intrinsic domain (BOOLEAN 0/1, default non-negativity) and nothing else.
     //!
     //! `lower_bounds` / `upper_bounds` above accumulate three different things — the
-    //! intrinsic domain, user bounds absorbed into the box by stage 05, and implied
+    //! intrinsic domain, user bounds folded into the box by stage 05, and implied
     //! tightenings derived by `DecidePropagateImpliedBounds`. The last two are backed by
     //! rows the elastic engine may loosen, and it reverts them for exactly that reason
-    //! (see the `user_absorbed_bounds` re-emission in `PhysicalDecide::Finalize`), so a
+    //! (see the `user_singleton_row_bounds` re-emission in `PhysicalDecide::Finalize`), so a
     //! rewrite that bakes one into a constraint's *structure* cannot be reverted with it
     //! and would misstate the query under repair.
     //!
@@ -498,8 +498,8 @@ struct SolverInput {
     // Linear objective
     vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows
     vector<idx_t> objective_variable_indices;          // [term_idx]
-    //! [term_idx] SUM when the term came from inside a reducer (its coefficient is a sum
-    //! over the counted rows); NONE for a query-wide decision standing beside a reducer,
+    //! [term_idx] SUM when the term came from inside an aggregate (its coefficient is a sum
+    //! over the counted rows); NONE for a query-wide decision standing beside an aggregate,
     //! whose coefficient is a single row-invariant value. Distinguishes `SUM(cost * cap)`
     //! (contributes once per counted row) from `SUM(x) + cap` (contributes once). Mirrors
     //! EvaluatedConstraint::linear_term_reductions on the constraint side.
@@ -568,7 +568,7 @@ struct SolverInput {
         //! ConstraintProvenance::indicator_col). This describes the disjunction;
         //! `removal_group_id` independently groups all descendants for DROP.
         idx_t indicator_col = DConstants::INVALID_INDEX;
-        //! PER/WHEN group id, its printable key, the reducer qualifier text, and whether
+        //! PER/WHEN group id, its printable key, the aggregate qualifier text, and whether
         //! the clause's LHS was an aggregate — the display half of the provenance every
         //! row carries. A per-row clause emitted through `EvaluatedConstraint` gets these
         //! from its `row_group_ids` / `group_labels` / `qualifier`; a clause emitted in
@@ -653,11 +653,11 @@ struct SolverInput {
 //! explicitly, so "which box is this constant valid for?" has an answer at the call site.
 //!
 //! `OfSolvedModel(input)` is the box the solved model declares — the intrinsic domain,
-//! user bounds absorbed by stage 05, and implied tightenings. It is exactly what those
+//! user bounds folded by stage 05, and implied tightenings. It is exactly what those
 //! sites read before, so threading it through changes no constant.
 //!
 //! `OfSolvedModel` is also how the SECOND formulation names its box. A diagnosis widens
-//! the absorbed bounds and re-runs `PhysicalDecide::FormulateModel` on a copy of the
+//! the singleton-row bounds and re-runs `PhysicalDecide::FormulateModel` on a copy of the
 //! input, so every constant is derived against the box the repair actually searches
 //! rather than inherited from the narrower one. That widening is bounded on purpose: no
 //! finite Big-M dominates an open column, so a fully re-opened box does not lose

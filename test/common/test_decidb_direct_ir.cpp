@@ -289,9 +289,9 @@ TEST_CASE("Direct-solve IR models every decision domain and scope", "[decidb]") 
 	REQUIRE(ir.entity_scopes.size() == 1);
 	REQUIRE(ir.entity_scopes[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(!ir.entity_scopes[0].key_slots.empty());
-	// The query-wide decision is a row-level part beside the reducers.
+	// The query-wide decision is a row-level part beside the aggregates.
 	REQUIRE(ir.objective.parts.size() == 5);
-	REQUIRE(ir.objective.parts[3].reducer == DirectReducer::NONE);
+	REQUIRE(ir.objective.parts[3].aggregate == DirectAggregate::NONE);
 }
 
 TEST_CASE("Direct-solve IR models comparisons, membership, and right-hand sides", "[decidb]") {
@@ -310,7 +310,7 @@ TEST_CASE("Direct-solve IR models comparisons, membership, and right-hand sides"
 	// One constraint per row, holding both decisions.
 	REQUIRE(!constraints[0].aggregate);
 	REQUIRE(constraints[0].lhs.size() == 1);
-	REQUIRE(constraints[0].lhs[0].reducer == DirectReducer::NONE);
+	REQUIRE(constraints[0].lhs[0].aggregate == DirectAggregate::NONE);
 	REQUIRE(constraints[0].lhs[0].terms.size() == 2);
 	REQUIRE(constraints[1].comparison == ExpressionType::COMPARE_NOTEQUAL);
 	REQUIRE(constraints[2].comparison == ExpressionType::COMPARE_IN);
@@ -321,7 +321,7 @@ TEST_CASE("Direct-solve IR models comparisons, membership, and right-hand sides"
 	REQUIRE(constraints[6].comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO);
 }
 
-TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norms", "[decidb]") {
+TEST_CASE("Direct-solve IR models aggregates, filters, qualifiers, scales and norms", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	QueryIR query(con, IRQuery("t.x(INT), y(INT)",
@@ -332,13 +332,13 @@ TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norm
 	auto &constraints = query.ir.constraints;
 	REQUIRE(constraints.size() == 8);
 	for (idx_t i = 0; i < constraints.size(); i++) {
-		// `norm(y, 0)` needs indicator variables: it reads as a not-proved part, not as a reducer.
+		// `norm(y, 0)` needs indicator variables: it reads as a not-proved part, not as an aggregate.
 		REQUIRE(constraints[i].status == (i == 6 ? DirectAnalysisStatus::NOT_PROVED : DirectAnalysisStatus::PROVED));
 		REQUIRE(constraints[i].lhs.size() == 1);
 	}
-	REQUIRE(constraints[0].lhs[0].reducer == DirectReducer::AVG);
-	REQUIRE(constraints[1].lhs[0].reducer == DirectReducer::MIN);
-	REQUIRE(constraints[2].lhs[0].reducer == DirectReducer::MAX);
+	REQUIRE(constraints[0].lhs[0].aggregate == DirectAggregate::AVG);
+	REQUIRE(constraints[1].lhs[0].aggregate == DirectAggregate::MIN);
+	REQUIRE(constraints[2].lhs[0].aggregate == DirectAggregate::MAX);
 	REQUIRE(constraints[3].lhs[0].filter != nullptr);
 	REQUIRE(constraints[4].lhs[0].qualifier == 0);
 	REQUIRE(constraints[5].lhs[0].scale != nullptr);
@@ -346,7 +346,7 @@ TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norm
 	REQUIRE(constraints[6].lhs[0].reason == "norm of order 0 is not modelled");
 	REQUIRE(constraints[6].reason == constraints[6].lhs[0].reason);
 	// L1 reads as its definition: SUM of an absolute value.
-	REQUIRE(constraints[7].lhs[0].reducer == DirectReducer::SUM);
+	REQUIRE(constraints[7].lhs[0].aggregate == DirectAggregate::SUM);
 	REQUIRE(constraints[7].lhs[0].terms.size() == 1);
 	REQUIRE(constraints[7].lhs[0].terms[0].kind == DecideTermKind::ABS);
 }
@@ -369,7 +369,7 @@ TEST_CASE("Direct-solve IR reads an unexpected norm tag as a not-proved part, ne
 	}
 }
 
-TEST_CASE("Direct-solve IR models products, squares, and nested objective reducers", "[decidb]") {
+TEST_CASE("Direct-solve IR models products, squares, and nested objective aggregates", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	QueryIR products(con,
@@ -383,9 +383,9 @@ TEST_CASE("Direct-solve IR models products, squares, and nested objective reduce
 	QueryIR nested(con, IRQuery("x(INT)", "x <= 3", "MINIMIZE SUM(MAX(w*x)) PER id"));
 	auto &parts = nested.ir.objective.parts;
 	REQUIRE(parts.size() == 1);
-	REQUIRE(parts[0].reducer == DirectReducer::SUM);
+	REQUIRE(parts[0].aggregate == DirectAggregate::SUM);
 	REQUIRE(parts[0].inner != nullptr);
-	REQUIRE(parts[0].inner->reducer == DirectReducer::MAX);
+	REQUIRE(parts[0].inner->aggregate == DirectAggregate::MAX);
 	REQUIRE(parts[0].terms.empty());
 }
 
@@ -407,7 +407,7 @@ TEST_CASE("Direct-solve IR says which bounds the solver folds into a variable's 
 	DuckDB db(nullptr);
 	Connection con(db);
 
-	// One decision, constraints that each produce one IR node in order; `expected` is the solver's absorption of each.
+	// One decision, constraints that each produce one IR node in order; `expected` is the solver's folding of each.
 	auto check = [&](const string &declaration, const string &constraints, duckdb::vector<bool> expected) {
 		QueryIR query(con, IRQuery(declaration, constraints, "MINIMIZE SUM(x)"));
 		auto &ir = query.ir;

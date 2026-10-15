@@ -51,7 +51,7 @@ Stage numbers refer to [`README.md`](README.md).
 | Path | Stage | Contents |
 |---|---|---|
 | `parser/decide/decide_parse_hints.cpp` | 01 | DECIDE-aware parse-error hint |
-| `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, degree, reducers, qualified reducers |
+| `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, degree, aggregates, qualified aggregates |
 | `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective |
 | `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarations, scopes, scoped-variable spelling, and the `SUCH THAT` / objective binds |
@@ -69,7 +69,7 @@ Stage numbers refer to [`README.md`](README.md).
 | `optimizer/decide/decide_rewrite_abs.cpp` | 05 | ABS Big-M tagging and linearization |
 | `optimizer/decide/decide_rewrite_minmax.cpp` | 05 | MIN/MAX, plain and composed |
 | `optimizer/decide/decide_rewrite_bilinear.cpp` | 05 | Bilinear McCormick |
-| `optimizer/decide/decide_bound_absorption.cpp` | 05 | Literal bounds folded into column boxes |
+| `optimizer/decide/decide_singleton_row_folding.cpp` | 05 | Literal bounds folded into column boxes |
 | `optimizer/decide/decide_linear_form.cpp` | 05 | Flattens every constraint and the objective into `decide.prepared`; must run last |
 | `optimizer/decide/decide_solver_gate.cpp` | 05 | `ChooseDecideSolver`, `DeriveDecideModelClass`, `RequireDecideSolverSupport` |
 | `execution/column_binding_resolver.cpp` | 03 | The `LOGICAL_DECIDE` case, with `ignored_bindings` |
@@ -113,7 +113,7 @@ classDiagram
         +BindAggregate()
         +BindFunction()
         +BindLocalWhenAggregate()
-        +BindQualifiedReducer()
+        +BindQualifiedAggregate()
     }
     class DecideConstraintsBinder {
         +BindComparison()
@@ -198,7 +198,7 @@ classDiagram
 - **`ValidateSumArgument()`** — linear (or optionally quadratic) combination check.
 - **`DecideDegreeInternal()`** — polynomial degree, not occurrence count.
 - **`ValidateDecideNoExplicitDecisionCasts()`** — the cast authorship boundary.
-- **`BindLocalWhenAggregate()` / `BindQualifiedReducer()`**.
+- **`BindLocalWhenAggregate()` / `BindQualifiedAggregate()`**.
 
 ### `src/planner/decide/decide_canonicalizer.cpp` — stage 04
 - **`CanonicalizeTree()` / `CanonicalizeComparison()` / `CanonicalizeObjective()`** — pure.
@@ -215,7 +215,7 @@ constraint.
 - **`IsWhenConstraintWrapper()` / `IsPerConstraintWrapper()` / `IsConstraintWrapper()`
   / `IsConstraintChild()`** — the predicates. Every site that walks a bound
   constraint tree asks these, including the few that deliberately act differently
-  on the answer: bound absorption refuses to descend into a WHEN, and the MIN/MAX
+  on the answer: singleton-row folding refuses to descend into a WHEN, and the MIN/MAX
   rewrite strips a PER as it goes. They bring their own descent, not their own
   definition of a wrapper, so a new wrapper kind is a one-line change here.
 - **`VisitConstraintTree()`** — parents before children, skipping metadata, with a
@@ -242,12 +242,12 @@ constraint.
 
 ### `src/optimizer/decide/decide_optimizer.cpp` — stage 05
 - **`OptimizeDecide()`** — the eight-pass sequence. Each pass body lives in a
-  `decide_rewrite_*.cpp` sibling (or `decide_bound_absorption.cpp`); this file keeps
+  `decide_rewrite_*.cpp` sibling (or `decide_singleton_row_folding.cpp`); this file keeps
   the dispatcher, `AppendConstraint`, and the helpers the passes share, declared in
   `decide_optimizer_internal.hpp`.
 
 ### `src/execution/operator/decide/physical_decide.cpp` — stage 08
-- **`GetGlobalSinkState()`** — constructs the sink state, which absorbs bounds and
+- **`GetGlobalSinkState()`** — constructs the sink state, which folds bounds and
   extracts terms before any data arrives.
 - **`Sink()` / `Combine()`** — materialize into a `ColumnDataCollection`.
 - **`Finalize()`** — entity mappings, coefficient evaluation, model build, solve.

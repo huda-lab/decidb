@@ -25,8 +25,8 @@
 
 namespace duckdb {
 
-//! The solver model's "no bound" value: a column bound of -1e30 or 1e30, and the unset side of an absorbed bound. The
-//! builder writes it, and every backend reads it as infinite.
+//! The solver model's "no bound" value: a column bound of -1e30 or 1e30, and the unset side of a singleton-row bound.
+//! The builder writes it, and every backend reads it as infinite.
 constexpr double DECIDE_SOLVER_INFINITY = 1e30;
 
 //! A finite bound at or beyond this magnitude is read as infinite (the variable is unbounded in that direction). It is
@@ -63,7 +63,7 @@ inline bool DecideIsWithinExactRange(double value) {
 //! The inclusive bound a strict `>` (`is_lower`) or `<` against `k` means on a whole-numbered decision: the first whole
 //! value above `k` (`floor(k) + 1`) or below it (`ceil(k) - 1`). `x > 0.5` is `x >= 1` and `x < 2.5` is `x <= 2`, while
 //! `x > 1` is `x >= 2` and `x < 3` is `x <= 2`. Moving the bound a whole unit before rounding is wrong against a
-//! fraction. The solver's absorption, its model builder (linear and quadratic rows) and direct solve all take the shift
+//! fraction. The solver's folding, its model builder (linear and quadratic rows) and direct solve all take the shift
 //! from here so that they cannot disagree.
 inline double DecideStrictBound(bool is_lower, double k) {
 	return is_lower ? std::floor(k) + 1.0 : std::ceil(k) - 1.0;
@@ -86,8 +86,8 @@ struct DecideBoundBox {
 
 //! Folds one bound into a decision's box: `sense` is '<' (an upper bound), '>' (a lower bound) or '=' (both), `k` the
 //! raw value. Each side keeps the tightest value written. This is the one place that says how bounds combine; the
-//! solver's absorption pass, the elastic engine's retained box and direct solve's A1 rule all call it.
-inline void DecideAbsorbBound(DecideBoundBox &box, char sense, double k) {
+//! solver's folding pass, the elastic engine's retained box and direct solve's A1 rule all call it.
+inline void DecideFoldSingletonRow(DecideBoundBox &box, char sense, double k) {
 	if (sense != '>') {
 		box.upper = std::min(box.upper, k);
 	}

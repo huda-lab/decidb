@@ -54,7 +54,7 @@ constexpr uint32_t DIRECT_CONSTANT = FOLD_STABLE | FOLD_CATCH_DUCKDB_ERRORS;
 //! The same, for a numeric constant that must also be finite and survive a round trip through DOUBLE.
 constexpr uint32_t DIRECT_FINITE_CONSTANT = DIRECT_CONSTANT | FOLD_EXACT_FINITE;
 
-//! The factor a query-wide `2 * SUM(...)` or `SUM(...) / 2` puts on a reducer: 1 without one. False unless it is a
+//! The factor a query-wide `2 * SUM(...)` or `SUM(...) / 2` puts on an aggregate: 1 without one. False unless it is a
 //! finite foldable constant, and nonzero when it divides.
 bool DirectPartScale(ClientContext &context, const DirectPart &part, double &scale);
 

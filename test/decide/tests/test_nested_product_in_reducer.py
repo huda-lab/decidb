@@ -1,4 +1,4 @@
-"""A product with an additive factor inside a reducer body: ``SUM(q * (price + x))``.
+"""A product with an additive factor inside an aggregate body: ``SUM(q * (price + x))``.
 
 The physical layer cannot hand such a body to the coefficient classifier as written —
 ``(price + x)`` is neither a data factor nor a bare decision variable — so it
@@ -203,13 +203,13 @@ def test_nested_product_subtraction(decidb_cli, oracle_solver, perf_tracker):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_nested_product_scaled_reducer(decidb_cli):
-    """``2 * SUM(q*(price+x)) <= 36`` — a scaled reducer over the same body.
+    """``2 * SUM(q*(price+x)) <= 36`` — a scaled aggregate over the same body.
 
     When this was written, the parsed-level simplifier distributed such a body before
-    binding, which is why the bug hid for so long; a scaled reducer was one of the
+    binding, which is why the bug hid for so long; a scaled aggregate was one of the
     shapes it declined, so this reached the rebuild from a second direction. That layer
     was deleted at the canonicalization refactor, so every test in this file now reaches the
-    rebuild directly. Kept because the scaled-reducer path multiplies the factor in at
+    rebuild directly. Kept because the scaled-aggregate path multiplies the factor in at
     the physical layer, which the others do not exercise.
 
     ``2 * (14 + SUM(q*x)) <= 36`` is ``SUM(q*x) <= 4`` — the same model as

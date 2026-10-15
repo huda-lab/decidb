@@ -20,7 +20,7 @@ _OBJECTIVES = {
 }
 
 
-_NORM_REDUCERS = ["norm(x, 'inf')", "norm(x, 1)", "norm(x, 0)"]
+_NORM_AGGREGATES = ["norm(x, 'inf')", "norm(x, 1)", "norm(x, 0)"]
 
 
 _NORM_OBJECTIVES = {
@@ -91,8 +91,8 @@ def _fuzz_query(rng, with_objective=True):
         )
         if op == "=" and ("cap" in bound or "COUNT" in bound):
             bound = str(rng.randint(0, 3))
-        reducer = rng.choice(_NORM_REDUCERS) if near_miss == "clause" and index == 0 else "SUM(x)"
-        aggregate = f"{reducer} WHEN flag" if style == "local" else reducer
+        bare_aggregate = rng.choice(_NORM_AGGREGATES) if near_miss == "clause" and index == 0 else "SUM(x)"
+        aggregate = f"{bare_aggregate} WHEN flag" if style == "local" else bare_aggregate
         scope = " ".join(part for part in ("WHEN flag" if style == "top" else "", per) if part)
         clauses.append(f"{aggregate} {op} {bound} {scope}".strip())
     if rng.random() < 0.25:

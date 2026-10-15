@@ -15,7 +15,7 @@
  *   the identical PGDecideClause via makeDecideClause(), so bison's default
  *   shift is correct and the resolution is not load-bearing.
  * Aggregate-local WHEN_DECIDE conflicts are resolved explicitly: the empty
- * within_group_clause and the plain relation-qualified reducer use
+ * within_group_clause and the plain relation-qualified aggregate use
  * DECIDE_ITEM precedence, below both DECIDE WHEN tokens, so the parser shifts
  * WHEN. They are keyed on tokens base_yylex() emits only inside DECIDE.
  */

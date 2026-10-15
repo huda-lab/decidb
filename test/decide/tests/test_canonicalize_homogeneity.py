@@ -1,13 +1,13 @@
 """Aggregate/per-row homogeneity at the canonicalization boundary.
 
-A reducer anywhere in a comparison makes the comparison aggregate-shaped.  A
+An aggregate anywhere in a comparison makes the comparison aggregate-shaped.  A
 bare decision term beside it is legal only when that decision is one value for
-the whole query.  Row- and entity-scoped decisions must occur inside a reducer;
+the whole query.  Row- and entity-scoped decisions must occur inside an aggregate;
 otherwise no single solver value exists to compare with the reduced number.
 
 These tests also pin error ownership.  Unsupported mixtures are binder/planning
 errors with SQL-level guidance, never late physical-extractor errors.  ``PER``
-uses the same validated classification, so a data-only reducer cannot disguise
+uses the same validated classification, so a data-only aggregate cannot disguise
 a per-row decision constraint as aggregate.
 """
 
@@ -18,7 +18,7 @@ import pytest
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_query_wide_decision_beside_data_reducer(decidb_cli):
-    """A scalar decision is row-invariant and may sit beside a data reducer."""
+    """A scalar decision is row-invariant and may sit beside a data aggregate."""
     rows, cols = decidb_cli.execute("""
         SELECT id, p, s
         FROM (VALUES (1, 1), (2, 2), (3, 3)) t(id, p)
@@ -51,7 +51,7 @@ def test_query_wide_decision_beside_per_data_reducer(decidb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_row_scoped_decision_inside_reducer_remains_legal(decidb_cli):
-    """Row scope is legal when the reducer owns the row-to-one collapse."""
+    """Row scope is legal when the aggregate owns the row-to-one collapse."""
     rows, cols = decidb_cli.execute("""
         SELECT id, p, x
         FROM (VALUES (1, 1), (2, 2), (3, 3)) t(id, p)
@@ -75,7 +75,7 @@ def test_row_scoped_decision_beside_data_reducer_rejected(decidb_cli):
         DECIDE x(INT)
         SUCH THAT SUM(p) + x <= 10
         MAXIMIZE SUM(x)
-    """, match=r"Binder Error: DECIDE constraint.*row-scoped.*'x'.*outside.*(?:reducer|SUM)")
+    """, match=r"Binder Error: DECIDE constraint.*row-scoped.*'x'.*outside.*(?:aggregate|SUM)")
 
 
 @pytest.mark.var_integer
@@ -84,7 +84,7 @@ def test_row_scoped_decision_beside_data_reducer_rejected(decidb_cli):
 @pytest.mark.error_binder
 @pytest.mark.error
 def test_entity_scoped_decision_beside_global_reducer_rejected(decidb_cli):
-    """An entity decision is not one value for a reducer over many entities."""
+    """An entity decision is not one value for an aggregate over many entities."""
     decidb_cli.assert_error("""
         SELECT c.c_custkey, n.n_nationkey, y
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
@@ -92,7 +92,7 @@ def test_entity_scoped_decision_beside_global_reducer_rejected(decidb_cli):
         DECIDE n.y(INT)
         SUCH THAT SUM(c.c_acctbal) + y <= 1000000000 AND y <= 10
         MAXIMIZE SUM(y)
-    """, match=r"Binder Error: DECIDE constraint.*entity-scoped.*'y'.*outside.*(?:reducer|SUM)")
+    """, match=r"Binder Error: DECIDE constraint.*entity-scoped.*'y'.*outside.*(?:aggregate|SUM)")
 
 
 @pytest.mark.var_integer
@@ -107,7 +107,7 @@ def test_row_varying_coefficient_on_scalar_beside_reducer_rejected(decidb_cli):
         DECIDE scalar s(INT)
         SUCH THAT SUM(p) + p * s <= 100
         MAXIMIZE s
-    """, match=r"Binder Error: DECIDE constraint.*varies per row.*outside.*(?:reducer|SUM)")
+    """, match=r"Binder Error: DECIDE constraint.*varies per row.*outside.*(?:aggregate|SUM)")
 
 
 @pytest.mark.var_integer

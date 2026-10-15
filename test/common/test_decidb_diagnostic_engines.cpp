@@ -358,7 +358,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	}
 
 	SECTION("punted multi-instance bound suppresses the elastic-infeasible claim") {
-		// Same rigid conflict, but the operator flagged an absorbed bound it could
+		// Same rigid conflict, but the operator flagged a singleton-row bound it could
 		// not re-emit (I2 scope). The engine must NOT declare it unfixable — it falls
 		// through to the static error (invalid diagnosis) instead.
 		SolverModel model = MakeSingleVarModel({

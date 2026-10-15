@@ -29341,7 +29341,7 @@ yyreduce:
   case 1079:
 #line 3083 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* DecidB: relation-qualified reducer, sum(D: expr) or, qualified by
+					/* DecidB: relation-qualified aggregate, sum(D: expr) or, qualified by
 					 * several relations at once, sum(D, T: expr).
 					 *
 					 * The qualifier is parsed as a func_arg_list rather than as a
@@ -29360,28 +29360,28 @@ yyreduce:
 						if (!IsA((PGNode *) lc->data.ptr_value, PGColumnRef))
 						{
 							ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
-								errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
+								errmsg("the qualifier of an aggregate must be a relation name or alias, as in sum(D: ...)"),
 								parser_errposition((yylsp[(3) - (6)]))));
 						}
 					}
 					PGFuncCall *n = makeFuncCall((yyvsp[(1) - (6)].list), (yyvsp[(5) - (6)].list), (yylsp[(1) - (6)]));
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, (PGNode *) (yyvsp[(3) - (6)].list), (yylsp[(4) - (6)]));
+						PG_AEXPR_QUALIFIED_AGGREGATE, "qualified_aggregate", (PGNode *) n, (PGNode *) (yyvsp[(3) - (6)].list), (yylsp[(4) - (6)]));
 				;}
     break;
 
   case 1080:
 #line 3112 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* DecidB: aggregate-local WHEN on a relation-qualified reducer,
+					/* DecidB: aggregate-local WHEN on a relation-qualified aggregate,
 					 * sum(D: expr) WHEN cond. Mirrors the two productions above: the
 					 * qualifier validation is duplicated (not factored into a shared
-					 * helper) rather than reusing the plain-qualified-reducer action,
+					 * helper) rather than reusing the plain-qualified-aggregate action,
 					 * because bison actions can't call each other directly and this
 					 * file has no C prologue of its own to hang a helper on.
 					 *
 					 * Without this production, `sum(D: expr) WHEN cond` never matches
-					 * here (a qualified reducer is not a func_application, so the
+					 * here (a qualified aggregate is not a func_application, so the
 					 * aggregate-WHEN clause right after `func_application` above cannot
 					 * fire), so the token stream falls to the loose, whole-constraint
 					 * `a_expr WHEN_DECIDE b_expr` production instead, which swallows
@@ -29392,15 +29392,15 @@ yyreduce:
 						if (!IsA((PGNode *) lc->data.ptr_value, PGColumnRef))
 						{
 							ereport(ERROR, (errcode(PG_ERRCODE_SYNTAX_ERROR),
-								errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
+								errmsg("the qualifier of an aggregate must be a relation name or alias, as in sum(D: ...)"),
 								parser_errposition((yylsp[(3) - (7)]))));
 						}
 					}
 					PGFuncCall *n = makeFuncCall((yyvsp[(1) - (7)].list), (yyvsp[(5) - (7)].list), (yylsp[(1) - (7)]));
-					PGNode *qualified_reducer = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer", (PGNode *) n, (PGNode *) (yyvsp[(3) - (7)].list), (yylsp[(4) - (7)]));
+					PGNode *qualified_aggregate = (PGNode *) makeSimpleAExpr(
+						PG_AEXPR_QUALIFIED_AGGREGATE, "qualified_aggregate", (PGNode *) n, (PGNode *) (yyvsp[(3) - (7)].list), (yylsp[(4) - (7)]));
 					(yyval.node) = (PGNode *) makeSimpleAExpr(
-						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", qualified_reducer, (yyvsp[(7) - (7)].node), (yylsp[(7) - (7)]));
+						PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", qualified_aggregate, (yyvsp[(7) - (7)].node), (yylsp[(7) - (7)]));
 				;}
     break;
 

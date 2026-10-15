@@ -230,9 +230,9 @@ static void StampConstraintProvenance(ConstraintProvenance &provenance, const Ev
     }
 }
 
-//! F2, aggregate sites only: reducer-placement metadata for the diagnosis renderer's
+//! F2, aggregate sites only: aggregate-placement metadata for the diagnosis renderer's
 //! SUM(...)-wrapping (Facet B) and WHEN/PER qualifier suffix (Facet C). A per-row
-//! constraint has no reducer and no qualifier text of its own, so this is never called
+//! constraint has no aggregate and no qualifier text of its own, so this is never called
 //! there.
 static void StampAggregateProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const) {
     provenance.is_aggregate = eval_const.lhs_is_aggregate;
@@ -327,7 +327,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     }
 
     // A BOOLEAN-domain variable's bounds are normally exactly [0,1] (the merge above
-    // is a no-op for it — its lower default is already the resolved-absorbed 0, and
+    // is a no-op for it — its lower default is already the resolved, folded 0, and
     // its upper is capped by the type default). But an explicit, unusual user pin that
     // widens past the domain (e.g. `x >= -1` on a declared BOOL) would leave `binary`
     // paired with an out-of-[0,1] bound, which solver backends don't accept. Downgrade
@@ -411,10 +411,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             bool is_reduced_scalar = term_idx < input.objective_term_reductions.size() &&
                                      input.objective_term_reductions[term_idx] == LinearTermReduction::SUM;
             if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
-                // A query-wide decision standing beside a reducer (not inside one) has one
+                // A query-wide decision standing beside an aggregate (not inside one) has one
                 // column and does not vary by row, so its term contributes once rather than
                 // once per row — otherwise the coefficient would be silently multiplied by
-                // the input cardinality. A scalar *inside* a reducer body (`SUM(cost * cap)`)
+                // the input cardinality. A scalar *inside* an aggregate body (`SUM(cost * cap)`)
                 // is marked SUM-reduced and falls through to the per-row loop below instead,
                 // so its coefficient is the sum of every counted row's data.
                 model.obj_coeffs[indexer.Get(decide_var_idx, 0)] += col.Size() > 0 ? col.Get(0) : 1.0;
@@ -652,7 +652,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     };
 
     // Handle constraints whose LHS reduced to 0 (all coefficients cancelled or
-    // all variables absorbed into column bounds). A tautology is dropped; a
+    // all variables folded into column bounds). A tautology is dropped; a
     // violated constant constraint (`0 <= -1`) is KEPT as a coefficient-free row
     // and flags the model, so the whole model still gets built and retained.
     // Keeping the row is what lets the infeasible-diagnosis engine name and relax
@@ -834,11 +834,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                 term_idx < eval_const.linear_term_reductions.size() &&
                                 eval_const.linear_term_reductions[term_idx] == LinearTermReduction::SUM;
                             if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
-                                // A query-wide decision standing beside a reducer (not inside
+                                // A query-wide decision standing beside an aggregate (not inside
                                 // one) has one column and does not vary by row, so its term
                                 // contributes once rather than once per row — otherwise
                                 // `SUM(x) + s <= 8` would silently build `... + n*s`. A scalar
-                                // *inside* a reducer body (`SUM(cost * cap)`) is marked
+                                // *inside* an aggregate body (`SUM(cost * cap)`) is marked
                                 // SUM-reduced and falls through to the per-row loop below
                                 // instead. The objective accumulator makes the same distinction.
                                 auto &col = eval_const.row_coefficients[term_idx];
@@ -948,11 +948,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                 term_idx < eval_const.linear_term_reductions.size() &&
                                 eval_const.linear_term_reductions[term_idx] == LinearTermReduction::SUM;
                             if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
-                                // One column for the whole query, so a scalar beside a reducer
+                                // One column for the whole query, so a scalar beside an aggregate
                                 // (not inside one) enters each group's row once — not once per
                                 // row of that group. Same rule the ungrouped path above applies;
                                 // a PER constraint just has more rows to get it wrong in. A
-                                // scalar *inside* a reducer body is SUM-reduced and falls
+                                // scalar *inside* an aggregate body is SUM-reduced and falls
                                 // through to the per-row loop below, summing the whole group.
                                 accum.Add(static_cast<int>(indexer.Get(decide_var_idx, 0)),
                                           col.Size() > 0 ? col.Get(flat_rows[g_begin]) : 1.0);

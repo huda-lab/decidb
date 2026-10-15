@@ -33,7 +33,7 @@ class Optimizer;
 //!     or SUM+indicator, handles objectives (flat and nested PER)
 //!   - RewriteNotEqual: creates indicator variables for <> constraints
 //!   - RewriteAvgToSum: rewrites AVG(expr) → SUM(expr) with alias tag for RHS scaling
-//!   - AbsorbVariableBounds: folds simple `x OP const` bounds into the column box.
+//!   - FoldSingletonRows: folds simple `x OP const` bounds into the column box.
 //!     Must run LAST — see its declaration.
 //!
 class DecideOptimizer {
@@ -65,26 +65,26 @@ private:
 	void FindNotEqualConstraints(Expression &expr, LogicalDecide &decide);
 
 	//! Fold every simple `x OP const` / `x BETWEEN a AND b` constraint into the decision
-	//! column's box (`absorbed_boxes`, combined by `DecideAbsorbBound`) rather than leaving
+	//! column's box (`singleton_row_boxes`, combined by `DecideFoldSingletonRow`) rather than leaving
 	//! it to become a model row: a box is smaller and tighter for the solver than one row
-	//! per data row. Absorbed comparisons are tagged ABSORBED_BOUND_TAG so physical term
-	//! extraction skips them, and recorded in `user_absorbed_bounds` so the infeasible
+	//! per data row. Folded comparisons are tagged SINGLETON_ROW_BOUND_TAG so physical term
+	//! extraction skips them, and recorded in `user_singleton_row_bounds` so the infeasible
 	//! diagnosis can re-emit them as slackable rows.
 	//!
 	//! MUST RUN LAST, after every other pass. RewriteInDomain emits a floor-lowering
-	//! `x >= min_value` for a negative all-constant IN domain, which is itself absorbable;
+	//! `x >= min_value` for a negative all-constant IN domain, which is itself a singleton-row bound;
 	//! run earlier and that floor stays at 0 and the negative domain value silently
 	//! becomes unreachable. Running last also guarantees every auxiliary variable already
 	//! exists, so `is_boolean_var` is complete.
 	//!
 	//! Declines rather than throws. A strict `<` / `>` on a REAL variable has no valid
-	//! absorption, so it is deliberately left as a comparison for the model builder to
+	//! folding, so it is deliberately left as a comparison for the model builder to
 	//! reject with a user-facing message.
-	void AbsorbVariableBounds(LogicalDecide &decide);
+	void FoldSingletonRows(LogicalDecide &decide);
 
-	//! Helper: recursively walk the constraint tree absorbing what it can. WHEN-wrapped
+	//! Helper: recursively walk the constraint tree folding what it can. WHEN-wrapped
 	//! comparisons are conditional, so they never contribute to a global bound.
-	void AbsorbBoundsInExpression(Expression &expr, LogicalDecide &decide);
+	void FoldSingletonRowsInExpression(Expression &expr, LogicalDecide &decide);
 
 	//! Rewrite decision-bearing AVG(expr) aggregates to SUM(expr) with alias tagging.
 	//! Execution scales extracted AVG terms by the active row count.

@@ -20,7 +20,7 @@
 // and the one that got missed would start walking a condition as a constraint.
 //
 // It is stated once here instead. Every site asks the predicate, INCLUDING the
-// handful that deliberately act differently on the answer: bound absorption refuses
+// handful that deliberately act differently on the answer: singleton-row folding refuses
 // to descend into a WHEN at all (a conditional bound must not become a global one),
 // and the MIN/MAX rewrite strips a PER wrapper as it goes. Those pass their own
 // descent but not their own definition of what a wrapper is, which is where the

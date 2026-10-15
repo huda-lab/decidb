@@ -18,7 +18,7 @@
 namespace duckdb {
 
 //! Tracks entity-scope metadata for decision variables scoped to a base table, or
-//! for a reducer qualifier scoped to a set of relations at once (`sum(D, T: e)`).
+//! for an aggregate qualifier scoped to a set of relations at once (`sum(D, T: e)`).
 //! When a variable is declared as "T.x IS BOOLEAN", it has one value per unique
 //! row in table T, not per join result row. A multi-relation qualifier extends the
 //! same idea: its tuple identity is the concatenation of every named relation's
@@ -191,8 +191,8 @@ public:
         int sign;                             // +1 or -1 (from subtraction)
         unique_ptr<Expression> inner_expr;    // The expression inside the aggregate
         unique_ptr<Expression> filter;        // Aggregate-local WHEN filter (optional)
-        //! Factor the canonicalizer peeled off this reducer (`2 * MAX(x*v)`), or nullptr
-        //! for none. It stays OUTSIDE the reducer: MIN/MAX are order statistics, so
+        //! Factor the canonicalizer peeled off this aggregate (`2 * MAX(x*v)`), or nullptr
+        //! for none. It stays OUTSIDE the aggregate: MIN/MAX are order statistics, so
         //! pushing a factor in only commutes for a positive one, and the value may not
         //! be known until the query runs. The physical layer evaluates it once (it is
         //! query-wide by construction) and multiplies it into this term's contribution.
@@ -206,10 +206,10 @@ public:
         //! true when the term was `AGG(...) / scale` rather than `scale * AGG(...)`.
         bool scale_divides = false;
         bool is_easy = true;                  // For MIN/MAX: easy (no Big-M) or hard (indicator).
-        //! Entity scope this term's reducer is qualified by (`SUM(D: ...)`), or
+        //! Entity scope this term's aggregate is qualified by (`SUM(D: ...)`), or
         //! INVALID_INDEX when unqualified. Mirrors `Term::qualifier_scope_idx`; the
         //! physical layer folds the matching de-duplication mask into `filter`'s mask so a
-        //! qualified reducer keeps its identity semantics inside a composed clause.
+        //! qualified aggregate keeps its identity semantics inside a composed clause.
         idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
         //! `inner_expr` flattened into additive terms by BuildDecidePreparedModel, so
         //! the composed emitter reads prepared terms like every other construct rather
@@ -230,7 +230,7 @@ public:
     //! objective is a single aggregate (handled by RewriteMinMaxObjective) or plain linear.
     vector<ComposedMinMaxTerm> composed_minmax_objective_terms;
 
-    // --- Absorbed variable bounds (set by DecideOptimizer::AbsorbVariableBounds) ---
+    // --- Singleton-row variable bounds (set by DecideOptimizer::FoldSingletonRows) ---
 
     //! A user-written simple bound that was folded into a decision column's box instead
     //! of being emitted as a model row. Kept so the infeasible diagnosis can re-emit it
@@ -253,9 +253,9 @@ public:
     //! these into SolverInput instead of re-walking the constraint tree. A box whose
     //! lower side was never written resolves to the default 0 floor; an explicit negative
     //! lower bound (`x >= -5`, `BETWEEN -10 AND 10`, a negative IN minimum) is honored.
-    vector<DecideBoundBox> absorbed_boxes;
-    //! Every absorbed user bound, in absorption order. A BETWEEN contributes two specs.
-    vector<UserBoundSpec> user_absorbed_bounds;
+    vector<DecideBoundBox> singleton_row_boxes;
+    //! Every folded user bound, in folding order. A BETWEEN contributes two specs.
+    vector<UserBoundSpec> user_singleton_row_bounds;
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 

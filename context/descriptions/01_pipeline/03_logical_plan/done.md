@@ -127,7 +127,7 @@ Grouped by who writes it:
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
 `abs_maximize_links`, `aux_var_expressions`, `composed_minmax_constraints`,
 `composed_minmax_objective_terms`, `flat_objective_agg` /
-`flat_objective_is_easy`, the five `per_*` objective fields, the absorbed variable
+`flat_objective_is_easy`, the five `per_*` objective fields, the folded variable
 box, and the prepared linear form.
 
 `optimized` marks the boundary between the first two groups and the third. It is
@@ -253,7 +253,7 @@ from the constructs **this host's** solver declares — the same reason
 `solver_backend_name` and `use_native_constructs` are not serialized (§4). An
 optimized DECIDE plan is an answer computed for one machine, so it declines to be
 copied rather than arriving somewhere else as a formulation that machine cannot
-honor. The composed MIN/MAX terms, the absorbed variable box and the prepared
+honor. The composed MIN/MAX terms, the folded variable box and the prepared
 linear form are all rebuilt from the canonical tree by the optimizer, in
 milliseconds, wherever the plan lands.
 

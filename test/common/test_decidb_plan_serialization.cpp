@@ -98,7 +98,7 @@ TEST_CASE("Parsed DECIDE statements survive ToString and binary round trips", "[
 	    // Whole-constraint WHEN plus multi-column PER.
 	    "SELECT a, b, x FROM t DECIDE x(INT) "
 	    "SUCH THAT SUM(x) <= 2 WHEN (a > 0) PER (a, t.b) AND x BETWEEN 0 AND 2",
-	    // Aggregate-local WHEN and one- and many-relation qualified reducers.
+	    // Aggregate-local WHEN and one- and many-relation qualified aggregates.
 	    "SELECT a, b, x FROM data D CROSS JOIN other T DECIDE D.x(INT) "
 	    "SUCH THAT SUM(D: x) WHEN (a > 0) + AVG(D, T: x) <= 10 "
 	    "MAXIMIZE SUM(D: x) WHEN (b = 2)",
@@ -269,7 +269,7 @@ TEST_CASE("An optimized DECIDE plan refuses to be copied", "[decidb]") {
 	REQUIRE_NO_FAIL(con.Query("INSERT INTO site VALUES (10, 40), (11, 25)"));
 
 	// With the DECIDE optimizer left on, the plan carries a formulation chosen from
-	// this host's solver -- the prepared linear form, the absorbed variable box, the
+	// this host's solver -- the prepared linear form, the folded variable box, the
 	// composed MIN/MAX terms -- none of which is serialized. Copying it would hand
 	// back a plan missing all of it, so it raises instead.
 	auto plan = con.ExtractPlan("SELECT s_key, ship FROM site "

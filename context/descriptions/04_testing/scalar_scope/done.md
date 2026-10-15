@@ -24,11 +24,11 @@ syntax: `00_project_overview/syntax_reference.md` §2.2.
 - **One column regardless of cardinality**
   (`test_scalar_is_one_column_regardless_of_cardinality`) and **the value is
   repeated on every output row** (`test_scalar_value_repeated_on_every_row`).
-- **A row-invariant reducer body is rejected** (`TestScalarReducerRejected`, error
+- **A row-invariant aggregate body is rejected** (`TestScalarReducerRejected`, error
   tier): `SUM(cap)` and `AVG(cap)` in both objective and constraint position. A
   scalar mixed with row-varying data or a row-scoped decision is legal and is
   weighted once per counted row; `test_scalar_var_in_aggregate.py` and the
-  scalar-in-reducer tests in `test_scalar_scope.py` cover that distinction.
+  scalar-in-aggregate tests in `test_scalar_scope.py` cover that distinction.
 - **Grammar** (error tier): a `scalar` with no type, and `scalar T.x(TYPE)`,
   each rejected with a message naming the fix.
 - **`scalar` remains an ordinary identifier**
@@ -40,7 +40,7 @@ syntax: `00_project_overview/syntax_reference.md` §2.2.
   empty relation, exactly as for a row-scoped decision. There is no special case.
 - **Composition with the rewrite-heavy features**, all oracle-verified except the
   `<>` case, which is pinned to an exact value. A scalar cannot appear inside a
-  reducer and objectives must be aggregates, so `ABS` / `POWER` / bilinear reach
+  aggregate and objectives must be aggregates, so `ABS` / `POWER` / bilinear reach
   a scalar only through **per-row constraints** — that is the surface covered:
   `ABS(x - cap) <= 2` (`test_scalar_with_abs_per_row_constraint`),
   `POWER(x - cap, 2) <= 4` (`test_scalar_with_quadratic_constraint`, Gurobi
@@ -49,9 +49,9 @@ syntax: `00_project_overview/syntax_reference.md` §2.2.
   rewrite appends auxiliaries to the global block, which sits immediately above
   the scalar block in `VarIndexer`'s four-block layout — these are the cases
   where a misplaced block boundary would surface.
-- **The scalar's coefficient survives both reducer desugarings**, oracle-verified.
+- **The scalar's coefficient survives both aggregate desugarings**, oracle-verified.
   `norm(e, 1)` becomes `SUM(ABS(e))` and a quadratic objective becomes
-  `SUM(POWER(e, 2))`, so both put the scalar inside a reducer body mixed with
+  `SUM(POWER(e, 2))`, so both put the scalar inside an aggregate body mixed with
   row-varying data and both must pick up the same per-row weighting the plain
   `SUM(data * cap)` path uses.
   - `test_scalar_inside_norm_is_weighted_per_row` —
@@ -82,10 +82,10 @@ syntax: `00_project_overview/syntax_reference.md` §2.2.
 | scalar | row-scoped variable in the same query | ✓ |
 | scalar | row-varying comparison (`ship <= cap`) | ✓ |
 | scalar | bare in objective (`MINIMIZE cap`) | ✓ |
-| scalar | additive beside a reducer (`MINIMIZE 2*cap - SUM(x)`) | ✓ |
+| scalar | additive beside an aggregate (`MINIMIZE 2*cap - SUM(x)`) | ✓ |
 | scalar | JOIN source | ✓ |
 | scalar | split clause order | ✓ (`test_clause_order.py`) |
-| scalar | qualified reducer | ✓ when weighted by qualified-row data; bare row-invariant body rejected |
+| scalar | qualified aggregate | ✓ when weighted by qualified-row data; bare row-invariant body rejected |
 | scalar | empty input | ✓ |
 | scalar | ABS (per-row constraint) | ✓ |
 | scalar | quadratic constraint (QCQP, Gurobi) | ✓ |

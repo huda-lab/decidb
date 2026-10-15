@@ -21,7 +21,7 @@ on `PhysicalDecide`, in call order:
 | `BuildEntityMappings` | 1.5 — entity mappings for table-scoped variables |
 | `EvaluateConstraints` | 2, constraints — appends to `gstate.evaluated_constraints` |
 | `EvaluateObjective` | 2, objective — per-term filters, the `WHEN` mask, and the objective's `PER` grouping |
-| `EvaluateComposedClauses` | 2, composed MIN/MAX — per-row coefficients, reducer factors, `WHEN` masks, constant RHS |
+| `EvaluateComposedClauses` | 2, composed MIN/MAX — per-row coefficients, aggregate factors, `WHEN` masks, constant RHS |
 | `BuildSolverInput` | 3a — assembles `SolverInput`, settles the column box, builds the `VarIndexer` |
 | `FormulateModel` | 3b — derives the constants and emits the rows, against a given box |
 | `FormulateElasticModel` | 3b again, under `DIAGNOSE` only — the same pass against the widened box a repair searches |
@@ -47,7 +47,7 @@ separate objective-side copy.
 
 | # | Where | What |
 |---|---|---|
-| 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the absorbed variable box and alias the prepared linear form |
+| 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
 | 3 | `Finalize` → `BuildEntityMappings` | Build entity mappings for table-scoped variables |
 | 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` | Evaluate coefficients, `WHEN` masks, `PER` groups, RHS values |
@@ -64,13 +64,13 @@ query saw. Concurrent modifications cannot affect a running solve.
 
 ---
 
-## 2. The absorbed variable box
+## 2. The folded variable box
 
 Whether a simple bound (`x <= 10`) becomes a column box or a model row is decided
 at stage 05 — see [`../05_optimizer/done.md`](../05_optimizer/done.md), "Bound
-absorption". This stage consumes that decision and does not re-derive it.
+folding". This stage consumes that decision and does not re-derive it.
 
-The sink state copies `op.absorbed_boxes` and `op.user_absorbed_bounds` in its
+The sink state copies `op.singleton_row_boxes` and `op.user_singleton_row_bounds` in its
 constructor. Three consumers read them:
 
 - `Finalize` copies each box into `SolverInput` through `EffectiveLower`: a decision
@@ -79,10 +79,10 @@ constructor. Three consumers read them:
 - The domain-contradiction guard below reads the box to reject a user bound that
   contradicts a variable's intrinsic domain.
 - The infeasible diagnosis re-emits each `UserBoundSpec` as a loosenable row, after
-  `OpenElasticColumnBox` has re-opened the column it was absorbed into (below).
+  `OpenElasticColumnBox` has re-opened the column it was folded into (below).
 
-Flattening skips any comparison tagged `ABSORBED_BOUND_TAG`, so an
-absorbed bound does not also produce `num_rows` redundant per-row model rows. The
+Flattening skips any comparison tagged `SINGLETON_ROW_BOUND_TAG`, so an
+singleton-row bound does not also produce `num_rows` redundant per-row model rows. The
 comparison itself stays in the tree, which is why `EXPLAIN` still renders the bound
 the user wrote.
 
@@ -91,9 +91,9 @@ the user wrote.
 `OpenElasticColumnBox` turns the solved model's box into the box the elastic model is
 *formulated against*: every direction a repair may loosen is widened, so each is enforced
 only by the loosenable row the diagnosis emits beside it. Both revertible layers move —
-the user bounds stage 05 absorbed, and the tightenings `DecidePropagateImpliedBounds`
+the user bounds stage 05 folded, and the tightenings `DecidePropagateImpliedBounds`
 derived — which is why the test is simply "is this direction narrower than `rigid_*`?":
-propagation only ever narrows, and stage 05's absorption is already re-opened in the
+propagation only ever narrows, and stage 05's folding is already re-opened in the
 rigid snapshot. A BOOLEAN's [0,1] is intrinsic and never widens past it, so a user pin on
 one becomes loosenable while the 0/1 domain stays rigid.
 
@@ -134,7 +134,7 @@ becomes available. Stage 08 invokes it — `DecidePropagateImpliedBounds()` — 
 does not own it: the pass is pure over `SolverInput` and lives at stage 06. See
 [`../06_model_formulation/done.md`](../06_model_formulation/done.md) §9.
 
-The call is ordered here, immediately after the absorbed bounds are resolved and
+The call is ordered here, immediately after the singleton-row bounds are resolved and
 before any Big-M is computed, because every downstream constant depends on the
 tightened box.
 
@@ -173,7 +173,7 @@ materialized rows (PHASE 2), and nothing else. Which variable a term names and w
 multiplies it were settled upstream, where a binder was in scope.
 
 **The shape is asserted, never repaired.** A decision variable on the RHS, a
-non-reducer term in an aggregate LHS, an unrewritten MIN/MAX — each is an internal
+non-aggregate term in an aggregate LHS, an unrewritten MIN/MAX — each is an internal
 invariant failure raised by the flattening pass at plan time, not something
 execution fixes. The structures themselves are documented in
 `src/include/duckdb/planner/decide/decide_prepared_model.hpp`; the algebra that
@@ -212,10 +212,10 @@ The result is an `EntityMapping { num_entities, row_to_entity }` on the
 | `BoundColumnRefExpression` | `BoundReferenceExpression` on `binding.column_index` |
 | `BoundFunctionExpression` | recurse into children, copy `bind_info` |
 | `BoundCastExpression` | recurse into child, re-wrap with `AddCastToType` |
-| `BoundAggregateExpression` | a reference to an extra chunk column holding that reducer's per-group value, cast back to the reducer's own type (see `EvaluateRhsReducerPerGroup`) |
+| `BoundAggregateExpression` | a reference to an extra chunk column holding that aggregate's per-group value, cast back to the aggregate's own type (see `EvaluateRhsAggregatePerGroup`) |
 | anything else | copied as-is |
 
-A reducer reached with no substitution prepared — inside a `WHEN` condition or a
+An aggregate reached with no substitution prepared — inside a `WHEN` condition or a
 coefficient, where it has no meaning — is rejected with `InvalidInputException`.
 
 Results are cached per `Finalize` call, and the cache outlives every
@@ -244,8 +244,8 @@ row or group sum from the RHS.
 
 - **Constant** — extracted once and broadcast.
 - **Expression** — evaluated per row, giving row-varying bounds.
-- **Reducer** — evaluated per group and by reducer kind
-  (`EvaluateRhsReducerPerGroup`).
+- **Aggregate** — evaluated per group and by aggregate kind
+  (`EvaluateRhsAggregatePerGroup`).
 
 The canonical RHS classification decides which: a bound tagged
 `QUERY_WIDE_BOUND_TAG` is a shared scalar; anything with a row-varying component
@@ -286,7 +286,7 @@ SUM(x * a) WHEN active + SUM(x * b) WHEN priority <= 10 PER grp
 `active` filters only the `a` term, `priority` only the `b` term, and `PER grp`
 groups rows participating in at least one.
 
-### Relation-qualified reducers
+### Relation-qualified aggregates
 
 `SUM(D: expr)` asks for one contribution per **tuple identity** of `D`, but the
 join repeats each `D` tuple once per matching row. De-duplication keeps the first
@@ -333,27 +333,27 @@ handled; canonicalization rebuilds `x + v <= K` as `x <= K - v`, which put the *
 bound on the strict path purely because of how it was written.
 
 Two values sit on that path, and both now follow the rule. The row's own bound is
-one. The other is the input of a **bound-side reducer**: `MIN(x) <= MAX(cap) PER g`
-folds a column to one value per group, and `EvaluateRhsReducerPerGroup` extracted
+one. The other is the input of a **bound-side aggregate**: `MIN(x) <= MAX(cap) PER g`
+folds a column to one value per group, and `EvaluateRhsAggregatePerGroup` extracted
 that column strictly, so a single infinite row in `cap` refused the query outright —
 before grouping, before folding, before anything knew which group the row belonged
-to, and before the reducer's own `WHEN` or relation-qualified dedup had masked the
+to, and before the aggregate's own `WHEN` or relation-qualified dedup had masked the
 rows that contribute to nothing. The literal spelling of the same bound was accepted
 and classified per group, so the outcome depended on how the bound was written.
 
 It is now uniform: an infinite bound behaves the same in every spelling, and the
 solver decides what it means. `inf - inf` is still NaN, and still refused — a
-reducer's infinities reach the per-row extraction that reads the folded bound back,
+aggregate's infinities reach the per-row extraction that reads the folded bound back,
 where the NaN guard is unchanged, so admitting them upstream costs nothing.
 
-**A non-finite bound is not absorbed into the column box.** `AbsorbVariableBounds`
+**A non-finite bound is not folded into the column box.** `FoldSingletonRows`
 (stage 05) folds a bare `x OP const` into `lower_bounds` / `upper_bounds`, each
 initialized to a ±1e30 sentinel and tightened with `min` / `max`. Those sentinels swallow an infinity
 in one direction and keep it in the other, so one spelling of one bound became "no
 bound" and its mirror reached the bounds validator as a non-finite column — an
 internal error, which also invalidates the connection for every later query in the
-session. Absorption is an optimization, not a semantic step, so a non-finite value is
-left unabsorbed and takes the ordinary constraint path: `x >= +inf` becomes one
+session. Folding is an optimization, not a semantic step, so a non-finite value is
+left unfolded and takes the ordinary constraint path: `x >= +inf` becomes one
 infeasible row and `x <= +inf` one satisfied row, the same answer the rebuilt
 spelling `x + v >= +inf` gives.
 
@@ -506,7 +506,7 @@ the linearization passes then work on it in place.
 
 The MIN/MAX objective (flat and nested-`PER`) and the composed MIN/MAX clauses are
 emitted by stage 06, not here. What stays is the evaluation they need — a composed
-term's per-row coefficients, the query-wide factor on a reducer, its `WHEN` mask,
+term's per-row coefficients, the query-wide factor on an aggregate, its `WHEN` mask,
 the constant RHS. The evaluated terms travel to stage 06 as
 `ComposedMinMaxTermData`; the objective's shape travels as `MinMaxObjectiveSpec`.
 
@@ -516,7 +516,7 @@ PHASE 3 is two methods, split by *what each one reads* rather than by where it s
 in the sequence.
 
 `BuildSolverInput` **assembles**. It moves the evaluated constraints, objective and
-links off `gstate`, resolves the variable types and the column box (the absorbed
+links off `gstate`, resolves the variable types and the column box (the folded
 bounds, the `lower_bounds` sentinel, the rigid snapshot, then
 `DecidePropagateImpliedBounds`), folds each relation qualifier's de-duplication into
 the objective's filter masks, applies AVG scaling, and builds the `VarIndexer`. It

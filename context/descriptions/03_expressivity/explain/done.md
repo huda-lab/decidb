@@ -81,7 +81,7 @@ documented in `decide_source_provenance.hpp` and described in
 [`../../01_pipeline/03_logical_plan/done.md`](../../01_pipeline/03_logical_plan/done.md).
 It replaces `ToString()` because the bound tree is not the query: it carries
 casts the user cannot edit, prints functions in call form, and stores pipeline
-metadata (source clause, `WHEN`/`PER` role, reducer scope) in expression aliases
+metadata (source clause, `WHEN`/`PER` role, aggregate scope) in expression aliases
 that `GetName()` would print verbatim as `__source_clause_0__`.
 
 The rule that separates a cast the user typed from one the binder added is
@@ -181,7 +181,7 @@ both:
 - **One clause, many rows** — a linearized clause owns every row it generated.
 - **One clause, no rows** — a composed MIN/MAX clause was lifted out of the tree
   into `composed_minmax_constraints`, leaving a `TRUE` placeholder. Its group
-  reports which reducers became auxiliary variables, since that is the one thing
+  reports which aggregates became auxiliary variables, since that is the one thing
   no other line shows.
 - **A row with no clause** — printed under `added by formulation:` rather than
   dropped or misattributed. Nothing currently reaches this path; it exists so a

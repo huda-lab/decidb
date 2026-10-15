@@ -50,10 +50,10 @@ flow diagram: [`01_pipeline/README.md`](01_pipeline/README.md).
 | # | Stage | Owns | Key source |
 |---|---|---|---|
 | 01 | [parser](01_pipeline/01_parser/done.md) | Grammar, DECIDE `WHEN` lexing and precedence, transformer | `third_party/libpg_query/grammar/statements/select.y`, `src/planner/binder/query_node/bind_select_node.cpp` |
-| 02 | [binder](01_pipeline/02_binder/done.md) | Names, scopes, types, degree, reducers, DECIDE validity | `decide_binder.cpp`, `decide_constraints_binder.cpp` |
+| 02 | [binder](01_pipeline/02_binder/done.md) | Names, scopes, types, degree, aggregates, DECIDE validity | `decide_binder.cpp`, `decide_constraints_binder.cpp` |
 | 03 | [logical_plan](01_pipeline/03_logical_plan/done.md) | `LogicalDecide`, subquery provenance, `AddConstraint`/`SetObjective`, serialization | `logical_decide.cpp`, `plan_select_node.cpp` |
-| 04 | [canonicalizer](01_pipeline/04_canonicalizer/done.md) | The one shape boundary — decisions left, bound right, one spelling per reducer scale | `decide_canonicalizer.cpp` |
-| 05 | [optimizer](01_pipeline/05_optimizer/done.md) | Formulation choice: ABS, MIN/MAX, AVG, `<>`, bilinear, composed reducers | `decide_optimizer.cpp` |
+| 04 | [canonicalizer](01_pipeline/04_canonicalizer/done.md) | The one shape boundary — decisions left, bound right, one spelling per aggregate scale | `decide_canonicalizer.cpp` |
+| 05 | [optimizer](01_pipeline/05_optimizer/done.md) | Formulation choice: ABS, MIN/MAX, AVG, `<>`, bilinear, composed aggregates | `decide_optimizer.cpp` |
 | 06 | [model_formulation](01_pipeline/06_model_formulation/done.md) | `SolverInput` → `SolverModel`: layout, accumulation, bounds, Q matrix | `ilp_model_builder.cpp` |
 | 07 | [solver](01_pipeline/07_solver/done.md) | Backend dispatch, Gurobi and HiGHS translation, status normalization | `ilp_solver.cpp`, `gurobi_solver.cpp`, `deterministic_naive.cpp` |
 | 08 | [execution](01_pipeline/08_execution/done.md) | Materialization, extraction, coefficient evaluation, entity mapping, readback | `physical_decide.cpp` |

@@ -14,9 +14,10 @@ check). Design: `../../architecture/`.
   a forced backend use the solver and conflict with `require`. A prepared plan keeps its selection until rebound.
   `require` also fails when the DECIDE optimizer is off.
 - **IR.** One read-only front end turns the bound tree into the IR: decision domains and scopes, each constraint with
-  reducer, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Unmodeled parts are *not proved* with a
-  reason, and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the front end
-  does not expect are not-proved parts. No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
+  aggregate, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Unmodeled parts are *not proved*
+  with a reason, and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the
+  front end does not expect are not-proved parts. No IR node is kept that no rule reads. It uses the same term splitter
+  as the solver path.
 - **Rule contract.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
   rule driver runs CheckCondition for every rule. Rules are disjoint, so at most one applies to a query; two that apply
@@ -57,25 +58,24 @@ check). Design: `../../architecture/`.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
   DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
   rules, the model builder and the solver backends all read it without including each other. It names the solver's
-  sentinel `DECIDE_SOLVER_INFINITY` (1e30: the builder's "no bound", the unset side of an absorbed bound, a one-sided
-  row), the reading margin `DECIDE_EFFECTIVE_INFINITY` (1e20) with `DecideIsOpenAbove` and `DecideIsOpenBelow`,
-  `DECIDE_MAX_EXACT_INTEGER` (2^53) with `DecideIsWithinExactRange`, `DECIDE_MAX_FRACTIONAL_MAGNITUDE` (2^52),
-  `DECIDE_FIRST_DOUBLE_BEYOND_BIGINT` (2^63), and `DecideIsExactFiniteDouble` (a converted double is exact when it is
-  finite and converts back to the original value), and `DecideStrictBound` (`x > 0.5` means `x >= 1`: the solver's
-  absorption, its model builder's linear and quadratic rows, A1 and S1 all shift a strict bound with it, so none of them
-  reads a strict comparison differently). `LogicalDecide::ABSORBED_*_UNSET`
-  are the sentinel under the names the planner uses. An integer answer is returnable when, rounded half away from zero, it
-  lies within the column's range (`DecideRoundedAnswerWithin`); beyond it both paths raise one message,
-  `DecideWholeNumberRangeMessage`, which names the variable and its rounded value. A1 spells the test in SQL once
-  (`WithinExactRange`, `abs(round(answer)) <= 2^53`) and builds the message at run time from its two halves around
-  `printf('%.0f', round(answer))`, so the text matches the solver's character for character.
-  What stays outside the header on purpose: bare `std::isfinite` and `std::isinf` that only reject NaN or infinity in
-  input, a report or a diagnostic (they state no exactness policy); HiGHS's own infinite bound and large-matrix limits in
+  sentinel `DECIDE_SOLVER_INFINITY` (1e30: the builder's "no bound", the unset side of a singleton-row bound, a
+  one-sided row), the reading margin `DECIDE_EFFECTIVE_INFINITY` (1e20) with `DecideIsOpenAbove` and
+  `DecideIsOpenBelow`, `DECIDE_MAX_EXACT_INTEGER` (2^53) with `DecideIsWithinExactRange`,
+  `DECIDE_MAX_FRACTIONAL_MAGNITUDE` (2^52), `DECIDE_FIRST_DOUBLE_BEYOND_BIGINT` (2^63), and `DecideIsExactFiniteDouble`
+  (a converted double is exact when it is finite and converts back to the original value), and `DecideStrictBound` (`x >
+  0.5` means `x >= 1`: the solver's folding, its model builder's linear and quadratic rows, A1 and S1 all shift a strict
+  bound with it, so none of them reads a strict comparison differently). An integer answer is returnable when, rounded
+  half away from zero, it lies within the column's range (`DecideRoundedAnswerWithin`); beyond it both paths raise one
+  message, `DecideWholeNumberRangeMessage`, which names the variable and its rounded value. A1 spells the test in SQL
+  once (`WithinExactRange`, `abs(round(answer)) <= 2^53`) and builds the message at run time from its two halves around
+  `printf('%.0f', round(answer))`, so the text matches the solver's character for character. What stays outside the
+  header on purpose: bare `std::isfinite` and `std::isinf` that only reject NaN or infinity in input, a report or a
+  diagnostic (they state no exactness policy); HiGHS's own infinite bound and large-matrix limits in
   `deterministic_naive.cpp`; Gurobi's 1e100; `INTEGER_SOLVER_CEILING` and the ray epsilon in `diagnostic_constants.hpp`
-  (diagnostic-only thresholds). No hand-written range proof of DuckDB's overflow is left; the copies of DuckDB's absorption and
-  numeric logic that remain are tasks in `todo.md`. `DirectCastMayThrow` and `DirectMayThrow` copy DuckDB's `CanThrow`
-  on purpose: DuckDB's counts `TRY_CAST` as throwing, and fixing that would change DuckDB itself. Test: `test/common/test_decidb_numeric_policy.cpp`
-  (`[numeric_policy]`, 5 cases).
+  (diagnostic-only thresholds). No hand-written range proof of DuckDB's overflow is left; the copies of DuckDB's folding
+  and numeric logic that remain are tasks in `todo.md`. `DirectCastMayThrow` and `DirectMayThrow` copy DuckDB's
+  `CanThrow` on purpose: DuckDB's counts `TRY_CAST` as throwing, and fixing that would change DuckDB itself. Test:
+  `test/common/test_decidb_numeric_policy.cpp` (`[numeric_policy]`, 5 cases).
 - **Shared admission predicates.** `DirectIsNumericDecisionFree`, `DirectSourceNumericColumn`,
   `DirectIsSourceOnlyNumeric`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
   `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT` and `DirectConstraintFact::PlainSum` answer "may a rule use this value"
@@ -123,20 +123,20 @@ check). Design: `../../architecture/`.
   applied; under `auto` nothing is printed. Nothing persists a serialized plan across versions, so
   `DIRECT_RESULT_EXTENSION` is unchanged. `test_serializer_explain_and_model_dump` checks the rule and the condition
   line in the logical, physical and profiled plans.
-- **The solver's domain check, once.** The solver raises, before it reads any row, for a decision whose box
-  contradicts its built-in domain: an upper bound below the default floor of 0, any upper bound below 0 on a `BOOL` (its
-  floor stays 0 whatever lower bound is written), or a `BOOL` lower bound above 1. That test is
-  `DecideBoxContradictsDomain(box, is_bool)` in `decide_bound_absorption.{hpp,cpp}`. For a non-negative `INT` or `REAL`
-  the error quotes the clause; for a `BOOL` it is DECIDE's usual infeasible error, and under `DIAGNOSE` the check skips a
-  `BOOL` so the elastic engine names the clause. The solver's pre-check (`DecideGlobalSinkState`), A1 (`ProveBounds`) and
-  S1 (`ConstantFixedDomain`) call it. Direct solve only declines these queries and lets the solver raise the error.
+- **The solver's domain check, once.** The solver raises, before it reads any row, for a decision whose box contradicts
+  its built-in domain: an upper bound below the default floor of 0, any upper bound below 0 on a `BOOL` (its floor stays
+  0 whatever lower bound is written), or a `BOOL` lower bound above 1. That test is `DecideBoxContradictsDomain(box,
+  is_bool)` in `decide_singleton_row_folding.{hpp,cpp}`. For a non-negative `INT` or `REAL` the error quotes the clause;
+  for a `BOOL` it is DECIDE's usual infeasible error, and under `DIAGNOSE` the check skips a `BOOL` so the elastic
+  engine names the clause. The solver's pre-check (`DecideGlobalSinkState`), A1 (`ProveBounds`) and S1
+  (`ConstantFixedDomain`) call it. Direct solve only declines these queries and lets the solver raise the error.
 - **One box, one way to combine bounds.** A decision's unconditional bounds fold into a `DecideBoundBox`
-  (`decide_numeric_policy.hpp`) through `DecideAbsorbBound`, which keeps the tightest value on each side. The solver's
-  absorption pass, the elastic engine's retained box, A1 (`ProveBounds`) and S1 (`ConstantFixedDomain`) all call it, so
-  the paths cannot combine bounds differently. The box keeps a `lower_written` flag apart from the value: a written lower
-  bound of -1e30 or below is no bound, like any bound of magnitude 1e20 or more, and only a decision with no lower bound
-  written takes the default floor of 0 (`EffectiveLower`). No value is reserved to mean "unset", so a value the user
-  writes can never be mistaken for one.
+  (`decide_numeric_policy.hpp`) through `DecideFoldSingletonRow`, which keeps the tightest value on each side. The
+  solver's folding pass, the elastic engine's retained box, A1 (`ProveBounds`) and S1 (`ConstantFixedDomain`) all call
+  it, so the paths cannot combine bounds differently. The box keeps a `lower_written` flag apart from the value: a
+  written lower bound of -1e30 or below is no bound, like any bound of magnitude 1e20 or more, and only a decision with
+  no lower bound written takes the default floor of 0 (`EffectiveLower`). No value is reserved to mean "unset", so a
+  value the user writes can never be mistaken for one.
 - **One test scaffold.** `test/decide/tests/_direct_oracle_common.py` holds what the oracle suites share: the autouse
   fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, and `agree_with_oracle` (oracle model, `off`, `require`,
   then a rule-supplied check of one assignment). `test_direct_three_way.py` (S1) and `test_direct_a1.py` keep their case
@@ -167,8 +167,8 @@ A rule registers with one line in `direct_registry.cpp` and one in the folder's 
 are materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a
 breaker or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own
 reading comes from the solver's code, not a copy: `DirectIRConstraint::variable_bound` is the predicate
-`DecideBoundIsAbsorbed` (`decide_bound_absorption.cpp`), so a rule can ask which bounds replace a variable's default
-box.
+`DecideIsSingletonRowBound` (`decide_singleton_row_folding.cpp`), so a rule can ask which bounds replace a variable's
+default box.
 
 ## Checked and fine
 

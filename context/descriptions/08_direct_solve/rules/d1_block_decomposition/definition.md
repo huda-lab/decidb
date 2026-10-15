@@ -119,29 +119,22 @@ Disjoint internal identities ensure that the union contains one assignment per d
 
 ## Eligibility conditions
 
-> • All decisions fixed by bounds or another exact rule are substituted before the component split is proved.
->
-> • Every remaining constraint and every nonseparable objective term belongs wholly to one component.
->
-> • The objective is an additive combination of component objectives, or an outer MIN/MAX whose required direction is proved coordinatewise monotone.
->
-> • Every component optimum needed by an outer MIN/MAX is finite and attained.
->
-> • Under an additive objective, an infeasible component makes the global problem infeasible, while a component unbounded in the favorable direction makes it unbounded.
->
-> • Exact row, entity, and scalar decision identities are known, and no decision identity occurs in more than one component.
->
-> • Component membership follows the complete entity key and proved functional dependencies rather than coincidental equality of data values.
->
-> • PER keys, WHEN masks, qualified reducers, join multiplicities, and data-valued right-hand sides are normalized before decomposition.
->
-> • NULL PER keys bypass their grouped factor. Shared scalars or any factor that spans groups reconnect the affected decisions.
->
-> • Every component matches one complete leaf rule and satisfies that rule's full **Valid when** checklist. A proof failure in any component rejects the complete D1 rewrite and keeps the original DECIDE query on the solver path.
->
-> • Component keys and solver-read coefficients are non-NULL and finite wherever DECIDE requires them. Empty, infeasible, and unbounded outcomes preserve DECIDE's precedence and cannot appear as missing join rows.
->
-> • Every leaf emits one typed assignment per internal decision identity. Assembly verifies complete, duplicate-free coverage and preserves source cardinality, entity and scalar fan-out, schema, ordering, status, NULL behavior, and numeric semantics.
+> • All decisions fixed by bounds or another exact rule are substituted before the component split is proved. > > •
+Every remaining constraint and every nonseparable objective term belongs wholly to one component. > > • The objective is
+an additive combination of component objectives, or an outer MIN/MAX whose required direction is proved coordinatewise
+monotone. > > • Every component optimum needed by an outer MIN/MAX is finite and attained. > > • Under an additive
+objective, an infeasible component makes the global problem infeasible, while a component unbounded in the favorable
+direction makes it unbounded. > > • Exact row, entity, and scalar decision identities are known, and no decision
+identity occurs in more than one component. > > • Component membership follows the complete entity key and proved
+functional dependencies rather than coincidental equality of data values. > > • PER keys, WHEN masks, qualified
+aggregates, join multiplicities, and data-valued right-hand sides are normalized before decomposition. > > • NULL PER
+keys bypass their grouped factor. Shared scalars or any factor that spans groups reconnect the affected decisions. > > •
+Every component matches one complete leaf rule and satisfies that rule's full **Valid when** checklist. A proof failure
+in any component rejects the complete D1 rewrite and keeps the original DECIDE query on the solver path. > > • Component
+keys and solver-read coefficients are non-NULL and finite wherever DECIDE requires them. Empty, infeasible, and
+unbounded outcomes preserve DECIDE's precedence and cannot appear as missing join rows. > > • Every leaf emits one typed
+assignment per internal decision identity. Assembly verifies complete, duplicate-free coverage and preserves source
+cardinality, entity and scalar fan-out, schema, ordering, status, NULL behavior, and numeric semantics.
 
 ## Exactness
 

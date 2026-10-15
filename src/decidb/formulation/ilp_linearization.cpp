@@ -80,7 +80,7 @@ idx_t decide_linearize::AddGlobalBinaryAux(SolverInput &input, const VarIndexer 
     return aux_idx;
 }
 
-//! Pin an already-created auxiliary to exactly `value`. Used where a reducer turns
+//! Pin an already-created auxiliary to exactly `value`. Used where an aggregate turns
 //! out to range over nothing at all, so the auxiliary has no pinning rows and would
 //! otherwise float on whatever box it was given.
 void decide_linearize::PinGlobalAux(SolverInput &input, const VarIndexer &indexer, idx_t aux_idx,

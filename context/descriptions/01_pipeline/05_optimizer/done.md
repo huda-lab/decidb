@@ -1,7 +1,7 @@
 # Stage 05 — DECIDE optimizer
 
 Chooses the **mathematical formulation** for every construct the solver cannot take
-literally: ABS, MIN/MAX, AVG, `<>`, bilinear products, and composed reducers, and
+literally: ABS, MIN/MAX, AVG, `<>`, bilinear products, and composed aggregates, and
 then **flattens the finished tree into the prepared linear form** that execution
 consumes. It assumes canonical input and produces canonical output; it never
 decides shape, parses SQL, executes relations, or calls a solver.
@@ -12,7 +12,7 @@ decides shape, parses SQL, executes relations, or calls a solver.
   and the helpers the passes share; each pass body lives in a sibling file:
   `decide_rewrite_norm_in.cpp`, `decide_rewrite_notequal_avg.cpp`,
   `decide_rewrite_abs.cpp`, `decide_rewrite_minmax.cpp`,
-  `decide_rewrite_bilinear.cpp`, `decide_bound_absorption.cpp`
+  `decide_rewrite_bilinear.cpp`, `decide_singleton_row_folding.cpp`
 - `src/optimizer/decide/decide_linear_form.cpp` (~1,600 lines) — the flattening
 - `src/include/duckdb/optimizer/decide/decide_optimizer.hpp`
 - `src/include/duckdb/optimizer/decide/decide_optimizer_internal.hpp` — helpers
@@ -155,11 +155,11 @@ short fails loudly instead of handing a backend a model it cannot load.
 | 3 | `TagAbsConstraintsForBigM` | Marks the ABS nodes that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
 | 4 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes; must be first of the remaining rewrites so later passes see plain variables. |
 | 5 | `RewriteBilinear` | McCormick linearization for Boolean × anything. |
-| 6 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
+| 6 | `RewriteComposedMinMax` | Detects composed (additive, mixed-aggregate) MIN/MAX **before** single-term MIN/MAX handling. |
 | 7 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
 | 8 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 9 | `RewriteAvgToSum` | Last of the rewrites, so every reducer that reaches it is settled. |
-| 10 | `AbsorbVariableBounds` | Must be last of all — see below. |
+| 9 | `RewriteAvgToSum` | Last of the rewrites, so every aggregate that reaches it is settled. |
+| 10 | `FoldSingletonRows` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. Setting `DECIDB_BENCH` prints `optimizer_ms` for the whole block.
@@ -175,8 +175,8 @@ Turns each canonical comparison and the objective into additive terms:
 `sign * coefficient * variable`. This is where DECIDE does its linear algebra —
 distributing `K * (1 - pick)` into `K - K*pick`, pulling coefficients out of `*`
 chains, pushing a divisor into every produced coefficient, folding unary minus,
-stripping binder casts, and multiplying a peeled reducer scale into everything the
-reducer produced.
+stripping binder casts, and multiplying a peeled aggregate scale into everything the
+aggregate produced.
 
 The output is `LogicalDecide::prepared`, a `DecidePreparedModel`: a
 `vector<DecideConstraint>` plus an optional `DecideObjective`. It also fills
@@ -185,7 +185,7 @@ prepared terms rather than one path re-deriving its own.
 
 **A coefficient stays an unevaluated `Expression`.** `SUM(x * price)` yields the
 coefficient `price`, which is a number only once a row exists. Everything else
-about a term — which variable it names, its sign, which reducer produced it, which
+about a term — which variable it names, its sign, which aggregate produced it, which
 filter applies, which entity scope qualifies it — is a fact about types and
 structure and is settled here. The pass reads no data.
 
@@ -207,12 +207,12 @@ coefficient `2 + 3`. A term contributes `sign * coefficient`, so a group merges 
 sign differs from the group's.
 
 **Naming the same variable is not sufficient.** A term also records *which rows it
-applies to* and *which reducer produced it*, and `TermsAreLike` refuses to merge
+applies to* and *which aggregate produced it*, and `TermsAreLike` refuses to merge
 across any of that:
 
 | Field | Why it separates two terms |
 |---|---|
-| `reduction` | A reducer term and a row-invariant one are summed differently downstream |
+| `reduction` | An aggregate term and a row-invariant one are summed differently downstream |
 | `filter` | The aggregate-local `WHEN`. `SUM(x) WHEN a` and `SUM(x) WHEN b` are one column over two row sets |
 | `avg_scale` | AVG divides by the group's row count; merging before that scaling applies the division to both |
 | `qualifier_scope_idx` | Selects a de-duplication mask (`sum(D: ...)`) — again a statement about which rows contribute |
@@ -329,7 +329,7 @@ loosened. Atomic source-level DROP repair is recorded in `todo.md`.
 ### MIN/MAX — `RewriteMinMax`
 
 **Constraints.** An *easy* direction (`MAX(...) <= K`, `MIN(...) >= K`) strips the
-reducer and becomes a per-row constraint — one row per data row, no Big-M. A *hard*
+aggregate and becomes a per-row constraint — one row per data row, no Big-M. A *hard*
 direction creates a Boolean indicator per active row and rewrites to
 `SUM` + linking rows (`EmitHardMinMaxClause`). Equality splits into both
 directions. `WHEN` / `PER` wrappers are preserved; `out_was_easy` tells the caller
@@ -427,32 +427,32 @@ it with `SUM`'s integral type while its value stays fractional. Keeping the tag 
 objective terms is what makes a mixed `AVG(a) + SUM(b)` preserve true AVG
 semantics.
 
-### Bound absorption — `AbsorbVariableBounds`
+### Singleton-row folding — `FoldSingletonRows`
 
 `x <= 10` is one fact about a column, so it belongs in that column's box rather than
 in `num_rows` identical model rows. A box is also strictly better for the solver:
 smaller model, tighter presolve. The pass folds every simple `x OP const` and
-`x BETWEEN a AND b` into one `DecideBoundBox` per decision (`absorbed_boxes` on
-`LogicalDecide`), and tags the comparison `ABSORBED_BOUND_TAG` so physical extraction
+`x BETWEEN a AND b` into one `DecideBoundBox` per decision (`singleton_row_boxes` on
+`LogicalDecide`), and tags the comparison `SINGLETON_ROW_BOUND_TAG` so physical extraction
 skips it.
 
-A bound qualifies when the LHS is a bare decision variable — not inside a reducer —
+A bound qualifies when the LHS is a bare decision variable — not inside an aggregate —
 and the RHS is a literal under any number of casts. Recursion goes through `AND` and
 into child 0 only of `PER` and `WHEN`. **A `WHEN`-guarded comparison is never
-absorbed**: it is conditional per row, not a domain.
+folded**: it is conditional per row, not a domain.
 
 - `<=` tightens the upper bound (`min`), `>=` the lower (`max`), `=` intersects both.
   Intersecting rather than assigning is what makes `x = 5 AND x = 10` invert the box
   and be caught, instead of silently resolving to whichever was written last.
 - Strict `<` / `>` on an integer tighten by ±1, carrying the user's typed literal so
   the diagnosis re-quotes `< 10` rather than the normalized `<= 9`.
-- Strict `<` / `>` on a REAL variable are deliberately **not** absorbed. The pass
+- Strict `<` / `>` on a REAL variable are deliberately **not** folded. The pass
   declines, the comparison stays a row, and `ApplyComparisonSense` in the model
   builder rejects it with a message naming the clause.
-- A non-finite constant is **not** absorbed either: the box has one sentinel per
+- A non-finite constant is **not** folded either: the box has one sentinel per
   direction and cannot hold it.
 
-Every bound goes through `DecideAbsorbBound` (`decide_numeric_policy.hpp`), the same
+Every bound goes through `DecideFoldSingletonRow` (`decide_numeric_policy.hpp`), the same
 combiner A1 and S1 call. Lower bounds start at -1e30 rather than 0, so an explicit
 negative bound is honored instead of clamped up. Whether a lower bound was written is a
 separate flag (`lower_written`), not a reserved value: stage 08 gives the default 0
@@ -471,7 +471,7 @@ sizing columns. (That fallback is gone now: an unbounded contributor is refused.
 same gap today would not cost a loose `M`, it would refuse the query outright — the
 seeding matters more, not less.)
 
-Seeding it here is safe because absorption only ever narrows (`min`), and because a
+Seeding it here is safe because folding only ever narrows (`min`), and because a
 user restatement like `x <= 1` on a BOOL was already treated as a no-op against the
 intrinsic box. It also lets the `<>` range collapse see a BOOL's upper side, which it
 could not before: `SUM(x) <> 9` over four BOOL decisions is unreachable and now drops
@@ -482,24 +482,24 @@ to nothing instead of emitting a disjunction against a bound no assignment can m
 > Corpus query 85 pins the tight constant, since queries 82–84 either collapse or use
 > INT decisions and so never exposed it.
 
-Each absorbed bound is also recorded as a `UserBoundSpec` so infeasible diagnosis can
-re-emit it as a loosenable row — absorbed bounds carry no row provenance otherwise. A
+Each singleton-row bound is also recorded as a `UserBoundSpec` so infeasible diagnosis can
+re-emit it as a loosenable row — singleton-row bounds carry no row provenance otherwise. A
 variable's *intrinsic* domain is excluded: a BOOLEAN's `[0,1]` box is never
 synthesized as a constraint, so it only appears here when the user restated it
 redundantly, and `is_boolean_var` is consulted to skip that restatement. A genuine
 BOOLEAN pin (`x <= 0`, `x >= 1`) does tighten the box and is recorded.
 
 **Why it runs last.** `RewriteInDomain` emits a floor-lowering `x >= min_value` for
-an all-constant `IN` domain whose minimum is negative — itself an absorbable shape.
-Absorb before that pass and the floor stays at 0, the negative domain value becomes
+an all-constant `IN` domain whose minimum is negative — itself an foldable shape.
+Fold before that pass and the floor stays at 0, the negative domain value becomes
 unreachable, and the solver returns a *different answer* rather than an error.
 Running last also guarantees every auxiliary variable created by `RewriteAbs`,
 `RewriteBilinear` and `RewriteMinMax` already exists before the box is sized.
 
 **Why here and not stage 04.** "Bound or row" looks like shape, which stage 04 owns,
 but stage 04's contract rules it out three times: that pass is pure (it returns a new
-tree; absorption writes into bound arrays), it is total and never declines
-(absorption declines on strict-`<`-over-REAL), and §5 explicitly excludes choosing a
+tree; folding writes into bound arrays), it is total and never declines
+(folding declines on strict-`<`-over-REAL), and §5 explicitly excludes choosing a
 solver formulation, which bound-versus-row is. Stage 05 already chooses formulations
 with types in scope and is forbidden only from evaluating *data* — a foldable literal
 is not data.
@@ -512,9 +512,9 @@ sees.
 
 ---
 
-## 3. A factor on a reducer stays outside
+## 3. A factor on an aggregate stays outside
 
-The canonicalizer peels a query-wide factor *outward* off a reducer
+The canonicalizer peels a query-wide factor *outward* off an aggregate
 (`2 * SUM(x*p)`, `2 * MAX(x*v)`) and converges every spelling onto one. **No pass
 here pushes it back in.**
 
@@ -582,7 +582,7 @@ stage 07.
   audited against that: ABS and bilinear replace decision-bearing atoms with
   decision auxiliaries; MIN/MAX and AVG keep decision terms on the left; `<>`
   changes only metadata; composed MIN/MAX leaves a permitted placeholder;
-  `AbsorbVariableBounds` only annotates.
+  `FoldSingletonRows` only annotates.
 - Evaluate anything against data, or emit solver rows. Flattening produces
   coefficient *expressions*; turning them into numbers is stage 08.
 
@@ -598,7 +598,7 @@ stage 07.
 | ABS | `src/optimizer/decide/decide_rewrite_abs.cpp` |
 | MIN/MAX, plain and composed | `src/optimizer/decide/decide_rewrite_minmax.cpp` |
 | Bilinear McCormick | `src/optimizer/decide/decide_rewrite_bilinear.cpp` |
-| Bound absorption | `src/optimizer/decide/decide_bound_absorption.cpp` |
+| Singleton-row folding | `src/optimizer/decide/decide_singleton_row_folding.cpp` |
 | Linear-form flattening | `src/optimizer/decide/decide_linear_form.cpp` |
 | Backend selection and the model-class gate | `src/optimizer/decide/decide_solver_gate.cpp` |
 | Pass inventory and helper contracts | `src/include/duckdb/optimizer/decide/decide_optimizer.hpp` |

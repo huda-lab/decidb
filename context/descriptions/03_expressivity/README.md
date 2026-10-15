@@ -12,7 +12,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | Folder | done.md covers | todo.md covers |
 |---|---|---|
 | [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, QCQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | SOCP |
-| [decide/](decide/) | BOOL, INT, REAL, row/entity/query-wide scope, both clause orders, relation-qualified reducers | *(no planned features)* |
+| [decide/](decide/) | BOOL, INT, REAL, row/entity/query-wide scope, both clause orders, relation-qualified aggregates | *(no planned features)* |
 | [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), WHEN, PER, quadratic (`POWER(expr,2)`), NULL policy | *(no planned features)* |
 | [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives; cross-refs to sql_functions, problem_types, when, per | *(no planned features)* |
 | [when/](when/) | Constraints, objectives, PER composition, aggregate-local filters, grammar restrictions | *(no planned features)* |
@@ -60,7 +60,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | `ABS()` | Yes (linearized) | — |
 | `MIN()` / `MAX()` over dec. vars | Yes (per-row / Big-M) | — |
 | `DIAGNOSE <query>` prefix | Yes | [diagnose/done.md](diagnose/done.md) |
-| Relation-qualified reducer `SUM(D: expr)` / `SUM(D, T: expr)` | Yes (paper §3.2.2; composite multi-relation keys included) | — |
+| Relation-qualified aggregate `SUM(D: expr)` / `SUM(D, T: expr)` | Yes (paper §3.2.2; composite multi-relation keys included) | — |
 | `DECIDE` before `FROM` (paper clause order) | Yes (both orders accepted) | — |
 | `DECIDE scalar x(INT)` (query-wide) | Yes (paper §3.1) | — |
 | `IS BETWEEN a AND b` | **No** (bare `BETWEEN` is the supported syntax) | — |

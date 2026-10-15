@@ -3,7 +3,7 @@
 #include <algorithm>
 
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
+#include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
@@ -149,9 +149,9 @@ private:
 	// Parts: one additive term of a left side or the objective
 	//===--------------------------------------------------------------------===//
 
-	void ReadReducer(const BoundAggregateExpression &aggregate, DirectPart &part) const {
+	void ReadAggregate(const BoundAggregateExpression &aggregate, DirectPart &part) const {
 		if (aggregate.IsDistinct() || aggregate.order_bys || aggregate.children.size() != 1) {
-			MarkNotProved(part.status, part.reason, "a reducer with DISTINCT, ORDER BY or several arguments");
+			MarkNotProved(part.status, part.reason, "an aggregate with DISTINCT, ORDER BY or several arguments");
 			return;
 		}
 		string order;
@@ -164,25 +164,25 @@ private:
 			                                        : StringUtil::Format("norm tag '%s' is not modelled", order));
 			return;
 		} else if (name == "sum") {
-			part.reducer = DirectReducer::SUM;
+			part.aggregate = DirectAggregate::SUM;
 		} else if (name == "avg") {
-			part.reducer = DirectReducer::AVG;
+			part.aggregate = DirectAggregate::AVG;
 		} else if (name == "min") {
-			part.reducer = DirectReducer::MIN;
+			part.aggregate = DirectAggregate::MIN;
 		} else if (name == "max") {
-			part.reducer = DirectReducer::MAX;
+			part.aggregate = DirectAggregate::MAX;
 		} else {
-			MarkNotProved(part.status, part.reason, StringUtil::Format("reducer '%s' is not modelled", name));
+			MarkNotProved(part.status, part.reason, StringUtil::Format("aggregate '%s' is not modelled", name));
 			return;
 		}
 		if (aggregate.filter) {
 			part.filter = aggregate.filter->Copy();
 		}
-		TryParseQualifiedReducerTag(aggregate.GetAlias(), part.qualifier);
+		TryParseQualifiedAggregateTag(aggregate.GetAlias(), part.qualifier);
 		auto body = UnwrapDecideCasts(*aggregate.children[0], decide.decide_index);
 		if (body->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			part.inner = make_uniq<DirectPart>();
-			ReadReducer(body->Cast<BoundAggregateExpression>(), *part.inner);
+			ReadAggregate(body->Cast<BoundAggregateExpression>(), *part.inner);
 			if (part.inner->status == DirectAnalysisStatus::NOT_PROVED) {
 				MarkNotProved(part.status, part.reason, part.inner->reason);
 			}
@@ -202,7 +202,7 @@ private:
 		}
 		auto root = UnwrapDecideCasts(*term, decide.decide_index);
 		if (root->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			ReadReducer(root->Cast<BoundAggregateExpression>(), part);
+			ReadAggregate(root->Cast<BoundAggregateExpression>(), part);
 		} else {
 			splitter.Split(*root, 1, part.terms);
 		}
@@ -287,8 +287,8 @@ private:
 			}
 			ir_node.rhs = comparison.right->Copy();
 			ir_node.degree = DecideExpressionDegree(*comparison.left, decide.decide_index).degree;
-			// Absorption never reads a clause under a WHEN: `x <= 0 WHEN c` does not bound `x` everywhere.
-			ir_node.variable_bound = !wrappers.when && DecideBoundIsAbsorbed(context, decide, comparison);
+			// Folding never reads a clause under a WHEN: `x <= 0 WHEN c` does not bound `x` everywhere.
+			ir_node.variable_bound = !wrappers.when && DecideIsSingletonRowBound(context, decide, comparison);
 		} else {
 			not_proved("the clause is not a comparison or an IN list");
 		}
@@ -424,7 +424,7 @@ const DirectPart *DirectIRConstraint::PlainSum(bool allow_filter) const {
 		return nullptr;
 	}
 	auto &part = lhs[0];
-	if (part.sign != 1 || part.scale || part.reducer != DirectReducer::SUM ||
+	if (part.sign != 1 || part.scale || part.aggregate != DirectAggregate::SUM ||
 	    part.qualifier != DConstants::INVALID_INDEX || part.inner || (!allow_filter && part.filter)) {
 		return nullptr;
 	}

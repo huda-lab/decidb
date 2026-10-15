@@ -23,7 +23,7 @@
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
-#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
+#include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp"
 #include "duckdb/decidb/diagnostics/decide_router.hpp"
 #include "duckdb/common/enums/decide.hpp"
@@ -63,15 +63,15 @@ namespace duckdb {
 // BoundReferenceExpression nodes so that DuckDB's ExpressionExecutor can
 // evaluate expressions against data chunks (which use positional indices).
 
-//! Collect every reducer in an expression. Descent stops at a match: a reducer inside a
-//! reducer is not legal SQL, so there is nothing below one to find.
-static void CollectReducers(const Expression &expr, vector<const Expression *> &out) {
+//! Collect every aggregate in an expression. Descent stops at a match: an aggregate inside an
+//! aggregate is not legal SQL, so there is nothing below one to find.
+static void CollectAggregates(const Expression &expr, vector<const Expression *> &out) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		out.push_back(&expr);
 		return;
 	}
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		CollectReducers(child, out);
+		CollectAggregates(child, out);
 	});
 }
 
@@ -79,9 +79,9 @@ static void CollectReducers(const Expression &expr, vector<const Expression *> &
 //! Handles: BOUND_COLUMN_REF, BOUND_FUNCTION, BOUND_CAST, BOUND_AGGREGATE,
 //! BOUND_COMPARISON, BOUND_CONJUNCTION, BOUND_OPERATOR. Falls back to Copy() for others.
 //!
-//! `agg_substitutions` maps a reducer node to an extra chunk column carrying that
-//! reducer's already-computed value, broadcast over the rows of its group. It is how a
-//! right-hand side like `MIN(cap) + demand * 2` becomes evaluable per row: the reducer
+//! `agg_substitutions` maps an aggregate node to an extra chunk column carrying that
+//! aggregate's already-computed value, broadcast over the rows of its group. It is how a
+//! right-hand side like `MIN(cap) + demand * 2` becomes evaluable per row: the aggregate
 //! collapses to a column reference and the rest of the tree is untouched. A tree built
 //! this way is only valid against the augmented chunk layout, so it must never be
 //! memoized by CachedTransformToChunkExpression.
@@ -112,7 +112,7 @@ static unique_ptr<Expression> TransformToChunkExpression(
 			auto it = agg_substitutions->find(&expr);
 			if (it != agg_substitutions->end()) {
 				// The extra column is DOUBLE, but the parent node was bound against this
-				// reducer's own type. Handing it a DOUBLE would not fail — it would
+				// aggregate's own type. Handing it a DOUBLE would not fail — it would
 				// reinterpret the physical representation and compute a wrong value
 				// (a DOUBLE 4.0 read as INTEGER is 0), so cast back explicitly.
 				auto ref = make_uniq<BoundReferenceExpression>(LogicalType::DOUBLE, it->second);
@@ -121,11 +121,11 @@ static unique_ptr<Expression> TransformToChunkExpression(
 			}
 		}
 		// Reached only where no substitution was prepared — an aggregate outside the
-		// right-hand side, e.g. in a WHEN condition or a coefficient, where a reducer has
+		// right-hand side, e.g. in a WHEN condition or a coefficient, where an aggregate has
 		// no meaning.
 		throw InvalidInputException(
-		    "DECIDE: an aggregate cannot be used here. Reducers are allowed on either side "
-		    "of a constraint and in the objective, not inside a WHEN condition or a "
+		    "DECIDE: this aggregate cannot be used here. An aggregate such as SUM(x) is allowed on either side "
+		    "of a constraint and in the objective, but not inside a WHEN condition or a "
 		    "coefficient.");
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 		auto &comp = expr.Cast<BoundComparisonExpression>();
@@ -228,12 +228,12 @@ static string DescribeNullSource(const NullSourceContext *ctx, idx_t row) {
 //! Fast path for DOUBLE; otherwise casts via VectorOperations::DefaultCast.
 //!
 //! `allow_infinite` relaxes the check to NaN-only, and is used exclusively for values
-//! on the path to a model row's `rhs` — the row's own bound, and the reducer input
+//! on the path to a model row's `rhs` — the row's own bound, and the aggregate input
 //! that a per-group bound is folded from. An infinite bound is not an error there:
 //! it is the absence of a constraint (`<= +inf`) or a constraint nothing satisfies
 //! (`>= +inf`), both of which the solver contract already expresses — the model
 //! validator accepts a non-finite rhs and rejects only NaN, and the constant and
-//! absorbed-bound RHS paths have always passed infinities straight through. A
+//! singleton-row-bound RHS paths have always passed infinities straight through. A
 //! coefficient has no such reading, so every other caller stays strict.
 static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign,
                                 vector<double> &out, const char *err_context,
@@ -485,7 +485,7 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
                                      vector<string> &out_group_labels,
                                      // Optional second map over the SAME group numbering but a
                                      // looser row filter. The right-hand side needs this: its
-                                     // reducers must not inherit the LHS's aggregate-local WHEN,
+                                     // aggregates must not inherit the LHS's aggregate-local WHEN,
                                      // which `row_filter` folds in. Groups that no strict row
                                      // reached emit no constraint, so their rows stay excluded.
                                      const std::function<bool(idx_t)> *loose_row_filter = nullptr,
@@ -584,13 +584,13 @@ static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
 
 
 
-//! Entity scope a reducer is qualified by (`sum(D: ...)`), read back from the tag the
-//! binder stamped on the aggregate; INVALID_INDEX when the reducer is unqualified.
-//! The prepared terms already carry this on `qualifier_scope_idx`; a data-side reducer
+//! Entity scope an aggregate is qualified by (`sum(D: ...)`), read back from the tag the
+//! binder stamped on the aggregate; INVALID_INDEX when the aggregate is unqualified.
+//! The prepared terms already carry this on `qualifier_scope_idx`; a data-side aggregate
 //! on the RHS is evaluated here from the tree, so it reads the tag itself.
 static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
 	idx_t scope_idx = DConstants::INVALID_INDEX;
-	TryParseQualifiedReducerTag(agg.alias, scope_idx);
+	TryParseQualifiedAggregateTag(agg.alias, scope_idx);
 	return scope_idx;
 }
 
@@ -612,7 +612,7 @@ static void RejectEmptyAggregate(idx_t effective_row_count, const char *what, co
 //
 // A reduced constraint emits ONE row per group, but the RHS is still a column, so a
 // bound that varies row to row has to collapse. Paper §3.2.1 fixes the semantics:
-// without PER, the clause generates one instance per tuple, each pairing the reducer
+// without PER, the clause generates one instance per tuple, each pairing the aggregate
 // (evaluated over the whole selection) with that tuple's non-reduced values. The
 // conjunction `LHS <= r_i` over every row is exactly `LHS <= min r_i`, so MIN for
 // `<=` and MAX for `>=` is a derivation, not a policy choice. With PER we apply the
@@ -630,8 +630,8 @@ static void RejectEmptyAggregate(idx_t effective_row_count, const char *what, co
 // uniform-storage fast path (and the built model) exactly as it was.
 //
 // `group_ids` is the RHS's own map — the constraint's WHEN and PER, deliberately
-// without the LHS's aggregate-local filters, the same map the RHS reducers are
-// evaluated over. An aggregate-local WHEN scopes its own reducer, not the per-tuple
+// without the LHS's aggregate-local filters, the same map the RHS aggregates are
+// evaluated over. An aggregate-local WHEN scopes its own aggregate, not the per-tuple
 // fan-out, so `SUM(x) WHEN a <= cap` takes the tightest `cap` over every selected row
 // rather than over the a-rows. Reducing over the looser map is safe for the broadcast
 // too: it is a superset of the strict map, so every row a reader reaches is written.
@@ -727,7 +727,7 @@ static void ReduceAggregateRhsPerGroup(EvaluatedConstraint &ec,
 // TermFilterState is declared in physical_decide.hpp (EvaluateObjective's
 // EvaluatedClauses return value carries it across Finalize's phase methods).
 
-// Which rows a relation-qualified reducer (`sum(D: ...)`) actually contributes.
+// Which rows a relation-qualified aggregate (`sum(D: ...)`) actually contributes.
 // The join repeats each D tuple once per matching row; §3.2.2 asks for one term per
 // tuple identity, and the binder has already guaranteed that every row sharing an
 // identity carries the same value — so keeping the first row of each identity and
@@ -836,38 +836,38 @@ static vector<bool> EvaluateBooleanMask(const Expression &condition, ChunkExprCa
     return EvaluateBooleanMasks({&condition}, chunk_expr_cache, context, data, num_rows)[0];
 }
 
-// Reduce one data-only reducer on the right-hand side to a value per group.
+// Reduce one data-only aggregate on the right-hand side to a value per group.
 //
-// Implements the construction order paper §3.2.2 fixes for every reducer:
+// Implements the construction order paper §3.2.2 fixes for every aggregate:
 //
 //     when selection -> per partitioning -> qualifier de-duplication -> aggregation
 //
 // The first two arrive as `group_ids` (built from the constraint's WHEN and PER,
-// deliberately without the LHS's aggregate-local filters). This adds the reducer's
+// deliberately without the LHS's aggregate-local filters). This adds the aggregate's
 // own WHEN, then the relation-qualifier de-duplication, then folds.
 //
 // Unlike the left-hand side, nothing here can be expressed as a coefficient: the
 // LHS reduces by *summing a column*, which is why only SUM and AVG could ever be
 // moved there and MIN/MAX/COUNT were refused. Folding per kind is what removes
 // that asymmetry.
-static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression &agg,
-                                                 const vector<idx_t> &group_ids, idx_t num_groups,
-                                                 const vector<EntityMapping> &entity_mappings,
-                                                 ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                                 ColumnDataCollection &data, idx_t num_rows) {
+static vector<double> EvaluateRhsAggregatePerGroup(const BoundAggregateExpression &agg,
+                                                   const vector<idx_t> &group_ids, idx_t num_groups,
+                                                   const vector<EntityMapping> &entity_mappings,
+                                                   ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                                   ColumnDataCollection &data, idx_t num_rows) {
     const bool has_groups = !group_ids.empty();
     const idx_t groups = has_groups ? num_groups : 1;
     auto group_of = [&](idx_t row) -> idx_t {
         return has_groups ? group_ids[row] : 0;
     };
 
-    // Stage 1: the reducer's own WHEN (`SUM(b) WHEN w`), which scopes this reducer
+    // Stage 1: the aggregate's own WHEN (`SUM(b) WHEN w`), which scopes this aggregate
     // and nothing else.
     vector<bool> keep;
     if (agg.filter) {
         keep = EvaluateBooleanMask(*agg.filter, chunk_expr_cache, context, data, num_rows);
     }
-    // Stage 2: relation-qualified reducers (`sum(D: cost)`) contribute once per
+    // Stage 2: relation-qualified aggregates (`sum(D: cost)`) contribute once per
     // distinct entity, not once per joined row.
     idx_t scope_idx = QualifierScopeOf(agg);
     if (scope_idx != DConstants::INVALID_INDEX) {
@@ -897,7 +897,7 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
     // A data-only AVG reaches here as a genuine AVG node: DecideOptimizer's
     // AVG->SUM rewrite deliberately skips decision-free aggregates, because
     // rebinding one as SUM redeclares it with SUM's integral type while its value
-    // stays fractional — and this is the one place a reducer's value is handed
+    // stays fractional — and this is the one place an aggregate's value is handed
     // back to a surrounding expression that was bound against that declared type.
     // Left as AVG, the round trip is DOUBLE->DOUBLE and the fold below is exact.
 
@@ -918,7 +918,7 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
         while (data.Scan(scan, in_chunk)) {
             out_chunk.Reset();
             arg_executor.Execute(in_chunk, out_chunk);
-            // A reducer's input feeds a bound, so it follows the same rule as
+            // An aggregate's input feeds a bound, so it follows the same rule as
             // every other RHS: ±inf is a value, not an error. A group whose
             // MAX(cap) folds to +inf is a group with no upper bound, and one
             // whose bound points out of reach is an infeasibility the solver
@@ -962,7 +962,7 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
         counts[g]++;
     }
     for (idx_t g = 0; g < groups; g++) {
-        // An empty reducer has no value — MIN(∅) and MAX(∅) are not representable
+        // An empty aggregate has no value — MIN(∅) and MAX(∅) are not representable
         // and AVG(∅) is undefined. Same rule the left-hand side already enforces.
         RejectEmptyAggregate(counts[g], "aggregate", "constraint right-hand side");
         if (is_avg) {
@@ -1200,7 +1200,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 // Sink (Collecting Data)
 //===--------------------------------------------------------------------===//
 
-//! Bound absorption is decided at layer 05 (DecideOptimizer::AbsorbVariableBounds).
+//! Singleton-row folding is decided at layer 05 (DecideOptimizer::FoldSingletonRows).
 //! `UserBoundSpec` lives on LogicalDecide with it; execution reads the resulting box
 //! rather than deriving one.
 using UserBoundSpec = LogicalDecide::UserBoundSpec;
@@ -1210,12 +1210,12 @@ public:
 	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
 	      canonicalizer(context, op.decide_index, op.variable_scopes) {
-        // The decision column box was resolved by DecideOptimizer::AbsorbVariableBounds.
+        // The decision column box was resolved by DecideOptimizer::FoldSingletonRows.
         // A variable whose box never had a lower bound written is one the query never
         // lowered, and Finalize resolves it to the default 0 floor.
         idx_t num_decide_vars = op.decide_variables.size();
-        absorbed_boxes = op.absorbed_boxes;
-        user_absorbed_bounds = op.user_absorbed_bounds;
+        singleton_row_boxes = op.singleton_row_boxes;
+        user_singleton_row_bounds = op.user_singleton_row_bounds;
 
         // A user bound that contradicts the variable's INTRINSIC domain (a non-negative
         // REAL/INTEGER's `>= 0` floor, or a BOOLEAN's `0/1` box) is a deterministic semantic
@@ -1238,15 +1238,15 @@ public:
             }
             // The raw box: an unwritten lower bound is the default floor of 0 to
             // DecideBoxContradictsDomain.
-            DecideBoundBox box = absorbed_boxes[var];
+            DecideBoundBox box = singleton_row_boxes[var];
             bool has_removable_bound = false;
-            for (const auto &bound : user_absorbed_bounds) {
+            for (const auto &bound : user_singleton_row_bounds) {
                 has_removable_bound = has_removable_bound ||
                                       (bound.decide_var_idx == var &&
                                        bound.removal_group_id != DConstants::INVALID_INDEX);
             }
             if (has_removable_bound) {
-                // A singleton/negative IN lowering can be absorbed into the box. It is
+                // A singleton/negative IN lowering can be folded into the box. It is
                 // not an independently written bound, and exact diagnosis may omit its
                 // whole source clause, so it must not trigger the pre-solve static bound
                 // error. Reconstruct the box from intrinsic domain plus only retained
@@ -1254,15 +1254,15 @@ public:
                 // full box and therefore still proves the original query infeasible.
                 DecideBoundBox retained;
                 if (is_bool) {
-                    DecideAbsorbBound(retained, '=', 0.0);
+                    DecideFoldSingletonRow(retained, '=', 0.0);
                     retained.upper = 1.0;
                 }
-                for (const auto &bound : user_absorbed_bounds) {
+                for (const auto &bound : user_singleton_row_bounds) {
                     if (bound.decide_var_idx != var ||
                         bound.removal_group_id != DConstants::INVALID_INDEX) {
                         continue;
                     }
-                    DecideAbsorbBound(retained, bound.sense, bound.k);
+                    DecideFoldSingletonRow(retained, bound.sense, bound.k);
                 }
                 box = retained;
             }
@@ -1275,10 +1275,10 @@ public:
                 ThrowDecideSolveError(infeasible);
             }
             const string vname = op.decide_variables[var]->GetName();
-            // Quote the clause as the user typed it: a strict `x < 0` is absorbed as `U = -1`,
+            // Quote the clause as the user typed it: a strict `x < 0` is folded as `U = -1`,
             // but the message says `x < 0`, not the normalized `x <= -1`.
             auto QuoteBound = [&](bool upper, double value) {
-                for (const auto &bound : user_absorbed_bounds) {
+                for (const auto &bound : user_singleton_row_bounds) {
                     if (bound.decide_var_idx == var && bound.strict && bound.sense == (upper ? '<' : '>') &&
                         bound.k == value) {
                         return StringUtil::Format("%s %s %g", vname, upper ? "<" : ">", bound.typed_k);
@@ -1311,11 +1311,11 @@ public:
     const vector<unique_ptr<DecideConstraint>> &constraints = op.prepared.constraints;
     const unique_ptr<DecideObjective> &objective = op.prepared.objective;
 
-    //! Local copies of the decision column box and the absorbed-bound records that
-    //! DecideOptimizer::AbsorbVariableBounds resolved. Finalize copies the box into
+    //! Local copies of the decision column box and the singleton-row-bound records that
+    //! DecideOptimizer::FoldSingletonRows resolved. Finalize copies the box into
     //! solver_input; the infeasible diagnosis re-emits the records as slackable rows.
-    vector<DecideBoundBox> absorbed_boxes;
-    vector<UserBoundSpec> user_absorbed_bounds;
+    vector<DecideBoundBox> singleton_row_boxes;
+    vector<UserBoundSpec> user_singleton_row_bounds;
 
     //===--------------------------------------------------------------------===//
     // Evaluated Coefficients (Phase 2)
@@ -1969,7 +1969,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         bool has_when = (constraint->when_condition != nullptr);
         bool has_per = (!constraint->per_columns.empty());
 
-        // Group map for the right-hand side's own reducers: the constraint's WHEN and
+        // Group map for the right-hand side's own aggregates: the constraint's WHEN and
         // PER, without the LHS's aggregate-local filters. Empty means "every row, one
         // group", the same convention `row_group_ids` uses.
         vector<idx_t> rhs_row_group_ids;
@@ -2021,8 +2021,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 }
                 return true;
             };
-            // The RHS's own reducers are scoped by the constraint's WHEN and PER, but
-            // NOT by the LHS's aggregate-local WHENs — those scope their own reducer
+            // The RHS's own aggregates are scoped by the constraint's WHEN and PER, but
+            // NOT by the LHS's aggregate-local WHENs — those scope their own aggregate
             // only. `SUM(x) WHEN a <= MIN(b)` must take MIN over every row, not the
             // a-rows. Kept in the same numbering so group g means the same thing on
             // both sides.
@@ -2067,7 +2067,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
         }
 
-        // Relation-qualified reducers: drop the duplicate rows the join introduced, now
+        // Relation-qualified aggregates: drop the duplicate rows the join introduced, now
         // that WHEN selection and PER partitioning have fixed the groups to de-duplicate
         // within. Folding this into the term filter keeps AVG's denominator honest.
         for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
@@ -2146,24 +2146,24 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
             eval_const.rhs_values.Reserve(num_rows);
 
-            // Reducers on this side are evaluated first, to one value per group, and
+            // Aggregates on this side are evaluated first, to one value per group, and
             // replaced by an extra chunk column carrying that value broadcast over the
             // group's rows. What remains is an ordinary per-row expression, so a mixed
-            // bound like `MIN(cap) + demand * 2` needs no special case: the reducer part
+            // bound like `MIN(cap) + demand * 2` needs no special case: the aggregate part
             // is constant within the group and the rest still varies, which is exactly
             // what the reduction after this block expects.
-            vector<const Expression *> rhs_reducers;
-            CollectReducers(*constraint->rhs_expr, rhs_reducers);
+            vector<const Expression *> rhs_aggregates;
+            CollectAggregates(*constraint->rhs_expr, rhs_aggregates);
 
             std::unordered_map<const Expression *, idx_t> agg_substitutions;
-            vector<vector<double>> reducer_values;
+            vector<vector<double>> aggregate_values;
             const idx_t data_columns = gstate.data.ColumnCount();
-            for (idx_t i = 0; i < rhs_reducers.size(); i++) {
-                auto &agg = rhs_reducers[i]->Cast<BoundAggregateExpression>();
-                reducer_values.push_back(EvaluateRhsReducerPerGroup(
+            for (idx_t i = 0; i < rhs_aggregates.size(); i++) {
+                auto &agg = rhs_aggregates[i]->Cast<BoundAggregateExpression>();
+                aggregate_values.push_back(EvaluateRhsAggregatePerGroup(
                     agg, rhs_row_group_ids, eval_const.num_groups, entity_mappings,
                     chunk_expr_cache, context, gstate.data, num_rows));
-                agg_substitutions.emplace(rhs_reducers[i], data_columns + i);
+                agg_substitutions.emplace(rhs_aggregates[i], data_columns + i);
             }
 
             // A substituted tree is only valid against the augmented chunk below, so it
@@ -2187,7 +2187,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             ColumnDataScanState rhs_scan_state;
             gstate.data.InitializeScan(rhs_scan_state);
             vector<LogicalType> chunk_types = gstate.data.Types();
-            for (idx_t i = 0; i < rhs_reducers.size(); i++) {
+            for (idx_t i = 0; i < rhs_aggregates.size(); i++) {
                 chunk_types.push_back(LogicalType::DOUBLE);
             }
             DataChunk rhs_chunk;
@@ -2201,13 +2201,13 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             idx_t scanned = 0;
             while (gstate.data.Scan(rhs_scan_state, scan_chunk)) {
                 DataChunk *eval_chunk = &scan_chunk;
-                if (!rhs_reducers.empty()) {
+                if (!rhs_aggregates.empty()) {
                     rhs_chunk.Reset();
                     for (idx_t col = 0; col < scan_chunk.ColumnCount(); col++) {
                         rhs_chunk.data[col].Reference(scan_chunk.data[col]);
                     }
-                    for (idx_t i = 0; i < rhs_reducers.size(); i++) {
-                        auto &vals = reducer_values[i];
+                    for (idx_t i = 0; i < rhs_aggregates.size(); i++) {
+                        auto &vals = aggregate_values[i];
                         auto out = FlatVector::GetData<double>(rhs_chunk.data[data_columns + i]);
                         for (idx_t row = 0; row < scan_chunk.size(); row++) {
                             idx_t abs_row = scanned + row;
@@ -2230,7 +2230,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 // Infinities are admitted here and nowhere else: this column becomes
                 // the model row's `rhs`, where ±inf is a meaningful bound. Canonical-
                 // ization rebuilds `x + v <= K` as `x <= K - v`, so an infinite K that
-                // was absorbed as a column bound in its bare spelling must stay legal
+                // was folded as a column bound in its bare spelling must stay legal
                 // in its rebuilt one. `inf - inf` still yields NaN and is still refused.
                 NullSourceContext null_ctx {constraint->rhs_expr.get(), eval_chunk};
                 ExtractDoubleColumn(rhs_result.data[0], scan_chunk.size(), 1.0, rhs_col,
@@ -2243,7 +2243,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 
         // A reduced constraint emits one row per group, so its bound must be one value
         // per group. `was_minmax_easy` is included: the optimizer emitted it per row,
-        // but it is still one reducer compared against every tuple's bound, so the
+        // but it is still one aggregate compared against every tuple's bound, so the
         // tightest bound is what pins it.
         if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
             string rhs_text = eval_const.rhs_label.empty()
@@ -2467,7 +2467,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
             vector<idx_t> *out_var_indices;
             vector<TermFilterState> *out_term_filters;
             //! Only set for the linear bucket: the model builder's scalar-once shortcut
-            //! needs to tell a reducer-summed term from a row-invariant sibling term.
+            //! needs to tell an aggregate-summed term from a row-invariant sibling term.
             //! Quadratic terms have no such shortcut, so this stays null there.
             vector<LinearTermReduction> *out_reductions = nullptr;
         };
@@ -2737,8 +2737,8 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 
 // Composed MIN/MAX: additive clauses mixing SUM/AVG/MIN/MAX, in a constraint
 // (`SUM(a) + MAX(b) <= K`) or in the objective. This phase evaluates the parts that
-// need a row -- each inner term's per-row coefficient, the query-wide factor on a
-// reducer, the term's WHEN mask, the constant RHS. The rows and auxiliaries they
+// need a row -- each inner term's per-row coefficient, the query-wide factor on an
+// aggregate, the term's WHEN mask, the constant RHS. The rows and auxiliaries they
 // become are emitted later, by FormulateModel; nothing evaluated here depends on a
 // variable bound, so a second formulation against a widened box reuses it as is.
 void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate,
@@ -2782,7 +2782,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
         return coefs;
     };
 
-    //! A factor on a reducer is one value for the whole query by construction (the
+    //! A factor on an aggregate is one value for the whole query by construction (the
     //! canonicalizer rejects anything row-varying), so evaluate it once and read
     //! row 0. It goes through the same chunk-expression transform every other
     //! coefficient does -- a flattened scalar subquery is a column reference, and
@@ -2874,7 +2874,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
                 ta.filter_mask.assign(num_rows, true);
             }
             // Fold in the relation qualifier's de-duplication mask, exactly as the
-            // non-composed reducer paths do. Composed v1 has no outer PER, so every
+            // non-composed aggregate paths do. Composed v1 has no outer PER, so every
             // row is in one group and `row_group_ids` is empty. Applied uniformly:
             // for MIN/MAX it is provably a no-op (every row of an identity carries the
             // same value, so dropping repeats cannot move an extremum), which keeps
@@ -2971,7 +2971,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         solver_input.variable_types[var] = bool_domain ? LogicalType::BOOLEAN : decide_var.return_type;
     }
 
-    // Bounds were absorbed in the gstate constructor from simple
+    // Bounds were folded in the gstate constructor from simple
     // `x OP const` / BETWEEN constraints; those comparisons were skipped in
     // AnalyzeConstraint so we don't re-emit them as per-row model rows.
     solver_input.constraint_sources = constraint_sources;
@@ -2980,11 +2980,11 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // keeps it, and a written bound of -1e30 or below is no bound, as -1e29 is. Must
     // run before any consumer of lower_bounds (implied-bound propagation, Big-M,
     // McCormick, model builder).
-    solver_input.lower_bounds.resize(gstate.absorbed_boxes.size());
-    solver_input.upper_bounds.resize(gstate.absorbed_boxes.size());
-    for (idx_t var = 0; var < gstate.absorbed_boxes.size(); var++) {
-        solver_input.lower_bounds[var] = gstate.absorbed_boxes[var].EffectiveLower();
-        solver_input.upper_bounds[var] = gstate.absorbed_boxes[var].upper;
+    solver_input.lower_bounds.resize(gstate.singleton_row_boxes.size());
+    solver_input.upper_bounds.resize(gstate.singleton_row_boxes.size());
+    for (idx_t var = 0; var < gstate.singleton_row_boxes.size(); var++) {
+        solver_input.lower_bounds[var] = gstate.singleton_row_boxes[var].EffectiveLower();
+        solver_input.upper_bounds[var] = gstate.singleton_row_boxes[var].upper;
     }
 
     // Everything below this point is stage 06 working on the evaluated model, so
@@ -3001,15 +3001,15 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         solver_input.abs_maximize_links.push_back(AbsMaximizeLinkSpec {link.aux_idx, link.y_idx});
     }
 
-    // The rigid box, captured before any propagation runs and with every user-absorbed
+    // The rigid box, captured before any propagation runs and with every user-folded
     // direction re-opened. What is left is the intrinsic domain alone — the only part of
     // the column box that survives infeasibility diagnosis unchanged, and therefore the
     // only part a structural rewrite may rely on. The re-opening mirrors the
-    // `user_absorbed_bounds` re-emission below, which relaxes the same directions for the
+    // `user_singleton_row_bounds` re-emission below, which relaxes the same directions for the
     // same reason.
     solver_input.rigid_lower_bounds = solver_input.lower_bounds;
     solver_input.rigid_upper_bounds = solver_input.upper_bounds;
-    for (const auto &b : gstate.user_absorbed_bounds) {
+    for (const auto &b : gstate.user_singleton_row_bounds) {
         idx_t v = b.decide_var_idx;
         if (v >= solver_input.rigid_lower_bounds.size()) {
             continue;
@@ -3064,7 +3064,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     solver_input.objective_row_group_ids = evaluated.objective_row_group_ids;
     solver_input.objective_num_groups = evaluated.objective_num_groups;
 
-    // Relation-qualified reducers in the objective: same de-duplication as on the
+    // Relation-qualified aggregates in the objective: same de-duplication as on the
     // constraint side, applied once the objective's PER groups are settled and before
     // AVG scaling reads the surviving-row counts.
     if (gstate.objective) {
@@ -3386,13 +3386,13 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 //! only by the loosenable row emitted beside it rather than by a bound that cannot move.
 //!
 //! The solved box carries three things (see `SolverInput::rigid_lower_bounds`): the
-//! intrinsic domain, user bounds stage 05 absorbed, and implied tightenings
+//! intrinsic domain, user bounds stage 05 folded, and implied tightenings
 //! `DecidePropagateImpliedBounds` derived. The last two are each backed by a row the
 //! elastic engine may loosen, so leaving them in place would pin the loosenable row behind
 //! a bound that cannot move — the engine would report an edit that changes nothing.
 //! `rigid_*` is exactly the intrinsic domain, which is what makes the test "is this
 //! direction narrower than rigid?" the same as "is a loosenable row holding it?":
-//! propagation only ever narrows, and stage 05's absorption is re-opened in the snapshot.
+//! propagation only ever narrows, and stage 05's folding is re-opened in the snapshot.
 //!
 //! The widening is bounded, and it is bounded RELATIVE TO EACH COLUMN. Opening a direction
 //! all the way is not an option: an unbounded column has no finite Big-M, so a formulation
@@ -3483,9 +3483,9 @@ static void OpenElasticColumnBox(SolverInput &input) {
     }
 }
 
-//! Decision 1a: a user constraint like `x <= 10` / `x BETWEEN a AND b` was absorbed into
+//! Decision 1a: a user constraint like `x <= 10` / `x BETWEEN a AND b` was folded into
 //! the column-bound arrays, not emitted as a matrix row, so it is invisible to the
-//! elastic engine. Re-emit each absorbed bound as a USER_PARAMETER slackable row,
+//! elastic engine. Re-emit each singleton-row bound as a USER_PARAMETER slackable row,
 //! pairing the column `OpenElasticColumnBox` just widened with the row that now enforces
 //! it. The bound `x <= k` is ONE editable knob; on a multi-instance variable it fans into
 //! one row per instance under a single (synthetic) clause id and shape SHARED_SCALAR, so
@@ -3495,11 +3495,11 @@ static void OpenElasticColumnBox(SolverInput &input) {
 //! C3: if a recorded bound cannot be re-emitted (its column is missing from the model),
 //! the elastic model is missing a user constraint — `has_unhandled_user_bounds` is set so
 //! the engine won't claim an elastic-infeasible verdict.
-static void EmitAbsorbedUserBoundRows(SolverModel &model, const VarIndexer &var_indexer,
-                                      const vector<LogicalDecide::UserBoundSpec> &user_absorbed_bounds,
-                                      bool &has_unhandled_user_bounds) {
+static void EmitSingletonRowUserBoundRows(SolverModel &model, const VarIndexer &var_indexer,
+                                          const vector<LogicalDecide::UserBoundSpec> &user_singleton_row_bounds,
+                                          bool &has_unhandled_user_bounds) {
     // The synthetic ids must be FRESH: the elastic engine groups rows into one shared
-    // slack by `repair_group_id`, so an id already in use silently welds an absorbed
+    // slack by `repair_group_id`, so an id already in use silently welds a singleton-row
     // bound onto an unrelated clause and reports one edit for both. They are read off the
     // model rather than derived from a count, because no count is the id space. A regular
     // constraint takes its index in `solver_input.constraints` and a GLOBAL one takes
@@ -3515,7 +3515,7 @@ static void EmitAbsorbedUserBoundRows(SolverModel &model, const VarIndexer &var_
             synthetic_clause_id = row.provenance.repair_group_id + 1;
         }
     }
-    for (const auto &b : user_absorbed_bounds) {
+    for (const auto &b : user_singleton_row_bounds) {
         idx_t num_instances = var_indexer.NumInstances(b.decide_var_idx);
         idx_t bound_clause_id = synthetic_clause_id++;
         for (idx_t inst = 0; inst < num_instances; inst++) {
@@ -3536,7 +3536,7 @@ static void EmitAbsorbedUserBoundRows(SolverModel &model, const VarIndexer &var_
             row.provenance.kind = ConstraintKind::USER_PARAMETER;
             row.provenance.shape = ElasticShape::SHARED_SCALAR;
             // Mirror the strict re-quote stamped by ApplyComparisonSense on the
-            // non-absorbed path, so `x < 10` reports `< 10` → `< 16`, not `<= 9`.
+            // non-folded path, so `x < 10` reports `< 10` → `< 16`, not `<= 9`.
             row.provenance.strict = b.strict;
             row.provenance.typed_k = b.typed_k;
             model.constraints.push_back(std::move(row));
@@ -3992,8 +3992,8 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
             break;
         }
         bool has_unhandled_user_bounds = false;
-        EmitAbsorbedUserBoundRows(elastic_model, elastic_indexer, gstate.user_absorbed_bounds,
-                                  has_unhandled_user_bounds);
+        EmitSingletonRowUserBoundRows(elastic_model, elastic_indexer, gstate.user_singleton_row_bounds,
+                                      has_unhandled_user_bounds);
 
         InfeasibleDiagnosisInput diag_input {
             elastic_model,         elastic_indexer, var_labels,

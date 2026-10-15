@@ -128,15 +128,15 @@ public:
     // Empty when the objective is not composed.
     vector<LogicalDecide::ComposedMinMaxTerm> composed_minmax_objective_terms;
 
-    // --- Absorbed variable bounds (decided by DecideOptimizer::AbsorbVariableBounds) ---
+    // --- Singleton-row variable bounds (decided by DecideOptimizer::FoldSingletonRows) ---
     //
     // The decision column box, already resolved upstream. Finalize copies these into
-    // SolverInput; comparisons folded into them carry ABSORBED_BOUND_TAG so term
+    // SolverInput; comparisons folded into them carry SINGLETON_ROW_BOUND_TAG so term
     // extraction skips them. Execution consumes this, it does not re-derive it.
-    vector<DecideBoundBox> absorbed_boxes;
-    // Every absorbed user bound, kept so the infeasible diagnosis can re-emit it as a
+    vector<DecideBoundBox> singleton_row_boxes;
+    // Every folded user bound, kept so the infeasible diagnosis can re-emit it as a
     // slackable row and quote it as written. A BETWEEN contributes two entries.
-    vector<LogicalDecide::UserBoundSpec> user_absorbed_bounds;
+    vector<LogicalDecide::UserBoundSpec> user_singleton_row_bounds;
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
@@ -298,7 +298,7 @@ private:
                                        const vector<EntityMapping> &entity_mappings) const;
 
     //! PHASE 2, sub-phase 3: evaluate every composed MIN/MAX clause — each inner term's
-    //! per-row coefficient, the factor peeled off a reducer, the term's WHEN mask, the
+    //! per-row coefficient, the factor peeled off an aggregate, the term's WHEN mask, the
     //! constant RHS. The rows these become are emitted later, by the formulation pass.
     void EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                  ChunkExprCache &chunk_expr_cache,

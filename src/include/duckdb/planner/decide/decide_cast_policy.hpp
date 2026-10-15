@@ -143,7 +143,7 @@ bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, d
 //! True for a literal under any number of cast wrappers.
 //!
 //! This is an ELIGIBILITY test, not a folder: it asks whether an expression is a
-//! constant the user wrote, so bound absorption stays a shape optimization rather
+//! constant the user wrote, so singleton-row folding stays a shape optimization rather
 //! than becoming a general constant folder. Pair it with TryEvaluateFoldableDouble,
 //! which evaluates the whole expression so a data cast keeps its SQL semantics.
 bool IsCastWrappedConstant(const Expression &expr);

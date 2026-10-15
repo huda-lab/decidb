@@ -90,7 +90,7 @@ def test_not_equal_over_unbounded_variable_is_refused(decidb_cli, constraint):
 @pytest.mark.cons_mixed
 @pytest.mark.error
 def test_composed_minmax_over_unbounded_variable_is_refused(decidb_cli):
-    """A composed reducer pins a global auxiliary, which needs a family-wide M.
+    """A composed aggregate pins a global auxiliary, which needs a family-wide M.
 
     ``x >= -100`` bounds x from below only, which is what keeps implied-bound
     propagation from supplying an upper bound and lets this reach the auxiliary

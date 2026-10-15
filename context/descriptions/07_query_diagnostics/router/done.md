@@ -98,7 +98,7 @@ per-scope entity candidates across the engine's per-variable calls.
 ## Terminals: infeasible (elastic)
 
 R5 wired the `INFEASIBLE` terminal to the **elastic engine**. In the
-`DiagnosisTerminal::INFEASIBLE` arm, `Finalize` re-emits absorbed user bounds as
+`DiagnosisTerminal::INFEASIBLE` arm, `Finalize` re-emits folded user bounds as
 slackable rows, resets implied bound tightenings to the intrinsic domain, builds the
 `InfeasibleDiagnosisInput` (the retained `SolverModel` + indexer + labels + an injected
 solve callback), and calls `DiagnoseInfeasible`. A valid diagnosis is reported as

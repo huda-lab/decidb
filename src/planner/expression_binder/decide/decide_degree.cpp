@@ -145,7 +145,7 @@ static DegreeWalk WalkDegree(const Expression &expr, idx_t decide_index) {
 		return WalkDegree(*expr.Cast<const BoundCastExpression>().child, decide_index);
 	case ExpressionClass::BOUND_AGGREGATE: {
 		// SUM / AVG / MIN / MAX and the norm marker combine values across rows without
-		// multiplying them, so a reducer has the degree of what it reduces. Its `filter`
+		// multiplying them, so an aggregate has the degree of what it reduces. Its `filter`
 		// (an aggregate-local WHEN) may not reference a decision and is not walked.
 		auto &agg = expr.Cast<const BoundAggregateExpression>();
 		for (auto &child : agg.children) {

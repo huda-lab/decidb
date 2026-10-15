@@ -18,8 +18,8 @@ class LogicalDecide;
 //! form on `decide.prepared`.
 //!
 //! This is the LAST pass of DECIDE optimization, and it must stay last for the
-//! same reason bound absorption does: the nine rewrites above it emit fresh
-//! constraint rows through `LogicalDecide::AddConstraint`, and absorption tags
+//! same reason singleton-row folding does: the nine rewrites above it emit fresh
+//! constraint rows through `LogicalDecide::AddConstraint`, and folding tags
 //! the comparisons it folded into the variable box. Flattening earlier would
 //! miss the former and re-emit the latter.
 //!

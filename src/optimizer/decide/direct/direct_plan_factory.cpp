@@ -10,7 +10,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/function/table/table_scan.hpp"
-#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
+#include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/binder.hpp"
@@ -425,7 +425,7 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 	constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 	idx_t decision_count = ir.decisions.size();
 	// The box as the solver folds it: the raw values it reads (after the strict shift, before any rounding or mapping
-	// to infinity), combined by the one function the solver's own absorption pass calls.
+	// to infinity), combined by the one function the solver's own folding pass calls.
 	vector<DecideBoundBox> boxes(decision_count);
 	for (auto &ir_node : ir.constraints) {
 		if (ir_node.aggregate) {
@@ -460,8 +460,8 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 			}
 			bool lower = DirectIsLowerBound(comparison);
 			bool upper = DirectIsUpperBound(comparison);
-			DecideAbsorbBound(boxes[decision], lower && upper ? '=' : (lower ? '>' : '<'),
-			                  strict ? DecideStrictBound(lower, k) : k);
+			DecideFoldSingletonRow(boxes[decision], lower && upper ? '=' : (lower ? '>' : '<'),
+			                       strict ? DecideStrictBound(lower, k) : k);
 			continue;
 		}
 		DirectBoundClause clause;

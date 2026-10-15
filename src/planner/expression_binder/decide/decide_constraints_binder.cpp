@@ -88,11 +88,11 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
                 // canonicalization refactor; before that, `<= SUM(b) WHEN w` was
                 // rewritten away before this
                 // check ever saw it. The physical layer has always had the matching
-                // stages -- EvaluateRhsReducerPerGroup applies the reducer's own filter
+                // stages -- EvaluateRhsAggregatePerGroup applies the aggregate's own filter
                 // and BuildQualifierKeepMask its de-duplication -- so this opens paths
                 // that were built and unreachable, not new ones.
                 if (func.function_name == WHEN_CONSTRAINT_TAG ||
-                    func.function_name == QUALIFIED_REDUCER_TAG ||
+                    func.function_name == QUALIFIED_AGGREGATE_TAG ||
                     IsPerConstraintTag(func.function_name)) {
                     return !func.children.empty() &&
                            IsAllowedDecisionFreeBoundExpression(*func.children[0], variables);
@@ -302,16 +302,16 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
             "Move the shared condition into each aggregate-local WHEN, or keep a single expression-level WHEN."));
     }
 
-    // A relation-qualified reducer (`sum(D: ...)`) is not a `func_application`, so WHEN
+    // A relation-qualified aggregate (`sum(D: ...)`) is not a `func_application`, so WHEN
     // written right after it always parses as this (whole-constraint) form rather than
     // aggregate-local WHEN, taking everything after it — including a trailing comparison
     // like `<= bound` — as the condition. What is left in child[0] is then the bare
-    // reducer, which can never be a constraint on its own. Catch that shape here with a
+    // aggregate, which can never be a constraint on its own. Catch that shape here with a
     // message that names the fix, instead of falling through to the generic dispatch
-    // below, which would report the reducer's internal tag.
+    // below, which would report the aggregate's internal tag.
     if (func.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION) {
         auto &candidate = func.children[0]->Cast<FunctionExpression>();
-        if (candidate.is_operator && candidate.function_name == QUALIFIED_REDUCER_TAG &&
+        if (candidate.is_operator && candidate.function_name == QUALIFIED_AGGREGATE_TAG &&
             candidate.children.size() >= 2 &&
             candidate.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION) {
             bool all_column_refs = true;
@@ -328,7 +328,7 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
                 auto relation = StringUtil::Join(relation_names, ", ");
                 return BindResult(BinderException::Unsupported(*expr_ptr,
                     StringUtil::Format(
-                        "A relation-qualified reducer's WHEN must follow the comparison, not precede it. "
+                        "A relation-qualified aggregate's WHEN must follow the comparison, not precede it. "
                         "Write %s(%s: ...) <= bound WHEN cond.",
                         StringUtil::Upper(agg_name), relation)));
             }
@@ -398,7 +398,7 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
 
     // Aggregate eligibility is deliberately deferred until the bound comparison has
     // been canonicalized. Parsed shape cannot distinguish `SUM(p) + x <= 10` (a
-    // per-row decision beside a data-only reducer) from a homogeneous aggregate row.
+    // per-row decision beside a data-only aggregate) from a homogeneous aggregate row.
     // DecideCanonicalizer validates the completed shape and owns the PER error.
 
     return BindPerWrapper(func, depth);
@@ -483,7 +483,7 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
     case ExpressionClass::SUBQUERY:
         return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
     case ExpressionClass::CASE:
-        // Same answer as a CASE inside a reducer, which ValidateSumArgument rejects
+        // Same answer as a CASE inside an aggregate, which ValidateSumArgument rejects
         // with this text: without this branch the generic message below leaks
         // `ExpressionClass::CASE`, which is not something a SQL user can act on.
         return BindResult(BinderException::Unsupported(expr, DecideCaseUnsupportedMessage()));
@@ -496,9 +496,9 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 }
 
 DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &expr_ptr, string& error_msg){
-    // A relation qualifier changes which tuples a reducer sums over, not what shape it
+    // A relation qualifier changes which tuples an aggregate sums over, not what shape it
     // is, so classification looks straight through it.
-    auto &expr = const_cast<ParsedExpression &>(UnwrapQualifiedReducer(expr_ptr));
+    auto &expr = const_cast<ParsedExpression &>(UnwrapQualifiedAggregate(expr_ptr));
     switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF: {
         if (!IsVariableExpression(expr, variables)) {
@@ -509,9 +509,9 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
     }
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
-		DecideExpression reducer_result;
-		if (ClassifyReducerCall(func, reducer_result, error_msg)) {
-			return reducer_result;
+		DecideExpression aggregate_result;
+		if (ClassifyAggregateCall(func, aggregate_result, error_msg)) {
+			return aggregate_result;
 		}
 		if (ContainsDecideAggregate(expr)) {
             return DecideExpression::SUM;

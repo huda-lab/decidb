@@ -12,7 +12,7 @@ behaviour that *is* observable has its own test in `test_implied_bounds.py`.
 What these tests guard is the other direction — the cases where two terms name
 one column but are **not** the same contribution, and merging them would be
 wrong. Naming a variable is not enough; a term also says which rows it applies
-to and which reducer produced it.
+to and which aggregate produced it.
 """
 
 import re

@@ -300,7 +300,7 @@ class TestDiagnoseRelationShape:
 class TestDiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_contradictory_absorbed_bounds_are_diagnosed(self, request, cli_fixture):
-        """Bug 1: two contradictory USER bounds both absorbed into the column box
+        """Bug 1: two contradictory USER bounds both folded into the column box
         (`x >= 5 AND x <= 1`) invert it (col_lower > col_upper). The build no longer
         throws under diagnosis; the elastic engine resets the box to the intrinsic
         domain, re-emits both bounds as slackable rows, and reports a least-change
@@ -332,10 +332,10 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_absorbed_bound_is_loosened(self, request, cli_fixture):
-        """Decision 1a end-to-end: a user `x <= 5` is absorbed into the column bound
+        """Decision 1a end-to-end: a user `x <= 5` is folded into the column bound
         (no row, no provenance), yet the engine must still loosen it. The conflict is
         with the row `2*x >= 30` (x >= 15); loosening the cap to 15 is the unique fix.
-        Proves the operator re-emits the absorbed bound as a slackable row."""
+        Proves the operator re-emits the singleton-row bound as a slackable row."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
@@ -480,7 +480,7 @@ class TestDiagnosticsRelation:
         across two clauses). The rank-weighted tie-break re-solves under the frozen tier
         budgets and concentrates the repair on the lowest-ranked clause — ranks follow
         slack emission order: matrix rows in declaration order first, then re-emitted
-        absorbed bounds — so both backends report the single floor edit. Asserting the
+        singleton-row bounds — so both backends report the single floor edit. Asserting the
         SAME clause on both backends is the solver-agnosticism guarantee."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
@@ -500,7 +500,7 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_between_bound_is_loosened(self, request, cli_fixture):
-        """BETWEEN is now tracked for re-emission too (it was absorbed but untracked).
+        """BETWEEN is now tracked for re-emission too (it was folded but untracked).
         `x BETWEEN 0 AND 5` against `2*x >= 30` loosens the upper side to 15; the
         lower side (0) takes no slack, so only the cap edit is reported."""
         cli = request.getfixturevalue(cli_fixture)
@@ -519,7 +519,7 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_easy_max_shares_one_slack_max_overshoot(self, request, cli_fixture):
-        """I2.a: `MAX(x) <= 5` is absorbed as a per-instance 0/1-style cap that shares
+        """I2.a: `MAX(x) <= 5` is folded as a per-instance 0/1-style cap that shares
         ONE knob across rows. Floors force x@row1 >= 8 (overshoot 3) and x@row2 >= 12
         (overshoot 7). The cap is one shared slack, so the minimal total loosening is
         the MAX overshoot (7) — not the per-row sum (10) independent slacks would force.
@@ -541,7 +541,7 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_multi_instance_bound_shares_one_slack(self, request, cli_fixture):
-        """I2.a: the absorbed bound `x <= 5` on a multi-instance variable (2 rows) is
+        """I2.a: the singleton-row bound `x <= 5` on a multi-instance variable (2 rows) is
         re-emitted as one row per instance under a single knob → ONE shared slack.
         Floors force overshoots 3 and 7, so the minimal total loosening is the MAX
         (7), the shared saving vs the sum (10). The default non-negativity and any
@@ -563,7 +563,7 @@ class TestDiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_reversed_bound_is_absorbed_and_reported(self, request, cli_fixture):
         """A reversed simple bound (`5 >= x`) normalizes to `x <= 5` before bound
-        absorption, so the elastic engine still re-emits it as an editable user
+        folding, so the elastic engine still re-emits it as an editable user
         bound instead of losing it behind the rigid column box."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
@@ -739,7 +739,7 @@ class TestDiagnosticsRelation:
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_boolean_pin_floor_is_diagnosed(self, request, cli_fixture):
         """A1 (silent-failure repro): a genuine user pin on a BOOLEAN (`x >= 1`) used
-        to be erased from the elastic model — absorbed into the 0/1 box and never
+        to be erased from the elastic model — folded into the 0/1 box and never
         re-emitted — so this trivially diagnosable conflict fell through to the bare
         static error with an empty relation. Pinning all 3 x to 1 conflicts with
         `SUM(x) <= 2`; the engine must produce a diagnosis whose edit names one of
@@ -1155,8 +1155,8 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_single_absorbed_bound_vs_row(self, request, cli_fixture):
-        """Bug 1: a single absorbed cap (`x <= 4`) that conflicts with a matrix row
-        (`2*x >= 30` → x >= 15) — the column box (implied + absorbed) no longer pins the
+        """Bug 1: a single folded cap (`x <= 4`) that conflicts with a matrix row
+        (`2*x >= 30` → x >= 15) — the column box (implied + folded) no longer pins the
         variable, so the cap loosens 4 → 15 (amount 11). The `2*x` coefficient breaks the
         L1 tie, so the edit is deterministic."""
         cli = request.getfixturevalue(cli_fixture)
@@ -1484,7 +1484,7 @@ class TestDiagnosticsRelation:
         self, request, cli_fixture, domain, when
     ):
         """Singleton, multi-value, negative, and WHEN-wrapped IN formulations are
-        source-level remove-only groups. Cardinality/linking/absorbed-floor rows never
+        source-level remove-only groups. Cardinality/linking/folded-floor rows never
         surface separately and always disappear together."""
         cli = request.getfixturevalue(cli_fixture)
         clause = f"b IN {domain}{when}"
@@ -1504,7 +1504,7 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_negative_in_group_participates_in_atomic_choice(self, request, cli_fixture):
-        """A negative IN formulation (including its absorbed floor) is one candidate.
+        """A negative IN formulation (including its folded floor) is one candidate.
         Against a disjoint positive IN, MAXIMIZE selects dropping the negative clause."""
         cli = request.getfixturevalue(cli_fixture)
         negative = "x IN (-2, -3)"
@@ -1699,8 +1699,8 @@ class TestInfeasibleHeadlineAndRendering:
         """A uniform-valued data coefficient keeps the written `SUM(x * w)` source
         expression (never a raw `x + x` fan-out). The infeasibility is repaired by a
         single objective-preserving edit: loosen the budget to `<= 5` so one `x` can be
-        chosen (achievable objective 1). Before the boolean bound-absorption fix, `x` was
-        wrongly pinned to 0 (the budget `<= -1` absorbed `x <= -0.2`), which forced a
+        chosen (achievable objective 1). Before the boolean singleton-row-folding fix, `x` was
+        wrongly pinned to 0 (the budget `<= -1` folded `x <= -0.2`), which forced a
         degenerate two-clause objective-0 fix; the bound fix now lets stage 2 keep the
         floor and reach objective 1 with one edit."""
         cli = request.getfixturevalue(cli_fixture)
@@ -2140,14 +2140,14 @@ class TestNativeConstructDiagnosis:
     a real defect.
 
     **The defect.** The elastic engine folds the rows of one clause into a single
-    shared slack, grouping them by `repair_group_id`. Absorbed bounds (`y <= 2`, which
+    shared slack, grouping them by `repair_group_id`. Singleton-row bounds (`y <= 2`, which
     is stored as a column box, not a row) are re-emitted as slackable rows at diagnosis
     time under freshly minted ids, and those ids started at the count of linear
     constraint specs. But a GLOBAL constraint is numbered `constraints.size() + its own
     index`, from the same base — so the two ranges overlap. When the count of linear
     specs happened to exceed the ids actually in use the overlap was empty and nothing
     showed; stating a construct natively removes linear specs without removing ids, and
-    the first absorbed bound landed on top of the first global constraint.
+    the first singleton-row bound landed on top of the first global constraint.
 
     The two then shared one slack, which is a slack spanning two unrelated clauses.
     The engine could satisfy `SUM(y) >= 100` by spending that slack on the bound rows,

@@ -21,7 +21,7 @@ Each subdirectory corresponds to a feature area and contains:
 | `variables/` | BOOL / INT / REAL, multi-variable | `test_var_*.py` |
 | `entity_scope/` | Table-scoped decision variables (`DECIDE Table.var`) | `test_entity_scope.py` |
 | `scalar_scope/` | Query-wide decision variables (`DECIDE scalar var`) | `test_scalar_scope.py` |
-| `qualified_reducer/` | Relation-qualified reducers (`SUM(D: expr)`) | `test_qualified_reducer.py` |
+| `qualified_aggregate/` | Relation-qualified aggregates (`SUM(D: expr)`) | `test_qualified_reducer.py` |
 | `constraints/` | Comparison operators (`=`, `<`, `<=`, `>`, `>=`, `<>`, BETWEEN, IN), per-row vs aggregate | `test_cons_*.py` |
 | `when/` | WHEN clause (expression-level and aggregate-local) | `test_when_*.py`, `test_aggregate_local_when.py` |
 | `per/` | PER clause (grouped constraints and nested-aggregate objectives) | `test_per_*.py` |

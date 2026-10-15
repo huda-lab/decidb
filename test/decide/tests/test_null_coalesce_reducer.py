@@ -1,4 +1,4 @@
-"""Explicit NULL imputation is legal inside DECIDE reducer coefficients.
+"""Explicit NULL imputation is legal inside DECIDE aggregate coefficients.
 
 NULL values still fail by default. These tests pin the explicit opt-in path:
 data-only COALESCE/IFNULL nodes are evaluated by DuckDB as coefficient atoms,

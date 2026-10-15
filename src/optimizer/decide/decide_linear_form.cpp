@@ -193,10 +193,10 @@ private:
 	//! Whether two terms describe the same contribution and may be summed into one.
 	//!
 	//! Naming the same variable is not enough. A term also carries *which rows it
-	//! applies to* and *which reducer produced it*, and two terms that disagree on
+	//! applies to* and *which aggregate produced it*, and two terms that disagree on
 	//! any of that are different contributions that happen to share a column:
 	//!
-	//! - `reduction` separates a reducer term from a row-invariant one. `SUM(x)` and
+	//! - `reduction` separates an aggregate term from a row-invariant one. `SUM(x)` and
 	//!   a query-wide `x` in the same clause are summed differently downstream.
 	//! - `filter` is the aggregate-local `WHEN`. `SUM(x) WHEN a` and `SUM(x) WHEN b`
 	//!   name one column over two row sets; merging them would apply one mask to both.
@@ -266,14 +266,14 @@ private:
 	}
 
 	//===------------------------------------------------------------------===//
-	// Reducer metadata and peeled scales
+	// Aggregate metadata and peeled scales
 	//===------------------------------------------------------------------===//
 
-	//! Entity scope a reducer is qualified by (`sum(D: ...)`), read back from the tag the
-	//! binder stamped on the aggregate; INVALID_INDEX when the reducer is unqualified.
+	//! Entity scope an aggregate is qualified by (`sum(D: ...)`), read back from the tag the
+	//! binder stamped on the aggregate; INVALID_INDEX when the aggregate is unqualified.
 	static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
 		idx_t scope_idx = DConstants::INVALID_INDEX;
-		TryParseQualifiedReducerTag(agg.alias, scope_idx);
+		TryParseQualifiedAggregateTag(agg.alias, scope_idx);
 		return scope_idx;
 	}
 
@@ -297,7 +297,7 @@ private:
 		return name.empty() ? cur->ToString() : name;
 	}
 
-	//! Multiply a coefficient by a factor that stayed outside a reducer, keeping the
+	//! Multiply a coefficient by a factor that stayed outside an aggregate, keeping the
 	//! operand types the original `*` / `/` node was bound for and then binding the
 	//! rebuilt node through `FunctionBinder`. Casting first preserves the division
 	//! semantics the user's expression was bound with; binding after is what removes
@@ -320,7 +320,7 @@ private:
 	}
 
 	//! Multiply everything the aggregate under a peeled scale just produced by that
-	//! scale. Folding the factor into the reducer's body is what the canonicalizer
+	//! scale. Folding the factor into the aggregate's body is what the canonicalizer
 	//! refuses to do, because at the parsed level the aggregate may still be MIN/MAX
 	//! and `MAX(-2x)` is `-2*MIN(x)`, not `-2*MAX(x)`. Here it is safe and exact: the
 	//! optimizer has already rewritten every MIN/MAX to SUM (asserted below), and a
@@ -363,8 +363,8 @@ private:
 		}
 	}
 
-	//! Objective twin of ApplyScaleToExtracted: multiply a factor that stayed outside a
-	//! reducer into everything the reducer produced. `quadratic_sign` is a number
+	//! Objective twin of ApplyScaleToExtracted: multiply a factor that stayed outside an
+	//! aggregate into everything the aggregate produced. `quadratic_sign` is a number
 	//! rather than an expression, so a squared term needs the factor's value here.
 	void ApplyScaleToObjective(const BoundFunctionExpression &scale_func, const Expression &scale, bool divides,
 	                           DecideObjective &obj, idx_t linear_before, idx_t bilinear_before, idx_t squared_before) {
@@ -399,7 +399,7 @@ private:
 
 	//! True when the decision referenced by `expr` is query-wide (`scalar`).
 	//! Such a term is a complete objective contribution on its own: it maps to a
-	//! single solver column, so there is no reducer to collapse it.
+	//! single solver column, so there is no aggregate to collapse it.
 	bool IsScalarDecideTerm(const Expression &expr) const {
 		idx_t var_idx = FindDecideVariable(expr);
 		return var_idx != DConstants::INVALID_INDEX && var_idx < op.variable_scopes.size() &&
@@ -410,7 +410,7 @@ private:
 	// Constraints
 	//===------------------------------------------------------------------===//
 
-	//! The left side of an aggregate constraint, one canonical atom at a time: a reducer, a reducer with the
+	//! The left side of an aggregate constraint, one canonical atom at a time: an aggregate, an aggregate with the
 	//! factor canonicalization left on it, a query-wide decision, or a data cast kept as a typed fixed term.
 	void ExtractAggregateConstraintTerms(const Expression &lhs, DecideConstraint &constraint) {
 		for (auto &atom : ReadCanonicalAtoms(lhs, decide_index)) {
@@ -431,7 +431,7 @@ private:
 				idx_t linear_before = constraint.lhs_terms.size();
 				idx_t bilinear_before = constraint.bilinear_terms.size();
 				idx_t quadratic_before = constraint.quadratic_groups.size();
-				ExtractReducerConstraintTerms(*atom.scale.aggregate, constraint, atom.sign);
+				ExtractAggregateCallConstraintTerms(*atom.scale.aggregate, constraint, atom.sign);
 				ApplyScaleToExtracted(*atom.scale.function, *scale, atom.scale.divides, constraint, linear_before,
 				                      bilinear_before, quadratic_before);
 				continue;
@@ -441,11 +441,11 @@ private:
 				ExtractConstraintTerms(expr, constraint, atom.sign);
 				continue;
 			}
-			// A query-wide (`scalar`) decision standing alone (not inside a reducer) is
+			// A query-wide (`scalar`) decision standing alone (not inside an aggregate) is
 			// row-invariant, so it is a complete term of an aggregate constraint on its own --
-			// there is nothing for a reducer to collapse. This is K3's "reducer or
+			// there is nothing for an aggregate to collapse. This is K3's "aggregate or
 			// row-invariant" rule. The BOUND_AGGREGATE exclusion matters: a scalar may also
-			// sit *inside* a reducer body (`SUM(cost * cap)`), and that case must reach the
+			// sit *inside* an aggregate body (`SUM(cost * cap)`), and that case must reach the
 			// SUM extraction below so the coefficient is evaluated per row instead of being
 			// read as a bare `cap` with coefficient 1.
 			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE && IsScalarDecideTerm(expr)) {
@@ -453,15 +453,16 @@ private:
 				continue;
 			}
 			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-				throw InternalException("DECIDE aggregate constraint LHS contains a non-reducer term after canonical "
+				throw InternalException("DECIDE aggregate constraint LHS contains a non-aggregate term after canonical "
 				                        "verification: %s",
 				                        expr.ToString());
 			}
-			ExtractReducerConstraintTerms(expr.Cast<BoundAggregateExpression>(), constraint, atom.sign);
+			ExtractAggregateCallConstraintTerms(expr.Cast<BoundAggregateExpression>(), constraint, atom.sign);
 		}
 	}
 
-	void ExtractReducerConstraintTerms(const BoundAggregateExpression &agg, DecideConstraint &constraint, int sign) {
+	void ExtractAggregateCallConstraintTerms(const BoundAggregateExpression &agg, DecideConstraint &constraint,
+	                                         int sign) {
 		auto agg_name = StringUtil::Lower(agg.function.name);
 		if (agg_name != "sum") {
 			throw InternalException("DECIDE optimizer did not rewrite aggregate '%s' to SUM before execution",
@@ -504,7 +505,7 @@ private:
 		}
 	}
 
-	//! A reducer body or a per-row left side, split by the shared splitter into the constraint's linear terms,
+	//! An aggregate body or a per-row left side, split by the shared splitter into the constraint's linear terms,
 	//! bilinear terms, and one quadratic group per square.
 	void ExtractConstraintTerms(const Expression &expr, DecideConstraint &constr, int sign) {
 		vector<DecideSplitTerm> split;
@@ -577,8 +578,8 @@ private:
 			// Skip comparisons the optimizer already folded into the column box.
 			// Emitting a DecideConstraint here would add num_rows redundant model
 			// rows. The comparison is still in the tree so EXPLAIN renders it; the
-			// tag is the decision, and it was made by AbsorbVariableBounds.
-			if (HasDecideTag(comp.alias, ABSORBED_BOUND_TAG)) {
+			// tag is the decision, and it was made by FoldSingletonRows.
+			if (HasDecideTag(comp.alias, SINGLETON_ROW_BOUND_TAG)) {
 				break;
 			}
 
@@ -640,7 +641,7 @@ private:
 				// Aggregate constraint. Handles both legacy single aggregates and
 				// additive aggregate expressions with aggregate-local WHEN filters. The
 				// classification comes from the canonical boundary rather than aggregate
-				// presence alone, so a data-only RHS reducer cannot change row semantics.
+				// presence alone, so a data-only RHS aggregate cannot change row semantics.
 				constraint->lhs_is_aggregate = true;
 				ExtractAggregateConstraintTerms(*lhs, *constraint);
 			} else {
@@ -754,12 +755,12 @@ private:
 	void ExtractAggregateObjectiveTerms(const Expression &objective_expr, DecideObjective &obj) {
 		for (auto &atom : ReadCanonicalAtoms(objective_expr, decide_index)) {
 			auto &expr = *atom.term;
-			// A factor left outside a reducer (`2 * SUM(x*p)`): extract the reducer, then
+			// A factor left outside an aggregate (`2 * SUM(x*p)`): extract the aggregate, then
 			// multiply the factor into everything it produced.
 			if (atom.scaled) {
 				auto obj_scale = atom.scale.scale;
 				// A decision on both sides of the `*` is a product of two decisions
-				// (bilinear), not a scaled reducer; treating it as a coefficient reads a
+				// (bilinear), not a scaled aggregate; treating it as a coefficient reads a
 				// decision column as data and crashes in evaluation.
 				if (FindDecideVariable(*obj_scale) != DConstants::INVALID_INDEX) {
 					throw InvalidInputException("DECIDE objective: '%s' is a decision, so it cannot multiply an "
@@ -770,7 +771,7 @@ private:
 				idx_t linear_before = obj.terms.size();
 				idx_t bilinear_before = obj.bilinear_terms.size();
 				idx_t squared_before = obj.squared_terms.size();
-				ExtractReducerObjectiveTerms(*atom.scale.aggregate, obj, atom.sign);
+				ExtractAggregateCallObjectiveTerms(*atom.scale.aggregate, obj, atom.sign);
 				ApplyScaleToObjective(*atom.scale.function, *obj_scale, atom.scale.divides, obj, linear_before,
 				                      bilinear_before, squared_before);
 				continue;
@@ -780,7 +781,7 @@ private:
 				ExtractLinearAndBilinearTerms(expr, obj, atom.sign);
 				continue;
 			}
-			// A query-wide decision standing alone (not inside a reducer) contributes without
+			// A query-wide decision standing alone (not inside an aggregate) contributes without
 			// one. Excludes BOUND_AGGREGATE for the same reason as the constraint side.
 			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE && IsScalarDecideTerm(expr)) {
 				ExtractLinearAndBilinearTerms(expr, obj, atom.sign, nullptr);
@@ -794,11 +795,11 @@ private:
 				    "use the supported shape SUM(POWER(x, 2)) instead.",
 				    expr.ToString());
 			}
-			ExtractReducerObjectiveTerms(expr.Cast<BoundAggregateExpression>(), obj, atom.sign);
+			ExtractAggregateCallObjectiveTerms(expr.Cast<BoundAggregateExpression>(), obj, atom.sign);
 		}
 	}
 
-	void ExtractReducerObjectiveTerms(const BoundAggregateExpression &agg, DecideObjective &obj, int sign) {
+	void ExtractAggregateCallObjectiveTerms(const BoundAggregateExpression &agg, DecideObjective &obj, int sign) {
 		auto agg_name = StringUtil::Lower(agg.function.name);
 		if (agg_name != "sum") {
 			throw InvalidInputException(

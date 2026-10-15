@@ -61,7 +61,7 @@ declare variables either before `FROM` or with `SUCH THAT`, not in both slots.
 | split order | row-scoped declaration | ✓ |
 | split order | table-scoped declaration (`T.x`) | ✓ |
 | split order | query-wide declaration (`scalar x`) | ✓ |
-| split order | qualified reducer `SUM(n: ...)` | ✓ |
+| split order | qualified aggregate `SUM(n: ...)` | ✓ |
 | split order | `CASE WHEN` in an intervening `JOIN ... ON` | ✓ |
 | split order | `CASE WHEN` in an intervening `WHERE` | ✓ |
 | split order | `EXPLAIN` | ✓ |

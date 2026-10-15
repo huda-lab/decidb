@@ -12,10 +12,10 @@ to DOUBLE for the solver. The oracle cases below cover both sides of that split,
 including the documented precision limit beyond ``2^53``.
 
 Covers:
-  - test_cast_lid_mixed_placement: reducer (LEFT) beside a scalar subquery
+  - test_cast_lid_mixed_placement: aggregate (LEFT) beside a scalar subquery
     (RIGHT) under a cast lid -- the shape where descent changes the pass's
     decision, not merely its reach
-  - test_cast_lid_negated_reducer: two aggregate-local WHEN reducers, one
+  - test_cast_lid_negated_reducer: two aggregate-local WHEN aggregates, one
     negated, under a cast lid
   - test_bigint_to_double_cast_lid_preserves_sql_semantics: the exactness cliff
     immediately around 2^53

@@ -166,12 +166,12 @@ idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &t
 	return scope_idx;
 }
 
-const ParsedExpression &UnwrapQualifiedReducer(const ParsedExpression &expr) {
+const ParsedExpression &UnwrapQualifiedAggregate(const ParsedExpression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
 		return expr;
 	}
 	auto &func = expr.Cast<const FunctionExpression>();
-	if (func.is_operator && func.function_name == QUALIFIED_REDUCER_TAG && !func.children.empty()) {
+	if (func.is_operator && func.function_name == QUALIFIED_AGGREGATE_TAG && !func.children.empty()) {
 		return *func.children[0];
 	}
 	return expr;
@@ -403,7 +403,7 @@ void ValidateDecideNoNonLinearScalar(ClientContext &context,
 //! The other orders are not counts and do not qualify: `norm(e, 1)` sums magnitudes,
 //! `norm(e, 2)` is a Euclidean length, `norm(e, 'inf')` is a maximum — each is as
 //! continuous as `e` is.
-static bool IsIntegerValuedReducer(const ParsedExpression &expr) {
+static bool IsIntegerValuedAggregate(const ParsedExpression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
 		return false;
 	}
@@ -432,13 +432,13 @@ static bool IsIntegerValuedReducer(const ParsedExpression &expr) {
 //! same reason ValidateDecideNoExplicitDecisionCasts does: a correlated decision
 //! reference can sit inside one, and EnumerateChildren does not enter a QueryNode.
 //!
-//! Stops at an integer-valued reducer: what a comparison compares is the reducer's
+//! Stops at an integer-valued aggregate: what a comparison compares is the aggregate's
 //! value, so a REAL decision counted by `norm(..., 0, M)` is not the compared
 //! quantity and must not be reported as one.
 static string FindRealDecideVariable(const ParsedExpression &expr,
                                      const case_insensitive_map_t<idx_t> &variables,
                                      const vector<LogicalType> &variable_types) {
-	if (IsIntegerValuedReducer(expr)) {
+	if (IsIntegerValuedAggregate(expr)) {
 		return "";
 	}
 	if (IsVariableExpression(expr, variables)) {
@@ -982,8 +982,8 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
 			}
 			// Degree is deliberately not judged here. It is one concept with one owner —
 			// `ValidateDecideConstraintDegree` / `ValidateDecideObjectiveDegree`, which run on
-			// the bound tree once binding is complete — so that a per-row constraint and a
-			// reducer argument are held to the same rule. This branch used to re-derive it,
+			// the bound tree once binding is complete — so that a per-row constraint and an
+			// aggregate argument are held to the same rule. This branch used to re-derive it,
 			// and because its name scoped it to SUM arguments nothing called it for
 			// `POWER(x*y, 2) <= 5`, which then reached term extraction at layer 5.
 			return true;
@@ -1095,7 +1095,7 @@ bool DecideBinder::IsRowInvariantExpression(const ParsedExpression &expr) const 
 	return invariant;
 }
 
-bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, string &error_msg) {
+bool DecideBinder::ClassifyAggregateCall(FunctionExpression &func, DecideExpression &result, string &error_msg) {
 	auto fname = StringUtil::Lower(func.function_name);
 	if (fname == "norm") {
 		if (func.children.empty() ||
@@ -1223,7 +1223,7 @@ BindResult DecideBinder::BindAggregate(FunctionExpression &aggr, AggregateFuncti
 	// 3. Create the BoundAggregateExpression itself.
 	auto bound_aggregate = function_binder.BindAggregateFunction(bound_function, std::move(children));
 	// DECIDE uses aggregate aliases for semantic transport tags (qualified
-	// reducers, optimizer markers, provenance). DuckDB's generic binder does not
+	// aggregates, optimizer markers, provenance). DuckDB's generic binder does not
 	// need them here, but dropping one would make the later DECIDE pass blind.
 	bound_aggregate->alias = aggr.alias;
 	// Note: We are NOT storing this aggregate in a BoundSelectNode. We are returning it directly.
@@ -1280,8 +1280,8 @@ BindResult DecideBinder::BindLocalWhenAggregate(FunctionExpression &when_expr, i
 //! True when `expr` holds the same value on every row of the qualified relation: no
 //! plain data column and no row- or entity-scoped decision appears anywhere inside it.
 //! The bound-tree twin of `DecideBinder::IsRowInvariantExpression`, used once the
-//! reducer body is bound and its columns carry scope information.
-static bool IsBoundReducerBodyRowInvariant(const Expression &expr, const DecideQualifierContext &ctx) {
+//! aggregate body is bound and its columns carry scope information.
+static bool IsBoundAggregateBodyRowInvariant(const Expression &expr, const DecideQualifierContext &ctx) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<const BoundColumnRefExpression>();
 		if (colref.binding.table_index != ctx.decide_index) {
@@ -1293,7 +1293,7 @@ static bool IsBoundReducerBodyRowInvariant(const Expression &expr, const DecideQ
 	}
 	bool invariant = true;
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		if (invariant && !IsBoundReducerBodyRowInvariant(child, ctx)) {
+		if (invariant && !IsBoundAggregateBodyRowInvariant(child, ctx)) {
 			invariant = false;
 		}
 	});
@@ -1318,8 +1318,8 @@ static bool ScopeTablesIntersect(const EntityScopeInfo &a, const EntityScopeInfo
 	return false;
 }
 
-//! Enforces the well-formedness rule for a relation-qualified reducer: everything the
-//! reducer body reads must come from one of the qualified relations, so that all rows
+//! Enforces the well-formedness rule for a relation-qualified aggregate: everything the
+//! aggregate body reads must come from one of the qualified relations, so that all rows
 //! sharing a tuple identity carry the same value and de-duplication can keep any one of
 //! them. A query-wide (`scalar`) decision is exempt — it is row-invariant, so it
 //! contributes the same value to every tuple regardless of which relation "owns" it; the
@@ -1329,9 +1329,9 @@ static bool ScopeTablesIntersect(const EntityScopeInfo &a, const EntityScopeInfo
 //! rejected here rather than resolved silently. Returns "" when the body is well formed,
 //! else the message to raise. `relations` names the qualifier for error text, in the
 //! order the query wrote them.
-static string CheckQualifiedReducerBody(const Expression &expr, const vector<string> &relations,
-                                        const string &agg_name, idx_t scope_idx,
-                                        const DecideQualifierContext &ctx) {
+static string CheckQualifiedAggregateBody(const Expression &expr, const vector<string> &relations,
+                                          const string &agg_name, idx_t scope_idx,
+                                          const DecideQualifierContext &ctx) {
 	string error;
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<const BoundColumnRefExpression>();
@@ -1351,18 +1351,18 @@ static string CheckQualifiedReducerBody(const Expression &expr, const vector<str
 			if (relations.size() == 1) {
 				return StringUtil::Format(
 				    "'%s' is not a decision of %s, so %s(%s: ...) cannot use it; declare it as "
-				    "%s.%s(...) or move that term into its own reducer",
+				    "%s.%s(...) or move that term into its own aggregate",
 				    name, relation_list, StringUtil::Upper(agg_name), relation_list, relation_list, name);
 			}
 			return StringUtil::Format(
 			    "'%s' is not a decision of %s, so %s(%s: ...) cannot use it; declare it on one of "
-			    "those relations or move that term into its own reducer",
+			    "those relations or move that term into its own aggregate",
 			    name, relation_list, StringUtil::Upper(agg_name), relation_list);
 		}
 		if (!ScopeContainsTable(qualifier_scope, colref.binding.table_index)) {
 			return StringUtil::Format(
 			    "'%s' does not come from %s, so %s(%s: ...) cannot use it; keep only those relations' "
-			    "columns inside the qualified reducer and sum the rest separately",
+			    "columns inside the qualified aggregate and sum the rest separately",
 			    name, relation_list, StringUtil::Upper(agg_name), relation_list);
 		}
 		return "";
@@ -1371,15 +1371,15 @@ static string CheckQualifiedReducerBody(const Expression &expr, const vector<str
 		if (!error.empty()) {
 			return;
 		}
-		error = CheckQualifiedReducerBody(child, relations, agg_name, scope_idx, ctx);
+		error = CheckQualifiedAggregateBody(child, relations, agg_name, scope_idx, ctx);
 	});
 	return error;
 }
 
-BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth) {
+BindResult DecideBinder::BindQualifiedAggregate(FunctionExpression &qualified_expr, idx_t depth) {
 	if (qualified_expr.children.size() < 2) {
 		return BindResult(BinderException::Unsupported(
-		    qualified_expr, "A qualified reducer expects one or more relations and an expression, as in "
+		    qualified_expr, "A qualified aggregate expects one or more relations and an expression, as in "
 		                    "sum(D: ...) or sum(D, T: ...)."));
 	}
 	vector<string> relations;
@@ -1389,7 +1389,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		    qualifier.Cast<ColumnRefExpression>().IsQualified()) {
 			return BindResult(BinderException::Unsupported(
 			    qualified_expr,
-			    "The qualifier of a reducer must be a relation name or alias, as in sum(D: ...)."));
+			    "The qualifier of an aggregate must be a relation name or alias, as in sum(D: ...)."));
 		}
 		relations.push_back(qualifier.Cast<ColumnRefExpression>().GetColumnName());
 	}
@@ -1397,7 +1397,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 
 	if (!qualifier_context) {
 		return BindResult(BinderException::Unsupported(
-		    qualified_expr, "A relation-qualified reducer is only allowed inside a DECIDE clause."));
+		    qualified_expr, "A relation-qualified aggregate is only allowed inside a DECIDE clause."));
 	}
 	auto &ctx = *qualifier_context;
 	for (auto &relation : relations) {
@@ -1405,9 +1405,9 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		auto binding = binder.bind_context.GetBinding(relation, binding_error);
 		if (!binding || binding->index == ctx.decide_index) {
 			return BindResult(BinderException::Unsupported(
-			    qualified_expr, StringUtil::Format(
-			                        "Relation '%s' is not in the FROM clause, so a reducer cannot be qualified by it.",
-			                        relation)));
+			    qualified_expr, StringUtil::Format("Relation '%s' is not in the FROM clause, so an aggregate cannot "
+			                                       "be qualified by it.",
+			                                       relation)));
 		}
 	}
 	// A qualifier is an entity scope with no variable of its own, so it shares the
@@ -1438,7 +1438,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	}
 	bool any_row_varying = false;
 	for (auto &child : aggregate->children) {
-		if (!IsBoundReducerBodyRowInvariant(*child, ctx)) {
+		if (!IsBoundAggregateBodyRowInvariant(*child, ctx)) {
 			any_row_varying = true;
 			break;
 		}
@@ -1452,12 +1452,12 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		                        body_text, StringUtil::Upper(agg_name), relation_list, body_text)));
 	}
 	for (auto &child : aggregate->children) {
-		auto error = CheckQualifiedReducerBody(*child, relations, agg_name, scope_idx, ctx);
+		auto error = CheckQualifiedAggregateBody(*child, relations, agg_name, scope_idx, ctx);
 		if (!error.empty()) {
 			return BindResult(BinderException::Unsupported(qualified_expr, error));
 		}
 	}
-	aggregate->alias = MakeQualifiedReducerTag(scope_idx);
+	aggregate->alias = MakeQualifiedAggregateTag(scope_idx);
 	return BindResult(std::move(aggregate_expr));
 }
 
@@ -1467,8 +1467,8 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
     if (function.is_operator && function.function_name == WHEN_CONSTRAINT_TAG) {
         return BindLocalWhenAggregate(function, depth);
     }
-    if (function.is_operator && function.function_name == QUALIFIED_REDUCER_TAG) {
-        return BindQualifiedReducer(function, depth);
+    if (function.is_operator && function.function_name == QUALIFIED_AGGREGATE_TAG) {
+        return BindQualifiedAggregate(function, depth);
     }
     // NORM is DECIDE syntax, not a catalog function. Bind it as a deliberately
     // inert SUM aggregate marker; DecideOptimizer owns the mathematical rewrite

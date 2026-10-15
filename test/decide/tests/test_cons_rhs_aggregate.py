@@ -1,8 +1,8 @@
 """Data-only aggregate RHS in aggregate constraints.
 
 `SUM(x*val) <= SUM(val)` (RHS aggregate over data columns only) is evaluated in
-place: the right-hand side reduces each data reducer to one value per group
-(EvaluateRhsReducerPerGroup), honouring the reducer's own WHEN, the constraint's
+place: the right-hand side reduces each data aggregate to one value per group
+(EvaluateRhsAggregatePerGroup), honouring the aggregate's own WHEN, the constraint's
 WHEN/PER, and relation-qualifier de-duplication. These tests pin (a) parity with
 the explicit hoisted form the binder used to produce, (b) parity with the
 scalar-bound equivalent, and (c) WHEN / PER / AVG composition, including
@@ -113,7 +113,7 @@ def test_rhs_aggregate_local_when(decidb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_rhs_minmax_bound(decidb_cli):
-    """MIN/MAX on the RHS is evaluated by the reducer evaluator, not the hoist.
+    """MIN/MAX on the RHS is evaluated by the aggregate evaluator, not the hoist.
 
     The hoist could only ever move SUM and AVG, because the left side reduces a
     data term by *summing a column* — MIN cannot be obtained by adding things up.
@@ -147,7 +147,7 @@ def test_rhs_avg_mixed_with_other_terms(decidb_cli):
     This used to be refused. The refusal was never about the arithmetic — the RHS
     evaluator already divided correctly — but about a type: DecideOptimizer rewrote
     every AVG to SUM, which redeclares the node with SUM's integral type while its
-    value stays fractional, and this is the one place a reducer's value is handed
+    value stays fractional, and this is the one place an aggregate's value is handed
     back to a surrounding expression bound against that type. The rewrite now skips
     decision-free aggregates, so the node stays a real AVG and the round trip is
     DOUBLE->DOUBLE.

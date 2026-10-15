@@ -130,11 +130,11 @@ MINIMIZE max_shortfall - SUM(ship)
   decision shared rather than per-row. It may also be the **bound of a reduced
   constraint** — `SUM(ship) <= max_shortfall`, and the paper's Example 1
   `demand - SUM(ship) <= max_shortfall PER regionID` — since being row-invariant
-  is exactly what lets it stand beside a reducer.
-- **A reducer is rejected iff its body is row-invariant** — holds the same value
+  is exactly what lets it stand beside an aggregate.
+- **An aggregate is rejected iff its body is row-invariant** — holds the same value
   on every row, with no data column and no row- or entity-scoped decision
   anywhere inside it. `SUM(cap)`, `AVG(cap)` and `SUM(cap1 + cap2)` are rejected:
-  there is one column and nothing for the reducer to reduce over, so either
+  there is one column and nothing for the aggregate to reduce over, so either
   plausible reading (coefficient `1` or coefficient `n`) is a different
   optimization problem. Use the bare name instead.
   A body that mixes a scalar with row-varying data is **not** row-invariant and
@@ -142,11 +142,11 @@ MINIMIZE max_shortfall - SUM(ship)
   `(SUM cost) * cap`, and `SUM(x + cap)` means `SUM(x) + n*cap` where `n` is the
   number of counted rows (the group's, under `PER`; the qualified relation's
   distinct tuples, under `agg(D: ...)` — see §5.1). This is the same rule stated
-  on a relation-qualified reducer's body.
+  on a relation-qualified aggregate's body.
 - **In objectives.** A query-wide decision may appear bare, either alone
-  (`MINIMIZE max_shortfall`) or as an additive term beside reducers
+  (`MINIMIZE max_shortfall`) or as an additive term beside aggregates
   (`MINIMIZE max_shortfall - SUM(ship)`) — its coefficient is applied **once**,
-  not once per row — or inside a reducer whose body is not row-invariant
+  not once per row — or inside an aggregate whose body is not row-invariant
   (`MINIMIZE SUM(cost * cap)`), where it is weighted like any other term.
 
 Tests: `test/decide/tests/test_scalar_scope.py`.
@@ -182,7 +182,11 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
     - Encoding depends on where `K` falls in the LHS's reachable range. When `K` is **interior**, the disjunction costs 1 auxiliary binary + 2 Big-M constraints. When the range lies wholly on one side of `K`, one branch is dead and a **single plain inequality** is emitted instead — `SUM(x) <> 0` over non-negative decisions is just `SUM(x) >= 1`, with no binary and no Big-M. When `K` is unreachable the constraint excludes nothing and is dropped. Only a variable's intrinsic domain (BOOL 0/1, default non-negativity) licenses the collapse; a bound you write yourself stays loosenable under `DIAGNOSE` and keeps the disjunction.
   - An L0 count is integer-valued whatever it counts, so `norm(e, 0, M) < K` and `norm(e, 0, M) <> K` are accepted even when `e` references a REAL decision. Other norm orders (`1`, `2`, `'inf'`) are not counts and are not exempt.
   - `<` / `>` (strict): Rewritten internally to the integer-step form (`LHS < K` $\rightarrow$ `LHS <= ceil(K) - 1`), which is only valid when the compared side is provably whole-numbered. Use `<=` / `>=` instead when it is not.
-    - **The rule is stated on declared types, and rejects at bind time**, before any data is read. A side is whole-numbered when every decision in it is `INT`/`BOOL` and every column, literal and reducer over them has a whole-numbered type: an integer type, or `DECIMAL` with scale 0. `DOUBLE`, `FLOAT` and `DECIMAL(p, s>0)` are not, *whatever values they happen to hold* — otherwise inserting one fractional row could make a working query illegal. The message names the offender and the cast that fixes it (`SUM(x * l_quantity::BIGINT) < 100`).
+    - **The rule is stated on declared types, and rejects at bind time**, before any data is read. A side is
+      whole-numbered when every decision in it is `INT`/`BOOL` and every column, literal and aggregate over them has a
+      whole-numbered type: an integer type, or `DECIMAL` with scale 0. `DOUBLE`, `FLOAT` and `DECIMAL(p, s>0)` are not,
+      *whatever values they happen to hold* — otherwise inserting one fractional row could make a working query illegal.
+      The message names the offender and the cast that fixes it (`SUM(x * l_quantity::BIGINT) < 100`).
     - **Not refused**: the bound `K` itself (a fractional bound is handled by rounding, or for `<>` by dropping a tautology); a decision-free additive offset, which moves the bound rather than the lattice; `POWER(e, n)` with a whole, non-negative constant `n`; and an L0 count, which is integral whatever it counts. A fractional *multiplier* (`SUM(0.5 * x) < 5`) is refused, since it rescales the decision off the lattice.
 - **Between**: `expr BETWEEN a AND b` $\rightarrow$ `expr >= a AND expr <= b`.
 - **In**: `x IN (v1, ..., vK)` — works on both table columns and decision variables. On decision variables, rewritten to K binary indicator variables with cardinality + linking constraints. `IN` on aggregates (e.g., `SUM(x) IN (...)`) is not supported.
@@ -196,7 +200,11 @@ Constraints must evaluate to a boolean. Multiple constraints are separated by `A
 - **Quadratic constraints**: `POWER(linear_expr, 2)` / `expr ** 2` / `(expr)*(expr)` in constraints enables QCQP. Gurobi only. Composes with WHEN, PER. See Section 3.1 below.
 - **Subqueries**: Scalar subqueries (both uncorrelated and correlated) are allowed on the RHS of constraints. Correlated subqueries are decorrelated into joins, producing per-row values. For aggregate constraints, the subquery RHS must evaluate to the same scalar for all rows. Subqueries cannot reference DECIDE variables from the enclosing query.
 - **Nested DECIDE**: A scalar RHS subquery may contain its own `DECIDE` clause. The inner decision query solves first and its one-row result becomes the outer bound. Nested DECIDE clauses restore the enclosing lexer state, so an outer `WHEN` may follow the subquery. `DIAGNOSE` has a separate exactly-one-DECIDE restriction (§8.3).
-- **NULL**: A NULL in any value the solver reads is an error, never a zero — coefficients, bounds, and reducer inputs alike. The message names the offending column and asks for explicit `COALESCE()` imputation or a `WHERE` filter. A data-only imputation may be written inline anywhere the value is used, including inside a reducer (`SUM(x * COALESCE(weight, 0))`). Rationale in [`../03_expressivity/such_that/done.md`](../03_expressivity/such_that/done.md). This is distinct from `WHEN` and `PER`, where a NULL excludes the row rather than failing the query.
+- **NULL**: A NULL in any value the solver reads is an error, never a zero — coefficients, bounds, and aggregate inputs
+  alike. The message names the offending column and asks for explicit `COALESCE()` imputation or a `WHERE` filter. A
+  data-only imputation may be written inline anywhere the value is used, including inside an aggregate (`SUM(x *
+  COALESCE(weight, 0))`). Rationale in [`../03_expressivity/such_that/done.md`](../03_expressivity/such_that/done.md).
+  This is distinct from `WHEN` and `PER`, where a NULL excludes the row rather than failing the query.
 
 ### 3.1 Quadratic Constraints (QCQP)
 
@@ -293,23 +301,37 @@ what the solver could represent in any case. This limit is pinned by
 - `SUM`/`AVG` constraint bodies may include data-only additive terms alongside decision terms, e.g. `SUM(x + cost) <= K` or `SUM(q * (price + x)) <= K`. DeciDB evaluates the data-only aggregate contribution over the active rows/group and subtracts it from the scalar RHS before building the solver row.
 - `MIN(expr)` and `MAX(expr)` are supported. Easy cases (`MAX(expr) <= K`, `MIN(expr) >= K`) become per-row constraints with no auxiliary variables. Hard cases (opposite direction, equality) use a global auxiliary variable and Big-M binary indicators. In objectives, `MINIMIZE MAX(expr)` and `MAXIMIZE MIN(expr)` use a global auxiliary; `MAXIMIZE MAX(expr)` and `MINIMIZE MIN(expr)` additionally require Big-M indicators. Composes with WHEN.
 - Aggregate-local filters are supported on individual aggregate terms: `SUM(expr) WHEN condition + SUM(expr2) WHEN condition2`. This is different from an expression-level `WHEN` on the whole constraint or objective.
-- **A factor on a reducer** is supported for every aggregate kind and on either side: `2 * SUM(x*p)`, `SUM(x*p) * 2`, `SUM(x*p) / 2`, `2 * MAX(x*v)`, and inside a composed LHS (`SUM(x) + 2 * MAX(x*v)`). The factor must be **one value for the whole query** — a literal, an expression over literals, or an uncorrelated scalar subquery. A negative factor is handled correctly: `-2 * MAX(e)` is `-2·MIN(e)`, and the rewrite swaps `MIN`/`MAX` accordingly.
-  - A **row-varying** factor is rejected on every aggregate kind: `weight * SUM(x)` errors with *"'weight' varies per row, so it cannot multiply SUM(x). Move it inside the aggregate, e.g. SUM(x * weight)."* A reducer produces one number, so there is no row whose `weight` would scale it — the same reason SQL requires `col` in the `GROUP BY` for `col * SUM(x)`. Write the per-row-coefficient form explicitly.
+- **A factor on an aggregate** is supported for every aggregate kind and on either side: `2 * SUM(x*p)`, `SUM(x*p) * 2`,
+  `SUM(x*p) / 2`, `2 * MAX(x*v)`, and inside a composed LHS (`SUM(x) + 2 * MAX(x*v)`). The factor must be **one value
+  for the whole query** — a literal, an expression over literals, or an uncorrelated scalar subquery. A negative factor
+  is handled correctly: `-2 * MAX(e)` is `-2·MIN(e)`, and the rewrite swaps `MIN`/`MAX` accordingly.
+  - A **row-varying** factor is rejected on every aggregate kind: `weight * SUM(x)` errors with *"'weight' varies per
+    row, so it cannot multiply SUM(x). Move it inside the aggregate, e.g. SUM(x * weight)."* An aggregate produces one
+    number, so there is no row whose `weight` would scale it — the same reason SQL requires `col` in the `GROUP BY` for
+    `col * SUM(x)`. Write the per-row-coefficient form explicitly.
   - A **correlated** scalar subquery is row-varying by construction and is rejected on the same grounds, with a message that calls it a subquery rather than quoting the internal column name flattening gives it: *"this subquery returns a different value for each row, so it cannot multiply SUM(x). Move it inside the aggregate, e.g. SUM(x * (SELECT ...))."* Only **uncorrelated** scalar subqueries are legal factors.
   - A **decision** factor is rejected as bilinear rather than as a scale: `s * SUM(x)` (with `scalar s`) is a product of two decisions.
 - A query-wide (`scalar`) decision may appear as a **bare additive term** of an aggregate constraint, since it is row-invariant: `SUM(ship) - max_shortfall <= cap` (paper §3.1). It contributes its coefficient once, not once per row. It may equally be written as the **bound** (`SUM(ship) <= max_shortfall`); which side it is on carries no meaning, because canonicalization moves every decision-bearing term to the left before anything downstream looks. A **row-scoped** decision as the bound of a reduced constraint (`SUM(x) <= y`) is rejected — there is no single `y` for a number that has no row.
-- **Either side may carry the decision.** The constraint gate classifies both sides and accepts when either is a DECIDE expression, so `5 >= x`, `10 >= SUM(x)` and `cap >= SUM(x)` are the same constraints as their mirror images. A reducer may appear on **both** sides (`SUM(x*v) <= SUM(y*v)`, `SUM(x*v) <= MAX(x*w) + 30`). What is *not* symmetric is the bound rule: a side carrying no decision must still reduce to one value per group, whichever side it is written on. For `<=`/`<`/`>=`/`>` that reduction is the tightest of the bound's own per-row values (MIN for `<=`/`<`, MAX for `>=`/`>`) — a bare data column qualifies exactly like a scalar subquery (`SUM(ship) <= stock PER depotID`, the paper's own Figure 1). `=` refuses a bound that genuinely varies, naming it a contradiction (two different single numbers can't both be *the* sum). `<>` does not collapse at all: it keeps every value the bound took as its own exclusion (`SUM(x) <> 500 AND SUM(x) <> 350` within one group), not just the tighter of the two.
+- **Either side may carry the decision.** The constraint gate classifies both sides and accepts when either is a DECIDE
+  expression, so `5 >= x`, `10 >= SUM(x)` and `cap >= SUM(x)` are the same constraints as their mirror images. An
+  aggregate may appear on **both** sides (`SUM(x*v) <= SUM(y*v)`, `SUM(x*v) <= MAX(x*w) + 30`). What is *not* symmetric
+  is the bound rule: a side carrying no decision must still reduce to one value per group, whichever side it is written
+  on. For `<=`/`<`/`>=`/`>` that reduction is the tightest of the bound's own per-row values (MIN for `<=`/`<`, MAX for
+  `>=`/`>`) — a bare data column qualifies exactly like a scalar subquery (`SUM(ship) <= stock PER depotID`, the paper's
+  own Figure 1). `=` refuses a bound that genuinely varies, naming it a contradiction (two different single numbers
+  can't both be *the* sum). `<>` does not collapse at all: it keeps every value the bound took as its own exclusion
+  (`SUM(x) <> 500 AND SUM(x) <> 350` within one group), not just the tighter of the two.
 - `norm(expr, p)` expresses an L_p regularization term over a decision-variable expression (lasso/ridge-style). The user supplies the weight, e.g. `MINIMIZE SUM(cost*x) + 0.5 * norm(x - base, 1)`. Canonicalization replaces it with its definition (L0 is lowered by the optimizer), so it composes with WHEN/PER and works in both objectives and constraints (including norm-bounded constraints like `norm(e, 1) <= K`). Supported orders:
   - `norm(e, 1)` → `SUM(ABS(e))` — L1 (sparse-leaning; ABS linearization).
   - `norm(e, 2)` → `SUM(POWER(e, 2))` — squared L2 / ridge (convex QP).
   - `norm(e, 'inf')` → `MAX(ABS(e))` — L-infinity (max linearization).
   - `norm(e, 0[, M])` → **L0 / count of nonzeros**. Adds one 0/1 indicator `z` per row, linked so `z = 1` **iff** `|e| >= tolerance` (a forward Big-M link forces `z=1` when `e != 0`, a reverse link `ABS(e) >= tol*z` forces `z=0` when `e` is within tolerance); the term becomes `SUM(z)`, the **exact** count. Upgrades the model to a MILP. Because the count is exact it is sound in **every** context — `MINIMIZE`/penalty and `<= K` cap, **and** `>= K`, `= K`, `MAXIMIZE`. The Big-M bound is **inferred from the data** when omitted — `norm(e, 0)` derives a tight per-problem `M` at execution from variable bounds (implied-bound propagation) + data; pass `norm(e, 0, M)` to supply it explicitly. The reverse link reuses ABS linearization, so `e` must have finite bounds. The nonzero tolerance (default `1e-4`, must exceed the solver feasibility tolerance) is configurable via `SET decide_l0_tolerance = …`; a value forced into `(0, tolerance)` is reported infeasible (tolerance-ambiguous).
 
-### 5.1 Relation-Qualified Reducers — `SUM(D: expr)`
+### 5.1 Relation-Qualified Aggregates — `SUM(D: expr)`
 
-By default a reducer combines one term per **join-result row**. A join repeats a table's
-tuples once per match, so an unqualified reducer over a table-scoped decision weights that
-decision by how many rows its entity joined with. A **relation-qualified reducer** reduces
+By default an aggregate combines one term per **join-result row**. A join repeats a table's
+tuples once per match, so an unqualified aggregate over a table-scoped decision weights that
+decision by how many rows its entity joined with. A **relation-qualified aggregate** reduces
 over the qualified relation's tuple identities instead, contributing one term per tuple.
 
 **Syntax**: `agg(Rel[, Rel, ...]: expr)`, where `agg` is `SUM`, `AVG`, `MIN` or `MAX`, and
@@ -352,12 +374,12 @@ it three times. Both forms remain available and the unqualified one is unchanged
 - **Several relations at once — `SUM(D, T: expr)`.** The tuple identity widens to the
   concatenation of every named relation's own key, so a row is a duplicate only when it
   repeats on *all* of them together. Naming a relation removes the fan-out it would
-  otherwise contribute to the reducer; a relation left unnamed still contributes its
+  otherwise contribute to the aggregate; a relation left unnamed still contributes its
   fan-out, uncollapsed — so with a third, unqualified relation `X` in the join,
   `SUM(D, T: expr)` differs from both `SUM(D: expr)` and the unqualified `SUM(expr)`.
   `expr` may draw columns and decisions from any of the named relations, not just one.
   The list is order-independent (`SUM(D, T: ...)` and `SUM(T, D: ...)` are the same
-  reducer). One consequence follows directly: if `D` and `T` are the *only* two relations
+  aggregate). One consequence follows directly: if `D` and `T` are the *only* two relations
   the query joins, naming both is a no-op — the composite key already is the join-result
   row, so `SUM(D, T: expr)` and unqualified `SUM(expr)` compute the same thing. The two
   forms only diverge once some relation the query joins is left out of the qualifier.

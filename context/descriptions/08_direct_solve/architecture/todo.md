@@ -26,11 +26,12 @@ Owner decisions every task below follows. The names they lead to are in `glossar
   plan that computes the optimum. The setting, `EXPLAIN` keys and `Direct*` identifiers stay.
 - P-02: the shared-engine folder becomes `08_direct_solve/framework/`. `rules/` stays; one rule implements one
   catalogue class.
-- P-03: adopt every standard candidate. Match/Prove/Rewrite become pattern/condition/apply; proof becomes
-  applicability condition (`DirectRuleProof` takes that name); proposal becomes substitute; coordinator becomes rule
-  driver; registry stays registry + factory method; hit/miss become applies/does not apply; `DirectRuleOverride`
-  becomes a test seam; `*Rewriter` becomes plan builder. "Reducer" and "absorbed bound" are renamed too (P-19).
-  The `EXPLAIN` key `Direct solve proof` becomes `Direct solve condition` (P-22 below).
+- P-03: adopt every standard candidate. Match/Prove/Rewrite become pattern/condition/apply; proof becomes applicability
+  condition (`DirectRuleProof` takes that name); proposal becomes substitute; coordinator becomes rule driver; registry
+  stays registry + factory method; hit/miss become applies/does not apply; `DirectRuleOverride` becomes a test seam;
+  `*Rewriter` becomes plan builder. Two planner and solver terms move to their standard names too (P-19; `glossary.md`
+  rows "aggregate" and "singleton-row bound"). The `EXPLAIN` key `Direct solve proof` becomes `Direct solve condition`
+  (P-22 below).
 - P-04: one `Prove` that returns the applicability condition, and `Summary()` on the rule in place of Explain. The
   interface has two steps, Prove and Rewrite.
 - P-05: keep the `Direct` prefix in `namespace duckdb`; drop it inside a rule's namespace (`direct_s1_uniform_matroid`,
@@ -67,19 +68,6 @@ Owner decisions every task below follows. The names they lead to are in `glossar
   files to their glossary names, then run the oracle once. The orchestrator estimates the Gurobi cost and runs it on a
   quiet machine. This is the one task allowed to rename a Python test file.
 
-## P-19 — Rename "reducer" and "absorbed bound"
-
-- **Problem.** P-03 adopted the standard names for both. They reach about 55 files across the planner and solver,
-  outside direct solve.
-- **Change.** Rename per the glossary: "reducer" to the DuckDB term "aggregate", and "absorbed bound" to the
-  operations-research term for a singleton row folded into a variable bound. Cover identifiers, comments and docs
-  outside `08_direct_solve/` too, the `require` reasons, `syntax_reference.md` and the website. A Python test
-  function, parameter id or file keeps its name (the oracle cache is keyed on the node id); module constants may
-  change. Check that the parser tag is never serialized before renaming it.
-- **Needs.** Run it alone: it touches the planner and solver.
-- **Done when.** Neither old term greps under `src/` or `test/`; `make decide-test` and the forced-HiGHS run give the
-  baseline counts.
-
 ## P-17 — Sweep for retired terms
 
 - **Problem.** A rename task covers the files it knows of. Comments, other doc areas and `.claude/` skills may still
@@ -87,10 +75,20 @@ Owner decisions every task below follows. The names they lead to are in `glossar
 - **Change.** For every retired term in `glossary.md`, grep `src/`, `test/`, `benchmark/decide/`, `context/` and
   `.claude/`, and fix what remains. Leave git history and the frozen paper alone.
 - **Allowed leftovers.** The serializer property name `"proof"` (id 209, `direct_result_adapter.cpp`), because
-  serialized names stay (P-22); the field behind it is `condition`. Oracle test names keep old terms, because a
-  test's name is its cache key: `test_a1_unused_wide_columns_stay_out_of_the_barrier...` and the four
-  `test_second_read_*` tests in `test_direct_user_facing.py`. "Second read" in its everyday sense
-  (`_diagnose_relation.py`, `test_decidb_diagnostic_engines.cpp`) is not the retired term.
+  serialized names stay (P-22); the field behind it is `condition`. Oracle test names keep old terms, because a test's
+  name is its cache key: `test_a1_unused_wide_columns_stay_out_of_the_barrier...` and the four `test_second_read_*`
+  tests in `test_direct_user_facing.py`. "Second read" in its everyday sense (`_diagnose_relation.py`,
+  `test_decidb_diagnostic_engines.cpp`) is not the retired term. From P-19: the parser tag's string
+  `__qualified_reducer__` (`QUALIFIED_AGGREGATE_TAG`), because a saved view stores it; the test files
+  `test_qualified_reducer.py`, `test_nested_product_in_reducer.py` and `test_null_coalesce_reducer.py`, test function
+  and class names, the `reducer_*` and `qualified_reducer` parameter ids, and `S1_REDUCER_CASES` and
+  `REDUCER_CONTEXT_CASES` in `test_direct_three_way.py` (oracle decorators use them); comments and strings inside oracle
+  test bodies (the body is part of the cache key), in `test_canonicalize_cast.py`, `test_canonicalize_side_agnostic.py`,
+  `test_canonicalize_sign.py`, `test_cons_correlated_subquery.py`, `test_infinite_bounds.py`,
+  `test_nested_product_in_reducer.py`, `test_null_coalesce_reducer.py`, `test_quadratic_constraints.py`,
+  `test_qualified_reducer.py`, `test_scalar_scope.py`, `test_bilinear.py` and `test_per_objective.py`. DuckDB's own
+  words stay: `ExpressionDepthReducer` and the aggregate-state `Absorb`. So do "absorb" in its everyday sense and
+  `AbsorbAdditive` (`decide_degree.cpp`, which merges a child's degree into its parent, not a bound).
 - **Needs.** Every other task in this file.
 - **Done when.** Each retired term greps to zero outside history; `test/decide/run_direct_matrix.sh` gives the baseline
   counts, and the stamp in the shared-engine `done.md` is renewed.

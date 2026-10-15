@@ -182,8 +182,8 @@ unordered_map<idx_t, AbsConstraintPair> BuildAbsTagMap(const SolverInput &input)
 static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t num_rows) {
     double demanded = 0.0;
     // The common shape, and the one B3 was reported against: `ABS(x) >= 5` is a simple
-    // `var OP const` comparison over the auxiliary, so stage 05 absorbs it into the
-    // auxiliary's own box rather than leaving a row (`AbsorbVariableBounds`). The floor
+    // `var OP const` comparison over the auxiliary, so stage 05 folds it into the
+    // auxiliary's own box rather than leaving a row (`FoldSingletonRows`). The floor
     // it puts there IS the demand, and without this the ceiling below is set under it —
     // an empty column, which no widening of `x` can repair.
     if (aux_idx < input.lower_bounds.size() && input.lower_bounds[aux_idx] > -DECIDE_EFFECTIVE_INFINITY) {

@@ -356,4 +356,4 @@ def test_row_scoped_decision_as_aggregate_bound_rejected(decidb_cli):
         DECIDE x(INT), y(INT)
         SUCH THAT SUM(x) <= y AND y <= 3
         MAXIMIZE SUM(x)
-    """, match=r"Binder Error: DECIDE constraint.*row-scoped.*'y'.*outside.*(?:reducer|SUM)")
+    """, match=r"Binder Error: DECIDE constraint.*row-scoped.*'y'.*outside.*(?:aggregate|SUM)")

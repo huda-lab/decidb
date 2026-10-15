@@ -108,7 +108,10 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
    - Uses `is_boolean_var` vector (not `return_type`) to detect boolean status
 
 4. **Term splitting and the prepared model**:
-   - `DecideTermSplitter::Split` (`src/planner/decide/decide_term_split.cpp`) splits a reducer body into constant, linear, product, square and ABS terms. `ExtractLinearAndBilinearTerms()` (objective) and `ExtractConstraintTerms()` (constraints) in `src/optimizer/decide/decide_linear_form.cpp` turn those terms into prepared linear, bilinear and quadratic terms.
+   - `DecideTermSplitter::Split` (`src/planner/decide/decide_term_split.cpp`) splits an aggregate body into constant,
+     linear, product, square and ABS terms. `ExtractLinearAndBilinearTerms()` (objective) and `ExtractConstraintTerms()`
+     (constraints) in `src/optimizer/decide/decide_linear_form.cpp` turn those terms into prepared linear, bilinear and
+     quadratic terms.
    - `ClassifyProduct()` flattens any nested `*` tree into leaf factors, partitions them into decide-variable indices (`decide_factors`) and data expressions (`coefficient_factors`). Handles arbitrary groupings like `(a*b)*(x*y)` and `a*b*x*y` identically.
    - `BuildCoefficientFromFactors()` rebuilds the coefficient sub-expression from the data leaf factors, used for bilinear terms. Each binary `*` is re-bound through `DecideRebindOperator` for the operands actually present — reusing the original multiply's signature over a reshaped factor list silently reinterprets the operands' physical representation (see `../../01_pipeline/05_optimizer/done.md` §1a).
    - Linear terms (`decide_factors.size() == 1`) go to `SplitLinear` (uses `ExtractCoefficientWithoutVariable` on the original tree for type-safe coefficient extraction).

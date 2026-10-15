@@ -29,7 +29,7 @@
 
 namespace duckdb {
 
-// The rewrite passes below live in decide_rewrite_*.cpp / decide_bound_absorption.cpp;
+// The rewrite passes below live in decide_rewrite_*.cpp / decide_singleton_row_folding.cpp;
 // this file keeps the dispatcher and the helpers they share.
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
@@ -108,10 +108,10 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	phase.Next("optimizer.avg");
 	RewriteAvgToSum(decide);
 	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
-	// that is itself absorbable, and every auxiliary variable must exist before the
+	// that is itself a singleton-row bound, and every auxiliary variable must exist before the
 	// box is sized.
-	phase.Next("optimizer.absorb_bounds");
-	AbsorbVariableBounds(decide);
+	phase.Next("optimizer.fold_singleton_rows");
+	FoldSingletonRows(decide);
 
 	VerifyNormMarkersLowered(decide);
 

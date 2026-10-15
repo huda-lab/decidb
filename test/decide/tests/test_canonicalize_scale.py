@@ -1,6 +1,6 @@
-"""A factor sitting on a reducer: `2 * SUM(x)`, `2 * MAX(x*v)`, `SUM(x) / 2`.
+"""A factor sitting on an aggregate: `2 * SUM(x)`, `2 * MAX(x*v)`, `SUM(x) / 2`.
 
-Canonicalization peels such a factor outward off the reducer and converges every
+Canonicalization peels such a factor outward off the aggregate and converges every
 spelling onto one (`scale * term`, factor on the left). It then **stays outside**:
 the physical layer multiplies it into the per-row coefficients for SUM/AVG, or into
 the auxiliary's contribution for MIN/MAX.
@@ -243,7 +243,7 @@ def test_negative_scale_on_max_constraint(decidb_cli):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_objective_factor_on_the_right(decidb_cli):
-    """``MAXIMIZE SUM(x*p) * 2`` — factor on the right of the reducer.
+    """``MAXIMIZE SUM(x*p) * 2`` — factor on the right of the aggregate.
 
     Must agree with ``MAXIMIZE 2 * SUM(x*p)``: a positive factor cannot change the
     argmax, so both should spend the budget of 3 on the highest-priced row.
@@ -378,7 +378,7 @@ def test_correlated_subquery_factor_moved_inside(decidb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.error_binder
 def test_row_varying_factor_rejected(decidb_cli):
-    """``w * SUM(x)`` — a reducer collapses many rows to one number, so "which
+    """``w * SUM(x)`` — an aggregate collapses many rows to one number, so "which
     row's w scales it?" has no answer. The message names the column and gives the
     edit that expresses the per-row-coefficient reading instead."""
     decidb_cli.assert_error("""
@@ -409,7 +409,7 @@ def test_decision_factor_rejected(decidb_cli):
     """``s * SUM(x)`` where ``s`` is a query-wide decision — a product of two
     decisions is bilinear, not a scale. Before B.3 this produced the unrelated
     "SUM(s) has nothing to aggregate over", because the fold pushed ``s`` into the
-    reducer's body."""
+    aggregate's body."""
     decidb_cli.assert_error("""
         SELECT id, x, s FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT), scalar s(INT)
@@ -425,7 +425,7 @@ def test_decision_factor_rejected(decidb_cli):
 # An uncorrelated scalar subquery is a legal factor — one value for the whole query —
 # but its value, and therefore its sign, is unavailable at plan time. That matters
 # only for MIN/MAX, which are order statistics: a negative factor turns a MAX into a
-# MIN. Keeping the factor OUTSIDE the reducer is what makes this survivable — the
+# MIN. Keeping the factor OUTSIDE the aggregate is what makes this survivable — the
 # sign then selects which linearization is *cheaper*, never which one is *correct*.
 #
 # These are the shapes that used to fail with the internal assertion
@@ -561,10 +561,10 @@ def test_scaled_composed_minmax_over_a_join(decidb_cli):
 def test_decision_factor_in_objective_rejected(decidb_cli):
     """``MAXIMIZE s * SUM(x)`` — a decision on both sides of the `*`.
 
-    A factor on a reducer must be one value for the whole query, and a decision is
+    A factor on an aggregate must be one value for the whole query, and a decision is
     not. ``DecideCanonicalizer`` vets objective factors at the planning boundary with
     the same ``PeelScale`` rule it applies to constraints, so the rejection names the
-    specific reducer (``SUM(x)``) rather than "an aggregate". The physical extractor
+    specific aggregate (``SUM(x)``) rather than "an aggregate". The physical extractor
     keeps its own check as a defensive invariant, but it is no longer the first place
     that can say no — without a guard the decision column was read as a data
     coefficient and evaluation crashed with an internal DuckDB assertion.

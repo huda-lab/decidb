@@ -1,15 +1,15 @@
 //===----------------------------------------------------------------------===//
 //                         DecidB
 //
-// src/optimizer/decide/decide_bound_absorption.cpp
+// src/optimizer/decide/decide_singleton_row_folding.cpp
 //
-// DECIDE bound absorption: fold a literal bound into a column box. See decide_optimizer.cpp.
+// DECIDE singleton-row folding: fold a literal bound into a column box. See decide_optimizer.cpp.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
 #include "duckdb/common/decide_numeric_policy.hpp"
-#include "duckdb/optimizer/decide/decide_bound_absorption.hpp"
+#include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 
 #include <cmath>
@@ -40,7 +40,7 @@
 namespace duckdb {
 
 // ---------------------------------------------------------------------------
-// Bound absorption: a bound, not a row
+// Singleton-row folding: a bound, not a row
 // ---------------------------------------------------------------------------
 //
 // `x <= 10` is one fact about a column, so it belongs in that column's box rather
@@ -50,9 +50,9 @@ namespace duckdb {
 // The pass reads a comparison, a decision variable and a foldable literal. It never
 // touches data, so it needs types, not rows.
 
-//! One decision variable, resolved, plus the type facts absorption needs about it.
+//! One decision variable, resolved, plus the type facts folding needs about it.
 //! The comparison and BETWEEN arms ask exactly the same questions, so they ask once.
-struct AbsorptionTarget {
+struct FoldingTarget {
 	LogicalDecide *decide = nullptr;
 	idx_t var_idx = DConstants::INVALID_INDEX;
 	bool is_integer = false;
@@ -79,11 +79,10 @@ struct AbsorptionTarget {
 	//! Tighten one side of the box and record the bound, in the one order that is always
 	//! correct: tighten unconditionally (a BOOLEAN restatement is a harmless no-op against
 	//! the intrinsic box), record only when ShouldRecord agrees.
-	void Absorb(char sense, double k, bool strict, double typed_k, idx_t source_clause_id,
-	            idx_t removal_group_id) const {
-		DecideAbsorbBound(decide->absorbed_boxes[var_idx], sense, k);
+	void Fold(char sense, double k, bool strict, double typed_k, idx_t source_clause_id, idx_t removal_group_id) const {
+		DecideFoldSingletonRow(decide->singleton_row_boxes[var_idx], sense, k);
 		if (ShouldRecord(sense, k)) {
-			decide->user_absorbed_bounds.push_back(
+			decide->user_singleton_row_bounds.push_back(
 			    {var_idx, sense, k, strict, typed_k, source_clause_id, removal_group_id});
 		}
 	}
@@ -92,7 +91,7 @@ struct AbsorptionTarget {
 //! Resolve `expr` to a decision variable. Fails for anything that is not a bare
 //! decision reference under casts — a multi-variable LHS (`x - 3*z_1 - 5*z_2 = 0`,
 //! the IN linking row) is a genuine relation, not a bound.
-static bool TryMatchAbsorptionTarget(const Expression &expr, LogicalDecide &decide, AbsorptionTarget &out) {
+static bool TryMatchFoldingTarget(const Expression &expr, LogicalDecide &decide, FoldingTarget &out) {
 	auto *unwrapped = UnwrapDecideCasts(const_cast<Expression &>(expr), decide.decide_index);
 	if (unwrapped->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		return false;
@@ -114,10 +113,10 @@ static bool TryMatchAbsorptionTarget(const Expression &expr, LogicalDecide &deci
 }
 
 //! The solver's reading of a comparison that belongs in a variable's box: the decision, the side it tightens and the
-//! value it tightens to. This is the one place that says which comparisons are absorbed, shared with direct solve
-//! through DecideBoundIsAbsorbed so the two cannot disagree about whether a bound replaces a variable's default.
-struct AbsorbableBound {
-	AbsorptionTarget target;
+//! value it tightens to. This is the one place that says which comparisons are folded, shared with direct solve
+//! through DecideIsSingletonRowBound so the two cannot disagree about whether a bound replaces a variable's default.
+struct SingletonRowBound {
+	FoldingTarget target;
 	char sense = '<';
 	double k = 0.0;
 	bool strict = false;
@@ -125,15 +124,15 @@ struct AbsorbableBound {
 	double typed_k = 0.0;
 };
 
-static bool TryReadAbsorbableBound(ClientContext &context, LogicalDecide &decide, const BoundComparisonExpression &comp,
-                                   AbsorbableBound &out) {
-	if (!TryMatchAbsorptionTarget(*comp.left, decide, out.target)) {
+static bool TryReadSingletonRowBound(ClientContext &context, LogicalDecide &decide,
+                                     const BoundComparisonExpression &comp, SingletonRowBound &out) {
+	if (!TryMatchFoldingTarget(*comp.left, decide, out.target)) {
 		return false;
 	}
 
 	// A non-finite bound is left for the constraint path, which already reads it the
 	// way the solver does: `x <= +inf` is no bound, `x >= +inf` has no solution, and
-	// NaN is an error naming the arithmetic. Absorbing it instead would write it into
+	// NaN is an error naming the arithmetic. Folding it instead would write it into
 	// the column box, where min/max against the ±1e30 sentinels keep an upper bound
 	// but not a lower one — the same infinity silently vanishing in one direction and
 	// reaching the model validator as an internal error in the other.
@@ -177,9 +176,10 @@ static bool TryReadAbsorbableBound(ClientContext &context, LogicalDecide &decide
 	}
 }
 
-bool DecideBoundIsAbsorbed(ClientContext &context, LogicalDecide &decide, const BoundComparisonExpression &comparison) {
-	AbsorbableBound bound;
-	return TryReadAbsorbableBound(context, decide, comparison, bound);
+bool DecideIsSingletonRowBound(ClientContext &context, LogicalDecide &decide,
+                               const BoundComparisonExpression &comparison) {
+	SingletonRowBound bound;
+	return TryReadSingletonRowBound(context, decide, comparison, bound);
 }
 
 bool DecideBoxContradictsDomain(const DecideBoundBox &box, bool is_bool) {
@@ -189,13 +189,13 @@ bool DecideBoxContradictsDomain(const DecideBoundBox &box, bool is_bool) {
 	return (box.upper < 0.0 && (floor >= 0.0 || is_bool)) || (is_bool && floor > 1.0);
 }
 
-void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &decide) {
+void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDecide &decide) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		// PER: only the constraint (child 0) carries bounds; the grouping columns do not.
 		if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
-			AbsorbBoundsInExpression(*conj.children[0], decide);
+			FoldSingletonRowsInExpression(*conj.children[0], decide);
 			break;
 		}
 		// WHEN: conditional per-row constraints must NOT contribute to a global bound.
@@ -206,7 +206,7 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 			break;
 		}
 		for (auto &child : conj.children) {
-			AbsorbBoundsInExpression(*child, decide);
+			FoldSingletonRowsInExpression(*child, decide);
 		}
 		break;
 	}
@@ -218,21 +218,21 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		idx_t removal_group_id = DConstants::INVALID_INDEX;
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
 
-		AbsorbableBound bound;
-		if (!TryReadAbsorbableBound(optimizer.context, decide, comp, bound)) {
+		SingletonRowBound bound;
+		if (!TryReadSingletonRowBound(optimizer.context, decide, comp, bound)) {
 			break;
 		}
-		bound.target.Absorb(bound.sense, bound.k, bound.strict, bound.typed_k, source_clause_id, removal_group_id);
+		bound.target.Fold(bound.sense, bound.k, bound.strict, bound.typed_k, source_clause_id, removal_group_id);
 		// The comparison stays in the tree so EXPLAIN keeps rendering what the user
 		// wrote; the tag is what stops it also becoming a model row.
-		AddDecideTag(comp.alias, ABSORBED_BOUND_TAG);
+		AddDecideTag(comp.alias, SINGLETON_ROW_BOUND_TAG);
 		break;
 	}
 
 	case ExpressionClass::BOUND_BETWEEN: {
 		auto &between = expr.Cast<BoundBetweenExpression>();
-		AbsorptionTarget target;
-		if (!TryMatchAbsorptionTarget(*between.input, decide, target)) {
+		FoldingTarget target;
+		if (!TryMatchFoldingTarget(*between.input, decide, target)) {
 			break;
 		}
 
@@ -250,14 +250,14 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		double lo = ExtractBound(*between.lower);
 		if (!std::isnan(lo)) {
 			bool strict = !between.lower_inclusive && target.is_integer;
-			target.Absorb('>', strict ? DecideStrictBound(true, lo) : lo, strict, lo, DConstants::INVALID_INDEX,
-			              DConstants::INVALID_INDEX);
+			target.Fold('>', strict ? DecideStrictBound(true, lo) : lo, strict, lo, DConstants::INVALID_INDEX,
+			            DConstants::INVALID_INDEX);
 		}
 		double hi = ExtractBound(*between.upper);
 		if (!std::isnan(hi)) {
 			bool strict = !between.upper_inclusive && target.is_integer;
-			target.Absorb('<', strict ? DecideStrictBound(false, hi) : hi, strict, hi, DConstants::INVALID_INDEX,
-			              DConstants::INVALID_INDEX);
+			target.Fold('<', strict ? DecideStrictBound(false, hi) : hi, strict, hi, DConstants::INVALID_INDEX,
+			            DConstants::INVALID_INDEX);
 		}
 		break;
 	}
@@ -271,11 +271,11 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 	}
 }
 
-void DecideOptimizer::AbsorbVariableBounds(LogicalDecide &decide) {
+void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
 	// Sized here rather than at construction so every auxiliary variable created by the
 	// preceding passes is already counted.
 	idx_t num_decide_vars = decide.decide_variables.size();
-	decide.absorbed_boxes.assign(num_decide_vars, DecideBoundBox());
+	decide.singleton_row_boxes.assign(num_decide_vars, DecideBoundBox());
 
 	// Seed a BOOLEAN's intrinsic ceiling here rather than leaving every variable at
 	// 1e30 and repairing it at model-build time. The box travels to stage 06 as
@@ -288,22 +288,22 @@ void DecideOptimizer::AbsorbVariableBounds(LogicalDecide &decide) {
 	// The ceiling is a property of the declared type, known here, and it is rigid: the
 	// elastic engine resets BOOLEAN columns only within [0,1], so no diagnosis opens it.
 	// That also lets the `<>` range collapse see a BOOL's upper side, which it could not
-	// before. Absorption only ever narrows (`std::min`), and a user restatement like
+	// before. Folding only ever narrows (`std::min`), and a user restatement like
 	// `x <= 1` is already treated as a harmless no-op against the intrinsic box, so
 	// seeding it changes nothing about how a written bound is recorded.
 	for (idx_t i = 0; i < num_decide_vars; i++) {
 		if (i < decide.is_boolean_var.size() && decide.is_boolean_var[i]) {
-			decide.absorbed_boxes[i].upper = 1.0;
+			decide.singleton_row_boxes[i].upper = 1.0;
 			// The floor is just as rigid. A written lower bound only ever raises it (`max`), so `x >= -3`
 			// leaves the box at [0,1] and a bound that cannot hold (`x >= 2`, `x <= -1`) inverts it, which
 			// the solve reports as infeasible. Without this the box would widen to [-3,1], and x would
 			// take a value that is not a Boolean.
-			DecideAbsorbBound(decide.absorbed_boxes[i], '>', 0.0);
+			DecideFoldSingletonRow(decide.singleton_row_boxes[i], '>', 0.0);
 		}
 	}
 
 	if (decide.decide_constraints) {
-		AbsorbBoundsInExpression(*decide.decide_constraints, decide);
+		FoldSingletonRowsInExpression(*decide.decide_constraints, decide);
 	}
 }
 
