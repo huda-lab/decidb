@@ -50,6 +50,7 @@ separate objective-side copy.
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the absorbed variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
 | 3 | `Finalize` → `BuildEntityMappings` | Build entity mappings for table-scoped variables |
+| 3a | `Finalize` → `RunScopeChecks` | Run the scope checks (§4a); the first failure stops the query |
 | 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` | Evaluate coefficients, `WHEN` masks, `PER` groups, RHS values |
 | 5 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
 | 6 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
@@ -197,6 +198,67 @@ For each `EntityScopeInfo`, before coefficient evaluation:
 
 The result is an `EntityMapping { num_entities, row_to_entity }` on the
 `SolverInput`, which is what makes several rows share one solver column.
+
+---
+
+## 4a. PHASE 1.6 — scope checks, and how a scoped clause is read
+
+`RunScopeChecks` runs `LogicalDecide::scope_checks` (stage 04) in order, before any
+coefficient is evaluated, over the materialized rows — an empty input runs none:
+
+| Kind | Fails when | Message |
+|---|---|---|
+| `KEEPS_A_ROW` | the `when` keeps no row | `DECIDE: when <c> matches no rows.` |
+| `DETERMINES` | a class of the key (over the kept rows, and a reducer's own `when`) shows two values, NULL equal to NULL, or two instances of the decision | `DECIDE: per <K> does not determine <value>[ (<context>)]. <class> has more than one value: <a>, <b>.` · `... the decision <x> (declared ...). <class> covers more than one <x>.` |
+| `READS_A_ROW` | a `by` group of the kept rows has no row the reducer's own `when` keeps | `DECIDE: <reducer> has no rows for <group>.` · `... has no rows.` for `by ()` |
+
+A class or group is named by its key's values as SQL literals (`D.depotID = 'D1'`); over
+`()` the message says "The kept rows". Groups come from `LookupOrBuildPerGroupIds` with
+NULL a value. A key with no columns (`per ()`, `by ()`, a reducer's `per ()`) is one group
+of every row the filter keeps: `BuildGroupIds` says so once, for every caller. A key that
+is the same on every row (`by (1)`) hashes to a constant vector, which `BuildGroupIds`
+flattens before each row reads its own hash. A check reads its `when` on every row
+(`KeptRows`), a reducer's own `when` on the rows that keeps, and its key and value only on
+the rows it looks at.
+
+A clause the binder tagged `SCOPED_CLAUSE_TAG` (`DecideConstraint::scoped`) is then
+read by these rules; every other clause, by §5 unchanged:
+
+- **Kept rows first.** Its `when` is read before anything else, on every row, the parts
+  of an AND or an OR left to right, each only on the rows the earlier parts leave
+  undecided -- an AND's on the rows they keep, an OR's on the rows they do not
+  (`KeptRows`; the composed rewrite folds the clause's `when` in front of a term's own).
+  Anything else, `not` included, is computed whole. Nothing is then
+  computed on a row the `when` drops: a reducer's own `when` is read on the kept rows,
+  a term's coefficient on the kept rows its own `when` keeps, a bound, a `by` key and a
+  class key on the kept rows (`ExecuteOnReadRows`, which slices each chunk to the rows an
+  expression reads and leaves the others NULL; `LookupOrBuildPerGroupIds`' `read_rows`,
+  which builds such a clause's groups afresh rather than from the cache's, computed on
+  every row). `ExtractDoubleColumn` writes 0 for a row it does not read, so a NULL or a
+  failing expression there is no error. The empty-set errors of §5 do not apply; the
+  checks have run.
+- **Grouping.** The aggregate shape groups the kept rows by its `by` key
+  (`group_keys[constraint->group_key]`), NULL a value: a group's members are the rows a
+  reducer's `when` keeps (all kept rows for `<>`, whose bound values are all excluded),
+  its bound the tightest over all its kept rows. The rows shape under `per K:` emits one
+  row per class, at its first kept row; under `when` alone, one per kept row.
+- **Bound-side reducers** are each evaluated over their own `by` groups of the kept rows
+  (`EvaluateRhsReducerPerGroup`, `scoped`), whatever the clause's shape, and broadcast
+  by each row's own group.
+- **De-duplication** for a reducer's own `per` keeps the first row of each class among
+  the rows its `when` keeps (`BuildQualifierKeepMask`'s `eligible`), within each group:
+  a class whose first joined row the `when` drops is still counted. The old spellings
+  keep the first row among all rows (`06_issues/bugs`).
+- **The objective**, under `DecideObjective::scoped`: its `when` is folded into every
+  term's filter, so reading, de-duplication and AVG denominators all follow it. A
+  decision outside the reducers (`NONE`) keeps its coefficient on the first kept row only
+  (`CountTupleTermsOnce`; a query-wide one moves to row 0, where stage 06 reads it). The
+  two-level form groups with NULL a class.
+- **Composed clauses** read the rows their folded filter keeps, de-duplicate among them,
+  and skip the old empty-set errors.
+- **A NULL subquery** is named by its text as DuckDB prints it:
+  `NullSourceContext::fragments`, set by a scoped clause only, maps the flattened column
+  back to the subquery's source fragment.
 
 ---
 

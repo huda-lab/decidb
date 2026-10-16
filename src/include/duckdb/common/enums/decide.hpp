@@ -87,6 +87,12 @@ struct DecideVarScopeInfo {
     static DecideVarScopeInfo Deserialize(Deserializer &deserializer);
 };
 
+//! What a run-time scope check (LogicalDecide::scope_checks) asks of the rows.
+//!   KEEPS_A_ROW — a `when` keeps a row of a non-empty input
+//!   DETERMINES  — every class of a key shows one value, or one instance of a decision
+//!   READS_A_ROW — every group of a reducer's `by` key has a row passing its own `when`
+enum class DecideScopeCheckKind : uint8_t { KEEPS_A_ROW = 0, DETERMINES = 1, READS_A_ROW = 2 };
+
 //! Type of aggregate used in MIN/MAX objective linearization
 enum class ObjectiveAggregateType : uint8_t {
     NONE = 0,   //! No MIN/MAX objective (pure SUM or no objective)
@@ -245,6 +251,34 @@ static constexpr const char *SCOPE_PER_TAG = "__scope_per__";
 //! children[1..] the key, none for `BY ()`.
 static constexpr const char *REDUCER_BY_TAG = "__reducer_by__";
 
+//! Tag on a clause written with the scope spellings -- a `when` or `per` in front, a `by`,
+//! or a scope inside a reducer. The binder puts it on every constraint of such a scope (a
+//! comparison, an `IN` marker), on the scope's WHEN wrapper and on the PER wrapper of the
+//! objective's two-level form; a row the optimizer adds for such a clause (IN, ABS, norm,
+//! MIN/MAX) carries it, and so does that row's WHEN wrapper. Readers take it from the
+//! comparison, or from the WHEN wrapper when they need the clause's `when` with it. Such a
+//! clause follows the scoping language rather than the old postfix one: NULL is a key
+//! value, every reducer reads its own `by` group of the kept rows, nothing is computed on
+//! a row its `when` drops, and LogicalDecide::scope_checks guard it at run time. An old
+//! spelling never carries it.
+static constexpr const char *SCOPED_CLAUSE_TAG = "__scoped_clause__";
+
+//! The bound form of a constraint's `PER key:`: a conjunction whose child 0 is the
+//! constraint and whose children[1..] are the key's columns, none for `PER ()`. The
+//! constraint is generated once per class of the key among the kept rows. Unlike the
+//! old PER wrapper it groups no reducer, and NULL is a class.
+static constexpr const char *PER_CLASS_TAG = "__per_class__";
+
+//! Tag prefix naming a `BY (key)`: "__group_key_<i>__" indexes LogicalDecide::group_keys.
+//! On a reducer, the rows it reads at a class are the kept rows sharing the class's key
+//! value; on a scoped aggregate comparison, the key its decision reducers share, which
+//! is the comparison's grouping. No tag means `BY ()`: every kept row.
+static constexpr const char *GROUP_KEY_TAG_PREFIX = "__group_key_";
+
+inline string MakeGroupKeyTag(idx_t group_key_idx) {
+	return string(GROUP_KEY_TAG_PREFIX) + to_string(group_key_idx) + "__";
+}
+
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
 static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 
@@ -344,6 +378,10 @@ inline bool TryParseRemovalGroupTag(const string &alias, idx_t &removal_group_id
 
 inline bool TryParseSourceFragmentTag(const string &alias, idx_t &fragment_id) {
 	return TryParseDecideIndexTag(alias, SOURCE_FRAGMENT_TAG_PREFIX, fragment_id);
+}
+
+inline bool TryParseGroupKeyTag(const string &alias, idx_t &group_key_idx) {
+	return TryParseDecideIndexTag(alias, GROUP_KEY_TAG_PREFIX, group_key_idx);
 }
 
 //! Classification stamped by DecideCanonicalizer on the complete canonical RHS when

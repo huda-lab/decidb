@@ -1,7 +1,8 @@
 # ANR language surface — implemented
 
-Items 1 and 2 of the plan have shipped: **the new spellings parse**, and **a
-declaration's `per` runs**. What the engine accepts is recorded in
+Items 1 to 4 of the plan have shipped: **the new spellings parse**, **a declaration's
+`per` runs**, and **a scope runs in front of a constraint or the objective, after a
+reducer (`by`) and inside one**. What the engine accepts is recorded in
 [`../00_project_overview/syntax_reference.md`](../00_project_overview/syntax_reference.md);
 what the extension will do is in
 [`../00_project_overview/anr_language_extension.md`](../00_project_overview/anr_language_extension.md),
@@ -23,10 +24,10 @@ and the remaining items are in [`todo.md`](todo.md).
 - Three parse errors are exact: `PER` other than `()` on an objective, a parenthesized
   key, and an expression in a `PER` key (messages in the behaviour file, §9).
 - `PER ROW` is the default written out: it leaves no node and runs as if omitted.
-- Every scope in a constraint or the objective, subqueries included, answers
-  *"DECIDE: 'PER key:' is not supported yet"* (or `PER ():`, `WHEN condition:`,
-  `BY (key)`) from `ValidateDecideNoUnsupportedScope`, which each later item shrinks; a
-  declaration's `PER` binds since item 2.
+- Every other scope answered *"DECIDE: 'PER key:' is not supported yet"* (or `PER ():`,
+  `WHEN condition:`, `BY (key)`) until items 2–4 bound it; the gate, now part of
+  `ValidateDecideScopeSpellings`, keeps that answer inside ordinary SQL subqueries
+  written in the clause.
 - The grammar's conflict budget fell from `%expect 6` to `%expect 4`: the two conflicts
   the postfix-operator states carried were on the token `PER` being readable as an
   identifier, which it no longer is inside the clause.
@@ -59,9 +60,10 @@ and the remaining items are in [`todo.md`](todo.md).
   key columns alive through pruning, `plan_decide` resolves them, `BuildEntityMappings`
   groups rows on them with NULL as a value (D5), and every row reads its class's column.
   Layers 5 to 8 are unchanged; layer 4 only words its error for a keyed decision.
-- Until item 3, a keyed decision inside `SUM(D: e)` is refused with "not supported yet"
-  (D10). Until item 5, a keyed decision beside a reducer in an aggregate constraint is
-  refused, named as declared, with a `per ()` hint (D11). DIAGNOSE labels its scope
+- A keyed decision inside `SUM(D: e)` is refused with "not supported yet" (D10; D13
+  keeps the refusal until item 7, and `sum(per D: e)` takes one). Until item 5, a keyed
+  decision beside a reducer in an aggregate constraint is refused, named as declared,
+  with a `per ()` hint (D11). DIAGNOSE labels its scope
   `entity` until item 6 (D11).
 - `exact_key` (id 105) and `declared_key` (id 102) are serialized; `nodes.json` names
   `duckdb/planner/operator/decide/logical_decide.hpp`, so regenerating reproduces the
@@ -71,3 +73,71 @@ and the remaining items are in [`todo.md`](todo.md).
   judged class by class); the keyed-scope case in
   `test/common/test_decidb_plan_serialization.cpp` (sharing, `exact_key`, round trip);
   the declaration cases of `test/decidb/test_scope_parser.test`, which now run.
+
+## Items 3 and 4 — reducer and clause scope
+
+Built together, under the decisions D12–D18 of [`todo.md`](todo.md) §3. A clause that
+uses a new spelling — in front, a `by`, or a scope inside a reducer — follows the ANR
+rules; one without keeps today's, so no existing answer moved (the golden models are
+identical on both solvers). `per row` alone leaves no node (item 1), so its clause keeps
+today's rules too. What the user sees: `syntax_reference.md` §10.
+
+- **Binder** (`02_binder/done.md` §4a). `ValidateDecideScopeSpellings` replaces the
+  item-1 gate: it keeps "not supported yet" inside ordinary subqueries, refuses mixed
+  spellings (D14), scopes on non-reducer calls (D15), window functions in scope data and
+  `norm(D: e, p)`. Its whole-number check for `<`, `>` and `<>` counts a constant added
+  inside a scoped `MIN` or `MAX`, which stays in the extremum the bound is stepped on.
+  `per K:` binds to a `PER_CLASS_TAG` wrapper, `when c:` to a WHEN wrapper, `by (Γ)` to a
+  `__group_key_<i>__` tag naming `decide_group_keys[i]` (one entry per key as written, a
+  subquery in it included), an inner `per` to a qualifier tag on an exact key scope, an
+  inner `when` to the aggregate's filter; every comparison of such a clause carries
+  `SCOPED_CLAUSE_TAG`, the one switch later layers read. The two-level objective binds
+  onto today's nested objective.
+- **Logical plan** (`03_logical_plan/done.md`). `LogicalDecide::group_keys`,
+  `scope_checks` and `scoped_objective`, serialized (ids 217–219), in
+  `EnumerateExpressions`, flattened by `PlanSubqueries`.
+- **Canonicalizer** (`04_canonicalizer/done.md` §3.10, §4 "Scope checks"). `ClassifyScoped` decides a
+  scoped comparison's shape — rows, aggregate (stamped with its `by` key; a `per K:`
+  wrapper over it is dropped, the checks keep what `K` requires) or refused with "not
+  supported yet", the composed MIN/MAX with a `by` or a bound that is not a constant
+  included. A lone negated reducer is spelled with its sign in its factor (`-max(e)` as
+  `-1 * max(e)`), and one written with signs around it as the bare term (`-(-max(e))`
+  as `max(e)`). `BuildConstraintScopeChecks` / `BuildObjectiveScopeChecks` build the
+  run-time checks from the clauses as bound, before canonicalization.
+- **Optimizer** (`05_optimizer/done.md`). Scoped easy MIN/MAX keeps its reducer (its
+  `when` picks the members, the bound reduces over the group); the hard half keeps the
+  `by` key and takes a negative factor inside the extremum (`-2 * max(e)` is
+  `min(-2 * e)`); a composed clause folds its `when` into each term. Rows a rewrite adds for a
+  scoped clause (IN, ABS, norm L0) keep its `when` and its tag. The linear form records
+  `scoped`, the group key and the class key, and counts an objective's decision outside
+  reducers once (a product there is refused).
+- **Model** (`06_model_formulation/done.md`). `MinMaxObjectiveSpec::member_rows`: a
+  scoped MIN/MAX objective's members are the rows its reducer reads, whatever their
+  coefficients. `EvaluatedConstraint::rows_stand_with_their_class` keeps implied bounds
+  for a `per K:` clause emitted once per class. A scoped hard MIN/MAX or composed clause
+  steps a strict bound by one (`EvaluatedConstraint::scoped`,
+  `ComposedMinMaxTermData::scoped`), and its row keeps the written bound for a diagnosis
+  (`RawConstraint::strict`, `typed_k`).
+- **Execution** (`08_execution/done.md` §4a). `RunScopeChecks` runs first; a scoped
+  clause computes nothing on a row its `when` drops (`ExecuteOnReadRows`, `KeptRows`):
+  a NULL there is never read and an expression that would fail there is never computed.
+  It groups by its `by` key with NULL a value, emits a `per K:` rows clause at each
+  class's first kept row, evaluates each bound-side reducer over its own groups and
+  de-duplicates an inner `per` among the rows its `when` keeps. An empty or constant key
+  is one group everywhere (`BuildGroupIds`).
+- **Messages** quote the query: a `per`/`by` key and a reducer as written, columns
+  qualified by relation over a join; a subquery in an objective's `when`, or a NULL one,
+  by its text as DuckDB prints it. DIAGNOSE quotes a stepped strict bound as written. `EXPLAIN` echoes the scope spellings. A reducer or `norm` with no argument
+  now gets a binder message in every spelling (it was an internal error, or an empty one).
+- **Old spellings** keep their behaviour, wrong answers included (D17); the ones found
+  are in `06_issues/bugs/todo.md` ("Old spellings: wrong answers found while building
+  items 3–4"). The 21 "not supported yet" expectations of `test_scope_parser.test` now
+  show each query's result (D16).
+- Tests: `test/decide/tests/test_scope_generation.py` (C3, C4),
+  `test_scope_reducer_by.py` (C5, MIN/MAX, AVG, `<>`, refusals),
+  `test_scope_reducer_inner.py` (C6), `test_scope_determination.py` (C8),
+  `test_scope_objective.py` (C9), `test_scope_deck_examples.py` (deck examples 2, 3, 4,
+  6, 7 in both forms; example 7's D8 error), against `_scope_oracle.ScopedModel`, which
+  follows the ANR definition literally; `_scope_cases.py` holds the shared data. The
+  scoped case of `test/common/test_decidb_plan_serialization.cpp` round-trips the new
+  plan fields.

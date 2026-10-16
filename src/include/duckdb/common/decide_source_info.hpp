@@ -14,6 +14,22 @@ namespace duckdb {
 class Serializer;
 class Deserializer;
 
+//! A clause's text with its WHEN/PER qualifier attached where DECIDE writes it: the old
+//! postfix qualifier (`WHEN c PER g`) after the clause, the scope spellings' `when c per
+//! K:` in front of it. The renderers keep the two apart: the old keywords in upper case,
+//! the scope spellings' in lower case and closed by a colon. The colon alone would not:
+//! an old condition may end in a column named `ok:`.
+inline string AttachDecideQualifier(const string &clause, const string &qualifier) {
+	if (qualifier.empty()) {
+		return clause;
+	}
+	bool scope_spelling = qualifier.compare(0, 5, "when ") == 0 || qualifier.compare(0, 4, "per ") == 0;
+	if (scope_spelling && qualifier.back() == ':') {
+		return qualifier + " " + clause;
+	}
+	return clause + " " + qualifier;
+}
+
 //! How diagnostics should render the right-hand side of a source constraint.
 enum class ConstraintSourceRhsKind : uint8_t {
 	//! No directly editable symbolic RHS. Diagnostics quote its evaluated value.

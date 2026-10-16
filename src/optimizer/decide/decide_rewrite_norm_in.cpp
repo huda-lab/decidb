@@ -60,10 +60,11 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> links;
 	idx_t l0_counter = 0;
 
-	std::function<void(unique_ptr<Expression> &, const string &)> rewrite =
-	    [&](unique_ptr<Expression> &expr, const string &source_alias) {
+	std::function<void(unique_ptr<Expression> &, const string &, ClauseScope)> rewrite =
+	    [&](unique_ptr<Expression> &expr, const string &source_alias, ClauseScope scope) {
 		if (!expr) return;
 		auto clause_alias = DescendSourceAlias(*expr, source_alias);
+		scope = EnterClauseScope(*expr, scope);
 		string payload;
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
 		    !TryParseNormMarker(expr->GetAlias(), payload)) {
@@ -75,7 +76,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			// drop the norm. A marker beneath another aggregate cannot occur: the binder
 			// rejects `SUM(norm(...))` before this pass runs.
 			ExpressionIterator::EnumerateChildren(
-			    *expr, [&](unique_ptr<Expression> &child) { rewrite(child, clause_alias); });
+			    *expr, [&](unique_ptr<Expression> &child) { rewrite(child, clause_alias, scope); });
 			return;
 		}
 		auto &aggregate = expr->Cast<BoundAggregateExpression>();
@@ -129,7 +130,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                                  std::move(lhs), std::move(rhs));
 			MarkFormulationConstraint(*link, clause_alias);
-			links.push_back(std::move(link));
+			links.push_back(ScopeHelperRow(std::move(link), scope));
 		};
 		add_link(make_mz(), aggregate.children[0]->Copy());
 		add_link(make_mz(), optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)),
@@ -139,17 +140,20 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		expr = make_aggregate("sum", std::move(z));
 	};
 
-	rewrite(decide.decide_objective, string());
-	rewrite(decide.decide_constraints, string());
+	rewrite(decide.decide_objective, string(), ClauseScope {decide.scoped_objective, nullptr});
+	rewrite(decide.decide_constraints, string(), ClauseScope());
 	for (auto &link : links) AppendConstraint(decide, std::move(link));
 }
 
 void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> generated;
 	idx_t in_counter = 0;
+	// Set at each IN: written with the scope spellings, its rows keep the clause's rules.
+	bool scoped_in = false;
 	auto emit = [&](unique_ptr<Expression> constraint, const Expression *when, const string &source_alias) {
 		MarkFormulationConstraint(*constraint, source_alias);
-		generated.push_back(WrapWithWhen(std::move(constraint), when));
+		generated.push_back(scoped_in ? ScopeHelperRow(std::move(constraint), ClauseScope {true, when})
+		                              : WrapWithWhen(std::move(constraint), when));
 	};
 	std::function<void(unique_ptr<Expression> &, const Expression *, const string &)> rewrite =
 	    [&](unique_ptr<Expression> &expr, const Expression *when, const string &source_alias) {
@@ -169,6 +173,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		}
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR || expr->type != ExpressionType::COMPARE_IN) return;
 		auto &in = expr->Cast<BoundOperatorExpression>();
+		scoped_in = HasDecideTag(in.GetAlias(), SCOPED_CLAUSE_TAG);
 		if (in.children.size() < 2) throw InternalException("DECIDE IN marker has no domain values");
 		auto *target = GetBareDecideColumnRef(*in.children[0], decide.decide_index);
 		if (!target) throw InternalException("DECIDE IN marker target is not a decision variable");

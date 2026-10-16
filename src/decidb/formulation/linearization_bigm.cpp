@@ -280,7 +280,7 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
         // excluded rows.
         bool has_excluded = false;
         for (idx_t gid : ec.row_group_ids) {
-            if (gid == DConstants::INVALID_INDEX) {
+            if (gid == DConstants::INVALID_INDEX && !ec.rows_stand_with_their_class) {
                 has_excluded = true;
                 break;
             }
@@ -368,6 +368,9 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
             for (idx_t r = 0; r < num_rows; r++) {
                 bool excluded = !ec.row_group_ids.empty() &&
                                 ec.row_group_ids[r] == DConstants::INVALID_INDEX;
+                if (excluded && ec.rows_stand_with_their_class) {
+                    continue; // its class's first row bounds the same instance
+                }
                 double a = 0.0;
                 for (idx_t t2 = t; t2 < ec.variable_indices.size(); t2++) {
                     if (ec.variable_indices[t2] == v) {

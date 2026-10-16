@@ -2,6 +2,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 
 namespace duckdb {
 
@@ -9,6 +10,138 @@ DecideObjectiveBinder::DecideObjectiveBinder(Binder &binder, ClientContext &cont
                                              const case_insensitive_set_t &scalar_variables,
                                              optional_ptr<DecideQualifierContext> qualifier_context)
     : DecideBinder(binder, context, variables, scalar_variables, qualifier_context) {
+}
+
+BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
+	// `[WHEN c] [PER ()]: objective`. An objective is produced once, so `PER ()` is its
+	// default and adds nothing; the parser refuses any other key.
+	auto *body = &expr_ptr;
+	if (IsDecideMarker(**body, SCOPE_PER_TAG)) {
+		body = &(*body)->Cast<FunctionExpression>().children[0];
+	}
+	optional_ptr<FunctionExpression> when;
+	if (IsDecideMarker(**body, SCOPE_WHEN_TAG)) {
+		when = &(*body)->Cast<FunctionExpression>();
+		body = &when->children[0];
+	}
+	ErrorData body_error;
+	is_top_expression = true;
+	binding_scoped_objective = true;
+	try {
+		BindChild(*body, depth, body_error);
+	} catch (...) {
+		binding_scoped_objective = false;
+		throw;
+	}
+	binding_scoped_objective = false;
+	if (body_error.HasError()) {
+		return BindResult(std::move(body_error));
+	}
+	auto bound = std::move(BoundExpression::GetExpression(**body));
+	if (!when) {
+		return BindResult(std::move(bound));
+	}
+	ErrorData condition_error;
+	is_top_expression = false;
+	binding_when_condition = true;
+	try {
+		BindChild(when->children[1], depth, condition_error);
+	} catch (...) {
+		binding_when_condition = false;
+		throw;
+	}
+	binding_when_condition = false;
+	if (condition_error.HasError()) {
+		return BindResult(std::move(condition_error));
+	}
+	auto wrap = [&](unique_ptr<Expression> objective) -> unique_ptr<Expression> {
+		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		wrapper->children.push_back(std::move(objective));
+		wrapper->children.push_back(BoundCastExpression::AddCastToType(
+		    context, std::move(BoundExpression::GetExpression(*when->children[1])), LogicalType::BOOLEAN));
+		wrapper->alias = WHEN_CONSTRAINT_TAG;
+		AddDecideTag(wrapper->alias, SCOPED_CLAUSE_TAG);
+		return std::move(wrapper);
+	};
+	// The two-level form's PER wrapper stays outermost, as the nested objective's rewrite
+	// reads it: PER{WHEN{objective, c}, k}.
+	if (bound->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION && IsPerConstraintTag(bound->alias)) {
+		auto &per = bound->Cast<BoundConjunctionExpression>();
+		per.children[0] = wrap(std::move(per.children[0]));
+		return BindResult(std::move(bound));
+	}
+	return BindResult(wrap(std::move(bound)));
+}
+
+BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
+	// `outer(PER k: inner(e) BY (k)) [BY ()]`.
+	auto *outer_slot = &expr_ptr;
+	if (IsDecideMarker(**outer_slot, REDUCER_BY_TAG)) {
+		outer_slot = &(*outer_slot)->Cast<FunctionExpression>().children[0];
+	}
+	auto &outer = (*outer_slot)->Cast<FunctionExpression>();
+	auto &per = outer.children[0]->Cast<FunctionExpression>();
+	if (IsDecideMarker(*per.children[0], SCOPE_WHEN_TAG)) {
+		return BindResult(BinderException::Unsupported(
+		    outer, StringUtil::Format("DECIDE: when inside the outer reducer of %s(per %s: ...) is not supported "
+		                              "yet; write it in front of the objective",
+		                              StringUtil::Lower(outer.function_name), DecideKeyToString(per))));
+	}
+	auto &inner_by = per.children[0]->Cast<FunctionExpression>();
+	auto &inner = inner_by.children[0]->Cast<FunctionExpression>();
+	auto form = StringUtil::Format("%s(per %s: %s(...) by (%s))", StringUtil::Lower(outer.function_name),
+	                               DecideKeyToString(per), StringUtil::Lower(inner.function_name),
+	                               DecideKeyToString(inner_by));
+	if (!inner.children.empty() && IsDecideMarker(*inner.children[0], SCOPE_WHEN_TAG)) {
+		return BindResult(BinderException::Unsupported(
+		    inner, StringUtil::Format("DECIDE: when inside the inner reducer of %s is not supported yet; write it "
+		                              "in front of the objective",
+		                              form)));
+	}
+	if (!inner.children.empty() && IsDecideMarker(*inner.children[0], SCOPE_PER_TAG)) {
+		return BindResult(BinderException::Unsupported(
+		    inner, StringUtil::Format("DECIDE: per inside the inner reducer of %s is not supported yet", form)));
+	}
+	for (idx_t i = 1; i < inner_by.children.size(); i++) {
+		if (inner_by.children[i]->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
+			return BindResult(BinderException::Unsupported(
+			    inner_by, StringUtil::Format("DECIDE: in %s the by key must be the per key; any other is not "
+			                                 "supported yet",
+			                                 form)));
+		}
+	}
+	case_insensitive_set_t decision_names;
+	for (auto &variable : variables) {
+		decision_names.insert(variable.first);
+	}
+	auto key = BindKeyColumns(binder.bind_context, per, decision_names);
+	auto by_key = BindKeyColumns(binder.bind_context, inner_by, decision_names);
+	bool same_key = key.size() == by_key.size();
+	for (idx_t i = 0; same_key && i < key.size(); i++) {
+		same_key = key[i]->Cast<BoundColumnRefExpression>().binding ==
+		           by_key[i]->Cast<BoundColumnRefExpression>().binding;
+	}
+	if (!same_key) {
+		return BindResult(BinderException::Unsupported(
+		    inner_by, StringUtil::Format("DECIDE: in %s the by key must be the per key; any other is not supported "
+		                                 "yet",
+		                                 form)));
+	}
+	// The nested objective the old spelling binds to: `outer(inner(e))` under a PER
+	// wrapper whose columns are the key.
+	outer.children[0] = std::move(inner_by.children[0]);
+	auto result = BindExpression(*outer_slot, depth);
+	if (result.HasError()) {
+		return result;
+	}
+	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	wrapper->children.push_back(std::move(result.expression));
+	for (auto &column : key) {
+		wrapper->children.push_back(std::move(column));
+	}
+	wrapper->alias = PER_CONSTRAINT_TAG;
+	AddDecideTag(wrapper->alias, SCOPED_CLAUSE_TAG);
+	return BindResult(std::move(wrapper));
 }
 
 BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
@@ -30,14 +163,23 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
     case ExpressionClass::COLUMN_REF:
     case ExpressionClass::CONSTANT: {
         // A bare query-wide decision is a complete objective on its own: it has a
-        // single solver column, so there is nothing for a reducer to collapse.
-        if (!is_top_expression || IsScalarDecideVariable(expr)) {
+        // single solver column, so there is nothing for a reducer to collapse. Under a
+        // scope written in front, any decision is: one instance is a scope check.
+        if (!is_top_expression || IsScalarDecideVariable(expr) ||
+            (binding_scoped_objective && IsVariableExpression(expr, variables))) {
 	        return ExpressionBinder::BindExpression(expr_ptr, depth);
 	    }
 	    break;
 	}
 	case ExpressionClass::FUNCTION: {
 	    auto &func = expr.Cast<FunctionExpression>();
+	    if (is_top_expression && func.is_operator &&
+	        (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG)) {
+	        return BindScopedObjective(expr_ptr, depth);
+	    }
+	    if (is_top_expression && IsTwoLevelObjective(expr)) {
+	        return BindTwoLevelObjective(expr_ptr, depth);
+	    }
 	    // DecidB: Handle PER on objective — preserve PER columns for per-group objectives
 	    if (func.is_operator && IsPerConstraintTag(func.function_name)) {
 	        D_ASSERT(func.children.size() >= 2);
@@ -144,7 +286,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, string& error_msg){
     // A relation qualifier changes which tuples a reducer sums over, not what shape it
     // is, so classification looks straight through it.
-    auto &expr = const_cast<ParsedExpression &>(UnwrapQualifiedReducer(expr_ptr));
+    auto &expr = const_cast<ParsedExpression &>(UnwrapReducerMarkers(expr_ptr));
     switch (expr.GetExpressionClass()) {
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
@@ -166,7 +308,9 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
             !ContainsDecideAggregate(*func.children[1])) {
             is_additive_or_scalar = true;
         }
-        if (is_additive_or_scalar && ContainsDecideAggregate(expr)) {
+        if (is_additive_or_scalar &&
+            (ContainsDecideAggregate(expr) ||
+             (binding_scoped_objective && ExpressionContainsDecideVariable(expr, variables)))) {
             return DecideExpression::SUM;
         }
         if (ContainsDecideAggregate(expr)) {

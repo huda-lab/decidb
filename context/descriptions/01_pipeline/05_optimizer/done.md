@@ -197,6 +197,18 @@ node's `FunctionData`, which does not fail on a type mismatch — it reinterpret
 children's physical representation and returns a plausible wrong number. That
 workaround is gone.
 
+**Scoped clauses** (stage 04 §3.10). `DecideConstraint` records `scoped` (from
+`SCOPED_CLAUSE_TAG`), `group_key` (the comparison's `by` stamp) and, under a kept
+`per K:` wrapper, `per_class` with `class_key`; `per_columns` keeps its old meaning. A
+scoped easy MIN/MAX (`MINMAX_EASY` on the comparison, its reducer kept) extracts its
+body's terms with the reducer's `when` as their filter, one row per member. In a scoped
+objective (`LogicalDecide::scoped_objective`, copied to `DecideObjective::scoped`), a
+decision outside the reducers — query-wide or not — is a `NONE` term, counted once at
+execution; a product of two decisions left there is refused (*"... multiplies decisions
+outside a reducer, which is not supported yet"*), since it has no once-only reading in the
+model. `RewriteBilinear` has already linearized a product with a `BOOL` decision by then,
+so only a product of two non-Boolean decisions reaches the refusal.
+
 ### Like-term collection
 
 After flattening, every list that becomes a **linear** solver row is grouped:
@@ -266,6 +278,10 @@ aggregate bodies, and constant factors. A factor whose value is not known until
 execution — a data column, as in `SUM(w * ABS(x - t))` — yields sign 0, which
 never matches the pinning direction and so forces Big-M.
 
+In a clause written with the scope spellings, the two envelope rows keep its `when`
+and `SCOPED_CLAUSE_TAG` (`ScopeHelperRow`), so they read only the rows the clause keeps.
+The objective's do too, under `scoped_objective`.
+
 That is deliberately conservative: a row whose `w` happens to be positive gets
 an envelope it does not need. Assuming such a factor positive is unsound, since
 a negative `w` makes enlarging the auxiliary *relax* the row, and the constraint
@@ -307,7 +323,10 @@ optimisations that need to read the domain values — the `{0,1}` Boolean shortc
 and the `x >= min(domain)` tightening on the general encoding — evaluate each
 value with the cast policy's folder, so a written-out expression such as
 `x IN (1-3, 2)` qualifies exactly like the literal `x IN (-2, 2)` does. Neither
-affects correctness: the indicator encoding is exact with or without them. These helper rows are
+affects correctness: the indicator encoding is exact with or without them. Under a
+scope spelling the rows keep the clause's `when` and `SCOPED_CLAUSE_TAG`, as an L0 norm's
+links do (`EnterClauseScope` / `ScopeHelperRow` in `decide_optimizer.cpp`): a row the
+`when` drops is never read. These helper rows are
 structural for today’s infeasibility repair: they must never be independently
 loosened. Atomic source-level DROP repair is recorded in `todo.md`.
 
@@ -326,11 +345,21 @@ loosened. Atomic source-level DROP repair is recorded in `todo.md`.
 
 **Constraints.** An *easy* direction (`MAX(...) <= K`, `MIN(...) >= K`) strips the
 reducer and becomes a per-row constraint — one row per data row, no Big-M. A *hard*
-direction creates a Boolean indicator per active row and rewrites to
-`SUM` + linking rows (`EmitHardMinMaxClause`). Equality splits into both
+direction rewrites to a `SUM` tagged with the clause (`EmitHardMinMaxClause`); stage 06
+creates the extremum column and any binaries its link needs. Equality splits into both
 directions. `WHEN` / `PER` wrappers are preserved; `out_was_easy` tells the caller
 whether `PER` should be stripped, since an easy rewrite has already become
 per-row.
+
+Under a scope spelling the easy direction keeps its reducer and only tags the comparison
+`MINMAX_EASY`: the reducer's `when` picks the member rows, while the bound reduces over
+every kept row of the `by` group — hoisting the `when` onto the clause, as the old
+spelling does, would reduce it over the members only. Equality emits the easy half as a
+copy of the comparison under the clause's `when`; the hard half's rebuilt `SUM` keeps
+the `by` key. Stage 06 takes the extremum the hard half names over its members'
+coefficients and states the clause's own relation over it, so a scoped hard half takes a
+negative factor inside (`scoped_hard_lhs`): `-2 * MAX(e)` is `MIN(-2 * e)`. The old
+spellings keep it outside, which reverses the clause (`06_issues/bugs/todo.md`).
 
 **Objectives.** Flat and nested-`PER` patterns are detected and the easy/hard
 classification is precomputed into typed metadata — `flat_objective_agg` /
@@ -350,6 +379,14 @@ single-term path. Each term's metadata is extracted into
 `ComposedMinMaxTerm`, and the comparison is replaced with a no-op `TRUE`
 placeholder so the physical layer owns emission. Non-comparison leaves are legal
 under C0 precisely so that placeholder verifies.
+
+Under a scope spelling (`ScopeComposedTerms`) the clause's `when` folds into each
+term's filter, in front of the term's own, and every term is marked `scoped` (stage 08
+reads only its rows; stage 06 steps a strict bound). The canonicalizer has refused such a
+clause with a `by` or a bound that is not a constant (stage 04 §3.10);
+`AssertComposable` checks it. A decision beside a MIN or MAX is refused here, for the
+constraint and the objective alike, quoting it (*"DECIDE: 's' beside MIN or MAX is not
+supported yet"*).
 
 For the objective, `RewriteComposedMinMaxObjectiveTop` installs a **constant
 placeholder** and supplies the coefficients from
@@ -509,18 +546,22 @@ sees.
 
 The canonicalizer peels a query-wide factor *outward* off a reducer
 (`2 * SUM(x*p)`, `2 * MAX(x*v)`) and converges every spelling onto one. **No pass
-here pushes it back in.**
+here pushes it back in**, but for the hard half of a scoped MIN/MAX, whose factor's sign
+is known (§2, MIN/MAX).
 
 `MIN`/`MAX` are order statistics, so a negative factor turns one into the other —
 `MAX(-2x)` is `-2·MIN(x)`. Folding therefore needs the factor's sign, which an
-uncorrelated scalar subquery does not supply until the query runs. Kept outside,
-the sign is not a correctness input at all; it only selects which linearization is
-cheaper. `ScaleSignAtPlanTime` returns +1, -1, or **0 for "not known until the
-query runs"**, and 0 must be treated as "take the expensive but exact form", never
-as an error. A scale of -2 flips the direction `z` is pushed exactly as a
-subtraction would, so a known sign participates in `is_easy` alongside `sign`;
-an unknown sign forces `is_easy` false, and the indicator layer pins `z` to the
-true MIN/MAX in both directions — correct whichever sign it turns out to have.
+uncorrelated scalar subquery does not supply until the query runs. Kept outside, a
+known sign picks the easy or the hard form, and in the hard form which extremum the link
+takes: the scoped hard half takes a negative factor inside (§2), the old one keeps it
+outside and reverses the clause (`06_issues/bugs/todo.md`). Only an unknown sign is safe
+outside, because the composed path pins both sides. `ScaleSignAtPlanTime`
+(`decide_cast_policy`, shared with the canonicalizer) returns +1, -1, or **0 for "not
+known until the query runs"**, and 0 must be treated as "take the expensive but exact
+form", never as an error. A scale of -2 flips the direction `z` is pushed exactly as a
+subtraction would, so a known sign participates in `is_easy` alongside `sign`; an
+unknown sign forces `is_easy` false, and the indicator layer pins `z` to the true
+MIN/MAX in both directions — correct whichever sign it turns out to have.
 
 `WalkComposedLhs` records the factor on `ComposedMinMaxTerm::scale` (with
 `scale_divides` for the `AGG / factor` spelling). The physical layer applies it

@@ -197,6 +197,9 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     }
     decide_op->entity_scopes = std::move(op.entity_scopes);
     decide_op->variable_scopes = std::move(op.variable_scopes);
+    // Resolved like every other expression the operator owns (EnumerateExpressions).
+    decide_op->group_keys = std::move(op.group_keys);
+    decide_op->scope_checks = std::move(op.scope_checks);
 
     // Resolve source column names for the surviving (post-pruning) child columns,
     // positionally aligned with the materialized data chunk. Used by the unbounded
@@ -234,6 +237,23 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     }
     if (decide_op->decide_objective) {
         harvest(*decide_op->decide_objective);
+    }
+    // A `by` key and a scope check read the clause's data too; an aggregate-shape clause
+    // keeps its `per` key only in its checks.
+    for (auto &group_key : decide_op->group_keys) {
+        for (auto &expr : group_key.expressions) {
+            harvest(*expr);
+        }
+    }
+    for (auto &check : decide_op->scope_checks) {
+        for (auto *expr : {check.rows.get(), check.value.get(), check.filter.get()}) {
+            if (expr) {
+                harvest(*expr);
+            }
+        }
+        for (auto &column : check.key) {
+            harvest(*column);
+        }
     }
     // entity_key_expressions are deliberately NOT harvested for names: every entry
     // carries the synthetic "entity_key_<alias>" placeholder (see

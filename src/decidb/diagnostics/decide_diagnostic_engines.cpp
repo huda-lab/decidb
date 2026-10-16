@@ -801,9 +801,7 @@ static ClauseEdit MakeDropEdit(const SolverModel &model, const RemovalGroupInfo 
 		const string &cmp = source.written_cmp.empty() ? source.canonical_cmp : source.written_cmp;
 		edit.label = cmp.empty() || rhs.empty() ? lhs : lhs + " " + cmp + " " + rhs;
 		const string &qualifier = source.qualifier.empty() ? group.qualifier : source.qualifier;
-		if (!qualifier.empty()) {
-			edit.label += " " + qualifier;
-		}
+		edit.label = AttachDecideQualifier(edit.label, qualifier);
 	} else {
 		edit.label = "constraint " + to_string(group.id);
 	}

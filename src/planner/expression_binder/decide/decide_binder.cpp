@@ -12,6 +12,7 @@
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
@@ -102,7 +103,35 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
 	});
 }
 
-void ValidateDecideNoUnsupportedScope(const ParsedExpression &expr) {
+//===--------------------------------------------------------------------===//
+// Where the scope spellings may stand
+//===--------------------------------------------------------------------===//
+
+bool IsDecideMarker(const ParsedExpression &expr, const char *tag) {
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<const FunctionExpression>();
+	return func.is_operator && func.function_name == tag && !func.children.empty();
+}
+
+static bool IsScopeMarker(const ParsedExpression &expr) {
+	return IsDecideMarker(expr, SCOPE_WHEN_TAG) || IsDecideMarker(expr, SCOPE_PER_TAG);
+}
+
+//! A call to SUM, AVG, MIN or MAX: the only calls a scope or a `by` may attach to.
+static bool IsScopedReducerCall(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &func = expr.Cast<const FunctionExpression>();
+	return !func.is_operator && IsDecideAggregateName(func.function_name);
+}
+
+//! Refuses every scope spelling inside `expr`, subquery bodies included, as not bound
+//! there: a `when` condition, a key, a `by` key and an ordinary SQL subquery written in
+//! the clause (which is lexed with the clause's keywords) take data only.
+static void ValidateNoScopeSpelling(const ParsedExpression &expr) {
 	static const struct {
 		const char *tag;
 		const char *spelling;
@@ -116,10 +145,319 @@ void ValidateDecideNoUnsupportedScope(const ParsedExpression &expr) {
 			}
 		}
 	}
-	// Subquery bodies too: a subquery written in the clause is lexed with the clause's
-	// keywords, so it can hold these spellings.
-	EnumerateChildrenAndSubqueries(expr,
-	                               [&](const ParsedExpression &child) { ValidateDecideNoUnsupportedScope(child); });
+	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) { ValidateNoScopeSpelling(child); });
+}
+
+//! The first decision `expr` names, as written, or empty: `when`, `per` and `by` take data.
+static string FindDecisionName(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+	if (IsVariableExpression(expr, variables)) {
+		return expr.ToString();
+	}
+	string found;
+	EnumerateChildrenAndSubqueries(expr, [&](const ParsedExpression &child) {
+		if (found.empty()) {
+			found = FindDecisionName(child, variables);
+		}
+	});
+	return found;
+}
+
+//! The first window function `expr` holds outside its subqueries, or null.
+static optional_ptr<const ParsedExpression> FindWindowFunction(const ParsedExpression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::WINDOW) {
+		return &expr;
+	}
+	optional_ptr<const ParsedExpression> found;
+	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+		if (!found) {
+			found = FindWindowFunction(child);
+		}
+	});
+	return found;
+}
+
+//! A `when` condition, a key element or a `by` key: data only, no scope spelling, and
+//! no window function, which reads rows the scope has not chosen yet.
+static void ValidateScopeData(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
+	auto decision = FindDecisionName(expr, variables);
+	if (!decision.empty()) {
+		throw BinderException(expr, "DECIDE: %s is a decision; when, per and by may only use data", decision);
+	}
+	auto window = FindWindowFunction(expr);
+	if (window) {
+		throw BinderException(*window, "DECIDE: a window function such as '%s' is not supported in when, per or by",
+		                      window->ToString());
+	}
+	ValidateNoScopeSpelling(expr);
+}
+
+//! `[WHEN c] [PER K]:` off a clause or a reducer's argument: the key elements and the
+//! condition are validated as data, and the body is returned.
+static const ParsedExpression &PeelScopeSpelling(const ParsedExpression &expr,
+                                                 const case_insensitive_map_t<idx_t> &variables) {
+	const ParsedExpression *body = &expr;
+	if (IsDecideMarker(*body, SCOPE_PER_TAG)) {
+		auto &per = body->Cast<const FunctionExpression>();
+		for (idx_t i = 1; i < per.children.size(); i++) {
+			ValidateScopeData(*per.children[i], variables);
+		}
+		body = per.children[0].get();
+	}
+	if (IsDecideMarker(*body, SCOPE_WHEN_TAG)) {
+		auto &when = body->Cast<const FunctionExpression>();
+		ValidateScopeData(*when.children[1], variables);
+		body = when.children[0].get();
+	}
+	return *body;
+}
+
+//! A condition as the parser prints it, without the one pair of parentheses it puts
+//! around a comparison, for quoting back in a message.
+static string ConditionText(const ParsedExpression &condition) {
+	auto text = condition.ToString();
+	if (text.size() > 2 && text.front() == '(' && text.back() == ')') {
+		int depth = 0;
+		bool outer = true;
+		for (idx_t i = 0; i + 1 < text.size(); i++) {
+			depth += text[i] == '(' ? 1 : text[i] == ')' ? -1 : 0;
+			if (depth == 0) {
+				outer = false;
+				break;
+			}
+		}
+		if (outer) {
+			return text.substr(1, text.size() - 2);
+		}
+	}
+	return text;
+}
+
+//! The first old-spelling marker of a clause (`C WHEN c`, `C PER g`, `SUM(e) WHEN c`),
+//! and whether the clause also uses a new spelling. Subquery bodies are not entered:
+//! a spelling there is refused on its own.
+struct DecideClauseSpellings {
+	optional_ptr<const FunctionExpression> old_marker;
+	bool old_marker_is_reducer_when = false;
+	bool uses_new_spelling = false;
+};
+
+static void FindClauseSpellings(const ParsedExpression &expr, bool at_root, DecideClauseSpellings &found) {
+	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &func = expr.Cast<const FunctionExpression>();
+		if (func.is_operator && (func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG ||
+		                         func.function_name == REDUCER_BY_TAG)) {
+			found.uses_new_spelling = true;
+		}
+		if (func.is_operator && !found.old_marker &&
+		    (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == PER_CONSTRAINT_TAG)) {
+			found.old_marker = &func;
+			found.old_marker_is_reducer_when = !at_root && func.function_name == WHEN_CONSTRAINT_TAG;
+		}
+		// The constraint inside an old postfix wrapper is still at the clause root.
+		bool wrapper = func.is_operator && at_root &&
+		               (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == PER_CONSTRAINT_TAG);
+		for (idx_t i = 0; i < func.children.size(); i++) {
+			FindClauseSpellings(*func.children[i], wrapper && i == 0, found);
+		}
+		if (func.filter) {
+			FindClauseSpellings(*func.filter, false, found);
+		}
+		return;
+	}
+	ParsedExpressionIterator::EnumerateChildren(
+	    expr, [&](const ParsedExpression &child) { FindClauseSpellings(child, false, found); });
+}
+
+bool UsesScopeSpelling(const ParsedExpression &clause) {
+	DecideClauseSpellings found;
+	FindClauseSpellings(clause, true, found);
+	return found.uses_new_spelling;
+}
+
+//! D14: a clause is written in the old spellings or the new ones, never both. The
+//! message names the new spelling of the old part.
+[[noreturn]] static void ThrowMixedSpellings(const DecideClauseSpellings &found, bool objective) {
+	auto &marker = *found.old_marker;
+	auto condition = marker.children.size() > 1 ? ConditionText(*marker.children[1]) : string();
+	const char *clause = objective ? "objective" : "constraint";
+	const char *after = objective ? "after the objective" : "after a constraint";
+	if (marker.function_name == PER_CONSTRAINT_TAG) {
+		auto key = DecideKeyToString(marker);
+		if (objective) {
+			// An objective takes no `per K:` in front: its per-group form is the two-level one.
+			throw BinderException(marker,
+			                      "DECIDE: PER %s after the objective cannot be combined with when, per or by; "
+			                      "write it as outer(per %s: inner(e) by (%s))",
+			                      key, key, key);
+		}
+		throw BinderException(marker,
+		                      "DECIDE: PER %s after a constraint cannot be combined with when, per or by; write per "
+		                      "%s: in front of it, with by (%s) on each reducer",
+		                      key, key, key);
+	}
+	auto &target = UnwrapReducerMarkers(*marker.children[0]);
+	if (found.old_marker_is_reducer_when && IsScopedReducerCall(target)) {
+		auto &reducer = target.Cast<const FunctionExpression>();
+		string per;
+		if (IsDecideMarker(*marker.children[0], QUALIFIED_REDUCER_TAG)) {
+			per = " per " + DecideKeyToString(marker.children[0]->Cast<const FunctionExpression>());
+		}
+		string body = reducer.children.empty() ? string() : reducer.children[0]->ToString();
+		throw BinderException(marker,
+		                      "DECIDE: %s WHEN %s cannot be combined with when, per or by; write %s(when %s%s: %s)",
+		                      marker.children[0]->ToString(), condition, StringUtil::Lower(reducer.function_name),
+		                      condition, per, body);
+	}
+	if (marker.children[0]->GetExpressionClass() != ExpressionClass::COMPARISON &&
+	    marker.children[0]->GetExpressionClass() != ExpressionClass::BETWEEN &&
+	    marker.children[0]->GetExpressionClass() != ExpressionClass::OPERATOR) {
+		// `sum(x) by (g) WHEN c <= 1` parses with the bound inside the condition.
+		throw BinderException(marker, "DECIDE: WHEN cannot follow a reducer written with when, per or by; write "
+		                              "the condition inside the reducer, sum(when c: e), or in front of the %s, "
+		                              "when c: ...",
+		                      clause);
+	}
+	throw BinderException(marker,
+	                      "DECIDE: WHEN %s %s cannot be combined with when, per or by; write when %s: in front of it",
+	                      condition, after, condition);
+}
+
+namespace {
+//! Where in a clause a node stands, for the placement rules.
+struct ScopePlacement {
+	const case_insensitive_map_t<idx_t> &variables;
+	//! The clause uses a new spelling: the rules that come with it apply.
+	bool new_spelling;
+	//! Inside a reducer's argument.
+	bool in_reducer = false;
+	//! The objective's two-level form: its one inner reducer is allowed.
+	bool two_level = false;
+};
+} // namespace
+
+static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement placement) {
+	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
+		ValidateNoScopeSpelling(expr);
+		return;
+	}
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		ParsedExpressionIterator::EnumerateChildren(
+		    expr, [&](const ParsedExpression &child) { ValidateScopePlacement(child, placement); });
+		return;
+	}
+	auto &func = expr.Cast<const FunctionExpression>();
+	if (func.is_operator && func.function_name == REDUCER_BY_TAG) {
+		if (!IsScopedReducerCall(UnwrapReducerMarkers(*func.children[0]))) {
+			throw BinderException(expr, "DECIDE: by (...) must directly follow SUM, AVG, MIN or MAX");
+		}
+		for (idx_t i = 1; i < func.children.size(); i++) {
+			ValidateScopeData(*func.children[i], placement.variables);
+		}
+		ValidateScopePlacement(*func.children[0], placement);
+		return;
+	}
+	if (func.is_operator && (func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG)) {
+		// Only in front of a clause or of a reducer's argument, both peeled before here.
+		ValidateNoScopeSpelling(expr);
+	}
+	if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && func.children.size() == 2) {
+		ValidateScopePlacement(*func.children[0], placement);
+		ValidateNoScopeSpelling(*func.children[1]);
+		return;
+	}
+	// The colon form binds a qualifier over SUM, AVG, MIN or MAX only; on `norm` it loses
+	// the norm and reads `SUM(D: e)` (a logged bug the old spellings keep, D17).
+	if (placement.new_spelling && IsDecideMarker(expr, QUALIFIED_REDUCER_TAG) && func.children.size() > 1 &&
+	    func.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION &&
+	    StringUtil::CIEquals(func.children[0]->Cast<const FunctionExpression>().function_name, "norm")) {
+		vector<string> relations;
+		for (idx_t i = 1; i < func.children.size(); i++) {
+			relations.push_back(func.children[i]->ToString());
+		}
+		throw BinderException(expr, "DECIDE: norm(%s: ...) is not supported yet; a relation qualifier takes SUM, AVG, "
+		                            "MIN or MAX",
+		                      StringUtil::Join(relations, ", "));
+	}
+	bool scoped_argument = !func.is_operator && !func.children.empty() && IsScopeMarker(*func.children[0]);
+	if (scoped_argument && !IsDecideAggregateName(func.function_name)) {
+		throw BinderException(expr, "DECIDE: when and per inside a call need SUM, AVG, MIN or MAX; write the scope "
+		                            "in front of the constraint or inside a reducer");
+	}
+	bool reducer = !func.is_operator &&
+	               (IsDecideAggregateName(func.function_name) || StringUtil::CIEquals(func.function_name, "norm"));
+	if (reducer && placement.new_spelling && placement.in_reducer && !placement.two_level) {
+		throw BinderException(expr, "DECIDE: an aggregate inside an aggregate is not supported yet");
+	}
+	auto inner = placement;
+	if (reducer) {
+		// The two-level objective allows the outer reducer's one inner reducer, no deeper.
+		inner.two_level = placement.two_level && !placement.in_reducer;
+		inner.in_reducer = true;
+	}
+	for (idx_t i = 0; i < func.children.size(); i++) {
+		auto &child = i == 0 && scoped_argument ? PeelScopeSpelling(*func.children[0], placement.variables)
+		                                        : *func.children[i];
+		ValidateScopePlacement(child, reducer ? inner : placement);
+	}
+	if (func.filter) {
+		ValidateNoScopeSpelling(*func.filter);
+	}
+}
+
+bool IsTwoLevelObjective(const ParsedExpression &body) {
+	const ParsedExpression *outer = &body;
+	if (IsDecideMarker(*outer, REDUCER_BY_TAG)) {
+		auto &by = outer->Cast<const FunctionExpression>();
+		if (by.children.size() != 1) {
+			return false;
+		}
+		outer = by.children[0].get();
+	}
+	if (!IsScopedReducerCall(*outer)) {
+		return false;
+	}
+	auto &outer_call = outer->Cast<const FunctionExpression>();
+	if (outer_call.children.size() != 1 || !IsDecideMarker(*outer_call.children[0], SCOPE_PER_TAG)) {
+		return false;
+	}
+	auto &per = outer_call.children[0]->Cast<const FunctionExpression>();
+	if (per.children.size() < 2) {
+		return false;
+	}
+	// `outer(when c per k: inner(e) by (k))` is the same form with a `when` the binder
+	// refuses by name.
+	auto *inner = per.children[0].get();
+	if (IsDecideMarker(*inner, SCOPE_WHEN_TAG)) {
+		inner = inner->Cast<const FunctionExpression>().children[0].get();
+	}
+	return IsDecideMarker(*inner, REDUCER_BY_TAG) &&
+	       IsScopedReducerCall(*inner->Cast<const FunctionExpression>().children[0]);
+}
+
+static void ValidateScopeClause(const ParsedExpression &clause, const case_insensitive_map_t<idx_t> &variables,
+                                bool objective) {
+	DecideClauseSpellings found;
+	FindClauseSpellings(clause, true, found);
+	if (found.uses_new_spelling && found.old_marker) {
+		ThrowMixedSpellings(found, objective);
+	}
+	auto &body = PeelScopeSpelling(clause, variables);
+	ScopePlacement placement {variables, found.uses_new_spelling};
+	placement.two_level = objective && IsTwoLevelObjective(body);
+	ValidateScopePlacement(body, placement);
+}
+
+void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
+                                  bool objective) {
+	if (!objective && expr.GetExpressionClass() == ExpressionClass::CONJUNCTION &&
+	    expr.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
+		// `AND` separates constraints; each is written in one spelling or the other.
+		for (auto &child : expr.Cast<const ConjunctionExpression>().children) {
+			ValidateDecideScopeSpellings(*child, variables, objective);
+		}
+		return;
+	}
+	ValidateScopeClause(expr, variables, objective);
 }
 
 bool IsDecideAggregateName(const string &name) {
@@ -156,7 +494,22 @@ static bool IsStoredColumn(Binding &binding, column_t column_index) {
 	return !entry->Cast<TableCatalogEntry>().GetColumn(LogicalIndex(column_index)).Generated();
 }
 
-using KeyColumns = vector<std::pair<ColumnBinding, LogicalType>>;
+//! One column of a key: where it binds, its type, and its name as a message quotes it --
+//! as written for a column element, qualified by its relation (`D.depotID`) for a column
+//! a relation element stands for.
+struct KeyColumn {
+	ColumnBinding binding;
+	LogicalType type;
+	string name;
+};
+using KeyColumns = vector<KeyColumn>;
+
+//! Column `column_index` of `binding` as a key column, registered with the scan.
+static KeyColumn MakeKeyColumn(Binding &binding, column_t column_index) {
+	return KeyColumn {RegisterKeyColumn(binding, column_index), binding.types[column_index],
+	                  KeywordHelper::WriteOptionallyQuoted(binding.GetAlias()) + "." +
+	                      KeywordHelper::WriteOptionallyQuoted(binding.names[column_index])};
+}
 
 //! Adds column `column_index` of `binding`, which `element` names, to `columns`.
 static void AddKeyColumn(const ColumnRefExpression &element, Binding &binding, column_t column_index,
@@ -167,7 +520,9 @@ static void AddKeyColumn(const ColumnRefExpression &element, Binding &binding, c
 		                      "FROM clause",
 		                      element.ToString());
 	}
-	columns.emplace_back(RegisterKeyColumn(binding, column_index), binding.types[column_index]);
+	auto column = MakeKeyColumn(binding, column_index);
+	column.name = element.ToString();
+	columns.push_back(std::move(column));
 }
 
 //! The relation named by up to three parts: `alias`, `schema.alias`, `catalog.schema.alias`.
@@ -234,14 +589,16 @@ static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpressi
 	}
 	for (column_t column_index = 0; column_index < relation->names.size(); column_index++) {
 		if (IsStoredColumn(*relation, column_index)) {
-			columns.emplace_back(RegisterKeyColumn(*relation, column_index), relation->types[column_index]);
+			columns.push_back(MakeKeyColumn(*relation, column_index));
 		}
 	}
 }
 
-idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
-                           const case_insensitive_set_t &decision_names, const string &key_text,
-                           vector<EntityScopeInfo> &entity_scopes) {
+//! The columns of the key `per` lists (its children[1..]; none for `per ()`), each element
+//! resolved by ResolveKeyElement. A key is a set: order and repetition do not change which
+//! rows share a class, so the columns come back sorted by binding, without repeats.
+static KeyColumns ResolveKey(BindContext &bind_context, const FunctionExpression &per,
+                             const case_insensitive_set_t &decision_names) {
 	KeyColumns columns;
 	for (idx_t i = 1; i < per.children.size(); i++) {
 		auto &element = *per.children[i];
@@ -250,22 +607,26 @@ idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &
 		}
 		ResolveKeyElement(bind_context, element.Cast<ColumnRefExpression>(), decision_names, columns);
 	}
-	if (columns.empty()) {
-		throw InternalException("DECIDE per key '%s' resolved to no column", key_text);
+	if (columns.empty() && per.children.size() > 1) {
+		throw InternalException("DECIDE per key '%s' resolved to no column", DecideKeyToString(per));
 	}
-	// A key is a set: order and repetition do not change which rows share a decision.
-	std::sort(columns.begin(), columns.end(), [](const KeyColumns::value_type &a, const KeyColumns::value_type &b) {
-		return a.first.table_index != b.first.table_index ? a.first.table_index < b.first.table_index
-		                                                  : a.first.column_index < b.first.column_index;
+	std::sort(columns.begin(), columns.end(), [](const KeyColumn &a, const KeyColumn &b) {
+		return a.binding.table_index != b.binding.table_index ? a.binding.table_index < b.binding.table_index
+		                                                      : a.binding.column_index < b.binding.column_index;
 	});
 	columns.erase(std::unique(columns.begin(), columns.end(),
-	                          [](const KeyColumns::value_type &a, const KeyColumns::value_type &b) {
-		                          return a.first == b.first;
-	                          }),
+	                          [](const KeyColumn &a, const KeyColumn &b) { return a.binding == b.binding; }),
 	              columns.end());
+	return columns;
+}
+
+idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
+                           const case_insensitive_set_t &decision_names, const string &key_text,
+                           vector<EntityScopeInfo> &entity_scopes) {
+	auto columns = ResolveKey(bind_context, per, decision_names);
 	vector<ColumnBinding> bindings;
 	for (auto &column : columns) {
-		bindings.push_back(column.first);
+		bindings.push_back(column.binding);
 	}
 	for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
 		if (entity_scopes[scope_idx].exact_key && entity_scopes[scope_idx].entity_key_bindings == bindings) {
@@ -273,18 +634,63 @@ idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &
 		}
 	}
 	EntityScopeInfo scope_info;
-	scope_info.table_alias = key_text;
+	scope_info.table_alias = key_text.empty() ? "()" : key_text;
 	scope_info.exact_key = true;
 	scope_info.entity_key_bindings = std::move(bindings);
 	for (auto &column : columns) {
-		scope_info.entity_key_column_types.push_back(column.second);
+		scope_info.entity_key_column_types.push_back(column.type);
+		scope_info.key_names.push_back(column.name);
 		auto &tables = scope_info.source_table_indices;
-		if (std::find(tables.begin(), tables.end(), column.first.table_index) == tables.end()) {
-			tables.push_back(column.first.table_index);
+		if (std::find(tables.begin(), tables.end(), column.binding.table_index) == tables.end()) {
+			tables.push_back(column.binding.table_index);
 		}
 	}
 	entity_scopes.push_back(std::move(scope_info));
 	return entity_scopes.size() - 1;
+}
+
+vector<unique_ptr<Expression>> BindKeyColumns(BindContext &bind_context, const FunctionExpression &per,
+                                              const case_insensitive_set_t &decision_names) {
+	vector<unique_ptr<Expression>> result;
+	for (auto &column : ResolveKey(bind_context, per, decision_names)) {
+		result.push_back(make_uniq<BoundColumnRefExpression>(column.name, column.type, column.binding));
+	}
+	return result;
+}
+
+//! The relation `element` names when it names no column of the FROM clause: `by (D)`
+//! stands for D's stored columns, as `per D` does. Null for a column or an unknown name.
+static optional_ptr<Binding> ResolveRelationName(BindContext &bind_context, const ColumnRefExpression &element) {
+	auto &names = element.column_names;
+	ErrorData error;
+	// A column wins, as it does in SQL; an ambiguous one is still a column, left for the
+	// ordinary binder to report.
+	bool column = false;
+	if (names.size() == 1) {
+		column = bind_context.GetUsingBinding(names[0]) != nullptr;
+		for (auto &binding : bind_context.GetBindingsList()) {
+			column = column || binding->HasMatchingBinding(names[0]);
+		}
+	} else if (names.size() <= 4) {
+		column = bind_context.GetBinding(RelationAlias(vector<string>(names.begin(), names.end() - 1)), names.back(),
+		                                 error) != nullptr;
+	}
+	if (column || names.size() > 3) {
+		return nullptr;
+	}
+	return bind_context.GetBinding(RelationAlias(names), error);
+}
+
+//! A relation's stored columns as bound column references, registered with the scan.
+static vector<unique_ptr<Expression>> BindRelationColumns(Binding &relation) {
+	vector<unique_ptr<Expression>> result;
+	for (column_t column_index = 0; column_index < relation.names.size(); column_index++) {
+		if (IsStoredColumn(relation, column_index)) {
+			auto column = MakeKeyColumn(relation, column_index);
+			result.push_back(make_uniq<BoundColumnRefExpression>(column.name, column.type, column.binding));
+		}
+	}
+	return result;
 }
 
 idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &table_names,
@@ -320,15 +726,22 @@ idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &t
 	return scope_idx;
 }
 
-const ParsedExpression &UnwrapQualifiedReducer(const ParsedExpression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
-		return expr;
+const ParsedExpression &UnwrapReducerMarkers(const ParsedExpression &expr) {
+	const ParsedExpression *result = &expr;
+	for (auto tag : {REDUCER_BY_TAG, QUALIFIED_REDUCER_TAG}) {
+		if (IsDecideMarker(*result, tag)) {
+			result = result->Cast<const FunctionExpression>().children[0].get();
+		}
 	}
-	auto &func = expr.Cast<const FunctionExpression>();
-	if (func.is_operator && func.function_name == QUALIFIED_REDUCER_TAG && !func.children.empty()) {
-		return *func.children[0];
+	return *result;
+}
+
+const ParsedExpression &ReducerArgumentBody(const ParsedExpression &argument) {
+	const ParsedExpression *body = &argument;
+	while (IsScopeMarker(*body)) {
+		body = body->Cast<const FunctionExpression>().children[0].get();
 	}
-	return expr;
+	return *body;
 }
 
 bool ContainsDecideAggregate(const ParsedExpression &expr) {
@@ -337,7 +750,10 @@ bool ContainsDecideAggregate(const ParsedExpression &expr) {
 		if (!func.is_operator && (IsDecideAggregateName(func.function_name) || StringUtil::CIEquals(func.function_name, "norm"))) {
 			return true;
 		}
-		if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG && !func.children.empty()) {
+		// A condition, a key or a `by` key is not part of the value.
+		if (func.is_operator && !func.children.empty() &&
+		    (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == REDUCER_BY_TAG ||
+		     func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG)) {
 			return ContainsDecideAggregate(*func.children[0]);
 		}
 		for (auto &child : func.children) {
@@ -639,7 +1055,8 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 	case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<const FunctionExpression>();
 		if (func.is_operator && !func.children.empty() &&
-		    (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == PER_CONSTRAINT_TAG)) {
+		    (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == PER_CONSTRAINT_TAG ||
+		     func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG)) {
 			// children[0] is the constraint; the rest are the condition / PER columns.
 			ValidateDecideNoIntegerStepComparisonOnReal(*func.children[0], variables, variable_types);
 		}
@@ -781,15 +1198,19 @@ static bool IsBoundAvgAggregate(const Expression &expr) {
 //! `allow_avg_hoist` is set only for `<>`, whose rewrite multiplies both sides by the
 //! group size and so compares `SUM(e)` against `K*n` — integral whenever `e` is. A
 //! strict comparison has no such hoist and keeps AVG's fractional 1/n coefficients.
-static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoist,
-                                      idx_t decide_index) {
+//!
+//! `scoped` marks a clause written with the scope spellings, whose strict bound on a MIN
+//! or MAX is stepped on the extremum itself (stage 06): an addend inside its argument
+//! stays in every member there, so `in_extremum` counts it as part of the value.
+static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoist, idx_t decide_index,
+                                      bool scoped = false, bool in_extremum = false) {
 	if (IsBoundL0NormMarker(expr)) {
 		return true;
 	}
 	if (allow_avg_hoist && IsBoundAvgAggregate(expr)) {
 		auto &agg = expr.Cast<const BoundAggregateExpression>();
 		return agg.children.size() == 1 &&
-		       DecideSideIsWholeNumbered(*agg.children[0], false, decide_index);
+		       DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, scoped, in_extremum);
 	}
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CAST: {
@@ -798,17 +1219,17 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 		// keeps it one. Either direction suffices.
 		auto &cast = expr.Cast<const BoundCastExpression>();
 		return DecideTypeIsWholeNumbered(cast.return_type) ||
-		       DecideSideIsWholeNumbered(*cast.child, allow_avg_hoist, decide_index);
+		       DecideSideIsWholeNumbered(*cast.child, allow_avg_hoist, decide_index, scoped, in_extremum);
 	}
 	case ExpressionClass::BOUND_AGGREGATE: {
 		// SUM / MIN / MAX of whole numbers are whole. AVG is handled above; anything
 		// else falls through to its declared return type.
 		auto &agg = expr.Cast<const BoundAggregateExpression>();
 		const auto &name = agg.function.name;
-		if ((StringUtil::CIEquals(name, "sum") || StringUtil::CIEquals(name, "min") ||
-		     StringUtil::CIEquals(name, "max")) &&
-		    agg.children.size() == 1) {
-			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index);
+		bool extremum = StringUtil::CIEquals(name, "min") || StringUtil::CIEquals(name, "max");
+		if ((StringUtil::CIEquals(name, "sum") || extremum) && agg.children.size() == 1) {
+			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, scoped,
+			                                 in_extremum || (scoped && extremum));
 		}
 		return DecideTypeIsWholeNumbered(expr.return_type);
 	}
@@ -825,10 +1246,10 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 			// value-based guard this replaces skipped constant terms for the same
 			// reason — it only ever read coefficients carrying a variable index.)
 			for (const auto &child : func.children) {
-				if (!SideReferencesDecision(*child, decide_index)) {
+				if (!in_extremum && !SideReferencesDecision(*child, decide_index)) {
 					continue;
 				}
-				if (!DecideSideIsWholeNumbered(*child, allow_avg_hoist, decide_index)) {
+				if (!DecideSideIsWholeNumbered(*child, allow_avg_hoist, decide_index, scoped, in_extremum)) {
 					return false;
 				}
 			}
@@ -838,7 +1259,7 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 			// Every factor matters here, decision-bearing or not: a fractional
 			// multiplier rescales the decision off the lattice (`0.5 * x`).
 			for (const auto &child : func.children) {
-				if (!DecideSideIsWholeNumbered(*child, allow_avg_hoist, decide_index)) {
+				if (!DecideSideIsWholeNumbered(*child, allow_avg_hoist, decide_index, scoped, in_extremum)) {
 					return false;
 				}
 			}
@@ -854,7 +1275,8 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 			double exp_val;
 			if (func.children.size() == 2 && TryGetDecideConstantExponent(*func.children[1], exp_val) &&
 			    exp_val >= 0.0 && exp_val == std::floor(exp_val)) {
-				return DecideSideIsWholeNumbered(*func.children[0], allow_avg_hoist, decide_index);
+				return DecideSideIsWholeNumbered(*func.children[0], allow_avg_hoist, decide_index, scoped,
+				                                 in_extremum);
 			}
 			return false;
 		}
@@ -878,9 +1300,9 @@ struct FractionalOperand {
 
 //! First operand that is not whole-numbered, for the message. Descends the same way the
 //! test above does, so what it reports is what was refused.
-static bool FindFractionalOperand(const Expression &expr, bool allow_avg_hoist,
-                                  idx_t decide_index, FractionalOperand &out) {
-	if (DecideSideIsWholeNumbered(expr, allow_avg_hoist, decide_index)) {
+static bool FindFractionalOperand(const Expression &expr, bool allow_avg_hoist, idx_t decide_index, bool scoped,
+                                  optional_ptr<const DecideSourceNames> names, FractionalOperand &out) {
+	if (DecideSideIsWholeNumbered(expr, allow_avg_hoist, decide_index, scoped)) {
 		return false;
 	}
 	// Prefer a named leaf over the composite node above it: `l_quantity` is actionable,
@@ -888,7 +1310,7 @@ static bool FindFractionalOperand(const Expression &expr, bool allow_avg_hoist,
 	bool found = false;
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
 		if (!found) {
-			found = FindFractionalOperand(child, allow_avg_hoist, decide_index, out);
+			found = FindFractionalOperand(child, allow_avg_hoist, decide_index, scoped, names, out);
 		}
 	});
 	if (found) {
@@ -900,14 +1322,17 @@ static bool FindFractionalOperand(const Expression &expr, bool allow_avg_hoist,
 		out.is_castable_column = true;
 		return true;
 	}
-	// No fractional leaf underneath: the node itself is what produces fractions.
-	out.name = expr.GetName();
+	// No fractional leaf underneath: the node itself is what produces fractions. A clause
+	// written with the scope spellings names it as written; its reducer's alias carries
+	// the spellings' tags.
+	out.name = names ? RenderDecideSource(expr, *names, /*scoped=*/true) : expr.GetName();
 	out.type = expr.return_type;
 	out.is_castable_column = false;
 	return true;
 }
 
-void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t decide_index) {
+void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t decide_index,
+                                              optional_ptr<const DecideSourceNames> names) {
 	// Constraint position only, and by the same reasoning as the parsed-tree validator:
 	// a comparison nested inside an operand is a boolean value, not a model row.
 	// ForEachConstraintLeaf owns that descent; this is only the check.
@@ -927,9 +1352,13 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 		// bound, and a fractional bound is a tautology rather than an error.
 		bool left_is_compared = SideReferencesDecision(*comp.left, decide_index);
 		bool right_is_compared = SideReferencesDecision(*comp.right, decide_index);
+		bool scoped = HasDecideTag(comp.GetAlias(), SCOPED_CLAUSE_TAG);
+		auto quote_with = scoped ? names : nullptr;
 		FractionalOperand bad;
-		if (!(left_is_compared && FindFractionalOperand(*comp.left, is_not_equal, decide_index, bad)) &&
-		    !(right_is_compared && FindFractionalOperand(*comp.right, is_not_equal, decide_index, bad))) {
+		if (!(left_is_compared &&
+		      FindFractionalOperand(*comp.left, is_not_equal, decide_index, scoped, quote_with, bad)) &&
+		    !(right_is_compared &&
+		      FindFractionalOperand(*comp.right, is_not_equal, decide_index, scoped, quote_with, bad))) {
 			return;
 		}
 		string op = is_not_equal ? "<>" : (type == ExpressionType::COMPARE_LESSTHAN ? "<" : ">");
@@ -1239,8 +1668,11 @@ bool DecideBinder::IsRowInvariantExpression(const ParsedExpression &expr) const 
 bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpression &result, string &error_msg) {
 	auto fname = StringUtil::Lower(func.function_name);
 	if (fname == "norm") {
-		if (func.children.empty() ||
-		    !ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true)) {
+		if (func.children.empty()) {
+			error_msg = StringUtil::Format("NORM needs an expression and an order, as in norm(e, 1), found '%s'",
+			                               func.ToString());
+			result = DecideExpression::INVALID;
+		} else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true)) {
 			error_msg += ", found '" + func.ToString() + "'";
 			result = DecideExpression::INVALID;
 		} else {
@@ -1249,14 +1681,23 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 		return true;
 	}
 	if (fname == "sum" || fname == "avg" || fname == "min" || fname == "max") {
-		if (!func.children.empty() && IsRowInvariantExpression(*func.children.front())) {
-			auto body_text = func.children.front()->ToString();
+		// The value reduced is the argument's body; a `when` or `per` in front of it only
+		// chooses the rows.
+		auto body = func.children.empty()
+		                ? nullptr
+		                : &const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children.front()));
+		if (body && IsRowInvariantExpression(*body)) {
+			auto body_text = body->ToString();
 			error_msg = StringUtil::Format(
 			    "%s is a query-wide decision, so %s(%s) has nothing to aggregate over; "
 			    "use %s on its own",
 			    body_text, StringUtil::Upper(fname), body_text, body_text);
 			result = DecideExpression::INVALID;
-		} else if (!ValidateSumArgument(*func.children.front(), variables, error_msg, /*allow_quadratic=*/true)) {
+		} else if (!body) {
+			error_msg = StringUtil::Format("%s needs one argument, found '%s'", StringUtil::Upper(fname),
+			                               func.ToString());
+			result = DecideExpression::INVALID;
+		} else if (!ValidateSumArgument(*body, variables, error_msg, /*allow_quadratic=*/true)) {
 			error_msg += ", found '" + func.ToString() + "'";
 			result = DecideExpression::INVALID;
 		} else {
@@ -1609,6 +2050,168 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	return BindResult(std::move(aggregate_expr));
 }
 
+//! The names a key element may not take: every declared decision, as the user may spell it.
+static case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> &variables) {
+	case_insensitive_set_t names;
+	for (auto &variable : variables) {
+		names.insert(variable.first);
+	}
+	return names;
+}
+
+//! The index of the `by` key equal to `key` as a set -- order and repetition aside --
+//! appending it as written when no reducer has used it yet.
+static idx_t FindOrCreateGroupKey(vector<unique_ptr<Expression>> key, vector<string> names, const string &text,
+                                  vector<DecideGroupKey> &group_keys) {
+	vector<unique_ptr<Expression>> unique_key;
+	vector<string> unique_names;
+	for (idx_t i = 0; i < key.size(); i++) {
+		bool seen = false;
+		for (auto &kept : unique_key) {
+			seen = seen || kept->Equals(*key[i]);
+		}
+		if (!seen) {
+			unique_key.push_back(std::move(key[i]));
+			unique_names.push_back(std::move(names[i]));
+		}
+	}
+	auto contains = [](const vector<unique_ptr<Expression>> &set, const Expression &expr) {
+		for (auto &member : set) {
+			if (member->Equals(expr)) {
+				return true;
+			}
+		}
+		return false;
+	};
+	for (idx_t i = 0; i < group_keys.size(); i++) {
+		auto &existing = group_keys[i].expressions;
+		bool equal = existing.size() == unique_key.size();
+		for (auto &expr : unique_key) {
+			equal = equal && contains(existing, *expr);
+		}
+		// A bound subquery equals nothing, not even itself, so a key holding one is
+		// recognised by its text: written the same way in one query, it is the same key.
+		if (equal || group_keys[i].text == text) {
+			return i;
+		}
+	}
+	DecideGroupKey group_key;
+	group_key.expressions = std::move(unique_key);
+	group_key.text = text;
+	group_key.names = std::move(unique_names);
+	group_keys.push_back(std::move(group_key));
+	return group_keys.size() - 1;
+}
+
+BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
+	auto &reducer = expr_ptr->Cast<FunctionExpression>();
+	// Peel `[WHEN c] [PER K]:` off the argument; the reducer itself reduces the body.
+	auto argument = std::move(reducer.children[0]);
+	unique_ptr<ParsedExpression> per;
+	if (IsDecideMarker(*argument, SCOPE_PER_TAG)) {
+		auto body = std::move(argument->Cast<FunctionExpression>().children[0]);
+		per = std::move(argument);
+		argument = std::move(body);
+	}
+	unique_ptr<ParsedExpression> condition;
+	if (IsDecideMarker(*argument, SCOPE_WHEN_TAG)) {
+		auto &when = argument->Cast<FunctionExpression>();
+		condition = std::move(when.children[1]);
+		auto body = std::move(when.children[0]);
+		argument = std::move(body);
+	}
+	reducer.children[0] = std::move(argument);
+
+	auto result = BindFunction(expr_ptr, depth);
+	if (result.HasError()) {
+		return result;
+	}
+	auto *aggregate = GetBoundAggregate(*result.expression);
+	if (!aggregate) {
+		throw InternalException("DECIDE: a scoped reducer did not bind to an aggregate");
+	}
+	if (condition) {
+		// The condition takes data only (ValidateDecideScopeSpellings), so it binds as plain
+		// SQL: a compound condition needs no parentheses.
+		ErrorData condition_error;
+		binding_when_condition = true;
+		try {
+			BindChild(condition, depth, condition_error);
+		} catch (...) {
+			binding_when_condition = false;
+			throw;
+		}
+		binding_when_condition = false;
+		if (condition_error.HasError()) {
+			return BindResult(std::move(condition_error));
+		}
+		aggregate->filter = BoundCastExpression::AddCastToType(
+		    context, std::move(BoundExpression::GetExpression(*condition)), LogicalType::BOOLEAN);
+	}
+	if (per) {
+		if (!qualifier_context) {
+			throw InternalException("DECIDE: a reducer's per needs the clause's key scopes");
+		}
+		auto &marker = per->Cast<FunctionExpression>();
+		auto scope_idx = FindOrCreateKeyScope(binder.bind_context, marker, DecisionNames(variables),
+		                                      DecideKeyToString(marker), *qualifier_context->entity_scopes);
+		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
+	}
+	return result;
+}
+
+BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
+	// Read before the key elements bind in place.
+	auto key_text = DecideKeyToString(by);
+	auto result = BindExpression(by.children[0], depth);
+	if (result.HasError()) {
+		return result;
+	}
+	auto *aggregate = GetBoundAggregate(*result.expression);
+	if (!aggregate) {
+		throw InternalException("DECIDE: a reducer with by did not bind to an aggregate");
+	}
+	if (by.children.size() == 1) {
+		return result; // `by ()`: every kept row, the default
+	}
+	if (!qualifier_context || !qualifier_context->group_keys) {
+		throw InternalException("DECIDE: a reducer's by needs the clause's group keys");
+	}
+	// Each element is a data expression, or a relation standing for its stored columns.
+	vector<unique_ptr<Expression>> key;
+	vector<string> names;
+	for (idx_t i = 1; i < by.children.size(); i++) {
+		auto &element = by.children[i];
+		if (element->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
+			auto relation = ResolveRelationName(binder.bind_context, element->Cast<ColumnRefExpression>());
+			if (relation) {
+				for (auto &column : BindRelationColumns(*relation)) {
+					names.push_back(column->GetName());
+					key.push_back(std::move(column));
+				}
+				continue;
+			}
+		}
+		names.push_back(element->ToString());
+		ErrorData key_error;
+		binding_when_condition = true;
+		try {
+			BindChild(element, depth, key_error);
+		} catch (...) {
+			binding_when_condition = false;
+			throw;
+		}
+		binding_when_condition = false;
+		if (key_error.HasError()) {
+			return BindResult(std::move(key_error));
+		}
+		key.push_back(std::move(BoundExpression::GetExpression(*element)));
+	}
+	auto group_key = FindOrCreateGroupKey(std::move(key), std::move(names), key_text, *qualifier_context->group_keys);
+	AddDecideTag(aggregate->alias, MakeGroupKeyTag(group_key));
+	return result;
+}
+
 BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &function = expr.Cast<FunctionExpression>();
@@ -1617,6 +2220,14 @@ BindResult DecideBinder::BindFunction(unique_ptr<ParsedExpression> &expr_ptr, id
     }
     if (function.is_operator && function.function_name == QUALIFIED_REDUCER_TAG) {
         return BindQualifiedReducer(function, depth);
+    }
+    // `by (key)` and a scope in front of a reducer's argument. ValidateDecideScopeSpellings
+    // has already refused both on anything but SUM, AVG, MIN and MAX.
+    if (function.is_operator && function.function_name == REDUCER_BY_TAG) {
+        return BindReducerBy(function, depth);
+    }
+    if (!function.is_operator && !function.children.empty() && IsScopeMarker(*function.children[0])) {
+        return BindScopedReducer(expr_ptr, depth);
     }
     // NORM is DECIDE syntax, not a catalog function. Bind it as a deliberately
     // inert SUM aggregate marker; DecideOptimizer owns the mathematical rewrite

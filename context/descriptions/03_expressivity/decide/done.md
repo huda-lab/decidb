@@ -121,8 +121,9 @@ so this is opt-in and nothing existing changes meaning.
   for `PER` on the same grounds.
 - **Rejections** (all at bind time, in `BindQualifiedReducer` /
   `CheckQualifiedReducerBody`): a column or entity-scoped decision from a relation *not*
-  named in the qualifier, a row-scoped decision, a decision declared with `per` (until
-  item 3 of `09_anr_language`, D10), an unknown relation name, a qualifier on a
+  named in the qualifier, a row-scoped decision, a decision declared with `per` (D10;
+  D13 keeps it until item 7 of `09_anr_language`, and `sum(per D: e)` takes one), an
+  unknown relation name, a qualifier on a
   non-`SUM`/`AVG`/`MIN`/`MAX` function, and a row-invariant body.
 - Tests: `test/decide/tests/test_qualified_reducer.py`.
 

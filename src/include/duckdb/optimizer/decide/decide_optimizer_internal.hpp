@@ -15,6 +15,7 @@
 #pragma once
 
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/expression.hpp"
 
 namespace duckdb {
@@ -44,12 +45,21 @@ string DescendSourceAlias(const Expression &expr, const string &inherited);
 //! A TRUE placeholder standing in for a clause a rewrite has consumed.
 unique_ptr<Expression> MakeTrueExpression(const string &source_alias = string());
 
-//! Constant-fold `expr` to a double at plan time, returning false instead of
-//! throwing when it is not foldable.
-bool TryEvaluateFoldableDoubleNoThrow(ClientContext &context, const Expression &expr, double &out);
+//! The clause a rewrite stands in, when it is written with the scope spellings. A row the
+//! rewrite adds for it keeps the clause's rules and its `when`, so it reads only the rows
+//! the clause keeps (anr_language_extension.md §8). `when` is null for none.
+struct ClauseScope {
+	bool scoped = false;
+	const Expression *when = nullptr;
+};
 
-//! Sign of a scale factor resolved at plan time: -1, +1, or 0 when unknown.
-int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides);
+//! The clause scope in force below `node`, given the one above it: a scoped WHEN wrapper
+//! supplies its condition, and a scoped wrapper, comparison or IN marks the clause.
+ClauseScope EnterClauseScope(const Expression &node, ClauseScope scope);
+
+//! `row`, which a rewrite adds for a clause in `scope`: tagged SCOPED_CLAUSE_TAG and
+//! wrapped in a copy of the clause's `when` when the clause is scoped, else unchanged.
+unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const ClauseScope &scope);
 
 //! Mark the ABS nodes that need a Big-M envelope. Must run before RewriteAbs.
 void TagAbsConstraintsForBigM(ClientContext &context, LogicalDecide &decide);

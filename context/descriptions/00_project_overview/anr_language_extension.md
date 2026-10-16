@@ -1,7 +1,9 @@
 # ANR Language Extension — `per`, `when`, `by`
 
-> **Target behaviour — settled 2026-10-05. Items 1 and 2 are implemented
-> (`syntax_reference.md` §1.1, §2.3); the rest is not.**
+> **Target behaviour — settled 2026-10-05. Items 1–4 are implemented
+> (`syntax_reference.md` §1.1, §2.3, §10); the shapes of item 5 (`syntax_reference.md`
+> §10.6, `../09_anr_language/todo.md` §9a) answer "not supported yet", and the old
+> spellings stay until item 7.**
 >
 > This file specifies what the planned scoping language does. `syntax_reference.md`
 > describes what the engine accepts today: as an item lands, what it delivers is written
@@ -379,7 +381,8 @@ per (): sum(ship) <= networkCapacity
 | A reducer has no row for a class | run, before solving | `DECIDE: sum(when S.priority: ship) has no rows for D.depotID = 'D2'.` |
 | `per` other than `()` on an objective | parse | `an objective is produced once: write per (): or leave per out` |
 | Parenthesized key | parse | `write per a, b: without parentheses; parentheses are only for per ()` |
-| `by` not directly after a reducer | bind | `by (...) must directly follow SUM, AVG, MIN or MAX` |
+| `by` after a call that is not a reducer | bind | `by (...) must directly follow SUM, AVG, MIN or MAX` |
+| `by` after anything but a function call (a column, a literal, `CASE`, `CAST`, `::`, parentheses) | parse | syntax error |
 | A decision in `when`, in a key, or in `by` | bind | `x is a decision; when, per and by may only use data` |
 | An expression in a `per` key | parse | `a per key lists columns or relations; put expressions in by (...)` |
 | Unknown key element | bind | `depot is neither a column nor a relation of the FROM clause` |

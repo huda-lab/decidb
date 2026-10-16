@@ -4,7 +4,7 @@
 
 ---
 
-**Syntax and basic semantics** (constraint/objective/aggregate-local forms, row filtering vs. coefficient zeroing, parenthesization rules): see `../../00_project_overview/syntax_reference.md` §6. This doc covers the deeper semantics, edge cases, and implementation.
+**Syntax and basic semantics** (constraint/objective/aggregate-local forms, row filtering vs. coefficient zeroing, parenthesization rules): see `../../00_project_overview/syntax_reference.md` §6. This doc covers the deeper semantics, edge cases, and implementation of the postfix `WHEN`. The scope spelling `when c:` in front of a clause or inside a reducer, which never reads the rows it drops and is an error when it keeps none, is `syntax_reference.md` §10.
 
 ---
 

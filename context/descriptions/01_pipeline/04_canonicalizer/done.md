@@ -256,6 +256,17 @@ The pass does not pre-evaluate a query-wide subquery; composition builds an
 expression, so `(SELECT a) * ((SELECT b) * SUM(x))` emits the factor
 `(SELECT a) * (SELECT b)` and the values still arrive at execution.
 
+**A scoped clause's lone negated reducer** carries its sign in its factor:
+`-max(e) <= -cap` is emitted as `-1 * max(e) <= -cap`, `-(2 * max(e))` as
+`-(2) * max(e)` (`IsLoneNegatedReducer`, `FoldNegationIntoFactor`), and one written with
+signs around it, `-(-max(e))`, as the bare term (`IsSignedSpine`). The MIN/MAX rewrite
+then reads it as a factor of known sign, the route a `by` can take; left as `-max(e)` it
+is an additive spine, which the composed formulation takes. Old spellings keep
+`-MAX(e)`: their composed route answers it, where their single-reducer route would not
+(D17, `06_issues/bugs/todo.md`). Whether a factor's sign is known before the query runs
+is `ScaleSignAtPlanTime` (`decide_cast_policy`), which this stage and the MIN/MAX
+rewrite share.
+
 **Composition reassociates, and that is accepted.** `(SUM(x) / 2) / 3` emits
 `SUM(x) / (2 * 3)`, which in double arithmetic is not bit-identical to dividing
 twice. Decided 2026-08-13: the model carries one numeric domain end to end (§3.6),
@@ -332,6 +343,38 @@ Because objectives are canonicalized, `TryMatchScaledAggregate` needs no
 `objective_flexible` escape: `AGG * factor` was what an unnormalized clause looked
 like, and every consumer now sees `factor * AGG` or `AGG / factor`.
 
+### 3.10 Clauses written with the scope spellings
+
+A comparison tagged `SCOPED_CLAUSE_TAG` (stage 02 §4a) is classified by
+`ClassifyScoped` rather than the rules above; a clause without the tag never reaches it.
+
+| Decision side holds | Shape | Model rows |
+|---|---|---|
+| no reducer (a data-only reducer may sit on the bound side) | `PER_ROW` | one per kept row, or per class of an enclosing `per K:` |
+| decision reducers sharing one `by` key, beside query-wide terms only | `AGGREGATE` | one per `by` group of the kept rows |
+| anything else | refused | *"... is not supported yet"* (item 5) |
+
+Refused in particular: a per-row or keyed decision beside a decision reducer, reducers
+with different `by` keys, a reducer inside another expression, a query-wide decision
+beside a reducer in a row that multiplies decisions (the quadratic and bilinear builders
+would count it once per row), `AVG` under `<>` unless every term is a plain `AVG`
+(its exclusion scales the bound by the group's row count), and a clause that takes the
+composed MIN/MAX formulation (`TakesComposedMinMax`: a MIN or MAX over decisions beside
+another term, or alone under a factor whose sign is not known before the query runs)
+with a `by` or with a bound that is not a constant — that formulation is one row over
+all of the clause's kept rows. The MIN/MAX rewrite asserts both. Refusals quote the
+query through `QuoteMessagesWith`: columns qualified by relation over a join, a reducer
+with its scopes and `by`. `ClassifyCanonicalComparison`
+returns the scoped answer, so the linear form, the validation in `AddConstraint` and the
+debug verifier all read one classification.
+
+`CanonicalizeTree` stamps an aggregate-shape comparison with its `by` key
+(`__group_key_<i>__`) — the one grouping carrier after this stage, since later rewrites
+rebuild the reducers — and drops a `per K:` wrapper over it: one row per `by` group
+already stands for every class, whose constraints differ only in a bound the class
+determines. Over the rows shape the wrapper stays (`IsPerClassWrapper`, a wrapper for
+every walker).
+
 ---
 
 ## 4. Classification and verification
@@ -379,6 +422,23 @@ separate function and are **not** gated — those stay in release. Build `debug`
 pins both the debug-mode throwing behavior and the release-mode no-op via a
 `REQUIRE_VERIFY_THROWS` macro that switches on `DEBUG`.
 
+### Scope checks
+
+`BuildConstraintScopeChecks` and `BuildObjectiveScopeChecks` are read-only passes over
+the clauses and objective as bound, called once by `Binder::CreatePlan`, after
+`PlanSubqueries` (a check's expressions must be copyable) and before `CanonicalizeTree`
+(which drops the aggregate shape's `per K:`). A rewrite's clause entering through
+`AddConstraint` builds none. Per clause, in this order: its `when` keeps a row
+(`KEEPS_A_ROW`); its `per` key determines each maximal decision- and reducer-free
+subexpression, each decision outside reducers and each `by` key (`DETERMINES`); then each
+reducer in turn: it reads a row in every `by` group when it has its own `when`
+(`READS_A_ROW`), and its own `per` key determines its body within its `by` group
+(`DETERMINES`). The objective: its `when`, then `per ()` over its values and decisions,
+then each top-level reducer in turn, its `by` key (`DETERMINES`) before its own checks.
+The first check to fail stops the query, so this order picks the message. Literals and query-wide values need no check. The message texts are rendered
+here, through `RenderDecideSource`, from source fragments and relation aliases
+(`DecideScopeChecks`), since only planning still knows them.
+
 ---
 
 ## 5. What this stage does not do
@@ -387,7 +447,7 @@ pins both the debug-mode throwing behavior and the release-mode no-op via a
 - combine like terms;
 - fold constants;
 - rewrite AVG, ABS, MIN/MAX, `<>`, bilinear products, `norm()` or `IN`;
-- look inside reducer bodies;
+- look inside reducer bodies, except to read them, unchanged, for the scope checks;
 - evaluate data, reducers, `WHEN`, `PER` or qualifiers;
 - choose a solver formulation.
 

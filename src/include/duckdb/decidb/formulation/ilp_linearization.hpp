@@ -497,6 +497,10 @@ struct MinMaxObjectiveSpec {
     bool per_inner_was_avg = false;
     bool has_when = false;
     vector<bool> when_mask;
+    //! An objective written with the scope spellings: exactly the rows its reducer reads,
+    //! each a member whatever its coefficients. Empty for the old spellings, whose
+    //! members are the WHEN rows with a nonzero coefficient.
+    vector<bool> member_rows;
 };
 
 //! Encode a MIN/MAX *objective* — the counterpart of `LinearizeMinMaxIndicators`, which
@@ -542,6 +546,10 @@ struct ComposedMinMaxTermData {
     idx_t z_idx = DConstants::INVALID_INDEX;
     //! User source text (`MAX(x)`) naming this term's global auxiliary in diagnostics.
     string label;
+    //! From a clause written with the scope spellings: its strict relation steps the
+    //! outer row's bound onto the integer lattice; the old spellings' does not (a logged
+    //! bug, D17).
+    bool scoped = false;
 };
 
 //! Encode one composed MIN/MAX *constraint*: a global auxiliary and its pinning rows per

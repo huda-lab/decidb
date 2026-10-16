@@ -320,6 +320,16 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             outer.coefficients.push_back(1.0);
             outer.sense = is_max_agg ? '>' : '<';
             outer.rhs = clause_bound;
+            // A strict relation over whole-numbered members -- the bind-time gate's
+            // guarantee for the scope spellings, a constant inside the extremum included
+            // -- is the next value on the lattice, as `ApplyComparisonSense` states it for
+            // every other row.
+            bool greater = ec.comparison_type == ExpressionType::COMPARE_GREATERTHAN;
+            if (ec.scoped && (greater || ec.comparison_type == ExpressionType::COMPARE_LESSTHAN)) {
+                outer.rhs = greater ? std::floor(clause_bound) + 1.0 : std::ceil(clause_bound) - 1.0;
+                outer.strict = true;
+                outer.typed_k = clause_bound;
+            }
             outer.kind = ConstraintKind::USER_PARAMETER;
             // The elastic shape, without which this row does not fold. One `PER` clause
             // emits one of these per group, and they are all the same line of SQL: the
@@ -690,6 +700,12 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 active_offsets[g] = active_flat_rows.size();
                 for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
                     idx_t row = obj_flat_rows[k];
+                    if (!spec.member_rows.empty()) {
+                        if (spec.member_rows[row]) {
+                            active_flat_rows.push_back(row);
+                        }
+                        continue;
+                    }
                     bool has_nonzero = false;
                     for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
                         if (std::abs(saved_obj_coefficients[t][row]) >= 1e-15) {
@@ -829,7 +845,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 // member of the extremum, and an all-zero one participates as the
                 // constant 0 it is. A group left holding only a constant still bounds w
                 // either way, so it stays.
-                if (outer_easy && member.link.HasNoColumns() && std::abs(member.link.constant) < 1e-15) {
+                if (spec.member_rows.empty() && outer_easy && member.link.HasNoColumns() &&
+                    std::abs(member.link.constant) < 1e-15) {
                     continue;
                 }
                 // Boxed by the family over group sums — looser than a per-group bracket,
@@ -869,6 +886,12 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         vector<idx_t> active_rows;
         active_rows.reserve(num_rows);
         for (idx_t row = 0; row < num_rows; row++) {
+            if (!spec.member_rows.empty()) {
+                if (spec.member_rows[row]) {
+                    active_rows.push_back(row);
+                }
+                continue;
+            }
             if (spec.has_when && !spec.when_mask[row]) continue;
             bool has_nonzero = false;
             for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
@@ -1117,16 +1140,29 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
             outer.coefficients.push_back(p.second);
         }
     }
+    // A strict relation over whole-numbered terms (the bind-time gate's guarantee) is the
+    // next value on the lattice, as `ApplyComparisonSense` states it for every other row.
+    bool step_strict = !terms.empty() && terms.front().scoped;
     switch (outer_cmp) {
     case ExpressionType::COMPARE_LESSTHANOREQUALTO:
     case ExpressionType::COMPARE_LESSTHAN:
         outer.sense = '<';
         outer.rhs = outer_rhs;
+        if (step_strict && outer_cmp == ExpressionType::COMPARE_LESSTHAN) {
+            outer.rhs = std::ceil(outer_rhs) - 1.0;
+            outer.strict = true;
+            outer.typed_k = outer_rhs;
+        }
         break;
     case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
     case ExpressionType::COMPARE_GREATERTHAN:
         outer.sense = '>';
         outer.rhs = outer_rhs;
+        if (step_strict && outer_cmp == ExpressionType::COMPARE_GREATERTHAN) {
+            outer.rhs = std::floor(outer_rhs) + 1.0;
+            outer.strict = true;
+            outer.typed_k = outer_rhs;
+        }
         break;
     case ExpressionType::COMPARE_EQUAL:
         // One native equality row, not a pair of opposing inequalities: the backends take

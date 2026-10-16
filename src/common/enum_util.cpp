@@ -1191,6 +1191,25 @@ DecideExpression EnumUtil::FromString<DecideExpression>(const char *value) {
 	return static_cast<DecideExpression>(StringUtil::StringToEnum(GetDecideExpressionValues(), 3, "DecideExpression", value));
 }
 
+const StringUtil::EnumStringLiteral *GetDecideScopeCheckKindValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideScopeCheckKind::KEEPS_A_ROW), "KEEPS_A_ROW" },
+		{ static_cast<uint32_t>(DecideScopeCheckKind::DETERMINES), "DETERMINES" },
+		{ static_cast<uint32_t>(DecideScopeCheckKind::READS_A_ROW), "READS_A_ROW" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideScopeCheckKind>(DecideScopeCheckKind value) {
+	return StringUtil::EnumToString(GetDecideScopeCheckKindValues(), 3, "DecideScopeCheckKind", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *value) {
+	return static_cast<DecideScopeCheckKind>(StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 3, "DecideScopeCheckKind", value));
+}
+
 const StringUtil::EnumStringLiteral *GetDecideSenseValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideSense::MAXIMIZE), "MAXIMIZE" },

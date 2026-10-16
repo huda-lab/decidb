@@ -386,6 +386,9 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<string>(214, "canonical_objective", canonical_objective);
 	serializer.WritePropertyWithDefault<vector<string>>(215, "source_fragments", source_fragments);
 	serializer.WritePropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", source_columns);
+	serializer.WritePropertyWithDefault<vector<DecideGroupKey>>(217, "group_keys", group_keys);
+	serializer.WritePropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", scope_checks);
+	serializer.WritePropertyWithDefault<bool>(219, "scoped_objective", scoped_objective);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -407,6 +410,9 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<string>(214, "canonical_objective", result->canonical_objective);
 	deserializer.ReadPropertyWithDefault<vector<string>>(215, "source_fragments", result->source_fragments);
 	deserializer.ReadPropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", result->source_columns);
+	deserializer.ReadPropertyWithDefault<vector<DecideGroupKey>>(217, "group_keys", result->group_keys);
+	deserializer.ReadPropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", result->scope_checks);
+	deserializer.ReadPropertyWithDefault<bool>(219, "scoped_objective", result->scoped_objective);
 	return std::move(result);
 }
 

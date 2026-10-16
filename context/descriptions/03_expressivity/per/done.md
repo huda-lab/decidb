@@ -2,7 +2,7 @@
 
 `PER` generates **one constraint per data-driven group** (one per distinct value/combination of the named column(s)) — groups the user can't enumerate when writing the query. `SUM(new_hours) <= 40 PER empID` is semantically equivalent to writing `SUM(new_hours) <= 40 WHEN empID = 'E001' AND … ` once per distinct `empID`.
 
-**Syntax and basic semantics** (single/multi-column form, qualified references, WHEN+PER ordering, nested-aggregate objectives, restrictions): see `../../00_project_overview/syntax_reference.md` §7. This doc covers implementation semantics and architecture.
+**Syntax and basic semantics** (single/multi-column form, qualified references, WHEN+PER ordering, nested-aggregate objectives, restrictions): see `../../00_project_overview/syntax_reference.md` §7. This doc covers implementation semantics and architecture of the postfix `PER`. The scope spelling `per K:` in front of a clause, which does not group reducers (`by (Γ)` does), is `syntax_reference.md` §10.
 
 ---
 

@@ -95,6 +95,12 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         is_outside_flattened = true;
         PlanSubqueries(statement.decide_constraints, root);
         PlanSubqueries(statement.decide_objective, root);
+        // A `by` key is a data expression too, and may hold a subquery of its own.
+        for (auto &group_key : statement.decide_group_keys) {
+            for (auto &expr : group_key.expressions) {
+                PlanSubqueries(expr, root);
+            }
+        }
         is_outside_flattened = outer_flatten_state;
 
         // Read back what every scalar subquery became. The table-index sets give the
@@ -152,18 +158,29 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         // LogicalDecide::AddConstraint. Those two are the only call sites.
         string written_objective;
         string canonical_objective;
+        // The run-time checks of the clauses written with the scope spellings, built by the
+        // canonicalizer from each clause as bound, before it is canonicalized. When the
+        // FROM clause joins relations, their messages name a column by its relation, which
+        // only the BindContext still knows; over one relation the name alone is clear.
+        DecideScopeChecks scope_checks {statement.decide_group_keys, statement.entity_scopes,
+                                        statement.decide_source_fragments,
+                                        DecideRelationNames(bind_context, statement.decide_index)};
+        DecideSourceNames message_names {scope_checks.source_fragments, scope_checks.entity_scopes,
+                                         scope_checks.group_keys, scope_checks.relations};
         {
             DecideCanonicalizer canonicalizer(context, statement.decide_index,
                                                statement.variable_scopes,
                                                std::move(query_wide_table_indexes),
                                                std::move(correlated_subquery_table_indexes));
+            canonicalizer.QuoteMessagesWith(message_names);
             if (statement.decide_constraints) {
+                canonicalizer.BuildConstraintScopeChecks(*statement.decide_constraints, scope_checks);
                 statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
                 canonicalizer.VerifyCanonical(*statement.decide_constraints);
                 FinalizeConstraintSourceInfo(*statement.decide_constraints,
                                              statement.decide_constraint_sources,
                                              statement.decide_source_fragments,
-                                             statement.entity_scopes);
+                                             statement.entity_scopes, &statement.decide_group_keys);
             }
             // The objective is one side of a comparison, so it belongs to the same
             // boundary. It carries no relation to orient, which is the only part of
@@ -175,13 +192,18 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 // exactly one objective, so these are two strings rather than a registry.
                 written_objective = RenderDecideObjective(*statement.decide_objective,
                                                           statement.decide_source_fragments,
-                                                          statement.entity_scopes);
+                                                          statement.entity_scopes, &statement.decide_group_keys,
+                                                          statement.decide_scoped_objective);
+                if (statement.decide_scoped_objective) {
+                    canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
+                }
                 statement.decide_objective = canonicalizer.CanonicalizeObjective(
                     *statement.decide_objective, statement.objective_constant_offset);
                 canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
                 canonical_objective = RenderDecideObjective(*statement.decide_objective,
                                                             statement.decide_source_fragments,
-                                                            statement.entity_scopes);
+                                                            statement.entity_scopes, &statement.decide_group_keys,
+                                                            statement.decide_scoped_objective);
                 if (canonical_objective == written_objective) {
                     canonical_objective.clear();
                 }
@@ -217,6 +239,9 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
             }
         }
         decide_op->entity_key_expressions = std::move(statement.entity_key_expressions);
+        decide_op->scope_checks = std::move(scope_checks.checks);
+        decide_op->group_keys = std::move(statement.decide_group_keys);
+        decide_op->scoped_objective = statement.decide_scoped_objective;
         // ne_clause_labels, ABS aux vars, and MIN/MAX indicator links +
         // objective types are created by DecideOptimizer (runs after plan creation)
         decide_op->AddChild(std::move(root));

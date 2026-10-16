@@ -249,35 +249,36 @@ unique_ptr<Expression> decide_rewrite::MakeTrueExpression(const string &source_a
 	return placeholder;
 }
 
-bool decide_rewrite::TryEvaluateFoldableDoubleNoThrow(ClientContext &context, const Expression &expr, double &out) {
-	try {
-		return TryEvaluateFoldableDouble(context, expr, out);
-	} catch (...) {
-		return false;
+ClauseScope decide_rewrite::EnterClauseScope(const Expression &node, ClauseScope scope) {
+	if (!HasDecideTag(node.GetAlias(), SCOPED_CLAUSE_TAG)) {
+		return scope;
 	}
+	scope.scoped = true;
+	if (node.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = node.Cast<BoundConjunctionExpression>();
+		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+			scope.when = conj.children[1].get();
+		}
+	}
+	return scope;
 }
 
-//! The sign a factor contributes: +1, -1, or 0 when it is not known until the query
-//! runs. Any foldable numeric expression is decidable here; a scalar subquery is not.
-//!
-//! Nothing depends on this for correctness -- it selects between an exact cheap
-//! linearization and an exact expensive one. 0 must therefore be treated as "assume
-//! the expensive one", never as an error.
-int decide_rewrite::ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides) {
-	if (!scale) {
-		return 1;
+unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row, const ClauseScope &scope) {
+	if (!scope.scoped) {
+		return row;
 	}
-	double d;
-	if (!TryEvaluateFoldableDoubleNoThrow(context, *scale, d)) {
-		return 0;
+	auto alias = row->GetAlias();
+	AddDecideTag(alias, SCOPED_CLAUSE_TAG);
+	row->SetAlias(std::move(alias));
+	if (!scope.when) {
+		return row;
 	}
-	if (d == 0.0) {
-		// A zero factor annihilates the term. Dividing by it is an error the
-		// evaluator will raise; multiplying by it makes the sign irrelevant, and
-		// "positive" keeps the cheap path (every coefficient is zero either way).
-		return divides ? 0 : 1;
-	}
-	return d < 0.0 ? -1 : 1;
+	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	wrapper->children.push_back(std::move(row));
+	wrapper->children.push_back(scope.when->Copy());
+	wrapper->alias = WHEN_CONSTRAINT_TAG;
+	AddDecideTag(wrapper->alias, SCOPED_CLAUSE_TAG);
+	return std::move(wrapper);
 }
 
 } // namespace duckdb

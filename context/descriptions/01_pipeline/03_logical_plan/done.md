@@ -122,9 +122,18 @@ Grouped by who writes it:
 `constraint_sources`. `entity_scopes` holds every key scope — of `T.x`, of
 `SUM(T: …)`, and of `per K:` (`exact_key`, possibly spanning several relations) — and
 `variable_scopes` points each decision at one; a `per K:` decision also carries its key
-as written (`declared_key`).
+as written (`declared_key`). A reducer's own `per K'` is an exact key scope too, whose
+`key_names` are its columns as a message names them. `group_keys` holds every `by (Γ)`
+key of the clauses (`DecideGroupKey`: the bound expressions, the key as written, each
+element's name); a reducer's `__group_key_<i>__` tag names entry `i`. `scoped_objective`
+marks an objective written with a scope spelling.
 
-**From the canonicalizer** — `objective_constant_offset`.
+**From the canonicalizer** — `objective_constant_offset`, and `scope_checks`: the
+run-time checks of the clauses and objective written with the scope spellings
+(`DecideScopeCheck`: kind, the rows it looks at, the key, the value or decision, a
+reducer's own `when`, and the texts its message quotes). `PlanSubqueries` runs on the
+`by` keys as on the trees, and `EnumerateExpressions` visits both lists, so binding
+resolution and column pruning see their columns.
 
 **From the optimizer** — `solver_backend_name`, `use_native_constructs`,
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
@@ -234,7 +243,8 @@ binding fact, and the parser cannot see it (the clause may sit inside a subquery
 `LogicalDecide` and `LogicalDecideDiagnose` are serialized by DuckDB's generator.
 The field list lives in `storage/serialization/logical_operator.json`; the structs
 it names — `EntityScopeInfo`, `DecideVarScopeInfo`, `ConstraintSourceInfo`,
-`DecideSourceColumnName` — have their own entries in `nodes.json`, and both
+`DecideSourceColumnName`, `DecideGroupKey`, `DecideScopeCheck` — have their own entries
+in `nodes.json`, and both
 directions are generated into `src/storage/serialization/serialize_*.cpp`. There is
 no hand-written copy. Adding a field means adding one JSON entry, not two mirrored
 lines in two functions that can drift apart; `python3 scripts/generate_serialization.py`

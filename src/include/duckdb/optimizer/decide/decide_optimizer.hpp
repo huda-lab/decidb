@@ -103,7 +103,10 @@ private:
 	void RewriteComposedMinMax(LogicalDecide &decide);
 
 	//! Helper: walk the constraint tree looking for composed MIN/MAX comparisons.
-	void RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide);
+	//! `scoped_when` is the `when` of the scope spellings enclosing `expr`, folded into a
+	//! composed clause's terms.
+	void RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
+	                                       const Expression *scoped_when = nullptr);
 
 	//! Detect a composed MIN/MAX objective (additive sum of SUM/AVG/MIN/MAX terms).
 	//! Extracts term metadata into decide.composed_minmax_objective_terms and replaces
@@ -121,9 +124,11 @@ private:
 
 	//! Helper: recursively walk bound constraint tree, classifying and rewriting MIN/MAX.
 	//! out_was_easy is set when the rewrite produced a per-row constraint (used for PER stripping).
+	//! `scoped_when` is the `when` of the scope spellings enclosing `expr`, which the easy
+	//! half of a scoped `=` keeps.
 	void RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                               vector<unique_ptr<Expression>> &new_constraints,
-	                               bool &out_was_easy);
+	                               bool &out_was_easy, optional_ptr<const Expression> scoped_when = nullptr);
 
 	//! Objective-side MIN/MAX detection and rewriting.
 	//! Handles flat (non-PER) and nested PER objectives.
@@ -175,12 +180,17 @@ private:
 		                     //        false aux pins to |inner| naturally via
 		                     //        solver pressure (MINIMIZE objective, or
 		                     //        constraint shape that upper-bounds aux).
+		//! Written with the scope spellings: the envelope rows keep the clause's rules and
+		//! read only the rows its `when` (a copy, or null) keeps.
+		bool scoped = false;
+		unique_ptr<Expression> when;
 	};
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
 	//! replace with auxiliary variable references, and collect AbsPairInfo entries.
 	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                       vector<AbsPairInfo> &abs_pairs, bool in_objective, const string &source_alias);
+	                       vector<AbsPairInfo> &abs_pairs, bool in_objective, const string &source_alias,
+	                       bool scoped, const Expression *when);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis

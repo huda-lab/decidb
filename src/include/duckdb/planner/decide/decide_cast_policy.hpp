@@ -121,6 +121,19 @@ const Expression *StripCastsForIdentity(const Expression &expr);
 //! are deliberately left to the caller's layer-specific error policy.
 bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, double &out);
 
+//! TryEvaluateFoldableDouble, returning false instead of throwing when evaluation fails.
+bool TryEvaluateFoldableDoubleNoThrow(ClientContext &context, const Expression &expr, double &out);
+
+//! The sign a factor on a reducer contributes: +1, -1, or 0 when it is not known until
+//! the query runs. Any foldable numeric expression is decidable here; a scalar subquery
+//! is not. The canonicalizer and the MIN/MAX rewrite read it alike: a MIN or MAX under a
+//! factor of unknown sign takes the composed formulation.
+//!
+//! Nothing depends on this for correctness -- it selects between an exact cheap
+//! linearization and an exact expensive one. 0 must therefore be treated as "assume
+//! the expensive one", never as an error.
+int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides);
+
 //! True for a literal under any number of cast wrappers.
 //!
 //! This is an ELIGIBILITY test, not a folder: it asks whether an expression is a

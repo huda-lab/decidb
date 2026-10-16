@@ -17,6 +17,7 @@ namespace duckdb {
 
 class BindContext;
 class FunctionExpression;
+struct DecideSourceNames;
 
 //! Find or create the entity scope keyed by `table_name`, returning its index into
 //! `entity_scopes`. Shared by the declaration path (`T.x(INT)`) and the
@@ -42,15 +43,25 @@ idx_t FindOrCreateEntityScope(BindContext &bind_context, const vector<string> &t
 //! clause alone, never an outer query: a declared decision is an error; otherwise it is a
 //! column, else a relation standing for its stored columns. Equal keys -- order and
 //! repetition aside -- share one scope, marked `exact_key` so it is never refined and never
-//! shared with a `T.x` scope. `key_text` is the key as written, kept for display.
+//! shared with a `T.x` scope. `key_text` is the key as written, kept for display. A
+//! reducer's `per ()` is the empty key: one scope every row belongs to.
 idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
                            vector<EntityScopeInfo> &entity_scopes);
 
-//! Peels the parser's qualified-reducer wrapper so checks that key off the
-//! aggregate's name see the aggregate: `sum(D: e)` reads as `sum(e)`. Returns
-//! `expr` unchanged when it is not a qualified reducer.
-const ParsedExpression &UnwrapQualifiedReducer(const ParsedExpression &expr);
+//! The columns of `per K` (the parser's `SCOPE_PER_TAG` marker) as bound column
+//! references, resolved and ordered as FindOrCreateKeyScope resolves them; none for
+//! `per ()`. The bound form of a constraint's generation key.
+vector<unique_ptr<Expression>> BindKeyColumns(BindContext &bind_context, const FunctionExpression &per,
+                                              const case_insensitive_set_t &decision_names);
+
+//! Peels the parser's `BY (key)` and qualified-reducer markers so checks that key off
+//! the aggregate's name see the aggregate: `sum(D: e) by (g)` reads as `sum(e)`.
+//! Returns `expr` unchanged when it carries neither.
+const ParsedExpression &UnwrapReducerMarkers(const ParsedExpression &expr);
+
+//! A reducer argument without its `[WHEN c] [PER K]:` scope: `sum(when c: e)` sums `e`.
+const ParsedExpression &ReducerArgumentBody(const ParsedExpression &argument);
 
 //! What a relation-qualified reducer needs in order to resolve `D:` and to check
 //! the §3.2.2 well-formedness rule. Owned by bind_select_node, which is still
@@ -63,6 +74,11 @@ struct DecideQualifierContext {
     case_insensitive_map_t<idx_t> *table_scope_map = nullptr;
     //! Scope of each declared variable, indexed as the decide columns are.
     const vector<DecideVarScopeInfo> *variable_scopes = nullptr;
+    //! Every `by (key)` bound so far; a reducer's GROUP_KEY_TAG_PREFIX tag indexes it.
+    vector<DecideGroupKey> *group_keys = nullptr;
+    //! The query's source fragments (TagDecideSourceFragments): a `per K:` in front of a
+    //! constraint adds its key as written, which binding expands past recognition.
+    vector<string> *source_fragments = nullptr;
 };
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
@@ -90,11 +106,30 @@ const char *DecideCaseUnsupportedMessage();
 void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
                                            const case_insensitive_map_t<idx_t> &variables);
 
-//! Reject the scope spellings -- `WHEN condition:`, `PER key:` and a reducer's
-//! `BY (key)` -- which parse but are not bound yet. Run on the constraints and the
-//! objective; a declaration's `PER key:` binds through FindOrCreateKeyScope. A spelling
-//! leaves this check when its binding lands, and the check goes with the last of them.
-void ValidateDecideNoUnsupportedScope(const ParsedExpression &expr);
+//! Where the scope spellings may stand, checked on the parsed constraints (`objective`
+//! false) or objective before binding. `[WHEN c] [PER K]:` stands in front of a clause or
+//! of a SUM/AVG/MIN/MAX argument, `BY (key)` right after a SUM/AVG/MIN/MAX; a condition,
+//! a key and a `by` key take data only. A clause is written in the old spellings
+//! (postfix WHEN/PER, `SUM(e) WHEN c`) or the new ones, never both, and with a new
+//! spelling a reducer may not hold a reducer (the objective's two-level form aside).
+//! Anything else -- a spelling inside a condition, a key or an ordinary subquery --
+//! answers "not supported yet".
+void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
+                                  bool objective);
+
+//! Whether `expr` is the parser's operator marker named `tag` (decide.hpp).
+bool IsDecideMarker(const ParsedExpression &expr, const char *tag);
+
+//! Whether a constraint or the objective is written with a scope spelling: a `when` or
+//! `per` in front, a `by`, or a scope in front of a reducer's argument. Such a clause is
+//! bound under the scoping language's rules (SCOPED_CLAUSE_TAG).
+bool UsesScopeSpelling(const ParsedExpression &clause);
+
+//! Whether an objective (its `[WHEN c] [PER ()]:` peeled) has the two-level form
+//! `outer(PER k: inner(e) BY (k'))`: an outer reducer, optionally `BY ()`, over a `per`
+//! whose body is one inner reducer with a `by`. Whether k and k' are the same key is
+//! the binder's question.
+bool IsTwoLevelObjective(const ParsedExpression &body);
 
 bool IsDecideAggregateName(const string &name);
 bool ContainsDecideAggregate(const ParsedExpression &expr);
@@ -163,7 +198,9 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 //! Runs on the bound tree, because a parsed tree has no types yet.
 //! `decide_index` identifies the DECIDE binding, so a side that references no decision
 //! can be recognised as the bound `K` and skipped.
-void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t decide_index);
+//! `names` quotes an operand of a clause written with the scope spellings as written.
+void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t decide_index,
+                                              optional_ptr<const DecideSourceNames> names = nullptr);
 
 //! The DecideBinder is a base class for binders in DECIDE statements
 class DecideBinder : public ExpressionBinder {
@@ -207,6 +244,13 @@ protected:
     //! well-formedness rule on the reducer body, and tags the bound aggregate with
     //! the scope it de-duplicates by.
     BindResult BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth);
+    //! Binds `agg([WHEN c] [PER K]: e)`: `agg(e)` with `c` as the aggregate's filter and
+    //! `K` as the key it keeps one row of each class by (an exact key scope, tagged like a
+    //! qualifier; `PER ()` is the empty key).
+    BindResult BindScopedReducer(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
+    //! Binds `agg(...) BY (key)`: the reducer, then the key into LogicalDecide::group_keys,
+    //! named on the aggregate by a GROUP_KEY_TAG_PREFIX tag (none for `BY ()`).
+    BindResult BindReducerBy(FunctionExpression &by, idx_t depth);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
     //! The dispatch itself. `BindExpression` wraps it so every bound node this binder

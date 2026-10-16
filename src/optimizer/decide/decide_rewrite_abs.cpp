@@ -272,11 +272,13 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// the ABS node originated in the objective (vs. a constraint).
 	vector<AbsPairInfo> abs_pairs;
 	if (decide.decide_constraints) {
-		FindAndReplaceAbs(decide.decide_constraints, decide, abs_pairs, /*in_objective=*/false, string());
+		FindAndReplaceAbs(decide.decide_constraints, decide, abs_pairs, /*in_objective=*/false, string(),
+		                  /*scoped=*/false, nullptr);
 	}
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceAbs(objective, decide, abs_pairs, /*in_objective=*/true, string());
+		FindAndReplaceAbs(objective, decide, abs_pairs, /*in_objective=*/true, string(), decide.scoped_objective,
+		                  nullptr);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 
@@ -365,18 +367,20 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			MarkFormulationConstraint(*c2, pair.source_alias);
 		}
 
-		AppendConstraint(decide, std::move(c1));
-		AppendConstraint(decide, std::move(c2));
+		ClauseScope scope {pair.scoped, pair.when.get()};
+		AppendConstraint(decide, ScopeHelperRow(std::move(c1), scope));
+		AppendConstraint(decide, ScopeHelperRow(std::move(c2), scope));
 	}
 }
 
 void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                         vector<AbsPairInfo> &abs_pairs, bool in_objective,
-                                        const string &source_alias) {
+                                        const string &source_alias, bool scoped, const Expression *when) {
 	if (!expr) {
 		return;
 	}
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
+	auto scope = EnterClauseScope(*expr, ClauseScope {scoped, when});
 
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr->Cast<BoundFunctionExpression>();
@@ -416,7 +420,8 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				bool needs_bigm = HasDecideTag(func.alias, ABS_NEEDS_BIGM_TAG);
 
 				// Stash the bound inner expression for constraint generation
-				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), in_objective, clause_alias, needs_bigm});
+				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), in_objective, clause_alias, needs_bigm,
+				                     scope.scoped, scope.when ? scope.when->Copy() : nullptr});
 
 				// Replace ABS(inner) with aux var reference
 				expr = make_uniq<BoundColumnRefExpression>(
@@ -429,7 +434,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAndReplaceAbs(child, decide, abs_pairs, in_objective, clause_alias);
+		FindAndReplaceAbs(child, decide, abs_pairs, in_objective, clause_alias, scope.scoped, scope.when);
 	});
 }
 

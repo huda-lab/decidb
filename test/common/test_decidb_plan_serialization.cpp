@@ -431,3 +431,79 @@ TEST_CASE("An optimized DECIDE plan refuses to be copied", "[decidb]") {
 	REQUIRE(decide->optimized);
 	REQUIRE_THROWS_AS(plan->Copy(*con.context), NotImplementedException);
 }
+
+TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark through a serialization round trip",
+          "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+
+	// Two `by` keys, the checks of a `when` (D4), a `per` key (determination), a reducer's
+	// own `when` (D8) and its own `per`, and an objective written with a scope.
+	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
+	                            "DECIDE x(INT), per region: open(BOOL) "
+	                            "SUCH THAT when cap > 10 per r_name: sum(x) by (r_name) <= 50 "
+	                            "AND sum(when cap > 30 per region: open) by (site.r_key) <= 1 "
+	                            "MAXIMIZE when cap > 0: sum(x)");
+	auto *before = FindDecide(*plan);
+	REQUIRE(before != nullptr);
+	REQUIRE(before->scoped_objective);
+	REQUIRE(before->group_keys.size() == 2);
+	REQUIRE(before->group_keys[0].text == "r_name");
+	REQUIRE(before->group_keys[1].text == "site.r_key");
+	REQUIRE(before->group_keys[1].names == duckdb::vector<string> {"site.r_key"});
+	duckdb::vector<DecideScopeCheckKind> kinds;
+	for (auto &check : before->scope_checks) {
+		kinds.push_back(check.kind);
+	}
+	// The clause's `when`, its per key over the `by` key, then the reducer's `when` and its
+	// own per key over the reducer's body; then the objective's `when`.
+	REQUIRE(kinds == duckdb::vector<DecideScopeCheckKind> {DecideScopeCheckKind::KEEPS_A_ROW, DecideScopeCheckKind::DETERMINES,
+	                                               DecideScopeCheckKind::READS_A_ROW, DecideScopeCheckKind::DETERMINES,
+	                                               DecideScopeCheckKind::KEEPS_A_ROW});
+	REQUIRE(before->scope_checks[1].subject == "r_name");
+	REQUIRE(before->scope_checks[1].context == "in by (r_name)");
+	REQUIRE(before->scope_checks[3].decision != DConstants::INVALID_INDEX);
+
+	auto copied = RoundTrip(con, *plan);
+	auto *after = FindDecide(*copied);
+	REQUIRE(after != nullptr);
+	REQUIRE(after->scoped_objective);
+	REQUIRE(after->group_keys.size() == before->group_keys.size());
+	for (idx_t i = 0; i < before->group_keys.size(); i++) {
+		auto &key = before->group_keys[i];
+		auto &copy = after->group_keys[i];
+		REQUIRE(copy.text == key.text);
+		REQUIRE(copy.names == key.names);
+		REQUIRE(copy.expressions.size() == key.expressions.size());
+		for (idx_t e = 0; e < key.expressions.size(); e++) {
+			REQUIRE(copy.expressions[e]->Equals(*key.expressions[e]));
+		}
+	}
+	REQUIRE(after->scope_checks.size() == before->scope_checks.size());
+	auto same = [](const duckdb::unique_ptr<Expression> &a, const duckdb::unique_ptr<Expression> &b) {
+		return a ? (b && a->Equals(*b)) : !b;
+	};
+	for (idx_t i = 0; i < before->scope_checks.size(); i++) {
+		auto &check = before->scope_checks[i];
+		auto &copy = after->scope_checks[i];
+		REQUIRE(copy.kind == check.kind);
+		REQUIRE(same(copy.rows, check.rows));
+		REQUIRE(same(copy.value, check.value));
+		REQUIRE(same(copy.filter, check.filter));
+		REQUIRE(copy.key.size() == check.key.size());
+		for (idx_t k = 0; k < check.key.size(); k++) {
+			REQUIRE(copy.key[k]->Equals(*check.key[k]));
+		}
+		REQUIRE(copy.decision == check.decision);
+		REQUIRE(copy.subject == check.subject);
+		REQUIRE(copy.object == check.object);
+		REQUIRE(copy.context == check.context);
+		REQUIRE(copy.key_names == check.key_names);
+	}
+	// A reducer's own `per` names its key as written.
+	REQUIRE(after->entity_scopes.size() == before->entity_scopes.size());
+	for (idx_t i = 0; i < before->entity_scopes.size(); i++) {
+		REQUIRE(after->entity_scopes[i].key_names == before->entity_scopes[i].key_names);
+	}
+}

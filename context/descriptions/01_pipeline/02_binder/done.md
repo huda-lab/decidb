@@ -411,6 +411,82 @@ to read back as the PER key.
 
 ---
 
+## 4a. The scope spellings — `when`, `per`, `by`
+
+`ValidateDecideScopeSpellings` (`decide_binder.cpp`) runs on the parsed constraints
+(one `AND` operand at a time) and on the objective, before either binds:
+
+- a scope or `by` inside an ordinary SQL subquery written in the clause, a `when`
+  condition or a key keeps the item-1 answer naming the spelling, *"DECIDE: 'PER key:' is
+  not supported yet"* (or `'PER ():'`, `'WHEN condition:'`, `'BY (key)'`);
+- a clause mixing an old postfix `WHEN`/`PER` (on the clause or after a reducer) with a
+  new spelling is refused, naming the new spelling (D14); after the objective an old
+  `PER` names the two-level form. A postfix after a scope written in front of the same
+  clause never reaches here: the item-1 grammar rejects it as a syntax error;
+- a scope or `by` on a call other than `SUM`/`AVG`/`MIN`/`MAX` is refused (D15); after a
+  special form (`COALESCE`, `NULLIF`, `CAST`) or a parenthesized expression it is a
+  syntax error, as the grammar admits `by` only after a function call;
+- a decision in a `when`, a key or a `by`: *"DECIDE: x is a decision; when, per and by
+  may only use data"*; a window function there: *"DECIDE: a window function such as
+  'row_number() OVER ()' is not supported in when, per or by"*; a reducer there gets the
+  old *"DECIDE: an aggregate cannot be used here. ..."*;
+- `norm(D: e, p)` in a clause with a new spelling: *"DECIDE: norm(D: ...) is not supported
+  yet; a relation qualifier takes SUM, AVG, MIN or MAX"* (bound, it would read
+  `SUM(D: e)`);
+- a reducer inside a reducer: *"DECIDE: an aggregate inside an aggregate is not supported
+  yet"*, except the objective's two-level form.
+
+| Written | Bound |
+|---|---|
+| `when c: C` | WHEN wrapper (`WHEN_CONSTRAINT_TAG` + `SCOPED_CLAUSE_TAG`) over `C` |
+| `per K: C` | `PER_CLASS_TAG` wrapper `[C, key columns...]`, none for `per ()`, its key as written a source fragment on the alias |
+| `when c per K: C` | `PER_CLASS{WHEN{C, c}, K}` |
+| `agg(...) by (Γ)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide_group_keys[i]`; `by ()` adds nothing |
+| `agg(when c: e)` | the aggregate's `filter` |
+| `agg(per K': e)` | a `__qualified_by_<i>__` tag on an exact key scope (`FindOrCreateKeyScope`; an empty one for `per ()`) |
+| `outer(per k: inner(e) by (k))` | today's nested objective, `PER{outer(inner(e)), k}`, plus `SCOPED_CLAUSE_TAG` |
+
+Every comparison of a clause written with a new spelling (in front, a `by`, a scope
+inside a reducer) is tagged `SCOPED_CLAUSE_TAG`, an `IN` under a scope too: the one
+switch every later layer reads (D12). `per row:` leaves no node, so it cannot switch;
+`by ()` can.
+
+- `BindScopedConstraint` binds the body with `binding_scoped_clause` set, the condition
+  as data, the key through `BindKeyColumns` (a declaration key's resolution; a column
+  element keeps its written name for messages). A BETWEEN binds to two comparisons, each
+  under the whole scope; the second binds the condition again from its parsed text,
+  since a bound subquery cannot be copied.
+- The key's text becomes a source fragment while binding, not on the parsed marker:
+  `ExpressionBinder::Bind` copies a parsed node's alias onto the node it binds to, which
+  would replace the wrapper's tag.
+- `BindReducerBy`: a relation element stands for its stored columns (a column of that
+  name wins); any other element binds as data. Equal key sets share one
+  `DecideGroupKey` (expressions, text as written, each element's name): equal as bound
+  expressions, or written alike — a bound subquery equals nothing, not even itself.
+- `BindScopedReducer` peels the inner `per`/`when`; `SUM(D: e)` keeps its bind-time rule
+  that its body comes from `D` (D13) and may take a `by`.
+- `BindScopedObjective`: `per ()` adds nothing; a `when` wraps the body, inside the
+  two-level form's PER wrapper. `BindTwoLevelObjective` refuses a `when` inside either
+  reducer and a `by` key that is not the `per` key. Under a scope a decision outside the
+  reducers binds; its single instance is a run-time check.
+  `decide_scoped_objective` marks an objective written with a new spelling; its casts
+  and subqueries are fragment-tagged like a constraint's. `BindTwoLevelObjective` also
+  refuses a `per` inside the inner reducer.
+- D9 under the new spellings: an old `T.x` drops from its key every column a clause
+  reads — `when` conditions, `per` and `by` keys, a reducer's own `per` key.
+- A strict comparison over a fractional operand names a reducer as written, scopes and
+  `by` included (*"'avg(ship) by (D.region)' has type DOUBLE ..."*). Inside a `MIN` or
+  `MAX` of such a clause a constant addend counts toward the value
+  (`DecideSideIsWholeNumbered`'s `in_extremum`): stage 06 steps the bound on the
+  extremum, where the addend stays, so `max(x + 0.5) > 3` is refused. Elsewhere, and in
+  the old spellings, a decision-free addend belongs to the bound.
+- A `SUM`, `AVG`, `MIN`, `MAX` or `norm` with no argument is refused in every spelling:
+  *"SUM needs one argument, found 'sum()'"*, *"NORM needs an expression and an order, as
+  in norm(e, 1), found 'norm()'"*. Before items 3–4 the old spellings raised an internal
+  error for a reducer and an empty reason for `norm()`.
+
+---
+
 ## 5. Objective
 
 `DecideObjectiveBinder` binds `MAXIMIZE` / `MINIMIZE` bodies through the same

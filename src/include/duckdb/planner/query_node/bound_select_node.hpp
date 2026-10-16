@@ -79,6 +79,10 @@ public:
     //! BoundColumnRefExpressions for entity_key columns (one per key per scope, flattened in scope order).
     //! Transferred to LogicalDecide; see logical_decide.hpp for details on why these exist.
     vector<unique_ptr<Expression>> entity_key_expressions;
+    //! Every `by (key)` of the clause; transferred to LogicalDecide::group_keys.
+    vector<DecideGroupKey> decide_group_keys;
+    //! The objective is written with a scope spelling; see LogicalDecide::scoped_objective.
+    bool decide_scoped_objective = false;
     //! MIN/MAX indicator links, objective type, and PER types are now populated by
     //! DecideOptimizer::RewriteMinMax directly on LogicalDecide (post-binding)
 	//! list of groups

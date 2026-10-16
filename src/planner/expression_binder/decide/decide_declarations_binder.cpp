@@ -101,15 +101,6 @@ DecideDeclarationsBinder::DecideDeclarationsBinder(Binder &binder, ClientContext
 void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSelectNode &result) {
 	auto &bind_context = binder.bind_context;
 
-	// A declaration's `per` binds below; the scopes of constraints and the objective
-	// are still refused.
-	if (statement.decide_constraints) {
-		ValidateDecideNoUnsupportedScope(*statement.decide_constraints);
-	}
-	if (statement.decide_objective) {
-		ValidateDecideNoUnsupportedScope(*statement.decide_objective);
-	}
-
         case_insensitive_map_t<idx_t> decide_variable_names;
         vector<string> var_names;
         vector<LogicalType> var_types;
@@ -228,6 +219,16 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // Capture user var count BEFORE any rewrites that add auxiliary variables
         idx_t num_user_vars = var_names.size();
 
+        // Where `when`, `per` and `by` may stand, before anything reads the clauses: every
+        // decision name is known now, as written (`T.x` included), so a decision in a
+        // condition or a key is named the way the user spelled it.
+        if (statement.decide_constraints) {
+            ValidateDecideScopeSpellings(*statement.decide_constraints, decide_variable_names, false);
+        }
+        if (statement.decide_objective) {
+            ValidateDecideScopeSpellings(*statement.decide_objective, decide_variable_names, true);
+        }
+
         // Strip table qualifiers from `Table.var` references that match a
         // registered scoped DECIDE variable. Applied to the SELECT list, the
         // SUCH THAT tree, and the objective tree so that downstream binders
@@ -286,6 +287,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         }
         if (statement.decide_objective) {
             ValidateDecideNoNonLinearScalar(context, *statement.decide_objective, decide_variable_names);
+            // An objective written with the scope spellings quotes its own SQL in a message
+            // (a `when` that keeps no row), so its casts and subqueries keep their written
+            // text, as every constraint's do.
+            if (UsesScopeSpelling(*statement.decide_objective)) {
+                TagDecideSourceFragments(*statement.decide_objective, decide_source_fragments);
+            }
         }
 
         bind_context.AddGenericBinding(result.decide_index, "decide_variables", var_names, var_types);
@@ -305,6 +312,9 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         qualifier_context.entity_scopes = &entity_scopes;
         qualifier_context.table_scope_map = &table_scope_map;
         qualifier_context.variable_scopes = &variable_scopes;
+        vector<DecideGroupKey> group_keys;
+        qualifier_context.group_keys = &group_keys;
+        qualifier_context.source_fragments = &decide_source_fragments;
         // Isolate with brackets to avoid multiple active binders.
         {
             DecideConstraintsBinder decide_constraints_binder (binder, context, decide_variable_names, scalar_variable_names, &qualifier_context);
@@ -315,8 +325,9 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 // read the decision's declared type off the DECIDE clause; every other
                 // operand's type is only known now that binding has resolved it. Together
                 // they are the whole refusal, so the model builder no longer raises one.
-                ValidateDecideIntegralComparisonOperands(*result.decide_constraints,
-                                                         result.decide_index);
+                auto relations = DecideRelationNames(bind_context, result.decide_index);
+                DecideSourceNames names {decide_source_fragments, entity_scopes, group_keys, relations};
+                ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, &names);
                 // Degree has one owner, and this is it. Running on the bound tree makes the
                 // rule total: a reducer argument and a bare per-row constraint are judged
                 // the same way, which the parsed-tree gate could not do because it was only
@@ -324,12 +335,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 ValidateDecideConstraintDegree(*result.decide_constraints, result.decide_index);
                 result.decide_constraint_sources = InitializeConstraintSourceInfo(
                     *result.decide_constraints, decide_source_fragments, entity_scopes,
-                    result.decide_index);
-                result.decide_source_fragments = decide_source_fragments;
+                    result.decide_index, &group_keys);
             }
             // Types are now determined from the DECIDE clause, not from constraint binding
         }
         if (statement.decide_objective) {
+            result.decide_scoped_objective = UsesScopeSpelling(*statement.decide_objective);
             DecideObjectiveBinder decide_objective_binder (binder, context, decide_variable_names, scalar_variable_names, &qualifier_context);
             decide_objective_binder.decide_sense = statement.decide_sense;
             unique_ptr<ParsedExpression> objective = std::move(statement.decide_objective);
@@ -338,6 +349,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 ValidateDecideObjectiveDegree(*result.decide_objective, result.decide_index);
             }
         }
+        result.decide_source_fragments = decide_source_fragments;
         result.decide_sense = statement.decide_sense;
         // Update types in bind context to reflect the determined types from DECIDE clause
         bind_context.GetBindingsList().back()->types = var_types;
@@ -360,26 +372,37 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         if (!entity_scopes.empty()) {
             // Collect column bindings from scoped tables that appear in bound expressions
             unordered_set<uint64_t> data_columns;  // encode as (table_index << 32) | col_index
+            auto mark_data_column = [&](const ColumnBinding &binding) {
+                // Check if this column belongs to any scoped table
+                for (auto &scope : entity_scopes) {
+                    if (scope.exact_key) {
+                        continue;
+                    }
+                    bool in_scope = false;
+                    for (auto scope_table_index : scope.source_table_indices) {
+                        if (binding.table_index == scope_table_index) {
+                            in_scope = true;
+                            break;
+                        }
+                    }
+                    if (in_scope) {
+                        data_columns.insert((static_cast<uint64_t>(binding.table_index) << 32) |
+                                            static_cast<uint64_t>(binding.column_index));
+                    }
+                }
+            };
             auto collect_data_cols = [&](Expression &expr) {
                 if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-                    auto &col_ref = expr.Cast<BoundColumnRefExpression>();
-                    auto &binding = col_ref.binding;
-                    // Check if this column belongs to any scoped table
-                    for (auto &scope : entity_scopes) {
-                        if (scope.exact_key) {
-                            continue;
-                        }
-                        bool in_scope = false;
-                        for (auto scope_table_index : scope.source_table_indices) {
-                            if (binding.table_index == scope_table_index) {
-                                in_scope = true;
-                                break;
-                            }
-                        }
-                        if (in_scope) {
-                            data_columns.insert((static_cast<uint64_t>(binding.table_index) << 32) |
-                                                static_cast<uint64_t>(binding.column_index));
-                        }
+                    mark_data_column(expr.Cast<BoundColumnRefExpression>().binding);
+                }
+                // A reducer's own `per K'` reads its key columns to form classes, as a
+                // `by` key and a `per K:` in front of the clause do.
+                idx_t scope_idx;
+                if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+                    TryParseQualifiedReducerTag(expr.GetAlias(), scope_idx) && scope_idx < entity_scopes.size() &&
+                    entity_scopes[scope_idx].exact_key) {
+                    for (auto &binding : entity_scopes[scope_idx].entity_key_bindings) {
+                        mark_data_column(binding);
                     }
                 }
             };
@@ -388,6 +411,13 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             }
             if (result.decide_objective) {
                 ExpressionIterator::EnumerateExpression(result.decide_objective, collect_data_cols);
+            }
+            // A `by` key groups rows the way an old PER key does, so it reads its columns
+            // as data too.
+            for (auto &group_key : group_keys) {
+                for (auto &expr : group_key.expressions) {
+                    ExpressionIterator::EnumerateExpression(expr, collect_data_cols);
+                }
             }
 
             // Remove data columns from entity keys (keep at least one key column)
@@ -430,6 +460,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                         scope.entity_key_bindings[k]));
             }
         }
+
+        result.decide_group_keys = std::move(group_keys);
 
         // Store table-scoped variable metadata
         result.entity_scopes = std::move(entity_scopes);

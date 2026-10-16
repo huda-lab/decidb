@@ -436,6 +436,48 @@ ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserialize
 	return result;
 }
 
+void DecideGroupKey::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(100, "expressions", expressions);
+	serializer.WritePropertyWithDefault<string>(101, "text", text);
+	serializer.WritePropertyWithDefault<vector<string>>(102, "names", names);
+}
+
+DecideGroupKey DecideGroupKey::Deserialize(Deserializer &deserializer) {
+	DecideGroupKey result;
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(100, "expressions", result.expressions);
+	deserializer.ReadPropertyWithDefault<string>(101, "text", result.text);
+	deserializer.ReadPropertyWithDefault<vector<string>>(102, "names", result.names);
+	return result;
+}
+
+void DecideScopeCheck::Serialize(Serializer &serializer) const {
+	serializer.WriteProperty<DecideScopeCheckKind>(100, "kind", kind);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(101, "rows", rows);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(102, "key", key);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(103, "value", value);
+	serializer.WritePropertyWithDefault<idx_t>(104, "decision", decision);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(105, "filter", filter);
+	serializer.WritePropertyWithDefault<string>(106, "subject", subject);
+	serializer.WritePropertyWithDefault<string>(107, "object", object);
+	serializer.WritePropertyWithDefault<string>(108, "context", context);
+	serializer.WritePropertyWithDefault<vector<string>>(109, "key_names", key_names);
+}
+
+DecideScopeCheck DecideScopeCheck::Deserialize(Deserializer &deserializer) {
+	DecideScopeCheck result;
+	deserializer.ReadProperty<DecideScopeCheckKind>(100, "kind", result.kind);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(101, "rows", result.rows);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(102, "key", result.key);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(103, "value", result.value);
+	deserializer.ReadPropertyWithDefault<idx_t>(104, "decision", result.decision);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(105, "filter", result.filter);
+	deserializer.ReadPropertyWithDefault<string>(106, "subject", result.subject);
+	deserializer.ReadPropertyWithDefault<string>(107, "object", result.object);
+	deserializer.ReadPropertyWithDefault<string>(108, "context", result.context);
+	deserializer.ReadPropertyWithDefault<vector<string>>(109, "key_names", result.key_names);
+	return result;
+}
+
 void DecideSourceColumnName::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty<ColumnBinding>(100, "binding", binding);
 	serializer.WritePropertyWithDefault<string>(101, "name", name);
@@ -469,6 +511,7 @@ void EntityScopeInfo::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<ColumnBinding>>(103, "entity_key_bindings", entity_key_bindings);
 	serializer.WritePropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", scoped_variable_indices);
 	serializer.WritePropertyWithDefault<bool>(105, "exact_key", exact_key);
+	serializer.WritePropertyWithDefault<vector<string>>(106, "key_names", key_names);
 }
 
 EntityScopeInfo EntityScopeInfo::Deserialize(Deserializer &deserializer) {
@@ -479,6 +522,7 @@ EntityScopeInfo EntityScopeInfo::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<vector<ColumnBinding>>(103, "entity_key_bindings", result.entity_key_bindings);
 	deserializer.ReadPropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", result.scoped_variable_indices);
 	deserializer.ReadPropertyWithDefault<bool>(105, "exact_key", result.exact_key);
+	deserializer.ReadPropertyWithDefault<vector<string>>(106, "key_names", result.key_names);
 	return result;
 }
 

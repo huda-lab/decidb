@@ -3,6 +3,8 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -14,6 +16,7 @@
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/bind_context.hpp"
 
 #include <cstring>
 
@@ -58,53 +61,95 @@ void PreserveDecideSourceFragment(const ParsedExpression &source, Expression &bo
 	}
 }
 
-static string RenderSource(const Expression &expr, const vector<string> &fragments,
-	                         const vector<EntityScopeInfo> &entity_scopes, int parent_precedence = 0);
+namespace {
+//! What rendering a bound clause reads besides the tree.
+struct RenderContext {
+	const vector<string> &fragments;
+	const vector<EntityScopeInfo> &entity_scopes;
+	//! The `by` keys, so a reducer prints its `by (...)`; null prints none.
+	const vector<DecideGroupKey> *group_keys = nullptr;
+	//! A relation's alias by table index, so a column prints as `D.depotID`; null
+	//! prints its name alone.
+	const unordered_map<idx_t, string> *relations = nullptr;
+	//! Inside a clause written with the scope spellings (SCOPED_CLAUSE_TAG): a reducer
+	//! prints its `when`, `per` and `by` as that clause spells them.
+	bool scoped = false;
+};
+} // namespace
 
-static string RenderFunction(const BoundFunctionExpression &func, const vector<string> &fragments,
-	                           const vector<EntityScopeInfo> &entity_scopes, int parent_precedence) {
+static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence = 0);
+
+static string RenderFunction(const BoundFunctionExpression &func, const RenderContext &ctx, int parent_precedence) {
 	auto name = func.function.name;
 	if (func.children.size() == 1 && name == "-") {
-		return "-" + RenderSource(*func.children[0], fragments, entity_scopes, 40);
+		return "-" + RenderSource(*func.children[0], ctx, 40);
 	}
 	if (func.children.size() == 2 &&
 	    (name == "+" || name == "-" || name == "*" || name == "/" || name == "%" || name == "**")) {
 		int precedence = (name == "+" || name == "-") ? 10 : ((name == "**") ? 30 : 20);
-		string result = RenderSource(*func.children[0], fragments, entity_scopes, precedence) + " " + name + " " +
-		                RenderSource(*func.children[1], fragments, entity_scopes,
+		string result = RenderSource(*func.children[0], ctx, precedence) + " " + name + " " +
+		                RenderSource(*func.children[1], ctx,
 		                             precedence + ((name == "-" || name == "/" || name == "%") ? 1 : 0));
 		return precedence < parent_precedence ? "(" + result + ")" : result;
 	}
 	if (func.is_operator && func.children.size() == 1) {
-		return name + "(" + RenderSource(*func.children[0], fragments, entity_scopes) + ")";
+		return name + "(" + RenderSource(*func.children[0], ctx) + ")";
 	}
 	if (func.is_operator && func.children.size() == 2) {
-		return "(" + RenderSource(*func.children[0], fragments, entity_scopes) + " " + name + " " +
-		       RenderSource(*func.children[1], fragments, entity_scopes) + ")";
+		return "(" + RenderSource(*func.children[0], ctx) + " " + name + " " + RenderSource(*func.children[1], ctx) +
+		       ")";
 	}
 	string result = StringUtil::Upper(name) + "(";
 	for (idx_t i = 0; i < func.children.size(); i++) {
 		if (i > 0) {
 			result += ", ";
 		}
-		result += RenderSource(*func.children[i], fragments, entity_scopes);
+		result += RenderSource(*func.children[i], ctx);
 	}
 	result += ")";
 	return result;
 }
 
-static string RenderAggregate(const BoundAggregateExpression &agg, const vector<string> &fragments,
-                            const vector<EntityScopeInfo> &entity_scopes) {
+//! A reducer in a clause written with the scope spellings, as that clause spells it:
+//! `sum(when c per K: e) by (g)`. A relation qualifier (`SUM(D: e)`) keeps its colon form.
+static string RenderScopedAggregate(const BoundAggregateExpression &agg, const string &body,
+                                    const RenderContext &ctx) {
+	string scope;
+	if (agg.filter) {
+		scope = "when " + RenderSource(*agg.filter, ctx);
+	}
+	string result = StringUtil::Lower(agg.function.name) + "(";
+	idx_t scope_idx;
+	if (TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < ctx.entity_scopes.size()) {
+		auto &key = ctx.entity_scopes[scope_idx];
+		if (key.exact_key) {
+			scope += (scope.empty() ? "per " : " per ") + key.table_alias;
+		} else {
+			result += key.table_alias + ": ";
+		}
+	}
+	result += (scope.empty() ? "" : scope + ": ") + body + ")";
+	idx_t group_key;
+	if (ctx.group_keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.group_keys->size()) {
+		result += " by (" + (*ctx.group_keys)[group_key].text + ")";
+	}
+	return result;
+}
+
+static string RenderAggregate(const BoundAggregateExpression &agg, const RenderContext &ctx) {
 	string body;
 	for (idx_t i = 0; i < agg.children.size(); i++) {
 		if (i > 0) {
 			body += ", ";
 		}
-		body += RenderSource(*agg.children[i], fragments, entity_scopes);
+		body += RenderSource(*agg.children[i], ctx);
+	}
+	if (ctx.scoped) {
+		return RenderScopedAggregate(agg, body, ctx);
 	}
 	idx_t scope_idx;
-	if (TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < entity_scopes.size()) {
-		body = entity_scopes[scope_idx].table_alias + ": " + body;
+	if (TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < ctx.entity_scopes.size()) {
+		body = ctx.entity_scopes[scope_idx].table_alias + ": " + body;
 	}
 	string result;
 	string norm_payload;
@@ -128,9 +173,17 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const vector<
 		result = StringUtil::Upper(agg.function.name) + "(" + body + ")";
 	}
 	if (agg.filter) {
-		result += " WHEN " + RenderSource(*agg.filter, fragments, entity_scopes);
+		result += " WHEN " + RenderSource(*agg.filter, ctx);
 	}
 	return result;
+}
+
+//! The old three-argument form every other renderer in this file uses.
+static string RenderSource(const Expression &expr, const vector<string> &fragments,
+                           const vector<EntityScopeInfo> &entity_scopes,
+                           const vector<DecideGroupKey> *group_keys = nullptr) {
+	RenderContext ctx {fragments, entity_scopes, group_keys};
+	return RenderSource(expr, ctx);
 }
 
 template <class CALLBACK>
@@ -143,20 +196,31 @@ static void VisitSourceInOperators(Expression &expr, CALLBACK &&callback) {
 	});
 }
 
-static string RenderSource(const Expression &expr, const vector<string> &fragments,
-	                         const vector<EntityScopeInfo> &entity_scopes, int parent_precedence) {
+static string RenderSource(const Expression &expr, const RenderContext &ctx, int parent_precedence) {
 	idx_t fragment_id;
-	if (TryParseSourceFragmentTag(expr.GetAlias(), fragment_id) && fragment_id < fragments.size()) {
-		return fragments[fragment_id];
+	if (TryParseSourceFragmentTag(expr.GetAlias(), fragment_id) && fragment_id < ctx.fragments.size()) {
+		return ctx.fragments[fragment_id];
 	}
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CAST:
 		// Untagged casts were introduced by DuckDB binding and are display noise.
-		return RenderSource(*expr.Cast<BoundCastExpression>().child, fragments, entity_scopes);
+		return RenderSource(*expr.Cast<BoundCastExpression>().child, ctx);
+	case ExpressionClass::BOUND_COLUMN_REF: {
+		auto &colref = expr.Cast<BoundColumnRefExpression>();
+		if (ctx.relations) {
+			auto relation = ctx.relations->find(colref.binding.table_index);
+			if (relation != ctx.relations->end()) {
+				return relation->second + "." + KeywordHelper::WriteOptionallyQuoted(StripDecideTags(colref.GetName()));
+			}
+		}
+		break;
+	}
 	case ExpressionClass::BOUND_COMPARISON: {
 		auto &cmp = expr.Cast<BoundComparisonExpression>();
-		return RenderSource(*cmp.left, fragments, entity_scopes) + " " + DecideComparisonOperator(cmp.type) + " " +
-		       RenderSource(*cmp.right, fragments, entity_scopes);
+		RenderContext sides = ctx;
+		sides.scoped = ctx.scoped || HasDecideTag(cmp.GetAlias(), SCOPED_CLAUSE_TAG);
+		return RenderSource(*cmp.left, sides) + " " + DecideComparisonOperator(cmp.type) + " " +
+		       RenderSource(*cmp.right, sides);
 	}
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
@@ -166,7 +230,7 @@ static string RenderSource(const Expression &expr, const vector<string> &fragmen
 			if (i > 0) {
 				result += op;
 			}
-			result += RenderSource(*conj.children[i], fragments, entity_scopes);
+			result += RenderSource(*conj.children[i], ctx);
 		}
 		return result;
 	}
@@ -182,19 +246,19 @@ static string RenderSource(const Expression &expr, const vector<string> &fragmen
 		if (in.children.size() < 2) {
 			break;
 		}
-		string result = RenderSource(*in.children[0], fragments, entity_scopes) + " IN (";
+		string result = RenderSource(*in.children[0], ctx) + " IN (";
 		for (idx_t i = 1; i < in.children.size(); i++) {
 			if (i > 1) {
 				result += ", ";
 			}
-			result += RenderSource(*in.children[i], fragments, entity_scopes);
+			result += RenderSource(*in.children[i], ctx);
 		}
 		return result + ")";
 	}
 	case ExpressionClass::BOUND_FUNCTION:
-		return RenderFunction(expr.Cast<BoundFunctionExpression>(), fragments, entity_scopes, parent_precedence);
+		return RenderFunction(expr.Cast<BoundFunctionExpression>(), ctx, parent_precedence);
 	case ExpressionClass::BOUND_AGGREGATE:
-		return RenderAggregate(expr.Cast<BoundAggregateExpression>(), fragments, entity_scopes);
+		return RenderAggregate(expr.Cast<BoundAggregateExpression>(), ctx);
 	default:
 		break;
 	}
@@ -210,6 +274,20 @@ static string AppendQualifier(string prefix, const string &suffix) {
 	}
 	prefix += suffix;
 	return prefix;
+}
+
+//! `per K` of the scope spellings: the key as written, else its columns; `per ()` for none.
+static string PerClassQualifier(const BoundConjunctionExpression &conj, const vector<string> &fragments,
+                                const vector<EntityScopeInfo> &entity_scopes) {
+	idx_t fragment_id;
+	if (TryParseSourceFragmentTag(conj.GetAlias(), fragment_id) && fragment_id < fragments.size()) {
+		return "per " + fragments[fragment_id];
+	}
+	string key;
+	for (idx_t i = 1; i < conj.children.size(); i++) {
+		key += (i > 1 ? ", " : "") + RenderSource(*conj.children[i], fragments, entity_scopes);
+	}
+	return "per " + (key.empty() ? string("()") : key);
 }
 
 static string PerQualifier(const BoundConjunctionExpression &conj, const vector<string> &fragments,
@@ -231,6 +309,21 @@ static string PerQualifier(const BoundConjunctionExpression &conj, const vector<
 	return result;
 }
 
+//! The qualifier of a WHEN wrapper: the scope spellings' `when c` in front, else the old
+//! postfix `WHEN c`.
+static string WhenQualifier(const BoundConjunctionExpression &conj, const vector<string> &fragments,
+                            const vector<EntityScopeInfo> &entity_scopes) {
+	bool scoped = HasDecideTag(conj.GetAlias(), SCOPED_CLAUSE_TAG);
+	return (scoped ? "when " : "WHEN ") + RenderSource(*conj.children[1], fragments, entity_scopes);
+}
+
+//! A scope qualifier (`when c per K`) is written in front of its clause; its lower-case
+//! keyword and the colon that ends it are what AttachDecideQualifier reads to put it
+//! there.
+static string FrontQualifier(const string &qualifier) {
+	return qualifier.empty() ? qualifier : qualifier + ":";
+}
+
 template <class CALLBACK>
 static void VisitSourceComparisons(Expression &expr, const vector<string> &fragments,
 	                               const vector<EntityScopeInfo> &entity_scopes, bool render_qualifiers,
@@ -238,6 +331,14 @@ static void VisitSourceComparisons(Expression &expr, const vector<string> &fragm
 	                               CALLBACK &&callback) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		if (IsPerClassWrapper(conj) && !conj.children.empty()) {
+			if (render_qualifiers) {
+				qualifier = AppendQualifier(std::move(qualifier), PerClassQualifier(conj, fragments, entity_scopes));
+			}
+			VisitSourceComparisons(*conj.children[0], fragments, entity_scopes, render_qualifiers,
+			                       std::move(qualifier), callback);
+			return;
+		}
 		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
 			if (render_qualifiers) {
 				qualifier = AppendQualifier(std::move(qualifier), PerQualifier(conj, fragments, entity_scopes));
@@ -248,8 +349,7 @@ static void VisitSourceComparisons(Expression &expr, const vector<string> &fragm
 		}
 		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
 			if (render_qualifiers) {
-				qualifier = AppendQualifier("WHEN " + RenderSource(*conj.children[1], fragments, entity_scopes),
-				                            qualifier);
+				qualifier = AppendQualifier(WhenQualifier(conj, fragments, entity_scopes), qualifier);
 			}
 			VisitSourceComparisons(*conj.children[0], fragments, entity_scopes, render_qualifiers,
 			                       std::move(qualifier), callback);
@@ -261,7 +361,8 @@ static void VisitSourceComparisons(Expression &expr, const vector<string> &fragm
 		return;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		callback(expr.Cast<BoundComparisonExpression>(), qualifier);
+		auto &cmp = expr.Cast<BoundComparisonExpression>();
+		callback(cmp, HasDecideTag(cmp.GetAlias(), SCOPED_CLAUSE_TAG) ? FrontQualifier(qualifier) : qualifier);
 	}
 }
 
@@ -282,13 +383,23 @@ static bool ReferencesDecideVariable(const Expression &expr, idx_t decide_index)
 	return found;
 }
 
+//! One side of a comparison, its reducers printed as the comparison's clause spells them.
+static string RenderSide(const BoundComparisonExpression &cmp, const Expression &side,
+                         const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
+                         const vector<DecideGroupKey> *group_keys) {
+	RenderContext ctx {fragments, entity_scopes, group_keys};
+	ctx.scoped = HasDecideTag(cmp.GetAlias(), SCOPED_CLAUSE_TAG);
+	return RenderSource(side, ctx);
+}
+
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints,
 	                                                        const vector<string> &fragments,
 	                                                        const vector<EntityScopeInfo> &entity_scopes,
-	                                                        idx_t decide_index) {
+	                                                        idx_t decide_index,
+	                                                        const vector<DecideGroupKey> *group_keys) {
 	vector<ConstraintSourceInfo> result;
-	VisitSourceComparisons(constraints, fragments, entity_scopes, false, string(),
-	                       [&](BoundComparisonExpression &cmp, const string &) {
+	VisitSourceComparisons(constraints, fragments, entity_scopes, /*render_qualifiers=*/true, string(),
+	                       [&](BoundComparisonExpression &cmp, const string &qualifier) {
 		                       idx_t source_id = result.size();
 		                       auto alias = cmp.GetAlias();
 		                       AddDecideTag(alias, MakeSourceClauseTag(source_id));
@@ -315,8 +426,14 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       // became of it -- so the render happens unconditionally and the
 		                       // narrower diagnostic signal is assigned from it.
 		                       ConstraintSourceInfo info;
-		                       info.written_lhs = RenderSource(*cmp.left, fragments, entity_scopes);
-		                       info.written_rhs = RenderSource(*cmp.right, fragments, entity_scopes);
+		                       // A scope written in front belongs to the clause as written:
+		                       // canonicalization drops the `per K:` of a clause in the
+		                       // aggregate shape, which still holds (its scope checks).
+		                       if (HasDecideTag(cmp.GetAlias(), SCOPED_CLAUSE_TAG)) {
+			                       info.qualifier = qualifier;
+		                       }
+		                       info.written_lhs = RenderSide(cmp, *cmp.left, fragments, entity_scopes, group_keys);
+		                       info.written_rhs = RenderSide(cmp, *cmp.right, fragments, entity_scopes, group_keys);
 		                       info.written_cmp = DecideComparisonOperator(cmp.type);
 		                       if (ReferencesDecideVariable(*cmp.left, decide_index) &&
 		                           ReferencesDecideVariable(*cmp.right, decide_index)) {
@@ -356,7 +473,8 @@ static bool ContainsSubquerySource(const Expression &expr) {
 
 void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,
 	                              const vector<string> &fragments,
-	                              const vector<EntityScopeInfo> &entity_scopes) {
+	                              const vector<EntityScopeInfo> &entity_scopes,
+	                              const vector<DecideGroupKey> *group_keys) {
 	auto &mutable_constraints = const_cast<Expression &>(constraints);
 	VisitSourceComparisons(mutable_constraints, fragments, entity_scopes, true, string(),
 	                       [&](BoundComparisonExpression &cmp, const string &qualifier) {
@@ -365,10 +483,12 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 			                       return;
 		                       }
 		                       auto &info = sources[source_id];
-		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, entity_scopes);
-		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, entity_scopes);
+		                       info.canonical_lhs = RenderSide(cmp, *cmp.left, fragments, entity_scopes, group_keys);
+		                       info.canonical_rhs = RenderSide(cmp, *cmp.right, fragments, entity_scopes, group_keys);
 		                       info.canonical_cmp = DecideComparisonOperator(cmp.type);
-		                       info.qualifier = qualifier;
+		                       if (!HasDecideTag(cmp.GetAlias(), SCOPED_CLAUSE_TAG)) {
+			                       info.qualifier = qualifier;
+		                       }
 		                       // The written spelling is only worth carrying when it differs
 		                       // from the canonical one. Two cases retire it here. When both
 		                       // sides render identically nothing moved, so the canonical text
@@ -396,8 +516,31 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 }
 
 string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
-                          const vector<EntityScopeInfo> &entity_scopes) {
-	return RenderSource(expr, fragments, entity_scopes);
+                          const vector<EntityScopeInfo> &entity_scopes, const vector<DecideGroupKey> *group_keys) {
+	return RenderSource(expr, fragments, entity_scopes, group_keys);
+}
+
+string RenderDecideSource(const Expression &expr, const DecideSourceNames &names, bool scoped) {
+	RenderContext ctx {names.fragments, names.entity_scopes, &names.group_keys, &names.relations, scoped};
+	return RenderSource(expr, ctx);
+}
+
+unordered_map<idx_t, string> DecideRelationNames(BindContext &bind_context, idx_t decide_index) {
+	unordered_map<idx_t, string> relations;
+	for (auto &binding : bind_context.GetBindingsList()) {
+		if (binding->index != decide_index) {
+			relations.emplace(binding->index, KeywordHelper::WriteOptionallyQuoted(binding->GetAlias()));
+		}
+	}
+	if (relations.size() < 2) {
+		relations.clear();
+	}
+	return relations;
+}
+
+string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names) {
+	RenderContext ctx {names.fragments, names.entity_scopes, nullptr, &names.relations, true};
+	return RenderSource(reducer, ctx);
 }
 
 //! Push one rendered clause, keeping `out_source_ids` the same length as `out`.
@@ -419,19 +562,65 @@ static bool IsTruePlaceholder(const Expression &expr) {
 	return value.type().id() == LogicalTypeId::BOOLEAN && !value.IsNull() && value.GetValue<bool>();
 }
 
-void CollectDecideExpressionStrings(const Expression &expr, const vector<string> &fragments,
-                                    const vector<EntityScopeInfo> &entity_scopes, vector<string> &out,
-                                    const vector<ConstraintSourceInfo> *sources,
-                                    vector<idx_t> *out_source_ids) {
+//! The scope spellings' qualifier for the two-level objective `outer(per k: inner(e)
+//! by (k))`, which binds onto the old nested objective `OUTER(INNER(e)) PER k`: rendered
+//! as written when the wrapper still holds the nested reducer, else null.
+static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpression &per,
+                                                  const vector<string> &fragments,
+                                                  const vector<EntityScopeInfo> &entity_scopes) {
+	const Expression *body = per.children[0].get();
+	string when;
+	if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
+	    IsWhenConstraintWrapper(body->Cast<BoundConjunctionExpression>())) {
+		auto &wrapper = body->Cast<BoundConjunctionExpression>();
+		when = "when " + RenderSource(*wrapper.children[1], fragments, entity_scopes) + ": ";
+		body = wrapper.children[0].get();
+	}
+	if (body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return nullptr;
+	}
+	auto &outer = body->Cast<BoundAggregateExpression>();
+	if (outer.children.size() != 1 || outer.children[0]->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return nullptr;
+	}
+	auto &inner = outer.children[0]->Cast<BoundAggregateExpression>();
+	string key;
+	for (idx_t i = 1; i < per.children.size(); i++) {
+		key += (i > 1 ? ", " : "") + RenderSource(*per.children[i], fragments, entity_scopes);
+	}
+	string inner_body = inner.children.empty() ? string() : RenderSource(*inner.children[0], fragments, entity_scopes);
+	return make_uniq<string>(when + StringUtil::Lower(outer.function.name) + "(per " + key + ": " +
+	                         StringUtil::Lower(inner.function.name) + "(" + inner_body + ") by (" + key + "))");
+}
+
+//! `CollectDecideExpressionStrings` with the scope spellings' pending front qualifier.
+static void CollectExpressionStrings(const Expression &expr, const vector<string> &fragments,
+                                     const vector<EntityScopeInfo> &entity_scopes, vector<string> &out,
+                                     const vector<ConstraintSourceInfo> *sources, vector<idx_t> *out_source_ids,
+                                     const vector<DecideGroupKey> *group_keys, const string &front, bool scoped) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
+		// `per K:` of the scope spellings: in front, like the `when` it encloses.
+		if (IsPerClassWrapper(conj) && !conj.children.empty()) {
+			auto per = PerClassQualifier(conj, fragments, entity_scopes);
+			CollectExpressionStrings(*conj.children[0], fragments, entity_scopes, out, sources, out_source_ids,
+			                         group_keys, AppendQualifier(front, per), true);
+			return;
+		}
+		if (IsPerConstraintWrapper(conj) && HasDecideTag(conj.GetAlias(), SCOPED_CLAUSE_TAG)) {
+			auto two_level = RenderTwoLevelObjective(conj, fragments, entity_scopes);
+			if (two_level) {
+				PushClause(out, out_source_ids, *two_level, DConstants::INVALID_INDEX);
+				return;
+			}
+		}
 		// PER wrapper: child[0] is the constraint, children[1..N] are the PER key columns.
 		if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
 			string suffix = " " + PerQualifier(conj, fragments, entity_scopes);
 			vector<string> inner;
 			vector<idx_t> inner_ids;
-			CollectDecideExpressionStrings(*conj.children[0], fragments, entity_scopes, inner, sources,
-			                               &inner_ids);
+			CollectExpressionStrings(*conj.children[0], fragments, entity_scopes, inner, sources, &inner_ids,
+			                         group_keys, string(), scoped);
 			for (idx_t i = 0; i < inner.size(); i++) {
 				PushClause(out, out_source_ids, inner[i] + suffix, inner_ids[i]);
 			}
@@ -439,11 +628,17 @@ void CollectDecideExpressionStrings(const Expression &expr, const vector<string>
 		}
 		// WHEN wrapper: child[0] is the constraint, child[1] is the condition.
 		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+			if (HasDecideTag(conj.GetAlias(), SCOPED_CLAUSE_TAG)) {
+				CollectExpressionStrings(*conj.children[0], fragments, entity_scopes, out, sources, out_source_ids,
+				                         group_keys,
+				                         AppendQualifier(WhenQualifier(conj, fragments, entity_scopes), front), true);
+				return;
+			}
 			string suffix = " WHEN " + RenderSource(*conj.children[1], fragments, entity_scopes);
 			vector<string> inner;
 			vector<idx_t> inner_ids;
-			CollectDecideExpressionStrings(*conj.children[0], fragments, entity_scopes, inner, sources,
-			                               &inner_ids);
+			CollectExpressionStrings(*conj.children[0], fragments, entity_scopes, inner, sources, &inner_ids,
+			                         group_keys, string(), scoped);
 			for (idx_t i = 0; i < inner.size(); i++) {
 				PushClause(out, out_source_ids, inner[i] + suffix, inner_ids[i]);
 			}
@@ -451,7 +646,8 @@ void CollectDecideExpressionStrings(const Expression &expr, const vector<string>
 		}
 		// A plain AND is the constraint list itself, so each child is its own clause.
 		for (auto &child : conj.children) {
-			CollectDecideExpressionStrings(*child, fragments, entity_scopes, out, sources, out_source_ids);
+			CollectExpressionStrings(*child, fragments, entity_scopes, out, sources, out_source_ids, group_keys,
+			                         front, scoped);
 		}
 		return;
 	}
@@ -467,25 +663,39 @@ void CollectDecideExpressionStrings(const Expression &expr, const vector<string>
 		PushClause(out, out_source_ids, string(), leaf_source_id);
 		return;
 	}
+	auto front_qualifier = FrontQualifier(front);
 	if (sources && expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 		if (leaf_source_id != DConstants::INVALID_INDEX && leaf_source_id < sources->size()) {
 			auto &info = (*sources)[leaf_source_id];
 			if (!info.source_lhs.empty()) {
 				auto &cmp = expr.Cast<BoundComparisonExpression>();
 				PushClause(out, out_source_ids,
-				           info.source_lhs + " " + DecideComparisonOperator(cmp.type) + " " + info.source_rhs,
+				           AttachDecideQualifier(info.source_lhs + " " + DecideComparisonOperator(cmp.type) + " " +
+				                                     info.source_rhs,
+				                                 front_qualifier),
 				           leaf_source_id);
 				return;
 			}
 		}
 	}
-	PushClause(out, out_source_ids, RenderSource(expr, fragments, entity_scopes), leaf_source_id);
+	RenderContext ctx {fragments, entity_scopes, group_keys};
+	ctx.scoped = scoped;
+	PushClause(out, out_source_ids, AttachDecideQualifier(RenderSource(expr, ctx), front_qualifier), leaf_source_id);
+}
+
+void CollectDecideExpressionStrings(const Expression &expr, const vector<string> &fragments,
+                                    const vector<EntityScopeInfo> &entity_scopes, vector<string> &out,
+                                    const vector<ConstraintSourceInfo> *sources, vector<idx_t> *out_source_ids,
+                                    const vector<DecideGroupKey> *group_keys, bool scoped) {
+	CollectExpressionStrings(expr, fragments, entity_scopes, out, sources, out_source_ids, group_keys, string(),
+	                         scoped);
 }
 
 string RenderDecideObjective(const Expression &expr, const vector<string> &fragments,
-                             const vector<EntityScopeInfo> &entity_scopes) {
+                             const vector<EntityScopeInfo> &entity_scopes, const vector<DecideGroupKey> *group_keys,
+                             bool scoped) {
 	vector<string> parts;
-	CollectDecideExpressionStrings(expr, fragments, entity_scopes, parts);
+	CollectDecideExpressionStrings(expr, fragments, entity_scopes, parts, nullptr, nullptr, group_keys, scoped);
 	string result;
 	for (auto &part : parts) {
 		if (part.empty()) {
@@ -538,23 +748,20 @@ static void RenderComposedRewrite(const LogicalDecide::ComposedMinMaxConstraint 
 	}
 }
 
-//! Join a clause body with its WHEN/PER qualifier, which sits after it in DECIDE syntax.
-static string WithQualifier(const string &body, const string &qualifier) {
-	return qualifier.empty() ? body : body + " " + qualifier;
-}
 
 vector<DecideClauseLayers> CollectDecideClauseLayers(
     optional_ptr<const Expression> constraints,
     const vector<LogicalDecide::ComposedMinMaxConstraint> &composed_minmax_constraints,
     const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
-    const vector<ConstraintSourceInfo> &sources, vector<string> &unattributed) {
+    const vector<ConstraintSourceInfo> &sources, vector<string> &unattributed,
+    const vector<DecideGroupKey> *group_keys) {
 	// Every row the solver will see, tagged with the clause it came from. `sources` is
 	// deliberately not passed: this walk wants the tree AS IT IS, not the written
 	// substitution the flat renderer performs.
 	vector<string> rows;
 	vector<idx_t> row_ids;
 	if (constraints) {
-		CollectDecideExpressionStrings(*constraints, fragments, entity_scopes, rows, nullptr, &row_ids);
+		CollectDecideExpressionStrings(*constraints, fragments, entity_scopes, rows, nullptr, &row_ids, group_keys);
 	}
 	vector<vector<string>> by_clause(sources.size());
 	// Display follows the tree, not the registry. Source ids are handed out in two
@@ -597,14 +804,14 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(
 		if (!info.canonical_cmp.empty()) {
 			canonical += " " + info.canonical_cmp + " " + info.canonical_rhs;
 		}
-		canonical = WithQualifier(canonical, info.qualifier);
+		canonical = AttachDecideQualifier(canonical, info.qualifier);
 		// A clause with no written spelling is either a DECIDE-variable IN -- an opaque
 		// marker the binder registers rather than a comparison -- or a plan serialized
 		// before the written layer existed. Both read as canonical-only.
 		if (info.written_lhs.empty() && info.written_cmp.empty()) {
 			layers.written = canonical;
 		} else {
-			layers.written = WithQualifier(
+			layers.written = AttachDecideQualifier(
 			    info.written_lhs + " " + info.written_cmp + " " + info.written_rhs, info.qualifier);
 			if (canonical != layers.written) {
 				layers.canonical = canonical;

@@ -29,6 +29,18 @@ protected:
 
 private:
     DecideExpression GetExpressionType(ParsedExpression &expr, string &error_msg) override;
+    //! Binds `[WHEN c] [PER ()]: objective`: `PER ()` is the objective's only key and adds
+    //! nothing; `WHEN c` becomes the WHEN wrapper.
+    BindResult BindScopedObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
+    //! Binds the two-level form `outer(PER k: inner(e) BY (k))` onto the nested objective
+    //! the old `OUTER(INNER(e)) PER k` binds to, its PER wrapper tagged SCOPED_CLAUSE_TAG
+    //! so that NULL keys form a class.
+    BindResult BindTwoLevelObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
+
+    //! Set while binding an objective written with a `when` or `per ()` in front: a
+    //! decision outside a reducer is then a term like any other, legal when it has one
+    //! instance over the kept rows (a scope check).
+    bool binding_scoped_objective = false;
 };
 
 } // namespace duckdb

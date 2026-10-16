@@ -28,6 +28,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -127,14 +128,17 @@ static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
 // each MIN/MAX term's easy/hard classification. `exact_pin` says there is no such
 // direction — an outer `=` — so every MIN/MAX term is classified hard and gets its
 // auxiliary pinned from both sides.
+//! `names`, given for a clause written with the scope spellings, quotes a refused term as
+//! written.
 static void WalkComposedLhs(ClientContext &context, const Expression &e, int sign, idx_t decide_index,
                              bool outer_push_down, bool exact_pin,
-                             vector<LogicalDecide::ComposedMinMaxTerm> &out_terms) {
+                             vector<LogicalDecide::ComposedMinMaxTerm> &out_terms,
+                             optional_ptr<const DecideSourceNames> names = nullptr) {
 	auto &u = (*UnwrapDecideCasts(e, decide_index));
 	if (IsAddNode(u, decide_index)) {
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		for (auto &child : fn.children) {
-			WalkComposedLhs(context, *child, sign, decide_index, outer_push_down, exact_pin, out_terms);
+			WalkComposedLhs(context, *child, sign, decide_index, outer_push_down, exact_pin, out_terms, names);
 		}
 		return;
 	}
@@ -146,12 +150,14 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 		// and a term that crosses the relation arrives negated.
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		if (fn.children.size() == 2) {
-			WalkComposedLhs(context, *fn.children[0], sign, decide_index, outer_push_down, exact_pin, out_terms);
-			WalkComposedLhs(context, *fn.children[1], -sign, decide_index, outer_push_down, exact_pin, out_terms);
+			WalkComposedLhs(context, *fn.children[0], sign, decide_index, outer_push_down, exact_pin, out_terms, names);
+			WalkComposedLhs(context, *fn.children[1], -sign, decide_index, outer_push_down, exact_pin, out_terms,
+			                names);
 			return;
 		}
 		if (fn.children.size() == 1) {
-			WalkComposedLhs(context, *fn.children[0], -sign, decide_index, outer_push_down, exact_pin, out_terms);
+			WalkComposedLhs(context, *fn.children[0], -sign, decide_index, outer_push_down, exact_pin, out_terms,
+			                names);
 			return;
 		}
 	}
@@ -173,6 +179,10 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 	bool scale_divides = scale_match.divides;
 
 	if (!scaled_agg && u.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		if (names) {
+			throw BinderException("DECIDE: '%s' beside MIN or MAX is not supported yet",
+			                      RenderDecideSource(e, *names, /*scoped=*/true));
+		}
 		throw BinderException(
 		    "Composed MIN/MAX in DECIDE v1 supports only additive sums of SUM/AVG/MIN/MAX aggregates. "
 		    "Got non-aggregate term: %s",
@@ -236,14 +246,61 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 	out_terms.push_back(std::move(term));
 }
 
-void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide) {
+//! A composed clause written with the scope spellings reads only the rows its `when`
+//! keeps: the condition joins each term's own `when`, and every term follows the scoped
+//! reading rules. A non-empty `by` would group the clause, which composed rows are not.
+static void ScopeComposedTerms(vector<LogicalDecide::ComposedMinMaxTerm> &terms, const Expression *when) {
+	for (auto &term : terms) {
+		term.scoped = true;
+		if (!when) {
+			continue;
+		}
+		if (!term.filter) {
+			term.filter = when->Copy();
+			continue;
+		}
+		auto both = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		both->children.push_back(when->Copy());
+		both->children.push_back(std::move(term.filter));
+		term.filter = std::move(both);
+	}
+}
+
+//! The composed formulation is one row over all of a clause's kept rows, and its bound
+//! is one number: the canonicalizer refuses a scoped clause with a `by` or another bound
+//! (DecideCanonicalizer::ClassifyScoped).
+static void AssertComposable(const BoundComparisonExpression &comparison) {
+	idx_t group_key;
+	if (TryParseGroupKeyTag(comparison.GetAlias(), group_key) || !comparison.right->IsFoldable()) {
+		throw InternalException("DECIDE: a scoped composed MIN/MAX clause reached the rewrite with a by key or a "
+		                        "bound that is not constant: %s",
+		                        comparison.ToString());
+	}
+}
+
+void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
+                                                       const Expression *scoped_when) {
 	if (!expr) {
 		return;
 	}
 
-	// Walk through AND conjunctions and WHEN/PER wrappers (no composed MIN/MAX inside WHEN/PER in v1).
+	// Walk through AND conjunctions and WHEN/PER wrappers. A composed MIN/MAX inside an old
+	// WHEN/PER is refused (v1); inside the scope spellings' `when c:` its terms read the rows
+	// `c` keeps.
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr->Cast<BoundConjunctionExpression>();
+		// The scope spellings' `when c:` folds into the terms, which then read only the
+		// rows it keeps; the wrapper goes with the clause it held.
+		if (IsWhenConstraintWrapper(conj) && HasDecideTag(conj.GetAlias(), SCOPED_CLAUSE_TAG) &&
+		    conj.children.size() == 2) {
+			RewriteComposedMinMaxInConstraint(conj.children[0], decide, conj.children[1].get());
+			auto &inner = *conj.children[0];
+			if (inner.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+			    inner.return_type == LogicalType::BOOLEAN) {
+				expr = std::move(conj.children[0]); // the placeholder of a composed clause
+			}
+			return;
+		}
 		if (IsConstraintWrapper(conj)) {
 			// If the wrapped constraint is composed MIN/MAX, reject in v1.
 			if (!conj.children.empty()) {
@@ -330,6 +387,12 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	bool outer_push_down = (cmp_type == ExpressionType::COMPARE_LESSTHAN ||
 	                         cmp_type == ExpressionType::COMPARE_LESSTHANOREQUALTO);
 
+	bool scoped = HasDecideTag(comp.GetAlias(), SCOPED_CLAUSE_TAG);
+	unordered_map<idx_t, string> no_relations;
+	DecideSourceNames names {decide.source_fragments, decide.entity_scopes, decide.group_keys, no_relations};
+	if (scoped) {
+		AssertComposable(comp);
+	}
 	LogicalDecide::ComposedMinMaxConstraint spec;
 	spec.outer_cmp = cmp_type;
 	spec.rhs_expr = comp.right->Copy();
@@ -337,7 +400,10 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	TryParseRemovalGroupTag(comp.GetAlias(), spec.removal_group_id);
 
 	WalkComposedLhs(optimizer.context, *comp.left, /*sign=*/1, decide.decide_index, outer_push_down,
-	                exact_pin, spec.terms);
+	                exact_pin, spec.terms, scoped ? &names : nullptr);
+	if (scoped) {
+		ScopeComposedTerms(spec.terms, scoped_when);
+	}
 
 	decide.composed_minmax_constraints.push_back(std::move(spec));
 
@@ -352,8 +418,19 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	}
 	auto &obj = *decide.decide_objective;
 
-	// Reject composed MIN/MAX in objectives with outer PER or WHEN (v1 scope).
-	if (obj.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+	// The scope spellings' `MAXIMIZE when c:` folds into the terms; any other outer PER
+	// or WHEN stays refused (v1 scope).
+	const Expression *body = &obj;
+	const Expression *scoped_when = nullptr;
+	if (decide.scoped_objective && obj.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = obj.Cast<BoundConjunctionExpression>();
+		if (IsWhenConstraintWrapper(conj) && HasDecideTag(conj.GetAlias(), SCOPED_CLAUSE_TAG) &&
+		    conj.children.size() == 2 && AdditiveContainsMinMax(*conj.children[0], decide.decide_index)) {
+			body = conj.children[0].get();
+			scoped_when = conj.children[1].get();
+		}
+	}
+	if (!scoped_when && obj.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj.Cast<BoundConjunctionExpression>();
 		if (IsConstraintWrapper(conj)) {
 			// If the wrapped objective is composed, reject.
@@ -379,7 +456,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	// MIN/MAX still goes to the flat path, which keeps its cheaper encoding.
 	ScaledAggregateMatch lone_match;
 	const BoundAggregateExpression *lone_scaled =
-	    TryMatchScaledAggregate(obj, decide.decide_index, lone_match) ? lone_match.aggregate : nullptr;
+	    TryMatchScaledAggregate(*body, decide.decide_index, lone_match) ? lone_match.aggregate : nullptr;
 	auto lone_scale = lone_match.scale;
 	bool is_scaled_lone_minmax =
 	    lone_scaled && lone_scale &&
@@ -390,10 +467,10 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	    !BoundExpressionReferencesDecide(*lone_scale, decide.decide_index);
 
 	if (!is_scaled_lone_minmax) {
-		if (!IsAddNode(obj, decide.decide_index) && !IsSubNode(obj, decide.decide_index)) {
+		if (!IsAddNode(*body, decide.decide_index) && !IsSubNode(*body, decide.decide_index)) {
 			return;
 		}
-		if (!AdditiveContainsMinMax(obj, decide.decide_index)) {
+		if (!AdditiveContainsMinMax(*body, decide.decide_index)) {
 			return;
 		}
 	}
@@ -403,8 +480,13 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 
 	vector<LogicalDecide::ComposedMinMaxTerm> terms;
 	// An objective always has a direction, so no term needs the both-sides pin here.
-	WalkComposedLhs(optimizer.context, obj, /*sign=*/1, decide.decide_index, outer_push_down,
-	                /*exact_pin=*/false, terms);
+	unordered_map<idx_t, string> no_relations;
+	DecideSourceNames names {decide.source_fragments, decide.entity_scopes, decide.group_keys, no_relations};
+	WalkComposedLhs(optimizer.context, *body, /*sign=*/1, decide.decide_index, outer_push_down,
+	                /*exact_pin=*/false, terms, decide.scoped_objective ? &names : nullptr);
+	if (decide.scoped_objective) {
+		ScopeComposedTerms(terms, scoped_when);
+	}
 
 	decide.composed_minmax_objective_terms = std::move(terms);
 
@@ -438,7 +520,7 @@ void DecideOptimizer::RewriteMinMaxConstraints(LogicalDecide &decide) {
 
 void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                                 vector<unique_ptr<Expression>> &new_constraints,
-                                                bool &out_was_easy) {
+                                                bool &out_was_easy, optional_ptr<const Expression> scoped_when) {
 	if (!expr) {
 		return;
 	}
@@ -447,9 +529,13 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr->Cast<BoundConjunctionExpression>();
 		if (IsWhenConstraintWrapper(conj)) {
-			// Recurse into the wrapped constraint (child[0])
+			// Recurse into the wrapped constraint (child[0]). A scoped `when` travels with
+			// it, so a row this rewrite adds for the clause keeps the clause's rows.
 			if (!conj.children.empty()) {
-				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy);
+				auto when = HasDecideTag(conj.GetAlias(), SCOPED_CLAUSE_TAG) && conj.children.size() == 2
+				                ? conj.children[1].get()
+				                : nullptr;
+				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy, when);
 			}
 			return;
 		}
@@ -571,6 +657,35 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		                     : optimizer.BindScalarFunction("*", scale->Copy(), std::move(inner));
 	};
 
+	// A clause written with the scope spellings keeps its reducer through the easy
+	// direction: its `when` picks the members its rows are emitted for, while its bound
+	// is reduced over every kept row of the `by` group (the linear form expands it).
+	// Hoisting the `when` onto the clause, as the old spelling does, would reduce the
+	// bound over the members only.
+	bool scoped = HasDecideTag(comp.alias, SCOPED_CLAUSE_TAG);
+	// The hard reducer the indicators pin is rebuilt as a SUM; it keeps its `by`.
+	auto keep_group_key = [&](unique_ptr<Expression> hard_lhs) {
+		idx_t group_key;
+		if (scoped && TryParseGroupKeyTag(agg.alias, group_key)) {
+			AddDecideTag(hard_lhs->alias, MakeGroupKeyTag(group_key));
+		}
+		return hard_lhs;
+	};
+	// The hard side of a scoped clause. Stage 06 takes the extremum the tag names over
+	// the members' coefficients -- the factor included -- and states the clause's own
+	// relation over it, which is the clause only when the factor is inside the reducer:
+	// with a negative factor `s * MAX(e)` is `MIN(s * e)`. The old spellings keep the
+	// factor outside, which reverses the clause (a logged bug, D17).
+	auto scoped_hard_lhs = [&](idx_t &ind_idx) -> unique_ptr<Expression> {
+		if (scale_sign > 0) {
+			return apply_scale(
+			    keep_group_key(EmitHardMinMaxClause(decide, fname, *agg.children[0], agg.filter.get(), ind_idx)));
+		}
+		auto scaled_body = apply_scale(agg.children[0]->Copy());
+		return keep_group_key(
+		    EmitHardMinMaxClause(decide, is_max ? "min" : "max", *scaled_body, agg.filter.get(), ind_idx));
+	};
+
 	if (cmp_type == ExpressionType::COMPARE_EQUAL) {
 		// Equality: split into easy + hard parts
 		// MAX(expr) = K → (expr <= K) AND (MAX(expr) >= K)
@@ -582,6 +697,31 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		                            : ExpressionType::COMPARE_GREATERTHANOREQUALTO;
 		if (scale_sign < 0) {
 			easy_cmp_type = FlipComparisonExpression(easy_cmp_type);
+		}
+		if (scoped) {
+			unique_ptr<Expression> easy =
+			    make_uniq<BoundComparisonExpression>(easy_cmp_type, comp.left->Copy(), comp.right->Copy());
+			easy->alias = comp.alias;
+			AddDecideTag(easy->alias, MINMAX_EASY_REWRITE_TAG);
+			if (scoped_when) {
+				auto when_wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+				when_wrapper->children.push_back(std::move(easy));
+				when_wrapper->children.push_back(scoped_when->Copy());
+				when_wrapper->alias = WHEN_CONSTRAINT_TAG;
+				AddDecideTag(when_wrapper->alias, SCOPED_CLAUSE_TAG);
+				easy = std::move(when_wrapper);
+			}
+			new_constraints.push_back(std::move(easy));
+			auto hard_cmp_type = is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
+			                            : ExpressionType::COMPARE_LESSTHANOREQUALTO;
+			if (scale_sign < 0) {
+				hard_cmp_type = FlipComparisonExpression(hard_cmp_type);
+			}
+			idx_t ind_idx;
+			auto hard_lhs = scoped_hard_lhs(ind_idx);
+			comp.left = std::move(hard_lhs);
+			comp.type = hard_cmp_type;
+			return;
 		}
 		unique_ptr<Expression> easy = make_uniq<BoundComparisonExpression>(
 		    easy_cmp_type,
@@ -608,6 +748,11 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		auto hard_lhs = EmitHardMinMaxClause(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
 		comp.left = apply_scale(std::move(hard_lhs));
 		comp.type = hard_cmp_type;
+		return;
+	}
+
+	if (is_easy && scoped) {
+		AddDecideTag(comp.alias, MINMAX_EASY_REWRITE_TAG);
 		return;
 	}
 
@@ -648,6 +793,11 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		// coefficients, which is exact whatever its sign because the indicator layer
 		// has already pinned the auxiliary to the true MIN/MAX.
 		idx_t ind_idx;
+		if (scoped) {
+			auto hard_lhs = scoped_hard_lhs(ind_idx);
+			comp.left = std::move(hard_lhs);
+			return;
+		}
 		auto hard_lhs = EmitHardMinMaxClause(decide, fname, *agg.children[0], agg.filter.get(), ind_idx);
 		comp.left = apply_scale(std::move(hard_lhs));
 		return;

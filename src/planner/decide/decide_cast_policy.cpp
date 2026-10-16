@@ -68,6 +68,31 @@ bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, d
 	return true;
 }
 
+bool TryEvaluateFoldableDoubleNoThrow(ClientContext &context, const Expression &expr, double &out) {
+	try {
+		return TryEvaluateFoldableDouble(context, expr, out);
+	} catch (...) {
+		return false;
+	}
+}
+
+int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides) {
+	if (!scale) {
+		return 1;
+	}
+	double d;
+	if (!TryEvaluateFoldableDoubleNoThrow(context, *scale, d)) {
+		return 0;
+	}
+	if (d == 0.0) {
+		// A zero factor annihilates the term. Dividing by it is an error the
+		// evaluator will raise; multiplying by it makes the sign irrelevant, and
+		// "positive" keeps the cheap path (every coefficient is zero either way).
+		return divides ? 0 : 1;
+	}
+	return d < 0.0 ? -1 : 1;
+}
+
 bool IsCastWrappedConstant(const Expression &expr) {
 	// StripCastsForIdentity is the right tool despite its warning: only the innermost
 	// node's CLASS is read here, never its value. The value comes from evaluating the

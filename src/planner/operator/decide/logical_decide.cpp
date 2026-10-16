@@ -116,6 +116,21 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			callback(&expr);
 		}
 	}
+	for (auto &group_key : group_keys) {
+		for (auto &expr : group_key.expressions) {
+			callback(&expr);
+		}
+	}
+	for (auto &check : scope_checks) {
+		for (auto *expr : {&check.rows, &check.value, &check.filter}) {
+			if (*expr) {
+				callback(expr);
+			}
+		}
+		for (auto &expr : check.key) {
+			callback(&expr);
+		}
+	}
 }
 
 InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
@@ -138,7 +153,8 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	if (decide_objective) {
 		string sense_prefix = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*decide_objective, source_fragments, entity_scopes, objective_strs);
+		CollectDecideExpressionStrings(*decide_objective, source_fragments, entity_scopes, objective_strs,
+		                               nullptr, nullptr, &group_keys, scoped_objective);
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,
 		                                                  objective_strs);
 	} else {
@@ -152,7 +168,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 		vector<string> unattributed;
 		auto layers = CollectDecideClauseLayers(decide_constraints.get(), composed_minmax_constraints,
 		                                        source_fragments, entity_scopes, constraint_sources,
-		                                        unattributed);
+		                                        unattributed, &group_keys);
 		result["Constraints"] = RenderDecideClauseLayers(layers, unattributed);
 	}
 

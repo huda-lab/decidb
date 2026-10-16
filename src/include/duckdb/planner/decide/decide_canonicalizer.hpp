@@ -88,12 +88,16 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 namespace duckdb {
 
 class ClientContext;
 class BoundAggregateExpression;
 class BoundComparisonExpression;
+class BoundConjunctionExpression;
+struct DecideSourceNames;
 class BoundColumnRefExpression;
 class BoundFunctionExpression;
 
@@ -115,6 +119,24 @@ bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledA
 //! tree mixes reduced values with row/entity-varying decision algebra and cannot
 //! denote either one constraint per row or one reduced constraint.
 enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, INVALID };
+
+//! The scope a clause is written under: the WHEN condition and the `per K:` wrapper
+//! (PER_CLASS_TAG) that enclose it, if any.
+struct DecideEnclosingScope {
+	const Expression *when = nullptr;
+	const BoundConjunctionExpression *per = nullptr;
+};
+
+//! What building the scope checks of the user's clauses reads besides the bound tree,
+//! and the checks it builds (LogicalDecide::scope_checks), in clause order.
+struct DecideScopeChecks {
+	const vector<DecideGroupKey> &group_keys;
+	const vector<EntityScopeInfo> &entity_scopes;
+	const vector<string> &source_fragments;
+	//! A relation's alias by table index, so a message names a column `D.depotID`.
+	unordered_map<idx_t, string> relations;
+	vector<DecideScopeCheck> checks;
+};
 
 class DecideCanonicalizer {
 public:
@@ -149,6 +171,27 @@ public:
 	//! wrappers. Descends only into the constraint child of a wrapper, never
 	//! into its condition or PER columns. Pure -- `constraints` is untouched.
 	unique_ptr<Expression> CanonicalizeTree(const Expression &constraints) const;
+
+	//! The scope checks of every clause of the user's SUCH THAT tree written with the
+	//! scope spellings, appended to `scope` in clause order. Read-only, from the clauses
+	//! as bound: before CanonicalizeTree, which drops the `per K:` of a clause in the
+	//! aggregate shape -- one model row per `by` group already is one per class there --
+	//! while the checks are what that key still requires of the data. Called once, by
+	//! the planner; a rewrite's clause (AddConstraint) never builds any.
+	void BuildConstraintScopeChecks(const Expression &constraints, DecideScopeChecks &scope) const;
+
+	//! The scope checks of an objective written with the scope spellings, built from
+	//! the bound objective before CanonicalizeObjective: its `when` keeps a row, it is
+	//! one value over the kept rows (`per ()`), and each reducer reads a row and is
+	//! determined by its own `per`.
+	void BuildObjectiveScopeChecks(const Expression &objective, DecideScopeChecks &scope) const;
+
+	//! Quote expressions in the scope spellings' refusals as the query writes them, from
+	//! these names, rather than through the bound tree's own names. Set by the planner,
+	//! which alone has them; `names` must outlive the canonicalizer.
+	void QuoteMessagesWith(const DecideSourceNames &names) {
+		message_names = &names;
+	}
 
 	//! Canonicalize a single comparison. Pure -- `comparison` is untouched.
 	unique_ptr<Expression> CanonicalizeComparison(const Expression &comparison) const;
@@ -305,11 +348,42 @@ private:
 	void VerifyCanonicalObjectiveBody(const Expression &objective) const;
 	void VerifyCanonicalComparison(const BoundComparisonExpression &comparison) const;
 	CanonicalConstraintClass ClassifyCanonicalTree(const Expression &constraints) const;
+
 	unique_ptr<Expression> CanonicalizeTreeInternal(const Expression &constraints) const;
+	void BuildConstraintScopeChecks(const Expression &constraints, DecideEnclosingScope enclosing,
+	                                DecideScopeChecks &scope) const;
+
+	//! The shape of a comparison written with the scope spellings (SCOPED_CLAUSE_TAG):
+	//! ROWS when no decision reducer is on the left, AGGREGATE when the left holds
+	//! decision reducers sharing one `by` key (`group_key`, INVALID for `by ()`) beside
+	//! query-wide terms only, and UNSUPPORTED otherwise, with the message in `refusal`.
+	enum class ScopedShape : uint8_t { ROWS, AGGREGATE, UNSUPPORTED };
+	ScopedShape ClassifyScoped(const BoundComparisonExpression &comparison, idx_t &group_key,
+	                           string &refusal) const;
+	//! Whether a scoped comparison's decision side takes the composed MIN/MAX formulation
+	//! (RewriteComposedMinMaxInConstraint): a MIN or MAX over decisions beside another
+	//! term, or alone under a factor whose sign is not known before the query runs.
+	bool TakesComposedMinMax(const vector<Atom> &atoms) const;
+
+	//! The scope checks of one clause written with the scope spellings, `leaf` its
+	//! comparison (or other constraint) as bound.
+	void BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing,
+	                            DecideScopeChecks &scope) const;
+	//! The checks of one reducer: a row in every `by` group (D8), and its own `per`
+	//! determining its body. `rows` is the clause's `when`, null for every row.
+	void BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
+	                             DecideScopeChecks &scope) const;
 
 	//! Rebuild an additive chain from terms, negating every sign when `negate`
 	//! is set (used for the terms that crossed the relation).
 	unique_ptr<Expression> BuildAdditive(const vector<Atom> &atoms, bool negate) const;
+	//! Whether `atoms` is one negated reducer (`-max(e)`, `-(2 * max(e))`).
+	bool IsLoneNegatedReducer(const vector<Atom> &atoms) const;
+	//! Whether `side` spells one term with signs around it (`-(-max(e))`): its canonical
+	//! form is the bare term, which only a rebuild gives.
+	bool IsSignedSpine(const Expression &side, const vector<Atom> &atoms) const;
+	//! Moves a negated reducer's sign into its factor: `-1 * max(e)`, `-(2) * max(e)`.
+	void FoldNegationIntoFactor(Atom &atom) const;
 
 	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> left,
 	                              unique_ptr<Expression> right) const;
@@ -332,6 +406,11 @@ private:
 	//! False when the pass was given no flattening evidence. In that mode an arbitrary
 	//! column ref is never guessed to be query-wide; only explicit semantic tags qualify.
 	bool judge_column_refs = false;
+	//! See QuoteMessagesWith; null quotes through the bound tree (UserFacingName).
+	optional_ptr<const DecideSourceNames> message_names;
+
+	//! `expr` as a scope spellings' refusal quotes it.
+	string Quote(const Expression &expr) const;
 };
 
 } // namespace duckdb

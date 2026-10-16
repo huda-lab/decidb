@@ -58,14 +58,15 @@ Outside the clause, including the `SELECT` list and `FROM` of a DECIDE query,
 nothing changes, and `GROUP BY` / `ORDER BY` / `PARTITION BY` in a subquery written
 inside the clause are untouched.
 
-The scope spellings of the planned extension —
+The scope spellings of the extension —
 [`anr_language_extension.md`](anr_language_extension.md): `PER key:`, `WHEN
-condition:`, `BY (key)` — parse today. A declaration's `PER key:` runs (§2.3); every
-other one is refused with *"not supported yet"*, wherever it appears in the clause,
-until the item that binds it lands. On a declaration, a constraint or inside a
-reducer, `PER ROW` is the default written out and runs as if it were omitted. An objective takes only `PER ()`: any other `PER`
-there, `PER ROW` included, is the parse error *"an objective is produced once: write
-per (): or leave per out"*.
+condition:`, `BY (key)` — run: a declaration's `PER key:` (§2.3), and a scope in front of
+a constraint or the objective, after a reducer or inside one (§10). Inside an ordinary
+SQL subquery written in the clause they are still refused with *"not supported yet"*. On
+a declaration, a constraint or inside a reducer, `PER ROW` is the default written out and
+runs as if it were omitted. An objective takes only `PER ()`: any other `PER` there,
+`PER ROW` included, is the parse error *"an objective is produced once: write per (): or
+leave per out"*.
 
 ## 2. Decision Variables
 
@@ -361,7 +362,7 @@ what the solver could represent in any case. This limit is pinned by
 - `SUM`/`AVG` constraint bodies may include data-only additive terms alongside decision terms, e.g. `SUM(x + cost) <= K` or `SUM(q * (price + x)) <= K`. DeciDB evaluates the data-only aggregate contribution over the active rows/group and subtracts it from the scalar RHS before building the solver row.
 - `MIN(expr)` and `MAX(expr)` are supported. Easy cases (`MAX(expr) <= K`, `MIN(expr) >= K`) become per-row constraints with no auxiliary variables. Hard cases (opposite direction, equality) use a global auxiliary variable and Big-M binary indicators. In objectives, `MINIMIZE MAX(expr)` and `MAXIMIZE MIN(expr)` use a global auxiliary; `MAXIMIZE MAX(expr)` and `MINIMIZE MIN(expr)` additionally require Big-M indicators. Composes with WHEN.
 - Aggregate-local filters are supported on individual aggregate terms: `SUM(expr) WHEN condition + SUM(expr2) WHEN condition2`. This is different from an expression-level `WHEN` on the whole constraint or objective.
-- **A factor on a reducer** is supported for every aggregate kind and on either side: `2 * SUM(x*p)`, `SUM(x*p) * 2`, `SUM(x*p) / 2`, `2 * MAX(x*v)`, and inside a composed LHS (`SUM(x) + 2 * MAX(x*v)`). The factor must be **one value for the whole query** — a literal, an expression over literals, or an uncorrelated scalar subquery. A negative factor is handled correctly: `-2 * MAX(e)` is `-2·MIN(e)`, and the rewrite swaps `MIN`/`MAX` accordingly.
+- **A factor on a reducer** is supported for every aggregate kind and on either side: `2 * SUM(x*p)`, `SUM(x*p) * 2`, `SUM(x*p) / 2`, `2 * MAX(x*v)`, and inside a composed LHS (`SUM(x) + 2 * MAX(x*v)`). The factor must be **one value for the whole query** — a literal, an expression over literals, or an uncorrelated scalar subquery. A negative factor reverses the relation the aggregate faces — `-2 * MAX(e) >= -8` is `MAX(e) <= 4`, the cheap per-row direction — and a factor whose sign is not known before the query runs takes the composed formulation, which is exact for either sign. In the hard direction these spellings keep a negative factor outside the extremum, which reverses the clause, and solve a strict `<`/`>` on a hard `MIN`/`MAX` or a composed clause as `<=`/`>=` (both logged in `06_issues/bugs/todo.md`); the scope spellings read `-2 * MAX(e)` as `MIN(-2 * e)` and step the bound (§10.2).
   - A **row-varying** factor is rejected on every aggregate kind: `weight * SUM(x)` errors with *"'weight' varies per row, so it cannot multiply SUM(x). Move it inside the aggregate, e.g. SUM(x * weight)."* A reducer produces one number, so there is no row whose `weight` would scale it — the same reason SQL requires `col` in the `GROUP BY` for `col * SUM(x)`. Write the per-row-coefficient form explicitly.
   - A **correlated** scalar subquery is row-varying by construction and is rejected on the same grounds, with a message that calls it a subquery rather than quoting the internal column name flattening gives it: *"this subquery returns a different value for each row, so it cannot multiply SUM(x). Move it inside the aggregate, e.g. SUM(x * (SELECT ...))."* Only **uncorrelated** scalar subqueries are legal factors.
   - A **decision** factor is rejected as bilinear rather than as a scale: `s * SUM(x)` (with `scalar s`) is a product of two decisions.
@@ -687,3 +688,121 @@ columns.
 
 `EXPLAIN` plans without executing the decision query. `EXPLAIN ANALYZE` executes it and
 adds actual row counts and timing. JSON uses the same content in a structured plan.
+
+## 10. Scope Spellings — `when` and `per` in front, `by` after a reducer
+
+Items 3 and 4 of [`../09_anr_language/todo.md`](../09_anr_language/todo.md); the full
+behaviour is [`anr_language_extension.md`](anr_language_extension.md) §3–§9. A clause
+written with any of these spellings — in front, a `by`, or a scope inside a reducer —
+follows the rules below; a clause without one keeps the rules of §5–§7, word for word.
+`per row` alone, in front or inside a reducer, is the default written out (§1.1): the
+clause runs as if it were omitted, under §5–§7.
+
+```sql
+SUCH THAT
+    when S.priority: ship >= 1 AND                                  -- the priority rows
+    per D.depotID: sum(ship) by (D.depotID) <= D.capacity AND       -- one per depot
+    per (): sum(when S.priority per D: D.opening_cost * open) <= 50 -- each depot once
+MAXIMIZE when S.status = 'active': sum(ship)
+```
+
+### 10.1 A scope in front of a constraint — `[when c] [per K]: C`
+
+- **`when c`** keeps the rows where `c` is true (NULL is false). Any boolean condition
+  over data, no parentheses needed: an `and` before `per` or `:` belongs to it. Classes
+  form from kept rows only, every reducer of the clause reads kept rows only, and nothing
+  is computed on a row the `when` drops: a NULL there is no error, nor an expression that
+  would fail there (`CAST(s AS INTEGER)` of a text, `ln(0)`) — in the clause, its keys,
+  its bounds, its checks (§10.5) or any row a rewrite adds for it (`IN`, `ABS`,
+  `BETWEEN`, `norm`). The parts of an `and` or an `or`, at any depth outside a `not`, are
+  read left to right, each only on the rows the parts before it leave undecided:
+  `when s <> '' and CAST(s AS INT) > 3:` casts no empty text. The condition takes no
+  reducer (*"DECIDE: an aggregate cannot be used here. ..."*), nor does a key or a `by`.
+- **`per K`** makes one constraint per class of `K` among the kept rows (a class is one
+  key value; NULL is one); `per ()` makes one; no `per`, or `per row`, one per kept row.
+  `K` lists columns and relations as a declaration's key does (§2.3). `per` does not
+  group reducers: `per g: sum(x) <= 10` bounds the total over all kept rows.
+- A scope covers one constraint: in `per g: A AND B`, only `A`. A `BETWEEN` is one
+  constraint, both halves under the scope.
+- **Model rows.** No reducer on the decision side: one row per class, from its first kept
+  row (the key determines the clause, §10.5). Decision reducers sharing one `by` key,
+  beside query-wide terms only: one row per `by` group of the kept rows, under the
+  group's tightest bound — `=` refuses a group whose bounds differ, `<>` excludes every
+  value. With no `per`, a bound that varies inside a group is that tightest bound, as
+  today.
+
+### 10.2 `by (Γ)` — which rows a reducer reads
+
+`agg(e) by (Γ)` reads every kept row whose `Γ` equals the current row's, including rows
+outside the current class. `Γ` lists columns, relations (all their stored columns; a
+column of the same name wins) and data expressions; NULL is one group; no `by` is
+`by ()`, every kept row, and so is a key that is the same on every row (`by (1)`,
+`by (NULL)`). A key written twice in one clause is one key, a subquery in it included.
+Any `SUM`, `AVG`, `MIN` or `MAX` may take one, on either side; a data-only reducer on the
+bound side is evaluated over its own groups. A factor holds the reducer's value:
+`-2 * max(e) by (g)` is `min(-2 * e) by (g)`, and `-max(e)` is the factor -1. `<` and `>`
+step a whole-numbered bound by one: `max(x) by (g) > cap` is `max(x) by (g) >= cap + 1`.
+The step is on the extremum itself, so a strict bound refuses a `MIN` or `MAX` whose value
+can be fractional, a constant added inside included (*"Comparison '>' is not supported
+here: 'max(x + 0.5)' has type DECIMAL(21,1) ... Compare with '>=' instead."*).
+
+### 10.3 `when` and `per` inside a reducer — `agg([when c] [per K]: e)`
+
+Order: the rows `by` selects, then the reducer's `when`, then one value per class of its
+`per` (each class read at its first row the `when` keeps), then the aggregate. The inner
+`when` is read on the rows the clause keeps and filters that reducer only, whose body is
+read on the rows both keep; `AVG` divides by the values it receives (kept rows, or
+classes); `MIN`/`MAX` are unaffected by an inner `per`. `SUM(D: e)` keeps the rules of
+§5.1 and may take a `by`.
+
+### 10.4 The objective — `MAXIMIZE|MINIMIZE [when c] [per ()]: E`
+
+- Produced once: no `per` is `per ()`. `when c` filters the rows for the whole objective.
+- A decision outside the reducers is legal when it has one instance over the kept rows,
+  and counts once (`MAXIMIZE when id = 3: x`, `+ s` for a `per ()` decision, but not
+  beside a `MIN` or `MAX`, §10.6); a data value beside it must be one value there. A
+  product of two decisions outside a reducer is refused (*"... multiplies decisions
+  outside a reducer, which is not supported yet"*) unless one is `BOOL`: that product is
+  linearized first, and counts once.
+- A top-level reducer's `by` must be one group over the kept rows.
+- **Two-level form** `outer(per k: inner(e) by (k))`, all nine of `SUM`/`MIN`/`MAX`,
+  NULL a class of `k`: `inner` once per class of `k`, then `outer` over those values. It
+  takes a `when` in front, not inside either reducer, its inner reducer takes no `per`,
+  and its `by` key must be its `per` key.
+
+### 10.5 Data checks — run before solving, on every run
+
+| Check | Message |
+|---|---|
+| A `when` keeps no row of a non-empty input (constraint or objective) | `DECIDE: when S.status = 'actve' matches no rows.` |
+| A `per` key determines every tuple term (a bound, a factor on a reducer), every decision outside reducers and every `by` key, over the kept rows; an inner `per` key, the body of its reducer | `DECIDE: per D.depotID does not determine D.capacity. D.depotID = 'D1' has more than one value: 25, 40.` · `... does not determine the decision ship (declared per row). D.depotID = 'D1' covers more than one ship.` · `(in by (S.region))`, `(in sum(per D: ...))` |
+| A reducer's own `when` leaves a `by` group of the kept rows empty | `DECIDE: sum(when S.priority: ship) has no rows for D.depotID = 'D2'.` · `... has no rows.` for `by ()` |
+
+NULL counts as one value in a check; a NULL coefficient or bound is still the NULL error
+of §3, which names a subquery by its text as DuckDB prints it (*"DECIDE: the subquery
+(SELECT ...) is NULL. ..."*). An input with no rows at all is not an error. The checks also run under
+`DIAGNOSE`. Over a join, a message names a column with its relation (`D.capacity`).
+
+### 10.6 Refused
+
+| Shape | Message |
+|---|---|
+| An old postfix `WHEN`/`PER` in a constraint or objective with a new spelling | names the new spelling, e.g. *"DECIDE: PER D.region after a constraint cannot be combined with when, per or by; write per D.region: in front of it, with by (D.region) on each reducer"* · *"... PER D.region after the objective ...; write it as outer(per D.region: inner(e) by (D.region))"*. After a scope written in front of the same clause, the postfix is a syntax error (*syntax error at or near "PER"*) |
+| A scope or `by` on a call that is not `SUM`/`AVG`/`MIN`/`MAX` | *"DECIDE: by (...) must directly follow SUM, AVG, MIN or MAX"* · *"DECIDE: when and per inside a call need SUM, AVG, MIN or MAX; ..."*. `by` after anything but a function call (a column, a literal, `CASE`, `CAST`, `TRY_CAST`, `::`, `COALESCE`, `NULLIF`, `EXTRACT`, parentheses), and a scope inside such a form, is a syntax error |
+| `norm(D: e, p)` | *"DECIDE: norm(D: ...) is not supported yet; a relation qualifier takes SUM, AVG, MIN or MAX"* |
+| A `per` inside the two-level objective's inner reducer | *"DECIDE: per inside the inner reducer of min(per g: sum(...) by (g)) is not supported yet"* |
+| A window function in a `when`, a key or a `by` | *"DECIDE: a window function such as 'row_number() OVER ()' is not supported in when, per or by"* |
+| A reducer or `norm` with no argument | *"SUM needs one argument, found 'sum()'"* · *"NORM needs an expression and an order, as in norm(e, 1), found 'norm()'"* |
+| A decision in a `when`, a key or a `by` | *"DECIDE: x is a decision; when, per and by may only use data"* |
+| A reducer inside a reducer (but the two-level objective) | *"DECIDE: an aggregate inside an aggregate is not supported yet"* |
+| A per-row or keyed decision beside a decision reducer · reducers with different `by` keys · a reducer inside another expression · a query-wide decision beside a reducer in a row that multiplies decisions | *"... is not supported yet"* |
+| `AVG` under `<>` beside another term, over a product, or with its own `when`/`per` | *"DECIDE: AVG in a <> constraint is not supported yet ..."* |
+| A `MIN` or `MAX` beside another term, or under a factor whose sign is not known before the query runs (`(SELECT 2) * max(x)`), with a `by` · with a bound that is not a constant | *"DECIDE: 'max(x) by (g) - min(x) by (g)' is not supported yet: by (...) cannot apply to a MIN or MAX beside another term, or under a factor whose sign is not known before the query runs"* · *"DECIDE: 'max(S.demand) by (D.region)' is not supported yet as the bound of a MIN or MAX beside another term, ...; the bound must be a constant"* |
+| A decision beside a `MIN` or `MAX`, in a constraint or the objective | *"DECIDE: 's' beside MIN or MAX is not supported yet"* |
+| A row-varying factor on a decision reducer | today's message (§5) |
+
+`EXPLAIN` echoes a clause written with these spellings in them.
+
+Tests: `test/decide/tests/test_scope_generation.py`, `test_scope_reducer_by.py`,
+`test_scope_reducer_inner.py`, `test_scope_determination.py`, `test_scope_objective.py`,
+`test_scope_deck_examples.py`.

@@ -386,6 +386,12 @@ The pass is a single sweep, not a fixpoint: a bound derived for one variable is
 not fed back to tighten others in the same pass. That is sound and only leaves
 tightness on the table for chained implications.
 
+A row outside `row_group_ids` normally means "not constrained", which disqualifies the
+clause. `EvaluatedConstraint::rows_stand_with_their_class` says otherwise for a
+`per K:` clause of the scope spellings over every row: it is emitted once per class, at
+the class's first row, and every other row carries the same decisions and data (a scope
+check), so it is skipped instead.
+
 ### The formulation box
 
 Every constant this stage derives — a Big-M, a McCormick envelope — is valid only
@@ -561,6 +567,15 @@ bound stays `PER_ROW_DATA` and reports a virtual offset. The extremum column is
 labelled with the clause text stage 05 recorded (`minmax_clause_labels`), so a repair
 names `MAX(x * c)` rather than an internal column.
 
+A clause written with the scope spellings (`EvaluatedConstraint::scoped`) steps a strict
+bound on that row, as `ApplyComparisonSense` does for any other: `z > K` is
+`z >= floor(K) + 1`, `z < K` is `z <= ceil(K) - 1`. That is exact because the binder
+refused any member that can be fractional, a constant inside the extremum included
+(stage 02 §4a). The row keeps the written bound (`RawConstraint::strict`, `typed_k`), so a
+diagnosis quotes `> K`. The old spellings state `z > K` as `z >= K`
+(`06_issues/bugs/todo.md`). Its factor arrives inside the extremum when negative
+(stage 05), so the row's relation is the clause's own.
+
 **No indicator is allocated before the rows that read it.** Stage 05 records only the
 marking — `minmax_agg_type`, and a `minmax_clause_idx` naming the clause. The binaries
 a Big-M pinning needs are global-block columns `EmitExtremumLink` creates for the
@@ -600,6 +615,12 @@ the emitter, because it is a fact about the site. The shape flags (`flat_agg`, `
 inner-AVG rewrite) arrive from stage 05 as `MinMaxObjectiveSpec`; the `WHEN` mask
 and the coefficients arrive evaluated.
 
+For an objective written with the scope spellings, `MinMaxObjectiveSpec::member_rows`
+lists the rows its reducer reads (stage 08 folds its `when` into the terms' filters).
+Those rows are the members, whatever their coefficients: a row whose data is 0 is the
+member 0, not an absent one, so neither the zero-coefficient skip nor the outer
+envelope's zero-group skip applies. The old spellings keep both.
+
 ### Composed MIN/MAX
 
 A composed clause mixes reducers additively — `SUM(a) + 2*MAX(b) <= K`, or the same
@@ -615,7 +636,10 @@ than an internal column.
 Terms arrive as `ComposedMinMaxTermData`: everything data-dependent — per-row
 coefficients, the query-wide factor the canonicalizer peeled off the reducer, the
 row mask the reducer runs over — is already evaluated by stage 08, and an empty row
-set is refused there before these functions see it.
+set is refused there before these functions see it. The terms of a clause written with
+the scope spellings are marked `scoped`, and its outer row steps a strict bound by one
+(`> 30` is `>= 31`), keeping the written bound for a diagnosis; the old spellings solve it
+as `>= 30` (`06_issues/bugs/todo.md`).
 
 A composed term needs **both** sides of its link in the hard direction, and that is the
 one place the two-flag spec earns its keep. An outer `=` needs both sides on *every*

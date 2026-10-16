@@ -313,6 +313,14 @@ struct EvaluatedConstraint {
     //! 0..K-1 = group assignment
     vector<idx_t> row_group_ids;
     idx_t num_groups = 0;                     // 0 = ungrouped, >0 = number of distinct groups
+    //! A `per K:` clause of the scope spellings over every row: a row INVALID above is
+    //! not excluded but stands with its class's first row, which carries the same
+    //! decisions and data (a scope check). So every row is still constrained.
+    bool rows_stand_with_their_class = false;
+    //! Written with the scope spellings. Its hard MIN/MAX row steps a strict bound onto
+    //! the integer lattice, as every other row does; the old spellings' does not (a
+    //! logged bug, D17).
+    bool scoped = false;
 
     //! Printable PER key per group (size num_groups when PER-grouped; empty otherwise).
     //! Surfaces each group's key value (`'a'`, or `EU, 2024` for a composite key) so
@@ -584,6 +592,10 @@ struct SolverInput {
         //! Symbolic name of a data-backed RHS column, for a PER_ROW_DATA row. Empty for a
         //! literal/shared bound.
         string rhs_label;
+        //! A strict `<` / `>` stepped onto this row, and the user's literal: a diagnosis
+        //! quotes `> K` rather than the stepped `>= floor(K)+1` (ConstraintProvenance).
+        bool strict = false;
+        double typed_k = 0.0;
     };
     vector<RawConstraint> global_constraints;
 

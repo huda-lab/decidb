@@ -164,6 +164,12 @@ public:
     //! entity_scope_idx indexes entity_scopes
     vector<DecideVarScopeInfo> variable_scopes;
 
+    //! Every `by (key)` of the clause, its expressions resolved against the input chunk.
+    vector<DecideGroupKey> group_keys;
+
+    //! The run-time checks of the clauses written with the scope spellings, run first.
+    vector<DecideScopeCheck> scope_checks;
+
     //! Source column name per physical child-output column (positionally aligned
     //! with gstate.data columns), resolved post-pruning in plan_decide.cpp. Used by
     //! the unbounded diagnosis to label escaping categorical groups (affected_rows).
@@ -258,6 +264,14 @@ private:
     vector<EntityMapping> BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate,
                                               idx_t num_rows) const;
 
+    //! PHASE 1.6: the scope checks (anr_language_extension.md §7, §8), before any clause is
+    //! evaluated, so every later phase may assume a well-defined clause. Raises the first
+    //! one the data fails: a `when` that keeps no row, a key that does not determine a
+    //! value or a decision, a reducer with no row in some `by` group.
+    void RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                        ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                        const vector<EntityMapping> &entity_mappings) const;
+
     //! PHASE 2, sub-phase 1: evaluate every constraint's coefficients and append the
     //! result to gstate.evaluated_constraints.
     void EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
@@ -275,6 +289,9 @@ private:
         //! The objective's clause-level WHEN mask.
         vector<bool> when_mask;
         bool has_when = false;
+        //! Written with the scope spellings: its WHEN is folded into every term's filter
+        //! above, and a MIN/MAX reads every row those filters keep.
+        bool scoped_objective = false;
 
         //! The objective's PER grouping, keyed by the filters above. Copied into
         //! `SolverInput` during assembly.

@@ -42,12 +42,63 @@ struct EntityScopeInfo {
     //! `sum(T: ...)` scope (false) drops the columns its clause reads as data
     //! (`DecideDeclarationsBinder::BindDeclarations`), and the two never share a scope.
     bool exact_key = false;
+    //! For an exact key, each key column as a message names it (`D.depotID`), in
+    //! `entity_key_bindings` order. Empty for any other scope.
+    vector<string> key_names;
 
     //! Generated from `storage/serialization/nodes.json`. `entity_key_physical_indices`
     //! is deliberately absent: it is resolved at physical planning, after the only point
     //! a plan is ever serialized, so it is always empty on the wire.
     void Serialize(Serializer &serializer) const;
     static EntityScopeInfo Deserialize(Deserializer &deserializer);
+};
+
+//! A reducer's `by (key)`. At a class, the reducer reads the kept rows whose key value
+//! equals the class's, NULL being a value. Reducers whose keys are the same set of
+//! expressions share one entry, named by GROUP_KEY_TAG_PREFIX.
+struct DecideGroupKey {
+	//! The key's data expressions, in the order first written.
+	vector<unique_ptr<Expression>> expressions;
+	//! The key as written, for messages: `D.region, S.dispatchDay + S.transitDays`.
+	string text;
+	//! Each expression as a message names it (`D.region`), in `expressions` order; a
+	//! relation written in the key names each of its columns.
+	vector<string> names;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideGroupKey Deserialize(Deserializer &deserializer);
+};
+
+//! One run-time requirement of a clause written with the scope spellings
+//! (anr_language_extension.md §7, §8): built by DecideCanonicalizer from the user's
+//! clause, before any rewrite, and run by PhysicalDecide before any model is built.
+struct DecideScopeCheck {
+	DecideScopeCheckKind kind = DecideScopeCheckKind::KEEPS_A_ROW;
+	//! The rows considered: those `rows` keeps, NULL dropping a row; null for every row.
+	unique_ptr<Expression> rows;
+	//! DETERMINES: the classes. READS_A_ROW: the groups. Empty for one class or group.
+	vector<unique_ptr<Expression>> key;
+	//! DETERMINES: the data value each class shows once; null when it is `decision`.
+	unique_ptr<Expression> value;
+	//! DETERMINES: the decision (index into decide_variables) each class holds once.
+	idx_t decision = DConstants::INVALID_INDEX;
+	//! DETERMINES inside a reducer's `per`, READS_A_ROW: the reducer's own `when`.
+	unique_ptr<Expression> filter;
+	//! What the message quotes, as written. KEEPS_A_ROW: `subject` is the condition.
+	//! DETERMINES: `subject` the key (`D.depotID`, `()`), `object` the value or the
+	//! decision, `context` where it stands (`in by (S.region)`, `declared per row`).
+	//! READS_A_ROW: `subject` the reducer (`sum(when S.priority: ship)`).
+	string subject;
+	string object;
+	string context;
+	//! How a message names each key expression it describes a class or group by
+	//! (`D.depotID` in `D.depotID = 'D1'`), in key order: a prefix of `key`.
+	vector<string> key_names;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideScopeCheck Deserialize(Deserializer &deserializer);
 };
 
 //! A source column's logical identity and the name the user wrote for it.
@@ -215,6 +266,10 @@ public:
         //! the composed emitter reads prepared terms like every other construct rather
         //! than re-deriving them once the rows are in.
         vector<DecideTerm> inner_terms;
+        //! From a clause written with the scope spellings: `filter` also holds the clause's
+        //! `when`, only the rows it keeps are read, and the qualifier keeps the first row
+        //! of each class among them.
+        bool scoped = false;
     };
     struct ComposedMinMaxConstraint {
         vector<ComposedMinMaxTerm> terms;
@@ -288,6 +343,18 @@ public:
     //! Per-variable scope assignment (row / entity / query-wide scalar).
     //! Defaults to row-scoped; entity_scope_idx indexes entity_scopes.
     vector<DecideVarScopeInfo> variable_scopes;
+
+    //! Every `by (key)` written in the clause, indexed by GROUP_KEY_TAG_PREFIX tags.
+    vector<DecideGroupKey> group_keys;
+
+    //! The run-time requirements of every clause written with the scope spellings, in
+    //! clause order; PhysicalDecide runs them before it formulates anything.
+    vector<DecideScopeCheck> scope_checks;
+
+    //! True when the objective is written with the scope spellings: a `when` in front,
+    //! a `by`, or a scope inside a reducer (see SCOPED_CLAUSE_TAG for what that changes).
+    //! A flag rather than a tag because every objective rewrite rebuilds the tree.
+    bool scoped_objective = false;
 
     //! BoundColumnRefExpressions for every entity-key column (flattened in scope order).
     //! These live here so that DuckDB's binder initial column_id selection AND the
@@ -384,7 +451,8 @@ public:
 
     //! Calls back with every expression this operator owns: decide_variables,
     //! decide_constraints, decide_objective, the composed MIN/MAX constraint and
-    //! objective terms, and entity_key_expressions. This is the single place that
+    //! objective terms, entity_key_expressions, the `by` keys and the scope checks.
+    //! This is the single place that
     //! knows LogicalDecide's expression layout -- generic DuckDB passes (the
     //! LogicalOperatorVisitor dispatcher, ColumnBindingResolver, RemoveUnusedColumns)
     //! call through it instead of each re-listing these fields by hand, which is how

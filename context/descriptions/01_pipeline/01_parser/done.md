@@ -87,13 +87,12 @@ shape. No parsed-tree association repair is needed.
 ### Scope spellings
 
 The planned extension ([`../../00_project_overview/anr_language_extension.md`](../../00_project_overview/anr_language_extension.md))
-writes a scope *in front* of what it governs. The grammar accepts all of it. A
-declaration's `PER key:` binds (`../02_binder/done.md`, "Keyed declarations"); the
-binder refuses every other scope with *"DECIDE: 'PER key:' is not supported yet"* (or
-`PER ():`, `WHEN condition:`, `BY (key)`, whichever was written)
-(`ValidateDecideNoUnsupportedScope`, `decide_binder.cpp`, run first by
-`DecideDeclarationsBinder::BindDeclarations` over the constraints and the objective,
-looking inside subqueries too) until the item that binds it lands.
+writes a scope *in front* of what it governs. The grammar accepts all of it, and the
+binder binds it (`../02_binder/done.md`, "Keyed declarations" and §4a) except inside an
+ordinary SQL subquery written in the clause, where it answers *"DECIDE: 'PER key:' is
+not supported yet"* (or `PER ():`, `WHEN condition:`, `BY (key)`, whichever was written)
+(`ValidateDecideScopeSpellings`, `decide_binder.cpp`, run first by
+`DecideDeclarationsBinder::BindDeclarations` over the constraints and the objective).
 
 ```
 decide_scope  ::= decide_when | decide_when decide_per | decide_per
@@ -338,7 +337,7 @@ continuation cases outside the materializing verifier. The guarded release run p
 | Reserved keywords | `third_party/libpg_query/grammar/keywords/reserved_keywords.list` |
 | DECIDE `WHEN`, `PER` and `BY` lexer gating | `third_party/libpg_query/src_backend_parser_parser.cpp` (`base_yylex`) |
 | Scope carrier and helpers | `third_party/libpg_query/include/nodes/parsenodes.hpp` (`PGDecideScope`), `grammar/grammar.cpp` (`makeDecideScope`, `applyDecideScope`, `makeQualifiedReducer`) |
-| Scope gate in the binder | `src/planner/expression_binder/decide/decide_binder.cpp` (`ValidateDecideNoUnsupportedScope`) |
+| Scope validation in the binder | `src/planner/expression_binder/decide/decide_binder.cpp` (`ValidateDecideScopeSpellings`) |
 | Clause → `SelectNode` | `src/parser/transform/statement/transform_select_node.cpp` |
 | `DIAGNOSE` → `ShowRef` | `src/parser/transform/statement/transform_show_select.cpp` |
 | DECIDE tag construction | `src/parser/transform/expression/transform_operator.cpp` |

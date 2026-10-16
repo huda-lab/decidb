@@ -1316,6 +1316,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         constr.provenance.is_aggregate = raw.is_aggregate;
         constr.provenance.rhs_mechanism_offset = raw.rhs_mechanism_offset;
         constr.provenance.rhs_label = raw.rhs_label;
+        constr.provenance.strict = raw.strict;
+        constr.provenance.typed_k = raw.typed_k;
         model.constraints.push_back(std::move(constr));
     }
 

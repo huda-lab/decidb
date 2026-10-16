@@ -70,115 +70,111 @@ SELECT shipmentID, reserve DECIDE per D.depotID: reserve(REAL) FROM Shipment S J
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority and demand > 5: ship <= 5 MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 
 # constraint: per in front
-statement error
+statement ok
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID: sum(ship) <= 100 MAXIMIZE SUM(ship);
-----
-Binder Error: DECIDE: 'PER key:' is not supported yet
 
 # constraint: when then per, several key columns, by on the reducer
 statement error
 SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT when S.priority per D.depotID, D.region: sum(ship) by (D.depotID) <= D.capacity MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'PER key:' is not supported yet
+Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 
 # constraint: per ()
-statement error
+statement ok
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per (): sum(ship) <= 100 MAXIMIZE SUM(ship);
-----
-Binder Error: DECIDE: 'PER ():' is not supported yet
 
 # constraint: when with per row keeps the when
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority per row: ship <= 5 MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 
 # constraint: a scoped constraint, then a plain one
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority: ship <= 5 AND ship >= 0 MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 
 # reducer: by () and by (expression)
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) by () <= 100 AND ship <= 0.25 * sum(ship) by (depotID, dispatchDay + transitDays) MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'BY (key)' is not supported yet
+Binder Error: DECIDE: the decision ship outside a reducer, in a constraint with SUM, AVG, MIN or MAX, is not supported yet
 
 # reducer: when inside
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(when priority: ship) <= 100 MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 
 # reducer: per inside, with a column key
 statement error
 SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE sum(per D.depotID: D.opening_cost * ship);
 ----
-Binder Error: DECIDE: 'PER key:' is not supported yet
+Invalid Input Error: DECIDE: per D.depotID does not determine the decision ship (in sum(per D.depotID: D.opening_cost * ship)). D.depotID = 'D1' covers more than one ship.
 
 # reducer: per () inside AVG
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) <= avg(per (): demand) MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'PER ():' is not supported yet
+Invalid Input Error: DECIDE: per () does not determine demand (in avg(per (): demand)). The kept rows have more than one value: 10.0, 20.0.
 
 # reducer: when and per inside, by after
 statement error
 SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE max(when S.priority per D: ship - D.capacity) by (D.region);
 ----
-Binder Error: DECIDE: 'BY (key)' is not supported yet
+Invalid Input Error: DECIDE: per () does not determine D.region (in by (D.region)). The kept rows have more than one value: 'East', 'West'.
 
 # reducer: by on the kept colon form
 statement error
 SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT SUM(D: ship) by (D.region) <= 100 MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'BY (key)' is not supported yet
+Binder Error: 'ship' is not a decision of D, so SUM(D: ...) cannot use it; declare it as D.ship(...) or move that term into its own reducer
 
 # objective: when in front
-statement error
+statement ok
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE when priority: sum(ship);
-----
-Binder Error: DECIDE: 'WHEN condition:' is not supported yet
 
 # objective: per (), written out
-statement error
+query II rowsort
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MAXIMIZE per (): sum(ship);
 ----
-Binder Error: DECIDE: 'PER ():' is not supported yet
+1	5
+2	5
+3	5
 
 # objective: when then per ()
-statement error
+statement ok
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE when priority per (): sum(ship);
-----
-Binder Error: DECIDE: 'PER ():' is not supported yet
 
 # objective: the nested form, a reducer over a keyed reducer
-statement error
+query II rowsort
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE max(per depotID: sum(ship) by (depotID));
 ----
-Binder Error: DECIDE: 'PER key:' is not supported yet
+1	0
+2	0
+3	0
 
 # DIAGNOSE in front
-statement error
+query TTTRITTTI
 DIAGNOSE SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID: sum(ship) by (depotID) <= 100 MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'PER key:' is not supported yet
+feasible	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
 
 # a new spelling inside a nested DECIDE subquery
-statement error
+statement ok
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT MAX(d) FROM Shipment DECIDE d(INT) SUCH THAT per (): sum(d) <= 4 MAXIMIZE SUM(d)) MAXIMIZE SUM(ship);
-----
-Binder Error: DECIDE: 'PER ():' is not supported yet
 
 # the clause's keywords are back after a nested DECIDE subquery closes
-statement error
+query II rowsort
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT MAX(d) FROM Shipment DECIDE d(INT) SUCH THAT d <= 4 MAXIMIZE SUM(d)) AND when priority: ship <= 2 MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: 'WHEN condition:' is not supported yet
+1	2
+2	4
+3	2
 
 # a new spelling inside an ordinary subquery written in the clause
 statement error
@@ -211,10 +207,11 @@ SELECT g, x FROM kw DECIDE per "per": x(INT) SUCH THAT x <= v MAXIMIZE SUM(x) OR
 2	7
 
 # ... and in a constraint's key and a reducer's by, which are not bound yet
-statement error
+query II rowsort
 SELECT g, x FROM kw DECIDE per "per": x(INT) SUCH THAT per "row", "by": sum(x) by ("per") <= "row" MAXIMIZE SUM(x);
 ----
-Binder Error: DECIDE: 'PER key:' is not supported yet
+1	3
+2	6
 
 # ---------------------------------------------------------------------------
 # PER ROW is the default written out: it leaves no new construct and runs.
@@ -350,10 +347,8 @@ SELECT g, x FROM kw DECIDE x(INT) SUCH THAT SUM(x) <= 10 PER "row" AND x <= v MA
 2	7
 
 # elsewhere in a key, row is a name
-statement error
+statement ok
 SELECT g, x FROM kw DECIDE x(INT) SUCH THAT per g, row: sum(x) <= 10 MAXIMIZE SUM(x);
-----
-Binder Error: DECIDE: 'PER key:' is not supported yet
 
 # row, and a by that does not follow ')', are names inside the clause
 query II
