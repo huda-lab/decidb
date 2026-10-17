@@ -288,7 +288,7 @@ bool DecideCanonicalizer::FindNonScalarDecideVar(
 }
 
 const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale,
-                                                 bool &out_divides, Clause clause) const {
+                                                 bool &out_divides, Clause clause, bool scoped) const {
 	out_scale = nullptr;
 	out_divides = false;
 	const char *clause_name = clause == Clause::OBJECTIVE ? "DECIDE objective" : "DECIDE constraint";
@@ -351,7 +351,11 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 			    "Only constants and query-wide values can scale SUM/AVG/MIN/MAX.",
 			    clause_name, UserFacingName(*factor), verb, UserFacingName(*term));
 		}
-		if (!IsQueryWideConstant(*factor)) {
+		// A row-varying factor on a reducer of a scoped constraint is a tuple term of the
+		// row's constraint: the comparison takes the VALUE shape (ClassifyScoped), which
+		// multiplies the reducer's helper decision by the factor's value on each row.
+		bool row_varying_tuple_term = scoped && clause == Clause::CONSTRAINT;
+		if (!IsQueryWideConstant(*factor) && !row_varying_tuple_term) {
 			// A correlated subquery has no SQL identifier to quote -- flattening left it a
 			// column ref named "SUBQUERY" -- so name it for what the user wrote instead of
 			// echoing an internal name and suggesting `SUM(x * SUBQUERY)`, which is not
@@ -404,21 +408,22 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 	return *cur;
 }
 
-void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause) const {
+void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause,
+                                    bool scoped) const {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		if (func.function.name == "+" && func.children.size() == 2) {
-			Decompose(*func.children[0], sign, out, clause);
-			Decompose(*func.children[1], sign, out, clause);
+			Decompose(*func.children[0], sign, out, clause, scoped);
+			Decompose(*func.children[1], sign, out, clause, scoped);
 			return;
 		}
 		if (func.function.name == "-" && func.children.size() == 2) {
-			Decompose(*func.children[0], sign, out, clause);
-			Decompose(*func.children[1], -sign, out, clause);
+			Decompose(*func.children[0], sign, out, clause, scoped);
+			Decompose(*func.children[1], -sign, out, clause, scoped);
 			return;
 		}
 		if (func.function.name == "-" && func.children.size() == 1) {
-			Decompose(*func.children[0], -sign, out, clause);
+			Decompose(*func.children[0], -sign, out, clause, scoped);
 			return;
 		}
 	}
@@ -428,7 +433,7 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 			// The parsed boundary rejected every user-authored decision cast.
 			// Anything left here was inserted by binding and is transparent in the
 			// solver's single DOUBLE domain. Data-only casts stay atomic.
-			Decompose(*cast.child, sign, out, clause);
+			Decompose(*cast.child, sign, out, clause, scoped);
 			return;
 		}
 	}
@@ -437,7 +442,7 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 	// reducer and the factor travels beside it.
 	unique_ptr<Expression> scale;
 	bool divides = false;
-	auto &term = PeelScale(expr, scale, divides, clause);
+	auto &term = PeelScale(expr, scale, divides, clause, scoped);
 	// Classify on the whole original term. The factors are decision-free and
 	// reducer-free by construction, so this agrees with classifying `term` -- stated
 	// rather than assumed, because Classify is the part that was wrong twice before.
@@ -526,18 +531,20 @@ void DecideCanonicalizer::FoldNegationIntoFactor(Atom &atom) const {
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Expression &expr) const {
 	DecideProfileScope profile("canonicalize.comparison");
 	auto &cmp = expr.Cast<BoundComparisonExpression>();
-	// A scoped clause spells a lone negated reducer with its sign in its factor, the one
-	// spelling a factor on a reducer has, so `-max(e) by (g)` reads as `-2 * max(e) by (g)`
-	// does: one MIN/MAX under a factor whose sign is known; and `-(-max(e))` as `max(e)`.
-	// The MIN/MAX rewrite routes on the tree it is given, so the tree must be the one its
-	// atoms rebuild. The old spellings keep `-MAX(e)` (D17), which the composed MIN/MAX
-	// route answers.
-	const bool fold_negation = HasDecideTag(cmp.GetAlias(), SCOPED_CLAUSE_TAG);
+	// A clause written with the scope spellings differs from the old ones in two places
+	// here. It spells a lone negated reducer with its sign in its factor, the one spelling
+	// a factor on a reducer has, so `-max(e) by (g)` reads as `-2 * max(e) by (g)` does:
+	// one MIN/MAX under a factor whose sign is known; and `-(-max(e))` as `max(e)`. The
+	// MIN/MAX rewrite routes on the tree it is given, so the tree must be the one its
+	// atoms rebuild. (The old spellings keep `-MAX(e)` (D17), which the composed MIN/MAX
+	// route answers.) And a tuple term may stand under a row-varying factor beside a
+	// reducer (PeelScale): the VALUE shape takes it, where the old spellings refuse.
+	const bool scoped = HasDecideTag(cmp.GetAlias(), SCOPED_CLAUSE_TAG);
 
 	vector<Atom> left_atoms;
 	vector<Atom> right_atoms;
-	Decompose(*cmp.left, 1, left_atoms);
-	Decompose(*cmp.right, 1, right_atoms);
+	Decompose(*cmp.left, 1, left_atoms, Clause::CONSTRAINT, scoped);
+	Decompose(*cmp.right, 1, right_atoms, Clause::CONSTRAINT, scoped);
 
 	auto Has = [](const vector<Atom> &atoms, Placement placement) {
 		for (auto &atom : atoms) {
@@ -567,7 +574,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 	// spelling. Rebuilding an already-canonical `2 * SUM(x)` reproduces it.
 	if (left_has_decision && !right_has_decision && !Has(left_atoms, Placement::RIGHT) &&
 	    !HasScale(left_atoms) &&
-	    !(fold_negation && (IsLoneNegatedReducer(left_atoms) || IsSignedSpine(*cmp.left, left_atoms)))) {
+	    !(scoped && (IsLoneNegatedReducer(left_atoms) || IsSignedSpine(*cmp.left, left_atoms)))) {
 		auto copy = cmp.Copy();
 		return FinalizeBoundProvenance(unique_ptr_cast<Expression, BoundComparisonExpression>(std::move(copy)));
 	}
@@ -623,7 +630,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 		}
 	}
 
-	if (fold_negation && IsLoneNegatedReducer(new_left)) {
+	if (scoped && IsLoneNegatedReducer(new_left)) {
 		FoldNegationIntoFactor(new_left[0]);
 	}
 	auto new_lhs = BuildAdditive(new_left, false);
@@ -710,7 +717,7 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
                                                                      idx_t &group_key, string &refusal) const {
 	group_key = DConstants::INVALID_INDEX;
 	vector<Atom> lhs_atoms;
-	Decompose(*cmp.left, 1, lhs_atoms);
+	Decompose(*cmp.left, 1, lhs_atoms, Clause::CONSTRAINT, /*scoped=*/true);
 	bool has_reducer = false;
 	for (auto &atom : lhs_atoms) {
 		has_reducer = has_reducer || ContainsReducer(*atom.expr);
@@ -719,42 +726,42 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 		// A data-only reducer sits on the right, as a bound.
 		return ScopedShape::ROWS;
 	}
+	// The aggregate shape is today's grouped row: decision reducers sharing one `by` key,
+	// under whole-query factors, with only query-wide terms beside them. Anything else on
+	// the decision side takes the value rewrite (VALUE): a per-row or keyed decision, a
+	// factor that varies by row, a second `by` key, a reducer inside another expression,
+	// a product of decisions beside a reducer.
+	bool value = false;
 	bool first_reducer = true;
 	// A query-wide decision beside the reducers counts once per group -- except in a
 	// quadratic or bilinear row, whose builder sums every term over the group's rows.
 	const Expression *query_wide_decision = nullptr;
-	bool nonlinear = false;
+	bool nonlinear_body = false;
+	bool nonlinear_beside = false;
 	// `<>` excludes an AVG's value by scaling the bound with the number of rows in the
 	// group, which is exact only when every term is an AVG reading all of them.
 	bool has_avg = false;
 	bool only_plain_avgs = true;
 	for (auto &atom : lhs_atoms) {
-		nonlinear = nonlinear || !DecideExpressionDegree(*atom.expr, decide_index).IsLinear();
+		bool linear = DecideExpressionDegree(*atom.expr, decide_index).IsLinear();
 		if (!ContainsReducer(*atom.expr)) {
 			only_plain_avgs = false;
+			nonlinear_beside = nonlinear_beside || !linear;
 			if (IsQueryWideExpression(*atom.expr)) {
 				if (ReferencesDecideVar(*atom.expr)) {
 					query_wide_decision = atom.expr;
 				}
 				continue;
 			}
-			idx_t var_idx;
-			const BoundColumnRefExpression *var_ref = nullptr;
-			refusal = FindNonScalarDecideVar(*atom.expr, var_idx, var_ref)
-			              ? StringUtil::Format("DECIDE: the decision %s outside a reducer, in a constraint with "
-			                                   "SUM, AVG, MIN or MAX, is not supported yet",
-			                                   UserFacingName(*var_ref))
-			              : StringUtil::Format("DECIDE: '%s' outside a reducer, in a constraint with SUM, AVG, "
-			                                   "MIN or MAX, is not supported yet",
-			                                   Quote(*atom.expr));
-			return ScopedShape::UNSUPPORTED;
+			value = true; // a per-row or keyed decision, or row data, beside a reducer
+			continue;
 		}
+		nonlinear_body = nonlinear_body || !linear;
 		auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
 		if (root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE || !ReferencesDecideVar(*root)) {
-			refusal = StringUtil::Format("DECIDE: '%s' holds a reducer inside another expression, which is not "
-			                             "supported yet",
-			                             Quote(*atom.expr));
-			return ScopedShape::UNSUPPORTED;
+			only_plain_avgs = false;
+			value = true; // a reducer inside another expression: `abs(sum(e) by (g) - 40)`
+			continue;
 		}
 		auto &reducer = root->Cast<BoundAggregateExpression>();
 		idx_t qualifier;
@@ -763,45 +770,42 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 		has_avg = has_avg || is_avg;
 		only_plain_avgs = only_plain_avgs && is_avg && !reducer.filter &&
 		                  !TryParseQualifiedReducerTag(reducer.GetAlias(), qualifier);
+		if (atom.scale && !IsQueryWideConstant(*atom.scale)) {
+			value = true; // a factor that varies by row: a tuple term of the row's constraint
+		}
 		idx_t key = DConstants::INVALID_INDEX;
 		TryParseGroupKeyTag(root->GetAlias(), key);
 		if (first_reducer) {
 			group_key = key;
 			first_reducer = false;
 		} else if (key != group_key) {
-			refusal = "DECIDE: reducers with different by keys in one constraint are not supported yet";
-			return ScopedShape::UNSUPPORTED;
+			value = true; // reducers with different `by` keys
 		}
 	}
-	if (query_wide_decision && nonlinear) {
+	if (query_wide_decision && nonlinear_body) {
 		refusal = StringUtil::Format("DECIDE: '%s' beside a reducer, in a constraint that multiplies decisions, is "
 		                             "not supported yet",
 		                             Quote(*query_wide_decision));
 		return ScopedShape::UNSUPPORTED;
 	}
-	if (cmp.type == ExpressionType::COMPARE_NOTEQUAL && has_avg && (!only_plain_avgs || nonlinear)) {
+	if (query_wide_decision && nonlinear_beside) {
+		value = true; // `sum(x) + b * s`: the product beside the reducer is a term of each row
+	}
+	if (cmp.type == ExpressionType::COMPARE_NOTEQUAL && has_avg &&
+	    (!only_plain_avgs || nonlinear_body || nonlinear_beside)) {
 		refusal = "DECIDE: AVG in a <> constraint is not supported yet beside another term, over a product of "
 		          "decisions, or with its own when or per";
 		return ScopedShape::UNSUPPORTED;
 	}
-	// The composed formulation is one row over all of the clause's kept rows, and its
-	// bound is one number.
-	if (TakesComposedMinMax(lhs_atoms)) {
-		static constexpr const char *COMPOSED =
-		    "a MIN or MAX beside another term, or under a factor whose sign is not known before the query runs";
-		if (group_key != DConstants::INVALID_INDEX) {
-			refusal = StringUtil::Format("DECIDE: '%s' is not supported yet: by (...) cannot apply to %s",
-			                             Quote(*cmp.left), COMPOSED);
-			return ScopedShape::UNSUPPORTED;
-		}
-		if (!cmp.right->IsFoldable()) {
-			refusal = StringUtil::Format(
-			    "DECIDE: '%s' is not supported yet as the bound of %s; the bound must be a constant",
-			    Quote(*cmp.right), COMPOSED);
-			return ScopedShape::UNSUPPORTED;
-		}
+	// A MIN or MAX beside another term, or under a factor of unknown sign, takes the
+	// composed formulation where that applies: one row over all of the clause's kept rows,
+	// under one bound, with nothing but reducers in it. With a `by`, a bound that is not
+	// a constant, or a decision beside it, the value rewrite pins the extremum per group.
+	if (!value && TakesComposedMinMax(lhs_atoms) &&
+	    (group_key != DConstants::INVALID_INDEX || !cmp.right->IsFoldable() || query_wide_decision)) {
+		value = true;
 	}
-	return ScopedShape::AGGREGATE;
+	return value ? ScopedShape::VALUE : ScopedShape::AGGREGATE;
 }
 
 bool DecideCanonicalizer::TakesComposedMinMax(const vector<Atom> &atoms) const {
@@ -830,6 +834,8 @@ CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const 
 			return CanonicalConstraintClass::PER_ROW;
 		case ScopedShape::AGGREGATE:
 			return CanonicalConstraintClass::AGGREGATE;
+		case ScopedShape::VALUE:
+			return CanonicalConstraintClass::VALUE;
 		default:
 			return CanonicalConstraintClass::INVALID;
 		}
@@ -978,8 +984,9 @@ void DecideCanonicalizer::VerifyCanonicalComparison(const BoundComparisonExpress
 
 	vector<Atom> lhs_atoms;
 	vector<Atom> rhs_atoms;
-	Decompose(*comparison.left, 1, lhs_atoms);
-	Decompose(*comparison.right, 1, rhs_atoms);
+	const bool scoped = HasDecideTag(comparison.GetAlias(), SCOPED_CLAUSE_TAG);
+	Decompose(*comparison.left, 1, lhs_atoms, Clause::CONSTRAINT, scoped);
+	Decompose(*comparison.right, 1, rhs_atoms, Clause::CONSTRAINT, scoped);
 	for (auto &atom : lhs_atoms) {
 		if (atom.placement != Placement::LEFT) {
 			CanonicalInvariantFailure("C3", "decision-free additive term remains on the left", comparison);
@@ -1160,6 +1167,12 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 			    !TryParseGroupKeyTag(result->GetAlias(), stamped)) {
 				auto alias = result->GetAlias();
 				AddDecideTag(alias, MakeGroupKeyTag(group_key));
+				result->SetAlias(std::move(alias));
+			}
+			// The VALUE shape is decided here, once: the value rewrite reads the tag.
+			if (shape == ScopedShape::VALUE && !HasDecideTag(result->GetAlias(), VALUE_REWRITE_TAG)) {
+				auto alias = result->GetAlias();
+				AddDecideTag(alias, VALUE_REWRITE_TAG);
 				result->SetAlias(std::move(alias));
 			}
 		}

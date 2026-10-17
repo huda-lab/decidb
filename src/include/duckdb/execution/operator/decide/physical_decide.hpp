@@ -128,6 +128,10 @@ public:
     // Empty when the objective is not composed.
     vector<LogicalDecide::ComposedMinMaxTerm> composed_minmax_objective_terms;
 
+    //! The helper decisions of the value rewrite and the reducers they hold
+    //! (LogicalDecide::reducer_value_links); PHASE 2 evaluates each one's members.
+    vector<LogicalDecide::ReducerValueLink> reducer_value_links;
+
     // --- Absorbed variable bounds (decided by DecideOptimizer::AbsorbVariableBounds) ---
     //
     // The decision column box, already resolved upstream. Finalize copies these into
@@ -260,9 +264,11 @@ private:
     //! Layer 8 never re-selects: it looks up the name stage 05 recorded.
     SolverBackend PlannedSolverBackend() const;
 
-    //! PHASE 1.5: one row→entity mapping per table-scoped entity scope.
+    //! PHASE 1.5: one row→entity mapping per key scope -- a table-scoped or keyed
+    //! decision's key columns, or a helper decision's `by` key over the rows its clause
+    //! keeps (EntityScopeInfo::value_link).
     vector<EntityMapping> BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate,
-                                              idx_t num_rows) const;
+                                              idx_t num_rows, ChunkExprCache &chunk_expr_cache) const;
 
     //! PHASE 1.6: the scope checks (anr_language_extension.md §7, §8), before any clause is
     //! evaluated, so every later phase may assume a well-defined clause. Raises the first
@@ -322,6 +328,14 @@ private:
                                  ChunkExprCache &chunk_expr_cache,
                                  const vector<EntityMapping> &entity_mappings,
                                  EvaluatedClauses &evaluated) const;
+
+    //! PHASE 2, sub-phase 4: evaluate every helper decision's members -- the rows of the
+    //! reducer it holds, among those the clause and the reducer keep, grouped by its `by`
+    //! key -- onto gstate.evaluated_value_links. The formulation pass states the
+    //! definition over them.
+    void EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                   ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                                   const vector<EntityMapping> &entity_mappings) const;
 
     //! PHASE 3a, assembly: build `SolverInput` out of what PHASE 2 evaluated — variable
     //! types and the column box, implied-bound propagation, the objective transfer with

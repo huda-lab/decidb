@@ -94,6 +94,8 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
 	phase.Next("optimizer.bilinear");
 	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products
+	phase.Next("optimizer.scoped_reducers");
+	RewriteScopedReducers(decide); // The value rewrite: a VALUE-shape clause's reducers become helper decisions
 	phase.Next("optimizer.composed_minmax");
 	RewriteComposedMinMax(decide); // Detect composed MIN/MAX before single-term MIN/MAX rewrite
 	phase.Next("optimizer.minmax");
@@ -152,6 +154,30 @@ void decide_rewrite::MarkFormulationConstraint(Expression &expr, const string &s
 	AddDecideTag(alias, STRUCTURAL_CONSTRAINT_TAG);
 	expr.SetAlias(std::move(alias));
 	CopyClauseProvenanceTags(source_alias, expr);
+}
+
+idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type,
+                                           bool is_boolean, DecideVarScopeInfo scope, const string &label) {
+	idx_t var_idx = decide.decide_variables.size();
+	decide.decide_variables.push_back(
+	    make_uniq<BoundColumnRefExpression>(name, type, ColumnBinding(decide.decide_index, var_idx)));
+	decide.num_auxiliary_vars++;
+	decide.is_boolean_var.push_back(is_boolean);
+	if (!decide.variable_scopes.empty() || scope.scope != DecideVarScope::ROW) {
+		while (decide.variable_scopes.size() < var_idx) {
+			decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
+		}
+		decide.variable_scopes.push_back(scope);
+	}
+	if (!label.empty()) {
+		decide.aux_var_expressions.emplace_back(var_idx, label);
+	}
+	return var_idx;
+}
+
+unique_ptr<Expression> decide_rewrite::MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx) {
+	auto &ref = decide.decide_variables[var_idx]->Cast<BoundColumnRefExpression>();
+	return make_uniq<BoundColumnRefExpression>(ref.GetName(), ref.return_type, ref.binding);
 }
 
 //! The user clause a rewrite is currently standing inside. A comparison carrying a

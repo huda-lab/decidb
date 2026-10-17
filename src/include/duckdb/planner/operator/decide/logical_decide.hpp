@@ -45,6 +45,14 @@ struct EntityScopeInfo {
     //! For an exact key, each key column as a message names it (`D.depotID`), in
     //! `entity_key_bindings` order. Empty for any other scope.
     vector<string> key_names;
+    //! A helper decision's scope (DecideOptimizer::RewriteScopedReducers): the link into
+    //! `LogicalDecide::reducer_value_links` it holds. Its entities are the groups of the
+    //! link's `by` key among the rows the link's clause keeps -- data expressions rather
+    //! than key columns, so `entity_key_bindings` is empty and execution builds the
+    //! mapping from the link. INVALID_INDEX for every scope the binder creates.
+    //! Deliberately absent from the serialization: the optimizer creates these scopes,
+    //! and an optimized plan is never serialized.
+    idx_t value_link = DConstants::INVALID_INDEX;
 
     //! Generated from `storage/serialization/nodes.json`. `entity_key_physical_indices`
     //! is deliberately absent: it is resolved at physical planning, after the only point
@@ -280,6 +288,40 @@ public:
     };
     vector<ComposedMinMaxConstraint> composed_minmax_constraints;
 
+    //! A decision reducer of a scoped comparison in the VALUE shape
+    //! (CanonicalConstraintClass::VALUE), replaced by the helper decision `value_var`
+    //! that holds `agg([when c'] [per K']: e) by (Γ)` over the rows the clause keeps: one
+    //! instance per Γ group of those rows, defined once by stage 06 -- an equality row per
+    //! group for SUM/AVG, an extremum link per group for MIN/MAX. Produced by
+    //! DecideOptimizer::RewriteScopedReducers; an optimized plan is never serialized.
+    //!
+    //! One link per occurrence of a reducer in a clause, shared by every row the rewrites
+    //! before this one derived from that clause (an ABS envelope pair holds two copies):
+    //! the sides a shared MIN/MAX helper needs are the union of its rows' needs.
+    struct ReducerValueLink {
+        idx_t value_var = DConstants::INVALID_INDEX;
+        string agg_name;                   //!< "sum", "avg", "min" or "max"
+        string label;                      //!< the reducer as the user wrote it, for messages
+        unique_ptr<Expression> inner_expr; //!< e, as bound; the ABS and bilinear rewrites applied
+        unique_ptr<Expression> filter;     //!< the reducer's own `when`, or null
+        //! Its own `per K'`: the key scope whose classes it counts once; INVALID_INDEX
+        //! for per row.
+        idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+        //! Γ, into `group_keys`; INVALID_INDEX for `by ()`, every kept row.
+        idx_t group_key = DConstants::INVALID_INDEX;
+        unique_ptr<Expression> when; //!< the clause's `when`, or null
+        //! MIN/MAX: the sides that pin the helper (ExtremumLinkSpec), read from the way the
+        //! clause pushes it; both when the sign of its factor is not known before the query
+        //! runs or the comparison is `=` or `<>`. Unused for SUM/AVG, whose row is an equality.
+        bool need_envelope = false;
+        bool need_closing = false;
+        idx_t source_clause_id = DConstants::INVALID_INDEX;
+        idx_t removal_group_id = DConstants::INVALID_INDEX;
+        //! `inner_expr` flattened by BuildDecidePreparedModel, like a composed term's.
+        vector<DecideTerm> inner_terms;
+    };
+    vector<ReducerValueLink> reducer_value_links;
+
     //! Composed MIN/MAX objective: additive sum of SUM/AVG/MIN/MAX terms in the objective.
     //! Populated by DecideOptimizer::RewriteComposedMinMaxObjective. Empty when the
     //! objective is a single aggregate (handled by RewriteMinMaxObjective) or plain linear.
@@ -451,7 +493,8 @@ public:
 
     //! Calls back with every expression this operator owns: decide_variables,
     //! decide_constraints, decide_objective, the composed MIN/MAX constraint and
-    //! objective terms, entity_key_expressions, the `by` keys and the scope checks.
+    //! objective terms, the helper decisions' reducers, entity_key_expressions, the `by`
+    //! keys and the scope checks.
     //! This is the single place that
     //! knows LogicalDecide's expression layout -- generic DuckDB passes (the
     //! LogicalOperatorVisitor dispatcher, ColumnBindingResolver, RemoveUnusedColumns)

@@ -692,7 +692,7 @@ adds actual row counts and timing. JSON uses the same content in a structured pl
 
 ## 10. Scope Spellings — `when` and `per` in front, `by` after a reducer
 
-Items 3 and 4 of [`../09_anr_language/todo.md`](../09_anr_language/todo.md); the full
+Items 3 to 5 of [`../09_anr_language/todo.md`](../09_anr_language/todo.md); the full
 behaviour is [`anr_language_extension.md`](anr_language_extension.md) §3–§9. A clause
 written with any of these spellings — in front, a `by`, or a scope inside a reducer —
 follows the rules below; a clause without one keeps the rules of §5–§7, word for word.
@@ -727,10 +727,25 @@ MAXIMIZE when S.status = 'active': sum(ship)
   constraint, both halves under the scope.
 - **Model rows.** No reducer on the decision side: one row per class, from its first kept
   row (the key determines the clause, §10.5). Decision reducers sharing one `by` key,
-  beside query-wide terms only: one row per `by` group of the kept rows, under the
-  group's tightest bound — `=` refuses a group whose bounds differ, `<>` excludes every
-  value. With no `per`, a bound that varies inside a group is that tightest bound, as
-  today.
+  under whole-query factors, beside query-wide terms only: one row per `by` group of the
+  kept rows, under the group's tightest bound — `=` refuses a group whose bounds differ,
+  `<>` excludes every value. With no `per`, a bound that varies inside a group is that
+  tightest bound, as today. Anything else on the decision side — a per-row or keyed
+  decision beside a reducer (`ship <= 0.20 * sum(ship) by ()`, the facility link
+  `sum(ship) by (D.depotID) <= D.capacity * open`), a factor that varies by row
+  (`ship <= D.maxShipmentShare * sum(ship) by (D.depotID)`), reducers with different
+  `by` keys, a reducer inside another expression (`abs(sum(ship) by (g) - 40) <= 5`) —
+  is built from a **helper decision per reducer**: one instance per `by` group of the
+  kept rows, holding the reducer's value over the rows it reads, defined once (an
+  equality row per group for `SUM`/`AVG`; for `MIN`/`MAX` an extremum link per group,
+  pinned on the side the row would otherwise let it escape through, both for `=`, `<>`
+  and a factor of unknown sign) and used by one row per class. The helper is
+  whole-numbered when the reducer is, so `<`, `>` and `<>` keep their rules, and it may
+  be negative. Deck examples 1, 5 and 8 take this shape; example 1 costs N rows of two
+  entries and one definition row, not N rows of N. A product or square of decisions
+  inside such a reducer stays refused (§10.6). `EXPLAIN`'s solver-row layer names a
+  helper `__value_<n>__`, as it names an ABS auxiliary; `DIAGNOSE` names the clause and
+  never offers a definition row.
 
 ### 10.2 `by (Γ)` — which rows a reducer reads
 
@@ -796,11 +811,11 @@ of §3, which names a subquery by its text as DuckDB prints it (*"DECIDE: the su
 | A reducer or `norm` with no argument | *"SUM needs one argument, found 'sum()'"* · *"NORM needs an expression and an order, as in norm(e, 1), found 'norm()'"* |
 | A decision in a `when`, a key or a `by` | *"DECIDE: x is a decision; when, per and by may only use data"* |
 | A reducer inside a reducer (but the two-level objective) | *"DECIDE: an aggregate inside an aggregate is not supported yet"* |
-| A per-row or keyed decision beside a decision reducer · reducers with different `by` keys · a reducer inside another expression · a query-wide decision beside a reducer in a row that multiplies decisions | *"... is not supported yet"* |
+| A product or square of decisions inside a reducer that a helper decision replaces (§10.1): a decision beside it, a row-varying factor on it, another `by` key next to it, an enclosing expression | *"DECIDE: 'sum(ship * ship)' is not supported yet in this constraint: a product or square of decisions inside a reducer is accepted only where the constraint's reducers share one by key, under a whole-query factor, with no other decision beside them"* |
+| A query-wide decision beside a reducer whose body multiplies decisions (`s + sum(x * y) <= 50`) | *"DECIDE: 's' beside a reducer, in a constraint that multiplies decisions, is not supported yet"* |
 | `AVG` under `<>` beside another term, over a product, or with its own `when`/`per` | *"DECIDE: AVG in a <> constraint is not supported yet ..."* |
-| A `MIN` or `MAX` beside another term, or under a factor whose sign is not known before the query runs (`(SELECT 2) * max(x)`), with a `by` · with a bound that is not a constant | *"DECIDE: 'max(x) by (g) - min(x) by (g)' is not supported yet: by (...) cannot apply to a MIN or MAX beside another term, or under a factor whose sign is not known before the query runs"* · *"DECIDE: 'max(S.demand) by (D.region)' is not supported yet as the bound of a MIN or MAX beside another term, ...; the bound must be a constant"* |
-| A decision beside a `MIN` or `MAX`, in a constraint or the objective | *"DECIDE: 's' beside MIN or MAX is not supported yet"* |
-| A row-varying factor on a decision reducer | today's message (§5) |
+| A decision beside a `MIN` or `MAX` in the objective | *"DECIDE: 's' beside MIN or MAX is not supported yet"* |
+| A clause with no scope spelling at all keeps today's rules, refusals included: deck example 1's bare form `ship <= 0.20 * sum(ship)` until item 7 | today's messages (§5); write `per row:` or `by ()` to opt in |
 
 `EXPLAIN` echoes a clause written with these spellings in them.
 

@@ -164,6 +164,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->source_fragments = std::move(op.source_fragments);
     decide_op->composed_minmax_constraints = std::move(op.composed_minmax_constraints);
     decide_op->composed_minmax_objective_terms = std::move(op.composed_minmax_objective_terms);
+    decide_op->reducer_value_links = std::move(op.reducer_value_links);
     decide_op->absorbed_lower_bounds = std::move(op.absorbed_lower_bounds);
     decide_op->absorbed_upper_bounds = std::move(op.absorbed_upper_bounds);
     decide_op->user_absorbed_bounds = std::move(op.user_absorbed_bounds);
@@ -253,6 +254,33 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         }
         for (auto &column : check.key) {
             harvest(*column);
+        }
+    }
+    // A lifted reducer's expressions live beside the tree: a composed term's and a helper
+    // decision's (reducer_value_links). The columns they read explain the answer too.
+    auto harvest_composed_term = [&](const LogicalDecide::ComposedMinMaxTerm &term) {
+        for (auto *expr : {term.inner_expr.get(), term.filter.get(), term.scale.get()}) {
+            if (expr) {
+                harvest(*expr);
+            }
+        }
+    };
+    for (auto &spec : decide_op->composed_minmax_constraints) {
+        for (auto &term : spec.terms) {
+            harvest_composed_term(term);
+        }
+        if (spec.rhs_expr) {
+            harvest(*spec.rhs_expr);
+        }
+    }
+    for (auto &term : decide_op->composed_minmax_objective_terms) {
+        harvest_composed_term(term);
+    }
+    for (auto &link : decide_op->reducer_value_links) {
+        for (auto *expr : {link.inner_expr.get(), link.filter.get(), link.when.get()}) {
+            if (expr) {
+                harvest(*expr);
+            }
         }
     }
     // entity_key_expressions are deliberately NOT harvested for names: every entry

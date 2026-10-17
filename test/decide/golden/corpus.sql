@@ -687,3 +687,32 @@ SUCH THAT x BETWEEN 0 AND 10
     AND SUM(x) >= 3 AND SUM(x) <= 7
     AND SUM(x) <> cap PER grp
 MAXIMIZE SUM(x);
+
+-- ---------------------------------------------------------------------------
+-- The value rewrite (ANR item 5). A scoped constraint whose decision side mixes a
+-- reducer with a per-row or keyed decision, a factor that varies by row, a second
+-- by key or an enclosing expression is built from a helper decision per reducer:
+-- one instance per by group, defined once (an equality row for SUM/AVG, an
+-- extremum link for MIN/MAX), used by one row per class.
+-- ---------------------------------------------------------------------------
+
+-- 95 deck example 1: one helper for the total, one definition row, one row per item
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT x <= 10 AND per row: x <= 0.5 * sum(x) MAXIMIZE SUM(x);
+
+-- 96 deck example 5: a factor that varies by row, on a helper per group
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT x <= 10 AND x <= (price / 50) * sum(x) by (grp) MAXIMIZE SUM(x);
+
+-- 97 deck example 8: an expression in the by key, one row per class of the per key
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT x <= 10 AND per id: x <= 0.6 * sum(x) by (grp, weight > 3) MAXIMIZE SUM(x);
+
+-- 98 two reducers with different by keys: two helpers in every row
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT x <= 10 AND sum(x) by (grp) + sum(x) <= 25 MAXIMIZE SUM(x);
+
+-- 99 a MAX helper pinned on both sides by an equality, per group
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT x <= price AND x = max(x) by (grp) MAXIMIZE SUM(x);
+
+-- 100 a MAX helper pinned on its closing side only (the row pushes it up)
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT x <= price AND x <= 0.5 * max(x) by (grp) + 5 MAXIMIZE SUM(x);
+
+-- 101 a keyed decision beside a reducer under per: the facility-location link
+SELECT id, x, open FROM items JOIN groups ON grp = g DECIDE x(INT), per grp: open(BOOL) SUCH THAT x <= 10 AND per grp: sum(x) by (grp) <= budget / 10 * open AND per (): sum(per grp: open) <= 1 MAXIMIZE SUM(x);

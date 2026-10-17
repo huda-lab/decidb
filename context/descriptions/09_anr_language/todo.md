@@ -79,6 +79,9 @@ the language does; this plan says *how* it gets built and verified.
 | D20 | (2026-10-17) Comment lines of `test_scope_parser.test` that said a spelling "answers not supported yet" are updated where it now binds | user |
 | D21 | (2026-10-17) The D14 exception stays: an old postfix `WHEN`/`PER` after a clause written with a scope in front is a parser syntax error | user |
 | D22 | (2026-10-17) The `SUM()` / `norm()` no-argument messages stay, the one change to the old spellings | user |
+| D23 | (2026-10-17) A clause with no scope spelling keeps today's rules until item 7, refusals included: deck example 1's bare form `ship <= 0.20 * sum(ship)` needs `per row:` or `by ()` until then (strict D12) | user |
+| D24 | (2026-10-17) Item 5 lifts every refusal the value rewrite handles exactly, not only the four shapes of §4.2: a decision beside a reducer, different `by` keys, a row-varying factor, a reducer inside another expression, a `MIN`/`MAX` beside another term with a `by` or a non-constant bound, a decision beside a `MIN`/`MAX` in a constraint, a query-wide product beside a reducer | user |
+| D25 | (2026-10-17) The tests that pinned those refusals change expectation: the 16 cases of `test_scope_reducer_by.py` move to `test_scope_value_rewrite.py` as oracle-judged answers, `test_scope_parser.test`'s by-expression case shows its result, the C++ per-row assertion asserts D19 | user |
 
 Small calls made while planning. All were put to the user on 2026-10-05 and none was
 vetoed.
@@ -165,6 +168,20 @@ whole-query `v` — two things the engine documents today: a whole-query decisio
 a reducer (`syntax_reference.md` §5) and one compared per row (§2.2). It costs O(N)
 matrix entries instead of N². The pattern is the one `RewriteAbs` set: helper variable
 at stage 5, linking rows at stage 6. Stage 6 gets no new constraint path.
+
+**How item 5 built it.** As designed, with these differences: a helper over a `by` key
+is an `ENTITY` decision whose `EntityScopeInfo` names its link (`value_link`): its
+entities are the `by` groups among the rows the clause keeps, built by execution over
+those rows only, NULL a value; one helper per occurrence of a reducer in a clause, shared
+by every row the earlier rewrites derived from that clause (the ABS envelope pair), with
+the sides any of them needs; the definition is stated in layer 6 (a flat equality per
+group for SUM/AVG, an extremum link for MIN/MAX) over the members layer 8 evaluates, and
+the ABS and helper boxes are derived together to a fixed point; the shape is decided once
+in layer 4 (`CanonicalConstraintClass::VALUE`, `VALUE_REWRITE_TAG`) and the pass reads
+the tag; a MIN/MAX link's closing Big-M is read off the helper's box (the cover of every
+group's reach) against the family's far end; `=` and `<>` under a `per` whose key differs
+from the `by` key keep the aggregate-shape rules settled with items 3–4. Every refusal
+the rewrite handles exactly was lifted (D24).
 
 ### 4.3 Checks are built once and run once
 
@@ -258,17 +275,16 @@ adds 1, 5 and 8 the same way.
 ## 7. Order of work
 
 Seven items, one commit each: a feature plus the tests that prove it. Old spellings keep
-working until item 7. Items 1 to 4 have shipped — see [`done.md`](done.md).
+working until item 7. Items 1 to 5 have shipped — see [`done.md`](done.md).
 
 | Item | Delivers | Checklist |
 |---|---|---|
-| 5 | New constraint shapes for `SUM`, `AVG`, `MIN`, `MAX`: a plain term beside a reducer, reducers with different `by` keys, a row-varying factor — the value rewrite of §4.2. Tests `test_scope_value_rewrite.py`, `test_scope_deck_examples.py` (all eight, both written forms), `test_scope_combinations.py`, one golden entry per new shape | C7 C11 |
 | 6 | Switch everything to the new spellings: EXPLAIN and DIAGNOSE echo them; golden corpus, parser tests, pytest suite and benchmarks converted; no other engine change. `golden/check.sh` identical on both solvers | — |
 | 7 | Remove the old spellings: `T.x(TYPE)`, `scalar x(TYPE)`, postfix `PER`, postfix `WHEN` and `D.x` references raise the error naming the new spelling; dead code removed; `SUM(D: e)` stays; the behaviour file is folded into `syntax_reference.md`. Tests `test_scope_removed_syntax.py` | C10 |
 
-Items 3 and 4 changed no old answer (D12, D17): the new rules apply to the new
+Items 3 to 5 changed no old answer (D12, D17, D23): the new rules apply to the new
 spellings. Item 7 changes the old ones when it removes them (NULL keys, empty sets, a
-varying bound under `per`) and rewrites the tests it affects.
+varying bound under `per`, deck example 1's bare form) and rewrites the tests it affects.
 
 Gate at the end of every step — all green:
 
@@ -334,31 +350,35 @@ of `01_pipeline/`; `04_testing/` (new `scope/` area).
 
 ---
 
-## 9a. Left open by items 3–4
+## 9a. Left open by items 3–5
 
-- **Item 5's shapes answer "not supported yet"**: a per-row or keyed decision beside a
-  decision reducer (deck ex. 1, 5, 8; the facility-location link), reducers with
-  different `by` keys, a reducer inside another expression, a query-wide decision beside
-  a reducer in a row that multiplies decisions. A row-varying factor on a decision
-  reducer still gets today's message ("'w' varies per row ... Move it inside the
-  aggregate"), which item 5 replaces with the value rewrite.
 - **Refused until a later item**: `AVG` under `<>` beside another term, over a product,
-  or with its own `when`/`per`; a `MIN` or `MAX` beside another term, or under a factor
-  whose sign is not known before the query runs, with a `by` or a bound that is not a
-  constant (the composed formulation is one row over every kept row); a strict bound on
-  a `MIN` or `MAX` whose value can be fractional; a decision beside a `MIN` or `MAX`; a
-  `when` inside either reducer of the two-level objective, a `per` inside its inner one,
-  or a `by` key that is not its `per` key; a product of two non-Boolean decisions outside
-  the objective's reducers; a window function or a reducer in a `when`, a key or a `by`;
-  `norm(D: e, p)`.
+  or with its own `when`/`per`; a product or square of decisions inside a reducer that
+  the value rewrite replaces (spec §12: accepted only in the aggregate shape); a strict
+  bound on a `MIN` or `MAX` whose value can be fractional; a decision beside a `MIN` or
+  `MAX` in the objective; a `when` inside either reducer of the two-level objective, a
+  `per` inside its inner one, or a `by` key that is not its `per` key; a product of two
+  non-Boolean decisions outside the objective's reducers; a window function or a reducer
+  in a `when`, a key or a `by`; `norm(D: e, p)`.
+- **Bare clauses** (no scope spelling) keep today's rules until item 7, refusals
+  included (D23): deck example 1's `ship <= 0.20 * sum(ship)` runs as `per row: ...` or
+  with `by ()`; `w * SUM(x) <= 4` keeps "'w' varies per row".
 - **Parse errors, not D14/D15 messages**: a postfix `WHEN`/`PER` after a clause written
   with a scope in front, and a `by` after anything but a function call (a column, a
   literal, `CASE`, `CAST`, `TRY_CAST`, `::`, `COALESCE`, `NULLIF`, `EXTRACT`,
   parentheses) or a scope inside such a form (the item-1 grammar admits neither). D14's
   and D15's messages cover every position the binder sees.
-- **DIAGNOSE** (item 6): an aggregate-shape clause's `group` column names its `by` group;
-  the spec's §1 asks for the `per` key value. Its suggested edit quotes the clause in
-  the new spelling, `per` included.
+- **EXPLAIN and DIAGNOSE** (item 6): an aggregate-shape clause's `group` column names
+  its `by` group where the spec's §1 asks for the `per` key value; a helper decision of
+  the value rewrite appears as `__value_<n>__` in EXPLAIN's solver-row layer (as an ABS
+  auxiliary does) and should carry its reducer's SQL; its definition rows are structural
+  and never offered for repair. A diagnosis suggested edit quotes the clause in the new
+  spelling, `per` included.
+- **One helper per clause and reducer**: two clauses holding the same reducer over the
+  same rows get two helpers (the rows of one clause share theirs); sharing across clauses
+  is the §10 follow-up, since a definition carries one clause's provenance. A helper's
+  column box is the cover of every group's reach (one box per decision), which the
+  MIN/MAX link's closing Big-M reads; a box per instance would tighten the LP.
 - **An `IN` under `per K:`** is emitted once per kept row, not per class: exact (the key
   determines the decision and the domain), one indicator set per row.
 - **Old spellings**: wrong answers found next to the shared code are logged in

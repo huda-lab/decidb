@@ -326,7 +326,7 @@ reason objectives get a boundary instead of their own normalizer.
 | **O1** | The body is an additive spine whose every term references a decision. | — |
 | **O2** | A decision-free additive term is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. One that does not fold to a constant is rejected here. | — |
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
-| **O4** | A factor on a decision-bearing reducer is one query-wide value, sits outside the reducer, and has one spelling. | C6, same `PeelScale` |
+| **O4** | A factor on a decision-bearing reducer is one query-wide value, sits outside the reducer, and has one spelling (in a scoped constraint it may vary by row, which makes the comparison VALUE, §3.10). | C6, same `PeelScale` |
 | **O5** | Structural tags survive rebuilding. The result is a fixed point. | C7 |
 
 Two consequences:
@@ -351,35 +351,40 @@ A comparison tagged `SCOPED_CLAUSE_TAG` (stage 02 §4a) is classified by
 | Decision side holds | Shape | Model rows |
 |---|---|---|
 | no reducer (a data-only reducer may sit on the bound side) | `PER_ROW` | one per kept row, or per class of an enclosing `per K:` |
-| decision reducers sharing one `by` key, beside query-wide terms only | `AGGREGATE` | one per `by` group of the kept rows |
-| anything else | refused | *"... is not supported yet"* (item 5) |
+| decision reducers sharing one `by` key, under whole-query factors, beside query-wide terms only | `AGGREGATE` | one per `by` group of the kept rows |
+| anything else: a per-row or keyed decision beside a reducer, a factor that varies by row, a second `by` key, a reducer inside another expression, a query-wide product beside a reducer | `VALUE` | the value rewrite (stage 05, item 5): each decision reducer becomes a helper decision per `by` group, then one row per class |
+| `AVG` under `<>` unless every term is a plain `AVG` · a query-wide decision beside a reducer whose body multiplies decisions | refused | *"... is not supported yet"* |
 
-Refused in particular: a per-row or keyed decision beside a decision reducer, reducers
-with different `by` keys, a reducer inside another expression, a query-wide decision
-beside a reducer in a row that multiplies decisions (the quadratic and bilinear builders
-would count it once per row), `AVG` under `<>` unless every term is a plain `AVG`
-(its exclusion scales the bound by the group's row count), and a clause that takes the
-composed MIN/MAX formulation (`TakesComposedMinMax`: a MIN or MAX over decisions beside
-another term, or alone under a factor whose sign is not known before the query runs)
-with a `by` or with a bound that is not a constant — that formulation is one row over
-all of the clause's kept rows. The MIN/MAX rewrite asserts both. Refusals quote the
-query through `QuoteMessagesWith`: columns qualified by relation over a join, a reducer
-with its scopes and `by`. `ClassifyCanonicalComparison`
-returns the scoped answer, so the linear form, the validation in `AddConstraint` and the
-debug verifier all read one classification.
+The two refusals: an `AVG`'s exclusion under `<>` scales the bound by the group's row
+count, exact only when every term is a plain `AVG` over all of them; the quadratic and
+bilinear builders count a query-wide decision beside a reducer once per row. A clause
+that takes the composed MIN/MAX formulation (`TakesComposedMinMax`: a MIN or MAX over
+decisions beside another term, or alone under a factor whose sign is not known before
+the query runs) is AGGREGATE only with no `by`, a constant bound and no decision beside
+it — that formulation is one row over all of the clause's kept rows under one bound;
+otherwise it is VALUE, where each extremum is pinned per group. `PeelScale` lets a
+row-varying factor stay on a scoped constraint's reducer as its scale (the comparison is
+then VALUE; the old spellings keep "varies per row"); a factor that is a decision is
+still bilinear, never a scale. Refusals quote the query through `QuoteMessagesWith`:
+columns qualified by relation over a join, a reducer with its scopes and `by`.
+`ClassifyCanonicalComparison` returns the scoped answer, so the linear form, the
+validation in `AddConstraint` and the debug verifier all read one classification; a
+VALUE comparison reaching the linear form is an internal error (the rewrite did not run).
 
 `CanonicalizeTree` stamps an aggregate-shape comparison with its `by` key
 (`__group_key_<i>__`) — the one grouping carrier after this stage, since later rewrites
 rebuild the reducers — and drops a `per K:` wrapper over it: one row per `by` group
 already stands for every class, whose constraints differ only in a bound the class
-determines. Over the rows shape the wrapper stays (`IsPerClassWrapper`, a wrapper for
-every walker).
+determines. A VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads
+and removes; its wrapper stays, as over the rows shape (`IsPerClassWrapper`, a wrapper
+for every walker).
 
 ---
 
 ## 4. Classification and verification
 
-`ClassifyCanonicalComparison` returns `PER_ROW`, `AGGREGATE` or `INVALID` from
+`ClassifyCanonicalComparison` returns `PER_ROW`, `AGGREGATE`, `VALUE` (a scoped
+comparison the value rewrite turns into `PER_ROW`, §3.10) or `INVALID` from
 reducer placement plus DECIDE variable scope. Aggregate rows admit only
 reducer-rooted decision terms and query-wide top-level terms; scalar decisions are
 query-wide, while row/entity decisions and data-varying expressions must be inside

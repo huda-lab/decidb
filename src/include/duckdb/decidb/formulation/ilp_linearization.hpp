@@ -222,6 +222,24 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
 //! Reads the range DeriveAbsAuxiliaryBounds already derived; never recomputes it.
 void LinearizeAbsMaximize(SolverInput &input);
 
+//! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
+//! each helper by the reach of its members over every group -- the sum of their brackets
+//! for SUM/AVG, their cover for MIN/MAX -- so a Big-M over it has a span and the root LP
+//! a box. Only ever tightens, like DeriveAbsAuxiliaryBounds: a member may be an ABS
+//! auxiliary and an ABS may hold a helper, so FormulateModel runs the two to a fixed
+//! point. A helper may be negative, so its floor is derived like its ceiling, never
+//! defaulted to 0; an end no member bounds is left open.
+void DeriveReducerValueBounds(SolverInput &input);
+
+//! Phase 2: emit each helper's definition, one row per group of its members. SUM/AVG:
+//! the flat equality `value - members = constants` (an AVG's members carry their 1/n).
+//! MIN/MAX: an extremum link (EmitExtremumLink) on the sides the clause needs, its
+//! closing Big-M sized off the helper's box against the family's far end, and refused
+//! naming a column to bound where no such constant exists on the lowering arm. The
+//! evaluated member rows are consumed here; none reaches `input.constraints`.
+void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
+                                NativeConstructPolicy policy);
+
 //! Phase 2, NATIVE path: one column `t` per active row, an equality row `t = inner`,
 //! and a `GeneralConstraintSpec` saying `aux = |t|`. Emitted in flat columns, which is
 //! why every construct site takes the `VarIndexer`.

@@ -1671,6 +1671,9 @@ public:
     //===--------------------------------------------------------------------===//
 
     vector<EvaluatedConstraint> evaluated_constraints;
+    //! The value rewrite's helper decisions, each with its reducer's members evaluated
+    //! (EvaluateReducerValueLinks); moved into SolverInput::reducer_value_links.
+    vector<ReducerValueLinkSpec> evaluated_value_links;
     vector<CoefficientColumn> evaluated_objective_coefficients;  // [term_idx]
     vector<idx_t> objective_variable_indices;
     vector<LinearTermReduction> objective_term_reductions;       // [term_idx]
@@ -2007,18 +2010,47 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
 //===--------------------------------------------------------------------===//
 
 vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate,
-                                                           idx_t num_rows) const {
+                                                           idx_t num_rows, ChunkExprCache &chunk_expr_cache) const {
     vector<EntityMapping> entity_mappings;
     auto data_types = gstate.data.Types();
     for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
         auto &scope = entity_scopes[scope_idx];
         EntityMapping mapping;
 
+        vector<unique_ptr<Expression>> key_exprs_owned;
+        vector<const Expression *> key_exprs;
+        if (scope.value_link != DConstants::INVALID_INDEX) {
+            // A helper decision's scope: the groups of its link's `by` key among the rows
+            // the link's clause keeps, one entity per value the key takes there (NULL a
+            // value). The key is never evaluated on a row the clause drops; those rows
+            // are no group, and share one spare entity so that every row has an id.
+            auto &link = reducer_value_links[scope.value_link];
+            for (auto &expr : group_keys[link.group_key].expressions) {
+                key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *expr, context));
+            }
+            vector<bool> kept;
+            if (link.when) {
+                kept = KeptRows(*link.when, chunk_expr_cache, context, gstate.data, num_rows);
+            }
+            BuildGroupIds(key_exprs, context, gstate.data, num_rows, std::function<bool(idx_t)> {},
+                          /*null_excludes=*/false, mapping.row_to_entity, mapping.num_entities, nullptr,
+                          link.when ? &kept : nullptr);
+            bool dropped = false;
+            for (auto &entity : mapping.row_to_entity) {
+                if (entity == DConstants::INVALID_INDEX) {
+                    entity = mapping.num_entities;
+                    dropped = true;
+                }
+            }
+            if (dropped) {
+                mapping.num_entities++;
+            }
+            entity_mappings.push_back(std::move(mapping));
+            continue;
+        }
         // Build BoundReferenceExpression for each entity-key physical column index
         // so BuildGroupIds can run them through one ExpressionExecutor.
-        vector<unique_ptr<Expression>> key_exprs_owned;
         key_exprs_owned.reserve(scope.entity_key_physical_indices.size());
-        vector<const Expression *> key_exprs;
         key_exprs.reserve(scope.entity_key_physical_indices.size());
         for (idx_t col_idx = 0; col_idx < scope.entity_key_physical_indices.size(); col_idx++) {
             idx_t phys_idx = scope.entity_key_physical_indices[col_idx];
@@ -2079,7 +2111,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //===--------------------------------------------------------------------===//
 
     DecideProfileScope phase("execution.entity_mapping");
-    vector<EntityMapping> entity_mappings = BuildEntityMappings(context, gstate, num_rows);
+    vector<EntityMapping> entity_mappings = BuildEntityMappings(context, gstate, num_rows, chunk_expr_cache);
 
     //===--------------------------------------------------------------------===//
     // PHASE 1.6: Scope checks of the clauses written with the scope spellings
@@ -2104,6 +2136,10 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // 3. Evaluate composed MIN/MAX clauses (constraint and objective)
     phase.Next("execution.evaluate_composed");
     EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, entity_mappings, evaluated);
+
+    // 4. Evaluate the value rewrite's helper decisions (their reducers' members)
+    phase.Next("execution.evaluate_value_links");
+    EvaluateReducerValueLinks(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
 
     //===--------------------------------------------------------------------===//
     // PHASE 3: Build and Solve ILP
@@ -2704,6 +2740,25 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             if (scope_idx == DConstants::INVALID_INDEX) continue;
             ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, num_rows,
                                    quadratic_filters[group_idx], scoped);
+        }
+        // A MIN/MAX reads the rows of its group as members, so a row the de-duplication
+        // drops leaves the group: left in with zero coefficients, it would be a member
+        // pinned at 0. (A SUM or AVG row is unchanged by a zero member.)
+        if (!constraint->minmax_agg_type.empty()) {
+            for (idx_t row = 0; row < num_rows; row++) {
+                bool member = constraint->lhs_terms.empty();
+                for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size() && !member; term_idx++) {
+                    member = !term_filters[term_idx].has_filter || term_filters[term_idx].mask[row];
+                }
+                if (member) {
+                    continue;
+                }
+                if (eval_const.row_group_ids.empty()) {
+                    eval_const.row_group_ids.assign(num_rows, 0);
+                    eval_const.num_groups = 1;
+                }
+                eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
+            }
         }
 
         // Per-term aggregate-local WHEN: reject any term whose own filter mask
@@ -3668,6 +3723,124 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 
 
 //===--------------------------------------------------------------------===//
+// Finalize: PHASE 2, sub-phase 4 -- the value rewrite's helper decisions
+//===--------------------------------------------------------------------===//
+
+//! Each term's coefficient (its sign applied) on the rows `read` keeps, 0 elsewhere, in
+//! one scan: the columns of a lifted reducer's members.
+static void EvaluateTermColumns(ClientContext &context, ColumnDataCollection &data, ChunkExprCache &chunk_expr_cache,
+                                const vector<DecideTerm> &terms, const vector<bool> &read, idx_t num_rows,
+                                const vector<string> &source_fragments, vector<CoefficientColumn> &columns) {
+    columns.resize(terms.size());
+    if (terms.empty()) {
+        return;
+    }
+    ExpressionExecutor executor(context);
+    vector<LogicalType> types;
+    for (idx_t t = 0; t < terms.size(); t++) {
+        const Expression &cached = CachedTransformToChunkExpression(chunk_expr_cache, *terms[t].coefficient, context);
+        types.push_back(cached.return_type);
+        executor.AddExpression(cached);
+        columns[t].Reserve(num_rows);
+    }
+    DataChunk results;
+    results.Initialize(context, types);
+    ColumnDataScanState scan_state;
+    data.InitializeScan(scan_state);
+    DataChunk chunk;
+    chunk.Initialize(context, data.Types());
+    idx_t row_base = 0;
+    while (data.Scan(scan_state, chunk)) {
+        results.Reset();
+        ExecuteOnReadRows(executor, chunk, row_base, &read, results);
+        for (idx_t t = 0; t < terms.size(); t++) {
+            NullSourceContext null_ctx {terms[t].coefficient.get(), &chunk, &source_fragments};
+            ExtractDoubleColumn(results.data[t], chunk.size(), terms[t].sign, columns[t].MutableDense(),
+                                "constraint coefficient", /*allow_infinite=*/false, &null_ctx, &read, row_base);
+            columns[t].SyncSize();
+        }
+        row_base += chunk.size();
+    }
+}
+
+void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+                                               ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
+                                               const vector<EntityMapping> &entity_mappings) const {
+    for (auto &link : reducer_value_links) {
+        DecideProfileScope clause_profile("extraction.value_link");
+        ReducerValueLinkSpec spec;
+        spec.value_var = link.value_var;
+        spec.agg_name = link.agg_name;
+        spec.need_envelope = link.need_envelope;
+        spec.need_closing = link.need_closing;
+        spec.label = link.label;
+        auto &ec = spec.rows;
+        ec.scoped = true;
+        ec.kind = ConstraintKind::STRUCTURAL;
+        ec.lhs_is_aggregate = true;
+        ec.comparison_type = ExpressionType::COMPARE_EQUAL;
+        ec.source_clause_id = link.source_clause_id;
+        ec.removal_group_id = link.removal_group_id;
+        ec.rhs_values.AssignScalar(num_rows, 0.0);
+        ec.rhs_is_shared_scalar = true;
+
+        // The rows the clause keeps, then those the reducer's own `when` keeps: its
+        // members. Nothing is computed on any other row.
+        vector<bool> kept(num_rows, true);
+        if (link.when) {
+            kept = KeptRows(*link.when, chunk_expr_cache, context, gstate.data, num_rows);
+        }
+        vector<bool> read = link.filter ? KeptRows(*link.filter, chunk_expr_cache, context, gstate.data, num_rows, &kept)
+                                        : kept;
+
+        // One group per `by` value among the kept rows (NULL a value); a member row
+        // stands in its group, every other row outside. The scope checks have passed, so
+        // no group is empty.
+        std::function<bool(idx_t)> is_member = [&](idx_t row) { return read[row]; };
+        vector<unique_ptr<Expression>> no_key;
+        LookupOrBuildPerGroupIds(per_group_cache,
+                                 link.group_key != DConstants::INVALID_INDEX ? group_keys[link.group_key].expressions
+                                                                             : no_key,
+                                 chunk_expr_cache, context, gstate.data, num_rows, /*null_excludes=*/false, is_member,
+                                 &kept, ec.row_group_ids, ec.num_groups, ec.group_labels);
+
+        // The members' coefficients, computed on the member rows alone.
+        EvaluateTermColumns(context, gstate.data, chunk_expr_cache, link.inner_terms, read, num_rows, source_fragments,
+                            ec.row_coefficients);
+        for (auto &term : link.inner_terms) {
+            ec.variable_indices.push_back(term.variable_index);
+            ec.linear_term_reductions.push_back(LinearTermReduction::SUM);
+            ec.coefficient_labels.push_back(term.coefficient->GetName());
+        }
+        // Its own `per`: one member per class of that key within each group. A row the
+        // de-duplication drops leaves the group, so that a MIN/MAX reads no member pinned
+        // at 0. AVG then divides by the members a group has.
+        TermFilterState members;
+        members.has_filter = true;
+        members.mask = read;
+        if (link.qualifier_scope_idx != DConstants::INVALID_INDEX) {
+            ApplyQualifierToFilter(entity_mappings, link.qualifier_scope_idx, ec.row_group_ids, num_rows, members,
+                                   /*scoped=*/true);
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (!members.mask[row]) {
+                    ec.row_group_ids[row] = DConstants::INVALID_INDEX;
+                }
+            }
+        }
+        const bool is_avg = link.agg_name == "avg";
+        for (auto &column : ec.row_coefficients) {
+            MaskCoefficientColumn(column, members.mask);
+            if (is_avg) {
+                ScaleAvgRows(column, true, members.mask, /*quadratic_inner=*/false, num_rows, ec.row_group_ids,
+                             ec.num_groups);
+            }
+        }
+        ec.avg_scaled = is_avg;
+        gstate.evaluated_value_links.push_back(std::move(spec));
+    }
+}
+
+//===--------------------------------------------------------------------===//
 // Finalize: PHASE 3a, assembly -- BuildSolverInput
 //===--------------------------------------------------------------------===//
 
@@ -3718,6 +3891,12 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         }
     }
     solver_input.upper_bounds = gstate.absorbed_upper_bounds;
+    // A helper decision of the value rewrite holds a reducer's value, which may be
+    // negative: no default floor. The formulation pass boxes it by its members' reach
+    // (DeriveReducerValueBounds), after the rigid box below is captured with it free.
+    for (auto &link : gstate.evaluated_value_links) {
+        solver_input.lower_bounds[link.value_var] = -NumericLimits<double>::Maximum();
+    }
 
     // Everything below this point is stage 06 working on the evaluated model, so
     // hand the constraints and the formulation links over before the first pass.
@@ -3732,6 +3911,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     for (auto &link : abs_maximize_links) {
         solver_input.abs_maximize_links.push_back(AbsMaximizeLinkSpec {link.aux_idx, link.y_idx});
     }
+    solver_input.reducer_value_links = std::move(gstate.evaluated_value_links);
 
     // The rigid box, captured before any propagation runs and with every user-absorbed
     // direction re-opened. What is left is the intrinsic domain alone — the only part of
@@ -4002,12 +4182,46 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // the LOWERING path refuses an underivable range; the native path leaves the
     // auxiliary open and answers.
     phase.Next("formulation.abs_bounds");
-    DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, !native_abs);
+    if (solver_input.reducer_value_links.empty()) {
+        DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, !native_abs);
+    } else {
+        // The value rewrite's helper decisions are boxed by their members' reach, and a
+        // member may be an ABS auxiliary while an ABS may hold a helper: each box is the
+        // other's input. Both derivations only tighten, and a reducer holds no reducer, so
+        // alternating them settles in as many passes as the constructs nest. The lowering
+        // arm's refusal is decided last, on the settled boxes, naming a helper by its
+        // reducer.
+        for (auto &link : solver_input.reducer_value_links) {
+            if (link.value_var < decide_var_names.size() && !link.label.empty()) {
+                decide_var_names[link.value_var] = link.label;
+            }
+        }
+        const idx_t max_passes =
+            solver_input.abs_maximize_links.size() + solver_input.reducer_value_links.size() + 1;
+        for (idx_t pass = 0;; pass++) {
+            auto lower = solver_input.lower_bounds;
+            auto upper = solver_input.upper_bounds;
+            DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, /*refuse_when_unbounded=*/false);
+            DeriveReducerValueBounds(solver_input);
+            if (lower == solver_input.lower_bounds && upper == solver_input.upper_bounds) {
+                break;
+            }
+            if (pass == max_passes) {
+                throw InternalException("DECIDE: the ABS and helper decision boxes did not settle");
+            }
+        }
+        DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, !native_abs);
+    }
     if (native_abs) {
         EmitNativeAbs(solver_input, var_indexer);
     } else {
         LinearizeAbsMaximize(solver_input);
     }
+
+    // The helper decisions' definitions: an equality row per group for SUM/AVG, an
+    // extremum link per group for MIN/MAX. A refusal names a helper by its reducer.
+    phase.Next("formulation.value_links");
+    LinearizeReducerValueLinks(solver_input, var_indexer, decide_var_names, native_min_max);
 
     // Encode every hard MIN/MAX constraint stage 05 tagged. Native states `z = MAX(t..)`
     // directly and needs no Big-M, so it also needs no bound on the contributing

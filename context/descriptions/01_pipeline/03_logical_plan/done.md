@@ -126,7 +126,11 @@ as written (`declared_key`). A reducer's own `per K'` is an exact key scope too,
 `key_names` are its columns as a message names them. `group_keys` holds every `by (Γ)`
 key of the clauses (`DecideGroupKey`: the bound expressions, the key as written, each
 element's name); a reducer's `__group_key_<i>__` tag names entry `i`. `scoped_objective`
-marks an objective written with a scope spelling.
+marks an objective written with a scope spelling. A scope the optimizer creates for a
+helper decision of the value rewrite names the link it holds instead of key columns
+(`EntityScopeInfo::value_link`; its `entity_key_bindings` are empty, and the field is
+deliberately absent from the serialization: an optimized plan is never serialized). Its
+entities are the link's `by` groups among the rows the link's clause keeps.
 
 **From the canonicalizer** — `objective_constant_offset`, and `scope_checks`: the
 run-time checks of the clauses and objective written with the scope spellings
@@ -138,9 +142,13 @@ resolution and column pruning see their columns.
 **From the optimizer** — `solver_backend_name`, `use_native_constructs`,
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
 `abs_maximize_links`, `aux_var_expressions`, `composed_minmax_constraints`,
-`composed_minmax_objective_terms`, `flat_objective_agg` /
-`flat_objective_is_easy`, the five `per_*` objective fields, the absorbed variable
-box, and the prepared linear form.
+`composed_minmax_objective_terms`, `reducer_value_links` (the value rewrite's helper
+decisions, one per occurrence of a reducer in a clause: each `ReducerValueLink` holds
+the reducer a helper replaced — kind, body, its own `when` and `per`, its `by` key, its
+SQL as a label — the clause's `when`, the MIN/MAX sides any row of the clause needs, the
+clause id and removal group; `inner_terms` are flattened with the prepared form),
+`flat_objective_agg` / `flat_objective_is_easy`, the five `per_*` objective fields, the
+absorbed variable box, and the prepared linear form.
 
 `optimized` marks the boundary between the first two groups and the third. It is
 set before the optimizer's first rewrite and is what takes this plan off the wire —
@@ -192,7 +200,8 @@ expression-holding fields **explicitly** rather than calling
 `VisitOperatorExpressions`, because DECIDE variables must be shielded from
 resolution via `ignored_bindings`. Currently enumerated: `decide_variables`,
 `decide_constraints`, `decide_objective`, `composed_minmax_objective_terms`,
-`composed_minmax_constraints`.
+`composed_minmax_constraints`, `reducer_value_links` (body, own `when`, clause `when`),
+`entity_key_expressions`, `group_keys`, `scope_checks`.
 
 **Any new field holding expressions that execution will evaluate must be added to
 that enumeration.** An optimizer rewrite that moves subexpressions out of

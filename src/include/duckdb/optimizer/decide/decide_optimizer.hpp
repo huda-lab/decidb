@@ -28,6 +28,8 @@ class Optimizer;
 //!   - RewriteAbs: detects ABS(expr) over decide vars, creates auxiliary REAL vars,
 //!     replaces ABS nodes with aux var refs, generates linearization constraints
 //!   - RewriteBilinear: McCormick linearization for Boolean × anything products
+//!   - RewriteScopedReducers: the value rewrite of the scope spellings -- each decision
+//!     reducer of a VALUE-shape comparison becomes a helper decision defined per group
 //!   - RewriteComposedMinMax: detects composed MIN/MAX before the single-term pass
 //!   - RewriteMinMax: classifies MIN/MAX constraints as easy/hard, rewrites to per-row
 //!     or SUM+indicator, handles objectives (flat and nested PER)
@@ -95,6 +97,14 @@ private:
 	//! A decision-free AVG is skipped: there is nothing to linearize, and rebinding it as SUM
 	//! would redeclare it with SUM's integral type while its value stays fractional.
 	void RewriteAvgInExpression(unique_ptr<Expression> &expr, idx_t decide_index);
+
+	//! The value rewrite of the scope spellings (todo.md §4.2): every decision reducer of a
+	//! comparison in the VALUE shape (VALUE_REWRITE_TAG) becomes a helper decision defined
+	//! once per `by` group (LogicalDecide::reducer_value_links), and the comparison is then
+	//! one row per class. Runs after ABS and bilinear, whose auxiliaries may stand inside a
+	//! reducer's body, and before the MIN/MAX passes, which never see these reducers. A
+	//! product of decisions left inside such a reducer is refused (spec §12).
+	void RewriteScopedReducers(LogicalDecide &decide);
 
 	//! Detect composed MIN/MAX constraints — additive LHS mixing SUM/AVG/MIN/MAX terms.
 	//! Extracts each term's metadata into decide.composed_minmax_constraints and replaces

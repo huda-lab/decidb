@@ -9,6 +9,7 @@ add_library_unity(
   decide_rewrite_minmax.cpp
   decide_rewrite_norm_in.cpp
   decide_rewrite_notequal_avg.cpp
+  decide_rewrite_scoped.cpp
   decide_solver_gate.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_optimizer_decide>

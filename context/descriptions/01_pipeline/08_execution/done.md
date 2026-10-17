@@ -22,6 +22,7 @@ on `PhysicalDecide`, in call order:
 | `EvaluateConstraints` | 2, constraints — appends to `gstate.evaluated_constraints` |
 | `EvaluateObjective` | 2, objective — per-term filters, the `WHEN` mask, and the objective's `PER` grouping |
 | `EvaluateComposedClauses` | 2, composed MIN/MAX — per-row coefficients, reducer factors, `WHEN` masks, constant RHS |
+| `EvaluateReducerValueLinks` | 2, the value rewrite's helper decisions — each reducer's members on the rows the clause and the reducer keep, grouped by its `by` key |
 | `BuildSolverInput` | 3a — assembles `SolverInput`, settles the column box, builds the `VarIndexer` |
 | `FormulateModel` | 3b — derives the constants and emits the rows, against a given box |
 | `FormulateElasticModel` | 3b again, under `DIAGNOSE` only — the same pass against the widened box a repair searches |
@@ -51,7 +52,7 @@ separate objective-side copy.
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
 | 3 | `Finalize` → `BuildEntityMappings` | Build entity mappings for table-scoped variables |
 | 3a | `Finalize` → `RunScopeChecks` | Run the scope checks (§4a); the first failure stops the query |
-| 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` | Evaluate coefficients, `WHEN` masks, `PER` groups, RHS values |
+| 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` / `EvaluateReducerValueLinks` | Evaluate coefficients, `WHEN` masks, `PER` groups, RHS values, the helper decisions' members |
 | 5 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
 | 6 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
 | 7 | `GetData` | Project solution values back onto rows |
@@ -189,7 +190,13 @@ For each `EntityScopeInfo`, before coefficient evaluation:
 
 1. Evaluate the entity-key columns per row from the materialized data, using
    `BoundReferenceExpression`s built from `entity_key_physical_indices` so one
-   `ExpressionExecutor` covers them all.
+   `ExpressionExecutor` covers them all. A helper decision's scope
+   (`EntityScopeInfo::value_link`, the value rewrite) has no key columns: its link's
+   `by` key expressions are evaluated instead (`CachedTransformToChunkExpression`), on
+   the rows the link's clause `when` keeps only (`BuildGroupIds`' `read_rows`), one
+   entity per value they take together, NULL a value. A row the clause drops is no
+   group; every such row maps to one spare entity, so each row has an id and the key is
+   never evaluated where the clause never reads.
 2. Concatenate each row's key values into a composite string key with NULL-safe
    tagging, so a real NULL is distinguishable from the string `"NULL"` — the same
    pattern `PER` grouping uses.
@@ -240,8 +247,12 @@ read by these rules; every other clause, by §5 unchanged:
 - **Grouping.** The aggregate shape groups the kept rows by its `by` key
   (`group_keys[constraint->group_key]`), NULL a value: a group's members are the rows a
   reducer's `when` keeps (all kept rows for `<>`, whose bound values are all excluded),
-  its bound the tightest over all its kept rows. The rows shape under `per K:` emits one
-  row per class, at its first kept row; under `when` alone, one per kept row.
+  its bound the tightest over all its kept rows. A row the reducer's own `per`
+  de-duplication drops leaves the group when the clause is a hard MIN/MAX
+  (`minmax_agg_type`): the members are the rows the reducer reads, and a zeroed row
+  would be a member pinned at 0 (the same line serves the old spellings). The rows
+  shape under `per K:` emits one row per class, at its first kept row; under `when`
+  alone, one per kept row.
 - **Bound-side reducers** are each evaluated over their own `by` groups of the kept rows
   (`EvaluateRhsReducerPerGroup`, `scoped`), whatever the clause's shape, and broadcast
   by each row's own group.
@@ -256,6 +267,16 @@ read by these rules; every other clause, by §5 unchanged:
   two-level form groups with NULL a class.
 - **Composed clauses** read the rows their folded filter keeps, de-duplicate among them,
   and skip the old empty-set errors.
+- **Helper decisions** (the value rewrite, `EvaluateReducerValueLinks`): each link's
+  reducer is read on the rows the clause's `when` keeps and its own `when` keeps among
+  them, grouped by its `by` key over the kept rows (`LookupOrBuildPerGroupIds`, NULL a
+  value; the scope checks guarantee no group is empty); its coefficients come from
+  `EvaluateTermColumns`, one scan for every term; its `per` de-duplicates within each
+  group, a dropped row leaves the group, and AVG divides by the members left. The result
+  is a `ReducerValueLinkSpec` carrying the members alone, with the link's label and
+  provenance; stage 06 states the definition over them (an equality per group for
+  SUM/AVG, an extremum link for MIN/MAX). `BuildSolverInput` frees a helper's floor before
+  the rigid box is captured; a refusal in formulation names a helper by its reducer.
 - **A NULL subquery** is named by its text as DuckDB prints it:
   `NullSourceContext::fragments`, set by a scoped clause only, maps the flattened column
   back to the subquery's source fragment.

@@ -124,21 +124,20 @@ static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
 // Throws BinderException on v1-unsupported shapes (non-aggregate leaves,
 // nested subtraction/scaling, non-SUM/AVG/MIN/MAX aggregates).
 //
-// `outer_push_down` is which way the outer comparison drives the LHS, and decides
-// each MIN/MAX term's easy/hard classification. `exact_pin` says there is no such
-// direction — an outer `=` — so every MIN/MAX term is classified hard and gets its
-// auxiliary pinned from both sides.
+// `outer_push` is which way the outer comparison or objective drives the LHS, and decides
+// each MIN/MAX term's easy/hard classification; NONE (an outer `=`) classifies every
+// MIN/MAX term hard, with its auxiliary pinned from both sides.
 //! `names`, given for a clause written with the scope spellings, quotes a refused term as
 //! written.
 static void WalkComposedLhs(ClientContext &context, const Expression &e, int sign, idx_t decide_index,
-                             bool outer_push_down, bool exact_pin,
+                             ExtremumPush outer_push,
                              vector<LogicalDecide::ComposedMinMaxTerm> &out_terms,
                              optional_ptr<const DecideSourceNames> names = nullptr) {
 	auto &u = (*UnwrapDecideCasts(e, decide_index));
 	if (IsAddNode(u, decide_index)) {
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		for (auto &child : fn.children) {
-			WalkComposedLhs(context, *child, sign, decide_index, outer_push_down, exact_pin, out_terms, names);
+			WalkComposedLhs(context, *child, sign, decide_index, outer_push, out_terms, names);
 		}
 		return;
 	}
@@ -150,13 +149,13 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 		// and a term that crosses the relation arrives negated.
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		if (fn.children.size() == 2) {
-			WalkComposedLhs(context, *fn.children[0], sign, decide_index, outer_push_down, exact_pin, out_terms, names);
-			WalkComposedLhs(context, *fn.children[1], -sign, decide_index, outer_push_down, exact_pin, out_terms,
+			WalkComposedLhs(context, *fn.children[0], sign, decide_index, outer_push, out_terms, names);
+			WalkComposedLhs(context, *fn.children[1], -sign, decide_index, outer_push, out_terms,
 			                names);
 			return;
 		}
 		if (fn.children.size() == 1) {
-			WalkComposedLhs(context, *fn.children[0], -sign, decide_index, outer_push_down, exact_pin, out_terms,
+			WalkComposedLhs(context, *fn.children[0], -sign, decide_index, outer_push, out_terms,
 			                names);
 			return;
 		}
@@ -221,27 +220,12 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 		// A negative FACTOR flips which way z is pushed exactly as a subtraction does,
 		// so the two combine into one effective sign. `-2 * MAX(e)` under `<=` pushes
 		// MAX up, the hard direction, just as `- MAX(e)` would.
+		// An outer `=` holds the LHS from both sides, and a factor whose sign is not known
+		// until the query runs leaves the direction open (ExtremumPush::NONE either way):
+		// neither has a cheap direction, so the indicator layer pins z to the true MIN/MAX
+		// from both sides -- right for an equality, and right for either sign.
 		int scale_sign = ScaleSignAtPlanTime(context, scale, scale_divides);
-		if (exact_pin) {
-			// An equality holds the LHS from both sides at once, so no MIN/MAX term in it
-			// has a cheap direction. The indicator layer pins z to the true MIN/MAX from
-			// both sides, which is exactly what the equality needs -- the same machinery
-			// the unknown-sign case below falls back to, asked for deliberately here.
-			term.is_easy = false;
-		} else if (scale_sign == 0) {
-			// The factor's sign is not known until the query runs, so neither is the
-			// cheap direction. The indicator layer pins z to the true MIN/MAX in BOTH
-			// directions, which is correct for either sign -- pay for it rather than
-			// guess. This is the case that used to be rejected outright.
-			term.is_easy = false;
-		} else {
-			int effective_sign = sign * scale_sign;
-			// z_k pushed down if the outer wants LHS small and this term's effective
-			// sign is +, or outer wants LHS large and it is -.
-			bool z_pushed_down = (effective_sign > 0) ? outer_push_down : !outer_push_down;
-			// Easy: MAX pushed down, or MIN pushed up.
-			term.is_easy = (is_max && z_pushed_down) || (!is_max && !z_pushed_down);
-		}
+		term.is_easy = IsEasyExtremum(is_max, ExtremumPushOf(outer_push, sign * scale_sign));
 	}
 	out_terms.push_back(std::move(term));
 }
@@ -383,9 +367,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 		                      "BETWEEN comparisons.");
 	}
 
-	// Meaningless when `exact_pin` is set, which short-circuits the classification.
-	bool outer_push_down = (cmp_type == ExpressionType::COMPARE_LESSTHAN ||
-	                         cmp_type == ExpressionType::COMPARE_LESSTHANOREQUALTO);
+	const ExtremumPush outer_push = ExtremumPushOf(cmp_type);
 
 	bool scoped = HasDecideTag(comp.GetAlias(), SCOPED_CLAUSE_TAG);
 	unordered_map<idx_t, string> no_relations;
@@ -399,8 +381,8 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	TryParseSourceClauseTag(comp.GetAlias(), spec.source_clause_id);
 	TryParseRemovalGroupTag(comp.GetAlias(), spec.removal_group_id);
 
-	WalkComposedLhs(optimizer.context, *comp.left, /*sign=*/1, decide.decide_index, outer_push_down,
-	                exact_pin, spec.terms, scoped ? &names : nullptr);
+	WalkComposedLhs(optimizer.context, *comp.left, /*sign=*/1, decide.decide_index, outer_push, spec.terms,
+	                scoped ? &names : nullptr);
 	if (scoped) {
 		ScopeComposedTerms(spec.terms, scoped_when);
 	}
@@ -476,14 +458,15 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	}
 
 	// Direction: MAXIMIZE pushes each term UP; MINIMIZE pushes each term DOWN.
-	bool outer_push_down = (decide.decide_sense == DecideSense::MINIMIZE);
+	const ExtremumPush outer_push =
+	    decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
 
 	vector<LogicalDecide::ComposedMinMaxTerm> terms;
 	// An objective always has a direction, so no term needs the both-sides pin here.
 	unordered_map<idx_t, string> no_relations;
 	DecideSourceNames names {decide.source_fragments, decide.entity_scopes, decide.group_keys, no_relations};
-	WalkComposedLhs(optimizer.context, *body, /*sign=*/1, decide.decide_index, outer_push_down,
-	                /*exact_pin=*/false, terms, decide.scoped_objective ? &names : nullptr);
+	WalkComposedLhs(optimizer.context, *body, /*sign=*/1, decide.decide_index, outer_push, terms,
+	                decide.scoped_objective ? &names : nullptr);
 	if (decide.scoped_objective) {
 		ScopeComposedTerms(terms, scoped_when);
 	}
@@ -620,28 +603,12 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	if (scale_sign == 0) {
 		return;
 	}
-	auto effective_cmp = (scale_sign < 0) ? FlipComparisonExpression(cmp_type) : cmp_type;
-
-	// Classify: easy vs hard
-	bool is_easy = false;
-	if (is_max && (effective_cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
-	               effective_cmp == ExpressionType::COMPARE_LESSTHAN)) {
-		is_easy = true; // MAX(expr) <= K → every row: expr <= K
-	}
-	if (!is_max && (effective_cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
-	                effective_cmp == ExpressionType::COMPARE_GREATERTHAN)) {
-		is_easy = true; // MIN(expr) >= K → every row: expr >= K
-	}
-
-	bool is_hard = false;
-	if (is_max && (effective_cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
-	               effective_cmp == ExpressionType::COMPARE_GREATERTHAN)) {
-		is_hard = true; // MAX(expr) >= K → need indicator
-	}
-	if (!is_max && (effective_cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
-	                effective_cmp == ExpressionType::COMPARE_LESSTHAN)) {
-		is_hard = true; // MIN(expr) <= K → need indicator
-	}
+	// Classify: easy (`MAX(expr) <= K` is every row's `expr <= K`; `MIN(expr) >= K` the
+	// mirror) against hard (`MAX(expr) >= K` needs an indicator: some row reaches K).
+	// `=` is neither and is split below.
+	const ExtremumPush push = ExtremumPushOf(ExtremumPushOf(cmp_type), scale_sign);
+	const bool is_easy = IsEasyExtremum(is_max, push);
+	const bool is_hard = push != ExtremumPush::NONE && !is_easy;
 
 	if (cmp_type == ExpressionType::COMPARE_NOTEQUAL) {
 		throw BinderException("DECIDE does not support <> comparison with MIN/MAX aggregates.");

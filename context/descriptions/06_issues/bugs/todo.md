@@ -409,6 +409,12 @@ this branch and its parent with the same result.
 - **A PER key NULL on every row:** `SUM(x) <= 7 PER nn` answers *"DECIDE empty row set
   ... check your WHEN clause"* though there is no WHEN; `MINIMIZE SUM(MAX(x)) PER nn`
   drops the PER and the MAX and minimizes `SUM(x)` over every row.
+- **DIAGNOSE of a hard MIN or MAX over a keyed decision:** `DECIDE per t.g: x(INT) SUCH
+  THAT x >= 15 AND x <= 20 AND MIN(x) <= 12` (or `per (): min(x) <= 12`,
+  `MAX(x) >= 25`) is infeasible, and DIAGNOSE answers *"no loosening of the clauses you
+  wrote restores feasibility"* (`undiagnosed`); the same query over a per-row `x(INT)`
+  suggests `min(x) <= 15`. Found 2026-10-17 while building item 5; the same on
+  `1c12622bbb`, so not of items 3–5. Expected: the loosening the per-row form suggests.
 - **Expected:** a refusal or an answer in SQL terms; `g IS NULL` for a NULL slice.
 - **Impact:** internal errors, misleading messages, and one wrong optimum (`PER nn`).
 

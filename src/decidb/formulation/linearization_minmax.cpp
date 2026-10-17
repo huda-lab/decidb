@@ -128,26 +128,13 @@ bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_a
     return true;
 }
 
-//! The family one group of a MIN/MAX constraint reduces over, in flat columns: one
-//! member per active row, each holding that row's inner expression negated (the shape
-//! `MinMaxLinkRow` and `EmitExtremumLink` take) with its constant part separate.
-//!
-//! `family` accumulates the reach of the whole group, which boxes the extremum column
-//! and sizes the Big-M; each member also keeps its OWN reach, which is the box a native
-//! arm gives a column pinned to it. Each end is kept independently — a row open above
-//! still contributes the floor it does have.
-struct MinMaxGroup {
-    vector<ExtremumMember> members;
-    AuxRange family;
-    //! The row this group reads its bound off. Group-constant by construction:
-    //! `ReduceAggregateRhsPerGroup` has already collapsed a row-varying bound.
-    idx_t first_row = DConstants::INVALID_INDEX;
-};
+} // namespace
 
-//! Split one tagged constraint into its groups' families. An ungrouped clause is the
-//! single group 0.
-static vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const VarIndexer &indexer,
-                                             const EvaluatedConstraint &ec) {
+// `MinMaxGroup` and this builder are declared in ilp_linearization_internal.hpp: the
+// value rewrite's MIN/MAX helpers (linearization_reducer_value.cpp) reduce over the same
+// families.
+vector<MinMaxGroup> decide_linearize::BuildMinMaxGroups(const SolverInput &input, const VarIndexer &indexer,
+                                                        const EvaluatedConstraint &ec) {
     const idx_t num_rows = input.num_rows;
     bool has_groups = !ec.row_group_ids.empty();
     idx_t group_count = has_groups ? MaxValue<idx_t>(ec.num_groups, 1) : 1;
@@ -189,8 +176,6 @@ static vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const Var
     }
     return groups;
 }
-
-} // namespace
 
 void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
                                 const vector<string> &var_names, NativeConstructPolicy policy) {

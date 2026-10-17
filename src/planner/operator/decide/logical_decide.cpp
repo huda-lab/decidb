@@ -111,6 +111,14 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			callback(&spec.rhs_expr);
 		}
 	}
+	// The value rewrite lifts each reducer it replaces out of the constraint tree too.
+	for (auto &link : reducer_value_links) {
+		for (auto *expr : {&link.inner_expr, &link.filter, &link.when}) {
+			if (*expr) {
+				callback(expr);
+			}
+		}
+	}
 	for (auto &expr : entity_key_expressions) {
 		if (expr) {
 			callback(&expr);

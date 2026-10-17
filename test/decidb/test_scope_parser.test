@@ -98,11 +98,15 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority: 
 ----
 Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 
-# reducer: by () and by (expression)
-statement error
+# reducer: by () and by (expression); a decision beside a reducer is the value rewrite
+# (item 5): every shipment arrives on its own depot-day, so a quarter of its group's
+# total is a quarter of itself, and nothing ships
+query II rowsort
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) by () <= 100 AND ship <= 0.25 * sum(ship) by (depotID, dispatchDay + transitDays) MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: the decision ship outside a reducer, in a constraint with SUM, AVG, MIN or MAX, is not supported yet
+1	0
+2	0
+3	0
 
 # reducer: when inside
 statement error

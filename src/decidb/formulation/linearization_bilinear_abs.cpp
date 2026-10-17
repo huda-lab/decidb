@@ -255,7 +255,10 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
 
         // M = max over rows of |rhs[r]| + sum_{t: var != aux} |coeff[t][r]| * max(|lb|, |ub|),
         // reusing the shared per-row range helper (skipping the aux term). This
-        // upper-bounds |inner| across all rows and variable values.
+        // upper-bounds |inner| across all rows and variable values. Derived afresh each
+        // time: a run that found a member open may be followed by one that finds it
+        // boxed, once the value rewrite's helpers among the members are boxed.
+        link.range_unbounded = false;
         bool abs_unbounded = false;
         double M = 0.0;
         for (idx_t r = 0; r < num_rows; r++) {

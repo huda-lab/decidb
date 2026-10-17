@@ -100,7 +100,11 @@ binary.
 
 Bounds and type flags then expand across `NumInstances(var)` for each variable.
 Global auxiliaries take their own bounds and types from
-`input.global_lower_bounds` / `global_upper_bounds` / `global_variable_types`.
+`input.global_lower_bounds` / `global_upper_bounds` / `global_variable_types`. A helper
+decision of the value rewrite (`SolverInput::reducer_value_links`) holds a reducer's
+value, which may be negative: assembly frees its floor before the rigid box is captured,
+and `DeriveReducerValueBounds` (§9) boxes it by its members' reach. The rigid box
+therefore holds a helper open below, so a diagnosis never lifts a floor it never had.
 
 ---
 
@@ -581,6 +585,39 @@ marking — `minmax_agg_type`, and a `minmax_clause_idx` naming the clause. The 
 a Big-M pinning needs are global-block columns `EmitExtremumLink` creates for the
 members it actually writes, so the native arm allocates none at all.
 
+### Helper decisions of the value rewrite
+
+Stage 05 replaced each decision reducer of a VALUE-shape scoped clause by a helper
+decision (`05_optimizer/done.md`); stage 08 evaluated that reducer's members per `by`
+group into a `ReducerValueLinkSpec` (`solver_input.hpp`): an `EvaluatedConstraint` whose
+terms are the body's, nonzero only on the rows the clause and the reducer keep, grouped
+by the `by` key over the kept rows, with the link's label and provenance. The helper's
+own column enters only here (`linearization_reducer_value.cpp`).
+
+`DeriveReducerValueBounds` brackets, per group, the reducer's value — the sum of the
+members' signed brackets for SUM/AVG (an AVG's coefficients already carry the 1/n), their
+cover for MIN/MAX — and boxes the helper by the cover of every group's reach, each end on
+its own, only ever tightening; an end no member bounds stays open. One box per decision,
+so an instance may be boxed wider than its own group. A member may be an ABS auxiliary
+and an ABS may hold a helper, so when a model has helpers `FormulateModel` names them
+first and alternates `DeriveAbsAuxiliaryBounds` (not refusing) with this derivation until
+no box moves — a reducer holds no reducer, so the chain is finite — and only then runs
+the ABS derivation that refuses on the lowering arm. Each ABS derivation starts afresh
+(`range_unbounded` is reset), so a range open on one pass may close on the next.
+
+`LinearizeReducerValueLinks` then states each definition over the groups
+`BuildMinMaxGroups` splits the members into, consuming the evaluated rows. A SUM/AVG
+helper gets one flat equality per group in `global_constraints`:
+`value - members' expressions = members' constants`, the members' columns accumulated
+first (a keyed decision may stand in several rows of a group), STRUCTURAL, with the
+clause's provenance. A MIN/MAX helper gets one extremum link per group through
+`EmitExtremumLink`, its result column the helper's instance for that group, on the sides
+stage 05 recorded; the closing Big-M is the helper's box end against the family's far
+end (`upper_bounds[value] - family.lo` for MAX, `family.hi - lower_bounds[value]` for
+MIN), because the box is wider than one family. Where that constant does not exist the
+lowering arm refuses naming a column to bound and the native arm states the extremum, as
+for every other MIN/MAX.
+
 ### MIN/MAX objectives
 
 `LinearizeMinMaxObjective()` is the objective-side counterpart. A MIN/MAX
@@ -953,9 +990,10 @@ columns still name a decide variable in that message.
 | MIN/MAX — constraint, objective, extremum links, composed | `src/decidb/formulation/linearization_minmax.cpp` |
 | `<>` collapse classification and Big-M disjunction | `src/decidb/formulation/linearization_not_equal.cpp` |
 | McCormick and ABS rows | `src/decidb/formulation/linearization_bilinear_abs.cpp` |
+| The value rewrite's helper decisions: boxes and definitions | `src/decidb/formulation/linearization_reducer_value.cpp` |
 | Helpers shared across those files | `src/include/duckdb/decidb/formulation/ilp_linearization_internal.hpp` |
 | `MinMaxObjectiveSpec`, `ComposedMinMaxTermData` — what stage 08 hands over | `src/include/duckdb/decidb/formulation/ilp_linearization.hpp` |
-| `BilinearLinkSpec`, `AbsMaximizeLinkSpec` — the formulation tags | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
+| `BilinearLinkSpec`, `AbsMaximizeLinkSpec`, `ReducerValueLinkSpec` — the formulation tags | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
 | `VarIndexer`, `SolverModel`, `ModelConstraint`, provenance | `src/include/duckdb/decidb/formulation/ilp_model.hpp` |
 | `SolverInput`, `EvaluatedConstraint`, `CoefficientColumn` | `src/include/duckdb/decidb/formulation/solver_input.hpp` |
 | Golden model corpus (the characterization oracle) | `test/decide/golden/` |

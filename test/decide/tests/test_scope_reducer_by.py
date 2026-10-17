@@ -252,6 +252,42 @@ def test_min_and_max(decidb_cli, scope_solver, clause, sense, oracle_clause):
 
 @pytest.mark.correctness
 @pytest.mark.min_max
+@pytest.mark.parametrize("clause, oracle_clause, xs", [
+    pytest.param("per (): min(per t.g: x) <= 12",
+                 Scoped((Reduce("min", lambda r: {"x": 1}, per=("g",)),), "<=", (lambda r: {CONSTANT: 12},),
+                        per=()), [20, 20, 12], id="hard-min"),
+    pytest.param("per (): max(per t.g: x) >= 18",
+                 Scoped((Reduce("max", lambda r: {"x": 1}, per=("g",)),), ">=", (lambda r: {CONSTANT: 18},),
+                        per=()), [20, 20, 20], id="hard-max"),
+    pytest.param("per (): max(per t.g: x) <= 12",
+                 Scoped((Reduce("max", lambda r: {"x": 1}, per=("g",)),), "<=", (lambda r: {CONSTANT: 12},),
+                        per=()), [12, 12, 12], id="easy-max"),
+])
+def test_a_hard_min_or_max_counts_a_keyed_decision_once(decidb_cli, scope_solver, clause, oracle_clause, xs):
+    """`min(per t.g: x)` over `per t.g: x` reads one row per class of `g`: a row it does not
+    read is no member. Left in with a zero coefficient, it was a member pinned at 0, which
+    `min(...) <= 12` took for the class below 12 and let both classes stay at 20."""
+    columns = ("id", "g")
+    rows = ((1, "a"), (2, "a"), (3, "b"))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE per t.g: x(INT)
+        SUCH THAT x >= 10 AND x <= 20 AND {clause}
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    x = lambda r: {"x": 1}  # noqa: E731
+    model = ScopedModel(table_rows(columns, rows), [Decision("x", ("g",))])
+    clauses = [Scoped((x,), ">=", (lambda r: {CONSTANT: 10},)), Scoped((x,), "<=", (lambda r: {CONSTANT: 20},)),
+               oracle_clause]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", x),))
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)) == sum(xs)
+    assert [row["x"] for row in result] == xs
+
+
+@pytest.mark.correctness
+@pytest.mark.min_max
 def test_easy_max_reduces_the_bound_over_every_kept_row(decidb_cli, scope_solver):
     """The reducer's own `when` picks the members, S1 and S3 of D1 (capacity 40); the
     bound is still the tightest over every kept row of the group -- D2's 25, on the
@@ -456,17 +492,14 @@ def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
 
 
 # ---------------------------------------------------------------------------
-# Refused shapes and errors
+# Refused shapes and errors. The shapes item 5 lifted -- a decision beside a reducer,
+# reducers with different by keys, MIN/MAX beside another term with a by or a varying
+# bound, a reducer inside another expression -- run in test_scope_value_rewrite.py.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.error
 @pytest.mark.error_binder
 @pytest.mark.parametrize("clause, message", [
-    pytest.param("sum(ship) by (D.depotID) + sum(ship) by (D.region) <= 50",
-                 "DECIDE: reducers with different by keys in one constraint are not supported yet", id="two-by-keys"),
-    pytest.param("ship <= 0.25 * sum(ship) by (D.depotID)",
-                 "DECIDE: the decision ship outside a reducer, in a constraint with SUM, AVG, MIN or MAX, is not "
-                 "supported yet", id="decision-beside-a-reducer"),
     pytest.param("avg(ship) by (D.region) + sum(ship) by (D.region) <> 3",
                  "DECIDE: AVG in a <> constraint is not supported yet beside another term, over a product of "
                  "decisions, or with its own when or per", id="avg-beside-a-term-under-not-equal"),
@@ -479,41 +512,6 @@ def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
                  id="decision-in-by"),
     pytest.param("sum(max(ship) by (D.region)) <= 5", "DECIDE: an aggregate inside an aggregate is not supported yet",
                  id="nested"),
-    pytest.param("when S.priority: sum(ship) + max(ship) by (D.region) <= 30",
-                 "DECIDE: reducers with different by keys in one constraint are not supported yet",
-                 id="composed-with-two-keys"),
-    pytest.param("when S.priority: sum(ship) by (D.region) + max(ship) by (D.region) <= 30",
-                 "DECIDE: 'sum(ship) by (D.region) + max(ship) by (D.region)' is not supported yet: by (...) cannot "
-                 "apply to a MIN or MAX beside another term, or under a factor whose sign is not known before the "
-                 "query runs", id="composed-with-by"),
-    pytest.param("max(ship) by (D.region) - min(ship) by (D.region) <= 5",
-                 "DECIDE: 'max(ship) by (D.region) - min(ship) by (D.region)' is not supported yet: by (...) cannot "
-                 "apply to a MIN or MAX beside another term, or under a factor whose sign is not known before the "
-                 "query runs", id="range-with-by"),
-    pytest.param("(SELECT 2) * max(ship) by (D.region) <= 40",
-                 "DECIDE: '(SELECT 2) * max(ship) by (D.region)' is not supported yet: by (...) cannot apply to a MIN "
-                 "or MAX beside another term, or under a factor whose sign is not known before the query runs",
-                 id="unknown-sign-factor-with-by"),
-    pytest.param("max(ship) - min(ship) <= max(S.demand) by (D.region)",
-                 "DECIDE: 'max(S.demand) by (D.region)' is not supported yet as the bound of a MIN or MAX beside "
-                 "another term, or under a factor whose sign is not known before the query runs; the bound must be a "
-                 "constant", id="composed-bound-with-by"),
-    pytest.param("max(ship) - min(ship) <= max(per D.depotID: D.capacity)",
-                 "DECIDE: 'max(per D.depotID: D.capacity)' is not supported yet as the bound of a MIN or MAX beside "
-                 "another term, or under a factor whose sign is not known before the query runs; the bound must be a "
-                 "constant", id="composed-bound-with-inner-per"),
-    pytest.param("power(sum(ship) by (D.region), 2) <= 50",
-                 "DECIDE: 'POWER(sum(ship) by (D.region), 2)' holds a reducer inside another expression, which is not "
-                 "supported yet", id="power-of-a-reducer"),
-    pytest.param("abs(sum(ship) by (D.region)) <= 5",
-                 "DECIDE: 'ABS(sum(ship) by (D.region))' holds a reducer inside another expression, which is not "
-                 "supported yet", id="abs-of-a-reducer"),
-    pytest.param("sum(ship) by (D.region) * sum(ship) by (D.region) <= 50",
-                 "DECIDE: 'sum(ship) by (D.region) * sum(ship) by (D.region)' holds a reducer inside another "
-                 "expression, which is not supported yet", id="product-of-reducers"),
-    pytest.param("power(sum(when S.priority: ship), 2) <= 50",
-                 "DECIDE: 'POWER(sum(when S.priority: ship), 2)' holds a reducer inside another expression, which is "
-                 "not supported yet", id="power-of-a-reducer-with-a-when"),
     pytest.param("per D.region: avg(ship) by (D.region) < 3",
                  "Comparison '<' is not supported here: 'avg(ship) by (D.region)' has type DOUBLE",
                  id="strict-avg-with-by"),
@@ -545,22 +543,8 @@ def test_refused_shapes(decidb_cli, clause, message):
     pytest.param("ship(INT), per D.depotID: r(INT)", "r <= 9 AND avg(per D.depotID: r) < 3", "MAXIMIZE SUM(ship)",
                  "Comparison '<' is not supported here: 'avg(per D.depotID: r)' has type DOUBLE",
                  id="strict-avg-keyed"),
-    pytest.param("ship(INT), per (): s(INT)", "s <= 3 AND when S.priority: max(ship) by (D.region) + s <= 12",
-                 "MAXIMIZE SUM(ship)",
-                 "DECIDE: 'max(ship) by (D.region) + s' is not supported yet: by (...) cannot apply to a MIN or MAX "
-                 "beside another term", id="decision-beside-max-with-by"),
-    pytest.param("ship(INT), per (): s(INT)", "s <= 3 AND when S.priority: max(ship) + s <= 12", "MAXIMIZE SUM(ship)",
-                 "DECIDE: 's' beside MIN or MAX is not supported yet", id="decision-beside-max"),
     pytest.param("ship(INT), per (): s(INT)", "s <= 7", "MAXIMIZE when S.priority: sum(ship) - max(ship) + s",
                  "DECIDE: 's' beside MIN or MAX is not supported yet", id="decision-beside-max-in-the-objective"),
-    pytest.param("ship(INT), per (): s(INT)", "s <= 3 AND when S.priority: sum(ship) + D.capacity * s <= 100",
-                 "MAXIMIZE SUM(ship)",
-                 "DECIDE: 'D.capacity * s' outside a reducer, in a constraint with SUM, AVG, MIN or MAX, is not "
-                 "supported yet", id="row-varying-factor-on-a-decision-beside-a-reducer"),
-    pytest.param("ship(INT), per (): b(BOOL), per (): s(INT)", "s <= 3 AND when S.priority: sum(ship) + b * s <= 50",
-                 "MAXIMIZE SUM(ship)",
-                 "DECIDE: 'b * s' beside a reducer, in a constraint that multiplies decisions, is not supported yet",
-                 id="product-of-decisions-beside-a-reducer"),
 ])
 def test_refused_shapes_beside_other_decisions(decidb_cli, decide, clause, objective, message):
     result = decidb_cli.execute_raw(f"""

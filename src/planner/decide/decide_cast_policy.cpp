@@ -93,6 +93,29 @@ int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool di
 	return d < 0.0 ? -1 : 1;
 }
 
+ExtremumPush ExtremumPushOf(ExpressionType comparison) {
+	switch (comparison) {
+	case ExpressionType::COMPARE_LESSTHAN:
+	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
+		return ExtremumPush::DOWN;
+	case ExpressionType::COMPARE_GREATERTHAN:
+	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
+		return ExtremumPush::UP;
+	default:
+		return ExtremumPush::NONE;
+	}
+}
+
+ExtremumPush ExtremumPushOf(ExtremumPush outer, int sign) {
+	if (outer == ExtremumPush::NONE || sign == 0) {
+		return ExtremumPush::NONE;
+	}
+	if (sign > 0) {
+		return outer;
+	}
+	return outer == ExtremumPush::DOWN ? ExtremumPush::UP : ExtremumPush::DOWN;
+}
+
 bool IsCastWrappedConstant(const Expression &expr) {
 	// StripCastsForIdentity is the right tool despite its warning: only the innermost
 	// node's CLASS is read here, never its value. The value comes from evaluating the

@@ -338,17 +338,7 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			// decision: the arm is known at the moment the variable would be allocated.
 			idx_t y_idx = DConstants::INVALID_INDEX;
 			if (!decide.use_native_constructs.abs) {
-				y_idx = decide.decide_variables.size();
-				string y_name = "__abs_y_" + to_string(pi) + "__";
-				auto y_var = make_uniq<BoundColumnRefExpression>(
-				    y_name, LogicalType::BOOLEAN,
-				    ColumnBinding(decide.decide_index, y_idx));
-				decide.decide_variables.push_back(std::move(y_var));
-				decide.num_auxiliary_vars++;
-				decide.is_boolean_var.push_back(true);
-				if (!decide.variable_scopes.empty()) {
-					decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
-				}
+				y_idx = AddAuxiliaryDecision(decide, "__abs_y_" + to_string(pi) + "__", LogicalType::BOOLEAN, true);
 			}
 
 			// Tag C1 and C2 so the linearizer can find them at finalization. Keyed by the
@@ -397,21 +387,10 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				LogicalType aux_type =
 				    inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
 
-				// Create auxiliary variable
-				idx_t aux_idx = decide.decide_variables.size();
-				string aux_name = "__abs_aux_" + to_string(abs_pairs.size()) + "__";
-				auto aux_var = make_uniq<BoundColumnRefExpression>(
-				    aux_name, aux_type,
-				    ColumnBinding(decide.decide_index, aux_idx));
-				decide.decide_variables.push_back(std::move(aux_var));
-				decide.num_auxiliary_vars++;
-				decide.is_boolean_var.push_back(false);
-				if (!decide.variable_scopes.empty()) {
-					decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
-				}
-				// F6: record the user's original ABS(inner) for diagnosis naming
-				decide.aux_var_expressions.emplace_back(
-				    aux_idx, "ABS(" + func.children[0]->ToString() + ")");
+				// F6: a diagnosis names the auxiliary by the user's ABS(inner).
+				idx_t aux_idx =
+				    AddAuxiliaryDecision(decide, "__abs_aux_" + to_string(abs_pairs.size()) + "__", aux_type, false,
+				                         DecideVarScopeInfo::Row(), "ABS(" + func.children[0]->ToString() + ")");
 
 				// Read the Big-M marker set by TagAbsConstraintsForBigM. Tag is
 				// set on the BoundFunctionExpression alias before the rewrite.
@@ -424,9 +403,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				                     scope.scoped, scope.when ? scope.when->Copy() : nullptr});
 
 				// Replace ABS(inner) with aux var reference
-				expr = make_uniq<BoundColumnRefExpression>(
-				    aux_name, aux_type,
-				    ColumnBinding(decide.decide_index, aux_idx));
+				expr = MakeDecisionRef(decide, aux_idx);
 				return;
 			}
 		}

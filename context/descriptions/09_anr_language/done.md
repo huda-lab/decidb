@@ -142,3 +142,79 @@ follows the ANR rules too (D19, 2026-10-17). What the user sees: `syntax_referen
   follows the ANR definition literally; `_scope_cases.py` holds the shared data. The
   scoped case of `test/common/test_decidb_plan_serialization.cpp` round-trips the new
   plan fields.
+
+## Item 5 — the value rewrite
+
+Shipped 2026-10-17 under D23–D25 of [`todo.md`](todo.md) §3, on the design of its §4.2.
+A scoped comparison whose decision side mixes a decision reducer with something the
+grouped row cannot hold — a per-row or keyed decision, a factor that varies by row, a
+second `by` key, a reducer inside another expression — is the **VALUE shape**: each
+decision reducer becomes a helper decision with one instance per `by` group, defined
+once, and the comparison is then one row per class. Deck examples 1, 5 and 8 run; example
+1's bare form keeps today's refusal until item 7 (D23). What the user sees:
+`syntax_reference.md` §10.1 and §10.6.
+
+- **Canonicalizer** (`04_canonicalizer/done.md` §3.10). `ClassifyScoped` returns VALUE
+  for the shapes above (`CanonicalConstraintClass::VALUE`), AGGREGATE where the grouped
+  row is exact (one `by` key, whole-query factors, only query-wide terms beside; the
+  composed MIN/MAX formulation only with no `by`, a constant bound and no decision
+  beside), UNSUPPORTED for `AVG` under `<>` with anything but plain AVGs and for a
+  query-wide decision beside a reducer whose body multiplies decisions. `PeelScale` lets
+  a row-varying factor stay on a scoped constraint's reducer as its scale.
+  `CanonicalizeTree` stamps `VALUE_REWRITE_TAG`; the per-class wrapper stays.
+- **Logical plan** (`03_logical_plan/done.md`). `LogicalDecide::reducer_value_links`,
+  one per occurrence of a reducer in a clause (`ReducerValueLink`: the helper, the
+  reducer's kind, body, label, own `when` and `per`, its `by` key, the clause's `when`,
+  the MIN/MAX sides any row of the clause needs, the clause id and removal group;
+  `inner_terms` flattened by `BuildDecidePreparedModel`), in `EnumerateExpressions`,
+  never serialized. `EntityScopeInfo::value_link` marks a helper's scope — the link's
+  `by` groups among the rows its clause keeps — so `entity_key_bindings` is empty; the
+  field is not serialized.
+- **Optimizer** (`05_optimizer/done.md`). `RewriteScopedReducers`
+  (`decide_rewrite_scoped.cpp`), after `RewriteBilinear` and before the MIN/MAX passes:
+  walks the VALUE-tagged comparisons, reads each reducer's sign through `+`, `-`, casts
+  and factors (`ScaleSignAtPlanTime`; 0 for a data factor or an enclosing expression),
+  refuses a body that still multiplies decisions (spec §12), and replaces the reducer
+  node in place by its helper: the clause's existing one for a repeated occurrence (the
+  ABS envelope pair holds two copies; `Helpers::Find` matches reducer, alias, clause id
+  and `when`), else a new `__value_<n>__` through `AddAuxiliaryDecision` — INTEGER when
+  the reducer's type is integral, `Scalar()` for `by ()`, else `Entity` of its own scope,
+  labelled by the reducer's SQL. A MIN/MAX helper needs its envelope when a row pushes it
+  down (MAX) or up (MIN), its closing side otherwise, both for `=`, `<>` or an unknown
+  sign (`ExtremumPushOf`, shared with the MIN/MAX passes); a shared helper takes every
+  side any of its rows needs.
+- **Model** (`06_model_formulation/done.md` §9). `DeriveReducerValueBounds` boxes each
+  helper by its members' reach over every group (sums for SUM/AVG, cover for MIN/MAX),
+  tightening only, with no default floor; `FormulateModel` alternates it with the ABS
+  derivation to a fixed point when a model has helpers (a member may be an ABS auxiliary
+  and an ABS may hold a helper), then lets the ABS derivation refuse on the lowering arm.
+  `LinearizeReducerValueLinks` states each definition: a SUM/AVG helper's flat equality
+  per group (`value - members = constants`, `global_constraints`) and a MIN/MAX helper's
+  extremum link per group through `EmitExtremumLink`, its closing Big-M the helper's box
+  end against the family's far end; native or lowered per the backend policy.
+- **Execution** (`08_execution/done.md` §4, §4a). `BuildEntityMappings` builds a helper's
+  scope from its link: the `by` key over the rows the clause keeps (NULL a value), the
+  dropped rows on one spare entity. `EvaluateReducerValueLinks` computes each reducer's
+  members on the rows the clause and the reducer keep (`EvaluateTermColumns`), grouped
+  by its `by` key over the kept rows, de-duplicates its own `per` — a dropped row leaves
+  its group — and scales AVG; the same drop applies to a hard MIN/MAX of the aggregate
+  shape. `BuildSolverInput` frees the helper's floor before the rigid box is captured. A
+  refusal names a helper by its reducer.
+- **Messages.** DIAGNOSE names the user's clause and never a helper or a definition row
+  (structural). EXPLAIN shows a helper as `__value_<n>__` in its solver-row layer, as it
+  shows an ABS auxiliary (item 6 labels it).
+- Tests: `test/decide/tests/test_scope_value_rewrite.py` (C7: the shapes, MIN/MAX
+  sides, strict and `<>`, AVG, inner `when`/`per`, NULL groups, ABS/POWER over a helper,
+  linear model size, the unbounded-member refusal on HiGHS against the native answer,
+  the §12 refusal, the checks, DIAGNOSE, EXPLAIN, HiGHS agreement; the shared helper
+  under a hard-direction ABS on both solvers against a brute-force optimum, a helper
+  inside a hard ABS on the lowering arm, a helper key read on the kept rows only, a MIN
+  helper over a keyed decision counting each class once), `test_scope_reducer_by.py` (a
+  hard MIN/MAX of the aggregate shape counting each class once),
+  `test_scope_combinations.py` (§8 grid: 784 cells against the oracle — every cell the
+  oracle solves is solved identically, every cell it refuses is refused with the same
+  phrase, and no cell answers "not supported yet", asserted), `test_scope_deck_examples.py`
+  (examples 1, 5, 8 in both forms, C11), golden corpus entries 95–101 on both solvers.
+  The 16 refusal
+  cases of `test_scope_reducer_by.py` that item 5 lifted moved to the new suite as
+  answers (D25).

@@ -228,6 +228,10 @@ public:
 		for (auto &term : op.composed_minmax_objective_terms) {
 			ExtractTerms(*term.inner_expr, term.inner_terms);
 		}
+		// The reducers the value rewrite lifted into helper decisions, the same way.
+		for (auto &link : op.reducer_value_links) {
+			ExtractTerms(*link.inner_expr, link.inner_terms);
+		}
 
 		// Group like terms, once, over every list that becomes a linear solver row.
 		for (auto &constraint : op.prepared.constraints) {
@@ -243,6 +247,9 @@ public:
 		}
 		for (auto &term : op.composed_minmax_objective_terms) {
 			CollectLikeTerms(term.inner_terms);
+		}
+		for (auto &link : op.reducer_value_links) {
+			CollectLikeTerms(link.inner_terms);
 		}
 	}
 
@@ -1286,6 +1293,11 @@ private:
 				    "DECIDE constraint reached term extraction with invalid aggregate/per-row "
 				    "homogeneity: '%s'. Canonical validation must reject this during planning.",
 				    comp.ToString());
+			}
+			if (constraint_class == CanonicalConstraintClass::VALUE) {
+				throw InternalException("DECIDE constraint in the VALUE shape reached term extraction: the value "
+				                        "rewrite did not replace its reducers in '%s'.",
+				                        comp.ToString());
 			}
 
 			if (constraint->scoped && constraint->was_minmax_easy) {

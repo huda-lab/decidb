@@ -75,6 +75,7 @@
 
 #pragma once
 
+#include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/types.hpp"
 #include "duckdb/planner/expression.hpp"
 
@@ -133,6 +134,26 @@ bool TryEvaluateFoldableDoubleNoThrow(ClientContext &context, const Expression &
 //! linearization and an exact expensive one. 0 must therefore be treated as "assume
 //! the expensive one", never as an error.
 int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides);
+
+//! The way a comparison drives a term on its decision side, read before the query runs.
+//! `<=` and `<` push a positive term DOWN and a negative one UP; `>=` and `>` the mirror.
+//! NONE when nothing decides it: `=`, `<>`, or a sign (0) that is not known until the
+//! query runs. A MIN or MAX pushed its cheap way -- MAX down, MIN up -- is held by its
+//! envelope alone (every member bounds it); pushed the other way it needs the closing
+//! side (some member must reach it); under NONE it needs both. The single-reducer, the
+//! composed and the value rewrites all read the direction from here.
+enum class ExtremumPush : uint8_t { DOWN, UP, NONE };
+
+//! The push of a comparison's whole decision side (a term of sign +1).
+ExtremumPush ExtremumPushOf(ExpressionType comparison);
+
+//! The push of a term of `sign` under `outer`, the push of the side it stands in.
+ExtremumPush ExtremumPushOf(ExtremumPush outer, int sign);
+
+//! True when `push` is the cheap direction of a MIN (`is_max` false) or MAX; NONE never is.
+inline bool IsEasyExtremum(bool is_max, ExtremumPush push) {
+	return push == (is_max ? ExtremumPush::DOWN : ExtremumPush::UP);
+}
 
 //! True for a literal under any number of cast wrappers.
 //!

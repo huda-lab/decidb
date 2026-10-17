@@ -387,6 +387,22 @@ struct AbsMaximizeLinkSpec {
     bool range_unbounded = false;
 };
 
+//! A helper decision of the value rewrite (LogicalDecide::ReducerValueLink), evaluated.
+//! `rows` holds the reducer's members: the inner terms' coefficients on the rows the
+//! clause and the reducer keep (every other row 0), grouped by the `by` key over the kept
+//! rows. For SUM and AVG it also carries the helper's own term, -1 on each group's first
+//! row, so the row is the equality `members - value = 0` per group; a MIN/MAX helper is
+//! pinned by an extremum link per group instead (ExtremumLinkSpec).
+struct ReducerValueLinkSpec {
+    idx_t value_var = DConstants::INVALID_INDEX;
+    string agg_name;
+    bool need_envelope = false;
+    bool need_closing = false;
+    //! The reducer as written, for the rows and columns a diagnosis names.
+    string label;
+    EvaluatedConstraint rows;
+};
+
 //! A construct handed to the backend whole, instead of being lowered into rows.
 //!
 //! Named in flat COLUMNS, not expressions, and that is the design decision: every
@@ -502,6 +518,9 @@ struct SolverInput {
     // them need evaluated bounds, so they are derived at stage 06.
     vector<BilinearLinkSpec> bilinear_links;
     vector<AbsMaximizeLinkSpec> abs_maximize_links;
+    //! The value rewrite's helper decisions, each with its evaluated definition. Consumed
+    //! (moved into `constraints` or emitted as extremum links) by the formulation pass.
+    vector<ReducerValueLinkSpec> reducer_value_links;
 
     // Linear objective
     vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows

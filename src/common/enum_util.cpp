@@ -667,6 +667,7 @@ const StringUtil::EnumStringLiteral *GetCanonicalConstraintClassValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(CanonicalConstraintClass::PER_ROW), "PER_ROW" },
 		{ static_cast<uint32_t>(CanonicalConstraintClass::AGGREGATE), "AGGREGATE" },
+		{ static_cast<uint32_t>(CanonicalConstraintClass::VALUE), "VALUE" },
 		{ static_cast<uint32_t>(CanonicalConstraintClass::INVALID), "INVALID" }
 	};
 	return values;
@@ -674,12 +675,12 @@ const StringUtil::EnumStringLiteral *GetCanonicalConstraintClassValues() {
 
 template<>
 const char* EnumUtil::ToChars<CanonicalConstraintClass>(CanonicalConstraintClass value) {
-	return StringUtil::EnumToString(GetCanonicalConstraintClassValues(), 3, "CanonicalConstraintClass", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetCanonicalConstraintClassValues(), 4, "CanonicalConstraintClass", static_cast<uint32_t>(value));
 }
 
 template<>
 CanonicalConstraintClass EnumUtil::FromString<CanonicalConstraintClass>(const char *value) {
-	return static_cast<CanonicalConstraintClass>(StringUtil::StringToEnum(GetCanonicalConstraintClassValues(), 3, "CanonicalConstraintClass", value));
+	return static_cast<CanonicalConstraintClass>(StringUtil::StringToEnum(GetCanonicalConstraintClassValues(), 4, "CanonicalConstraintClass", value));
 }
 
 const StringUtil::EnumStringLiteral *GetCatalogLookupBehaviorValues() {

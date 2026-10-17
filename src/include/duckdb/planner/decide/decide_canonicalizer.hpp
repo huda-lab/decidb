@@ -115,10 +115,14 @@ struct ScaledAggregateMatch {
 
 bool TryMatchScaledAggregate(const Expression &expr, idx_t decide_index, ScaledAggregateMatch &result);
 
-//! The semantic row shape of a canonical DECIDE comparison. INVALID means the
-//! tree mixes reduced values with row/entity-varying decision algebra and cannot
-//! denote either one constraint per row or one reduced constraint.
-enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, INVALID };
+//! The semantic row shape of a canonical DECIDE comparison. VALUE is a comparison written
+//! with the scope spellings whose decision side mixes a decision reducer with something
+//! the aggregate shape cannot hold -- a per-row or keyed decision, a factor that varies by
+//! row, a second `by` key, a reducer inside another expression: the value rewrite (stage
+//! 05) replaces each decision reducer by a helper decision defined once per `by` group,
+//! after which the comparison is PER_ROW. INVALID means the tree mixes reduced values
+//! with row/entity-varying decision algebra and can denote none of the three.
+enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, VALUE, INVALID };
 
 //! The scope a clause is written under: the WHEN condition and the `per K:` wrapper
 //! (PER_CLASS_TAG) that enclose it, if any.
@@ -289,9 +293,10 @@ private:
 
 	//! Split an expression into signed additive terms. Descends through `+`,
 	//! binary `-`, unary `-`, and binder-inserted casts over decision algebra;
-	//! every other node, including a data-only cast, is a term boundary.
-	void Decompose(const Expression &expr, int sign, vector<Atom> &out,
-	               Clause clause = Clause::CONSTRAINT) const;
+	//! every other node, including a data-only cast, is a term boundary. `scoped` is
+	//! PeelScale's: the side of a constraint written with the scope spellings.
+	void Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause = Clause::CONSTRAINT,
+	               bool scoped = false) const;
 
 	//! If `expr` is a decision-bearing reducer with factors on it, split them out into
 	//! `out_scale` / `out_divides` and return the bare reducer term. Returns `expr`
@@ -309,8 +314,12 @@ private:
 	//! judgement is made. A factor multiplying a reducer must be ONE value for the
 	//! whole query: `weight * SUM(x)` asks which row's weight scales a number that has
 	//! no row, and `s * SUM(x)` is a product of two decisions (bilinear), not a scale.
+	//! In a constraint written with the scope spellings (`scoped`) a factor that varies
+	//! by row is a tuple term of the row's constraint (anr_language_extension.md §4.3):
+	//! it is peeled like any other and the comparison takes the VALUE shape, where the
+	//! reducer becomes a helper decision the row's factor multiplies.
 	const Expression &PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale, bool &out_divides,
-	                            Clause clause = Clause::CONSTRAINT) const;
+	                            Clause clause = Clause::CONSTRAINT, bool scoped = false) const;
 
 	//! True when `expr` evaluates to a single value for the entire query, so it may
 	//! scale a reducer. Constants qualify by folding; a column ref qualifies only by
@@ -353,11 +362,12 @@ private:
 	void BuildConstraintScopeChecks(const Expression &constraints, DecideEnclosingScope enclosing,
 	                                DecideScopeChecks &scope) const;
 
-	//! The shape of a comparison written with the scope spellings (SCOPED_CLAUSE_TAG):
-	//! ROWS when no decision reducer is on the left, AGGREGATE when the left holds
-	//! decision reducers sharing one `by` key (`group_key`, INVALID for `by ()`) beside
-	//! query-wide terms only, and UNSUPPORTED otherwise, with the message in `refusal`.
-	enum class ScopedShape : uint8_t { ROWS, AGGREGATE, UNSUPPORTED };
+	//! The shape of a scoped comparison's decision side (anr_language_extension.md §4.3,
+	//! todo.md §4.2): ROWS has no decision reducer; AGGREGATE has decision reducers sharing
+	//! one `by` key under whole-query factors with only query-wide terms beside them (one
+	//! model row per group); VALUE needs the value rewrite; UNSUPPORTED is refused with
+	//! `refusal`. `group_key` is the AGGREGATE shape's shared key, INVALID for `by ()`.
+	enum class ScopedShape : uint8_t { ROWS, AGGREGATE, VALUE, UNSUPPORTED };
 	ScopedShape ClassifyScoped(const BoundComparisonExpression &comparison, idx_t &group_key,
 	                           string &refusal) const;
 	//! Whether a scoped comparison's decision side takes the composed MIN/MAX formulation

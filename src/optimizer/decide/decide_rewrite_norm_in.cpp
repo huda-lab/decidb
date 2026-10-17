@@ -116,14 +116,8 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 				throw InternalException("DECIDE NORM marker has invalid L0 bound '%s'", payload);
 			}
 		}
-		idx_t z_idx = decide.decide_variables.size();
 		string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
-		auto z = make_uniq<BoundColumnRefExpression>(z_name, LogicalType::INTEGER,
-		                                             ColumnBinding(decide.decide_index, z_idx));
-		decide.decide_variables.push_back(z->Copy());
-		decide.num_auxiliary_vars++;
-		decide.is_boolean_var.push_back(true);
-		if (!decide.variable_scopes.empty()) decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
+		auto z = MakeDecisionRef(decide, AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true));
 		auto make_mz = [&]() { return optimizer.BindScalarFunction("*",
 		    make_uniq<BoundConstantExpression>(Value::DOUBLE(m)), z->Copy()); };
 		auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
@@ -196,15 +190,8 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		}
 		vector<unique_ptr<Expression>> indicators;
 		for (idx_t i = 0; i < k; i++) {
-			idx_t ind_idx = decide.decide_variables.size();
 			string name = "__in_ind_" + target->GetName() + "_" + to_string(in_counter) + "_" + to_string(i) + "__";
-			auto indicator = make_uniq<BoundColumnRefExpression>(name, LogicalType::INTEGER,
-			                                                    ColumnBinding(decide.decide_index, ind_idx));
-			decide.decide_variables.push_back(indicator->Copy());
-			decide.num_auxiliary_vars++;
-			decide.is_boolean_var.push_back(true);
-			if (!decide.variable_scopes.empty()) decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
-			indicators.push_back(std::move(indicator));
+			indicators.push_back(MakeDecisionRef(decide, AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true)));
 		}
 		in_counter++;
 		auto cardinality = indicators[0]->Copy();

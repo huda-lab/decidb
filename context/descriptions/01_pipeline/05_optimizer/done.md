@@ -146,7 +146,7 @@ short fails loudly instead of handing a backend a model it cannot load.
 
 ## 1. Pass order
 
-`DecideOptimizer::OptimizeDecide` runs ten passes, and the order is load-bearing:
+`DecideOptimizer::OptimizeDecide` runs eleven passes, and the order is load-bearing:
 
 | # | Pass | Why here |
 |---|---|---|
@@ -155,17 +155,19 @@ short fails loudly instead of handing a backend a model it cannot load.
 | 3 | `TagAbsConstraintsForBigM` | Marks the ABS nodes that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
 | 4 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes; must be first of the remaining rewrites so later passes see plain variables. |
 | 5 | `RewriteBilinear` | McCormick linearization for Boolean × anything. |
-| 6 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
-| 7 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
-| 8 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 9 | `RewriteAvgToSum` | Last of the rewrites, so every reducer that reaches it is settled. |
-| 10 | `AbsorbVariableBounds` | Must be last of all — see below. |
+| 6 | `RewriteScopedReducers` | The value rewrite of the scope spellings: a VALUE-shape comparison's reducers become helper decisions. After ABS and bilinear, whose auxiliaries may stand in a reducer's body; before the MIN/MAX passes, which never see these reducers. |
+| 7 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
+| 8 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
+| 9 | `RewriteNotEqual` | Creates `<>` indicators. |
+| 10 | `RewriteAvgToSum` | Last of the rewrites, so every reducer that reaches it is settled. |
+| 11 | `AbsorbVariableBounds` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. Setting `DECIDB_BENCH` prints `optimizer_ms` for the whole block.
 
-An eleventh pass, `BuildDecidePreparedModel`, belongs to this stage but is
-**triggered later** — see §1a.
+A twelfth pass, `BuildDecidePreparedModel`, belongs to this stage but is
+**triggered later** — see §1a. It also flattens each `ReducerValueLink`'s body into
+`inner_terms`, as it does a composed term's.
 
 ---
 
@@ -341,13 +343,61 @@ loosened. Atomic source-level DROP repair is recorded in `todo.md`.
 `ExtractMultiplicativeCoefficient` walks a chain shaped
 `coeff * ... * decide_var * ... * coeff` and combines the non-variable factors.
 
+### The value rewrite — `RewriteScopedReducers`
+
+Item 5 of the scope spellings (`09_anr_language/done.md`). Stage 04 tagged every scoped
+comparison whose decision side a grouped row cannot hold (`CanonicalConstraintClass::VALUE`,
+`VALUE_REWRITE_TAG`): a per-row or keyed decision beside a reducer, a factor that varies
+by row, reducers with different `by` keys, a reducer inside another expression. For each
+decision reducer `agg([when c'] [per K']: e) by (Γ)` on such a comparison's left side the
+pass allocates a **helper decision** `__value_<n>__` — INTEGER when the reducer's type is
+integral (so a strict bound on the rewritten row still steps on the lattice), `Scalar()`
+for `by ()`, else `Entity` of a scope of its own (`EntityScopeInfo::value_link`: the
+link's `by` groups among the rows the clause keeps, built by execution) — labelled with
+the reducer's SQL (`aux_var_expressions`, and `ReducerValueLink::label`), records a
+`LogicalDecide::ReducerValueLink` (kind, body, own `when` and `per`, `by` key, the
+clause's `when`, the clause id and removal group) and replaces the reducer node in place,
+as `RewriteAbs` does. The comparison is then one row per class (the tag is removed);
+stage 06 emits the helper's definition.
+
+One helper per **occurrence** of a reducer in a clause: a second site holding the same
+reducer (`Equals`, alias included) under the same clause id and `when` reuses the first
+helper (`Helpers::Find`). The rows `RewriteAbs` derived from one clause each hold a copy
+of the reducer (`aux >= sum(e) by (g) - 40`, `aux >= 40 - sum(e) by (g)`), and two
+helpers pinned on different sides would let the pair drift apart; rows of different
+clauses never share one, since the definition carries one clause's provenance.
+
+A MIN/MAX helper records which side pins it (`need_envelope` / `need_closing`), from the
+sign its term carries once the side is read as a sum — through `+`, `-`, binder casts and
+the factors on it (`ScaleSignAtPlanTime`; 0 for a data factor, a decision factor or an
+enclosing expression) — and the comparison, read as an `ExtremumPush`: a term pushed
+down needs a MAX's envelope (`value >= member`) or a MIN's closing side (`value >= some
+member`, with indicators), a term pushed up the other one, and an unknown sign, `=` or
+`<>` both. A shared helper takes every side any of its rows needs. A SUM/AVG helper is an
+equality and needs neither.
+
+A body that still multiplies decisions after `RewriteBilinear` — a product of two
+non-Boolean decisions or a square — is refused here with "not supported yet" (spec §12):
+its definition would be a quadratic equality; the test is on what survives the ABS and
+bilinear rewrites, whose auxiliaries are linear.
+
+Every auxiliary decision column the passes allocate — an ABS auxiliary and its sign
+indicator, a McCormick product, an L0 and an `IN` indicator, a value helper — goes
+through `AddAuxiliaryDecision` (`decide_optimizer_internal.hpp`): the column reference,
+its Boolean flag, its scope (recorded only once some decision is not row-scoped, the
+convention every reader follows) and its diagnosis label (F6).
+
 ### MIN/MAX — `RewriteMinMax`
 
 **Constraints.** An *easy* direction (`MAX(...) <= K`, `MIN(...) >= K`) strips the
 reducer and becomes a per-row constraint — one row per data row, no Big-M. A *hard*
 direction rewrites to a `SUM` tagged with the clause (`EmitHardMinMaxClause`); stage 06
 creates the extremum column and any binaries its link needs. Equality splits into both
-directions. `WHEN` / `PER` wrappers are preserved; `out_was_easy` tells the caller
+directions. Which way a clause pushes a term — down under `<=` for a positive term, up
+for a negative one, the mirror under `>=`, nowhere under `=` or an unknown sign — is read
+once, in `ExtremumPushOf` (`decide_cast_policy.hpp`), by this pass, the composed pass and
+the value rewrite alike; MAX pushed down and MIN pushed up are the cheap directions.
+`WHEN` / `PER` wrappers are preserved; `out_was_easy` tells the caller
 whether `PER` should be stripped, since an easy rewrite has already become
 per-row.
 
@@ -632,6 +682,7 @@ stage 07.
 | `<>` / AVG→SUM | `src/optimizer/decide/decide_rewrite_notequal_avg.cpp` |
 | ABS | `src/optimizer/decide/decide_rewrite_abs.cpp` |
 | MIN/MAX, plain and composed | `src/optimizer/decide/decide_rewrite_minmax.cpp` |
+| The value rewrite (scoped reducers to helper decisions) | `src/optimizer/decide/decide_rewrite_scoped.cpp` |
 | Bilinear McCormick | `src/optimizer/decide/decide_rewrite_bilinear.cpp` |
 | Bound absorption | `src/optimizer/decide/decide_bound_absorption.cpp` |
 | Linear-form flattening | `src/optimizer/decide/decide_linear_form.cpp` |

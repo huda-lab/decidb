@@ -17,6 +17,7 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 
@@ -63,6 +64,17 @@ unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const ClauseSc
 
 //! Mark the ABS nodes that need a Big-M envelope. Must run before RewriteAbs.
 void TagAbsConstraintsForBigM(ClientContext &context, LogicalDecide &decide);
+
+//! Allocate an auxiliary decision column `name` of `type`: its reference in
+//! `decide_variables`, its Boolean flag, and its scope -- recorded only when the plan
+//! keeps scopes at all (`variable_scopes` is empty while every decision is row-scoped,
+//! and stays so for a row-scoped auxiliary). A non-empty `label` names the column in a
+//! diagnosis (F6) by what it stands for. Returns the column's index.
+idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type, bool is_boolean,
+                           DecideVarScopeInfo scope = DecideVarScopeInfo::Row(), const string &label = string());
+
+//! A reference to decision column `var_idx`, as an expression of the DECIDE clause.
+unique_ptr<Expression> MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx);
 
 } // namespace decide_rewrite
 } // namespace duckdb

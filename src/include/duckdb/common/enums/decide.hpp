@@ -272,6 +272,12 @@ static constexpr const char *SCOPED_CLAUSE_TAG = "__scoped_clause__";
 //! old PER wrapper it groups no reducer, and NULL is a class.
 static constexpr const char *PER_CLASS_TAG = "__per_class__";
 
+//! Tag on a scoped comparison in the VALUE shape (CanonicalConstraintClass::VALUE): the
+//! canonicalizer stamps it once, and DecideOptimizer::RewriteScopedReducers replaces each
+//! decision reducer under it by a helper decision (LogicalDecide::reducer_value_links),
+//! after which the comparison is one row per class like any other.
+static constexpr const char *VALUE_REWRITE_TAG = "__value_rewrite__";
+
 //! Tag prefix naming a `BY (key)`: "__group_key_<i>__" indexes LogicalDecide::group_keys.
 //! On a reducer, the rows it reads at a class are the kept rows sharing the class's key
 //! value; on a scoped aggregate comparison, the key its decision reducers share, which

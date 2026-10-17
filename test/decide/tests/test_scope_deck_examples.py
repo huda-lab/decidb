@@ -1,15 +1,17 @@
-"""Deck examples 2, 3, 4, 6 and 7 (anr_language_extension.md §11), as written and in
-their fully explicit form.
+"""Deck examples 1-8 (anr_language_extension.md §11), as written and in their fully
+explicit form.
 
 Each runs over the deck's query -- `FROM Shipment S JOIN Depot D USING (depotID)` with
 `DECIDE ship(INT), per D.depotID: reserve(REAL)` -- and is checked four ways: both forms
-build the same model (DECIDB_DUMP_MODEL), the model has one row per generated class, the
+build the same model (DECIDB_DUMP_MODEL), the model has one row per generated class (plus,
+for examples 1, 5 and 8, one definition row per helper the value rewrite adds), the
 optimum is the oracle's (`_scope_oracle.ScopedModel`, which follows the ANR definition
 literally), and the answer satisfies every clause the language generates. Example 7 is
 also run on data where one depot has no priority shipment: the reducer has no row for
 that class, which is an error naming it (D8, D18).
 
-Examples 1, 5 and 8 put a decision beside a reducer that reads it, which is item 5.
+Example 1's bare form, `ship <= 0.20 * sum(ship)`, has no scope spelling and keeps
+today's refusal until item 7 (D12); it is written with `per row:` here.
 """
 
 import pytest
@@ -47,6 +49,11 @@ def _demand(row):
 
 EXAMPLES = [
     pytest.param(
+        "per row: ship <= 0.20 * sum(ship)",
+        "per row: ship <= 0.20 * sum(per row: ship) by ()",
+        Scoped((lambda r: {"ship": 1},), "<=", (Reduce("sum", lambda r: {"ship": 1}, factor=lambda r: 0.20),)),
+        5 + 1, MAXIMIZE_SHIP, id="1"),  # one row per shipment, one definition row for the total
+    pytest.param(
         "per (): sum(ship) <= networkCapacity",
         "per (): sum(per row: ship) by () <= networkCapacity",
         Scoped((Reduce("sum", lambda r: {"ship": 1}),), "<=", (lambda r: {CONSTANT: r["networkCapacity"]},),
@@ -73,11 +80,24 @@ EXAMPLES = [
                 Reduce("sum", _demand, by=("country",), factor=lambda r: 0.02)), per=("depotID",)),
         3, SHIP_LESS_RESERVE, id="6"),
     pytest.param(
+        "ship <= D.maxShipmentShare * sum(ship) by (D.depotID)",
+        "per row: ship <= D.maxShipmentShare * sum(per row: ship) by (D.depotID)",
+        Scoped((lambda r: {"ship": 1},), "<=",
+               (Reduce("sum", lambda r: {"ship": 1}, by=("depotID",), factor=lambda r: r["maxShipmentShare"]),)),
+        5 + 3, MAXIMIZE_SHIP, id="5"),  # one row per shipment, one definition row per depot
+    pytest.param(
         "per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity",
         "per D.depotID: sum(when S.priority per row: ship) by (D.depotID) <= D.priorityCapacity",
         Scoped((Reduce("sum", lambda r: {"ship": 1}, when=lambda r: r["priority"], by=("depotID",)),), "<=",
                (lambda r: {CONSTANT: r["priorityCapacity"]},), per=("depotID",)),
         3, MAXIMIZE_SHIP, id="7"),
+    pytest.param(
+        "per S.shipmentID: ship <= 0.25 * sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)",
+        "per S.shipmentID: ship <= 0.25 * sum(per row: ship) by (D.depotID, S.dispatchDay + S.transitDays)",
+        Scoped((lambda r: {"ship": 1},), "<=",
+               (Reduce("sum", lambda r: {"ship": 1}, by=lambda r: (r["depotID"], r["dispatchDay"] + r["transitDays"]),
+                       factor=lambda r: 0.25),), per=("shipmentID",)),
+        5 + 5, MAXIMIZE_SHIP, id="8"),  # one row per shipment, each arriving alone: one definition row each
 ]
 
 
@@ -88,7 +108,8 @@ def test_deck_example(decidb_cli, scope_solver, tmp_path, written, explicit, cla
     sql = _query(written, sql_objective)
     dump = decidb_cli.dump_model(sql, tmp_path / "written.dump")
     assert dump == decidb_cli.dump_model(_query(explicit, sql_objective), tmp_path / "explicit.dump")
-    # One row per shipment for `ship <= S.demand`, one per generated class for the example.
+    # One row per shipment for `ship <= S.demand`, one per generated class for the example
+    # (and one definition row per helper of the value rewrite, examples 1, 5 and 8).
     assert dump_counts(dump)["num_rows"] == len(SHIPMENTS) + classes
 
     model = ScopedModel(joined(), DECISIONS)
