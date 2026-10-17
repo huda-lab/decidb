@@ -23,7 +23,8 @@ and the remaining items are in [`todo.md`](todo.md).
   [`../01_pipeline/01_parser/done.md`](../01_pipeline/01_parser/done.md).
 - Three parse errors are exact: `PER` other than `()` on an objective, a parenthesized
   key, and an expression in a `PER` key (messages in the behaviour file, §9).
-- `PER ROW` is the default written out: it leaves no node and runs as if omitted.
+- `PER ROW` is the default written out. It first left no node; since D19 (2026-10-17) it
+  builds `PG_AEXPR_SCOPE_PER_ROW`, so a clause written with it follows the ANR rules.
 - Every other scope answered *"DECIDE: 'PER key:' is not supported yet"* (or `PER ():`,
   `WHEN condition:`, `BY (key)`) until items 2–4 bound it; the gate, now part of
   `ValidateDecideScopeSpellings`, keeps that answer inside ordinary SQL subqueries
@@ -79,8 +80,8 @@ and the remaining items are in [`todo.md`](todo.md).
 Built together, under the decisions D12–D18 of [`todo.md`](todo.md) §3. A clause that
 uses a new spelling — in front, a `by`, or a scope inside a reducer — follows the ANR
 rules; one without keeps today's, so no existing answer moved (the golden models are
-identical on both solvers). `per row` alone leaves no node (item 1), so its clause keeps
-today's rules too. What the user sees: `syntax_reference.md` §10.
+identical on both solvers). A written `per row` alone, in front or inside a reducer,
+follows the ANR rules too (D19, 2026-10-17). What the user sees: `syntax_reference.md` §10.
 
 - **Binder** (`02_binder/done.md` §4a). `ValidateDecideScopeSpellings` replaces the
   item-1 gate: it keeps "not supported yet" inside ordinary subqueries, refuses mixed

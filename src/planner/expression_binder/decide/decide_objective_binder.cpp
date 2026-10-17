@@ -92,6 +92,11 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	auto form = StringUtil::Format("%s(per %s: %s(...) by (%s))", StringUtil::Lower(outer.function_name),
 	                               DecideKeyToString(per), StringUtil::Lower(inner.function_name),
 	                               DecideKeyToString(inner_by));
+	if (!inner.children.empty() && IsDecideMarker(*inner.children[0], SCOPE_PER_ROW_TAG)) {
+		// `per row`, the default written out: one value per row, as without it.
+		auto body = std::move(inner.children[0]->Cast<FunctionExpression>().children[0]);
+		inner.children[0] = std::move(body);
+	}
 	if (!inner.children.empty() && IsDecideMarker(*inner.children[0], SCOPE_WHEN_TAG)) {
 		return BindResult(BinderException::Unsupported(
 		    inner, StringUtil::Format("DECIDE: when inside the inner reducer of %s is not supported yet; write it "

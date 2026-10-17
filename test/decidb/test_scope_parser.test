@@ -1,5 +1,5 @@
 # name: test/decidb/test_scope_parser.test
-# description: The scope spellings of the planned DECIDE extension parse (PER key:, WHEN condition:, BY (key)); a declaration's PER binds, the others answer not supported yet
+# description: The scope spellings of the DECIDE extension parse and run (PER key:, WHEN condition:, BY (key), PER ROW:); inside an ordinary subquery they answer not supported yet
 # group: [decidb]
 
 statement ok
@@ -21,10 +21,10 @@ statement ok
 INSERT INTO kw VALUES (1, 2, 3, 1, 5), (4, 5, 6, 2, 7);
 
 # ---------------------------------------------------------------------------
-# New spellings parse. A declaration's PER binds and runs (the keyed declarations
-# themselves are tested in test/decide/tests/test_scope_declare.py). Every other
-# scope answers "not supported yet" -- a Binder Error, which proves the parser
-# accepted it.
+# New spellings parse and bind (items 2-4; their meaning is tested in
+# test/decide/tests/test_scope_*.py). A spelling inside an ordinary SQL subquery
+# written in the clause still answers "not supported yet" -- a Binder Error, which
+# proves the parser accepted it there too.
 # ---------------------------------------------------------------------------
 
 # declaration: column key
@@ -214,7 +214,8 @@ SELECT g, x FROM kw DECIDE per "per": x(INT) SUCH THAT per "row", "by": sum(x) b
 2	6
 
 # ---------------------------------------------------------------------------
-# PER ROW is the default written out: it leaves no new construct and runs.
+# PER ROW is the default written out. It is a spelling of the scoping language
+# like the others (D19): it names no key, and the clause follows the new rules.
 # ---------------------------------------------------------------------------
 
 query II
@@ -223,6 +224,38 @@ SELECT shipmentID, ship FROM Shipment DECIDE per row: ship(INT) SUCH THAT per ro
 1	10
 2	20
 3	30
+
+# the new rules: a strict bound on a hard MAX steps to the next whole number (12),
+# in front of the clause and inside the reducer alike
+query II
+SELECT MAX(ship), SUM(ship) FROM (SELECT ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= demand AND per row: max(ship) > 11 MINIMIZE SUM(ship));
+----
+12	12
+
+query II
+SELECT MAX(ship), SUM(ship) FROM (SELECT ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= demand AND max(per row: ship) > 11 MINIMIZE SUM(ship));
+----
+12	12
+
+# in the objective's reducer
+query II
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= demand MAXIMIZE sum(per row: ship) ORDER BY shipmentID;
+----
+1	10
+2	20
+3	30
+
+# a new spelling, so it does not mix with the old postfix PER (D14)
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(per row: ship) <= 100 PER depotID MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: PER depotID after a constraint cannot be combined with when, per or by; write per depotID: in front of it, with by (depotID) on each reducer
+
+# ... and inside an ordinary subquery it answers like the other spellings
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT sum(per row: demand) FROM Shipment) MAXIMIZE SUM(ship);
+----
+Binder Error: DECIDE: 'PER ROW:' is not supported yet
 
 # ---------------------------------------------------------------------------
 # The three exact parse errors.

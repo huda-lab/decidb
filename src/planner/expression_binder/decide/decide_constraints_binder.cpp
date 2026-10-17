@@ -414,11 +414,14 @@ BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpressio
 
 BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     // `[WHEN c] [PER K]: body`: PER is the outer marker, WHEN the inner one. The markers
-    // stay where they are; their children bind in place.
+    // stay where they are; their children bind in place. `PER ROW`, the default written
+    // out, adds no class key: one constraint per kept row.
     optional_ptr<FunctionExpression> per;
     optional_ptr<FunctionExpression> when;
     auto *body = &expr_ptr;
-    if (IsDecideMarker(**body, SCOPE_PER_TAG)) {
+    if (IsDecideMarker(**body, SCOPE_PER_ROW_TAG)) {
+        body = &(*body)->Cast<FunctionExpression>().children[0];
+    } else if (IsDecideMarker(**body, SCOPE_PER_TAG)) {
         per = &(*body)->Cast<FunctionExpression>();
         body = &per->children[0];
     }
@@ -592,7 +595,8 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
     case ExpressionClass::FUNCTION: {
         auto &func = expr.Cast<FunctionExpression>();
         // `[WHEN c] [PER K]:` in front of a constraint.
-        if (func.is_operator && (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG)) {
+        if (func.is_operator && (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG ||
+                                 func.function_name == SCOPE_PER_ROW_TAG)) {
             return BindScopedConstraint(expr_ptr, depth);
         }
         // DecidB: PER constraint wrapper (outermost, wraps optional WHEN)

@@ -62,7 +62,8 @@ static void RewriteScopedVarRefs(unique_ptr<ParsedExpression> &expr,
 //! was written.
 struct ParsedDeclaration {
 	const ColumnRefExpression *name = nullptr;
-	//! The `per` marker, or null when none was written. One child means `per ()`.
+	//! The `per` marker, or null when none was written or it was `per row`, the default
+	//! written out. One child means `per ()`.
 	const FunctionExpression *per = nullptr;
 	string type_marker;
 };
@@ -78,6 +79,8 @@ static ParsedDeclaration SplitDeclaration(const ParsedExpression &declaration) {
 		auto &marker = name->Cast<FunctionExpression>();
 		if (marker.is_operator && marker.function_name == SCOPE_PER_TAG && !marker.children.empty()) {
 			result.per = &marker;
+			name = marker.children[0].get();
+		} else if (marker.is_operator && marker.function_name == SCOPE_PER_ROW_TAG && !marker.children.empty()) {
 			name = marker.children[0].get();
 		}
 	}

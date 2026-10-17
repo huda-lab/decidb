@@ -110,8 +110,9 @@ decide_by     ::= BY_DECIDE '(' ')' | BY_DECIDE '(' expr_list ')'
 - The scope is carried through the grammar as a `PGDecideScope` (`parsenodes.hpp`)
   and folded by `applyDecideScope` (`grammar.cpp`) into `PG_AEXPR_SCOPE_WHEN`
   (`lexpr` body, `rexpr` condition) inside `PG_AEXPR_SCOPE_PER` (`lexpr` body,
-  `rexpr` the key list, `NULL` for `PER ()`). `PER ROW` is the default written out
-  and leaves no node. `BY` builds `PG_AEXPR_REDUCER_BY` (`lexpr` the call, `rexpr`
+  `rexpr` the key list, `NULL` for `PER ()`). `PER ROW`, the default written out,
+  builds `PG_AEXPR_SCOPE_PER_ROW` (`lexpr` body, no key), so a clause written with it
+  is written in the new spelling (D19). `BY` builds `PG_AEXPR_REDUCER_BY` (`lexpr` the call, `rexpr`
   the key list, `NULL` for `BY ()`).
 - A key element must be a column or relation name (`makeDecideScope`): anything
   else is *"a per key lists columns or relations; put expressions in by (...)"*.

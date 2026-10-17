@@ -193,12 +193,22 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 	REQUIRE(ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT when a = 1: x <= 1 AND x >= 0")->ToString() ==
 	        "SELECT a FROM t DECIDE x(INT) SUCH THAT WHEN (a = 1): (x <= 1) AND (x >= 0)");
 
-	// PER ROW is the default written out: it parses to the same statement.
+	// PER ROW is the default written out, and a spelling of the scoping language like the
+	// others (D19): it keeps a node of its own, prints back as written, and is not the
+	// statement with the scope left out.
 	auto spelled_out = ParseSelect("SELECT a FROM t DECIDE per row: x(INT) "
 	                               "SUCH THAT per row: SUM(per row: x) <= 1 AND per row: x <= 1");
 	auto implied = ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(x) <= 1 AND x <= 1");
-	REQUIRE(spelled_out->Equals(*implied));
-	REQUIRE(spelled_out->ToString() == implied->ToString());
+	auto spelled_rendered = spelled_out->ToString();
+	INFO(spelled_rendered);
+	size_t per_row_count = 0;
+	for (auto pos = spelled_rendered.find("PER ROW:"); pos != string::npos;
+	     pos = spelled_rendered.find("PER ROW:", pos + 1)) {
+		per_row_count++;
+	}
+	REQUIRE(per_row_count == 4);
+	REQUIRE(ParseSelect(spelled_rendered)->Equals(*spelled_out));
+	REQUIRE(!spelled_out->Equals(*implied));
 
 	// The three exact parse errors, and the generic one. The exception text is JSON,
 	// so a quoted token is matched on its own rather than inside the message.

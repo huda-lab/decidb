@@ -100,12 +100,16 @@ static string QualifiedReducerToString(const FunctionExpression &wrapper) {
 static string DecideScopeToString(const FunctionExpression &scope) {
 	const ParsedExpression *body = &scope;
 	string per;
-	if (scope.function_name == SCOPE_PER_TAG) {
+	if (scope.function_name == SCOPE_PER_TAG || scope.function_name == SCOPE_PER_ROW_TAG) {
 		if (scope.children.empty()) {
 			throw InternalException("DECIDE PER scope marker has no body");
 		}
-		auto key = DecideKeyToString(scope);
-		per = key.empty() ? "PER ()" : "PER " + key;
+		if (scope.function_name == SCOPE_PER_ROW_TAG) {
+			per = "PER ROW";
+		} else {
+			auto key = DecideKeyToString(scope);
+			per = key.empty() ? "PER ()" : "PER " + key;
+		}
 		body = scope.children[0].get();
 	}
 	string when;
@@ -124,7 +128,8 @@ static string DecideScopeToString(const FunctionExpression &scope) {
 }
 
 string FunctionExpression::ToString() const {
-	if (is_operator && (function_name == SCOPE_WHEN_TAG || function_name == SCOPE_PER_TAG)) {
+	if (is_operator &&
+	    (function_name == SCOPE_WHEN_TAG || function_name == SCOPE_PER_TAG || function_name == SCOPE_PER_ROW_TAG)) {
 		return DecideScopeToString(*this);
 	}
 	if (is_operator && function_name == REDUCER_BY_TAG) {

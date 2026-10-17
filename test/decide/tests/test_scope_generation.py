@@ -88,6 +88,34 @@ def test_per_row_is_the_default_written_out(decidb_cli, tmp_path):
 
 
 @pytest.mark.correctness
+def test_per_row_adds_nothing_to_a_scoped_clause(decidb_cli, tmp_path):
+    """Beside another spelling, `per row` -- in front or inside the reducer -- changes
+    nothing: the same model."""
+    plain = decidb_cli.dump_model(_ship_query("sum(ship) by (D.depotID) <= D.capacity"), tmp_path / "plain.dump")
+    assert plain == decidb_cli.dump_model(_ship_query("per row: sum(per row: ship) by (D.depotID) <= D.capacity"),
+                                          tmp_path / "row.dump")
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause", ["per row: max(ship) > 11", "max(per row: ship) > 11"], ids=["in-front", "inside"])
+def test_per_row_written_follows_the_new_rules(decidb_cli, scope_solver, clause):
+    """`per row` is a spelling of the language, so its clause follows the new rules (D19):
+    the strict bound on a hard MAX steps to the next whole number, and MINIMIZE puts one
+    shipment at 12. In front of the clause and inside the reducer alike."""
+    sql = f"""
+        SELECT shipmentID, ship {from_clause()}
+        DECIDE ship(INT)
+        SUCH THAT ship <= S.demand AND {clause}
+        MINIMIZE SUM(ship)
+        ORDER BY shipmentID"""
+    model = ScopedModel(joined(), SHIP)
+    clauses = [SHIP_BOUND, Scoped((Reduce("max", lambda r: {"ship": 1}),), ">", (lambda r: {CONSTANT: 11},))]
+    objective = ScopedObjective(ObjSense.MINIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
+    result = _check_optimum(decidb_cli, scope_solver, sql, model, clauses, objective)
+    assert max(row["ship"] for row in result) == 12
+
+
+@pytest.mark.correctness
 def test_unused_per_is_accepted(decidb_cli, tmp_path):
     """`per D.region: sum(ship) <= 50` bounds the total over all rows, once per region;
     the identical constraints are one constraint (D6)."""

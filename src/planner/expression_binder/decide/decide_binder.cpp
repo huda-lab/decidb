@@ -116,7 +116,8 @@ bool IsDecideMarker(const ParsedExpression &expr, const char *tag) {
 }
 
 static bool IsScopeMarker(const ParsedExpression &expr) {
-	return IsDecideMarker(expr, SCOPE_WHEN_TAG) || IsDecideMarker(expr, SCOPE_PER_TAG);
+	return IsDecideMarker(expr, SCOPE_WHEN_TAG) || IsDecideMarker(expr, SCOPE_PER_TAG) ||
+	       IsDecideMarker(expr, SCOPE_PER_ROW_TAG);
 }
 
 //! A call to SUM, AVG, MIN or MAX: the only calls a scope or a `by` may attach to.
@@ -135,7 +136,10 @@ static void ValidateNoScopeSpelling(const ParsedExpression &expr) {
 	static const struct {
 		const char *tag;
 		const char *spelling;
-	} scopes[] = {{SCOPE_WHEN_TAG, "WHEN condition:"}, {SCOPE_PER_TAG, "PER key:"}, {REDUCER_BY_TAG, "BY (key)"}};
+	} scopes[] = {{SCOPE_WHEN_TAG, "WHEN condition:"},
+	              {SCOPE_PER_TAG, "PER key:"},
+	              {SCOPE_PER_ROW_TAG, "PER ROW:"},
+	              {REDUCER_BY_TAG, "BY (key)"}};
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<const FunctionExpression>();
 		for (auto &scope : scopes) {
@@ -196,7 +200,9 @@ static void ValidateScopeData(const ParsedExpression &expr, const case_insensiti
 static const ParsedExpression &PeelScopeSpelling(const ParsedExpression &expr,
                                                  const case_insensitive_map_t<idx_t> &variables) {
 	const ParsedExpression *body = &expr;
-	if (IsDecideMarker(*body, SCOPE_PER_TAG)) {
+	if (IsDecideMarker(*body, SCOPE_PER_ROW_TAG)) {
+		body = body->Cast<const FunctionExpression>().children[0].get();
+	} else if (IsDecideMarker(*body, SCOPE_PER_TAG)) {
 		auto &per = body->Cast<const FunctionExpression>();
 		for (idx_t i = 1; i < per.children.size(); i++) {
 			ValidateScopeData(*per.children[i], variables);
@@ -244,8 +250,7 @@ struct DecideClauseSpellings {
 static void FindClauseSpellings(const ParsedExpression &expr, bool at_root, DecideClauseSpellings &found) {
 	if (expr.GetExpressionClass() == ExpressionClass::FUNCTION) {
 		auto &func = expr.Cast<const FunctionExpression>();
-		if (func.is_operator && (func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG ||
-		                         func.function_name == REDUCER_BY_TAG)) {
+		if (IsScopeMarker(expr) || IsDecideMarker(expr, REDUCER_BY_TAG)) {
 			found.uses_new_spelling = true;
 		}
 		if (func.is_operator && !found.old_marker &&
@@ -356,7 +361,7 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 		ValidateScopePlacement(*func.children[0], placement);
 		return;
 	}
-	if (func.is_operator && (func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG)) {
+	if (IsScopeMarker(expr)) {
 		// Only in front of a clause or of a reducer's argument, both peeled before here.
 		ValidateNoScopeSpelling(expr);
 	}
@@ -753,7 +758,7 @@ bool ContainsDecideAggregate(const ParsedExpression &expr) {
 		// A condition, a key or a `by` key is not part of the value.
 		if (func.is_operator && !func.children.empty() &&
 		    (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == REDUCER_BY_TAG ||
-		     func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG)) {
+		     IsScopeMarker(expr))) {
 			return ContainsDecideAggregate(*func.children[0]);
 		}
 		for (auto &child : func.children) {
@@ -1056,7 +1061,7 @@ void ValidateDecideNoIntegerStepComparisonOnReal(const ParsedExpression &expr,
 		auto &func = expr.Cast<const FunctionExpression>();
 		if (func.is_operator && !func.children.empty() &&
 		    (func.function_name == WHEN_CONSTRAINT_TAG || func.function_name == PER_CONSTRAINT_TAG ||
-		     func.function_name == SCOPE_WHEN_TAG || func.function_name == SCOPE_PER_TAG)) {
+		     IsScopeMarker(expr))) {
 			// children[0] is the constraint; the rest are the condition / PER columns.
 			ValidateDecideNoIntegerStepComparisonOnReal(*func.children[0], variables, variable_types);
 		}
@@ -2108,7 +2113,11 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 	// Peel `[WHEN c] [PER K]:` off the argument; the reducer itself reduces the body.
 	auto argument = std::move(reducer.children[0]);
 	unique_ptr<ParsedExpression> per;
-	if (IsDecideMarker(*argument, SCOPE_PER_TAG)) {
+	if (IsDecideMarker(*argument, SCOPE_PER_ROW_TAG)) {
+		// `per row`, the default written out: one value per row, as without it.
+		auto body = std::move(argument->Cast<FunctionExpression>().children[0]);
+		argument = std::move(body);
+	} else if (IsDecideMarker(*argument, SCOPE_PER_TAG)) {
 		auto body = std::move(argument->Cast<FunctionExpression>().children[0]);
 		per = std::move(argument);
 		argument = std::move(body);

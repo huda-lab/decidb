@@ -441,6 +441,7 @@ to read back as the PER key.
 | `when c: C` | WHEN wrapper (`WHEN_CONSTRAINT_TAG` + `SCOPED_CLAUSE_TAG`) over `C` |
 | `per K: C` | `PER_CLASS_TAG` wrapper `[C, key columns...]`, none for `per ()`, its key as written a source fragment on the alias |
 | `when c per K: C` | `PER_CLASS{WHEN{C, c}, K}` |
+| `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`SCOPE_PER_ROW_TAG`, peeled), but the clause is scoped (D19) |
 | `agg(...) by (Γ)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide_group_keys[i]`; `by ()` adds nothing |
 | `agg(when c: e)` | the aggregate's `filter` |
 | `agg(per K': e)` | a `__qualified_by_<i>__` tag on an exact key scope (`FindOrCreateKeyScope`; an empty one for `per ()`) |
@@ -448,8 +449,8 @@ to read back as the PER key.
 
 Every comparison of a clause written with a new spelling (in front, a `by`, a scope
 inside a reducer) is tagged `SCOPED_CLAUSE_TAG`, an `IN` under a scope too: the one
-switch every later layer reads (D12). `per row:` leaves no node, so it cannot switch;
-`by ()` can.
+switch every later layer reads (D12). `per row:` and `by ()` switch it too (D19): the
+defaults written out are spellings of the language.
 
 - `BindScopedConstraint` binds the body with `binding_scoped_clause` set, the condition
   as data, the key through `BindKeyColumns` (a declaration key's resolution; a column

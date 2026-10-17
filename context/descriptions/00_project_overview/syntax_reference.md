@@ -63,8 +63,9 @@ The scope spellings of the extension —
 condition:`, `BY (key)` — run: a declaration's `PER key:` (§2.3), and a scope in front of
 a constraint or the objective, after a reducer or inside one (§10). Inside an ordinary
 SQL subquery written in the clause they are still refused with *"not supported yet"*. On
-a declaration, a constraint or inside a reducer, `PER ROW` is the default written out and
-runs as if it were omitted. An objective takes only `PER ()`: any other `PER` there,
+a declaration, a constraint or inside a reducer, `PER ROW` is the default written out; it
+names no key, but it is a spelling of the extension, so a constraint or reducer written
+with it follows §10. An objective takes only `PER ()`: any other `PER` there,
 `PER ROW` included, is the parse error *"an objective is produced once: write per (): or
 leave per out"*.
 
@@ -695,8 +696,8 @@ Items 3 and 4 of [`../09_anr_language/todo.md`](../09_anr_language/todo.md); the
 behaviour is [`anr_language_extension.md`](anr_language_extension.md) §3–§9. A clause
 written with any of these spellings — in front, a `by`, or a scope inside a reducer —
 follows the rules below; a clause without one keeps the rules of §5–§7, word for word.
-`per row` alone, in front or inside a reducer, is the default written out (§1.1): the
-clause runs as if it were omitted, under §5–§7.
+`per row` alone, in front or inside a reducer, is the default written out (§1.1) and a
+spelling like the others: its clause follows the rules below (D19).
 
 ```sql
 SUCH THAT

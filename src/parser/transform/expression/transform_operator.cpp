@@ -231,6 +231,8 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		return decide_marker(SCOPE_WHEN_TAG);
 	case duckdb_libpgquery::PG_AEXPR_SCOPE_PER:
 		return decide_marker(SCOPE_PER_TAG);
+	case duckdb_libpgquery::PG_AEXPR_SCOPE_PER_ROW:
+		return decide_marker(SCOPE_PER_ROW_TAG);
 	case duckdb_libpgquery::PG_AEXPR_REDUCER_BY:
 		return decide_marker(REDUCER_BY_TAG);
 

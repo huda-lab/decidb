@@ -23,8 +23,8 @@ bool SelectNode::HasDecideClause() const {
 //! Reverse the parser-only comparison marker used for a typed DECIDE declaration.
 //! The generic expression renderer would expose the marker as
 //! `(x = 'integer_variable')`, which is neither public nor parseable DECIDE syntax.
-//! The name on its left is a column reference, under a `PER key:` scope marker when
-//! the declaration has one; that marker renders itself.
+//! The name on its left is a column reference, under a `PER key:` or `PER ROW:` scope
+//! marker when the declaration has one; that marker renders itself.
 static string DecideVariableToString(const ParsedExpression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::COMPARISON) {
 		throw InternalException("DECIDE variable declaration is not a typed comparison marker");
@@ -32,7 +32,8 @@ static string DecideVariableToString(const ParsedExpression &expr) {
 	auto &comparison = expr.Cast<ComparisonExpression>();
 	auto &name = *comparison.left;
 	bool scoped = name.GetExpressionClass() == ExpressionClass::FUNCTION &&
-	              name.Cast<FunctionExpression>().function_name == SCOPE_PER_TAG;
+	              (name.Cast<FunctionExpression>().function_name == SCOPE_PER_TAG ||
+	               name.Cast<FunctionExpression>().function_name == SCOPE_PER_ROW_TAG);
 	if (comparison.type != ExpressionType::COMPARE_EQUAL ||
 	    (!scoped && name.GetExpressionClass() != ExpressionClass::COLUMN_REF) ||
 	    comparison.right->GetExpressionClass() != ExpressionClass::CONSTANT) {

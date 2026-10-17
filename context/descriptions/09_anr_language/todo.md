@@ -75,6 +75,10 @@ the language does; this plan says *how* it gets built and verified.
 | D16 | (2026-10-14) The 21 "not supported yet" cases of `test_scope_parser.test` that now bind change only their expected result; the four ordinary-subquery cases keep the gate message. `_scope_oracle.py` may gain code, its existing behaviour unchanged | user |
 | D17 | (2026-10-14) New paths are correct; old spellings keep today's behaviour, wrong answers included, and every old bug found is logged in `06_issues/bugs/todo.md` | user |
 | D18 | (2026-10-14) The D8 message names the `by` group the reducer reads (`has no rows for D.region = 'North'.`); with `by ()` it ends `has no rows.` | user |
+| D19 | (2026-10-17) A written `per row:`, in front of a constraint or inside a reducer, is a spelling of the language: its clause follows the new rules (`PG_AEXPR_SCOPE_PER_ROW`, `SCOPE_PER_ROW_TAG`) | user |
+| D20 | (2026-10-17) Comment lines of `test_scope_parser.test` that said a spelling "answers not supported yet" are updated where it now binds | user |
+| D21 | (2026-10-17) The D14 exception stays: an old postfix `WHEN`/`PER` after a clause written with a scope in front is a parser syntax error | user |
+| D22 | (2026-10-17) The `SUM()` / `norm()` no-argument messages stay, the one change to the old spellings | user |
 
 Small calls made while planning. All were put to the user on 2026-10-05 and none was
 vetoed.
@@ -352,9 +356,6 @@ of `01_pipeline/`; `04_testing/` (new `scope/` area).
   literal, `CASE`, `CAST`, `TRY_CAST`, `::`, `COALESCE`, `NULLIF`, `EXTRACT`,
   parentheses) or a scope inside such a form (the item-1 grammar admits neither). D14's
   and D15's messages cover every position the binder sees.
-- **`per row` alone** leaves no node (item 1), so its clause keeps the old rules (D12):
-  `per row: max(x) > 3` is the old `MAX(x) > 3`, with its logged bugs. Whether a written
-  `per row` should switch a clause to the new rules is open.
 - **DIAGNOSE** (item 6): an aggregate-shape clause's `group` column names its `by` group;
   the spec's §1 asks for the `per` key value. Its suggested edit quotes the clause in
   the new spelling, `per` included.

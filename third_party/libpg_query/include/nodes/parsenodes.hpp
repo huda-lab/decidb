@@ -239,6 +239,7 @@ typedef enum PGAExpr_Kind {
 	PG_AEXPR_QUALIFIED_REDUCER, /* DecidB: relation-qualified reducer sum(D: expr) */
 	PG_AEXPR_SCOPE_WHEN,        /* DecidB: scope filter, WHEN condition: body */
 	PG_AEXPR_SCOPE_PER,         /* DecidB: scope key, PER key: body */
+	PG_AEXPR_SCOPE_PER_ROW,     /* DecidB: the default scope written out, PER ROW: body */
 	PG_AEXPR_REDUCER_BY         /* DecidB: reducer rows, agg(...) BY (key) */
 } PGAExpr_Kind;
 

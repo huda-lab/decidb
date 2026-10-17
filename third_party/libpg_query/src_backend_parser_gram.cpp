@@ -34132,7 +34132,9 @@ makeDecideScope(PGDecidePer per, PGList *key, int location, core_yyscan_t yyscan
 
 /*
  * DecidB: fold a scope around the body it governs. WHEN applies first and PER
- * second, so PER is the outer node. PER ROW is the default and leaves no node.
+ * second, so PER is the outer node. PER ROW is the default written out: it names
+ * no key, but it keeps a node of its own, so the clause follows the scoping
+ * language like every other spelling.
  */
 static PGNode *
 applyDecideScope(PGNode *scope_node, PGNode *body)
@@ -34147,6 +34149,9 @@ applyDecideScope(PGNode *scope_node, PGNode *body)
 	if (scope->per == PG_DECIDE_PER_ALL || scope->per == PG_DECIDE_PER_KEY)
 		body = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_PER, "scope_per", body,
 										  (PGNode *) scope->key, scope->location);
+	else if (scope->per == PG_DECIDE_PER_ROW)
+		body = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_PER_ROW, "scope_per_row", body,
+										  NULL, scope->location);
 	return body;
 }
 
