@@ -2,6 +2,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/common/types/data_chunk.hpp"
 #include "duckdb/main/client_context.hpp"
@@ -305,28 +306,30 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 //!
 //! When the reported rules account for every escaping instance (EscapeRule::covers_scope)
 //! the cap is scoped to exactly those rows, so pasting it back does not also restrict
-//! rows that were already bounded. Rendered as a `SUCH THAT` conjunct the user can paste:
-//! `buy <= <cap> WHEN region = 'B'`, or over several rules the disjunction they form.
-//! Anything less than full coverage keeps the global form — capping extra rows is merely
-//! over-restrictive, but missing an escaper would leave the query unbounded.
+//! rows that were already bounded. Rendered as a `SUCH THAT` conjunct the user can paste,
+//! in the scope spellings (the remedy is new text, not an echo of a clause the user
+//! typed): `when region = 'B': buy <= <cap>`, or over several rules the disjunction they
+//! form. Anything less than full coverage keeps the global form — capping extra rows is
+//! merely over-restrictive, but missing an escaper would leave the query unbounded.
 //!
-//! The parentheses are required: DeciQL's `WHEN` takes a bare comparison or a
-//! parenthesized condition, and an unbracketed `OR` is a parse error.
+//! The disjunction keeps its parentheses, so the condition reads as one unit before the
+//! colon. The column prints as the clause's own reference to it names it (`t.depot` for a
+//! key column, already SQL); the value is a SQL string.
 static string PrescribeCap(const VarEscape &ve) {
 	string cap = ve.name + " <= <cap>";
 	vector<string> scope;
 	for (const auto &r : ve.rules) {
 		if (r.covers_scope) {
-			scope.push_back(r.column + " = '" + r.value + "'");
+			scope.push_back(r.column + " = " + KeywordHelper::WriteQuoted(r.value));
 		}
 	}
 	if (scope.empty()) {
 		return cap;
 	}
 	if (scope.size() == 1) {
-		return cap + " WHEN " + scope[0];
+		return "when " + scope[0] + ": " + cap;
 	}
-	return cap + " WHEN (" + StringUtil::Join(scope, " OR ") + ")";
+	return "when (" + StringUtil::Join(scope, " OR ") + "): " + cap;
 }
 
 DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
@@ -464,6 +467,10 @@ DecideDiagnostic BuildUnreachableBoundDiagnostic(const vector<UnreachableClause>
 		DiagnosticFinding f;
 		f.clause = c.label;
 		f.group = c.group;
+		if (c.row != DConstants::INVALID_INDEX) {
+			f.has_row = true;
+			f.row = static_cast<int64_t>(c.row);
+		}
 		f.suggested_change = "lower this bound — no assignment can reach it";
 		f.edit_source = "unreachable_bound";
 		diag.findings.push_back(std::move(f));

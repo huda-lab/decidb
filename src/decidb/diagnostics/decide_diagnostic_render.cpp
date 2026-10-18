@@ -539,9 +539,51 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, d
 	return e;
 }
 
+vector<ClauseEdit> FanOutByClass(ClauseEdit edit, const ConstraintProvenance &prov, const SolverModel &model,
+                                 bool expanded) {
+	using Kind = SolverInput::ClassSet::Kind;
+	vector<ClauseEdit> out;
+	if (prov.class_set >= model.class_sets.size()) {
+		if (expanded && prov.per_kept_row) {
+			edit.group.clear();
+			edit.row = prov.data_row;
+			edit.edit_source = "expanded_row";
+		}
+		out.push_back(std::move(edit));
+		return out;
+	}
+	auto &set = model.class_sets[prov.class_set];
+	if (set.kind == Kind::KEY_VALUES) {
+		for (auto &label : set.labels) {
+			ClauseEdit per_class = edit;
+			per_class.group = label;
+			per_class.row = DConstants::INVALID_INDEX;
+			if (expanded) {
+				per_class.edit_source = "expanded_group";
+			}
+			out.push_back(std::move(per_class));
+		}
+		return out;
+	}
+	if (set.kind == Kind::KEPT_ROWS && expanded) {
+		for (auto row : set.rows) {
+			ClauseEdit per_row = edit;
+			per_row.group.clear();
+			per_row.row = row;
+			per_row.edit_source = "expanded_row";
+			out.push_back(std::move(per_row));
+		}
+		return out;
+	}
+	edit.group.clear();
+	out.push_back(std::move(edit));
+	return out;
+}
+
 //! Name every user clause whose bound is out of reach, before any solve. A clause fans
 //! into one row per relation row, all rendering the same text, so entries are
-//! de-duplicated on (label, group) — the user wrote one clause and reads one finding.
+//! de-duplicated on (label, group, row) — the user wrote one clause and reads one
+//! finding, or one per class it names (FanOutByClass).
 //!
 //! The gate is "does this row trace back to a clause the user wrote", not "is it
 //! elastically editable". They are different questions, and a hard MIN/MAX clause is
@@ -555,18 +597,23 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, d
 //! `M`. So an infinite bound on a mechanism row is never a helper's own bound — it is a
 //! user bound re-emitted per row, which is exactly what we want to name.
 vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
-                                                    const vector<ColumnProvenance> &columns) {
+                                                    const vector<ColumnProvenance> &columns, bool expanded) {
 	vector<UnreachableClause> found;
-	std::set<std::pair<string, string>> seen;
+	std::set<std::tuple<string, string, idx_t>> seen;
 	auto record = [&](const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
 		auto display_provenance = SourceAwareProvenance(model, prov);
-		UnreachableClause c;
-		c.label = MakeClauseLabel(display_provenance, lhs, rhs, sense);
-		c.group = display_provenance.group_label;
-		if (!seen.insert({c.label, c.group}).second) {
-			return;
+		ClauseEdit base;
+		base.label = MakeClauseLabel(display_provenance, lhs, rhs, sense);
+		base.group = display_provenance.group_label;
+		for (auto &finding : FanOutByClass(std::move(base), prov, model, expanded)) {
+			UnreachableClause c;
+			c.label = finding.label;
+			c.group = finding.group;
+			c.row = finding.row;
+			if (seen.insert(std::make_tuple(c.label, c.group, c.row)).second) {
+				found.push_back(std::move(c));
+			}
 		}
-		found.push_back(std::move(c));
 	};
 	for (const auto &row : model.constraints) {
 		if (row.provenance.kind == ConstraintKind::STRUCTURAL ||
@@ -589,13 +636,17 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
 
 //! Build a query-mode virtual-offset LOOSEN edit for a data-backed RHS clause
 //! (`x <= col`): the clause's folded shared slack `delta` becomes one synthetic
-//! query-level offset `x <= col + delta` (`>=` loosens downward → `col - delta`).
+//! query-level offset `x <= col + delta` (`>=` loosens downward → `col - delta`; `=`
+//! moves by its signed net slack). A strict `<` / `>` keeps its operator: its row was
+//! stepped onto the lattice, and the written bound moves by the same amount.
 //! `rhs_text` is the RHS column name (`prov.rhs_label`) or a numeric fallback when no
 //! name is available. `edit_source` is stamped by the caller.
 ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &lhs,
                                  const string &rhs_text, char sense, double delta) {
-	string sense_str = SenseStr(sense);
-	string op = (sense == '>') ? " - " : " + ";
+	bool strict = prov.strict && sense != '=';
+	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
+	bool down = sense == '=' ? delta < 0.0 : sense == '>';
+	string op = down ? " - " : " + ";
 	string mag = FormatNum(std::fabs(delta));
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;

@@ -435,12 +435,12 @@ def test_sum_not_equal_zero(decidb_cli):
 @pytest.mark.when
 @pytest.mark.obj_maximize
 def test_sum_not_equal_with_when(decidb_cli):
-    """SUM(x) <> 5 WHEN condition — NE with conditional application."""
+    """when condition: sum(x) <> 5 — NE with conditional application."""
     result, _ = decidb_cli.execute("""
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 5 WHEN l_quantity > 20
+        SUCH THAT when l_quantity > 20: sum(x) <> 5
             AND SUM(x * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice)
     """)
@@ -457,7 +457,7 @@ def test_sum_not_equal_with_when(decidb_cli):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_sum_not_equal_with_when_binding(decidb_cli, oracle_solver):
-    """SUM(x) <> K WHEN cond — expression-level WHEN where NE is binding.
+    """when cond: sum(x) <> K — a WHEN-scoped constraint where NE is binding.
     Oracle emits an NE indicator over the active-row sum only."""
     rows, cols = decidb_cli.execute("""
         SELECT name, value, active, x FROM (
@@ -467,7 +467,7 @@ def test_sum_not_equal_with_when_binding(decidb_cli, oracle_solver):
                    ('d', 3, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 2 WHEN active
+        SUCH THAT when active: sum(x) <> 2
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * value)
     """)

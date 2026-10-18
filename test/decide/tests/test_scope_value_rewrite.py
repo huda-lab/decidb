@@ -596,14 +596,15 @@ def test_diagnose_names_the_clause_not_the_helper(decidb_cli):
 
 @pytest.mark.explain
 def test_explain_echoes_the_clause_as_written(decidb_cli):
-    """EXPLAIN shows the clause as written and its canonical reading with the reducer. Its
-    solver-row layer names the helper `__value_0__`, as it names an ABS auxiliary today;
-    labelling helpers there is item 6."""
+    """EXPLAIN shows the clause as written, its canonical reading with the reducer, and
+    the rewrite's account; the helper prints as its reducer, never as `__value_0__`."""
     out = decidb_cli.execute_raw(f"EXPLAIN {_ship_query('ship <= D.maxShipmentShare * sum(ship) by (D.depotID)')}")
     # The plan box breaks lines inside tokens, so compare without any whitespace.
     text = re.sub(r"[│\s]", "", out.stdout)
     assert "ship<=maxShipmentShare*sum(ship)by(D.depotID)" in text, out.stdout
     assert "≡ship-maxShipmentShare*sum(ship)by(D.depotID)<=0.0" in text, out.stdout
+    assert "sum(ship)by(D.depotID)becomesahelperdecisionpergroup" in text, out.stdout
+    assert "__value_" not in text, out.stdout
     assert out.returncode == 0 and not out.stderr.strip(), out.stderr
 
 

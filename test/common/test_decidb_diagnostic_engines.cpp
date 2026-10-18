@@ -232,7 +232,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(diag.findings[0].edit_source == "runaway_+inf");
 		// The one rule accounts for every escaping instance and its whole group escapes,
 		// so the cap is scoped to those rows rather than capping the domestic row too.
-		CHECK(diag.findings[0].suggested_change == "x <= <cap> WHEN channel = 'export'");
+		CHECK(diag.findings[0].suggested_change == "when channel = 'export': x <= <cap>");
 		CHECK(diag.findings[0].group == "channel = 'export'");
 		REQUIRE(diag.findings[0].has_amount);
 		CHECK(diag.findings[0].amount == 2.0);

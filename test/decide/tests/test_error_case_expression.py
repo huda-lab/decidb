@@ -131,6 +131,7 @@ class TestCaseExpressionRejection:
         plain constraints, so this case confirms the PER wrapper does not
         bypass the new arm by binding the inner expression differently.
         """
+        # old spelling until item 7: pins the old PER path's CASE rejection
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
             DECIDE x(BOOL)

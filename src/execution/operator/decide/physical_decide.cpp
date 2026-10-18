@@ -998,6 +998,67 @@ static void MaskCoefficientColumn(CoefficientColumn &column, const vector<bool> 
     }
 }
 
+//! The classes each group's rows stand for (anr_language_extension.md §1, D28), kept for
+//! the diagnosis: under a `per K:`, K's values among the group's kept rows (first-seen
+//! order); with no `per`, every kept row of the group; under `per ()`, the whole clause,
+//! one set its groups share. One `SolverInput::ClassSet` per group with kept rows,
+//! referenced from `ec.group_class_set`. `kept_row_group` maps each kept row to its group;
+//! empty when the clause has one implicit group, which then holds every kept row.
+static vector<idx_t> CollectGroupClasses(DecideConstraint::PerKeyRole role,
+                                         const vector<unique_ptr<Expression>> &class_key,
+                                         PerGroupCache &per_group_cache, ChunkExprCache &chunk_expr_cache,
+                                         ClientContext &context, ColumnDataCollection &data, idx_t num_rows,
+                                         const vector<bool> &kept_rows, const vector<idx_t> &kept_row_group,
+                                         idx_t groups, vector<SolverInput::ClassSet> &class_sets) {
+    using Kind = SolverInput::ClassSet::Kind;
+    const bool keyed = role != DecideConstraint::PerKeyRole::NONE;
+    vector<idx_t> group_class_set(groups, DConstants::INVALID_INDEX);
+    if (keyed && class_key.empty()) {
+        group_class_set.assign(groups, class_sets.size());
+        class_sets.push_back({Kind::WHOLE_CLAUSE, {}, {}});
+        return group_class_set;
+    }
+    const bool one_group = kept_row_group.empty();
+    std::function<bool(idx_t)> kept = [&](idx_t row) { return kept_rows[row]; };
+    vector<vector<idx_t>> rows_of(groups);
+    for (idx_t row = 0; row < num_rows; row++) {
+        idx_t group = one_group ? (kept_rows[row] ? idx_t(0) : DConstants::INVALID_INDEX) : kept_row_group[row];
+        if (group != DConstants::INVALID_INDEX && group < groups) {
+            rows_of[group].push_back(row);
+        }
+    }
+    vector<idx_t> class_ids;
+    idx_t num_classes = 0;
+    vector<string> class_labels;
+    if (keyed) {
+        LookupOrBuildPerGroupIds(per_group_cache, class_key, chunk_expr_cache, context, data, num_rows,
+                                 /*null_excludes=*/false, kept, &kept_rows, class_ids, num_classes, class_labels);
+    }
+    // `named_in[c]` is the last group that recorded class c; groups are walked one at a
+    // time, so it says whether this group has it already.
+    vector<idx_t> named_in(num_classes, DConstants::INVALID_INDEX);
+    for (idx_t group = 0; group < groups; group++) {
+        if (rows_of[group].empty()) {
+            continue;
+        }
+        SolverInput::ClassSet set {keyed ? Kind::KEY_VALUES : Kind::KEPT_ROWS, {}, {}};
+        if (keyed) {
+            for (auto row : rows_of[group]) {
+                idx_t cls = class_ids[row];
+                if (cls != DConstants::INVALID_INDEX && named_in[cls] != group) {
+                    named_in[cls] = group;
+                    set.labels.push_back(class_labels[cls]);
+                }
+            }
+        } else {
+            set.rows = std::move(rows_of[group]);
+        }
+        group_class_set[group] = class_sets.size();
+        class_sets.push_back(std::move(set));
+    }
+    return group_class_set;
+}
+
 // Evaluate N boolean filter expressions in a single scan over `data`.
 static vector<vector<bool>> EvaluateBooleanMasks(const vector<const Expression *> &conditions,
                                                   ChunkExprCache &chunk_expr_cache, ClientContext &context,
@@ -1525,27 +1586,44 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	}
 	result["Variables"] = vars_info;
 
+	// What the optimizer made of the clauses: a column that stands for an expression
+	// prints it, and each rewrite's account follows its clause, the objective's its own.
+	auto names = DecidePlanNames(source_fragments, entity_scopes, group_keys, decide_index, aux_var_expressions);
+	vector<string> objective_accounts;
+	for (auto &account : rewrite_accounts) {
+		if (account.source_clause_id == DConstants::INVALID_INDEX) {
+			objective_accounts.push_back(RenderDecideRewriteAccount(account));
+		}
+	}
+	// Constraints first: they also hand back the rows the rewrites added for the objective.
+	vector<string> unattributed;
+	vector<string> objective_rows;
+	string constraints_text;
+	if (decide_constraints || !constraint_sources.empty()) {
+		auto layers = CollectDecideClauseLayers(decide_constraints.get(), names, constraint_sources, unattributed,
+		                                        objective_rows, rewrite_accounts);
+		constraints_text = RenderDecideClauseLayers(layers, unattributed);
+	}
 	if (decide_objective) {
-		// Render through the same tagged-expression walker as constraints so
-		// WHEN/PER wrappers print as postfix suffixes (e.g. "SUM(x) WHEN c")
-		// rather than the raw internal tag or a generic conjunction form.
 		string sense_prefix = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*decide_objective, source_fragments, entity_scopes, objective_strs,
-		                               nullptr, nullptr, &group_keys, prepared.objective && prepared.objective->scoped);
+		CollectDecideExpressionStrings(*decide_objective, names, objective_strs, nullptr, nullptr,
+		                               prepared.objective && prepared.objective->scoped);
+		// A MIN/MAX objective leaves a carrier in the tree -- a SUM standing for the
+		// extremum, or the composed objective's 0.0 placeholder -- that its accounts
+		// describe and a row would misread. An AVG's sum stays, under its account, as in a
+		// constraint.
+		if (flat_objective_agg != ObjectiveAggregateType::NONE || !composed_minmax_objective_terms.empty() ||
+		    per_inner_agg == ObjectiveAggregateType::MIN_AGG || per_inner_agg == ObjectiveAggregateType::MAX_AGG) {
+			objective_strs.clear();
+		}
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,
-		                                                  objective_strs);
+		                                                  objective_strs, objective_accounts, objective_rows);
 	} else {
 		result["Objective"] = "FEASIBILITY";
 	}
-
-	// Same layered grouping as the logical node -- one renderer, so the two plans agree.
 	if (decide_constraints || !constraint_sources.empty()) {
-		vector<string> unattributed;
-		auto layers = CollectDecideClauseLayers(decide_constraints.get(), composed_minmax_constraints,
-		                                        source_fragments, entity_scopes, constraint_sources,
-		                                        unattributed, &group_keys);
-		result["Constraints"] = RenderDecideClauseLayers(layers, unattributed);
+		result["Constraints"] = constraints_text;
 	}
 
 	SetEstimatedCardinality(result, estimated_cardinality);
@@ -1657,6 +1735,7 @@ public:
     //! (stage 05). Aliases rather than copies: this state evaluates their
     //! coefficients against the data, it does not derive or alter their shape.
     const vector<unique_ptr<DecideConstraint>> &constraints = op.prepared.constraints;
+    const vector<unique_ptr<DecideConstraint>> &absorbed_constraints = op.prepared.absorbed_constraints;
     const unique_ptr<DecideObjective> &objective = op.prepared.objective;
 
     //! Local copies of the decision column box and the absorbed-bound records that
@@ -1671,6 +1750,11 @@ public:
     //===--------------------------------------------------------------------===//
 
     vector<EvaluatedConstraint> evaluated_constraints;
+    //! `absorbed_constraints`, evaluated under DIAGNOSE for the repair model alone.
+    vector<EvaluatedConstraint> evaluated_absorbed_constraints;
+    //! The classes each aggregate-shape row's group stands for (D28), referenced from the
+    //! rows; filled under DIAGNOSE only and moved into SolverInput::class_sets.
+    vector<SolverInput::ClassSet> class_sets;
     //! The value rewrite's helper decisions, each with its reducer's members evaluated
     //! (EvaluateReducerValueLinks); moved into SolverInput::reducer_value_links.
     vector<ReducerValueLinkSpec> evaluated_value_links;
@@ -2135,7 +2219,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // 3. Evaluate composed MIN/MAX clauses (constraint and objective)
     phase.Next("execution.evaluate_composed");
-    EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, entity_mappings, evaluated);
+    EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings, evaluated);
 
     // 4. Evaluate the value rewrite's helper decisions (their reducers' members)
     phase.Next("execution.evaluate_value_links");
@@ -2156,12 +2240,16 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     // before a single constant was derived. An infeasibility repair searches a WIDER box
     // than the solved model declares, and a Big-M or a McCormick envelope is sound only
     // for the box it came from, so the INFEASIBLE terminal formulates a second model from
-    // this instead of re-deriving nothing and inheriting the narrow one's constants. The
-    // copy is paid for only when the user asked for a diagnosis.
+    // this instead of re-deriving nothing and inheriting the narrow one's constants. It
+    // also emits the scoped bounds the column box enforces, which the solved model has no
+    // row for. The copy is paid for only when the user asked for a diagnosis.
     unique_ptr<ElasticFormulation> elastic;
     if (diagnose) {
         elastic = make_uniq<ElasticFormulation>();
         elastic->input = solver_input;
+        for (auto &absorbed : gstate.evaluated_absorbed_constraints) {
+            elastic->input.constraints.push_back(std::move(absorbed));
+        }
         elastic->var_indexer = var_indexer;
     }
 
@@ -2335,11 +2423,16 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                                          idx_t num_rows, ChunkExprCache &chunk_expr_cache,
                                          PerGroupCache &per_group_cache,
                                          const vector<EntityMapping> &entity_mappings) const {
-    for (idx_t c = 0; c < gstate.constraints.size(); c++) {
+    // The absorbed scoped bounds follow under DIAGNOSE, numbered after every other clause:
+    // only the repair model emits their rows.
+    const idx_t num_constraints = gstate.constraints.size();
+    const idx_t num_evaluated = num_constraints + (diagnose ? gstate.absorbed_constraints.size() : 0);
+    for (idx_t c = 0; c < num_evaluated; c++) {
         DecideProfileScope clause_profile("extraction.constraint");
         DecideProfileScope::Counter("constraint.ordinal", c);
         DecideProfileScope clause_phase("extraction.constraint_setup");
-        auto &constraint = gstate.constraints[c];
+        auto &constraint =
+            c < num_constraints ? gstate.constraints[c] : gstate.absorbed_constraints[c - num_constraints];
 
         EvaluatedConstraint eval_const;
         eval_const.comparison_type = constraint->comparison_type;
@@ -2565,7 +2658,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             if (has_when) {
                 q = "when " + RenderDecideSource(*constraint->when_condition, source_fragments, entity_scopes);
             }
-            if (constraint->per_class) {
+            if (constraint->per_key != DecideConstraint::PerKeyRole::NONE) {
                 string key;
                 for (idx_t i = 0; i < constraint->class_key.size(); i++) {
                     key += (i > 0 ? ", " : "") +
@@ -2629,7 +2722,18 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                     }
                     eval_const.num_groups = 1;
                 }
-            } else if (constraint->per_class) {
+                // The classes each group's rows stand for -- the aggregate row of a group,
+                // or the easy MIN/MAX's member rows -- which an expanded diagnosis reports
+                // one by one (D28). Diagnosis prep: paid for only under DIAGNOSE.
+                if (diagnose) {
+                    const bool one_group = eval_const.row_group_ids.empty();
+                    eval_const.group_class_set =
+                        CollectGroupClasses(constraint->per_key, constraint->class_key, per_group_cache,
+                                            chunk_expr_cache, context, gstate.data, num_rows, scoped_kept,
+                                            one_group ? vector<idx_t>() : rhs_row_group_ids,
+                                            one_group ? 1 : eval_const.num_groups, gstate.class_sets);
+                }
+            } else if (constraint->per_key == DecideConstraint::PerKeyRole::ONE_ROW_PER_CLASS) {
                 // One row per class of the `per` key among the kept rows: its first, which
                 // stands for the class because the key determines the whole clause.
                 vector<idx_t> class_ids;
@@ -2650,6 +2754,13 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 eval_const.num_groups = num_classes;
                 eval_const.group_labels = std::move(labels);
                 eval_const.rows_stand_with_their_class = !has_when;
+                // Each class's row stands for its class (D28), under DIAGNOSE only.
+                if (diagnose) {
+                    eval_const.group_class_set =
+                        CollectGroupClasses(constraint->per_key, constraint->class_key, per_group_cache,
+                                            chunk_expr_cache, context, gstate.data, num_rows, scoped_kept,
+                                            eval_const.row_group_ids, num_classes, gstate.class_sets);
+                }
             } else if (has_when) {
                 eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
                 for (idx_t row = 0; row < num_rows; row++) {
@@ -3136,7 +3247,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
         }
 
-        gstate.evaluated_constraints.push_back(std::move(eval_const));
+        (c < num_constraints ? gstate.evaluated_constraints : gstate.evaluated_absorbed_constraints)
+            .push_back(std::move(eval_const));
     }
 }
 
@@ -3515,6 +3627,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 // variable bound, so a second formulation against a widened box reuses it as is.
 void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate,
                                              idx_t num_rows, ChunkExprCache &chunk_expr_cache,
+                                             PerGroupCache &per_group_cache,
                                              const vector<EntityMapping> &entity_mappings,
                                              EvaluatedClauses &evaluated) const {
     if (composed_minmax_constraints.empty() && composed_minmax_objective_terms.empty()) {
@@ -3712,6 +3825,19 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
                          .DefaultCastAs(LogicalType::DOUBLE)
                          .GetValue<double>();
         clause.terms = EvaluateComposedTerms(spec.terms, "constraint");
+        clause.repair_group_id =
+            gstate.constraints.size() + gstate.absorbed_constraints.size() + evaluated.composed_constraints.size();
+        // The classes its one row stands for (D28), under DIAGNOSE: its `per` key's values
+        // among the rows its `when` keeps, or those rows with no `per`.
+        if (diagnose && spec.scoped) {
+            vector<bool> kept_rows(num_rows, true);
+            if (spec.when) {
+                kept_rows = KeptRows(*spec.when, chunk_expr_cache, context, gstate.data, num_rows);
+            }
+            clause.class_set = CollectGroupClasses(spec.per_key, spec.class_key, per_group_cache, chunk_expr_cache,
+                                                   context, gstate.data, num_rows, kept_rows, {}, 1,
+                                                   gstate.class_sets)[0];
+        }
         evaluated.composed_constraints.push_back(std::move(clause));
     }
 
@@ -3901,6 +4027,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // Everything below this point is stage 06 working on the evaluated model, so
     // hand the constraints and the formulation links over before the first pass.
     solver_input.constraints = std::move(gstate.evaluated_constraints);
+    solver_input.class_sets = std::move(gstate.class_sets);
     solver_input.minmax_clause_labels = minmax_clause_labels;
     solver_input.ne_clause_labels = ne_clause_labels;
     for (auto &link : bilinear_links) {
@@ -4301,10 +4428,10 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
          i++) {
         auto &spec = composed_minmax_constraints[i];
         auto terms = evaluated.composed_constraints[i].terms;
-        LinearizeComposedMinMaxConstraint(solver_input, var_indexer, terms,
-                                          evaluated.composed_constraints[i].rhs, spec.outer_cmp,
-                                          spec.source_clause_id, spec.removal_group_id,
-                                          decide_var_names, native_min_max);
+        auto &clause = evaluated.composed_constraints[i];
+        LinearizeComposedMinMaxConstraint(solver_input, var_indexer, terms, clause.rhs, spec.outer_cmp,
+                                          spec.source_clause_id, spec.removal_group_id, clause.repair_group_id,
+                                          clause.class_set, decide_var_names, native_min_max);
     }
     if (!evaluated.composed_objective_terms.empty()) {
         auto terms = evaluated.composed_objective_terms;
@@ -4447,7 +4574,8 @@ static void OpenElasticColumnBox(SolverInput &input) {
 //! it. The bound `x <= k` is ONE editable knob; on a multi-instance variable it fans into
 //! one row per instance under a single (synthetic) clause id and shape SHARED_SCALAR, so
 //! the elastic engine collapses them to one shared slack and reports the max overshoot
-//! (I2.a). Single-instance is the N=1 case (a size-1 block).
+//! (I2.a). Single-instance is the N=1 case (a size-1 block). A scoped bound is left out:
+//! its clause's own rows are in the model already, one per kept row or class (D28).
 //!
 //! C3: if a recorded bound cannot be re-emitted (its column is missing from the model),
 //! the elastic model is missing a user constraint — `has_unhandled_user_bounds` is set so
@@ -4457,14 +4585,11 @@ static void EmitAbsorbedUserBoundRows(SolverModel &model, const VarIndexer &var_
                                       bool &has_unhandled_user_bounds) {
     // The synthetic ids must be FRESH: the elastic engine groups rows into one shared
     // slack by `repair_group_id`, so an id already in use silently welds an absorbed
-    // bound onto an unrelated clause and reports one edit for both. They are read off the
-    // model rather than derived from a count, because no count is the id space. A regular
-    // constraint takes its index in `solver_input.constraints` and a GLOBAL one takes
-    // `constraints.size() + its own index`, so the two ranges are adjacent: starting at
-    // `constraints.size()` lands on top of the first global constraint. That collision is
-    // invisible whenever the linear specs outnumber the ids actually in use, and appears
-    // as soon as a construct is stated natively — fewer linear specs, same ids — which is
-    // how it was found. Taking the max in use cannot drift with either allocation rule.
+    // bound onto an unrelated clause and reports one edit for both. Execution numbers
+    // every clause it evaluates (the prepared clauses, then the absorbed scoped bounds,
+    // then the composed clauses), but formulation drops rows -- a natively stated
+    // construct, a `<>` moved into indicator rows -- so no count of the model's rows is
+    // the id space. They are read off the model instead: the max in use cannot drift.
     idx_t synthetic_clause_id = 0;
     for (const auto &row : model.constraints) {
         if (row.provenance.repair_group_id != DConstants::INVALID_INDEX &&
@@ -4473,6 +4598,9 @@ static void EmitAbsorbedUserBoundRows(SolverModel &model, const VarIndexer &var_
         }
     }
     for (const auto &b : user_absorbed_bounds) {
+        if (b.repair_rows_from_clause) {
+            continue;
+        }
         idx_t num_instances = var_indexer.NumInstances(b.decide_var_idx);
         idx_t bound_clause_id = synthetic_clause_id++;
         for (idx_t inst = 0; inst < num_instances; inst++) {

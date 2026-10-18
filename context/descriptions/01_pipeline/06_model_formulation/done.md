@@ -301,7 +301,10 @@ see `05_optimizer/done.md` → "The model-class gate".
 
 `ConstraintProvenance` (`ilp_model.hpp`) travels with each emitted constraint so
 diagnosis can report at the **user-clause** level rather than at raw matrix rows:
-the source comparison for display, `repair_group_id` for elastic grouping, the
+the source comparison for display, `repair_group_id` for elastic grouping (execution
+numbers every clause it evaluates -- the prepared clauses, then the absorbed scoped
+bounds, then the composed clauses, whose id `LinearizeComposedMinMaxConstraint` takes
+as given -- so no two clauses share one), the
 `PER`/`WHEN` group id and its printable key, `ConstraintKind` (user parameter vs
 rigid mechanism row), the elastic shape (does this row share one slack with its
 siblings or get its own), whether coefficients were pre-scaled by `1/N_g` for an
@@ -322,7 +325,18 @@ each site repeating them:
 - `StampConstraintProvenance(provenance, eval_const, repair_group_id, group_key,
   group_label)` sets `source_clause_id`, `repair_group_id`, `kind`, `shape` +
   `rhs_label`, and — only when the caller passes a real one — `group_key` /
-  `group_label`. All six sites call this.
+  `group_label`. All six sites call this; the four aggregate sites then set
+  `class_set` from `EvaluatedConstraint::group_class_set` (`ClassSetOf`), the index of
+  the group's classes in `SolverModel::class_sets` (moved from `SolverInput::class_sets`
+  by `Build`; D28), each of a `Kind`: `KEY_VALUES` (a `per K:`'s values), `KEPT_ROWS` (no
+  `per` key) or `WHOLE_CLAUSE` (`per ()`, one class with no key value). The per-row
+  sites set it for a scoped easy MIN/MAX's member rows from their group and for a `per K:`
+  clause's row from its class, then stamp `data_row` (the row it was emitted at,
+  DIAGNOSE's `row`) and `per_kept_row` (a scoped clause's row with no class set: each
+  kept row is a class of its own) through `StampDataRow`. A flat row copies
+  `RawConstraint::class_set`, which the hard MIN/MAX bound row carries from its group and
+  the composed clause's outer row from its evaluated clause
+  (`LinearizeComposedMinMaxConstraint`).
 - `StampAggregateProvenance(provenance, eval_const)` sets `is_aggregate` and
   `qualifier`. Only the four aggregate sites (linear and quadratic, ungrouped and
   grouped) call this; a per-row constraint has no reducer to name.

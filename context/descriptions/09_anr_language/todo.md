@@ -82,6 +82,10 @@ the language does; this plan says *how* it gets built and verified.
 | D23 | (2026-10-17) A clause with no scope spelling keeps today's rules until item 7, refusals included: deck example 1's bare form `ship <= 0.20 * sum(ship)` needs `per row:` or `by ()` until then (strict D12) | user |
 | D24 | (2026-10-17) Item 5 lifts every refusal the value rewrite handles exactly, not only the four shapes of §4.2: a decision beside a reducer, different `by` keys, a row-varying factor, a reducer inside another expression, a `MIN`/`MAX` beside another term with a `by` or a non-constant bound, a decision beside a `MIN`/`MAX` in a constraint, a query-wide product beside a reducer | user |
 | D25 | (2026-10-17) The tests that pinned those refusals change expectation: the 16 cases of `test_scope_reducer_by.py` move to `test_scope_value_rewrite.py` as oracle-judged answers, `test_scope_parser.test`'s by-expression case shows its result, the C++ per-row assertion asserts D19 | user |
+| D26 | (2026-10-17) A clause typed in an old spelling keeps its old echo in `EXPLAIN` and `DIAGNOSE` until item 7 removes the spelling: a suggested edit pastes back into the query as typed | user |
+| D27 | (2026-10-17) `EXPLAIN` names every auxiliary by what it stands for (an ABS `abs(e)`, a product `(b * x)`, an indicator `(x = v)`, a helper `sum(e) by (g)`) and prints one account line per rewrite under its clause, in both plans and for both spellings; the two `__abs_aux_0__` pins of `test_explain.py` change | user |
+| D28 | (2026-10-17) `DIAGNOSE`'s `group` column holds the `per` key value: in the expanded slack scope a `by`-grouped clause reports its group's finding once per class of its `per` key, and once per kept row when it has no `per` key (ANR deck p. 16-17, 110: `per row` is a vector, `per K` / `per ()` a set of distinct signatures) | user |
+| D29 | (2026-10-17) Item 6 lands as one commit: the rendering changes and the conversion of the tests, corpus and benchmarks together | user |
 
 Small calls made while planning. All were put to the user on 2026-10-05 and none was
 vetoed.
@@ -275,11 +279,10 @@ adds 1, 5 and 8 the same way.
 ## 7. Order of work
 
 Seven items, one commit each: a feature plus the tests that prove it. Old spellings keep
-working until item 7. Items 1 to 5 have shipped — see [`done.md`](done.md).
+working until item 7. Items 1 to 6 have shipped — see [`done.md`](done.md).
 
 | Item | Delivers | Checklist |
 |---|---|---|
-| 6 | Switch everything to the new spellings: EXPLAIN and DIAGNOSE echo them; golden corpus, parser tests, pytest suite and benchmarks converted; no other engine change. `golden/check.sh` identical on both solvers | — |
 | 7 | Remove the old spellings: `T.x(TYPE)`, `scalar x(TYPE)`, postfix `PER`, postfix `WHEN` and `D.x` references raise the error naming the new spelling; dead code removed; `SUM(D: e)` stays; the behaviour file is folded into `syntax_reference.md`. Tests `test_scope_removed_syntax.py` | C10 |
 
 Items 3 to 5 changed no old answer (D12, D17, D23): the new rules apply to the new
@@ -350,7 +353,7 @@ of `01_pipeline/`; `04_testing/` (new `scope/` area).
 
 ---
 
-## 9a. Left open by items 3–5
+## 9a. Left open by items 3–6
 
 - **Refused until a later item**: `AVG` under `<>` beside another term, over a product,
   or with its own `when`/`per`; a product or square of decisions inside a reducer that
@@ -368,12 +371,41 @@ of `01_pipeline/`; `04_testing/` (new `scope/` area).
   literal, `CASE`, `CAST`, `TRY_CAST`, `::`, `COALESCE`, `NULLIF`, `EXTRACT`,
   parentheses) or a scope inside such a form (the item-1 grammar admits neither). D14's
   and D15's messages cover every position the binder sees.
-- **EXPLAIN and DIAGNOSE** (item 6): an aggregate-shape clause's `group` column names
-  its `by` group where the spec's §1 asks for the `per` key value; a helper decision of
-  the value rewrite appears as `__value_<n>__` in EXPLAIN's solver-row layer (as an ABS
-  auxiliary does) and should carry its reducer's SQL; its definition rows are structural
-  and never offered for repair. A diagnosis suggested edit quotes the clause in the new
-  spelling, `per` included.
+- **EXPLAIN and DIAGNOSE**: done with item 6 (D27, D28). A helper's definition rows stay
+  structural and are never offered for repair.
+- **Reducers without a `by`**: `count(*)` and `norm(e, p)` take no `by (...)` ("by (...)
+  must directly follow SUM, AVG, MIN or MAX"), so `SUM(x) <= COUNT(*) PER g` and
+  `norm(e, 1) <= 5 PER g` have no new spelling yet (golden entry 62,
+  `test_cons_rhs_aggregate.py`, `test_norm.py`); nor has the flat objective `SUM(e) PER k`.
+  Item 7 decides them.
+- **Tests kept in the old spelling** (88, each above the marker `# old spelling until
+  item 7`; and the deliberate old-vs-new cases of `test_scope_declare.py`,
+  `test_scope_reducer_inner.py`, `test_scope_generation.py`, the C++ serialization
+  matrix, `test_scope_parser.test`'s "old spellings are unchanged" block): they pin the
+  old-only behaviours of §9 of the behaviour file or an old message, and go with item 7.
+- **Columns print unqualified over a join**: `when S.cap > 12: abs(x - D.cap) <= S.cap`
+  echoes as `when cap > 12: abs(x - cap) <= cap` in EXPLAIN and DIAGNOSE (only a `by`
+  or `per` key keeps its relation), so a suggested edit over a join may paste back
+  ambiguous. The written layer is rendered without the relation aliases
+  (`InitializeConstraintSourceInfo`); giving it them changes every multi-relation echo
+  and its pins, so it is a decision for item 7.
+- **A `=` on a MIN/MAX** is echoed by DIAGNOSE as the half its finding loosens (`>=` or
+  `<=`), and its suggested change pastes back as that half alone -- shared with the old
+  spellings.
+- **A NULL class reads like the string `'NULL'`**: the `group` column labels a NULL `per`
+  key value `NULL`, as it does a value that is the string `'NULL'`, so the two classes
+  read the same. The old `PER` excluded NULL keys, so only the scope spellings meet it;
+  a distinct label (SQL NULL, or SQL literals throughout) is a decision for the user.
+- **An old spelling's echo prints a column unquoted** (`WHEN ok:` for `WHEN "ok:"`),
+  pinned by `test_scope_generation.py` under D26; the scope spellings quote it. It goes
+  with item 7.
+- **Structure for item 7**, which reworks `DecideConstraint` when the old `PER` goes: the
+  scope fields (`scoped`, `per_key`, `class_key`, `when`) are declared on both
+  `DecideConstraint` and `ComposedMinMaxConstraint` and filled by two readers, one
+  `DecideClauseScope` would serve both; an old spelling's absorbed bound still re-emits
+  through `EmitAbsorbedUserBoundRows`, while a scoped one comes from its clause
+  (`absorbed_constraints`), so one path can go; the two-level objective's account subjects
+  are joined in the MIN/MAX rewrite beside the renderer's own two-level text.
 - **One helper per clause and reducer**: two clauses holding the same reducer over the
   same rows get two helpers (the rows of one clause share theirs); sharing across clauses
   is the §10 follow-up, since a definition carries one clause's provenance. A helper's

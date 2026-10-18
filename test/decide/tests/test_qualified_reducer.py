@@ -24,6 +24,10 @@ import pytest
 from decidb_cli import DecidBCliError
 from solver.types import VarType, ObjSense
 
+# old spelling until item 7: every `T.x` declaration in this file stays beside its
+# `SUM(D: e)` (D10: the old qualifier refuses a keyed decision), and so does the
+# `SUM(D: e)` itself -- this is the file that covers the qualified reducer.
+
 
 # ---------------------------------------------------------------------------
 # Shared data helper
@@ -417,7 +421,7 @@ def test_qualified_reducer_in_constraint(decidb_cli, duckdb_conn, oracle_solver,
 
 @pytest.mark.correctness
 def test_qualified_reducer_with_per(decidb_cli, duckdb_conn, perf_tracker):
-    """A per-nation budget stated once per nation. Each PER group holds exactly one
+    """A per-nation budget stated once per nation. Each `per` class holds exactly one
     nation, so every group's charge is that nation's cost — feasible only for the
     nations under the cap."""
     sql = """
@@ -425,7 +429,7 @@ def test_qualified_reducer_with_per(decidb_cli, duckdb_conn, perf_tracker):
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
         DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(n: (n.n_nationkey + 1) * keepN) <= 8 PER n.n_nationkey
+        SUCH THAT per n.n_nationkey: sum(n: (n.n_nationkey + 1) * keepN) by (n.n_nationkey) <= 8
         MAXIMIZE SUM(keepN * c.c_acctbal)
     """
     result, _ = decidb_cli.execute(sql)
@@ -498,7 +502,7 @@ def test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated
         SELECT c.c_custkey, n.n_nationkey, cap
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE scalar cap(INT)
+        DECIDE per (): cap(INT)
         SUCH THAT SUM(n: (n.n_nationkey + 1) * cap) <= 300
         MAXIMIZE cap
     """
@@ -596,14 +600,14 @@ def test_row_scoped_decision_inside_qualified_reducer_rejected(decidb_cli):
 
 @pytest.mark.error_binder
 def test_query_wide_decision_alone_inside_qualified_reducer_rejected(decidb_cli):
-    """A `scalar` decision standing *alone* inside a qualified reducer is still
+    """A query-wide (`per ()`) decision standing *alone* inside a qualified reducer is still
     rejected: the body is row-invariant, so there is nothing for the reducer to
     de-duplicate or sum over (batch D: "row-invariant", not "contains a scalar" --
     a scalar *combined with* the qualified relation's own data is legal instead,
     see test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated)."""
     with pytest.raises(DecidBCliError, match="query-wide decision"):
         decidb_cli.execute(_REJECT_BASE.format(
-            extra_decls=", scalar cap(INT)",
+            extra_decls=", per (): cap(INT)",
             constraint="cap <= 5",
             objective="SUM(n: cap)"))
 
@@ -718,7 +722,7 @@ def test_qualified_reducer_with_aggregate_local_when_in_objective(
         WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
         DECIDE n.keepN(BOOL)
         SUCH THAT SUM(n: keepN) <= 1
-        MAXIMIZE SUM({reducer}) WHEN (n.n_nationkey > 1)
+        MAXIMIZE when (n.n_nationkey > 1): sum({reducer})
     """
     counts = {
         int(r[0]): int(r[1]) for r in duckdb_conn.execute("""
@@ -760,7 +764,7 @@ def test_aggregate_local_when_filters_inside_a_qualified_reducer(
         WHERE n.n_nationkey IN (5, 14) AND c.c_custkey <= 200
         DECIDE n.keepN(BOOL)
         SUCH THAT SUM(n: keepN) <= 1
-        MAXIMIZE SUM(n: n.n_nationkey * keepN) WHEN (n.n_nationkey < 10)
+        MAXIMIZE when (n.n_nationkey < 10): sum(n: n.n_nationkey * keepN)
     """)
     keep = _keep_by_nation(result, 1, 2)
     assert keep.get(5) == 1, \
@@ -782,6 +786,7 @@ def test_qualified_reducer_with_aggregate_local_when_in_constraint(
     same budget and get dropped in favor of 16 alone — so nation 5's keep
     value is what distinguishes a correctly scoped WHEN from a broken one.
     """
+    # old spelling until item 7
     result, _ = decidb_cli.execute("""
         SELECT c.c_custkey, n.n_nationkey, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey

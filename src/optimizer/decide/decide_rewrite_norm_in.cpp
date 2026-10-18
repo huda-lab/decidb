@@ -93,16 +93,21 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			if (aggregate.filter) result->Cast<BoundAggregateExpression>().filter = aggregate.filter->Copy();
 			return result;
 		};
+		using Kind = LogicalDecide::RewriteAccount::Kind;
 		if (payload == "1") {
+			AddRewriteAccount(decide, clause_alias, Kind::NORM_SUM_ABS, RenderForPlan(aggregate, decide, scope.scoped));
 			expr = make_aggregate("sum", optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()));
 			return;
 		}
 		if (payload == "2") {
+			AddRewriteAccount(decide, clause_alias, Kind::NORM_SUM_SQUARES,
+			                  RenderForPlan(aggregate, decide, scope.scoped));
 			expr = make_aggregate("sum", optimizer.BindScalarFunction(
 			    "power", aggregate.children[0]->Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(2))));
 			return;
 		}
 		if (payload == "inf") {
+			AddRewriteAccount(decide, clause_alias, Kind::NORM_MAX_ABS, RenderForPlan(aggregate, decide, scope.scoped));
 			expr = make_aggregate("max", optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()));
 			return;
 		}
@@ -117,9 +122,18 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			}
 		}
 		string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
-		auto z = MakeDecisionRef(decide, AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true));
-		auto make_mz = [&]() { return optimizer.BindScalarFunction("*",
-		    make_uniq<BoundConstantExpression>(Value::DOUBLE(m)), z->Copy()); };
+		auto z = MakeDecisionRef(
+		    decide, AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, DecideVarScopeInfo::Row(),
+		                                 "(" + RenderForPlan(*aggregate.children[0], decide, scope.scoped) + " <> 0)"));
+		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::L0_INDICATORS,
+		                  RenderForPlan(aggregate, decide, scope.scoped));
+		auto make_mz = [&]() {
+			auto bound = make_uniq<BoundConstantExpression>(Value::DOUBLE(m));
+			if (auto_m) {
+				bound->alias = L0_AUTO_BOUND_TAG; // a placeholder stage 06 fills from the box
+			}
+			return optimizer.BindScalarFunction("*", std::move(bound), z->Copy());
+		};
 		auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
 			auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                                  std::move(lhs), std::move(rhs));
@@ -134,7 +148,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		expr = make_aggregate("sum", std::move(z));
 	};
 
-	rewrite(decide.decide_objective, string(), ClauseScope {decide.scoped_objective, nullptr});
+	rewrite(decide.decide_objective, OBJECTIVE_ROW_TAG, ClauseScope {decide.scoped_objective, nullptr});
 	rewrite(decide.decide_constraints, string(), ClauseScope());
 	for (auto &link : links) AppendConstraint(decide, std::move(link));
 }
@@ -189,9 +203,15 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			return;
 		}
 		vector<unique_ptr<Expression>> indicators;
+		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::IN_INDICATORS,
+		                  RenderForPlan(in, decide, scoped_in));
 		for (idx_t i = 0; i < k; i++) {
 			string name = "__in_ind_" + target->GetName() + "_" + to_string(in_counter) + "_" + to_string(i) + "__";
-			indicators.push_back(MakeDecisionRef(decide, AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true)));
+			// A plan names an indicator by the value it stands for.
+			string label = "(" + RenderForPlan(*in.children[0], decide, scoped_in) + " = " +
+			               RenderForPlan(*in.children[1 + i], decide, scoped_in) + ")";
+			indicators.push_back(MakeDecisionRef(
+			    decide, AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true, DecideVarScopeInfo::Row(), label)));
 		}
 		in_counter++;
 		auto cardinality = indicators[0]->Copy();

@@ -38,6 +38,7 @@ def test_simple_test(decidb_cli):
 @pytest.mark.error
 def test_qualified_missing_type(decidb_cli):
     """Omitted type on a table-scoped declaration is rejected the same way."""
+    # old spelling until item 7
     decidb_cli.assert_error("""
             SELECT x, l_orderkey FROM LINEITEM
             WHERE l_orderkey <= 5

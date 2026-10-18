@@ -164,7 +164,7 @@ def test_scalar_declaration_in_split_slot(decidb_cli, perf_tracker):
     shared column."""
     rows, cols = decidb_cli.execute("""
         SELECT c_custkey, ship, cap
-        DECIDE ship(INT), scalar cap(INT)
+        DECIDE ship(INT), per (): cap(INT)
         FROM customer
         WHERE c_custkey <= 20
         SUCH THAT ship <= cap AND cap <= 4
@@ -179,6 +179,7 @@ def test_scalar_declaration_in_split_slot(decidb_cli, perf_tracker):
 def test_entity_scoped_declaration_in_split_slot(decidb_cli, perf_tracker):
     """A table-scoped declaration parses in the pre-FROM slot and still shares one
     variable per entity across the join's repeated rows."""
+    # old spelling until item 7
     rows, cols = decidb_cli.execute("""
         SELECT n.n_nationkey, keep
         DECIDE n.keep(BOOL)
@@ -294,11 +295,11 @@ def test_split_order_over_subquery_source(decidb_cli, perf_tracker):
     The declaration names a source that the parser has not read yet — it sits
     textually before the subquery it scopes over. Entity scoping over a subquery
     regressed once before (`04_testing/entity_scope/done.md`), so the
-    table-scoped form is what is exercised here.
+    keyed (`per t:`) form is what is exercised here.
     """
     rows, cols = decidb_cli.execute("""
         SELECT t.c_custkey, x
-        DECIDE t.x(BOOL)
+        DECIDE per t: x(BOOL)
         FROM (SELECT c_custkey, c_acctbal FROM customer WHERE c_custkey <= 60) t
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(t.c_acctbal * x)
@@ -389,7 +390,7 @@ def test_split_order_with_when(decidb_cli, perf_tracker):
         DECIDE x(BOOL)
         FROM customer
         WHERE c_custkey <= 60
-        SUCH THAT SUM(x) <= 5 WHEN (c_acctbal > 0)
+        SUCH THAT when (c_acctbal > 0): sum(x) <= 5
         MAXIMIZE SUM(x * c_acctbal)
     """
     single_block = """
@@ -397,7 +398,7 @@ def test_split_order_with_when(decidb_cli, perf_tracker):
         FROM customer
         WHERE c_custkey <= 60
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 WHEN (c_acctbal > 0)
+        SUCH THAT when (c_acctbal > 0): sum(x) <= 5
         MAXIMIZE SUM(x * c_acctbal)
     """
     split_rows, _ = decidb_cli.execute(split)
@@ -414,7 +415,7 @@ def test_split_order_with_per(decidb_cli, perf_tracker):
         DECIDE x(BOOL)
         FROM customer
         WHERE c_custkey <= 60
-        SUCH THAT SUM(x) <= 2 PER c_nationkey
+        SUCH THAT per c_nationkey: sum(x) by (c_nationkey) <= 2
         MAXIMIZE SUM(x * c_acctbal)
     """
     single_block = """
@@ -422,7 +423,7 @@ def test_split_order_with_per(decidb_cli, perf_tracker):
         FROM customer
         WHERE c_custkey <= 60
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 PER c_nationkey
+        SUCH THAT per c_nationkey: sum(x) by (c_nationkey) <= 2
         MAXIMIZE SUM(x * c_acctbal)
     """
     split_rows, split_cols = decidb_cli.execute(split)
@@ -440,14 +441,14 @@ def test_split_order_with_per(decidb_cli, perf_tracker):
 
 @pytest.mark.correctness
 def test_split_order_with_nested_per_objective(decidb_cli, perf_tracker):
-    """A nested-aggregate `PER` objective in the split order."""
+    """A two-level `per` objective in the split order."""
     split = """
         SELECT c_custkey, c_nationkey, x
         DECIDE x(BOOL)
         FROM customer
         WHERE c_custkey <= 60
         SUCH THAT SUM(x) <= 6
-        MAXIMIZE MIN(SUM(x * c_acctbal)) PER c_nationkey
+        MAXIMIZE min(per c_nationkey: sum(x * c_acctbal) by (c_nationkey))
     """
     single_block = """
         SELECT c_custkey, c_nationkey, x
@@ -455,7 +456,7 @@ def test_split_order_with_nested_per_objective(decidb_cli, perf_tracker):
         WHERE c_custkey <= 60
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 6
-        MAXIMIZE MIN(SUM(x * c_acctbal)) PER c_nationkey
+        MAXIMIZE min(per c_nationkey: sum(x * c_acctbal) by (c_nationkey))
     """
     split_rows, _ = decidb_cli.execute(split)
     single_rows, _ = decidb_cli.execute(single_block)

@@ -60,6 +60,7 @@ _PAIRS = [
         """,
         id="reducer_scale",
     ),
+    # old spelling until item 7
     pytest.param(
         """
             SELECT id, grp, active, x

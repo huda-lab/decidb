@@ -184,7 +184,7 @@ def test_highs_never_takes_the_native_path(decidb_cli_highs):
 # `MIN(e) >= K`, `MINIMIZE MAX`, `MAXIMIZE MIN`) never needed a Big-M — the one-sided
 # envelope plus outer pressure is exact — so they never reach it and A/B-ing them
 # would exercise no new code. These are the hard ones: constraint, objective,
-# PER-nested, and composed.
+# two-level (per-keyed), and composed.
 #
 # Each entry carries the objective as a function of the returned rows, because that is
 # what "the same optimum" means. Comparing the ASSIGNMENT would be wrong: an optimum can
@@ -223,16 +223,16 @@ _MINMAX_SHAPES = [
      "SUCH THAT x <= 9 AND MIN(x * c) <= 3 MAXIMIZE SUM(x)", _sum_x),
     ("hard constraint equality",
      "SUCH THAT x <= 9 AND MAX(x) = 5 MINIMIZE SUM(x * c)", _sum_xc),
-    ("hard constraint PER",
-     "SUCH THAT x <= 9 AND MAX(x) >= 5 PER g MINIMIZE SUM(x * c)", _sum_xc),
+    ("hard constraint per",
+     "SUCH THAT x <= 9 AND per g: max(x) by (g) >= 5 MINIMIZE SUM(x * c)", _sum_xc),
     ("hard objective MAXIMIZE MAX",
      "SUCH THAT x <= 4 AND SUM(x) <= 6 MAXIMIZE MAX(x * c)", _max_xc),
     ("hard objective MINIMIZE MIN",
      "SUCH THAT x >= 1 AND x <= 4 AND SUM(x) >= 3 MINIMIZE MIN(x * c)", _min_xc),
-    ("hard PER-nested objective",
-     "SUCH THAT x <= 4 AND SUM(x) <= 6 MAXIMIZE MAX(MAX(x * c)) PER g", _max_xc),
-    ("hard PER outer over group sums",
-     "SUCH THAT x <= 4 AND SUM(x) <= 6 MAXIMIZE MAX(SUM(x * c)) PER g", _max_group_sum_xc),
+    ("hard two-level objective",
+     "SUCH THAT x <= 4 AND SUM(x) <= 6 MAXIMIZE max(per g: max(x * c) by (g))", _max_xc),
+    ("hard two-level outer over group sums",
+     "SUCH THAT x <= 4 AND SUM(x) <= 6 MAXIMIZE max(per g: sum(x * c) by (g))", _max_group_sum_xc),
     ("composed constraint",
      "SUCH THAT x <= 9 AND SUM(x) + MAX(x * c) >= 20 MINIMIZE SUM(x)", _sum_x),
     ("composed objective",
@@ -339,11 +339,11 @@ def test_native_minmax_needs_no_bound(decidb_cli_gurobi):
 # covers that boundary.
 _NOT_EQUAL_SHAPES = [
     ("per-row", "SUCH THAT x <= 9 AND x <> 5 MAXIMIZE SUM(x * c)", _sum_xc),
-    ("per-row under WHEN",
-     "SUCH THAT x <= 9 AND x <> 5 WHEN g = 'a' MAXIMIZE SUM(x * c)", _sum_xc),
+    ("per-row under when",
+     "SUCH THAT x <= 9 AND when g = 'a': x <> 5 MAXIMIZE SUM(x * c)", _sum_xc),
     ("aggregate", "SUCH THAT x <= 9 AND SUM(x) <> 36 MAXIMIZE SUM(x * c)", _sum_xc),
-    ("aggregate PER",
-     "SUCH THAT x <= 9 AND SUM(x) <> 18 PER g MAXIMIZE SUM(x * c)", _sum_xc),
+    ("aggregate per",
+     "SUCH THAT x <= 9 AND per g: sum(x) by (g) <> 18 MAXIMIZE SUM(x * c)", _sum_xc),
     ("both spellings at once",
      "SUCH THAT x <= 9 AND x <> 5 AND SUM(x) <> 36 MAXIMIZE SUM(x * c)", _sum_xc),
 ]

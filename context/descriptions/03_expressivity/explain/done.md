@@ -104,9 +104,11 @@ clause reads identically wherever it is quoted back. Each caller supplies the
 
 **EXPLAIN describes the model that was built, not only what the user wrote.** The
 tree it walks is post-optimizer, so the rows linearization emitted (`NORM`
-indicators, ABS auxiliaries, `<>` links) are part of the picture, carrying their
-internal variable names. Those names are real model columns; the renderer makes
-them legible without pretending they are SQL. Section 2.1 says where they print.
+indicators, ABS auxiliaries, `<>` links) are part of the picture. An auxiliary column
+prints as the expression it stands for (`abs(ship - 20)`, `(open * ship)`,
+`(ship = 5)`, `sum(ship) by (D.region)`; the labels ride in `DecideSourceNames`), never
+by its internal name, and each rewrite leaves one account line saying what it made of
+the construct (item 6, D27). Section 2.1 says where they print.
 
 ---
 
@@ -127,17 +129,25 @@ lower layers are noise when they read the same as the one above.
 ```
 Constraints:
   MAX(ship) + SUM(ship) <= 100
-    ↳ MAX(ship) becomes an auxiliary variable
+    ↳ MAX(ship) becomes an extremum column
   AVG(ship) >= 10
+    ↳ AVG(ship) becomes a sum divided by its row count
     ↳ SUM(ship) >= 10
   ABS(ship - 20) <= 5
-    ↳ __abs_aux_0__ <= 5
-    ↳ __abs_aux_0__ - ship >= -20
-    ↳ __abs_aux_0__ + ship >= 0 + 20
+    ↳ ABS(ship - 20) becomes an auxiliary variable
+    ↳ ABS(ship - 20) - ship >= -20
+    ↳ ABS(ship - 20) + ship >= 0 + 20
   ship <= capacity * open
     ≡ ship - capacity * open <= 0.0
   SUM(ship) >= 300
 ```
+
+The account lines come first under their clause, then the rows; a row that reads as
+the layer above it (the ABS clause's own row, `ABS(ship - 20) <= 5`) is left out. Each
+account is a fact a rewrite recorded (`LogicalDecide::rewrite_accounts`: the construct
+and a `RewriteAccount::Kind`), worded in one place by `RenderDecideRewriteAccount`. The
+objective prints its own accounts, and the rows a rewrite added for it (an ABS
+envelope, an L0 link, tagged `OBJECTIVE_ROW_TAG`), under `Objective:`.
 
 Before this, EXPLAIN printed whichever tree happened to sit on `LogicalDecide` at
 render time, and the same three clauses came out as a bare `true`, a
@@ -180,9 +190,11 @@ both:
 
 - **One clause, many rows** — a linearized clause owns every row it generated.
 - **One clause, no rows** — a composed MIN/MAX clause was lifted out of the tree
-  into `composed_minmax_constraints`, leaving a `TRUE` placeholder. Its group
-  reports which reducers became auxiliary variables, since that is the one thing
-  no other line shows.
+  into `composed_minmax_constraints`, leaving a `TRUE` placeholder. Its account lines
+  report which reducers became extremum columns, since that is the one thing no other
+  line shows.
+- **A row for the objective** — a row a rewrite added for the objective carries
+  `OBJECTIVE_ROW_TAG` instead of a clause id and prints under the objective.
 - **A row with no clause** — printed under `added by formulation:` rather than
   dropped or misattributed. Nothing currently reaches this path; it exists so a
   future rewrite that forgets to carry an id degrades visibly instead of lying.
@@ -250,4 +262,5 @@ and the `N Rows` in `EXPLAIN ANALYZE` match the scan's cardinality.
 | Layering and formatting | `CollectDecideClauseLayers` / `RenderDecideClauseLayers` / `RenderDecideObjectiveLayers` |
 | Clause id carried onto emitted rows | `MarkFormulationConstraint`, `CopyClauseProvenanceTags`, `DescendSourceAlias` in `src/optimizer/decide/decide_optimizer.cpp` (shared via `decide_optimizer_internal.hpp`) |
 | Objective snapshots captured | `src/planner/binder/query_node/plan_select_node.cpp`, around `CanonicalizeObjective` |
-| Tests | `test/decide/tests/test_explain.py` — 35 cases over TPC-H, including `test_explain_renders_user_casts_only`, `test_explain_objective_when_postfix`, and the layered-rendering group; plus `test_diagnosis_written_clause.py::test_explain_leads_with_the_written_clause` |
+| Account lines and auxiliary labels | `RewriteAccount` in `logical_decide.hpp`; `AddRewriteAccount`, `RenderForPlan` in `decide_optimizer.cpp`; `RenderDecideRewriteAccount`, `DecidePlanNames` in `decide_source_provenance.cpp` |
+| Tests | `test/decide/tests/test_explain.py` — 35 cases over TPC-H, including `test_explain_renders_user_casts_only`, `test_explain_objective_when_postfix`, and the layered-rendering group; `test_scope_explain_diagnose.py` (accounts, labels and the scope spellings' echo); plus `test_diagnosis_written_clause.py::test_explain_leads_with_the_written_clause` |

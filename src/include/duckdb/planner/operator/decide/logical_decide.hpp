@@ -285,6 +285,15 @@ public:
         ExpressionType outer_cmp;             // Outer comparison (<=, >=, <, >, =)
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t removal_group_id = DConstants::INVALID_INDEX;
+        //! Written with the scope spellings: the classes its one row stands for, which an
+        //! expanded diagnosis reports one by one (D28) -- the values of its `per K:` key
+        //! among the rows its `when` keeps (`per_key` NAMES_CLASSES; `per ()` names none),
+        //! or those rows themselves with no `per` (NONE). `when` is the clause's own,
+        //! also folded into each term's filter.
+        bool scoped = false;
+        DecideConstraint::PerKeyRole per_key = DecideConstraint::PerKeyRole::NONE;
+        vector<unique_ptr<Expression>> class_key;
+        unique_ptr<Expression> when;
     };
     vector<ComposedMinMaxConstraint> composed_minmax_constraints;
 
@@ -322,6 +331,39 @@ public:
     };
     vector<ReducerValueLink> reducer_value_links;
 
+    //! What a rewrite made of a construct, for EXPLAIN: the construct as a plan prints it
+    //! (`subject`) and what it became (`kind`), worded by the renderer in one place
+    //! (RenderDecideRewriteAccount). One per construct a rewrite replaced, under the
+    //! clause it came from; INVALID_INDEX is the objective. Produced by the rewrites; an
+    //! optimized plan is never serialized.
+    struct RewriteAccount {
+        enum class Kind : uint8_t {
+            AVG_SUM,                      //!< an AVG over decisions, a sum scaled by its row count
+            NORM_SUM_ABS,                 //!< `norm(e, 1)`, a sum of absolute values
+            NORM_SUM_SQUARES,             //!< `norm(e, 2)`, a sum of squares
+            NORM_MAX_ABS,                 //!< `norm(e, 'inf')`, a maximum of absolute values
+            EXTREMUM_EACH_MEMBER,         //!< a MIN/MAX in its cheap direction, a bound on each member
+            ABS_AUXILIARY,                //!< an ABS held by solver pressure alone
+            ABS_AUXILIARY_SIGN_INDICATOR, //!< an ABS pinned by Big-M rows and a sign binary
+            ABS_AUXILIARY_NATIVE,         //!< an ABS stated to the solver as an absolute value
+            PRODUCT_AND,                  //!< a Boolean product, AND rows
+            PRODUCT_MCCORMICK,            //!< a Boolean times a bounded decision, McCormick rows
+            IN_INDICATORS,                //!< `x IN (...)`, one indicator per value
+            L0_INDICATORS,                //!< `norm(e, 0)`, one indicator per row
+            VALUE_HELPER,                 //!< a reducer held by one helper decision
+            VALUE_HELPER_PER_GROUP,       //!< a reducer held by a helper decision per `by` group
+            EXTREMUM,                     //!< a MIN/MAX held by its envelope
+            EXTREMUM_PINNED,              //!< a MIN/MAX pinned by indicator rows
+            EXTREMUM_PER_GROUP,           //!< a two-level objective's inner MIN/MAX, per group
+            EXTREMUM_PER_GROUP_PINNED,    //!< the same, pinned by indicator rows
+            NOT_EQUAL,                    //!< `<>`, two conditional rows with an indicator
+        };
+        idx_t source_clause_id = DConstants::INVALID_INDEX;
+        Kind kind = Kind::ABS_AUXILIARY;
+        string subject;
+    };
+    vector<RewriteAccount> rewrite_accounts;
+
     //! Composed MIN/MAX objective: additive sum of SUM/AVG/MIN/MAX terms in the objective.
     //! Populated by DecideOptimizer::RewriteComposedMinMaxObjective. Empty when the
     //! objective is a single aggregate (handled by RewriteMinMaxObjective) or plain linear.
@@ -344,6 +386,10 @@ public:
         double typed_k = 0.0;
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t removal_group_id = DConstants::INVALID_INDEX;
+        //! Its clause, written with the scope spellings and flattened into
+        //! DecidePreparedModel::absorbed_constraints, gives the repair model its rows
+        //! (ABSORBED_CLAUSE_ROWS_TAG); this record re-emits none.
+        bool repair_rows_from_clause = false;
     };
 
     //! Sentinel for "no explicit lower bound was written". Not 0, so that an explicit

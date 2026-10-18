@@ -22,6 +22,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -146,6 +147,9 @@ void decide_rewrite::CopyClauseProvenanceTags(const string &from_alias, Expressi
 	if (TryParseRemovalGroupTag(from_alias, removal_id)) {
 		AddDecideTag(alias, MakeRemovalGroupTag(removal_id));
 	}
+	if (HasDecideTag(from_alias, OBJECTIVE_ROW_TAG)) {
+		AddDecideTag(alias, OBJECTIVE_ROW_TAG);
+	}
 	to.SetAlias(std::move(alias));
 }
 
@@ -180,13 +184,39 @@ unique_ptr<Expression> decide_rewrite::MakeDecisionRef(const LogicalDecide &deci
 	return make_uniq<BoundColumnRefExpression>(ref.GetName(), ref.return_type, ref.binding);
 }
 
+string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide &decide, bool scoped) {
+	// The labels of the auxiliaries earlier passes made, so a construct over one prints
+	// it as what it stands for rather than by its internal name.
+	return RenderDecideSource(expr,
+	                          DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys,
+	                                          decide.decide_index, decide.aux_var_expressions),
+	                          scoped);
+}
+
+void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id,
+                                       LogicalDecide::RewriteAccount::Kind kind, string subject) {
+	LogicalDecide::RewriteAccount account;
+	account.source_clause_id = source_clause_id;
+	account.kind = kind;
+	account.subject = std::move(subject);
+	decide.rewrite_accounts.push_back(std::move(account));
+}
+
+void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, const string &clause_alias,
+                                       LogicalDecide::RewriteAccount::Kind kind, string subject) {
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	TryParseSourceClauseTag(clause_alias, source_clause_id);
+	AddRewriteAccount(decide, source_clause_id, kind, std::move(subject));
+}
+
 //! The user clause a rewrite is currently standing inside. A comparison carrying a
 //! source id starts a new one; every other node inherits its parent's. This is what lets
 //! a row emitted deep inside a clause still name the clause it came from.
 string decide_rewrite::DescendSourceAlias(const Expression &expr, const string &inherited) {
 	idx_t provenance_id;
 	return TryParseSourceClauseTag(expr.GetAlias(), provenance_id) ||
-	               TryParseRemovalGroupTag(expr.GetAlias(), provenance_id)
+	               TryParseRemovalGroupTag(expr.GetAlias(), provenance_id) ||
+	               HasDecideTag(expr.GetAlias(), OBJECTIVE_ROW_TAG)
 	           ? expr.GetAlias()
 	           : inherited;
 }

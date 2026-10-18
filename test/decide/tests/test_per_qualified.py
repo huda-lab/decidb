@@ -34,7 +34,7 @@ from ._oracle_helpers import group_indices
 def test_per_single_qualified_column_in_constraint(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`PER s.s_nationkey` in a JOIN-based SUCH THAT constraint.
+    """`per s.s_nationkey:` in a JOIN-based SUCH THAT constraint.
 
     Joins supplier × nation and groups by the supplier-side nationkey via
     the table alias. Confirms both parse acceptance and that the qualifier
@@ -45,7 +45,7 @@ def test_per_single_qualified_column_in_constraint(
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, n.n_name, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER s.s_nationkey
+        SUCH THAT per s.s_nationkey: sum(x) by (s.s_nationkey) <= 3
         MAXIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
@@ -91,7 +91,7 @@ def test_per_single_qualified_column_in_constraint(
 def test_per_multi_column_all_qualified(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`PER (s.s_nationkey, n.n_regionkey)` — qualified composite key.
+    """`per s.s_nationkey, n.n_regionkey:` — qualified composite key.
 
     Catches a regression where the `columnrefList` change to
     `columnref_opt_indirection` was missed: without it, parenthesized
@@ -102,7 +102,7 @@ def test_per_multi_column_all_qualified(
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, n.n_regionkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 PER (s.s_nationkey, n.n_regionkey)
+        SUCH THAT per s.s_nationkey, n.n_regionkey: sum(x) by (s.s_nationkey, n.n_regionkey) <= 2
         MAXIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
@@ -148,7 +148,7 @@ def test_per_multi_column_all_qualified(
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_per_multi_column_mixed_qualified_and_bare(decidb_cli, duckdb_conn):
-    """`PER (col, t.col)` and `PER (t.col, col)` both parse and run.
+    """`per col, t.col:` and `per t.col, col:` both parse and run.
 
     Confirms the rule doesn't accidentally require all-or-nothing on the
     qualifier. Uses a simpler same-result-as-bare check instead of a full
@@ -160,16 +160,16 @@ def test_per_multi_column_mixed_qualified_and_bare(decidb_cli, duckdb_conn):
         SELECT s.s_suppkey, s.s_acctbal, s_nationkey, n_regionkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 PER (s_nationkey, n_regionkey)
+        SUCH THAT per s_nationkey, n_regionkey: sum(x) by (s_nationkey, n_regionkey) <= 2
         MAXIMIZE SUM(x * s_acctbal)
     """
     mixed1_sql = bare_sql.replace(
-        "PER (s_nationkey, n_regionkey)",
-        "PER (s.s_nationkey, n_regionkey)",
+        "per s_nationkey, n_regionkey: sum(x) by (s_nationkey, n_regionkey)",
+        "per s.s_nationkey, n_regionkey: sum(x) by (s.s_nationkey, n_regionkey)",
     )
     mixed2_sql = bare_sql.replace(
-        "PER (s_nationkey, n_regionkey)",
-        "PER (s_nationkey, n.n_regionkey)",
+        "per s_nationkey, n_regionkey: sum(x) by (s_nationkey, n_regionkey)",
+        "per s_nationkey, n.n_regionkey: sum(x) by (s_nationkey, n.n_regionkey)",
     )
 
     bare_rows, _ = decidb_cli.execute(bare_sql)
@@ -210,7 +210,7 @@ def test_per_qualified_equivalent_to_unqualified(decidb_cli):
         SELECT s.s_suppkey, s.s_acctbal, s_nationkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER {per_col}
+        SUCH THAT per {per_col}: sum(x) by ({per_col}) <= 3
         MAXIMIZE SUM(x * s_acctbal)
     """
     bare_rows, _ = decidb_cli.execute(base_sql.format(per_col="s_nationkey"))
@@ -227,7 +227,7 @@ def test_per_qualified_equivalent_to_unqualified(decidb_cli):
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_per_qualified_with_table_alias(decidb_cli):
-    """`FROM supplier AS s` + `PER s.s_nationkey` (alias form).
+    """`FROM supplier AS s` + `per s.s_nationkey:` (alias form).
 
     The bug-report repro used aliased tables and qualified PER, so this
     test reproduces that exact shape and asserts it both parses and
@@ -237,7 +237,7 @@ def test_per_qualified_with_table_alias(decidb_cli):
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, x
         FROM supplier AS s
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 PER s.s_nationkey
+        SUCH THAT per s.s_nationkey: sum(x) by (s.s_nationkey) <= 2
         MAXIMIZE SUM(x * s.s_acctbal)
     """
     rows, cols = decidb_cli.execute(sql)
@@ -248,7 +248,7 @@ def test_per_qualified_with_table_alias(decidb_cli):
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_per_with_when_qualified_column(decidb_cli):
-    """Combined `expr WHEN cond PER t.col` — the WHEN+PER+qualifier rule arm.
+    """Combined `when cond per t.col: expr` — the WHEN+PER+qualifier rule arm.
 
     The grammar has separate arms for `a_expr PER col`, `a_expr WHEN b
     PER col`, and the parenthesized variants. This test exercises the
@@ -259,7 +259,7 @@ def test_per_with_when_qualified_column(decidb_cli):
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, x
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 WHEN s.s_acctbal > 0 PER s.s_nationkey
+        SUCH THAT when s.s_acctbal > 0 per s.s_nationkey: sum(x) by (s.s_nationkey) <= 3
         MAXIMIZE SUM(x * s.s_acctbal)
     """
     rows, cols = decidb_cli.execute(sql)
@@ -269,7 +269,7 @@ def test_per_with_when_qualified_column(decidb_cli):
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_per_qualified_in_objective(decidb_cli):
-    """`PER s.s_nationkey` on the objective side (decide_objective_item arms).
+    """`per s.s_nationkey:` on the objective side (the two-level form).
 
     Objective PER goes through a separate set of grammar arms from
     constraint PER (decide_objective_item vs decide_constraint_item). Each
@@ -282,7 +282,7 @@ def test_per_qualified_in_objective(decidb_cli):
         FROM supplier s JOIN nation n ON s.s_nationkey = n.n_nationkey
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 5
-        MAXIMIZE SUM(MAX(x * s.s_acctbal)) PER s.s_nationkey
+        MAXIMIZE sum(per s.s_nationkey: max(x * s.s_acctbal) by (s.s_nationkey))
     """
     rows, cols = decidb_cli.execute(sql)
     assert rows, "Expected result rows from objective-side qualified PER"
@@ -291,7 +291,7 @@ def test_per_qualified_in_objective(decidb_cli):
 @pytest.mark.per_clause
 @pytest.mark.error
 def test_per_unknown_qualifier_gives_clean_error(decidb_cli):
-    """`PER unknown_table.col` must produce a clean error, not crash.
+    """`per unknown_table.col:` must produce a clean error, not crash.
 
     A non-existent table qualifier should be rejected at bind time with a
     diagnostic naming the offending reference. The test asserts the
@@ -304,7 +304,7 @@ def test_per_unknown_qualifier_gives_clean_error(decidb_cli):
         SELECT s.s_suppkey, s.s_acctbal, x
         FROM supplier s
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER unknown_table.s_nationkey
+        SUCH THAT per unknown_table.s_nationkey: sum(x) by (unknown_table.s_nationkey) <= 3
         MAXIMIZE SUM(x * s.s_acctbal)
     """
     # Must produce some error (not parse error since the grammar now accepts

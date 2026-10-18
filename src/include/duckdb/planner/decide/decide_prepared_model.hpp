@@ -92,9 +92,14 @@ struct DecideConstraint {
 	//! Scoped, aggregate shape: the `by` key its decision reducers share, which groups its
 	//! rows (index into LogicalDecide::group_keys); INVALID_INDEX for `by ()`.
 	idx_t group_key = DConstants::INVALID_INDEX;
-	//! Scoped, per-row shape under `per K:` / `per ()` (`per_class`): one row per class of
-	//! `class_key` among the kept rows, the class's first; `per ()` is one class.
-	bool per_class = false;
+	//! What a scoped clause's `per K:` / `per ()` does. ONE_ROW_PER_CLASS: the per-row
+	//! shape emits one row per class of `class_key` among the kept rows, the class's
+	//! first (`per ()` is one class). NAMES_CLASSES: the aggregate shape and the scoped
+	//! easy MIN/MAX emit their own rows, and the key only names the classes each `by`
+	//! group's row stands for, which a diagnosis reports one by one. NONE: no `per`
+	//! written, so every kept row of a group is a class of its own.
+	enum class PerKeyRole : uint8_t { NONE, ONE_ROW_PER_CLASS, NAMES_CLASSES };
+	PerKeyRole per_key = PerKeyRole::NONE;
 	vector<unique_ptr<Expression>> class_key;
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 	//! Stable origin in LogicalDecide::constraint_sources.
@@ -181,6 +186,11 @@ struct DecideObjective {
 //! which physical analysis used to leave its `objective` pointer unset.
 struct DecidePreparedModel {
 	vector<unique_ptr<DecideConstraint>> constraints;
+	//! Scoped bounds the optimizer folded into a column box (ABSORBED_BOUND_TAG). The box
+	//! enforces them, so the solved model has no row for them; a repair model emits their
+	//! rows, one per kept row or per class of a `per` key, so an expanded diagnosis loosens
+	//! one the way its clause scopes it (D28). Evaluated under DIAGNOSE only.
+	vector<unique_ptr<DecideConstraint>> absorbed_constraints;
 	unique_ptr<DecideObjective> objective;
 };
 

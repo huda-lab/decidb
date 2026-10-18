@@ -1,8 +1,8 @@
 """Tests for WHEN clause on per-row constraints.
 
 Covers:
-  - Force zero: x <= 0 WHEN condition (block selection of matching rows)
-  - Force select: x = 1 WHEN condition (require matching rows)
+  - Force zero: when condition: x <= 0 (block selection of matching rows)
+  - Force select: when condition: x = 1 (require matching rows)
   - Numeric condition on per-row bound
   - Boundary: no rows match (per-row constraint is inert)
   - Boundary: all rows match (equivalent to unconditional per-row)
@@ -25,14 +25,14 @@ from comparison.compare import compare_solutions
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_perrow_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Block non-returned items: x <= 0 WHEN returnflag='N', plus capacity."""
+    """Block non-returned items: when returnflag='N': x <= 0, plus capacity."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT x <= 0 WHEN l_returnflag = 'N'
+        SUCH THAT when l_returnflag = 'N': x <= 0
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -92,14 +92,14 @@ def test_when_perrow_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_perrow_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Force selection of high-discount items: x = 1 WHEN discount >= 0.09."""
+    """Force selection of high-discount items: when discount >= 0.09: x = 1."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_discount, x
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT x = 1 WHEN l_discount >= 0.09
+        SUCH THAT when l_discount >= 0.09: x = 1
             AND SUM(x * l_quantity) <= 5000
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -158,13 +158,13 @@ def test_when_perrow_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_perrow_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Exclude large-quantity items: x <= 0 WHEN quantity > 40."""
+    """Exclude large-quantity items: when quantity > 40: x <= 0."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT x <= 0 WHEN l_quantity > 40
+        SUCH THAT when l_quantity > 40: x <= 0
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -222,6 +222,7 @@ def test_when_perrow_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, p
 @pytest.mark.correctness
 def test_when_perrow_no_matches(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN matches nothing — per-row constraint is inert, only aggregate limits."""
+    # old spelling until item 7: an empty per-row WHEN was a silent no-op; the new spelling raises "matches no rows"
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
@@ -290,7 +291,7 @@ def test_when_perrow_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         FROM partsupp
         WHERE ps_partkey < 20
         DECIDE x(INT)
-        SUCH THAT x <= 3 WHEN ps_availqty > 0
+        SUCH THAT when ps_availqty > 0: x <= 3
             AND SUM(x) <= 50
         MAXIMIZE SUM(x * ps_availqty)
     """
@@ -367,7 +368,7 @@ def test_when_perrow_real(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         FROM lineitem
         WHERE l_orderkey <= 5
         DECIDE x(REAL)
-        SUCH THAT x <= 10 WHEN l_returnflag = 'N'
+        SUCH THAT when l_returnflag = 'N': x <= 10
             AND SUM(x) <= 30
         MAXIMIZE SUM(x * l_extendedprice)
     """

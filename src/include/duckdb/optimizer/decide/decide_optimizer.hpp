@@ -96,7 +96,11 @@ private:
 	//! The replacement is tagged with AVG_REWRITE_TAG so coefficient evaluation can scale terms.
 	//! A decision-free AVG is skipped: there is nothing to linearize, and rebinding it as SUM
 	//! would redeclare it with SUM's integral type while its value stays fractional.
-	void RewriteAvgInExpression(unique_ptr<Expression> &expr, idx_t decide_index);
+	//! `clause_alias` is the clause the walk stands in (OBJECTIVE_ROW_TAG for the
+	//! objective), under which each rewritten AVG's account is recorded; `scoped` prints
+	//! its subject as the scope spellings write it.
+	void RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const string &clause_alias,
+	                            bool scoped);
 
 	//! The value rewrite of the scope spellings (todo.md §4.2): every decision reducer of a
 	//! comparison in the VALUE shape (VALUE_REWRITE_TAG) becomes a helper decision defined
@@ -115,8 +119,11 @@ private:
 	//! Helper: walk the constraint tree looking for composed MIN/MAX comparisons.
 	//! `scoped_when` is the `when` of the scope spellings enclosing `expr`, folded into a
 	//! composed clause's terms.
+	//! `per_class` is the scope spellings' `per K:` wrapper enclosing it, whose classes a
+	//! composed clause's one row stands for (D28).
 	void RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                                       const Expression *scoped_when = nullptr);
+	                                       const Expression *scoped_when = nullptr,
+	                                       const BoundConjunctionExpression *per_class = nullptr);
 
 	//! Detect a composed MIN/MAX objective (additive sum of SUM/AVG/MIN/MAX terms).
 	//! Extracts term metadata into decide.composed_minmax_objective_terms and replaces
@@ -136,9 +143,12 @@ private:
 	//! out_was_easy is set when the rewrite produced a per-row constraint (used for PER stripping).
 	//! `scoped_when` is the `when` of the scope spellings enclosing `expr`, which the easy
 	//! half of a scoped `=` keeps.
+	//! `scoped_when` and `per_class` are the scope spellings' `when` and `per K:` around
+	//! `expr`, which a row this rewrite adds for the clause (an equality's easy half) keeps.
 	void RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                               vector<unique_ptr<Expression>> &new_constraints,
-	                               bool &out_was_easy, optional_ptr<const Expression> scoped_when = nullptr);
+	                               bool &out_was_easy, optional_ptr<const Expression> scoped_when = nullptr,
+	                               optional_ptr<const BoundConjunctionExpression> per_class = nullptr);
 
 	//! Objective-side MIN/MAX detection and rewriting.
 	//! Handles flat (non-PER) and nested PER objectives.
@@ -194,6 +204,8 @@ private:
 		//! read only the rows its `when` (a copy, or null) keeps.
 		bool scoped = false;
 		unique_ptr<Expression> when;
+		//! The ABS as a plan prints it: the auxiliary's name there, and its account's.
+		string label;
 	};
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,

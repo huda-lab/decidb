@@ -1,6 +1,6 @@
 """Tests for aggregate-local WHEN filters inside DECIDE aggregate expressions.
 
-``SUM(x * v) WHEN cond1 + SUM(x * v) WHEN cond2`` applies each WHEN only to
+``sum(when cond1: x * v) + sum(when cond2: x * v)`` applies each ``when`` only to
 its own aggregate term. A row matching both contributes to both; a row
 matching neither drops out of both. In the oracle we pre-compute a row's
 *effective* coefficient as the sum across all mask-gated terms:
@@ -68,7 +68,7 @@ def _run_constraint_test(
 def test_aggregate_local_when_constraint_independent_masks(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """SUM(x*v) WHEN w1 + SUM(x*v) WHEN w2 <= 6: row c (neither flag) is free."""
+    """sum(when w1: x*v) + sum(when w2: x*v) <= 6: row c (neither flag) is free."""
     data_sql = """
         SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE),
                CAST(w1 AS BOOLEAN), CAST(w2 AS BOOLEAN) FROM (
@@ -84,7 +84,7 @@ def test_aggregate_local_when_constraint_independent_masks(
                    ('c', 10, false, false)
         ) t(name, value, w1, w2)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN w1 + SUM(x * value) WHEN w2 <= 6
+        SUCH THAT sum(when w1: x * value) + sum(when w2: x * value) <= 6
         MAXIMIZE SUM(x * value)
     """
 
@@ -133,7 +133,7 @@ def test_aggregate_local_when_constraint_parenthesized_condition(
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'none')
         ) t(name, value, tier)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN (tier = 'high') + SUM(x * value) WHEN (tier = 'low') <= 7
+        SUCH THAT sum(when (tier = 'high'): x * value) + sum(when (tier = 'low'): x * value) <= 7
         MAXIMIZE SUM(x * value)
     """
 
@@ -169,7 +169,7 @@ def test_aggregate_local_when_constraint_parenthesized_condition(
 def test_aggregate_local_when_objective_independent_masks(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Objective: SUM(x*value) WHEN w1 + SUM(x*bonus) WHEN w2."""
+    """Objective: sum(when w1: x*value) + sum(when w2: x*bonus)."""
     data_sql = """
         SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE),
                CAST(bonus AS DOUBLE), CAST(w1 AS BOOLEAN), CAST(w2 AS BOOLEAN) FROM (
@@ -186,7 +186,7 @@ def test_aggregate_local_when_objective_independent_masks(
         ) t(name, value, bonus, w1, w2)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
-        MAXIMIZE SUM(x * value) WHEN w1 + SUM(x * bonus) WHEN w2
+        MAXIMIZE sum(when w1: x * value) + sum(when w2: x * bonus)
     """
 
     def build(oracle, data, cols, rows):
@@ -236,7 +236,7 @@ def test_expression_level_when_still_works(
             VALUES ('a', 6, true), ('b', 4, true), ('c', 10, false)
         ) t(name, value, w1)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) <= 6 WHEN w1
+        SUCH THAT when w1: sum(x * value) <= 6
         MAXIMIZE SUM(x * value)
     """
 
@@ -270,6 +270,7 @@ def test_expression_level_when_still_works(
 @pytest.mark.error_binder
 def test_expression_level_when_cannot_mix_with_aggregate_local_when(decidb_cli):
     """Mixed expression-level + aggregate-local WHEN is rejected."""
+    # old spelling until item 7: pins the old "Cannot combine" message
     decidb_cli.assert_error("""
         SELECT name, value, w1, w2, x FROM (
             VALUES ('a', 6, true, false), ('b', 4, false, true)
@@ -302,7 +303,7 @@ def test_aggregate_local_when_with_avg_constraint(
             VALUES ('a', 12, true), ('b', 4, true), ('c', 8, false), ('d', 6, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * value) WHEN active <= 5
+        SUCH THAT avg(when active: x * value) <= 5
         MAXIMIZE SUM(x * value)
     """
 
@@ -340,7 +341,7 @@ def test_aggregate_local_when_with_avg_constraint(
 def test_aggregate_local_when_with_per_constraint(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Aggregate-local WHEN composes with PER for per-group filtered constraints."""
+    """An inner `when` composes with `per ... by` for per-group filtered constraints."""
     data_sql = """
         SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE),
                CAST(grp AS VARCHAR), CAST(priority AS BOOLEAN) FROM (
@@ -356,7 +357,7 @@ def test_aggregate_local_when_with_per_constraint(
                    ('e', 7, 'X', true), ('f', 6, 'Y', true)
         ) t(name, value, grp, priority)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN priority <= 12 PER grp
+        SUCH THAT per grp: sum(when priority: x * value) by (grp) <= 12
         MAXIMIZE SUM(x * value)
     """
 
@@ -412,7 +413,7 @@ def test_aggregate_local_when_with_avg_and_per(
                    ('e', 6, 'G2', true), ('f', 2, 'G2', false)
         ) t(name, value, grp, active)
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * value) WHEN active <= 6 PER grp
+        SUCH THAT per grp: avg(when active: x * value) by (grp) <= 6
         MAXIMIZE SUM(x * value)
     """
 
@@ -453,7 +454,7 @@ def test_aggregate_local_when_with_avg_and_per(
 def test_aggregate_local_when_with_max(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MAX(x*value) WHEN eligible <= 7 (easy-case MAX strips to per-row)."""
+    """max(when eligible: x*value) <= 7 (easy-case MAX strips to per-row)."""
     data_sql = """
         SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), CAST(eligible AS BOOLEAN) FROM (
             VALUES ('a', 10, true), ('b', 5, true), ('c', 20, false), ('d', 3, true)
@@ -464,7 +465,7 @@ def test_aggregate_local_when_with_max(
             VALUES ('a', 10, true), ('b', 5, true), ('c', 20, false), ('d', 3, true)
         ) t(name, value, eligible)
         DECIDE x(BOOL)
-        SUCH THAT MAX(x * value) WHEN eligible <= 7
+        SUCH THAT max(when eligible: x * value) <= 7
         MAXIMIZE SUM(x * value)
     """
 
@@ -501,7 +502,7 @@ def test_aggregate_local_when_with_max(
 def test_aggregate_local_when_with_hard_max(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MAX(x*value) WHEN active >= 6 (hard-case MAX with aggregate-local WHEN).
+    """max(when active: x*value) >= 6 (hard-case MAX with aggregate-local WHEN).
 
     Hard MAX(>=) is disjunctive: at least one WHEN-matching row must satisfy the
     bound. DecidB must emit Big-M indicators *only* for active rows — a bug that
@@ -523,7 +524,7 @@ def test_aggregate_local_when_with_hard_max(
             VALUES ('a', 10, true), ('b', 5, true), ('c', 20, false), ('d', 3, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT MAX(x * value) WHEN active >= 6
+        SUCH THAT max(when active: x * value) >= 6
             AND SUM(x) <= 2
         MAXIMIZE SUM(x * value)
     """
@@ -578,7 +579,7 @@ def test_aggregate_local_when_with_hard_max(
 def test_aggregate_local_when_mixed_filtered_unfiltered_constraint(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """SUM(x*v) WHEN premium + SUM(x) <= 12."""
+    """sum(when premium: x*v) + sum(x) <= 12."""
     data_sql = """
         SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), CAST(premium AS BOOLEAN) FROM (
             VALUES ('a', 8, true), ('b', 5, false), ('c', 10, true), ('d', 3, false)
@@ -589,7 +590,7 @@ def test_aggregate_local_when_mixed_filtered_unfiltered_constraint(
             VALUES ('a', 8, true), ('b', 5, false), ('c', 10, true), ('d', 3, false)
         ) t(name, value, premium)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN premium + SUM(x) <= 12
+        SUCH THAT sum(when premium: x * value) + sum(x) <= 12
         MAXIMIZE SUM(x * value)
     """
 
@@ -626,7 +627,7 @@ def test_aggregate_local_when_mixed_filtered_unfiltered_constraint(
 def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Objective: SUM(x*value) WHEN vip + SUM(x*bonus)."""
+    """Objective: sum(when vip: x*value) + sum(x*bonus)."""
     data_sql = """
         SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE),
                CAST(bonus AS DOUBLE), CAST(vip AS BOOLEAN) FROM (
@@ -641,7 +642,7 @@ def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
         ) t(name, value, bonus, vip)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
-        MAXIMIZE SUM(x * value) WHEN vip + SUM(x * bonus)
+        MAXIMIZE sum(when vip: x * value) + sum(x * bonus)
     """
 
     def build(oracle, data, cols, rows):
@@ -688,6 +689,7 @@ def test_aggregate_local_when_all_filtered_out(decidb_cli):
     pre-solver per the "reject all empty aggregate sets" rule. Previously the
     empty term was allowed to contribute 0 while the unmasked term still
     bound; the strict rule catches it."""
+    # old spelling until item 7: a when that keeps no rows is a different error in the new spelling
     decide_sql = """
         SELECT name, value, flag, x FROM (
             VALUES ('a', 10, false), ('b', 5, false), ('c', 8, false)
@@ -719,7 +721,7 @@ def test_aggregate_local_when_overlapping_filters(
                    ('c', 8, false, true), ('d', 3, false, false)
         ) t(name, value, cat_a, cat_b)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN cat_a + SUM(x * value) WHEN cat_b <= 20
+        SUCH THAT sum(when cat_a: x * value) + sum(when cat_b: x * value) <= 20
         MAXIMIZE SUM(x * value)
     """
 
@@ -768,7 +770,7 @@ def test_aggregate_local_when_single_aggregate(
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN active <= 10
+        SUCH THAT sum(when active: x * value) <= 10
         MAXIMIZE SUM(x * value)
     """
 
@@ -815,7 +817,7 @@ def test_aggregate_local_when_three_terms(
                    ('d', 3, 'X'), ('e', 7, 'Y')
         ) t(name, value, cat)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN (cat = 'X') + SUM(x * value) WHEN (cat = 'Y') + SUM(x * value) WHEN (cat = 'Z') <= 20
+        SUCH THAT sum(when (cat = 'X'): x * value) + sum(when (cat = 'Y'): x * value) + sum(when (cat = 'Z'): x * value) <= 20
         MAXIMIZE SUM(x * value)
     """
 
@@ -859,6 +861,7 @@ def test_aggregate_local_when_three_terms(
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_aggregate_local_when_decide_var_in_condition_error(decidb_cli):
+    # old spelling until item 7: pins the old "WHEN conditions cannot reference DECIDE variables" message
     decidb_cli.assert_error("""
         SELECT name, value, x FROM (
             VALUES ('a', 10), ('b', 5)
@@ -874,6 +877,7 @@ def test_aggregate_local_when_decide_var_in_condition_error(decidb_cli):
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_aggregate_local_when_mixed_expression_objective_error(decidb_cli):
+    # old spelling until item 7: pins the old "Cannot combine" message
     decidb_cli.assert_error("""
         SELECT name, value, w1, w2, x FROM (
             VALUES ('a', 10, true, false), ('b', 5, false, true)
@@ -889,6 +893,7 @@ def test_aggregate_local_when_mixed_expression_objective_error(decidb_cli):
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_aggregate_local_when_decide_var_in_objective_condition_error(decidb_cli):
+    # old spelling until item 7: pins the old "WHEN conditions cannot reference DECIDE variables" message
     decidb_cli.assert_error("""
         SELECT name, value, x FROM (
             VALUES ('a', 10), ('b', 5)
@@ -921,7 +926,7 @@ def test_expression_level_when_objective_still_works(
         ) t(name, value, vip)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
-        MAXIMIZE SUM(x * value) WHEN vip
+        MAXIMIZE when vip: sum(x * value)
     """
 
     def build(oracle, data, cols, rows):
@@ -971,7 +976,7 @@ def test_expression_level_when_per_still_works(
                    ('c', 8, 'B', true), ('d', 3, 'B', false)
         ) t(name, value, grp, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) <= 10 WHEN active PER grp
+        SUCH THAT when active per grp: sum(x * value) by (grp) <= 10
         MAXIMIZE SUM(x * value)
     """
 
@@ -1027,7 +1032,7 @@ def test_bilinear_aggregate_local_when_constraint(
             VALUES (1, 10, true), (2, 5, true), (3, 8, false), (4, 3, true)
         ) t(id, value, active)
         DECIDE b(BOOL), x(BOOL)
-        SUCH THAT SUM(b * x) WHEN active <= 1
+        SUCH THAT sum(when active: b * x) <= 1
         MAXIMIZE SUM(b * value + x * value)
     """
     t0 = time.perf_counter()
@@ -1079,7 +1084,7 @@ def test_bilinear_aggregate_local_when_constraint(
 def test_bilinear_aggregate_local_when_objective(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Triple bilinear b*x*value WHEN premium — AND-linearize b∧x then scale by value."""
+    """Triple bilinear sum(when premium: b*x*value) — AND-linearize b∧x then scale by value."""
     data_sql = """
         SELECT CAST(id AS BIGINT), CAST(value AS DOUBLE), CAST(premium AS BOOLEAN) FROM (
             VALUES (1, 10, true), (2, 5, false), (3, 8, true)
@@ -1091,7 +1096,7 @@ def test_bilinear_aggregate_local_when_objective(
         ) t(id, value, premium)
         DECIDE b(BOOL), x(BOOL)
         SUCH THAT SUM(b) <= 3 AND SUM(x) <= 3
-        MAXIMIZE SUM(b * x * value) WHEN premium
+        MAXIMIZE sum(when premium: b * x * value)
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(decide_sql)
@@ -1144,7 +1149,7 @@ def test_bilinear_aggregate_local_when_objective(
 def test_ne_aggregate_local_when_constraint(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """SUM(x) WHEN active <> 2 — the active-only count cannot equal 2."""
+    """sum(when active: x) <> 2 — the active-only count cannot equal 2."""
     data_sql = """
         SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), CAST(active AS BOOLEAN) FROM (
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false), ('d', 3, true)
@@ -1155,7 +1160,7 @@ def test_ne_aggregate_local_when_constraint(
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false), ('d', 3, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) WHEN active <> 2
+        SUCH THAT sum(when active: x) <> 2
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * value)
     """
@@ -1196,7 +1201,7 @@ def test_ne_aggregate_local_when_constraint(
 def test_ne_with_per_constraint(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """SUM(x) <> 2 PER dept — each dept's count cannot equal 2."""
+    """per dept: sum(x) by (dept) <> 2 — each dept's count cannot equal 2."""
     data_sql = """
         SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), CAST(dept AS VARCHAR) FROM (
             VALUES ('a', 10, 'eng'), ('b', 5, 'eng'), ('c', 8, 'sales'),
@@ -1209,7 +1214,7 @@ def test_ne_with_per_constraint(
                    ('d', 3, 'sales'), ('e', 7, 'eng')
         ) t(name, value, dept)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 2 PER dept
+        SUCH THAT per dept: sum(x) by (dept) <> 2
             AND SUM(x) <= 4
         MAXIMIZE SUM(x * value)
     """
@@ -1261,7 +1266,7 @@ def test_between_aggregate_local_when_constraint(
             VALUES ('a', 10, true), ('b', 5, true), ('c', 8, false), ('d', 3, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) WHEN active BETWEEN 5 AND 13
+        SUCH THAT sum(when active: x * value) BETWEEN 5 AND 13
         MAXIMIZE SUM(x * value)
     """
 
@@ -1297,13 +1302,13 @@ def test_between_aggregate_local_when_constraint(
 def test_entity_scoped_aggregate_local_when(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Entity-scoped ``n.keepN`` with aggregate-local WHEN on a row-scoped column."""
+    """Keyed ``per n: keepN`` with an inner ``when`` on a row-scoped column."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, n.n_name, c.c_acctbal, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
-        SUCH THAT SUM(keepN * c.c_acctbal) WHEN (c.c_acctbal > 5000) <= 50000
+        DECIDE per n: keepN(BOOL)
+        SUCH THAT sum(when (c.c_acctbal > 5000): keepN * c.c_acctbal) <= 50000
         MAXIMIZE SUM(keepN)
     """
     t0 = time.perf_counter()
@@ -1367,6 +1372,7 @@ def test_entity_scoped_aggregate_local_when(
 @pytest.mark.error
 def test_aggregate_local_when_unparenthesized_comparison_error(decidb_cli):
     """Constraint-local comparison conditions need parentheses to protect the bound."""
+    # old spelling until item 7: pins the old grammar's syntax error
     decidb_cli.assert_error("""
         SELECT name, value, tier, x FROM (
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'none')
@@ -1383,7 +1389,7 @@ def test_aggregate_local_when_unparenthesized_comparison_error(decidb_cli):
 def test_aggregate_local_when_objective_atomic_comparison(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """The grammar attaches an atomic comparison directly to objective WHEN."""
+    """An atomic comparison needs no parentheses in the objective's `when`."""
     data_sql = """
         SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE), CAST(tier AS VARCHAR) FROM (
             VALUES ('a', 7, 'high'), ('b', 3, 'low'), ('c', 9, 'high')
@@ -1395,7 +1401,7 @@ def test_aggregate_local_when_objective_atomic_comparison(
         ) t(name, value, tier)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 2
-        MAXIMIZE SUM(x * value) WHEN tier = 'high'
+        MAXIMIZE when tier = 'high': sum(x * value)
     """
 
     def build(oracle, data, cols, rows):
@@ -1452,7 +1458,7 @@ def test_aggregate_local_when_objective_atomic_comparison(
 def test_when_with_constant_offset_paren_condition(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`SUM(x) WHEN (w > 1) + 3 <= K` — additive constant peeled to RHS."""
+    """`sum(when (w > 1): x) + 3 <= K` — additive constant peeled to RHS."""
     data_sql = """
         SELECT CAST(id AS BIGINT), CAST(w AS DOUBLE) FROM (
             VALUES (1, 2.0), (2, 0.5), (3, 3.0)
@@ -1463,7 +1469,7 @@ def test_when_with_constant_offset_paren_condition(
             VALUES (1, 2.0), (2, 0.5), (3, 3.0)
         ) t(id, w)
         DECIDE x(REAL)
-        SUCH THAT SUM(x) WHEN (w > 1) + 3 <= 10
+        SUCH THAT sum(when (w > 1): x) + 3 <= 10
             AND x <= 10
         MAXIMIZE SUM(x)
     """
@@ -1500,7 +1506,7 @@ def test_when_with_constant_offset_paren_condition(
 def test_when_with_scalar_multiplier(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`2 * (SUM(x) WHEN cond) <= K` — constant scalar folded into the SUM
+    """`2 * sum(when cond: x) <= K` — constant scalar folded into the SUM
     body so the extractor sees `WHEN(SUM(2*x), cond)` instead of
     `*(2, BoundAggregate)`."""
     data_sql = """
@@ -1513,7 +1519,7 @@ def test_when_with_scalar_multiplier(
             VALUES (1, true), (2, false), (3, true)
         ) t(id, w)
         DECIDE x(REAL)
-        SUCH THAT 2 * (SUM(x) WHEN w) <= 10
+        SUCH THAT 2 * sum(when w: x) <= 10
             AND x <= 10
         MAXIMIZE SUM(x)
     """
@@ -1550,9 +1556,9 @@ def test_when_with_scalar_multiplier(
 def test_when_with_parallel_sum_and_offset(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`(SUM(x) WHEN w) + (SUM(y) + 3) <= K` — additive walker peels the
+    """`sum(when w: x) + (sum(y) + 3) <= K` — additive walker peels the
     constant offset out of a deeper parenthesized parallel sum, leaving
-    `(SUM(x) WHEN w) + SUM(y) <= K - 3` for the extractor."""
+    `sum(when w: x) + sum(y) <= K - 3` for the extractor."""
     data_sql = """
         SELECT CAST(id AS BIGINT), CAST(w AS BOOLEAN) FROM (
             VALUES (1, true), (2, false), (3, true)
@@ -1563,7 +1569,7 @@ def test_when_with_parallel_sum_and_offset(
             VALUES (1, true), (2, false), (3, true)
         ) t(id, w)
         DECIDE x(REAL), y(REAL)
-        SUCH THAT (SUM(x) WHEN w) + (SUM(y) + 3) <= 10
+        SUCH THAT sum(when w: x) + (sum(y) + 3) <= 10
             AND x <= 10 AND y <= 10
         MAXIMIZE SUM(x) + SUM(y)
     """
@@ -1608,6 +1614,7 @@ def test_when_unparenthesized_condition_misparses(decidb_cli):
     user-facing message at least names the type mismatch; the intended
     form `SUM(x) WHEN (w > 1) + 3 <= K` (parens around the condition)
     is the exercised positive path above."""
+    # old spelling until item 7: pins an old-grammar misparse
     decidb_cli.assert_error("""
         SELECT id, x FROM (VALUES (1, 2.0), (2, 0.5), (3, 3.0)) t(id, w)
         DECIDE x(REAL)
@@ -1624,7 +1631,7 @@ def test_when_unparenthesized_condition_misparses(decidb_cli):
 def test_when_objective_with_constant_offset(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`MAXIMIZE (SUM(x) WHEN cond) + 3` — the additive `+3` is peeled from
+    """`MAXIMIZE sum(when cond: x) + 3` — the additive `+3` is peeled from
     the objective body by NormalizeDecideObjective. The constant doesn't
     affect argmax, so decidb's optimal assignment matches an oracle that
     maximizes just the aggregate without the constant."""
@@ -1639,7 +1646,7 @@ def test_when_objective_with_constant_offset(
         ) t(id, w)
         DECIDE x(REAL)
         SUCH THAT x <= 10
-        MAXIMIZE (SUM(x) WHEN w > 1) + 3
+        MAXIMIZE sum(when w > 1: x) + 3
     """
 
     def build(oracle, data, cols, rows):
@@ -1678,9 +1685,9 @@ def test_when_objective_with_constant_offset(
 def test_outer_when_with_arithmetic_offset_works(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`SUM(x) + 3 <= K WHEN cond` — outer-WHEN form. Same semantics as
-    the now-working aggregate-local form `(SUM(x) WHEN cond) + 3 <= K`
-    above; this test pins the equivalence on the outer-WHEN side."""
+    """`when cond: sum(x) + 3 <= K` — outer-when form. Same semantics as
+    the aggregate-local form `sum(when cond: x) + 3 <= K`
+    above; this test pins the equivalence on the outer-when side."""
     data_sql = """
         SELECT CAST(id AS BIGINT), CAST(value AS DOUBLE), CAST(w AS BOOLEAN) FROM (
             VALUES (1, 6.0, true), (2, 4.0, true), (3, 10.0, false)
@@ -1691,7 +1698,7 @@ def test_outer_when_with_arithmetic_offset_works(
             VALUES (1, 6.0, true), (2, 4.0, true), (3, 10.0, false)
         ) t(id, value, w)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * value) + 3 <= 10 WHEN w
+        SUCH THAT when w: sum(x * value) + 3 <= 10
         MAXIMIZE SUM(x * value)
     """
 
@@ -1740,6 +1747,7 @@ def test_outer_when_with_arithmetic_offset_works(
 @pytest.mark.error_binder
 def test_when_with_data_column_scalar_left_rejected(decidb_cli):
     """`col * (SUM(x) WHEN w) <= K` — data column on the left of the `*`."""
+    # old spelling until item 7: the new spelling accepts a row-varying factor; D23 keeps the "varies per row" refusal
     decidb_cli.assert_error("""
         SELECT id, col, w, x FROM (
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
@@ -1758,6 +1766,7 @@ def test_when_with_data_column_scalar_left_rejected(decidb_cli):
 def test_when_with_data_column_scalar_right_rejected(decidb_cli):
     """`(SUM(x) WHEN w) * col <= K` — data column on the right of the `*`.
     Canonicalization converges both spellings, so both are rejected the same way."""
+    # old spelling until item 7: the new spelling accepts a row-varying factor; D23 keeps the "varies per row" refusal
     decidb_cli.assert_error("""
         SELECT id, col, w, x FROM (
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
@@ -1776,6 +1785,7 @@ def test_when_with_data_column_scalar_right_rejected(decidb_cli):
 def test_when_divided_by_data_column_rejected(decidb_cli):
     """`(SUM(x) WHEN w) / col <= K` — division reads as a scale too, and the
     message says "divide" rather than "multiply"."""
+    # old spelling until item 7: the new spelling accepts a row-varying factor; D23 keeps the "varies per row" refusal
     decidb_cli.assert_error("""
         SELECT id, col, w, x FROM (
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
@@ -1795,7 +1805,7 @@ def test_when_with_data_column_moved_inside(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """The edit the rejection message asks for actually works, and gives the
-    per-row-coefficient reading the old fold produced: `SUM(col * x) WHEN w <= 20`."""
+    per-row-coefficient reading the old fold produced: `sum(when w: col * x) <= 20`."""
     data_sql = """
         SELECT CAST(id AS BIGINT), CAST(col AS DOUBLE), CAST(w AS BOOLEAN) FROM (
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
@@ -1806,7 +1816,7 @@ def test_when_with_data_column_moved_inside(
             VALUES (1, 2.0, true), (2, 3.0, false), (3, 4.0, true), (4, 1.0, true)
         ) t(id, col, w)
         DECIDE x(REAL)
-        SUCH THAT SUM(col * x) WHEN w <= 20
+        SUCH THAT sum(when w: col * x) <= 20
             AND x <= 10
         MAXIMIZE SUM(x)
     """

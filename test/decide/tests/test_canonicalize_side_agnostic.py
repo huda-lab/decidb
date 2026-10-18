@@ -118,7 +118,7 @@ def test_scalar_decision_as_reversed_bound(decidb_cli):
     common = """
         SELECT c_custkey, x, cap
         FROM customer WHERE c_custkey <= 20
-        DECIDE x(INT), scalar cap(INT)
+        DECIDE x(INT), per (): cap(INT)
         SUCH THAT {constraint} AND cap <= 12 AND x <= 12
         MAXIMIZE 3 * SUM(x) - 2 * cap
     """
@@ -155,7 +155,7 @@ def test_data_term_left_of_reducer(decidb_cli, duckdb_conn, oracle_solver):
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x, cap
         FROM lineitem WHERE l_orderkey <= 3
-        DECIDE x(INT), scalar cap(INT)
+        DECIDE x(INT), per (): cap(INT)
         SUCH THAT l_quantity - SUM(x) <= cap AND x <= 4
         MINIMIZE cap
     """
@@ -312,6 +312,7 @@ def test_row_varying_bound_collapses_to_tightest_on_either_side(
     the bound rule runs on whichever side is the bound, not on `right` by
     position.
     """
+    # old spelling until item 7
     caps = {1: 4, 2: 9, 3: 6}
     fixture = "(VALUES (1, 4), (2, 9), (3, 6)) t(id, cap)"
 
@@ -351,6 +352,7 @@ def test_row_scoped_decision_as_aggregate_bound_rejected(decidb_cli):
     pins that ownership: physical extraction must not be the first stage to
     discover the unsupported mixture.
     """
+    # old spelling until item 7
     decidb_cli.assert_error("""
         SELECT c_custkey, x, y FROM customer WHERE c_custkey <= 10
         DECIDE x(INT), y(INT)

@@ -42,7 +42,7 @@ from ._oracle_helpers import group_indices
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """MAX(x * l_quantity) >= 30 PER l_returnflag — Big-M indicators must be
+    """per l_returnflag: max(x * l_quantity) by (l_returnflag) >= 30 — Big-M indicators must be
     partitioned per group. A global-scoping bug would let one row's indicator
     satisfy all groups simultaneously."""
     sql = """
@@ -50,7 +50,7 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
                l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT MAX(x * l_quantity) >= 30 PER l_returnflag
+        SUCH THAT per l_returnflag: max(x * l_quantity) by (l_returnflag) >= 30
         MINIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -144,7 +144,7 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """MIN(x * l_quantity) <= 20 PER l_returnflag with INTEGER x in [1,5].
+    """per l_returnflag: min(x * l_quantity) by (l_returnflag) <= 20 with INTEGER x in [1,5].
     The lower bound x>=1 prevents the trivial x=0 escape, so the MIN constraint
     actively limits at least one row's x value per group. Big-M indicators must
     be per-group."""
@@ -154,7 +154,7 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(INT)
         SUCH THAT x >= 1 AND x <= 5
-            AND MIN(x * l_quantity) <= 20 PER l_returnflag
+            AND per l_returnflag: min(x * l_quantity) by (l_returnflag) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -252,7 +252,7 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """MAX(x * l_quantity) = 30 PER l_returnflag with INTEGER x in [0,5].
+    """per l_returnflag: max(x * l_quantity) by (l_returnflag) = 30 with INTEGER x in [0,5].
     Combines easy direction (per-row x*qty <= 30) with hard direction
     (per-group existence of x*qty = 30). Both must be partitioned per group
     for the equality semantics to hold per group. Uses l_orderkey <= 100 to
@@ -264,7 +264,7 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         FROM lineitem WHERE l_orderkey <= 100
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 5
-            AND MAX(x * l_quantity) = 30 PER l_returnflag
+            AND per l_returnflag: max(x * l_quantity) by (l_returnflag) = 30
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -364,7 +364,7 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_per_abs_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """SUM(ABS(x - target)) <= 5 PER grp — ABS auxiliary variables must be
+    """per grp: sum(abs(x - target)) by (grp) <= 5 — ABS auxiliary variables must be
     partitioned by PER group. A global-scoping bug would let cross-group
     deviations cancel against each other in the aggregate, relaxing the
     per-group bound."""
@@ -379,7 +379,7 @@ def test_per_abs_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         FROM data
         DECIDE x(REAL)
         SUCH THAT x <= 50
-            AND SUM(ABS(x - target)) <= 5 PER grp
+            AND per grp: sum(abs(x - target)) by (grp) <= 5
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
@@ -486,7 +486,7 @@ def test_per_multi_variable(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         SELECT id, grp, w, x, y
         FROM data
         DECIDE x(BOOL), y(INT)
-        SUCH THAT SUM(x * w) <= 12 PER grp
+        SUCH THAT per grp: sum(x * w) by (grp) <= 12
             AND y <= 3
             AND SUM(y) <= 8
         MAXIMIZE SUM(x * w + y)
@@ -603,7 +603,7 @@ def test_when_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
         )
         SELECT id, grp, w, v, x, y FROM data
         DECIDE x(BOOL), y(INT)
-        SUCH THAT y <= 5 AND SUM(x * w + y * v) <= 18 WHEN active PER grp
+        SUCH THAT y <= 5 AND when active per grp: sum(x * w + y * v) by (grp) <= 18
         MAXIMIZE SUM(x * w + y * v)
     """
     t0 = time.perf_counter()
@@ -697,7 +697,7 @@ def test_qp_objective_per_constraint(
     decidb_cli, oracle_solver, perf_tracker,
 ):
     """QP objective (MINIMIZE SUM(POWER(x - target, 2))) with a linear PER
-    constraint (SUM(x) >= 5 PER grp).
+    constraint (per grp: sum(x) by (grp) >= 5).
 
     Oracle-compared via ``set_quadratic_objective`` so both the QP path and
     the PER path are exercised together; a silently-dropped PER constraint
@@ -713,7 +713,7 @@ def test_qp_objective_per_constraint(
         SELECT id, grp, target, ROUND(x::DOUBLE, 6) AS x
         FROM data
         DECIDE x(REAL)
-        SUCH THAT x >= 0 AND x <= 100 AND SUM(x) >= 5 PER grp
+        SUCH THAT x >= 0 AND x <= 100 AND per grp: sum(x) by (grp) >= 5
         MINIMIZE SUM(POWER(x - target, 2))
     """
     t0 = time.perf_counter()
@@ -803,7 +803,7 @@ def test_per_single_row_groups(decidb_cli, oracle_solver, perf_tracker):
             VALUES (1, 'A', 100.0), (2, 'B', 50.0), (3, 'C', 75.0)
         ) t(id, grp, val)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 60 PER grp
+        SUCH THAT per grp: sum(x * val) by (grp) <= 60
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
@@ -870,7 +870,7 @@ def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
                    (3, 'B', 5.0), (4, 'B', 20.0)
         ) t(id, grp, val)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 8 PER grp
+        SUCH THAT per grp: sum(x * val) by (grp) <= 8
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
@@ -934,6 +934,8 @@ def test_per_null_group_with_when(decidb_cli, oracle_solver, perf_tracker):
     combined count exceeds the per-group cap. Group 'B' has only an inactive
     row, so its empty WHEN bucket also emits no constraint.
     """
+    # old spelling until item 7
+    # (a NULL per key is excluded today; the new spelling makes NULL a group)
     sql = """
         SELECT id, grp, val, active, x FROM (
             VALUES (1, 'A', 10.0, true),

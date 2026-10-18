@@ -15,6 +15,11 @@ This file pins the resulting boundary:
     specific error messages.
 
 See `context/descriptions/03_expressivity/when/todo.md` for the remaining gap.
+
+The positive tests are written in the scope spelling (`sum(when c: e)`,
+`MAXIMIZE when c: ...`), where the condition runs to the colon. The rejection
+tests keep the old postfix spelling until item 7: they pin that grammar's
+boundary and its messages.
 """
 
 import time
@@ -75,7 +80,7 @@ def _run_oracle_test(
 def test_when_paren_not_constraint(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`WHEN (NOT w)` — parenthesized NOT in a constraint.
+    """`sum(when (NOT w): ...)` — parenthesized NOT in a constraint.
 
     Picks `val` only on rows where `w` is false. With val=[10,5,7] and
     w=[T,F,F], constraint `5 x_1 + 7 x_2 <= 8` admits {x_1, x_2} but not
@@ -94,7 +99,7 @@ def test_when_paren_not_constraint(
                    (3,  7.0, false)
         ) t(id, val, w)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN (NOT w) <= 8
+        SUCH THAT sum(when (NOT w): x * val) <= 8
         MAXIMIZE SUM(x * val)
     """
 
@@ -131,7 +136,7 @@ def test_when_paren_not_constraint(
 def test_when_paren_eq_constraint(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`WHEN (tier = 'high')` — parenthesized comparison in a constraint.
+    """`sum(when (tier = 'high'): ...)` — parenthesized comparison in a constraint.
 
     val=[10,5,7], tier=[high,low,high]. Constraint `10 x_0 + 7 x_2 <= 8`:
     x_0 must be 0 (10>8); x_2 may be 1 (7<=8). x_1 unconstrained →
@@ -150,7 +155,7 @@ def test_when_paren_eq_constraint(
                    (3,  7.0, 'high')
         ) t(id, val, tier)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN (tier = 'high') <= 8
+        SUCH THAT sum(when (tier = 'high'): x * val) <= 8
         MAXIMIZE SUM(x * val)
     """
 
@@ -187,7 +192,7 @@ def test_when_paren_eq_constraint(
 def test_when_paren_arith_constraint(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`WHEN (a + b > 5)` — parenthesized arithmetic+comparison in a constraint.
+    """`sum(when (a + b > 5): ...)` — parenthesized arithmetic+comparison in a constraint.
 
     val=[10,5,7], (a+b)=[6,2,6]. Same shape as the eq test: rows 0,2 enter
     the constraint, row 1 is free. Optimum: x=[0,1,1] → obj=12.
@@ -206,7 +211,7 @@ def test_when_paren_arith_constraint(
                    (3,  7.0, 3, 3)
         ) t(id, val, a, b)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN (a + b > 5) <= 8
+        SUCH THAT sum(when (a + b > 5): x * val) <= 8
         MAXIMIZE SUM(x * val)
     """
 
@@ -249,7 +254,7 @@ def test_when_paren_arith_constraint(
 def test_when_paren_not_objective(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`WHEN (NOT w)` — parenthesized NOT on the objective.
+    """`MAXIMIZE when (NOT w): ...` — parenthesized NOT on the objective.
 
     SUCH THAT SUM(x) <= 1 forces a single pick. Objective sums val on
     rows where w is false. Optimum: x_2=1 → obj=7 (vs 5 for x_1, 0 for x_0).
@@ -268,7 +273,7 @@ def test_when_paren_not_objective(
         ) t(id, val, w)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN (NOT w)
+        MAXIMIZE when (NOT w): sum(x * val)
     """
 
     def build(oracle, data, cols, rows):
@@ -307,7 +312,7 @@ def test_when_paren_not_objective(
 def test_when_paren_eq_objective(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`WHEN (tier = 'high')` — parenthesized comparison on the objective.
+    """`MAXIMIZE when (tier = 'high'): ...` — parenthesized comparison on the objective.
 
     The unparenthesized equivalent is checked separately so this grammar path
     cannot silently regress to a parsed-tree reassociator.
@@ -326,7 +331,7 @@ def test_when_paren_eq_objective(
         ) t(id, val, tier)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN (tier = 'high')
+        MAXIMIZE when (tier = 'high'): sum(x * val)
     """
 
     def build(oracle, data, cols, rows):
@@ -372,7 +377,7 @@ def test_when_unparen_eq_objective_matches_parenthesized(decidb_cli):
         ) t(id, val, tier)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN {condition}
+        MAXIMIZE when {condition}: sum(x * val)
     """
     unparenthesized = decidb_cli.execute(template.format(condition="tier = 'high'"))
     parenthesized = decidb_cli.execute(template.format(condition="(tier = 'high')"))
@@ -385,7 +390,7 @@ def test_when_unparen_eq_objective_matches_parenthesized(decidb_cli):
 def test_when_paren_arith_objective(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """`WHEN (a + b > 5)` — parenthesized arithmetic+comparison on the objective."""
+    """`MAXIMIZE when (a + b > 5): ...` — parenthesized arithmetic+comparison on the objective."""
     data_sql = """
         SELECT CAST(id AS BIGINT), CAST(val AS DOUBLE),
                CAST(a AS BIGINT), CAST(b AS BIGINT)
@@ -401,7 +406,7 @@ def test_when_paren_arith_objective(
         ) t(id, val, a, b)
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN (a + b > 5)
+        MAXIMIZE when (a + b > 5): sum(x * val)
     """
 
     def build(oracle, data, cols, rows):
@@ -448,6 +453,7 @@ def test_when_paren_arith_objective(
 @pytest.mark.error
 def test_when_unparen_not_constraint_rejects(decidb_cli):
     """`WHEN NOT w` (unparenthesized) on a constraint — parser-level reject."""
+    # old spelling until item 7: pins the old grammar's syntax error
     decidb_cli.assert_error(
         """
         SELECT id, val, w, x FROM (
@@ -468,6 +474,7 @@ def test_when_unparen_not_constraint_rejects(decidb_cli):
 @pytest.mark.error
 def test_when_unparen_eq_constraint_rejects(decidb_cli):
     """The trailing comparison is ambiguous with the constraint bound."""
+    # old spelling until item 7: pins the old grammar's syntax error
     decidb_cli.assert_error("""
         SELECT id, val, tier, x FROM (
             VALUES (1, 10.0, 'high'),
@@ -485,6 +492,7 @@ def test_when_unparen_eq_constraint_rejects(decidb_cli):
 @pytest.mark.error
 def test_when_unparen_arith_constraint_rejects(decidb_cli):
     """`WHEN a + b > 5` (unparenthesized arithmetic+comparison) on a constraint."""
+    # old spelling until item 7: pins the old grammar's syntax error
     decidb_cli.assert_error(
         """
         SELECT id, val, a, b, x FROM (
@@ -505,6 +513,7 @@ def test_when_unparen_arith_constraint_rejects(decidb_cli):
 @pytest.mark.error
 def test_when_unparen_not_objective_rejects(decidb_cli):
     """`WHEN NOT w` (unparenthesized) on an objective — parser-level reject."""
+    # old spelling until item 7: pins the old grammar's syntax error
     decidb_cli.assert_error(
         """
         SELECT id, val, w, x FROM (
@@ -532,6 +541,7 @@ def test_when_unparen_arith_objective_rejects(decidb_cli):
     This reaches a different error phase from the constraint-side parser
     failure; both shapes remain documented in the WHEN todo.
     """
+    # old spelling until item 7: pins the old grammar's binder-level message
     decidb_cli.assert_error(
         """
         SELECT id, val, a, b, x FROM (
@@ -557,6 +567,7 @@ def test_when_unparen_error_carries_paren_hint(decidb_cli):
     This pins the hint text so it is not silently dropped. If the grammar is
     widened to accept unparenthesized NOT, convert this to a positive test.
     """
+    # old spelling until item 7: pins the old grammar's parenthesization hint
     decidb_cli.assert_error(
         """
         SELECT id, val, w, x FROM (

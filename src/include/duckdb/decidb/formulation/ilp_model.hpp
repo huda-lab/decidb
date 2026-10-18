@@ -183,6 +183,16 @@ struct ConstraintProvenance {
     //! identify which group an edit belongs to and populate the finding's `group` column, so PER
     //! aggregates can fold to `SUM(x)` without colliding in the relation (Facet A).
     string group_label;
+    //! The classes this row's group stands for (SolverModel::class_sets), or
+    //! INVALID_INDEX: an expanded diagnosis reports the row once per class (D28).
+    idx_t class_set = DConstants::INVALID_INDEX;
+    //! The data row a per-row model row was emitted at -- what DIAGNOSE's `row` column
+    //! reports for a row that stands for it -- or INVALID_INDEX for a group's row.
+    idx_t data_row = DConstants::INVALID_INDEX;
+    //! A per-row row of a clause written with the scope spellings that stands for no class
+    //! set (no `per` key): each kept row is a class of its own, so the expanded scope
+    //! reports it once per row rather than folding the clause's rows into one finding (D28).
+    bool per_kept_row = false;
     //! True when the LHS was an aggregate (`SUM`/`AVG`/...). Lets the diagnosis wrap a
     //! single-row / WHEN group's reconstruction in `SUM(...)` even when there is no
     //! per-row fan-out to key on (distinct from SHARED_SCALAR, which a per-row
@@ -323,6 +333,10 @@ struct SolverModel {
 
     //! Constraints (linear)
     vector<ModelConstraint> constraints;
+
+    //! The classes a scoped clause's group stands for, by ConstraintProvenance::class_set
+    //! (SolverInput::class_sets, moved here by Build).
+    vector<SolverInput::ClassSet> class_sets;
     //! Stable source display registry, indexed by source_clause_id.
     vector<ConstraintSourceInfo> constraint_sources;
 

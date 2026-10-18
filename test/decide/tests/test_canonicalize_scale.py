@@ -410,6 +410,7 @@ def test_decision_factor_rejected(decidb_cli):
     decisions is bilinear, not a scale. Before B.3 this produced the unrelated
     "SUM(s) has nothing to aggregate over", because the fold pushed ``s`` into the
     reducer's body."""
+    # old spelling until item 7
     decidb_cli.assert_error("""
         SELECT id, x, s FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT), scalar s(INT)
@@ -569,6 +570,7 @@ def test_decision_factor_in_objective_rejected(decidb_cli):
     that can say no — without a guard the decision column was read as a data
     coefficient and evaluation crashed with an internal DuckDB assertion.
     """
+    # old spelling until item 7
     decidb_cli.assert_error("""
         SELECT id, x, s FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT), scalar s(INT)

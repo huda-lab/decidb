@@ -17,6 +17,7 @@ namespace duckdb {
 
 class BindContext;
 class BoundAggregateExpression;
+class BoundConjunctionExpression;
 
 //! Tag source-only casts and subqueries before binding obscures their spelling.
 void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments);
@@ -63,7 +64,19 @@ struct DecideSourceNames {
 	const vector<EntityScopeInfo> &entity_scopes;
 	const vector<DecideGroupKey> &group_keys;
 	const unordered_map<idx_t, string> &relations;
+	//! The decision columns that stand for an expression (`LogicalDecide::aux_var_expressions`:
+	//! an ABS auxiliary `abs(e)`, a product `(b * x)`, an indicator `(x = v)`, a helper
+	//! `sum(e) by (g)`), which print as that expression rather than by their internal
+	//! name; `decide_index` tells a decision column apart. Null prints the name.
+	idx_t decide_index = DConstants::INVALID_INDEX;
+	const vector<pair<idx_t, string>> *aux_labels = nullptr;
 };
+
+//! The names a plan and the rewrites render with: the clause registries, no relation
+//! aliases (a column prints its name alone), and the auxiliary labels.
+DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
+                                  const vector<DecideGroupKey> &group_keys, idx_t decide_index,
+                                  const vector<pair<idx_t, string>> &aux_labels);
 
 //! RenderDecideSource with every column qualified by its relation (when `relations`
 //! lists any). `scoped` renders a reducer as the scope spellings write it, `by` and all.
@@ -76,6 +89,10 @@ unordered_map<idx_t, string> DecideRelationNames(BindContext &bind_context, idx_
 //! A reducer as the scope spellings write it, without its `by`: `sum(when S.priority:
 //! ship)`, for a message that names its `by` group separately.
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names);
+
+//! The key of a scope spelling's `per` wrapper: as written, else its columns, which
+//! BindKeyColumns named in SQL already (`D.region`); `()` for none.
+string RenderDecidePerKey(const BoundConjunctionExpression &per, const vector<string> &fragments);
 
 //! Split a DECIDE constraint or objective tree into one rendered string per clause,
 //! turning the WHEN and PER wrappers the binder stamps back into the syntax the user
@@ -91,11 +108,9 @@ string RenderDecideReducer(const BoundAggregateExpression &reducer, const Decide
 //! caller group the post-optimizer rows under the clause they came from.
 //! `scoped` renders an objective written with the scope spellings as it was written,
 //! where no comparison carries the mark.
-void CollectDecideExpressionStrings(const Expression &expr, const vector<string> &fragments,
-                                    const vector<EntityScopeInfo> &entity_scopes, vector<string> &out,
+void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
                                     const vector<ConstraintSourceInfo> *sources = nullptr,
-                                    vector<idx_t> *out_source_ids = nullptr,
-                                    const vector<DecideGroupKey> *group_keys = nullptr, bool scoped = false);
+                                    vector<idx_t> *out_source_ids = nullptr, bool scoped = false);
 
 //! Render a whole objective tree as one display string.
 //!
@@ -103,9 +118,7 @@ void CollectDecideExpressionStrings(const Expression &expr, const vector<string>
 //! which the leaf renderer spells `SUM(x) AND cond` rather than the postfix
 //! `SUM(x) WHEN cond` the user wrote. Only the clause walker unwraps those tags, so the
 //! objective's snapshots go through it too.
-string RenderDecideObjective(const Expression &expr, const vector<string> &fragments,
-                             const vector<EntityScopeInfo> &entity_scopes,
-                             const vector<DecideGroupKey> *group_keys = nullptr, bool scoped = false);
+string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names, bool scoped = false);
 
 //! One user clause, rendered at each layer that says something different about it.
 //!
@@ -135,20 +148,30 @@ struct DecideClauseLayers {
 //! one-to-one in either direction and the result tolerates both: a linearized clause
 //! owns several rows, a clause the optimizer extracted into `composed_minmax_constraints`
 //! owns none in the tree, and a row carrying no id at all is returned in `unattributed`.
-vector<DecideClauseLayers> CollectDecideClauseLayers(
-    optional_ptr<const Expression> constraints,
-    const vector<LogicalDecide::ComposedMinMaxConstraint> &composed_minmax_constraints,
-    const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
-    const vector<ConstraintSourceInfo> &sources, vector<string> &unattributed,
-    const vector<DecideGroupKey> *group_keys = nullptr);
+//! `accounts` (LogicalDecide::rewrite_accounts) are printed under their clause before its
+//! rows; the objective's (INVALID_INDEX) are left to RenderDecideObjectiveLayers, and so
+//! are the rows a rewrite added for the objective (OBJECTIVE_ROW_TAG), returned in
+//! `objective_rows`.
+vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expression> constraints,
+                                                      const DecideSourceNames &names,
+                                                      const vector<ConstraintSourceInfo> &sources,
+                                                      vector<string> &unattributed, vector<string> &objective_rows,
+                                                      const vector<LogicalDecide::RewriteAccount> &accounts);
+
+//! One account line: the construct a rewrite replaced and what it became, in the one
+//! vocabulary every plan uses ("`abs(e)` becomes an auxiliary variable").
+string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account);
 
 //! Format clause layers as the indented block EXPLAIN prints, one clause per group.
 string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers,
                                 const vector<string> &unattributed);
 
 //! Format the objective's layers the same way. `written` and `canonical` come from
-//! LogicalDecide's two objective snapshots; `rewritten` is the post-optimizer render.
-string RenderDecideObjectiveLayers(const string &sense_prefix, const string &written,
-                                   const string &canonical, const vector<string> &rewritten);
+//! LogicalDecide's two objective snapshots; `accounts` are what its rewrites made of it;
+//! `rewritten` is the post-optimizer render; `derived_rows` are the rows its rewrites
+//! added (CollectDecideClauseLayers' `objective_rows`).
+string RenderDecideObjectiveLayers(const string &sense_prefix, const string &written, const string &canonical,
+                                   const vector<string> &rewritten, const vector<string> &accounts = {},
+                                   const vector<string> &derived_rows = {});
 
 } // namespace duckdb

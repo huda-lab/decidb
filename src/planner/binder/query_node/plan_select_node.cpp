@@ -190,9 +190,10 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 // FinalizeConstraintSourceInfo: written on the way in, canonical on the
                 // way out, captured around the one call that can change it. There is
                 // exactly one objective, so these are two strings rather than a registry.
-                written_objective = RenderDecideObjective(*statement.decide_objective,
-                                                          statement.decide_source_fragments,
-                                                          statement.entity_scopes, &statement.decide_group_keys,
+                unordered_map<idx_t, string> no_relations;
+                DecideSourceNames objective_names {statement.decide_source_fragments, statement.entity_scopes,
+                                                   statement.decide_group_keys, no_relations};
+                written_objective = RenderDecideObjective(*statement.decide_objective, objective_names,
                                                           statement.decide_scoped_objective);
                 if (statement.decide_scoped_objective) {
                     canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
@@ -200,9 +201,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 statement.decide_objective = canonicalizer.CanonicalizeObjective(
                     *statement.decide_objective, statement.objective_constant_offset);
                 canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
-                canonical_objective = RenderDecideObjective(*statement.decide_objective,
-                                                            statement.decide_source_fragments,
-                                                            statement.entity_scopes, &statement.decide_group_keys,
+                canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names,
                                                             statement.decide_scoped_objective);
                 if (canonical_objective == written_objective) {
                     canonical_objective.clear();

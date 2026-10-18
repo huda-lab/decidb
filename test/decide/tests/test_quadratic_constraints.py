@@ -773,7 +773,7 @@ class TestQuadraticConstraintInteractions:
     def test_when_filtering(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
-        """SUM(POWER(x - t, 2)) <= 2 WHEN active=1 — inactive rows free."""
+        """when active=1: sum(power(x - t, 2)) <= 2 — inactive rows free."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id, 10.0 AS target, 1 AS active UNION ALL
@@ -783,7 +783,7 @@ class TestQuadraticConstraintInteractions:
             SELECT id, ROUND(x, 4) AS x, target, active FROM data
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
-                AND SUM(POWER(x - target, 2)) <= 2 WHEN active = 1
+                AND when active = 1: sum(power(x - target, 2)) <= 2
             MAXIMIZE SUM(x)
         """
         t0 = time.perf_counter()
@@ -838,7 +838,7 @@ class TestQuadraticConstraintInteractions:
     def test_per_group_quadratic_constraint(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
-        """SUM(POWER(x - t, 2)) <= 10 PER group — one quadratic constraint per group."""
+        """per grp: sum(power(x - t, 2)) by (grp) <= 10 — one quadratic constraint per group."""
         sql = """
             WITH data AS (
                 SELECT 1 AS id, 'A' AS grp, 10.0 AS target UNION ALL
@@ -849,7 +849,7 @@ class TestQuadraticConstraintInteractions:
             SELECT id, grp, ROUND(x, 4) AS x, target FROM data
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
-                AND SUM(POWER(x - target, 2)) <= 10 PER grp
+                AND per grp: sum(power(x - target, 2)) by (grp) <= 10
             MAXIMIZE SUM(x)
         """
         t0 = time.perf_counter()
@@ -902,7 +902,7 @@ class TestQuadraticConstraintInteractions:
     def test_when_per_quadratic_constraint(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
-        """SUM(POWER(x - t, 2)) <= K WHEN active=1 PER grp.
+        """when active=1 per grp: sum(power(x - t, 2)) by (grp) <= K.
 
         WHEN filters out inactive rows; PER then partitions the surviving rows
         into groups and emits one quadratic constraint per group. Inactive
@@ -923,7 +923,7 @@ class TestQuadraticConstraintInteractions:
             SELECT id, grp, active, ROUND(x, 4) AS x, target FROM data
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
-                AND SUM(POWER(x - target, 2)) <= 5 WHEN active = 1 PER grp
+                AND when active = 1 per grp: sum(power(x - target, 2)) by (grp) <= 5
             MAXIMIZE SUM(x)
         """
         t0 = time.perf_counter()
@@ -1264,7 +1264,7 @@ class TestQuadraticConstraintVarTypes:
     def test_table_scoped_variables(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
-        """Table-scoped x with quadratic constraint.
+        """x declared per items.item with a quadratic constraint.
 
         Each distinct ``item`` value yields one x variable; all rows of the
         same item share that x. The inner SUM(POWER(x - target, 2)) then
@@ -1278,7 +1278,7 @@ class TestQuadraticConstraintVarTypes:
                 SELECT 'B', 22.0
             )
             SELECT item, ROUND(x, 4) AS x, target FROM items
-            DECIDE items.x(REAL)
+            DECIDE per items.item: x(REAL)
             SUCH THAT x >= 0 AND x <= 100
                 AND SUM(POWER(x - target, 2)) <= 20
             MAXIMIZE SUM(x)

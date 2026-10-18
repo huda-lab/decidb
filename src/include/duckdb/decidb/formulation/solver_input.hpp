@@ -327,6 +327,12 @@ struct EvaluatedConstraint {
     //! infeasible diagnosis can identify which group an edit belongs to. Stamped onto
     //! ConstraintProvenance::group_label at the aggregate-PER emission sites.
     vector<string> group_labels;
+    //! The classes each group's rows stand for (SolverInput::class_sets, by group;
+    //! INVALID_INDEX for none), under DIAGNOSE: a `by` group's of a scoped clause of the
+    //! aggregate shape or easy MIN/MAX, or each class's of a `per K:` / `per ()` per-row
+    //! clause, whose one row stands for its class. An expanded diagnosis reports the row
+    //! once per class. Empty otherwise.
+    vector<idx_t> group_class_set;
 
     //! WHEN/PER qualifier text for this clause (`PER grp`, `WHEN g='a' PER (region, year)`),
     //! same for every group. Stamped onto ConstraintProvenance::qualifier so infeasible
@@ -595,6 +601,9 @@ struct SolverInput {
         //! ConstraintProvenance::indicator_col). This describes the disjunction;
         //! `removal_group_id` independently groups all descendants for DROP.
         idx_t indicator_col = DConstants::INVALID_INDEX;
+        //! The classes this row's group stands for (SolverInput::class_sets), or
+        //! INVALID_INDEX: an expanded diagnosis reports the row once per class.
+        idx_t class_set = DConstants::INVALID_INDEX;
         //! PER/WHEN group id, its printable key, the reducer qualifier text, and whether
         //! the clause's LHS was an aggregate — the display half of the provenance every
         //! row carries. A per-row clause emitted through `EvaluatedConstraint` gets these
@@ -617,6 +626,21 @@ struct SolverInput {
         double typed_k = 0.0;
     };
     vector<RawConstraint> global_constraints;
+
+    //! The classes a scoped clause's group stands for (anr_language_extension.md §1, D28),
+    //! referenced by `EvaluatedConstraint::group_class_set` and `RawConstraint::class_set`.
+    //! Filled by execution under DIAGNOSE only; the model carries it on to the diagnosis.
+    struct ClassSet {
+        enum class Kind : uint8_t {
+            KEY_VALUES,  //!< `per K:`: K's values among the group's kept rows, in `labels`
+            KEPT_ROWS,   //!< no `per` key: every kept row is a class, in `rows`
+            WHOLE_CLAUSE //!< `per ()`: one class, which has no key value
+        };
+        Kind kind;
+        vector<string> labels;
+        vector<idx_t> rows;
+    };
+    vector<ClassSet> class_sets;
 
     //! A ROW, conditioned: it holds whenever `binary_column == binary_value`, and says
     //! nothing otherwise. This is the semantic form of a disjunctive clause, and it is

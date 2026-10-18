@@ -294,6 +294,7 @@ class TestBinderErrors:
         constraint, so partitioning has no meaning. Closes both
         `per/todo.md` and `error_handling/todo.md` gaps.
         """
+        # old spelling until item 7: pins the old "PER can only be applied" message
         decidb_cli.assert_error("""
                 WITH t AS (SELECT 1 AS l_quantity, 'A' AS grp
                     UNION ALL SELECT 2, 'B')
@@ -579,6 +580,7 @@ class TestBinderErrors:
     @pytest.mark.when_constraint
     def test_when_decide_variable_in_condition(self, decidb_cli):
         """WHEN condition must not reference DECIDE variables."""
+        # old spelling until item 7: pins the old "WHEN conditions cannot reference" message
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
@@ -589,6 +591,7 @@ class TestBinderErrors:
     @pytest.mark.when_compound
     def test_when_decide_variable_in_compound_condition(self, decidb_cli):
         """WHEN compound condition must not hide a DECIDE variable."""
+        # old spelling until item 7: pins the old "WHEN conditions cannot reference" message
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)

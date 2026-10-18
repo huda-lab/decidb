@@ -68,7 +68,7 @@ def test_rhs_sum_per_group_bound(decidb_cli):
     """PER carries a per-group RHS. Here every group's budget is 10 (SUM(b) over
     2 rows), so each group admits exactly one item: the higher-profit one."""
     # grp 0 → id 2 (profit 2 > 1); grp 1 → id 4 (profit 4 > 3).
-    assert _selected(decidb_cli, "SUM(x * weight) <= SUM(b) PER grp") == [2, 4]
+    assert _selected(decidb_cli, "per grp: sum(x * weight) by (grp) <= sum(b) by (grp)") == [2, 4]
 
 
 @pytest.mark.cons_aggregate
@@ -103,6 +103,8 @@ def test_rhs_aggregate_local_when(decidb_cli):
     aggregate's rows, not the whole constraint. `SUM(x*weight) <= SUM(b) WHEN w`
     means `SUM(x*weight) <= (SUM(b) WHEN w)` — the moved term keeps its filter, so
     the bound is SUM(b) over w-rows (= 15) while the LHS still sums all rows."""
+    # old spelling until item 7
+    # (pins the old grammar's binding of a trailing WHEN; inventory §2)
     direct = _selected(decidb_cli, "SUM(x * weight) <= SUM(b) WHEN w")
     hoist = _selected(decidb_cli, "SUM(x * weight) - (SUM(b) WHEN w) <= 0")
     # 10*SUM(x) <= 15 over all rows ⇒ at most one item ⇒ highest profit (id 4).
@@ -134,6 +136,8 @@ def test_rhs_count_is_group_aware(decidb_cli):
     Here COUNT(*) = 4, so `SUM(x) <= COUNT(*)` admits every item.
     """
     assert _selected(decidb_cli, "SUM(x) <= COUNT(*)") == [1, 2, 3, 4]
+    # old spelling until item 7
+    # (count(*) takes no by; its new spelling is an item-7 question)
     # PER splits the four rows into two groups of two, so each group's COUNT is 2 —
     # not the operator's total of 4. This is the assertion the old fold got wrong.
     assert _selected(decidb_cli, "SUM(x) <= COUNT(*) PER grp") == [1, 2, 3, 4]

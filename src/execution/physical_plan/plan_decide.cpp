@@ -165,6 +165,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->composed_minmax_constraints = std::move(op.composed_minmax_constraints);
     decide_op->composed_minmax_objective_terms = std::move(op.composed_minmax_objective_terms);
     decide_op->reducer_value_links = std::move(op.reducer_value_links);
+    decide_op->rewrite_accounts = std::move(op.rewrite_accounts);
     decide_op->absorbed_lower_bounds = std::move(op.absorbed_lower_bounds);
     decide_op->absorbed_upper_bounds = std::move(op.absorbed_upper_bounds);
     decide_op->user_absorbed_bounds = std::move(op.user_absorbed_bounds);
@@ -271,6 +272,12 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         }
         if (spec.rhs_expr) {
             harvest(*spec.rhs_expr);
+        }
+        if (spec.when) {
+            harvest(*spec.when);
+        }
+        for (auto &column : spec.class_key) {
+            harvest(*column);
         }
     }
     for (auto &term : decide_op->composed_minmax_objective_terms) {

@@ -24,7 +24,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_objective_maximize(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Only returned items contribute to profit: MAXIMIZE SUM(x*price) WHEN flag='R'."""
+    """Only returned items contribute to profit: MAXIMIZE when flag='R': sum(x*price)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
@@ -32,7 +32,7 @@ def test_when_objective_maximize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        MAXIMIZE when l_returnflag = 'R': sum(x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -90,7 +90,7 @@ def test_when_objective_maximize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_when_objective_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Minimize accepted-item quantity: MINIMIZE SUM(x*qty) WHEN flag='A'."""
+    """Minimize accepted-item quantity: MINIMIZE when flag='A': sum(x*qty)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
@@ -98,7 +98,7 @@ def test_when_objective_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 50
-        MINIMIZE SUM(x * l_quantity) WHEN l_returnflag = 'A'
+        MINIMIZE when l_returnflag = 'A': sum(x * l_quantity)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -157,6 +157,7 @@ def test_when_objective_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.error_infeasible
 def test_when_objective_no_match(decidb_cli):
     """Aggregate objective with WHEN matching no rows — now rejected pre-solver."""
+    # old spelling until item 7: pins the old "empty row set" error; a when that keeps no rows is a different error
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
@@ -182,7 +183,7 @@ def test_when_objective_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_t
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_quantity > 0
+        MAXIMIZE when l_quantity > 0: sum(x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -244,8 +245,8 @@ def test_when_constraint_and_objective_same_condition(
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        SUCH THAT when l_returnflag = 'R': sum(x * l_quantity) <= 50
+        MAXIMIZE when l_returnflag = 'R': sum(x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -312,8 +313,8 @@ def test_when_constraint_and_objective_different_conditions(
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'A'
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        SUCH THAT when l_returnflag = 'A': sum(x * l_quantity) <= 100
+        MAXIMIZE when l_returnflag = 'R': sum(x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -383,7 +384,7 @@ def test_when_objective_with_unconditional_constraint(
         DECIDE x(BOOL)
         SUCH THAT SUM(x * l_quantity) <= 100
             AND x <= 1
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        MAXIMIZE when l_returnflag = 'R': sum(x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)

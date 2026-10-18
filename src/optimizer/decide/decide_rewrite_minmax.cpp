@@ -129,15 +129,16 @@ static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
 // MIN/MAX term hard, with its auxiliary pinned from both sides.
 //! `names`, given for a clause written with the scope spellings, quotes a refused term as
 //! written.
-static void WalkComposedLhs(ClientContext &context, const Expression &e, int sign, idx_t decide_index,
-                             ExtremumPush outer_push,
+static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t source_clause_id,
+                             const Expression &e, int sign, idx_t decide_index, ExtremumPush outer_push,
                              vector<LogicalDecide::ComposedMinMaxTerm> &out_terms,
                              optional_ptr<const DecideSourceNames> names = nullptr) {
 	auto &u = (*UnwrapDecideCasts(e, decide_index));
 	if (IsAddNode(u, decide_index)) {
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		for (auto &child : fn.children) {
-			WalkComposedLhs(context, *child, sign, decide_index, outer_push, out_terms, names);
+			WalkComposedLhs(context, decide, source_clause_id, *child, sign, decide_index, outer_push, out_terms,
+			                names);
 		}
 		return;
 	}
@@ -149,14 +150,15 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 		// and a term that crosses the relation arrives negated.
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		if (fn.children.size() == 2) {
-			WalkComposedLhs(context, *fn.children[0], sign, decide_index, outer_push, out_terms, names);
-			WalkComposedLhs(context, *fn.children[1], -sign, decide_index, outer_push, out_terms,
-			                names);
+			WalkComposedLhs(context, decide, source_clause_id, *fn.children[0], sign, decide_index, outer_push,
+			                out_terms, names);
+			WalkComposedLhs(context, decide, source_clause_id, *fn.children[1], -sign, decide_index, outer_push,
+			                out_terms, names);
 			return;
 		}
 		if (fn.children.size() == 1) {
-			WalkComposedLhs(context, *fn.children[0], -sign, decide_index, outer_push, out_terms,
-			                names);
+			WalkComposedLhs(context, decide, source_clause_id, *fn.children[0], -sign, decide_index, outer_push,
+			                out_terms, names);
 			return;
 		}
 	}
@@ -226,6 +228,10 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 		// from both sides -- right for an equality, and right for either sign.
 		int scale_sign = ScaleSignAtPlanTime(context, scale, scale_divides);
 		term.is_easy = IsEasyExtremum(is_max, ExtremumPushOf(outer_push, sign * scale_sign));
+		AddRewriteAccount(decide, source_clause_id,
+		                  term.is_easy ? LogicalDecide::RewriteAccount::Kind::EXTREMUM
+		                               : LogicalDecide::RewriteAccount::Kind::EXTREMUM_PINNED,
+		                  RenderForPlan(agg, decide, names != nullptr));
 	}
 	out_terms.push_back(std::move(term));
 }
@@ -263,7 +269,8 @@ static void AssertComposable(const BoundComparisonExpression &comparison) {
 }
 
 void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                                       const Expression *scoped_when) {
+                                                       const Expression *scoped_when,
+                                                       const BoundConjunctionExpression *per_class) {
 	if (!expr) {
 		return;
 	}
@@ -277,12 +284,19 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 		// rows it keeps; the wrapper goes with the clause it held.
 		if (IsWhenConstraintWrapper(conj) && HasDecideTag(conj.GetAlias(), SCOPED_CLAUSE_TAG) &&
 		    conj.children.size() == 2) {
-			RewriteComposedMinMaxInConstraint(conj.children[0], decide, conj.children[1].get());
+			RewriteComposedMinMaxInConstraint(conj.children[0], decide, conj.children[1].get(), per_class);
 			auto &inner = *conj.children[0];
 			if (inner.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
 			    inner.return_type == LogicalType::BOOLEAN) {
 				expr = std::move(conj.children[0]); // the placeholder of a composed clause
 			}
+			return;
+		}
+		// The scope spellings' `per K:` over a composed clause names the classes its one
+		// row stands for (the checks hold K to it) and adds no row: the clause is rewritten
+		// as under no wrapper, which keeps the placeholder the rewrite leaves.
+		if (IsPerClassWrapper(conj) && !conj.children.empty()) {
+			RewriteComposedMinMaxInConstraint(conj.children[0], decide, scoped_when, &conj);
 			return;
 		}
 		if (IsConstraintWrapper(conj)) {
@@ -370,8 +384,8 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	const ExtremumPush outer_push = ExtremumPushOf(cmp_type);
 
 	bool scoped = HasDecideTag(comp.GetAlias(), SCOPED_CLAUSE_TAG);
-	unordered_map<idx_t, string> no_relations;
-	DecideSourceNames names {decide.source_fragments, decide.entity_scopes, decide.group_keys, no_relations};
+	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys, decide.decide_index,
+	                             decide.aux_var_expressions);
 	if (scoped) {
 		AssertComposable(comp);
 	}
@@ -381,10 +395,22 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	TryParseSourceClauseTag(comp.GetAlias(), spec.source_clause_id);
 	TryParseRemovalGroupTag(comp.GetAlias(), spec.removal_group_id);
 
-	WalkComposedLhs(optimizer.context, *comp.left, /*sign=*/1, decide.decide_index, outer_push, spec.terms,
-	                scoped ? &names : nullptr);
+	WalkComposedLhs(optimizer.context, decide, spec.source_clause_id, *comp.left, /*sign=*/1, decide.decide_index,
+	                outer_push, spec.terms, scoped ? &names : nullptr);
 	if (scoped) {
 		ScopeComposedTerms(spec.terms, scoped_when);
+		// The classes its one row stands for (D28): its `per` key's values, or with no
+		// `per` every row its `when` keeps.
+		spec.scoped = true;
+		if (per_class) {
+			spec.per_key = DecideConstraint::PerKeyRole::NAMES_CLASSES;
+			for (idx_t i = 1; i < per_class->children.size(); i++) {
+				spec.class_key.push_back(per_class->children[i]->Copy());
+			}
+		}
+		if (scoped_when) {
+			spec.when = scoped_when->Copy();
+		}
 	}
 
 	decide.composed_minmax_constraints.push_back(std::move(spec));
@@ -463,10 +489,10 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 
 	vector<LogicalDecide::ComposedMinMaxTerm> terms;
 	// An objective always has a direction, so no term needs the both-sides pin here.
-	unordered_map<idx_t, string> no_relations;
-	DecideSourceNames names {decide.source_fragments, decide.entity_scopes, decide.group_keys, no_relations};
-	WalkComposedLhs(optimizer.context, *body, /*sign=*/1, decide.decide_index, outer_push, terms,
-	                decide.scoped_objective ? &names : nullptr);
+	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys, decide.decide_index,
+	                             decide.aux_var_expressions);
+	WalkComposedLhs(optimizer.context, decide, DConstants::INVALID_INDEX, *body, /*sign=*/1, decide.decide_index,
+	                outer_push, terms, decide.scoped_objective ? &names : nullptr);
 	if (decide.scoped_objective) {
 		ScopeComposedTerms(terms, scoped_when);
 	}
@@ -503,7 +529,8 @@ void DecideOptimizer::RewriteMinMaxConstraints(LogicalDecide &decide) {
 
 void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                                 vector<unique_ptr<Expression>> &new_constraints,
-                                                bool &out_was_easy, optional_ptr<const Expression> scoped_when) {
+                                                bool &out_was_easy, optional_ptr<const Expression> scoped_when,
+                                                optional_ptr<const BoundConjunctionExpression> per_class) {
 	if (!expr) {
 		return;
 	}
@@ -518,7 +545,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 				auto when = HasDecideTag(conj.GetAlias(), SCOPED_CLAUSE_TAG) && conj.children.size() == 2
 				                ? conj.children[1].get()
 				                : nullptr;
-				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy, when);
+				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy, when, per_class);
 			}
 			return;
 		}
@@ -536,10 +563,20 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 			}
 			return;
 		}
-		// Regular AND conjunction — recurse into all children
-		for (auto &child : conj.children) {
+		// The scope spellings' `per K:`: its clause is rewritten under it, and a row added
+		// for the clause keeps it.
+		if (IsPerClassWrapper(conj) && !conj.children.empty()) {
+			RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, out_was_easy, scoped_when, &conj);
+			return;
+		}
+		// Regular AND conjunction -- recurse into the constraint children; a wrapper's
+		// key or condition children are data (decide_constraint_walk.hpp).
+		for (idx_t i = 0; i < conj.children.size(); i++) {
+			if (!IsConstraintChild(conj, i)) {
+				continue;
+			}
 			bool child_easy = false;
-			RewriteMinMaxInConstraint(child, decide, new_constraints, child_easy);
+			RewriteMinMaxInConstraint(conj.children[i], decide, new_constraints, child_easy);
 		}
 		return;
 	}
@@ -653,6 +690,17 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		    EmitHardMinMaxClause(decide, is_max ? "min" : "max", *scaled_body, agg.filter.get(), ind_idx));
 	};
 
+	// What the plan says the reducer became: an extremum column for the hard direction, a
+	// bound on each member for the cheap one, both for an equality.
+	if (is_hard || cmp_type == ExpressionType::COMPARE_EQUAL) {
+		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::EXTREMUM_PINNED,
+		                  RenderForPlan(agg, decide, scoped));
+	}
+	if (is_easy || cmp_type == ExpressionType::COMPARE_EQUAL) {
+		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::EXTREMUM_EACH_MEMBER,
+		                  RenderForPlan(agg, decide, scoped));
+	}
+
 	if (cmp_type == ExpressionType::COMPARE_EQUAL) {
 		// Equality: split into easy + hard parts
 		// MAX(expr) = K → (expr <= K) AND (MAX(expr) >= K)
@@ -677,6 +725,17 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 				when_wrapper->alias = WHEN_CONSTRAINT_TAG;
 				AddDecideTag(when_wrapper->alias, SCOPED_CLAUSE_TAG);
 				easy = std::move(when_wrapper);
+			}
+			if (per_class) {
+				// The clause's own `per K:`, outermost as the binder nests it: the easy half
+				// stands for the same classes (D28) and prints in front as written.
+				auto per_wrapper = make_uniq<BoundConjunctionExpression>(per_class->type);
+				per_wrapper->alias = per_class->alias;
+				per_wrapper->children.push_back(std::move(easy));
+				for (idx_t i = 1; i < per_class->children.size(); i++) {
+					per_wrapper->children.push_back(per_class->children[i]->Copy());
+				}
+				easy = std::move(per_wrapper);
 			}
 			new_constraints.push_back(std::move(easy));
 			auto hard_cmp_type = is_max ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
@@ -818,12 +877,14 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	unique_ptr<Expression> *obj_owner = &objective;
 	Expression *obj_expr = objective.get();
 	bool has_per = false;
+	const BoundConjunctionExpression *per_wrapper = nullptr;
 
 	// Unwrap PER wrapper (outermost layer)
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
 		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
 			has_per = true;
+			per_wrapper = &conj;
 			obj_owner = &conj.children[0];
 			obj_expr = conj.children[0].get();
 		}
@@ -903,6 +964,30 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 					decide.per_outer_is_easy = (outer_is_min && decide.decide_sense == DecideSense::MAXIMIZE) ||
 					                           (!outer_is_min && decide.decide_sense == DecideSense::MINIMIZE);
 				}
+				// What the plan says the two levels became, read before the inner is rebuilt.
+				// Under the scope spellings the `by` of the inner reducer is the `per` key,
+				// which the wrapper holds, so the subjects spell it out as written.
+				{
+					using Kind = LogicalDecide::RewriteAccount::Kind;
+					const bool scoped = decide.scoped_objective;
+					const string key = scoped ? RenderDecidePerKey(*per_wrapper, decide.source_fragments) : string();
+					auto inner_text = RenderForPlan(inner_agg, decide, scoped) + (scoped ? " by (" + key + ")" : "");
+					if (inner_name == "min" || inner_name == "max") {
+						AddRewriteAccount(decide, DConstants::INVALID_INDEX,
+						                  decide.per_inner_is_easy ? Kind::EXTREMUM_PER_GROUP
+						                                           : Kind::EXTREMUM_PER_GROUP_PINNED,
+						                  inner_text);
+					}
+					if (inner_name == "avg") {
+						AddRewriteAccount(decide, DConstants::INVALID_INDEX, Kind::AVG_SUM, inner_text);
+					}
+					if (outer_name == "min" || outer_name == "max") {
+						AddRewriteAccount(decide, DConstants::INVALID_INDEX,
+						                  decide.per_outer_is_easy ? Kind::EXTREMUM : Kind::EXTREMUM_PINNED,
+						                  scoped ? outer_name + "(per " + key + ": " + inner_text + ")"
+						                         : RenderForPlan(outer_agg, decide, false));
+					}
+				}
 
 				// Rewrite inner MIN/MAX/AVG → SUM for normalization
 				if (inner_name == "min" || inner_name == "max" || inner_name == "avg") {
@@ -912,6 +997,9 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 					if (inner_agg.filter) {
 						new_sum->Cast<BoundAggregateExpression>().filter = inner_agg.filter->Copy();
 					}
+					// The inner reducer's tags (its `by` key under the scope spellings) stay
+					// on the sum that stands in for it, so a plan still prints it as written.
+					new_sum->alias = inner_agg.alias;
 					// Replace inner aggregate within the outer
 					outer_agg.children[0] = std::move(new_sum);
 				}
@@ -951,6 +1039,10 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		bool is_min = (outer_name == "min");
 		decide.flat_objective_is_easy = (is_min && decide.decide_sense == DecideSense::MAXIMIZE) ||
 		                                (!is_min && decide.decide_sense == DecideSense::MINIMIZE);
+		AddRewriteAccount(decide, DConstants::INVALID_INDEX,
+		                  decide.flat_objective_is_easy ? LogicalDecide::RewriteAccount::Kind::EXTREMUM
+		                                                : LogicalDecide::RewriteAccount::Kind::EXTREMUM_PINNED,
+		                  RenderForPlan(outer_agg, decide, decide.scoped_objective));
 		// Replace MIN/MAX with SUM
 		vector<unique_ptr<Expression>> sum_children;
 		sum_children.push_back(outer_agg.children[0]->Copy());

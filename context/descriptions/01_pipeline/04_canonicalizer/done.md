@@ -373,11 +373,12 @@ VALUE comparison reaching the linear form is an internal error (the rewrite did 
 
 `CanonicalizeTree` stamps an aggregate-shape comparison with its `by` key
 (`__group_key_<i>__`) — the one grouping carrier after this stage, since later rewrites
-rebuild the reducers — and drops a `per K:` wrapper over it: one row per `by` group
-already stands for every class, whose constraints differ only in a bound the class
-determines. A VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads
-and removes; its wrapper stays, as over the rows shape (`IsPerClassWrapper`, a wrapper
-for every walker).
+rebuild the reducers. A `per K:` wrapper over it stays, as over every shape
+(`IsPerClassWrapper`, a wrapper for every walker): one row per `by` group already stands
+for every class, whose constraints differ only in a bound the class determines, so the
+wrapper adds no row; it names the classes each group's row stands for, which the linear
+form reads as the clause's class key and a diagnosis reports one by one (item 6, D28). A
+VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and removes.
 
 ---
 
@@ -431,8 +432,8 @@ pins both the debug-mode throwing behavior and the release-mode no-op via a
 
 `BuildConstraintScopeChecks` and `BuildObjectiveScopeChecks` are read-only passes over
 the clauses and objective as bound, called once by `Binder::CreatePlan`, after
-`PlanSubqueries` (a check's expressions must be copyable) and before `CanonicalizeTree`
-(which drops the aggregate shape's `per K:`). A rewrite's clause entering through
+`PlanSubqueries` (a check's expressions must be copyable) and before `CanonicalizeTree`.
+A rewrite's clause entering through
 `AddConstraint` builds none. Per clause, in this order: its `when` keeps a row
 (`KEEPS_A_ROW`); its `per` key determines each maximal decision- and reducer-free
 subexpression, each decision outside reducers and each `by` key (`DETERMINES`); then each

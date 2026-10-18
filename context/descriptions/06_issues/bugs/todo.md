@@ -386,6 +386,21 @@ query was run on this branch and on its parent commit with the same answer.
 - **Expected:** the refusal in SQL terms.
 - **Impact:** an internal error, naming an internal column.
 
+### An outer `AVG` over the nested objective's groups is summed
+
+- **Location:** `src/optimizer/decide/decide_rewrite_minmax.cpp` (`RewriteMinMaxObjectiveTree`,
+  "Map outer AVG → SUM (dividing by constant G doesn't change optimal)").
+- **Observed:** `MAXIMIZE AVG(SUM(x)) PER grp` over two groups whose best sums are 60 and
+  15 reports the objective 75, the SUM of the group values; `AVG(MAX(x)) PER grp` 45
+  instead of 22.5. The optimum's argument is unchanged (a constant divisor), the reported
+  objective value is not an average. Found 2026-10-18 while reviewing item 6; the same on
+  the parent commit.
+- **Expected:** the average over the groups, or a refusal. The new spelling refuses the
+  form: `avg(per k: sum(e) by (k))` answers *"avg over the classes of ... is not supported
+  yet; write sum, min or max over them"* (§10.4 admits sum, min and max).
+- **Impact:** DIAGNOSE's `achievable_objective` and any reader of the objective value see
+  a sum where the query says average.
+
 ## Defects shared by both spellings, found while building items 3–4
 
 Neither is specific to the scoping language; both spellings reach them. Each was run on
@@ -398,8 +413,8 @@ this branch and its parent with the same result.
   of the DECIDE variables"*.
 - **DIAGNOSE names a NULL slice `g = 'NULL'`:** for `x <= cap WHEN (g IS NOT NULL)` (or
   `when g is not null: x <= cap`) over data where a NULL-`g` row leaves `x` unbounded,
-  the suggested change reads `x <= <cap> WHEN g = 'NULL'`, which leaves the query
-  unbounded; `g IS NULL` repairs it.
+  the suggested change reads `when g = 'NULL': x <= <cap>`, which matches no row; `g IS
+  NULL` repairs it.
 - **Internal names in messages:** `x NOT BETWEEN 1 AND 3` answers *"...
   (ExpressionType::OPERATOR_NOT)"*, `MAXIMIZE x` *"... (ExpressionClass::COLUMN_REF)"*,
   `MAXIMIZE 3` *"... (ExpressionClass::CONSTANT)"*; `MINIMIZE SUM(MAX(D: y)) PER region`
@@ -417,5 +432,67 @@ this branch and its parent with the same result.
   `1c12622bbb`, so not of items 3–5. Expected: the loosening the per-row form suggests.
 - **Expected:** a refusal or an answer in SQL terms; `g IS NULL` for a NULL slice.
 - **Impact:** internal errors, misleading messages, and one wrong optimum (`PER nn`).
+
+## Wrong answers shared by both spellings, found while reviewing item 6
+
+Each reproduced on this branch; none is caused by item 6.
+
+- **`OR` between constraints is read as `AND`:** `x <= 40 AND (x >= t.cap OR x <= 2)` is
+  reported infeasible, and EXPLAIN lists `x >= cap` and `x <= 2` as two clauses; the same
+  under a scope spelling (`when t.id > 0: (x >= t.cap OR x <= 2)`). A disjunction is
+  silently made a conjunction. Location: the constraint walk treats every untagged
+  conjunction as a plain AND (`IsConstraintWrapper`, `decide_constraint_walk.hpp`) and
+  the binder lets an `OR` of constraints through. Expected: a refusal in SQL terms (a
+  disjunction of constraints needs an indicator), or the disjunction.
+- **An old spelling's fractional strict bound steps by 1:** `x > 2.5` (bare, so under the
+  old rules, D23) minimizes to `x = 4`, `x < 2.5` maximizes to 1, `x > -2.5` gives -2 on
+  HiGHS and -1 on Gurobi: absorption folds `x > k` into `x >= k + 1`. Location:
+  `decide_bound_absorption.cpp`; a scoped clause steps onto the lattice since item 6
+  (`floor(k) + 1`), the old spellings keep `k ± 1` (D17).
+- **A negative `IN` value with a negative upper bound is refused:** `x IN (-5, 0, 5) AND
+  x <= -3` answers *"x <= -3 cannot hold because x is non-negative"*; the answer is
+  `x = -5`. Location: the domain check in `DecideGlobalSinkState`'s constructor
+  (`physical_decide.cpp`) rebuilds the box without the removable `IN` floor.
+- **Gurobi and an infinite bound on a decision outside the objective:** `per t.depot:
+  y >= 'inf'::DOUBLE` on a keyed `y` answers *"DECIDE optimization failed (solver status
+  6)"*; `s >= 'inf'::DOUBLE` on a decision the objective does not read is diagnosed as
+  unbounded (a runaway) rather than as an unreachable bound.
+- **Impact:** a wrong optimum (`OR`, fractional strict), a refused feasible query, an
+  internal status.
+
+## Diagnosis text shared by both spellings, found while reviewing item 6
+
+Reproduced on this branch with the old spellings; the code involved is unchanged since
+`429e0f6cf7`.
+
+- **A quadratic bound is echoed with the constant canonicalization moved:** `x >= 12 AND
+  SUM(POWER(x - 5, 2)) <= 3` over three rows (also `per (): norm(x - 5, 2) <= 3`) echoes
+  `SUM(POWER(x - 5, 2)) <= -97` and suggests `<= -96`, a bound no assignment meets. Location:
+  `SourceAwareQuadraticLhs` (`decide_diagnostic_render.cpp`) pairs the written body with
+  the row's moved bound.
+- **An amount can round down and under-repair:** `SnapDiagnosticValue` rounds to the
+  nearest integer within 1e-6 relative, so `x(REAL)`, `x <= 1000000.16 AND SUM(x) >=
+  2000000.5` suggests `x <= 2000000.16` (amount 1000000, the gap is 1000000.34) and the
+  pasted query is still infeasible. Expected: round toward the repair.
+- **An unreachable upper bound at minus infinity says "lower this bound":** `MIN(x) <=
+  -1e1000::DOUBLE` answers *"lower this bound — no assignment can reach it"*; it has to be
+  raised.
+- **A `BETWEEN` echoes its lower half only:** `per row: x BETWEEN 18 AND 25` (or the old
+  `x BETWEEN 18 AND 25`) reports the clause `per row: x >= 18` and suggests `per row: x >=
+  10`; pasted back, the upper half is lost. The binder splits a BETWEEN into two
+  comparisons that share the clause.
+- **The unbounded remedy names a plain column unquoted:** the cap names a column as the
+  clause's own reference does -- a `per`/`by` key column as SQL already (`t.depot`), any
+  other by its bare name -- so a column whose name needs quotes (`"my col"`) prints as
+  `when my col = 'v': x <= <cap>`. The harvested names (`plan_decide.cpp`) mix the two.
+- **A quadratic clause is reported once per row or group in the query scope:** quadratic
+  rows never share a slack (I2.d), so `per row: power(x - 20, 2) <= 4` gives two query-scope
+  findings with no row to tell them apart; the expanded scope names each class (D28).
+- **HiGHS's expanded repair can carry a 1e-5 cushion:** `x <> -1 AND ... AND per (): sum(x)
+  + max(x) <= -5 AND per row: x >= 18` suggests `per (): sum(x) + max(x) <= 1e-05`
+  (amount 5.00001) in the expanded scope where Gurobi and the query scope say `<= 0`; the
+  edit over-repairs by 1e-5 (the rounding item above).
+- **Impact:** a suggested change that does not repair the query, or names the wrong
+  direction.
 
 Resolved behavior is documented by its owning `done.md`.

@@ -485,12 +485,12 @@ def test_in_maximize_picks_largest(
 def test_in_with_when(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """x IN (0, 2, 4) WHEN condition — IN restriction gated by a row filter."""
+    """when condition: x IN (0, 2, 4) — IN restriction gated by a row filter."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(INT)
-        SUCH THAT x IN (0, 2, 4) WHEN l_quantity > 20
+        SUCH THAT when l_quantity > 20: x IN (0, 2, 4)
             AND SUM(x * l_quantity) <= 500
         MAXIMIZE SUM(x * l_extendedprice)
     """

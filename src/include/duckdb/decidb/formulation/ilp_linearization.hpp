@@ -573,10 +573,14 @@ struct ComposedMinMaxTermData {
 //! Encode one composed MIN/MAX *constraint*: a global auxiliary and its pinning rows per
 //! MIN/MAX term, then one outer row summing the auxiliaries and the SUM/AVG terms against
 //! `rhs_val`. `terms` is mutated in place — each MIN/MAX term's `z_idx` is filled in.
+//! The outer row carries the clause's identity as execution numbered it: its repair group
+//! (`repair_group_id`, which no other clause shares) and `class_set`
+//! (SolverInput::class_sets, or INVALID_INDEX), the classes it stands for, which an
+//! expanded diagnosis reports one by one.
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
                                        vector<ComposedMinMaxTermData> &terms, double rhs_val,
                                        ExpressionType outer_cmp, idx_t source_clause_id,
-                                       idx_t removal_group_id,
+                                       idx_t removal_group_id, idx_t repair_group_id, idx_t class_set,
                                        const vector<string> &var_names, NativeConstructPolicy native_min_max);
 
 //! Encode a composed MIN/MAX *objective*: the same auxiliary layer, but the composition is

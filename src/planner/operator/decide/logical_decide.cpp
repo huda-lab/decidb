@@ -107,6 +107,12 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 				callback(&term.scale);
 			}
 		}
+		for (auto &column : spec.class_key) {
+			callback(&column);
+		}
+		if (spec.when) {
+			callback(&spec.when);
+		}
 		if (spec.rhs_expr) {
 			callback(&spec.rhs_expr);
 		}
@@ -155,29 +161,45 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	}
 	result["Variables"] = vars_info;
 
-	// Objective: render through the same tagged-expression walker as constraints so
-	// WHEN/PER wrappers print as postfix suffixes (e.g. "SUM(x) WHEN c") rather than
-	// the generic conjunction form "(SUM(x) AND c)".
+	// The objective and the constraints, through the one clause walker, so WHEN/PER
+	// wrappers print as written rather than as a generic conjunction. What the optimizer
+	// made of them: a column that stands for an expression prints it, and each rewrite's
+	// account follows its clause, the objective's its own.
+	auto names = DecidePlanNames(source_fragments, entity_scopes, group_keys, decide_index, aux_var_expressions);
+	vector<string> objective_accounts;
+	for (auto &account : rewrite_accounts) {
+		if (account.source_clause_id == DConstants::INVALID_INDEX) {
+			objective_accounts.push_back(RenderDecideRewriteAccount(account));
+		}
+	}
+	// Constraints first: they also hand back the rows the rewrites added for the objective.
+	vector<string> unattributed;
+	vector<string> objective_rows;
+	string constraints_text;
+	if (decide_constraints || !constraint_sources.empty()) {
+		auto layers = CollectDecideClauseLayers(decide_constraints.get(), names, constraint_sources, unattributed,
+		                                        objective_rows, rewrite_accounts);
+		constraints_text = RenderDecideClauseLayers(layers, unattributed);
+	}
 	if (decide_objective) {
 		string sense_prefix = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*decide_objective, source_fragments, entity_scopes, objective_strs,
-		                               nullptr, nullptr, &group_keys, scoped_objective);
+		CollectDecideExpressionStrings(*decide_objective, names, objective_strs, nullptr, nullptr, scoped_objective);
+		// A MIN/MAX objective leaves a carrier in the tree -- a SUM standing for the
+		// extremum, or the composed objective's 0.0 placeholder -- that its accounts
+		// describe and a row would misread. An AVG's sum stays, under its account, as in a
+		// constraint.
+		if (flat_objective_agg != ObjectiveAggregateType::NONE || !composed_minmax_objective_terms.empty() ||
+		    per_inner_agg == ObjectiveAggregateType::MIN_AGG || per_inner_agg == ObjectiveAggregateType::MAX_AGG) {
+			objective_strs.clear();
+		}
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,
-		                                                  objective_strs);
+		                                                  objective_strs, objective_accounts, objective_rows);
 	} else {
 		result["Objective"] = "FEASIBILITY";
 	}
-
-	// Constraints: one group per user clause -- as written, then the canonical reading
-	// when canonicalization moved something, then the rows the solver receives when they
-	// differ. A clause nothing touched stays a single line.
 	if (decide_constraints || !constraint_sources.empty()) {
-		vector<string> unattributed;
-		auto layers = CollectDecideClauseLayers(decide_constraints.get(), composed_minmax_constraints,
-		                                        source_fragments, entity_scopes, constraint_sources,
-		                                        unattributed, &group_keys);
-		result["Constraints"] = RenderDecideClauseLayers(layers, unattributed);
+		result["Constraints"] = constraints_text;
 	}
 
 	SetParamsEstimatedCardinality(result);

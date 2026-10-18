@@ -76,6 +76,8 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 		idx_t clause_idx = decide.ne_clause_labels.size();
 		decide.ne_clause_labels.push_back(DiagnosisComparand(*comp.left) + " <> " +
 		                                  DiagnosisComparand(*comp.right));
+		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::NOT_EQUAL,
+		                  RenderForPlan(comp, decide, HasDecideTag(comp.alias, SCOPED_CLAUSE_TAG)));
 		AddDecideTag(comp.alias, string(NE_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "__");
 	});
 }
@@ -86,21 +88,26 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 
 void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 	if (decide.decide_constraints) {
-		RewriteAvgInExpression(decide.decide_constraints, decide.decide_index);
+		RewriteAvgInExpression(decide.decide_constraints, decide, string(), false);
 	}
 	if (decide.decide_objective) {
 		// Rewrites mutate in place, so the objective is detached, rewritten, and
 		// reinstalled through the boundary rather than edited where it sits.
 		auto objective = std::move(decide.decide_objective);
-		RewriteAvgInExpression(objective, decide.decide_index);
+		RewriteAvgInExpression(objective, decide, OBJECTIVE_ROW_TAG, decide.scoped_objective);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 }
 
-void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, idx_t decide_index) {
+void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
+                                             const string &source_alias, bool scoped) {
 	if (!expr) {
 		return;
 	}
+	const idx_t decide_index = decide.decide_index;
+	auto clause_alias = DescendSourceAlias(*expr, source_alias);
+	// A clause written with the scope spellings prints its subject as it spells it.
+	scoped = scoped || HasDecideTag(expr->GetAlias(), SCOPED_CLAUSE_TAG);
 
 	// Check if this node is an AVG aggregate — may be wrapped in a BOUND_CAST
 	Expression *inner = expr.get();
@@ -122,6 +129,8 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, idx_t
 		// cast away. Leaving it as a real AVG keeps the round trip DOUBLE->DOUBLE.
 		if (StringUtil::CIEquals(agg.function.name, "avg") && agg.children.size() == 1 &&
 		    BoundExpressionReferencesDecide(*inner, decide_index)) {
+			AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::AVG_SUM,
+			                  RenderForPlan(agg, decide, scoped));
 			// Replace AVG(expr) with SUM(expr)
 			vector<unique_ptr<Expression>> sum_children;
 			sum_children.push_back(agg.children[0]->Copy());
@@ -152,7 +161,7 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, idx_t
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		RewriteAvgInExpression(child, decide_index);
+		RewriteAvgInExpression(child, decide, clause_alias, scoped);
 	});
 }
 

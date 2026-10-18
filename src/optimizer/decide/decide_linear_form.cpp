@@ -251,6 +251,19 @@ public:
 		for (auto &link : op.reducer_value_links) {
 			CollectLikeTerms(link.inner_terms);
 		}
+
+		// A bound whose repair rows come from its clause re-emits none of its own, so the
+		// repair model would open its column with nothing enforcing it were its clause not
+		// flattened above.
+		idx_t clause_rows = 0;
+		for (auto &bound : op.user_absorbed_bounds) {
+			clause_rows += bound.repair_rows_from_clause;
+		}
+		if (clause_rows != op.prepared.absorbed_constraints.size()) {
+			throw InternalException("DECIDE: %llu absorbed bounds take their repair rows from their clause, but "
+			                        "%llu such clauses were flattened",
+			                        clause_rows, op.prepared.absorbed_constraints.size());
+		}
 	}
 
 private:
@@ -1226,8 +1239,11 @@ private:
 			// Skip comparisons the optimizer already folded into the column box.
 			// Emitting a DecideConstraint here would add num_rows redundant model
 			// rows. The comparison is still in the tree so EXPLAIN renders it; the
-			// tag is the decision, and it was made by AbsorbVariableBounds.
-			if (HasDecideTag(comp.alias, ABSORBED_BOUND_TAG)) {
+			// tag is the decision, and it was made by AbsorbVariableBounds. One whose
+			// repair rows come from its clause is flattened aside, for the repair model
+			// alone (absorbed_constraints).
+			const bool absorbed = HasDecideTag(comp.alias, ABSORBED_BOUND_TAG);
+			if (absorbed && !HasDecideTag(comp.alias, ABSORBED_CLAUSE_ROWS_TAG)) {
 				break;
 			}
 
@@ -1275,7 +1291,7 @@ private:
 			if (constraint->scoped) {
 				TryParseGroupKeyTag(comp.alias, constraint->group_key);
 				if (per_class) {
-					constraint->per_class = true;
+					constraint->per_key = DecideConstraint::PerKeyRole::NAMES_CLASSES;
 					for (idx_t i = 1; i < per_class->children.size(); i++) {
 						constraint->class_key.push_back(per_class->children[i]->Copy());
 					}
@@ -1299,6 +1315,13 @@ private:
 				                        "rewrite did not replace its reducers in '%s'.",
 				                        comp.ToString());
 			}
+			// `per K:` makes a per-row clause one row per class. Over the aggregate shape, and
+			// over the scoped easy MIN/MAX whose rows are its members, the key only names the
+			// classes a group's row stands for.
+			if (constraint->per_key != DecideConstraint::PerKeyRole::NONE && !constraint->was_minmax_easy &&
+			    constraint_class != CanonicalConstraintClass::AGGREGATE) {
+				constraint->per_key = DecideConstraint::PerKeyRole::ONE_ROW_PER_CLASS;
+			}
 
 			if (constraint->scoped && constraint->was_minmax_easy) {
 				// The easy direction of a scoped MIN/MAX (`max(when c: e) by (g) <= cap`)
@@ -1306,7 +1329,6 @@ private:
 				// reducer's `when` choosing the members, while the bound is reduced over
 				// each `by` group of every kept row. RewriteMinMax kept the reducer so its
 				// `when` and `by` reach this point; a factor on it distributes over the rows.
-				D_ASSERT(!per_class);
 				constraint->lhs_is_aggregate = false;
 				ExtractEasyExtremumTerms(*lhs, *constraint);
 			} else if (constraint_class == CanonicalConstraintClass::AGGREGATE) {
@@ -1354,7 +1376,7 @@ private:
 				}
 			}
 
-			op.prepared.constraints.push_back(std::move(constraint));
+			(absorbed ? op.prepared.absorbed_constraints : op.prepared.constraints).push_back(std::move(constraint));
 			break;
 		}
 

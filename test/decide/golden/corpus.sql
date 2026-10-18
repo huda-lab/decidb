@@ -105,24 +105,24 @@ SELECT id, x FROM items DECIDE x(INT) SUCH THAT AVG(x) <= 2 AND x <= 9 MAXIMIZE 
 -- ---------------------------------------------------------------------------
 
 -- 20 constraint-level WHEN
-SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 5 WHEN grp = 'A' AND x <= 9 MAXIMIZE SUM(x);
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT when grp = 'A' per (): sum(x) <= 5 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 21 aggregate-local WHEN (comparison condition parenthesized before the bound)
-SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) WHEN (grp = 'A') <= 5 AND x <= 9 MAXIMIZE SUM(x);
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT sum(when grp = 'A': x) <= 5 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 21b two aggregate-local WHENs, additive
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT SUM(x) WHEN (grp = 'A') + SUM(x) WHEN (grp = 'B') <= 6 AND x <= 9 MAXIMIZE SUM(x);
+SUCH THAT sum(when grp = 'A': x) + sum(when grp = 'B': x) <= 6 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 22 PER
-SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 4 PER grp AND x <= 9 MAXIMIZE SUM(x);
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT per grp: sum(x) by (grp) <= 4 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 23 PER + WHEN
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT SUM(x) <= 4 WHEN price > 15 PER grp AND x <= 9 MAXIMIZE SUM(x);
+SUCH THAT when price > 15 per grp: sum(x) by (grp) <= 4 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 24 per-row constraint under WHEN
-SELECT id, x FROM items DECIDE x(INT) SUCH THAT x <= 2 WHEN grp = 'A' AND x <= 9 MAXIMIZE SUM(x);
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT when grp = 'A': x <= 2 AND x <= 9 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
 -- Optimizer-rewritten shapes (these emit auxiliary constraints)
@@ -172,20 +172,20 @@ SUCH THAT x <= 5 AND SUM(b * x) <= 8 MAXIMIZE SUM(b * x);
 -- ---------------------------------------------------------------------------
 
 -- 36 scalar (query-wide) variable as a shared bound
-SELECT id, ship, cap FROM items DECIDE ship(INT), scalar cap(INT)
+SELECT id, ship, cap FROM items DECIDE ship(INT), per (): cap(INT)
 SUCH THAT ship <= cap AND ship <= 10 AND cap <= 8 MAXIMIZE SUM(ship) - 20 * cap;
 
 -- 37 scalar variable inside a reducer constraint
-SELECT id, ship, cap FROM items DECIDE ship(INT), scalar cap(INT)
+SELECT id, ship, cap FROM items DECIDE ship(INT), per (): cap(INT)
 SUCH THAT SUM(ship) <= 20 AND ship <= cap AND cap <= 6 MAXIMIZE SUM(ship);
 
 -- 38 table-scoped variable with a join
 SELECT i.id, keep FROM items i JOIN groups g ON i.grp = g.g
-DECIDE i.keep(BOOL) SUCH THAT SUM(i.price * keep) <= 60 MAXIMIZE SUM(i.price * keep);
+DECIDE per i: keep(BOOL) SUCH THAT SUM(i.price * keep) <= 60 MAXIMIZE SUM(i.price * keep);
 
 -- 39 qualified reducer over a joined relation
 SELECT i.id, keep FROM items i JOIN groups g ON i.grp = g.g
-DECIDE i.keep(BOOL) SUCH THAT SUM(i: keep) <= 2 MAXIMIZE SUM(i.price * keep);
+DECIDE per i: keep(BOOL) SUCH THAT sum(per i: keep) <= 2 MAXIMIZE SUM(i.price * keep);
 
 -- ---------------------------------------------------------------------------
 -- Shapes unlocked by Phase A (sign-aware ABS Big-M + composed MIN/MAX).
@@ -230,7 +230,7 @@ SUCH THAT 3 - MAX(x) <= 0 AND x <= 9 MINIMIZE SUM(x);
 -- cast lid. All terms are decision-bearing, so the split changes placement for
 -- none of them; it is the spine reaching them at all that is being pinned.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT (SUM(x) WHEN (price > 5)) - (SUM(x * price) WHEN (price > 5)) + 2 <= 8
+SUCH THAT sum(when price > 5: x) - sum(when price > 5: x * price) + 2 <= 8
 AND x <= 4 MAXIMIZE SUM(x);
 
 -- 46 mixed placement under a cast lid: a reducer (LEFT) beside a scalar
@@ -240,7 +240,7 @@ AND x <= 4 MAXIMIZE SUM(x);
 -- A subquery is used deliberately: a numeric offset in this position is peeled
 -- by the parsed-level simplifier before binding, so it never arrives sealed.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT (SUM(x) WHEN (price > 5)) + (SELECT max(budget) FROM groups) <= 210
+SUCH THAT sum(when price > 5: x) + (SELECT max(budget) FROM groups) <= 210
 AND x <= 4 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
@@ -299,12 +299,12 @@ MAXIMIZE SUM(x);
 -- ---------------------------------------------------------------------------
 
 -- 55 the paper's max_shortfall shape: a scalar slack absorbing the overflow
-SELECT id, x, s FROM items DECIDE x(INT), scalar s(INT)
+SELECT id, x, s FROM items DECIDE x(INT), per (): s(INT)
 SUCH THAT x >= 3 AND x <= 3 AND SUM(x) - s <= 4 MINIMIZE s;
 
 -- 56 scalar variable added to an aggregate, under PER
-SELECT id, grp, x, s FROM items DECIDE x(INT), scalar s(INT)
-SUCH THAT x <= 9 AND s >= 2 AND s <= 2 AND SUM(x) + s <= 8 PER grp
+SELECT id, grp, x, s FROM items DECIDE x(INT), per (): s(INT)
+SUCH THAT x <= 9 AND s >= 2 AND s <= 2 AND per grp: sum(x) by (grp) + s <= 8
 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
@@ -358,7 +358,7 @@ MAXIMIZE SUM(x);
 -- "one value per group" means concretely -- a single global MAX would give B's
 -- bound to A as well.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 9 AND SUM(x * price) <= MAX(price) * 2 PER grp
+SUCH THAT x <= 9 AND per grp: sum(x * price) by (grp) <= max(price) by (grp) * 2
 MAXIMIZE SUM(x);
 
 -- 62 COUNT(*) under PER. Regression pin for a live wrong answer: count_star was
@@ -390,7 +390,7 @@ MAXIMIZE SUM(x);
 -- 65 the same bound under PER, where each group takes its own tightest value (100
 -- for A, 200 for B) rather than one global minimum.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 90 AND SUM(x) <= (SELECT budget FROM groups WHERE g = items.grp) PER grp
+SUCH THAT x <= 90 AND per grp: sum(x) by (grp) <= (SELECT budget FROM groups WHERE g = items.grp)
 MAXIMIZE SUM(x);
 
 -- 66 an aggregate-local WHEN on the left, a row-varying bound on the right. The
@@ -407,7 +407,7 @@ MAXIMIZE SUM(x);
 -- folding and row-varying reduction -- must answer "which rows?" the same way, so
 -- this binds at MIN over all four rows (10), not over the B rows (30).
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 9 AND (SUM(x) WHEN (grp = 'B')) <= MIN(price)
+SUCH THAT x <= 9 AND sum(when grp = 'B': x) <= MIN(price)
 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
@@ -429,14 +429,14 @@ MAXIMIZE SUM(x);
 -- that reducer: the bound is SUM(price) over the A rows (30), while the left side
 -- still sums every row.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 9 AND SUM(x) <= SUM(price) WHEN (grp = 'A')
+SUCH THAT x <= 9 AND SUM(x) <= sum(when grp = 'A': price)
 MAXIMIZE SUM(x);
 
 -- 70 a relation-qualified reducer as a bound. The join fans each group to two
 -- rows, so the de-duplication is what makes `rhs` 3 (= (100+200)/100) rather than
 -- 6 -- the same call the left side has always made.
 SELECT i.id, keep FROM items i JOIN groups g ON i.grp = g.g
-DECIDE i.keep(BOOL) SUCH THAT SUM(i: keep) <= SUM(g: budget) / 100
+DECIDE per i: keep(BOOL) SUCH THAT sum(per i: keep) <= sum(per g: budget) / 100
 MAXIMIZE SUM(i.price * keep);
 
 -- ---------------------------------------------------------------------------
@@ -499,7 +499,7 @@ MAXIMIZE SUM(x * weight);
 -- 75 a query-wide decision as the bound. Rejected before C.2 by the RHS
 -- validator, which refused any bound containing a decision variable. Canonical
 -- form is `SUM(x*price) - cap <= 0`, the row-invariant term B.3 landed.
-SELECT id, x, cap FROM items DECIDE x(BOOL), scalar cap(INT)
+SELECT id, x, cap FROM items DECIDE x(BOOL), per (): cap(INT)
 SUCH THAT SUM(x * price) <= cap AND cap <= 60
 MAXIMIZE 3 * SUM(x * price) - 2 * cap;
 
@@ -511,7 +511,7 @@ MAXIMIZE 3 * SUM(x * price) - 2 * cap;
 -- flip WAS a direction normalization, which is why it had to go rather than move.
 -- What is pinned here is that the two spellings agree as models: same columns,
 -- same bounds, and one row that is the other multiplied by -1.
-SELECT id, x, cap FROM items DECIDE x(BOOL), scalar cap(INT)
+SELECT id, x, cap FROM items DECIDE x(BOOL), per (): cap(INT)
 SUCH THAT cap >= SUM(x * price) AND cap <= 60
 MAXIMIZE 3 * SUM(x * price) - 2 * cap;
 
@@ -519,7 +519,7 @@ MAXIMIZE 3 * SUM(x * price) - 2 * cap;
 -- decision on the bound. Canonical form is `-SUM(x) - cap <= -price`, so it
 -- exercises C.2's gate and B.5's runtime reduction of the row-varying bound in
 -- one query. `<=` takes the MIN over rows, i.e. the largest price binds.
-SELECT id, x, cap FROM items DECIDE x(INT), scalar cap(INT)
+SELECT id, x, cap FROM items DECIDE x(INT), per (): cap(INT)
 SUCH THAT price - SUM(x) <= cap AND x <= 5
 MINIMIZE cap;
 
@@ -642,12 +642,12 @@ MAXIMIZE MAX(x + price) + 0.001 * SUM(x);
 -- row count, which is a bound on that family rather than a measurement of it.
 SELECT grp, id, x FROM items DECIDE x(INT)
 SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <= 6
-MAXIMIZE MAX(SUM(x)) PER grp;
+MAXIMIZE max(per grp: sum(x) by (grp));
 
 -- 92 the MIN mirror of 91, whose hard direction is the other arm.
 SELECT grp, id, x FROM items DECIDE x(INT)
 SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 4
-MINIMIZE MIN(SUM(x)) PER grp;
+MINIMIZE min(per grp: sum(x) by (grp));
 
 -- ---------------------------------------------------------------------------
 -- A plain column as the bound of a reduced constraint (C1/C2/C3)
@@ -670,13 +670,13 @@ Regions(regionID, demand, priority) AS (
     VALUES ('R1', 450, 'critical'), ('R2', 600, 'standard')
 )
 SELECT routeID, depotID, regionID, open, ship
-DECIDE D.open(BOOL), T.ship(INT)
+DECIDE per D: open(BOOL), per T: ship(INT)
 FROM Depots D JOIN Routes T USING (depotID) JOIN Regions R USING (regionID)
 SUCH THAT
     ship BETWEEN 0 AND capacity * open AND
-    SUM(ship) <= stock PER depotID AND
-    SUM(ship) >= demand WHEN priority = 'critical' PER regionID
-MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open);
+    per depotID: sum(ship) by (depotID) <= stock AND
+    when priority = 'critical' per regionID: sum(ship) by (regionID) >= demand
+MINIMIZE SUM(unit_cost * ship) + sum(per D: opening_cost * open);
 
 -- 94 `<>` with a bound that varies within a PER group (C3): every excluded value
 -- is kept -- `SUM(x) <> 3 AND SUM(x) <> 7` for group 'a' -- rather than collapsed

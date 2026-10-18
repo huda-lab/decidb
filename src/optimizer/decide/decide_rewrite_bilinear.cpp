@@ -44,7 +44,7 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	vector<LogicalDecide::BilinearLink> links;
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceBilinear(objective, decide, links, string());
+		FindAndReplaceBilinear(objective, decide, links, OBJECTIVE_ROW_TAG);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 	if (decide.decide_constraints) {
@@ -230,10 +230,16 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				LogicalType aux_type = (both_bool || other_is_integer_typed)
 				                           ? LogicalType::INTEGER
 				                           : LogicalType::DOUBLE;
-				// F6: a diagnosis names the auxiliary by the user's product (b * x).
+				// F6: a diagnosis, and a plan, name the auxiliary by the user's product (b * x).
+				const bool scoped_clause = HasDecideTag(clause_alias, SCOPED_CLAUSE_TAG);
+				string label = "(" + RenderForPlan(*func.children[0], decide, scoped_clause) + " * " +
+				               RenderForPlan(*func.children[1], decide, scoped_clause) + ")";
 				idx_t aux_idx =
-				    AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, DecideVarScopeInfo::Row(),
-				                         "(" + func.children[0]->ToString() + " * " + func.children[1]->ToString() + ")");
+				    AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, DecideVarScopeInfo::Row(), label);
+				AddRewriteAccount(decide, clause_alias,
+				                  both_bool ? LogicalDecide::RewriteAccount::Kind::PRODUCT_AND
+				                            : LogicalDecide::RewriteAccount::Kind::PRODUCT_MCCORMICK,
+				                  label);
 
 				if (both_bool) {
 					// AND-linearization: w <= b1, w <= b2, w >= b1 + b2 - 1

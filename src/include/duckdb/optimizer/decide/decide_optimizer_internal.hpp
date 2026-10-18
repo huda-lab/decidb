@@ -76,5 +76,19 @@ idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const Logi
 //! A reference to decision column `var_idx`, as an expression of the DECIDE clause.
 unique_ptr<Expression> MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx);
 
+//! An expression as a plan prints it (RenderDecideSource, columns unqualified): the label
+//! of an auxiliary decision, the text of a rewrite account. `scoped` prints a clause
+//! written with the scope spellings as it spells things: lower-case names, `by`.
+string RenderForPlan(const Expression &expr, const LogicalDecide &decide, bool scoped);
+
+//! Record what a rewrite made of `subject` (as RenderForPlan prints it), for EXPLAIN
+//! (LogicalDecide::rewrite_accounts): under the clause `source_clause_id`, or the
+//! objective (INVALID_INDEX). The alias form reads the clause id off a clause's alias;
+//! an alias without one is the objective's.
+void AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id, LogicalDecide::RewriteAccount::Kind kind,
+                       string subject);
+void AddRewriteAccount(LogicalDecide &decide, const string &clause_alias, LogicalDecide::RewriteAccount::Kind kind,
+                       string subject);
+
 } // namespace decide_rewrite
 } // namespace duckdb

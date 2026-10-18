@@ -523,7 +523,7 @@ class TestBilinearFeatureInteractions:
     """Bilinear with WHEN, PER, and other features."""
 
     def test_bilinear_with_when(self, decidb_cli, oracle_solver, perf_tracker):
-        """MAXIMIZE SUM(b * x) WHEN category = 'A' — filtered bilinear.
+        """MAXIMIZE when category = 'A': sum(b * x) — filtered bilinear.
 
         Oracle includes only rows where category='A' in the objective.
         Rows where category='B' still have their b/x variables in the
@@ -538,7 +538,7 @@ class TestBilinearFeatureInteractions:
             FROM data
             DECIDE b(BOOL), x(REAL)
             SUCH THAT x >= 0 AND x <= 10
-            MAXIMIZE SUM(b * x) WHEN category = 'A'
+            MAXIMIZE when category = 'A': sum(b * x)
         """
         t0 = time.perf_counter()
         result, cols = decidb_cli.execute(sql)
@@ -1218,7 +1218,7 @@ def _mccormick_link(oracle, w, b, x, U, prefix):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_bilinear_per_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """SUM(b*x) <= 100 PER l_returnflag with bilinear MAXIMIZE objective.
+    """per l_returnflag: sum(b*x) by (l_returnflag) <= 100 with bilinear MAXIMIZE objective.
     McCormick aux variables w_i = b_i*x_i must be partitioned per group; a
     global-scoping bug would let one group's slack absorb another's mass."""
     sql = """
@@ -1226,7 +1226,7 @@ def test_bilinear_per_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
                b, ROUND(x, 4) AS x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE b(BOOL), x(REAL)
-        SUCH THAT x <= 50 AND SUM(b * x) <= 100 PER l_returnflag
+        SUCH THAT x <= 50 AND per l_returnflag: sum(b * x) by (l_returnflag) <= 100
         MAXIMIZE SUM(l_extendedprice * b * x)
     """
     t0 = time.perf_counter()
@@ -1305,7 +1305,7 @@ def test_bilinear_per_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """WHEN filter + PER groups + bilinear McCormick — all three must compose.
+    """when filter + per groups + bilinear McCormick — all three must compose.
     Only AIR/RAIL rows contribute to the per-group SUM and the objective."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_returnflag,
@@ -1313,8 +1313,9 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE b(BOOL), x(REAL)
         SUCH THAT x <= 50
-            AND SUM(b * x) <= 80 WHEN (l_shipmode = 'AIR' OR l_shipmode = 'RAIL') PER l_returnflag
-        MAXIMIZE SUM(l_extendedprice * b * x) WHEN (l_shipmode = 'AIR' OR l_shipmode = 'RAIL')
+            AND when (l_shipmode = 'AIR' OR l_shipmode = 'RAIL') per l_returnflag:
+                sum(b * x) by (l_returnflag) <= 80
+        MAXIMIZE when (l_shipmode = 'AIR' OR l_shipmode = 'RAIL'): sum(l_extendedprice * b * x)
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -1397,14 +1398,14 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_bilinear_entity_scoped(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Entity-scoped Boolean keepN (per nation) × row-scoped Real x.
+    """Boolean keepN declared per n (one per nation) × row-scoped Real x.
     McCormick aux per join row must use the entity-keyed Boolean — multiple
     rows of the same nation share the same keepN variable."""
     sql = """
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN, ROUND(x, 4) AS x
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 200
-        DECIDE n.keepN(BOOL), x(REAL)
+        DECIDE per n: keepN(BOOL), x(REAL)
         SUCH THAT x <= 100 AND SUM(keepN * x) <= 1000
         MAXIMIZE SUM(keepN * x * c_acctbal)
     """

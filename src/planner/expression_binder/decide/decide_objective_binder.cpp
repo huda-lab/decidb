@@ -92,6 +92,14 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	auto form = StringUtil::Format("%s(per %s: %s(...) by (%s))", StringUtil::Lower(outer.function_name),
 	                               DecideKeyToString(per), StringUtil::Lower(inner.function_name),
 	                               DecideKeyToString(inner_by));
+	if (StringUtil::Lower(outer.function_name) == "avg") {
+		// The nested objective it would bind onto treats an outer AVG as a SUM, which is
+		// not an average over the classes; §10.4 admits sum, min and max over them.
+		return BindResult(BinderException::Unsupported(
+		    outer, StringUtil::Format("DECIDE: avg over the classes of %s is not supported yet; write sum, min or "
+		                              "max over them",
+		                              form)));
+	}
 	if (!inner.children.empty() && IsDecideMarker(*inner.children[0], SCOPE_PER_ROW_TAG)) {
 		// `per row`, the default written out: one value per row, as without it.
 		auto body = std::move(inner.children[0]->Cast<FunctionExpression>().children[0]);
@@ -132,6 +140,8 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 		                                 "yet",
 		                                 form)));
 	}
+	// The key as written, read before the move below destroys the marker that holds it.
+	const auto key_text = DecideKeyToString(per);
 	// The nested objective the old spelling binds to: `outer(inner(e))` under a PER
 	// wrapper whose columns are the key.
 	outer.children[0] = std::move(inner_by.children[0]);
@@ -146,6 +156,11 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	}
 	wrapper->alias = PER_CONSTRAINT_TAG;
 	AddDecideTag(wrapper->alias, SCOPED_CLAUSE_TAG);
+	// The plan prints the key as written rather than its columns (RenderDecidePerKey).
+	if (qualifier_context && qualifier_context->source_fragments) {
+		AddDecideTag(wrapper->alias, MakeSourceFragmentTag(qualifier_context->source_fragments->size()));
+		qualifier_context->source_fragments->push_back(key_text);
+	}
 	return BindResult(std::move(wrapper));
 }
 

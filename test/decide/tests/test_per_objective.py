@@ -73,6 +73,8 @@ def _per_group_values_if_selected(rows, cols, per_col, expr_fn, x_col="x"):
 @pytest.mark.correctness
 def test_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """SUM(x * cost) PER col ≡ SUM(x * cost)."""
+    # old spelling until item 7
+    # (a flat SUM(e) PER k objective has no new spelling; only the two-level form does)
     sql_per = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
@@ -119,13 +121,13 @@ def test_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_sum_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """SUM(SUM(x * cost)) PER col — nested SUMs cancel to flat SUM."""
+    """sum(per col: sum(x * cost) by (col)) — nested SUMs cancel to flat SUM."""
     sql = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 3
-        MAXIMIZE SUM(SUM(x * s_acctbal)) PER s_nationkey
+        MAXIMIZE sum(per s_nationkey: sum(x * s_acctbal) by (s_nationkey))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -184,7 +186,7 @@ def _group_rows(data, key_idx):
 
 
 # ===========================================================================
-# SUM(MAX(expr)) PER col — inner MAX
+# sum(per col: max(expr) by (col)) — inner MAX
 # ===========================================================================
 
 @pytest.mark.per_clause
@@ -194,13 +196,13 @@ def _group_rows(data, key_idx):
 def test_minimize_sum_max_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MINIMIZE SUM(MAX(x * qty)) PER flag — easy inner MAX."""
+    """MINIMIZE sum(per flag: max(x * qty) by (flag)) — easy inner MAX."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-        MINIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 1
+        MINIMIZE sum(per l_returnflag: max(x * l_quantity) by (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -260,13 +262,13 @@ def test_minimize_sum_max_per(
 def test_maximize_sum_min_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MAXIMIZE SUM(MIN(x * qty)) PER flag — easy inner MIN."""
+    """MAXIMIZE sum(per flag: min(x * qty) by (flag)) — easy inner MIN."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-        MAXIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 1
+        MAXIMIZE sum(per l_returnflag: min(x * l_quantity) by (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -324,14 +326,14 @@ def test_maximize_sum_min_per(
 def test_maximize_sum_max_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MAXIMIZE SUM(MAX(x * qty)) PER flag — hard inner MAX (needs indicators)."""
+    """MAXIMIZE sum(per flag: max(x * qty) by (flag)) — hard inner MAX (needs indicators)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-            AND SUM(x) <= 3 PER l_returnflag
-        MAXIMIZE SUM(MAX(x * l_quantity)) PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 1
+            AND per l_returnflag: sum(x) by (l_returnflag) <= 3
+        MAXIMIZE sum(per l_returnflag: max(x * l_quantity) by (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -392,14 +394,14 @@ def test_maximize_sum_max_per(
 def test_minimize_sum_min_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MINIMIZE SUM(MIN(x * qty)) PER flag — hard inner MIN."""
+    """MINIMIZE sum(per flag: min(x * qty) by (flag)) — hard inner MIN."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 7
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-            AND SUM(x) <= 3 PER l_returnflag
-        MINIMIZE SUM(MIN(x * l_quantity)) PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 1
+            AND per l_returnflag: sum(x) by (l_returnflag) <= 3
+        MINIMIZE sum(per l_returnflag: min(x * l_quantity) by (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -454,7 +456,7 @@ def test_minimize_sum_min_per(
 
 
 # ===========================================================================
-# MIN/MAX(SUM(expr)) PER col — easy outer
+# min/max(per col: sum(expr) by (col)) — easy outer
 # ===========================================================================
 
 @pytest.mark.per_clause
@@ -464,13 +466,13 @@ def test_minimize_sum_min_per(
 def test_minimize_max_sum_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MINIMIZE MAX(SUM(x * qty)) PER flag — easy outer MAX over per-group SUMs."""
+    """MINIMIZE max(per flag: sum(x * qty) by (flag)) — easy outer MAX over per-group SUMs."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 2 PER l_returnflag
-        MINIMIZE MAX(SUM(x * l_quantity)) PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 2
+        MINIMIZE max(per l_returnflag: sum(x * l_quantity) by (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -526,13 +528,13 @@ def test_minimize_max_sum_per(
 def test_maximize_min_sum_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MAXIMIZE MIN(SUM(x * qty)) PER flag — easy outer MIN over per-group SUMs."""
+    """MAXIMIZE min(per flag: sum(x * qty) by (flag)) — easy outer MIN over per-group SUMs."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 2 PER l_returnflag
-        MAXIMIZE MIN(SUM(x * l_quantity)) PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 2
+        MAXIMIZE min(per l_returnflag: sum(x * l_quantity) by (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -592,6 +594,8 @@ def test_sum_max_when_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(MAX(x * qty)) WHEN qty>10 PER flag — WHEN filters each group."""
+    # old spelling until item 7
+    # (an empty WHEN group is skipped today: old-only semantics, inventory §2)
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
@@ -664,13 +668,13 @@ def test_sum_max_when_per(
 def test_single_group(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """All rows share one PER key ⇒ SUM(MAX(...)) PER col === MAX(x*qty)."""
+    """All rows share one per key ⇒ sum(per col: max(...) by (col)) === MAX(x*qty)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey = 1
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 2
-        MINIMIZE SUM(MAX(x * l_quantity)) PER l_orderkey
+        MINIMIZE sum(per l_orderkey: max(x * l_quantity) by (l_orderkey))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -725,13 +729,13 @@ def test_single_group(
 def test_sum_avg_per_unequal_groups(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """SUM(AVG(x*cost)) PER col — inner AVG scales coeffs by 1/n_g per group."""
+    """sum(per col: avg(x*cost) by (col)) — inner AVG scales coeffs by 1/n_g per group."""
     sql = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER s_nationkey
-        MINIMIZE SUM(AVG(x * s_acctbal)) PER s_nationkey
+        SUCH THAT per s_nationkey: sum(x) by (s_nationkey) >= 1
+        MINIMIZE sum(per s_nationkey: avg(x * s_acctbal) by (s_nationkey))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -793,6 +797,9 @@ def test_avg_sum_per_noop(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """AVG(SUM(x*cost)) PER col — outer AVG divides by constant G ⇒ argmin matches SUM."""
+    # old spelling until item 7
+    # (an outer AVG over the groups is summed by the old nested objective, a logged bug;
+    #  the new spelling refuses `avg(per k: ...)`)
     sql = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
@@ -854,13 +861,13 @@ def test_avg_sum_per_noop(
 def test_minimize_max_avg_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MINIMIZE MAX(AVG(x*qty)) PER flag — easy outer MAX, inner AVG."""
+    """MINIMIZE max(per flag: avg(x*qty) by (flag)) — easy outer MAX, inner AVG."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 2 PER l_returnflag
-        MINIMIZE MAX(AVG(x * l_quantity)) PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 2
+        MINIMIZE max(per l_returnflag: avg(x * l_quantity) by (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -918,13 +925,13 @@ def test_minimize_max_avg_per(
 def test_maximize_min_avg_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MAXIMIZE MIN(AVG(x*qty)) PER flag — easy outer MIN, inner AVG."""
+    """MAXIMIZE min(per flag: avg(x*qty) by (flag)) — easy outer MIN, inner AVG."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 2 PER l_returnflag
-        MAXIMIZE MIN(AVG(x * l_quantity)) PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 2
+        MAXIMIZE min(per l_returnflag: avg(x * l_quantity) by (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -983,6 +990,8 @@ def test_sum_avg_when_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """MINIMIZE SUM(AVG(x*qty)) WHEN qty>10 PER flag — WHEN filters each group's AVG."""
+    # old spelling until item 7
+    # (an empty WHEN group is skipped today: old-only semantics, inventory §2)
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
@@ -1050,7 +1059,7 @@ def test_sum_avg_when_per(
 def test_sum_avg_per_extreme_unequal_groups(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """SUM(AVG(x*cost)) PER grp with a 1:5 group-size ratio.
+    """sum(per grp: avg(x*cost) by (grp)) with a 1:5 group-size ratio.
 
     Strengthens the coverage of ``test_sum_avg_per_unequal_groups``: that
     test's ``WHERE s_nationkey < 5`` filter yields a 3:1 max/min ratio, but
@@ -1072,8 +1081,8 @@ def test_sum_avg_per_extreme_unequal_groups(
     sql = f"""
         SELECT id, grp, cost, x FROM ({data_sql})
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER grp
-        MINIMIZE SUM(AVG(x * cost)) PER grp
+        SUCH THAT per grp: sum(x) by (grp) >= 1
+        MINIMIZE sum(per grp: avg(x * cost) by (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1130,7 +1139,7 @@ def test_sum_avg_per_extreme_unequal_groups(
 
 
 # ===========================================================================
-# SUM(MIN/MAX(POWER(expr, 2))) PER col — hard inner with quadratic
+# sum(per col: min/max(power(expr, 2)) by (col)) — hard inner with quadratic
 # ===========================================================================
 #
 # Inner expression is POWER(x - target, 2); outer is SUM over groups. The
@@ -1178,7 +1187,7 @@ def _power_group_obj(rs, cs, reducer):
 def test_maximize_sum_max_power_per(
     decidb_cli_gurobi, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MAXIMIZE SUM(MAX(POWER(x - target, 2))) PER grp — hard inner MAX,
+    """MAXIMIZE sum(per grp: max(power(x - target, 2)) by (grp)) — hard inner MAX,
     quadratic per-row expression. Budget couples x's so at most some rows
     can reach the bound extremes; the group MAX must pick among affordable
     pushes.
@@ -1197,7 +1206,7 @@ def test_maximize_sum_max_power_per(
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 10 AND SUM(x) <= 20
-        MAXIMIZE SUM(MAX(POWER(x - target, 2))) PER grp
+        MAXIMIZE sum(per grp: max(power(x - target, 2)) by (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli_gurobi.execute(sql)
@@ -1259,7 +1268,7 @@ def test_maximize_sum_max_power_per(
 def test_minimize_sum_min_power_per(
     decidb_cli_gurobi, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MINIMIZE SUM(MIN(POWER(x - target, 2))) PER grp — hard inner MIN,
+    """MINIMIZE sum(per grp: min(power(x - target, 2)) by (grp)) — hard inner MIN,
     quadratic per-row expression. INTEGER x with non-integer targets forces
     every row's POWER strictly positive. Target offsets vary per row so
     each row's best-achievable POWER differs, meaning the indicator has to
@@ -1282,7 +1291,7 @@ def test_minimize_sum_min_power_per(
         SELECT id, grp, target, x FROM data
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 10
-        MINIMIZE SUM(MIN(POWER(x - target, 2))) PER grp
+        MINIMIZE sum(per grp: min(power(x - target, 2)) by (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli_gurobi.execute(sql)
@@ -1338,6 +1347,8 @@ def test_minimize_sum_min_power_per(
 @pytest.mark.min_max
 def test_flat_max_per_error(decidb_cli):
     """MAX(x * cost) PER col without outer aggregate is ambiguous ⇒ error."""
+    # old spelling until item 7
+    # (pins the old "PER is ambiguous" message; inventory §2)
     with pytest.raises(Exception, match="ambiguous|nested aggregate"):
         decidb_cli.execute("""
             SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
@@ -1352,6 +1363,8 @@ def test_flat_max_per_error(decidb_cli):
 @pytest.mark.min_max
 def test_flat_min_per_error(decidb_cli):
     """MIN(x * cost) PER col without outer aggregate ⇒ error."""
+    # old spelling until item 7
+    # (pins the old "PER is ambiguous" message; inventory §2)
     with pytest.raises(Exception, match="ambiguous|nested aggregate"):
         decidb_cli.execute("""
             SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier

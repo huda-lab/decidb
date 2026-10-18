@@ -334,6 +334,9 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             if (g < ec.group_labels.size()) {
                 outer.group_label = ec.group_labels[g];
             }
+            if (g < ec.group_class_set.size()) {
+                outer.class_set = ec.group_class_set[g];
+            }
             input.global_constraints.push_back(std::move(outer));
         }
     }
@@ -1079,7 +1082,7 @@ static idx_t ComposedAvgDivisor(const ComposedMinMaxTermData &ta, idx_t num_rows
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
                                        vector<ComposedMinMaxTermData> &terms, double rhs_val,
                                        ExpressionType outer_cmp, idx_t source_clause_id,
-                                       idx_t removal_group_id,
+                                       idx_t removal_group_id, idx_t repair_group_id, idx_t class_set,
                                        const vector<string> &var_names, NativeConstructPolicy native_min_max) {
     idx_t num_rows = input.num_rows;
     EmitComposedMinMaxAuxiliaries(input, indexer, terms, source_clause_id, removal_group_id,
@@ -1165,7 +1168,8 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
     outer.shape = ElasticShape::SHARED_SCALAR;
     outer.source_clause_id = source_clause_id;
     outer.removal_group_id = removal_group_id;
-    outer.repair_group_id = input.constraints.size() + input.global_constraints.size();
+    outer.class_set = class_set;
+    outer.repair_group_id = repair_group_id;
     input.global_constraints.push_back(std::move(outer));
 }
 

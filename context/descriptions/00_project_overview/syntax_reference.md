@@ -585,7 +585,7 @@ state | clause | suggested_change | amount | total | scope | edit_source | group
 | `total`            | BIGINT  | denominator for an unbounded escape count; otherwise NULL                    |
 | `scope`            | VARCHAR | `row` or `entity` for an unbounded escape count; otherwise NULL              |
 | `edit_source`      | VARCHAR | what kind of finding this row is (below)                                     |
-| `group`            | VARCHAR | the `PER` key, or the categorical slice a decision escapes on                |
+| `group`            | VARCHAR | the `PER` key, the `per` key value (expanded scope, one finding per class), or the categorical slice a decision escapes on |
 | `row`              | BIGINT  | the emitted row this finding covers, under the `expanded` slack scope        |
 
 One row per finding. A query that solves returns exactly one row, `state = 'feasible'`,
@@ -683,16 +683,22 @@ EXPLAIN (FORMAT JSON) SELECT ... DECIDE ...;
 
 The DECIDE node shows the declared variables, objective, and constraints. It leads with
 the SQL the user wrote, then adds indented canonical or rewritten rows only when the
-model differs materially from that spelling. Internal auxiliary variables are excluded
-from the declaration list but may appear in rewritten rows because they are real solver
-columns.
+model differs materially from that spelling. Under each clause, one line per rewrite says
+what it made of the clause (`abs(ship - 20) becomes an auxiliary variable`,
+`sum(ship) by (D.region) becomes a helper decision per group`, `max(ship) by (D.region)
+becomes an extremum column pinned by indicator rows`, `avg(ship) becomes a sum divided by
+its row count`), and an auxiliary column prints as the expression it stands for
+(`abs(ship - 20)`, `(open * ship)`, `(ship = 5)`), never by an internal name; a bound the
+engine derives from the data prints as `M`. The objective's rewrites, and the rows they
+add, print under the objective. Internal auxiliary variables are excluded from the
+declaration list.
 
 `EXPLAIN` plans without executing the decision query. `EXPLAIN ANALYZE` executes it and
 adds actual row counts and timing. JSON uses the same content in a structured plan.
 
 ## 10. Scope Spellings — `when` and `per` in front, `by` after a reducer
 
-Items 3 to 5 of [`../09_anr_language/todo.md`](../09_anr_language/todo.md); the full
+Items 3 to 6 of [`../09_anr_language/todo.md`](../09_anr_language/todo.md); the full
 behaviour is [`anr_language_extension.md`](anr_language_extension.md) §3–§9. A clause
 written with any of these spellings — in front, a `by`, or a scope inside a reducer —
 follows the rules below; a clause without one keeps the rules of §5–§7, word for word.
@@ -743,9 +749,9 @@ MAXIMIZE when S.status = 'active': sum(ship)
   whole-numbered when the reducer is, so `<`, `>` and `<>` keep their rules, and it may
   be negative. Deck examples 1, 5 and 8 take this shape; example 1 costs N rows of two
   entries and one definition row, not N rows of N. A product or square of decisions
-  inside such a reducer stays refused (§10.6). `EXPLAIN`'s solver-row layer names a
-  helper `__value_<n>__`, as it names an ABS auxiliary; `DIAGNOSE` names the clause and
-  never offers a definition row.
+  inside such a reducer stays refused (§10.6). `EXPLAIN` names a helper by its reducer
+  (`sum(ship) by (D.depotID)`) and says it became a helper decision; `DIAGNOSE` names the
+  clause and never offers a definition row.
 
 ### 10.2 `by (Γ)` — which rows a reducer reads
 

@@ -76,9 +76,10 @@ struct AbsorptionTarget {
 
 	//! Tighten one side of the box and record the bound, in the one order that is always
 	//! correct: tighten unconditionally (a BOOLEAN restatement is a harmless no-op against
-	//! the intrinsic box), record only when ShouldRecord agrees.
-	void Absorb(char sense, double k, bool strict, double typed_k, idx_t source_clause_id,
-	            idx_t removal_group_id) const {
+	//! the intrinsic box), record only when ShouldRecord agrees. Returns whether it
+	//! recorded: only a recorded bound is loosened by a diagnosis.
+	bool Absorb(char sense, double k, bool strict, double typed_k, idx_t source_clause_id,
+	            idx_t removal_group_id, bool repair_rows_from_clause) const {
 		auto &lower = decide->absorbed_lower_bounds[var_idx];
 		auto &upper = decide->absorbed_upper_bounds[var_idx];
 		if (sense != '>') {
@@ -87,10 +88,12 @@ struct AbsorptionTarget {
 		if (sense != '<') {
 			lower = std::max(lower, k); // '>' and '='
 		}
-		if (ShouldRecord(sense, k)) {
-			decide->user_absorbed_bounds.push_back(
-			    {var_idx, sense, k, strict, typed_k, source_clause_id, removal_group_id});
+		if (!ShouldRecord(sense, k)) {
+			return false;
 		}
+		decide->user_absorbed_bounds.push_back(
+		    {var_idx, sense, k, strict, typed_k, source_clause_id, removal_group_id, repair_rows_from_clause});
+		return true;
 	}
 };
 
@@ -146,6 +149,7 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
 		idx_t removal_group_id = DConstants::INVALID_INDEX;
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
+		const bool scoped = HasDecideTag(comp.GetAlias(), SCOPED_CLAUSE_TAG);
 
 		AbsorptionTarget target;
 		if (!TryMatchAbsorptionTarget(*comp.left, decide, target)) {
@@ -169,28 +173,33 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		// written last. A strict `<` / `>` normalizes into the bound for an integer
 		// (`x < 10` is `x <= 9`), carrying the user's literal as `typed_k` so the
 		// diagnosis re-quotes `< 10`. A REAL has no such normalization, so it declines
-		// and the constraint path rejects it with a message naming the clause.
+		// and the constraint path rejects it with a message naming the clause. A scoped
+		// clause steps onto the lattice as every row does (`x > 2.5` is `x >= 3`); the
+		// old spellings keep `k ± 1` (`x >= 3.5`, a logged bug, D17).
+		const double below = scoped ? std::ceil(k) - 1.0 : k - 1.0;
+		const double above = scoped ? std::floor(k) + 1.0 : k + 1.0;
 		bool absorbed = true;
+		bool recorded = false;
 		switch (comp.type) {
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			target.Absorb('<', k, false, 0.0, source_clause_id, removal_group_id);
+			recorded = target.Absorb('<', k, false, 0.0, source_clause_id, removal_group_id, scoped);
 			break;
 		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			target.Absorb('>', k, false, 0.0, source_clause_id, removal_group_id);
+			recorded = target.Absorb('>', k, false, 0.0, source_clause_id, removal_group_id, scoped);
 			break;
 		case ExpressionType::COMPARE_EQUAL:
-			target.Absorb('=', k, false, 0.0, source_clause_id, removal_group_id);
+			recorded = target.Absorb('=', k, false, 0.0, source_clause_id, removal_group_id, scoped);
 			break;
 		case ExpressionType::COMPARE_LESSTHAN:
 			absorbed = target.is_integer;
 			if (absorbed) {
-				target.Absorb('<', k - 1.0, true, k, source_clause_id, removal_group_id);
+				recorded = target.Absorb('<', below, true, k, source_clause_id, removal_group_id, scoped);
 			}
 			break;
 		case ExpressionType::COMPARE_GREATERTHAN:
 			absorbed = target.is_integer;
 			if (absorbed) {
-				target.Absorb('>', k + 1.0, true, k, source_clause_id, removal_group_id);
+				recorded = target.Absorb('>', above, true, k, source_clause_id, removal_group_id, scoped);
 			}
 			break;
 		default:
@@ -200,8 +209,13 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 
 		if (absorbed) {
 			// The comparison stays in the tree so EXPLAIN keeps rendering what the user
-			// wrote; the tag is what stops it also becoming a model row.
+			// wrote; the tag is what stops it also becoming a model row. A scoped clause is
+			// one knob per kept row or class in an expanded diagnosis (D28), which one column
+			// bound cannot say, so a recorded one is flattened for the repair model too.
 			AddDecideTag(comp.alias, ABSORBED_BOUND_TAG);
+			if (recorded && scoped) {
+				AddDecideTag(comp.alias, ABSORBED_CLAUSE_ROWS_TAG);
+			}
 		}
 		break;
 	}
@@ -223,18 +237,19 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		// Each finite side is recorded as its own spec so the infeasible diagnosis
 		// loosens BETWEEN uniformly with the other simple bounds. A strict side is
 		// integer-normalized like the comparison arm, carrying the user's typed literal
-		// so the diagnosis re-quotes `> a` rather than the normalized `>= a+1`.
+		// so the diagnosis re-quotes `> a` rather than the normalized `>= a+1`. Never a
+		// scoped clause's: the binder splits a scoped BETWEEN into two comparisons.
 		double lo = ExtractBound(*between.lower);
 		if (!std::isnan(lo)) {
 			bool strict = !between.lower_inclusive && target.is_integer;
 			target.Absorb('>', strict ? lo + 1.0 : lo, strict, lo, DConstants::INVALID_INDEX,
-			              DConstants::INVALID_INDEX);
+			              DConstants::INVALID_INDEX, false);
 		}
 		double hi = ExtractBound(*between.upper);
 		if (!std::isnan(hi)) {
 			bool strict = !between.upper_inclusive && target.is_integer;
 			target.Absorb('<', strict ? hi - 1.0 : hi, strict, hi, DConstants::INVALID_INDEX,
-			              DConstants::INVALID_INDEX);
+			              DConstants::INVALID_INDEX, false);
 		}
 		break;
 	}
@@ -254,6 +269,7 @@ void DecideOptimizer::AbsorbVariableBounds(LogicalDecide &decide) {
 	idx_t num_decide_vars = decide.decide_variables.size();
 	decide.absorbed_lower_bounds.assign(num_decide_vars, LogicalDecide::ABSORBED_LOWER_UNSET);
 	decide.absorbed_upper_bounds.assign(num_decide_vars, 1e30);
+	decide.user_absorbed_bounds.clear();
 
 	// Seed a BOOLEAN's intrinsic ceiling here rather than leaving every variable at
 	// 1e30 and repairing it at model-build time. The box travels to stage 06 as

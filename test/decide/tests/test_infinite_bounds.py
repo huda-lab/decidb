@@ -193,7 +193,7 @@ def test_vacuous_minmax_bound_drops(decidb_cli, oracle_solver):
 
     Dropping has to leave the rest of the model alone, so the objective is compared
     against the same query without the constraint and then pinned by the oracle. The
-    PER spelling is included because the verdict is reached per group.
+    ``per`` spelling is included because the verdict is reached per group.
     """
     common = """
         SELECT l_orderkey, x
@@ -212,7 +212,7 @@ def test_vacuous_minmax_bound_drops(decidb_cli, oracle_solver):
     assert n > 1
     for extra in (" AND MIN(x) <= 1e1000::DOUBLE",
                   " AND MAX(x) >= -1e1000",
-                  " AND MIN(x) <= 1e1000::DOUBLE PER l_orderkey"):
+                  " AND per l_orderkey: min(x) by (l_orderkey) <= 1e1000::DOUBLE"):
         assert solve(extra) == (unconstrained, n), \
             f"a vacuous bound restricted the model: {extra}"
 
@@ -300,7 +300,7 @@ def test_infinite_value_inside_abs_is_named(decidb_cli):
 # ---------------------------------------------------------------------------
 #
 # Everything above writes the infinity as a literal the user typed. A bound can
-# also be *reduced from a column* — ``MIN(x) <= MAX(cap) PER g`` — and that path
+# also be *reduced from a column* — ``per g: min(x) by (g) <= max(cap) by (g)`` — and that path
 # read its input through the strict finiteness guard, so one infinite row in
 # ``cap`` refused the whole query. The two spellings describe the same bound, so
 # they get the same answer: the reducer's input is on the way to a model row's
@@ -334,7 +334,7 @@ def _by_group(rows, cols):
 @pytest.mark.per_clause
 @pytest.mark.edge_case
 def test_data_reducer_bound_agrees_with_the_literal_spelling(decidb_cli):
-    """``MAX(cap)`` folding to +inf is the same bound as a typed ``1e1000``.
+    """``max(cap) by (g)`` folding to +inf is the same bound as a typed ``1e1000``.
 
     This is the bug at its smallest: the reducer's input was extracted under the
     strict guard, so the query died at the first infinite row — before grouping,
@@ -351,10 +351,10 @@ def test_data_reducer_bound_agrees_with_the_literal_spelling(decidb_cli):
         )
         SELECT g, x FROM data
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= {bound} PER g
+        SUCH THAT x >= 0 AND x <= 6 AND per g: min(x) by (g) <= {bound}
         MAXIMIZE SUM(x)
     """
-    reduced = _by_group(*decidb_cli.execute(data.format(bound="MAX(cap)")))
+    reduced = _by_group(*decidb_cli.execute(data.format(bound="max(cap) by (g)")))
     literal = _by_group(*decidb_cli.execute(data.format(bound="1e1000::DOUBLE")))
     assert reduced == literal, \
         f"data reducer and literal disagree: {reduced} vs {literal}"
@@ -378,7 +378,7 @@ def test_data_reducer_bound_is_classified_per_group(decidb_cli, oracle_solver):
     constraints rather than a Big-M of our own.
     """
     mixed = _by_group(*decidb_cli.execute(
-        _MIXED.format(extra=" AND MIN(x) <= MAX(cap) PER g")))
+        _MIXED.format(extra=" AND per g: min(x) by (g) <= max(cap) by (g)")))
     unconstrained = _by_group(*decidb_cli.execute(_MIXED.format(extra="")))
 
     # g=0 reduces to MAX(inf, 2.0) = +inf: vacuous, so it matches the model with
@@ -415,13 +415,13 @@ def test_data_reducer_bound_is_classified_per_group(decidb_cli, oracle_solver):
 @pytest.mark.when_constraint
 @pytest.mark.edge_case
 def test_data_reducer_ignores_an_infinity_it_never_reads(decidb_cli):
-    """A row the reducer's own ``WHEN`` excludes cannot poison the bound.
+    """A row the reducer's own ``when`` excludes cannot poison the bound.
 
     The guard ran during extraction, ahead of the ``WHEN`` mask and the
     relation-qualified dedup, so it judged rows that go on to contribute to
     nothing. Here the only infinite ``cap`` sits in a ``WHEN``-false row: the
-    bound for g=0 is ``MAX(2.0) = 2.0``, and the excluded row is not part of the
-    ``MIN(x)`` disjunction either, so it floats to 6.
+    bound for g=0 is ``MAX(2.0) = 2.0``, which one row of the group meets while the
+    other floats to 6.
     """
     rows, cols = decidb_cli.execute("""
         WITH data AS (
@@ -432,7 +432,7 @@ def test_data_reducer_ignores_an_infinity_it_never_reads(decidb_cli):
         )
         SELECT g, x FROM data
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) WHEN ok PER g
+        SUCH THAT x >= 0 AND x <= 6 AND per g: min(x) by (g) <= max(when ok: cap) by (g)
         MAXIMIZE SUM(x)
     """)
     assert _by_group(rows, cols) == {0: [2, 6], 1: [3, 6]}
@@ -460,7 +460,7 @@ def test_data_reducer_unreachable_bound_is_infeasible(decidb_cli):
         )
         SELECT g, x FROM data
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) PER g
+        SUCH THAT x >= 0 AND x <= 6 AND per g: min(x) by (g) <= max(cap) by (g)
         MAXIMIZE SUM(x)
     """, match=_UNREACHABLE)
 
@@ -486,7 +486,7 @@ def test_nan_from_reducer_arithmetic_is_still_rejected(decidb_cli):
         )
         SELECT g, x FROM data
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 6 AND MIN(x) <= MAX(cap) + MIN(cap) PER g
+        SUCH THAT x >= 0 AND x <= 6 AND per g: min(x) by (g) <= max(cap) by (g) + min(cap) by (g)
         MAXIMIZE SUM(x)
     """, match=r"NaN")
 

@@ -235,11 +235,32 @@ the rest of the engine are unchanged. `BuildElasticModel(base, slack_scope)`:
 
 - **query** — one clause-level edit with `group` and `row` NULL. A data RHS → a
   `virtual_offset` LOOSEN (`MakeVirtualOffsetEdit`:
-  `x <= col + delta` / `>=` → `col - delta`, where `col` is `ConstraintProvenance::rhs_label`,
+  `x <= col + delta` / `>=` → `col - delta`, `=` by its signed slack, a strict `<` / `>`
+  keeping its operator, where `col` is `ConstraintProvenance::rhs_label`,
   the RHS column name carried from the binder — fall back to the numeric representative RHS
   when absent). Any other literal knob → `source_literal`.
 - **expanded** — a data RHS → `expanded_row` per conflicting row; a PER-grouped literal →
   `expanded_group` per group (keeping the group key); an ungrouped literal → `source_literal`.
+  A clause written with the scope spellings over `by` groups reports each group's row once
+  per class it stands for (`ConstraintProvenance::class_set` → `SolverModel::class_sets`,
+  D28; `FanOutByClass` in `decide_diagnostic_render.cpp`, which the elastic readback and
+  the unreachable-bound collector both read): per value of its `per` key
+  (`expanded_group`, the value in `group`), or per kept row when it has no `per` key
+  (`expanded_row`, the row in `row`); `per ()` (a `WHOLE_CLAUSE` class set) is one finding. The
+  hard MIN/MAX bound row, the easy MIN/MAX's member rows and a composed clause's row carry
+  their group's classes too. A row that carries classes folds within its group in both
+  scopes (`folds()`), so an easy MIN/MAX's members, bound by their group's tightest
+  value, share one slack and the group's bound moves once. A per-row row of a scoped
+  clause with no `per` key keeps its own slack in the expanded scope whatever its shape
+  (`per_kept_row`), and reports at its data row (`data_row`); when canonicalization
+  moved a term across its comparison, the finding offsets the bound as written. A scoped
+  bound the optimizer folded into a column box is not re-emitted per column
+  (`EmitAbsorbedUserBoundRows` skips `UserBoundSpec::repair_rows_from_clause`): its clause is evaluated
+  under DIAGNOSE (`DecidePreparedModel::absorbed_constraints`) and only the repair model
+  emits its rows, one per kept row or class. An unreachable bound names its `per` key's
+  values in both scopes and its kept rows in the expanded scope only; an old spelling's
+  keeps its group. A quadratic row keeps its own slack (I2.d) and, in the expanded scope,
+  reports the classes it stands for through the same `FanOutByClass`.
 
 **Reporting contract (flat typed vocabulary, additive to I5).** Every LOOSEN finding carries
 `edit_source ∈ {source_literal, virtual_offset, expanded_row, expanded_group}`. The

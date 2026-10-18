@@ -22,7 +22,7 @@ def test_query_wide_decision_beside_data_reducer(decidb_cli):
     rows, cols = decidb_cli.execute("""
         SELECT id, p, s
         FROM (VALUES (1, 1), (2, 2), (3, 3)) t(id, p)
-        DECIDE scalar s(INT)
+        DECIDE per (): s(INT)
         SUCH THAT SUM(p) + s <= 10 AND s <= 10
         MAXIMIZE s
     """)
@@ -35,12 +35,12 @@ def test_query_wide_decision_beside_data_reducer(decidb_cli):
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_query_wide_decision_beside_per_data_reducer(decidb_cli):
-    """The same scalar participates in every PER group's reduced bound."""
+    """The same query-wide decision participates in every per class's reduced bound."""
     rows, cols = decidb_cli.execute("""
         SELECT id, grp, p, s
         FROM (VALUES (1, 'a', 1), (2, 'a', 2), (3, 'b', 3)) t(id, grp, p)
-        DECIDE scalar s(INT)
-        SUCH THAT SUM(p) + s <= 10 PER grp AND s <= 10
+        DECIDE per (): s(INT)
+        SUCH THAT per grp: sum(p) by (grp) + s <= 10 AND s <= 10
         MAXIMIZE s
     """)
     si = cols.index("s")
@@ -69,6 +69,7 @@ def test_row_scoped_decision_inside_reducer_remains_legal(decidb_cli):
 @pytest.mark.error
 def test_row_scoped_decision_beside_data_reducer_rejected(decidb_cli):
     """``SUM(p) + x`` is neither a per-row nor a homogeneous aggregate row."""
+    # old spelling until item 7
     decidb_cli.assert_error("""
         SELECT id, p, x
         FROM (VALUES (1, 1), (2, 2), (3, 3)) t(id, p)
@@ -85,6 +86,7 @@ def test_row_scoped_decision_beside_data_reducer_rejected(decidb_cli):
 @pytest.mark.error
 def test_entity_scoped_decision_beside_global_reducer_rejected(decidb_cli):
     """An entity decision is not one value for a reducer over many entities."""
+    # old spelling until item 7
     decidb_cli.assert_error("""
         SELECT c.c_custkey, n.n_nationkey, y
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
@@ -101,6 +103,7 @@ def test_entity_scoped_decision_beside_global_reducer_rejected(decidb_cli):
 @pytest.mark.error
 def test_row_varying_coefficient_on_scalar_beside_reducer_rejected(decidb_cli):
     """A scalar decision is not query-wide once multiplied by a row column."""
+    # old spelling until item 7
     decidb_cli.assert_error("""
         SELECT id, p, s
         FROM (VALUES (1, 1), (2, 2), (3, 3)) t(id, p)
@@ -120,6 +123,7 @@ def test_data_only_reducer_cannot_make_per_row_constraint_eligible_for_per(decid
     The existing PER error is the user-facing contract.  This pins the final
     canonical classification rather than the removed parsed-shape gate.
     """
+    # old spelling until item 7
     decidb_cli.assert_error("""
         SELECT id, grp, p, x
         FROM (VALUES (1, 'a', 1), (2, 'a', 2), (3, 'b', 3)) t(id, grp, p)

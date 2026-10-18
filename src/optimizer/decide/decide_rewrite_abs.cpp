@@ -277,8 +277,8 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	}
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceAbs(objective, decide, abs_pairs, /*in_objective=*/true, string(), decide.scoped_objective,
-		                  nullptr);
+		FindAndReplaceAbs(objective, decide, abs_pairs, /*in_objective=*/true, OBJECTIVE_ROW_TAG,
+		                  decide.scoped_objective, nullptr);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 
@@ -325,6 +325,15 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 
 		bool needs_bigm = pair.needs_bigm ||
 		                  (pair.in_objective && decide.decide_sense == DecideSense::MAXIMIZE);
+		// The account says how the auxiliary is pinned: on the sound direction solver
+		// pressure does it; otherwise the lowering arm switches the envelope with a sign
+		// indicator and the native arm states the absolute value outright.
+		using Kind = LogicalDecide::RewriteAccount::Kind;
+		AddRewriteAccount(decide, pair.source_alias,
+		                  !needs_bigm                        ? Kind::ABS_AUXILIARY
+		                  : decide.use_native_constructs.abs ? Kind::ABS_AUXILIARY_NATIVE
+		                                                     : Kind::ABS_AUXILIARY_SIGN_INDICATOR,
+		                  pair.label);
 		if (needs_bigm) {
 			// The sign indicator exists to switch the Big-M upper envelope, and the
 			// native arm emits no Big-M: it states `aux = |t|` outright. So allocate y
@@ -338,7 +347,9 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			// decision: the arm is known at the moment the variable would be allocated.
 			idx_t y_idx = DConstants::INVALID_INDEX;
 			if (!decide.use_native_constructs.abs) {
-				y_idx = AddAuxiliaryDecision(decide, "__abs_y_" + to_string(pi) + "__", LogicalType::BOOLEAN, true);
+				y_idx = AddAuxiliaryDecision(decide, "__abs_y_" + to_string(pi) + "__", LogicalType::BOOLEAN, true,
+				                             DecideVarScopeInfo::Row(),
+				                             "(" + RenderForPlan(*pair.inner_expr, decide, pair.scoped) + " >= 0)");
 			}
 
 			// Tag C1 and C2 so the linearizer can find them at finalization. Keyed by the
@@ -387,10 +398,11 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				LogicalType aux_type =
 				    inner_is_integer ? LogicalType::INTEGER : LogicalType::DOUBLE;
 
-				// F6: a diagnosis names the auxiliary by the user's ABS(inner).
-				idx_t aux_idx =
-				    AddAuxiliaryDecision(decide, "__abs_aux_" + to_string(abs_pairs.size()) + "__", aux_type, false,
-				                         DecideVarScopeInfo::Row(), "ABS(" + func.children[0]->ToString() + ")");
+				// F6: a diagnosis, and a plan, name the auxiliary by the user's ABS(inner).
+				string label =
+				    (scope.scoped ? "abs(" : "ABS(") + RenderForPlan(*func.children[0], decide, scope.scoped) + ")";
+				idx_t aux_idx = AddAuxiliaryDecision(decide, "__abs_aux_" + to_string(abs_pairs.size()) + "__", aux_type,
+				                                     false, DecideVarScopeInfo::Row(), label);
 
 				// Read the Big-M marker set by TagAbsConstraintsForBigM. Tag is
 				// set on the BoundFunctionExpression alias before the rewrite.
@@ -400,7 +412,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 				// Stash the bound inner expression for constraint generation
 				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), in_objective, clause_alias, needs_bigm,
-				                     scope.scoped, scope.when ? scope.when->Copy() : nullptr});
+				                     scope.scoped, scope.when ? scope.when->Copy() : nullptr, std::move(label)});
 
 				// Replace ABS(inner) with aux var reference
 				expr = MakeDecisionRef(decide, aux_idx);

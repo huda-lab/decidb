@@ -201,8 +201,8 @@ once, and the comparison is then one row per class. Deck examples 1, 5 and 8 run
   shape. `BuildSolverInput` frees the helper's floor before the rigid box is captured. A
   refusal names a helper by its reducer.
 - **Messages.** DIAGNOSE names the user's clause and never a helper or a definition row
-  (structural). EXPLAIN shows a helper as `__value_<n>__` in its solver-row layer, as it
-  shows an ABS auxiliary (item 6 labels it).
+  (structural). EXPLAIN names a helper by its reducer and says it became a helper
+  decision (item 6).
 - Tests: `test/decide/tests/test_scope_value_rewrite.py` (C7: the shapes, MIN/MAX
   sides, strict and `<>`, AVG, inner `when`/`per`, NULL groups, ABS/POWER over a helper,
   linear model size, the unbounded-member refusal on HiGHS against the native answer,
@@ -218,3 +218,86 @@ once, and the comparison is then one row per class. Deck examples 1, 5 and 8 run
   The 16 refusal
   cases of `test_scope_reducer_by.py` that item 5 lifted moved to the new suite as
   answers (D25).
+
+## Item 6 — the new spellings everywhere
+
+Shipped 2026-10-18 under D26–D29 of [`todo.md`](todo.md) §3. EXPLAIN and DIAGNOSE speak
+the scope spellings, and the tests, the golden corpus and the benchmarks are written in
+them; the old spellings still parse and keep their old echo until item 7 removes them
+(D26). What the user sees: `syntax_reference.md` §8.1, §9, §10.
+
+- **EXPLAIN** (`03_logical_plan/done.md`, `05_optimizer/done.md`). Every renderer takes a
+  `DecideSourceNames` that carries the auxiliary labels, so a decision column the
+  optimizer added prints as what it stands for — `abs(e)`, `(e >= 0)`, `(b * x)`,
+  `(x = v)`, `(e <> 0)`, `sum(e) by (g)` — in both plans, a later rewrite's label
+  included (D27). Each rewrite records a fact, `LogicalDecide::RewriteAccount` (subject
+  and `Kind`, under its clause or the objective), which `RenderDecideRewriteAccount` words
+  once: "becomes an auxiliary variable [with a sign indicator | stated to the solver as an
+  absolute value | linearized by McCormick rows]", "one indicator per value / per row",
+  "a helper decision [per group]", "an extremum column [per group] [pinned by indicator
+  rows]", "two conditional rows with an indicator", "a sum divided by its row count"
+  (AVG), "a sum of absolute values / of squares", "a maximum of absolute values" (`norm`),
+  "a bound on each member" (a MIN/MAX in its cheap direction); EXPLAIN prints them under
+  the clause before its rows, and under the objective with the rows its rewrites added
+  for it (`OBJECTIVE_ROW_TAG`). A row that repeats its clause is left out; the hard
+  MIN/MAX carrier prints as the reducer it marks; a MIN/MAX or composed objective prints
+  its accounts and no carrier row, an AVG objective its sum under its account; an
+  automatic L0 bound prints as `M`; the two-level objective's rewritten row reads
+  `when c per k: inner(e) by (k)`, its key as written (`RenderDecidePerKey`); under a
+  scope spelling functions print lower-case and a column is quoted where SQL needs it
+  (`"order"`, `"per"`); a scoped `IN` and a clause whose spelling shows nowhere else keep
+  `when c per K:` / `per row:` in front; `norm(e, 'inf')` keeps its quotes. Parentheses
+  follow DuckDB's precedence in every echo: `-(-x)`, `x * (cap % 7)`, `(a OR b) AND c`,
+  `a ** (b ** c)`.
+- **DIAGNOSE** (`07_query_diagnostics/infeasible/done.md`, `08_execution/done.md` §4a,
+  `06_model_formulation/done.md`). The `group` column holds the `per` key value (D28, ANR
+  deck p. 16–17 and 110): the canonicalizer keeps the `per K:` wrapper over the aggregate
+  shape, the linear form reads it as `DecideConstraint::PerKeyRole` (`NAMES_CLASSES`) with
+  the class key, and under DIAGNOSE execution records the classes each `by` group's row
+  stands for (`CollectGroupClasses` → `SolverInput::class_sets`, referenced by
+  `EvaluatedConstraint::group_class_set` and `RawConstraint::class_set`, carried to
+  `ConstraintProvenance::class_set`). In the expanded slack scope `FanOutByClass` reports
+  the group once per class — `expanded_group` with the key value, or `expanded_row` per
+  kept row when the clause has no `per` key — for SUM/AVG rows, hard and easy MIN/MAX,
+  composed clauses and helper-path clauses alike (an easy MIN/MAX's members fold into one
+  slack per group); a per-row row of a clause with no `per` key keeps its own slack and
+  reports at its data row (`ConstraintProvenance::data_row`, `per_kept_row`). `per ()`
+  (a `WHOLE_CLAUSE` class set) and the query scope report once. A scoped bound the optimizer
+  folds into a column box (`x >= 18`, an ABS pin, a keyed decision's bound) reaches the
+  repair model through its own clause (`DecidePreparedModel::absorbed_constraints`,
+  evaluated under DIAGNOSE only), so it reports per class too; such a bound's strict
+  `<`/`>` steps onto the lattice (`x > 2.5` is `x >= 3`). A kept row's finding over a
+  canonicalized bound offsets the bound as written (`x >= 0.5 * sum(x) by (g) + 20 - 20`),
+  a strict bound keeping its operator and an `=` moving by its signed slack. A quadratic
+  row keeps its own slack (I2.d) and reports its classes in the expanded scope. A composed
+  clause takes its repair id after every other clause's, so a row formulation drops (a
+  `<>`) never lands it on another clause's slack. An unreachable bound names the `per`
+  key's values in either scope, the kept rows in the expanded scope only. The unbounded
+  remedy is written `when region = 'B': buy <= <cap>`, the column as the clause names it
+  (`t.depot` for a key column) and the value a SQL string. A HiGHS refusal quotes a
+  scoped clause with its scope in front. An outer `avg` in the two-level objective is
+  refused (the nested objective summed it; logged for the old spelling in
+  `06_issues/bugs/todo.md`).
+- **Conversion.** 325 queries in 58 pytest files, the golden corpus (identical dumps and
+  results on both solvers; entries 62, 66 and 94 stay old: `COUNT(*) PER g`, a bound-side
+  `WHEN` with a row-varying bound, `<>` with a varying bound) and benchmarks p4, q1, q4,
+  q6, q8. 88 tests keep the old spelling above the marker `# old spelling until item 7`:
+  they pin NULL keys excluded, a silent empty `WHEN`, the tightest bound, D23's bare-form
+  refusal, an old message, or compare the two spellings (todo §9a). The C++ serialization
+  matrix, the diagnostic-engine fixtures and `test_scope_parser.test`'s "old spellings
+  are unchanged" block cover the old spellings on purpose and go with item 7.
+- Tests: `test/decide/tests/test_scope_explain_diagnose.py` (accounts and labels per
+  rewrite kind -- AVG, `norm` 1/2/inf/0, easy and hard MIN/MAX, `=`, product, `IN`,
+  `<>`, helpers -- stacked rewrites, the objective's accounts and rows, the L0 `M`,
+  lower-case functions, the two-level objective's layers, D26's old echo, a scoped `IN`
+  and `per row:` kept, the outer-avg refusal; DIAGNOSE per class for a finer `per` key,
+  an equal one, no key, a hard MIN/MAX, an easy MIN/MAX with a literal and a group bound,
+  a composed clause, a `when` in front, `per ()` and its `=`, the query scope, the
+  infinity norm's echo pasted back, lower-case functions, a bound folded into a column
+  box -- ABS pin, `per row:`, keyed decision --, a kept row's offset written bound and its
+  strict and `=` forms, unreachable bounds in both scopes, a composed clause's own slack,
+  quadratic classes, the remedy's key column, a `per row:` row and a two-level key in
+  EXPLAIN, the HiGHS refusal's scope), `test_scope_generation.py` (a fractional strict
+  bound), `test_query_diagnostics_relation.py` (`TestComposedClauseRepairIdentity`),
+  the converted EXPLAIN and diagnostics pins, `test_decidb_diagnostic_engines.cpp`'s
+  remedy pin.

@@ -104,14 +104,14 @@ def test_abs_objective_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """MINIMIZE SUM(ABS(new_qty - l_quantity)) WHEN l_returnflag = 'R'."""
+    """MINIMIZE when l_returnflag = 'R': sum(abs(new_qty - l_quantity))."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, new_qty
         FROM lineitem
         WHERE l_orderkey <= 5
         DECIDE new_qty(REAL)
         SUCH THAT SUM(new_qty) = 100
-        MINIMIZE SUM(ABS(new_qty - l_quantity)) WHEN l_returnflag = 'R'
+        MINIMIZE when l_returnflag = 'R': sum(abs(new_qty - l_quantity))
     """
     t0 = time.perf_counter()
     decidb_result, decidb_cols = decidb_cli.execute(sql)
@@ -180,13 +180,13 @@ def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_abs_objective_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """MINIMIZE SUM(ABS(new_qty - l_quantity)) with PER l_orderkey constraint."""
+    """MINIMIZE SUM(ABS(new_qty - l_quantity)) with a per l_orderkey constraint."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
         FROM lineitem
         WHERE l_orderkey <= 5
         DECIDE new_qty(REAL)
-        SUCH THAT SUM(new_qty) = 20 PER l_orderkey
+        SUCH THAT per l_orderkey: sum(new_qty) by (l_orderkey) = 20
         MINIMIZE SUM(ABS(new_qty - l_quantity))
     """
     t0 = time.perf_counter()
@@ -414,7 +414,7 @@ def test_abs_constraint_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """SUM(ABS(new_qty - l_quantity)) <= 30 WHEN l_returnflag = 'R'.
+    """when l_returnflag = 'R': sum(abs(new_qty - l_quantity)) <= 30.
 
     Exercises WHEN mask propagation to ABS-linearization auxiliaries in an
     aggregate constraint. The d_i auxiliaries exist for all rows (their linking
@@ -429,7 +429,7 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
         WHERE l_orderkey <= 5
         DECIDE new_qty(REAL)
         SUCH THAT new_qty <= 60
-            AND SUM(ABS(new_qty - l_quantity)) <= 30 WHEN l_returnflag = 'R'
+            AND when l_returnflag = 'R': sum(abs(new_qty - l_quantity)) <= 30
         MAXIMIZE SUM(new_qty * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -1301,7 +1301,7 @@ def _pin_abs_aux(oracle_solver, xname, dname, yname, target, two_m, tag):
 @pytest.mark.correctness
 def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
                                                     oracle_solver, perf_tracker):
-    """`SUM(ABS(x - l_quantity)) >= K WHEN l_linenumber <= 2`.
+    """`when l_linenumber <= 2: sum(abs(x - l_quantity)) >= K`.
 
     The hard direction needs each `d_i` pinned by the sign-indicator Big-M, and
     that pinning is per-row and unconditional; WHEN only decides which `d_i`
@@ -1327,7 +1327,7 @@ def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
         FROM lineitem WHERE l_orderkey <= 3
         DECIDE x(REAL)
         SUCH THAT x <= {ub}
-            AND SUM(ABS(x - l_quantity)) >= {k} WHEN l_linenumber <= 2
+            AND when l_linenumber <= 2: sum(abs(x - l_quantity)) >= {k}
         MINIMIZE SUM(x)
     """
     t0 = time.perf_counter()
@@ -1382,7 +1382,7 @@ def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
 @pytest.mark.correctness
 def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver,
                                                    perf_tracker):
-    """`SUM(ABS(x - target)) >= 50 PER grp`.
+    """`per grp: sum(abs(x - target)) by (grp) >= 50`.
 
     Each group carries its own hard lower bound over its own pinned auxiliaries.
     At `x = 0` group A's dispersion is 25 and group B's is 45, so *both* groups
@@ -1405,7 +1405,7 @@ def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver,
         SELECT id, grp, target, x
         FROM data
         DECIDE x(REAL)
-        SUCH THAT x <= {ub} AND SUM(ABS(x - target)) >= {k} PER grp
+        SUCH THAT x <= {ub} AND per grp: sum(abs(x - target)) by (grp) >= {k}
         MINIMIZE SUM(x)
     """
     t0 = time.perf_counter()

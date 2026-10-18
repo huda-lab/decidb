@@ -4,8 +4,8 @@
 SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_returnflag, keep
 FROM lineitem
 DECIDE keep(BOOL)
-SUCH THAT SUM(keep) >= 2 PER l_returnflag
-    AND SUM(keep * l_quantity) <= ${Q4_QTY_CAP} PER l_returnflag
-    AND MAX(keep * l_quantity) <= 45
-    AND SUM(keep * l_extendedprice) + MAX(keep * l_extendedprice) <= 50000000
-MINIMIZE MAX(SUM(keep * l_extendedprice)) PER l_returnflag;
+SUCH THAT per l_returnflag: sum(keep) by (l_returnflag) >= 2
+    AND per l_returnflag: sum(keep * l_quantity) by (l_returnflag) <= ${Q4_QTY_CAP}
+    AND per (): max(keep * l_quantity) <= 45
+    AND per (): sum(keep * l_extendedprice) + max(keep * l_extendedprice) <= 50000000
+MINIMIZE max(per l_returnflag: sum(keep * l_extendedprice) by (l_returnflag));

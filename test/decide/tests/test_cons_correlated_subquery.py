@@ -228,7 +228,7 @@ def test_correlated_subquery_objective(decidb_cli, duckdb_conn, oracle_solver, p
 def test_correlated_subquery_when_composition(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN filter combined with correlated subquery on per-row bound.
 
-    x <= COALESCE((SELECT 1 FROM supplier ...), 0) WHEN ps_supplycost < 500
+    when ps_supplycost < 500: x <= COALESCE((SELECT 1 FROM supplier ...), 0)
     Only rows with supplycost < 500 get the correlated eligibility check;
     rows with supplycost >= 500 are unconstrained (BOOLEAN caps at 1).
     """
@@ -237,10 +237,9 @@ def test_correlated_subquery_when_composition(decidb_cli, duckdb_conn, oracle_so
         FROM partsupp
         WHERE ps_partkey < 10
         DECIDE x(BOOL)
-        SUCH THAT x <= COALESCE(
+        SUCH THAT when ps_supplycost < 500: x <= COALESCE(
                     (SELECT 1 FROM supplier
                      WHERE s_suppkey = ps_suppkey AND s_acctbal > 0), 0)
-                  WHEN ps_supplycost < 500
             AND SUM(x * ps_supplycost) <= 2000
         MAXIMIZE SUM(x)
     """
@@ -463,6 +462,8 @@ def test_correlated_subquery_aggregate_rhs_tightest_bound(
     The subquery yields one p_size per row. Every tuple imposes
     `SUM(x * cost) <= p_size_i`, so the binding one is the smallest.
     """
+    # old spelling until item 7
+    # (a row-varying bound collapses to the tightest today: old-only semantics)
     sql = """
         SELECT ps_partkey, ps_suppkey, x
         FROM partsupp
@@ -528,6 +529,8 @@ def test_correlated_subquery_aggregate_per_rhs_tightest_per_group(
     This is what discriminates group-aware reduction from a single global MIN: each
     supplier's cap is the smallest p_size among that supplier's own rows.
     """
+    # old spelling until item 7
+    # (a bound that varies within a group collapses to the tightest today: old-only semantics)
     sql = """
         SELECT ps_partkey, ps_suppkey, x
         FROM partsupp
@@ -602,6 +605,8 @@ def test_correlated_subquery_rhs_ignores_aggregate_local_when(
     same shape (``<= MIN(col)``) already took the wider row set, so this pins the two
     halves of the RHS to one answer.
     """
+    # old spelling until item 7
+    # (an aggregate-local WHEN beside a row-varying bound: old-only semantics)
     sql = """
         SELECT ps_partkey, ps_suppkey, x
         FROM partsupp

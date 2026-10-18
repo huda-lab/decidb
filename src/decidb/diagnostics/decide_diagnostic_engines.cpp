@@ -274,8 +274,19 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	//     virtual offset `x <= col + delta`; in expanded mode its rows stay independent so
 	//     the readback exposes the per-row profile.
 	// Rows without a clause id always stay independent.
+	//   - A row that stands for its group's classes (D28: an easy MIN/MAX's member rows,
+	//     bound by the group's tightest value): folds within its group in both modes, so
+	//     the group's bound moves once and the readback reports it per class.
+	//   - A row of a scoped clause with no `per` key (per row): each kept row is a class
+	//     of its own (D28), so in expanded mode it keeps its own slack whatever its shape.
 	auto folds = [&](const ConstraintProvenance &p) {
 		if (p.repair_group_id == DConstants::INVALID_INDEX) {
+			return false;
+		}
+		if (p.class_set != DConstants::INVALID_INDEX) {
+			return true;
+		}
+		if (p.per_kept_row && !fold_data) {
 			return false;
 		}
 		if (p.shape == ElasticShape::SHARED_SCALAR) {
@@ -298,7 +309,12 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 		    !IsRelaxableForElastic(row.provenance.kind) || !folds(row.provenance)) {
 			continue;
 		}
-		blocks[block_key(row.provenance)].push_back(r);
+		auto &block = blocks[block_key(row.provenance)];
+		// Rows that share a slack are one clause's: a repair id two clauses hold welds them
+		// into one edit.
+		D_ASSERT(block.empty() ||
+		         elastic.constraints[block.front()].provenance.source_clause_id == row.provenance.source_clause_id);
+		block.push_back(r);
 	}
 
 	// Emit in row order: a shared block is emitted once, at its first row (its rows
@@ -447,7 +463,16 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			ClauseEdit e = MakeLoosenEdit(display_provenance, SourceAwareQuadraticLhs(orig_model, orig, columns),
 			                              orig.rhs, sl.sense, amount);
 			e.edit_source = "source_literal";
-			edits.push_back(std::move(e));
+			// A quadratic row never shares a slack (I2.d), so it reads back on its own, its
+			// group naming it in either scope; in the expanded scope a scoped clause's row
+			// reports the classes it stands for instead (D28).
+			if (!expanded) {
+				edits.push_back(std::move(e));
+				continue;
+			}
+			for (auto &finding : FanOutByClass(std::move(e), orig.provenance, orig_model, /*expanded=*/true)) {
+				edits.push_back(std::move(finding));
+			}
 			continue;
 		}
 		const ModelConstraint &orig = orig_model.constraints[sl.rows.front()];
@@ -460,18 +485,24 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		bool data_rhs = prov.shape == ElasticShape::PER_ROW_DATA &&
 		                prov.repair_group_id != DConstants::INVALID_INDEX;
 		if (expanded) {
-			// Only an unreduced per-row constraint expands row by row. A reduced
-			// constraint emits one elastic row per *group*, so a data-derived bound on
-			// one of those is a per-group knob, not a per-row profile entry — routing
-			// it here would relabel every group as a row and drop the group key.
-			if (data_rhs && !prov.is_aggregate) {
+			// Only a row that stands for its own data row expands row by row: an unreduced
+			// clause's data-derived bound, or any row of a scoped clause with no `per` key.
+			// A reduced constraint emits one elastic row per *group*, and a row that
+			// stands for classes (a `per K:` clause's, an easy MIN/MAX member) carries
+			// them, so a bound on one of those is a per-group knob, not a per-row profile
+			// entry -- routing it here would relabel it as a data row.
+			if (((data_rhs && !prov.is_aggregate) || prov.per_kept_row) &&
+			    prov.class_set == DConstants::INVALID_INDEX) {
 				// The independent per-row slack is that row's exact overshoot, one profile
-				// entry. A debug view, not a directly pasteable edit.
-				ClauseEdit e = MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount);
+				// entry, quoted against that row's bound -- or offsetting the written bound
+				// when canonicalization moved a term across it, as below.
+				ClauseEdit e =
+				    written_rhs.empty()
+				        ? MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount)
+				        : MakeVirtualOffsetEdit(display_provenance, display_lhs, written_rhs, sl.sense, amount);
 				e.edit_source = "expanded_row";
-				// The emitted row's own identity, so an `expanded` profile can be read
-				// back row by row. `group_key` carries the row id for a per-row clause.
-				e.row = prov.group_key;
+				e.group.clear();
+				e.row = prov.data_row;
 				edits.push_back(std::move(e));
 				continue;
 			}
@@ -491,13 +522,20 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			} else {
 				e = MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount);
 			}
+			// An offset over the written bound is a virtual offset whichever bound it moves.
+			const char *clause_source = (data_rhs || !written_rhs.empty()) ? "virtual_offset" : "source_literal";
+			// A clause written over `by` groups reports once per class its group's row
+			// stands for (anr_language_extension.md §1, D28), `per ()` as the clause.
+			if (prov.class_set != DConstants::INVALID_INDEX) {
+				e.edit_source = clause_source;
+				for (auto &finding : FanOutByClass(std::move(e), prov, orig_model, /*expanded=*/true)) {
+					edits.push_back(std::move(finding));
+				}
+				continue;
+			}
 			// When PER-grouped this block is one group → break it out with its group
 			// key; otherwise there is nothing per-group to expose.
-			if (!prov.group_label.empty()) {
-				e.edit_source = "expanded_group";
-			} else {
-				e.edit_source = data_rhs ? "virtual_offset" : "source_literal";
-			}
+			e.edit_source = prov.group_label.empty() ? clause_source : "expanded_group";
 			edits.push_back(std::move(e));
 			continue;
 		}
@@ -986,7 +1024,7 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 	vector<ColumnProvenance> columns =
 	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux,
 	                          input.global_variable_labels);
-	auto unreachable = CollectUnreachableClauses(input.model, columns);
+	auto unreachable = CollectUnreachableClauses(input.model, columns, input.params.slack_scope == "expanded");
 	if (!unreachable.empty()) {
 		return BuildUnreachableBoundDiagnostic(unreachable);
 	}

@@ -128,19 +128,19 @@ def test_qualified_column_in_objective_only(decidb_cli, duckdb_conn):
 @pytest.mark.sql_joins
 @pytest.mark.cons_aggregate
 def test_qualified_decide_variable_with_qualified_column(decidb_cli, duckdb_conn):
-    """A table-scoped DECIDE variable and a qualified coefficient in one query.
+    """A keyed (`per n1:`) DECIDE variable and a qualified coefficient in one query.
 
     DECIDE variables are canonicalized to their unqualified name (the form
     `bind_select_node.cpp` always registers) rather than routed through
-    `column_map`, so `n1.keep` and `keep` must stay a single symbol while
-    `n1.n_nationkey` keeps its qualifier.
+    `column_map`, so `keep` must stay a single symbol while `n1.n_nationkey`
+    keeps its qualifier.
     """
     sql = """
         SELECT n1.n_nationkey, keep
         FROM nation n1 JOIN nation n2 ON n1.n_regionkey = n2.n_regionkey
         WHERE n2.n_nationkey = 1
-        DECIDE n1.keep(BOOL)
-        SUCH THAT SUM(n1.keep * n2.n_nationkey) <= 2
+        DECIDE per n1: keep(BOOL)
+        SUCH THAT SUM(keep * n2.n_nationkey) <= 2
         MAXIMIZE SUM(keep * n1.n_nationkey)
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)

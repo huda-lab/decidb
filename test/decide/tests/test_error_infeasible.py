@@ -102,6 +102,7 @@ class TestInfeasibleModels:
         self, decidb_cli, duckdb_conn, oracle_solver
     ):
         """WHEN forces ``x=0`` for every qualifying row; aggregate still demands SUM(x)>=1."""
+        # old spelling until item 7
         decidb_cli.assert_error("""
             SELECT l_orderkey, l_quantity, l_returnflag, x
             FROM lineitem WHERE l_orderkey < 10
@@ -173,6 +174,7 @@ class TestInfeasibleModels:
         would mean a different constraint), unlike `<>` (C3), which keeps every
         excluded value instead of contradicting.
         """
+        # old spelling until item 7
         decidb_cli.assert_error("""
             SELECT id, grp, x FROM (
                 VALUES (1, 'a', 500), (2, 'a', 350)

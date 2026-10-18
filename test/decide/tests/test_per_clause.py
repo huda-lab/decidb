@@ -1,8 +1,8 @@
 """Tests for the PER keyword.
 
-PER partitions constraints by group:
-    SUM(x) <= 5 PER s_nationkey
-means a separate SUM(x) <= 5 constraint for each distinct s_nationkey value.
+A per key partitions constraints by group:
+    per s_nationkey: sum(x) by (s_nationkey) <= 5
+means a separate sum(x) <= 5 constraint for each distinct s_nationkey value.
 
 Also covers:
   - PER with <> operator (Big-M disjunction per group)
@@ -28,7 +28,7 @@ def test_per_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     sql = """
         SELECT s_suppkey, s_acctbal, s_nationkey, x FROM supplier
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER s_nationkey
+        SUCH THAT per s_nationkey: sum(x) by (s_nationkey) <= 5
         MAXIMIZE SUM(x * s_acctbal)
     """
     t0 = time.perf_counter()
@@ -81,7 +81,7 @@ def test_per_with_integer_variable(
         SELECT ps_partkey, ps_suppkey, ps_availqty, ps_supplycost, x
         FROM partsupp WHERE ps_partkey < 50
         DECIDE x(INT)
-        SUCH THAT SUM(x * ps_supplycost) <= 1000 PER ps_partkey
+        SUCH THAT per ps_partkey: sum(x * ps_supplycost) by (ps_partkey) <= 1000
         MAXIMIZE SUM(x * ps_availqty)
     """
     t0 = time.perf_counter()
@@ -137,9 +137,9 @@ def test_per_combined_with_when(
                l_returnflag, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x * l_quantity) by (l_returnflag) <= 50
             AND SUM(x) <= 30
-        MAXIMIZE SUM(x * l_extendedprice) WHEN l_returnflag = 'R'
+        MAXIMIZE when l_returnflag = 'R': sum(x * l_extendedprice)
     """
     t0 = time.perf_counter()
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
@@ -207,7 +207,7 @@ def test_per_not_equal(
         SELECT l_orderkey, l_linenumber, l_returnflag, l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 3 PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) <> 3
             AND SUM(x) <= 15
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -271,6 +271,8 @@ def test_per_not_equal_varying_bound_keeps_every_exclusion(decidb_cli, oracle_so
     bound to its tightest value (as `<=`/`>=` do) would keep only `<> 3` and answer 7;
     keeping both gives 6, the next value down from the excluded ceiling.
     """
+    # old spelling until item 7
+    # (a bound that varies within a group: old-only semantics, inventory §2)
     rows, cols = decidb_cli.execute("""
         SELECT id, grp, x FROM (
             VALUES (1, 'a', 3), (2, 'a', 7)
@@ -306,6 +308,8 @@ def test_per_null_group_key(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """NULL values in PER column should be excluded from all groups."""
+    # old spelling until item 7
+    # (a NULL per key is excluded today; the new spelling makes NULL a group)
     data_sql = """
         SELECT 1 AS id, 'A' AS grp, 10.0 AS val UNION ALL
         SELECT 2, NULL, 50.0 UNION ALL
@@ -369,8 +373,8 @@ def test_per_different_grouping_columns(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 5 PER l_returnflag
-            AND SUM(x) <= 8 PER l_linestatus
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) <= 5
+            AND per l_linestatus: sum(x) by (l_linestatus) <= 8
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -442,7 +446,7 @@ def test_real_between_per_oracle(
         FROM lineitem WHERE l_orderkey < 25
         DECIDE x(REAL)
         SUCH THAT x BETWEEN 0.1 AND 2.9
-            AND SUM(x) <= 10 PER l_linestatus
+            AND per l_linestatus: sum(x) by (l_linestatus) <= 10
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()

@@ -26,6 +26,8 @@ def test_column_bound_reduces_to_tightest_per_group(decidb_cli, oracle_solver):
     'b' has one row (cap 7) so its bound is just 7. Verified against an independently
     built model carrying the same per-row conjunction, not a hand-computed MIN.
     """
+    # old spelling until item 7
+    # (a bound that varies within a group collapses to the tightest today: old-only semantics)
     rows, cols = decidb_cli.execute("""
         SELECT id, grp, x FROM (
             VALUES (1, 'a', 10), (2, 'a', 15), (3, 'b', 7)
@@ -73,6 +75,8 @@ def test_figure1_paper_query_matches_published_output(decidb_cli, oracle_solver)
     ship along T3 costs 8000 up front for at most a 900 (300 * 3) shipping saving, so
     the minimizer leaves it closed — matching the paper's published output exactly.
     """
+    # old spelling until item 7
+    # (the paper's Figure 1 verbatim; inventory §2)
     query = """
         WITH Depots(depotID, stock, opening_cost) AS (
             VALUES ('D1', 800, 12000), ('D2', 500, 8000)

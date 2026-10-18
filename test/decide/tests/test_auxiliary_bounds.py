@@ -115,7 +115,7 @@ def test_per_inner_minmax_auxiliaries_are_boxed(decidb_cli, tmp_path):
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4
-            MAXIMIZE SUM(MAX(x * c)) PER g
+            MAXIMIZE sum(per g: max(x * c) by (g))
         """,
         tmp_path / "per_inner.dump")
     aux = _assert_all_boxed(dump, 2)
@@ -132,7 +132,7 @@ def test_per_outer_minmax_over_group_values_is_boxed(decidb_cli, tmp_path):
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4
-            MAXIMIZE MAX(MAX(x * c)) PER g
+            MAXIMIZE max(per g: max(x * c) by (g))
         """,
         tmp_path / "per_outer_values.dump")
     aux = _assert_all_boxed(dump, 3)  # two z_g plus the outer w
@@ -156,7 +156,7 @@ def test_per_outer_minmax_over_group_sums_is_boxed(decidb_cli, tmp_path):
         f"""
             SELECT id, x FROM {_GROUPED_ROWS}
             DECIDE x(INT) SUCH THAT x <= 4
-            MAXIMIZE MIN(SUM(x * c)) PER g
+            MAXIMIZE min(per g: sum(x * c) by (g))
         """,
         tmp_path / "per_outer_sums.dump")
     assert _assert_all_boxed(dump, 1) == [(3, 0.0, 32.0)], \

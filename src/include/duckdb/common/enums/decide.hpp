@@ -315,6 +315,16 @@ static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 //! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
 static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";
 
+//! Tag marking a row a rewrite added for the objective (an ABS envelope, a product's
+//! corner rows, an L0 link), which no clause owns: the rewrites start the objective's
+//! walk with it as the source alias, and EXPLAIN prints such rows under the objective.
+static constexpr const char *OBJECTIVE_ROW_TAG = "__objective_row__";
+
+//! Tag on the placeholder coefficient of an automatic L0 link (`norm(e, 0)` with no
+//! bound written): stage 06 replaces it with a bound derived from the column box, so a
+//! plan prints it as `M` rather than as the 1.0 it holds until then.
+static constexpr const char *L0_AUTO_BOUND_TAG = "__l0_auto_bound__";
+
 //! Tag marking a simple `x OP const` comparison whose entire meaning the optimizer
 //! folded into the decision column's box (`LogicalDecide::absorbed_*_bounds`), so it
 //! must not also be emitted as a model row. Set on the BoundComparisonExpression.alias
@@ -325,6 +335,12 @@ static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_co
 //! this bound, so it keeps rendering. The tag moves the *decision* upstream without
 //! moving the rendering.
 static constexpr const char *ABSORBED_BOUND_TAG = "__absorbed_bound__";
+
+//! Beside ABSORBED_BOUND_TAG on a recorded bound of a clause written with the scope
+//! spellings: a repair model loosens it through the clause's own rows, one per kept row or
+//! class (DecidePreparedModel::absorbed_constraints, D28), not one knob per column. Set by
+//! DecideOptimizer::AbsorbVariableBounds with UserBoundSpec::repair_rows_from_clause.
+static constexpr const char *ABSORBED_CLAUSE_ROWS_TAG = "__absorbed_clause_rows__";
 
 //! A private aggregate marker emitted by the DECIDE binder for norm(expr, p).
 //! The marker is only a transport representation: DecideOptimizer must lower it

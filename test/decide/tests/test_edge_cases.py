@@ -276,6 +276,7 @@ def test_zero_rows_empty_input(decidb_cli, duckdb_conn, oracle_solver, perf_trac
 def test_avg_constraint_when_filters_all_rows(decidb_cli):
     """AVG(...) WHEN <cond> where no row matches — now rejected pre-solver.
     AVG(∅) is undefined (divide by zero); caught by the empty-aggregate guard."""
+    # old spelling until item 7
     sql = """
         SELECT id, val, flag, x FROM (
             VALUES (1, 10.0, 'A'),
@@ -311,6 +312,7 @@ def test_maximize_sum_max_per_with_empty_when_group(
     """
     from ._oracle_helpers import emit_hard_inner_max
 
+    # old spelling until item 7
     sql = """
         SELECT id, grp, val, flag, x FROM (
             VALUES (1, 'A', 10.0, true),
@@ -425,6 +427,7 @@ def test_min_geq_constraint_when_empty(decidb_cli):
     project decision to "reject all cases of an empty set," even the easy
     direction (previously trivially-satisfied) now raises.
     """
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -442,6 +445,7 @@ def test_min_geq_constraint_when_empty(decidb_cli):
 @pytest.mark.error_infeasible
 def test_min_leq_constraint_when_empty(decidb_cli):
     """MIN(...) <= K WHEN <never> — hard case, now rejected pre-solver."""
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -459,6 +463,7 @@ def test_min_leq_constraint_when_empty(decidb_cli):
 @pytest.mark.error_infeasible
 def test_max_leq_constraint_when_empty(decidb_cli):
     """MAX(...) <= K WHEN <never> — easy case, now rejected pre-solver."""
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -476,6 +481,7 @@ def test_max_leq_constraint_when_empty(decidb_cli):
 @pytest.mark.error_infeasible
 def test_max_geq_constraint_when_empty(decidb_cli):
     """MAX(...) >= K WHEN <never> — hard case, now rejected pre-solver."""
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -499,6 +505,7 @@ def test_avg_per_constraint_with_empty_group(decidb_cli, duckdb_conn, oracle_sol
     :2004), and the per-group constraint should reduce to 0 <= K (trivially
     true) for that group. Group with matches enforces its AVG cap.
     """
+    # old spelling until item 7
     sql = """
         SELECT id, grp, val, flag, x FROM (
             VALUES (1, 'A', 10.0, true),
@@ -544,6 +551,7 @@ def test_maximize_min_objective_when_empty(decidb_cli):
     only by its declared upper bound. ILP semantics: MIN(∅) = +∞,
     so MAXIMIZE drives z to +∞ → unbounded → infeasibility/error.
     """
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
@@ -565,6 +573,7 @@ def test_minimize_max_objective_when_empty(decidb_cli):
     Mirror of `test_maximize_min_objective_when_empty`. MAX(∅) = −∞,
     so MINIMIZE drives z to −∞ → unbounded → infeasibility/error.
     """
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
@@ -588,6 +597,7 @@ def test_maximize_max_objective_when_empty(decidb_cli):
     indicator can satisfy SUM(y) >= 1 → the model is infeasible. Rejected
     before the solver by the empty-aggregate guard (`physical_decide.cpp`).
     """
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
@@ -613,6 +623,7 @@ def test_mixed_empty_and_populated_when_terms_constraint(decidb_cli):
     solver. Users with data-dependent WHEN predicates that might match zero
     rows must guard against that case in their query.
     """
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0, true),
@@ -632,6 +643,7 @@ def test_mixed_empty_and_populated_when_terms_constraint(decidb_cli):
 @pytest.mark.error_infeasible
 def test_mixed_empty_and_populated_when_terms_objective(decidb_cli):
     """Mirror of the constraint-side test for an objective — now rejected."""
+    # old spelling until item 7
     sql = """
         SELECT id, val, bonus, x FROM (
             VALUES (1, 10.0, 0.0, false),
@@ -658,6 +670,7 @@ def test_minimize_min_objective_when_empty(decidb_cli):
     no indicator → infeasible. Rejected before the solver by the
     empty-aggregate guard.
     """
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
@@ -689,6 +702,7 @@ def test_max_when_empty_constraint_hard(decidb_cli):
     so semantically infeasible. Rejected before the solver by the
     empty-aggregate guard.
     """
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
@@ -710,6 +724,7 @@ def test_min_when_empty_constraint_hard(decidb_cli):
     so semantically infeasible. Rejected before the solver by the
     empty-aggregate guard.
     """
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
@@ -734,6 +749,7 @@ def test_sum_plus_max_when_empty_silently_vacates_constraint(decidb_cli):
     can never be silently dropped. (The test name is kept for continuity with the
     original bug report; the behavior it pins is now the rejection.)
     """
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
@@ -753,6 +769,7 @@ def test_sum_when_empty_rejected(decidb_cli):
     """`SUM(x*val) <= K WHEN <never>` — SUM(∅) = 0 is mathematically defined
     but the "reject all empty sets" directive catches this too. Surfaces the
     likely WHEN-typo rather than silently making the constraint vacuous."""
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -772,6 +789,7 @@ def test_sum_when_empty_rejected(decidb_cli):
 def test_avg_when_empty_rejected(decidb_cli):
     """`AVG(x*val) <= K WHEN <never>` — AVG(∅) is undefined (divide by zero
     row count); rejected pre-solver."""
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0), (3, 4.0)
@@ -794,6 +812,7 @@ def test_composed_easy_min_when_empty_rejected(decidb_cli):
     the per-term auxiliary z_k for the MIN floated free (happened to coincide
     with MIN(∅) = +∞ but via the wrong mechanism). Now rejected pre-solver.
     """
+    # old spelling until item 7
     sql = """
         SELECT id, val, x FROM (
             VALUES (1, 10.0), (2, 7.0)
@@ -843,7 +862,7 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Feasibility problem (no objective) combined with PER constraints.
 
     Exercises the FEASIBILITY sense path through PER constraint generation:
-    `SUM(x) = 1 PER grp` becomes one equality per group, and the PER
+    `per grp: sum(x) by (grp) = 1` becomes one equality per group, and the per
     constraint-builder must work even when the model builder sets all
     objective coefficients to zero (DecideSense::FEASIBILITY).
 
@@ -871,7 +890,7 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         SELECT id, grp, val, x
         FROM data
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) = 1 PER grp
+        SUCH THAT per grp: sum(x) by (grp) = 1
             AND SUM(x * val) <= 35
     """
     t0 = time.perf_counter()
@@ -1145,8 +1164,8 @@ def test_five_plus_heterogeneous_constraints(
         DECIDE x(BOOL)
         SUCH THAT x <= 1
             AND SUM(x * qty) <= 12
-            AND SUM(x) >= 2 WHEN flag = 'R'
-            AND SUM(x) <= 2 PER category
+            AND when flag = 'R': sum(x) >= 2
+            AND per category: sum(x) by (category) <= 2
             AND SUM(x) <> 7
             AND SUM(x * price) BETWEEN 10 AND 60
         MAXIMIZE SUM(x * price)

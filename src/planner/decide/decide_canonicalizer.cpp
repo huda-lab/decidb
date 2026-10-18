@@ -1139,18 +1139,12 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 			result->children.push_back(IsConstraintChild(conj, i) ? CanonicalizeTreeInternal(*conj.children[i])
 			                                                     : conj.children[i]->Copy());
 		}
-		// `per K:` over a clause in the aggregate shape adds nothing to the model: its rows
+		// `per K:` over a clause in the aggregate shape adds no row to the model: its rows
 		// are one per `by` group of the kept rows, and every per-K constraint in a group
-		// differs only in its bound, which the group's tightest bound already covers once
-		// K determines it (a scope check). The wrapper goes; the checks keep what K requires.
-		if (IsPerClassWrapper(conj) && !result->children.empty()) {
-			auto &leaf = ClauseLeaf(*result->children[0]);
-			if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON &&
-			    HasDecideTag(leaf.GetAlias(), SCOPED_CLAUSE_TAG) &&
-			    ClassifyCanonicalComparison(leaf) == CanonicalConstraintClass::AGGREGATE) {
-				return std::move(result->children[0]);
-			}
-		}
+		// differs only in its bound, which the group's tightest bound covers once K
+		// determines it (a scope check). The wrapper stays all the same: it names the
+		// classes each group's row stands for, which a diagnosis reports one by one
+		// (anr_language_extension.md §1); the linear form reads it as the clause's class key.
 		return std::move(result);
 	}
 	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {

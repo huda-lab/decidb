@@ -15,7 +15,7 @@ Covers:
   - test_cast_lid_mixed_placement: reducer (LEFT) beside a scalar subquery
     (RIGHT) under a cast lid -- the shape where descent changes the pass's
     decision, not merely its reach
-  - test_cast_lid_negated_reducer: two aggregate-local WHEN reducers, one
+  - test_cast_lid_negated_reducer: two reducers with their own ``when``, one
     negated, under a cast lid
   - test_bigint_to_double_cast_lid_preserves_sql_semantics: the exactness cliff
     immediately around 2^53
@@ -90,7 +90,7 @@ def _solve_cast_relation_case(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_cast_lid_mixed_placement(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """``(SUM(x) WHEN (q > 25)) + (scalar subquery) <= 60``.
+    """``(sum(when q > 25: x)) + (scalar subquery) <= 60``.
 
     The LHS binds to ``CAST(CAST(sum(x) FILTER ... AS DECIMAL) + CAST(sub AS
     DECIMAL) AS DOUBLE)`` -- one cast lid over a two-term spine whose terms want
@@ -104,7 +104,7 @@ def test_cast_lid_mixed_placement(decidb_cli, duckdb_conn, oracle_solver, perf_t
         WHERE l_orderkey <= 5
         DECIDE x(INT)
         SUCH THAT x <= 4
-          AND (SUM(x) WHEN (l_quantity > 25))
+          AND (sum(when l_quantity > 25: x))
               + (SELECT MAX(l_quantity) FROM lineitem WHERE l_orderkey = 1) <= 60
         MAXIMIZE SUM(x)
     """
@@ -167,7 +167,7 @@ def test_cast_lid_mixed_placement(decidb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_cast_lid_negated_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """``(SUM(x) WHEN c) - (SUM(x * q) WHEN c) + 2 <= 8`` under a cast lid.
+    """``(sum(when c: x)) - (sum(when c: x * q)) + 2 <= 8`` under a cast lid.
 
     Every term is decision-bearing here, so placement does not change -- what is
     pinned is that the spine is reached at all, with the subtraction's sign
@@ -179,8 +179,8 @@ def test_cast_lid_negated_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_t
         WHERE l_orderkey <= 5
         DECIDE x(INT)
         SUCH THAT x <= 4
-          AND (SUM(x) WHEN (l_quantity > 25))
-              - (SUM(x * l_quantity) WHEN (l_quantity > 25)) + 2 <= 8
+          AND (sum(when l_quantity > 25: x))
+              - (sum(when l_quantity > 25: x * l_quantity)) + 2 <= 8
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
@@ -363,7 +363,7 @@ def test_cast_aggregate_per_bounds(decidb_cli, duckdb_conn):
             (4, 'b', 1000001::BIGINT, 2000007::DOUBLE)
         ) t(id, grp, value, lim)
         DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 3 AND SUM(x + value) <= MIN(lim) PER grp
+        SUCH THAT x >= 0 AND x <= 3 AND per grp: sum(x + value) by (grp) <= min(lim) by (grp)
         MAXIMIZE SUM(x)
     """)
     ci = {name: i for i, name in enumerate(cols)}
@@ -567,17 +567,17 @@ def test_all_explicit_decision_cast_syntax_is_rejected(
         pytest.param("""
             SELECT id, s
             FROM (VALUES (1)) t(id)
-            DECIDE scalar s(INT)
+            DECIDE per (): s(INT)
             SUCH THAT CAST(s AS DOUBLE) <= 4
             MAXIMIZE s
         """, id="query_wide"),
         pytest.param("""
             SELECT n.n_nationkey, keepN
             FROM nation n
-            DECIDE n.keepN(BOOL)
-            SUCH THAT CAST(n.keepN AS DOUBLE) <= 1
+            DECIDE per n: keepN(BOOL)
+            SUCH THAT CAST(keepN AS DOUBLE) <= 1
             MAXIMIZE SUM(keepN)
-        """, id="entity_scoped_qualified"),
+        """, id="keyed"),
     ],
 )
 @pytest.mark.error_binder

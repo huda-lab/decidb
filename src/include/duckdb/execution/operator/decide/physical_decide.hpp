@@ -131,6 +131,8 @@ public:
     //! The helper decisions of the value rewrite and the reducers they hold
     //! (LogicalDecide::reducer_value_links); PHASE 2 evaluates each one's members.
     vector<LogicalDecide::ReducerValueLink> reducer_value_links;
+    //! What each rewrite made of a clause, for EXPLAIN (LogicalDecide::rewrite_accounts).
+    vector<LogicalDecide::RewriteAccount> rewrite_accounts;
 
     // --- Absorbed variable bounds (decided by DecideOptimizer::AbsorbVariableBounds) ---
     //
@@ -309,6 +311,12 @@ private:
         struct ComposedConstraint {
             vector<ComposedMinMaxTermData> terms;
             double rhs = 0.0;
+            //! Its repair group, numbered after every clause of `constraints` and
+            //! `absorbed_constraints`, so its slack is shared with no other clause.
+            idx_t repair_group_id = DConstants::INVALID_INDEX;
+            //! The classes its one row stands for (SolverInput::class_sets), under
+            //! DIAGNOSE; INVALID_INDEX for none.
+            idx_t class_set = DConstants::INVALID_INDEX;
         };
         vector<ComposedConstraint> composed_constraints;
         //! The composed MIN/MAX *objective*'s terms, evaluated.
@@ -325,7 +333,7 @@ private:
     //! per-row coefficient, the factor peeled off a reducer, the term's WHEN mask, the
     //! constant RHS. The rows these become are emitted later, by the formulation pass.
     void EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                 ChunkExprCache &chunk_expr_cache,
+                                 ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                  const vector<EntityMapping> &entity_mappings,
                                  EvaluatedClauses &evaluated) const;
 
@@ -363,10 +371,11 @@ private:
                         const EvaluatedClauses &evaluated) const;
 
     //! The model input and column space as PHASE 3a left them — before a single Big-M or
-    //! McCormick constant was derived. Retained only under `DIAGNOSE`, so the INFEASIBLE
-    //! terminal can formulate a *second* model against the widened box a repair searches
-    //! in, instead of re-using constants that were derived against the narrower box the
-    //! solved model declares.
+    //! McCormick constant was derived — plus the scoped bounds the column box enforces
+    //! (`evaluated_absorbed_constraints`), whose rows only a repair model carries. Retained
+    //! only under `DIAGNOSE`, so the INFEASIBLE terminal can formulate a *second* model
+    //! against the widened box a repair searches in, instead of re-using constants that
+    //! were derived against the narrower box the solved model declares.
     struct ElasticFormulation {
         SolverInput input;
         VarIndexer var_indexer;

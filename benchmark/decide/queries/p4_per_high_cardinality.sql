@@ -3,5 +3,5 @@
 SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, keep
 FROM lineitem
 DECIDE keep(BOOL)
-SUCH THAT SUM(keep) = 1 PER l_orderkey
+SUCH THAT per l_orderkey: sum(keep) by (l_orderkey) = 1
 MAXIMIZE SUM(l_extendedprice * keep);

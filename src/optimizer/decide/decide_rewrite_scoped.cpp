@@ -111,22 +111,25 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 //! alias carries its `by` key and qualifier). One occurrence of a reducer in a clause is
 //! one helper, however many rows the rewrites before this one derived from that clause:
 //! an ABS splits a clause into an envelope pair, each row holding a copy of the reducer,
-//! and two helpers pinned on different sides would let the pair drift apart. Rows of
+//! and two helpers pinned on different sides would let the pair drift apart. The rows a
+//! rewrite added for the objective (OBJECTIVE_ROW_TAG) share theirs the same way. Rows of
 //! different clauses never share one: the definition carries one clause's provenance.
 struct Helpers {
 	LogicalDecide &decide;
 	vector<unique_ptr<Expression>> reducers; //!< parallel to decide.reducer_value_links
+	vector<bool> objective;                  //!< parallel: the helper serves the objective
 
-	//! The link holding `agg` for a row of the clause `source_clause_id` in `scope`, or
-	//! INVALID_INDEX.
-	idx_t Find(const BoundAggregateExpression &agg, const ClauseScope &scope, idx_t source_clause_id) const {
-		if (source_clause_id == DConstants::INVALID_INDEX) {
+	//! The link holding `agg` for a row of the clause `source_clause_id` (or of the
+	//! objective) in `scope`, or INVALID_INDEX.
+	idx_t Find(const BoundAggregateExpression &agg, const ClauseScope &scope, idx_t source_clause_id,
+	           bool objective_row) const {
+		if (source_clause_id == DConstants::INVALID_INDEX && !objective_row) {
 			return DConstants::INVALID_INDEX;
 		}
 		for (idx_t i = 0; i < reducers.size(); i++) {
 			auto &link = decide.reducer_value_links[i];
-			if (link.source_clause_id != source_clause_id || !reducers[i]->Equals(agg) ||
-			    reducers[i]->GetAlias() != agg.GetAlias()) {
+			if (link.source_clause_id != source_clause_id || objective[i] != objective_row ||
+			    !reducers[i]->Equals(agg) || reducers[i]->GetAlias() != agg.GetAlias()) {
 				continue;
 			}
 			// A clause's rows carry copies of its `when`: the same condition.
@@ -142,7 +145,7 @@ struct Helpers {
 //! Replace the reducer at `site` by its helper decision: the clause's existing one for a
 //! repeated occurrence, else a new one, recording what it holds.
 void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const ClauseScope &scope,
-                    ExpressionType comparison, idx_t source_clause_id, idx_t removal_group_id,
+                    ExpressionType comparison, idx_t source_clause_id, idx_t removal_group_id, bool objective_row,
                     const ReducerSite &site) {
 	auto &decide = helpers.decide;
 	auto &agg = (*site.slot)->Cast<BoundAggregateExpression>();
@@ -172,7 +175,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	const bool need_envelope = extremum && (push == ExtremumPush::NONE || easy);
 	const bool need_closing = extremum && (push == ExtremumPush::NONE || !easy);
 
-	idx_t link_idx = helpers.Find(agg, scope, source_clause_id);
+	idx_t link_idx = helpers.Find(agg, scope, source_clause_id, objective_row);
 	if (link_idx != DConstants::INVALID_INDEX) {
 		auto &link = decide.reducer_value_links[link_idx];
 		link.need_envelope = link.need_envelope || need_envelope;
@@ -214,13 +217,19 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 		var_scope = DecideVarScopeInfo::Entity(decide.entity_scopes.size() - 1);
 	}
 	LogicalType aux_type = agg.return_type.IsIntegral() ? LogicalType::INTEGER : LogicalType::DOUBLE;
-	// F6: a diagnosis names the helper by the reducer it holds.
+	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included.
+	auto plan_label = RenderDecideSource(agg, names, true);
 	link.value_var =
-	    AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__", aux_type, false, var_scope, label);
+	    AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__", aux_type, false, var_scope, plan_label);
+	AddRewriteAccount(decide, source_clause_id,
+	                  var_scope.IsEntity() ? LogicalDecide::RewriteAccount::Kind::VALUE_HELPER_PER_GROUP
+	                                       : LogicalDecide::RewriteAccount::Kind::VALUE_HELPER,
+	                  plan_label);
 	if (var_scope.IsEntity()) {
 		decide.entity_scopes[var_scope.entity_scope_idx].scoped_variable_indices.push_back(link.value_var);
 	}
 	helpers.reducers.push_back(agg.Copy());
+	helpers.objective.push_back(objective_row);
 	*site.slot = MakeDecisionRef(decide, link.value_var);
 	decide.reducer_value_links.push_back(std::move(link));
 }
@@ -231,9 +240,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	if (!decide.decide_constraints) {
 		return;
 	}
-	unordered_map<idx_t, string> no_relations;
-	DecideSourceNames names {decide.source_fragments, decide.entity_scopes, decide.group_keys, no_relations};
-	Helpers helpers {decide, {}};
+	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys, decide.decide_index,
+	                             decide.aux_var_expressions);
+	Helpers helpers {decide, {}, {}};
 
 	std::function<void(unique_ptr<Expression> &, ClauseScope)> rewrite = [&](unique_ptr<Expression> &expr,
 	                                                                         ClauseScope scope) {
@@ -259,8 +268,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		// Canonicalization put every decision reducer on the left.
 		vector<ReducerSite> sites;
 		CollectReducerSites(cmp.left, 1, optimizer.context, decide.decide_index, sites);
+		const bool objective_row = HasDecideTag(cmp.GetAlias(), OBJECTIVE_ROW_TAG);
 		for (auto &site : sites) {
-			ReplaceReducer(helpers, names, scope, cmp.type, source_clause_id, removal_group_id, site);
+			ReplaceReducer(helpers, names, scope, cmp.type, source_clause_id, removal_group_id, objective_row, site);
 		}
 		// One row per class from here on: the shape tag has done its work.
 		auto alias = cmp.GetAlias();

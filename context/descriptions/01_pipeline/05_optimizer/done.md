@@ -385,7 +385,24 @@ Every auxiliary decision column the passes allocate — an ABS auxiliary and its
 indicator, a McCormick product, an L0 and an `IN` indicator, a value helper — goes
 through `AddAuxiliaryDecision` (`decide_optimizer_internal.hpp`): the column reference,
 its Boolean flag, its scope (recorded only once some decision is not row-scoped, the
-convention every reader follows) and its diagnosis label (F6).
+convention every reader follows) and its label (F6). The label is the expression the
+column stands for, rendered as a plan prints it (`RenderForPlan`, which sees the labels
+of the auxiliaries earlier passes made, lower-case under a scope spelling): `abs(e)`,
+`(e >= 0)` for the sign indicator, `(b * x)`, `(e <> 0)` for an L0 indicator, `(x = v)`
+for an `IN` indicator, `sum(e) by (g)` for a helper. Each rewrite also records what it
+made of a construct as a fact (`AddRewriteAccount` → `LogicalDecide::rewrite_accounts`:
+the subject as the plan prints it and a `RewriteAccount::Kind`, under the clause id or
+the objective): the AVG scaled into a sum, the `norm` lowerings (a sum of absolute
+values, a sum of squares, a maximum of absolute values), the ABS auxiliary and how it is
+pinned (solver pressure, a sign indicator, or the native absolute value), the Boolean
+product (AND rows or McCormick), the `IN` and L0 indicators, the value helper (per group
+or query-wide), a MIN/MAX in its cheap direction (a bound on each member), the extremum
+column of a hard MIN/MAX, of a composed term and of an objective's level (pinned by
+indicator rows or not), and the `<>` disjunction. The renderer words them in one place
+(`RenderDecideRewriteAccount`, `03_logical_plan/done.md`). The passes start the
+objective's walk with `OBJECTIVE_ROW_TAG` as its source alias, which
+`CopyClauseProvenanceTags` carries onto every row they add for it, so EXPLAIN can print
+those rows under the objective.
 
 ### MIN/MAX — `RewriteMinMax`
 
@@ -527,8 +544,10 @@ absorbed**: it is conditional per row, not a domain.
 - `<=` tightens the upper bound (`min`), `>=` the lower (`max`), `=` intersects both.
   Intersecting rather than assigning is what makes `x = 5 AND x = 10` invert the box
   and be caught, instead of silently resolving to whichever was written last.
-- Strict `<` / `>` on an integer tighten by ±1, carrying the user's typed literal so
-  the diagnosis re-quotes `< 10` rather than the normalized `<= 9`.
+- Strict `<` / `>` on an integer step onto the lattice, carrying the user's typed
+  literal so the diagnosis re-quotes `< 10` rather than the normalized `<= 9`: a scoped
+  clause as every row does (`x > 2.5` is `x >= 3`, `floor(k) + 1`), an old spelling by
+  ±1 (`x >= 3.5`, a logged bug, D17).
 - Strict `<` / `>` on a REAL variable are deliberately **not** absorbed. The pass
   declines, the comparison stays a row, and `ApplyComparisonSense` in the model
   builder rejects it with a message naming the clause.
@@ -538,6 +557,18 @@ absorbed**: it is conditional per row, not a domain.
 Lower bounds start at `ABSORBED_LOWER_UNSET` (-1e30) rather than 0, so an explicit
 negative bound is honored instead of clamped up. Stage 08 resolves anything still at
 the sentinel to the default 0 floor.
+
+**A scoped bound is absorbed too, and flattened aside.** The box is how a written
+negative bound makes a decision signed, so `per row: x >= -5` must reach it like
+`x >= -5`. But a scoped clause is one knob per kept row or class in an expanded
+diagnosis (D28), which one column bound cannot say. So a recorded one (not a BOOLEAN
+restatement) is decided here, once: its spec is marked
+`UserBoundSpec::repair_rows_from_clause` and its comparison tagged
+`ABSORBED_CLAUSE_ROWS_TAG`, and the linear form flattens a tagged comparison into
+`DecidePreparedModel::absorbed_constraints` instead of skipping it, throwing an
+`InternalException` if the two counts differ (the repair model would open the column
+with nothing enforcing it). Stage 08 evaluates those under DIAGNOSE only and hands them
+to the repair model alone.
 
 **Upper bounds start at the declared type's ceiling**, not uniformly at 1e30: a
 BOOLEAN variable is seeded to `1.0`. The box is what stage 06 receives as

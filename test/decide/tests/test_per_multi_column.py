@@ -1,8 +1,8 @@
 """Tests for multi-column PER.
 
-PER (col1, col2) partitions constraints by composite groups:
-    SUM(x) <= 5 PER (l_returnflag, l_linestatus)
-emits one ``SUM(x) <= 5`` constraint per distinct composite tuple. The oracle
+A multi-column per key partitions constraints by composite groups:
+    per l_returnflag, l_linestatus: sum(x) by (l_returnflag, l_linestatus) <= 5
+emits one ``sum(x) <= 5`` constraint per distinct composite tuple. The oracle
 mirrors that by grouping the fetched rows in Python and emitting one
 ``add_constraint`` call per non-empty group.
 """
@@ -33,7 +33,7 @@ def test_multi_column_per_basic(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER (l_returnflag, l_linestatus)
+        SUCH THAT per l_returnflag, l_linestatus: sum(x) by (l_returnflag, l_linestatus) <= 3
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -81,6 +81,8 @@ def test_multi_column_per_single_column_in_parens(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """PER (col) with parens should be equivalent to PER col at the objective level."""
+    # old spelling until item 7
+    # (compares two old spellings; the new grammar refuses parentheses around a per key)
     sql_parens = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         DECIDE x(BOOL)
@@ -152,7 +154,7 @@ def test_multi_column_per_with_when_on_different_column(
                l_extendedprice, l_quantity, l_discount, x
         FROM lineitem WHERE l_orderkey < 200
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 20 WHEN l_discount > 0.05 PER (l_returnflag, l_linestatus)
+        SUCH THAT when l_discount > 0.05 per l_returnflag, l_linestatus: sum(x * l_quantity) by (l_returnflag, l_linestatus) <= 20
             AND SUM(x) <= 30
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -215,7 +217,7 @@ def test_multi_column_per_when_overlaps_per_column(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 200
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 WHEN l_returnflag = 'R' PER (l_returnflag, l_linestatus)
+        SUCH THAT when l_returnflag = 'R' per l_returnflag, l_linestatus: sum(x) by (l_returnflag, l_linestatus) <= 2
             AND SUM(x) <= 50
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -277,7 +279,7 @@ def test_multi_column_per_when_eliminates_all_in_group(
                l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 WHEN l_quantity > 40 PER (l_returnflag, l_linestatus)
+        SUCH THAT when l_quantity > 40 per l_returnflag, l_linestatus: sum(x) by (l_returnflag, l_linestatus) <= 2
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -338,7 +340,7 @@ def test_multi_column_per_more_groups(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) <= 3
         MAXIMIZE SUM(x * l_extendedprice)
     """
     sql_multi = """
@@ -346,7 +348,7 @@ def test_multi_column_per_more_groups(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 3 PER (l_returnflag, l_linestatus)
+        SUCH THAT per l_returnflag, l_linestatus: sum(x) by (l_returnflag, l_linestatus) <= 3
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -407,7 +409,7 @@ def test_multi_column_per_three_columns(
                l_extendedprice, x
         FROM lineitem WHERE l_orderkey < 200
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2 PER (l_returnflag, l_linestatus, l_shipmode)
+        SUCH THAT per l_returnflag, l_linestatus, l_shipmode: sum(x) by (l_returnflag, l_linestatus, l_shipmode) <= 2
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -461,7 +463,7 @@ def test_multi_column_per_with_integer_variable(
                l_extendedprice, l_quantity, x
         FROM lineitem WHERE l_orderkey < 100
         DECIDE x(INT)
-        SUCH THAT SUM(x * l_quantity) <= 100 PER (l_returnflag, l_linestatus)
+        SUCH THAT per l_returnflag, l_linestatus: sum(x * l_quantity) by (l_returnflag, l_linestatus) <= 100
             AND x <= 3
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -510,6 +512,8 @@ def test_unparenthesized_multi_column_per_rejected_with_hint(decidb_cli):
     """`PER a, b` (no parens) is a grammar ambiguity, so it is not a
     supported form. The comma is rejected by the parser with a hint pointing
     at the parenthesized `PER (col1, col2)` form."""
+    # old spelling until item 7
+    # (pins the old grammar's hint; inventory §2)
     sql = """
         SELECT id, x FROM (VALUES (1,'EU',2024),(2,'US',2025)) t(id, region, yr)
         DECIDE x(BOOL)
@@ -527,6 +531,8 @@ def test_unparenthesized_multi_column_per_rejected_with_hint(decidb_cli):
 def test_parenthesized_multi_column_per_is_the_supported_form(decidb_cli):
     """The parenthesized composite PER binds and solves end-to-end — the
     supported counterpart to the rejected bare form above."""
+    # old spelling until item 7
+    # (kept in the old form with its old-grammar counterpart above)
     sql = """
         SELECT id, x FROM (VALUES (1,'EU',2024),(2,'US',2025)) t(id, region, yr)
         DECIDE x(BOOL)

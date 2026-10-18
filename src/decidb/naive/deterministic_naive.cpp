@@ -55,11 +55,7 @@ string DescribeRowClause(const SolverModel &model, const ModelConstraint &constr
         return string();
     }
     const char *sense = constr.sense == '<' ? "<=" : (constr.sense == '>' ? ">=" : "=");
-    string label = source.canonical_lhs + " " + sense + " " + rhs_text;
-    if (!source.qualifier.empty()) {
-        label += " " + source.qualifier;
-    }
-    return label;
+    return AttachDecideQualifier(source.canonical_lhs + " " + sense + " " + rhs_text, source.qualifier);
 }
 
 //! The `DescribeRowClause` spelling for the unreachable-bound refusal below. The bound is

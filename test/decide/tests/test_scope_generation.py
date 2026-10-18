@@ -116,6 +116,24 @@ def test_per_row_written_follows_the_new_rules(decidb_cli, scope_solver, clause)
 
 
 @pytest.mark.correctness
+@pytest.mark.parametrize("clause, objective, value", [
+    pytest.param("per row: x > 2.5", "MINIMIZE", 3, id="greater"),
+    pytest.param("per row: x < 2.5", "MAXIMIZE", 2, id="less"),
+    pytest.param("per row: x > -2.5 AND per row: x >= -10", "MINIMIZE", -2, id="negative"),
+])
+def test_a_fractional_strict_bound_steps_onto_the_lattice(decidb_cli, clause, objective, value):
+    """`x > 2.5` on a whole-number decision is `x >= 3`, as every row states it. Folded into
+    the column box, the bound steps the same way (the old spellings' `k + 1` makes it
+    `x >= 3.5`, a logged bug that stays until item 7)."""
+    rows = answer(decidb_cli, f"""
+        SELECT id, x {table('t', ('id',), ((1,), (2,)))}
+        DECIDE x(INT)
+        SUCH THAT x <= 10 AND {clause}
+        {objective} SUM(x)""")
+    assert [row["x"] for row in rows] == [value, value], rows
+
+
+@pytest.mark.correctness
 def test_unused_per_is_accepted(decidb_cli, tmp_path):
     """`per D.region: sum(ship) <= 50` bounds the total over all rows, once per region;
     the identical constraints are one constraint (D6)."""

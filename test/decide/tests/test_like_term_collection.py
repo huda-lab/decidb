@@ -35,7 +35,7 @@ _ROWS = "(VALUES (1, 'A'), (2, 'B'), (3, 'A')) t(id, grp)"
 
 @pytest.mark.correctness
 def test_differing_aggregate_local_when_filters_do_not_merge(decidb_cli, tmp_path):
-    """`SUM(x) WHEN a + SUM(x) WHEN b` is two row sets, not one column twice.
+    """`sum(when a: x) + sum(when b: x)` is two row sets, not one column twice.
 
     Merging these would keep one term's mask and apply it to both, silently
     dropping every row the surviving filter excludes. Here that would drop the
@@ -47,7 +47,7 @@ def test_differing_aggregate_local_when_filters_do_not_merge(decidb_cli, tmp_pat
             SELECT id, x FROM {_ROWS}
             DECIDE x(INT)
             SUCH THAT x <= 9
-                  AND SUM(x) WHEN (grp = 'A') + SUM(x) WHEN (grp = 'B') <= 6
+                  AND sum(when grp = 'A': x) + sum(when grp = 'B': x) <= 6
             MAXIMIZE SUM(x)
         """,
         tmp_path / "when.dump")

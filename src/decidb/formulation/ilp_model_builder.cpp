@@ -229,6 +229,19 @@ static void StampConstraintProvenance(ConstraintProvenance &provenance, const Ev
     }
 }
 
+//! The data row a per-row row was emitted at (DIAGNOSE's `row`). A scoped clause's row
+//! that stands for no class set is a kept row, a class of its own (D28). Stamped after
+//! `class_set`.
+static void StampDataRow(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const, idx_t row) {
+    provenance.data_row = row;
+    provenance.per_kept_row = eval_const.scoped && provenance.class_set == DConstants::INVALID_INDEX;
+}
+
+//! The class set group `group`'s rows stand for (D28), INVALID_INDEX for none.
+static idx_t ClassSetOf(const EvaluatedConstraint &eval_const, idx_t group) {
+    return group < eval_const.group_class_set.size() ? eval_const.group_class_set[group] : DConstants::INVALID_INDEX;
+}
+
 //! F2, aggregate sites only: reducer-placement metadata for the diagnosis renderer's
 //! SUM(...)-wrapping (Facet B) and WHEN/PER qualifier suffix (Facet C). A per-row
 //! constraint has no reducer and no qualifier text of its own, so this is never called
@@ -273,6 +286,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     DecideProfileScope profile("model.build");
     DecideProfileScope phase("model.variables_and_bounds");
     SolverModel model;
+    model.class_sets = std::move(input.class_sets);
     model.constraint_sources = std::move(input.constraint_sources);
 
     idx_t num_rows = input.num_rows;
@@ -873,6 +887,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id,
                                           DConstants::INVALID_INDEX, string(), lhs_offset);
                 StampAggregateProvenance(constr.provenance, eval_const);
+                constr.provenance.class_set = ClassSetOf(eval_const, 0);
                 constr.provenance.avg_scaled = eval_const.avg_scaled;
                 StampWeightLabels(constr.provenance);
                 constr.provenance.folded_terms = clause_folded_terms;
@@ -981,6 +996,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_label,
                                               group_lhs_offset);
                     StampAggregateProvenance(constr.provenance, eval_const);
+                    constr.provenance.class_set = ClassSetOf(eval_const, g);
                     constr.provenance.avg_scaled = eval_const.avg_scaled;
                     StampWeightLabels(constr.provenance);
                     constr.provenance.folded_terms = clause_folded_terms;
@@ -1054,6 +1070,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         : string();
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
                                           row_group_label, rhs_adjustment);
+                // A scoped easy MIN/MAX's member row stands for its `by` group's classes, a
+                // `per K:` clause's row for its class; any other per-row row for its data row.
+                constr.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
+                StampDataRow(constr.provenance, eval_const, row);
                 PushNormalizedConstraint(std::move(constr));
             }
         }
@@ -1241,6 +1261,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // F2 site 4: quadratic aggregate, ungrouped.
                 StampConstraintProvenance(qc.provenance, eval_const, repair_group_id);
                 StampAggregateProvenance(qc.provenance, eval_const);
+                qc.provenance.class_set = ClassSetOf(eval_const, 0);
                 model.quadratic_constraints.push_back(std::move(qc));
             } else {
                 // PER groups: one QuadraticConstraint per group, reuse CSR
@@ -1266,6 +1287,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
                     StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, group_label);
                     StampAggregateProvenance(qc.provenance, eval_const);
+                    qc.provenance.class_set = ClassSetOf(eval_const, g);
                     model.quadratic_constraints.push_back(std::move(qc));
                 }
             }
@@ -1281,6 +1303,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // F2 site 6: quadratic per-row.
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key);
+                qc.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
+                StampDataRow(qc.provenance, eval_const, row);
                 model.quadratic_constraints.push_back(std::move(qc));
             }
         }
@@ -1307,6 +1331,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         // I4 (aggregate `<>`): carry the disjunction-binary column so the infeasible
         // removal dial groups the two global rows just like a per-row `<>`.
         constr.provenance.indicator_col = raw.indicator_col;
+        constr.provenance.class_set = raw.class_set;
         // The display half. A per-row clause emitted through EvaluatedConstraint gets
         // these stamped from its group columns; one emitted in flat columns states them
         // itself, so a clause reads the same in a diagnosis whichever shape its rows took.

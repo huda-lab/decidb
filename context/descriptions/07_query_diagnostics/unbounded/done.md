@@ -105,13 +105,13 @@ count, denominator, and scope when they would add no information.
 A global `ship <= <cap>` also restricts rows that were never running away, and it leaves
 the user to turn a scoped characterization back into a conditional edit by hand. When the
 reported rules **account for every escaping instance**, the remedy is instead rendered as
-a `SUCH THAT` conjunct the user can paste as written:
+a `SUCH THAT` conjunct the user can paste as written, in the scope spellings (item 6; the
+remedy is new text, not an echo of a clause the user typed):
 
-    ship <= <cap> WHEN region = 'B'
-    ship <= <cap> WHEN (region = 'B' OR region = 'C')
+    when region = 'B': ship <= <cap>
+    when (region = 'B' OR region = 'C'): ship <= <cap>
 
-The brackets are load-bearing: DeciQL's `WHEN` takes a bare comparison or a parenthesized
-condition, and an unbracketed `OR` is a parse error.
+The disjunction keeps its brackets, so the condition reads as one unit before the colon.
 
 Two conditions gate it, both decided in `CharacterizeEscape` and carried to the formatter
 on `EscapeRule::covers_scope` (the flattened finding fields cannot recover them):

@@ -242,6 +242,7 @@ DecideDiagnostic BuildElasticInfeasibleDiagnostic();
 struct UnreachableClause {
 	string label; //!< the constraint as the user wrote it
 	string group; //!< printable PER key of this clause's group (empty if ungrouped)
+	idx_t row = DConstants::INVALID_INDEX; //!< the kept row this finding stands for (D28), or none
 };
 
 //! Build the diagnosis for a bound that is out of reach for every assignment

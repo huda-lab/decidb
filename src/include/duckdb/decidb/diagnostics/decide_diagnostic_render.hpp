@@ -57,12 +57,25 @@ string SourceAwareRhs(const SolverModel &model, const ConstraintProvenance &prov
 ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, double rhs, char sense,
                           double amount);
 
-//! Name the clauses whose rows can never be satisfied by any assignment.
+//! The findings one emitted row stands for (D28): one per class of its group's `per` key
+//! (`expanded_group`, the value in `group`); in the expanded slack scope, one per kept row
+//! when the clause has no `per` key (`expanded_row`, the row in `row`) -- each kept row
+//! its group's row stands for, or the kept row a per-row row was emitted at. A group's
+//! row that names no class (`per ()`, or kept rows in the query scope) is the edit with
+//! no group; any other row, the edit itself. The elastic readback asks for the expanded
+//! scope only, the unreachable-bound scan for either.
+vector<ClauseEdit> FanOutByClass(ClauseEdit edit, const ConstraintProvenance &prov, const SolverModel &model,
+                                 bool expanded);
+
+//! Name the clauses whose rows can never be satisfied by any assignment. `expanded`
+//! reports a grouped clause once per class (FanOutByClass), as the elastic readback does
+//! in that scope.
 vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
-                                                    const vector<ColumnProvenance> &columns);
+                                                    const vector<ColumnProvenance> &columns, bool expanded);
 
 //! Fold a clause's per-row data slack into one synthetic query-level offset
-//! (`x <= col + delta`; `>=` loosens downward → `col - delta`).
+//! (`x <= col + delta`; `>=` loosens downward → `col - delta`; `=` by its signed slack),
+//! a strict `<` / `>` keeping its operator.
 ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &lhs, const string &rhs_text,
                                  char sense, double delta);
 

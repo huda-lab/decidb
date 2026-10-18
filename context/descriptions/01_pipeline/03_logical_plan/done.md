@@ -142,7 +142,11 @@ resolution and column pruning see their columns.
 **From the optimizer** — `solver_backend_name`, `use_native_constructs`,
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
 `abs_maximize_links`, `aux_var_expressions`, `composed_minmax_constraints`,
-`composed_minmax_objective_terms`, `reducer_value_links` (the value rewrite's helper
+`composed_minmax_objective_terms`, `rewrite_accounts` (one fact per construct a rewrite
+replaced -- the construct as a plan prints it and what it became, `RewriteAccount::Kind`
+-- under the clause it came from, INVALID_INDEX for the objective; worded by the renderer;
+never serialized),
+`reducer_value_links` (the value rewrite's helper
 decisions, one per occurrence of a reducer in a clause: each `ReducerValueLink` holds
 the reducer a helper replaced — kind, body, its own `when` and `per`, its `by` key, its
 SQL as a label — the clause's `when`, the MIN/MAX sides any row of the clause needs, the
@@ -324,7 +328,34 @@ The guarded suite passes 1,604 tests with no skips.
 `GetName()` returns `"DECIDE"`. `ParamsToString()` builds the structured plan
 output, using `CollectDecideExpressionStrings` to render `WHEN` and `PER` wrappers
 back into DECIDE postfix syntax — it recurses into child 0 and appends
-` WHEN <cond>` / ` PER <cols>` to each leaf, parenthesizing a multi-column `PER`.
+` WHEN <cond>` / ` PER <cols>` to each leaf, parenthesizing a multi-column `PER` — and
+the scope spellings' wrappers back in front (`when c per K:`), the two-level objective's
+rewritten inner reducer included (`when c per k: inner(e) by (k)`, its key as written:
+`RenderDecidePerKey` reads the source fragment both binders record for a `per` key,
+falling back to the key columns' names, which `BindKeyColumns` made SQL text). A row the
+solver receives is left out where it reads as the clause above it, compared without a
+`per row:` kept in front, which no wrapper holds. Every renderer takes a
+`DecideSourceNames` (item 6): the clause registries, the relation aliases for messages,
+and the auxiliary labels (`aux_var_expressions`, with `decide_index`), so a decision
+column that stands for an expression -- an ABS auxiliary `abs(e)`, a product `(b * x)`,
+an indicator `(x = v)`, a helper `sum(e) by (g)` -- prints that expression wherever it
+appears, a later rewrite's label included; `DecidePlanNames` builds the plan's. Each
+rewrite's account (`rewrite_accounts`, worded once by `RenderDecideRewriteAccount`:
+"`abs(e)` becomes an auxiliary variable") is printed under its clause before the rows it
+left; the objective's accounts, and the rows a rewrite added for the objective (tagged
+`OBJECTIVE_ROW_TAG`, returned by `CollectDecideClauseLayers` in `objective_rows`), print
+under the objective. The hard MIN/MAX carrier (`__minmax_clause_`) prints as the reducer
+it marks, so its row repeats the clause and is left out; a MIN/MAX or composed objective
+prints its accounts and no carrier row, an AVG objective its sum under its account; an
+automatic L0 link's placeholder bound (`L0_AUTO_BOUND_TAG`) prints as `M`. A scoped `IN`
+and a clause whose spelling shows nowhere else (`per row:`, `by ()`) keep their front
+qualifier in the source info, so a suggested edit pastes back under the new rules; an
+infinity norm echoes its order quoted (`norm(e, 'inf')`). Parentheses follow DuckDB's
+precedence: an untagged cast passes its precedence to the child it hides, the right
+operand of a non-associative operator keeps its parentheses (`x * (cap % 7)`,
+`a ** (b ** c)`), a negated negative prints `-(-x)` and an `OR` under an `AND` keeps its
+parentheses. Under a scope spelling a function prints its lower-case name and a column
+is quoted where SQL needs it (`"order"`, `"per"`); an old spelling keeps its echo (D26).
 
 Both the walker and the leaf renderer `RenderDecideSource` live in
 `src/planner/decide/decide_source_provenance.cpp`, beside the source-fragment

@@ -81,12 +81,18 @@ The sink state copies `op.absorbed_lower_bounds`, `op.absorbed_upper_bounds` and
 - The domain-contradiction guard below reads the box to reject a user bound that
   contradicts a variable's intrinsic domain.
 - The infeasible diagnosis re-emits each `UserBoundSpec` as a loosenable row, after
-  `OpenElasticColumnBox` has re-opened the column it was absorbed into (below).
+  `OpenElasticColumnBox` has re-opened the column it was absorbed into (below). One
+  marked `repair_rows_from_clause` is left out: its clause gives the repair model its rows.
 
 Flattening skips any comparison tagged `ABSORBED_BOUND_TAG`, so an
 absorbed bound does not also produce `num_rows` redundant per-row model rows. The
 comparison itself stays in the tree, which is why `EXPLAIN` still renders the bound
-the user wrote.
+the user wrote. A scoped one is flattened aside into
+`DecidePreparedModel::absorbed_constraints`: under DIAGNOSE `EvaluateConstraints`
+evaluates it after every other clause (numbered after them) into
+`evaluated_absorbed_constraints`, and only the elastic input receives it, so the repair
+model loosens it one kept row or class at a time (D28) while the solved model keeps the
+box alone.
 
 ### The elastic box
 
@@ -266,7 +272,22 @@ read by these rules; every other clause, by §5 unchanged:
   (`CountTupleTermsOnce`; a query-wide one moves to row 0, where stage 06 reads it). The
   two-level form groups with NULL a class.
 - **Composed clauses** read the rows their folded filter keeps, de-duplicate among them,
-  and skip the old empty-set errors.
+  and skip the old empty-set errors. Each takes its repair id here, after every prepared
+  and absorbed clause (`ComposedConstraint::repair_group_id`), since formulation drops rows
+  (a `<>` moved into indicator rows) and no count of the model's rows is the id space.
+- **Classes of a grouped row** (D28, `CollectGroupClasses`, under DIAGNOSE only). The
+  rows of a scoped clause over `by` groups -- an aggregate-shape group row, an easy
+  MIN/MAX's member rows, a composed clause's one row -- stand for every class of its
+  `per` key in their group: with `per K:` in front (`per_key = NAMES_CLASSES`,
+  `class_key`) the key's values among the group's kept rows (`LookupOrBuildPerGroupIds`
+  over the kept rows, first-seen order); with no `per` (`NONE`) every kept row of the
+  group; `per ()` the whole clause (one `WHOLE_CLAUSE` set its groups share). A per-row
+  clause under `per K:` (`ONE_ROW_PER_CLASS`) calls it with its classes as the groups, so
+  each class's row gets a set naming that class. One `SolverInput::ClassSet` per group with
+  kept rows, its `Kind` saying which, referenced from
+  `EvaluatedConstraint::group_class_set` (a composed clause's from its
+  evaluated `class_set`, over the rows its `when` keeps); the model keeps the table and an
+  expanded diagnosis reports the group once per class (`FanOutByClass`).
 - **Helper decisions** (the value rewrite, `EvaluateReducerValueLinks`): each link's
   reducer is read on the rows the clause's `when` keeps and its own `when` keeps among
   them, grouped by its `by` key over the kept rows (`LookupOrBuildPerGroupIds`, NULL a
