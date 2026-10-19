@@ -89,7 +89,7 @@ enum class ObjectiveAggregateType : uint8_t {
 enum class ConstraintKind : uint8_t { USER_PARAMETER, USER_MECHANISM, STRUCTURAL };
 
 //! Reduction that owns a linear term in a canonical constraint LHS. Fixed
-//! (decision-free) terms may only reach the model builder through a SUM aggregate;
+//! (decision-free) terms may only reach the model builder through a SUM reducer;
 //! a NONE fixed term there means an earlier canonical-shape invariant was broken.
 enum class LinearTermReduction : uint8_t { NONE, SUM };
 
@@ -188,32 +188,29 @@ inline bool IsPerConstraintTag(const string &alias) {
 	return HasDecideTag(alias, PER_CONSTRAINT_TAG);
 }
 
-//! Tag used by the parser to mark a relation-qualified aggregate, `sum(D: expr)`.
+//! Tag used by the parser to mark a relation-qualified reducer, `sum(D: expr)`.
 //! Shape mirrors the aggregate-local WHEN tag: children[0] is the aggregate,
 //! children[1] is the qualifier's relation name. The binder consumes and
 //! discards it, folding the resolved relation into the tag below.
-//! The string keeps its old spelling on purpose: a parsed statement stored in a view
-//! is written to disk with this function name, so renaming the value would break
-//! views created before the rename.
-static constexpr const char *QUALIFIED_AGGREGATE_TAG = "__qualified_reducer__";
+static constexpr const char *QUALIFIED_REDUCER_TAG = "__qualified_reducer__";
 
-//! Tag prefix recording a bound qualified aggregate (on BoundAggregateExpression.alias).
+//! Tag prefix recording a bound qualified reducer (on BoundAggregateExpression.alias).
 //! Format: "__qualified_by_<entity_scope_idx>__" — the index is into
 //! LogicalDecide::entity_scopes, whose entry supplies the tuple-identity key the
-//! aggregate de-duplicates by. A qualifier is an entity scope that may have no
+//! reducer de-duplicates by. A qualifier is an entity scope that may have no
 //! variable declared on it, so the two share one table of keys and one mapping.
-static constexpr const char *QUALIFIED_AGGREGATE_SCOPE_TAG_PREFIX = "__qualified_by_";
+static constexpr const char *QUALIFIED_REDUCER_SCOPE_TAG_PREFIX = "__qualified_by_";
 
-//! Builds the alias tag naming the entity scope an aggregate is qualified by.
-inline string MakeQualifiedAggregateTag(idx_t entity_scope_idx) {
-	return string(QUALIFIED_AGGREGATE_SCOPE_TAG_PREFIX) + to_string(entity_scope_idx) + "__";
+//! Builds the alias tag naming the entity scope a reducer is qualified by.
+inline string MakeQualifiedReducerTag(idx_t entity_scope_idx) {
+	return string(QUALIFIED_REDUCER_SCOPE_TAG_PREFIX) + to_string(entity_scope_idx) + "__";
 }
 
-//! Reads back the entity scope index from an alias written by MakeQualifiedAggregateTag.
+//! Reads back the entity scope index from an alias written by MakeQualifiedReducerTag.
 //! Returns false (leaving `scope_idx` untouched) when the alias carries no such tag.
-inline bool TryParseQualifiedAggregateTag(const string &alias, idx_t &scope_idx) {
+inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
 	string digits;
-	if (!ExtractDecideTagPayload(alias, QUALIFIED_AGGREGATE_SCOPE_TAG_PREFIX, digits)) {
+	if (!ExtractDecideTagPayload(alias, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, digits)) {
 		return false;
 	}
 	if (digits.find_first_not_of("0123456789") != string::npos) {

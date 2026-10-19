@@ -168,7 +168,7 @@
                 <li><a href="#decide" class="sidebar-link">The DECIDE Clause</a></li>
                 <li><a href="#such-that" class="sidebar-link">The SUCH THAT Clause</a></li>
                 <li><a href="#objective" class="sidebar-link">The Objective Clause</a></li>
-                <li><a href="#aggregates" class="sidebar-link">Aggregates</a></li>
+                <li><a href="#reducers" class="sidebar-link">Reducers</a></li>
                 <li><a href="#solver-selection" class="sidebar-link">Solver Selection</a></li>
                 <li><a href="#solver-outcomes" class="sidebar-link">Solver Outcomes</a></li>
                 <li><a href="#explain" class="sidebar-link">EXPLAIN</a></li>
@@ -207,7 +207,7 @@ FROM table_expression
 DECIDE [scalar] [Table.]variable(INT | BOOL | REAL) [, ...]
 SUCH THAT
     constraint [AND constraint ...]   -- constraints may use WHEN, PER
-[MAXIMIZE | MINIMIZE] objective        -- aggregates / POWER / bilinear / bare scalar
+[MAXIMIZE | MINIMIZE] objective        -- reducers / POWER / bilinear / bare scalar
 
 -- Split order: the declaration sits between SELECT and FROM
 SELECT select_list
@@ -439,7 +439,7 @@ SUCH THAT SUM(keepN * s.hours) <= 100
 MAXIMIZE SUM(keepN * n.skill_score);</code></pre>
               </div>
               <p class="text-fg-muted text-sm mb-4">
-                The qualifier (<code>n.</code>) must match a table or alias in the <code>FROM</code> clause. <code>SUM</code> still sums over result rows, so an entity that appears in <em>k</em> joined rows contributes its variable <em>k</em> times. To count each entity once instead, qualify the aggregate &mdash; see <a href="#aggregates" class="text-accent hover:text-accent">Aggregates</a>.
+                The qualifier (<code>n.</code>) must match a table or alias in the <code>FROM</code> clause. <code>SUM</code> still sums over result rows, so an entity that appears in <em>k</em> joined rows contributes its variable <em>k</em> times. To count each entity once instead, qualify the reducer &mdash; see <a href="#reducers" class="text-accent hover:text-accent">Reducers</a>.
               </p>
               <p class="text-fg-muted text-sm mb-8">
                 The entity is identified by <strong>all columns</strong> of the source table. Two rows of <code>nurses</code> share a variable only when every column matches. There is no syntax for picking a subset of columns as the key.
@@ -592,7 +592,7 @@ SUCH THAT
 
               <h3 class="text-xl font-semibold text-fg mb-4">Which Side the Decision Goes On</h3>
               <p class="text-fg-muted mb-4">
-                Either side of the comparison may carry the decision. <code>SUM(x) &lt;= 10</code> and <code>10 &gt;= SUM(x)</code> are the same constraint, and an aggregate may appear on both sides at once.
+                Either side of the comparison may carry the decision. <code>SUM(x) &lt;= 10</code> and <code>10 &gt;= SUM(x)</code> are the same constraint, and a reducer may appear on both sides at once.
               </p>
               <div class="code-block mb-4">
                 <div class="code-header">
@@ -605,7 +605,7 @@ SUCH THAT
                 <pre class="language-sql"><code>-- The bound may be written first
 SUCH THAT 5 >= x AND 10 >= SUM(x)
 
--- Aggregates on both sides
+-- Reducers on both sides
 SUCH THAT SUM(x * v) <= SUM(y * v)
 
 -- A plain data column as the bound of a grouped constraint
@@ -956,7 +956,7 @@ MAXIMIZE SUM(x * value);</code></pre>
               <h2 class="text-3xl text-fg mb-6">The Objective Clause</h2>
 
               <p class="text-fg-muted mb-6">
-                Use <code>MAXIMIZE</code> or <code>MINIMIZE</code> to tell the solver what to optimize. Row- and table-scoped decisions belong inside supported aggregates; a query-wide <code>scalar</code> decision may also appear as a bare term. <code>SUM</code>, <code>AVG</code>, <code>MIN</code>, and <code>MAX</code> are supported, along with quadratic (<code>POWER</code>) and bilinear (<code>x * y</code>) shapes.
+                Use <code>MAXIMIZE</code> or <code>MINIMIZE</code> to tell the solver what to optimize. Row- and table-scoped decisions belong inside supported reducers; a query-wide <code>scalar</code> decision may also appear as a bare term. <code>SUM</code>, <code>AVG</code>, <code>MIN</code>, and <code>MAX</code> are supported, along with quadratic (<code>POWER</code>) and bilinear (<code>x * y</code>) shapes.
               </p>
 
               <div class="code-block mb-8">
@@ -979,7 +979,7 @@ MAXIMIZE SUM(x * (revenue - cost) * discount_factor)
 -- Multiple variables in one objective
 MAXIMIZE SUM(x * profit_a + y * profit_b)
 
--- A query-wide decision contributes once, without an aggregate
+-- A query-wide decision contributes once, without a reducer
 MINIMIZE max_load - SUM(ship)</code></pre>
               </div>
 
@@ -1128,16 +1128,16 @@ SUCH THAT
 
 
             <!-- ============================================
-                 AGGREGATES
+                 REDUCERS
                  ============================================ -->
-            <section id="aggregates" class="mb-20">
-              <h2 class="text-3xl text-fg mb-6">Aggregates</h2>
+            <section id="reducers" class="mb-20">
+              <h2 class="text-3xl text-fg mb-6">Reducers</h2>
 
               <p class="text-fg-muted mb-6">
-                An aggregate here is an aggregate function over decisions &mdash; <code>SUM</code>, <code>AVG</code>, <code>MIN</code> or <code>MAX</code>. Everything in this section applies in both <code>SUCH THAT</code> and the objective.
+                A reducer is an aggregate over decisions &mdash; <code>SUM</code>, <code>AVG</code>, <code>MIN</code> or <code>MAX</code>. Everything in this section applies in both <code>SUCH THAT</code> and the objective.
               </p>
 
-              <h3 class="text-xl font-semibold text-fg mb-4">Relation-Qualified Aggregates</h3>
+              <h3 class="text-xl font-semibold text-fg mb-4">Relation-Qualified Reducers</h3>
               <p class="text-fg-muted mb-4">
                 A join repeats a table's rows once per match, so a plain <code>SUM</code> over a table-scoped decision counts that decision once per joined row. Name a relation in front of the body to count it once per row of that relation instead.
               </p>
@@ -1180,13 +1180,13 @@ ORDER BY routeID;</code></pre>
               <div class="code-block mb-8">
                 <div class="code-header"><span class="language-label">Error &mdash; a column from outside the qualifier</span></div>
                 <pre class="text-sm"><code>'unit_cost' does not come from D, so SUM(D: ...) cannot use it; keep only
-those relations' columns inside the qualified aggregate and sum the rest
+those relations' columns inside the qualified reducer and sum the rest
 separately</code></pre>
               </div>
 
-              <h3 class="text-xl font-semibold text-fg mb-4">Scaling an Aggregate</h3>
+              <h3 class="text-xl font-semibold text-fg mb-4">Scaling a Reducer</h3>
               <p class="text-fg-muted mb-4">
-                An aggregate may be multiplied or divided by a factor, on either side. The factor must be one value for the whole query: a literal, an expression over literals, or an uncorrelated scalar subquery.
+                A reducer may be multiplied or divided by a factor, on either side. The factor must be one value for the whole query: a literal, an expression over literals, or an uncorrelated scalar subquery.
               </p>
               <div class="code-block mb-4">
                 <div class="code-header">

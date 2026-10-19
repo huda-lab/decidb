@@ -1,6 +1,6 @@
 """Every auxiliary column stage 05 introduces must carry a derived box.
 
-An auxiliary stands for a known expression — the extremum of a MIN/MAX aggregate over
+An auxiliary stands for a known expression — the extremum of a MIN/MAX reducer over
 rows, over per-group values, or over group sums — so the range it can reach is always
 computable at the moment it is created. Leaving one declared `[-1e30, 1e30]` is not a
 wrong answer, which is exactly why it went unnoticed: it is a performance cliff. A free

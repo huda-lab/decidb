@@ -128,7 +128,7 @@ objective, an infeasible component makes the global problem infeasible, while a 
 direction makes it unbounded. > > • Exact row, entity, and scalar decision identities are known, and no decision
 identity occurs in more than one component. > > • Component membership follows the complete entity key and proved
 functional dependencies rather than coincidental equality of data values. > > • PER keys, WHEN masks, qualified
-aggregates, join multiplicities, and data-valued right-hand sides are normalized before decomposition. > > • NULL PER
+reducers, join multiplicities, and data-valued right-hand sides are normalized before decomposition. > > • NULL PER
 keys bypass their grouped factor. Shared scalars or any factor that spans groups reconnect the affected decisions. > > •
 Every component matches one complete leaf rule and satisfies that rule's full **Valid when** checklist. A proof failure
 in any component rejects the complete D1 rewrite and keeps the original DECIDE query on the solver path. > > • Component

@@ -683,8 +683,8 @@ def test_real_strict_rejected_when_term_stays_continuous(decidb_cli):
     """The L0 exemption is narrow: only p=0 is a count.
 
     `norm(e, 1)` sums magnitudes and is as continuous as `e`, so a REAL decision
-    under one is still refused. This pins that IsIntegerValuedAggregate did not open
-    the gate for every aggregate.
+    under one is still refused. This pins that IsIntegerValuedReducer did not open
+    the gate for every reducer.
     """
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty

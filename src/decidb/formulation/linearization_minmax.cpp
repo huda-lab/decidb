@@ -911,7 +911,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
 }
 
 // --- Composed (additive) MIN/MAX --------------------------------------------
-// A composed clause mixes aggregates additively (`SUM(a) + MAX(b) <= K`). Each
+// A composed clause mixes reducers additively (`SUM(a) + MAX(b) <= K`). Each
 // MIN/MAX term becomes a global auxiliary z_k pinned per row; SUM/AVG terms fold
 // straight into the outer row (constraint) or into the objective coefficients.
 // The two entry points below share that auxiliary layer and differ only in what

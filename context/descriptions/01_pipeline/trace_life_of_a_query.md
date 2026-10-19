@@ -69,7 +69,7 @@ LogicalDecide  [x]
 The constraint is already canonical, and the pass confirms it rather than changing
 it: `SUM(x*weight)` is one decision-bearing atom on the left, `50` is one
 decision-free atom on the right, no scale to peel, no cast to see through. The
-classification is `AGGREGATE` — one aggregate-rooted decision term, no row-varying
+classification is `AGGREGATE` — one reducer-rooted decision term, no row-varying
 algebra beside it.
 
 The objective is canonicalized through the same machinery: one additive term,
@@ -90,7 +90,7 @@ Verification runs once more at physical-plan entry.
 
 The sink state is constructed **before** the first row arrives.
 `TraverseBoundsConstraints` finds nothing to fold — the only constraint has a
-aggregate on its left, so it is not a bound. Flattening (`AnalyzeConstraint`) produces one
+reducer on its left, so it is not a bound. Flattening (`AnalyzeConstraint`) produces one
 `DecideConstraint` with `lhs_is_aggregate = true` and one `Term`
 `{variable_index: 0, coefficient: weight, sign: +1}`. `AnalyzeObjective` produces
 one term with coefficient `value`.

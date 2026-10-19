@@ -142,7 +142,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 string qualified_name = table_name + "." + name;
                 decide_variable_names.emplace(qualified_name, var_idx);
 
-                // Reuse the scope if another variable — or a qualified aggregate — already
+                // Reuse the scope if another variable — or a qualified reducer — already
                 // keyed on this table; the tuple-identity key is the same either way.
                 scope_idx = FindOrCreateEntityScope(bind_context, table_name, entity_scopes, table_scope_map);
                 entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
@@ -256,7 +256,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 scalar_variable_names.insert(var_names[v]);
             }
         }
-        // What a relation-qualified aggregate needs to resolve `sum(D: ...)`. The binders
+        // What a relation-qualified reducer needs to resolve `sum(D: ...)`. The binders
         // may append a key-only entity scope to `entity_scopes`, which is why this runs
         // before the vector is moved onto the operator below.
         DecideQualifierContext qualifier_context;
@@ -277,7 +277,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 ValidateDecideIntegralComparisonOperands(*result.decide_constraints,
                                                          result.decide_index);
                 // Degree has one owner, and this is it. Running on the bound tree makes the
-                // rule total: an aggregate argument and a bare per-row constraint are judged
+                // rule total: a reducer argument and a bare per-row constraint are judged
                 // the same way, which the parsed-tree gate could not do because it was only
                 // ever called for SUM/AVG/MIN/MAX arguments.
                 ValidateDecideConstraintDegree(*result.decide_constraints, result.decide_index);

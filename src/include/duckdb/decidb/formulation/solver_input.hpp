@@ -219,7 +219,7 @@ struct EvaluatedConstraint {
     //! symbolically instead of dumping the per-row numeric fan-out. Empty entries (constant
     //! coefficients / non-aggregate rows) fall back to the numeric reconstruction.
     vector<string> coefficient_labels;
-    //! Parallel to variable_indices. Records which canonical aggregate owns each
+    //! Parallel to variable_indices. Records which canonical reducer owns each
     //! linear term so fixed LHS offsets cannot silently acquire generic SUM semantics.
     vector<LinearTermReduction> linear_term_reductions;
     CoefficientColumn rhs_values;                // RHS column (logical size = num_rows)
@@ -336,7 +336,7 @@ struct EvaluatedConstraint {
 };
 
 //! Sum decision-free LHS terms over a row range after checking that each one is
-//! explicitly owned by a canonical SUM aggregate.
+//! explicitly owned by a canonical SUM reducer.
 double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
                                   const vector<idx_t> *rows, idx_t begin, idx_t end,
                                   const char *error_context);
@@ -498,8 +498,8 @@ struct SolverInput {
     // Linear objective
     vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows
     vector<idx_t> objective_variable_indices;          // [term_idx]
-    //! [term_idx] SUM when the term came from inside an aggregate (its coefficient is a sum
-    //! over the counted rows); NONE for a query-wide decision standing beside an aggregate,
+    //! [term_idx] SUM when the term came from inside a reducer (its coefficient is a sum
+    //! over the counted rows); NONE for a query-wide decision standing beside a reducer,
     //! whose coefficient is a single row-invariant value. Distinguishes `SUM(cost * cap)`
     //! (contributes once per counted row) from `SUM(x) + cap` (contributes once). Mirrors
     //! EvaluatedConstraint::linear_term_reductions on the constraint side.
@@ -568,7 +568,7 @@ struct SolverInput {
         //! ConstraintProvenance::indicator_col). This describes the disjunction;
         //! `removal_group_id` independently groups all descendants for DROP.
         idx_t indicator_col = DConstants::INVALID_INDEX;
-        //! PER/WHEN group id, its printable key, the aggregate qualifier text, and whether
+        //! PER/WHEN group id, its printable key, the reducer qualifier text, and whether
         //! the clause's LHS was an aggregate — the display half of the provenance every
         //! row carries. A per-row clause emitted through `EvaluatedConstraint` gets these
         //! from its `row_group_ids` / `group_labels` / `qualifier`; a clause emitted in

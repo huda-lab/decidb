@@ -38,12 +38,12 @@ namespace duckdb {
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
 // ---------------------------------------------------------------------------
-// A factor sitting on an aggregate
+// A factor sitting on a reducer
 // ---------------------------------------------------------------------------
 //
-// The canonicalizer peels a factor OUTWARD off an aggregate (`2 * SUM(x*p)`) and
+// The canonicalizer peels a factor OUTWARD off a reducer (`2 * SUM(x*p)`) and
 // converges every spelling onto one. It stays outside from there: nothing pushes
-// it back into the aggregate's body.
+// it back into the reducer's body.
 //
 // WHY IT STAYS OUTSIDE. `MIN`/`MAX` are order statistics, not linear functionals.
 // They commute with a POSITIVE factor only -- `MAX(-2x)` is `-2*MIN(x)`, not
@@ -204,8 +204,8 @@ static void WalkComposedLhs(ClientContext &context, const Expression &e, int sig
 	}
 	// Carry the relation qualifier (`SUM(D: ...)`) off the tag the binder stamped on the
 	// aggregate. Without this the composed path reduces over join-result rows and a
-	// qualified aggregate silently reverts to row semantics.
-	TryParseQualifiedAggregateTag(agg.alias, term.qualifier_scope_idx);
+	// qualified reducer silently reverts to row semantics.
+	TryParseQualifiedReducerTag(agg.alias, term.qualifier_scope_idx);
 	if (term.kind == LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND) {
 		bool is_max = (name == "max");
 		// A negative FACTOR flips which way z is pushed exactly as a subtraction does,
@@ -728,7 +728,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		obj_expr = cast.child.get();
 	}
 
-	// A factor peeled onto the objective's aggregate (`2 * MAX(x*v)`, `MAX(x*v) * 2`).
+	// A factor peeled onto the objective's reducer (`2 * MAX(x*v)`, `MAX(x*v) * 2`).
 	// Objectives are not canonicalized, so both spellings arrive as written.
 	ScaledAggregateMatch scale_match;
 	const BoundAggregateExpression *scaled_obj_agg =

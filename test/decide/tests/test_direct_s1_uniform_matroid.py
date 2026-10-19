@@ -142,7 +142,7 @@ BOUND_EXPRS = {
 # TINYINT column `sm`): SQL text -> its value given the rows the bound's clause covers in the group (every row of the
 # group under an aggregate-local WHEN, the flagged ones under a top WHEN). The variants ending in `+ 0` exist for a top
 # WHEN, which a bare aggregate would take for its own.
-_AGGREGATE_BASES = {
+_REDUCER_BASES = {
     "MIN(cap)": lambda rows: min(r["cap"] for r in rows),
     "MAX(cap)": lambda rows: max(r["cap"] for r in rows),
     "MIN(cap2)": lambda rows: min(r["cap2"] for r in rows),
@@ -155,14 +155,14 @@ _AGGREGATE_BASES = {
     "MAX(cap) - MIN(cap)": lambda rows: max(r["cap"] for r in rows) - min(r["cap"] for r in rows),
     "AVG(sm) * 0.5": lambda rows: Fraction(sum(r["sm"] for r in rows), len(rows)) * Fraction("0.5"),
 }
-_AGGREGATE_EXTRAS = {
+_REDUCER_EXTRAS = {
     "SUM(sm) + 100": lambda rows: sum(r["sm"] for r in rows) + 100,
     "AVG(sm) + 2": lambda rows: Fraction(sum(r["sm"] for r in rows), len(rows)) + 2,
 }
-AGGREGATE_BOUND_EXPRS = {
-    **_AGGREGATE_BASES,
-    **_AGGREGATE_EXTRAS,
-    **{f"{key} + 0": function for key, function in _AGGREGATE_BASES.items()},
+REDUCER_BOUND_EXPRS = {
+    **_REDUCER_BASES,
+    **_REDUCER_EXTRAS,
+    **{f"{key} + 0": function for key, function in _REDUCER_BASES.items()},
 }
 
 
@@ -549,8 +549,8 @@ def _s1_constraints(case):
     def limit_of(bound, row, covered, group_rows=()):
         if isinstance(bound, (int, float)):
             return float(bound)
-        if bound in AGGREGATE_BOUND_EXPRS:
-            return float(AGGREGATE_BOUND_EXPRS[bound](group_rows))
+        if bound in REDUCER_BOUND_EXPRS:
+            return float(REDUCER_BOUND_EXPRS[bound](group_rows))
         return float(BOUND_EXPRS[bound](row, covered))
 
     for bound in case.get("bounds", ()):
@@ -1463,14 +1463,14 @@ def test_s1_offset_bound_near_the_bigint_limit_matches_the_solver(decidb_cli, co
 # MIN, MAX and COUNT of any numeric column, and SUM and AVG of a TINYINT, SMALLINT, UTINYINT or USMALLINT column, give
 # one value per group. The group is the rows the clause covers (its WHEN holds, its PER key is not NULL); an
 # aggregate-local WHEN on the left sum does not narrow it. The oracle evaluates the aggregate over those rows in Python
-# (`AGGREGATE_BOUND_EXPRS`) and states the bound as a plain linear constraint.
+# (`REDUCER_BOUND_EXPRS`) and states the bound as a plain linear constraint.
 
-_AGGREGATE_OPS = ("<=", "<", ">=", ">", "=")
-S1_AGGREGATE_CASES = {}
-for _base, _op, _scope in itertools.product(_AGGREGATE_BASES, _AGGREGATE_OPS, _CORE_SCOPES):
+_REDUCER_OPS = ("<=", "<", ">=", ">", "=")
+S1_REDUCER_CASES = {}
+for _base, _op, _scope in itertools.product(_REDUCER_BASES, _REDUCER_OPS, _CORE_SCOPES):
     # A bare aggregate before a top WHEN would take the WHEN for its own.
     _bound = f"{_base} + 0" if _scope == "top_per" else _base
-    S1_AGGREGATE_CASES[f"aggregate_{_tag(_base.replace(' ', ''))}_{_OPNAMES[_op]}_{_scope}"] = {
+    S1_REDUCER_CASES[f"reducer_{_tag(_base.replace(' ', ''))}_{_OPNAMES[_op]}_{_scope}"] = {
         **_OFFSET_SCOPES[_scope][0],
         "bounds": [(_op, _bound)],
         "sense": "MINIMIZE" if _op in (">", ">=") else "MAXIMIZE",
@@ -1478,50 +1478,50 @@ for _base, _op, _scope in itertools.product(_AGGREGATE_BASES, _AGGREGATE_OPS, _C
 
 # Bodies with an offset or a negation against an aggregate bound, intervals, several bounds, fixed values, and no
 # objective.
-S1_AGGREGATE_CASES.update(
+S1_REDUCER_CASES.update(
     {
-        "aggregate_interval_min_max_per": {"bounds": [(">=", "MIN(cap)"), ("<=", "MAX(cap)")], "per": True},
-        "aggregate_interval_min_max_local_when": {
+        "reducer_interval_min_max_per": {"bounds": [(">=", "MIN(cap)"), ("<=", "MAX(cap)")], "per": True},
+        "reducer_interval_min_max_local_when": {
             "bounds": [(">=", "MIN(cap)"), ("<=", "MAX(cap)")],
             "per": True,
             "when": "local",
         },
-        "aggregate_interval_avg_sum_global": {"bounds": [(">=", "AVG(sm)"), ("<=", "SUM(sm) / 2 + 1")]},
+        "reducer_interval_avg_sum_global": {"bounds": [(">=", "AVG(sm)"), ("<=", "SUM(sm) / 2 + 1")]},
         # Group b: the unflagged row has the smallest cap, so a MIN that ignored the left side's WHEN would differ.
-        "aggregate_local_when_reads_unflagged_rows": {"bounds": [("<=", "MIN(cap)")], "per": True, "when": "local"},
-        "aggregate_local_when_max_reads_unflagged_rows": {
+        "reducer_local_when_reads_unflagged_rows": {"bounds": [("<=", "MIN(cap)")], "per": True, "when": "local"},
+        "reducer_local_when_max_reads_unflagged_rows": {
             "bounds": [("<=", "MAX(cap)")],
             "per": True,
             "when": "local",
         },
-        "aggregate_with_source_bound": {"bounds": [("<=", "MIN(cap)"), ("<=", "cap")], "per": True},
-        "aggregate_with_count_star": {"bounds": [("<=", "MAX(cap)"), ("<=", "COUNT(*) - 1")], "per": True},
-        "aggregate_with_coalesce_bound": {
+        "reducer_with_source_bound": {"bounds": [("<=", "MIN(cap)"), ("<=", "cap")], "per": True},
+        "reducer_with_count_star": {"bounds": [("<=", "MAX(cap)"), ("<=", "COUNT(*) - 1")], "per": True},
+        "reducer_with_coalesce_bound": {
             "bounds": [(">=", "COALESCE(nlo, 1.0)"), ("<=", "MAX(cap)")],
             "per": True,
         },
-        "aggregate_with_fixed": {"bounds": [("<=", "MAX(cap)")], "per": True, "fixed": [(1, [4]), (0, [0, 8])]},
-        "aggregate_no_objective_lower": {"bounds": [(">=", "MIN(cap)")], "per": True, "objective": "none"},
-        "aggregate_no_objective_local_when": {
+        "reducer_with_fixed": {"bounds": [("<=", "MAX(cap)")], "per": True, "fixed": [(1, [4]), (0, [0, 8])]},
+        "reducer_no_objective_lower": {"bounds": [(">=", "MIN(cap)")], "per": True, "objective": "none"},
+        "reducer_no_objective_local_when": {
             "bounds": [(">=", "AVG(sm)")],
             "per": True,
             "when": "local",
             "objective": "none",
         },
-        "aggregate_infeasible_lower_above_group": {"bounds": [(">=", "SUM(sm) + 100")], "per": True},
-        "aggregate_ties": {"data": "ties", "bounds": [("<=", "MAX(cap)")], "per": True},
+        "reducer_infeasible_lower_above_group": {"bounds": [(">=", "SUM(sm) + 100")], "per": True},
+        "reducer_ties": {"data": "ties", "bounds": [("<=", "MAX(cap)")], "per": True},
         # A count body with an offset or a negation against an aggregate bound.
-        "aggregate_offset_min_per": _offset_case(1, "1", [("<=", "MIN(cap)")], "per"),
-        "aggregate_offset_max_negated_per": _offset_case(-1, "1", [("<=", "MAX(cap)")], "per", sense="MINIMIZE"),
-        "aggregate_offset_fractional_avg_local_when": _offset_case(1, "0.5", [("<=", "AVG(sm) + 2")], "local_per"),
-        "aggregate_offset_count_col_local_when": _offset_case(1, "1", [("<=", "COUNT(cap)")], "local_per"),
-        "aggregate_offset_negation_sum_local_when": _offset_case(
+        "reducer_offset_min_per": _offset_case(1, "1", [("<=", "MIN(cap)")], "per"),
+        "reducer_offset_max_negated_per": _offset_case(-1, "1", [("<=", "MAX(cap)")], "per", sense="MINIMIZE"),
+        "reducer_offset_fractional_avg_local_when": _offset_case(1, "0.5", [("<=", "AVG(sm) + 2")], "local_per"),
+        "reducer_offset_count_col_local_when": _offset_case(1, "1", [("<=", "COUNT(cap)")], "local_per"),
+        "reducer_offset_negation_sum_local_when": _offset_case(
             -1, "0", [(">=", "SUM(sm) / 2 + 1")], "local_per", sense="MINIMIZE"
         ),
-        "aggregate_offset_top_when": _offset_case(1, "-1", [("<=", "MAX(cap) + 0")], "top_per"),
-        "aggregate_offset_global": _offset_case(1, "1", [("<=", "MAX(cap)")], "global"),
-        "aggregate_offset_interval_per": _offset_case(1, "0.5", [(">=", "MIN(cap2)"), ("<=", "MAX(cap)")], "per"),
-        "aggregate_offset_negated_interval_local_when": _offset_case(
+        "reducer_offset_top_when": _offset_case(1, "-1", [("<=", "MAX(cap) + 0")], "top_per"),
+        "reducer_offset_global": _offset_case(1, "1", [("<=", "MAX(cap)")], "global"),
+        "reducer_offset_interval_per": _offset_case(1, "0.5", [(">=", "MIN(cap2)"), ("<=", "MAX(cap)")], "per"),
+        "reducer_offset_negated_interval_local_when": _offset_case(
             -1, "1", [(">=", "MIN(cap)"), ("<=", "MAX(cap)")], "local_per"
         ),
     }
@@ -1531,16 +1531,16 @@ S1_AGGREGATE_CASES.update(
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize("name", sorted(S1_AGGREGATE_CASES))
-def test_s1_aggregate_bound_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
-    _agree(decidb_cli, oracle_solver, S1_AGGREGATE_CASES[name])
+@pytest.mark.parametrize("name", sorted(S1_REDUCER_CASES))
+def test_s1_reducer_bound_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
+    _agree(decidb_cli, oracle_solver, S1_REDUCER_CASES[name])
 
 
-AGGREGATE_CONTEXT_CASES = [
-    ("aggregate_MIN(cap)_le_per", "wide_source"),
-    ("aggregate_local_when_reads_unflagged_rows", "recombined_filters"),
-    ("aggregate_offset_count_col_local_when", "joined_source"),
-    ("aggregate_AVG(sm)_ge_top_per", "parent_join"),
+REDUCER_CONTEXT_CASES = [
+    ("reducer_MIN(cap)_le_per", "wide_source"),
+    ("reducer_local_when_reads_unflagged_rows", "recombined_filters"),
+    ("reducer_offset_count_col_local_when", "joined_source"),
+    ("reducer_AVG(sm)_ge_top_per", "parent_join"),
 ]
 
 
@@ -1549,18 +1549,18 @@ AGGREGATE_CONTEXT_CASES = [
 @pytest.mark.sql_subquery
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "base,wrap", AGGREGATE_CONTEXT_CASES, ids=[f"{base}-{wrap}" for base, wrap in AGGREGATE_CONTEXT_CASES]
+    "base,wrap", REDUCER_CONTEXT_CASES, ids=[f"{base}-{wrap}" for base, wrap in REDUCER_CONTEXT_CASES]
 )
-def test_s1_aggregate_bound_agrees_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
-    _agree(decidb_cli, oracle_solver, S1_AGGREGATE_CASES[base], wrap)
+def test_s1_reducer_bound_agrees_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
+    _agree(decidb_cli, oracle_solver, S1_REDUCER_CASES[base], wrap)
 
 
 # A bad value in a column an aggregate reduces raises on both paths, on every row, as it does for any bound.
 # name -> (column type, rows as (id, key, flag, value), constraint).
-_AGGREGATE_ROWS = (
+_REDUCER_ROWS = (
     "(1, 'a', true, 9.0, {v1}), (2, 'a', false, 8.0, {v2}), (3, 'b', true, 7.0, {v3}), (4, NULL, true, 6.0, {v4})"
 )
-S1_AGGREGATE_ERROR_CASES = {
+S1_REDUCER_ERROR_CASES = {
     "null_min": ("INTEGER", ("1", "2", "3", "NULL"), "SUM(x) <= MIN(v)"),
     "null_in_a_row_the_when_excludes": ("INTEGER", ("1", "NULL", "3", "4"), "SUM(x) <= MIN(v) + 0 WHEN flag"),
     "null_in_a_row_with_a_null_key": ("INTEGER", ("1", "2", "3", "NULL"), "SUM(x) <= MAX(v) PER g"),
@@ -1584,11 +1584,11 @@ S1_AGGREGATE_ERROR_CASES = {
 @pytest.mark.var_boolean
 @pytest.mark.error
 @pytest.mark.correctness
-@pytest.mark.parametrize("name", sorted(S1_AGGREGATE_ERROR_CASES))
-def test_s1_aggregate_bound_errors_fail_on_both_paths(decidb_cli, name):
-    column_type, values, constraint = S1_AGGREGATE_ERROR_CASES[name]
+@pytest.mark.parametrize("name", sorted(S1_REDUCER_ERROR_CASES))
+def test_s1_reducer_bound_errors_fail_on_both_paths(decidb_cli, name):
+    column_type, values, constraint = S1_REDUCER_ERROR_CASES[name]
     typed = tuple(f"CAST({value} AS {column_type})" for value in values)
-    rows = _AGGREGATE_ROWS.format(v1=typed[0], v2=typed[1], v3=typed[2], v4=typed[3])
+    rows = _REDUCER_ROWS.format(v1=typed[0], v2=typed[1], v3=typed[2], v4=typed[3])
     sql = (
         f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, g, flag, score, v) "
         f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
@@ -1603,7 +1603,7 @@ def test_s1_aggregate_bound_errors_fail_on_both_paths(decidb_cli, name):
 
 
 # Infinity is a value of the aggregate, not an error: no limit above, or a limit no count meets.
-AGGREGATE_INFINITY_CASES = {
+REDUCER_INFINITY_CASES = {
     f"{aggregate}_{_OPNAMES[op]}_{'_'.join(_tag(v) for v in values)}": (aggregate, op, values)
     for aggregate in ("MAX(v)", "MIN(v)")
     for op in ("<=", ">=", "<", ">")
@@ -1614,9 +1614,9 @@ AGGREGATE_INFINITY_CASES = {
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize("name", sorted(AGGREGATE_INFINITY_CASES))
-def test_s1_aggregate_bound_reads_infinity_like_the_solver(decidb_cli, name):
-    aggregate, op, values = AGGREGATE_INFINITY_CASES[name]
+@pytest.mark.parametrize("name", sorted(REDUCER_INFINITY_CASES))
+def test_s1_reducer_bound_reads_infinity_like_the_solver(decidb_cli, name):
+    aggregate, op, values = REDUCER_INFINITY_CASES[name]
     rows = ", ".join(f"({i}, {10 - i}.0, CAST({v} AS DOUBLE))" for i, v in enumerate(values))
     sql = (
         f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, score, v) "
@@ -1631,7 +1631,7 @@ def test_s1_aggregate_bound_reads_infinity_like_the_solver(decidb_cli, name):
 # column wider than SMALLINT are not exact in the solver's row-by-row DOUBLE addition (below: 2^60, 1, -2^60 adds up to
 # 1 exactly and to 0 in a double), so a window could not match it.
 _DECLINED_SUM_REASON = "SUM or AVG of a column that is not TINYINT, SMALLINT, UTINYINT or USMALLINT"
-S1_AGGREGATE_DECLINED = {
+S1_REDUCER_DECLINED = {
     "sum_integer": ("INTEGER", ("1", "2", "3"), "SUM(v)", _DECLINED_SUM_REASON),
     "avg_integer": ("INTEGER", ("1", "2", "3"), "AVG(v)", _DECLINED_SUM_REASON),
     "sum_uinteger": ("UINTEGER", ("1", "2", "3"), "SUM(v)", _DECLINED_SUM_REASON),
@@ -1675,21 +1675,21 @@ S1_AGGREGATE_DECLINED = {
         "MAX(v) / MIN(v)",
         "a divisor that is not a nonzero constant",
     ),
-    "qualified_aggregate": ("INTEGER", ("1", "2", "3"), "MIN(t: v)", "variable_shape"),
+    "qualified_reducer": ("INTEGER", ("1", "2", "3"), "MIN(t: v)", "variable_shape"),
 }
 
 
 @pytest.mark.var_boolean
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.parametrize("name", sorted(S1_AGGREGATE_DECLINED))
-def test_s1_aggregate_bound_declines_what_it_cannot_read_exactly(decidb_cli, name):
-    column_type, values, aggregate, reason = S1_AGGREGATE_DECLINED[name]
+@pytest.mark.parametrize("name", sorted(S1_REDUCER_DECLINED))
+def test_s1_reducer_bound_declines_what_it_cannot_read_exactly(decidb_cli, name):
+    column_type, values, reducer, reason = S1_REDUCER_DECLINED[name]
     rows = ", ".join(f"({i}, {9 - i}.0, CAST({value} AS {column_type}))" for i, value in enumerate(values))
-    declaration = "t.x(BOOL)" if "t:" in aggregate else "x(BOOL)"
+    declaration = "t.x(BOOL)" if "t:" in reducer else "x(BOOL)"
     sql = (
         f"SELECT id FROM (FROM (VALUES {rows}) t(id, score, v) "
-        f"DECIDE {declaration} SUCH THAT SUM(x) <= {aggregate} MAXIMIZE SUM(score*x)) q ORDER BY id"
+        f"DECIDE {declaration} SUCH THAT SUM(x) <= {reducer} MAXIMIZE SUM(score*x)) q ORDER BY id"
     )
     with pytest.raises(DecidBCliError) as declined:
         _run(decidb_cli, sql, "require")

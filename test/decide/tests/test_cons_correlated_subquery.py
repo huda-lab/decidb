@@ -445,7 +445,7 @@ def test_correlated_subquery_is_real(
 # --- Row-varying RHS on a reduced constraint (B.5 / D3) ---
 #
 # A correlated subquery decorrelates into a per-row column. On a reduced constraint
-# that is one bound per tuple, all sharing the same aggregate, so the conjunction
+# that is one bound per tuple, all sharing the same reducer, so the conjunction
 # collapses to the tightest single bound: MIN for `<=`, MAX for `>=` (paper §3.2.1,
 # "Without per"). These two used to be rejection tests in test_error_binder.py.
 

@@ -149,9 +149,9 @@ private:
 	// Parts: one additive term of a left side or the objective
 	//===--------------------------------------------------------------------===//
 
-	void ReadAggregate(const BoundAggregateExpression &aggregate, DirectPart &part) const {
+	void ReadReducer(const BoundAggregateExpression &aggregate, DirectPart &part) const {
 		if (aggregate.IsDistinct() || aggregate.order_bys || aggregate.children.size() != 1) {
-			MarkNotProved(part.status, part.reason, "an aggregate with DISTINCT, ORDER BY or several arguments");
+			MarkNotProved(part.status, part.reason, "a reducer with DISTINCT, ORDER BY or several arguments");
 			return;
 		}
 		string order;
@@ -164,25 +164,25 @@ private:
 			                                        : StringUtil::Format("norm tag '%s' is not modelled", order));
 			return;
 		} else if (name == "sum") {
-			part.aggregate = DirectAggregate::SUM;
+			part.reducer = DirectReducer::SUM;
 		} else if (name == "avg") {
-			part.aggregate = DirectAggregate::AVG;
+			part.reducer = DirectReducer::AVG;
 		} else if (name == "min") {
-			part.aggregate = DirectAggregate::MIN;
+			part.reducer = DirectReducer::MIN;
 		} else if (name == "max") {
-			part.aggregate = DirectAggregate::MAX;
+			part.reducer = DirectReducer::MAX;
 		} else {
-			MarkNotProved(part.status, part.reason, StringUtil::Format("aggregate '%s' is not modelled", name));
+			MarkNotProved(part.status, part.reason, StringUtil::Format("reducer '%s' is not modelled", name));
 			return;
 		}
 		if (aggregate.filter) {
 			part.filter = aggregate.filter->Copy();
 		}
-		TryParseQualifiedAggregateTag(aggregate.GetAlias(), part.qualifier);
+		TryParseQualifiedReducerTag(aggregate.GetAlias(), part.qualifier);
 		auto body = UnwrapDecideCasts(*aggregate.children[0], decide.decide_index);
 		if (body->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 			part.inner = make_uniq<DirectPart>();
-			ReadAggregate(body->Cast<BoundAggregateExpression>(), *part.inner);
+			ReadReducer(body->Cast<BoundAggregateExpression>(), *part.inner);
 			if (part.inner->status == DirectAnalysisStatus::NOT_PROVED) {
 				MarkNotProved(part.status, part.reason, part.inner->reason);
 			}
@@ -202,7 +202,7 @@ private:
 		}
 		auto root = UnwrapDecideCasts(*term, decide.decide_index);
 		if (root->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			ReadAggregate(root->Cast<BoundAggregateExpression>(), part);
+			ReadReducer(root->Cast<BoundAggregateExpression>(), part);
 		} else {
 			splitter.Split(*root, 1, part.terms);
 		}
@@ -424,7 +424,7 @@ const DirectPart *DirectIRConstraint::PlainSum(bool allow_filter) const {
 		return nullptr;
 	}
 	auto &part = lhs[0];
-	if (part.sign != 1 || part.scale || part.aggregate != DirectAggregate::SUM ||
+	if (part.sign != 1 || part.scale || part.reducer != DirectReducer::SUM ||
 	    part.qualifier != DConstants::INVALID_INDEX || part.inner || (!allow_filter && part.filter)) {
 		return nullptr;
 	}

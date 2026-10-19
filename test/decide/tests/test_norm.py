@@ -375,7 +375,7 @@ def test_norm_combined_l1_l2_objective(decidb_cli):
 
 @pytest.mark.correctness
 def test_norm_l0_in_arithmetic_objective(decidb_cli):
-    """L0 under arithmetic. The aggregate returns an integer count where the marker
+    """L0 under arithmetic. The reducer returns an integer count where the marker
     returned the deviation's DOUBLE, so this also pins the type change down."""
     r1, c1 = decidb_cli.execute(_MIXED.format(
         obj="norm(new_qty - l_quantity, 0, 100) + 0.001 * SUM(new_qty)"))

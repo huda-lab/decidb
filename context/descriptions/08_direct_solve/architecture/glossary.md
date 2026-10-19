@@ -29,7 +29,7 @@ Conventions that apply to every row:
 | IR | Intermediate representation: a neutral form of the program that later passes read instead of the source tree | Compiler texts (front end, IR, back end) | `DirectProblemFacts` → `DirectIR`; `DirectDecisionFact` → `DirectIRDecision`; `DirectIRConstraint` → `DirectIRConstraint`; `DirectObjectiveFact` → `DirectIRObjective`; `DirectScopeFact` → `DirectIRScope`; `DirectEntityScopeFact` → `DirectIREntityScope`; `FindDirectFactsInput` → `FindDirectIRInput`; variables `facts` → `ir`, `fact` → `ir_node`; test helpers `QueryFacts` → `QueryIR`, `FactsQuery` → `IRQuery`; `direct_problem.cpp` → `direct_ir.cpp`; `architecture/facts.md` → `architecture/ir.md` | facts, fact, `*Fact`, `Facts` |
 | front end | The pass that reads the source tree and builds the IR; the only code that knows `LogicalDecide`'s layout | Compiler texts | `FactReader` → `DirectFrontEnd` | fact reader, adapter (for the second front end) |
 | conservative analysis | An analysis that reports only what it can prove, and "not proved" for anything else, so a wrong rewrite cannot follow from it | Static analysis (soundness) | `DirectFactStatus` → `DirectAnalysisStatus` with `PROVED` / `NOT_PROVED`; `FirstUnknownReason` → `FirstNotProvedReason`; `MarkUnknown` → `MarkNotProved`; `require` reasons `constraint_facts_unknown:` → `constraints_not_proved:`, `objective_facts_unknown:` → `objective_not_proved:`. Not the canonicalizer's `DecideTermKind::UNKNOWN` | unknown fails closed, `KNOWN`, `UNKNOWN` |
-| aggregate | An aggregate function call over decision expressions (`SUM`, `AVG`, `MIN`, `MAX`, `COUNT`) | DuckDB (`BoundAggregateExpression`), SQL | `DirectReducer` → `DirectAggregate`; `S1Reducer` → `Aggregate` (in its namespace); `QUALIFIED_REDUCER_TAG` → `QUALIFIED_AGGREGATE_TAG` (`__qualified_aggregate__`); `ContainsReducer`, `ReadReducer`, `ClassifyReducerCall`, `IsIntegerValuedReducer`, `UnwrapQualifiedReducer`, `TryParseQualifiedReducerTag`, `EvaluateRhsReducerPerGroup`, `rhs_reducers`, `reducers_needed`, `reducer_result`, `reducer_values`, `ReducerProblem` → the same names with `Aggregate`; `04_testing/qualified_reducer/` → `04_testing/qualified_aggregate/`; `require` reasons and docs that say "reducer". Not DuckDB's own `ExpressionDepthReducer` | reducer, reducers |
+| reducer | An aggregate function (`SUM`, `AVG`, `MIN`, `MAX`, `COUNT`) applied over DECIDE variables; DECIDE's name for it, so it is never confused with a SQL aggregate over data | DeciDB term | `DirectReducer`, the S1 rule's `Reducer`, `QUALIFIED_REDUCER_TAG` (`__qualified_reducer__`), `ContainsReducer`, `ReadReducer`, `ClassifyReducerCall`, `EvaluateRhsReducerPerGroup`, `04_testing/qualified_reducer/` | none |
 | singleton-row bound | A constraint on one variable, folded into that variable's bounds before the model is built | Presolve (Andersen & Andersen 1995; Achterberg et al. 2020) | `AbsorbVariableBounds` → `FoldSingletonRows`; `DecideAbsorbBound` → `DecideFoldSingletonRow`; `DecideBoundIsAbsorbed` → `DecideIsSingletonRowBound`; `AbsorbBoundsInExpression` → `FoldSingletonRowsInExpression`; `AbsorbableBound`, `TryReadAbsorbableBound` → `SingletonRowBound`, `TryReadSingletonRowBound`; `absorbed_boxes` → `singleton_row_boxes`; `user_absorbed_bounds` → `user_singleton_row_bounds`; `ABSORBED_BOUND_TAG` → `SINGLETON_ROW_BOUND_TAG`; phase `optimizer.absorb_bounds` → `optimizer.fold_singleton_rows` | absorbed bound, absorb, absorbable |
 | fixed variable | A decision whose value the problem fixes before optimizing | Optimization texts | `ProvePins` → `ProveFixedVariables`; `PinTerms` → `FixedTerms`; `PinDomain` → `FixedDomain`; `ConstantPinDomain` → `ConstantFixedDomain`; `SourcePin` → `SourceFixedValue`; `SourceBooleanPinValue` → `SourceBooleanFixedValue` | pin, pins, pinned |
 
@@ -106,17 +106,16 @@ value. Classes without code take the name in docs only until their code exists.
 A retired word survives only where changing it would break something or where it means something else.
 
 - **Saved or serialized names.** The plan serializer's property `"proof"` (id 209, `direct_result_adapter.cpp`; the
-  field behind it is `condition`) and the parser tag string `__qualified_reducer__` (`QUALIFIED_AGGREGATE_TAG`), which
+  field behind it is `condition`) and the parser tag string `__qualified_reducer__` (`QUALIFIED_REDUCER_TAG`), which
   a saved view stores. Renaming either would stop older plans or database files from reading back.
 - **Oracle cache keys.** A Python test's cached oracle answer is keyed on its node id and its function's source, so
-  outside the direct-solve suites the old words stay in test file names (`test_qualified_reducer.py`,
-  `test_nested_product_in_reducer.py`, `test_null_coalesce_reducer.py`), test function and class names, parameter ids,
-  and comments or strings inside oracle test bodies. In `test_direct_user_facing.py` the same holds for
+  outside the direct-solve suites the old words stay in test function and class names, parameter ids, and comments or
+  strings inside oracle test bodies. In `test_direct_user_facing.py` the same holds for
   `test_a1_unused_wide_columns_stay_out_of_the_barrier_and_computed_errors_stay_in` and the four `test_second_read_*`
   tests. Changing any of them means re-solving those tests with Gurobi.
 - **Recorded benchmark commands.** `--pins` and the JSON key `pins` in `benchmark/decide/profile_direct_s1_api.*`,
   because the measurement commands in `rules/s1_uniform_matroid/done.md` use them.
-- **Other meanings.** DuckDB's own `ExpressionDepthReducer` and aggregate-state `Absorb`; `AbsorbAdditive`
+- **Other meanings.** DuckDB's aggregate-state `Absorb`; `AbsorbAdditive`
   (`decide_degree.cpp`, merging a child's degree into its parent); `DecideTermKind::UNKNOWN`; "absorb", "second read",
   "pin" (a test pins `require`) and "boundary" in their everyday senses; "near miss" (a testing term); a cache "miss";
   "proof" and "prove" in the mathematical sense and in the `Prove*` helpers that certify one part of the IR; the

@@ -20,8 +20,7 @@ and the old words it replaced; its last section lists the few places an old word
 - **The problem classes.** Each class keeps its id and adds the textbook name of its problem: S1 is uniform-matroid
   optimization and A1 is a separable box-constrained problem, and likewise for the other 17. Folders, rule files,
   namespaces, test files and the `EXPLAIN` value follow (`S1_UNIFORM_MATROID`, `A1_SEPARABLE_BOX`).
-- **Outside direct solve.** "Reducer" became "aggregate", DuckDB's own word, across the parser, planner, solver, error
-  messages, docs and website. An "absorbed bound" became a singleton-row bound folded into the variable's box, the
+- **Outside direct solve.** An "absorbed bound" became a singleton-row bound folded into the variable's box, the
   presolve term.
 - **Tests.** The S1 and A1 suites are differential oracle tests (`test_direct_s1_uniform_matroid.py`,
   `test_direct_a1_separable_box.py`), and the suite every rule must pass is the conformance suite
@@ -32,8 +31,8 @@ and the old words it replaced; its last section lists the few places an old word
 ## What a SQL user notices
 
 Only wording. `EXPLAIN` shows the new class names and a `Direct solve condition` line where it said `Direct solve
-proof`; `require` reasons and error messages say "aggregate" and "fixed value" where they said "reducer" and "pin"; the
-`decide_direct_solve` setting description says "a rule that applies". Answers, plans and speed are unchanged. The
+proof`; `require` reasons and error messages say "fixed value" where they said "pin"; the `decide_direct_solve`
+setting description says "a rule that applies". Answers, plans and speed are unchanged. The
 setting's name, its values, and every serialized name stayed, so saved plans and database files still read back.
 
 ## Decisions the owner made

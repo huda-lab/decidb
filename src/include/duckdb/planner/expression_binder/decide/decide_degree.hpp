@@ -59,7 +59,7 @@ DecideDegree DecideExpressionDegree(const Expression &expr, idx_t decide_index);
 //!
 //! Runs on the bound tree immediately after `DecideConstraintsBinder`, and is *total*:
 //! it descends conjunctions and `WHEN` / `PER` wrappers to every comparison that becomes
-//! a model row, and checks both sides. Aggregate arguments and bare per-row constraints are
+//! a model row, and checks both sides. Reducer arguments and bare per-row constraints are
 //! therefore judged by one rule — before this existed, `SUM(POWER(x*y,2)) <= 10` was
 //! refused at bind time while the identical `POWER(x*y,2) <= 5` reached term extraction
 //! and was refused at plan time, in extractor vocabulary and with no source location.

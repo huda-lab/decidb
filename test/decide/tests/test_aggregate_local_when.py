@@ -1435,7 +1435,7 @@ def test_aggregate_local_when_objective_atomic_comparison(
 # bound. A WHEN-tagged aggregate is just one opaque term to it, so the
 # per-aggregate filter cannot be flattened. A factor on the aggregate
 # (`K * (SUM(x) WHEN c)`) is peeled OUTWARD onto the term and stays outside the
-# aggregate all the way to the solver row.
+# reducer all the way to the solver row.
 #
 # These shapes used to be handled before binding instead, by a dedicated
 # tagged-aggregate path in `SimplifyComparisonExpr`, which folded the factor
@@ -1721,12 +1721,12 @@ def test_outer_when_with_arithmetic_offset_works(
 
 
 # ===========================================================================
-# A per-row data column may NOT scale an aggregate.
+# A per-row data column may NOT scale a reducer.
 # ===========================================================================
 #
 # These three shapes used to solve, via a parsed-level fold that rewrote
 # `col * (SUM(x) WHEN w)` into `WHEN(SUM(col * x), w)` — reading the column as a
-# per-row coefficient. That fold is gone (see DecideCanonicalizer::PeelScale): an aggregate collapses many rows to one number,
+# per-row coefficient. That fold is gone (see DecideCanonicalizer::PeelScale): a reducer collapses many rows to one number,
 # so "which row's `col` scales it?" has no answer, and plain SQL agrees — `col *
 # SUM(x)` needs `col` in the GROUP BY. The per-row-coefficient reading is still
 # available, spelled explicitly as `SUM(col * x)`.

@@ -35,7 +35,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 
     if (statement.HasDecideClause()) {
         // Which column refs will be ONE value for the whole query once flattening is
-        // done. Canonicalization needs this to tell a legal factor on an aggregate
+        // done. Canonicalization needs this to tell a legal factor on a reducer
         // (`(SELECT k FROM p) * SUM(x)`) from an illegal one (`weight * SUM(x)`, which
         // has no answer to "which row's weight?"). After PlanSubqueries all three of
         // `weight`, an uncorrelated subquery and a CORRELATED subquery are plain column
@@ -73,7 +73,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
             }
             // The objective passes through the same canonicalization boundary, so it
             // needs the same correlation evidence. Without this an UNCORRELATED
-            // subquery scaling an aggregate (`(SELECT k) * MAX(x)`) is indistinguishable
+            // subquery scaling a reducer (`(SELECT k) * MAX(x)`) is indistinguishable
             // from a row-varying column after flattening, hits the fail-safe default,
             // and is rejected for varying per row when it does not.
             if (statement.decide_objective) {

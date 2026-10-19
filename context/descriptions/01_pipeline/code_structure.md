@@ -51,7 +51,7 @@ Stage numbers refer to [`README.md`](README.md).
 | Path | Stage | Contents |
 |---|---|---|
 | `parser/decide/decide_parse_hints.cpp` | 01 | DECIDE-aware parse-error hint |
-| `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, degree, aggregates, qualified aggregates |
+| `planner/expression_binder/decide/decide_binder.cpp` | 02 | Shared DECIDE expression rules, degree, reducers, qualified reducers |
 | `planner/expression_binder/decide/decide_constraints_binder.cpp` | 02 | `SUCH THAT` |
 | `planner/expression_binder/decide/decide_objective_binder.cpp` | 02 | Objective |
 | `planner/expression_binder/decide/decide_declarations_binder.cpp` | 02 | DECIDE declarations, scopes, scoped-variable spelling, and the `SUCH THAT` / objective binds |
@@ -113,7 +113,7 @@ classDiagram
         +BindAggregate()
         +BindFunction()
         +BindLocalWhenAggregate()
-        +BindQualifiedAggregate()
+        +BindQualifiedReducer()
     }
     class DecideConstraintsBinder {
         +BindComparison()
@@ -198,7 +198,7 @@ classDiagram
 - **`ValidateSumArgument()`** — linear (or optionally quadratic) combination check.
 - **`DecideDegreeInternal()`** — polynomial degree, not occurrence count.
 - **`ValidateDecideNoExplicitDecisionCasts()`** — the cast authorship boundary.
-- **`BindLocalWhenAggregate()` / `BindQualifiedAggregate()`**.
+- **`BindLocalWhenAggregate()` / `BindQualifiedReducer()`**.
 
 ### `src/planner/decide/decide_canonicalizer.cpp` — stage 04
 - **`CanonicalizeTree()` / `CanonicalizeComparison()` / `CanonicalizeObjective()`** — pure.

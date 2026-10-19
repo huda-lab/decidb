@@ -85,7 +85,7 @@ silently on a missing reference is how the last one went stale.
 ## What the corpus covers
 
 Per-row and aggregate constraint shapes, canonicalization spellings (side-swapped,
-leading-negative, scaled aggregates), `WHEN` and `PER`, subquery right-hand sides, ABS,
+leading-negative, scaled reducers), `WHEN` and `PER`, subquery right-hand sides, ABS,
 MIN/MAX in all four hard forms, `<>` including both range collapses, and — queries 86-88
 — auxiliary boxes over a range open on one side, on both the constraint and the
 objective path. That last group was added with the half-open box: before it, every

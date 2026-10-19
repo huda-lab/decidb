@@ -249,7 +249,7 @@ class TestDegenerateConstraintRows:
     """
 
     # Every spelling that reduces to a coefficient-free row: a literal zero factor
-    # inside or outside the aggregate, either operand order, and cancellation (which
+    # inside or outside the reducer, either operand order, and cancellation (which
     # contains no zero literal at all).
     DEGENERATE_CLAUSES = [
         "0 * x <= -1",

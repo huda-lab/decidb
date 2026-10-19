@@ -6,7 +6,7 @@ already-canonical spelling it maps to emit byte-identical solver-neutral
 models.  This is stronger than comparing optimal values: different rows and
 bounds can share an optimum.
 
-The pairs cover side swaps, exact casts, query-wide provenance, aggregate scales,
+The pairs cover side swaps, exact casts, query-wide provenance, reducer scales,
 and WHEN/PER wrappers.
 """
 

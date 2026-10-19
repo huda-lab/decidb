@@ -1380,7 +1380,7 @@ def test_composed_minmax_scalar_mult_hard_min(decidb_cli):
     """`(2 * MIN(x*v) WHEN w) + SUM(x*v) <= K` — hard-direction composed MIN with
     a scalar multiplier.
 
-    The canonicalizer peels the `2` off the aggregate and it stays outside: the
+    The canonicalizer peels the `2` off the reducer and it stays outside: the
     physical layer multiplies it into the auxiliary's contribution. The hard-MIN
     indicator layer pins z to the true MIN of the unscaled inner expression, and the
     outer row carries `2 * z`.

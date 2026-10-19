@@ -33,9 +33,9 @@ SUCH THAT SUM(x * weight) <= SUM(b) + 10    -- aggregate plus a scalar offset
 SUCH THAT SUM(x * weight) <= SUM(b) WHEN w  -- RHS aggregate-local WHEN: bound over w-rows
 ```
 
-These are evaluated **in place, on the right**, by the RHS aggregate evaluator described under "Aggregates as a Bound"
-below: each data-only aggregate collapses to one value per group, honouring the constraint's `WHEN`/`PER`, the
-aggregate's own `WHEN`, and relation-qualifier de-duplication. `PER` constraints therefore carry a **per-group RHS**
+These are evaluated **in place, on the right**, by the RHS reducer evaluator described under "Reducers as a Bound"
+below: each data-only reducer collapses to one value per group, honouring the constraint's `WHEN`/`PER`, the
+reducer's own `WHEN`, and relation-qualifier de-duplication. `PER` constraints therefore carry a **per-group RHS**
 (each group's `SUM(val)` is its own bound), not one uniform scalar.
 
 A trailing `WHEN` on a bare RHS aggregate (`... <= SUM(b) WHEN w`) is **aggregate-local**: it scopes only that aggregate, so the bound is `SUM(b)` over the w-rows while the left side still sums every row.
@@ -48,9 +48,9 @@ A trailing `WHEN` on a bare RHS aggregate (`... <= SUM(b) WHEN w`) is **aggregat
 
 **Tests**: `test/decide/tests/test_cons_rhs_aggregate.py` — parity with the explicitly-subtracted form and the scalar-bound equivalent, scalar-plus-aggregate RHS, per-group PER bounds, AVG mixed with other terms, aggregate-local WHEN, MIN/MAX bounds, and group-aware `COUNT(*)`.
 
-#### Aggregates as a Bound (B.5)
+#### Reducers as a Bound (B.5)
 
-Any aggregate may stand on the right of a reduced constraint, evaluated to **one value per group**:
+Any reducer may stand on the right of a reduced constraint, evaluated to **one value per group**:
 
 ```sql
 SUCH THAT SUM(x * price) <= MIN(price) * 4      -- MIN/MAX, not just SUM/AVG
@@ -62,30 +62,30 @@ SUCH THAT SUM(ship) <= stock PER depotID        -- a plain column, the same way 
 
 This removes an asymmetry that could not be explained without describing internals: `<= AVG(col)` worked and `<= MIN(col)` did not, because the old hoist moved a data term to the left where it is reduced by **summing a column** — which is SUM by luck, and cannot express MIN.
 
-**Semantics.** The evaluator implements the construction order paper §3.2.2 fixes for every aggregate — `when` selection
-→ `per` partitioning → qualifier-key grouping and de-duplication → aggregation. An aggregate's own `WHEN` scopes only
-that aggregate, so the right side is *not* narrowed by the left side's aggregate-local `WHEN`: in `(SUM(x) WHEN a) <=
+**Semantics.** The evaluator implements the construction order paper §3.2.2 fixes for every reducer — `when` selection
+→ `per` partitioning → qualifier-key grouping and de-duplication → aggregation. A reducer's own `WHEN` scopes only
+that reducer, so the right side is *not* narrowed by the left side's aggregate-local `WHEN`: in `(SUM(x) WHEN a) <=
 MIN(b)`, `MIN(b)` still ranges over every row.
 
 **A row-varying bound** — a plain data column (C1) or a correlated subquery — collapses to the single bound the per-tuple conjunction implies for `<=`/`<`/`>=`/`>`: MIN for `<=`/`<`, MAX for `>=`/`>`, per paper §3.2.1. `=` has no such collapse and is refused as a contradiction when the values genuinely differ (two different single numbers can't both be *the* sum). `<>` also has no collapse, but for the opposite reason: nothing contradicts, so every excluded value is kept rather than reduced to one (C3) — `SUM(x) <> 500 AND SUM(x) <> 350` within one group, not just the tighter of the two. Both are Standing Decision 3.
 
 **AVG on the right** keeps its fractional value, including when mixed with other terms (`<= 2 * AVG(col)`). This briefly
 did not work: the optimizer's AVG→SUM rewrite redeclares the node with SUM's integral type while its value stays
-fractional, and this is the one place an aggregate's value is handed back to a surrounding expression bound against that
+fractional, and this is the one place a reducer's value is handed back to a surrounding expression bound against that
 type, so the fraction was cast away. `RewriteAvgInExpression` now **skips any AVG with no decision variable** — there is
 nothing to linearize in one, and DuckDB's `AVG` already returns `DOUBLE`.
 
-**Qualified and WHEN-scoped aggregates as bounds** (`<= SUM(D: cost)`, `<= SUM(b) WHEN w`) run the same de-duplication
+**Qualified and WHEN-scoped reducers as bounds** (`<= SUM(D: cost)`, `<= SUM(b) WHEN w`) run the same de-duplication
 and filtering the left side does. These were built with B.5 but unreachable until the binder's RHS validator stopped
 treating a wrapper's predicate / PER key / relation alias as if it were a value on the bound side.
 
-**Code**: `EvaluateRhsAggregatePerGroup` and `ReduceAggregateRhsPerGroup` in
-`src/execution/operator/decide/physical_decide.cpp`; aggregate substitution via `TransformToChunkExpression`'s
+**Code**: `EvaluateRhsReducerPerGroup` and `ReduceAggregateRhsPerGroup` in
+`src/execution/operator/decide/physical_decide.cpp`; reducer substitution via `TransformToChunkExpression`'s
 `agg_substitutions`. Design and the findings behind it: `the canonicalization refactor, B.5.
 
-#### A Query-Wide Decision Multiplied by a Vector, Inside an Aggregate (Batch D)
+#### A Query-Wide Decision Multiplied by a Vector, Inside a Reducer (Batch D)
 
-An aggregate is rejected iff its **body is row-invariant** — holds the same value on every
+A reducer is rejected iff its **body is row-invariant** — holds the same value on every
 row, with no data column and no row- or entity-scoped decision anywhere inside it — not
 merely because it *contains* a query-wide (`scalar`) decision:
 
@@ -102,7 +102,7 @@ Before this, the test was "does a scalar appear anywhere in the body", which rej
 is unambiguous — a standard scalar-times-vector product. The relation-qualified form
 follows the same rule: a scalar is exempt from "everything must come from the qualified
 relation" (§5.1) because it is row-invariant and contributes uniformly to every tuple,
-but a qualified aggregate whose entire body is scalars/constants is still rejected for the
+but a qualified reducer whose entire body is scalars/constants is still rejected for the
 same "nothing to reduce over" reason.
 
 **Formulation (stage 05/06).** Term extraction (`decide_linear_form.cpp`) was already
@@ -113,12 +113,12 @@ the **accumulator** that folds per-row-evaluated coefficients into the flat solv
 column a variable resolves to (`ilp_model_builder.cpp`): it took a shortcut for any
 `SCALAR`-scoped term — add the coefficient **once**, from row 0 or the group's first
 row — because the only shape that shortcut had ever needed to handle was a scalar
-standing **beside** an aggregate as a bare additive term (`SUM(x) - max_shortfall <= cap`),
+standing **beside** a reducer as a bare additive term (`SUM(x) - max_shortfall <= cap`),
 which is genuinely row-invariant and must not be multiplied by the row count. Now that a
-scalar can also sit **inside** an aggregate body, that same shortcut would silently drop
+scalar can also sit **inside** a reducer body, that same shortcut would silently drop
 every row's contribution but one. The fix distinguishes the two shapes using
 `DecideTerm::reduction`: `LinearTermReduction::SUM` marks a term that came from inside a
-real aggregate (stamped by `ApplyAggregateMetadata` on the constraint side, and now the
+real reducer (stamped by `ApplyAggregateMetadata` on the constraint side, and now the
 same way in `ExtractAggregateObjectiveTerms`/`AnalyzeObjective`'s aggregate branch on the
 objective side); `NONE` marks a bare sibling term. The accumulator's scalar shortcut now
 fires only when `var_scope == SCALAR && reduction != SUM` — a `SUM`-reduced scalar term
@@ -130,7 +130,7 @@ parallel `objective_term_reductions` array (the constraint side already had
 
 **De-duplication.** A relation-qualified `SUM(D: cost * cap)` still charges each of `D`'s
 distinct tuples once, even when two tuples share the same `cost` — identity is the tuple,
-not the value, same as every other qualified aggregate (§5.1). The qualifier's existing
+not the value, same as every other qualified reducer (§5.1). The qualifier's existing
 row-masking (`ApplyQualifierToFilter`/`BuildQualifierKeepMask`) runs before the
 accumulator sees the row data, so the accumulator itself needs no qualifier-specific case.
 
@@ -144,9 +144,9 @@ discriminates coefficient `Σcost` from both the bare-scalar and row-count misre
 weighted by distinct-entity data, equal-cost entities still counted twice),
 `test_query_wide_decision_alone_inside_qualified_reducer_rejected` (still-rejected).
 
-**Code**: `DecideBinder::IsRowInvariantExpression` and `ClassifyAggregateCall`
-(unqualified/parsed-tree gate), `IsBoundAggregateBodyRowInvariant` and
-`BindQualifiedAggregate` (qualified/bound-tree gate) in `decide_binder.cpp`;
+**Code**: `DecideBinder::IsRowInvariantExpression` and `ClassifyReducerCall`
+(unqualified/parsed-tree gate), `IsBoundReducerBodyRowInvariant` and
+`BindQualifiedReducer` (qualified/bound-tree gate) in `decide_binder.cpp`;
 `ExtractAggregateConstraintTerms`/`ExtractAggregateObjectiveTerms` in
 `decide_linear_form.cpp` (the `BOUND_AGGREGATE` exclusion on the bare-scalar shortcut);
 the three `var_scope == SCALAR` sites in `ilp_model_builder.cpp` (two constraint paths,
@@ -163,13 +163,13 @@ scope already used, just for each relation in the list. A row is a duplicate onl
 it repeats on *every* named relation's key at once, so naming a relation removes the
 fan-out it would otherwise contribute, and a relation left unnamed still contributes
 its fan-out uncollapsed. `expr` may draw columns and decisions from any of the named
-relations (`CheckQualifiedAggregateBody`'s "must come from the qualifier" rule now checks
+relations (`CheckQualifiedReducerBody`'s "must come from the qualifier" rule now checks
 set membership instead of equality), and the relation list is order-independent — `D,
 T` and `T, D` resolve to the same scope.
 
 One consequence of that identity rule is worth stating: with exactly two relations in
 the whole query, `SUM(D, T: expr)` and the unqualified `SUM(expr)` are the same
-aggregate — the composite key already *is* the join-result row, since there is no third,
+reducer — the composite key already *is* the join-result row, since there is no third,
 unqualified relation left to contribute fan-out for the qualifier to collapse. The two
 forms only diverge once a relation the query joins is left out of the qualifier list —
 which needs three relations to demonstrate, since the two-relation case can't produce
@@ -197,10 +197,10 @@ and are checked against three independent oracle models),
 `test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only_those_two_relations`
 (confirms the no-op case above, row-for-row), `test_unknown_relation_in_multi_relation_qualifier_rejected`.
 
-**Code**: grammar actions for `PG_AEXPR_QUALIFIED_AGGREGATE` in
+**Code**: grammar actions for `PG_AEXPR_QUALIFIED_REDUCER` in
 `third_party/libpg_query/grammar/statements/select.y`; the matching transform case in
-`transform_operator.cpp`; `FindOrCreateEntityScope`, `BindQualifiedAggregate`,
-`CheckQualifiedAggregateBody`, `ScopeContainsTable`/`ScopeTablesIntersect` in
+`transform_operator.cpp`; `FindOrCreateEntityScope`, `BindQualifiedReducer`,
+`CheckQualifiedReducerBody`, `ScopeContainsTable`/`ScopeTablesIntersect` in
 `decide_binder.cpp`; the `EntityScopeInfo` struct in `logical_decide.hpp`; the
 entity-key data-column refinement in `bind_select_node.cpp`; `Serialize`/`Deserialize`
 in `logical_decide.cpp` (field 239 carries the per-scope table-index count; old plans
@@ -323,7 +323,7 @@ SUCH THAT MAX(x * cost) <= 50 WHEN category = 'electronics'
 MINIMIZE MAX(x * deviation) WHEN active = 1
 ```
 
-**Code**: nothing rewrites a MIN/MAX before binding — an aggregate is one atomic term to the canonicalizer, which never
+**Code**: nothing rewrites a MIN/MAX before binding — a reducer is one atomic term to the canonicalizer, which never
 opens it, so a multi-term `inner` is safe by construction. (An earlier parsed-level representation encoded `MIN`/`MAX`
 as a `MARKER * inner` product, which algebraic expansion then distributed across a multi-term inner and scrambled; that
 is why a multi-term inner under a nested `SUM(...) PER` used to be rejected at bind time. Nothing distributes anything
@@ -485,7 +485,7 @@ MINIMIZE SUM(POWER(x / weight - 1, 2))     -- OK: data-column divisor in QP
 
 ### Data-only operators and named functions the algebra doesn't model (`%`, bitwise, `mod()`, `floor()`, …)
 
-DECIDE models a fixed set of operators (`+ - * / ^ **`) plus a handful of named forms (`abs`, `power`, the aggregates).
+DECIDE models a fixed set of operators (`+ - * / ^ **`) plus a handful of named forms (`abs`, `power`, the reducers).
 Any *other* operator — `%`, bitwise ops — or *named scalar function* — `mod()`, `floor()`, `sqrt()`, … — is rejected
 inside a DECIDE clause **only when it touches a decision variable**. When the operands reference no DECIDE variable, the
 whole subexpression is a per-row constant: nothing needs to model it, and the physical layer evaluates it through DuckDB
@@ -515,7 +515,7 @@ This is the same "fold data-only subterms" idea already applied to `x + cost` an
 (`test_mod_function_data_coefficient_matches_oracle` oracle-verified,
 `test_floor_function_data_coefficient_in_constraint`), and the `TestUnsupportedOperatorOverVariableRejection` cases
 pinning that a variable-bearing `%` or `mod()` still errors without a stack trace.
-`test/decide/tests/test_null_coalesce_reducer.py` covers the `COALESCE`/`IFNULL` operator node in aggregate constraints
+`test/decide/tests/test_null_coalesce_reducer.py` covers the `COALESCE`/`IFNULL` operator node in reducer constraints
 and objectives and keeps its decision-bearing form rejected.
 
 ### Per-row linear LHS (`+ const`, `- col`, `/ const`, unary `-`)

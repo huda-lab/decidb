@@ -44,7 +44,7 @@ struct DirectIRDecision {
 	idx_t entity_scope = DConstants::INVALID_INDEX;
 };
 
-//! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or an aggregate qualifier
+//! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or a reducer qualifier
 //! (`SUM(D: e)`).
 struct DirectIREntityScope {
 	vector<idx_t> relations;
@@ -53,8 +53,8 @@ struct DirectIREntityScope {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 };
 
-enum class DirectAggregate : uint8_t {
-	//! A row-level part: per-row constraint algebra, or a query-wide decision beside aggregates.
+enum class DirectReducer : uint8_t {
+	//! A row-level part: per-row constraint algebra, or a query-wide decision beside reducers.
 	NONE,
 	SUM,
 	AVG,
@@ -62,20 +62,20 @@ enum class DirectAggregate : uint8_t {
 	MAX
 };
 
-//! One additive part of a constraint's left side or of the objective: `sign * scale * aggregate(terms)`.
+//! One additive part of a constraint's left side or of the objective: `sign * scale * reducer(terms)`.
 struct DirectPart {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 	string reason;
 	int sign = 1;
-	//! A query-wide factor canonicalization left on the aggregate; null for none.
+	//! A query-wide factor canonicalization left on the reducer; null for none.
 	unique_ptr<Expression> scale;
 	bool scale_divides = false;
-	DirectAggregate aggregate = DirectAggregate::NONE;
+	DirectReducer reducer = DirectReducer::NONE;
 	//! Aggregate-local WHEN.
 	unique_ptr<Expression> filter;
-	//! Entity scope the aggregate is qualified by (`SUM(D: e)`), or INVALID_INDEX.
+	//! Entity scope the reducer is qualified by (`SUM(D: e)`), or INVALID_INDEX.
 	idx_t qualifier = DConstants::INVALID_INDEX;
-	//! The body's terms. Empty when `inner` holds a nested aggregate (`OUTER(INNER(e)) PER k` objectives).
+	//! The body's terms. Empty when `inner` holds a nested reducer (`OUTER(INNER(e)) PER k` objectives).
 	vector<DecideSplitTerm> terms;
 	unique_ptr<DirectPart> inner;
 };

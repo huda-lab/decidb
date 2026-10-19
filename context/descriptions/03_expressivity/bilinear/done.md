@@ -108,7 +108,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
    - Uses `is_boolean_var` vector (not `return_type`) to detect boolean status
 
 4. **Term splitting and the prepared model**:
-   - `DecideTermSplitter::Split` (`src/planner/decide/decide_term_split.cpp`) splits an aggregate body into constant,
+   - `DecideTermSplitter::Split` (`src/planner/decide/decide_term_split.cpp`) splits a reducer body into constant,
      linear, product, square and ABS terms. `ExtractLinearAndBilinearTerms()` (objective) and `ExtractConstraintTerms()`
      (constraints) in `src/optimizer/decide/decide_linear_form.cpp` turn those terms into prepared linear, bilinear and
      quadratic terms.

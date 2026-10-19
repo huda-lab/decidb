@@ -41,7 +41,7 @@ The `DECIDE` clause declares **decision variables** of a COP query. Each variabl
   - **Constraints**: a scalar may be compared against row-varying data (`ship <= cap`). The constraint fans out per row, but every generated row references the same column — that is what makes the decision shared. The row-scoped fast path in the model builder is skipped for scalars for the same reason it is skipped for entity-scoped variables (many rows, one column).
   - **As a term of an aggregate constraint**: a scalar is row-invariant, so it is a complete term of an aggregate
     constraint on its own — `SUM(x) - cap <= 4`, the paper's `max_shortfall` shape (§3.1). This mirrors the objective
-    rule below and is canonical form's K3 ("every term is an aggregate **or row-invariant**"). Two things had to agree
+    rule below and is canonical form's K3 ("every term is a reducer **or row-invariant**"). Two things had to agree
     for it to be right, and they fail differently: `ExtractAggregateConstraintTerms` used to *reject* the term outright,
     while both model-builder accumulators (ungrouped and `PER`) fan every term out over the group's rows, which for a
     one-column variable silently multiplies its coefficient by the row count. The accumulators now add a scalar's
@@ -53,12 +53,12 @@ The `DECIDE` clause declares **decision variables** of a COP query. Each variabl
     `test/decide/tests/test_scalar_var_in_aggregate.py`,
     `test_scalar_scope.py::test_scalar_as_aggregate_rhs[_with_per]`, `test_canonicalize_side_agnostic.py`, golden corpus
     55/56 and 75/76/77.
-  - **Objectives**: a scalar contributes **bare**, not through an aggregate — alone (`MINIMIZE cap`) or as an additive
-    term beside aggregates (`MINIMIZE cap - SUM(x)`). `AnalyzeObjective` (`src/optimizer/decide/decide_linear_form.cpp`)
+  - **Objectives**: a scalar contributes **bare**, not through a reducer — alone (`MINIMIZE cap`) or as an additive
+    term beside reducers (`MINIMIZE cap - SUM(x)`). `AnalyzeObjective` (`src/optimizer/decide/decide_linear_form.cpp`)
     recognises a purely-scalar objective (which carries no aggregate at all), and `ExtractAggregateObjectiveTerms`
     accepts a scalar leaf. The model builder adds the coefficient **once** instead of once per row; without that the
     coefficient would be silently multiplied by input cardinality.
-  - **An aggregate is rejected iff its body is row-invariant**: `SUM(cap)` / `AVG(cap)` / `SUM(cap1 + cap2)` raise a
+  - **A reducer is rejected iff its body is row-invariant**: `SUM(cap)` / `AVG(cap)` / `SUM(cap1 + cap2)` raise a
     binder error quoting the body and naming the fix. There is one column and nothing to reduce over, and the two
     plausible readings (coefficient 1 vs. coefficient `n`) are different optimization problems — so neither is chosen
     silently. A body that *mixes* a scalar with row-varying data is not row-invariant and is an ordinary
@@ -68,20 +68,20 @@ The `DECIDE` clause declares **decision variables** of a COP query. Each variabl
     passes it the set of `scalar`-declared names; the objective and constraint binders inherit it rather than each
     testing for a scalar themselves. The weighting the accepted case implies is carried to stage 06 by
     `DecideTerm::reduction` — see `../sql_functions/done.md` → "A Query-Wide Decision Multiplied by a Vector, Inside a
-    Aggregate (Batch D)".
+    Reducer (Batch D)".
   - **Output**: the value is repeated on every result row (paper §3.1), which falls out of `Get()` resolving every row to the same column.
   - **Diagnostics**: a scalar has a single instance, so `FormatEscapingInstances` already suppresses the `affected_rows`/`affected_entities` cell and the unbounded report carries only `grows_toward`. The candidate provider returns no grouping candidates for a scalar — there is no subset of rows to characterize.
   - Tests: `test/decide/tests/test_scalar_scope.py`.
 - **Table-scoped entity identification**: all columns from the source table form a composite key. During physical execution (Phase 1.5), the executor scans result rows, extracts the source-table columns for each scoped variable, and maps each distinct entity key to a single solver variable index — the **entity consistency guarantee**. There is no syntax for a custom key subset.
 - **Aggregate semantics with table scope**: SUM/AVG aggregate over result rows, not entities — if an entity appears in 5
   join-result rows, its shared variable contributes 5 times (standard SQL aggregation over the join result). A
-  **relation-qualified aggregate** opts out of that per aggregate; see below.
+  **relation-qualified reducer** opts out of that per reducer; see below.
 
-## Relation-qualified aggregates — `agg(D: expr)`, `agg(D, T: expr)`
+## Relation-qualified reducers — `agg(D: expr)`, `agg(D, T: expr)`
 
 `SUM(D: expr)` reduces over `D`'s tuple identities instead of over join-result rows,
 contributing one term per surviving `D` tuple (paper §3.2.2). Syntax and semantics:
-`../../00_project_overview/syntax_reference.md` §5.1. Unqualified aggregates are unchanged,
+`../../00_project_overview/syntax_reference.md` §5.1. Unqualified reducers are unchanged,
 so this is opt-in and nothing existing changes meaning.
 
 - **A qualifier is an entity scope with no variable.** The tuple-identity key a qualifier
@@ -102,18 +102,18 @@ so this is opt-in and nothing existing changes meaning.
   value, so *which* row survives cannot matter.
 - **The mask is per term, not per clause**, so `SUM(D: a * open) + SUM(b * ship)` in one
   objective de-duplicates only the first term.
-- **Aggregate-local WHEN on a qualified aggregate works on both sides, regardless of
+- **Aggregate-local WHEN on a qualified reducer works on both sides, regardless of
   WHEN/comparison order**: `SUM(D: expr) WHEN cond <= bound` and
   `SUM(D: expr) <= bound WHEN cond` both bind and execute in constraints, matching the
   objective side. This needed a grammar production, not a binder change — the binder's
   `ContainsDecideAggregate`/`GetExpressionType` already unwrap `WHEN_CONSTRAINT` around a
-  qualified aggregate correctly (proven by the objective side, which never had a trailing
+  qualified reducer correctly (proven by the objective side, which never had a trailing
   comparison to lose). The grammar had no route to *produce* that shape for the
-  WHEN-before-comparison order: a qualified aggregate is not a `func_application`, so it
+  WHEN-before-comparison order: a qualified reducer is not a `func_application`, so it
   couldn't take the `func_application WHEN_DECIDE decide_when_condition` production
   aggregate-local WHEN already used, and fell instead to the loose, whole-constraint
   `a_expr WHEN_DECIDE b_expr` production, which swallowed a trailing `<= bound` into the
-  WHEN condition. Fixed by adding a qualified-aggregate-specific mirror of that production
+  WHEN condition. Fixed by adding a qualified-reducer-specific mirror of that production
   (see Code Pointers below).
 - **Composed MIN/MAX carries the qualifier too.** `SUM(D: a * open) + MAX(b * ship)` routes
   through the composed path, which keeps its own term struct
@@ -136,36 +136,36 @@ so this is opt-in and nothing existing changes meaning.
   out of the list. This is a binder-only change — the optimizer's `qualifier_scope_idx`
   stamping, the prepared model's term structs and `BuildQualifierKeepMask` /
   `BuildEntityMappings` all treat a scope as an opaque index into `entity_scopes` and did
-  not move. Details: `../../01_pipeline/02_binder/done.md` → "Relation-qualified aggregates",
+  not move. Details: `../../01_pipeline/02_binder/done.md` → "Relation-qualified reducers",
   `../sql_functions/done.md` → "Several Relations at Once — A Composite Qualifier (Batch E)".
-- **A query-wide (`scalar`) decision is allowed inside a qualified aggregate**, matching paper
+- **A query-wide (`scalar`) decision is allowed inside a qualified reducer**, matching paper
   §3.2.2's carve-out: it is row-invariant, so it contributes the same value to every tuple
   regardless of which relation owns it (`SUM(D: opening_cost * cap)`). It is refused only
   when it is the *whole* body (`SUM(D: cap)`), by the general row-invariance rule above.
-- **EXPLAIN prints the qualifier.** `RenderAggregate` reads the qualified-aggregate tag off
+- **EXPLAIN prints the qualifier.** `RenderAggregate` reads the qualified-reducer tag off
   the aggregate's alias and prefixes the body with the scope's `table_alias`, so
   `SUM(D: opening_cost * open)` and `SUM(opening_cost * open)` are distinguishable in a
   plan. Unlike `WHEN` and `PER`, which the clause walker unwraps into postfix suffixes, the
   qualifier sits *on* the aggregate rather than above it, so it is rendered by the
   aggregate's own case rather than appended as a suffix.
-- **A row-scoped decision inside a qualified aggregate is rejected, and stays rejected**
+- **A row-scoped decision inside a qualified reducer is rejected, and stays rejected**
   (settled 2026-08-26). A row-scoped `y(INT)` is a different variable on every
   join-result row, so collapsing a depot's rows down to one would keep an arbitrary one
   of its `y` variables and silently drop the rest — the answer would depend on the row
   order the join happened to produce. The error names both one-word fixes: declare it on
-  the qualified relation (`D.y(INT)`), or move the term into its own unqualified aggregate.
+  the qualified relation (`D.y(INT)`), or move the term into its own unqualified reducer.
   Two alternatives were weighed and ruled out. Summing a group's row-scoped variables
   before de-duplicating is well defined, but makes `D:` mean "de-duplicate" for one
   operand and "sum first" for another. Allowing it when the join happens to be 1:1 would
   make a query's validity depend on its data rather than on the query — already rejected
   for `PER` on the same grounds.
-- **Rejections** (all at bind time, in `BindQualifiedAggregate` /
-  `CheckQualifiedAggregateBody`): a column or entity-scoped decision from a relation *not*
+- **Rejections** (all at bind time, in `BindQualifiedReducer` /
+  `CheckQualifiedReducerBody`): a column or entity-scoped decision from a relation *not*
   named in the qualifier, a row-scoped decision, an unknown relation name, a qualifier on a
   non-`SUM`/`AVG`/`MIN`/`MAX` function, and a row-invariant body.
 - Tests: `test/decide/tests/test_qualified_reducer.py`.
 
-### Code Pointers — qualified aggregates
+### Code Pointers — qualified reducers
 
 - **Grammar**: `third_party/libpg_query/grammar/statements/select.y`, `c_expr` alternative
   `func_name '(' func_arg_list ':' func_arg_list ')'`. The qualifier is parsed as an
@@ -175,21 +175,21 @@ so this is opt-in and nothing existing changes meaning.
   after a completed `func_arg_list`, which is conflict-free.
   A second alternative, `func_name '(' func_arg_list ':' func_arg_list ')' WHEN_DECIDE
   decide_when_condition`, mirrors `func_application WHEN_DECIDE decide_when_condition` so
-  a qualified aggregate followed directly by `WHEN` also takes the tight aggregate-local-WHEN
+  a qualified reducer followed directly by `WHEN` also takes the tight aggregate-local-WHEN
   route instead of the loose whole-constraint one; the qualifier validation is duplicated
   inline rather than factored into a shared helper (bison actions can't call each other and
   this file has no C prologue to hang one on — the file already accepts this style of
-  duplication elsewhere). The plain qualified-aggregate production has explicit
+  duplication elsewhere). The plain qualified-reducer production has explicit
   `DECIDE_ITEM` precedence, so `WHEN_DECIDE` shifts into this alternative without adding an
   expected conflict. The grammar's total conflict budget is `%expect 6`.
-- **Parse node**: `PG_AEXPR_QUALIFIED_AGGREGATE` (`parsenodes.hpp`) →
-  `QUALIFIED_AGGREGATE_TAG` FunctionExpression (`transform_operator.cpp`), shaped
+- **Parse node**: `PG_AEXPR_QUALIFIED_REDUCER` (`parsenodes.hpp`) →
+  `QUALIFIED_REDUCER_TAG` FunctionExpression (`transform_operator.cpp`), shaped
   `tag(aggregate, relation_name)` exactly like the aggregate-local WHEN tag.
-- **Parsed-tree rewriting**: none. A qualified aggregate reaches the binder exactly as
+- **Parsed-tree rewriting**: none. A qualified reducer reaches the binder exactly as
   written; nothing rewrites a constraint before binding. `DecideCanonicalizer` needs no
   protection for the tag either: it sits on a term, and the pass never opens a term.
-- **Binder**: `DecideBinder::BindQualifiedAggregate` resolves the relation, enforces
-  well-formedness, and stamps `MakeQualifiedAggregateTag(scope_idx)` on the bound aggregate's
+- **Binder**: `DecideBinder::BindQualifiedReducer` resolves the relation, enforces
+  well-formedness, and stamps `MakeQualifiedReducerTag(scope_idx)` on the bound aggregate's
   `alias`. `DecideQualifierContext` (`decide_binder.hpp`) carries what it needs from
   `bind_select_node.cpp`, which is still filling `entity_scopes` at that point.
 - **Alias tags are now composable** (`common/enums/decide.hpp`): `AddDecideTag`,

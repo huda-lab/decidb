@@ -34,7 +34,7 @@ grammar conflicts it introduces are keyed on that token.
 ```mermaid
 graph TD
     User[User SQL] --> P[01 Parser: grammar, DECIDE WHEN gating, desugaring]
-    P --> B[02 Binder: names, scopes, types, degree, aggregates]
+    P --> B[02 Binder: names, scopes, types, degree, reducers]
     B --> L[03 Logical plan: PlanSubqueries + correlation provenance]
     L --> C[04 Canonicalizer: ONE shape decision, constraints AND objective]
     C --> O[05 Optimizer: formulation choice; output re-canonicalized]
@@ -64,7 +64,7 @@ so the user's result contains only what they declared.
 ### Shape is decided exactly once
 
 Which side of a comparison each term sits on, which way the relation points, and
-where a factor on an aggregate lives are decided by `DecideCanonicalizer`, on the
+where a factor on a reducer lives are decided by `DecideCanonicalizer`, on the
 bound tree, before the optimizer runs. Every stage below consumes that shape and
 none re-decides it; a release-build verifier enforces it at three points.
 

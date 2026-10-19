@@ -63,38 +63,38 @@ SELECT id, x FROM items DECIDE x(INT) SUCH THAT x BETWEEN 1 AND 4 MAXIMIZE SUM(x
 -- Aggregate constraint shapes
 -- ---------------------------------------------------------------------------
 
--- 10 bare aggregate
+-- 10 bare reducer
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 10 AND x <= 9 MAXIMIZE SUM(x);
 
--- 11 aggregate with a data coefficient inside
+-- 11 reducer with a data coefficient inside
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(price * x) <= 100 AND x <= 9 MAXIMIZE SUM(x);
 
--- 12 aggregate with an additive constant on the left (binder normalizes today)
+-- 12 reducer with an additive constant on the left (binder normalizes today)
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) + 2 <= 8 AND x <= 9 MAXIMIZE SUM(x);
 
--- 13 side-swapped aggregate
+-- 13 side-swapped reducer
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT 10 >= SUM(x) AND x <= 9 MAXIMIZE SUM(x);
 
--- 14 scaled aggregate
+-- 14 scaled reducer
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT 2 * SUM(x) <= 10 AND x <= 9 MAXIMIZE SUM(x);
 
--- 15 two aggregates, additive
+-- 15 two reducers, additive
 SELECT id, x, y FROM items DECIDE x(INT), y(INT)
 SUCH THAT SUM(x) + SUM(y) <= 10 AND x <= 9 AND y <= 9 MAXIMIZE SUM(x);
 
--- 16 two aggregates, subtractive
+-- 16 two reducers, subtractive
 SELECT id, x, y FROM items DECIDE x(INT), y(INT)
 SUCH THAT SUM(x) - SUM(y) <= 3 AND x <= 9 AND y <= 9 MAXIMIZE SUM(x);
 
--- 17 data-only aggregate on the right. This one moved at B.4/C.1 and the delta is an
+-- 17 data-only reducer on the right. This one moved at B.4/C.1 and the delta is an
 -- accepted improvement: the bind-time hoist used to rewrite it to
 -- `SUM(weight*x) - SUM(weight) <= 0`, and a zero bound gives the absorption pass
--- nothing to work with, so the columns kept the loose `x <= 9`. The aggregate now stays
+-- nothing to work with, so the columns kept the loose `x <= 9`. The reducer now stays
 -- on the right, the row reads `rhs=14`, and absorption derives the correct
 -- `ub = 14/2 = 7`. Same row, same results.
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(weight * x) <= SUM(weight) AND x <= 9 MAXIMIZE SUM(x);
 
--- 18 aggregate equality
+-- 18 reducer equality
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) = 6 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 19 AVG
@@ -175,7 +175,7 @@ SUCH THAT x <= 5 AND SUM(b * x) <= 8 MAXIMIZE SUM(b * x);
 SELECT id, ship, cap FROM items DECIDE ship(INT), scalar cap(INT)
 SUCH THAT ship <= cap AND ship <= 10 AND cap <= 8 MAXIMIZE SUM(ship) - 20 * cap;
 
--- 37 scalar variable inside an aggregate constraint
+-- 37 scalar variable inside a reducer constraint
 SELECT id, ship, cap FROM items DECIDE ship(INT), scalar cap(INT)
 SUCH THAT SUM(ship) <= 20 AND ship <= cap AND cap <= 6 MAXIMIZE SUM(ship);
 
@@ -183,7 +183,7 @@ SUCH THAT SUM(ship) <= 20 AND ship <= cap AND cap <= 6 MAXIMIZE SUM(ship);
 SELECT i.id, keep FROM items i JOIN groups g ON i.grp = g.g
 DECIDE i.keep(BOOL) SUCH THAT SUM(i.price * keep) <= 60 MAXIMIZE SUM(i.price * keep);
 
--- 39 qualified aggregate over a joined relation
+-- 39 qualified reducer over a joined relation
 SELECT i.id, keep FROM items i JOIN groups g ON i.grp = g.g
 DECIDE i.keep(BOOL) SUCH THAT SUM(i: keep) <= 2 MAXIMIZE SUM(i.price * keep);
 
@@ -203,18 +203,18 @@ SUCH THAT x <= 20 AND ABS(x - 3) <= ABS(x - 9) MAXIMIZE SUM(x);
 SELECT id, x, y FROM items DECIDE x(REAL), y(REAL)
 SUCH THAT x <= 20 AND y <= 20 AND ABS(x - 3) - ABS(y - 9) <= 0 MAXIMIZE SUM(x) + SUM(y);
 
--- 42 negated aggregate in an additive LHS. The equivalent
+-- 42 negated reducer in an additive LHS. The equivalent
 -- `SUM(x) <= SUM(y)` is accepted by the side-agnostic binder and canonicalizer.
 SELECT id, x, y FROM items DECIDE x(INT), y(INT)
 SUCH THAT SUM(x) - SUM(y) <= 0 AND x <= 5 AND y <= 3 MAXIMIZE SUM(x);
 
--- 43 composed MIN/MAX with a negated aggregate. Rejected before Phase A with
+-- 43 composed MIN/MAX with a negated reducer. Rejected before Phase A with
 -- "does not support subtraction in the LHS"; the MAX term now arrives with
 -- sign -1, which flips its easy/hard classification (here: hard).
 SELECT id, x, y FROM items DECIDE x(INT), y(INT)
 SUCH THAT SUM(x) - MAX(y) <= 0 AND x <= 5 AND y <= 7 MAXIMIZE SUM(x);
 
--- 44 leading-negative aggregate: canonicalizes to `0 - MAX(x) <= -3`, the
+-- 44 leading-negative reducer: canonicalizes to `0 - MAX(x) <= -3`, the
 -- `0 - term` idiom the additive rebuild emits for a leading negative term.
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT 3 - MAX(x) <= 0 AND x <= 9 MINIMIZE SUM(x);
@@ -226,14 +226,14 @@ SUCH THAT 3 - MAX(x) <= 0 AND x <= 9 MINIMIZE SUM(x);
 -- spine before physical extraction consumes the canonical form.
 -- ---------------------------------------------------------------------------
 
--- 45 two aggregate-local WHEN aggregates, one negated, under a DECIMAL->DOUBLE
+-- 45 two aggregate-local WHEN reducers, one negated, under a DECIMAL->DOUBLE
 -- cast lid. All terms are decision-bearing, so the split changes placement for
 -- none of them; it is the spine reaching them at all that is being pinned.
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT (SUM(x) WHEN (price > 5)) - (SUM(x * price) WHEN (price > 5)) + 2 <= 8
 AND x <= 4 MAXIMIZE SUM(x);
 
--- 46 mixed placement under a cast lid: an aggregate (LEFT) beside a scalar
+-- 46 mixed placement under a cast lid: a reducer (LEFT) beside a scalar
 -- subquery (RIGHT). This is the one that changes the canonicalizer's DECISION
 -- rather than just its reach -- without cast descent the side is a single LEFT
 -- atom and the pass declines, so the migration happens downstream instead.
@@ -244,7 +244,7 @@ SUCH THAT (SUM(x) WHEN (price > 5)) + (SELECT max(budget) FROM groups) <= 210
 AND x <= 4 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
--- Scaled aggregates (Phase B.3). A factor on an aggregate is peeled outward by the
+-- Scaled reducers (Phase B.3). A factor on a reducer is peeled outward by the
 -- canonicalizer, which converges every spelling onto `scale * term`, then folded
 -- and then STAYS outside: the physical layer multiplies it into the per-row
 -- coefficients for SUM/AVG, or into the auxiliary's contribution for MIN/MAX.
@@ -255,7 +255,7 @@ AND x <= 4 MAXIMIZE SUM(x);
 -- that is the whole point of converging the spelling.
 -- ---------------------------------------------------------------------------
 
--- 47 factor on the left of the aggregate
+-- 47 factor on the left of the reducer
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT 2 * SUM(x * price) <= 400 AND x <= 9 MAXIMIZE SUM(x);
 
@@ -310,7 +310,7 @@ MAXIMIZE SUM(x);
 -- ---------------------------------------------------------------------------
 -- A factor whose SIGN is unknown at plan time (Phase B.3 / P4). An uncorrelated
 -- scalar subquery is a legal factor but its value is not available until the
--- query runs. Because the factor stays OUTSIDE the aggregate, the sign only
+-- query runs. Because the factor stays OUTSIDE the reducer, the sign only
 -- selects which linearization is cheaper -- never which is correct -- so these
 -- take the exact (envelope + indicator) encoding rather than being rejected.
 -- Before the fold was removed these failed with an internal assertion.
@@ -336,8 +336,8 @@ SUCH THAT x <= 9 AND SUM(x) <= 4
 MINIMIZE (SELECT max(budget) FROM groups) * MAX(x);
 
 -- ---------------------------------------------------------------------------
--- Aggregates as a bound (Phase B.5). The right-hand side is evaluated to one value
--- per group by the aggregate evaluator, which implements the construction order the
+-- Reducers as a bound (Phase B.5). The right-hand side is evaluated to one value
+-- per group by the reducer evaluator, which implements the construction order the
 -- paper fixes in §3.2.2: when selection -> per partitioning -> qualifier
 -- de-duplication -> aggregation.
 --
@@ -369,16 +369,16 @@ SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT x <= 9 AND SUM(x) <= COUNT(*) PER grp
 MAXIMIZE SUM(x);
 
--- 63 an aggregate mixed with an ordinary term. The aggregate collapses to one value per
+-- 63 a reducer mixed with an ordinary term. The reducer collapses to one value per
 -- group and the rest of the expression is still evaluated per row, so nothing here
--- needs a special case -- which is the point of substituting the aggregate with a
+-- needs a special case -- which is the point of substituting the reducer with a
 -- broadcast column rather than folding the whole side.
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT x <= 9 AND SUM(x * price) <= MIN(price) + 90
 MAXIMIZE SUM(x);
 
 -- 64 a row-varying bound on a reduced constraint (D3). Paper §3.2.1 without `per`:
--- the clause generates one instance per tuple, all sharing the aggregate, so the
+-- the clause generates one instance per tuple, all sharing the reducer, so the
 -- conjunction is exactly `<= min(bound)`. A correlated subquery decorrelates into a
 -- per-row column worth 100 for group A and 200 for B, so this binds at 100 -- not at
 -- row 0's value, and not per row. A bare column here (`<= price`) is the same shape
@@ -394,7 +394,7 @@ SUCH THAT x <= 90 AND SUM(x) <= (SELECT budget FROM groups WHERE g = items.grp) 
 MAXIMIZE SUM(x);
 
 -- 66 an aggregate-local WHEN on the left, a row-varying bound on the right. The
--- local WHEN scopes its own aggregate, never the per-tuple fan-out, so the bound is
+-- local WHEN scopes its own reducer, never the per-tuple fan-out, so the bound is
 -- the tightest over EVERY selected row (100) and not over the B rows the left side
 -- keeps (200). Results do not reveal this -- x is capped at 9 either way -- so the
 -- dump's `rhs` is the whole evidence, as with 62.
@@ -403,7 +403,7 @@ SUCH THAT x <= 9 AND (SUM(x) WHEN (grp = 'B'))
                      <= (SELECT budget FROM groups WHERE g = items.grp)
 MAXIMIZE SUM(x);
 
--- 67 the aggregate form of 66. The two halves of the right-hand side -- aggregate
+-- 67 the reducer form of 66. The two halves of the right-hand side -- reducer
 -- folding and row-varying reduction -- must answer "which rows?" the same way, so
 -- this binds at MIN over all four rows (10), not over the B rows (30).
 SELECT id, x FROM items DECIDE x(INT)
@@ -411,7 +411,7 @@ SUCH THAT x <= 9 AND (SUM(x) WHEN (grp = 'B')) <= MIN(price)
 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
--- Shapes unlocked by B.4 + C.1 (data aggregates stay right; the bind-time hoist
+-- Shapes unlocked by B.4 + C.1 (data reducers stay right; the bind-time hoist
 -- is gone). The first three were BUILT by B.5 and unreachable -- the binder's
 -- RHS check treated a WHEN predicate / PER key / relation alias as if it were a
 -- value on the bound side and rejected the whole wrapper.
@@ -425,14 +425,14 @@ SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT x <= 9 AND SUM(x * weight) <= 2 * AVG(price)
 MAXIMIZE SUM(x);
 
--- 69 an aggregate's OWN WHEN on the bound side. Aggregate-local, so it scopes only
--- that aggregate: the bound is SUM(price) over the A rows (30), while the left side
+-- 69 a reducer's OWN WHEN on the bound side. Aggregate-local, so it scopes only
+-- that reducer: the bound is SUM(price) over the A rows (30), while the left side
 -- still sums every row.
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT x <= 9 AND SUM(x) <= SUM(price) WHEN (grp = 'A')
 MAXIMIZE SUM(x);
 
--- 70 a relation-qualified aggregate as a bound. The join fans each group to two
+-- 70 a relation-qualified reducer as a bound. The join fans each group to two
 -- rows, so the de-duplication is what makes `rhs` 3 (= (100+200)/100) rather than
 -- 6 -- the same call the left side has always made.
 SELECT i.id, keep FROM items i JOIN groups g ON i.grp = g.g
@@ -440,7 +440,7 @@ DECIDE i.keep(BOOL) SUCH THAT SUM(i: keep) <= SUM(g: budget) / 100
 MAXIMIZE SUM(i.price * keep);
 
 -- ---------------------------------------------------------------------------
--- A product with an additive factor inside an aggregate body. The physical layer
+-- A product with an additive factor inside a reducer body. The physical layer
 -- distributes `weight*(price+x)` into `weight*price + weight*x` before it can
 -- classify the terms, and the rebuilt product used to inherit the ORIGINAL
 -- multiply's signature -- which was resolved for the wider `price+x`. Over
@@ -466,7 +466,7 @@ SELECT id, x FROM items DECIDE x(BOOL)
 SUCH THAT SUM(weight * (price - x)) >= (SELECT MIN(budget) + 200 FROM groups)
 MAXIMIZE SUM(x * price);
 
--- 73 nested product under a scaled aggregate -- the OTHER way the parsed-level
+-- 73 nested product under a scaled reducer -- the OTHER way the parsed-level
 -- simplifier used to decline. Same body, same rebuild, reached without a
 -- subquery on the bound side.
 SELECT id, x FROM items DECIDE x(BOOL)
@@ -515,7 +515,7 @@ SELECT id, x, cap FROM items DECIDE x(BOOL), scalar cap(INT)
 SUCH THAT cap >= SUM(x * price) AND cap <= 60
 MAXIMIZE 3 * SUM(x * price) - 2 * cap;
 
--- 77 paper Example 1 (§3.1): a row-varying data term left of the aggregate AND a
+-- 77 paper Example 1 (§3.1): a row-varying data term left of the reducer AND a
 -- decision on the bound. Canonical form is `-SUM(x) - cap <= -price`, so it
 -- exercises C.2's gate and B.5's runtime reduction of the row-varying bound in
 -- one query. `<=` takes the MIN over rows, i.e. the largest price binds.
@@ -523,7 +523,7 @@ SELECT id, x, cap FROM items DECIDE x(INT), scalar cap(INT)
 SUCH THAT price - SUM(x) <= cap AND x <= 5
 MINIMIZE cap;
 
--- 78 an aggregate on both sides. `SUM(x*price) - SUM(y*price) <= 0` after
+-- 78 a reducer on both sides. `SUM(x*price) - SUM(y*price) <= 0` after
 -- canonicalization -- no new machinery, but no single-sided gate could accept it.
 SELECT id, x, y FROM items DECIDE x(INT), y(INT)
 SUCH THAT SUM(x * price) <= SUM(y * price) AND SUM(y) <= 3 AND x <= 8 AND y <= 8

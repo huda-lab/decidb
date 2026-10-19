@@ -25,7 +25,7 @@ namespace duckdb {
 // A coefficient stays an unevaluated `Expression` because it may reference data
 // columns -- `SUM(x * price)` yields the coefficient `price`, which is a number
 // only once a row exists. Everything ELSE about a term (which variable it names,
-// its sign, which aggregate produced it, which filter applies) is a fact about
+// its sign, which reducer produced it, which filter applies) is a fact about
 // types and structure, and is decided here.
 //
 // These structures live at stage 03 rather than 05 because `LogicalDecide` is
@@ -43,8 +43,8 @@ struct DecideTerm {
 	unique_ptr<Expression> filter;      // Optional aggregate-local WHEN filter
 	bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
 	LinearTermReduction reduction = LinearTermReduction::NONE;
-	//! Entity scope this term's aggregate is qualified by (`sum(D: ...)`), or
-	//! INVALID_INDEX for an unqualified aggregate. Indexes entity_scopes /
+	//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
+	//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
 	//! entity_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
@@ -62,8 +62,8 @@ struct BilinearConstraintTerm {
 	int sign = 1;
 	unique_ptr<Expression> filter; // Optional aggregate-local WHEN filter
 	bool avg_scale = false;        // True when this term came from AVG and needs 1/N scaling
-	//! Entity scope this term's aggregate is qualified by (`sum(D: ...)`), or
-	//! INVALID_INDEX for an unqualified aggregate. Indexes entity_scopes /
+	//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
+	//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
 	//! entity_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
@@ -100,13 +100,13 @@ struct DecideConstraint {
 	struct QuadraticGroup {
 		vector<DecideTerm> inner_terms; // Inner linear expression of POWER(inner, 2)
 		double sign = 1.0;              // +1, -1, or scalar (from negation/scaling)
-		//! Query-wide aggregate scale not known until the relational input runs.
+		//! Query-wide reducer scale not known until the relational input runs.
 		unique_ptr<Expression> scale;
 		bool scale_divides = false;
 		unique_ptr<Expression> filter; // Optional aggregate-local WHEN filter
 		bool avg_scale = false;        // True when this group came from AVG and needs 1/N scaling
-		//! Entity scope this term's aggregate is qualified by (`sum(D: ...)`), or
-		//! INVALID_INDEX for an unqualified aggregate. Indexes entity_scopes /
+		//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
+		//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
 		//! entity_mappings; coefficient evaluation keeps one row per tuple identity
 		//! of that relation and zeroes the duplicates the join introduced.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
@@ -144,8 +144,8 @@ struct DecideObjective {
 		int sign = 1;                       // +1 or -1
 		unique_ptr<Expression> filter;      // Optional aggregate-local WHEN filter
 		bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
-		//! Entity scope this term's aggregate is qualified by (`sum(D: ...)`), or
-		//! INVALID_INDEX for an unqualified aggregate. Indexes entity_scopes /
+		//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
+		//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
 		//! entity_mappings; coefficient evaluation keeps one row per tuple identity
 		//! of that relation and zeroes the duplicates the join introduced.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;

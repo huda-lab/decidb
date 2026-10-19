@@ -298,7 +298,7 @@ private:
                                        const vector<EntityMapping> &entity_mappings) const;
 
     //! PHASE 2, sub-phase 3: evaluate every composed MIN/MAX clause — each inner term's
-    //! per-row coefficient, the factor peeled off an aggregate, the term's WHEN mask, the
+    //! per-row coefficient, the factor peeled off a reducer, the term's WHEN mask, the
     //! constant RHS. The rows these become are emitted later, by the formulation pass.
     void EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                  ChunkExprCache &chunk_expr_cache,

@@ -38,7 +38,7 @@ struct CanonicalObjective {
 	LogicalDecide *decide;
 };
 
-//! The terms of the objective's single aggregate body.
+//! The terms of the objective's single reducer body.
 duckdb::vector<DecideSplitTerm> SplitObjectiveBody(Connection &con, CanonicalObjective &objective) {
 	auto atoms = ReadCanonicalAtoms(*objective.decide->decide_objective, objective.decide->decide_index);
 	REQUIRE(atoms.size() == 1);
@@ -57,14 +57,14 @@ TEST_CASE("Canonicalization replaces norm with its definition and keeps the writ
 	Connection con(db);
 	struct Case {
 		const char *objective;
-		const char *aggregate;
+		const char *reducer;
 	};
 	for (auto &test : {Case {"norm(x - t, 1)", "sum"}, Case {"norm(x - t, 2)", "sum"}, Case {"norm(x, 'inf')", "max"}}) {
 		CanonicalObjective objective(con, test.objective);
 		auto atoms = ReadCanonicalAtoms(*objective.decide->decide_objective, objective.decide->decide_index);
 		REQUIRE(atoms.size() == 1);
 		auto &aggregate = atoms[0].term->Cast<BoundAggregateExpression>();
-		REQUIRE(StringUtil::Lower(aggregate.function.name) == test.aggregate);
+		REQUIRE(StringUtil::Lower(aggregate.function.name) == test.reducer);
 		REQUIRE(!HasDecideTag(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX));
 		REQUIRE(HasDecideTag(aggregate.GetAlias(), WRITTEN_NORM_TAG_PREFIX));
 	}
@@ -75,7 +75,7 @@ TEST_CASE("Canonicalization replaces norm with its definition and keeps the writ
 	REQUIRE(HasDecideTag(atoms[0].term->GetAlias(), NORM_MARKER_TAG_PREFIX));
 }
 
-TEST_CASE("Canonical atoms carry the sign and the factor canonicalization left on an aggregate", "[decidb]") {
+TEST_CASE("Canonical atoms carry the sign and the factor canonicalization left on a reducer", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	CanonicalObjective objective(con, "SUM(w * x) - 2 * SUM(y)");

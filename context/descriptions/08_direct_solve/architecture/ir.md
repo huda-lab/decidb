@@ -1,7 +1,7 @@
 # IR: how a query becomes something a rule can read
 
 A rule never reads the bound DECIDE tree or the SQL text. One front end reads the tree into an intermediate
-representation (**IR**): the decision variables and their scopes, every constraint with its comparison, aggregate,
+representation (**IR**): the decision variables and their scopes, every constraint with its comparison, reducer,
 `PER`/`WHEN` scope and right-hand side, and the objective's terms and scope. This is the compiler split of front end,
 IR and back end; the rules are the back end.
 

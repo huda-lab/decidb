@@ -5,7 +5,7 @@ Turns SQL text into a parsed `SelectNode` carrying `decide_variables`,
 source-preserving validation that must see what the user actually typed.
 
 **This stage decides no shape.** Which side of a comparison a term sits on, which
-way the relation points, and where a factor on an aggregate lives are all decided
+way the relation points, and where a factor on a reducer lives are all decided
 once by `DecideCanonicalizer` on the bound tree — see
 [`../04_canonicalizer/done.md`](../04_canonicalizer/done.md).
 
@@ -59,7 +59,7 @@ edit to make, naming the variable.
 appear the nesting is `PER(WHEN(body, condition), columns)`.
 
 The aggregate-local form (`SUM(x) WHEN active`) is a separate `c_expr`
-alternative on `func_application` and on the relation-qualified aggregate form
+alternative on `func_application` and on the relation-qualified reducer form
 `func_name '(' func_arg_list ':' func_arg_list ')'`. Constraint-local conditions
 stay at `c_expr`: in `SUM(x) WHEN active <= 20`, `active` is the condition and
 `<= 20` is the constraint bound. Comparison conditions therefore need
@@ -72,7 +72,7 @@ unpacked into a lone `PGColumnRef` until batch E. It now validates every element
 `PGColumnRef` and passes the whole list through as one `PGList` (cast to `PGNode*`,
 the same idiom `columnrefList` uses for multi-column `PER`), so `sum(D: e)` and
 `sum(D, T: e)` share one grammar action; the binder resolves what the relation list
-means (`02_binder/done.md`, "Relation-qualified aggregates").
+means (`02_binder/done.md`, "Relation-qualified reducers").
 
 `decide_item_expr` closes a constraint or objective body at `DECIDE_ITEM`
 precedence. That precedence is above `AND`, so `A AND B WHEN c` and
@@ -88,7 +88,7 @@ declaration slot, one per `simple_select` alternative. The declaration-slot four
 are reachable only when `from_clause` and `where_clause` are both empty, and both
 derivations build the same node, so bison's default shift is not load-bearing.
 Aggregate-local conflicts for both DECIDE WHEN tokens and the equivalent
-qualified-aggregate state are resolved explicitly by `DECIDE_ITEM` precedence.
+qualified-reducer state are resolved explicitly by `DECIDE_ITEM` precedence.
 
 Grammar changes require `make grammar-build` (bison 2.3).
 
@@ -200,7 +200,7 @@ formulation after types, scopes, and DuckDB coercions are known.
 
 The parsed tree stores DECIDE syntax as private structure: a variable declaration is
 a comparison against a type-marker string, and `WHEN`, `PER`, and a
-relation-qualified aggregate are tagged `FunctionExpression`s. Those encodings are for
+relation-qualified reducer are tagged `FunctionExpression`s. Those encodings are for
 the parser and binder, not SQL users.
 
 `SelectNode::ToString()` reverses the encoding. It emits `x(INT)`, `T.x(BOOL)` and
@@ -222,7 +222,7 @@ SQL -> parsed SelectStatement -> ToString SQL -> equal parsed SelectStatement
 Parsed-statement binary serialization is exercised separately from logical-plan
 serialization. The regression matrix in
 `test/common/test_decidb_plan_serialization.cpp` covers all variable types and scopes,
-both clause orders, `WHEN`, one- and multi-column `PER`, qualified aggregates, `NORM`,
+both clause orders, `WHEN`, one- and multi-column `PER`, qualified reducers, `NORM`,
 `IN`, nested aggregates, scalar subqueries, quoted identifiers and `DIAGNOSE`. It
 checks reparsed equality, stable rendering, and binary `SelectStatement` round trips.
 
@@ -250,7 +250,7 @@ continuation cases outside the materializing verifier. The guarded release run p
 ## 6. What this stage does not do
 
 - Decide which side of a comparison a term sits on, or flip a relation.
-- Fold a factor into an aggregate. `K * AGG(e)` → `AGG(K * e)` used to happen here
+- Fold a factor into a reducer. `K * AGG(e)` → `AGG(K * e)` used to happen here
   and was a wrong answer for `MIN`/`MAX` under negative `K`, since `MAX(-2x)` is
   `-2·MIN(x)`. At the parsed level the aggregate kind is not even settled yet.
   Nothing folds anywhere now; the canonicalizer peels the factor outward and it

@@ -1157,8 +1157,8 @@ def _power_data(duckdb_conn):
     ).fetchall()
 
 
-def _power_group_obj(rs, cs, aggregate):
-    """Evaluate SUM_g aggregate({POWER(x_i - target_i, 2) : i in group g})
+def _power_group_obj(rs, cs, reducer):
+    """Evaluate SUM_g reducer({POWER(x_i - target_i, 2) : i in group g})
     from DecidB's output rows. Uses the full (x-t)^2 value — no constant
     stripping — so the oracle side must match."""
     xi = cs.index("x")
@@ -1167,7 +1167,7 @@ def _power_group_obj(rs, cs, aggregate):
     groups: dict = defaultdict(list)
     for r in rs:
         groups[r[gi]].append((float(r[xi]) - float(r[ti])) ** 2)
-    return sum(aggregate(vs) for vs in groups.values())
+    return sum(reducer(vs) for vs in groups.values())
 
 
 @pytest.mark.per_clause

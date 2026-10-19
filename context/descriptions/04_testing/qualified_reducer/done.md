@@ -1,12 +1,12 @@
-# Relation-Qualified Aggregate Test Coverage — Done
+# Relation-Qualified Reducer Test Coverage — Done
 
 Tests live in `test/decide/tests/test_qualified_reducer.py`, plus
 `test_clause_order.py::test_entity_scoped_declaration_in_split_slot` for a
-qualified aggregate in the split clause order.
+qualified reducer in the split clause order.
 
 `SUM(D: expr)` reduces over `D`'s tuple identities instead of over join-result
 rows. Semantics: `03_expressivity/decide/done.md` → "Relation-qualified
-aggregates"; syntax: `00_project_overview/syntax_reference.md` §5.1.
+reducers"; syntax: `00_project_overview/syntax_reference.md` §5.1.
 
 The fixture is `customer JOIN nation`, where the join repeats each nation once
 per customer and nations have unequal customer counts — that inequality is what
@@ -31,7 +31,7 @@ makes the row-weighted and identity-weighted optima diverge.
   oracle-verified).
 - **PER composition** (`test_qualified_reducer_with_per`): de-duplication runs
   inside the partition, keying on `(PER group, entity id)`.
-- **Mixed qualified and unqualified aggregates in one objective**
+- **Mixed qualified and unqualified reducers in one objective**
   (`test_mixed_qualified_and_unqualified_objective`, oracle-verified): pins that
   the mask is per *term*, not per clause.
 - **Hard-direction MIN / MAX with a qualifier**:
@@ -51,7 +51,7 @@ makes the row-weighted and identity-weighted optima diverge.
 - **Aggregate-local `WHEN` composed with the qualifier, in a constraint, WHEN
   before the comparison**: `test_qualified_reducer_with_aggregate_local_when_in_constraint`
   (`SUM(D: expr) WHEN cond <= bound`) — the shape that used to be rejected (grammar
-  fix, `03_expressivity/decide/done.md` → "Relation-qualified aggregates"). Nation 5
+  fix, `03_expressivity/decide/done.md` → "Relation-qualified reducers"). Nation 5
   sits outside the filter so it never counts against the cap and is always kept;
   nations 14/15/16 do count and only the value-maximizing one (16) fits, so nation
   5's keep value is what distinguishes a correctly scoped WHEN from one silently
@@ -73,7 +73,7 @@ makes the row-weighted and identity-weighted optima diverge.
   (`test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only_those_two_relations`):
   with no third, unnamed relation left to fan out, `SUM(D, T: expr)` and the
   unqualified `SUM(expr)` agree row for row.
-- **A query-wide decision inside a qualified aggregate is weighted and de-duplicated**
+- **A query-wide decision inside a qualified reducer is weighted and de-duplicated**
   (`test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated`,
   oracle-verified): `SUM(n: (n_nationkey + 1) * cap)` over `customer JOIN nation`
   weights `cap` by the sum over *distinct* nations, not over join-result rows.
@@ -81,7 +81,7 @@ makes the row-weighted and identity-weighted optima diverge.
   in the qualifier, a row-scoped decision, an unknown relation name — including one
   inside a multi-relation list
   (`test_unknown_relation_in_multi_relation_qualifier_rejected`) — and a
-  row-invariant body, i.e. a query-wide decision standing alone inside the aggregate
+  row-invariant body, i.e. a query-wide decision standing alone inside the reducer
   (`test_query_wide_decision_alone_inside_qualified_reducer_rejected`).
 
 ## Caveats
@@ -90,7 +90,7 @@ makes the row-weighted and identity-weighted optima diverge.
   semantics: de-duplicating a qualified relation cannot choose one arbitrary
   row-scoped variable from a repeated identity. The error offers the two valid
   rewrites: scope the decision to the qualified relation, or move it to an
-  unqualified aggregate.
+  unqualified reducer.
 - `test_query_wide_decision_alone_inside_qualified_reducer_rejected` pins the
   general row-invariance rule (a body with nothing to aggregate over), while the
   paper's §3.2.2 carve-out for a weighted query-wide decision is covered by the
@@ -105,24 +105,24 @@ makes the row-weighted and identity-weighted optima diverge.
 
 | Feature A | Feature B | Tested |
 |-----------|-----------|--------|
-| qualified aggregate | SUM | ✓ |
-| qualified aggregate | AVG | ✓ |
-| qualified aggregate | MIN / MAX (easy direction) | ✓ |
-| qualified aggregate | constraint position | ✓ |
-| qualified aggregate | objective position | ✓ |
-| qualified aggregate | PER | ✓ |
-| qualified aggregate | unqualified aggregate in the same objective | ✓ |
-| qualified aggregate | entity-scoped decision | ✓ |
-| qualified aggregate | row-scoped decision (rejected) | ✓ |
-| qualified aggregate | query-wide decision times entity data | ✓ (oracle) |
-| qualified aggregate | query-wide decision as the whole body (rejected) | ✓ |
-| qualified aggregate | split clause order | ✓ (`test_clause_order.py`) |
-| qualified aggregate | hard-direction MAX objective | ✓ |
-| qualified aggregate | hard-direction MIN constraint | ✓ |
-| qualified aggregate | aggregate-local `WHEN` (objective) | ✓ |
-| qualified aggregate | aggregate-local `WHEN` (constraint) | ✓ |
-| qualified aggregate | composed MIN/MAX (objective) | ✓ |
-| qualified aggregate | composed MIN/MAX (constraint) | ✓ |
-| qualified aggregate | multi-relation qualifier, 3 relations | ✓ (oracle) |
-| qualified aggregate | multi-relation qualifier, no-op case | ✓ |
-| qualified aggregate | unknown relation in a multi-relation list (rejected) | ✓ |
+| qualified reducer | SUM | ✓ |
+| qualified reducer | AVG | ✓ |
+| qualified reducer | MIN / MAX (easy direction) | ✓ |
+| qualified reducer | constraint position | ✓ |
+| qualified reducer | objective position | ✓ |
+| qualified reducer | PER | ✓ |
+| qualified reducer | unqualified reducer in the same objective | ✓ |
+| qualified reducer | entity-scoped decision | ✓ |
+| qualified reducer | row-scoped decision (rejected) | ✓ |
+| qualified reducer | query-wide decision times entity data | ✓ (oracle) |
+| qualified reducer | query-wide decision as the whole body (rejected) | ✓ |
+| qualified reducer | split clause order | ✓ (`test_clause_order.py`) |
+| qualified reducer | hard-direction MAX objective | ✓ |
+| qualified reducer | hard-direction MIN constraint | ✓ |
+| qualified reducer | aggregate-local `WHEN` (objective) | ✓ |
+| qualified reducer | aggregate-local `WHEN` (constraint) | ✓ |
+| qualified reducer | composed MIN/MAX (objective) | ✓ |
+| qualified reducer | composed MIN/MAX (constraint) | ✓ |
+| qualified reducer | multi-relation qualifier, 3 relations | ✓ (oracle) |
+| qualified reducer | multi-relation qualifier, no-op case | ✓ |
+| qualified reducer | unknown relation in a multi-relation list (rejected) | ✓ |

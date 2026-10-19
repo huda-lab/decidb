@@ -1,3 +1,3 @@
-# Relation-Qualified Aggregate Test Coverage — Todo
+# Relation-Qualified Reducer Test Coverage — Todo
 
 No open coverage gaps. Shipped coverage is recorded in `done.md`.

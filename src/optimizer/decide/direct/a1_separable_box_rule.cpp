@@ -184,7 +184,7 @@ public:
 			return nullptr;
 		}
 		for (auto &part : ir.objective.parts) {
-			if (part.aggregate != DirectAggregate::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX) {
+			if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX) {
 				reason = "objective_shape: expected SUM(...) terms";
 				return nullptr;
 			}
@@ -227,7 +227,7 @@ private:
 			return false;
 		}
 		auto &part = ir_node.lhs[0];
-		if (part.sign != 1 || part.aggregate != DirectAggregate::NONE || part.scale || part.filter || part.inner ||
+		if (part.sign != 1 || part.reducer != DirectReducer::NONE || part.scale || part.filter || part.inner ||
 		    part.terms.empty()) {
 			return false;
 		}

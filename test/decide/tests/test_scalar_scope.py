@@ -9,7 +9,7 @@ Covers:
   - Objective coefficient is applied once, not once per row
   - One column regardless of input cardinality
   - The value is repeated on every output row
-  - Aggregates over a scalar are rejected (objective and constraint)
+  - Reducers over a scalar are rejected (objective and constraint)
   - Grammar: untyped and table-qualified scalars are rejected with a fix
   - `scalar` remains usable as an ordinary identifier
   - Empty input behaves like any other empty DECIDE query
@@ -183,12 +183,12 @@ def test_scalar_value_repeated_on_every_row(decidb_cli, perf_tracker):
 
 
 # ---------------------------------------------------------------------------
-# Test 5: Aggregates over a scalar are rejected
+# Test 5: Reducers over a scalar are rejected
 # ---------------------------------------------------------------------------
 
 @pytest.mark.error
 class TestScalarReducerRejected:
-    """A query-wide decision has nothing to aggregate over, so an aggregate around
+    """A query-wide decision has nothing to aggregate over, so a reducer around
     it is rejected rather than silently given a row-count coefficient."""
 
     def test_sum_over_scalar_in_objective(self, decidb_cli):
@@ -217,7 +217,7 @@ class TestScalarReducerRejected:
 
     def test_sum_over_two_scalars_rejected(self, decidb_cli):
         """A body built from nothing but scalars/constants is still row-invariant,
-        whichever combination of them it is (batch D: aggregate body is row-invariant,
+        whichever combination of them it is (batch D: reducer body is row-invariant,
         not "contains a scalar")."""
         decidb_cli.assert_error("""
                 SELECT cap1, cap2 FROM lineitem
@@ -228,9 +228,9 @@ class TestScalarReducerRejected:
 
 
 # ---------------------------------------------------------------------------
-# Test 5b: A scalar multiplied by row-varying data inside an aggregate is legal
+# Test 5b: A scalar multiplied by row-varying data inside a reducer is legal
 # (batch D). `SUM(cost * cap)` is not row-invariant -- `cost` varies per row --
-# so there is real work for the aggregate to do: `(Sum cost)*cap`, a standard
+# so there is real work for the reducer to do: `(Sum cost)*cap`, a standard
 # scalar-times-vector reduction.
 # ---------------------------------------------------------------------------
 
@@ -375,7 +375,7 @@ def test_scalar_empty_input(decidb_cli, perf_tracker):
 # ---------------------------------------------------------------------------
 # Test 9: Composition with the rewrite-heavy features
 #
-# A scalar cannot appear inside an aggregate (Test 5), and objectives must be
+# A scalar cannot appear inside a reducer (Test 5), and objectives must be
 # aggregates — so ABS / POWER / bilinear reach a scalar only through *per-row
 # constraints*. That is the surface tested here. Each case is built so the
 # scalar's single column is what the optimum turns on, which is what would
@@ -696,11 +696,11 @@ def test_unbounded_scalar_reports_a_single_instance(decidb_cli):
 
 
 # ---------------------------------------------------------------------------
-# Test 12: The scalar's coefficient through the two aggregate desugarings
+# Test 12: The scalar's coefficient through the two reducer desugarings
 # ---------------------------------------------------------------------------
 #
 # `norm(e, 1)` desugars to `SUM(ABS(e))` and a quadratic objective desugars to
-# `SUM(POWER(e, 2))`. Both put the scalar inside an aggregate body mixed with
+# `SUM(POWER(e, 2))`. Both put the scalar inside a reducer body mixed with
 # row-varying data, so both have to pick up the same per-row weighting the plain
 # `SUM(data * cap)` path was verified to use in
 # `test_scalar_times_data_inside_reducer_is_weighted_by_row_data`. The desugaring

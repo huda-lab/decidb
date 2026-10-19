@@ -157,14 +157,14 @@ bool DecideCanonicalizer::ReferencesDecideVar(const Expression &expr) const {
 	return BoundExpressionReferencesDecide(expr, decide_index);
 }
 
-bool DecideCanonicalizer::ContainsAggregate(const Expression &expr) {
+bool DecideCanonicalizer::ContainsReducer(const Expression &expr) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		return true;
 	}
 	bool found = false;
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
 		if (!found) {
-			found = ContainsAggregate(child);
+			found = ContainsReducer(child);
 		}
 	});
 	return found;
@@ -174,17 +174,17 @@ DecideCanonicalizer::Placement DecideCanonicalizer::Classify(const Expression &e
 	if (ReferencesDecideVar(expr)) {
 		return Placement::LEFT;
 	}
-	// Everything decision-free is a bound, including a data-only aggregate. The left
+	// Everything decision-free is a bound, including a data-only reducer. The left
 	// side has no aggregate evaluator -- SumFixedAggregateLhsOffset merely SUMS a term's
 	// column over the group, which is why only SUM and AVG could ever be hoisted
 	// there and MIN/MAX/COUNT were refused. The right side reduces per group by
-	// kind (EvaluateRhsAggregatePerGroup), so that is where an aggregate belongs.
+	// kind (EvaluateRhsReducerPerGroup), so that is where a reducer belongs.
 	return Placement::RIGHT;
 }
 
 
 bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
-	// A factor on an aggregate has to answer "are you one value for the whole query?", and
+	// A factor on a reducer has to answer "are you one value for the whole query?", and
 	// for a column ref that cannot be answered from shape: flattening leaves
 	// `(SELECT max(w) FROM p)` looking exactly like `weight`, down to being a
 	// BoundColumnRefExpression on a table index of its own.
@@ -247,8 +247,8 @@ bool DecideCanonicalizer::IsQueryWideExpression(const Expression &expr) const {
 		return judge_column_refs &&
 		       query_wide_table_indexes.find(colref.binding.table_index) != query_wide_table_indexes.end();
 	}
-	// Aggregates are group-wide rather than query-wide: their legality is decided as
-	// aggregate terms by ClassifyCanonicalComparison, not recursively here.
+	// Reducers are group-wide rather than query-wide: their legality is decided as
+	// reducer terms by ClassifyCanonicalComparison, not recursively here.
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		return false;
 	}
@@ -365,11 +365,11 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 	out_divides = false;
 	const char *clause_name = clause == Clause::OBJECTIVE ? "DECIDE objective" : "DECIDE constraint";
 
-	// Only a DECISION-BEARING aggregate is scaled here: a data-only aggregate
+	// Only a DECISION-BEARING reducer is scaled here: a data-only reducer
 	// (`2 * AVG(price)` as a bound) is the RHS evaluator's business, and reaching into
 	// it would reject shapes this pass has no stake in.
 	auto is_scalable = [&](const Expression &e) {
-		return ContainsAggregate(e) && ReferencesDecideVar(e);
+		return ContainsReducer(e) && ReferencesDecideVar(e);
 	};
 
 	// Factors are gathered by role, not in encounter order, so that one composition
@@ -381,7 +381,7 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 	while (true) {
 		// Casts around decision-bearing algebra are binder-inserted type noise. A
 		// data-only cast cannot reach this walk as `cur`, because `is_scalable`
-		// requires the subtree to contain a decision-bearing aggregate.
+		// requires the subtree to contain a decision-bearing reducer.
 		cur = UnwrapDecideCasts(*cur, decide_index);
 		if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 			break;
@@ -396,24 +396,24 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 		const Expression *term = nullptr;
 		const Expression *factor = nullptr;
 		bool factor_divides = false;
-		if (is_mult && is_scalable(*func.children[0]) && !ContainsAggregate(*func.children[1])) {
+		if (is_mult && is_scalable(*func.children[0]) && !ContainsReducer(*func.children[1])) {
 			term = func.children[0].get();
 			factor = func.children[1].get();
-		} else if (is_mult && is_scalable(*func.children[1]) && !ContainsAggregate(*func.children[0])) {
+		} else if (is_mult && is_scalable(*func.children[1]) && !ContainsReducer(*func.children[0])) {
 			term = func.children[1].get();
 			factor = func.children[0].get();
-		} else if (is_div && is_scalable(*func.children[0]) && !ContainsAggregate(*func.children[1])) {
-			// Only `AGG / K` divides. `K / AGG` is not a scaled aggregate at all.
+		} else if (is_div && is_scalable(*func.children[0]) && !ContainsReducer(*func.children[1])) {
+			// Only `AGG / K` divides. `K / AGG` is not a scaled reducer at all.
 			term = func.children[0].get();
 			factor = func.children[1].get();
 			factor_divides = true;
 		} else {
-			// Two aggregates multiplied, or no aggregate at all (`price * x` is an ordinary
+			// Two reducers multiplied, or no reducer at all (`price * x` is an ordinary
 			// per-row coefficient). Not a scale; stop here.
 			break;
 		}
 
-		// The single judgement. An aggregate collapses many rows to one number, so anything
+		// The single judgement. A reducer collapses many rows to one number, so anything
 		// multiplying it must also be one number. Each nesting level is judged
 		// separately, so the message names the factor the user actually has to fix.
 		const char *verb = factor_divides ? "divide" : "multiply";
@@ -480,14 +480,14 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 	WalkAdditiveSpine(
 	    expr, sign, [&](const Expression &node) { return ReferencesDecideVar(node); },
 	    [&](int term_sign, const Expression &whole) {
-		    // Every other node is a term boundary -- but a factor sitting on an aggregate is
+		    // Every other node is a term boundary -- but a factor sitting on a reducer is
 		    // peeled off it first, so the term the rest of the pipeline sees is the bare
-		    // aggregate and the factor travels beside it.
+		    // reducer and the factor travels beside it.
 		    unique_ptr<Expression> scale;
 		    bool divides = false;
 		    auto &term = PeelScale(whole, scale, divides, clause);
 		    // Classify on the whole original term. The factors are decision-free and
-		    // aggregate-free by construction, so this agrees with classifying `term` -- stated
+		    // reducer-free by construction, so this agrees with classifying `term` -- stated
 		    // rather than assumed, because Classify is the part that was wrong twice before.
 		    out.push_back(Atom {term_sign, &term, Classify(whole), std::move(scale), divides});
 	    });
@@ -614,7 +614,7 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 				// Leading negative term: unary minus, NOT `0 - term`. The spelling
 				// matters because the additive spine this pass emits is what downstream
 				// walkers decompose, and a synthesized `0` is a term to them. It is not
-				// a term to K3, which admits only aggregates and row-invariant values, so
+				// a term to K3, which admits only reducers and row-invariant values, so
 				// `price - SUM(x) <= cap` rebuilt as `(0 - SUM(x)) - cap` was rejected by
 				// the aggregate extractor for a constant this pass had invented.
 				// Negating in place introduces no node the spine has to explain away.
@@ -682,7 +682,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	// Mirror image: every decision term sits on the right. Swap the sides and flip
 	// the relation rather than negating both sides. Signs are preserved, which is
 	// what keeps MIN/MAX easy-vs-hard classification in RewriteMinMaxInConstraint
-	// stable -- negating an aggregate would silently turn a cheap per-row rewrite into
+	// stable -- negating a reducer would silently turn a cheap per-row rewrite into
 	// a Big-M encoding.
 	if (!left_has_decision) {
 		auto swapped = make_uniq<BoundComparisonExpression>(FlipComparisonExpression(cmp.type),
@@ -812,8 +812,8 @@ CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const 
 		return CanonicalConstraintClass::INVALID;
 	}
 
-	bool has_aggregate = ContainsAggregate(*cmp.left) || ContainsAggregate(*cmp.right);
-	if (!has_aggregate) {
+	bool has_reducer = ContainsReducer(*cmp.left) || ContainsReducer(*cmp.right);
+	if (!has_reducer) {
 		return CanonicalConstraintClass::PER_ROW;
 	}
 
@@ -823,10 +823,10 @@ CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const 
 		if (atom.placement != Placement::LEFT) {
 			return CanonicalConstraintClass::INVALID;
 		}
-		if (ContainsAggregate(*atom.expr)) {
-			// A legal reduced term is an aggregate at the atom root. PeelScale already
+		if (ContainsReducer(*atom.expr)) {
+			// A legal reduced term is a reducer at the atom root. PeelScale already
 			// removed the one supported outer factor representation before the atom
-			// was recorded; any aggregate still nested beneath another function is a
+			// was recorded; any reducer still nested beneath another function is a
 			// shape the physical aggregate extractor cannot consume.
 			auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
 			if (root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
@@ -870,7 +870,7 @@ void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpre
 		vector<Atom> lhs_atoms;
 		Decompose(*comparison.left, 1, lhs_atoms);
 		for (auto &atom : lhs_atoms) {
-			if (ContainsAggregate(*atom.expr) || IsQueryWideExpression(*atom.expr)) {
+			if (ContainsReducer(*atom.expr) || IsQueryWideExpression(*atom.expr)) {
 				continue;
 			}
 			idx_t var_idx = DConstants::INVALID_INDEX;
@@ -878,13 +878,13 @@ void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpre
 			if (FindNonScalarDecideVar(*atom.expr, var_idx, var_ref)) {
 				bool is_entity = var_idx < variable_scopes.size() && variable_scopes[var_idx].IsEntity();
 				throw BinderException(
-				    "DECIDE constraint: %s decision '%s' cannot appear outside an aggregate in an "
+				    "DECIDE constraint: %s decision '%s' cannot appear outside a reducer in an "
 				    "aggregate constraint. Put it inside SUM/AVG/MIN/MAX, or use a scalar "
 				    "decision when one query-wide value is intended.",
 				    is_entity ? "entity-scoped" : "row-scoped", UserFacingName(*var_ref));
 			}
 			throw BinderException(
-			    "DECIDE constraint: '%s' varies per row and cannot appear outside an aggregate "
+			    "DECIDE constraint: '%s' varies per row and cannot appear outside a reducer "
 			    "in an aggregate constraint. Move the row-varying expression inside "
 			    "SUM/AVG/MIN/MAX.",
 			    UserFacingName(*atom.expr));
@@ -1041,7 +1041,7 @@ void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) 
 		}
 		if (!CanonicalTreesEqual(objective, *fixed_point)) {
 			CanonicalInvariantFailure(
-			    "O4/O7", "canonicalizing the objective again changes its structure, aggregate scale, or tags",
+			    "O4/O7", "canonicalizing the objective again changes its structure, reducer scale, or tags",
 			    objective);
 		}
 	} catch (const InternalException &) {
@@ -1065,7 +1065,7 @@ void DecideCanonicalizer::VerifyCanonical(const Expression &constraints) const {
 		if (!CanonicalTreesEqual(constraints, *fixed_point)) {
 			CanonicalInvariantFailure(
 			    "C4/C6/C7",
-			    "canonicalizing the tree again changes its structure, aggregate scale, or provenance tags",
+			    "canonicalizing the tree again changes its structure, reducer scale, or provenance tags",
 			    constraints);
 		}
 	} catch (const InternalException &) {

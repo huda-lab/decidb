@@ -98,7 +98,7 @@ TEST_CASE("Parsed DECIDE statements survive ToString and binary round trips", "[
 	    // Whole-constraint WHEN plus multi-column PER.
 	    "SELECT a, b, x FROM t DECIDE x(INT) "
 	    "SUCH THAT SUM(x) <= 2 WHEN (a > 0) PER (a, t.b) AND x BETWEEN 0 AND 2",
-	    // Aggregate-local WHEN and one- and many-relation qualified aggregates.
+	    // Aggregate-local WHEN and one- and many-relation qualified reducers.
 	    "SELECT a, b, x FROM data D CROSS JOIN other T DECIDE D.x(INT) "
 	    "SUCH THAT SUM(D: x) WHEN (a > 0) + AVG(D, T: x) <= 10 "
 	    "MAXIMIZE SUM(D: x) WHEN (b = 2)",

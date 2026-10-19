@@ -60,7 +60,7 @@ spread across five sites.
 ## 2. Place in the pipeline
 
 ```text
-bind names, types, scopes, aggregates and subqueries
+bind names, types, scopes, reducers and subqueries
         |
         v
 PlanSubqueries and retain query-wide/correlated provenance
@@ -84,12 +84,12 @@ physical extraction and runtime RHS/group evaluation
 | Stage | Responsibility once canonicalization owns shape |
 |---|---|
 | Parser | Parse with the intended association and retain NORM/IN source structure. Does not move comparison terms. |
-| Binder | Resolve names, types, scopes, aggregates, subquery correlation. Determines *whether* a comparison is a DECIDE constraint; does not flip or repartition it. |
+| Binder | Resolve names, types, scopes, reducers, subquery correlation. Determines *whether* a comparison is a DECIDE constraint; does not flip or repartition it. |
 | Canonicalizer | Put every accepted bound comparison into §3 and reject unsupported mixtures once. |
 | Logical plan | Store canonical constraints. New ones enter only through `AddConstraint`. |
 | Optimizer | Assume canonical input; lower NORM/IN and select other formulations. Generated rows return through `AddConstraint`. |
 | Physical extraction | Read model terms from the left and the bound from the right. May assert the invariant; must not repair it. |
-| Runtime evaluation | Evaluate coefficients, `WHEN`, `PER`, qualifiers, data aggregates, row-varying bounds. Value operations, not shape decisions. |
+| Runtime evaluation | Evaluate coefficients, `WHEN`, `PER`, qualifiers, data reducers, row-varying bounds. Value operations, not shape decisions. |
 | Model builder | Accumulate coefficients and build solver-neutral rows. No SQL-expression canonicalization. |
 | Diagnostics / EXPLAIN | Source provenance for user-facing text; canonical/rewritten trees for internal views. |
 
@@ -116,10 +116,10 @@ a rendering job rather than a re-plumbing job.
 | **C0** | Ordinary `AND` conjunctions recurse into every child. A `WHEN` or `PER` wrapper recurses into child 0 only; its condition or grouping columns are copied unchanged. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
-| **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside an aggregate body stays inside that aggregate. |
+| **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
 | **C4** | Both additive spines contain only `+`, binary `-`, unary `-`, and binder-generated casts over decision algebra. Data casts are atoms. The pass never opens an atom or distributes a cast. |
-| **C5** | An aggregate constraint contains only decision-bearing aggregates and row-invariant decision terms at the top level. A per-row constraint contains no aggregates. Unsupported mixtures are rejected here. |
-| **C6** | A factor attached to a decision-bearing aggregate has one supported canonical representation and is one value for the whole query. |
+| **C5** | An aggregate constraint contains only decision-bearing reducers and row-invariant decision terms at the top level. A per-row constraint contains no reducers. Unsupported mixtures are rejected here. |
+| **C6** | A factor attached to a decision-bearing reducer has one supported canonical representation and is one value for the whole query. |
 | **C7** | Structural tags and source provenance survive rebuilding. The result is a fixed point: `Canon(Canon(c)) == Canon(c)`. |
 
 This is a **structural** canonical form, not algebraic simplification. The model
@@ -140,7 +140,7 @@ Indivisible atoms include `x`, `price * x`, `POWER(x - target, 2)`,
 `SUM(x * price)`, `MAX(x * value)`, `SUM(x) WHEN condition`.
 
 `ReadCanonicalAtoms` reads these atoms back from a canonical side, with each sign
-and any aggregate factor, by the same spine walk `Decompose` uses. Readers of
+and any reducer factor, by the same spine walk `Decompose` uses. Readers of
 canonical trees (the solver path's prepared linear form, direct solve's facts) use
 it instead of walking `+` and `-` themselves.
 
@@ -176,7 +176,7 @@ becomes structurally equivalent to
 -SUM(ship) - cap <= -demand
 ```
 
-There used to be a third placement case, `NEUTRAL`, for a data-only aggregate: it
+There used to be a third placement case, `NEUTRAL`, for a data-only reducer: it
 carries no decision so it need not be left, but it collapses rows to one value so
 it is a legitimate bound and need not be right either. That was scaffolding for a
 right-hand side that could not evaluate one. The RHS evaluator exists now, so the
@@ -235,15 +235,15 @@ is decided.
 read — resolving the binding beneath a cast, for instance. Casts in ordinary SQL,
 and casts of solved decisions in the `SELECT` list, are untouched.
 
-### 3.7 Aggregate scales
+### 3.7 Reducer scales
 
-A factor outside a decision-bearing aggregate is part of the atom:
+A factor outside a decision-bearing reducer is part of the atom:
 
 ```sql
 2 * SUM(x)      SUM(x) * 2      SUM(x) / 2
 ```
 
-The canonical representation keeps the factor **outside** the aggregate, and every
+The canonical representation keeps the factor **outside** the reducer, and every
 consumer reads one of exactly two spellings: `factor * AGG` or `AGG / factor`.
 
 **Why outside.** `MIN`/`MAX` are order statistics, not linear functionals: they
@@ -333,7 +333,7 @@ reason objectives get a boundary instead of their own normalizer.
 | **O1** | The body is an additive spine whose every term references a decision. | — |
 | **O2** | A decision-free additive term is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. One that does not fold to a constant is rejected here. | — |
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
-| **O4** | A factor on a decision-bearing aggregate is one query-wide value, sits outside the aggregate, and has one spelling. | C6, same `PeelScale` |
+| **O4** | A factor on a decision-bearing reducer is one query-wide value, sits outside the reducer, and has one spelling. | C6, same `PeelScale` |
 | **O5** | Structural tags survive rebuilding. The result is a fixed point. | C7 |
 
 Two consequences:
@@ -355,11 +355,11 @@ like, and every consumer now sees `factor * AGG` or `AGG / factor`.
 ## 4. Classification and verification
 
 `ClassifyCanonicalComparison` returns `PER_ROW`, `AGGREGATE` or `INVALID` from
-aggregate placement plus DECIDE variable scope. Aggregate rows admit only
-aggregate-rooted decision terms and query-wide top-level terms; scalar decisions are
+reducer placement plus DECIDE variable scope. Aggregate rows admit only
+reducer-rooted decision terms and query-wide top-level terms; scalar decisions are
 query-wide, while row/entity decisions and data-varying expressions must be inside
 `SUM`/`AVG`/`MIN`/`MAX`. `PER` eligibility is validated against this same
-classification after binding, which closed the data-only-aggregate loophole the
+classification after binding, which closed the data-only-reducer loophole the
 earlier parsed-shape predicate had. Physical extraction consumes this classifier
 rather than re-deciding from the mere presence of an aggregate.
 
@@ -405,10 +405,10 @@ pins both the debug-mode throwing behavior and the release-mode no-op via a
 - combine like terms;
 - fold constants;
 - rewrite AVG, ABS, MIN/MAX, `<>`, bilinear products, L0 `norm()` or `IN`;
-- look inside aggregate bodies. Splitting a body into `coefficient * variable` terms
+- look inside reducer bodies. Splitting a body into `coefficient * variable` terms
   opens terms and can fail, so it lives beside this stage in `DecideTermSplitter`
   (`decide_term_split.cpp`), which reads canonical atoms;
-- evaluate data, aggregates, `WHEN`, `PER` or qualifiers;
+- evaluate data, reducers, `WHEN`, `PER` or qualifiers;
 - choose a solver formulation.
 
 Expression association is fixed by the stage-01 grammar; this stage never
@@ -460,9 +460,9 @@ What each focused file pins:
 | File | Contract |
 |---|---|
 | `test_canonicalize_cast.py` | Mixed BIGINT/DECIMAL against direct DuckDB evaluation around `2^53`; every explicit decision-cast spelling rejected; data casts remain part of bounds and coefficients |
-| `test_canonicalize_scale.py` | Composed query-wide multiplication and division around aggregates are supported, not rejected |
+| `test_canonicalize_scale.py` | Composed query-wide multiplication and division around reducers are supported, not rejected |
 | `test_canonicalize_side_agnostic.py` | Correlated bounds on both sides |
-| `test_canonicalize_homogeneity.py` | Scalar / row / entity scope behavior and the data-only-aggregate `PER` case |
+| `test_canonicalize_homogeneity.py` | Scalar / row / entity scope behavior and the data-only-reducer `PER` case |
 | `test_canonicalize_idempotence.py` | Byte-identical emitted models for non-canonical and fixed-point spellings — side swaps, exact casts, scales, `WHEN`, `PER` |
 | `test_query_diagnostics_relation.py` | Forward and reversed uncorrelated subquery bounds emit the same editable SQL suggestion |
 | `test_bilinear.py` (`TestFactoredProductDegree`) | `SUM((x + y) * z)` is accepted in both clauses |

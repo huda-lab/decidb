@@ -213,7 +213,7 @@ There are three places that reject one, and they share **one wording**, returned
 
 | Where the `CASE` sits | Rejected by |
 |---|---|
-| Inside an aggregate argument (`SUM(x * CASE …)`) | `ValidateSumArgumentInternal` |
+| Inside a reducer argument (`SUM(x * CASE …)`) | `ValidateSumArgumentInternal` |
 | Anywhere else in a constraint (`x + CASE … <= 5`) | `DecideConstraintsBinder::BindExpression` |
 | Anywhere else in an objective (`SUM(x) + CASE …`) | `DecideObjectiveBinder::BindExpression` |
 

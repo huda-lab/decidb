@@ -63,15 +63,15 @@ namespace duckdb {
 // BoundReferenceExpression nodes so that DuckDB's ExpressionExecutor can
 // evaluate expressions against data chunks (which use positional indices).
 
-//! Collect every aggregate in an expression. Descent stops at a match: an aggregate inside an
-//! aggregate is not legal SQL, so there is nothing below one to find.
-static void CollectAggregates(const Expression &expr, vector<const Expression *> &out) {
+//! Collect every reducer in an expression. Descent stops at a match: a reducer inside a
+//! reducer is not legal SQL, so there is nothing below one to find.
+static void CollectReducers(const Expression &expr, vector<const Expression *> &out) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		out.push_back(&expr);
 		return;
 	}
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		CollectAggregates(child, out);
+		CollectReducers(child, out);
 	});
 }
 
@@ -79,9 +79,9 @@ static void CollectAggregates(const Expression &expr, vector<const Expression *>
 //! Handles: BOUND_COLUMN_REF, BOUND_FUNCTION, BOUND_CAST, BOUND_AGGREGATE,
 //! BOUND_COMPARISON, BOUND_CONJUNCTION, BOUND_OPERATOR. Falls back to Copy() for others.
 //!
-//! `agg_substitutions` maps an aggregate node to an extra chunk column carrying that
-//! aggregate's already-computed value, broadcast over the rows of its group. It is how a
-//! right-hand side like `MIN(cap) + demand * 2` becomes evaluable per row: the aggregate
+//! `agg_substitutions` maps a reducer node to an extra chunk column carrying that
+//! reducer's already-computed value, broadcast over the rows of its group. It is how a
+//! right-hand side like `MIN(cap) + demand * 2` becomes evaluable per row: the reducer
 //! collapses to a column reference and the rest of the tree is untouched. A tree built
 //! this way is only valid against the augmented chunk layout, so it must never be
 //! memoized by CachedTransformToChunkExpression.
@@ -112,7 +112,7 @@ static unique_ptr<Expression> TransformToChunkExpression(
 			auto it = agg_substitutions->find(&expr);
 			if (it != agg_substitutions->end()) {
 				// The extra column is DOUBLE, but the parent node was bound against this
-				// aggregate's own type. Handing it a DOUBLE would not fail — it would
+				// reducer's own type. Handing it a DOUBLE would not fail — it would
 				// reinterpret the physical representation and compute a wrong value
 				// (a DOUBLE 4.0 read as INTEGER is 0), so cast back explicitly.
 				auto ref = make_uniq<BoundReferenceExpression>(LogicalType::DOUBLE, it->second);
@@ -121,10 +121,10 @@ static unique_ptr<Expression> TransformToChunkExpression(
 			}
 		}
 		// Reached only where no substitution was prepared — an aggregate outside the
-		// right-hand side, e.g. in a WHEN condition or a coefficient, where an aggregate has
+		// right-hand side, e.g. in a WHEN condition or a coefficient, where a reducer has
 		// no meaning.
 		throw InvalidInputException(
-		    "DECIDE: this aggregate cannot be used here. An aggregate such as SUM(x) is allowed on either side "
+		    "DECIDE: this reducer cannot be used here. A reducer such as SUM(x) is allowed on either side "
 		    "of a constraint and in the objective, but not inside a WHEN condition or a "
 		    "coefficient.");
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
@@ -228,7 +228,7 @@ static string DescribeNullSource(const NullSourceContext *ctx, idx_t row) {
 //! Fast path for DOUBLE; otherwise casts via VectorOperations::DefaultCast.
 //!
 //! `allow_infinite` relaxes the check to NaN-only, and is used exclusively for values
-//! on the path to a model row's `rhs` — the row's own bound, and the aggregate input
+//! on the path to a model row's `rhs` — the row's own bound, and the reducer input
 //! that a per-group bound is folded from. An infinite bound is not an error there:
 //! it is the absence of a constraint (`<= +inf`) or a constraint nothing satisfies
 //! (`>= +inf`), both of which the solver contract already expresses — the model
@@ -485,7 +485,7 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
                                      vector<string> &out_group_labels,
                                      // Optional second map over the SAME group numbering but a
                                      // looser row filter. The right-hand side needs this: its
-                                     // aggregates must not inherit the LHS's aggregate-local WHEN,
+                                     // reducers must not inherit the LHS's aggregate-local WHEN,
                                      // which `row_filter` folds in. Groups that no strict row
                                      // reached emit no constraint, so their rows stay excluded.
                                      const std::function<bool(idx_t)> *loose_row_filter = nullptr,
@@ -584,13 +584,13 @@ static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
 
 
 
-//! Entity scope an aggregate is qualified by (`sum(D: ...)`), read back from the tag the
-//! binder stamped on the aggregate; INVALID_INDEX when the aggregate is unqualified.
-//! The prepared terms already carry this on `qualifier_scope_idx`; a data-side aggregate
+//! Entity scope a reducer is qualified by (`sum(D: ...)`), read back from the tag the
+//! binder stamped on the aggregate; INVALID_INDEX when the reducer is unqualified.
+//! The prepared terms already carry this on `qualifier_scope_idx`; a data-side reducer
 //! on the RHS is evaluated here from the tree, so it reads the tag itself.
 static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
 	idx_t scope_idx = DConstants::INVALID_INDEX;
-	TryParseQualifiedAggregateTag(agg.alias, scope_idx);
+	TryParseQualifiedReducerTag(agg.alias, scope_idx);
 	return scope_idx;
 }
 
@@ -612,7 +612,7 @@ static void RejectEmptyAggregate(idx_t effective_row_count, const char *what, co
 //
 // A reduced constraint emits ONE row per group, but the RHS is still a column, so a
 // bound that varies row to row has to collapse. Paper §3.2.1 fixes the semantics:
-// without PER, the clause generates one instance per tuple, each pairing the aggregate
+// without PER, the clause generates one instance per tuple, each pairing the reducer
 // (evaluated over the whole selection) with that tuple's non-reduced values. The
 // conjunction `LHS <= r_i` over every row is exactly `LHS <= min r_i`, so MIN for
 // `<=` and MAX for `>=` is a derivation, not a policy choice. With PER we apply the
@@ -630,8 +630,8 @@ static void RejectEmptyAggregate(idx_t effective_row_count, const char *what, co
 // uniform-storage fast path (and the built model) exactly as it was.
 //
 // `group_ids` is the RHS's own map — the constraint's WHEN and PER, deliberately
-// without the LHS's aggregate-local filters, the same map the RHS aggregates are
-// evaluated over. An aggregate-local WHEN scopes its own aggregate, not the per-tuple
+// without the LHS's aggregate-local filters, the same map the RHS reducers are
+// evaluated over. An aggregate-local WHEN scopes its own reducer, not the per-tuple
 // fan-out, so `SUM(x) WHEN a <= cap` takes the tightest `cap` over every selected row
 // rather than over the a-rows. Reducing over the looser map is safe for the broadcast
 // too: it is a superset of the strict map, so every row a reader reaches is written.
@@ -727,7 +727,7 @@ static void ReduceAggregateRhsPerGroup(EvaluatedConstraint &ec,
 // TermFilterState is declared in physical_decide.hpp (EvaluateObjective's
 // EvaluatedClauses return value carries it across Finalize's phase methods).
 
-// Which rows a relation-qualified aggregate (`sum(D: ...)`) actually contributes.
+// Which rows a relation-qualified reducer (`sum(D: ...)`) actually contributes.
 // The join repeats each D tuple once per matching row; §3.2.2 asks for one term per
 // tuple identity, and the binder has already guaranteed that every row sharing an
 // identity carries the same value — so keeping the first row of each identity and
@@ -836,38 +836,38 @@ static vector<bool> EvaluateBooleanMask(const Expression &condition, ChunkExprCa
     return EvaluateBooleanMasks({&condition}, chunk_expr_cache, context, data, num_rows)[0];
 }
 
-// Reduce one data-only aggregate on the right-hand side to a value per group.
+// Reduce one data-only reducer on the right-hand side to a value per group.
 //
-// Implements the construction order paper §3.2.2 fixes for every aggregate:
+// Implements the construction order paper §3.2.2 fixes for every reducer:
 //
 //     when selection -> per partitioning -> qualifier de-duplication -> aggregation
 //
 // The first two arrive as `group_ids` (built from the constraint's WHEN and PER,
-// deliberately without the LHS's aggregate-local filters). This adds the aggregate's
+// deliberately without the LHS's aggregate-local filters). This adds the reducer's
 // own WHEN, then the relation-qualifier de-duplication, then folds.
 //
 // Unlike the left-hand side, nothing here can be expressed as a coefficient: the
 // LHS reduces by *summing a column*, which is why only SUM and AVG could ever be
 // moved there and MIN/MAX/COUNT were refused. Folding per kind is what removes
 // that asymmetry.
-static vector<double> EvaluateRhsAggregatePerGroup(const BoundAggregateExpression &agg,
-                                                   const vector<idx_t> &group_ids, idx_t num_groups,
-                                                   const vector<EntityMapping> &entity_mappings,
-                                                   ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                                   ColumnDataCollection &data, idx_t num_rows) {
+static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression &agg,
+                                                 const vector<idx_t> &group_ids, idx_t num_groups,
+                                                 const vector<EntityMapping> &entity_mappings,
+                                                 ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                                 ColumnDataCollection &data, idx_t num_rows) {
     const bool has_groups = !group_ids.empty();
     const idx_t groups = has_groups ? num_groups : 1;
     auto group_of = [&](idx_t row) -> idx_t {
         return has_groups ? group_ids[row] : 0;
     };
 
-    // Stage 1: the aggregate's own WHEN (`SUM(b) WHEN w`), which scopes this aggregate
+    // Stage 1: the reducer's own WHEN (`SUM(b) WHEN w`), which scopes this reducer
     // and nothing else.
     vector<bool> keep;
     if (agg.filter) {
         keep = EvaluateBooleanMask(*agg.filter, chunk_expr_cache, context, data, num_rows);
     }
-    // Stage 2: relation-qualified aggregates (`sum(D: cost)`) contribute once per
+    // Stage 2: relation-qualified reducers (`sum(D: cost)`) contribute once per
     // distinct entity, not once per joined row.
     idx_t scope_idx = QualifierScopeOf(agg);
     if (scope_idx != DConstants::INVALID_INDEX) {
@@ -897,7 +897,7 @@ static vector<double> EvaluateRhsAggregatePerGroup(const BoundAggregateExpressio
     // A data-only AVG reaches here as a genuine AVG node: DecideOptimizer's
     // AVG->SUM rewrite deliberately skips decision-free aggregates, because
     // rebinding one as SUM redeclares it with SUM's integral type while its value
-    // stays fractional — and this is the one place an aggregate's value is handed
+    // stays fractional — and this is the one place a reducer's value is handed
     // back to a surrounding expression that was bound against that declared type.
     // Left as AVG, the round trip is DOUBLE->DOUBLE and the fold below is exact.
 
@@ -918,7 +918,7 @@ static vector<double> EvaluateRhsAggregatePerGroup(const BoundAggregateExpressio
         while (data.Scan(scan, in_chunk)) {
             out_chunk.Reset();
             arg_executor.Execute(in_chunk, out_chunk);
-            // An aggregate's input feeds a bound, so it follows the same rule as
+            // A reducer's input feeds a bound, so it follows the same rule as
             // every other RHS: ±inf is a value, not an error. A group whose
             // MAX(cap) folds to +inf is a group with no upper bound, and one
             // whose bound points out of reach is an infeasibility the solver
@@ -962,7 +962,7 @@ static vector<double> EvaluateRhsAggregatePerGroup(const BoundAggregateExpressio
         counts[g]++;
     }
     for (idx_t g = 0; g < groups; g++) {
-        // An empty aggregate has no value — MIN(∅) and MAX(∅) are not representable
+        // An empty reducer has no value — MIN(∅) and MAX(∅) are not representable
         // and AVG(∅) is undefined. Same rule the left-hand side already enforces.
         RejectEmptyAggregate(counts[g], "aggregate", "constraint right-hand side");
         if (is_avg) {
@@ -1969,7 +1969,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         bool has_when = (constraint->when_condition != nullptr);
         bool has_per = (!constraint->per_columns.empty());
 
-        // Group map for the right-hand side's own aggregates: the constraint's WHEN and
+        // Group map for the right-hand side's own reducers: the constraint's WHEN and
         // PER, without the LHS's aggregate-local filters. Empty means "every row, one
         // group", the same convention `row_group_ids` uses.
         vector<idx_t> rhs_row_group_ids;
@@ -2021,8 +2021,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 }
                 return true;
             };
-            // The RHS's own aggregates are scoped by the constraint's WHEN and PER, but
-            // NOT by the LHS's aggregate-local WHENs — those scope their own aggregate
+            // The RHS's own reducers are scoped by the constraint's WHEN and PER, but
+            // NOT by the LHS's aggregate-local WHENs — those scope their own reducer
             // only. `SUM(x) WHEN a <= MIN(b)` must take MIN over every row, not the
             // a-rows. Kept in the same numbering so group g means the same thing on
             // both sides.
@@ -2067,7 +2067,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
         }
 
-        // Relation-qualified aggregates: drop the duplicate rows the join introduced, now
+        // Relation-qualified reducers: drop the duplicate rows the join introduced, now
         // that WHEN selection and PER partitioning have fixed the groups to de-duplicate
         // within. Folding this into the term filter keeps AVG's denominator honest.
         for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
@@ -2146,24 +2146,24 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
             eval_const.rhs_values.Reserve(num_rows);
 
-            // Aggregates on this side are evaluated first, to one value per group, and
+            // Reducers on this side are evaluated first, to one value per group, and
             // replaced by an extra chunk column carrying that value broadcast over the
             // group's rows. What remains is an ordinary per-row expression, so a mixed
-            // bound like `MIN(cap) + demand * 2` needs no special case: the aggregate part
+            // bound like `MIN(cap) + demand * 2` needs no special case: the reducer part
             // is constant within the group and the rest still varies, which is exactly
             // what the reduction after this block expects.
-            vector<const Expression *> rhs_aggregates;
-            CollectAggregates(*constraint->rhs_expr, rhs_aggregates);
+            vector<const Expression *> rhs_reducers;
+            CollectReducers(*constraint->rhs_expr, rhs_reducers);
 
             std::unordered_map<const Expression *, idx_t> agg_substitutions;
-            vector<vector<double>> aggregate_values;
+            vector<vector<double>> reducer_values;
             const idx_t data_columns = gstate.data.ColumnCount();
-            for (idx_t i = 0; i < rhs_aggregates.size(); i++) {
-                auto &agg = rhs_aggregates[i]->Cast<BoundAggregateExpression>();
-                aggregate_values.push_back(EvaluateRhsAggregatePerGroup(
+            for (idx_t i = 0; i < rhs_reducers.size(); i++) {
+                auto &agg = rhs_reducers[i]->Cast<BoundAggregateExpression>();
+                reducer_values.push_back(EvaluateRhsReducerPerGroup(
                     agg, rhs_row_group_ids, eval_const.num_groups, entity_mappings,
                     chunk_expr_cache, context, gstate.data, num_rows));
-                agg_substitutions.emplace(rhs_aggregates[i], data_columns + i);
+                agg_substitutions.emplace(rhs_reducers[i], data_columns + i);
             }
 
             // A substituted tree is only valid against the augmented chunk below, so it
@@ -2187,7 +2187,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             ColumnDataScanState rhs_scan_state;
             gstate.data.InitializeScan(rhs_scan_state);
             vector<LogicalType> chunk_types = gstate.data.Types();
-            for (idx_t i = 0; i < rhs_aggregates.size(); i++) {
+            for (idx_t i = 0; i < rhs_reducers.size(); i++) {
                 chunk_types.push_back(LogicalType::DOUBLE);
             }
             DataChunk rhs_chunk;
@@ -2201,13 +2201,13 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             idx_t scanned = 0;
             while (gstate.data.Scan(rhs_scan_state, scan_chunk)) {
                 DataChunk *eval_chunk = &scan_chunk;
-                if (!rhs_aggregates.empty()) {
+                if (!rhs_reducers.empty()) {
                     rhs_chunk.Reset();
                     for (idx_t col = 0; col < scan_chunk.ColumnCount(); col++) {
                         rhs_chunk.data[col].Reference(scan_chunk.data[col]);
                     }
-                    for (idx_t i = 0; i < rhs_aggregates.size(); i++) {
-                        auto &vals = aggregate_values[i];
+                    for (idx_t i = 0; i < rhs_reducers.size(); i++) {
+                        auto &vals = reducer_values[i];
                         auto out = FlatVector::GetData<double>(rhs_chunk.data[data_columns + i]);
                         for (idx_t row = 0; row < scan_chunk.size(); row++) {
                             idx_t abs_row = scanned + row;
@@ -2243,7 +2243,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 
         // A reduced constraint emits one row per group, so its bound must be one value
         // per group. `was_minmax_easy` is included: the optimizer emitted it per row,
-        // but it is still one aggregate compared against every tuple's bound, so the
+        // but it is still one reducer compared against every tuple's bound, so the
         // tightest bound is what pins it.
         if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
             string rhs_text = eval_const.rhs_label.empty()
@@ -2467,7 +2467,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
             vector<idx_t> *out_var_indices;
             vector<TermFilterState> *out_term_filters;
             //! Only set for the linear bucket: the model builder's scalar-once shortcut
-            //! needs to tell an aggregate-summed term from a row-invariant sibling term.
+            //! needs to tell a reducer-summed term from a row-invariant sibling term.
             //! Quadratic terms have no such shortcut, so this stays null there.
             vector<LinearTermReduction> *out_reductions = nullptr;
         };
@@ -2737,8 +2737,8 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 
 // Composed MIN/MAX: additive clauses mixing SUM/AVG/MIN/MAX, in a constraint
 // (`SUM(a) + MAX(b) <= K`) or in the objective. This phase evaluates the parts that
-// need a row -- each inner term's per-row coefficient, the query-wide factor on an
-// aggregate, the term's WHEN mask, the constant RHS. The rows and auxiliaries they
+// need a row -- each inner term's per-row coefficient, the query-wide factor on a
+// reducer, the term's WHEN mask, the constant RHS. The rows and auxiliaries they
 // become are emitted later, by FormulateModel; nothing evaluated here depends on a
 // variable bound, so a second formulation against a widened box reuses it as is.
 void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate,
@@ -2782,7 +2782,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
         return coefs;
     };
 
-    //! A factor on an aggregate is one value for the whole query by construction (the
+    //! A factor on a reducer is one value for the whole query by construction (the
     //! canonicalizer rejects anything row-varying), so evaluate it once and read
     //! row 0. It goes through the same chunk-expression transform every other
     //! coefficient does -- a flattened scalar subquery is a column reference, and
@@ -2874,7 +2874,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
                 ta.filter_mask.assign(num_rows, true);
             }
             // Fold in the relation qualifier's de-duplication mask, exactly as the
-            // non-composed aggregate paths do. Composed v1 has no outer PER, so every
+            // non-composed reducer paths do. Composed v1 has no outer PER, so every
             // row is in one group and `row_group_ids` is empty. Applied uniformly:
             // for MIN/MAX it is provably a no-op (every row of an identity carries the
             // same value, so dropping repeats cannot move an extremum), which keeps
@@ -3064,7 +3064,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     solver_input.objective_row_group_ids = evaluated.objective_row_group_ids;
     solver_input.objective_num_groups = evaluated.objective_num_groups;
 
-    // Relation-qualified aggregates in the objective: same de-duplication as on the
+    // Relation-qualified reducers in the objective: same de-duplication as on the
     // constraint side, applied once the objective's PER groups are settled and before
     // AVG scaling reads the surviving-row counts.
     if (gstate.objective) {

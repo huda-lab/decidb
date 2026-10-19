@@ -305,13 +305,13 @@ class TestBinderErrors:
 
     # `SUM(x*v) <= SUM(y*v)` used to be rejected here, sharing this file's "not a
     # scalar or aggregate without DECIDE variables" message because the bound was
-    # itself an aggregate over decision variables. the canonicalization refactor made the gate
+    # itself a reducer over decision variables. the canonicalization refactor made the gate
     # side-agnostic and the shape solves; it is now oracle-verified in
     # test_canonicalize_side_agnostic.py::test_aggregate_vs_aggregate.
 
     def test_data_only_minmax_rhs_aggregate_now_supported(self, decidb_cli):
         """MIN/MAX on the RHS used to be refused because the left side could only
-        reduce a data term by summing it. The aggregate evaluator removes that limit,
+        reduce a data term by summing it. The reducer evaluator removes that limit,
         so this now solves: MIN(val) = 10 caps SUM(x*val), giving x = (1, 0)."""
         rows, cols = decidb_cli.execute("""
                 WITH t AS (SELECT 1 AS id, 10 AS val UNION ALL SELECT 2, 20)
@@ -491,7 +491,7 @@ class TestBinderErrors:
         "x * y * x <= 5",
     ])
     def test_degree_refused_on_a_per_row_constraint(self, decidb_cli, constraint):
-        """A per-row constraint is held to the same degree rule as an aggregate argument.
+        """A per-row constraint is held to the same degree rule as a reducer argument.
 
         These four used to bind cleanly and be refused at plan time by term extraction,
         because the binder's degree gate was reachable only from ValidateSumArgument and

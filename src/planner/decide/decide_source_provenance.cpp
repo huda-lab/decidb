@@ -123,7 +123,7 @@ static string RenderAggregate(const BoundAggregateExpression &agg, const vector<
 		}
 	}
 	idx_t scope_idx;
-	if (TryParseQualifiedAggregateTag(agg.GetAlias(), scope_idx) && scope_idx < entity_scopes.size()) {
+	if (TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < entity_scopes.size()) {
 		body = entity_scopes[scope_idx].table_alias + ": " + body;
 	}
 	if (!norm_payload.empty()) {
@@ -532,7 +532,7 @@ static string RenderComposedTerm(const LogicalDecide::ComposedMinMaxTerm &term,
 //! What a composed MIN/MAX clause became. It has no rows in the tree -- the optimizer
 //! replaced its comparison with a TRUE placeholder and moved the terms to
 //! `composed_minmax_constraints` -- so the account is the one thing a reader cannot see
-//! anywhere else: which aggregates turned into auxiliary variables.
+//! anywhere else: which reducers turned into auxiliary variables.
 static void RenderComposedRewrite(const LogicalDecide::ComposedMinMaxConstraint &spec,
                                   const vector<string> &fragments,
                                   const vector<EntityScopeInfo> &entity_scopes, vector<string> &out) {

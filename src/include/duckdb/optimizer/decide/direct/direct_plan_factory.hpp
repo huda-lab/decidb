@@ -38,7 +38,7 @@ unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, unique_ptr<Expression> message);
 
 //! A per-row numeric value read as the solver reads a coefficient: cast to DOUBLE, negated when `sign` is negative,
-//! then multiplied or divided by the query-wide factor of its aggregate (`scale`, when `scaled`).
+//! then multiplied or divided by the query-wide factor of its reducer (`scale`, when `scaled`).
 unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign, bool scaled,
                                         double scale, bool divides);
 

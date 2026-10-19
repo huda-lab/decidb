@@ -35,13 +35,13 @@ FunctionExpression::FunctionExpression(const string &function_name, vector<uniqu
                          std::move(order_bys), distinct, is_operator, export_state_p) {
 }
 
-//! A relation-qualified aggregate is represented by a parser-only operator whose first
+//! A relation-qualified reducer is represented by a parser-only operator whose first
 //! child is the real aggregate and whose remaining children are relation names. Render
 //! the aggregate's complete DuckDB function surface, inserting the qualifier before
 //! its arguments, rather than exposing the private marker as a function call.
-static string QualifiedAggregateToString(const FunctionExpression &wrapper) {
+static string QualifiedReducerToString(const FunctionExpression &wrapper) {
 	if (wrapper.children.size() < 2 || wrapper.children[0]->GetExpressionClass() != ExpressionClass::FUNCTION) {
-		throw InternalException("DECIDE qualified-aggregate marker has an invalid parsed shape");
+		throw InternalException("DECIDE qualified-reducer marker has an invalid parsed shape");
 	}
 	auto &aggregate = wrapper.children[0]->Cast<FunctionExpression>();
 	string result;
@@ -117,8 +117,8 @@ string FunctionExpression::ToString() const {
 		}
 		return result + (parenthesize ? ")" : "");
 	}
-	if (is_operator && function_name == QUALIFIED_AGGREGATE_TAG) {
-		return QualifiedAggregateToString(*this);
+	if (is_operator && function_name == QUALIFIED_REDUCER_TAG) {
+		return QualifiedReducerToString(*this);
 	}
 	return ToString<FunctionExpression, ParsedExpression>(*this, catalog, schema, function_name, is_operator, distinct,
 	                                                      filter.get(), order_bys.get(), export_state, true);

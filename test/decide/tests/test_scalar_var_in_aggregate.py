@@ -1,7 +1,7 @@
 """A query-wide (`scalar`) decision as a term of an aggregate constraint.
 
 Canonical form K3 says every term on the left of an aggregate constraint is either
-an aggregate **or row-invariant** — and names a scalar-scoped variable as the
+a reducer **or row-invariant** — and names a scalar-scoped variable as the
 row-invariant case. The code did not agree: `SUM(x) - s <= K` was rejected with
 "aggregate constraint LHS contains a non-aggregate term: s", even though the
 objective path had accepted the same term for as long as it existed.

@@ -30,7 +30,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
     case ExpressionClass::COLUMN_REF:
     case ExpressionClass::CONSTANT: {
         // A bare query-wide decision is a complete objective on its own: it has a
-        // single solver column, so there is nothing for an aggregate to collapse.
+        // single solver column, so there is nothing for a reducer to collapse.
         if (!is_top_expression || IsScalarDecideVariable(expr)) {
 	        return ExpressionBinder::BindExpression(expr_ptr, depth);
 	    }
@@ -124,7 +124,7 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		}
 		break;
 	case ExpressionClass::OPERATOR:
-		// The aggregate classifier already validated this aggregate body before
+		// The aggregate classifier already validated this reducer body before
 		// BindAggregate descends into it. A nested operator here is therefore a
 		// decision-free coefficient such as COALESCE(weight, 0); bind it with
 		// DuckDB's ordinary operator binder, matching the constraint binder.
@@ -142,16 +142,16 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 }
 
 DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr_ptr, string& error_msg){
-    // A relation qualifier changes which tuples an aggregate sums over, not what shape it
+    // A relation qualifier changes which tuples a reducer sums over, not what shape it
     // is, so classification looks straight through it.
-    auto &expr = const_cast<ParsedExpression &>(UnwrapQualifiedAggregate(expr_ptr));
+    auto &expr = const_cast<ParsedExpression &>(UnwrapQualifiedReducer(expr_ptr));
     switch (expr.GetExpressionClass()) {
     case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		auto fname = StringUtil::Lower(func.function_name);
-		DecideExpression aggregate_result;
-		if (ClassifyAggregateCall(func, aggregate_result, error_msg)) {
-			return aggregate_result;
+		DecideExpression reducer_result;
+		if (ClassifyReducerCall(func, reducer_result, error_msg)) {
+			return reducer_result;
 		}
         // Non-aggregate outer function. Only additive/scalar composition of
         // aggregates (e.g. `SUM(x) + SUM(y)`, `-SUM(x)`, `c * SUM(x)`,
@@ -182,7 +182,7 @@ DecideExpression DecideObjectiveBinder::GetExpressionType(ParsedExpression &expr
     }
     case ExpressionClass::COLUMN_REF: {
         // A query-wide decision is a single solver column, so it is already a
-        // scalar objective — it needs no aggregate to collapse it.
+        // scalar objective — it needs no reducer to collapse it.
         if (IsScalarDecideVariable(expr)) {
             return DecideExpression::VARIABLE;
         }

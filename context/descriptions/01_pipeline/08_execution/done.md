@@ -21,7 +21,7 @@ on `PhysicalDecide`, in call order:
 | `BuildEntityMappings` | 1.5 — entity mappings for table-scoped variables |
 | `EvaluateConstraints` | 2, constraints — appends to `gstate.evaluated_constraints` |
 | `EvaluateObjective` | 2, objective — per-term filters, the `WHEN` mask, and the objective's `PER` grouping |
-| `EvaluateComposedClauses` | 2, composed MIN/MAX — per-row coefficients, aggregate factors, `WHEN` masks, constant RHS |
+| `EvaluateComposedClauses` | 2, composed MIN/MAX — per-row coefficients, reducer factors, `WHEN` masks, constant RHS |
 | `BuildSolverInput` | 3a — assembles `SolverInput`, settles the column box, builds the `VarIndexer` |
 | `FormulateModel` | 3b — derives the constants and emits the rows, against a given box |
 | `FormulateElasticModel` | 3b again, under `DIAGNOSE` only — the same pass against the widened box a repair searches |
@@ -173,7 +173,7 @@ materialized rows (PHASE 2), and nothing else. Which variable a term names and w
 multiplies it were settled upstream, where a binder was in scope.
 
 **The shape is asserted, never repaired.** A decision variable on the RHS, a
-non-aggregate term in an aggregate LHS, an unrewritten MIN/MAX — each is an internal
+non-reducer term in an aggregate LHS, an unrewritten MIN/MAX — each is an internal
 invariant failure raised by the flattening pass at plan time, not something
 execution fixes. The structures themselves are documented in
 `src/include/duckdb/planner/decide/decide_prepared_model.hpp`; the algebra that
@@ -212,10 +212,10 @@ The result is an `EntityMapping { num_entities, row_to_entity }` on the
 | `BoundColumnRefExpression` | `BoundReferenceExpression` on `binding.column_index` |
 | `BoundFunctionExpression` | recurse into children, copy `bind_info` |
 | `BoundCastExpression` | recurse into child, re-wrap with `AddCastToType` |
-| `BoundAggregateExpression` | a reference to an extra chunk column holding that aggregate's per-group value, cast back to the aggregate's own type (see `EvaluateRhsAggregatePerGroup`) |
+| `BoundAggregateExpression` | a reference to an extra chunk column holding that reducer's per-group value, cast back to the reducer's own type (see `EvaluateRhsReducerPerGroup`) |
 | anything else | copied as-is |
 
-An aggregate reached with no substitution prepared — inside a `WHEN` condition or a
+A reducer reached with no substitution prepared — inside a `WHEN` condition or a
 coefficient, where it has no meaning — is rejected with `InvalidInputException`.
 
 Results are cached per `Finalize` call, and the cache outlives every
@@ -244,8 +244,8 @@ row or group sum from the RHS.
 
 - **Constant** — extracted once and broadcast.
 - **Expression** — evaluated per row, giving row-varying bounds.
-- **Aggregate** — evaluated per group and by aggregate kind
-  (`EvaluateRhsAggregatePerGroup`).
+- **Reducer** — evaluated per group and by reducer kind
+  (`EvaluateRhsReducerPerGroup`).
 
 The canonical RHS classification decides which: a bound tagged
 `QUERY_WIDE_BOUND_TAG` is a shared scalar; anything with a row-varying component
@@ -286,7 +286,7 @@ SUM(x * a) WHEN active + SUM(x * b) WHEN priority <= 10 PER grp
 `active` filters only the `a` term, `priority` only the `b` term, and `PER grp`
 groups rows participating in at least one.
 
-### Relation-qualified aggregates
+### Relation-qualified reducers
 
 `SUM(D: expr)` asks for one contribution per **tuple identity** of `D`, but the
 join repeats each `D` tuple once per matching row. De-duplication keeps the first
@@ -333,17 +333,17 @@ handled; canonicalization rebuilds `x + v <= K` as `x <= K - v`, which put the *
 bound on the strict path purely because of how it was written.
 
 Two values sit on that path, and both now follow the rule. The row's own bound is
-one. The other is the input of a **bound-side aggregate**: `MIN(x) <= MAX(cap) PER g`
-folds a column to one value per group, and `EvaluateRhsAggregatePerGroup` extracted
+one. The other is the input of a **bound-side reducer**: `MIN(x) <= MAX(cap) PER g`
+folds a column to one value per group, and `EvaluateRhsReducerPerGroup` extracted
 that column strictly, so a single infinite row in `cap` refused the query outright —
 before grouping, before folding, before anything knew which group the row belonged
-to, and before the aggregate's own `WHEN` or relation-qualified dedup had masked the
+to, and before the reducer's own `WHEN` or relation-qualified dedup had masked the
 rows that contribute to nothing. The literal spelling of the same bound was accepted
 and classified per group, so the outcome depended on how the bound was written.
 
 It is now uniform: an infinite bound behaves the same in every spelling, and the
 solver decides what it means. `inf - inf` is still NaN, and still refused — a
-aggregate's infinities reach the per-row extraction that reads the folded bound back,
+reducer's infinities reach the per-row extraction that reads the folded bound back,
 where the NaN guard is unchanged, so admitting them upstream costs nothing.
 
 **A non-finite bound is not folded into the column box.** `FoldSingletonRows`
@@ -506,7 +506,7 @@ the linearization passes then work on it in place.
 
 The MIN/MAX objective (flat and nested-`PER`) and the composed MIN/MAX clauses are
 emitted by stage 06, not here. What stays is the evaluation they need — a composed
-term's per-row coefficients, the query-wide factor on an aggregate, its `WHEN` mask,
+term's per-row coefficients, the query-wide factor on a reducer, its `WHEN` mask,
 the constant RHS. The evaluated terms travel to stage 06 as
 `ComposedMinMaxTermData`; the objective's shape travels as `MinMaxObjectiveSpec`.
 

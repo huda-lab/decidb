@@ -332,7 +332,7 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
                 continue;
             }
             // A variable can occupy several additive terms of the SAME constraint
-            // (`2*ship + 3*ship <= 10`, or two aggregates over the same decision), and
+            // (`2*ship + 3*ship <= 10`, or two reducers over the same decision), and
             // every one of them names the same solver column. The implied bound
             // follows from their combined coefficient (10/5 = 2), never from one
             // term's alone (10/3 = 3.33, sound but 1.67x looser) — reading a single

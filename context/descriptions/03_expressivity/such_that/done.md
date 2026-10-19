@@ -72,8 +72,8 @@ A decision may therefore sit on the **bound** side, which is what the paper's §
 ```sql
 SUCH THAT SUM(x) <= cap                       -- query-wide decision as the bound
 SUCH THAT price - SUM(x) <= cap PER grp       -- paper Example 1, both halves at once
-SUCH THAT SUM(x * v) <= SUM(y * v)            -- an aggregate on both sides
-SUCH THAT SUM(x * v) <= MAX(x * w) + 30       -- composed aggregate as the bound
+SUCH THAT SUM(x * v) <= SUM(y * v)            -- a reducer on both sides
+SUCH THAT SUM(x * v) <= MAX(x * w) + 30       -- composed reducer as the bound
 ```
 
 A **data** bound reduces to one value per group — the tightest of its own rows'
@@ -85,7 +85,7 @@ already accepted a scalar subquery — a bare column is just another decision-fr
 expression, and the physical reduction (`ReduceAggregateRhsPerGroup`) does not care
 where its per-row value came from. `=` refuses a bound that genuinely varies (a
 contradiction: two different single numbers can't both be *the* sum); `<>` instead
-keeps every value it took (C3) — see "Aggregates as a Bound" in
+keeps every value it took (C3) — see "Reducers as a Bound" in
 [`../sql_functions/done.md`](../sql_functions/done.md). Homogeneity (K3) is checked
 further down: a *row-scoped* decision as the bound of a reduced constraint
 (`SUM(x) <= y`) is rejected by the aggregate term extractor, which names the offending
@@ -103,7 +103,7 @@ SUM(x * v) + MAX(x * v) >= 40                       -- hard: MAX pushed up by >=
 SUM(x * v) + MIN(x * v) <= 25                       -- hard: MIN pushed down by <=
 SUM(x * v) + (MAX(x * v) WHEN critical) <= 20       -- aggregate-local WHEN on one term
 MIN(x * v) WHEN tier_a + MIN(x * v) WHEN tier_b >= 15
-(2 * MIN(x * v) WHEN w) + SUM(x * v) <= 20          -- a factor on a term; see "A Factor on an Aggregate"
+(2 * MIN(x * v) WHEN w) + SUM(x * v) <= 20          -- a factor on a term; see "A Factor on a Reducer"
 ```
 
 **Directions.** Every `MIN`/`MAX` term gets the same base one-sided *envelope* pin — `z_k >= inner` for `MAX`, `z_k <= inner` for `MIN`, per active row. In the **easy** direction (`MAX` pushed down by `<=`, `MIN` pushed up by `>=`) the outer pressure drives `z_k` to the extreme, so the envelope alone is exact. In the **hard** direction the outer pushes `z_k` the wrong way, so the envelope is augmented with an *indicator layer*: one binary `y_i` per active row, `SUM(y_i) >= 1`, and a Big-M link on the opposite side (`z_k <= inner_i + M(1−y_i)` for `MAX`, `z_k >= inner_i − M(1−y_i)` for `MIN`) so `z_k` is pinned to the true `MAX`/`MIN`. `M` is the signed spread of the inner expression over the term's active rows (same formula as the flat hard-`MIN`/`MAX` objective's). Emitted by `EmitExtremumLink` (`linearization_minmax.cpp`, stage 06), the single emitter every MIN/MAX auxiliary in the model goes through — a composed term is the case that needs *both* sides of the link, because a constraint supplies no optimization pressure to pin `z_k` with.
@@ -129,9 +129,9 @@ accepted. See also
 
 ---
 
-## A Factor on an Aggregate
+## A Factor on a Reducer
 
-An aggregate may be scaled by a factor that is **one value for the whole query** — a literal, an expression over
+A reducer may be scaled by a factor that is **one value for the whole query** — a literal, an expression over
 literals, or an *uncorrelated* scalar subquery. Every spelling is accepted and they are all equivalent:
 
 ```sql
@@ -144,8 +144,8 @@ SUM(x) + 2 * MAX(x * v) <= 30        -- inside a composed LHS
 ```
 
 Two stages are involved, and the split is deliberate. `DecideCanonicalizer` **peels** the factor outward off the
-aggregate and converges every spelling onto one (`scale * term`, factor on the left); it performs no algebra, so it
-cannot tell `SUM(x)` from `POWER(x-t,2)`. The factor then **stays outside** the aggregate: the optimizer records it on
+reducer and converges every spelling onto one (`scale * term`, factor on the left); it performs no algebra, so it
+cannot tell `SUM(x)` from `POWER(x-t,2)`. The factor then **stays outside** the reducer: the optimizer records it on
 the term and the physical layer multiplies it in at the end — into per-row coefficients for `SUM`/`AVG`, into the
 auxiliary's contribution for `MIN`/`MAX`. Nothing ever pushes it back in, because `MIN`/`MAX` are order statistics and a
 negative factor turns one into the other (`MAX(-2x)` is `-2·MIN(x)`).
@@ -160,7 +160,7 @@ weight * SUM(x) <= 4
 -- Move it inside the aggregate, e.g. SUM(x * weight).
 ```
 
-An aggregate collapses many rows to one number, so "which row's `weight` scales it?" has no answer — the same reason
+A reducer collapses many rows to one number, so "which row's `weight` scales it?" has no answer — the same reason
 plain SQL requires `col` in the `GROUP BY` for `col * SUM(x)`. The per-row-coefficient reading is still available,
 spelled explicitly as `SUM(weight * x)`. (This shape *was* accepted before 2026-08-10, silently rewritten to `SUM(weight
 * x)`.) A **decision** factor is rejected separately: `s * SUM(x)` is a product of two decisions, i.e. bilinear, not a
@@ -189,11 +189,11 @@ Rejected at execution time: any term whose aggregate-local `WHEN` matches zero r
 
 **Correlated scalar subqueries** are delegated to DuckDB's standard `ExpressionBinder`, which decorrelates them into joins via `PlanSubqueries`, producing per-row values:
 - **Per-row constraints**: each row gets its own RHS value from the join — `x <= (SELECT budget FROM Depts WHERE Depts.id = items.dept_id)`.
-- **Aggregate constraints**: a correlated value beside the aggregate is rejected during planning because it varies per
-  row. Move it inside the aggregate when row-wise participation is intended.
+- **Aggregate constraints**: a correlated value beside the reducer is rejected during planning because it varies per
+  row. Move it inside the reducer when row-wise participation is intended.
 
 A data-only *aggregate* RHS (`SUM(x*val) <= SUM(val)`, distinct from a subquery) stays on the right and is reduced to
-one value per group there — see "Data-Only Aggregate RHS in Aggregate Constraints" and "Aggregates as a Bound" in
+one value per group there — see "Data-Only Aggregate RHS in Aggregate Constraints" and "Reducers as a Bound" in
 [../sql_functions/done.md](../sql_functions/done.md). It was hoisted into the LHS before binding until 2026-08-10.
 
 **Restriction**: Subqueries cannot reference DECIDE variables (checked at bind time via `ExpressionContainsDecideVariable`).
@@ -205,7 +205,7 @@ one value per group there — see "Data-Only Aggregate RHS in Aggregate Constrai
 A NULL reaching any number the solver needs is an error, not a zero. This covers
 every value DECIDE evaluates from data: constraint coefficients, objective
 coefficients, quadratic and bilinear coefficients, constraint right-hand sides,
-and the input to an aggregate used as a bound.
+and the input to a reducer used as a bound.
 
 **Why an error rather than SQL's `SUM()` behaviour.** SQL's `SUM()` skips NULLs,
 so treating a NULL coefficient as 0 looks like the natural extension. It is not,
@@ -232,7 +232,7 @@ those rows out with a WHERE clause.
 ```
 
 `COALESCE` and its `IFNULL` alias are accepted inline wherever a data value is
-used, including the common aggregate form `SUM(keep * COALESCE(weight, 0))` and
+used, including the common reducer form `SUM(keep * COALESCE(weight, 0))` and
 the corresponding objective. The imputation must be decision-free:
 `COALESCE(keep, 0)` is rejected because `keep` is controlled by the solver.
 
@@ -263,5 +263,5 @@ scan ordinal is not something the user can look up in their own data.
 - **Execution** (constraint matrix construction): `src/execution/operator/decide/physical_decide.cpp`
   - `ExtractDoubleColumn()` — the single NULL / non-finite gate every evaluated coefficient and bound passes through
   - `CollectNullColumnsAtRow()` / `DescribeNullSource()` — name the NULL column on the error path
-- **Tests**: `test/decide/tests/test_null_coalesce_reducer.py` — inline aggregate imputation in constraints and
+- **Tests**: `test/decide/tests/test_null_coalesce_reducer.py` — inline reducer imputation in constraints and
   objectives, the `IFNULL` alias, oracle agreement, and decision-bearing rejection

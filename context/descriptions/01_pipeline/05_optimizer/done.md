@@ -1,7 +1,7 @@
 # Stage 05 — DECIDE optimizer
 
 Chooses the **mathematical formulation** for every construct the solver cannot take
-literally: ABS, MIN/MAX, AVG, `<>`, bilinear products, and composed aggregates, and
+literally: ABS, MIN/MAX, AVG, `<>`, bilinear products, and composed reducers, and
 then **flattens the finished tree into the prepared linear form** that execution
 consumes. It assumes canonical input and produces canonical output; it never
 decides shape, parses SQL, executes relations, or calls a solver.
@@ -155,10 +155,10 @@ short fails loudly instead of handing a backend a model it cannot load.
 | 3 | `TagAbsConstraintsForBigM` | Marks the ABS nodes that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
 | 4 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes; must be first of the remaining rewrites so later passes see plain variables. |
 | 5 | `RewriteBilinear` | McCormick linearization for Boolean × anything. |
-| 6 | `RewriteComposedMinMax` | Detects composed (additive, mixed-aggregate) MIN/MAX **before** single-term MIN/MAX handling. |
+| 6 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
 | 7 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
 | 8 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 9 | `RewriteAvgToSum` | Last of the rewrites, so every aggregate that reaches it is settled. |
+| 9 | `RewriteAvgToSum` | Last of the rewrites, so every reducer that reaches it is settled. |
 | 10 | `FoldSingletonRows` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
@@ -175,8 +175,8 @@ Turns each canonical comparison and the objective into additive terms:
 `sign * coefficient * variable`. This is where DECIDE does its linear algebra —
 distributing `K * (1 - pick)` into `K - K*pick`, pulling coefficients out of `*`
 chains, pushing a divisor into every produced coefficient, folding unary minus,
-stripping binder casts, and multiplying a peeled aggregate scale into everything the
-aggregate produced.
+stripping binder casts, and multiplying a peeled reducer scale into everything the
+reducer produced.
 
 The output is `LogicalDecide::prepared`, a `DecidePreparedModel`: a
 `vector<DecideConstraint>` plus an optional `DecideObjective`. It also fills
@@ -185,7 +185,7 @@ prepared terms rather than one path re-deriving its own.
 
 **A coefficient stays an unevaluated `Expression`.** `SUM(x * price)` yields the
 coefficient `price`, which is a number only once a row exists. Everything else
-about a term — which variable it names, its sign, which aggregate produced it, which
+about a term — which variable it names, its sign, which reducer produced it, which
 filter applies, which entity scope qualifies it — is a fact about types and
 structure and is settled here. The pass reads no data.
 
@@ -207,12 +207,12 @@ coefficient `2 + 3`. A term contributes `sign * coefficient`, so a group merges 
 sign differs from the group's.
 
 **Naming the same variable is not sufficient.** A term also records *which rows it
-applies to* and *which aggregate produced it*, and `TermsAreLike` refuses to merge
+applies to* and *which reducer produced it*, and `TermsAreLike` refuses to merge
 across any of that:
 
 | Field | Why it separates two terms |
 |---|---|
-| `reduction` | An aggregate term and a row-invariant one are summed differently downstream |
+| `reduction` | A reducer term and a row-invariant one are summed differently downstream |
 | `filter` | The aggregate-local `WHEN`. `SUM(x) WHEN a` and `SUM(x) WHEN b` are one column over two row sets |
 | `avg_scale` | AVG divides by the group's row count; merging before that scaling applies the division to both |
 | `qualifier_scope_idx` | Selects a de-duplication mask (`sum(D: ...)`) — again a statement about which rows contribute |
@@ -329,7 +329,7 @@ loosened. Atomic source-level DROP repair is recorded in `todo.md`.
 ### MIN/MAX — `RewriteMinMax`
 
 **Constraints.** An *easy* direction (`MAX(...) <= K`, `MIN(...) >= K`) strips the
-aggregate and becomes a per-row constraint — one row per data row, no Big-M. A *hard*
+reducer and becomes a per-row constraint — one row per data row, no Big-M. A *hard*
 direction creates a Boolean indicator per active row and rewrites to
 `SUM` + linking rows (`EmitHardMinMaxClause`). Equality splits into both
 directions. `WHEN` / `PER` wrappers are preserved; `out_was_easy` tells the caller
@@ -436,7 +436,7 @@ smaller model, tighter presolve. The pass folds every simple `x OP const` and
 `LogicalDecide`), and tags the comparison `SINGLETON_ROW_BOUND_TAG` so physical extraction
 skips it.
 
-A bound qualifies when the LHS is a bare decision variable — not inside an aggregate —
+A bound qualifies when the LHS is a bare decision variable — not inside a reducer —
 and the RHS is a literal under any number of casts. Recursion goes through `AND` and
 into child 0 only of `PER` and `WHEN`. **A `WHEN`-guarded comparison is never
 folded**: it is conditional per row, not a domain.
@@ -512,9 +512,9 @@ sees.
 
 ---
 
-## 3. A factor on an aggregate stays outside
+## 3. A factor on a reducer stays outside
 
-The canonicalizer peels a query-wide factor *outward* off an aggregate
+The canonicalizer peels a query-wide factor *outward* off a reducer
 (`2 * SUM(x*p)`, `2 * MAX(x*v)`) and converges every spelling onto one. **No pass
 here pushes it back in.**
 

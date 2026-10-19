@@ -8,7 +8,7 @@ side it was written on rather than by the sign it carries:
     pinned by an upper-bounded row, because raising it makes the row easier. Read
     side-wise, it looked pinned, and the constraint became vacuous.
   - composed MIN/MAX easy-vs-hard (``WalkComposedLhs``) — used to reject a
-    subtracted term outright, so a negated aggregate was a binder error.
+    subtracted term outright, so a negated reducer was a binder error.
 
 Each test pins the objective against an independent oracle model: a shape that is
 merely *accepted* but mis-classified still fails, which is the whole point — the

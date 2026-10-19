@@ -905,7 +905,7 @@ class TestFactoredProductDegree:
 
     @pytest.mark.cons_perrow
     def test_factored_per_row_constraint_matches_expanded(self, decidb_cli_gurobi):
-        """The per-row path (no aggregate) must accept the factored form too."""
+        """The per-row path (no reducer) must accept the factored form too."""
         factored_rows, factored_cols = self._run_constraint(
             decidb_cli_gurobi, "(x + y) * z <= 1",
         )

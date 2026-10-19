@@ -18,7 +18,7 @@
 namespace duckdb {
 
 //! Tracks entity-scope metadata for decision variables scoped to a base table, or
-//! for an aggregate qualifier scoped to a set of relations at once (`sum(D, T: e)`).
+//! for a reducer qualifier scoped to a set of relations at once (`sum(D, T: e)`).
 //! When a variable is declared as "T.x IS BOOLEAN", it has one value per unique
 //! row in table T, not per join result row. A multi-relation qualifier extends the
 //! same idea: its tuple identity is the concatenation of every named relation's
@@ -191,8 +191,8 @@ public:
         int sign;                             // +1 or -1 (from subtraction)
         unique_ptr<Expression> inner_expr;    // The expression inside the aggregate
         unique_ptr<Expression> filter;        // Aggregate-local WHEN filter (optional)
-        //! Factor the canonicalizer peeled off this aggregate (`2 * MAX(x*v)`), or nullptr
-        //! for none. It stays OUTSIDE the aggregate: MIN/MAX are order statistics, so
+        //! Factor the canonicalizer peeled off this reducer (`2 * MAX(x*v)`), or nullptr
+        //! for none. It stays OUTSIDE the reducer: MIN/MAX are order statistics, so
         //! pushing a factor in only commutes for a positive one, and the value may not
         //! be known until the query runs. The physical layer evaluates it once (it is
         //! query-wide by construction) and multiplies it into this term's contribution.
@@ -206,10 +206,10 @@ public:
         //! true when the term was `AGG(...) / scale` rather than `scale * AGG(...)`.
         bool scale_divides = false;
         bool is_easy = true;                  // For MIN/MAX: easy (no Big-M) or hard (indicator).
-        //! Entity scope this term's aggregate is qualified by (`SUM(D: ...)`), or
+        //! Entity scope this term's reducer is qualified by (`SUM(D: ...)`), or
         //! INVALID_INDEX when unqualified. Mirrors `Term::qualifier_scope_idx`; the
         //! physical layer folds the matching de-duplication mask into `filter`'s mask so a
-        //! qualified aggregate keeps its identity semantics inside a composed clause.
+        //! qualified reducer keeps its identity semantics inside a composed clause.
         idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
         //! `inner_expr` flattened into additive terms by BuildDecidePreparedModel, so
         //! the composed emitter reads prepared terms like every other construct rather

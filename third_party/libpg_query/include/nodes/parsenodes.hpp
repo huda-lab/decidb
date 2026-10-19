@@ -236,7 +236,7 @@ typedef enum PGAExpr_Kind {
 	AEXPR_PAREN,              /* nameless dummy node for parentheses */
 	PG_AEXPR_WHEN_CONSTRAINT,   /* DecidB: constraint WHEN condition */
 	PG_AEXPR_PER_CONSTRAINT,    /* DecidB: constraint PER column */
-	PG_AEXPR_QUALIFIED_AGGREGATE  /* DecidB: relation-qualified aggregate sum(D: expr) */
+	PG_AEXPR_QUALIFIED_REDUCER  /* DecidB: relation-qualified reducer sum(D: expr) */
 } PGAExpr_Kind;
 
 typedef struct PGAExpr {
