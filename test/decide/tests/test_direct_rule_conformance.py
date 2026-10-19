@@ -7,15 +7,23 @@ EXPLAIN, `require` reasons, and the solver path under `off`, a forced backend an
 `DIAGNOSE`.
 """
 
+import math
 import re
 
 import pytest
 
 from decidb_cli import DecidBCliError
+from solver.types import ObjSense, SolverStatus, VarType
 
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_rule_fixtures import RULE_FIXTURES, late_error_cases, near_miss_cases
+from ._direct_rule_fixtures import (
+    APPLIES_UNDER_REQUIRE,
+    RULE_FIXTURES,
+    S1_AGGREGATE_BOUNDS_NOW_APPLIED,
+    late_error_cases,
+    near_miss_cases,
+)
 
 
 def _run(cli, sql, mode="require"):
@@ -174,6 +182,19 @@ def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixt
         f"SELECT {fixture.near_miss_column} FROM ({fixture.near_miss_source} "
         f"DECIDE {declaration} SUCH THAT {constraint} {objective}) q"
     )
+    if reason == APPLIES_UNDER_REQUIRE:
+        # A right-hand aggregate is a window column of the source (H-19), so the rule reads it and applies. The three
+        # modes answer alike; `test_aggregate_bounds_that_apply_agree_with_the_oracle` checks the answer itself.
+        required = _raw(decidb_cli, sql)
+        assert "decide_direct_solve=require:" not in required.stderr, (sql, required.stderr)
+        assert "Direct solve" not in required.stderr, (sql, required.stderr)
+        plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="require")
+        assert f"{fixture.rule}" in plan.stdout and not _has_decide_operator(plan.stdout), (sql, plan.stderr)
+        # A direct plan may return the rows in another order than the solver path (the query has no ORDER BY).
+        require, off, auto = (_outcome(decidb_cli, sql, mode) for mode in ("require", "off", "auto"))
+        assert require[0] == off[0] == auto[0], (sql, require, off, auto)
+        assert sorted(require[1], key=str) == sorted(off[1], key=str) == sorted(auto[1], key=str), (sql, require, off)
+        return
     required = _raw(decidb_cli, sql).stderr
     assert "decide_direct_solve=require:" in required, (sql, required)
     assert f"{fixture.rule}: " in required and reason in required, (sql, required)
@@ -208,3 +229,34 @@ def test_diagnose_keeps_the_solver_path(decidb_cli, fixture):
     assert "conflicts with DIAGNOSE" in _raw(decidb_cli, f"DIAGNOSE {fixture.applies}").stderr
     diagnose_plan = _raw(decidb_cli, f"EXPLAIN DIAGNOSE {fixture.applies}", mode="auto").stdout
     assert "DECIDE_DIAGNOSE" in diagnose_plan and "Direct solve" not in diagnose_plan
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "constraint,bound", S1_AGGREGATE_BOUNDS_NOW_APPLIED, ids=[c for c, _ in S1_AGGREGATE_BOUNDS_NOW_APPLIED]
+)
+def test_aggregate_bounds_that_apply_agree_with_the_oracle(decidb_cli, oracle_solver, constraint, bound):
+    """The bound is a window column of the source: `require` applies and `off` and `require` reach the oracle's best."""
+    fixture = next(f for f in RULE_FIXTURES if f.rule == "S1_UNIFORM_MATROID")
+    sql = (
+        f"SELECT id, x FROM ({fixture.near_miss_source} DECIDE x(BOOL) SUCH THAT {constraint} "
+        f"MAXIMIZE SUM(p*x)) q ORDER BY id"
+    )
+    scores = {1: 9.0, 2: 10.0}
+    limit = 2 if bound == math.inf else min(math.floor(bound), 2)
+    oracle_solver.create_model("direct_s1_aggregate_bound")
+    for i in scores:
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    oracle_solver.add_constraint({f"x_{i}": 1.0 for i in scores}, "<=", float(limit))
+    oracle_solver.set_objective({f"x_{i}": score for i, score in scores.items()}, ObjSense.MAXIMIZE)
+    oracle = oracle_solver.solve()
+    assert oracle.status == SolverStatus.OPTIMAL
+    for mode in ("off", "require"):
+        rows, _ = _run(decidb_cli, sql, mode)
+        chosen = {row[0]: row[1] for row in rows}
+        assert sum(chosen.values()) <= limit, (mode, rows)
+        assert sum(scores[i] * chosen[i] for i in scores) == oracle.objective_value, (
+            mode,
+            rows,
+            oracle.objective_value,
+        )

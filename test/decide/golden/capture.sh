@@ -71,9 +71,13 @@ rm -f "$out" "$out.results"
 # the models in query order.
 # A query that errors is still useful signal (the error text lands in .results),
 # so a nonzero exit must not abort the capture.
-DECIDB_DUMP_MODEL="$out" DECIDB_FORCE_SOLVER="$solver" \
+# One thread: a window over a PER key (a right-hand aggregate) hands its rows on in an order that varies with the thread
+# schedule, and the dump follows the order of the rows the DECIDE operator reads. check.sh uses this script too, so the
+# baseline and the check see the same order.
+{ echo "SET threads=1;"; cat "$here/corpus.sql"; } | \
+    DECIDB_DUMP_MODEL="$out" DECIDB_FORCE_SOLVER="$solver" \
     DECIDB_NATIVE_CONSTRUCTS=on \
-    "$decidb" < "$here/corpus.sql" > "$out.results" 2>&1 || true
+    "$decidb" > "$out.results" 2>&1 || true
 
 if grep -q "that solver is not available" "$out.results" 2>/dev/null; then
     echo "solver '$solver' is not available on this host" >&2

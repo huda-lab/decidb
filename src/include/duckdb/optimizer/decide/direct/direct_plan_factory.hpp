@@ -48,6 +48,11 @@ unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer);
 //! DECIDE's unboundedness error: some decision can improve the objective without limit.
 unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer);
 
+//! The solver's NULL message for a value, as a VARCHAR expression over the row it is evaluated on: it names the columns
+//! of `value` that are NULL on that row (the leaves that still carry the name the user wrote), and quotes the value when
+//! none is. The DECIDE optimizer's right-hand-side window rewrite uses it too.
+unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expression &value);
+
 //! Evaluates to true for a DOUBLE bound that is neither NULL nor NaN, and raises the bound error otherwise. Infinity is
 //! a valid bound (no bound on that side). `source_value` is the bound as the user wrote it, over the columns the check
 //! reads, so a NULL names the column it came from.

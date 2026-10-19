@@ -72,10 +72,15 @@ bool DirectSourceNumericColumn(const Expression &expr, const vector<ColumnBindin
                                LogicalType &type, string &name);
 
 //! A data-valued bound a rule may validate and reduce per row (DirectValidateBounds): numeric, nonthrowing,
-//! deterministic, decision-free, over source columns only, and mentioning at least one. A bound that can raise stays
-//! a solver case until its error order is proved.
+//! deterministic, decision-free, over source columns only, and mentioning at least one.
 bool DirectIsSourceOnlyNumeric(const Expression &expr, idx_t decide_index,
                                const vector<ColumnBinding> &source_bindings);
+
+//! The same, for a plan that evaluates the value on every row as the solver does, so an expression that can raise (an
+//! overflow, a failed cast) raises on both paths or on neither: numeric, deterministic, decision-free, over source
+//! columns only, mentioning at least one. It may raise.
+bool DirectIsSourceOnlyNumericMayRaise(const Expression &expr, idx_t decide_index,
+                                       const vector<ColumnBinding> &source_bindings);
 
 //! A numeric or Boolean value a rule may read per row: deterministic, independent of the decisions, over source columns
 //! only, with or without a column. Unlike DirectIsSourceOnlyNumeric it may raise when evaluated, for a rule that

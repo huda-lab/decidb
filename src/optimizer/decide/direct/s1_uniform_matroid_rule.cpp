@@ -786,8 +786,11 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 			add_source_bound(DConstants::INVALID_INDEX, bound.return_type, string(), std::move(reducers));
 			continue;
 		}
+		// The plan evaluates a source-valued count bound on every row, as the solver does, so an expression that can
+		// raise (an overflow in `COUNT(*) * k` over a window column, or in `cap * k`) raises on both paths or on neither.
+		// A row no group covers reads 0 for a rewritten right-hand aggregate, so it cannot raise there.
 		if (!bound.IsFoldable() &&
-		    (source_column || DirectIsSourceOnlyNumeric(bound, ir.decide_index, ir.source_bindings))) {
+		    (source_column || DirectIsSourceOnlyNumericMayRaise(bound, ir.decide_index, ir.source_bindings))) {
 			add_source_bound(source_slot, source_column ? source_type : bound.return_type,
 			                 source_column ? source_name : string(), {});
 			continue;

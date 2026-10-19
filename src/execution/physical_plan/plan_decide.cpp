@@ -96,8 +96,14 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     for (idx_t i = 0; i < child_bindings.size(); i++) {
         binding_column_index[i] = child_bindings[i].column_index;
     }
-    if (op.children[0]->type == LogicalOperatorType::LOGICAL_GET) {
-        auto &child_get = op.children[0]->Cast<LogicalGet>();
+    // The DECIDE optimizer's right-hand-side rewrite puts a window directly above the source. A window keeps its
+    // child's bindings in front of its own, so the names of those columns are read from what the window sits on.
+    auto *name_base = op.children[0].get();
+    while (name_base->type == LogicalOperatorType::LOGICAL_WINDOW && name_base->children.size() == 1) {
+        name_base = name_base->children[0].get();
+    }
+    if (name_base->type == LogicalOperatorType::LOGICAL_GET) {
+        auto &child_get = name_base->Cast<LogicalGet>();
         auto &column_ids = child_get.GetColumnIds();
         for (idx_t i = 0; i < binding_column_index.size(); i++) {
             idx_t slot = i;
@@ -122,8 +128,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // here while the spelling comes from the binder. A column under any other operator
     // (a scan, most of all) has no such expression and is always eligible.
     vector<bool> nameable(child_bindings.size(), true);
-    if (op.children[0]->type == LogicalOperatorType::LOGICAL_PROJECTION) {
-        auto &child_proj = op.children[0]->Cast<LogicalProjection>();
+    if (name_base->type == LogicalOperatorType::LOGICAL_PROJECTION) {
+        auto &child_proj = name_base->Cast<LogicalProjection>();
         for (idx_t i = 0; i < nameable.size(); i++) {
             if (i >= child_proj.expressions.size()) {
                 break;

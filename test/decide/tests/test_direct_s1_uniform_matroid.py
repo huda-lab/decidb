@@ -1627,53 +1627,16 @@ def test_s1_reducer_bound_reads_infinity_like_the_solver(decidb_cli, name):
     assert direct == _outcome(decidb_cli, sql, "off")
 
 
-# What stays on the solver. Each says why under `require`, and `auto` gives the answer `off` gives. SUM and AVG over a
-# column wider than SMALLINT are not exact in the solver's row-by-row DOUBLE addition (below: 2^60, 1, -2^60 adds up to
-# 1 exactly and to 0 in a double), so a window could not match it.
-_DECLINED_SUM_REASON = "SUM or AVG of a column that is not TINYINT, SMALLINT, UTINYINT or USMALLINT"
+# What stays on the solver. Each says why under `require`, and `auto` gives the answer `off` gives. A reducer with a WHEN
+# of its own (H-20) and a relation-qualified reducer keep the solver's fold; every other COUNT, MIN, MAX, SUM and AVG on
+# the right is a window column of the source (H-19) and is exact, so it moved to `S1_REDUCER_NOW_APPLIED` below.
 S1_REDUCER_DECLINED = {
-    "sum_integer": ("INTEGER", ("1", "2", "3"), "SUM(v)", _DECLINED_SUM_REASON),
-    "avg_integer": ("INTEGER", ("1", "2", "3"), "AVG(v)", _DECLINED_SUM_REASON),
-    "sum_uinteger": ("UINTEGER", ("1", "2", "3"), "SUM(v)", _DECLINED_SUM_REASON),
-    "sum_bigint": ("BIGINT", ("1", "2", "3"), "SUM(v)", _DECLINED_SUM_REASON),
-    "avg_bigint": ("BIGINT", ("1", "2", "3"), "AVG(v)", _DECLINED_SUM_REASON),
-    "sum_ubigint": ("UBIGINT", ("1", "2", "3"), "SUM(v)", _DECLINED_SUM_REASON),
-    "sum_hugeint": ("HUGEINT", ("1", "2", "3"), "SUM(v)", _DECLINED_SUM_REASON),
-    "sum_decimal": ("DECIMAL(9,2)", ("1.25", "2.5", "3"), "SUM(v)", _DECLINED_SUM_REASON),
-    "avg_decimal": ("DECIMAL(9,2)", ("1.25", "2.5", "3"), "AVG(v)", _DECLINED_SUM_REASON),
-    "sum_double": ("DOUBLE", ("0.1", "0.2", "0.3"), "SUM(v)", _DECLINED_SUM_REASON),
-    "avg_float": ("FLOAT", ("0.1", "0.2", "0.3"), "AVG(v)", _DECLINED_SUM_REASON),
-    # The solver adds in DOUBLE: 2^60 + 1 loses the 1, so the sum is 0 where the exact sum is 1.
-    "sum_bigint_that_cancels": (
-        "BIGINT",
-        ("1152921504606846976", "1", "-1152921504606846976"),
-        "SUM(v)",
-        _DECLINED_SUM_REASON,
-    ),
-    "sum_bigint_past_2_pow_53": (
-        "BIGINT",
-        ("9007199254740992", "9007199254740993", "1"),
-        "SUM(v)",
-        _DECLINED_SUM_REASON,
-    ),
     "min_with_its_own_when": ("INTEGER", ("1", "2", "3"), "MIN(v) WHEN (id > 0)", "a WHEN on the right-hand aggregate"),
     "min_with_its_own_when_in_arithmetic": (
         "INTEGER",
         ("1", "2", "3"),
         "(MIN(v) WHEN (id > 0)) + 1",
         "a WHEN on the right-hand aggregate",
-    ),
-    "min_of_an_expression": (
-        "INTEGER",
-        ("1", "2", "3"),
-        "MIN(v + 1)",
-        "an aggregate over something other than a numeric column",
-    ),
-    "divisor_is_an_aggregate": (
-        "INTEGER",
-        ("1", "2", "3"),
-        "MAX(v) / MIN(v)",
-        "a divisor that is not a nonzero constant",
     ),
     "qualified_reducer": ("INTEGER", ("1", "2", "3"), "MIN(t: v)", "variable_shape"),
 }
@@ -1695,3 +1658,116 @@ def test_s1_reducer_bound_declines_what_it_cannot_read_exactly(decidb_cli, name)
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" in str(declined.value) and reason in str(declined.value), declined.value
     assert _outcome(decidb_cli, sql, "auto") == _outcome(decidb_cli, sql, "off")
+
+
+# These were declined while the solver added row by row in DOUBLE (S1-16). The right-hand aggregate is now a window
+# column of the source, computed by DuckDB in the column's own type, so S1 reads it and the answer is the exact one.
+# name -> (column type, values, reducer, the reducer's exact value from the values).
+_EXACT = {
+    "sum": lambda values: sum(values),
+    "avg": lambda values: sum(values) / len(values),
+}
+S1_REDUCER_NOW_APPLIED = {
+    "sum_integer": ("INTEGER", ("1", "2", "3"), "SUM(v)", _EXACT["sum"]),
+    "avg_integer": ("INTEGER", ("1", "2", "3"), "AVG(v)", _EXACT["avg"]),
+    "sum_uinteger": ("UINTEGER", ("1", "2", "3"), "SUM(v)", _EXACT["sum"]),
+    "sum_bigint": ("BIGINT", ("1", "2", "3"), "SUM(v)", _EXACT["sum"]),
+    "avg_bigint": ("BIGINT", ("1", "2", "3"), "AVG(v)", _EXACT["avg"]),
+    "sum_ubigint": ("UBIGINT", ("1", "2", "3"), "SUM(v)", _EXACT["sum"]),
+    "sum_hugeint": ("HUGEINT", ("1", "2", "3"), "SUM(v)", _EXACT["sum"]),
+    "sum_decimal": ("DECIMAL(9,2)", ("1.25", "2.5", "3"), "SUM(v)", _EXACT["sum"]),
+    "avg_decimal": ("DECIMAL(9,2)", ("1.25", "2.5", "3"), "AVG(v)", _EXACT["avg"]),
+    "sum_double": ("DOUBLE", ("0.1", "0.2", "0.3"), "SUM(v)", _EXACT["sum"]),
+    "avg_float": ("FLOAT", ("0.1", "0.2", "0.3"), "AVG(v)", _EXACT["avg"]),
+    # The solver added in DOUBLE: 2^60 + 1 lost the 1, so it read 0 where the exact sum is 1.
+    "sum_bigint_that_cancels": (
+        "BIGINT",
+        ("1152921504606846976", "1", "-1152921504606846976"),
+        "SUM(v)",
+        _EXACT["sum"],
+    ),
+    "sum_bigint_past_2_pow_53": ("BIGINT", ("9007199254740992", "9007199254740993", "1"), "SUM(v)", _EXACT["sum"]),
+    "min_of_an_expression": ("INTEGER", ("1", "2", "3"), "MIN(v + 1)", lambda values: min(values) + 1),
+    "divisor_is_an_aggregate": (
+        "INTEGER",
+        ("1", "2", "3"),
+        "MAX(v) / MIN(v)",
+        lambda values: max(values) / min(values),
+    ),
+}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(S1_REDUCER_NOW_APPLIED))
+def test_s1_reducer_bound_over_a_window_agrees_with_the_solver_and_oracle(decidb_cli, oracle_solver, name):
+    column_type, values, reducer, exact = S1_REDUCER_NOW_APPLIED[name]
+    rows = ", ".join(f"({i}, {9 - i}.0, CAST({value} AS {column_type}))" for i, value in enumerate(values))
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, score, v) "
+        f"DECIDE x(BOOL) SUCH THAT SUM(x) <= {reducer} MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    limit = min(math.floor(exact([Fraction(value) for value in values])), len(values))
+    oracle_solver.create_model("direct_s1_reducer_over_a_window")
+    names = [f"x_{i}" for i in range(len(values))]
+    for variable in names:
+        oracle_solver.add_variable(variable, VarType.BINARY)
+    oracle_solver.add_constraint({variable: 1.0 for variable in names}, "<=", float(limit))
+    oracle_solver.set_objective({variable: float(9 - i) for i, variable in enumerate(names)}, ObjSense.MAXIMIZE)
+    oracle = oracle_solver.solve()
+
+    def check_assignment(result_rows, columns, mode):
+        assert [row[0] for row in result_rows] == list(range(len(values))), mode
+        assert sum(row[1] for row in result_rows) <= limit, (mode, result_rows, limit)
+        assert sum((9 - row[0]) * row[1] for row in result_rows) == oracle.objective_value, (mode, result_rows)
+
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
+
+
+# The same question for a bound read from a column, or through an aggregate on the right (a window column of the source).
+# DuckDB evaluates the arithmetic around it, so it can overflow. The solver evaluates a plain column bound on every row,
+# and an aggregate bound once per group that has a row the clause covers (a row whose WHEN holds, whose PER key is not NULL,
+# in a group where the left side's own WHEN holds somewhere); a row no group covers reads 0 and cannot overflow. Group a
+# and b have cap 2, group c (no flagged row) and the NULL key (flagged) have cap 100, and a factor of 2e17 overflows INT64
+# from cap 47 up.
+_WINDOW_OVERFLOW_ROWS = (
+    "(1,'a',9.0,true,2),(2,'a',8.0,false,2),(3,'b',7.0,true,2),(4,'b',6.0,true,2),"
+    "(5,'c',5.0,false,100),(6,'c',4.0,false,100),(7,NULL,3.0,true,100),(8,NULL,2.0,true,100)"
+)
+_K = "200000000000000000"
+# name -> (constraint, outcome on both paths)
+WINDOW_OVERFLOW_CASES = {
+    # Only groups no clause row covers would overflow: both paths leave them alone.
+    "uncovered_groups_would_overflow_top_when_per": (f"SUM(x) <= MAX(cap) * {_K} WHEN flag PER g", "ok"),
+    "uncovered_group_would_overflow_local_when_per": (f"SUM(x) WHEN flag <= MAX(cap) * {_K} PER g", "ok"),
+    "covered_group_count_overflows_top_when_per": (
+        "SUM(x) <= COUNT(*) * 4611686018427387904 WHEN (id < 3) PER g",
+        "error",
+    ),
+    # A SUM is a HUGEINT, which holds the product; a covered group that does overflow makes both paths raise.
+    "sum_is_hugeint_and_holds_the_product": (f"SUM(x) <= SUM(cap) * {_K} PER g", "ok"),
+    "count_times_2_pow_62_global": ("SUM(x) <= COUNT(*) * 4611686018427387904", "error"),
+    "count_times_2_pow_62_per": ("SUM(x) <= COUNT(*) * 4611686018427387904 PER g", "error"),
+    "global_aggregate_overflows": (f"SUM(x) <= MAX(cap) * {_K}", "error"),
+    # A plain column bound is evaluated on every row, the rows a WHEN leaves out included.
+    "plain_cap_times_huge": (f"SUM(x) <= cap * {_K}", "error"),
+    "plain_cap_times_huge_on_a_row_the_when_leaves_out": (f"SUM(x) <= cap * {_K} WHEN flag", "error"),
+    "plain_cap_times_small": ("SUM(x) <= cap * 3", "ok"),
+}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(WINDOW_OVERFLOW_CASES))
+def test_s1_bound_over_a_column_raises_only_where_the_solver_does(decidb_cli, name):
+    constraint, expected = WINDOW_OVERFLOW_CASES[name]
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {_WINDOW_OVERFLOW_ROWS}) t(id, g, score, flag, cap) "
+        f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    solver = _outcome(decidb_cli, sql, "off")
+    direct = _outcome(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
+    assert solver[0] == expected, f"the solver gave {solver}, so this case no longer tests what it says"
+    assert direct == solver

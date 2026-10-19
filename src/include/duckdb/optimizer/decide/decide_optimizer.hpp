@@ -20,6 +20,7 @@ class Optimizer;
 //! This centralizes all DECIDE-specific transformations that were previously
 //! scattered across the binder and physical operator.
 //!
+//! RewriteRhsAggregates runs first, from Optimize, before the direct-solve rules.
 //! Current passes, in the order OptimizeDecide runs them:
 //!   - RewriteNorm: lowers the bound NORM marker, including L0 indicators/links
 //!   - RewriteInDomain: lowers DECIDE variable IN lists to indicator formulations
@@ -44,6 +45,11 @@ public:
 	unique_ptr<LogicalOperator> Optimize(unique_ptr<LogicalOperator> op);
 
 private:
+	//! Replace each COUNT/MIN/MAX/SUM/AVG on the right of a reduced constraint by a window column of the DECIDE
+	//! source (the same aggregate over the clause's group), so the solver and the direct-solve rules read one number
+	//! that DuckDB computed. Runs before the direct-solve rules, in every mode, because both paths must see it.
+	void RewriteRhsAggregates(LogicalDecide &decide);
+
 	//! Apply all DECIDE optimization passes to a LogicalDecide node
 	void OptimizeDecide(LogicalDecide &decide);
 	//! Before any one-to-many rewrite, assign written-order identities to source clauses

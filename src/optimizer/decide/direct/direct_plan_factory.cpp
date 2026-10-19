@@ -162,7 +162,7 @@ static unique_ptr<Expression> DirectMinus(Optimizer &optimizer, unique_ptr<Expre
 //!   all   = concat_ws(', ', piece_1, ..., piece_n)   every NULL column, comma-joined (concat_ws skips NULL pieces)
 //! and the text follows from them: no NULL column when `last` is NULL, one when `all = last`, otherwise the names
 //! before the last one, ` and `, and the last one.
-static unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expression &value) {
+unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expression &value) {
 	vector<const Expression *> leaves;
 	DecideCollectNamedColumns(value, leaves);
 	vector<string> names;

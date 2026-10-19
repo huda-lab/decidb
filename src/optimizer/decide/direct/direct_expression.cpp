@@ -147,8 +147,12 @@ bool DirectSourceNumericColumn(const Expression &expr, const vector<ColumnBindin
 
 bool DirectIsSourceOnlyNumeric(const Expression &expr, idx_t decide_index,
                                const vector<ColumnBinding> &source_bindings) {
-	return expr.return_type.IsNumeric() && !DirectMayThrow(expr) &&
-	       DirectIsDecisionFreeDeterministic(expr, decide_index) && DirectReferencesOnlySource(expr, source_bindings) &&
+	return !DirectMayThrow(expr) && DirectIsSourceOnlyNumericMayRaise(expr, decide_index, source_bindings);
+}
+
+bool DirectIsSourceOnlyNumericMayRaise(const Expression &expr, idx_t decide_index,
+                                       const vector<ColumnBinding> &source_bindings) {
+	return expr.return_type.IsNumeric() && DirectIsSourceOnlyValue(expr, decide_index, source_bindings) &&
 	       DirectHasColumnReference(expr);
 }
 
