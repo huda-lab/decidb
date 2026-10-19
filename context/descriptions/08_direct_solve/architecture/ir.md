@@ -29,8 +29,8 @@ so a wrong rewrite cannot follow from a gap in the front end. `require` mode pri
   shared with the solver (`DecideIsSingletonRowBound`), so the two cannot disagree.
 - The term splitter that breaks `SUM(2*x - x)` into linear terms is shared with the solver path
   (`src/planner/decide/decide_term_split.cpp`), so the two paths cannot read one term differently.
-- `norm(e, p)` is replaced by its definition when the query is canonicalized (L0 stays a marker). Before this,
-  S1 read the binder's tagged `SUM` as a plain sum and returned wrong answers, so a rule must refuse anything it
+- `norm(e, p)` is replaced by its definition when the query is canonicalized (L0 stays a marker). The binder tags the
+  resulting `SUM`, and a rule that read the tag as a plain sum would answer wrongly, so a rule refuses anything it
   does not prove.
 - Estimates (row counts) never prove an IR node.
 

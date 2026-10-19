@@ -5,11 +5,10 @@ replaces the DECIDE node with ordinary DuckDB operators (sort, rank, filter) tha
 problem takes the existing solver path, unchanged. It is **on by default** (`decide_direct_solve = 'auto'`); `off` forces
 the solver and `require` raises an error saying why a query was not proved.
 
-Today two problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable, optionally per
+Two problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable, optionally per
 group), and **A1**, "each row gets its best value in its own range" (per-row bounds on `BOOL`, `INT` or `REAL` decisions
 with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 times faster than Gurobi and A1 about 4 to
-30 times, on those shapes. The other 17 classes in the catalogue are not started. The working branch is
-`direct-solve-prototype`.
+30 times, on those shapes. The other 17 classes in the catalogue are not started.
 
 ## Where to look
 
@@ -18,7 +17,6 @@ with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 
 | Understand how it works | [architecture/overview.md](architecture/overview.md), then the other files there |
 | Look up a term, its standard name and the identifiers it covers | [architecture/glossary.md](architecture/glossary.md) |
 | Add a new problem class | [architecture/rules.md](architecture/rules.md), then a new folder under `rules/` |
-| See how the design moved onto standard patterns and names | [architecture/todo.md](architecture/todo.md) (report) |
 | See what S1 covers, how it is tested, how fast it is | [rules/s1_uniform_matroid/done.md](rules/s1_uniform_matroid/done.md) |
 | See what A1 covers, where it differs from the solver, how fast it is | [rules/a1_separable_box/done.md](rules/a1_separable_box/done.md) |
 | See what is open for S1 or A1 | [rules/s1_uniform_matroid/todo.md](rules/s1_uniform_matroid/todo.md), [rules/a1_separable_box/todo.md](rules/a1_separable_box/todo.md) |
@@ -65,5 +63,5 @@ The shared engine (IR, rule driver, plan factory functions, result adapter) is i
   you change the behavior it describes.
 - These docs are a high-level map. For detail, read the code in `src/optimizer/decide/direct/`.
 - Each folder under `rules/` also has a `definition.md`: the class as the catalogue defines it (worked example,
-  recognition, construction, correctness, eligibility). It is the only copy; the Word catalogue it came from was removed
-  on 2026-10-05 and is in git history at `721d49ba43`. Edit it when the code proves something different.
+  recognition, construction, correctness, eligibility). It is the only copy. Edit it when the code proves something
+  different.

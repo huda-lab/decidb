@@ -1,8 +1,8 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-10-13 on top of `161ba4dbf0`: `make decide-test` (3,346 passed, also with
-`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,345
-passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,319 assertions in 46
+Verified on 2026-10-19 on top of `d7dfe9e8a9`: `make decide-test` (3,443 passed, also with
+`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,442
+passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,322 assertions in 46
 cases). `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check). Code:
 `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`, with the helpers only S1 uses in
 `s1_uniform_matroid_helpers.{hpp,cpp}`. Class definition: [definition.md](definition.md).
@@ -12,30 +12,21 @@ cases). `test/decide/run_direct_matrix.sh` renews these numbers in one command (
 One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
 
 - **Count bounds on `SUM(x)`:** `<=`, `<`, `>=`, `>`, `=`, or several combined into one interval. A bound can be a constant,
-  a foldable constant expression, or a numeric source column or source-only expression that varies per row (including
-  `COALESCE` and `TRY_CAST`). Values are converted to DOUBLE as the solver does; strict and fractional limits become
+  a foldable constant expression, or a numeric source column or deterministic expression over source columns that varies per
+  row, including one that can raise (`cap + 1`, a narrowing `CAST`): the plan reads it on every row, as the solver does, so both
+  raise on the same inputs. Values are converted to DOUBLE as the solver does; strict and fractional limits become
   inclusive integer counts; limits are exact up to 2^53.
-- **Bounds that count rows:** a bound built from `COUNT(*)`, constants and `+ - * / //` (`SUM(x) <= COUNT(*) / 2`,
-  `>= COUNT(*) * 0.1`, `<= COUNT(*) - 1`, `-COUNT(*) + 6`), read per group. `COUNT(*)` counts the rows the clause covers in
-  each group: a clause-level `WHEN` or a NULL `PER` key narrows it, while an aggregate-local `WHEN` on the left
-  (`SUM(x) WHEN active <= COUNT(*) / 2`) does not narrow the right, which counts every row of the group. The expression is
-  evaluated in its own types (a bound of `COUNT(*) * 0.57` over 100 rows is exactly 57) and then read as any source bound.
-  A divisor must be a nonzero constant. The use case is a top-fraction query ("the best 10% of each group":
-  `SUM(x) <= COUNT(*) * 0.1 PER g`), which is the natural way to write it. The rule proves only the shape (plain `COUNT(*)`,
-  exact finite constants, casts that cannot throw, `+ - * / //`). It proves no range. The plan evaluates the bound with
-  DuckDB's own operators, so an overflow (`COUNT(*) * 4611686018427387904` over 3 rows) raises the same error as on the
-  solver path, and it evaluates the bound only for the groups the solver evaluates it for: a group with a row the clause
-  covers (WHEN holds, PER key not NULL). A row outside that reads the bound as 0 and the group extremum ignores it, so a
-  NULL-key group or a group the `WHEN` excludes cannot raise where the solver does not.
-- **Bounds read from a column of the group:** `MIN`, `MAX` and `COUNT(col)` of one numeric source column, and `SUM` and
-  `AVG` of one `TINYINT`, `SMALLINT`, `UTINYINT` or `USMALLINT` column, alone or inside the same arithmetic as `COUNT(*)`
-  (`SUM(x) <= MIN(cap) PER warehouse`, `>= MAX(lo) / 2`). Each is one value per group, over the same rows `COUNT(*)`
-  counts: the clause's `WHEN` and `PER` narrow it, a left-side aggregate-local `WHEN` does not. Values are read as
-  `DOUBLE`, as the solver reads them; `AVG` is that sum over the count; an infinite value is a value. A NULL or NaN in the
-  column raises on every row, including rows the `WHEN` or a NULL key excludes, and so does a NULL under `COUNT(col)`,
-  which the solver reads as a bad value rather than skipping. A group with no covered row raises the empty-aggregate
-  error. `SUM` and `AVG` stop at 16-bit integers because the solver adds row by row in `DOUBLE`: for these types every
-  running total stays exact, so the solver's sum equals the exact sum a window computes, and for wider types it does not.
+- **Bounds read from the group:** `COUNT(*)`, `COUNT`, `MIN`, `MAX`, `SUM` and `AVG` of a numeric source expression on the
+  right of a count bound, alone or inside `+ - * / //` and other arithmetic (`SUM(x) <= COUNT(*) / 2`, `>= COUNT(*) * 0.1`,
+  `<= MIN(cap) PER warehouse`, `>= MAX(lo) / 2`, `<= SUM(cap)`). The shared right-hand-side rewrite (`framework/done.md`) hands S1
+  each such aggregate as a source column holding the group's value, so S1 reads the bound like any per-row source bound and
+  checks it for NULL and NaN on every row. The value is DuckDB's, in its own types: `SUM` over any numeric type is exact, a bound of
+  `COUNT(*) * 0.57` over 100 rows is exactly 57, and over the `BIGINT` values 2^60, 1, -2^60 `SUM(cap)` is 1. `COUNT(*)` counts the
+  rows the clause covers in each group: a clause-level `WHEN` or a NULL `PER` key narrows it, while an aggregate-local `WHEN` on the
+  left (`SUM(x) WHEN active <= COUNT(*) / 2`) does not narrow the right, which counts every row of the group. An infinite value is a
+  value. An overflow (`COUNT(*) * 4611686018427387904` over 3 rows) raises as on the solver path; a row outside every group reads 0,
+  so a NULL-key group or a group the `WHEN` excludes cannot raise where the solver does not. The use case is a top-fraction query
+  ("the best 10% of each group": `SUM(x) <= COUNT(*) * 0.1 PER g`).
 - **Count bodies:** `SUM(a*x + c)` where the terms in `x` add up to exactly `a = 1` or `a = -1` (`SUM(x)`, `SUM(1*x)`,
   `SUM(2*x - x)`, `SUM(-x)`) and `c` is a finite foldable constant, whole or fractional, of magnitude at most 2^21
   (`SUM(x + 1)`, `SUM(1 - x)`, `SUM(x + 0.5)`, `SUM(x + 3 - 1)`). `SUM(x + c) <op> B` is `SUM(x) <op> B - n*c`, and
@@ -112,10 +103,8 @@ A query S1 does not apply to keeps its answer: it runs on the solver and `requir
 
 | Shape | Why it is out | How to reopen it |
 |---|---|---|
-| `SUM` or `AVG` on the right of a count bound over a column wider than 16 bits: `INTEGER`, `BIGINT`, `HUGEINT`, their unsigned forms, `DECIMAL`, `FLOAT`, `DOUBLE` | The solver adds row by row in `DOUBLE`, so a running total past 2^53 or a fraction loses digits in an order-dependent way: over the `BIGINT` values 2^60, 1, -2^60 it reads the sum as 0 where the exact sum is 1. A window sum adds in another order or exactly, and a last-digit difference can move a limit across a whole number | Read the solver's sum in the solver's row order, or prove a column's sums exact for the group sizes seen |
-| A right-hand aggregate with its own `WHEN` (`SUM(x) <= COUNT(*) WHEN active`), `DISTINCT` or `ORDER BY` inside it, a reducer of an expression rather than one column (`MIN(cap * 2)`), an aggregate as a divisor, or another reducer (`MEDIAN`) | Kept on the solver by decision | A separate task per shape |
+| A right-hand aggregate with its own `WHEN` (`SUM(x) <= COUNT(*) WHEN active`), a relation-qualified one, `DISTINCT` or `ORDER BY` inside it, or another reducer (`MEDIAN`) | Kept on the solver by decision | A separate task per shape |
 | A count body whose added term is not a usable constant: a column (`SUM(x + bonus)`), NULL, NaN, an infinity, a constant above 2^21 in magnitude, or a weight on `x` other than 1 or -1 (`SUM(2*x + 1)`) | A column term adds a different amount per row, so the shift is not `n*c`. A non-finite or NULL term raises on the solver. Above 2^21 the plan cannot prove `n*c` exact. A weight other than ±1 is a weighted constraint (S3, S4) | Raise the 2^21 cap with a run-time check of `n` |
-| A bound expression that can raise at runtime, such as a narrowing `CAST` | The solver raises on every row, including rows a `WHEN` or NULL `PER` key excludes, and direct solve must raise on the same inputs. Admitting it means proving DuckDB does not skip the check on a row the solver reads. Nonthrowing forms (`COALESCE`, `TRY_CAST`) are admitted, so `TRY_CAST` is the workaround. A multi-term objective whose coefficient can throw is left to the solver for the same reason | Prove the validation stage evaluates every row, then admit expressions that can only raise a cast or overflow error. Low value and costly |
 | A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor, a NULL factor, or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. The solver reads a NULL factor as an objective of zeros, which is not a result worth copying. A subquery factor has no sign when the plan is built, and the sign decides whether the sense reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
 | A bound on `x` with no `WHEN` that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises DECIDE's usual infeasible error before it reads a row, so an empty source raises it too, and skips that error under `DIAGNOSE`. A query that can only fail has no speed to win, so S1 declines it (`DecideBoxContradictsDomain`) and the solver answers. The same bound with a `WHEN` is admitted | Not planned |
 
@@ -139,7 +128,7 @@ different `PER` or `WHEN` membership (S2); `SUM(x) <> k` (not an interval); boun
 Measured 2026-10-13 (macOS arm64, 11 cores): the global narrow rows on top of `95ee8bf58c` with only variable-width columns late-materialized, the rest at `7a480a1a71`, where those shapes plan the same way. 5,000,000 stored rows; every query ran in a fresh process
 that only opens the database file, so peak memory is the query's own. Times are median query-plus-collection seconds
 (direct 1 to 3 runs, Gurobi 1 or 2). In all 36 runs direct and Gurobi agreed on selected count and objective. HiGHS was
-not re-run; earlier it took about 43 s on the global shape.
+not measured.
 
 | Shape | Direct | Gurobi | Speedup | Direct peak | Gurobi peak |
 |---|---:|---:|---:|---:|---:|

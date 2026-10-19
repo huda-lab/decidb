@@ -1,11 +1,11 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-15 on top of `178ccd13f2` with the retired-term sweep applied, with S1 and A1 registered: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each
-3,394 passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,393 passed and one
-failure, `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,322
-assertions in 46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it
-prints one line per check). Design: `../architecture/`.
+Verified on 2026-10-19 on top of `d7dfe9e8a9`, with the right-hand-side rewrite and S1 and A1 registered: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,443
+passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,442 passed and one failure,
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,322 assertions in
+46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+check). Design: `../architecture/`.
 
 ## What it does
 
@@ -25,104 +25,107 @@ prints one line per check). Design: `../architecture/`.
 - **Result adapter** (`DIRECT_RESULT_ADAPTER` in `EXPLAIN`). Keeps original bindings and types, serializes, prunes
   outputs only when skipping is proved safe, and always keeps the rule's validated columns live.
   `DirectValidationBreaker` builds the all-rows read for a plan that could stream. Because every row is checked before
-  any is released, rows are held in memory, wide parent-read columns included (`../architecture/result_adapter.md`,
-  "Memory of holding rows").
-- **Late materialization of a stored table** (`direct_late_materialization.cpp`). When the DECIDE source is one DuckDB
-  base table under non-volatile projections and filters, the rule driver appends the table's `rowid` to the source and
-  the adapter keeps it as a hidden trailing dependency. Right after unused-column removal, when it is known which
-  outputs a parent reads, a late step moves each parent-read output that is a plain stored column the rule's plan only
-  forwards to a second scan of the table, joined (inner, on `rowid`) under the adapter, and prunes again so the column
-  leaves the held rows. The first read still checks every row. Only a variable-width column moves (a physical type that
-  is not constant-size: `VARCHAR`, `BLOB`, nested types); a fixed-width one is cheaper held than read back, so it stays
-  in the single read (measurements in `../architecture/result_adapter.md`). Joins, aggregates, volatile or computed
-  columns, a source that already reads `rowid`, and a rule plan that is pipelined (`DirectSubstitute::pipelined`, set by
-  A1's constant problem) keep the single read. The step runs inside the `UNUSED_COLUMNS` pass rather than beside
-  `LATE_MATERIALIZATION`, because the passes in between add projection maps that unused-column removal does not keep up
-  to date; with that pass disabled the row id is computed and dropped and the plan holds rows as before.
+  any is released, rows are held in memory (`../architecture/result_adapter.md`, "Memory of holding rows").
+- **Late materialization of a stored table** (`direct_late_materialization.cpp`). The rule driver appends the table's
+  `rowid` to a single-base-table source, and after unused-column removal a late step moves each parent-read
+  variable-width column that the rule's plan only forwards to a second scan joined on `rowid`. Fixed-width columns,
+  joins, aggregates, volatile or computed columns, a source that already reads `rowid`, and a pipelined plan
+  (`DirectSubstitute::pipelined`, set by A1's constant problem) keep the single read. Rules and measurements:
+  `../architecture/result_adapter.md`.
 - **Plan factory functions.** `direct_plan_factory.hpp` holds free functions that each return one plan fragment (the
-  function form of a factory method; they are not GoF Builders). It lists only helpers with two or more users:
-  `DirectGuardEmptyAggregate`, `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBreaker`,
-  `DirectScaledTerm` (sign and constant factor of a coefficient), `DirectIsNull`, `DirectInfeasibleErrorPredicate`,
-  `DirectUnboundedErrorPredicate`, `DirectValidBoundPredicate` and `DirectValidNumberPredicate`. Which of several errors
-  a query reports is not specified. The per-row bound reader is also here, though A1 is its only user until R1 is built
-  on it, so that the two rules cannot read a bound differently: `DirectReadBounds` folds `variable_bound`s into each
-  decision's static box (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude 1e20 or more infinite) and lists
-  every other bound as a per-row clause, an equality split into its two halves; `DirectClauseBounds` turns one clause's
-  row values into a lower and an upper bound as the solver reads them; `DirectRowBox` intersects them with the box. Its
-  expressions are built with `ExpressionBuilder` (`direct_expression.hpp`; Fowler's Expression Builder), a small fluent
-  helper over bound expressions that passes them as `ExprPtr`. The helpers only S1 uses (the scope projection
-  `ProjectScope`, the bound validation `ValidateBounds`, `WindowExtremum`, `AnyCondition`) live in
-  `src/optimizer/decide/direct/s1_uniform_matroid_helpers.{hpp,cpp}` in `namespace direct_s1_uniform_matroid`, and move
-  to the plan factory functions when a second rule needs them. Inside a rule's namespace, names drop the `Direct` and
-  class prefixes. The exactness limit (2^53) is `DECIDE_MAX_EXACT_INTEGER` in the numeric-policy header (next bullet).
+  function form of a factory method). It lists only helpers with two or more users: `DirectGuardEmptyAggregate`,
+  `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBreaker`, `DirectScaledTerm` (sign and constant factor
+  of a coefficient), `DirectIsNull`, `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`,
+  `DirectValidBoundPredicate` and `DirectValidNumberPredicate`. Which of several errors a query reports is not
+  specified.
+- **Per-row bound reader** (in `direct_plan_factory.cpp`; A1 is its only user until R1 is built on it). It makes sure two
+  rules cannot read a bound differently. `DirectReadBounds` folds `variable_bound`s into each decision's static box
+  (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude 1e20 or more infinite) and lists every other bound as a
+  per-row clause, an equality split into its two halves. `DirectClauseBounds` turns one clause's row values into a lower
+  and an upper bound as the solver reads them. `DirectRowBox` intersects them with the box.
+- **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
+  expressions that passes them as `ExprPtr`. A1 uses it; S1 builds expressions by hand.
+- **Rule-local helpers.** The helpers only S1 uses (`ProjectScope`, `ValidateBounds`, `WindowExtremum`, `AnyCondition`)
+  live in `s1_uniform_matroid_helpers.{hpp,cpp}` in `namespace direct_s1_uniform_matroid`, and move to the plan factory
+  functions when a second rule needs them. Inside a rule's namespace, names drop the `Direct` and class prefixes.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
   DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
-  rules, the model builder and the solver backends all read it without including each other. It names the solver's
-  sentinel `DECIDE_SOLVER_INFINITY` (1e30: the builder's "no bound", the unset side of a singleton-row bound, a
-  one-sided row), the reading margin `DECIDE_EFFECTIVE_INFINITY` (1e20) with `DecideIsOpenAbove` and
-  `DecideIsOpenBelow`, `DECIDE_MAX_EXACT_INTEGER` (2^53) with `DecideIsWithinExactRange`,
-  `DECIDE_MAX_FRACTIONAL_MAGNITUDE` (2^52), `DECIDE_FIRST_DOUBLE_BEYOND_BIGINT` (2^63), and `DecideIsExactFiniteDouble`
-  (a converted double is exact when it is finite and converts back to the original value), and `DecideStrictBound` (`x >
-  0.5` means `x >= 1`: the solver's folding, its model builder's linear and quadratic rows, A1 and S1 all shift a strict
-  bound with it, so none of them reads a strict comparison differently). An integer answer is returnable when, rounded
-  half away from zero, it lies within the column's range (`DecideRoundedAnswerWithin`); beyond it both paths raise one
-  message, `DecideWholeNumberRangeMessage`, which names the variable and its rounded value. A1 spells the test in SQL
-  once (`WithinExactRange`, `abs(round(answer)) <= 2^53`) and builds the message at run time from its two halves around
-  `printf('%.0f', round(answer))`, so the text matches the solver's character for character. What stays outside the
-  header on purpose: bare `std::isfinite` and `std::isinf` that only reject NaN or infinity in input, a report or a
-  diagnostic (they state no exactness policy); HiGHS's own infinite bound and large-matrix limits in
-  `deterministic_naive.cpp`; Gurobi's 1e100; `INTEGER_SOLVER_CEILING` and the ray epsilon in `diagnostic_constants.hpp`
-  (diagnostic-only thresholds). No hand-written range proof of DuckDB's overflow is left; the copies of DuckDB's folding
-  and numeric logic that remain are tasks in `todo.md`. `DirectCastMayThrow` and `DirectMayThrow` copy DuckDB's
-  `CanThrow` on purpose: DuckDB's counts `TRY_CAST` as throwing, and fixing that would change DuckDB itself. Test:
-  `test/common/test_decidb_numeric_policy.cpp` (`[numeric_policy]`, 5 cases).
+  rules, the model builder and the solver backends all read it without including each other. It holds:
+  - `DECIDE_SOLVER_INFINITY` (1e30), the solver's sentinel: the builder's "no bound", the unset side of a
+    singleton-row bound, a one-sided row.
+  - `DECIDE_EFFECTIVE_INFINITY` (1e20), the reading margin, with `DecideIsOpenAbove` and `DecideIsOpenBelow`.
+  - `DECIDE_MAX_EXACT_INTEGER` (2^53) with `DecideIsWithinExactRange`; `DECIDE_MAX_FRACTIONAL_MAGNITUDE` (2^52);
+    `DECIDE_FIRST_DOUBLE_BEYOND_BIGINT` (2^63).
+  - `DecideIsExactFiniteDouble`: a converted double is exact when it is finite and converts back to the original value.
+  - `DecideStrictBound`: `x > 0.5` means `x >= 1`. The solver's folding, its model builder's linear and quadratic rows,
+    A1 and S1 all shift a strict bound with it, so none reads a strict comparison differently.
+  - `DecideRoundedAnswerWithin`: an integer answer is returnable when, rounded half away from zero, it lies within the
+    column's range. Beyond it both paths raise one message, `DecideWholeNumberRangeMessage`, which names the variable and
+    its rounded value. A1 spells the test in SQL once (`WithinExactRange`, `abs(round(answer)) <= 2^53`) and builds the
+    message at run time around `printf('%.0f', round(answer))`, so the text matches the solver's character for character.
+  - `DecideBoundBox`, the box described below.
+
+  Outside the header on purpose: bare `std::isfinite` and `std::isinf` that only reject NaN or infinity in input, a
+  report or a diagnostic; HiGHS's own infinite bound and large-matrix limits in `deterministic_naive.cpp`; Gurobi's 1e100;
+  `INTEGER_SOLVER_CEILING` and the ray epsilon in `diagnostic_constants.hpp` (diagnostic-only thresholds).
+  `DirectCastMayThrow` and `DirectMayThrow` copy DuckDB's `CanThrow` on purpose: DuckDB's counts `TRY_CAST` as throwing,
+  and fixing that would change DuckDB itself. Test: `test/common/test_decidb_numeric_policy.cpp` (`[numeric_policy]`, 5
+  cases).
 - **Shared admission predicates.** `DirectIsNumericDecisionFree`, `DirectSourceNumericColumn`,
   `DirectIsSourceOnlyNumeric`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
   `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT` and `DirectIRConstraint::PlainSum` answer "may a rule use this value"
   once for all rules.
 - **One evaluate-to-DOUBLE function.** `TryEvaluateFoldableDouble(context, expr, out, flags)` (`decide_cast_policy.hpp`)
   is the only code that folds a constant expression to a `DOUBLE`, for the planner, the rewrites and the direct rules.
-  Callers differ only in the flags they pass, each one difference stated by name: `FOLD_STABLE` (no row, parameter or
-  subquery can change it), `FOLD_ALLOW_BOOLEAN`, `FOLD_EXACT_FINITE` (through `DecideIsExactFiniteDouble`),
-  `FOLD_CATCH_DUCKDB_ERRORS` and `FOLD_CATCH_ALL`. The planner passes `FOLD_PLAIN` and lets a conversion error reach its
-  own error policy; the sign test for a scale factor and the `IN` rewrite catch everything; direct rules pass
-  `DIRECT_CONSTANT` or `DIRECT_FINITE_CONSTANT`. One function means one path cannot accept a constant another rejects
-  without a flag that says so.
+  Callers differ only in the flags they pass: `FOLD_STABLE` (no row, parameter or subquery can change it),
+  `FOLD_ALLOW_BOOLEAN`, `FOLD_EXACT_FINITE` (through `DecideIsExactFiniteDouble`), `FOLD_CATCH_DUCKDB_ERRORS` and
+  `FOLD_CATCH_ALL`. The planner passes `FOLD_PLAIN` and lets a conversion error reach its own error policy; the sign test
+  for a scale factor and the `IN` rewrite catch everything; direct rules pass `DIRECT_CONSTANT` or
+  `DIRECT_FINITE_CONSTANT`.
+- **Right-hand-side aggregates are window columns** (`decide_rewrite_rhs_window.cpp`, called by `DecideOptimizer::Optimize` before the
+  direct rules, in every mode). In a reduced constraint, a `COUNT`, `MIN`, `MAX`, `SUM` or `AVG` of one numeric source expression on the
+  right side, with no `WHEN`, `DISTINCT`, `ORDER BY` or relation qualifier of its own, becomes a column of the DECIDE source: the same
+  DuckDB aggregate as a window over the clause's `PER` keys and covered rows. The solver and the direct rules read DuckDB's value, so
+  `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1, -2^60 reads the limit 1 on `off` and `require`; the solver's row-by-row
+  `DOUBLE` fold reads 0. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's types. A row the clause does not cover
+  reads 0, so no overflow raises there, and a group where no row has a left-hand reducer active reads 0 because the solver never
+  evaluates it. A NULL or NaN argument raises on every row, as the solver does: the NULL text is built by `DirectNullMessageOf` and names
+  the argument's NULL columns; the NaN text lacks the solver's ` at row N`. The solver's C++ fold (`EvaluateRhsReducerPerGroup`) still
+  reads relation-qualified reducers, a reducer with its own `WHEN`, `DISTINCT`, `ORDER BY`, a non-numeric argument and a clause whose
+  left side holds no decision reducer. The window sits directly above the DECIDE source, so it appends columns and renumbers none
+  (the physical plan's column naming reads through it). It ends late materialization for an S1 source with an aggregate limit, and a
+  window over `PER` keys or a `WHEN` regroups rows, so output row order and the choice among equal optima are not guaranteed. Test:
+  `test_rhs_aggregate_window.py`.
 - **Number messages.** The NULL and NaN texts have one author for both paths, `decide_value_messages.hpp`
   (`DecideNullValueMessage`, `DecideInvalidValueMessage`, and `DecideCollectNamedColumns`, which decides which columns
-  of a value are named). A NULL number names the NULL source columns on the failing row: one column (`column "a" is
-  NULL. Impute it with COALESCE(a, 0)...`), several (`columns "a", "b" and "c" are NULL`), or, when no column is NULL,
-  the value's own text (`TRY_CAST(s AS DOUBLE) is NULL`). The value is the coefficient as the solver evaluates it: terms
-  of one decision are merged by `DecideMergeLikeCoefficients`, the function the solver's like-term collection calls, so
-  `SUM(a*x + b*x)` names `a` and `b` together. The message is a per-row expression (`DirectNullMessageOf`, used by
-  `DirectValidNumberPredicate` and `DirectValidBoundPredicate` in `direct_plan_factory.cpp`) that `error()` evaluates
-  only on the failing row; its size grows with the number of named columns, so a value may name any number of them. Each
-  column gives its quoted name when it is NULL on the row (else NULL); `COALESCE` over them, last column first, is the
-  last NULL column, and `concat_ws(', ', ...)` is all of them. No last column means no NULL column (the value's own
-  text), `concat_ws = last` means one, and otherwise the text is the leading names (cut off by length), ` and ` and the
-  last name. Every piece of wording comes from the small functions in `decide_value_messages.hpp` that
-  `DecideNullValueMessage` also joins. A value's source columns are read from the stage above the one that carries the
-  source (`DirectOverProjection`). An S1 count bound or fixed value that is exactly one column raises the same fixed
-  NULL and NaN messages (the column is the same on every row); a computed one keeps `DirectInvalidBoundMessage`. A NaN
-  or infinite number raises the solver's message, whose first words name the clause the user wrote it in: `objective
-  coefficient`, `constraint coefficient` or `constraint right-hand side`, without the solver's ` at row N`. The first
-  two come from the `DirectNumberKind` the rule passes (S1 and A1's objective values: objective; A1's coefficient on the
-  left of a bound: constraint). A source value read as a coefficient must be finite; one read as a bound (a count limit,
-  a fixed value, a per-row lower or upper bound) only has to be a number, because an infinite bound means "no bound" or
-  "nothing satisfies it". NaN and NULL raise in every slot. Direct applies this in SQL (`DirectValidNumberPredicate`,
-  `DirectValidBoundPredicate`) and the solver in C++ (`ExtractDoubleColumn`); the two cannot share code, so
-  `test_direct_source_values.py` puts NaN, both infinities and NULL in each of 27 slots S1 and A1 read and asserts the
-  same error or rows on `require`, `off` and forced HiGHS. Tests: `test_computed_score_null_error_names_the_columns`,
-  `test_null_score_no_column_explains_quotes_the_score`, `test_null_score_message_is_not_built_when_no_row_is_null`,
-  `test_null_value_error_is_the_solvers_error_word_for_word` and
-  `test_invalid_value_error_is_the_solvers_error_without_the_row_position` in `test_direct_user_facing.py` (the last two
-  compare the full text of `require` with `off` for S1 and A1). The cost on clean data is not measured.
+  of a value are named).
+  - A NULL number names the NULL source columns on the failing row: one column (`column "a" is NULL. Impute it with
+    COALESCE(a, 0)...`), several (`columns "a", "b" and "c" are NULL`), or, when no column is NULL, the value's own text
+    (`TRY_CAST(s AS DOUBLE) is NULL`). The value is the coefficient as the solver evaluates it: terms of one decision are
+    merged by `DecideMergeLikeCoefficients`, which the solver's like-term collection also calls, so `SUM(a*x + b*x)`
+    names `a` and `b` together.
+  - In direct solve the message is a per-row expression (`DirectNullMessageOf`, used by `DirectValidNumberPredicate` and
+    `DirectValidBoundPredicate`) that `error()` evaluates only on the failing row. A value's source columns are read from
+    the stage above the one that carries the source (`DirectOverProjection`).
+  - An S1 count bound or fixed value that is exactly one column raises the same fixed NULL and NaN messages; a computed
+    one keeps `DirectInvalidBoundMessage`.
+  - A NaN or infinite number raises the solver's message, whose first words name the clause: `objective coefficient`,
+    `constraint coefficient` or `constraint right-hand side`, without the solver's ` at row N`. The rule passes the
+    `DirectNumberKind` (S1 and A1's objective values: objective; A1's coefficient on the left of a bound: constraint).
+  - A source value read as a coefficient must be finite; one read as a bound (a count limit, a fixed value, a per-row
+    lower or upper bound) only has to be a number, because an infinite bound means "no bound" or "nothing satisfies it".
+    NaN and NULL raise in every slot.
+  - Direct applies this in SQL and the solver in C++ (`ExtractDoubleColumn`); the two cannot share code, so
+    `test_direct_source_values.py` puts NaN, both infinities and NULL in each of 27 slots S1 and A1 read and asserts the
+    same error or rows on `require`, `off` and forced HiGHS. Message tests are in `test_direct_user_facing.py`
+    (`test_null_value_error_is_the_solvers_error_word_for_word` and
+    `test_invalid_value_error_is_the_solvers_error_without_the_row_position` compare the full text of `require` with
+    `off` for S1 and A1). The cost on clean data is not measured.
 - **`EXPLAIN` annotation.** When a rule applies, mode, rule and one fixed condition line per rule appear in logical and
   physical `EXPLAIN` and profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x
-  <= u, each row independent`. There is no guards line and no number from the query. `require` explains why no rule
-  applied; under `auto` nothing is printed. Nothing persists a serialized plan across versions, so
-  `DIRECT_RESULT_EXTENSION` is unchanged. `test_serializer_explain_and_model_dump` checks the rule and the condition
-  line in the logical, physical and profiled plans.
+  <= u, each row independent`. There is no number from the query. `require` explains why no rule applied; under `auto`
+  nothing is printed. `test_serializer_explain_and_model_dump` checks the rule and the condition line in the logical,
+  physical and profiled plans.
 - **The solver's domain check, once.** The solver raises, before it reads any row, for a decision whose box contradicts
   its built-in domain: an upper bound below the default floor of 0, any upper bound below 0 on a `BOOL` (its floor stays
   0 whatever lower bound is written), or a `BOOL` lower bound above 1. That test is `DecideBoxContradictsDomain(box,
@@ -133,19 +136,27 @@ prints one line per check). Design: `../architecture/`.
 - **One box, one way to combine bounds.** A decision's unconditional bounds fold into a `DecideBoundBox`
   (`decide_numeric_policy.hpp`) through `DecideFoldSingletonRow`, which keeps the tightest value on each side. The
   solver's folding pass, the elastic engine's retained box, A1 (`ProveBounds`) and S1 (`ConstantFixedDomain`) all call
-  it, so the paths cannot combine bounds differently. The box keeps a `lower_written` flag apart from the value: a
-  written lower bound of -1e30 or below is no bound, like any bound of magnitude 1e20 or more, and only a decision with
-  no lower bound written takes the default floor of 0 (`EffectiveLower`). No value is reserved to mean "unset", so a
-  value the user writes can never be mistaken for one.
+  it. The box keeps a `lower_written` flag apart from the value: a written lower bound of -1e30 or below is no bound,
+  like any bound of magnitude 1e20 or more, and only a decision with no lower bound written takes the default floor of 0
+  (`EffectiveLower`). No value is reserved to mean "unset".
 - **One test scaffold.** `test/decide/tests/_direct_oracle_common.py` holds what the oracle suites share: the autouse
   fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, and `agree_with_oracle` (oracle model, `off`,
   `require`, then a rule-supplied check of one assignment). `test_direct_s1_uniform_matroid.py` and
   `test_direct_a1_separable_box.py` keep their case tables, oracle-model builders and assignment checks. Every direct
   suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can
-  see it), and none defines its own. A new rule's suite imports the scaffold (`architecture/rules.md`, item 2).
+  see it). A new rule's suite imports the scaffold (`architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
-  example `auto: 2322 passed, 0 xfailed, 0 failed`. The comment above `DirectDomain` in `direct_rule.hpp` points at
-  `architecture/ir.md`.
+  example `auto: 2322 passed, 0 xfailed, 0 failed`. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `PER` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
+
+## Registering a rule
+
+A rule registers with one line in `direct_registry.cpp` and one in the folder's `CMakeLists.txt`. The rule driver
+(`direct_rule_driver.cpp`) and the result adapter (`direct_result_adapter.cpp`) hold no rule-specific code. S1 and A1
+are materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a
+breaker or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own
+reading comes from the solver's code, not a copy: `DirectIRConstraint::variable_bound` is the predicate
+`DecideIsSingletonRowBound` (`decide_singleton_row_folding.cpp`), so a rule can ask which bounds replace a variable's
+default box.
 
 ## Verified by
 
@@ -160,27 +171,8 @@ prints one line per check). Design: `../architecture/`.
   `test_direct_fuzz.py` run about one query in ten over an empty source and add an impossible constant bound now and
   then; with A1's domain check disabled, the conformance test and the A1 fuzz fail. `test_direct_user_facing.py` checks
   which noun a NaN or infinite coefficient names.
-
-## Registering a rule
-
-A rule registers with one line in `direct_registry.cpp` and one in the folder's `CMakeLists.txt`. The rule driver
-(`direct_rule_driver.cpp`) and the result adapter (`direct_result_adapter.cpp`) hold no rule-specific code. S1 and A1
-are materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a
-breaker or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own
-reading comes from the solver's code, not a copy: `DirectIRConstraint::variable_bound` is the predicate
-`DecideIsSingletonRowBound` (`decide_singleton_row_folding.cpp`), so a rule can ask which bounds replace a variable's
-default box.
-
-## Checked and fine
-
-- **Result adapter** (`direct_result_adapter.cpp`): the extension operator, serialization and pruning hook keep DECIDE's
-  bindings. These parent contexts give identical results under `auto`, `off` and `require`: `CREATE TABLE AS`,
-  `INSERT ... SELECT`, a view, a window over the result, `UNION ALL` of an S1 and an A1 query, a joined source with a filter
-  above, a self-join of results, an empty source and a prepared statement with a parameter.
-- **Test-only hook:** the test seam `DirectRuleTestSeam` lets rule driver tests install stub rules.
-- **A1 plan size:** each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s,
-  3 clauses 0.13 s, 8 clauses with `WHEN` 0.26 s, 3 decisions and 8 clauses 0.29 s.
-
-## Not built
-
-- No second language front end.
+- Result adapter parent contexts, identical under `auto`, `off` and `require`: `CREATE TABLE AS`, `INSERT ... SELECT`, a
+  view, a window over the result, `UNION ALL` of an S1 and an A1 query, a joined source with a filter above, a self-join
+  of results, an empty source and a prepared statement with a parameter.
+- A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
+  clauses 0.13 s, 8 clauses with `WHEN` 0.26 s, 3 decisions and 8 clauses 0.29 s.

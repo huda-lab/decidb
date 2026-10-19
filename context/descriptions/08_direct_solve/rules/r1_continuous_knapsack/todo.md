@@ -6,19 +6,18 @@ goal is the full definition with its § Admitted class.
 
 ## R1-02 — The core rule: one decision, one `<=` budget
 
+- **Needs.** `../../framework/todo.md` § H-22 and § H-23.
 - **Problem.** `DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND available AND SUM(w*amount) <= B MAXIMIZE
   SUM(v*amount)` runs on the solver.
 - **Change.** `r1_continuous_knapsack_rule.cpp`, registered in `direct_registry.cpp`. One row-scoped `REAL` decision;
-  per-row ranges from the shared reader (`DirectReadBounds`, `DirectClauseBounds` and `DirectRowBox` in
-  `direct_plan_factory.cpp`; the shape check that a bound reads one decision, `ReadsOneDecision`, is still A1's own),
-  positive lower bounds included (the baseline is taken first); one `SUM(w*x) <= B` with a constant or foldable `B`; a
+  per-row ranges and the one-decision shape check from the shared bound reader, a linear objective from the shared
+  objective reader, positive lower bounds included (the baseline is taken first); one `SUM(w*x) <= B` with a constant or foldable `B`; a
   linear objective (`MAXIMIZE`, `MINIMIZE` or none). A weight of any sign, read per row (`definition.md` § Admitted
   class): one price per unit of budget, each row at its upper bound when its value beats price × weight, else at its
   lower. A bound of magnitude 1e20 or more, constant or per row, is no bound (`definition.md` § Admitted class): the
   price must leave an uncapped row's value no more than price × weight and a floorless row's value no less, and when no
   price does, the plan raises unbounded, in the same pass that finds the price. Tests cover a lone free row, an
-  improving pair, and both under `MINIMIZE`. Infeasible when a row's box is empty (A1's test in its answer stage, which
-  moves next to `DirectRowBox` so both rules share it) or the baseline exceeds the budget, unbounded where the solver
+  improving pair, and both under `MINIMIZE`. Infeasible when a row's box is empty (the bound reader's empty-box test) or the baseline exceeds the budget, unbounded where the solver
   says so, every row read before one is released.
 - **Done when.** `test_direct_r1_continuous_knapsack.py` (differential oracle table, error table, boundary table, the
   shape inside parent queries) and C++ applicability-condition cases pass; `rules/r1_continuous_knapsack/done.md` exists

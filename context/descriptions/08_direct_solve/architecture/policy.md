@@ -5,7 +5,7 @@
 `decide_direct_solve` is validated to `auto`, `off`, or `require`. The mode is resolved when the plan is built; a
 prepared plan keeps its choice until it is rebound.
 
-| Mode | Hit | Miss |
+| Mode | A rule applies | No rule applies |
 |---|---|---|
 | `auto` (default) | direct plan | solver, silently |
 | `off` | solver | solver |
