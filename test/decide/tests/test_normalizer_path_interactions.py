@@ -2,7 +2,7 @@
 
 These were written against the parsed-level constraint normalizer, which had four
 mutually-exclusive first-match-wins bypasses whose conditions were *not* disjoint —
-`(SUM(POWER(x,2)) WHEN c) + 3 <= K` matched several at once, and the tests pinned that
+`sum(when c: POWER(x,2)) + 3 <= K` matched several at once, and the tests pinned that
 whichever fired first did not break the others' structure.
 
 That normalizer was deleted at the canonicalization refactor. The combinations it protected are
@@ -65,7 +65,7 @@ def _solve_and_compare(oracle_solver, decidb_obj, tol=5e-2):
 
 
 # ===========================================================================
-# Quadratic LHS bypass + aggregate-local WHEN
+# Quadratic LHS bypass + a reducer's own `when`
 # ===========================================================================
 #
 # `sum(when c: power(x, 2))` is one atomic term to the canonicalizer — it is
@@ -81,7 +81,7 @@ def _solve_and_compare(oracle_solver, decidb_obj, tol=5e-2):
 @pytest.mark.correctness
 def test_quadratic_objective_with_when(decidb_cli, oracle_solver):
     """`MINIMIZE sum(when w: power(x - t, 2))` — quadratic objective with
-    aggregate-local WHEN. Only w-true rows contribute to Q and linear
+    a reducer's own `when`. Only w-true rows contribute to Q and linear
     coefficients; w-false rows are unconstrained."""
     sql = """
         SELECT id, t, ROUND(x, 4) AS x FROM (
@@ -153,7 +153,7 @@ def test_quadratic_constraint_with_when_and_constant_offset(decidb_cli, oracle_s
 
 
 # ===========================================================================
-# Bilinear LHS bypass + aggregate-local WHEN
+# Bilinear LHS bypass + a reducer's own `when`
 # ===========================================================================
 #
 # Same bypass-order story: WHEN path runs first, treats `sum(when c: x*y)`
@@ -168,7 +168,7 @@ def test_quadratic_constraint_with_when_and_constant_offset(decidb_cli, oracle_s
 @pytest.mark.correctness
 def test_bilinear_constraint_with_when(decidb_cli, oracle_solver):
     """`sum(when w: x * y) <= K` — bilinear (Bool * Real) constraint with
-    aggregate-local WHEN. McCormick reformulation must apply only to
+    a reducer's own `when`. McCormick reformulation must apply only to
     w-true rows; w-false rows are unconstrained."""
     sql = """
         SELECT id, x, y FROM (
@@ -269,7 +269,7 @@ def test_bilinear_constraint_with_when_and_constant_offset(decidb_cli, oracle_so
 
 
 # ===========================================================================
-# Composed MIN/MAX bypass + aggregate-local WHEN
+# Composed MIN/MAX bypass + a reducer's own `when`
 # ===========================================================================
 #
 # This combination is the trickiest because the WHEN path runs first

@@ -17,12 +17,12 @@ the physical layer sees the reduced shape B.3/B.5 already built.
 
 **A row-varying *data* bound now opens too (C1).** `IsAllowedDecisionFreeBoundExpression`
 gained a `COLUMN_REF` case, so a bare column is a legal bound of a reduced constraint —
-this is what the paper's own running example needs (`SUM(ship) <= stock PER depotID`).
+this is what the paper's own running example needs (`per depotID: sum(ship) by (depotID) <= stock`).
 The conjunction `LHS ⊙ rᵢ` over every row is exactly the tightest one (MIN for `<=`, MAX
-for `>=`), applied per `PER` group when one is present; `=` still refuses a bound that
+for `>=`), applied per `by` group when one is present; `=` still refuses a bound that
 genuinely varies (it would be a contradiction, not a tightening), and `<>` keeps every
 excluded value instead of collapsing. See `test_reduced_bound_data_column.py` for the
-PER and PER+WHEN cases (Figure 1's own two constraints); this file keeps the no-PER,
+`per` and `per`+`when` cases (Figure 1's own two constraints); this file keeps the no-`per`,
 side-agnostic case.
 
 Every positive case is checked against an independent oracle model. "It no longer
@@ -37,7 +37,7 @@ Covers:
   - test_reversed_per_row_bound: 5 >= x, no binder flip involved
   - test_correlated_subquery_bound_on_either_side: correlated row bounds retain
     their per-row meaning through a side swap
-  - test_row_varying_bound_collapses_to_tightest_on_either_side: C1, the no-PER case
+  - test_row_varying_bound_collapses_to_tightest_on_either_side: C1, the no-`per` case
   - test_row_scoped_decision_as_aggregate_bound_rejected: K3, named and actionable
 """
 
@@ -45,6 +45,8 @@ import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
 from ._oracle_helpers import emit_hard_inner_max
+from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
+from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 
 
 @pytest.mark.cons_aggregate
@@ -302,7 +304,7 @@ def test_row_varying_bound_collapses_to_tightest_on_either_side(
 ):
     """C1: a bare data column is now a legal bound of a reduced constraint.
 
-    Without PER there is one group — the whole selection — so `SUM(x) <= cap`
+    Without `by` there is one group — the whole selection — so `SUM(x) <= cap`
     is the conjunction of `SUM(x) <= cap_i` over every row, which is exactly
     `SUM(x) <= MIN(cap_i)`. Verified against an independently built model (three
     redundant per-row bounds, exactly as the conjunction reads), not a
@@ -312,7 +314,6 @@ def test_row_varying_bound_collapses_to_tightest_on_either_side(
     the bound rule runs on whichever side is the bound, not on `right` by
     position.
     """
-    # old spelling until item 7
     caps = {1: 4, 2: 9, 3: 6}
     fixture = "(VALUES (1, 4), (2, 9), (3, 6)) t(id, cap)"
 
@@ -341,21 +342,22 @@ def test_row_varying_bound_collapses_to_tightest_on_either_side(
         assert actual_sum == pytest.approx(result.objective_value)
 
 
-@pytest.mark.error
-def test_row_scoped_decision_as_aggregate_bound_rejected(decidb_cli):
-    """``SUM(x) <= y`` with a row-scoped ``y`` is K3, and is named as such.
-
-    A query-wide decision is a legal term of a reduced constraint because it is
-    row-invariant; a row-scoped one is not — there is no single ``y`` for a number
-    that has no row. C.2 moved this from a binder rejection to the homogeneity
-    validation at the canonicalization boundary.  The ``Binder Error`` prefix
-    pins that ownership: physical extraction must not be the first stage to
-    discover the unsupported mixture.
-    """
-    # old spelling until item 7
-    decidb_cli.assert_error("""
+@pytest.mark.correctness
+def test_row_scoped_decision_as_aggregate_bound_answers(decidb_cli, scope_solver):
+    """``SUM(x) <= y`` with a row-scoped ``y`` is generated once per row (D30): the total
+    stays under every row's y."""
+    result = answer(decidb_cli, """
         SELECT c_custkey, x, y FROM customer WHERE c_custkey <= 10
         DECIDE x(INT), y(INT)
         SUCH THAT SUM(x) <= y AND y <= 3
         MAXIMIZE SUM(x)
-    """, match=r"Binder Error: DECIDE constraint.*row-scoped.*'y'.*outside.*(?:reducer|SUM)")
+        ORDER BY c_custkey
+    """)
+    model = ScopedModel([{"c_custkey": row["c_custkey"]} for row in result], [Decision("x"), Decision("y")])
+    y = lambda r: {"y": 1}  # noqa: E731
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}),), "<=", (y,)),
+               Scoped((y,), "<=", (lambda r: {CONSTANT: 3},))]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": 1}),))
+    assert len(result) == 10
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4)

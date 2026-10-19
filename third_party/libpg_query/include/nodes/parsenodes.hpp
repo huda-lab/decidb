@@ -234,8 +234,8 @@ typedef enum PGAExpr_Kind {
 	PG_AEXPR_BETWEEN_SYM,     /* name must be "BETWEEN SYMMETRIC" */
 	PG_AEXPR_NOT_BETWEEN_SYM, /* name must be "NOT BETWEEN SYMMETRIC" */
 	AEXPR_PAREN,              /* nameless dummy node for parentheses */
-	PG_AEXPR_WHEN_CONSTRAINT,   /* DecidB: constraint WHEN condition */
-	PG_AEXPR_PER_CONSTRAINT,    /* DecidB: constraint PER column */
+	PG_AEXPR_WHEN_CONSTRAINT,   /* DecidB: the removed postfix WHEN; the transformer refuses it */
+	PG_AEXPR_PER_CONSTRAINT,    /* DecidB: the removed postfix PER; the transformer refuses it */
 	PG_AEXPR_QUALIFIED_REDUCER, /* DecidB: relation-qualified reducer sum(D: expr) */
 	PG_AEXPR_SCOPE_WHEN,        /* DecidB: scope filter, WHEN condition: body */
 	PG_AEXPR_SCOPE_PER,         /* DecidB: scope key, PER key: body */

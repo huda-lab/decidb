@@ -73,11 +73,11 @@ make decide-test
 ./test/decide/run_tests.sh -m cons_comparison        # comparison operator tests (=, <, >)
 ./test/decide/run_tests.sh -m cons_in                # IN domain tests (xfail)
 ./test/decide/run_tests.sh -m edge_case              # boundary / degenerate input tests
-./test/decide/run_tests.sh -m when_constraint        # WHEN on constraints
-./test/decide/run_tests.sh -m when_objective         # WHEN on objectives
-./test/decide/run_tests.sh -m when_perrow            # WHEN on per-row bounds
-./test/decide/run_tests.sh -m when_compound          # compound WHEN (AND/OR)
-./test/decide/run_tests.sh -m per_clause             # PER keyword
+./test/decide/run_tests.sh -m when_constraint        # when c: in front of a constraint
+./test/decide/run_tests.sh -m when_objective         # when c: in front of the objective
+./test/decide/run_tests.sh -m when_perrow            # when c: on a per-row bound
+./test/decide/run_tests.sh -m when_compound          # compound when conditions (and/or)
+./test/decide/run_tests.sh -m per_clause             # per K: in front of a constraint
 ./test/decide/run_tests.sh -m explain                # EXPLAIN / EXPLAIN ANALYZE output tests
 ./test/decide/run_tests.sh -m sql_joins              # JOIN tests
 ./test/decide/run_tests.sh -m query_diagnostics      # DECIDE diagnostic failure/reporting tests
@@ -89,7 +89,7 @@ make decide-test
 ./test/decide/run_tests.sh -m "not large_scale"      # skip slow tests
 
 # Boolean expressions on markers
-./test/decide/run_tests.sh -m "when_constraint or when_objective"   # all WHEN tests on constraints + objectives
+./test/decide/run_tests.sh -m "when_constraint or when_objective"   # all when tests on constraints + objectives
 ./test/decide/run_tests.sh -m "correctness and not large_scale"     # fast correctness tests only
 
 # Run a specific test file or function
@@ -128,7 +128,7 @@ make decide-test
 | `obj_minimize` | `test_obj_minimize.py` | 3 | passing |
 | `obj_complex` | `test_obj_complex_coeffs.py` | 1 | passing |
 
-### WHEN Clause
+### `when` in front of a clause
 
 | Marker | File | Tests | Status |
 |--------|------|-------|--------|
@@ -158,11 +158,27 @@ make decide-test
 | `error_binder` | `test_error_binder.py` | 21 | passing |
 | `error_infeasible` | `test_error_infeasible.py` | 4 | passing |
 
-### PER Keyword
+### `per` in front of a constraint
 
 | Marker | File | Tests | Status |
 |--------|------|-------|--------|
 | `per_clause` | `test_per_clause.py` | 3 | passing |
+
+### The scope language
+
+The `per` / `when` / `by` language as a whole is covered by twelve suites,
+`tests/test_scope_*.py`, which no single marker selects (`-k test_scope` does):
+declarations, constraint scopes, `by`, a reducer's own scope, the objective,
+determination, the helper-decision rewrite, the deck examples, bare clauses,
+combinations, the EXPLAIN / DIAGNOSE echo and the removed spellings. They are judged
+by `tests/_scope_oracle.py` or `tests/_brute_force.py` rather than a hand-built
+gurobipy model; see `context/descriptions/02_operations/oracle.md` §3.10 and
+`context/descriptions/04_testing/scope/done.md`.
+
+`tests/test_no_old_spellings_remain.py` (with `tests/_old_spellings.py`) scans every
+test surface — the Python tests, the sqllogic files, the C++ DECIDE tests, the golden
+corpus, the benchmark queries and `run.sh` — for a removed DECIDE spelling. Only
+`test_scope_removed_syntax.py` may write one.
 
 ### EXPLAIN Output
 
@@ -265,6 +281,11 @@ rm test/decide/results/oracle_cache.json
    - Record performance with `perf_tracker` (include `comparison_status` and `decide_vector`)
 3. Add appropriate markers (feature marker + `correctness` meta marker)
 4. The oracle cache updates automatically on the next run
+
+Write DECIDE in the current syntax (`context/descriptions/00_project_overview/syntax_reference.md`).
+`decidb_cli` fails a test whose query is refused with an error that says "is removed"
+(a removed spelling), unless the call passes `removed_spelling=True`; it also fails any
+run whose output shows an internal error or an internal name.
 
 ### Never assert on user-facing message text
 

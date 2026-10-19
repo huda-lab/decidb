@@ -497,11 +497,11 @@ def test_nan_from_reducer_arithmetic_is_still_rejected(decidb_cli):
 @pytest.mark.error
 @pytest.mark.parametrize("constraint,clause", [
     ("x >= 1e1000::DOUBLE", "x >= inf"),
-    ("SUM(x) >= 1e1000::DOUBLE", "SUM(x) >= inf"),
-    ("SUM(x) <= -1e1000::DOUBLE", "SUM(x) <= -inf"),
-    ("SUM(x) = 1e1000::DOUBLE", "SUM(x) = inf"),
-    ("MIN(x) <= -1e1000::DOUBLE", "MIN(x) <= -inf"),
-    ("MAX(x) >= 1e1000::DOUBLE", "MAX(x) >= inf"),
+    ("SUM(x) >= 1e1000::DOUBLE", "sum(x) >= inf"),
+    ("SUM(x) <= -1e1000::DOUBLE", "sum(x) <= -inf"),
+    ("SUM(x) = 1e1000::DOUBLE", "sum(x) = inf"),
+    ("MIN(x) <= -1e1000::DOUBLE", "min(x) <= -inf"),
+    ("MAX(x) >= 1e1000::DOUBLE", "max(x) >= inf"),
 ])
 def test_highs_refuses_an_unreachable_bound_in_sql_terms(
     decidb_cli_highs, constraint, clause

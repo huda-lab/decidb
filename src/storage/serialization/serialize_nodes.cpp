@@ -510,7 +510,7 @@ void EntityScopeInfo::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<LogicalType>>(102, "entity_key_column_types", entity_key_column_types);
 	serializer.WritePropertyWithDefault<vector<ColumnBinding>>(103, "entity_key_bindings", entity_key_bindings);
 	serializer.WritePropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", scoped_variable_indices);
-	serializer.WritePropertyWithDefault<bool>(105, "exact_key", exact_key);
+	/* [Deleted] (bool) "exact_key" */
 	serializer.WritePropertyWithDefault<vector<string>>(106, "key_names", key_names);
 }
 
@@ -521,7 +521,7 @@ EntityScopeInfo EntityScopeInfo::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<vector<LogicalType>>(102, "entity_key_column_types", result.entity_key_column_types);
 	deserializer.ReadPropertyWithDefault<vector<ColumnBinding>>(103, "entity_key_bindings", result.entity_key_bindings);
 	deserializer.ReadPropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", result.scoped_variable_indices);
-	deserializer.ReadPropertyWithDefault<bool>(105, "exact_key", result.exact_key);
+	deserializer.ReadDeletedProperty<bool>(105, "exact_key");
 	deserializer.ReadPropertyWithDefault<vector<string>>(106, "key_names", result.key_names);
 	return result;
 }

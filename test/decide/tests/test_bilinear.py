@@ -15,8 +15,8 @@ Covers:
   - Backward compatibility: existing QP and linear objectives unchanged
 
 Cross-feature interactions (oracle-compared, module-level):
-  - test_bilinear_per_group:           bilinear + PER (McCormick aux per group)
-  - test_bilinear_when_per_triple:     bilinear + WHEN + PER triple composition
+  - test_bilinear_per_group:           bilinear + `per` (McCormick aux per group)
+  - test_bilinear_when_per_triple:     bilinear + `when` + `per` triple composition
   - test_bilinear_entity_scoped:       entity-scoped Boolean × row-scoped Real
   - test_bilinear_minimize_objective:  MINIMIZE direction with data coefficient
   - test_bilinear_bool_real_constraint: McCormick feasibility for Bool×Real constraint
@@ -520,7 +520,7 @@ class TestBilinearMixedObjectives:
 
 @pytest.mark.correctness
 class TestBilinearFeatureInteractions:
-    """Bilinear with WHEN, PER, and other features."""
+    """Bilinear with `when`, `per`, and other features."""
 
     def test_bilinear_with_when(self, decidb_cli, oracle_solver, perf_tracker):
         """MAXIMIZE when category = 'A': sum(b * x) — filtered bilinear.
@@ -1199,7 +1199,7 @@ class TestBilinearBackwardCompat:
 # Each test mirrors DecidB's McCormick linearization in the oracle:
 #   For Bool b ∈ {0,1} and Real x ∈ [0, U]:
 #     w = b*x  ⇒  w ∈ [0, U],  w <= U*b,  w <= x,  w >= x - U*(1-b)
-# A scoping bug (e.g., aux variable shared across PER groups) would relax
+# A scoping bug (e.g., aux variable shared across `per` groups) would relax
 # the feasible region and produce a strictly better objective than the
 # oracle — caught by the equality assertion.
 
@@ -1347,7 +1347,7 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
     for i in range(n):
         _mccormick_link(oracle_solver, wnames[i], bnames[i], xnames[i], U, f"mc_{i}")
 
-    # WHEN→PER: groups partition only the kept rows. Empty groups skip (default).
+    # `when`→`per`: groups partition only the kept rows. Empty groups skip (default).
     groups: dict[str, list[int]] = {}
     for i, row in enumerate(data):
         if keep[i]:

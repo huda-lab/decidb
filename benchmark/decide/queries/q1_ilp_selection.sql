@@ -1,6 +1,6 @@
 -- Q1  ILP selection kitchen-sink (large scale)
--- TAGS: type=BOOLEAN; class=ILP; obj=MAXIMIZE-SUM,WHEN-on-objective;
---       func=SUM,AVG; when=WHEN-constraint,aggregate-local-WHEN; per=PER-multi-column
+-- TAGS: type=BOOLEAN; class=ILP; obj=MAXIMIZE-SUM,when-on-objective;
+--       func=SUM,AVG; when=when-constraint,when-in-reducer; per=per-(),per-multi-column,by-multi-column
 SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_returnflag, l_linestatus, keep
 FROM lineitem
 DECIDE keep(BOOL)

@@ -12,8 +12,9 @@ tests, and end-to-end benefit evidence. The Word catalogue owns class details.
   lower bounds only after relational infeasibility and empty-input outcomes are
   proved, implemented, and tested.
 - [ ] **NEXT-03 — Keyed application.** Depends: VAL-05. Extend only after exact
-  component independence, row/entity identity, and NULL `PER` semantics are
-  proved and tested. Estimates never establish independence.
+  component independence, row and keyed identity, and NULL-key semantics (in
+  the scope language a NULL key is its own class, D5) are proved and tested.
+  Estimates never establish independence.
 - [ ] **NEXT-04 — New-language / ANR adapter.** Depends: stable language branch,
   HAR-01, VAL-05. Map the new expression semantics into the shared problem and
   exact-fact vocabulary. Run the same adapter contract and direct/solver tests

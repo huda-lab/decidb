@@ -1,8 +1,7 @@
-"""Shared data and helpers for the tests of the scope spellings: `when` and `per` in
-front of a clause or inside a reducer, and `by` after one (anr_language_extension.md
-§3-§8).
+"""Shared data and helpers for the scope tests: `when` and `per` in front of a clause or
+inside a reducer, and `by` after one (syntax_reference.md §5-§7).
 
-The deck's relations (§11), small enough to check by hand: five shipments joined to
+The deck's relations (§6.5), small enough to check by hand: five shipments joined to
 three depots in two regions and two countries, with a priority flag, a status and one
 network capacity. ``from_clause`` renders them as VALUES -- with any rows swapped in --
 and ``joined`` as the oracle's rows, in shipmentID order, the order every query sorts by.

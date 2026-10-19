@@ -1110,7 +1110,8 @@
       {
         "id": 105,
         "name": "exact_key",
-        "type": "bool"
+        "type": "bool",
+        "deleted": true
       },
       {
         "id": 106,

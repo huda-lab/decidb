@@ -1,4 +1,4 @@
-"""Postfix `by (Γ)`: which rows a reducer reads (anr_language_extension.md §5.1).
+"""`by (Γ)` after a reducer: which rows it reads (syntax_reference.md §5.2).
 
 `agg(e) by (Γ)` reads every kept row whose Γ equals the current class's Γ, including
 rows outside the class; Γ is columns or data expressions, NULL is a group (D5), and an
@@ -116,7 +116,7 @@ def test_bound_side_reducers_each_read_their_own_group(decidb_cli, scope_solver)
 
 @pytest.mark.correctness
 def test_null_is_a_group_of_by(decidb_cli, scope_solver):
-    """S4 and S5 have no region: they form one group of their own (D5)."""
+    """Rows 4 and 5 have no region: they form one group of their own (D5)."""
     rows = ((1, "a", 10), (2, "a", 20), (3, "b", 30), (4, None, 15), (5, None, 25))
     columns = ("id", "region", "demand")
     sql = f"""
@@ -196,7 +196,7 @@ def test_a_by_key_with_a_subquery(decidb_cli, scope_solver, key, oracle_key):
 @pytest.mark.correctness
 def test_tightest_bound_per_group_without_per(decidb_cli, scope_solver):
     """With no `per`, a varying bound is one constraint per row, which is the group's
-    tightest bound (§4.1); `=` cannot hold two values, and `<>` excludes every one."""
+    tightest bound (§6.2); `=` cannot hold two values, and `<>` excludes every one."""
     sql = _ship_query("sum(ship) by (D.region) <= D.capacity")
     model = ScopedModel(joined(), SHIP)
     clauses = [SHIP_BOUND, Scoped((_ship_sum(("region",)),), "<=", (lambda r: {CONSTANT: r["capacity"]},))]
@@ -416,11 +416,12 @@ def test_a_strict_bound_on_a_composed_clause(decidb_cli, scope_solver, clause, s
 ])
 def test_diagnose_quotes_a_strict_min_or_max_bound_as_written(decidb_cli, clause, written, suggested):
     """The model steps a strict bound (`> 3` is `>= 4`); a diagnosis still quotes `> 3` and
-    suggests the next value the user would write."""
+    suggests the next value the user would write. (The cap is a data column, which a repair
+    edits only after the clauses' own literals, so the clause under test is the edit.)"""
     findings = diagnose_rows(run_diagnose(decidb_cli, f"""
-        SELECT id, x {table('t', ('id', 'g'), ((0, 'a'), (1, 'a'), (2, 'b')))}
+        SELECT id, x {table('t', ('id', 'g', 'cap'), ((0, 'a', 3), (1, 'a', 3), (2, 'b', 3)))}
         DECIDE x(INT)
-        SUCH THAT x <= 3 AND {clause}
+        SUCH THAT x <= t.cap AND {clause}
         MINIMIZE SUM(x)"""))
     assert any(row["clause"] == written and row["suggested_change"] == suggested for row in findings), findings
 
@@ -475,7 +476,7 @@ def test_avg_not_equal(decidb_cli):
 @pytest.mark.correctness
 @pytest.mark.quadratic
 def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
-    """`POWER(…, 2)` inside reducers sharing one `by` key is the aggregate shape (§12).
+    """`POWER(…, 2)` inside reducers sharing one `by` key is the aggregate shape (§10.2).
     A quadratic constraint needs Gurobi."""
     rows = ((1, "a", 5), (2, "a", 4), (3, "b", 6), (4, "b", 2))
     columns = ("id", "g", "cap")
@@ -492,21 +493,21 @@ def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
 
 
 # ---------------------------------------------------------------------------
-# Refused shapes and errors. The shapes item 5 lifted -- a decision beside a reducer,
-# reducers with different by keys, MIN/MAX beside another term with a by or a varying
-# bound, a reducer inside another expression -- run in test_scope_value_rewrite.py.
+# Refused shapes and errors. The shapes the value rewrite answers -- a decision beside a
+# reducer, reducers with different by keys, MIN/MAX beside another term with a by or a
+# varying bound, a reducer inside another expression -- run in test_scope_value_rewrite.py.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.error
 @pytest.mark.error_binder
 @pytest.mark.parametrize("clause, message", [
     pytest.param("avg(ship) by (D.region) + sum(ship) by (D.region) <> 3",
-                 "DECIDE: AVG in a <> constraint is not supported yet beside another term, over a product of "
-                 "decisions, or with its own when or per", id="avg-beside-a-term-under-not-equal"),
+                 "DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when "
+                 "or per", id="avg-beside-a-term-under-not-equal"),
     pytest.param("avg(when S.priority: ship) <> 3",
-                 "DECIDE: AVG in a <> constraint is not supported yet beside another term, over a product of "
-                 "decisions, or with its own when or per", id="avg-with-its-own-when-under-not-equal"),
-    pytest.param("abs(ship) by (D.region) <= 5", "DECIDE: by (...) must directly follow SUM, AVG, MIN or MAX",
+                 "DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when "
+                 "or per", id="avg-with-its-own-when-under-not-equal"),
+    pytest.param("abs(ship) by (D.region) <= 5", "DECIDE: by (...) must directly follow SUM, AVG, MIN, MAX, norm or count",
                  id="by-after-abs"),
     pytest.param("sum(ship) by (ship) <= 5", "DECIDE: ship is a decision; when, per and by may only use data",
                  id="decision-in-by"),

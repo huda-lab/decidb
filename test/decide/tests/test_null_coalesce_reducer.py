@@ -124,3 +124,20 @@ def test_coalesce_over_decide_variable_inside_reducer_is_rejected(decidb_cli, cl
         DECIDE keep(BOOL)
         {clauses}
     """, match=r"(?i)unsupported operator expression.*DECIDE variable")
+
+
+@pytest.mark.parametrize("clause", ["SUM(keep + NULL) <= 1", "keep + NULL <= 1"])
+@pytest.mark.error
+def test_null_beside_a_decision_is_refused(decidb_cli, clause):
+    """`keep + NULL` is NULL whatever `keep` is: refused where it is written, not
+    reported as an internal error once the decision has been folded away."""
+    result = decidb_cli.execute_raw(f"""
+        SELECT id, keep
+        FROM range(1, 4) items(id)
+        DECIDE keep(BOOL)
+        SUCH THAT {clause}
+        MAXIMIZE SUM(keep)
+    """)
+    assert ("DECIDE: '(keep + NULL)' is NULL whatever the decisions are; replace the NULL with a value, as in "
+            "COALESCE(column, 0)") in result.stderr, result.stderr
+    assert "INTERNAL" not in result.stderr, result.stderr

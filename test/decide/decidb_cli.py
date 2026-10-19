@@ -17,6 +17,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from tests._output_helpers import assert_no_internal_leak
+
 
 #: Prefix of the machine-readable terminal marker DeciDB emits on stderr when
 #: ``DECIDB_STATUS_MARKERS`` is set (see the SUBOPTIMAL arm of ``physical_decide.cpp``).
@@ -60,6 +62,31 @@ def _verify_serializer_args() -> list[str]:
         "-cmd", "PRAGMA verify_serializer;",
         "-cmd", ".output stdout",
     ]
+
+
+#: The phrase every removed-spelling error carries (RefuseRemovedDecideSpellings).
+REMOVED_SPELLING_PHRASE = "is removed"
+
+
+def assert_no_removed_spelling(result: subprocess.CompletedProcess, sql: str) -> None:
+    """Fail the calling test when the query was refused for a removed DECIDE spelling: a
+    loose error pattern would otherwise pass on that error by accident. Only the
+    removed-syntax suite runs such queries, and it says so."""
+    assert REMOVED_SPELLING_PHRASE not in result.stderr, (
+        f"the query uses a removed DECIDE spelling (only test_scope_removed_syntax.py may):\n"
+        f"{sql[:300]}\nstderr: {result.stderr[:500]}")
+
+
+def _run(argv: list[str], sql: str, *, removed_spelling: bool = False,
+         **kwargs) -> subprocess.CompletedProcess:
+    """Run the CLI on ``sql`` and fail the calling test if it showed the user an internal
+    error or an internal tag: no query, accepted or refused, may do either. Unless
+    ``removed_spelling`` says the test is about one, a removed-spelling error fails it too."""
+    result = subprocess.run(argv, capture_output=True, text=True, **kwargs)
+    assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
+    if not removed_spelling:
+        assert_no_removed_spelling(result, sql)
+    return result
 
 
 def _last_complete_model_dump(text: str) -> str:
@@ -178,10 +205,9 @@ class DecidBCli:
         DecidBCliError
             If the CLI writes anything to stderr (error messages).
         """
-        proc = subprocess.run(
+        proc = _run(
             self._argv("-json", "-c", sql),
-            capture_output=True,
-            text=True,
+            sql,
             timeout=timeout,
             env=self._subprocess_env(status_markers=True),
         )
@@ -227,13 +253,7 @@ class DecidBCli:
         model *shape* has to be asserted here rather than through result rows.
         """
         env = {**os.environ, **(self.env or {}), "DECIDB_DUMP_MODEL": str(path)}
-        proc = subprocess.run(
-            self._argv("-c", sql),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-        )
+        proc = _run(self._argv("-c", sql), sql, timeout=timeout, env=env)
         errors = [
             line for line in proc.stderr.splitlines()
             if line and not line.startswith("Warning:")
@@ -245,16 +265,12 @@ class DecidBCli:
         return _last_complete_model_dump(Path(path).read_text())
 
     def execute_raw(
-        self, sql: str, *, timeout: float = 120
+        self, sql: str, *, timeout: float = 120, removed_spelling: bool = False
     ) -> subprocess.CompletedProcess:
-        """Run a SQL query and return the raw ``CompletedProcess``."""
-        return subprocess.run(
-            self._argv("-c", sql),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=self._subprocess_env(),
-        )
+        """Run a SQL query and return the raw ``CompletedProcess``. ``removed_spelling``
+        says the query is expected to be refused for a removed DECIDE spelling."""
+        return _run(self._argv("-c", sql), sql, removed_spelling=removed_spelling, timeout=timeout,
+                    env=self._subprocess_env())
 
     def execute_script(
         self, sql: str, *, timeout: float = 120
@@ -267,14 +283,7 @@ class DecidBCli:
         but multi-statement setup, tuning pragmas, and lifecycle tests still need one
         connection.
         """
-        return subprocess.run(
-            self._argv(),
-            input=sql,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=self._subprocess_env(),
-        )
+        return _run(self._argv(), sql, input=sql, timeout=timeout, env=self._subprocess_env())
 
     def execute_interactive(
         self, sql: str, responses: str, *, timeout: float = 60
@@ -319,7 +328,10 @@ class DecidBCli:
             os.close(master_fd)
             if slave_fd >= 0:
                 os.close(slave_fd)
-        return subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+        assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
+        assert_no_removed_spelling(result, sql)
+        return result
 
     def assert_error(
         self, sql: str, *, match: str | None = None, timeout: float = 120

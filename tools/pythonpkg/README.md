@@ -55,9 +55,9 @@ MINIMIZE SUM(units * unit_cost)
 SELECT select_list
 FROM table_expression
 [WHERE ...]
-DECIDE [Table.]variable_name(TYPE) [, ...]
-SUCH THAT constraint [AND constraint ...]
-[MAXIMIZE | MINIMIZE] objective_expression
+DECIDE [per key:] variable_name(TYPE) [, ...]
+SUCH THAT [scope:] constraint [AND [scope:] constraint ...]
+[MAXIMIZE | MINIMIZE [when condition:] objective_expression]
 ```
 
 The declaration may also sit between `SELECT` and `FROM`; the two orders parse to the same plan. `SUCH THAT` is required.
@@ -78,24 +78,24 @@ Three scopes control how many variables one declaration creates:
 
 | Spelling | Scope | Variables |
 |---|---|---|
-| `x(INT)` | row-scoped (default) | one per result row |
-| `T.x(INT)` | table-scoped | one per distinct entity of `T` |
-| `scalar x(INT)` | query-wide | exactly one |
+| `x(INT)` | per row (default) | one per result row |
+| `per K: x(INT)` | keyed | one per distinct value of the key `K` (columns, or a relation name for all its columns) |
+| `per (): x(INT)` | query-wide | exactly one |
 
-Table-scoped variables matter after a join: `DECIDE n.keep(BOOL)` gives each nurse one decision even when they appear in five shift rows.
+Keyed variables matter after a join: `DECIDE per n: keep(BOOL)` gives each nurse one decision even when they appear in five shift rows.
 
 ### Constraints
 
 Operators are `=`, `<>`, `<`, `<=`, `>`, `>=`, plus `BETWEEN` and `IN`. Aggregates over a decision are `SUM`, `AVG`, `MIN`, and `MAX`. To count selected rows use `SUM(x)` — `COUNT(x)` is rejected, because a decision variable is never null and so counting one always returns the row count.
 
 ```sql
-SUCH THAT SUM(x * weight) <= 50            -- aggregate
-SUCH THAT x <= 3                           -- per row
-SUCH THAT SUM(x) <= 2 PER category         -- one constraint per group
-SUCH THAT SUM(x * cost) <= 100 WHEN region = 'EU'   -- conditional
+SUCH THAT SUM(x * weight) <= 50                            -- aggregate
+SUCH THAT x <= 3                                           -- per row
+SUCH THAT per category: sum(x) by (category) <= 2          -- one constraint per group
+SUCH THAT when region = 'EU': sum(x * cost) <= 100         -- conditional
 ```
 
-`PER` produces one constraint per distinct group. `WHEN` is a postfix condition that restricts which rows a constraint or objective term applies to.
+A scope in front of a constraint says which rows it looks at and how many constraints it makes: `when condition:` keeps the rows where the condition holds, and `per key:` makes one constraint per distinct key value. `by (key)` after an aggregate makes it read only the rows of the current group. The objective takes a `when` in front too (`MAXIMIZE when region = 'EU': SUM(x * value)`), and `sum(when condition: e)` filters a single aggregate.
 
 ### Objective
 
@@ -132,9 +132,9 @@ Any problem where the answer is a set of values that has to satisfy constraints 
 | Ship what fits in a weight budget | keep or drop each row | `x(BOOL)` |
 | Produce how much at each plant | a whole quantity per row | `units(INT)` |
 | Blend inputs to hit a spec at least cost | a continuous amount per row | `mix(REAL)` |
-| Roster staff across shifts | one decision per person, shared by their rows | `staff.on(BOOL)` |
+| Roster staff across shifts | one decision per person, shared by their rows | `per staff: on_duty(BOOL)` |
 | Hold a portfolio under a risk limit | continuous weights, quadratic risk constraint | `w(REAL)`, Gurobi |
-| Cap the worst shortfall anywhere | a single number for the whole query | `scalar worst(INT)` |
+| Cap the worst shortfall anywhere | a single number for the whole query | `per (): worst(INT)` |
 
 The shape is always the same: declare the decisions, constrain them, name what to optimize.
 

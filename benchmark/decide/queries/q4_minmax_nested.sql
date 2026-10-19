@@ -1,6 +1,6 @@
--- Q4  MIN/MAX (easy) + nested-PER objective (large scale)
--- TAGS: type=BOOLEAN; class=ILP; obj=MINIMIZE-MAX(easy),nested-PER-objective;
---       func=MAX(easy-constraint); cons=composed-MIN/MAX-in-LHS; per=PER-single-column
+-- Q4  MIN/MAX (easy) + two-level objective (large scale)
+-- TAGS: type=BOOLEAN; class=ILP; obj=MINIMIZE-MAX(easy),two-level-objective;
+--       func=MAX(easy-constraint); cons=composed-MIN/MAX-in-LHS; per=per-(),per-single-column,by-single-column
 SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_returnflag, keep
 FROM lineitem
 DECIDE keep(BOOL)

@@ -37,17 +37,6 @@ namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
-static unique_ptr<Expression> WrapWithWhen(unique_ptr<Expression> constraint, const Expression *when) {
-	if (!when) {
-		return constraint;
-	}
-	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	wrapper->children.push_back(std::move(constraint));
-	wrapper->children.push_back(when->Copy());
-	wrapper->alias = WHEN_CONSTRAINT_TAG;
-	return std::move(wrapper);
-}
-
 static bool IsWhenWrapper(const Expression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
 		return false;
@@ -95,19 +84,19 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		};
 		using Kind = LogicalDecide::RewriteAccount::Kind;
 		if (payload == "1") {
-			AddRewriteAccount(decide, clause_alias, Kind::NORM_SUM_ABS, RenderForPlan(aggregate, decide, scope.scoped));
+			AddRewriteAccount(decide, clause_alias, Kind::NORM_SUM_ABS, RenderForPlan(aggregate, decide));
 			expr = make_aggregate("sum", optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()));
 			return;
 		}
 		if (payload == "2") {
 			AddRewriteAccount(decide, clause_alias, Kind::NORM_SUM_SQUARES,
-			                  RenderForPlan(aggregate, decide, scope.scoped));
+			                  RenderForPlan(aggregate, decide));
 			expr = make_aggregate("sum", optimizer.BindScalarFunction(
 			    "power", aggregate.children[0]->Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(2))));
 			return;
 		}
 		if (payload == "inf") {
-			AddRewriteAccount(decide, clause_alias, Kind::NORM_MAX_ABS, RenderForPlan(aggregate, decide, scope.scoped));
+			AddRewriteAccount(decide, clause_alias, Kind::NORM_MAX_ABS, RenderForPlan(aggregate, decide));
 			expr = make_aggregate("max", optimizer.BindScalarFunction("abs", aggregate.children[0]->Copy()));
 			return;
 		}
@@ -124,9 +113,9 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
 		auto z = MakeDecisionRef(
 		    decide, AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, DecideVarScopeInfo::Row(),
-		                                 "(" + RenderForPlan(*aggregate.children[0], decide, scope.scoped) + " <> 0)"));
+		                                 "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)"));
 		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::L0_INDICATORS,
-		                  RenderForPlan(aggregate, decide, scope.scoped));
+		                  RenderForPlan(aggregate, decide));
 		auto make_mz = [&]() {
 			auto bound = make_uniq<BoundConstantExpression>(Value::DOUBLE(m));
 			if (auto_m) {
@@ -148,7 +137,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		expr = make_aggregate("sum", std::move(z));
 	};
 
-	rewrite(decide.decide_objective, OBJECTIVE_ROW_TAG, ClauseScope {decide.scoped_objective, nullptr});
+	rewrite(decide.decide_objective, OBJECTIVE_ROW_TAG, ClauseScope());
 	rewrite(decide.decide_constraints, string(), ClauseScope());
 	for (auto &link : links) AppendConstraint(decide, std::move(link));
 }
@@ -156,12 +145,10 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> generated;
 	idx_t in_counter = 0;
-	// Set at each IN: written with the scope spellings, its rows keep the clause's rules.
-	bool scoped_in = false;
+	// Every row an IN generates keeps its clause's `when`.
 	auto emit = [&](unique_ptr<Expression> constraint, const Expression *when, const string &source_alias) {
 		MarkFormulationConstraint(*constraint, source_alias);
-		generated.push_back(scoped_in ? ScopeHelperRow(std::move(constraint), ClauseScope {true, when})
-		                              : WrapWithWhen(std::move(constraint), when));
+		generated.push_back(ScopeHelperRow(std::move(constraint), ClauseScope {when}));
 	};
 	std::function<void(unique_ptr<Expression> &, const Expression *, const string &)> rewrite =
 	    [&](unique_ptr<Expression> &expr, const Expression *when, const string &source_alias) {
@@ -181,7 +168,6 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		}
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR || expr->type != ExpressionType::COMPARE_IN) return;
 		auto &in = expr->Cast<BoundOperatorExpression>();
-		scoped_in = HasDecideTag(in.GetAlias(), SCOPED_CLAUSE_TAG);
 		if (in.children.size() < 2) throw InternalException("DECIDE IN marker has no domain values");
 		auto *target = GetBareDecideColumnRef(*in.children[0], decide.decide_index);
 		if (!target) throw InternalException("DECIDE IN marker target is not a decision variable");
@@ -204,12 +190,12 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		}
 		vector<unique_ptr<Expression>> indicators;
 		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::IN_INDICATORS,
-		                  RenderForPlan(in, decide, scoped_in));
+		                  RenderForPlan(in, decide));
 		for (idx_t i = 0; i < k; i++) {
 			string name = "__in_ind_" + target->GetName() + "_" + to_string(in_counter) + "_" + to_string(i) + "__";
 			// A plan names an indicator by the value it stands for.
-			string label = "(" + RenderForPlan(*in.children[0], decide, scoped_in) + " = " +
-			               RenderForPlan(*in.children[1 + i], decide, scoped_in) + ")";
+			string label = "(" + RenderForPlan(*in.children[0], decide) + " = " +
+			               RenderForPlan(*in.children[1 + i], decide) + ")";
 			indicators.push_back(MakeDecisionRef(
 			    decide, AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true, DecideVarScopeInfo::Row(), label)));
 		}

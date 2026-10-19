@@ -2,7 +2,7 @@
 
 The `DECIDE` clause declares **decision variables** of a COP query. Each variable gets a value assigned by the solver, and the assigned values appear as new columns in the query result.
 
-**Syntax** (variable types, multiple variables, table-scoped form, examples): see `../../00_project_overview/syntax_reference.md` §1–§2. This doc covers semantics and implementation only.
+**Syntax** (variable types, multiple variables, keyed and query-wide declarations, examples): see `../../00_project_overview/syntax_reference.md` §1–§2. The meaning of `per` on a declaration is in [`../scope/done.md`](../scope/done.md) §2. This doc covers semantics and implementation only.
 
 ---
 
@@ -19,148 +19,146 @@ The `DECIDE` clause declares **decision variables** of a COP query. Each variabl
   declaration slot reduces and re-armed on the `SUCH` token, so `CASE WHEN` in a
   `JOIN ... ON` or `WHERE` between the two slots still lexes as ordinary SQL.
 - **The type is mandatory.** `x(INT)`, `x(BOOL)`, `x(REAL)` — there is no
-  implicit default and no `IS` form. Both removed spellings still have grammar
-  productions whose only job is to raise a message naming the fix.
+  implicit default and no `IS` form. A declaration with no type and the `x IS INTEGER`
+  form each keep a grammar production whose only job is to raise a message naming the
+  fix (`DECIDE variable "x" needs a type; write x(INT), x(BOOL) or x(REAL)`).
 - **`REAL`** is stored internally as `LogicalType::DOUBLE`; both HiGHS (`kContinuous`) and Gurobi (`GRB_CONTINUOUS`) support it natively. REAL enables value-assignment problems (imputation, repair, synthesis) as opposed to selection (BOOL) or counting (INT), and is a prerequisite for ABS() linearization.
-- **Signed variables (negative domains).** The default lower bound for `INT`/`REAL` is 0, but it is a *default*, not a floor. A variable becomes signed when the query gives it an explicit negative lower bound — `x >= -K`, `x BETWEEN -K AND K`, or a negative literal in an `IN` domain. Mechanism: bound absorption initializes lower bounds to an "unset" sentinel (`ABSORBED_LOWER_UNSET` in `physical_decide.cpp`) so the `std::max` combiner keeps the tightest of multiple `>=` constraints for negatives too; `Finalize` resolves any still-unset variable to 0. The model builder takes the resolved lower bound directly instead of re-clamping it to the type default. Only finite negative bounds are supported — there is no fully-free ($-\infty$) domain (deliberately: a two-sided-unbounded variable is the case most likely to make a model unbounded). **Limitation:** implied-bound propagation does not fire for a variable whose lower bound is negative (it is sound to skip — see `04_optimizer`), so a signed variable used in a **bilinear** product needs an *explicit* finite upper bound (`x <= K`); it cannot rely on a `SUM(x) <= K` constraint to infer one. Tests: `test/decide/tests/test_signed_variables.py`.
+- **Signed variables (negative domains).** The default lower bound for `INT`/`REAL` is 0, but it is a *default*, not a floor. A variable becomes signed when the query gives it an explicit negative lower bound — `x >= -K`, `x BETWEEN -K AND K`, a negative literal in an `IN` domain, or an easy `min(x) >= -K` with no `when` and no reducer filter, which is absorbed into the box like `x >= -K` (`../scope/done.md` §3). Mechanism: bound absorption initializes lower bounds to an "unset" sentinel (`ABSORBED_LOWER_UNSET` in `physical_decide.cpp`) so the `std::max` combiner keeps the tightest of multiple `>=` constraints for negatives too; `Finalize` resolves any still-unset variable to 0. The model builder takes the resolved lower bound directly instead of re-clamping it to the type default. Only finite negative bounds are supported — there is no fully-free ($-\infty$) domain (deliberately: a two-sided-unbounded variable is the case most likely to make a model unbounded). **Limitation:** implied-bound propagation does not fire for a variable whose lower bound is negative (it is sound to skip — see `../../01_pipeline/05_optimizer/done.md`), so a signed variable used in a **bilinear** product needs an *explicit* finite upper bound (`x <= K`); it cannot rely on a `SUM(x) <= K` constraint to infer one. Tests: `test/decide/tests/test_signed_variables.py`.
 - **Variable scope**: declared variables are available in `SUCH THAT`, `MAXIMIZE`/`MINIMIZE`, and the `SELECT` list (returned as output columns).
-- **Three scopes.** `DecideVarScope` (`common/enums/decide.hpp`) is `ROW` (`x(INT)`, one column per result row), `ENTITY` (`T.x(INT)`, one per distinct entity; `per K: x(INT)`, one per distinct value of the key `K`) or `SCALAR` (`scalar x(INT)` or `per (): x(INT)`, one for the whole query). Each declaration carries a `DecideVarScopeInfo` — the scope plus, for `ENTITY`, the index into `entity_scopes`, and for `per K:` the key as written (`declared_key`). How a key resolves and why a `per` key is never trimmed: `../../01_pipeline/02_binder/done.md` → "Keyed declarations". It is one struct rather than parallel arrays so the optimizer's auxiliary-variable appends cannot desync the scope from its entity index. The chain is `decide_declarations_binder.cpp` → `BoundSelectNode` → `LogicalDecide` → `PhysicalDecide` → `SolverInput`, all under the field name `variable_scopes`.
-- **Query-wide (`scalar`) variables**: `DECIDE scalar name(TYPE)` yields exactly one solver column regardless of input cardinality (paper §3.1). The grammar marks the declaration by prefixing the private type marker (`scalar_integer_variable`, see `scalar_variable_type` in `select.y`); the binder strips the prefix and records `DecideVarScope::SCALAR`, so the type comparisons stay scope-agnostic. `scalar T.x(TYPE)` is a parse error. `SCALAR` is an unreserved keyword and adds no grammar conflicts.
-  - **Column layout**: `VarIndexer` is now four blocks — `[row | entity | scalar | global auxiliary]`. Scalars sit *below* `global_block_start` so the "user decide-variable columns occupy `[0, global_block_start)`" invariant that the model builder and the column labeller rely on keeps holding. `Get()` ignores the row for a scalar and `NumInstances()` returns 1; `InstanceColumn(var, inst)` walks a variable's own instances and replaces the block math that was duplicated at the bounds and provenance sites.
-  - **Constraints**: a scalar may be compared against row-varying data (`ship <= cap`). The constraint fans out per row, but every generated row references the same column — that is what makes the decision shared. The row-scoped fast path in the model builder is skipped for scalars for the same reason it is skipped for entity-scoped variables (many rows, one column).
-  - **As a term of an aggregate constraint**: a scalar is row-invariant, so it is a complete term of an aggregate constraint on its own — `SUM(x) - cap <= 4`, the paper's `max_shortfall` shape (§3.1). This mirrors the objective rule below and is canonical form's K3 ("every term is a reducer **or row-invariant**"). Two things had to agree for it to be right, and they fail differently: `ExtractAggregateConstraintTerms` used to *reject* the term outright, while both model-builder accumulators (ungrouped and `PER`) fan every term out over the group's rows, which for a one-column variable silently multiplies its coefficient by the row count. The accumulators now add a scalar's coefficient **once per constraint row**, matching the objective path. Since the canonicalization refactor the scalar may equally be written as the **bound** — `SUM(x) <= cap`, `demand - SUM(x) <= cap PER g` — which is the paper's Example 1 spelling; canonicalization moves it to the left, so the shape reaching the extractor is the same one. A **row-scoped** decision as the bound is the other half of K3 and is rejected there (*"non-aggregate term: y"*), because there is no single `y` for a number that has no row. Tests: `test/decide/tests/test_scalar_var_in_aggregate.py`, `test_scalar_scope.py::test_scalar_as_aggregate_rhs[_with_per]`, `test_canonicalize_side_agnostic.py`, golden corpus 55/56 and 75/76/77.
-  - **Objectives**: a scalar contributes **bare**, not through a reducer — alone (`MINIMIZE cap`) or as an additive term beside reducers (`MINIMIZE cap - SUM(x)`). `AnalyzeObjective` (`src/optimizer/decide/decide_linear_form.cpp`) recognises a purely-scalar objective (which carries no aggregate at all), and `ExtractAggregateObjectiveTerms` accepts a scalar leaf. The model builder adds the coefficient **once** instead of once per row; without that the coefficient would be silently multiplied by input cardinality.
-  - **A reducer is rejected iff its body is row-invariant**: `SUM(cap)` / `AVG(cap)` / `SUM(cap1 + cap2)` raise a binder error quoting the body and naming the fix. There is one column and nothing to reduce over, and the two plausible readings (coefficient 1 vs. coefficient `n`) are different optimization problems — so neither is chosen silently. A body that *mixes* a scalar with row-varying data is not row-invariant and is an ordinary scalar-times-vector reduction: `SUM(cost * cap)` means `(Σ cost)·cap`, and `SUM(x + cap)` means `SUM(x) + n·cap` over the counted rows. Enforced once, in `DecideBinder`'s shared aggregate classification via `DecideBinder::IsRowInvariantExpression` (`decide_binder.cpp`), which it can answer because `bind_select_node.cpp` passes it the set of `scalar`-declared names; the objective and constraint binders inherit it rather than each testing for a scalar themselves. The weighting the accepted case implies is carried to stage 06 by `DecideTerm::reduction` — see `../sql_functions/done.md` → "A Query-Wide Decision Multiplied by a Vector, Inside a Reducer (Batch D)".
+- **Three scopes.** `DecideVarScope` (`common/enums/decide.hpp`) is `ROW` (`x(INT)` or
+  `per row: x(INT)`, one column per result row), `ENTITY` (`per K: x(INT)`, one per class
+  of the key `K`; the language calls this *keyed*) or `SCALAR` (`per (): x(INT)`, one for
+  the whole query). Each declaration carries a `DecideVarScopeInfo` — the scope plus, for a
+  keyed one, the index into `entity_scopes` and the key as written (`declared_key`), which
+  messages quote (*"declared per D.depotID"*). It is one struct rather than parallel
+  arrays so the optimizer's auxiliary-variable appends cannot desync the scope from its
+  key scope. The chain is `decide_declarations_binder.cpp` → `BoundSelectNode` →
+  `LogicalDecide` → `PhysicalDecide` → `SolverInput`, all under the field name
+  `variable_scopes`.
+- **Keyed variables — `per K: x(TYPE)`.** `BindDeclarations` resolves the key through
+  `FindOrCreateKeyScope` (`decide_binder.cpp`): its elements are columns and relations
+  of the `FROM` clause (a relation stands for its stored columns), the key is a sorted
+  set of bindings, and declarations and reducers with equal keys share one
+  `EntityScopeInfo`. The key is exactly what is written. During physical execution
+  (Phase 1.5, `BuildEntityMappings`) the executor reads each row's key columns and maps
+  each distinct key — NULL included, as one value — to one solver column, so every row of
+  a class shows the same value. Each declarator has its own key; a decision is
+  referenced by its bare name. Semantics and errors: `../scope/done.md` §2;
+  `../../01_pipeline/02_binder/done.md` → "Keyed declarations".
+- **Query-wide variables — `per (): x(TYPE)`** yield exactly one solver column regardless
+  of input cardinality (paper §3.1). The declaration carries no key scope:
+  `DecideVarScopeInfo::Scalar()`.
+  - **Column layout**: `VarIndexer` is four blocks — `[row | keyed | query-wide | global auxiliary]`. Query-wide columns sit *below* `global_block_start` so the "user decide-variable columns occupy `[0, global_block_start)`" invariant that the model builder and the column labeller rely on keeps holding. `Get()` ignores the row for a query-wide variable and `NumInstances()` returns 1; `InstanceColumn(var, inst)` walks a variable's own instances.
+  - **Constraints**: a query-wide decision may be compared against row-varying data (`ship <= cap`). The constraint fans out per row, but every generated row references the same column — that is what makes the decision shared. The per-row fast path in the model builder (`CanUseRowScopedFastPath`) is skipped for it for the same reason it is skipped for keyed variables (many rows, one column).
+  - **As a term beside a reducer**: a query-wide decision is row-invariant, so it is a complete term of an aggregate constraint on its own — `sum(x) - cap <= 4`, the paper's `max_shortfall` shape (§3.1) — or its bound (`sum(x) <= cap`, `per g: demand - sum(x) by (g) <= cap` when `g` determines `demand`); canonicalization moves it to the left either way. The model-builder accumulators (ungrouped and grouped) add its coefficient **once per model row**, not once per member row, matching the objective path. A per-row or keyed decision beside a reducer (`sum(x) <= y`) takes the value shape instead: the reducer becomes a helper decision and the clause is one row per class (`../scope/done.md` §3). Tests: `test/decide/tests/test_scalar_var_in_aggregate.py`, `test_scalar_scope.py`, `test_canonicalize_side_agnostic.py`, golden corpus 55/56 and 75/76/77.
+  - **Objectives**: a query-wide decision contributes **bare**, not through a reducer — alone (`MINIMIZE cap`) or as an additive term beside reducers (`MINIMIZE cap - sum(x)`). `AnalyzeObjective` (`src/optimizer/decide/decide_linear_form.cpp`) recognises a purely query-wide objective (which carries no aggregate at all), and `ExtractAggregateObjectiveTerms` accepts a query-wide leaf. The model builder adds the coefficient **once** instead of once per row. Beside a `MIN` or `MAX` it is refused (*"DECIDE: 'cap' beside MIN or MAX is not supported yet"*).
+  - **A reducer is rejected iff its body is row-invariant** on the decision side: `sum(cap)` / `avg(cap)` / `sum(cap1 + cap2)` raise a binder error naming the fix (*"cap is a query-wide decision, so SUM(cap) has nothing to aggregate over; use cap on its own"*). There is one column and nothing to reduce over, and the two plausible readings (coefficient 1 vs. coefficient `n`) are different optimization problems — so neither is chosen silently. A body that *mixes* a query-wide decision with row-varying data is an ordinary scalar-times-vector reduction: `sum(cost * cap)` means `(Σ cost)·cap`, and `sum(x + cap)` means `sum(x) + n·cap` over the counted rows. Enforced once, in `DecideBinder::ClassifyReducerCall` via `DecideBinder::IsRowInvariantExpression` (`decide_binder.cpp`), which knows the query-wide names because `BindDeclarations` passes them; the objective and constraint binders inherit it. The weighting the accepted case implies is carried to stage 06 by `DecideTerm::reduction` — see `../sql_functions/done.md` → "A Query-Wide Decision Multiplied by a Vector, Inside a Reducer".
   - **Output**: the value is repeated on every result row (paper §3.1), which falls out of `Get()` resolving every row to the same column.
-  - **Diagnostics**: a scalar has a single instance, so `FormatEscapingInstances` already suppresses the `affected_rows`/`affected_entities` cell and the unbounded report carries only `grows_toward`. The candidate provider returns no grouping candidates for a scalar — there is no subset of rows to characterize.
-  - Tests: `test/decide/tests/test_scalar_scope.py`.
-- **Table-scoped entity identification**: the source table's columns, minus those the clause reads as data, form a composite key (`syntax_reference.md` §2.1). During physical execution (Phase 1.5), the executor scans result rows, extracts the key columns for each scoped variable, and maps each distinct key to a single solver variable index — the **entity consistency guarantee**. For a key of your choosing, write `per K:` (§2.3).
-- **Aggregate semantics with table scope**: SUM/AVG aggregate over result rows, not entities — if an entity appears in 5 join-result rows, its shared variable contributes 5 times (standard SQL aggregation over the join result). A **relation-qualified reducer** opts out of that per reducer; see below.
+  - **Diagnostics**: a query-wide decision has a single instance, so an unbounded report carries no escape count and no `scope`, only `runaway_+inf` / `runaway_-inf`; the candidate provider returns no grouping candidates for it.
+  - Tests: `test/decide/tests/test_scalar_scope.py`, `test_scope_declare.py`.
+- **Reducers count result rows**: SUM/AVG aggregate over result rows, not classes — if a
+  keyed decision's class appears in 5 join-result rows, its shared variable contributes 5
+  times (standard SQL aggregation over the join result). A reducer's own key —
+  `sum(per D: e)` or the colon form below — opts out of that per reducer.
 
-## Relation-qualified reducers — `agg(D: expr)`, `agg(D, T: expr)`
+## The colon form — `SUM(D: e)`, `SUM(D, T: e)`
 
-`SUM(D: expr)` reduces over `D`'s tuple identities instead of over join-result rows,
-contributing one term per surviving `D` tuple (paper §3.2.2). Syntax and semantics:
-`../../00_project_overview/syntax_reference.md` §5.1. Unqualified reducers are unchanged,
-so this is opt-in and nothing existing changes meaning.
+`SUM(D: e)` reduces over `D`'s tuple identities instead of over join-result rows,
+contributing one term per surviving `D` tuple (paper §3.2.2). It means `sum(per D: e)`:
+the same key scope, the same checks, the same answer, and it may take a `by`. Syntax:
+`../../00_project_overview/syntax_reference.md` §5.1; a reducer's own `per`:
+`../scope/done.md` §4. A reducer with no key of its own counts result rows, so the key
+is opt-in.
 
-- **A qualifier is an entity scope with no variable.** The tuple-identity key a qualifier
-  needs is exactly the key a `T.x(TYPE)` declaration needs, so both go through
-  `FindOrCreateEntityScope` (`decide_binder.cpp`) and share one `entity_scopes` entry, one
-  set of pinned key columns, and one `EntityMapping`. Qualifying by a relation that already
-  has an entity-scoped declaration reuses its scope; qualifying by one that does not
-  appends a key-only scope whose `scoped_variable_indices` is empty.
+- **One key scope for `SUM(D: e)` and `sum(per D: e)`.** The key is the listed relations' stored columns,
+  found or created as the exact key scope `per D` uses (`FindOrCreateExactScope`,
+  `decide_binder.cpp`), so the two share one `entity_scopes` entry, one set of
+  pinned key columns, one `EntityMapping`, and one check: `D` determines the body within
+  each `by` group, over the rows the reducer reads (the canonicalizer's `DETERMINES`
+  check, run on the data). A scope with no decision declared on it has empty
+  `scoped_variable_indices`.
 - **De-duplication is a row mask, not a new pipeline stage.** `BuildQualifierKeepMask`
-  (`physical_decide.cpp`, Phase 2) keeps the first row of each `(PER group, entity id)` pair
-  and drops the rest; `ApplyQualifierToFilter` ANDs that into the term's existing
-  `TermFilterState`, the same slot aggregate-local `WHEN` uses. Consequences that fall out
-  rather than being coded: `AVG`'s denominator counts surviving rows and so becomes the
-  distinct-identity count; the empty-aggregate guard and coefficient zeroing already
-  respect the mask; the paper's construction order (`when` → `per` → qualifier grouping →
-  aggregation) is just where the mask is applied — after `row_group_ids` is settled.
-  Soundness rests on the well-formedness rule: every row of an identity carries the same
-  value, so *which* row survives cannot matter.
-- **The mask is per term, not per clause**, so `SUM(D: a * open) + SUM(b * ship)` in one
+  (`physical_decide.cpp`, Phase 2) keeps the first row of each class within each group,
+  among the rows the reducer reads (its own `when` included), and drops the rest;
+  `ApplyQualifierToFilter` ANDs that into the term's `TermFilterState`, the slot a
+  reducer's own `when` uses. Consequences that fall out rather than being coded: `AVG`'s
+  denominator counts surviving rows and so becomes the distinct-identity count; the
+  empty-group check and coefficient zeroing already respect the mask. Soundness rests on
+  the `DETERMINES` check: every row of an identity carries the same value, so *which*
+  row survives cannot matter.
+- **The mask is per term, not per clause**, so `SUM(D: a * open) + sum(b * ship)` in one
   objective de-duplicates only the first term.
-- **Aggregate-local WHEN on a qualified reducer works on both sides, regardless of
-  WHEN/comparison order**: `SUM(D: expr) WHEN cond <= bound` and
-  `SUM(D: expr) <= bound WHEN cond` both bind and execute in constraints, matching the
-  objective side. This needed a grammar production, not a binder change — the binder's
-  `ContainsDecideAggregate`/`GetExpressionType` already unwrap `WHEN_CONSTRAINT` around a
-  qualified reducer correctly (proven by the objective side, which never had a trailing
-  comparison to lose). The grammar had no route to *produce* that shape for the
-  WHEN-before-comparison order: a qualified reducer is not a `func_application`, so it
-  couldn't take the `func_application WHEN_DECIDE decide_when_condition` production
-  aggregate-local WHEN already used, and fell instead to the loose, whole-constraint
-  `a_expr WHEN_DECIDE b_expr` production, which swallowed a trailing `<= bound` into the
-  WHEN condition. Fixed by adding a qualified-reducer-specific mirror of that production
-  (see Code Pointers below).
-- **Composed MIN/MAX carries the qualifier too.** `SUM(D: a * open) + MAX(b * ship)` routes
+- **A filter on the colon form** is written inside the reducer: `sum(when c per D: e)`.
+- **Composed MIN/MAX carries the key too.** `SUM(D: a * open) + max(b * ship)` routes
   through the composed path, which keeps its own term struct
-  (`ComposedMinMaxTerm::qualifier_scope_idx`, stamped by the optimizer from the same tag)
-  and ANDs the same mask into that term's filter mask. Objective and constraint are separate
-  code paths and both do it. Applied uniformly to every term kind rather than skipped for
-  `MIN`/`MAX`: it is provably a no-op there, so one code path beats a special case.
+  (`ComposedMinMaxTerm::qualifier_scope_idx` on `LogicalDecide`, stamped by the optimizer
+  from the same tag) and ANDs the same mask into that term's filter mask. Objective and
+  constraint are separate code paths and both do it. Applied uniformly to every term kind
+  rather than skipped for `MIN`/`MAX`: it is provably a no-op there, so one code path
+  beats a special case.
 - **`MIN`/`MAX` need no de-duplication.** Dropping repeats of a value already present
-  cannot move an extremum. The qualifier is accepted, carried, and has no effect for them.
-- **Several relations at once — `agg(D, T: expr)`.** The qualifier is a *list* of
-  relations, and the tuple identity is the concatenation of each named relation's own key,
-  so a row is a duplicate only when it repeats on every named key at once. Naming a
-  relation removes the fan-out it would otherwise contribute; a relation left unnamed still
-  contributes its fan-out uncollapsed. The body may draw columns and decisions from any of
-  the named relations. The list is order-independent — `FindOrCreateEntityScope`
-  canonicalizes it (sorted, case-insensitively) as the scope cache key, so `SUM(D, T: ...)`
-  and `SUM(T, D: ...)` share one scope and one `EntityMapping`. One consequence follows
-  directly: naming *every* relation the query joins is a no-op, since the composite key
-  already is the join-result row; the forms diverge only once some joined relation is left
-  out of the list. This is a binder-only change — the optimizer's `qualifier_scope_idx`
-  stamping, the prepared model's term structs and `BuildQualifierKeepMask` /
-  `BuildEntityMappings` all treat a scope as an opaque index into `entity_scopes` and did
-  not move. Details: `../../01_pipeline/02_binder/done.md` → "Relation-qualified reducers",
-  `../sql_functions/done.md` → "Several Relations at Once — A Composite Qualifier (Batch E)".
-- **A query-wide (`scalar`) decision is allowed inside a qualified reducer**, matching paper
-  §3.2.2's carve-out: it is row-invariant, so it contributes the same value to every tuple
+  cannot move an extremum. The key is accepted, carried, and has no effect for them.
+- **Several relations at once — `SUM(D, T: e)`.** The tuple identity is the
+  concatenation of each named relation's own key, so a row is a duplicate only when it
+  repeats on every named key at once. Naming a relation removes the fan-out it would
+  otherwise contribute; a relation left unnamed still contributes its fan-out
+  uncollapsed. The body may draw columns and decisions from any of the named relations.
+  The key is a set of columns sorted by binding, so `SUM(D, T: ...)`, `SUM(T, D: ...)` and
+  `sum(per D, T: ...)` share one scope and one `EntityMapping`. Naming *every* relation
+  the query joins is a no-op, since the composite key already is the join-result row; the
+  forms diverge only once some joined relation is left out of the list. Below the binder
+  — the optimizer's `qualifier_scope_idx` stamping, the prepared model's term structs and
+  `BuildQualifierKeepMask` / `BuildEntityMappings` — a scope is an opaque index into
+  `entity_scopes`. Details: `../../01_pipeline/02_binder/done.md` → "Relation-qualified
+  reducers", `../sql_functions/done.md` → "Several Relations at Once — A Composite
+  Qualifier".
+- **A query-wide (`per ()`) decision is allowed inside**, matching paper §3.2.2's
+  carve-out: it is row-invariant, so it contributes the same value to every tuple
   regardless of which relation owns it (`SUM(D: opening_cost * cap)`). It is refused only
-  when it is the *whole* body (`SUM(D: cap)`), by the general row-invariance rule above.
-- **EXPLAIN prints the qualifier.** `RenderAggregate` reads the qualified-reducer tag off
-  the aggregate's alias and prefixes the body with the scope's `table_alias`, so
-  `SUM(D: opening_cost * open)` and `SUM(opening_cost * open)` are distinguishable in a
-  plan. Unlike `WHEN` and `PER`, which the clause walker unwraps into postfix suffixes, the
-  qualifier sits *on* the aggregate rather than above it, so it is rendered by the
-  aggregate's own case rather than appended as a suffix.
-- **A row-scoped decision inside a qualified reducer is rejected, and stays rejected**
-  (settled 2026-08-26). A row-scoped `y(INT)` is a different variable on every
-  join-result row, so collapsing a depot's rows down to one would keep an arbitrary one
-  of its `y` variables and silently drop the rest — the answer would depend on the row
-  order the join happened to produce. The error names both one-word fixes: declare it on
-  the qualified relation (`D.y(INT)`), or move the term into its own unqualified reducer.
-  Two alternatives were weighed and ruled out. Summing a group's row-scoped variables
-  before de-duplicating is well defined, but makes `D:` mean "de-duplicate" for one
-  operand and "sum first" for another. Allowing it when the join happens to be 1:1 would
-  make a query's validity depend on its data rather than on the query — already rejected
-  for `PER` on the same grounds.
-- **Rejections** (all at bind time, in `BindQualifiedReducer` /
-  `CheckQualifiedReducerBody`): a column or entity-scoped decision from a relation *not*
-  named in the qualifier, a row-scoped decision, a decision declared with `per` (D10;
-  D13 keeps it until item 7 of `09_anr_language`, and `sum(per D: e)` takes one), an
-  unknown relation name, a qualifier on a
-  non-`SUM`/`AVG`/`MIN`/`MAX` function, and a row-invariant body.
-- Tests: `test/decide/tests/test_qualified_reducer.py`.
+  when it is the *whole* body on the decision side (`SUM(D: cap)`), by the row-invariance
+  rule every reducer takes (`ClassifyReducerCall`).
+- **EXPLAIN prints the colon form as written** (D38). `RenderReducer` prints `sum(D: e)`
+  for an aggregate tagged `COLON_FORM_TAG` and `sum(per D: e)` otherwise; a shared scope
+  keeps the key text of the spelling bound first.
+- **What `D` does not determine is refused when the query runs**, as for
+  `sum(per D: e)`: a column of another relation, a per-row decision (a different
+  variable on every joined row, so collapsing a depot's rows would keep an arbitrary
+  one), a keyed decision whose key `D` does not determine (*"DECIDE: per D does not
+  determine the decision y (in sum(D: ...)). ..."*, naming the class).
+- **Refused at bind time** (`BindQualifiedReducer`): a qualifier that is not a relation
+  name, an unknown relation name, a qualifier on a non-`SUM`/`AVG`/`MIN`/`MAX` function
+  (*"DECIDE: norm(D: ...) is not supported yet; a relation qualifier takes SUM, AVG, MIN
+  or MAX"*), and a body of query-wide decisions alone.
+- Tests: `test/decide/tests/test_qualified_reducer.py`, `test_scope_reducer_inner.py`.
 
-### Code Pointers — qualified reducers
+### Code Pointers — the colon form
 
-- **Grammar**: `third_party/libpg_query/grammar/statements/select.y`, `c_expr` alternative
-  `func_name '(' func_arg_list ':' func_arg_list ')'`. The qualifier is parsed as an
-  argument list, not a dedicated name list: `sum(D, T: e)` and `sum(a, b)` share a prefix
-  that LALR(1) cannot separate at the comma, so both sides are read as argument lists and
-  the qualifier's shape is checked in the C action. The decision point becomes `:` vs `)`
-  after a completed `func_arg_list`, which is conflict-free.
-  A second alternative, `func_name '(' func_arg_list ':' func_arg_list ')' WHEN_DECIDE
-  decide_when_condition`, mirrors `func_application WHEN_DECIDE decide_when_condition` so
-  a qualified reducer followed directly by `WHEN` also takes the tight aggregate-local-WHEN
-  route instead of the loose whole-constraint one; the qualifier validation is duplicated
-  inline rather than factored into a shared helper (bison actions can't call each other and
-  this file has no C prologue to hang one on — the file already accepts this style of
-  duplication elsewhere). The plain qualified-reducer production has explicit
-  `DECIDE_ITEM` precedence, so `WHEN_DECIDE` shifts into this alternative without adding an
-  expected conflict. The grammar's total conflict budget is `%expect 6`.
+- **Grammar**: `third_party/libpg_query/grammar/statements/select.y`, `c_expr` alternatives
+  `func_name '(' func_arg_list ':' func_arg_list ')' [decide_by]` (`makeQualifiedReducer`).
+  The qualifier is parsed as an argument list, not a dedicated name list: `sum(D, T: e)`
+  and `sum(a, b)` share a prefix that LALR(1) cannot separate at the comma, so both sides
+  are read as argument lists and the qualifier's shape is checked in the C action. The
+  decision point becomes `:` vs `)` after a completed `func_arg_list`, which is
+  conflict-free. A scope inside a reducer (`func_name '(' decide_scope ':' ...`) starts
+  with `when` or `per`, so the two never compete.
 - **Parse node**: `PG_AEXPR_QUALIFIED_REDUCER` (`parsenodes.hpp`) →
   `QUALIFIED_REDUCER_TAG` FunctionExpression (`transform_operator.cpp`), shaped
-  `tag(aggregate, relation_name)` exactly like the aggregate-local WHEN tag.
-- **Parsed-tree rewriting**: none. A qualified reducer reaches the binder exactly as
-  written; nothing rewrites a constraint before binding. `DecideCanonicalizer` needs no
-  protection for the tag either: it sits on a term, and the pass never opens a term.
-- **Binder**: `DecideBinder::BindQualifiedReducer` resolves the relation, enforces
-  well-formedness, and stamps `MakeQualifiedReducerTag(scope_idx)` on the bound aggregate's
-  `alias`. `DecideQualifierContext` (`decide_binder.hpp`) carries what it needs from
-  `bind_select_node.cpp`, which is still filling `entity_scopes` at that point.
-- **Alias tags are now composable** (`common/enums/decide.hpp`): `AddDecideTag`,
-  `HasDecideTag`, `ExtractDecideTagPayload`. A qualified `AVG` is tagged twice — once by
-  the binder, once by the AVG→SUM rewrite — so tags concatenate and are matched by search
-  rather than equality. The AVG and MIN/MAX indicator readers were converted accordingly.
-- **Term plumbing**: `qualifier_scope_idx` on `Term`, `BilinearConstraintTerm`,
-  `QuadraticGroup` and `Objective::BilinearTerm` (`physical_decide.hpp`), stamped by
-  `ApplyAggregateMetadata` / `QualifierScopeOf`.
+  `tag(aggregate, relation_name...)`.
+- **Parsed-tree rewriting**: none. The reducer reaches the binder exactly as written.
+  `DecideCanonicalizer` needs no protection for the tag either: it sits on a term, and the
+  pass never opens a term.
+- **Binder**: `DecideBinder::BindQualifiedReducer` resolves the relations to an exact key
+  scope and appends `MakeQualifiedReducerTag(scope_idx)` and `COLON_FORM_TAG` to the bound
+  aggregate's `alias`; `BindScopedReducer` appends the same scope tag for
+  `sum(per D: e)`. `DecideQualifierContext` (`decide_binder.hpp`) carries what they need
+  from the declarations binder, which is still filling `entity_scopes` at that point.
+- **Alias tags are composable** (`common/enums/decide.hpp`): `AddDecideTag`,
+  `HasDecideTag`, `ExtractDecideTagPayload`. A keyed `AVG` is tagged by the binder and
+  again by the AVG→SUM rewrite, so tags concatenate and are matched by search rather than
+  equality.
+- **Term plumbing**: `qualifier_scope_idx` on `DecideTerm`, `BilinearConstraintTerm`,
+  `QuadraticGroup` and the objective's `BilinearTerm` (`decide_prepared_model.hpp`),
+  stamped by `ApplyAggregateMetadata` / `QualifierScopeOf` (`decide_linear_form.cpp`).
 
 ## Linearity / Non-Linearity
 
@@ -180,12 +178,11 @@ Linear expressions are always supported; bilinear (`x * y`) and quadratic (`POWE
 
 - **Grammar**: `third_party/libpg_query/grammar/statements/select.y`
   - `variable_type: INT_P | REAL | BOOL_P`  (the type is mandatory)
-  - `typed_decide_variable: ColId '(' variable_type ')' | ColId '.' ColId '(' variable_type ')'`
-  - Four further productions exist only to reject the removed spellings (bare
-    `x`, and `x(INT)`) with a message naming the fix
-  - `typed_decide_variable_list: typed_decide_variable | list ',' typed_decide_variable` (includes table-qualified syntax)
-- **Binder** (variable processing loop, type mapping): `src/planner/binder/query_node/bind_select_node.cpp`
-  - REAL → `LogicalType::DOUBLE`, BOOL/INT → `LogicalType::INTEGER` (the DuckDB-facing type — kept INTEGER even for `BOOL` so the variable can appear in arithmetic like `x * weight`, which BOOLEAN cannot implicitly cast into)
+  - `typed_decide_variable: ColId '(' variable_type ')' | decide_per ':' ColId '(' variable_type ')'` — the keyed form wraps the name in the `SCOPE_PER_TAG` marker (`applyDecideScope`)
+  - Further alternatives exist only to raise a message naming the fix: a declaration with no type (`x`, `per K: x`), the `x IS INTEGER` form, and the declaration spellings the language refuses (`syntax_reference.md` §10.3)
+  - `typed_decide_variable_list: typed_decide_variable | list ',' typed_decide_variable`
+- **Binder** (variable processing loop, scopes, type mapping): `DecideDeclarationsBinder::BindDeclarations` in `src/planner/expression_binder/decide/decide_declarations_binder.cpp` (the DECIDE section of `bind_select_node.cpp` only calls it)
+  - REAL → `LogicalType::DOUBLE`, INT → `LogicalType::BIGINT`, BOOL → `LogicalType::INTEGER` (the DuckDB-facing type — INT is 64-bit because nothing bounds a decision to int32; BOOL stays INTEGER so the variable can appear in arithmetic like `x * weight`, which BOOLEAN cannot implicitly cast into)
   - Boolean type detected via `type_marker == "bool_variable"` and recorded in `is_boolean_var[i]` — the domain signal, independent of the DuckDB type above
   - `is_boolean_var` carries the `[0,1]` domain from here through `LogicalDecide` to `PhysicalDecide`; nothing is synthesized into the `SUCH THAT` tree for it (see below)
 - **ILP model builder** (variable type handling): `src/decidb/formulation/ilp_model_builder.cpp`
@@ -197,8 +194,9 @@ Linear expressions are always supported; bilinear (`x * y`) and quadratic (`POWE
 - **Every BOOLEAN-domain variable's `[0,1]` box is applied directly to the solver column, never synthesized as a constraint.** This covers user-declared `x(BOOL)` (DuckDB type INTEGER) exactly like it covers optimizer-created auxiliaries with a real `LogicalType::BOOLEAN` type (MIN/MAX indicators, NE indicators) and INTEGER-typed auxiliaries that need to participate in arithmetic (IN-domain, L0 indicators): `PhysicalDecide::Finalize` (`physical_decide.cpp`) reports `LogicalType::BOOLEAN` to `SolverInput::variable_types` for any variable where `is_boolean_var[var]` is true, regardless of its DuckDB-facing type, and the ILP model builder's type-driven bounds above take it from there. `is_boolean_var` is the single authoritative domain signal end to end; `TraverseBoundsConstraints` in `physical_decide.cpp` only ever absorbs genuine user-written bound constraints (`x <= 10`, `BETWEEN`, an explicit BOOLEAN pin like `x = 1`), never the domain itself.
 - **Solver backends**: HiGHS `!is_integer → kContinuous` (`deterministic_naive.cpp`); Gurobi `!is_integer && !is_binary → GRB_CONTINUOUS` (`gurobi_solver.cpp`)
 - **Physical execution** (DOUBLE output path): `physical_decide.cpp` — returns raw `double` solution values for REAL vars
-- **Table-scoped variables**:
-  - `EntityScopeInfo` struct: `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — table alias + entity column indices per scoped variable
-  - `VarIndexer`: `src/include/duckdb/decidb/formulation/ilp_model.hpp` — maps entity keys to solver variable indices, deduplicating across result rows
-  - Entity mapping (Phase 1.5): `src/execution/operator/decide/physical_decide.cpp`
+- **Keyed variables**:
+  - `EntityScopeInfo` struct: `src/include/duckdb/planner/operator/decide/logical_decide.hpp` — the key as written (`table_alias`), its column bindings and types, the relations it reads (`source_table_indices`), the decisions declared on it (`scoped_variable_indices`)
+  - `FindOrCreateKeyScope` / `FindOrCreateExactScope`: `src/planner/expression_binder/decide/decide_binder.cpp` — resolve a key and share one scope per key
+  - `VarIndexer`: `src/include/duckdb/decidb/formulation/ilp_model.hpp` — maps class ids to solver variable indices, de-duplicating across result rows
+  - Class mapping (Phase 1.5, `BuildEntityMappings`): `src/execution/operator/decide/physical_decide.cpp`
   - Physical index resolution: `src/execution/physical_plan/plan_decide.cpp`

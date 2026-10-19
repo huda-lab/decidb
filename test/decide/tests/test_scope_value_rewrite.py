@@ -1,4 +1,5 @@
-"""The value rewrite (anr_language_extension.md §4.3, todo.md §4.2, item 5).
+"""The value rewrite (syntax_reference.md §6.4; 01_pipeline/05_optimizer/done.md, "The
+value rewrite").
 
 A scoped constraint whose decision side mixes a reducer with something a grouped row
 cannot hold -- a per-row or keyed decision beside it, a factor that varies by row, a second
@@ -6,7 +7,7 @@ cannot hold -- a per-row or keyed decision beside it, a factor that varies by ro
 reducer: one instance per `by` group, defined once (an equality row for SUM/AVG, an
 extremum link for MIN/MAX) and used by one row per class. Deck examples 1, 5 and 8 are this
 shape. The helper is whole-numbered when the reducer is, so `<`, `>` and `<>` keep working;
-it may be negative; a product of decisions inside such a reducer stays refused (§12).
+it may be negative; a product of decisions inside such a reducer is refused (§10.2).
 
 Every optimum is judged against `_scope_oracle.ScopedModel`, which follows the ANR
 definition literally; model sizes are read from DECIDB_DUMP_MODEL.
@@ -558,12 +559,30 @@ def test_the_model_grows_linearly(decidb_cli, tmp_path):
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_a_product_of_decisions_inside_a_rewritten_reducer_is_refused(decidb_cli):
-    """Spec §12: a square inside a reducer is accepted only in the aggregate shape."""
+    """§10.2: a square inside a reducer is accepted only in the aggregate shape."""
     result = decidb_cli.execute_raw(_ship_query("ship <= 0.5 * sum(ship * ship) by (D.region)"))
     assert ("DECIDE: 'sum(ship * ship)' is not supported yet in this constraint: a product or square of "
             "decisions inside a reducer is accepted only where the constraint's reducers share one by key, "
-            "under a whole-query factor, with no other decision beside them") in result.stderr, result.stderr
+            "under a whole-query factor, with nothing beside them but data and query-wide decisions, each on "
+            "its own") in result.stderr, result.stderr
     assert_no_internal_leak(result, "a product inside a rewritten reducer")
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("op, why", [
+    (">", "stepping the bound is exact only on whole numbers. Compare with '>=' instead."),
+    ("<>", "the rewrite (x <> K becomes x <= K-1 OR x >= K+1) is exact only on whole numbers. Compare with "
+           "'<=' or '>=' instead."),
+])
+def test_a_helper_that_can_be_fractional_takes_no_step(decidb_cli, op, why):
+    """The helper holds the reducer's whole value, `sum(ship + 0.5)` included, so `<`, `>`
+    and `<>` cannot step it; summed in place (the aggregate shape) the constant would move
+    to the bound instead. `>=` answers."""
+    result = decidb_cli.execute_raw(_ship_query(f"ship + sum(ship + 0.5) by (D.region) {op} 40"))
+    assert (f"Comparison '{op}' is not supported here: 'sum(ship + 0.5) by (D.region)' can take fractional "
+            f"values in this constraint, and {why}") in result.stderr, result.stderr
+    assert_no_internal_leak(result, "a fractional helper under a step")
+    assert decidb_cli.execute(_ship_query("ship + sum(ship + 0.5) by (D.region) >= 40"))[0]
 
 
 @pytest.mark.error

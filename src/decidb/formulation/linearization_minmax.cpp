@@ -306,20 +306,19 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             outer.sense = is_max_agg ? '>' : '<';
             outer.rhs = clause_bound;
             // A strict relation over whole-numbered members -- the bind-time gate's
-            // guarantee for the scope spellings, a constant inside the extremum included
-            // -- is the next value on the lattice, as `ApplyComparisonSense` states it for
-            // every other row.
+            // guarantee, a constant inside the extremum included -- is the next value on
+            // the lattice, as `ApplyComparisonSense` states it for every other row.
             bool greater = ec.comparison_type == ExpressionType::COMPARE_GREATERTHAN;
-            if (ec.scoped && (greater || ec.comparison_type == ExpressionType::COMPARE_LESSTHAN)) {
+            if (greater || ec.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
                 outer.rhs = greater ? std::floor(clause_bound) + 1.0 : std::ceil(clause_bound) - 1.0;
                 outer.strict = true;
                 outer.typed_k = clause_bound;
             }
             outer.kind = ConstraintKind::USER_PARAMETER;
-            // The elastic shape, without which this row does not fold. One `PER` clause
+            // The elastic shape, without which this row does not fold. One grouped clause
             // emits one of these per group, and they are all the same line of SQL: the
             // user edits a single literal and every group moves with it. Left UNSET they
-            // never fold, so an infeasible `MAX(e) >= K PER g` reported one edit per group
+            // never fold, so an infeasible `per g: max(e) by (g) >= K` reported one edit per group
             // — and only the loosest of them repaired anything. A genuinely per-group
             // bound stays PER_ROW_DATA and reports a virtual offset, as it does elsewhere.
             outer.shape = ec.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR
@@ -329,7 +328,6 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             outer.repair_group_id = ec.repair_group_id;
             outer.removal_group_id = ec.removal_group_id;
             outer.group_key = ec.row_group_ids.empty() ? DConstants::INVALID_INDEX : g;
-            outer.qualifier = ec.qualifier;
             outer.is_aggregate = true;
             if (g < ec.group_labels.size()) {
                 outer.group_label = ec.group_labels[g];
@@ -489,7 +487,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                               NativeConstructPolicy native_min_max) {
     idx_t num_rows = input.num_rows;
 
-    // Save objective data (needed for constraint generation in the PER MIN/MAX
+    // Save objective data (needed for constraint generation in the two-level MIN/MAX
     // and flat aggregate paths). Defer the deep copy of objective_coefficients
     // — which is a vector<vector<double>> sized num_terms * num_rows — until
     // we know we'll take one of those paths.
@@ -598,7 +596,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     //! at a composed site where the clause sits in a constraint and neither is supplied.
     //!
     //! `family` is the range the MEMBERS of this link reduce over, and it is a parameter
-    //! rather than `row_family()` because the outer PER link reduces over group SUMS, not
+    //! rather than `row_family()` because the two-level form's outer link reduces over group SUMS, not
     //! over rows. Both the Big-M and the blame column come from it, so a link can never
     //! be scaled off one family while its members live in another.
     auto objective_link = [&](idx_t result_column, bool is_max, bool is_easy,
@@ -617,7 +615,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     // Accumulate one row of the saved objective expression into `link`, negated:
     // the linking row is `z - expr op bound`, so the expression's coefficients
     // enter with the opposite sign and its constant part lands on the bound.
-    // `scale` carries the inner-AVG 1/n_g factor at the PER sites; 1.0 elsewhere.
+    // `scale` carries the inner-AVG 1/n_g factor at the two-level sites; 1.0 elsewhere.
     auto AddObjectiveRowTerms = [&](MinMaxLinkRow &link, idx_t row, double scale) {
         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
             double coeff = saved_obj_coefficients[t].Get(row) * scale;
@@ -636,7 +634,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     if (spec.per_inner_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty() &&
         input.objective_num_groups > 0) {
         // ================================================================
-        // PATH B: PER objective with nested OUTER(INNER(expr)) aggregate
+        // PATH B: two-level objective outer(per k: inner(e) by (k))
         // ================================================================
         idx_t K = input.objective_num_groups;
         auto &row_groups = input.objective_row_group_ids;
@@ -676,11 +674,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                     AddGlobalContinuousAux(input, indexer, row_family(), 0.0); // obj set by outer phase
             }
 
-            // Build a per-group active-rows CSR: drop rows whose every term coefficient
-            // is zero. Mirrors PATH A's active_rows pre-filter (lines below). Without it
-            // the easy path emits vacuous z_g op 0 rows and the hard path allocates an
-            // indicator binary plus a Big-M row for each, then references them in the
-            // sum_y >= 1 constraint — all wasted on rows that contribute nothing.
+            // Build a per-group CSR of the member rows: the rows the inner reducer reads,
+            // whatever their coefficients. Mirrors PATH A's active_rows.
             vector<idx_t> active_offsets(K + 1, 0);
             vector<idx_t> active_flat_rows;
             active_flat_rows.reserve(obj_flat_rows.size());
@@ -688,20 +683,9 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 active_offsets[g] = active_flat_rows.size();
                 for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
                     idx_t row = obj_flat_rows[k];
-                    if (!spec.member_rows.empty()) {
-                        if (spec.member_rows[row]) {
-                            active_flat_rows.push_back(row);
-                        }
-                        continue;
+                    if (spec.member_rows[row]) {
+                        active_flat_rows.push_back(row);
                     }
-                    bool has_nonzero = false;
-                    for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                        if (std::abs(saved_obj_coefficients[t][row]) >= 1e-15) {
-                            has_nonzero = true;
-                            break;
-                        }
-                    }
-                    if (has_nonzero) active_flat_rows.push_back(row);
                 }
             }
             active_offsets[K] = active_flat_rows.size();
@@ -827,76 +811,39 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
                     AddObjectiveRowTerms(member.link, obj_flat_rows[k], scale);
                 }
-                // On the envelope side a group that is identically zero contributes a
-                // vacuous `w op 0` row, which the outer optimization direction settles on
-                // its own. The closing side cannot drop it: there every group is a real
-                // member of the extremum, and an all-zero one participates as the
-                // constant 0 it is. A group left holding only a constant still bounds w
-                // either way, so it stays.
-                if (spec.member_rows.empty() && outer_easy && member.link.HasNoColumns() &&
-                    std::abs(member.link.constant) < 1e-15) {
-                    continue;
-                }
                 // Boxed by the family over group sums — looser than a per-group bracket,
                 // but sound (it covers every group) and finite whenever any of them is.
                 // The same range `w` itself was boxed by, so the two cannot drift.
                 member.range = group_sum_family;
                 members.push_back(std::move(member));
             }
-            if (members.empty()) {
-                // Every group is identically zero — pin w to 0 so outer optimization
-                // doesn't push the otherwise-unconstrained w to ±∞.
-                PinGlobalAux(input, indexer, w_idx, 0.0);
-            } else {
-                // The members ARE the group sums, so the Big-M comes from the family
-                // over group sums — the same range `w` and every member is boxed by. It
-                // used to be the per-row span multiplied by the row count, which is a
-                // different family and a bound on it rather than a measurement of it.
-                EmitExtremumLink(input, indexer,
-                                 objective_link(w_idx, !outer_is_min, outer_easy,
-                                                group_sum_family),
-                                 members, var_names, native_min_max);
-            }
+            // Every group is a member, whatever its coefficients. The members ARE the
+            // group sums, so the Big-M comes from the family over group sums — the same
+            // range `w` and every member is boxed by.
+            EmitExtremumLink(input, indexer,
+                             objective_link(w_idx, !outer_is_min, outer_easy, group_sum_family), members,
+                             var_names, native_min_max);
         }
     } else if (spec.flat_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty()) {
         // ================================================================
-        // PATH A: Non-PER flat MIN/MAX objective (existing behavior)
+        // PATH A: flat MIN/MAX objective
         // ================================================================
         bool is_min_agg = (spec.flat_agg == ObjectiveAggregateType::MIN_AGG);
         bool is_easy = spec.flat_is_easy;
 
-        // Compute active rows: pass WHEN, and have at least one nonzero coefficient.
-        // - Easy path: skipping inactive rows just avoids vacuous linking constraints
-        //   (the existing code already skipped zero coefficients individually, but still
-        //   emitted an empty linking row).
-        // - Hard path: this also reduces the number of indicator binaries and the size
-        //   of the SUM(y) >= 1 constraint sent to the solver.
+        // The active rows are the reducer's members: the rows it reads, whatever their
+        // coefficients. The easy path pins z against each; the hard path also gives each
+        // an indicator binary and a place in the SUM(y) >= 1 row.
         vector<idx_t> active_rows;
         active_rows.reserve(num_rows);
         for (idx_t row = 0; row < num_rows; row++) {
-            if (!spec.member_rows.empty()) {
-                if (spec.member_rows[row]) {
-                    active_rows.push_back(row);
-                }
-                continue;
-            }
-            if (spec.has_when && !spec.when_mask[row]) continue;
-            bool has_nonzero = false;
-            for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                if (std::abs(saved_obj_coefficients[t].Get(row)) >= 1e-15) {
-                    has_nonzero = true;
-                    break;
-                }
-            }
-            if (has_nonzero) {
+            if (spec.member_rows[row]) {
                 active_rows.push_back(row);
             }
         }
         if (active_rows.empty()) {
-            throw InvalidInputException(
-                "MIN/MAX objective has no active rows after WHEN filtering and zero-coefficient "
-                "elimination. The auxiliary variable would have no pinning constraints, "
-                "making the optimization unbounded or vacuous.");
+            // The scope checks refuse an objective reducer that reads no row (D4, D8).
+            throw InternalException("DECIDE: a MIN/MAX objective reached formulation with no member row");
         }
 
         // z is the extremum over the objective's rows, so the per-row family boxes it.
@@ -949,7 +896,7 @@ static void AddComposedRowTerms(const VarIndexer &indexer, MinMaxLinkRow &link,
 //! so the two can never disagree about the term's reach.
 //!
 //! A term admitting no rows yields the seeded [0,0], which pins its auxiliary at 0 —
-//! the same settlement the PER sites give a group with no active rows, and better than
+//! the same settlement the two-level sites give a group with no active rows, and better than
 //! letting an auxiliary with no pinning rows float on the outer pressure.
 static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideTerm> &inner_terms,
                                   const vector<vector<double>> &per_term_coefs,
@@ -1130,13 +1077,12 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
     }
     // A strict relation over whole-numbered terms (the bind-time gate's guarantee) is the
     // next value on the lattice, as `ApplyComparisonSense` states it for every other row.
-    bool step_strict = !terms.empty() && terms.front().scoped;
     switch (outer_cmp) {
     case ExpressionType::COMPARE_LESSTHANOREQUALTO:
     case ExpressionType::COMPARE_LESSTHAN:
         outer.sense = '<';
         outer.rhs = outer_rhs;
-        if (step_strict && outer_cmp == ExpressionType::COMPARE_LESSTHAN) {
+        if (outer_cmp == ExpressionType::COMPARE_LESSTHAN) {
             outer.rhs = std::ceil(outer_rhs) - 1.0;
             outer.strict = true;
             outer.typed_k = outer_rhs;
@@ -1146,7 +1092,7 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
     case ExpressionType::COMPARE_GREATERTHAN:
         outer.sense = '>';
         outer.rhs = outer_rhs;
-        if (step_strict && outer_cmp == ExpressionType::COMPARE_GREATERTHAN) {
+        if (outer_cmp == ExpressionType::COMPARE_GREATERTHAN) {
             outer.rhs = std::floor(outer_rhs) + 1.0;
             outer.strict = true;
             outer.typed_k = outer_rhs;

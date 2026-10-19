@@ -3,7 +3,7 @@
 
 Real joins produce *heterogeneous* per-row / per-group RHS, which is what makes
 the interesting diagnostic branches fire naturally: only some rows escape
-(row-scoped unbounded), only some PER groups are infeasible (per-group loosen),
+(row-scoped unbounded), only some `per` groups are infeasible (per-group loosen),
 per-row data conflicts. These cases were surfaced by a Phase-0 exploration over
 `decidb.db` (the TPC-H CLI fixture DB).
 

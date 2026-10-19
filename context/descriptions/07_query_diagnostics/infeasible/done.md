@@ -101,14 +101,16 @@ from `constraint_sources` in the same spelling the diagnosis uses. The error is 
 between backends: a vacuous infinity pairs cleanly with the sentinel and solves on both.
 
 **Output shape.** One finding per clause with `edit_source='unreachable_bound'`;
-`clause` names the clause, `group` carries its PER key when present, and
-`suggested_change` explains that the bound must be lowered because no assignment can
-reach it. `amount` and `row` are NULL because there is no finite repair magnitude. A
-clause fans into one model row per relation row, all rendering the same text, so findings
-are de-duplicated on `(label, group)` — the user wrote one clause and reads one finding. Clause text comes
-from the same `MakeClauseLabel` the elastic edits use (factored out of `MakeLoosenEdit`), so
-a pre-solve finding and a post-solve edit name a clause identically, PER/WHEN qualifier
-included.
+`clause` names the clause and `suggested_change` explains that the bound must be lowered
+because no assignment can reach it. `amount` is NULL because there is no finite repair
+magnitude. A clause with a `per` key reports once per class it names, the key value in
+`group`, in either scope; one with no `per` key reports once in the `query` scope and
+once per kept row (`row`) in the `expanded` one (`FanOutByClass`, below). A clause fans
+into one model row per relation row, all rendering the same text, so findings are
+de-duplicated on `(label, group, row)` — the user wrote one clause and reads one
+finding, or one per class. Clause text comes from the same `MakeClauseLabel` the elastic
+edits use (factored out of `MakeLoosenEdit`), so a pre-solve finding and a post-solve
+edit name a clause identically, its `when c per K:` qualifier included.
 
 ## Elastic engine: stage-1 core (simple shapes) + elastic-infeasible signal
 
@@ -134,37 +136,37 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
 `Expression` types, so the work splits across the I0 boundary:
 
 - **Operator (`physical_decide.cpp`).** Knows the `Expression`s and the sink state, so it
-  handles **absorbed bounds (decision 1a)**. A user `x <= 10` / `x BETWEEN a AND b` is
-  pre-absorbed into the column-bound arrays (never a row), so it carries no provenance and
-  the row-based engine can't see it. `TraverseBoundsConstraints` now also records each
-  absorbed user bound as a `UserBoundSpec {decide_var_idx, sense, k}` (COMPARISON → one
-  spec; **BETWEEN → two**, the previously-untracked side now captured). In the
-  `DiagnosisTerminal::INFEASIBLE` arm, for each spec the operator appends a `USER_PARAMETER`
-  row (`coeff 1·x sense k`) to the retained model and **relaxes the rigid column bound** for
-  that direction (to ±1e30) so the bound is enforced only by the loosenable row. A bound on a
-  **multi-instance** variable fans into one row per instance under a single synthetic
-  `clause_id`, shape `SHARED_SCALAR`, so the engine collapses them to one shared slack (the
-  knob is one literal `K` → report the max overshoot — **I2.a**). Single-instance is the N=1
-  case. Default non-negativity (`lower = 0`) and the BOOLEAN `0/1` box stay rigid: a BOOLEAN
+  handles **absorbed bounds (decision 1a)**. A user `x <= 10` / `x BETWEEN a AND b`, or an
+  easy `max(x) <= 10` with no `when` and no reducer filter (D41), is folded into the
+  column box by `DecideOptimizer::AbsorbVariableBounds` (`decide_bound_absorption.cpp`)
+  and becomes no row of the solved model, so on its own the row-based engine could not
+  see it. The pass records each absorbed bound as a `UserBoundSpec {decide_var_idx, sense,
+  k, strict, typed_k, source_clause_id, removal_group_id}` (a comparison → one spec, a
+  `BETWEEN` → two) and tags its comparison `ABSORBED_CLAUSE_ROWS_TAG` beside
+  `ABSORBED_BOUND_TAG`. Stage 05's linear form flattens such a clause aside
+  (`DecidePreparedModel::absorbed_constraints`, one per recorded bound, which it
+  asserts); execution evaluates those clauses under `DIAGNOSE` only, numbered after the
+  prepared clauses, and only the repair model carries their rows: one per kept row, or one
+  per class under a `per K:` key, each `USER_PARAMETER` and, for a literal bound,
+  `SHARED_SCALAR`. In the `query` scope the rows of one bound share one slack (the knob is
+  one literal `K` → report the max overshoot — **I2.a**); in the `expanded` scope each
+  kept row or class reports its own (D28). `OpenElasticColumnBox` then widens the column
+  in each absorbed direction, so the bound is enforced only by its loosenable rows.
+  Default non-negativity (`lower = 0`) and the BOOLEAN `0/1` box stay rigid: a BOOLEAN
   variable's domain is applied directly to the solver column by `PhysicalDecide::Finalize`
   (never synthesized as `x >= 0` / `x <= 1` constraints — its runtime DuckDB type is still
   INTEGER, so it participates in arithmetic, but its *solver-facing* type is reported as
   BOOLEAN from `op.is_boolean_var` alone). Since the domain is never a constraint node,
-  `TraverseBoundsConstraints` only ever sees one here if the user wrote it themselves; it
-  consults `op.is_boolean_var` (threaded from `LogicalDecide`) and skips recording a BOOLEAN
-  bound **only when it merely restates the domain** (an upper
-  `>= 1` or a lower `<= 0` after integer-strict normalization). A genuine BOOLEAN **pin**
-  (`x <= 0`, `x >= 1`, `x = 1`) IS recorded and re-emitted like any other user bound — its
-  column is opened only back to the intrinsic `[0,1]` (never to ±1e30), so the pin becomes
-  loosenable while the 0/1 domain itself stays rigid. (Erasing pins wholesale made the
-  elastic model diverge from the user's query: silently missing diagnoses, or edits that
-  left the real query infeasible.) Reversed user bounds such as `5 >= x` are flipped by
-  `DecideCanonicalizer` before this pass, so they follow the same absorption and re-emission
-  path as `x <= 5`. (Until the canonicalization refactor the constraint binder flipped them first, at
-  the parsed level; that duplicate was deleted and the canonicalizer's own mirror branch is
-  now the only thing that swaps a comparison's sides.) `has_unhandled_user_bounds` is now computed for real by the re-emission
-  loop: it turns `true` only if a recorded bound's column is missing from the retained model
-  (expected never in practice), keeping the elastic-infeasible verdict honest.
+  absorption only ever sees one if the user wrote it; it skips recording a BOOLEAN bound
+  **only when it merely restates the domain** (an upper `>= 1` or a lower `<= 0` after
+  integer-strict normalization, `ShouldRecord`). A genuine BOOLEAN **pin** (`x <= 0`,
+  `x >= 1`, `x = 1`) IS recorded and reaches the repair model like any other user bound —
+  its column opens only back to the intrinsic `[0,1]`, so the pin becomes loosenable while
+  the 0/1 domain itself stays rigid. (Erasing pins wholesale would make the elastic model
+  diverge from the user's query: silently missing diagnoses, or edits that leave the real
+  query infeasible.) Reversed user bounds such as `5 >= x` are flipped by
+  `DecideCanonicalizer` before absorption, so they follow the same path as `x <= 5` and
+  are reported as `x <= 5`.
 - **Engine (`decide_diagnostic_engines.cpp`, `DiagnoseInfeasible`).** Pure model math.
   Copies the model, clears the user objective for the repair passes (zeroes linear objective,
   drops the quadratic objective, `maximize=false`), and adds a slack to every relaxable **linear**
@@ -180,24 +182,24 @@ stage 1E:  E* = min Σ αᵢ s_edit    subject to D ≤ D*, fixed G
 
 **Reading the result.** On `OPTIMAL`, every slack above `DIAGNOSTIC_RAY_EPSILON` is an
 edit; the amount is the slack value (`=` reports the net `s⁺ − s⁻`). Each clause is labelled
-by reconstructing its algebra from the **original** row's coefficients over user-facing
-column names (`BuildColumnProvenance`) — `x <= 5` → suggestion `x <= 10` — so no source
-expression text needs threading. `BuildInfeasibleDiagnostic` emits one finding per edit:
-`clause` = the clause as written, plus `suggested_change`, `amount`,
-`edit_source`, and `group`. (Before batch H this was several EAV rows per edit under a
+from the source registry when the clause has an entry there (`SourceAwareLhs`: the written
+spelling when canonicalization moved a term across the comparison, else the canonical one,
+both in the plan-style echo), and otherwise by reconstructing its algebra from the
+**original** row's coefficients over user-facing column names (`BuildColumnProvenance`) —
+`x <= 5` → suggestion `x <= 10`. `BuildInfeasibleDiagnostic` emits one finding per edit:
+`clause` = the clause as written, plus `suggested_change`, `amount`, `edit_source`, `group`
+and `row`. (Before batch H this was several EAV rows per edit under a
 `subject_kind='clause'` subject, alongside a one-line stderr summary; the summary is gone
-and the rows collapsed into one.) How a fanout clause (data RHS, PER aggregate) reads back
+and the rows collapsed into one.) How a fanout clause (data RHS, `per` aggregate) reads back
 is governed by the slack-scope pragma — see "Slack-scope policy: query vs expanded" below.
 
 **Elastic-infeasible signal.** If the elastic program is *itself* infeasible, the conflict
 reaches rigid rows → `BuildElasticInfeasibleDiagnostic` renders a distinct outcome: one
 finding, `edit_source='rigid_conflict'`, naming no clause and saying that loosening your
-SUCH THAT limits cannot fix it. This is claimed **only** when every user constraint was actually made
-relaxable: the `has_unhandled_user_bounds` flag (set when the operator absorbed a user bound it
-could not re-emit) suppresses the rigid-conflict verdict rather than wrongly declaring the
-query unfixable. The operator then returns an `undiagnosed` finding. As of I2.a multi-instance bounds *are* re-emitted, so the
-flag stays `false` in practice and remains as a defensive guard. Likewise, when there are no
-relaxable rows at all, the engine returns invalid and the operator reports `undiagnosed`.
+SUCH THAT limits cannot fix it. The verdict is honest because every user constraint is
+relaxable in the repair model, absorbed bounds included (their clause rows, above). When
+there are no relaxable rows at all, the engine returns invalid and the operator reports
+`undiagnosed`.
 
 **Scope.** The achievable-objective re-solve (**I3**, "stage-2 achievable objective
 (freeze-budget)" below), atomic grouped removal (**I4**), lean
@@ -211,13 +213,16 @@ validated at SET time in `decide_diagnostic.cpp`; read into `DecideDiagParams::s
 answers two different user questions with the same engine:
 
 - **`query` (default)** — *"What single SQL rule do I change?"* Every knob that fans out
-  (a PER clause across its groups, a data-backed RHS across its rows, a multi-instance cap)
-  folds into **one** slack. The reported edit corresponds to the single literal the user
-  would edit. A data RHS with no literal to loosen reports a **virtual offset**.
-- **`expanded`** — *"Which generated rows/groups are actually tight?"* PER/aggregate groups
-  get one slack each (`edit_source='expanded_group'`, identity in `group`); a data RHS
-  stays per-row (`edit_source='expanded_row'`, identity in `row`), each conflicting row
-  exposing its exact overshoot. A debug/profile view, not necessarily a pasteable SQL edit.
+  (a clause across its `per` classes or `by` groups, a data-backed RHS across its rows, a
+  multi-instance cap) folds into **one** slack. The reported edit corresponds to the
+  single literal the user would edit. A data RHS with no literal to loosen reports a
+  **virtual offset**.
+- **`expanded`** — *"Which generated rows/classes are actually tight?"* Every clause
+  reports once per class it stands for (D28): a clause with a `per K:` key once per value
+  of K (`edit_source='expanded_group'`, the value in `group`), a clause with no `per` key
+  once per kept row (`edit_source='expanded_row'`, the row in `row`), and a `per ()`
+  clause once; a data RHS stays per-row, each conflicting row exposing its exact
+  overshoot. A debug/profile view, not necessarily a pasteable SQL edit.
 
 **Mechanism (one folding rule, two block keys).** The policy lives entirely in
 `BuildElasticModel` + `ReadElasticEdits` (`decide_diagnostic_engines.cpp`); the operator and
@@ -225,11 +230,14 @@ the rest of the engine are unchanged. `BuildElasticModel(base, slack_scope)`:
 
 - **`folds()`** — a `SHARED_SCALAR` knob always folds; a `PER_ROW_DATA` row folds **only in
   query mode** (in expanded mode its rows stay independent, one slack each).
-- **`block_key()`** — query mode keys a block by `clause_id` alone (so all PER groups of a
-  clause collapse into one slack = the single literal edit); expanded mode keys by
-  `(clause_id, group_key)` (so each PER group is its own slack). A folded data block still
-  belongs to the data-offset lexicographic tier in both modes — only the *grouping* changes by
-  mode, never the tier.
+  A row that stands for its group's classes (`class_set`, an easy MIN/MAX's member rows
+  included) folds within its group in both modes; a per-row row of a clause with no `per`
+  key (`per_kept_row`) keeps its own slack in expanded mode whatever its shape.
+- **`block_key()`** — query mode keys a block by `clause_id` alone (so all groups and
+  classes of a clause collapse into one slack = the single literal edit); expanded mode
+  keys by `(clause_id, group_key)` (so each `by` group or `per` class is its own slack). A
+  folded data block still belongs to the data-offset lexicographic tier in both modes —
+  only the *grouping* changes by mode, never the tier.
 
 **Readback (`ReadElasticEdits`, threaded with `slack_scope`).** Per block:
 
@@ -239,28 +247,25 @@ the rest of the engine are unchanged. `BuildElasticModel(base, slack_scope)`:
   keeping its operator, where `col` is `ConstraintProvenance::rhs_label`,
   the RHS column name carried from the binder — fall back to the numeric representative RHS
   when absent). Any other literal knob → `source_literal`.
-- **expanded** — a data RHS → `expanded_row` per conflicting row; a PER-grouped literal →
-  `expanded_group` per group (keeping the group key); an ungrouped literal → `source_literal`.
-  A clause written with the scope spellings over `by` groups reports each group's row once
-  per class it stands for (`ConstraintProvenance::class_set` → `SolverModel::class_sets`,
-  D28; `FanOutByClass` in `decide_diagnostic_render.cpp`, which the elastic readback and
-  the unreachable-bound collector both read): per value of its `per` key
-  (`expanded_group`, the value in `group`), or per kept row when it has no `per` key
-  (`expanded_row`, the row in `row`); `per ()` (a `WHOLE_CLAUSE` class set) is one finding. The
-  hard MIN/MAX bound row, the easy MIN/MAX's member rows and a composed clause's row carry
-  their group's classes too. A row that carries classes folds within its group in both
-  scopes (`folds()`), so an easy MIN/MAX's members, bound by their group's tightest
-  value, share one slack and the group's bound moves once. A per-row row of a scoped
-  clause with no `per` key keeps its own slack in the expanded scope whatever its shape
-  (`per_kept_row`), and reports at its data row (`data_row`); when canonicalization
-  moved a term across its comparison, the finding offsets the bound as written. A scoped
-  bound the optimizer folded into a column box is not re-emitted per column
-  (`EmitAbsorbedUserBoundRows` skips `UserBoundSpec::repair_rows_from_clause`): its clause is evaluated
-  under DIAGNOSE (`DecidePreparedModel::absorbed_constraints`) and only the repair model
-  emits its rows, one per kept row or class. An unreachable bound names its `per` key's
-  values in both scopes and its kept rows in the expanded scope only; an old spelling's
-  keeps its group. A quadratic row keeps its own slack (I2.d) and, in the expanded scope,
-  reports the classes it stands for through the same `FanOutByClass`.
+- **expanded** — a group's row reports once per class it stands for
+  (`ConstraintProvenance::class_set` → `SolverModel::class_sets`, D28; `FanOutByClass` in
+  `decide_diagnostic_render.cpp`, which the elastic readback and the unreachable-bound
+  collector both read): per value of its `per` key (`expanded_group`, the value in
+  `group`), or per kept row when it has no `per` key (`expanded_row`, the row in `row`);
+  `per ()` (a `WHOLE_CLAUSE` class set) is one finding (`source_literal` or
+  `virtual_offset`). The aggregate row of a `by` group, the hard MIN/MAX bound row, the
+  easy MIN/MAX's member rows and a composed clause's row all carry their group's classes.
+  A row that carries classes folds within its group in both scopes (`folds()`), so an
+  easy MIN/MAX's members, bound by their group's tightest value, share one slack and the
+  group's bound moves once. A per-row row of a clause with no `per` key keeps its own
+  slack in the expanded scope whatever its shape (`per_kept_row`) and reports at its data
+  row (`data_row`, `expanded_row`), a data RHS included; when canonicalization moved a
+  term across its comparison, the finding offsets the bound as written. A bound the
+  optimizer folded into a column box reports the same way through its own clause's rows
+  (decision 1a above). An unreachable bound names its `per` key's values in both scopes
+  and its kept rows in the expanded scope only. A quadratic row keeps its own slack (I2.d)
+  and, in the expanded scope, reports the classes it stands for through the same
+  `FanOutByClass`.
 
 **Reporting contract (flat typed vocabulary, additive to I5).** Every LOOSEN finding carries
 `edit_source ∈ {source_literal, virtual_offset, expanded_row, expanded_group}`. The
@@ -269,29 +274,36 @@ attribute was deleted with the EAV relation. The
 old `CONFLICT_SUMMARY` edit kind (the data-RHS `"conflicts in M of N rows"` dead-end) is
 **removed** — a data conflict is now an actionable `virtual_offset` (query) or an
 `expanded_row` profile (expanded). In query mode the clause reads as the folded clause
-(`SUM(x) >= 5 PER grp`) with `group` NULL; expanded mode emits one finding per failing
-group, same clause text, with the key in `group`.
+(`per grp: sum(x) by (grp) >= 5`) with `group` NULL; expanded mode emits one finding per
+failing class, same clause text, with the key value in `group`.
 
-**easy-MAX + PER is one global cap, correctly.** `MAX(x) <= K PER g` is mathematically
-`x <= K` for **every** row, so the optimizer's easy-MIN/MAX rewrite strips the (vacuous) PER
-wrapper (`decide_rewrite_minmax.cpp`, `RewriteMinMaxInConstraint`) and the cap is absorbed as one
-uniform column bound. There is genuinely no per-group *cap* to break out — the diagnosis
-reports the single global edit (`x <= K` → `x <= K + max overshoot`) in **both** modes, which
-is exactly right. (This resolves the former "easy-MAX+PER collapses" note: it was not a bug,
-just the uniform cap surfacing. Preserving a per-group *overshoot profile* would require
-carrying the stripped PER key as a diagnosis-only side channel through the optimizer — not
-done, since it risks the empty-group/WHEN semantics the strip protects.)
+**An easy MIN/MAX over a bare decision is a column bound.** `max(x) <= K` (and
+`min(x) >= K`) with no `when` and no reducer filter means `x <= K` on every row it reads
+(D41), whatever its `per` key or `by`, so bound absorption folds it into the column box
+like `x <= K` (`TryMatchEasyExtremumTarget`, `decide_bound_absorption.cpp`) and it reaches
+the repair model through its own clause's rows (decision 1a). The `query` scope reports
+one edit on the clause as written, by the max overshoot
+(`per g: max(x) by (g) <= 2` → `per g: max(x) by (g) <= 4`); the `expanded` scope reports
+it once per class of its `per` key, or once per kept row when it has none. An easy
+MIN/MAX with a `when`, a reducer filter or a member that is not a bare decision
+(`max(2 * x) <= K`) stays rows: its member rows carry their group's classes and fold
+within each group.
 
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): `BuildElasticModel` folds a
-PER `SHARED_SCALAR` clause into one block in query mode and one-per-group in expanded; a data
-RHS folds to one block in query and stays independent per-row in expanded. Python differential
-(`test_query_diagnostics_relation.py`, both backends): data-RHS query virtual offset (named
-column) + expanded per-row profile; PER-aggregate query fold (one clause edit) + expanded
-per-group; option validation for the pragma. TPC-H (`test_query_diagnostics_tpch.py`): the
-`SUM(x) >= 5 PER l_orderkey` case folds in query and breaks out per failing order in expanded;
-`x >= l_quantity` reports the named virtual offset in query and per-row in expanded.
+grouped `SHARED_SCALAR` clause into one block in query mode and one per group in expanded; a
+data RHS folds to one block in query and stays independent per-row in expanded. Python
+differential (`test_query_diagnostics_relation.py`, both backends): data-RHS query virtual
+offset (named column) + expanded per-row profile; `per` aggregate query fold (one clause
+edit) + expanded per class; option validation for the pragma. TPC-H
+(`test_query_diagnostics_tpch.py`): `per l_orderkey: sum(x) by (l_orderkey) >= 5` folds in
+query and breaks out per failing order in expanded; `x >= l_quantity` reports the named
+virtual offset in query and per-row in expanded. The per-class readback — a `per` key finer
+or equal to the `by` key, no `per` key (per kept row), `per ()` (once), a `when` in front, a
+bound folded into a column box, a keyed decision's bound, an unreachable bound, a
+quadratic clause — is pinned in `test_scope_explain_diagnose.py`
+(`../../04_testing/scope/done.md`).
 
-## Elastic engine: per-shape slack placement (shared blocks, PER, multi-instance bounds)
+## Elastic engine: per-shape slack placement (shared blocks, `per` classes, multi-instance bounds)
 
 I2.a/I2.b attach slack at the **editable-knob** level, not the matrix-row level, for the
 shapes where one user knob fans into several rows. **This is the reason the engine is
@@ -313,46 +325,41 @@ per-group **data** RHS (`x <= col`). Set in `ilp_model_builder.cpp`: linear and 
 builder sites read `EvaluatedConstraint::rhs_is_shared_scalar`. Physical evaluation sets it
 directly for constants and otherwise consumes the canonical RHS's `QUERY_WIDE_BOUND_TAG`;
 foldable composite expressions receive that tag at canonicalization. Other bounds are stamped
-`PER_ROW_DATA`; the absorbed-bound re-emission uses `SHARED_SCALAR`.
+`PER_ROW_DATA`; an absorbed bound's clause rows carry its literal, so `SHARED_SCALAR`.
 
 **Grouping (mode-aware — see "Slack-scope policy" above).** `BuildElasticModel` groups
 relaxable rows into blocks via `folds()` + `block_key()`. A `SHARED_SCALAR` block gets **one
 shared slack** wired into all N rows (`=` blocks get one shared `s⁺` and one shared `s⁻`); with
 `eᵢ − s ≤ K` on every row the single `s` is driven to the **max overshoot**, so the reported
 edit is the max (not the per-row sum) and the "which clause to relax" race is not skewed ≈N×.
-This covers **easy MIN/MAX** (`MAX(e) ≤ K` → per-row `eᵢ ≤ K`, absorbed as a shared cap),
-**per-row literal** constraints, and **multi-instance bounds** (`x ≤ K` over N instances).
-For **PER**, the block key depends on the mode: **query** keys by `clause_id` alone, so all
-groups of `SUM(x) ≥ K PER g` fold into one slack = the single literal edit; **expanded** keys
-by `(clause_id, group_key)`, so each group is its own slack (per-group profile). **easy-MAX +
-PER** re-emits as one global cap in both modes — correctly, because the easy rewrite makes the
-cap uniform `x ≤ K` across groups (the optimizer strips the vacuous PER; see "Slack-scope
-policy").
+This covers **easy MIN/MAX** (`max(e) ≤ K` → per-member `eᵢ ≤ K`), **per-row literal**
+constraints, and **multi-instance bounds** (`x ≤ K` over N instances, through its clause's
+rows). For a clause over **`per` classes or `by` groups** the block key depends on the
+mode: **query** keys by `clause_id` alone, so all classes of `per g: sum(x) by (g) ≥ K`
+fold into one slack = the single literal edit; **expanded** keys by
+`(clause_id, group_key)`, so each class is its own slack (the per-class profile).
 
-**The grouping id has to be fresh, and is read off the model to make sure of it.**
-`block_key()` groups by `repair_group_id`, so two clauses sharing an id share a slack —
-and a slack spanning two unrelated clauses can be spent on one of them and billed to the
-other. The re-emitted absorbed bounds need ids no row already holds. They are minted from
-`max(repair_group_id over the retained model) + 1` rather than from any count, because no
-count is the id space: a regular constraint takes its index in `solver_input.constraints`
-and a global one takes `constraints.size() + its own index`, so the two ranges sit
-adjacent and starting at `constraints.size()` lands on the first global constraint. That
-overlap is empty whenever the linear specs outnumber the ids in use, which is why it went
-unseen; stating a construct natively drops linear specs without dropping ids, and the
-collision appeared. The symptom was a repair that did not repair — `SUM(y) >= 100`
-loosened to `>= 81.6` on a query where `y <= 2` caps `SUM(y)` at 8 — because the slack the
-engine actually spent was the bound's. Pinned by `TestNativeConstructDiagnosis` in
+**Every clause has its own grouping id.** `block_key()` groups by `repair_group_id`, so
+two clauses sharing an id share a slack — and a slack spanning two unrelated clauses can be
+spent on one of them and billed to the other: a repair that does not repair
+(`SUM(y) >= 100` loosened to `>= 81.6` on a query where `y <= 2` caps `SUM(y)` at 8,
+because the slack the engine spent was the bound's). Execution numbers every clause it
+evaluates once: the prepared clauses first, then (under `DIAGNOSE`) the absorbed bounds'
+clauses, then the composed MIN/MAX clauses, each taking its position in that order. No
+count of the model's rows is the id space, since formulation drops rows (a natively
+stated construct, a `<>` moved into indicator rows), so the ids are fixed before
+formulation runs. Pinned by `TestNativeConstructDiagnosis` in
 `test/decide/tests/test_query_diagnostics_relation.py`, which applies the reported edit and
 re-runs the query, and compares the native and lowered arms against each other.
 
-**A `PER` MIN/MAX clause folds like any other.** `LinearizeMinMaxConstraints`
+**A grouped MIN/MAX clause folds like any other.** `LinearizeMinMaxConstraints`
 emits one bound row per group, all carrying the user's single literal, and stamps them
 from `EvaluatedConstraint::rhs_is_shared_scalar` — the same flag the linear builder reads,
 so the native and lowered arms classify one clause identically. Left `UNSET` those rows
-never folded, and an infeasible `MAX(e) >= K PER g` reported one edit per group against
-the same clause text with no group label to tell them apart; only the loosest of them
-repaired anything, so the report contained edits that made no progress. A genuinely
-per-group bound still stamps `PER_ROW_DATA` and reports a virtual offset.
+would never fold, and an infeasible `per g: max(e) by (g) >= K` would report one edit per
+group against the same clause text in the `query` scope; only the loosest of them would
+repair anything. A genuinely per-group bound still stamps `PER_ROW_DATA` and reports a
+virtual offset.
 
 **A hard MIN/MAX clause is loosenable on both arms.** `MAX(e) >= K` lowers to N rows of
 `e_i - M*y_i >= K - M` plus a rigid `SUM(y) >= 1`. The N rows are the clause: lowering `K`
@@ -469,31 +476,32 @@ preferred when it can restore feasibility. Two parts:
   **data-varying** coefficient (`SUM(buy * l_extendedprice)`) using the symbolic column name carried
   in `provenance.weight_labels` (see the "data-weighted SUM renders symbolically" note above); it
   only falls back to the raw numeric reconstruction when a data-varying term has *no* label.
-  **PER-grouped aggregates fold too** (the old `group_key == INVALID` gate is gone): `SUM(x) >= 5
-  PER grp` renders both groups as `SUM(x) >= 5 PER grp`, kept distinguishable by the `group` column
-  + `PER grp` qualifier (see "PER-group identity" below). A **single-row / WHEN aggregate group** has
-  no fan-out for `FormatSumLhs` to fold, so `FormatLhs` wraps the reconstruction in `SUM(...)`
-  explicitly when `provenance.is_aggregate` and there is no multi-column fan (`HasVarFan`) —
-  `SUM(x) >= 99 WHEN g='a'` renders `SUM(x) >= 99 …`, not a bare `x >= 99`.
-- **Entity-scoped SUM (the fold).** An **entity-scoped** variable (`DECIDE S.keepS`) maps every
-  joined row of an entity onto *one* solver column, so the builder **accumulates** instead of
-  fanning out: `SUM(keepS)` over two alert rows of one sensor reaches the matrix as a single index
-  with coefficient `2`. The per-row fan-out every rule above keys on is then structurally absent,
-  and reconstructing from the matrix quotes arithmetic the user never wrote — `SUM(2*keepS)` when
-  the group holds one entity, or `SUM(keepS * 1)` when the group mixes join multiplicities (the
-  differing per-entity totals read as a data-varying weight, so the coefficient's *source text*
-  gets rendered as if it were a column). Both fail the pasteable-edit test and leak the
-  entity/row-scope distinction. The accumulating build sites therefore stamp
-  `provenance.folded_terms` — the coefficient the user actually wrote per summed decide variable,
-  taken from `CoefficientColumn::IsUniform()` or, when the constant materializes dense, from a
-  numeric `coefficient_labels` entry (that label is the coefficient expression's source text, so a
-  wholly-numeric label *is* the written coefficient). `FormatLhs` consults `FormatFoldedSumLhs`
-  **before** the matrix-inference paths, since those misread accumulated rows; it declines
-  (returning false) for any row it cannot reconstruct whole — an auxiliary column, an unstamped
-  variable, or a data-varying term with no symbolic name — leaving the paths below unchanged.
-  `folded_terms` is populated only on the accumulating path, so a row-scoped fan-out never diverts
-  there. AVG rows are excluded: their coefficients are additionally 1/N pre-scaled, so the recorded
-  unit is not quotable in AVG units. Genuinely data-weighted entity clauses still render
+  **Grouped aggregates fold too**: every group of `per grp: sum(x) by (grp) >= 5` renders
+  as that one clause, kept distinguishable by the `group` column (see "Group identity"
+  below). A **single-row aggregate group** (one a `when` narrows to a single row) has no
+  fan-out for `FormatSumLhs` to fold, so `FormatLhs` wraps the reconstruction in `SUM(...)`
+  explicitly when `provenance.is_aggregate` and there is no multi-column fan (`HasVarFan`)
+  — `when g = 'a': sum(x) >= 99` never reads as a bare `x >= 99`.
+- **Keyed SUM (the fold).** A **keyed** decision (`DECIDE per S: keepS(BOOL)`) maps every
+  joined row of a class onto *one* solver column, so the builder **accumulates** instead of
+  fanning out: `sum(keepS)` over two alert rows of one sensor reaches the matrix as a single
+  index with coefficient `2`. The per-row fan-out every rule above keys on is then
+  structurally absent, and reconstructing from the matrix quotes arithmetic the user never
+  wrote — `SUM(2*keepS)` when the group holds one class, or `SUM(keepS * 1)` when the group
+  mixes join multiplicities (the differing per-class totals read as a data-varying weight,
+  so the coefficient's *source text* gets rendered as if it were a column). Both fail the
+  pasteable-edit test and leak the keyed/per-row distinction. The accumulating build sites
+  therefore stamp `provenance.folded_terms` — the coefficient the user actually wrote per
+  summed decide variable, taken from `CoefficientColumn::IsUniform()` or, when the constant
+  materializes dense, from a numeric `coefficient_labels` entry (that label is the
+  coefficient expression's source text, so a wholly-numeric label *is* the written
+  coefficient). `FormatLhs` consults `FormatFoldedSumLhs` **before** the matrix-inference
+  paths, since those misread accumulated rows; it declines (returning false) for any row it
+  cannot reconstruct whole — an auxiliary column, an unstamped variable, or a data-varying
+  term with no symbolic name — leaving the paths below unchanged. `folded_terms` is
+  populated only on the accumulating path, so a per-row fan-out never diverts there. AVG
+  rows are excluded: their coefficients are additionally 1/N pre-scaled, so the recorded
+  unit is not quotable in AVG units. Genuinely data-weighted keyed clauses still render
   symbolically (`SUM(keepS * cost)`).
 - **Strict `<` / `>`.** The δ offset (`< K → <= ceil(K)-1`, `> K → >= floor(K)+1`) is baked into
   `rhs` at the δ site (`ApplyComparisonSense`, `ilp_model_builder.cpp`), which now also sets
@@ -505,50 +513,56 @@ preferred when it can restore feasibility. Two parts:
   renders `POWER(x, 2)` / `x*y` terms. Quadratic slacks are always editable-weighted (a quadratic
   is always a LOOSEN edit, never a data conflict). QCQP is Gurobi-only.
 
-### PER-group identity (group label + qualifier; unblocks the SUM fold for PER)
+### Group identity (group label + scope)
 
-A PER-grouped aggregate (`SUM(x) >= 5 PER grp`) emits one row per group, so each group can get
-its own edit. Each group's edit is now **self-identifying**, which is what lets the SUM fold
-above apply to PER without the two groups colliding in the relation. Three additive channels,
-all carried on `ConstraintProvenance` (no change to PER solve logic):
+A clause over `per` classes or `by` groups (`per grp: sum(x) by (grp) >= 5`) emits one row
+per group (how a clause becomes model rows: `../../00_project_overview/syntax_reference.md`
+§6.4), so each group can get its own edit. Each edit is **self-identifying**, which is
+what lets the SUM fold above apply without two groups colliding in the relation. Three
+channels, read off `ConstraintProvenance` and the source registry (no change to the solve):
 
-- **`group_label`** — the group's printable key (`'a'`, or `EU, 2024` for a composite key).
-  `LookupOrBuildPerGroupIds` (`physical_decide.cpp`) now requests `BuildGroupIds`'s `rep_keys`
-  out-param and stores the per-group representative values on the cache entry; the post-WHEN
-  remap to consecutive `0..K'` reindexes the labels in lockstep (a new `mapped` id is pushed at
-  exactly `out_group_labels.size()`, so labels stay aligned with the dense ordinals).
-  `FormatPerGroupKey` joins composite columns with `, `; NULL renders `"NULL"` and an actual
-  empty-string key renders `"''"` so it is not confused with "ungrouped." Threaded through
-  `EvaluatedConstraint::group_labels` → stamped on `provenance.group_label` at **every**
-  emission site in `ilp_model_builder.cpp`: the aggregate-PER sites, and the per-row site
-  (F2 site 3), which used to stamp the group *key* but pass an empty label. That gap was
-  visible on a hard MIN/MAX whose bound no row in a group can reach: the rewrite drops the
+- **`group_label`** — the group's printable key value (`a`, or `EU, 2024` for the composite
+  key of `per r, y:`). `LookupOrBuildPerGroupIds` (`physical_decide.cpp`) requests
+  `BuildGroupIds`'s `rep_keys` out-param and stores each group's representative values on
+  the cache entry; the per-call renumbering to consecutive `0..K'` (the groups the call's
+  filter keeps, in the order their rows first appear) reindexes the labels in lockstep (a
+  new `mapped` id is pushed at exactly `out_group_labels.size()`, so labels stay aligned
+  with the dense ordinals). `FormatPerGroupKey` joins composite columns with `, `; a NULL
+  key value — a class of its own (D5) — renders `NULL`, and an empty-string key renders
+  `''` so it is not confused with "ungrouped" (a string `'NULL'` reads like a NULL, see
+  `todo.md` §2). Threaded through `EvaluatedConstraint::group_labels` → stamped on
+  `provenance.group_label` at **every** emission site in `ilp_model_builder.cpp`: the
+  grouped aggregate sites, and the per-row site (F2 site 3). The per-row site is the one
+  that sees a hard MIN/MAX whose bound no row in a group can reach: the rewrite drops the
   MIN/MAX marking and re-emits that group as ordinary per-row rows
-  (`linearization_minmax.cpp`, the `NO_SOLUTION` branch), so the per-row site is the only one
-  that ever sees it, and `CollectUnreachableClauses` reported the clause with no group.
-  A grouped failure now names the group it sits in (`MIN(x) <= -inf PER g`, group `0`)
-  rather than sending the user through every group. In expanded mode the diagnosis copies
-  it into the finding's `group` column while leaving `clause` in the user's original
-  spelling. This avoids
-  relying on relation row order to associate `suggested_change`/`amount` with a group and avoids
-  appending implementation-only `[group: ...]` text to the clause.
+  (`linearization_minmax.cpp`, the `NO_SOLUTION` branch). So a grouped failure names the
+  group it sits in (`per g: min(x) by (g) <= -inf`, group `0`) rather than sending the user
+  through every group. In the expanded scope the classes a row stands for (`class_set`,
+  read by `FanOutByClass`) supply the `group` values; `group_label` names the group of a
+  row that carries none. The `clause` stays in the user's spelling, so a finding never
+  relies on relation row order to tie `suggested_change`/`amount` to a group and never
+  appends implementation-only `[group: ...]` text to the clause.
 - **`is_aggregate`** — set from `eval_const.lhs_is_aggregate` at the aggregate emission sites;
-  drives the single-row / WHEN `SUM(...)` wrapper in `FormatLhs` (see I2.d SUM above).
-- **`qualifier`** — the `PER grp` / `PER (region, year)` / `WHEN <pred>` text, computed once per clause at the
-  WHEN/PER eval site (`physical_decide.cpp`) and appended to the reconstructed label by
-  `MakeLoosenEdit`. Both the PER keys and the WHEN predicate render through
-  `RenderDecideSource`, the same renderer EXPLAIN uses, so a clause reads identically wherever
+  drives the single-row `SUM(...)` wrapper in `FormatLhs` (see I2.d SUM above).
+- **The scope (`qualifier`)** — the `when c per K:` text in front of the clause, built once
+  per clause on the bound tree by `InitializeConstraintSourceInfo`
+  (`decide_source_provenance.cpp`, `VisitSourceComparisons`) and kept in the source
+  registry (`ConstraintSourceInfo::qualifier`). `SourceAwareProvenance` copies it onto the
+  provenance the renderer reads, and `AttachDecideQualifier` writes it in front of both
+  the clause and the suggestion. A `when` and a `per` key print in that order
+  (`when active per grp: sum(x) by (grp) >= 5`); a key prints as written, comma-separated
+  (`per r, y:`), `per ()` as `per ():`, and the default `per row:` not at all (D32). The
+  reducer prints with its `by (G)` after it. The `when` predicate renders through
+  `RenderDecideSource`, the renderer EXPLAIN uses, so a clause reads identically wherever
   it is quoted back: the binder's implicit CASTs are dropped (`grp = 'a'`, not
-  `(grp = CAST('a' AS VARCHAR))`) while a cast the user typed is replayed from its source
-  fragment.
+  `(grp = CAST('a' AS VARCHAR))`), a cast the user typed is replayed from its source
+  fragment, and a column that needs quoting keeps its quotes (`when "ok:": ...`).
 
-The objective PER path passes a throwaway labels vector (objective groups are not diagnosed by
-clause key). **Composite PER keys** (`PER (region, year)`) are handled by the join and reachable
-through `SUCH THAT` in the parenthesized form. The **unparenthesized** comma-list form
-(`PER region, year`) is rejected by the parser; use `PER (region, year)`. **easy-MAX + PER** correctly
-re-emits as one global cap: the easy rewrite makes `MAX(x) <= K PER g` the uniform `x <= K`
-(the optimizer strips the vacuous PER), so there is no per-group cap to break out — see
-"Slack-scope policy: query vs expanded" above.
+The two-level objective's `per` key passes a throwaway labels vector (objective groups
+are not diagnosed by clause key). A composite key is written as a comma list
+(`per region, year:`); parentheses are only for `per ()`, and `per (region, year):` is a
+parse error that names the comma spelling. An easy `max(x) <= K` is a column bound, not a
+grouped clause — see "An easy MIN/MAX over a bare decision is a column bound" above.
 
 ### I2.e — rigid shapes confirmed
 
@@ -598,22 +612,23 @@ producer cannot emit it, and the reader branch that handled it was dead. Both ar
 reader asserts the shape instead.
 
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): one shared slack spans all N
-rows with the correct sign; a PER `SHARED_SCALAR` clause folds to one block in query and
-one-per-group in expanded; a data RHS folds to one block in query and stays independent per-row
+rows with the correct sign; a grouped `SHARED_SCALAR` clause folds to one block in query and
+one per group in expanded; a data RHS folds to one block in query and stays independent per-row
 in expanded; `USER_MECHANISM`/`STRUCTURAL` rows are never slackened; a data-offset tier
 defers to an editable knob; a query-mode data RHS folds to one virtual offset; strict re-quotes
 against `typed_k`; an AVG row renders `AVG(x)` with the raw slack; a quadratic constraint slacks
 its linear part only with Q untouched. C++ behavioral: a shared block with rigid floors reports
 the max overshoot (7), one edit, not the sum (10). Python differential
-(`test_query_diagnostics_relation.py`): easy-MAX and multi-instance bound report total = max
-overshoot; aggregate `SUM(x) >= 5 PER grp` folds to one `SUM(x) >= 5 PER grp` edit in query mode
-and breaks out per group (`[group: a]` / `[group: b]` with `group` rows) in expanded mode;
-a single-row `SUM(x) >= 99 WHEN grp='a'` keeps its `SUM(...)` wrapper and clean WHEN qualifier; a
+(`test_query_diagnostics_relation.py`): an easy `max(x) <= 5` and a multi-instance bound
+report total = max overshoot; `per grp: sum(x) by (grp) >= 5` folds to one edit in query mode
+and breaks out per class (`group` = `a` / `b`) in expanded mode, an empty-string key keeping
+its `''` label; `when grp='a': sum(x) >= 99` keeps its `sum(...)` wrapper and its `when` in
+front (`when grp = 'a': sum(x) >= 99`), and `when active per grp:` keeps that order; a
 BOOLEAN model loosens its SUM target, never its 0/1 domain (regression guard); a data-RHS clause
 reports a named virtual offset (query) / per-row profile (expanded); a data-offset row defers
 to an editable edit; reversed bounds are
 reported as their canonical absorbed form; AVG/strict re-quote (single-row SUM keeps its wrapper:
-`SUM(x) > 10`, including strict quadratic); quadratic and McCormick gated to Gurobi; `<>` and
+`sum(x) > 10`, including strict quadratic); quadratic and McCormick gated to Gurobi; `<>` and
 McCormick rows stay rigid.
 
 ## Elastic engine: exact atomic DROP
@@ -622,7 +637,7 @@ I4 handles clauses that cannot be meaningfully loosened: `<>`, `IN (...)`, and e
 constraint-side comparison containing an L0 `norm`. The optimizer assigns one
 written-order `removal_group_id` to the source comparison before any rewrite. Objective-side
 L0 is deliberately excluded. Every descendant row or native construct copies that identity,
-including IN cardinality/link rows, absorbed-bound re-emission, ABS/McCormick descendants,
+including IN cardinality/link rows, an absorbed bound's clause rows, ABS/McCormick descendants,
 composed MIN/MAX extraction, and backend lowering.
 
 `source_clause_id`, `repair_group_id`, and `removal_group_id` are separate namespaces:
@@ -653,7 +668,7 @@ column by forgetting to pad first. The `resize(num_global_vars)` still standing 
 `BuildColumnProvenance` takes the vector as an optional argument and writes the labels
 onto the global-block columns; the infeasible engine forwards it through
 `InfeasibleDiagnosisInput::global_variable_labels`. DROP labels now come from the source
-registry keyed by `source_clause_id`, with the preserved WHEN/PER qualifier.
+registry keyed by `source_clause_id`, the clause's `when c per K:` qualifier in front.
 
 Because that registry is the single source of clause text, it also owns the operator
 spelling. `DecideComparisonOperator` (`decide_source_provenance.cpp`) renders
@@ -731,7 +746,7 @@ per variable (a minimum-cardinality-2 set, differential-checked); an **objective
 tie** (`x <> 0 AND x <> 1 AND y ≤ 5 MAXIMIZE SUM(y)`, where the objective only touches the free
 `y`) drops the earliest-declared `x <> 0` on **both** backends — the solver-agnostic tie-break
 guarantee; `x <> 5 AND 5 ≤ x ≤ 5` prefers loosening. IN (singleton, multi-value, negative,
-and WHEN-wrapped) and L0 (explicit/auto, directional/equality, composed MIN/MAX, and prepared
+and under a `when`) and L0 (explicit/auto, directional/equality, composed MIN/MAX, and prepared
 bilinear replay) each report one source-level DROP on both backends; objective L0 is excluded,
 and the removed setting is rejected.
 
@@ -846,7 +861,7 @@ envelope, sized at 1, made the box repair infeasible inside the elastic model. V
 formulation split and not a solver one: `DECIDB_NATIVE_CONSTRUCTS=off` reproduces the HiGHS
 answer on Gurobi.
 
-MIN/MAX has the same blind spot without the disagreement. `MAX(x + c) >= 25 PER g` over
+MIN/MAX has the same blind spot without the disagreement. `per g: max(x + c) by (g) >= 25` over
 `x` in `[0, 9]` boxes the extremum column at the family's own reach, so **every** arm
 advised loosening the MAX for a query worth 36 when `x <= 23` was the same size of edit
 and worth 92. Symmetric blindness reads as agreement, which is why the cross-backend
@@ -965,7 +980,7 @@ still infeasible. Over-repairing by one part in a million is invisible.
 **A backend that cannot analyse the repair model says so.** The elastic program is
 deliberately harder than the query's own — a widened box means looser Big-M constants — and
 HiGHS in particular gives up on some MIPs it would otherwise take, or refuses to load a model
-whose tier weights produced a sub-tolerance coefficient (`../../06_issues/bugs/todo.md`).
+whose tier weights produced a sub-tolerance coefficient.
 That is a limit on what can be *explained*, not a failure of the query, so the solver callback
 catches DuckDB exceptions from the backend call and the terminal reports an `undiagnosed`
 finding. The guard is at that callback boundary: exceptions from the diagnosis logic still
@@ -1023,37 +1038,33 @@ implied tightenings from `DecidePropagateImpliedBounds` (a presolve pass with no
 Three mechanisms make every column-derived user limit diagnosable while keeping the intrinsic
 domain rigid:
 
-- **Intrinsic reset (the elastic box carries only the intrinsic domain).** In the
-  `DiagnosisTerminal::INFEASIBLE` arm, after re-emitting absorbed bounds as slackable rows (the
-  decision-1a loop above), a second pass resets every decide column's *implied* tightenings back
-  to intrinsic — non-BOOLEAN: `col_lower > 0 → 0`, `col_upper < +∞ → +∞`; BOOLEAN: back to
-  `[0,1]` (`col_lower > 0 → 0`, `col_upper < 1 → 1`), never past 1. This is safe —
-  propagation only ever tightens (raises lower / lowers upper), and every implied tightening has
-  a backing row (`USER_PARAMETER` slackable, or `STRUCTURAL` still-rigid) that keeps enforcing it.
-  This is what lets `x <= 2+3` (a foldable cap copied into `col_upper`) be loosened by its row
-  instead of pinned by the box. **BOOLEAN columns are detected via `is_boolean_var[var]`, checked
-  before the generic `is_binary[col]` branch** — `is_binary` is also `true` for a BOOLEAN-domain
-  variable (its domain is reported straight to the model builder as `LogicalType::BOOLEAN`, see
-  `../../03_expressivity/decide/done.md`), but the generic `is_binary` branch only *skips* reset,
-  which is correct for an optimizer-created BOOLEAN indicator (never touched by
-  `DecidePropagateImpliedBounds`) and wrong for a BOOLEAN-domain variable, which can be
-  implied-tightened below 1 (the budget example) and needs the active `[0,1]` reset. Checking
-  `is_boolean_var` first preserves that. The decision-1a re-emission loop uses the same signal: an
-  absorbed BOOLEAN pin's column opens only to `[0,1]` for the pinned direction (a non-BOOLEAN opens
-  to ±1e30).
+- **Box widening (only the intrinsic domain stays rigid).** The repair model's
+  `OpenElasticColumnBox` (`physical_decide.cpp`) widens every decide column direction that
+  is narrower than the rigid box (`SolverInput::rigid_lower_bounds` / `rigid_upper_bounds`:
+  the intrinsic domain, captured before propagation with every absorbed user direction
+  re-opened) — absorbed user bounds and implied tightenings alike — by the bounded
+  per-column amount described above. This is safe: propagation only ever tightens (raises
+  lower / lowers upper), every implied tightening has a backing row (`USER_PARAMETER`
+  slackable, or `STRUCTURAL` still-rigid) that keeps enforcing it, and every absorbed bound
+  is enforced by its own clause's rows (decision 1a). This is what lets `x <= 2+3` (a
+  foldable cap copied into the column box) be loosened by its row instead of pinned by the
+  box. A BOOLEAN-domain column (`SolverInput::variable_types[var] == BOOLEAN`) is clamped
+  to `[0,1]` and never widens past it, so a pin on one opens only back to its domain and a
+  BOOLEAN implied-tightened below 1 (the budget example) opens back to 1.
 - **Inverted-box survival (`SolverInput::tolerate_infeasible_bounds`).** Two opposite absorbed
   bounds (`x <= 4 AND x >= 10`) invert the box (`col_lower > col_upper`). Without help,
   `SolverModel::Build` throws before `retained_model` is populated, so the engine never sees the
   model. Under `DIAGNOSE` the flag (set in `Finalize`, same trigger as the unbounded-ray extraction)
   makes `Build` keep the inverted box, and `SolveModel` short-circuits to INFEASIBLE **without
   handing the box to the backend** — HiGHS hard-rejects `lb>ub` at load and poisons the session;
-  Gurobi tolerates it, so the short-circuit is the solver-agnostic path. The intrinsic reset then
+  Gurobi tolerates it, so the short-circuit is the solver-agnostic path. The box widening then
   un-inverts the box for the elastic re-solve, which loosens one of the two bounds.
 - **Type-domain conflicts are a static error, not an elastic edit.** A user bound that
   contradicts the *intrinsic* domain — `x <= -1` on a non-negative REAL, `x >= 2` / `x = 2` on a
   BOOLEAN — can't be fixed by loosening (only by changing the type or dropping the bound), so it
-  never reaches the engine. A post-absorption check in the sink constructor (right after
-  `TraverseBoundsConstraints`) throws a precise static `InvalidInputException`
+  never reaches the engine. A check in the sink constructor (`DecideGlobalSinkState`, over
+  the box `DecideOptimizer::AbsorbVariableBounds` resolved) throws a precise static
+  `InvalidInputException`
   (`"x >= 2 cannot hold because x is BOOLEAN (0 or 1). …"`). The guard is `U < 0 AND L >= 0`
   (upper below the non-negativity floor) or `is_boolean AND L > 1` (lower above the 0/1 ceiling),
   so an explicitly-lowered floor (`x <= -1 AND x >= -5`, box `[-5,-1]`) stays feasible and a
@@ -1077,18 +1088,10 @@ I5 is the final reporting step. The structured edit list was already emitted by 
 **locks the vocabulary** — which is now the `edit_source` column, whose full value set is
 in `../../00_project_overview/syntax_reference.md` §8.
 
-Batch H removed the other half of I5: the "lean cue summary". `BuildInfeasibleDiagnostic`
-used to build a one-line stderr headline that pointed at the relevant clause(s)
-(`"…; diagnosis points to clause \`x <= 5\`."`), capping long PER-group lists at three with
-`… and N more`. That headline existed because the *error* was the primary surface and the
-relation was a second statement away. Under `DIAGNOSE` the relation IS the answer: every
-clause it names is a row, so there is nothing to summarize and nothing to truncate. The
-summary field, `BuildDiagnosticTargetPhrases`, `QuotedGroupList`, `JoinDiagnosticPhrases`
-and `AddDiagnosticTarget` were all deleted with it.
-
-One consequence worth stating: a query with dozens of failing PER groups now returns
-dozens of rows rather than three plus a count. That is the right shape for a relation —
-the user filters, aggregates, or `LIMIT`s it themselves.
+There is no summary line. Under `DIAGNOSE` the relation IS the answer: every clause it
+names is a row, so there is nothing to summarize and nothing to truncate. A query with
+dozens of failing classes returns dozens of rows, which is the right shape for a
+relation — the user filters, aggregates, or `LIMIT`s it themselves.
 
 **Why no runnable rewritten query.** The original plan envisioned emitting a copy-paste rewritten
 DECIDE query. It was deliberately dropped: the engine has no access to the original SQL text (it
@@ -1141,21 +1144,27 @@ verdict rather than just the word "infeasible".
 against the bundled HiGHS backend on one-variable models: a relaxable cap conflicting with
 a rigid floor reports the unique minimal loosening (`x <= 5` → `x <= 10`, amount 5); an
 equality row loosens via its two-sided slack (`x = 5` → `x = 8`); a rigid-only conflict
-with a non-helping relaxable row renders the elastic-infeasible row; the
-`has_unhandled_user_bounds` flag suppresses that claim (invalid → `undiagnosed` at the
-operator); and an all-rigid model returns invalid for the same treatment. End-to-end differential coverage (both backends, vs
-`oracle_solver`, including absorbed-bound and BETWEEN cases) is in
+with a non-helping relaxable row renders the elastic-infeasible row; and an all-rigid
+model returns invalid (→ `undiagnosed` at the operator). End-to-end differential coverage
+(both backends, vs `oracle_solver`, including absorbed-bound and BETWEEN cases) is in
 `test/decide/tests/test_query_diagnostics_relation.py`. That file's `_apply_reported_fix`
 harness (E1) guards the core least-change promise mechanically: for each asserted infeasible
 diagnosis it applies every reported edit to the SQL (loosen → replace the clause with its
 `suggested_change`; drop → remove the clause) and asserts the edited query actually solves.
 BOOLEAN user-pin coverage (E3: `x >= 1`, `x = 1`, `x <= 0` pins, plus a domain-restatement
 guard asserting `x <= 1 AND x >= 0` never becomes an editable knob) lives there too. The
-entity-scoped fold has three label tests in the same file, all on TPC-H so the CLI stays
-read-only: one entity per group (`SUM(keepR) >= 6 PER r_name` over region ⋈ nation, where each
-region folds 5 rows onto one column) must not render `SUM(5*keepR)`; mixed multiplicities in one
-group (`SUM(keepN) >= 1000 PER r_name` over customer ⋈ nation ⋈ region, where nations carry
-50-72 customers each) must not render `SUM(keepN * 1)`; and a row-scoped `SUM(buy) >= 5 PER grp`
-pins that the fan-out path is unchanged. Each entity case runs `_apply_reported_fix`, so the
-label is proven pasteable, not just pretty. The genuinely data-weighted entity clause
-(`SUM(keepS * cost)`) is verified manually only — no automated case yet.
+keyed fold has three label tests in the same file. Two run on TPC-H so the CLI stays
+read-only: one class per group
+(`test_infeasible_entity_scoped_label_drops_accumulated_coefficient`:
+`DECIDE per r: keepR(BOOL)` with `per r.r_name: sum(keepR) by (r.r_name) >= 6` over
+region ⋈ nation, where each region folds 5 rows onto one column) must not render
+`sum(5*keepR)`; mixed multiplicities in one group
+(`test_infeasible_entity_scoped_label_survives_mixed_multiplicity`:
+`DECIDE per n: keepN(BOOL)` with `per r.r_name: sum(keepN) by (r.r_name) >= 1000` over
+customer ⋈ nation ⋈ region, where nations carry 50-72 customers each) must not render
+`sum(keepN * 1)`. Both
+run `_apply_reported_fix`, so the label is proven pasteable, not just pretty. The third
+(`test_infeasible_row_scoped_label_unaffected_by_fold_rendering`, over `VALUES`) pins that
+a decision per row, `per grp: sum(buy) by (grp) >= 5`, keeps the fan-out path. The
+genuinely data-weighted keyed clause (`SUM(keepS * cost)`) is verified manually only — no
+automated case yet.

@@ -375,8 +375,8 @@ static string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenanc
 	// suggested edit mislabel the user's AVG constraint as SUM (the value is already in AVG
 	// units, so the SUM label makes the suggestion a different, wrong constraint).
 	const char *agg_name = row.provenance.avg_scaled ? "AVG" : "SUM";
-	// Collapse a uniform SUM fan-out to SUM(c*var). PER-grouped aggregates fold too: they
-	// stay distinguishable in the relation via the finding's `group` column + WHEN/PER qualifier
+	// Collapse a uniform SUM fan-out to SUM(c*var). Grouped aggregates fold too: they
+	// stay distinguishable in the relation via the finding's `group` column + `when c per K:` qualifier
 	// (Facet A), so the old group_key == INVALID gate is gone.
 	// A row off the accumulating build path carries per-entity *totals*, not the coefficients
 	// the user wrote, so every matrix-inference path below misreads it — either as a literal
@@ -470,13 +470,10 @@ string SourceAwareQuadraticLhs(const SolverModel &model, const SolverModel::Quad
 	return source && !source->canonical_lhs.empty() ? source->canonical_lhs : FormatQuadraticLhs(row, columns);
 }
 
-ConstraintProvenance SourceAwareProvenance(const SolverModel &model, const ConstraintProvenance &provenance) {
-	auto result = provenance;
+string SourceQualifier(const SolverModel &model, const ConstraintProvenance &provenance) {
+	// The source registry is the one place a clause's `when c per K:` qualifier lives.
 	auto source = FindConstraintSource(model, provenance);
-	if (source && !source->qualifier.empty()) {
-		result.qualifier = source->qualifier;
-	}
-	return result;
+	return source ? source->qualifier : string();
 }
 
 string SourceAwareRhs(const SolverModel &model, const ConstraintProvenance &provenance, double fallback) {
@@ -492,8 +489,8 @@ static const char *SenseStr(char sense) {
 	return sense == '<' ? "<=" : (sense == '>' ? ">=" : "=");
 }
 
-//! The clause as the user wrote it: `lhs sense rhs`, with the WHEN/PER qualifier
-//! appended (Facet C) so it stays recognizable. For a strict `<` / `>` the δ offset was
+//! The clause as the user wrote it: `lhs sense rhs`, with the `when c per K:` qualifier
+//! in front (Facet C) so it stays recognizable. For a strict `<` / `>` the δ offset was
 //! baked into `rhs` at build time, so quote the user's typed literal (`typed_k`) and
 //! render `<` / `>` rather than the model's `<=` / `>=` (I2.d).
 //! The number to quote for a row whose own RHS is not what the user typed. Two things
@@ -508,31 +505,32 @@ static double DisplayRhs(const ConstraintProvenance &prov, double rhs, char sens
 	return rhs - prov.rhs_mechanism_offset;
 }
 
-static string MakeClauseLabel(const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
+static string MakeClauseLabel(const ConstraintProvenance &prov, const string &qualifier, const string &lhs, double rhs,
+                              char sense) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	double base_rhs = DisplayRhs(prov, rhs, sense);
-	return AttachDecideQualifier(lhs + " " + sense_str + " " + FormatNum(base_rhs), prov.qualifier);
+	return AttachDecideQualifier(lhs + " " + sense_str + " " + FormatNum(base_rhs), qualifier);
 }
 
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
 //! solved slack `amount` (signed; for `=` it is the net s⁺−s⁻). For a strict `<` /
 //! `>` the δ offset was baked into `rhs` at build time, so re-quote the suggestion
 //! against the user's typed literal (`typed_k`) and render `<` / `>` (I2.d).
-ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, double rhs,
+ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &qualifier, const string &lhs, double rhs,
                           char sense, double amount) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	double base_rhs = DisplayRhs(prov, rhs, sense);
 	// `≥` loosens downward (b − s), `≤` / `=` upward (b + s).
 	double new_rhs = (sense == '>') ? base_rhs - amount : base_rhs + amount;
-	// Facet C: append the WHEN/PER qualifier (`PER grp`) so the clause is recognizable;
+	// Facet C: attach the `when c per K:` qualifier so the clause is recognizable;
 	// Facet A: carry the group's printable key as its own field (a separate `group` EAV
 	// row) so two folded `SUM(x)` groups stay distinguishable in the relation.
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;
-	e.label = MakeClauseLabel(prov, lhs, rhs, sense);
-	e.suggestion = AttachDecideQualifier(lhs + " " + sense_str + " " + FormatNum(new_rhs), prov.qualifier);
+	e.label = MakeClauseLabel(prov, qualifier, lhs, rhs, sense);
+	e.suggestion = AttachDecideQualifier(lhs + " " + sense_str + " " + FormatNum(new_rhs), qualifier);
 	e.has_amount = true;
 	e.amount = std::fabs(amount);
 	e.group = prov.group_label;
@@ -601,10 +599,9 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
 	vector<UnreachableClause> found;
 	std::set<std::tuple<string, string, idx_t>> seen;
 	auto record = [&](const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
-		auto display_provenance = SourceAwareProvenance(model, prov);
 		ClauseEdit base;
-		base.label = MakeClauseLabel(display_provenance, lhs, rhs, sense);
-		base.group = display_provenance.group_label;
+		base.label = MakeClauseLabel(prov, SourceQualifier(model, prov), lhs, rhs, sense);
+		base.group = prov.group_label;
 		for (auto &finding : FanOutByClass(std::move(base), prov, model, expanded)) {
 			UnreachableClause c;
 			c.label = finding.label;
@@ -641,7 +638,7 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
 //! stepped onto the lattice, and the written bound moves by the same amount.
 //! `rhs_text` is the RHS column name (`prov.rhs_label`) or a numeric fallback when no
 //! name is available. `edit_source` is stamped by the caller.
-ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &lhs,
+ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &qualifier, const string &lhs,
                                  const string &rhs_text, char sense, double delta) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
@@ -650,8 +647,8 @@ ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string 
 	string mag = FormatNum(std::fabs(delta));
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;
-	e.label = AttachDecideQualifier(lhs + " " + sense_str + " " + rhs_text, prov.qualifier);
-	e.suggestion = AttachDecideQualifier(lhs + " " + sense_str + " " + rhs_text + op + mag, prov.qualifier);
+	e.label = AttachDecideQualifier(lhs + " " + sense_str + " " + rhs_text, qualifier);
+	e.suggestion = AttachDecideQualifier(lhs + " " + sense_str + " " + rhs_text + op + mag, qualifier);
 	e.has_amount = true;
 	e.amount = std::fabs(delta);
 	e.group = prov.group_label;

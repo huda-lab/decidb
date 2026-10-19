@@ -1,6 +1,6 @@
 ---
 name: learn
-description: ELI5 explainer for DeciDB features and concepts - explains the mental model behind a keyword, pipeline stage, or optimization concept, not just the code. Use when the user wants to understand how something works (e.g. /learn PER, /learn Big-M, /learn pipeline).
+description: ELI5 explainer for DeciDB features and concepts - explains the mental model behind a keyword, pipeline stage, or optimization concept, not just the code. Use when the user wants to understand how something works (e.g. /learn per, /learn Big-M, /learn pipeline).
 ---
 
 # /learn — ELI5 Feature & Concept Explainer
@@ -10,13 +10,13 @@ Explains how a DeciDB feature or concept works — the mental model, not just th
 ## Arguments
 
 `$ARGUMENTS` — **required**: the topic to explain. Can be:
-- A keyword: `PER`, `WHEN`, `Big-M`, `QP`, `MIN/MAX`, `AVG`, `ABS`, `indicators`, `bilinear`
+- A keyword: `per`, `when`, `by`, `Big-M`, `QP`, `MIN/MAX`, `AVG`, `ABS`, `indicators`, `bilinear`
 - A pipeline stage: `parser`, `binder`, `optimizer`, `execution`, `solver`
 - A concept: `linearization`, `easy vs hard`, `auxiliary variables`, `solver-agnostic`
 - A broad area: `pipeline`, `how DECIDE works`, `constraint types`, `objective types`
 - A file name or path: reads and explains that specific file
 
-If `$ARGUMENTS` is empty, stop and say: "What do you want to learn about? Try something like `/learn PER`, `/learn Big-M`, or `/learn pipeline`."
+If `$ARGUMENTS` is empty, stop and say: "What do you want to learn about? Try something like `/learn per`, `/learn Big-M`, or `/learn pipeline`."
 
 ## Procedure
 
@@ -25,7 +25,7 @@ If `$ARGUMENTS` is empty, stop and say: "What do you want to learn about? Try so
 Based on the topic, identify which files and docs to read:
 
 **Keyword/feature topics** — map to `context/descriptions/03_expressivity/`:
-- Look for a matching subdirectory (e.g., `per/`, `when/`, `bilinear/`, `problem_types/`)
+- Look for a matching subdirectory (e.g., `scope/` for `per`, `when` and `by`; `bilinear/`, `problem_types/`)
 - Read the `done.md` and `todo.md` there
 - Also read the relevant source files listed in those docs
 
@@ -120,10 +120,10 @@ If the user asks a follow-up question in the same conversation, answer it in the
 
 These rules define how you write every word of the output:
 
-1. **ELI5 first**. Explain like the reader is smart but unfamiliar with the internals. Use analogies when they help (e.g., "PER is like a GROUP BY for constraints — instead of one rule for the whole table, you get one rule per group").
+1. **ELI5 first**. Explain like the reader is smart but unfamiliar with the internals. Use analogies when they help (e.g., "`per` is like a GROUP BY for constraints — instead of one rule for the whole table, you get one rule per group; `by` then says which rows each rule's sum reads").
 2. **No filler**. Never write "as you can see", "note that", "it's worth mentioning", "importantly", or similar padding.
 3. **Define jargon inline**. If you must use a term like "linearization" or "Big-M", define it in parentheses the first time.
 4. **Short code snippets**. Show only the essential lines (5-15), not entire functions. Annotate with `// ←` comments explaining what each important line does.
 5. **Real code only**. Snippets must come from the actual codebase (with file path and line numbers), not invented examples. The SQL examples can be illustrative, but C++ must be real.
 6. **Build mental models**. The goal isn't to document — it's to help the reader *understand*. Prefer "think of it like X" over "the implementation does X".
-7. **Concrete, not abstract**. Instead of "PER enables per-group constraints", say "if you write `SUM(x) <= 100 PER region`, each region gets its own budget of 100 — the Northeast can't steal from the Southwest".
+7. **Concrete, not abstract**. Instead of "`per` enables per-group constraints", say "if you write `per region: sum(x) by (region) <= 100`, each region gets its own budget of 100 — the Northeast can't steal from the Southwest".

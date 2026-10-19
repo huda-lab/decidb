@@ -1,6 +1,6 @@
-"""Objective scope (anr_language_extension.md §6): an objective is produced once -- an
+"""Objective scope (syntax_reference.md §4): an objective is produced once -- an
 omitted `per` is `per ()` -- `when` in front filters the rows for the whole objective,
-`when` and `per` inside reducers work as in §5.2, and the two-level form
+`when` and `per` inside reducers work as in §5.3, and the two-level form
 `outer(per k: inner(e) by (k))` evaluates `inner` once per class of `k` (NULL a class)
 and `outer` over those values.
 
@@ -211,7 +211,7 @@ def test_two_level_refusals(decidb_cli, objective, message):
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_a_nested_reducer_in_a_constraint_is_refused(decidb_cli):
-    """Deck example 9: nesting is the objective's two-level form only (§5.5)."""
+    """Deck example 9: nesting is the objective's two-level form only (§10.2)."""
     result = decidb_cli.execute_raw(_query("MAXIMIZE SUM(ship)",
                                            "ship <= S.demand AND sum(per D.depotID: max(ship) by (D.depotID)) <= 50"))
     assert "DECIDE: an aggregate inside an aggregate is not supported yet" in result.stderr, result.stderr

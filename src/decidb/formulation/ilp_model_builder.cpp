@@ -188,13 +188,13 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
 
 //! F2: stamp the row -> clause provenance fields every constraint-builder site sets,
 //! linear or quadratic, aggregate or per-row. `group_key` defaults to INVALID_INDEX for
-//! an ungrouped aggregate row; pass the PER/WHEN group id (and its label) for a grouped
+//! an ungrouped aggregate row; pass the `when`/`by` group id (and its label) for a grouped
 //! aggregate row, or the row id for a per-row row. Leaves every other ConstraintProvenance
 //! field at its default -- the aggregate-only and linear-aggregate-only fields are each
 //! their own site (see StampAggregateProvenance and the avg/weight/folded-terms block in
 //! the linear aggregate branches), because a per-row or quadratic row does not carry them:
 //! FormatQuadraticLhs never reads avg_scaled/weight_labels/folded_terms, and FormatLhs's
-//! is_aggregate/qualifier wrapping is meaningless off the aggregate branch.
+//! is_aggregate wrapping is meaningless off the aggregate branch.
 //! `lhs_offset` is the constant part of the LHS that this site folded into the RHS
 //! (`SUM(x + c) >= K` is emitted as `SUM(x) >= K - Sum(c)`). The reconstructed clause
 //! label still renders the LHS the user wrote, constant included, so the RHS it is
@@ -222,19 +222,13 @@ static void StampConstraintProvenance(ConstraintProvenance &provenance, const Ev
     if (!group_label.empty()) {
         provenance.group_label = group_label;
     }
-    if (eval_const.removal_group_id != DConstants::INVALID_INDEX) {
-        // DROP names the whole source clause, including a WHEN/PER wrapper, even when
-        // the formulation row itself is per-row rather than aggregate-shaped.
-        provenance.qualifier = eval_const.qualifier;
-    }
 }
 
-//! The data row a per-row row was emitted at (DIAGNOSE's `row`). A scoped clause's row
-//! that stands for no class set is a kept row, a class of its own (D28). Stamped after
-//! `class_set`.
-static void StampDataRow(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const, idx_t row) {
+//! The data row a per-row row was emitted at (DIAGNOSE's `row`). A row that stands for
+//! no class set is a kept row, a class of its own (D28). Stamped after `class_set`.
+static void StampDataRow(ConstraintProvenance &provenance, idx_t row) {
     provenance.data_row = row;
-    provenance.per_kept_row = eval_const.scoped && provenance.class_set == DConstants::INVALID_INDEX;
+    provenance.per_kept_row = provenance.class_set == DConstants::INVALID_INDEX;
 }
 
 //! The class set group `group`'s rows stand for (D28), INVALID_INDEX for none.
@@ -243,12 +237,10 @@ static idx_t ClassSetOf(const EvaluatedConstraint &eval_const, idx_t group) {
 }
 
 //! F2, aggregate sites only: reducer-placement metadata for the diagnosis renderer's
-//! SUM(...)-wrapping (Facet B) and WHEN/PER qualifier suffix (Facet C). A per-row
-//! constraint has no reducer and no qualifier text of its own, so this is never called
-//! there.
+//! SUM(...)-wrapping (Facet B). A per-row constraint has no reducer, so this is never
+//! called there.
 static void StampAggregateProvenance(ConstraintProvenance &provenance, const EvaluatedConstraint &eval_const) {
     provenance.is_aggregate = eval_const.lhs_is_aggregate;
-    provenance.qualifier = eval_const.qualifier;
 }
 
 //! The model class this built model demands, read straight off the facts the build
@@ -784,7 +776,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             value = parsed;
             return true;
         };
-        // Computed once per clause, not per group: the PER path below emits one constraint
+        // Computed once per clause, not per group: the grouped path below emits one constraint
         // per group and would otherwise rebuild this (and its scratch set) for every one.
         // Empty unless the clause is an aggregate that takes the accumulating path, which
         // is the only case whose matrix coefficients are folded totals.
@@ -810,7 +802,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
         if (is_aggregate) {
             if (!has_groups) {
-                // FAST PATH: no WHEN, no PER — one constraint summing all rows.
+                // FAST PATH: no `when`, no groups — one constraint summing all rows.
                 ModelConstraint constr;
                 bool row_scoped_fast = CanUseRowScopedFastPath(eval_const);
 
@@ -894,7 +886,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 PushNormalizedConstraint(std::move(constr));
 
             } else {
-                // UNIFIED PATH: WHEN and/or PER — build group→rows CSR once, emit one constraint per group
+                // UNIFIED PATH: a `when` and/or groups — build group→rows CSR once, emit one constraint per group
                 BuildGroupCSR(eval_const.row_group_ids, eval_const.num_groups,
                               eval_const.group_offsets, eval_const.group_row_ids);
                 auto &offsets = eval_const.group_offsets;
@@ -964,7 +956,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                 // One column for the whole query, so a scalar beside a reducer
                                 // (not inside one) enters each group's row once — not once per
                                 // row of that group. Same rule the ungrouped path above applies;
-                                // a PER constraint just has more rows to get it wrong in. A
+                                // a grouped constraint just has more rows to get it wrong in. A
                                 // scalar *inside* a reducer body is SUM-reduced and falls
                                 // through to the per-row loop below, summing the whole group.
                                 accum.Add(static_cast<int>(indexer.Get(decide_var_idx, 0)),
@@ -991,7 +983,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                                    "fixed aggregate LHS term");
                     double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality);
-                    // F2 site 2: aggregate + PER/WHEN.
+                    // F2 site 2: grouped aggregate (`by` and/or `when`).
                     string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
                     StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_label,
                                               group_lhs_offset);
@@ -1012,7 +1004,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
             idx_t num_terms = eval_const.variable_indices.size();
             for (idx_t row = 0; row < num_rows; row++) {
-                // Skip rows excluded by WHEN (row_group_ids with INVALID_INDEX)
+                // Skip rows excluded by `when` (row_group_ids with INVALID_INDEX)
                 if (has_groups && eval_const.row_group_ids[row] == DConstants::INVALID_INDEX) {
                     continue;
                 }
@@ -1073,7 +1065,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // A scoped easy MIN/MAX's member row stands for its `by` group's classes, a
                 // `per K:` clause's row for its class; any other per-row row for its data row.
                 constr.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
-                StampDataRow(constr.provenance, eval_const, row);
+                StampDataRow(constr.provenance, row);
                 PushNormalizedConstraint(std::move(constr));
             }
         }
@@ -1100,6 +1092,17 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
             idx_t decide_var_idx = ec.variable_indices[term_idx];
             if (decide_var_idx != DConstants::INVALID_INDEX) {
+                bool is_reduced_scalar = term_idx < ec.linear_term_reductions.size() &&
+                                         ec.linear_term_reductions[term_idx] == LinearTermReduction::SUM;
+                if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
+                    // A query-wide decision beside the reducers contributes once, as in a
+                    // linear row: `SUM(POWER(x, 2)) + s <= 30` is not `... + n*s`.
+                    if (!row_set.empty()) {
+                        linear_accum[static_cast<int>(indexer.Get(decide_var_idx, 0))] +=
+                            ec.row_coefficients[term_idx][row_set[0]];
+                    }
+                    continue;
+                }
                 for (idx_t row : row_set) {
                     double coeff = ec.row_coefficients[term_idx][row];
                     int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
@@ -1264,7 +1267,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 qc.provenance.class_set = ClassSetOf(eval_const, 0);
                 model.quadratic_constraints.push_back(std::move(qc));
             } else {
-                // PER groups: one QuadraticConstraint per group, reuse CSR
+                // Groups: one QuadraticConstraint per group, reuse CSR
                 BuildGroupCSR(eval_const.row_group_ids, eval_const.num_groups,
                               eval_const.group_offsets, eval_const.group_row_ids);
                 auto &offsets = eval_const.group_offsets;
@@ -1277,13 +1280,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     }
                     vector<idx_t> group_rows_slice(flat_rows.begin() + g_begin,
                                                    flat_rows.begin() + g_end);
-                    // This group's own bound — see the linear PER path for why row 0
+                    // This group's own bound — see the linear grouped path for why row 0
                     // is the wrong row to read once the RHS varies by group.
                     double group_rhs = eval_const.rhs_values.Empty()
                                            ? 0.0
                                            : eval_const.rhs_values.Get(flat_rows[g_begin]);
                     auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_integrality);
-                    // F2 site 5: quadratic aggregate + PER.
+                    // F2 site 5: grouped quadratic aggregate.
                     string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
                     StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, group_label);
                     StampAggregateProvenance(qc.provenance, eval_const);
@@ -1304,7 +1307,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key);
                 qc.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
-                StampDataRow(qc.provenance, eval_const, row);
+                StampDataRow(qc.provenance, row);
                 model.quadratic_constraints.push_back(std::move(qc));
             }
         }
@@ -1337,7 +1340,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         // itself, so a clause reads the same in a diagnosis whichever shape its rows took.
         constr.provenance.group_key = raw.group_key;
         constr.provenance.group_label = raw.group_label;
-        constr.provenance.qualifier = raw.qualifier;
         constr.provenance.is_aggregate = raw.is_aggregate;
         constr.provenance.rhs_mechanism_offset = raw.rhs_mechanism_offset;
         constr.provenance.rhs_label = raw.rhs_label;
@@ -1368,7 +1370,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         ic.provenance.indicator_col = spec.row.indicator_col;
         ic.provenance.group_key = spec.row.group_key;
         ic.provenance.group_label = spec.row.group_label;
-        ic.provenance.qualifier = spec.row.qualifier;
         ic.provenance.is_aggregate = spec.row.is_aggregate;
         ic.provenance.rhs_mechanism_offset = spec.row.rhs_mechanism_offset;
         ic.provenance.rhs_label = spec.row.rhs_label;

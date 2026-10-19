@@ -19,7 +19,6 @@
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
-#include "duckdb/planner/expression/bound_between_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -49,7 +48,6 @@ namespace duckdb {
 // touches data, so it needs types, not rows.
 
 //! One decision variable, resolved, plus the type facts absorption needs about it.
-//! The comparison and BETWEEN arms ask exactly the same questions, so they ask once.
 struct AbsorptionTarget {
 	LogicalDecide *decide = nullptr;
 	idx_t var_idx = DConstants::INVALID_INDEX;
@@ -79,7 +77,7 @@ struct AbsorptionTarget {
 	//! the intrinsic box), record only when ShouldRecord agrees. Returns whether it
 	//! recorded: only a recorded bound is loosened by a diagnosis.
 	bool Absorb(char sense, double k, bool strict, double typed_k, idx_t source_clause_id,
-	            idx_t removal_group_id, bool repair_rows_from_clause) const {
+	            idx_t removal_group_id) const {
 		auto &lower = decide->absorbed_lower_bounds[var_idx];
 		auto &upper = decide->absorbed_upper_bounds[var_idx];
 		if (sense != '>') {
@@ -91,8 +89,7 @@ struct AbsorptionTarget {
 		if (!ShouldRecord(sense, k)) {
 			return false;
 		}
-		decide->user_absorbed_bounds.push_back(
-		    {var_idx, sense, k, strict, typed_k, source_clause_id, removal_group_id, repair_rows_from_clause});
+		decide->user_absorbed_bounds.push_back({var_idx, sense, k, strict, typed_k, source_clause_id, removal_group_id});
 		return true;
 	}
 };
@@ -121,17 +118,34 @@ static bool TryMatchAbsorptionTarget(const Expression &expr, LogicalDecide &deci
 	return false;
 }
 
+//! Resolve an easy `max(x) <= K` / `min(x) >= K` (MINMAX_EASY_REWRITE_TAG) to its
+//! decision. It bounds every row its reducer reads: with no reducer filter and no
+//! front `when` (whose wrapper this pass never enters) that is every kept row, so it is the
+//! column bound `x <= K` / `x >= K`, and a negative K lets x go negative as `x >= -5` does
+//! (D41). The reducer stays in the tree, so EXPLAIN and DIAGNOSE read the clause as written.
+static bool TryMatchEasyExtremumTarget(const BoundComparisonExpression &comp, LogicalDecide &decide,
+                                       AbsorptionTarget &out) {
+	if (!HasDecideTag(comp.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
+		return false;
+	}
+	const Expression *left = comp.left.get();
+	while (left->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		left = left->Cast<BoundCastExpression>().child.get();
+	}
+	if (left->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return false;
+	}
+	auto &agg = left->Cast<BoundAggregateExpression>();
+	return (agg.function.name == "min" || agg.function.name == "max") && !agg.filter && agg.children.size() == 1 &&
+	       TryMatchAbsorptionTarget(*agg.children[0], decide, out);
+}
+
 void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &decide) {
 	switch (expr.GetExpressionClass()) {
 	case ExpressionClass::BOUND_CONJUNCTION: {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		// PER: only the constraint (child 0) carries bounds; the grouping columns do not.
-		if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
-			AbsorbBoundsInExpression(*conj.children[0], decide);
-			break;
-		}
-		// WHEN: conditional per-row constraints must NOT contribute to a global bound.
-		// `x <= 0 WHEN c` does not mean `x <= 0` everywhere. This is why the pass keeps
+		// `when c:` -- a conditional per-row constraint must NOT contribute to a global
+		// bound: `when c: x <= 0` does not mean `x <= 0` everywhere. This is why the pass keeps
 		// its own descent rather than using ForEachConstraintLeaf -- it asks the shared
 		// predicate what a wrapper is, then deliberately answers differently.
 		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
@@ -149,10 +163,9 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		TryParseSourceClauseTag(comp.GetAlias(), source_clause_id);
 		idx_t removal_group_id = DConstants::INVALID_INDEX;
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
-		const bool scoped = HasDecideTag(comp.GetAlias(), SCOPED_CLAUSE_TAG);
-
 		AbsorptionTarget target;
-		if (!TryMatchAbsorptionTarget(*comp.left, decide, target)) {
+		if (!TryMatchAbsorptionTarget(*comp.left, decide, target) &&
+		    !TryMatchEasyExtremumTarget(comp, decide, target)) {
 			break;
 		}
 
@@ -173,33 +186,32 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		// written last. A strict `<` / `>` normalizes into the bound for an integer
 		// (`x < 10` is `x <= 9`), carrying the user's literal as `typed_k` so the
 		// diagnosis re-quotes `< 10`. A REAL has no such normalization, so it declines
-		// and the constraint path rejects it with a message naming the clause. A scoped
-		// clause steps onto the lattice as every row does (`x > 2.5` is `x >= 3`); the
-		// old spellings keep `k ± 1` (`x >= 3.5`, a logged bug, D17).
-		const double below = scoped ? std::ceil(k) - 1.0 : k - 1.0;
-		const double above = scoped ? std::floor(k) + 1.0 : k + 1.0;
+		// and the constraint path rejects it with a message naming the clause. The bound
+		// steps onto the lattice as every row does (`x > 2.5` is `x >= 3`).
+		const double below = std::ceil(k) - 1.0;
+		const double above = std::floor(k) + 1.0;
 		bool absorbed = true;
 		bool recorded = false;
 		switch (comp.type) {
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-			recorded = target.Absorb('<', k, false, 0.0, source_clause_id, removal_group_id, scoped);
+			recorded = target.Absorb('<', k, false, 0.0, source_clause_id, removal_group_id);
 			break;
 		case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-			recorded = target.Absorb('>', k, false, 0.0, source_clause_id, removal_group_id, scoped);
+			recorded = target.Absorb('>', k, false, 0.0, source_clause_id, removal_group_id);
 			break;
 		case ExpressionType::COMPARE_EQUAL:
-			recorded = target.Absorb('=', k, false, 0.0, source_clause_id, removal_group_id, scoped);
+			recorded = target.Absorb('=', k, false, 0.0, source_clause_id, removal_group_id);
 			break;
 		case ExpressionType::COMPARE_LESSTHAN:
 			absorbed = target.is_integer;
 			if (absorbed) {
-				recorded = target.Absorb('<', below, true, k, source_clause_id, removal_group_id, scoped);
+				recorded = target.Absorb('<', below, true, k, source_clause_id, removal_group_id);
 			}
 			break;
 		case ExpressionType::COMPARE_GREATERTHAN:
 			absorbed = target.is_integer;
 			if (absorbed) {
-				recorded = target.Absorb('>', above, true, k, source_clause_id, removal_group_id, scoped);
+				recorded = target.Absorb('>', above, true, k, source_clause_id, removal_group_id);
 			}
 			break;
 		default:
@@ -209,47 +221,13 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 
 		if (absorbed) {
 			// The comparison stays in the tree so EXPLAIN keeps rendering what the user
-			// wrote; the tag is what stops it also becoming a model row. A scoped clause is
-			// one knob per kept row or class in an expanded diagnosis (D28), which one column
+			// wrote; the tag is what stops it also becoming a model row. A clause is one
+			// knob per kept row or class in an expanded diagnosis (D28), which one column
 			// bound cannot say, so a recorded one is flattened for the repair model too.
 			AddDecideTag(comp.alias, ABSORBED_BOUND_TAG);
-			if (recorded && scoped) {
+			if (recorded) {
 				AddDecideTag(comp.alias, ABSORBED_CLAUSE_ROWS_TAG);
 			}
-		}
-		break;
-	}
-
-	case ExpressionClass::BOUND_BETWEEN: {
-		auto &between = expr.Cast<BoundBetweenExpression>();
-		AbsorptionTarget target;
-		if (!TryMatchAbsorptionTarget(*between.input, decide, target)) {
-			break;
-		}
-
-		auto ExtractBound = [&](const Expression &e) -> double {
-			double value;
-			return IsCastWrappedConstant(e) && TryEvaluateFoldableDouble(optimizer.context, e, value)
-			           ? value
-			           : std::numeric_limits<double>::quiet_NaN();
-		};
-
-		// Each finite side is recorded as its own spec so the infeasible diagnosis
-		// loosens BETWEEN uniformly with the other simple bounds. A strict side is
-		// integer-normalized like the comparison arm, carrying the user's typed literal
-		// so the diagnosis re-quotes `> a` rather than the normalized `>= a+1`. Never a
-		// scoped clause's: the binder splits a scoped BETWEEN into two comparisons.
-		double lo = ExtractBound(*between.lower);
-		if (!std::isnan(lo)) {
-			bool strict = !between.lower_inclusive && target.is_integer;
-			target.Absorb('>', strict ? lo + 1.0 : lo, strict, lo, DConstants::INVALID_INDEX,
-			              DConstants::INVALID_INDEX, false);
-		}
-		double hi = ExtractBound(*between.upper);
-		if (!std::isnan(hi)) {
-			bool strict = !between.upper_inclusive && target.is_integer;
-			target.Absorb('<', strict ? hi - 1.0 : hi, strict, hi, DConstants::INVALID_INDEX,
-			              DConstants::INVALID_INDEX, false);
 		}
 		break;
 	}

@@ -379,7 +379,7 @@ def test_sum_body_data_only_offset_outer_when(decidb_cli):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_sum_body_data_only_offset_per_group(decidb_cli):
-    """PER subtracts the data-only aggregate offset separately for each group."""
+    """`per` subtracts the data-only aggregate offset separately for each group."""
     rows, cols = decidb_cli.execute("""
         SELECT id, grp, cost, value, x
         FROM (

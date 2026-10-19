@@ -1464,17 +1464,17 @@ def test_qp_mixed_negated_quadratic(
 
 
 # ===========================================================================
-# Nested outer-SUM of aggregate-of-quadratic (PER on QP objective)
+# Nested outer-SUM of aggregate-of-quadratic (two-level QP objective)
 # ===========================================================================
 # These tests exercise the nested-aggregate quadratic shape. Before the fix,
-# MINIMIZE SUM(SUM(POWER(x - const, 2)))
-# PER grp was rejected by the binder because POWER expansion produced a
+# MINIMIZE sum(per grp: sum(POWER(x - const, 2)) by (grp))
+# was rejected by the binder because POWER expansion produced a
 # __SUM__ placeholder that leaked through the nested-SUM validator. After the
 # fix, normalization preserves the raw AST and the post-bind optimizer's
 # nested-aggregate strip flattens the form.
 #
-# Semantically SUM(SUM(expr)) PER grp ≡ SUM(expr), and SUM(AVG(expr)) PER grp
-# weights each row by 1/n_g (group size). SUM(MIN/MAX(expr)) PER grp needs
+# Semantically sum(per grp: sum(expr) by (grp)) ≡ SUM(expr), and the same with an
+# inner avg weights each row by 1/n_g (group size). An inner min/max needs
 # quadratic per-row auxiliary constraints downstream; those shapes now bind
 # successfully but their physical-layer correctness is tracked separately.
 
@@ -1554,7 +1554,7 @@ def test_qp_nested_sum_sum_per_binding(
 def test_qp_nested_sum_sum_per_unconstrained(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Unconstrained nested-PER QP: each x_i = target_i, objective = -Σ t²
+    """Unconstrained nested-`per` QP: each x_i = target_i, objective = -Σ t²
     (after DecidB's constant-stripping convention). Sanity test confirming
     the nested form degenerates to flat SUM(POWER(x-t,2)) semantically.
     """

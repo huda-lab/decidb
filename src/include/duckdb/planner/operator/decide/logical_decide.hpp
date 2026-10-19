@@ -17,13 +17,12 @@
 namespace duckdb {
 
 //! A key scope: the columns whose values decide which result rows share one decision.
-//! `per K: x(TYPE)` keys on exactly the columns K names, possibly across relations.
-//! `T.x(TYPE)` keys on table T, and a reducer qualifier on the relations it names
-//! (`sum(D, T: e)`): one value per distinct tuple, so de-duplication collapses only the
-//! fan-out contributed by relations the qualifier does *not* name.
+//! `per K: x(TYPE)` keys on exactly the columns K names, possibly across relations; a
+//! relation named as a key (`per D`, `sum(D: e)`) stands for every column of that
+//! relation. One value per distinct tuple, so de-duplication collapses only the fan-out
+//! contributed by columns the key does *not* name.
 struct EntityScopeInfo {
-    //! What the user wrote: the relation for `T.x`, the named relations joined by ","
-    //! for a qualifier ("D,T"), the key for `per K:` ("D.depotID, S.customerID").
+    //! What the user wrote: the key of `per K:` ("D.depotID, S.customerID", "D", "()").
     string table_alias;
     //! DuckDB table index/indices from the bind context (Binding::index): every
     //! relation a key column comes from.
@@ -38,12 +37,8 @@ struct EntityScopeInfo {
     vector<ColumnBinding> entity_key_bindings;
     //! Which decide_variables indices this scope keys
     vector<idx_t> scoped_variable_indices;
-    //! True for a `per K:` scope, whose key is exactly the columns K names. A `T.x` or
-    //! `sum(T: ...)` scope (false) drops the columns its clause reads as data
-    //! (`DecideDeclarationsBinder::BindDeclarations`), and the two never share a scope.
-    bool exact_key = false;
-    //! For an exact key, each key column as a message names it (`D.depotID`), in
-    //! `entity_key_bindings` order. Empty for any other scope.
+    //! Each key column as a message names it (`D.depotID`), in `entity_key_bindings`
+    //! order; for a helper decision's scope, the names of its link's `by` key.
     vector<string> key_names;
     //! A helper decision's scope (DecideOptimizer::RewriteScopedReducers): the link into
     //! `LogicalDecide::reducer_value_links` it holds. Its entities are the groups of the
@@ -78,8 +73,8 @@ struct DecideGroupKey {
 	static DecideGroupKey Deserialize(Deserializer &deserializer);
 };
 
-//! One run-time requirement of a clause written with the scope spellings
-//! (anr_language_extension.md §7, §8): built by DecideCanonicalizer from the user's
+//! One run-time requirement of a clause
+//! (syntax_reference.md §7.3): built by DecideCanonicalizer from the user's
 //! clause, before any rewrite, and run by PhysicalDecide before any model is built.
 struct DecideScopeCheck {
 	DecideScopeCheckKind kind = DecideScopeCheckKind::KEEPS_A_ROW;
@@ -274,10 +269,6 @@ public:
         //! the composed emitter reads prepared terms like every other construct rather
         //! than re-deriving them once the rows are in.
         vector<DecideTerm> inner_terms;
-        //! From a clause written with the scope spellings: `filter` also holds the clause's
-        //! `when`, only the rows it keeps are read, and the qualifier keeps the first row
-        //! of each class among them.
-        bool scoped = false;
     };
     struct ComposedMinMaxConstraint {
         vector<ComposedMinMaxTerm> terms;
@@ -285,12 +276,10 @@ public:
         ExpressionType outer_cmp;             // Outer comparison (<=, >=, <, >, =)
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t removal_group_id = DConstants::INVALID_INDEX;
-        //! Written with the scope spellings: the classes its one row stands for, which an
-        //! expanded diagnosis reports one by one (D28) -- the values of its `per K:` key
-        //! among the rows its `when` keeps (`per_key` NAMES_CLASSES; `per ()` names none),
-        //! or those rows themselves with no `per` (NONE). `when` is the clause's own,
-        //! also folded into each term's filter.
-        bool scoped = false;
+        //! The classes its one row stands for, which an expanded diagnosis reports one by
+        //! one (D28) -- the values of its `per K:` key among the rows its `when` keeps
+        //! (`per_key` NAMES_CLASSES; `per ()` names none), or those rows themselves with
+        //! no `per` (NONE). `when` is the clause's own, also folded into each term's filter.
         DecideConstraint::PerKeyRole per_key = DecideConstraint::PerKeyRole::NONE;
         vector<unique_ptr<Expression>> class_key;
         unique_ptr<Expression> when;
@@ -372,8 +361,9 @@ public:
     // --- Absorbed variable bounds (set by DecideOptimizer::AbsorbVariableBounds) ---
 
     //! A user-written simple bound that was folded into a decision column's box instead
-    //! of being emitted as a model row. Kept so the infeasible diagnosis can re-emit it
-    //! as a slackable row and quote it back as the user wrote it.
+    //! of being emitted as a model row. Recorded so the linear form can check that its
+    //! clause was flattened for the repair model (ABSORBED_CLAUSE_ROWS_TAG), which is what
+    //! gives the diagnosis its rows and quotes the bound as the user wrote it.
     struct UserBoundSpec {
         idx_t decide_var_idx; //!< index into decide_variables
         char sense;           //!< '<' (<= K), '>' (>= K), '=' (== K)
@@ -386,10 +376,6 @@ public:
         double typed_k = 0.0;
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t removal_group_id = DConstants::INVALID_INDEX;
-        //! Its clause, written with the scope spellings and flattened into
-        //! DecidePreparedModel::absorbed_constraints, gives the repair model its rows
-        //! (ABSORBED_CLAUSE_ROWS_TAG); this record re-emits none.
-        bool repair_rows_from_clause = false;
     };
 
     //! Sentinel for "no explicit lower bound was written". Not 0, so that an explicit
@@ -408,12 +394,12 @@ public:
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
-    // Flat (non-PER) objective: original aggregate type before rewrite to SUM
+    // Flat (not two-level) objective: original aggregate type before rewrite to SUM
     ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
     // Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
     bool flat_objective_is_easy = false;
 
-    // PER nested objective: OUTER(INNER(expr)) PER col
+    // The two-level objective, outer(per k: inner(e) by (k))
     ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
     ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
     // Pre-computed easy/hard at each level (only meaningful when agg is MIN_AGG or MAX_AGG)
@@ -424,8 +410,8 @@ public:
 
     // --- Key scopes ---
 
-    //! Every key scope: of `T.x`, of `sum(T: ...)`, and of `per K:` (`exact_key`).
-    //! Empty when no decision or reducer is keyed.
+    //! Every key scope: of `per K:` and `sum(T: ...)`, one per key. Empty when no decision
+    //! or reducer is keyed.
     vector<EntityScopeInfo> entity_scopes;
 
     //! Per-variable scope assignment (row / entity / query-wide scalar).
@@ -435,14 +421,9 @@ public:
     //! Every `by (key)` written in the clause, indexed by GROUP_KEY_TAG_PREFIX tags.
     vector<DecideGroupKey> group_keys;
 
-    //! The run-time requirements of every clause written with the scope spellings, in
+    //! The run-time requirements of every clause, in
     //! clause order; PhysicalDecide runs them before it formulates anything.
     vector<DecideScopeCheck> scope_checks;
-
-    //! True when the objective is written with the scope spellings: a `when` in front,
-    //! a `by`, or a scope inside a reducer (see SCOPED_CLAUSE_TAG for what that changes).
-    //! A flag rather than a tag because every objective rewrite rebuilds the tree.
-    bool scoped_objective = false;
 
     //! BoundColumnRefExpressions for every entity-key column (flattened in scope order).
     //! These live here so that DuckDB's binder initial column_id selection AND the

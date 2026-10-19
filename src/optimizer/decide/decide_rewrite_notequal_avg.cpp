@@ -28,6 +28,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -46,14 +47,6 @@ void DecideOptimizer::RewriteNotEqual(LogicalDecide &decide) {
 	FindNotEqualConstraints(*decide.decide_constraints, decide);
 }
 
-//! User-facing rendering of a `<>` comparand for diagnosis labels: unwrap the implicit
-//! CAST the binder inserts around a literal so `x <> 1` reads `x <> 1`, not
-//! `x <> CAST(1 AS INTEGER)`. Falls through to the raw ToString for anything else.
-static string DiagnosisComparand(const Expression &expr) {
-	const Expression *cur = StripCastsForIdentity(expr);
-	return cur->ToString();
-}
-
 void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &decide) {
 	ForEachConstraintLeaf(expr, [&](Expression &node) {
 		if (node.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
@@ -63,6 +56,14 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 		if (comp.type != ExpressionType::COMPARE_NOTEQUAL) {
 			return;
 		}
+		// The two rows a `<>` becomes hold a linear left side only. A product with a BOOL
+		// decision is linear by now (RewriteBilinear runs before this pass); a product or a
+		// power of decisions still here has no formulation, and dropping its terms would
+		// change the answer.
+		if (!DecideExpressionDegree(*comp.left, decide.decide_index).IsLinear()) {
+			throw BinderException(comp, "DECIDE: <> over a product or a power of decisions is not supported yet: %s",
+			                      RenderForPlan(comp, decide));
+		}
 		// No indicator variable. Whether a `<>` even HAS a disjunction to switch is a
 		// question about evaluated data — a range that lies wholly on one side of `K`
 		// collapses to a plain inequality — and an aggregate spelling needs one binary
@@ -71,13 +72,14 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 		// that turned out to need none.
 		//
 		// What stage 05 owns is the marking: which clause this is, and the text to
-		// call it in a diagnosis. The clause index rides the tag; stage 06 allocates
-		// the binaries for the disjunctions it actually emits, and labels them here.
+		// call it in a diagnosis, spelled as the plan prints the clause. The clause index
+		// rides the tag; stage 06 allocates the binaries for the disjunctions it actually
+		// emits, and labels them here.
 		idx_t clause_idx = decide.ne_clause_labels.size();
-		decide.ne_clause_labels.push_back(DiagnosisComparand(*comp.left) + " <> " +
-		                                  DiagnosisComparand(*comp.right));
+		auto clause_text = RenderForPlan(comp, decide);
+		decide.ne_clause_labels.push_back(clause_text);
 		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::NOT_EQUAL,
-		                  RenderForPlan(comp, decide, HasDecideTag(comp.alias, SCOPED_CLAUSE_TAG)));
+		                  std::move(clause_text));
 		AddDecideTag(comp.alias, string(NE_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "__");
 	});
 }
@@ -88,26 +90,24 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 
 void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
 	if (decide.decide_constraints) {
-		RewriteAvgInExpression(decide.decide_constraints, decide, string(), false);
+		RewriteAvgInExpression(decide.decide_constraints, decide, string());
 	}
 	if (decide.decide_objective) {
 		// Rewrites mutate in place, so the objective is detached, rewritten, and
 		// reinstalled through the boundary rather than edited where it sits.
 		auto objective = std::move(decide.decide_objective);
-		RewriteAvgInExpression(objective, decide, OBJECTIVE_ROW_TAG, decide.scoped_objective);
+		RewriteAvgInExpression(objective, decide, OBJECTIVE_ROW_TAG);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 }
 
 void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                             const string &source_alias, bool scoped) {
+                                             const string &source_alias) {
 	if (!expr) {
 		return;
 	}
 	const idx_t decide_index = decide.decide_index;
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
-	// A clause written with the scope spellings prints its subject as it spells it.
-	scoped = scoped || HasDecideTag(expr->GetAlias(), SCOPED_CLAUSE_TAG);
 
 	// Check if this node is an AVG aggregate — may be wrapped in a BOUND_CAST
 	Expression *inner = expr.get();
@@ -130,7 +130,7 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 		if (StringUtil::CIEquals(agg.function.name, "avg") && agg.children.size() == 1 &&
 		    BoundExpressionReferencesDecide(*inner, decide_index)) {
 			AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::AVG_SUM,
-			                  RenderForPlan(agg, decide, scoped));
+			                  RenderForPlan(agg, decide));
 			// Replace AVG(expr) with SUM(expr)
 			vector<unique_ptr<Expression>> sum_children;
 			sum_children.push_back(agg.children[0]->Copy());
@@ -161,7 +161,7 @@ void DecideOptimizer::RewriteAvgInExpression(unique_ptr<Expression> &expr, Logic
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		RewriteAvgInExpression(child, decide, clause_alias, scoped);
+		RewriteAvgInExpression(child, decide, clause_alias);
 	});
 }
 

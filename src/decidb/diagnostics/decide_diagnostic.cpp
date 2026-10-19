@@ -307,7 +307,7 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 //! When the reported rules account for every escaping instance (EscapeRule::covers_scope)
 //! the cap is scoped to exactly those rows, so pasting it back does not also restrict
 //! rows that were already bounded. Rendered as a `SUCH THAT` conjunct the user can paste,
-//! in the scope spellings (the remedy is new text, not an echo of a clause the user
+//! with the `when` in front (the remedy is new text, not an echo of a clause the user
 //! typed): `when region = 'B': buy <= <cap>`, or over several rules the disjunction they
 //! form. Anything less than full coverage keeps the global form — capping extra rows is
 //! merely over-restrictive, but missing an escaper would leave the query unbounded.

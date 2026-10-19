@@ -15,9 +15,9 @@ useless, where this reports on the plan.
 The DECIDE node prints three sections:
 
 1. **Variables** — user-declared decision variables. Auxiliary variables are excluded.
-2. **Objective** — `MAXIMIZE` / `MINIMIZE` and the objective expression, with
-   `WHEN` / `PER` suffixes.
-3. **Constraints** — one group per user clause, with `WHEN` / `PER` suffixes.
+2. **Objective** — `MAXIMIZE` / `MINIMIZE` and the objective expression, its `when`
+   in front.
+3. **Constraints** — one group per user clause, its `when c per K:` in front.
 
 ```
 ┌───────────────────────────┐
@@ -26,10 +26,10 @@ The DECIDE node prints three sections:
 │        Variables: x       │
 │                           │
 │         Objective:        │
-│      MAXIMIZE SUM(x * v)  │
+│      MAXIMIZE sum(x * v)  │
 │                           │
 │        Constraints:       │
-│      SUM(x * w) <= 6      │
+│      sum(x * w) <= 6      │
 │                           │
 │          ~3 Rows          │
 └─────────────┬─────────────┘
@@ -49,30 +49,49 @@ a clause the pipeline reshaped is grouped with what it became.
 DuckDB binds several `SUCH THAT` constraints into a single
 `BoundConjunctionExpression`. Printing that root as one string would produce an
 unreadable line, so `CollectDecideExpressionStrings`
-(`src/planner/decide/decide_source_provenance.cpp`) walks it:
+(`src/planner/decide/decide_source_provenance.cpp`) walks it, carrying the qualifier
+of the wrappers above each clause:
 
 | Node | Handling |
 |---|---|
-| `PER` wrapper (`IsPerConstraintTag`, ≥2 children) | Build the suffix from `children[1..N]` — ` PER col`, or ` PER (col1, col2)` when there is more than one — recurse into child 0, append to every leaf |
-| `WHEN` wrapper (`WHEN_CONSTRAINT_TAG`, 2 children) | Suffix ` WHEN <condition>` from child 1, recurse into child 0, append to every leaf |
+| `per K:` wrapper (`PER_CLASS_TAG`) | Add `per K` to the qualifier, the key as written (`PerClassQualifier`, from the source fragment the binder recorded); recurse into child 0 |
+| `when c:` wrapper (`WHEN_CONSTRAINT_TAG`, 2 children) | Put `when c` (child 1) in front of the qualifier (`WhenQualifier`); recurse into child 0 |
+| Two-level objective wrapper (`PER_CONSTRAINT_TAG`) | Print `outer(per k: inner(e) by (k))` whole (`RenderTwoLevelObjective`); after its rewrite, the inner reducer once per class |
 | Plain `AND` | Recurse into each child |
 | `IN` marker (`COMPARE_IN`) | `<target> IN (v1, v2, ...)`, each part through the renderer |
-| Leaf | `RenderDecideSource` |
+| Leaf | `RenderDecideSource`, with the qualifier and a colon in front (`FrontQualifier`, `AttachDecideQualifier`) |
 
 Producing, for example:
 
 ```
-SUM(x * weight) <= 50.0 WHEN returnflag = 'R' PER department
+when returnflag = 'R' per department: sum(x * weight) by (department) <= 50.0
 ```
 
 **The Objective row goes through the same walker**, not a direct `GetName()`. A
-conditional objective is itself a `WHEN`/`PER`-tagged
-`BoundConjunctionExpression`, so reusing the walker peels those wrappers into
-postfix suffixes identically and keeps the two rows symmetric. Calling
-`GetName()` on the wrapper instead returns its *alias* — the raw
-`__when_constraint__` tag — because `GetName()` short-circuits to the alias
-whenever one is set. That divergence was a real bug once; the shared walker is
-what fixed it.
+conditional objective is itself a `when`-tagged `BoundConjunctionExpression`, so the
+walker prints its `when` in front exactly as it does a constraint's, and the two rows
+stay symmetric. `GetName()` on the wrapper would return its *alias*, the raw
+`__when_constraint__` tag, because `GetName()` short-circuits to the alias whenever
+one is set.
+
+### The plan style
+
+Every clause prints the same way, written as the user can edit it (D32):
+
+- reducers, `norm` and the scope keywords in lower case: `sum(x * w) <= 6`,
+  `MAXIMIZE when active: sum(x * w)`;
+- the `when c per K:` qualifier in front of its clause, a reducer's own scope inside it
+  (`sum(when priority per D: opening_cost * open)`) and its `by (G)` after it,
+  the key as written (`per D.depotID`), a column by its name;
+- the defaults `per row:` and `by ()` are not printed;
+- the colon form keeps its spelling: `SUM(D: e)` prints as `sum(D: e)`, not `sum(per D: e)` (D38);
+- the two-level objective whole: `MINIMIZE when tier > 0: max(per grp: sum(x * v) by (grp))`.
+
+A diagnosis quotes clauses in the same style, and so do the labels of the rows a
+rewrite adds: a `MIN`/`MAX` extremum column is `max(ship)`
+(`LogicalDecide::minmax_clause_labels`, written by `RewriteMinMaxInConstraint` through
+`RenderForPlan`), a `<>` binary is `sum(ship) by (D.region) <> 20`
+(`ne_clause_labels`).
 
 ### Leaves render by authorship, not by type
 
@@ -81,7 +100,7 @@ documented in `decide_source_provenance.hpp` and described in
 [`../../01_pipeline/03_logical_plan/done.md`](../../01_pipeline/03_logical_plan/done.md).
 It replaces `ToString()` because the bound tree is not the query: it carries
 casts the user cannot edit, prints functions in call form, and stores pipeline
-metadata (source clause, `WHEN`/`PER` role, reducer scope) in expression aliases
+metadata (source clause, scope role, a reducer's key and `by`) in expression aliases
 that `GetName()` would print verbatim as `__source_clause_0__`.
 
 The rule that separates a cast the user typed from one the binder added is
@@ -92,12 +111,14 @@ therefore keeps its cast — that is legal SQL, since the binder rejects a cast 
 over a *decision* — while the reconciliation casts around `x` and `q` do not
 appear at all.
 
-A `PER` key still prints its column name rather than a binding index (`#[3.1]`):
-it is a column reference whose alias *is* its name, and `RenderDecideSource`
-falls through to `ToString()` for a plain column ref, which prefers that alias.
+A key prints as written rather than as binding indexes (`#[3.1]`): a `per K:` key
+and a two-level key from the source fragment the binder recorded, a reducer's own
+`per` from its key scope's `table_alias`, and a `by` key from `DecideGroupKey::text`.
+A column inside an expression prints by its name, which a column reference carries as
+its alias.
 
 **Four surfaces, one implementation.** The logical node, the physical node
-(`PhysicalDecide::ParamsToString`), the `WHEN`/`PER` qualifier on an infeasibility
+(`PhysicalDecide::ParamsToString`), the `when c per K:` qualifier on an infeasibility
 diagnosis, and its right-hand-side label all call `RenderDecideSource`, so a
 clause reads identically wherever it is quoted back. Each caller supplies the
 `source_fragments` and `entity_scopes` copied down from `LogicalDecide`.
@@ -108,7 +129,7 @@ indicators, ABS auxiliaries, `<>` links) are part of the picture. An auxiliary c
 prints as the expression it stands for (`abs(ship - 20)`, `(open * ship)`,
 `(ship = 5)`, `sum(ship) by (D.region)`; the labels ride in `DecideSourceNames`), never
 by its internal name, and each rewrite leaves one account line saying what it made of
-the construct (item 6, D27). Section 2.1 says where they print.
+the construct (D27). Section 2.1 says where they print.
 
 ---
 
@@ -117,7 +138,7 @@ the construct (item 6, D27). Section 2.1 says where they print.
 A DECIDE clause is read three times on its way to a solver, and the Constraints
 section shows each reading that says something different about it:
 
-1. **As written** — `ABS(ship - 20) <= 5`
+1. **As written** — `abs(ship - 20) <= 5`
 2. **Canonical** — decisions left, bound right, after stage 04
 3. **Rewritten** — the rows the solver receives, after stage 05
 
@@ -128,32 +149,26 @@ lower layers are noise when they read the same as the one above.
 
 ```
 Constraints:
-  MAX(ship) + SUM(ship) <= 100
-    ↳ MAX(ship) becomes an extremum column
-  AVG(ship) >= 10
-    ↳ AVG(ship) becomes a sum divided by its row count
-    ↳ SUM(ship) >= 10
-  ABS(ship - 20) <= 5
-    ↳ ABS(ship - 20) becomes an auxiliary variable
-    ↳ ABS(ship - 20) - ship >= -20
-    ↳ ABS(ship - 20) + ship >= 0 + 20
+  max(ship) + sum(ship) <= 100
+    ↳ max(ship) becomes an extremum column
+  avg(ship) >= 10
+    ↳ avg(ship) becomes a sum divided by its row count
+    ↳ sum(ship) >= 10
+  abs(ship - 20) <= 5
+    ↳ abs(ship - 20) becomes an auxiliary variable
+    ↳ abs(ship - 20) - ship >= -20
+    ↳ abs(ship - 20) + ship >= 0 + 20
   ship <= capacity * open
     ≡ ship - capacity * open <= 0.0
-  SUM(ship) >= 300
+  sum(ship) >= 300
 ```
 
 The account lines come first under their clause, then the rows; a row that reads as
-the layer above it (the ABS clause's own row, `ABS(ship - 20) <= 5`) is left out. Each
+the layer above it (the ABS clause's own row, `abs(ship - 20) <= 5`) is left out. Each
 account is a fact a rewrite recorded (`LogicalDecide::rewrite_accounts`: the construct
 and a `RewriteAccount::Kind`), worded in one place by `RenderDecideRewriteAccount`. The
 objective prints its own accounts, and the rows a rewrite added for it (an ABS
 envelope, an L0 link, tagged `OBJECTIVE_ROW_TAG`), under `Objective:`.
-
-Before this, EXPLAIN printed whichever tree happened to sit on `LogicalDecide` at
-render time, and the same three clauses came out as a bare `true`, a
-`SUM(ship) >= 10` that is not what `AVG(ship) >= 10` means, and three loose rows
-naming an `__abs_aux_0__` with no account of where it came from. Two queries with
-different optima could produce identical plans.
 
 **Where each layer comes from.** Nothing re-derives a form at render time:
 
@@ -256,11 +271,11 @@ and the `N Rows` in `EXPLAIN ANALYZE` match the scan's cardinality.
 | `GetName()` / `ParamsToString()` on the logical node | `src/planner/operator/decide/logical_decide.cpp` |
 | The shared walker and `RenderDecideSource` | `src/planner/decide/decide_source_provenance.cpp` |
 | Their declarations | `src/include/duckdb/planner/decide/decide_source_provenance.hpp` |
-| Physical node rendering (calls the same walker) | `src/execution/operator/decide/physical_decide.cpp:728-772` |
+| Physical node rendering (calls the same walker) | `PhysicalDecide::ParamsToString` in `src/execution/operator/decide/physical_decide.cpp` |
 | Source fragments carried to both nodes | `LogicalDecide::source_fragments`, `PhysicalDecide::source_fragments` |
 | The three-layer record | `ConstraintSourceInfo` in `src/include/duckdb/common/decide_source_info.hpp` |
 | Layering and formatting | `CollectDecideClauseLayers` / `RenderDecideClauseLayers` / `RenderDecideObjectiveLayers` |
 | Clause id carried onto emitted rows | `MarkFormulationConstraint`, `CopyClauseProvenanceTags`, `DescendSourceAlias` in `src/optimizer/decide/decide_optimizer.cpp` (shared via `decide_optimizer_internal.hpp`) |
 | Objective snapshots captured | `src/planner/binder/query_node/plan_select_node.cpp`, around `CanonicalizeObjective` |
 | Account lines and auxiliary labels | `RewriteAccount` in `logical_decide.hpp`; `AddRewriteAccount`, `RenderForPlan` in `decide_optimizer.cpp`; `RenderDecideRewriteAccount`, `DecidePlanNames` in `decide_source_provenance.cpp` |
-| Tests | `test/decide/tests/test_explain.py` — 35 cases over TPC-H, including `test_explain_renders_user_casts_only`, `test_explain_objective_when_postfix`, and the layered-rendering group; `test_scope_explain_diagnose.py` (accounts, labels and the scope spellings' echo); plus `test_diagnosis_written_clause.py::test_explain_leads_with_the_written_clause` |
+| Tests | `test/decide/tests/test_explain.py` — 35 cases over TPC-H, including `test_explain_renders_user_casts_only`, `test_explain_objective_when_postfix` (the objective's `when` in front), and the layered-rendering group; `test_scope_explain_diagnose.py` (accounts, labels and the scope echo); plus `test_diagnosis_written_clause.py::test_explain_leads_with_the_written_clause` |

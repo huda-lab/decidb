@@ -7,7 +7,7 @@ with a C++ stack trace — making the rejection look like a decidb bug rather
 than an unsupported feature.
 
 These tests pin down the friendly-error contract:
-  - The user sees a single-line, actionable error pointing to WHEN / PER /
+  - The user sees a single-line, actionable error pointing to `when` / `per` /
     CTE alternatives.
   - The error never includes a stack trace, "INTERNAL Error", or any
     indication of an assertion failure.
@@ -41,8 +41,8 @@ class TestCaseExpressionRejection:
         # The friendly message should point users at the supported alternatives.
         result = decidb_cli.execute_raw(sql)
         combined = result.stderr + result.stdout
-        assert "WHEN" in combined and "PER" in combined, (
-            "Friendly error must mention both WHEN and PER as alternatives; "
+        assert "when " in combined and " per" in combined, (
+            "Friendly error must name the when and per scopes as alternatives; "
             f"got: {combined[:600]}"
         )
 
@@ -125,18 +125,17 @@ class TestCaseExpressionRejection:
         assert_no_internal_leak(decidb_cli.execute_raw(sql), "CASE rejection")
 
     def test_case_inside_per_grouped_constraint_is_rejected(self, decidb_cli):
-        """PER-wrapped constraint with CASE inside still rejected.
+        """A `per`-scoped constraint with CASE inside is still rejected.
 
-        PER constraints take a different code path (`BindPerConstraint`) than
-        plain constraints, so this case confirms the PER wrapper does not
-        bypass the new arm by binding the inner expression differently.
+        A `per g:` clause with `by (g)` on its reducer binds through the scope
+        path rather than as a plain constraint, so this case confirms the scope
+        does not bypass the new arm by binding the inner expression differently.
         """
-        # old spelling until item 7: pins the old PER path's CASE rejection
         sql = """
             SELECT s_suppkey, x FROM supplier WHERE s_suppkey < 10
             DECIDE x(BOOL)
-            SUCH THAT SUM(x * CASE WHEN s_nationkey = 1 THEN 1 ELSE 0 END) <= 1
-                     PER s_nationkey
+            SUCH THAT per s_nationkey:
+                     SUM(x * CASE WHEN s_nationkey = 1 THEN 1 ELSE 0 END) by (s_nationkey) <= 1
             MAXIMIZE SUM(x * s_acctbal)
         """
         decidb_cli.assert_error(sql, match=self._FRIENDLY)

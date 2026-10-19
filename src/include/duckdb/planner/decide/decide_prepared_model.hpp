@@ -40,7 +40,7 @@ struct DecideTerm {
 	idx_t variable_index;               // Which DECIDE variable (or INVALID_INDEX for constants)
 	unique_ptr<Expression> coefficient; // Row-varying expression to evaluate later
 	int sign = 1;                       // +1 or -1, applied at coefficient evaluation time
-	unique_ptr<Expression> filter;      // Optional aggregate-local WHEN filter
+	unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
 	bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
 	LinearTermReduction reduction = LinearTermReduction::NONE;
 	//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
@@ -60,7 +60,7 @@ struct BilinearConstraintTerm {
 	idx_t var_b;
 	unique_ptr<Expression> coefficient; // Data coefficient (or nullptr for 1.0)
 	int sign = 1;
-	unique_ptr<Expression> filter; // Optional aggregate-local WHEN filter
+	unique_ptr<Expression> filter; // Optional filter: the reducer's own `when`
 	bool avg_scale = false;        // True when this term came from AVG and needs 1/N scaling
 	//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
 	//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
@@ -75,20 +75,16 @@ struct DecideConstraint {
 	unique_ptr<Expression> rhs_expr; // RHS expression (may contain aggregates)
 	ExpressionType comparison_type;  // COMPARE_LESSTHANOREQUALTO or GREATERTHANOREQUALTO
 	bool lhs_is_aggregate = false;   // True if original LHS was an aggregate (e.g., SUM(...))
-	bool was_minmax_easy = false;    // True if optimizer stripped an easy-direction MIN/MAX (MINMAX_EASY_REWRITE_TAG). Lets Site 1 enforce empty-WHEN rejection on user-written MIN/MAX even though the LHS is now per-row.
+	bool was_minmax_easy = false;    // An easy-direction MIN/MAX kept its reducer (MINMAX_EASY_REWRITE_TAG): one row per member, the bound reduced over each `by` group.
 	idx_t minmax_clause_idx = DConstants::INVALID_INDEX; // index into LogicalDecide::minmax_clause_labels
 	string minmax_agg_type;                                 // "min" or "max" (empty if not minmax)
 	idx_t ne_clause_idx = DConstants::INVALID_INDEX;     // index into LogicalDecide::ne_clause_labels
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX;          // ABS auxiliary this envelope row bounds
 	bool abs_is_pos_bound = false;                          // true=C1 (aux >= inner), false=C2 (aux >= -inner)
-	unique_ptr<Expression> when_condition;                  // DecidB: optional WHEN condition (nullptr = unconditional)
-	vector<unique_ptr<Expression>> per_columns;             // DecidB: optional PER grouping columns (empty = no grouping)
-	//! Written with the scope spellings (SCOPED_CLAUSE_TAG). Such a clause reads only the
-	//! rows its `when` keeps (a NULL on another row is never evaluated), NULL is a key
-	//! value, every bound-side reducer reads its own `by` group of the kept rows, and
-	//! LogicalDecide::scope_checks have passed before it is evaluated. `per_columns` is
-	//! never set on it.
-	bool scoped = false;
+	unique_ptr<Expression> when_condition;                  // the clause's `when` (nullptr = every row)
+	//! A clause reads only the rows its `when` keeps (a NULL on another row is never
+	//! evaluated), NULL is a key value, every bound-side reducer reads its own `by` group of
+	//! the kept rows, and LogicalDecide::scope_checks have passed before it is evaluated.
 	//! Scoped, aggregate shape: the `by` key its decision reducers share, which groups its
 	//! rows (index into LogicalDecide::group_keys); INVALID_INDEX for `by ()`.
 	idx_t group_key = DConstants::INVALID_INDEX;
@@ -121,7 +117,7 @@ struct DecideConstraint {
 		//! Query-wide reducer scale not known until the relational input runs.
 		unique_ptr<Expression> scale;
 		bool scale_divides = false;
-		unique_ptr<Expression> filter; // Optional aggregate-local WHEN filter
+		unique_ptr<Expression> filter; // Optional filter: the reducer's own `when`
 		bool avg_scale = false;        // True when this group came from AVG and needs 1/N scaling
 		//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
 		//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
@@ -142,12 +138,11 @@ struct DecideConstraint {
 //! linear_terms.
 struct DecideObjective {
 	vector<DecideTerm> terms;              // Linear objective terms
-	unique_ptr<Expression> when_condition; // DecidB: optional WHEN condition (nullptr = unconditional)
-	vector<unique_ptr<Expression>> per_columns; // DecidB: optional PER grouping columns (empty = no grouping)
-	//! Written with the scope spellings (LogicalDecide::scoped_objective): it reads only the
-	//! rows its `when` keeps, its two-level form's key has NULL as a class, and a term
-	//! beside its reducers counts once, read on the first kept row.
-	bool scoped = false;
+	unique_ptr<Expression> when_condition; // the objective's `when` (nullptr = every row)
+	vector<unique_ptr<Expression>> per_columns; // the two-level form's key (empty = none)
+	//! The objective reads only the rows its `when` keeps, its two-level form's key has
+	//! NULL as a class, and a term beside its reducers counts once, read on the first
+	//! kept row.
 
 	//! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.
 	//! When non-empty, the objective includes a quadratic component: sign * SUM((inner_expr)^2).
@@ -164,13 +159,15 @@ struct DecideObjective {
 		idx_t var_b;                        // Second DECIDE variable index
 		unique_ptr<Expression> coefficient; // Data coefficient expression (or nullptr for 1.0)
 		int sign = 1;                       // +1 or -1
-		unique_ptr<Expression> filter;      // Optional aggregate-local WHEN filter
+		unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
 		bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
 		//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
 		//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
 		//! entity_mappings; coefficient evaluation keeps one row per tuple identity
 		//! of that relation and zeroes the duplicates the join introduced.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+		//! SUM inside a reducer, NONE outside every reducer (counted once), as for DecideTerm.
+		LinearTermReduction reduction = LinearTermReduction::NONE;
 	};
 	vector<BilinearTerm> bilinear_terms;
 	bool has_bilinear = false;

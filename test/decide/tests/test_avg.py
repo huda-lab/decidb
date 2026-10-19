@@ -551,7 +551,7 @@ def test_avg_not_equal_with_when(
         {f"x_{i}": data[i][2] for i in range(n)},
         "<=", 20.0, name="budget",
     )
-    # AVG(x) <> 0.5 WHEN high ⇒ SUM(x_i for high) <> 0.5 * |high| = 2.
+    # when high: avg(x) <> 0.5 ⇒ SUM(x_i for high) <> 0.5 * |high| = 2.
     add_ne_indicator(
         oracle_solver, {f"x_{i}": 1.0 for i in high_idx},
         rhs=0.5 * len(high_idx), name="avg_when_ne_05",

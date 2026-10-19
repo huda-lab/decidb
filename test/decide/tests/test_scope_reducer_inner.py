@@ -1,12 +1,12 @@
 """`when` and `per` inside a reducer: `agg([when c] [per K]: e) [by (Γ)]`
-(anr_language_extension.md §5.2).
+(syntax_reference.md §5.3).
 
 Order: the rows `by` selects, then the inner `when`, then one value per class of the
 inner `per` -- the first row the `when` keeps stands for its class, since the key
 determines the body (a scope check) -- then the aggregate. The inner `when` filters its
 own reducer only; `AVG` divides by the values it receives; `MIN`/`MAX` are unaffected by
 an inner `per`. A reducer with no row for some group of the kept rows is an error naming
-the group (D8, D18). The colon form `SUM(D: e)` keeps its own bind-time rules (D13).
+the group (D8, D18). The colon form `SUM(D: e)` is `sum(per D: e)` and takes the same checks (S4).
 
 Optima are judged against `_scope_oracle.ScopedModel`; model shapes against
 DECIDB_DUMP_MODEL.
@@ -87,7 +87,7 @@ def test_inner_per_matches_the_colon_form(decidb_cli, tmp_path):
     def query(clause):
         return f"""
             SELECT shipmentID, ship {from_clause()}
-            DECIDE ship(INT), D.open(BOOL)
+            DECIDE ship(INT), per D: open(BOOL)
             SUCH THAT ship <= S.demand * open AND {clause}
             MAXIMIZE SUM(ship)"""
     colon = decidb_cli.dump_model(query("SUM(D: capacity * open) <= 60"), tmp_path / "colon.dump")
@@ -96,12 +96,11 @@ def test_inner_per_matches_the_colon_form(decidb_cli, tmp_path):
 
 @pytest.mark.correctness
 def test_the_colon_form_takes_a_by(decidb_cli, tmp_path):
-    """`SUM(D: e) by (Γ)` keeps its bind-time rules (D13) and reads its `by` group: the
-    model of `sum(per D: e) by (Γ)`, which opens D2 and D3 alone."""
+    """`SUM(D: e) by (Γ)` reads its `by` group: the model of `sum(per D: e) by (Γ)`, which opens D2 and D3 alone."""
     def query(clause):
         return f"""
             SELECT shipmentID, open {from_clause()}
-            DECIDE ship(INT), D.open(BOOL)
+            DECIDE ship(INT), per D: open(BOOL)
             SUCH THAT ship <= S.demand * open AND {clause}
             MAXIMIZE SUM(ship)
             ORDER BY shipmentID"""
@@ -242,11 +241,10 @@ def test_a_reducer_with_no_row_for_a_group_is_an_error(decidb_cli, scope_solver)
     pytest.param("open <= 5", "MAXIMIZE per (): SUM(D: open) - norm(D: open, 1)", id="objective"),
 ])
 def test_norm_takes_no_relation_qualifier(decidb_cli, clause, objective):
-    """Bound with a qualifier, `norm(D: e, p)` would read `SUM(D: e)` (logged for the old
-    spellings, D17): under the scope spellings it is refused."""
+    """Bound with a qualifier, `norm(D: e, p)` would read `SUM(D: e)`, so it is refused."""
     result = decidb_cli.execute_raw(f"""
         SELECT shipmentID, open {from_clause()}
-        DECIDE D.open(INT)
+        DECIDE per D: open(INT)
         SUCH THAT open <= 5 AND {clause}
         {objective}""")
     assert ("DECIDE: norm(D: ...) is not supported yet; a relation qualifier takes SUM, AVG, MIN or MAX"
@@ -263,7 +261,8 @@ def test_norm_takes_no_relation_qualifier(decidb_cli, clause, objective):
     pytest.param("sum(when ship > 1: ship) <= 5", "DECIDE: ship is a decision; when, per and by may only use data",
                  id="decision-in-inner-when"),
     pytest.param("SUM(D: ship) by (D.region) <= 100",
-                 "'ship' is not a decision of D, so SUM(D: ...) cannot use it", id="colon-form-keeps-its-rule"),
+                 "DECIDE: per D does not determine the decision ship (in sum(D: ship))",
+                 id="colon-form-takes-the-data-check"),
 ])
 def test_inner_scope_errors(decidb_cli, clause, message):
     result = decidb_cli.execute_raw(_open_query(clause))

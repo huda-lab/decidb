@@ -259,7 +259,7 @@ def test_minmax_native_and_lowered_agree(decidb_cli_gurobi, name, clause, object
     """`z = MAX(t..)` and the indicator family must reach the same optimum.
 
     MIN/MAX is the messiest construct — a constraint form, an objective form, a
-    PER-nested form and a composed form, each with its own hard branch — so the A/B
+    `per`-nested form and a composed form, each with its own hard branch — so the A/B
     runs over all of them rather than a representative.
     """
     native = objective(_solve_grouped(decidb_cli_gurobi, clause,

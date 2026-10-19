@@ -355,6 +355,14 @@ historical reasons; it is a full MIP solver.
 
 HiGHS has no binary variable type — a binary is an integer with bounds `[0,1]`.
 
+An integer column is loaded with whole bounds: `ceil(lower)` and `floor(upper)`, each read
+within HiGHS's default `mip_feasibility_tolerance` (1e-6) of a whole number. Handed a
+fractional bound on an integer column whose other side is open, HiGHS answered below it
+(`x >= -2.5` minimized to -3; Gurobi rounds such bounds itself). A column whose bounds hold
+no whole number (`2.3 <= x <= 2.7`) is an empty model: `Solve` returns `INFEASIBLE` without
+loading it, since HiGHS refuses an inverted box. The neutral model, its dump and the
+diagnosis engines keep the bounds as written.
+
 Sense characters convert to HiGHS's range rows:
 
 | Sense | `row_lower` | `row_upper` |

@@ -5,8 +5,12 @@ Tests live in `test/decide/tests/test_qualified_reducer.py`, plus
 qualified reducer in the split clause order.
 
 `SUM(D: expr)` reduces over `D`'s tuple identities instead of over join-result
-rows. Semantics: `03_expressivity/decide/done.md` → "Relation-qualified
-reducers"; syntax: `00_project_overview/syntax_reference.md` §5.1.
+rows: it means `sum(per D: expr)`, one value per class of `D`'s columns, and `D`
+must determine the body, checked against the data at run time ("per D does not
+determine ..."). Semantics: `03_expressivity/decide/done.md` and
+`03_expressivity/scope/done.md`; syntax: `00_project_overview/syntax_reference.md`
+§5.1. The equivalence with `sum(per D: e)` is pinned in `test_scope_reducer_inner.py`
+and `test_scope_removed_syntax.py::test_colon_form_stays`.
 
 The fixture is `customer JOIN nation`, where the join repeats each nation once
 per customer and nations have unequal customer counts — that inequality is what
@@ -29,33 +33,34 @@ makes the row-weighted and identity-weighted optima diverge.
   of a value already present cannot move an extremum.
 - **Constraint position** (`test_qualified_reducer_in_constraint`,
   oracle-verified).
-- **PER composition** (`test_qualified_reducer_with_per`): de-duplication runs
-  inside the partition, keying on `(PER group, entity id)`.
+- **Under a `per` key** (`test_qualified_reducer_with_per`,
+  `per n.n_nationkey: sum(n: ...) by (n.n_nationkey) <= 8`): de-duplication runs
+  inside each `by` group; every class holds one nation, so its charge is that
+  nation's cost, counted once.
 - **Mixed qualified and unqualified reducers in one objective**
   (`test_mixed_qualified_and_unqualified_objective`, oracle-verified): pins that
   the mask is per *term*, not per clause.
 - **Hard-direction MIN / MAX with a qualifier**:
   `test_qualified_hard_max_objective` (`MAXIMIZE MAX(n: ...)`, the Big-M
   direction) and `test_qualified_hard_min_constraint` (`MIN(n: ...) <= K`). The
-  claim that de-duplication cannot move an extremum had only been checked for
-  the easy directions, which emit no auxiliaries; these confirm it survives the
-  Big-M encoding, where the mask and the indicator rows meet.
-- **Aggregate-local `WHEN` composed with the qualifier, in an objective**:
+  easy directions emit no auxiliaries; these confirm that de-duplication cannot
+  move an extremum under the Big-M encoding either, where the mask and the
+  indicator rows meet.
+- **The objective's `when` composed with the qualifier**
+  (`MAXIMIZE when c: sum(n: ...)`):
   `test_qualified_reducer_with_aggregate_local_when_in_objective` uses nations 5
   and 14, whose row counts invert the ranking (identity weights 5 and 14, row
   weights 45 and 28), so a dropped qualifier changes *which nation is chosen*,
   not merely the objective value.
   `test_aggregate_local_when_filters_inside_a_qualified_reducer` then flips the
-  answer using the filter alone. Together they pin that both masks apply — the
-  only place two independent masks share one `TermFilterState` slot.
-- **Aggregate-local `WHEN` composed with the qualifier, in a constraint, WHEN
-  before the comparison**: `test_qualified_reducer_with_aggregate_local_when_in_constraint`
-  (`SUM(D: expr) WHEN cond <= bound`) — the shape that used to be rejected (grammar
-  fix, `03_expressivity/decide/done.md` → "Relation-qualified reducers"). Nation 5
-  sits outside the filter so it never counts against the cap and is always kept;
-  nations 14/15/16 do count and only the value-maximizing one (16) fits, so nation
-  5's keep value is what distinguishes a correctly scoped WHEN from one silently
-  dropped back to the old bug.
+  answer using the filter alone. Together they pin that both filters apply — the
+  qualifier's keep mask and the `when` share one `TermFilterState` slot.
+- **A reducer's own `when` with a relation key, in a constraint**:
+  `test_qualified_reducer_with_aggregate_local_when_in_constraint`
+  (`sum(when n.n_nationkey > 5 per n: keepN) <= 1`). Nation 5 sits outside the
+  filter so it never counts against the cap and is always kept; nations 14/15/16 do
+  count and only the value-maximizing one (16) fits, so nation 5's keep value is
+  what distinguishes a correctly scoped `when` from a dropped one.
 - **Composed MIN/MAX keeps the qualifier**
   (`test_composed_minmax_preserves_the_qualifier`,
   `test_composed_minmax_preserves_the_qualifier_in_a_constraint`): adding
@@ -77,28 +82,32 @@ makes the row-weighted and identity-weighted optima diverge.
   (`test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated`,
   oracle-verified): `SUM(n: (n_nationkey + 1) * cap)` over `customer JOIN nation`
   weights `cap` by the sum over *distinct* nations, not over join-result rows.
-- **Rejections** (error tier, all at bind time): a column from a relation not named
-  in the qualifier, a row-scoped decision, an unknown relation name — including one
+- **A qualified reducer as a bound** (`test_qualified_reducer_as_a_bound`,
+  `SUM(n: keepN) <= SUM(n: n_nationkey) / 25`): the qualifier de-duplicates the
+  bound side too.
+- **Rejections** (error tier). At bind time: an unknown relation name, including one
   inside a multi-relation list
-  (`test_unknown_relation_in_multi_relation_qualifier_rejected`) — and a
-  row-invariant body, i.e. a query-wide decision standing alone inside the reducer
-  (`test_query_wide_decision_alone_inside_qualified_reducer_rejected`).
+  (`test_unknown_relation_in_multi_relation_qualifier_rejected`), and a row-invariant
+  body, i.e. a query-wide decision standing alone inside the reducer
+  (`test_query_wide_decision_alone_inside_qualified_reducer_rejected`). At run time,
+  the data check `sum(per n: ...)` takes: a column from another relation ("per n does
+  not determine c.c_acctbal (in sum(n: c.c_acctbal * keepN))") and a per-row decision
+  ("per n does not determine the decision y (in sum(n: ...))").
 
 ## Caveats
 
 - `test_row_scoped_decision_inside_qualified_reducer_rejected` pins settled
-  semantics: de-duplicating a qualified relation cannot choose one arbitrary
-  row-scoped variable from a repeated identity. The error offers the two valid
-  rewrites: scope the decision to the qualified relation, or move it to an
-  unqualified reducer.
+  semantics: `n` does not determine a per-row decision, so de-duplicating a
+  repeated identity cannot pick one of its values. The message quotes the reducer
+  as written.
 - `test_query_wide_decision_alone_inside_qualified_reducer_rejected` pins the
   general row-invariance rule (a body with nothing to aggregate over), while the
   paper's §3.2.2 carve-out for a weighted query-wide decision is covered by the
   neighbouring positive test.
 - `test_composed_minmax_preserves_the_qualifier` and
-  `…_in_a_constraint` are **regressions for a fixed wrong answer**, not aspirational
-  pins: `SUM(D: ...) + MAX(...)` used to revert to row semantics because
-  `ComposedMinMaxTerm` carried no `qualifier_scope_idx`. Objective and constraint are
+  `…_in_a_constraint` guard the qualifier on the composed path:
+  `ComposedMinMaxTerm::qualifier_scope_idx` carries it, and without it
+  `SUM(D: ...) + MAX(...)` falls back to row semantics. Objective and constraint are
   separate code paths, hence two tests.
 
 ## Feature interactions covered
@@ -110,17 +119,19 @@ makes the row-weighted and identity-weighted optima diverge.
 | qualified reducer | MIN / MAX (easy direction) | ✓ |
 | qualified reducer | constraint position | ✓ |
 | qualified reducer | objective position | ✓ |
-| qualified reducer | PER | ✓ |
+| qualified reducer | `per` key | ✓ |
 | qualified reducer | unqualified reducer in the same objective | ✓ |
-| qualified reducer | entity-scoped decision | ✓ |
-| qualified reducer | row-scoped decision (rejected) | ✓ |
+| qualified reducer | keyed decision | ✓ |
+| qualified reducer | per-row decision (run-time data check) | ✓ |
+| qualified reducer | a column of another relation (run-time data check) | ✓ |
+| qualified reducer | bound side | ✓ |
 | qualified reducer | query-wide decision times entity data | ✓ (oracle) |
 | qualified reducer | query-wide decision as the whole body (rejected) | ✓ |
 | qualified reducer | split clause order | ✓ (`test_clause_order.py`) |
 | qualified reducer | hard-direction MAX objective | ✓ |
 | qualified reducer | hard-direction MIN constraint | ✓ |
-| qualified reducer | aggregate-local `WHEN` (objective) | ✓ |
-| qualified reducer | aggregate-local `WHEN` (constraint) | ✓ |
+| qualified reducer | the objective's `when` | ✓ |
+| qualified reducer | a reducer's own `when` with a relation key (constraint) | ✓ |
 | qualified reducer | composed MIN/MAX (objective) | ✓ |
 | qualified reducer | composed MIN/MAX (constraint) | ✓ |
 | qualified reducer | multi-relation qualifier, 3 relations | ✓ (oracle) |

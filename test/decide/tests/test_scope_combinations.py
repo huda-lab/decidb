@@ -1,4 +1,4 @@
-"""The grid of the scope spellings (todo.md §8): a `when` or not, `per` omitted / `row` /
+"""The grid of scope combinations (04_testing/scope/done.md): a `when` or not, `per` omitted / `row` /
 `()` / a key, a body with a tuple term only / one reducer / a decision beside a reducer /
 two reducers with different `by` keys, the reducer's own scope none / `when` / `per` /
 both, SUM / AVG / MIN / MAX, over a per-row decision and one keyed by `h` (the only one a
@@ -7,8 +7,8 @@ reducer's `per t.h` can count once) -- every cell against `_scope_oracle.ScopedM
 Two outcomes are allowed, and nothing else: the oracle's optimum, or the error the
 language defines for the data (the oracle raises it: a key that does not determine, a
 `when` that keeps no row, a reducer with no row for a group), with the same phrase.
-Items 3 to 5 handle every cell, so no cell is refused; never a wrong answer, never an
-internal error.
+Every cell is handled, so no cell is refused; never a wrong answer, never an internal
+error.
 """
 
 import pytest

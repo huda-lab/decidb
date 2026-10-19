@@ -1,4 +1,4 @@
-"""Tests for query-wide (`per ()`, formerly `scalar`) decision variables.
+"""Tests for query-wide (`per ()`) decision variables.
 
 A `per (): x(TYPE)` declaration yields exactly one solver column for the whole
 query, independent of input cardinality — the third variable scope alongside
@@ -10,8 +10,7 @@ Covers:
   - One column regardless of input cardinality
   - The value is repeated on every output row
   - Reducers over a scalar are rejected (objective and constraint)
-  - Grammar: untyped and table-qualified scalars are rejected with a fix
-  - `scalar` remains usable as an ordinary identifier
+  - `scalar` is usable as an ordinary identifier
   - Empty input behaves like any other empty DECIDE query
 """
 
@@ -298,32 +297,7 @@ def test_scalar_plus_row_scoped_term_inside_reducer_is_legal(decidb_cli, perf_tr
 
 
 # ---------------------------------------------------------------------------
-# Test 6: Grammar rejections carry the fix
-# ---------------------------------------------------------------------------
-
-@pytest.mark.error_parser
-@pytest.mark.error
-class TestScalarGrammar:
-
-    def test_scalar_without_type(self, decidb_cli):
-        # old spelling until item 7
-        decidb_cli.assert_error("""
-                SELECT cap FROM lineitem
-                DECIDE scalar cap
-                SUCH THAT cap >= 1 MINIMIZE cap
-            """, match=r"needs a type; write scalar cap\(INT\)")
-
-    def test_scalar_cannot_be_table_qualified(self, decidb_cli):
-        # old spelling until item 7
-        decidb_cli.assert_error("""
-                SELECT cap FROM lineitem
-                DECIDE scalar lineitem.cap(INT)
-                SUCH THAT cap >= 1 MINIMIZE cap
-            """, match=r"cannot name a table")
-
-
-# ---------------------------------------------------------------------------
-# Test 7: `scalar` is still an ordinary identifier
+# Test 7: `scalar` is an ordinary identifier
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
@@ -338,15 +312,14 @@ def test_scalar_still_usable_as_identifier(decidb_cli, perf_tracker):
 
 
 @pytest.mark.correctness
-def test_scalar_identifier_and_keyword_in_one_query(decidb_cli, perf_tracker):
-    """The keyword and an identically-named column coexist: `scalar cap(INT)`
-    declares a decision while `scalar` also names an output column."""
-    # old spelling until item 7
+def test_query_wide_decision_beside_a_column_named_scalar(decidb_cli, perf_tracker):
+    """A query-wide decision (`per (): cap(INT)`) beside an output column named
+    `scalar`, an ordinary identifier (syntax_reference.md §1.2)."""
     rows, cols = decidb_cli.execute("""
         SELECT l_linenumber AS scalar, cap
         FROM lineitem
         WHERE l_orderkey <= 50
-        DECIDE scalar cap(INT)
+        DECIDE per (): cap(INT)
         SUCH THAT cap >= l_linenumber
         MINIMIZE cap
     """)

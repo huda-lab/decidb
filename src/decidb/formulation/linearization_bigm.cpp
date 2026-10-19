@@ -293,10 +293,22 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
         // the other terms to derive x_t <= K/a_t is valid. Constraints with any
         // negative coefficient (e.g. the IN/ABS rewrites such as x - z1 - 3*z2 = 0)
         // must be skipped: dropping a negative term would wrongly tighten the
-        // bound and cut feasible points (or make the model infeasible).
+        // bound and cut feasible points (or make the model infeasible). A per-row
+        // constraint over one variable drops nothing, so its sign does not matter there:
+        // `x <= cap` bounds a signed `x` as well, by a bound that may itself be negative.
+        // An aggregate one (`SUM(x) = -3`) sums every row's instance, so it does not.
+        idx_t only_variable = DConstants::INVALID_INDEX;
+        bool single_variable = !ec.lhs_is_aggregate;
+        for (idx_t v : ec.variable_indices) {
+            if (v == DConstants::INVALID_INDEX) {
+                continue;
+            }
+            single_variable = single_variable && (only_variable == DConstants::INVALID_INDEX || only_variable == v);
+            only_variable = v;
+        }
         bool nonneg = true;
         for (idx_t v : ec.variable_indices) {
-            if (v != DConstants::INVALID_INDEX && lower_bounds[v] < 0.0) {
+            if (!single_variable && v != DConstants::INVALID_INDEX && lower_bounds[v] < 0.0) {
                 nonneg = false;
                 break;
             }
@@ -350,7 +362,7 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
             if (already_handled) {
                 continue;
             }
-            double bound = 0.0;
+            double bound = single_variable ? -std::numeric_limits<double>::infinity() : 0.0;
             // The shared bound ub_x applies to EVERY row instance of x. A row
             // bounds x only if it is active (not WHEN-excluded) AND x has a
             // non-zero coefficient there. WHEN-excluded rows show up as a zero
@@ -382,7 +394,7 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
                     break;
                 }
                 double k = uniform_rhs ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(r);
-                if (k < 0.0) {
+                if (k < 0.0 && !single_variable) {
                     every_row_constrained = false;
                     break;
                 }

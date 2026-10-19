@@ -117,11 +117,6 @@ static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row,
 static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_rows,
                                        const vector<double> &lower_bounds,
                                        const vector<double> &upper_bounds) {
-    // A bilinear or quadratic LHS is not captured by variable_indices alone, so its
-    // reachable range is not the linear one computed above.
-    if (!ec.bilinear_terms.empty() || !ec.quadratic_groups.empty()) {
-        return NECollapse::DISJUNCTION;
-    }
     bool seen = false;
     NECollapse verdict = NECollapse::DISJUNCTION;
     for (idx_t r = 0; r < num_rows; r++) {
@@ -169,7 +164,7 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer,
     bool has_groups = !ec.row_group_ids.empty();
     for (idx_t r = 0; r < num_rows; r++) {
         if (has_groups && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-            continue; // masked out by WHEN/PER, or a non-integer bound on this row
+            continue; // masked out by `when` or its group, or a non-integer bound on this row
         }
         double k = ec.rhs_values.Get(r);
 
@@ -267,6 +262,12 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
             new_constraints.push_back(std::move(ec));
             continue;
         }
+        if (!ec.bilinear_terms.empty() || !ec.quadratic_groups.empty()) {
+            throw InternalException(
+                "DECIDE: a '<>' over a product or a power of decisions reached the model builder. "
+                "Its rows hold the linear terms only, so building it would drop the rest; stage 05 "
+                "refuses it (FindNotEqualConstraints).");
+        }
         if (NELhsIsIntegerValued(ec, input.variable_types) != NELhsIntegrality::INTEGER) {
             throw InternalException(
                 "DECIDE: a '<>' whose left-hand side is not integer-valued reached the "
@@ -297,7 +298,7 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
                 continue; // drop ec entirely (tautology)
             }
         } else {
-            // Build/extend a mask. row_group_ids may be empty (no WHEN/PER); in that
+            // Build/extend a mask. row_group_ids may be empty (no `when`, no groups); in that
             // case materialize one initialised to group 0 so individual rows can be
             // excluded by setting INVALID_INDEX.
             if (ec.row_group_ids.empty()) {
@@ -412,7 +413,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
             // arrived when it varies, rather than collapsing it to one value the way
             // it does for `<=`/`>=` — standing decision 3: a `<>` bound does not
             // collapse, every excluded value is kept. The common case (a uniform
-            // bound, or no PER at all) yields exactly one value here and this loop
+            // bound, or no groups at all) yields exactly one value here and this loop
             // runs once, identically to before this supported more than one.
             vector<double> distinct_rhs;
             for (idx_t k = g_begin; k < g_end; k++) {
@@ -430,7 +431,22 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
             // earns. Neither the range nor the LHS accumulation below depends on which
             // excluded value is being tested, so both are computed once per group and
             // reused for every value in `distinct_rhs`.
-            const bool has_linear_range = ec.bilinear_terms.empty() && ec.quadratic_groups.empty();
+            // A query-wide decision beside the reducers (SCALAR, not SUM-reduced) enters the
+            // group's row once, as in the linear builder: `SUM(x) + s <> 5` is not
+            // `... + n*s`. The per-row ranges would count it once per row, so a clause with
+            // one takes no collapse: emitting the disjunction is exact either way.
+            auto counted_once = [&](idx_t term_idx) {
+                idx_t v = ec.variable_indices[term_idx];
+                return v != DConstants::INVALID_INDEX && var_indexer.var_scope[v] == DecideVarScope::SCALAR &&
+                       !(term_idx < ec.linear_term_reductions.size() &&
+                         ec.linear_term_reductions[term_idx] == LinearTermReduction::SUM);
+            };
+            bool any_counted_once = false;
+            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+                any_counted_once = any_counted_once || counted_once(term_idx);
+            }
+            const bool has_linear_range =
+                ec.bilinear_terms.empty() && ec.quadratic_groups.empty() && !any_counted_once;
             double grp_lo = 0.0;
             double grp_hi = 0.0;
             if (has_linear_range) {
@@ -451,6 +467,10 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                     continue;
                 }
                 auto &col = ec.row_coefficients[term_idx];
+                if (counted_once(term_idx)) {
+                    accum.Add(static_cast<int>(var_indexer.Get(decide_var_idx, 0)), col.Get(flat_rows[g_begin]));
+                    continue;
+                }
                 for (idx_t k = g_begin; k < g_end; k++) {
                     idx_t row = flat_rows[k];
                     double coeff = col.Get(row);
@@ -528,7 +548,6 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                     rc.removal_group_id = ec.removal_group_id;
                     rc.indicator_col = z_idx;
                     rc.group_key = has_groups ? g : DConstants::INVALID_INDEX;
-                    rc.qualifier = ec.qualifier;
                     rc.is_aggregate = true;
                     if (has_groups && g < ec.group_labels.size()) {
                         rc.group_label = ec.group_labels[g];

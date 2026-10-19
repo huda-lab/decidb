@@ -4,12 +4,13 @@ Covers:
   - Force zero: when condition: x <= 0 (block selection of matching rows)
   - Force select: when condition: x = 1 (require matching rows)
   - Numeric condition on per-row bound
-  - Boundary: no rows match (per-row constraint is inert)
+  - Boundary: no rows match (an error: the when matches no rows)
   - Boundary: all rows match (equivalent to unconditional per-row)
   - test_when_perrow_real: REAL variable (no implicit [0,1] cap) + WHEN
     per-row — continuous skip-constraint path
 """
 
+import re
 import time
 
 import pytest
@@ -219,62 +220,24 @@ def test_when_perrow_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, p
 @pytest.mark.cons_perrow
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
-@pytest.mark.correctness
-def test_when_perrow_no_matches(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """WHEN matches nothing — per-row constraint is inert, only aggregate limits."""
-    # old spelling until item 7: an empty per-row WHEN was a silent no-op; the new spelling raises "matches no rows"
+@pytest.mark.error_infeasible
+def test_when_perrow_no_matches(decidb_cli):
+    """A `when` that matches nothing — rejected pre-solver: a front ``when`` that
+    keeps no row is refused as "when l_returnflag = 'Z' matches no rows." (D4),
+    rather than leaving the per-row constraint inert and solving with only the
+    aggregate limit."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT x <= 0 WHEN l_returnflag = 'Z'
+        SUCH THAT when l_returnflag = 'Z': x <= 0
             AND SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    t0 = time.perf_counter()
-    decidb_result, decidb_cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute("""
-        SELECT CAST(l_orderkey AS BIGINT),
-               CAST(l_linenumber AS BIGINT),
-               CAST(l_extendedprice AS DOUBLE),
-               CAST(l_quantity AS DOUBLE),
-               l_returnflag
-        FROM lineitem WHERE l_orderkey < 100
-    """).fetchall()
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("when_perrow_none")
-    vnames = [f"x_{i}" for i in range(len(data))]
-    # No rows match 'Z', so all variables get default bounds
-    for vn in vnames:
-        oracle_solver.add_variable(vn, VarType.BINARY)
-
-    oracle_solver.add_constraint(
-        {vnames[i]: data[i][3] for i in range(len(data))},
-        "<=", 100.0, name="capacity",
-    )
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] for i in range(len(data))},
-        ObjSense.MAXIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    cmp = compare_solutions(
-        decidb_result, decidb_cols, result, data, ["x"],
-        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_extendedprice")])},
-    )
-
-    perf_tracker.record(
-        "when_perrow_none", decidb_time, build_time,
-        result.solve_time_seconds, len(data), len(vnames), 1,
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status,
-        decide_vector=cmp.oracle_vector,
+    decidb_cli.assert_error(
+        sql, match=re.escape("DECIDE: when l_returnflag = 'Z' matches no rows.")
     )
 
 

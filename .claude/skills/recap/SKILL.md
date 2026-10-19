@@ -54,7 +54,7 @@ For each changed area, read the corresponding documentation to understand the fe
 ### 4. Group changes by area
 
 Classify every changed file into one of these groups:
-- **Grammar/Parser** — `.y` files, `src_backend_parser_parser.cpp` (`base_yylex`), `decide_parse_hints.cpp`
+- **Grammar/Parser** — `.y` files, `src_backend_parser_parser.cpp` (`base_yylex`), `decide_removed_spellings.cpp`
 - **Binder** — `decide_binder.cpp`, `decide_constraints_binder.cpp`, `decide_objective_binder.cpp`, `bind_select_node.cpp`, `plan_select_node.cpp`
 - **Canonicalizer** — `decide_canonicalizer.cpp`, `decide_source_provenance.cpp`
 - **Optimizer** — `decide_optimizer.cpp`
@@ -106,4 +106,4 @@ These rules define how you write every word of the output:
 3. **Define jargon inline**. If you must use a term like "linearization" or "Big-M", define it in parentheses the first time.
 4. **Short code snippets**. Show only the essential lines (5-15), not entire functions. Annotate with `// ←` comments explaining what each important line does.
 5. **Why > What**. The reader can see *what* changed in the diff. Your job is to explain *why* it changed and *what it means*.
-6. **Concrete, not abstract**. Instead of "the constraint handling was improved", say "constraints like `SUM(x) <= 10 PER region` now get split into one constraint per region instead of one big constraint".
+6. **Concrete, not abstract**. Instead of "the constraint handling was improved", say "constraints like `per region: sum(x) by (region) <= 10` now get split into one constraint per region instead of one big constraint".

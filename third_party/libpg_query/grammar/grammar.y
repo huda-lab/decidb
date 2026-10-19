@@ -12,12 +12,14 @@
  *   empty (SELECT 1 DECIDE x(INT) SUCH THAT ...), and both derivations build
  *   the identical PGDecideClause via makeDecideClause(), so bison's default
  *   shift is correct and the resolution is not load-bearing.
- * Aggregate-local WHEN_DECIDE conflicts are resolved explicitly: the empty
+ * The WHEN_DECIDE conflicts are resolved explicitly: the empty
  * within_group_clause and the plain relation-qualified reducer use
  * DECIDE_ITEM precedence, below both DECIDE WHEN tokens, so the parser shifts
  * WHEN. They are keyed on tokens base_yylex() emits only inside DECIDE.
  * PER and the reducer's BY reach the grammar as DECIDE-only tokens too, so
- * neither can be read as an identifier.
+ * neither can be read as an identifier. A WHEN or PER written after a clause
+ * is a removed spelling: its productions survive only so the error can name
+ * the scope written in front (see RefuseRemovedDecideSpellings).
  */
 %expect 4
 %name-prefix="base_yy"
@@ -119,8 +121,9 @@
  */
 %token		NOT_LA NULLS_LA WITH_LA
 /* DecidB: context-sensitive WHEN tokens emitted only inside DECIDE. The
- * objective variant lets its condition consume a comparison safely because an
- * objective has no trailing comparison bound. Never produced by keywords. */
+ * objective variant lets the removed postfix "E WHEN c" name a comparison
+ * condition as written: an objective has no trailing comparison bound that
+ * the condition could take. Never produced by keywords. */
 %token		WHEN_DECIDE
 %token		WHEN_DECIDE_OBJECTIVE
 /* DecidB: PER and a reducer's BY, emitted only inside DECIDE. PER is split by

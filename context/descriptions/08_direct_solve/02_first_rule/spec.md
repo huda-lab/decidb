@@ -7,16 +7,18 @@ below is unproved, the rule misses and DECIDE follows the solver path.
 
 ## Admitted shape
 
-- Exactly one user decision variable, row-scoped and declared `BOOL`; no
-  auxiliary, entity-scoped, or scalar decision. Its SQL output is `INTEGER` 0/1.
+- Exactly one user decision variable, one per row (no `per` key) and declared
+  `BOOL`; no auxiliary, keyed (`per K:`) or query-wide (`per ():`) decision. Its
+  SQL output is `INTEGER` 0/1.
 - One canonical global upper-cardinality constraint and one additive linear
   objective in that variable. There are no other decision or data-only terms
   that the solver would evaluate at runtime. A plan-time constant objective
   offset is ignorable for assignment only after its lack of runtime obligation
   is proved.
-- No `PER`, `WHEN`, reducer qualifier, frame, nested reducer, extra constraint,
-  or `DIAGNOSE`. The matcher examines the entire canonical trees, not a
-  promising fragment or original SQL text.
+- No `when` or `per` scope, `by` key, scope or colon-form qualifier inside a
+  reducer, frame, nested reducer, extra constraint, or `DIAGNOSE`. The matcher
+  examines the entire canonical trees, not a promising fragment or original SQL
+  text.
 - A finite, plan-time, non-negative integer capacity exactly representable in
   DOUBLE and the window rank type. The exact range is closed by
   [DES-06](../00_design/todo.md); fractional, data-valued, negative, and
@@ -27,7 +29,7 @@ below is unproved, the rule misses and DECIDE follows the solver path.
   policy for deterministic expressions that can throw belongs to
   [DES-02](../00_design/todo.md).
 
-No source-row uniqueness claim is needed. A row-scoped decision belongs to each
+No source-row uniqueness claim is needed. A per-row decision belongs to each
 input row even when two rows have identical data. Exact identity and fan-out
 must be preserved by the result contract.
 

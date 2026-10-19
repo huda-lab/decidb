@@ -16,20 +16,20 @@ Covers the constraint operators `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, and 
 All 6 operators tested on both per-row and aggregate constraints,
 oracle-verified (`test_cons_comparison.py` and others).
 
-- **`<>` (NE Big-M)** (`test_cons_comparison.py`, plus `test_aggregate_local_when.py` for the aggregate-local variant): expression-level and aggregate-local WHEN composition, with/without WHEN binding, and mixed-sign coefficient column (both-sided disjunction). `<>` on REAL LHS is rejected.
+- **`<>` (NE Big-M)** (`test_cons_comparison.py`, plus `test_aggregate_local_when.py` for a reducer's own `when`): under a `when` in front and inside a reducer, with the `<>` binding or not, and a mixed-sign coefficient column (both-sided disjunction). `<>` on REAL LHS is rejected.
 - **Strict `<` / `>` rejection coverage** (`test_cons_comparison.py`): rejected on REAL LHS (per-row and aggregate), non-integer coefficient, mixed BOOL + REAL LHS, quadratic path (`SUM(POWER(real, 2))`), and bilinear Bool × Real path.
 - **Strict `<` / `>` accepted shapes** (oracle-verified): pure INT SUM (per-row and aggregate), BOOL × INT bilinear LHS, INT × INT bilinear LHS (Gurobi), `SUM(ABS(integer_expr))`.
 - Regression: `<=` / `>=` on REAL LHS still work.
 
 ### BETWEEN
 
-- **Oracle-verified** (`test_cons_between.py`): per-row BETWEEN, fractional bounds on REAL var, column-derived bound (`x BETWEEN 0 AND col`) combined with multi-constraint + aggregate, aggregate BETWEEN standalone desugar (two constraints from one BETWEEN), and inside aggregate-local WHEN (`test_aggregate_local_when.py`).
-- BETWEEN + entity-scoped: `test_entity_scope.py::test_entity_scoped_between_constraint` — constraint only (feasibility, not optimality).
+- **Oracle-verified** (`test_cons_between.py`): per-row BETWEEN, fractional bounds on REAL var, column-derived bound (`x BETWEEN 0 AND col`) combined with multi-constraint + aggregate, aggregate BETWEEN standalone desugar (two constraints from one BETWEEN), and over a reducer with its own `when` (`test_aggregate_local_when.py`).
+- BETWEEN on a keyed decision: `test_entity_scope.py::test_entity_scoped_between_constraint`, oracle-verified on the objective.
 - Error tests (`test_error_binder.py`): non-scalar RHS, DECIDE var in BETWEEN bounds.
 
 ### IN
 
-- **Oracle-verified** (`test_cons_in.py`): `x IN (values)` on decision variable, non-integer values on REAL var, `x IN (0, 1)` on BOOL (no-op optimization), single-value IN rewritten to `x = v`, IN + WHEN composition.
+- **Oracle-verified** (`test_cons_in.py`): `x IN (values)` on decision variable, non-integer values on REAL var, `x IN (0, 1)` on BOOL (no-op optimization), single-value IN rewritten to `x = v`, IN under a `when` in front.
 - Error tests (`test_error_binder.py`): `SUM(x) IN (...)` rejected, DECIDE var in IN RHS rejected.
 
 ### Structural forms
@@ -53,13 +53,13 @@ signed column and negative constant literal multiplier
 |-----------|-----------|--------|
 | Comparison operators | aggregate SUM | ✓ (all 6) |
 | Comparison operators | per-row | ✓ (all 6) |
-| `<>` | PER | ✓ |
-| `<>` | entity-scoped | ✓ |
+| `<>` | a bound varying within a `by` group | ✓ (`test_per_clause.py`: every exclusion kept without a `per` key; the determination error under one) |
+| `<>` | keyed decision | ✓ |
 | `<>` | REAL LHS (rejected) | ✓ |
-| BETWEEN | entity-scoped | ✓ |
-| BETWEEN | aggregate-local WHEN | ✓ |
-| BETWEEN | PER + REAL var (fractional bounds) | ✓ (`test_per_clause.py::test_real_between_per_oracle`) |
-| IN | WHEN | ✓ |
+| BETWEEN | keyed decision | ✓ |
+| BETWEEN | a reducer's own `when` | ✓ |
+| BETWEEN | `per` + REAL var (fractional bounds) | ✓ (`test_per_clause.py::test_real_between_per_oracle`) |
+| IN | `when` | ✓ |
 | IN | BOOL domain restriction | ✓ |
 | Negative coefficients | objective | ✓ |
 | Negative coefficients | aggregate constraint (signed column) | ✓ |

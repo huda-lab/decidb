@@ -21,6 +21,7 @@ the three run-time errors of the language before any model is built.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Callable, Mapping, Sequence
 
@@ -257,8 +258,9 @@ Part = object
 @dataclass(frozen=True)
 class Scoped:
     """``[when c] [per K]: lhs sense rhs``, each side the sum of its parts. ``sense`` is
-    one of ``<=``, ``>=``, ``=``, ``<``, ``>``, ``<>``; ``<``, ``>`` and ``<>`` step by one,
-    which is exact only for whole-numbered sides (not an AVG)."""
+    one of ``<=``, ``>=``, ``=``, ``<``, ``>``, ``<>``; ``<``, ``>`` and ``<>`` step onto the
+    whole numbers (``< K`` is ``<= ceil(K) - 1``, ``> K`` is ``>= floor(K) + 1``), which is
+    exact only for whole-numbered decision sides (not an AVG)."""
     lhs: tuple
     sense: str
     rhs: tuple = ()
@@ -460,18 +462,20 @@ class ScopedModel(ScopeModel):
             for expr, sense in self._generate(clause, emit):
                 coefficients = {label(c): v for c, v in expr.items() if c != CONSTANT}
                 rhs = -expr.get(CONSTANT, 0.0)
+                below = math.ceil(rhs - _TOLERANCE) - 1
+                above = math.floor(rhs + _TOLERANCE) + 1
                 if sense in ("<=", ">=", "="):
                     solver.add_constraint(coefficients, sense, rhs)
                 elif sense == "<":
-                    solver.add_constraint(coefficients, "<=", rhs - 1)
+                    solver.add_constraint(coefficients, "<=", below)
                 elif sense == ">":
-                    solver.add_constraint(coefficients, ">=", rhs + 1)
+                    solver.add_constraint(coefficients, ">=", above)
                 elif sense == "<>":
                     side = f"__ne_{len(auxiliaries)}"
                     auxiliaries.append(side)
                     solver.add_variable(side, VarType.BINARY)
-                    solver.add_indicator_constraint(side, 1, coefficients, "<=", rhs - 1)
-                    solver.add_indicator_constraint(side, 0, coefficients, ">=", rhs + 1)
+                    solver.add_indicator_constraint(side, 1, coefficients, "<=", below)
+                    solver.add_indicator_constraint(side, 0, coefficients, ">=", above)
                 else:
                     raise ValueError(f"unknown sense {sense!r}")
         expr = self._objective(objective, emit)
@@ -511,8 +515,9 @@ class ScopedModel(ScopeModel):
         for clause in clauses:
             for expr, sense in self._generate(clause, emit):
                 lhs = evaluate(expr)
+                # A whole-numbered side misses a strict bound by at least its distance to the
+                # next whole number, so the strict senses are strict up to the tolerance.
                 ok = {"<=": lhs <= _TOLERANCE, ">=": lhs >= -_TOLERANCE, "=": abs(lhs) <= _TOLERANCE,
-                      "<": lhs <= -1 + _TOLERANCE, ">": lhs >= 1 - _TOLERANCE,
-                      "<>": abs(lhs) >= 1 - _TOLERANCE}[sense]
+                      "<": lhs < -_TOLERANCE, ">": lhs > _TOLERANCE, "<>": abs(lhs) > _TOLERANCE}[sense]
                 assert ok, f"a generated clause is violated: {lhs} {sense} 0"
         return evaluate(self._objective(objective, emit))

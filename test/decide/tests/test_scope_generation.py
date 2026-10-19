@@ -1,5 +1,5 @@
 """Constraint scope: `per K:` and `when c:` written in front of a constraint
-(anr_language_extension.md §4).
+(syntax_reference.md §6).
 
 `per K:` makes one constraint per class of K among the kept rows (`per ()`: one; no
 `per`, or `per row`: one per kept row) and does not group reducers. `when c:` keeps the
@@ -99,7 +99,7 @@ def test_per_row_adds_nothing_to_a_scoped_clause(decidb_cli, tmp_path):
 @pytest.mark.correctness
 @pytest.mark.parametrize("clause", ["per row: max(ship) > 11", "max(per row: ship) > 11"], ids=["in-front", "inside"])
 def test_per_row_written_follows_the_new_rules(decidb_cli, scope_solver, clause):
-    """`per row` is a spelling of the language, so its clause follows the new rules (D19):
+    """`per row` spells the default, so its clause follows the rules of a bare one (D19):
     the strict bound on a hard MAX steps to the next whole number, and MINIMIZE puts one
     shipment at 12. In front of the clause and inside the reducer alike."""
     sql = f"""
@@ -123,8 +123,7 @@ def test_per_row_written_follows_the_new_rules(decidb_cli, scope_solver, clause)
 ])
 def test_a_fractional_strict_bound_steps_onto_the_lattice(decidb_cli, clause, objective, value):
     """`x > 2.5` on a whole-number decision is `x >= 3`, as every row states it. Folded into
-    the column box, the bound steps the same way (the old spellings' `k + 1` makes it
-    `x >= 3.5`, a logged bug that stays until item 7)."""
+    the column box, the bound steps the same way."""
     rows = answer(decidb_cli, f"""
         SELECT id, x {table('t', ('id',), ((1,), (2,)))}
         DECIDE x(INT)
@@ -347,7 +346,7 @@ def _x_sum(when=None, by=()):
 ])
 def test_nothing_is_computed_on_a_row_the_when_drops(decidb_cli, scope_solver, clause, objective, oracle_clause,
                                                        oracle_objective):
-    """`when` filters before anything else (§3): an expression that would fail on a row
+    """`when` filters before anything else (§6.1): an expression that would fail on a row
     the `when` drops -- a cast of 'abc' -- is never computed there, as in SQL's WHERE."""
     sql = f"""
         SELECT id, x {table('t', GUARD_COLUMNS, GUARD_ROWS)}
@@ -416,11 +415,6 @@ def test_an_input_with_no_rows_is_not_an_error(decidb_cli):
                  id="decision-in-when"),
     pytest.param("per (): sum(ship) by (ship) <= 5", "DECIDE: ship is a decision; when, per and by may only use data",
                  id="decision-in-by"),
-    pytest.param("per D.depotID: sum(ship) by (D.depotID) <= 5 PER D.depotID", 'syntax error at or near "PER"',
-                 id="postfix-per-after-a-scope"),
-    pytest.param("sum(ship) by (D.region) <= 5 PER D.region",
-                 "DECIDE: PER D.region after a constraint cannot be combined with when, per or by; write per "
-                 "D.region: in front of it, with by (D.region) on each reducer", id="old-per-beside-by"),
     pytest.param("when S.priority: o", "'o' is not a valid SUCH THAT constraint on its own; compare it with a value",
                  id="bare-decision"),
     pytest.param("when row_number() over () > 1: ship <= 1",
@@ -441,21 +435,6 @@ def test_scope_errors(decidb_cli, clause, message):
         MAXIMIZE SUM(ship)""")
     assert message in result.stderr, result.stderr
     assert_no_internal_leak(result, "a scope error")
-
-
-@pytest.mark.error
-@pytest.mark.error_binder
-def test_an_old_per_after_the_objective_names_the_two_level_form(decidb_cli):
-    """D14 on an objective: `per K:` in front takes no key there, so the message names the
-    two-level form."""
-    result = decidb_cli.execute_raw(f"""
-        SELECT shipmentID, ship {from_clause()}
-        DECIDE ship(INT)
-        SUCH THAT ship <= S.demand
-        MINIMIZE sum(ship) by (D.region) PER D.region""")
-    assert ("DECIDE: PER D.region after the objective cannot be combined with when, per or by; write it as "
-            "outer(per D.region: inner(e) by (D.region))") in result.stderr, result.stderr
-    assert_no_internal_leak(result, "an old PER after a scoped objective")
 
 
 @pytest.mark.error
@@ -493,31 +472,31 @@ def test_explain_echoes_the_scope_as_written(decidb_cli):
     assert_no_internal_leak(result, "EXPLAIN of the scope spellings")
 
 
-#: Two columns whose names end in a colon, as the scope spellings' qualifiers do.
+#: Two columns whose names end in a colon, as a `when c:` qualifier does.
 COLON_SOURCE = """(VALUES (1, 5, true, 'a'), (2, 4, false, 'b')) t(id, cap, "ok:", "g:")"""
 
 
 @pytest.mark.explain
-def test_an_old_qualifier_ending_in_a_colon_stays_after_its_clause(decidb_cli):
-    """An old WHEN or PER is written after its clause, and EXPLAIN and DIAGNOSE keep it
-    there even when its last word ends in a colon (D17)."""
+def test_a_key_or_condition_ending_in_a_colon_is_quoted_in_the_echo(decidb_cli):
+    """A name that ends in a colon is a quoted identifier inside a scope, and EXPLAIN and
+    DIAGNOSE keep the quotes, so the echo reads back as the scope it is."""
     result = decidb_cli.execute_raw(f"""
         EXPLAIN SELECT id, x FROM {COLON_SOURCE}
         DECIDE x(INT)
-        SUCH THAT x <= cap AND SUM(x) <= 7 WHEN "ok:" AND SUM(x) <= 8 PER "g:"
+        SUCH THAT x <= cap AND when "ok:": sum(x) <= 7 AND per "g:": sum(x) by ("g:") <= 8
         MAXIMIZE SUM(x)""")
-    plan = [line.strip("│ ") for line in result.stdout.splitlines()]
-    assert "SUM(x) <= 7 WHEN ok:" in plan and "SUM(x) <= 8 PER g:" in plan, result.stdout
-    assert "↳" not in result.stdout, result.stdout
+    plan = "".join(line.strip("│ ") for line in result.stdout.splitlines()).replace(" ", "")
+    for text in ('when "ok:": sum(x) <= 7', 'per "g:": sum(x) by ("g:") <= 8'):
+        assert text.replace(" ", "") in plan, f"{text!r} not in:\n{result.stdout}"
 
-    for clause, written, suggested in (('x >= 9 WHEN "ok:"', "x >= 9 WHEN ok:", "x >= 5 WHEN ok:"),
-                                       ('SUM(x) >= 30 PER "g:"', "SUM(x) >= 30 PER g:", "SUM(x) >= 4 PER g:")):
+    for clause, suggested in (('when "ok:": x >= 9', 'when "ok:": x >= 5'),
+                              ('per "g:": sum(x) by ("g:") >= 30', 'per "g:": sum(x) by ("g:") >= 4')):
         findings = diagnose_rows(run_diagnose(decidb_cli, f"""
             SELECT id, x FROM {COLON_SOURCE}
             DECIDE x(INT)
             SUCH THAT x <= cap AND {clause}
             MAXIMIZE SUM(x)"""))
-        assert any(row["clause"] == written and row["suggested_change"] == suggested for row in findings), findings
+        assert any(row["clause"] == clause and row["suggested_change"] == suggested for row in findings), findings
 
 
 @pytest.mark.correctness

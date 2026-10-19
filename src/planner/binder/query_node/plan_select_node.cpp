@@ -158,7 +158,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         // LogicalDecide::AddConstraint. Those two are the only call sites.
         string written_objective;
         string canonical_objective;
-        // The run-time checks of the clauses written with the scope spellings, built by the
+        // The run-time checks of the clauses, built by the
         // canonicalizer from each clause as bound, before it is canonicalized. When the
         // FROM clause joins relations, their messages name a column by its relation, which
         // only the BindContext still knows; over one relation the name alone is clear.
@@ -193,16 +193,12 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 unordered_map<idx_t, string> no_relations;
                 DecideSourceNames objective_names {statement.decide_source_fragments, statement.entity_scopes,
                                                    statement.decide_group_keys, no_relations};
-                written_objective = RenderDecideObjective(*statement.decide_objective, objective_names,
-                                                          statement.decide_scoped_objective);
-                if (statement.decide_scoped_objective) {
-                    canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
-                }
+                written_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
+                canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
                 statement.decide_objective = canonicalizer.CanonicalizeObjective(
                     *statement.decide_objective, statement.objective_constant_offset);
                 canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
-                canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names,
-                                                            statement.decide_scoped_objective);
+                canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
                 if (canonical_objective == written_objective) {
                     canonical_objective.clear();
                 }
@@ -240,7 +236,6 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         decide_op->entity_key_expressions = std::move(statement.entity_key_expressions);
         decide_op->scope_checks = std::move(scope_checks.checks);
         decide_op->group_keys = std::move(statement.decide_group_keys);
-        decide_op->scoped_objective = statement.decide_scoped_objective;
         // ne_clause_labels, ABS aux vars, and MIN/MAX indicator links +
         // objective types are created by DecideOptimizer (runs after plan creation)
         decide_op->AddChild(std::move(root));

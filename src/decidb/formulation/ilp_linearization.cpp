@@ -97,6 +97,16 @@ void decide_linearize::PinGlobalAux(SolverInput &input, const VarIndexer &indexe
 //! what `SolverModel::Build` will expand into `col_lower` / `col_upper`, and must:
 //! a Big-M derived from a wider box than the model declares would be slack, and one
 //! derived from a narrower box would cut the feasible region.
+//! The bilinear link whose auxiliary is decision `v` (`w = b * x`), or null.
+static const BilinearLinkSpec *BilinearLinkOf(const SolverInput &input, idx_t v) {
+    for (const auto &link : input.bilinear_links) {
+        if (link.aux_idx == v) {
+            return &link;
+        }
+    }
+    return nullptr;
+}
+
 static void FlatColumnBox(const SolverInput &input, const FormulationBox &box,
                           const VarIndexer &indexer, int col, double &lo, double &hi) {
     idx_t c = static_cast<idx_t>(col);
@@ -119,6 +129,18 @@ static void FlatColumnBox(const SolverInput &input, const FormulationBox &box,
     hi = box.upper[v];
     if (input.variable_types[v] == LogicalType::BOOLEAN) {
         hi = MinValue<double>(hi, 1.0);
+    }
+    // A bilinear auxiliary's column stays open; its McCormick rows hold it to the product
+    // of a 0/1 and x's box, exactly [min(0, L), max(0, U)].
+    if (auto link = BilinearLinkOf(input, v)) {
+        double x_lo = box.lower[link->other_var_idx];
+        double x_hi = box.upper[link->other_var_idx];
+        if (x_lo > -1e20) {
+            lo = MaxValue<double>(lo, MinValue<double>(0.0, x_lo));
+        }
+        if (x_hi < 1e20) {
+            hi = MinValue<double>(hi, MaxValue<double>(0.0, x_hi));
+        }
     }
 }
 
@@ -171,8 +193,13 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
                           blame_col)) {
             // No finite M exists over an open box. Refuse, naming a column the user can
             // bound — which is what `OwnerOf` is for: this layer works in flat columns
-            // and still has to speak the user's language.
-            ThrowUnboundedBigMNaming(indexer.OwnerOf(blame_col), var_names, "<>");
+            // and still has to speak the user's language. A product's auxiliary is open
+            // because its factor is: name the factor.
+            idx_t blame = indexer.OwnerOf(blame_col);
+            if (auto link = BilinearLinkOf(input, blame)) {
+                blame = link->other_var_idx;
+            }
+            ThrowUnboundedBigMNaming(blame, var_names, "<>");
         }
         double M = hi_end ? reach - row.rhs : row.rhs - reach;
         // A row already implied by its own box needs no relaxation at all. The margin is

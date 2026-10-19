@@ -87,10 +87,10 @@ def test_a_data_only_bound_is_untouched(decidb_cli):
         SUCH THAT ship BETWEEN 0 AND capacity AND SUM(ship) >= 9000
         MINIMIZE SUM(ship)
     """)
-    assert "SUM(ship) >= 9000" in message, message
-    clause = attrs.get("SUM(ship) >= 9000")
+    assert "sum(ship) >= 9000" in message, message
+    clause = attrs.get("sum(ship) >= 9000")
     assert clause is not None, attrs
-    assert clause["suggested_change"].startswith("SUM(ship) >= "), clause
+    assert clause["suggested_change"].startswith("sum(ship) >= "), clause
 
 
 @pytest.mark.explain

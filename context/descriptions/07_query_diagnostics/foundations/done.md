@@ -195,17 +195,21 @@ was not established (`router/README.md`).
 Every emitted matrix row records where it came from, so diagnosis reports at the
 user-clause level instead of raw rows.
 
-- **`ConstraintProvenance {clause_id, group_key, kind, shape, avg_scaled, strict,
-  typed_k}`** on `ModelConstraint` and `SolverModel::QuadraticConstraint`
+- **`ConstraintProvenance {clause_id, group_key, kind, shape, avg_scaled, strict, typed_k}`**
+  on `ModelConstraint` and `SolverModel::QuadraticConstraint`
   (`src/include/duckdb/decidb/formulation/ilp_model.hpp`). `clause_id` indexes
   `SolverInput::constraints` (`INVALID_INDEX` for synthetic rows); `group_key` is the
-  PER/WHEN group id at emission (or row id for per-row, INVALID when ungrouped); `kind`
-  is the row role. The trailing fields (added in I2) drive the elastic engine's slack
-  placement: `shape` (`ElasticShape::UNSET` / `SHARED_SCALAR` / `PER_ROW_DATA`) decides
-  whether a clause's rows share **one** slack; `UNSET` is the invalid default, and
-  `BuildElasticModel` asserts that any relaxable user-clause row has been explicitly
-  stamped before diagnosis reads it. `avg_scaled` / `strict` / `typed_k` carry the
-  per-shape unit info for reporting (see `infeasible/done.md`).
+  group the row was emitted for — a reducer's `by` group in the aggregate shape, a
+  `per K:` class in the per-row shape, the one group of a clause with a `when` — and
+  INVALID when the clause is ungrouped; `kind` is the row role. Beside it, `data_row`
+  names the data row a per-row row came from and `class_set` the classes a group's row
+  stands for (D28), which the expanded slack scope reports one by one. The trailing fields
+  (added in I2) drive the elastic engine's slack placement: `shape` (`ElasticShape::UNSET`
+  / `SHARED_SCALAR` / `PER_ROW_DATA`) decides whether a clause's rows share **one** slack;
+  `UNSET` is the invalid default, and `BuildElasticModel` asserts that any relaxable
+  user-clause row has been explicitly stamped before diagnosis reads it. `avg_scaled` /
+  `strict` / `typed_k` carry the per-shape unit info for reporting (see
+  `infeasible/done.md`).
 - **Single row-role enum:** `ConstraintKind = { USER_PARAMETER, USER_MECHANISM,
   STRUCTURAL }` (`duckdb/common/enums/decide.hpp`). `USER_PARAMETER` carries a
   user-editable parameter/RHS and is relaxable. `USER_MECHANISM` is a rigid helper
@@ -214,19 +218,23 @@ user-clause level instead of raw rows.
   elastic predicate is one equality: `IsRelaxableForElastic(kind)` is true only for
   `USER_PARAMETER`.
 - **Stamped at every builder fan-out site** in `ilp_model_builder.cpp` (linear
-  aggregate-ungrouped / aggregate-PER / per-row, the raw global push, and the three
-  quadratic analogues). `clause_id` is derived by pointer arithmetic into
+  aggregate rows, ungrouped or one per `by` group; per-row rows; the raw global push;
+  and the three quadratic analogues). `clause_id` is derived by pointer arithmetic into
   `input.constraints` so it survives `continue` skips. Evaluated constraints default
   to `USER_PARAMETER` unless the planner/operator stamps a rigid role; raw generated
   constraints default to `STRUCTURAL` unless explicitly marked as user mechanism or
   user parameter. The six evaluated-constraint sites share the field-setting through
-  two free functions, `StampConstraintProvenance` (the fields common to all six:
-  `source_clause_id`, `repair_group_id`, `kind`, `shape`/`rhs_label`, and `group_key`/
-  `group_label` where grouped) and `StampAggregateProvenance` (`is_aggregate` /
-  `qualifier`, the four aggregate sites only) — see
+  three free functions: `StampConstraintProvenance` (the fields common to all six:
+  `source_clause_id`, `repair_group_id`, `removal_group_id`, `kind`, `shape`/`rhs_label`,
+  `rhs_mechanism_offset`, and `group_key`/`group_label` where grouped),
+  `StampAggregateProvenance` (`is_aggregate`, the four aggregate sites only) and
+  `StampDataRow` (`data_row` and `per_kept_row`, the two per-row sites) — see
   `../../01_pipeline/06_model_formulation/done.md` §7 for why `avg_scaled` /
-  `weight_labels` / `folded_terms` stay linear-only rather than becoming a third
-  shared field.
+  `weight_labels` / `folded_terms` stay linear-only rather than becoming a shared
+  field. The builder stamps no clause text: a clause's `when c per K:` qualifier lives
+  in the source registry alone (`ConstraintSourceInfo::qualifier`, built by
+  `InitializeConstraintSourceInfo` in `decide_source_provenance.cpp`), and the
+  diagnosis renderer reads it there through `SourceAwareProvenance`.
 - **Rigid rewrite rows are stamped at the source.** The optimizer tags structural
   rewrites that re-enter constraint parsing with `STRUCTURAL_CONSTRAINT_TAG`, and
   `PhysicalDecide` stamps generated McCormick / ABS envelope rows as `STRUCTURAL`;
@@ -251,9 +259,9 @@ it represents, so the unbounded diagnosis names escaping variables.
   pure (caller pre-extracts per-decide-var labels + an is-aux flag) and inverts
   `VarIndexer::Get(var, row)` over all rows to produce a `flat column →
   ColumnProvenance` map. The provenance retains the variable's **instance**
-  identity (entity id for entity-scoped, row for row-scoped) — the hook the
-  unbounded escape characterization resolves to categorical slice findings
-  set (`unbounded/done.md`). Global-block columns default to GLOBAL_AUX (unnamed)
+  identity (the class id for a keyed decision, the row for a decision per row) — the
+  hook the unbounded escape characterization resolves to categorical slice findings
+  (`unbounded/done.md`). Global-block columns default to GLOBAL_AUX (unnamed)
   unless named through `SolverInput::global_variable_labels` (aggregate `<>`
   indicators, composed MIN/MAX z's — see `infeasible/done.md`).
 
@@ -317,7 +325,7 @@ inline branches in `PhysicalDecide::Finalize`.
   groupings.
 - **Boundary:** the engine is free of DuckDB execution/operator types. It reads the
   ray, maps columns through variable provenance, groups escaping instances by
-  DECIDE variable, asks the callback for row/entity categorical candidates, and
+  DECIDE variable, asks the callback for row or keyed-class categorical candidates, and
   returns a `DecideDiagnostic` only when it produced named variable content.
 - **`Finalize` owns orchestration:** read the statement's armed flag, call the matching
   engine for the routed status, and write its findings to the statement-scoped handoff.
@@ -326,16 +334,15 @@ inline branches in `PhysicalDecide::Finalize`.
   `ThrowDecideSolveError`; success clears the handoff before the operator above emits
   its `feasible` finding.
 - **Infeasible engine (I1/I2):** `DiagnoseInfeasible(const InfeasibleDiagnosisInput&)`
-  carries the built `SolverModel` (the elastic transform `BuildElasticModel` reshapes
-  it) plus an injected `solve_model` callback, and a `has_unhandled_user_bounds` flag
-  that keeps the elastic-infeasible verdict honest when a user bound could not be
-  re-emitted. The flag is computed by the operator's re-emission loop: it turns `true`
-  only if a recorded bound's column is missing from the retained model — expected never
-  in practice, since every absorbed user bound is re-emitted (multi-instance bounds as a
-  shared-slack block per I2.a, BOOLEAN pins like `x <= 0` / `x >= 1` / `x = 1` with the
-  column opened only to its intrinsic `[0,1]`). Only bounds that merely restate a
-  variable's intrinsic domain (the BOOLEAN 0/1 box, default non-negativity) are excluded
-  at recording time via `op.is_boolean_var`. Engine internals are in `infeasible/done.md`.
+  carries the repair model `PhysicalDecide::FormulateElasticModel` builds against the
+  widened column box (the elastic transform `BuildElasticModel` then reshapes it) plus an
+  injected `solve_model` callback. No user bound is missing from that model: every bound
+  the optimizer absorbed into a column box reaches it through its own clause's rows
+  (`DecidePreparedModel::absorbed_constraints`, evaluated under `DIAGNOSE` only), one
+  row per kept row or class, BOOLEAN pins like `x <= 0` / `x >= 1` / `x = 1` included.
+  Only bounds that merely restate a variable's intrinsic domain (a BOOLEAN's `<= 1` or
+  `>= 0`) are left unrecorded, by `DecideOptimizer::AbsorbVariableBounds`. Engine
+  internals are in `infeasible/done.md`.
 
 Tested in `test/common/test_decidb_diagnostic_engines.cpp`.
 
@@ -447,8 +454,8 @@ this section is the mechanics.
   see `infeasible/done.md`) for loosen/drop edits and achievable-objective
   metadata. It adds `diagnose_decide_infeasible_slack_scope` (VARCHAR, `query`
   default / `expanded`)
-  — the T3 slack-scope policy selecting a folded SQL-level edit vs. the per-row /
-  per-group profile, threaded via `DecideDiagParams::slack_scope` (see
+  — the T3 slack-scope policy selecting a folded SQL-level edit vs. the profile per kept
+  row or per `per` class, threaded via `DecideDiagParams::slack_scope` (see
   `infeasible/done.md`).
 
 Tested in `test/decide/tests/test_query_diagnostics_relation.py` (both backends) and

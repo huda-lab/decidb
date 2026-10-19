@@ -6,9 +6,9 @@ objective must. Use an independent solver oracle for representative cases so
 two DeciDB paths cannot share one unnoticed mistake.
 
 - [ ] **VAL-00 — Freeze the baseline corpus.** Depends: BASE-01. Before feature
-  code, record current-syntax positive candidates and one-condition-away near
-  misses, with current solver outputs, schema, and expected path. This corpus
-  must not depend on the concurrent language branch.
+  code, record positive candidates in `master`'s syntax and one-condition-away
+  near misses, with current solver outputs, schema, and expected path. This
+  corpus must not depend on the concurrent language branch.
 - [ ] **VAL-01 — Harness contract tests.** Depends: HAR-01 through HAR-05.
   Exercise exact/unknown facts, complete proof objects, output binding and type
   checks, atomic miss, forced modes, and no backend/model work on a hit.

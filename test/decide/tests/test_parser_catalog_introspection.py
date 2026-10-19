@@ -1,13 +1,13 @@
 """Regression guard: the DECIDE grammar must not corrupt ordinary SQL parsing.
 
-History: the aggregate-local WHEN feature was first implemented with a
+History: DECIDE's reducer-level `when` was first implemented with a
 `func_application WHEN ...` rule in the *global* `c_expr` non-terminal. That
 polluted every function call — any unregistered/user-defined function name and
 every DuckDB default catalog view (`duckdb_tables`, `information_schema.*`,
 `pg_catalog.*`, ...) failed to parse with a bogus `syntax error at or near
 "then"`. It went unnoticed because no test ever selected a non-DECIDE function
 call or a catalog view. The fix confines the DECIDE WHEN to a context-sensitive
-`WHEN_DECIDE` token (see context/descriptions/01_pipeline/01_parser/done.md).
+`WHEN_DECIDE` token (see context/descriptions/01_pipeline/01_parser/done.md §2).
 
 These tests pin the parser back to correct behavior: catalog introspection runs,
 and an unregistered function call reaches the *binder* (Catalog error) rather

@@ -26,7 +26,7 @@ void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments)
 void PreserveDecideSourceFragment(const ParsedExpression &source, Expression &bound);
 
 //! Assign stable source ids to bound comparisons before planning rewrites them.
-//! `group_keys` lets a reducer of a clause written with the scope spellings print its
+//! `group_keys` lets a reducer print its
 //! `by (...)`; every renderer below takes it for the same reason.
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints,
                                                             const vector<string> &fragments,
@@ -56,7 +56,7 @@ string RenderDecideSource(const Expression &expr, const vector<string> &fragment
                           const vector<EntityScopeInfo> &entity_scopes,
                           const vector<DecideGroupKey> *group_keys = nullptr);
 
-//! What a message about a clause written with the scope spellings renders with: the
+//! What a message about a clause renders with: the
 //! registries above, and each relation's alias by table index, so a column reads
 //! `D.depotID` in a query that joins several relations.
 struct DecideSourceNames {
@@ -78,26 +78,26 @@ DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<
                                   const vector<DecideGroupKey> &group_keys, idx_t decide_index,
                                   const vector<pair<idx_t, string>> &aux_labels);
 
-//! RenderDecideSource with every column qualified by its relation (when `relations`
-//! lists any). `scoped` renders a reducer as the scope spellings write it, `by` and all.
-string RenderDecideSource(const Expression &expr, const DecideSourceNames &names, bool scoped = false);
+//! An expression as the query writes it (lower-case names, a reducer's `when`,
+//! `per` and `by`), every column qualified by its relation when `relations` lists any.
+string RenderDecideSource(const Expression &expr, const DecideSourceNames &names);
 
 //! The relations of a DECIDE query's FROM clause by table index, so a message names a
 //! column `D.depotID`; empty over one relation, where the column's name alone is clear.
 unordered_map<idx_t, string> DecideRelationNames(BindContext &bind_context, idx_t decide_index);
 
-//! A reducer as the scope spellings write it, without its `by`: `sum(when S.priority:
+//! A reducer as the query writes it, without its `by`: `sum(when S.priority:
 //! ship)`, for a message that names its `by` group separately.
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names);
 
-//! The key of a scope spelling's `per` wrapper: as written, else its columns, which
+//! The key of a `per` wrapper: as written, else its columns, which
 //! BindKeyColumns named in SQL already (`D.region`); `()` for none.
 string RenderDecidePerKey(const BoundConjunctionExpression &per, const vector<string> &fragments);
 
 //! Split a DECIDE constraint or objective tree into one rendered string per clause,
-//! turning the WHEN and PER wrappers the binder stamps back into the syntax the user
-//! wrote: the old postfix `WHEN c PER g`, or the scope spellings' `when c per K:` in
-//! front. Leaves are rendered by RenderDecideSource. Used by the logical and
+//! turning the wrappers the binder stamps back into the syntax the user wrote: `when c
+//! per K:` in front, and the two-level objective. Leaves are rendered by
+//! RenderDecideSource. Used by the logical and
 //! physical EXPLAIN paths, which see the tree AFTER the optimizer, so the output
 //! includes the rows linearization emitted as well as the ones the user wrote.
 //! `sources`, when supplied, lets a comparison that canonicalization rewrote print as
@@ -106,19 +106,17 @@ string RenderDecidePerKey(const BoundConjunctionExpression &per, const vector<st
 //! `out_source_ids`, when supplied, receives the source_clause_id behind each emitted
 //! string -- DConstants::INVALID_INDEX for a row no clause claims. This is what lets a
 //! caller group the post-optimizer rows under the clause they came from.
-//! `scoped` renders an objective written with the scope spellings as it was written,
-//! where no comparison carries the mark.
 void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
                                     const vector<ConstraintSourceInfo> *sources = nullptr,
-                                    vector<idx_t> *out_source_ids = nullptr, bool scoped = false);
+                                    vector<idx_t> *out_source_ids = nullptr);
 
 //! Render a whole objective tree as one display string.
 //!
-//! Not RenderDecideSource: an objective carrying a WHEN wrapper is a tagged conjunction,
-//! which the leaf renderer spells `SUM(x) AND cond` rather than the postfix
-//! `SUM(x) WHEN cond` the user wrote. Only the clause walker unwraps those tags, so the
+//! Not RenderDecideSource: an objective carrying a `when` wrapper is a tagged
+//! conjunction, which the leaf renderer spells `sum(x) AND cond` rather than the
+//! `when cond: sum(x)` the user wrote. Only the clause walker unwraps those tags, so the
 //! objective's snapshots go through it too.
-string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names, bool scoped = false);
+string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names);
 
 //! One user clause, rendered at each layer that says something different about it.
 //!
@@ -129,7 +127,7 @@ string RenderDecideObjective(const Expression &expr, const DecideSourceNames &na
 //! passed through untouched. These three fields keep the layers apart so a plan can show
 //! what became of each clause.
 struct DecideClauseLayers {
-	//! The clause as written, WHEN/PER qualifiers included. Always set.
+	//! The clause as written, `when`/`per` qualifiers included. Always set.
 	string written;
 	//! The canonical form. Empty when it reads the same as `written`, which is the
 	//! common case -- canonicalization only shows up when it had to move a decision

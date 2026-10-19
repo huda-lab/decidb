@@ -1,6 +1,6 @@
 # `DIAGNOSE` Prefix (how it works)
 
-Shipped in batch H (2026-08-26). The paper's §5 interface exists:
+This is the paper's §5 interface:
 
 > The interface for triggering diagnosis is a prefix to the query: `DIAGNOSE`. It is
 > analogous to `EXPLAIN ANALYZE` for a standard query in that it runs the query and reports
@@ -13,8 +13,8 @@ semantics and where the implementation lives.
 
 ## The semantic question, answered
 
-The design note this file replaced listed three readings of "without the prefix, a failed
-query just reports its status". Reading **1 — prefix replaces auto** was chosen, with
+Of the three readings of "without the prefix, a failed query just reports its status",
+DeciDB implements reading **1 — the prefix replaces automatic diagnosis**, with
 reading 2's relation output folded in:
 
 - **`DIAGNOSE` is the only trigger.** There is no automatic path. A query that is never
@@ -23,7 +23,7 @@ reading 2's relation output folded in:
   infeasible.` / `… is unbounded.` No clause name, no repair, no second statement.
   Naming the clause *is* the elastic solve, and that only runs when asked. The error does
   point at the prefix, so a user who does not know the keyword still learns it — the cost
-  reading 1 was originally charged with is paid in one sentence.
+  of reading 1 is paid in one sentence.
 - **It returns a relation, not a report.** One row per finding, real columns and real
   types. That matches `EXPLAIN` / `DESCRIBE` / `SUMMARIZE`, the CLI renders it as a box
   for free, and it composes: `SELECT clause FROM (DIAGNOSE …) WHERE amount > 1000`.
@@ -39,9 +39,24 @@ reading 2's relation output folded in:
   one diagnosis relation cannot identify which of several solves it describes.
 - **No options syntax.** There is no `DIAGNOSE (VERBOSE) …`.
 
+## Scoped clauses in the relation
+
+- **`clause` and `suggested_change`** quote a clause in the plan style EXPLAIN prints:
+  lower-case reducers and keywords, `when c per K:` in front, a reducer's `by (G)` after
+  it, the colon form as written, and no `per row:` or `by ()` (`../explain/done.md` §2).
+  The labels of rewrite rows follow the same style (`max(ship)` for an extremum column,
+  `sum(ship) by (D.region) <> 20` for a `<>` binary).
+- **`group`** holds the `per` key value of an expanded finding — one row per class
+  (`edit_source = expanded_group`); a NULL key value renders as the text `NULL`.
+- **`scope`** says `row`, or `entity` for a keyed (`per K:`) decision's escape count; a
+  query-wide (`per ()`) decision has one instance and reports no count.
+- **The data checks still raise.** A `when` that keeps no row, a `per` key that does not
+  determine its clause, and a reducer group its own `when` empties are errors before
+  solving, so `DIAGNOSE` reports them as the bare query does (`../scope/done.md` §5).
+
 ## Where it lives
 
-Batch H mirrored `SUMMARIZE`, not `EXPLAIN`: `EXPLAIN` carries its own statement node and
+The prefix mirrors `SUMMARIZE`, not `EXPLAIN`: `EXPLAIN` carries its own statement node and
 buys an options syntax we do not need; `SUMMARIZE` is one grammar alternative plus a flag.
 
 | layer | what it does |
@@ -52,8 +67,8 @@ buys an options syntax we do not need; `SUMMARIZE` is one grammar alternative pl
 | logical plan | `LogicalDecide::diagnose` — a property of the statement, never read back out of a session setting. `LogicalDecideDiagnose` owns the output schema. |
 | stage 08 | `PhysicalDecide::diagnose` arms the engines and reports findings instead of raising; `PhysicalDecideDiagnose` sinks the query's rows and emits the findings. |
 
-The engine itself is unchanged. What batch H changed is who starts it and how its answer
-is shaped — see `../../07_query_diagnostics/`.
+The prefix decides who starts the engine and how its answer is shaped; the engine itself
+is described in `../../07_query_diagnostics/`.
 
 ## Tests
 

@@ -1,4 +1,4 @@
-# MAXIMIZE / MINIMIZE — Planned Features
+# MAXIMIZE / MINIMIZE — open work
 
-No MAXIMIZE/MINIMIZE-specific work is open. Shipped behavior is recorded in
-`done.md`; problem-class extensions are owned by `../problem_types/todo.md`.
+No open work. Current behavior is recorded in [`done.md`](done.md); problem-class
+extensions are owned by [`../problem_types/todo.md`](../problem_types/todo.md).

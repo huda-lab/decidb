@@ -6,7 +6,7 @@ arrays, so the same solver column can reach one row more than once:
 
   - `(qty + 1) * x` distributes into `qty*x + 1*x` — two terms, one column
   - `qty*x + x` — the same shape written out
-  - an entity-scoped variable spans several rows of one PER group, so even a
+  - an entity-scoped variable spans several rows of one `per` group, so even a
     single term lands on one column repeatedly
 
 A repeated column index is rejected outright by Gurobi and HiGHS, so every
@@ -479,7 +479,7 @@ def test_composed_min_max_additive_coefficient(
 
 
 # ===========================================================================
-# PER objective, outer MIN over group sums, entity-scoped variable
+# Two-level objective, outer MIN over group sums, entity-scoped variable
 # ===========================================================================
 
 @pytest.mark.min_max
@@ -571,9 +571,9 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
 
 
 # ===========================================================================
-# PER objective, SUM outer, MIN/MAX inner, multi-term row expression
+# Two-level objective, SUM outer, MIN/MAX inner, multi-term row expression
 #
-# Regression coverage for the `SUM(MIN(expr)) PER col` bind-time bug: the
+# Regression coverage for the `sum(per col: min(expr) by (col))` bind-time bug: the
 # outer-SUM nested form used to reject a multi-term inner MIN/MAX argument
 # (`MIN((qty+1)*x)`, `MIN(qty*x + x)`) with a binder error naming syntax the
 # user never wrote (`sum((x * (min(l.qty) + __MIN__)))`) — the CAS
@@ -581,8 +581,6 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
 # could be reassembled into a whole aggregate. The single-term inner
 # (`MIN(qty*x)`, already covered above) and the outer-MIN/MAX-instead-of-SUM
 # forms were unaffected; only outer SUM + multi-term inner MIN/MAX hit it.
-# See done.md → "SUM(MIN(expr)) PER col rejected a multi-term inner
-# MIN/MAX argument at bind time".
 # ===========================================================================
 
 @pytest.mark.min_max

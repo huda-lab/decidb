@@ -767,7 +767,7 @@ class TestQuadraticConstraintSyntax:
 @pytest.mark.correctness
 @pytest.mark.quadratic
 class TestQuadraticConstraintInteractions:
-    """Quadratic constraints composed with WHEN, PER, and linear constraints."""
+    """Quadratic constraints composed with `when`, `per`, and linear constraints."""
 
     @_expect_gurobi
     def test_when_filtering(
@@ -904,10 +904,10 @@ class TestQuadraticConstraintInteractions:
     ):
         """when active=1 per grp: sum(power(x - t, 2)) by (grp) <= K.
 
-        WHEN filters out inactive rows; PER then partitions the surviving rows
+        `when` filters out inactive rows; `per` then partitions the surviving rows
         into groups and emits one quadratic constraint per group. Inactive
         rows have no constraint, so they go to the upper bound (x = 100). The
-        test exercises the WHEN-mask-then-PER-group path for QCQP — the Q
+        test exercises the `when`-mask-then-`per`-group path for QCQP — the Q
         matrix per group must reference only active rows in that group.
         """
         data_sql = """

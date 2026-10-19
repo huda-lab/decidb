@@ -19,9 +19,10 @@ current LogicalDecide -> current adapter --\
 future ANR -----------> ANR adapter ------/
 ```
 
-The semantic problem needs decision domains and row/entity/scalar identity;
-objective terms and direction; complete constraint factors and comparisons;
-reducer `PER`, `WHEN`, qualifier, and later frame semantics; data-valued
+The semantic problem needs decision domains and row, keyed and query-wide
+identity; objective terms and direction; complete constraint factors and
+comparisons; `when` and `per` scopes, `by` keys, a reducer's own scope and its
+colon-form qualifier (`SUM(D: e)`), and later frame semantics; data-valued
 expressions; source provenance; and the input plan's bindings. It does not carry
 solver choice, Big-M formulation, auxiliary solver variables, or evaluated
 coefficient vectors. The first adapter may expose only the facts needed by the

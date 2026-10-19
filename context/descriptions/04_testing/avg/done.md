@@ -7,9 +7,9 @@ Tests live in `test/decide/tests/test_avg.py` plus interactions in
 
 All oracle-verified unless noted:
 
-- **Core** (`test_avg.py`): `AVG(x) op K` constraints, flat AVG objective (= SUM argmax), AVG + WHEN, AVG + PER (per-group average), AVG + WHEN + PER, BOOL and INT variables, AVG in bilinear constraint, `AVG(x) <> K` (Big-M + RHS scaling, plain and with WHEN), AVG with no DECIDE variable (passthrough, no oracle needed).
-- **Aggregate-local WHEN** (`test_aggregate_local_when.py`): local WHEN on AVG, and local WHEN + AVG + PER.
-- **Nested PER objectives** (`test_per_objective.py`): `SUM(AVG(x * cost)) PER col` with unequal groups, including extreme 1:5 group-size asymmetry; `MAX(AVG(...)) PER col` (easy MAX) and `MIN(AVG(...)) PER col` (easy MIN).
+- **Core** (`test_avg.py`): `AVG(x) op K` constraints, flat AVG objective (= SUM argmax), `when c: avg(...)` (divides by the kept rows), `per g: avg(...) by (g)` (per-group average), `when c per g: avg(...) by (g)`, BOOL and INT variables, AVG in bilinear constraint, `AVG(x) <> K` (Big-M + RHS scaling, plain and under a `when`), AVG with no DECIDE variable (passthrough, no oracle needed).
+- **A reducer's own `when`** (`test_aggregate_local_when.py`): `avg(when c: e)`, alone and under `per g: ... by (g)`.
+- **Two-level objectives** (`test_per_objective.py`): `sum(per col: avg(x * cost) by (col))` with unequal groups, including extreme 1:5 group-size asymmetry; `max(per col: avg(...) by (col))` (easy MAX) and `min(per col: avg(...) by (col))` (easy MIN).
 
 ## Feature interactions covered
 
@@ -17,11 +17,11 @@ All oracle-verified unless noted:
 |-----------|-----------|--------|
 | AVG | BOOL | ✓ |
 | AVG | INT | ✓ |
-| AVG | WHEN (expression-level) | ✓ |
-| AVG | WHEN (aggregate-local) | ✓ |
-| AVG | PER | ✓ |
-| AVG | WHEN + PER | ✓ |
-| AVG (inner) | SUM / MAX / MIN (outer) + PER | ✓ |
+| AVG | `when` in front | ✓ |
+| AVG | a reducer's own `when` | ✓ |
+| AVG | `per` | ✓ |
+| AVG | `when` + `per` | ✓ |
+| AVG (inner) | SUM / MAX / MIN (outer) in the two-level objective | ✓ |
 | AVG | bilinear constraint | ✓ |
 | AVG | `<>` (NE Big-M) | ✓ (denominator hoisted to RHS at execution time; LHS stays integer-valued SUM — see `physical_decide.cpp` `ne_avg_rhs_scale` flag) |
-| AVG | entity-scoped | ✓ (`test_entity_scope.py::test_entity_scoped_with_avg`) |
+| AVG | keyed decision | ✓ (`test_entity_scope.py::test_entity_scoped_with_avg`) |

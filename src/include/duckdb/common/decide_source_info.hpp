@@ -14,20 +14,10 @@ namespace duckdb {
 class Serializer;
 class Deserializer;
 
-//! A clause's text with its WHEN/PER qualifier attached where DECIDE writes it: the old
-//! postfix qualifier (`WHEN c PER g`) after the clause, the scope spellings' `when c per
-//! K:` in front of it. The renderers keep the two apart: the old keywords in upper case,
-//! the scope spellings' in lower case and closed by a colon. The colon alone would not:
-//! an old condition may end in a column named `ok:`.
+//! A clause's text with its `when c per K:` qualifier in front of it, where DECIDE
+//! writes it.
 inline string AttachDecideQualifier(const string &clause, const string &qualifier) {
-	if (qualifier.empty()) {
-		return clause;
-	}
-	bool scope_spelling = qualifier.compare(0, 5, "when ") == 0 || qualifier.compare(0, 4, "per ") == 0;
-	if (scope_spelling && qualifier.back() == ':') {
-		return qualifier + " " + clause;
-	}
-	return clause + " " + qualifier;
+	return qualifier.empty() ? clause : qualifier + " " + clause;
 }
 
 //! How diagnostics should render the right-hand side of a source constraint.
@@ -87,5 +77,14 @@ struct ConstraintSourceInfo {
 	void Serialize(Serializer &serializer) const;
 	static ConstraintSourceInfo Deserialize(Deserializer &deserializer);
 };
+
+//! The clause as written (its canonical form where nothing was moved), without its
+//! qualifier: `lhs cmp rhs`.
+inline string WrittenDecideComparison(const ConstraintSourceInfo &source) {
+	const string &lhs = source.written_lhs.empty() ? source.canonical_lhs : source.written_lhs;
+	const string &rhs = source.written_rhs.empty() ? source.canonical_rhs : source.written_rhs;
+	const string &cmp = source.written_cmp.empty() ? source.canonical_cmp : source.written_cmp;
+	return cmp.empty() || rhs.empty() ? lhs : lhs + " " + cmp + " " + rhs;
+}
 
 } // namespace duckdb

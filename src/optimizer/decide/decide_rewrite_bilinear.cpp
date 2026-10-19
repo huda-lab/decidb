@@ -231,9 +231,8 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				                           ? LogicalType::INTEGER
 				                           : LogicalType::DOUBLE;
 				// F6: a diagnosis, and a plan, name the auxiliary by the user's product (b * x).
-				const bool scoped_clause = HasDecideTag(clause_alias, SCOPED_CLAUSE_TAG);
-				string label = "(" + RenderForPlan(*func.children[0], decide, scoped_clause) + " * " +
-				               RenderForPlan(*func.children[1], decide, scoped_clause) + ")";
+				string label = "(" + RenderForPlan(*func.children[0], decide) + " * " +
+				               RenderForPlan(*func.children[1], decide) + ")";
 				idx_t aux_idx =
 				    AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, DecideVarScopeInfo::Row(), label);
 				AddRewriteAccount(decide, clause_alias,

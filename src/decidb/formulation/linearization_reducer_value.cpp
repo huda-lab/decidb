@@ -3,13 +3,13 @@
 //
 // src/decidb/formulation/linearization_reducer_value.cpp
 //
-// Stage 06 — the helper decisions of the value rewrite (anr_language_extension.md
-// §4.3, todo.md §4.2). Stage 05 replaced each decision reducer of a VALUE-shape
-// clause by a helper decision and recorded what it holds; stage 08 evaluated that
-// reducer's members per `by` group. This boxes every helper by its members' reach
-// and emits its definition: an equality row per group for SUM and AVG, an extremum
-// link per group for MIN and MAX. The helper's own column enters only here: stage 08
-// hands over the members alone.
+// Stage 06 — the helper decisions of the value rewrite (syntax_reference.md §6.4;
+// 05_optimizer/done.md, "The value rewrite"). Stage 05 replaced each decision reducer
+// of a VALUE-shape clause by a helper decision and recorded what it holds; stage 08
+// evaluated that reducer's members per `by` group. This boxes every helper by its
+// members' reach and emits its definition: an equality row per group for SUM and AVG,
+// an extremum link per group for MIN and MAX. The helper's own column enters only
+// here: stage 08 hands over the members alone.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"

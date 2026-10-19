@@ -27,14 +27,18 @@ INTERNAL_ERROR_MARKERS = (
     "INTERNAL Error",
     "Stack Trace",
     "assertion failure",
+    # A bound column printed by its binding (`#[0.1]`) rather than by its name.
+    "#[",
 )
 
 
-def assert_no_internal_leak(result, context: str) -> None:
+def assert_no_internal_leak(result, context: str, written: str = "") -> None:
     """Fail if the CLI's combined output leaks internals to the user.
 
     ``result`` is a completed ``decidb_cli.execute_raw`` result; ``context``
     names the behaviour under test, so a failure says which path regressed.
+    ``written`` is the SQL that was run: a ``__name__`` it contains is the
+    user's own text (a value, an alias, the query echoed by an error), not a tag.
     """
     combined = result.stderr + result.stdout
 
@@ -46,7 +50,7 @@ def assert_no_internal_leak(result, context: str) -> None:
             f"stderr: {result.stderr[:500]}"
         )
 
-    leaked = INTERNAL_TAG_RE.search(combined)
+    leaked = next((m for m in INTERNAL_TAG_RE.finditer(combined) if m.group(0) not in written), None)
     assert leaked is None, (
         f"Found internal tag {leaked.group(0)!r} in user-facing output — "
         f"{context} is showing pipeline metadata instead of the user's SQL.\n"

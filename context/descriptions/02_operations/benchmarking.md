@@ -67,12 +67,12 @@ DECIDB_BENCH: num_rows=9965
 
 **The two constraint counts are different units — never add them.** A *spec* is one DECIDE
 clause as the operator hands it to the builder; a per-row spec expands to one matrix *row* per
-data row and a PER spec to one row per group, so the row count can be orders of magnitude
-larger. Read `total_constraint_rows` for matrix pressure (it is what the solver receives, and
-the only figure comparable across queries) and `total_constraint_specs` to trace pressure back
-to the clause that caused it. Q4 on `decidb.db` reports 60,182 specs against 120,360 rows: the
-`MAX(keep * l_quantity) <= 45` easy-direction rewrite contributes a row per data row while
-counting as a single spec.
+data row, and a `per K:` or `by` spec to one row per class or group, so the row count can be
+orders of magnitude larger. Read `total_constraint_rows` for matrix pressure (it is what the
+solver receives, and the only figure comparable across queries) and `total_constraint_specs`
+to trace pressure back to the clause that caused it. Q4 on `decidb.db` reports 60,182 specs against 120,360 rows: the
+`per (): max(keep * l_quantity) <= 45` easy-direction rewrite contributes a row per data row
+while counting as a single spec.
 
 Runs recorded before this split emit a single `total_constraints` that *summed* the two units
 and therefore reported neither. `view_results.py` still displays it, flagged `pre-split, mixed
@@ -89,7 +89,7 @@ Timers use DuckDB's `Profiler` class (`src/include/duckdb/common/profiler.hpp`).
 
 ## Benchmark Query Set
 
-Eleven queries run at all default database sizes. The set is designed to cover the DECIQL expressivity surface (problem classes, variable types, constraint/objective forms, SQL functions, WHEN/PER) with the **fewest queries** — each query deliberately bundles several features, recorded in a `-- TAGS:` header comment in its `.sql` file. Query files live in `benchmark/decide/queries/*.sql` and use `${NAME}` placeholders for size-specific coefficients; the runner resolves them before execution, fails fast on unresolved `${...}` tokens, and stores both the resolved SQL and coefficient map in each result entry.
+Eleven queries run at all default database sizes. The set is designed to cover the DECIQL expressivity surface (problem classes, variable types, constraint/objective forms, SQL functions, the `when` / `per` / `by` scopes) with the **fewest queries** — each query deliberately bundles several features, recorded in a `-- TAGS:` header comment in its `.sql` file. Query files live in `benchmark/decide/queries/*.sql` and use `${NAME}` placeholders for size-specific coefficients; the runner resolves them before execution, fails fast on unresolved `${...}` tokens, and stores both the resolved SQL and coefficient map in each result entry.
 
 **Scale tiers.** Every query runs at the largest size that completes in reasonable time, established by measurement (2026-07-26) rather than assumption. Three things bound a query's size:
 
@@ -117,17 +117,26 @@ A full run (3 iterations × 2 sizes) takes roughly 17 minutes at these settings.
 
 | Query | File | Features Exercised |
 |-------|------|--------------------|
-| Q1 | `q1_ilp_selection.sql` | Boolean ILP selection; MAXIMIZE SUM + WHEN-on-objective; AVG constraint; WHEN + aggregate-local WHEN; multi-column PER |
+| Q1 | `q1_ilp_selection.sql` | Boolean ILP selection; MAXIMIZE SUM with a `when` in front; AVG constraint; `when` in front of a constraint and inside a reducer; `per ()`; multi-column `per` key with its `by` |
 | Q2 | `q2_integer_domains.sql` | `INT` vars; BETWEEN, IN(var), `<>` per-row + aggregate, division, unary-minus, strict `>`; uncorrelated + correlated subqueries; data-only aggregate RHS; `%` fold |
 | Q3 | `q3_abs_norms.sql` | REAL signed domain; MINIMIZE; ABS lower-envelope; norm L1 / L∞ / L0 (row-limited — L0 is one binary per row) |
-| Q4 | `q4_minmax_nested.sql` | MINIMIZE MAX (easy) + nested-PER objective; composed MIN/MAX-in-LHS; easy MAX constraint (full scale) |
+| Q4 | `q4_minmax_nested.sql` | MINIMIZE MAX (easy) as the two-level objective `max(per l_returnflag: sum(...) by (l_returnflag))`; composed MIN/MAX-in-LHS; easy MAX constraint (full scale) |
 | Q5 | `q5_qp_qcqp.sql` | Convex QP + QCQP; quadratic + mixed linear/quadratic objective; norm L2; aggregate quadratic constraint (row-limited, Gurobi) |
-| Q6 | `q6_bilinear_mccormick.sql` | MILP; BOOL×REAL bilinear objective + constraint (McCormick); WHEN+PER (full `orders` scale) |
+| Q6 | `q6_bilinear_mccormick.sql` | MILP; BOOL×REAL bilinear objective + constraint (McCormick); `when` + `per` + `by` on one constraint (full `orders` scale) |
 | Q7 | `q7_nonconvex.sql` | MIQP + non-convex QP + non-convex bilinear; per-row quadratic constraint (full `orders` scale, Gurobi `NonConvex=2`) |
-| Q8 | `q8_feasibility_join.sql` | Feasibility (no objective); entity-scoped variable over a join; multi-column PER; WHEN+PER; IS NOT NULL |
+| Q8 | `q8_feasibility_join.sql` | Feasibility (no objective); keyed decision `per o: assign(BOOL)` over a join; multi-column `per` key; `when` + `per`; IS NOT NULL in a `when` |
 | Q9 | `q9_maximize_max.sql` | MAXIMIZE MAX (hard, Big-M); equality constraint (row-limited, tier not yet re-chosen — the "least scalable query" reading was a missing auxiliary box, fixed 2026-08-18) |
 | Q10 | `q10_maximize_abs.sql` | MAXIMIZE SUM(ABS) + ABS Path-B `>=` constraint (Big-M; full scale — per-row-independent sign binaries, 5M vars at 1M rows; heaviest query in the suite) |
 | Q11 | `q11_lp_allocation.sql` | Pure LP continuous allocation; MAXIMIZE AVG |
+
+Four profiling queries sit beside them. `run_benchmarks.py` does not run them; `profile_pipeline.py` does (see Recording Results).
+
+| Query | File | Shape |
+|-------|------|-------|
+| P1 | `p1_lp_row_bound.sql` | Bounded LP: each row pushed to its own upper bound |
+| P2 | `p2_qp_separable.sql` | Separable convex QP: no constraint couples the rows |
+| P3 | `p3_qp_coupled.sql` | P2 plus one aggregate budget that ties every decision together |
+| P4 | `p4_per_high_cardinality.sql` | High-cardinality `per`: `per l_orderkey: sum(keep) by (l_orderkey) = 1`, one row selected per order key |
 
 ### Coefficients
 
@@ -159,6 +168,7 @@ A full run (3 iterations × 2 sizes) takes roughly 17 minutes at these settings.
 | `Q10_SUM_CAP` | 7500000 | 15000000 |
 | `Q10_ABS_FLOOR` | 1250000 | 2500000 |
 | `Q11_BUDGET` | 51000000000 | 102000000000 |
+| `P3_BUDGET` | 5000000 | 10000000 |
 
 Q8 carries no placeholders (its feasibility bounds are fixed literals); Q4's composed-constraint cap and Q9's cardinality/price bounds are likewise inline literals held constant across sizes.
 
@@ -174,7 +184,7 @@ Cells mark which query exercises each feature. Queries pack multiple features, s
 | INT (explicit) | | x | | | | | | | | | |
 | REAL | | | x | | x | x | x | | | x | x |
 | Multiple variables | | x | | | | x | x | | | | |
-| Entity/table-scoped | | | | | | | | x | | | |
+| Keyed (`per K: x`) | | | | | | | | x | | | |
 | Signed / negative domain | | | x | | | | | | | | |
 
 **Problem classes**
@@ -221,11 +231,11 @@ Cells mark which query exercises each feature. Queries pack multiple features, s
 | MINIMIZE MAX (easy) | | | | x | | | | | | | |
 | MAXIMIZE MAX (hard, Big-M) | | | | | | | | | x | | |
 | MAXIMIZE SUM(ABS) | | | | | | | | | | x | |
-| Nested-PER objective | | | | x | | | | | | | |
+| Two-level objective | | | | x | | | | | | | |
 | Quadratic objective | | | | | x | | x | | | | |
 | Bilinear objective | | | | | | x | | | | | |
 | Mixed linear + quadratic | | | | | x | | | | | | |
-| WHEN on objective | x | | | | | | | | | | |
+| `when` on objective | x | | | | | | | | | | |
 | AVG objective | | | | | | | | | | | x |
 
 **SQL functions**
@@ -244,18 +254,20 @@ Cells mark which query exercises each feature. Queries pack multiple features, s
 | Bilinear (var × var) | | | | | | x | x | | | | |
 | Division | | x | | | | | | | | | |
 
-**WHEN / PER**
+**when / per / by**
 
 | Feature | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 | Q10 | Q11 |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:---:|:---:|
-| WHEN on constraint | x | | | | | x | | x | | | |
-| WHEN on objective | x | | | | | | | | | | |
-| Aggregate-local WHEN | x | | | | | | | | | | |
-| WHEN + PER composition | | | | | | x | | x | | | |
-| PER single-column | | | | x | | x | | x | | | |
-| PER multi-column | x | | | | | | | x | | | |
-| PER on objective (nested) | | | | x | | | | | | | |
-| IS NULL / IS NOT NULL | | | | | | | | x | | | |
+| `when` on constraint | x | | | | | x | | x | | | |
+| `when` on objective | x | | | | | | | | | | |
+| `when` inside a reducer | x | | | | | | | | | | |
+| `when` + `per` on one constraint | x | | | | | x | | x | | | |
+| `per ()` on constraint | x | | | x | | x | | | | | |
+| `per` single-column | | | | x | | x | | x | | | |
+| `per` multi-column | x | | | | | | | x | | | |
+| `by (G)` after a reducer | x | | | x | | x | | x | | | |
+| Two-level objective `outer(per k: inner(e) by (k))` | | | | x | | | | | | | |
+| IS NULL / IS NOT NULL in a `when` | | | | | | | | x | | | |
 
 **Deliberate omissions.** Two objective forms are left uncovered to keep the count at 11: `MAXIMIZE MIN` (easy) — mechanically identical to Q4's `MINIMIZE MAX`; and `MINIMIZE MIN` (hard) — the symmetric twin of Q9's `MAXIMIZE MAX`. Adding either costs a whole query (one objective per query) for a construct whose linearization is already exercised.
 
@@ -271,8 +283,8 @@ Q1: ilp_selection
   SELECT l_orderkey, l_linenumber, ..., keep
   FROM lineitem
   DECIDE keep(BOOL)
-  SUCH THAT SUM(keep * l_quantity) <= 3829286 ...
-  MAXIMIZE SUM(keep * l_extendedprice) WHEN l_linestatus = 'F';
+  SUCH THAT per (): sum(keep * l_quantity) <= 3829286 ...
+  MAXIMIZE when l_linestatus = 'F': sum(keep * l_extendedprice);
 
   medium  │ 500K rows │ 500K vars │ ... │ 1.73s
   ██░░░░░░░░░░░░████████████████████████████████████░░░░░░
@@ -306,7 +318,7 @@ Saved to `benchmark/decide/results/{commit}.json` (or `dirty.json` for uncommitt
       "query": "Q1",
       "description": "ilp_selection",
       "size": "medium",
-      "sql": "SELECT l_orderkey ... SUCH THAT SUM(keep * l_quantity) <= 3829286 ...",
+      "sql": "SELECT l_orderkey ... SUCH THAT per (): sum(keep * l_quantity) <= 3829286 ...",
       "coefficients": {
         "Q1_QTY_CAP": 3829286,
         "Q1_GRP_CAP": 62500
@@ -377,6 +389,8 @@ benchmark/decide/
 ├── generate_databases.py      # Database generation script
 ├── run_benchmarks.py          # Orchestration script
 ├── view_results.py            # Visual results viewer
+├── profile_pipeline.py        # Per-stage span profiler (both backends)
+├── test_large_scale.py        # Oracle-checked larger instances (pytest)
 ├── queries/
 │   ├── q1_ilp_selection.sql
 │   ├── q2_integer_domains.sql
@@ -389,6 +403,10 @@ benchmark/decide/
 │   ├── q9_maximize_max.sql
 │   ├── q10_maximize_abs.sql
 │   ├── q11_lp_allocation.sql
+│   ├── p1_lp_row_bound.sql
+│   ├── p2_qp_separable.sql
+│   ├── p3_qp_coupled.sql
+│   ├── p4_per_high_cardinality.sql
 │   └── manual.sql.example
 ├── databases/                 # Generated TPC-H DBs (gitignored)
 │   ├── medium.db              # SF=0.085, exactly 500K lineitem rows

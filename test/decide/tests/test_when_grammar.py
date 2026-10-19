@@ -1,25 +1,15 @@
-"""WHEN-clause grammar coverage.
+"""`when` condition grammar coverage.
 
-The constraint-side `decide_when_condition` non-terminal is deliberately
-restricted because a comparison after aggregate-local WHEN can instead be the
-constraint bound. The lexer gives objective WHEN a distinct token, so one
-comparison between atomic operands is unambiguous there. Both paths exclude
-unparenthesized `NOT` and arithmetic (`+`, `-`).
+A `when` condition runs to its colon -- inside a reducer (`sum(when c: e)`) and in
+front of the objective (`MAXIMIZE when c: ...`) -- so `NOT`, arithmetic and
+comparisons need no parentheses there.
 
-This file pins the resulting boundary:
+This file pins:
   - Parenthesized forms work everywhere (oracle-verified positives).
   - A simple unparenthesized comparison works on objectives and matches its
     parenthesized spelling.
-  - The same aggregate-local constraint condition requires parentheses.
-  - Unparenthesized `NOT` and arithmetic-comparison fail with shape-
-    specific error messages.
 
-See `context/descriptions/03_expressivity/when/todo.md` for the remaining gap.
-
-The positive tests are written in the scope spelling (`sum(when c: e)`,
-`MAXIMIZE when c: ...`), where the condition runs to the colon. The rejection
-tests keep the old postfix spelling until item 7: they pin that grammar's
-boundary and its messages.
+See `context/descriptions/03_expressivity/scope/done.md`, section 3.
 """
 
 import time
@@ -439,144 +429,4 @@ def test_when_paren_arith_objective(
         test_id="when_paren_arith_objective",
         decide_sql=decide_sql, data_sql=data_sql,
         build_oracle=build, decidb_obj_fn=decidb_obj,
-    )
-
-
-# ===========================================================================
-# Unparenthesized WHEN conditions — supported boundary and pinned errors
-# ===========================================================================
-
-
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_when_unparen_not_constraint_rejects(decidb_cli):
-    """`WHEN NOT w` (unparenthesized) on a constraint — parser-level reject."""
-    # old spelling until item 7: pins the old grammar's syntax error
-    decidb_cli.assert_error(
-        """
-        SELECT id, val, w, x FROM (
-            VALUES (1, 10.0, true),
-                   (2,  5.0, false)
-        ) t(id, val, w)
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN NOT w <= 8
-        MAXIMIZE SUM(x * val)
-        """,
-        match=r'syntax error at or near "NOT"',
-    )
-
-
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_when_unparen_eq_constraint_rejects(decidb_cli):
-    """The trailing comparison is ambiguous with the constraint bound."""
-    # old spelling until item 7: pins the old grammar's syntax error
-    decidb_cli.assert_error("""
-        SELECT id, val, tier, x FROM (
-            VALUES (1, 10.0, 'high'),
-                   (2,  5.0, 'low')
-        ) t(id, val, tier)
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN tier = 'high' <= 8
-        MAXIMIZE SUM(x * val)
-    """, match=r'syntax error at or near "<="')
-
-
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_when_unparen_arith_constraint_rejects(decidb_cli):
-    """`WHEN a + b > 5` (unparenthesized arithmetic+comparison) on a constraint."""
-    # old spelling until item 7: pins the old grammar's syntax error
-    decidb_cli.assert_error(
-        """
-        SELECT id, val, a, b, x FROM (
-            VALUES (1, 10.0, 2, 4),
-                   (2,  5.0, 1, 1)
-        ) t(id, val, a, b)
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN a + b > 5 <= 8
-        MAXIMIZE SUM(x * val)
-        """,
-        match=r'syntax error at or near "<="',
-    )
-
-
-@pytest.mark.when
-@pytest.mark.when_objective
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_when_unparen_not_objective_rejects(decidb_cli):
-    """`WHEN NOT w` (unparenthesized) on an objective — parser-level reject."""
-    # old spelling until item 7: pins the old grammar's syntax error
-    decidb_cli.assert_error(
-        """
-        SELECT id, val, w, x FROM (
-            VALUES (1, 10.0, true),
-                   (2,  5.0, false)
-        ) t(id, val, w)
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN NOT w
-        """,
-        match=r'syntax error at or near "NOT"',
-    )
-
-
-@pytest.mark.when
-@pytest.mark.when_objective
-@pytest.mark.error_binder
-@pytest.mark.error
-def test_when_unparen_arith_objective_rejects(decidb_cli):
-    """`WHEN a + b > 5` (unparenthesized) on an objective — binder-level reject.
-
-    The grammar handles one comparison between atomic operands, but not the
-    arithmetic-then-comparison shape `(SUM ... WHEN a) + b > 5`. The binder rejects the
-    resulting comparison expression as a top-level objective component.
-    This reaches a different error phase from the constraint-side parser
-    failure; both shapes remain documented in the WHEN todo.
-    """
-    # old spelling until item 7: pins the old grammar's binder-level message
-    decidb_cli.assert_error(
-        """
-        SELECT id, val, a, b, x FROM (
-            VALUES (1, 10.0, 2, 4),
-                   (2,  5.0, 1, 1)
-        ) t(id, val, a, b)
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 1
-        MAXIMIZE SUM(x * val) WHEN a + b > 5
-        """,
-        match=r'\[MAXIMIZE\|MINIMIZE\] clause does not support',
-    )
-
-
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_when_unparen_error_carries_paren_hint(decidb_cli):
-    """The bare bison syntax error on an unparenthesized WHEN condition is
-    augmented with an actionable parenthesization hint (MaybeAppendDecideWhenHint).
-
-    This pins the hint text so it is not silently dropped. If the grammar is
-    widened to accept unparenthesized NOT, convert this to a positive test.
-    """
-    # old spelling until item 7: pins the old grammar's parenthesization hint
-    decidb_cli.assert_error(
-        """
-        SELECT id, val, w, x FROM (
-            VALUES (1, 10.0, true),
-                   (2,  5.0, false)
-        ) t(id, val, w)
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) WHEN NOT w <= 8
-        MAXIMIZE SUM(x * val)
-        """,
-        match=r"wrap the WHEN condition in parentheses",
     )

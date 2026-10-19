@@ -91,24 +91,24 @@ TEST_CASE("Parsed DECIDE statements survive ToString and binary round trips", "[
 	    "SELECT a, x, y, flag FROM t "
 	    "DECIDE x(INT), y(REAL), flag(BOOL) "
 	    "SUCH THAT x >= 0 AND y <= 2.5 AND flag IN (0, 1)",
-	    // Table and scalar scopes, and the split clause order. ToString canonicalizes
-	    // both accepted orders to the single block after FROM.
-	    "SELECT ship, cap DECIDE D.ship(BOOL), scalar cap(REAL) FROM data D "
+	    // Keyed and query-wide declarations, and the split clause order. ToString
+	    // canonicalizes both accepted orders to the single block after FROM.
+	    "SELECT ship, cap DECIDE per D: ship(BOOL), per (): cap(REAL) FROM data D "
 	    "SUCH THAT ship <= cap AND cap >= 0 MINIMIZE cap - SUM(ship)",
-	    // Whole-constraint WHEN plus multi-column PER.
+	    // A constraint's when plus a multi-column per, and a by.
 	    "SELECT a, b, x FROM t DECIDE x(INT) "
-	    "SUCH THAT SUM(x) <= 2 WHEN (a > 0) PER (a, t.b) AND x BETWEEN 0 AND 2",
-	    // Aggregate-local WHEN and one- and many-relation qualified reducers.
-	    "SELECT a, b, x FROM data D CROSS JOIN other T DECIDE D.x(INT) "
-	    "SUCH THAT SUM(D: x) WHEN (a > 0) + AVG(D, T: x) <= 10 "
-	    "MAXIMIZE SUM(D: x) WHEN (b = 2)",
-	    // Objective WHEN + PER, nested aggregates, and NORM.
+	    "SUCH THAT when a > 0 per a, t.b: SUM(x) by (a, t.b) <= 2 AND x BETWEEN 0 AND 2",
+	    // A reducer's own when and per, and the one- and many-relation colon forms.
+	    "SELECT a, b, x FROM data D CROSS JOIN other T DECIDE per D: x(INT) "
+	    "SUCH THAT SUM(when a > 0 per D: x) + AVG(D, T: x) <= 10 "
+	    "MAXIMIZE when b = 2: SUM(D: x)",
+	    // The objective's when, the two-level form, and NORM.
 	    "SELECT a, b, x FROM t DECIDE x(REAL) "
 	    "SUCH THAT norm(x - a, 1) <= (SELECT 3) "
-	    "MAXIMIZE MAX(SUM(x)) WHEN (a = 1) PER (a, b)",
+	    "MAXIMIZE when a = 1: MAX(per a, b: SUM(x) by (a, b))",
 	    // Quoted identifiers and the statement-level DIAGNOSE wrapper.
 	    "DIAGNOSE SELECT \"from\", \"Choice\", \"limit\" FROM data AS \"select\" "
-	    "DECIDE \"select\".\"Choice\"(BOOL), scalar \"limit\"(INT) "
+	    "DECIDE per \"select\": \"Choice\"(BOOL), per (): \"limit\"(INT) "
 	    "SUCH THAT \"Choice\" <= \"limit\" AND \"limit\" <= 1",
 	};
 
@@ -193,7 +193,7 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 	REQUIRE(ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT when a = 1: x <= 1 AND x >= 0")->ToString() ==
 	        "SELECT a FROM t DECIDE x(INT) SUCH THAT WHEN (a = 1): (x <= 1) AND (x >= 0)");
 
-	// PER ROW is the default written out, and a spelling of the scoping language like the
+	// per row is the default written out, and a spelling of the scoping language like the
 	// others (D19): it keeps a node of its own, prints back as written, and is not the
 	// statement with the scope left out.
 	auto spelled_out = ParseSelect("SELECT a FROM t DECIDE per row: x(INT) "
@@ -228,7 +228,8 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per a + 1: SUM(x) <= 1", names);
 	rejects("SELECT a FROM t DECIDE per lower(a): x(INT) SUCH THAT x <= 1", names);
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(per 5: x) <= 1", names);
-	// A scoped constraint takes no postfix modifier, and outside DECIDE nothing changed.
+	// Nothing may trail a scoped constraint (a removed spelling after a scope is a
+	// plain syntax error), and outside DECIDE nothing changed.
 	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT per a: x <= 1 WHEN b", "syntax error at or near", "WHEN");
 	rejects("SELECT SUM(x) BY (a) FROM t", "syntax error at or near", "BY");
 	rejects("SELECT SUM(when a: x) FROM t", "syntax error at or near", "when");
@@ -239,13 +240,13 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	Connection con(db);
 	SetUp(con);
 
-	// `r_name` is referenced ONLY by the entity-scoped declaration. Its column ref
-	// lives on entity_key_expressions purely so column pruning keeps it alive, so a
-	// round trip that loses that vector loses the entity's identity.
+	// `r_name` is referenced ONLY by the keyed declaration. Its column ref lives on
+	// entity_key_expressions purely so column pruning keeps it alive, so a round trip
+	// that loses that vector loses the entity's identity.
 	// `ship <= cap * open` is the one shape canonicalization has to move -- a bound that
 	// CONTAINS a decision -- so it is the only thing that populates source_lhs/source_rhs.
 	auto plan = con.ExtractPlan("SELECT s_key, ship FROM site JOIN region USING (r_key) "
-	                            "DECIDE region.ship(INT), open(BOOL) "
+	                            "DECIDE per region: ship(INT), open(BOOL) "
 	                            "SUCH THAT ship <= cap * open AND SUM(ship) <= 100 "
 	                            "MAXIMIZE SUM(ship) + 5");
 	auto *before = FindDecide(*plan);
@@ -261,6 +262,7 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	REQUIRE(after->entity_scopes.size() == before->entity_scopes.size());
 	REQUIRE(after->entity_scopes.size() == 1);
 	REQUIRE(after->entity_scopes[0].table_alias == before->entity_scopes[0].table_alias);
+	REQUIRE(after->entity_scopes[0].key_names == before->entity_scopes[0].key_names);
 	REQUIRE(after->entity_scopes[0].source_table_indices == before->entity_scopes[0].source_table_indices);
 	REQUIRE(after->entity_scopes[0].entity_key_column_types.size() ==
 	        before->entity_scopes[0].entity_key_column_types.size());
@@ -315,18 +317,18 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	Connection con(db);
 	SetUp(con);
 
-	// a and b write one key two ways; d's old table scope comes first, then c's relation
-	// key with the same columns; e is query-wide and f is per row.
+	// a and b write one key two ways; d and c write the same relation key; e is
+	// query-wide and f is per row.
 	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
 	                            "DECIDE per region.r_name, site.cap: a(INT), per site.cap, r_name, r_name: b(INT), "
-	                            "region.d(INT), per region: c(INT), per (): e(INT), f(INT) "
+	                            "per region: d(INT), per region: c(INT), per (): e(INT), f(INT) "
 	                            "SUCH THAT a + b + c + d + e + f <= 10 MAXIMIZE SUM(a)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
 
 	auto &scopes = before->entity_scopes;
 	auto &vars = before->variable_scopes;
-	REQUIRE(scopes.size() == 3);
+	REQUIRE(scopes.size() == 2);
 	REQUIRE(vars.size() == 6);
 	// Equal keys share one scope, however they are written.
 	REQUIRE(vars[0].IsKeyed());
@@ -334,19 +336,14 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	REQUIRE(vars[1].declared_key == "site.cap, r_name, r_name");
 	REQUIRE(vars[0].entity_scope_idx == vars[1].entity_scope_idx);
 	auto &shared = scopes[vars[0].entity_scope_idx];
-	REQUIRE(shared.exact_key);
 	REQUIRE(shared.entity_key_bindings.size() == 2);
 	REQUIRE(shared.source_table_indices.size() == 2);
-	// A per key never reuses a T.x scope on the same columns: only the old table scope
-	// drops the columns its clause reads as data.
-	REQUIRE_FALSE(vars[2].IsKeyed());
-	REQUIRE(vars[2].IsEntity());
+	// A relation key is the relation's stored columns, one scope for every declaration
+	// that names it; a column key over some of those columns is another scope.
+	REQUIRE(vars[2].IsKeyed());
 	REQUIRE(vars[3].IsKeyed());
-	REQUIRE(vars[2].entity_scope_idx != vars[3].entity_scope_idx);
-	REQUIRE_FALSE(scopes[vars[2].entity_scope_idx].exact_key);
-	REQUIRE(scopes[vars[3].entity_scope_idx].exact_key);
-	REQUIRE(scopes[vars[2].entity_scope_idx].entity_key_bindings ==
-	        scopes[vars[3].entity_scope_idx].entity_key_bindings);
+	REQUIRE(vars[2].entity_scope_idx == vars[3].entity_scope_idx);
+	REQUIRE(vars[2].entity_scope_idx != vars[0].entity_scope_idx);
 	REQUIRE(vars[4].IsScalar());
 	REQUIRE(vars[5].scope == DecideVarScope::ROW);
 
@@ -355,7 +352,6 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	REQUIRE(after != nullptr);
 	REQUIRE(after->entity_scopes.size() == scopes.size());
 	for (idx_t i = 0; i < scopes.size(); i++) {
-		REQUIRE(after->entity_scopes[i].exact_key == scopes[i].exact_key);
 		REQUIRE(after->entity_scopes[i].table_alias == scopes[i].table_alias);
 		REQUIRE(after->entity_scopes[i].entity_key_bindings == scopes[i].entity_key_bindings);
 		REQUIRE(after->entity_scopes[i].source_table_indices == scopes[i].source_table_indices);
@@ -457,7 +453,6 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	                            "MAXIMIZE when cap > 0: sum(x)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
-	REQUIRE(before->scoped_objective);
 	REQUIRE(before->group_keys.size() == 2);
 	REQUIRE(before->group_keys[0].text == "r_name");
 	REQUIRE(before->group_keys[1].text == "site.r_key");
@@ -478,7 +473,6 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
-	REQUIRE(after->scoped_objective);
 	REQUIRE(after->group_keys.size() == before->group_keys.size());
 	for (idx_t i = 0; i < before->group_keys.size(); i++) {
 		auto &key = before->group_keys[i];

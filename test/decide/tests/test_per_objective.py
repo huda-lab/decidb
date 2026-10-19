@@ -1,12 +1,12 @@
-"""Tests for PER on objective with nested aggregate syntax.
+"""Tests for the two-level objective, `outer(per k: inner(e) by (k))`.
 
 The two-level ILP formulation (per DecidB docs):
   INNER creates per-group auxiliary variables; OUTER creates a global
   auxiliary. Easy / hard classification applies at each level independently.
 
-  - SUM/AVG as outer (over groups) is always easy — linear sum of auxiliaries.
-    AVG as outer divides by a constant ``G`` (number of groups) and is
-    equivalent to SUM for argmax/argmin.
+  - SUM as outer (over groups) is always easy — linear sum of auxiliaries. An
+    outer AVG is refused ("not supported yet"); ``sum(per k: ...)`` ranks
+    solutions the same way.
   - MIN/MAX as outer splits into easy (``MIN MAX SUM`` / ``MAX MIN SUM``) and
     hard (``MAX MAX SUM`` / ``MIN MIN SUM``) cases.
   - MIN/MAX as inner splits similarly: easy when the inner aggregate is
@@ -65,22 +65,20 @@ def _per_group_values_if_selected(rows, cols, per_col, expr_fn, x_col="x"):
 
 
 # ===========================================================================
-# SUM + PER = no-op
+# SUM + `per` = no-op
 # ===========================================================================
 
 @pytest.mark.per_clause
 @pytest.mark.obj_minimize
 @pytest.mark.correctness
 def test_sum_per_noop(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """SUM(x * cost) PER col ≡ SUM(x * cost)."""
-    # old spelling until item 7
-    # (a flat SUM(e) PER k objective has no new spelling; only the two-level form does)
+    """sum(per col: sum(x * cost) by (col)) ≡ SUM(x * cost)."""
     sql_per = """
         SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
         WHERE s_nationkey < 5
         DECIDE x(BOOL)
         SUCH THAT SUM(x) >= 3
-        MINIMIZE SUM(x * s_acctbal) PER s_nationkey
+        MINIMIZE sum(per s_nationkey: sum(x * s_acctbal) by (s_nationkey))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql_per)
@@ -593,15 +591,14 @@ def test_maximize_min_sum_per(
 def test_sum_max_when_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MINIMIZE SUM(MAX(x * qty)) WHEN qty>10 PER flag — WHEN filters each group."""
-    # old spelling until item 7
-    # (an empty WHEN group is skipped today: old-only semantics, inventory §2)
+    """MINIMIZE when qty > 10: sum(per flag: max(x * qty) by (flag)) — the when filters
+    the rows before the classes form, so a flag with no kept row has no class."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-        MINIMIZE SUM(MAX(x * l_quantity)) WHEN l_quantity > 10 PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 1
+        MINIMIZE when l_quantity > 10: sum(per l_returnflag: max(x * l_quantity) by (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -624,8 +621,8 @@ def test_sum_max_when_per(
     for flag, idxs in groups.items():
         qualifying = [i for i in idxs if data[i][2] > 10]
         if not qualifying:
-            # Empty after WHEN — inner MAX of empty set is undefined but the
-            # default-PER semantics skips empty groups entirely (no contribution).
+            # No kept row: the when filters the rows before the per classes form,
+            # so this flag has no class (no contribution).
             continue
         z = emit_inner_max(
             oracle_solver,
@@ -659,7 +656,7 @@ def test_sum_max_when_per(
 
 
 # ===========================================================================
-# Single PER group = flat aggregate
+# Single `per` group = flat aggregate
 # ===========================================================================
 
 @pytest.mark.per_clause
@@ -786,70 +783,6 @@ def test_sum_avg_per_unequal_groups(
         "sum_avg_per_unequal_groups", decidb_time, build_time,
         result.solve_time_seconds, n, n, len(groups),
         result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
-    )
-
-
-@pytest.mark.per_clause
-@pytest.mark.obj_minimize
-@pytest.mark.correctness
-def test_avg_sum_per_noop(
-    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
-):
-    """AVG(SUM(x*cost)) PER col — outer AVG divides by constant G ⇒ argmin matches SUM."""
-    # old spelling until item 7
-    # (an outer AVG over the groups is summed by the old nested objective, a logged bug;
-    #  the new spelling refuses `avg(per k: ...)`)
-    sql = """
-        SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-        WHERE s_nationkey < 5
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 3
-        MINIMIZE AVG(SUM(x * s_acctbal)) PER s_nationkey
-    """
-    t0 = time.perf_counter()
-    rows, cols = decidb_cli.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute("""
-        SELECT CAST(s_suppkey AS BIGINT),
-               CAST(s_nationkey AS BIGINT),
-               CAST(s_acctbal AS DOUBLE)
-        FROM supplier WHERE s_nationkey < 5
-    """).fetchall()
-    n = len(data)
-    groups = group_indices(data, lambda r: r[1])
-    G = len(groups)
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("avg_sum_per_noop")
-    vnames = [f"x_{i}" for i in range(n)]
-    for v in vnames:
-        oracle_solver.add_variable(v, VarType.BINARY)
-    oracle_solver.add_constraint({v: 1.0 for v in vnames}, ">=", 3.0, name="total")
-    # AVG outer over G groups ⇒ SUM(x*acctbal) / G. The 1/G factor is absorbed
-    # into each coefficient so the reported ``objective_value`` matches DecidB.
-    oracle_solver.set_objective(
-        {vnames[i]: data[i][2] / G for i in range(n)}, ObjSense.MINIMIZE,
-    )
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    def decidb_obj(rs, cs):
-        xi = cs.index("x"); ni = cs.index("s_nationkey"); ai = cs.index("s_acctbal")
-        g: dict = defaultdict(float)
-        for r in rs:
-            if float(r[xi]) > 0.5:
-                g[r[ni]] += float(r[ai])
-        return sum(g.values()) / G
-
-    cmp = compare_solutions(
-        rows, cols, result, data, ["x"],
-        decidb_objective_fn=decidb_obj,
-    )
-    perf_tracker.record(
-        "avg_sum_per_noop", decidb_time, build_time, result.solve_time_seconds,
-        n, n, 1, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
 
@@ -989,15 +922,14 @@ def test_maximize_min_avg_per(
 def test_sum_avg_when_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MINIMIZE SUM(AVG(x*qty)) WHEN qty>10 PER flag — WHEN filters each group's AVG."""
-    # old spelling until item 7
-    # (an empty WHEN group is skipped today: old-only semantics, inventory §2)
+    """MINIMIZE when qty > 10: sum(per flag: avg(x * qty) by (flag)) — the when filters
+    each class's AVG; a flag with no kept row has no class."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) >= 1 PER l_returnflag
-        MINIMIZE SUM(AVG(x * l_quantity)) WHEN l_quantity > 10 PER l_returnflag
+        SUCH THAT per l_returnflag: sum(x) by (l_returnflag) >= 1
+        MINIMIZE when l_quantity > 10: sum(per l_returnflag: avg(x * l_quantity) by (l_returnflag))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1341,35 +1273,3 @@ def test_minimize_sum_min_power_per(
         result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
-
-
-@pytest.mark.per_clause
-@pytest.mark.min_max
-def test_flat_max_per_error(decidb_cli):
-    """MAX(x * cost) PER col without outer aggregate is ambiguous ⇒ error."""
-    # old spelling until item 7
-    # (pins the old "PER is ambiguous" message; inventory §2)
-    with pytest.raises(Exception, match="ambiguous|nested aggregate"):
-        decidb_cli.execute("""
-            SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-            WHERE s_nationkey < 5
-            DECIDE x(BOOL)
-            SUCH THAT SUM(x) >= 1
-            MINIMIZE MAX(x * s_acctbal) PER s_nationkey
-        """)
-
-
-@pytest.mark.per_clause
-@pytest.mark.min_max
-def test_flat_min_per_error(decidb_cli):
-    """MIN(x * cost) PER col without outer aggregate ⇒ error."""
-    # old spelling until item 7
-    # (pins the old "PER is ambiguous" message; inventory §2)
-    with pytest.raises(Exception, match="ambiguous|nested aggregate"):
-        decidb_cli.execute("""
-            SELECT s_suppkey, s_nationkey, s_acctbal, x FROM supplier
-            WHERE s_nationkey < 5
-            DECIDE x(BOOL)
-            SUCH THAT SUM(x) >= 1
-            MAXIMIZE MIN(x * s_acctbal) PER s_nationkey
-        """)

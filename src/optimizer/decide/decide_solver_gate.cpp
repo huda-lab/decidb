@@ -148,7 +148,7 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 	SolverModelClass needed;
 
 	// A constraint carrying a squared or bilinear term becomes a quadratic row: the
-	// model builder emits one per data row or per PER group, and never folds it back
+	// model builder emits one per data row or per group, and never folds it back
 	// into the linear matrix.
 	for (auto &constraint : op.prepared.constraints) {
 		if (constraint->has_quadratic || constraint->has_bilinear) {

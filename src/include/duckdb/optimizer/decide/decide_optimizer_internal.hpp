@@ -46,20 +46,18 @@ string DescendSourceAlias(const Expression &expr, const string &inherited);
 //! A TRUE placeholder standing in for a clause a rewrite has consumed.
 unique_ptr<Expression> MakeTrueExpression(const string &source_alias = string());
 
-//! The clause a rewrite stands in, when it is written with the scope spellings. A row the
-//! rewrite adds for it keeps the clause's rules and its `when`, so it reads only the rows
-//! the clause keeps (anr_language_extension.md §8). `when` is null for none.
+//! The clause a rewrite stands in. A row the rewrite adds for it keeps the clause's
+//! `when`, so it reads only the rows the clause keeps. `when` is null for none.
 struct ClauseScope {
-	bool scoped = false;
 	const Expression *when = nullptr;
 };
 
-//! The clause scope in force below `node`, given the one above it: a scoped WHEN wrapper
-//! supplies its condition, and a scoped wrapper, comparison or IN marks the clause.
+//! The clause scope in force below `node`, given the one above it: a `when` wrapper
+//! supplies its condition.
 ClauseScope EnterClauseScope(const Expression &node, ClauseScope scope);
 
-//! `row`, which a rewrite adds for a clause in `scope`: tagged SCOPED_CLAUSE_TAG and
-//! wrapped in a copy of the clause's `when` when the clause is scoped, else unchanged.
+//! `row`, which a rewrite adds for a clause in `scope`: wrapped in a copy of the clause's
+//! `when` when it has one.
 unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const ClauseScope &scope);
 
 //! Mark the ABS nodes that need a Big-M envelope. Must run before RewriteAbs.
@@ -77,9 +75,8 @@ idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const Logi
 unique_ptr<Expression> MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx);
 
 //! An expression as a plan prints it (RenderDecideSource, columns unqualified): the label
-//! of an auxiliary decision, the text of a rewrite account. `scoped` prints a clause
-//! written with the scope spellings as it spells things: lower-case names, `by`.
-string RenderForPlan(const Expression &expr, const LogicalDecide &decide, bool scoped);
+//! of an auxiliary decision, the text of a rewrite account.
+string RenderForPlan(const Expression &expr, const LogicalDecide &decide);
 
 //! Record what a rewrite made of `subject` (as RenderForPlan prints it), for EXPLAIN
 //! (LogicalDecide::rewrite_accounts): under the clause `source_clause_id`, or the

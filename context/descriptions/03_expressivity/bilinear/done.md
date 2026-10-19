@@ -30,10 +30,9 @@ the resolved bounds `L` and `U` are known:
 
 For the common **non-negative** case (`L >= 0`) the lower corner ec4 is implied by
 `w`'s own non-negative bound and is skipped, and ec3 reduces to the plain
-structural `w <= x` — so the emitted set is byte-identical to the historical
-3-constraint form. The structural `w <= x` is **no longer** emitted at optimizer
-time (emitting it unconditionally would force `x >= 0` for a signed `x` when
-`b=0`); it lives in ec3 now. For a **signed** `x` (`L < 0`) all four corners are
+structural `w <= x`, so the emitted set is the 3-constraint form. The structural
+`w <= x` is not emitted at optimizer time (emitting it unconditionally would force
+`x >= 0` for a signed `x` when `b=0`); it is ec3. For a **signed** `x` (`L < 0`) all four corners are
 emitted and the aux `w`'s own lower bound is widened to `L` so the product can
 take the negative value of `x` when `b=1`.
 
@@ -76,8 +75,8 @@ MAXIMIZE SUM(cost + b * x)
 ### Composability
 
 Bilinear terms compose with existing features:
-- **WHEN**: `MAXIMIZE SUM(b * x) WHEN category = 'A'`
-- **PER**: `MAXIMIZE SUM(b * x) PER grp` (covered by `test_bilinear_per_group`)
+- **`when`**: `MAXIMIZE when category = 'A': sum(b * x)`, and inside a reducer, `sum(when category = 'A': b * x)`
+- **`per` and `by`**: `per grp: sum(b * x) by (grp) <= 100` (covered by `test_bilinear_per_group`, which checks that each group's row sums only its own rows' products)
 - **Mixed with POWER**: `MINIMIZE SUM(POWER(x - target, 2) + b * x)` (bilinear + quadratic in same objective)
 
 ### Degree Guard (Total Degree ≤ 2)
@@ -114,7 +113,7 @@ Without this guard the bilinear emitter would silently treat the inner POWER / n
    - `BuildCoefficientFromFactors()`: rebuilds the coefficient sub-expression from the data leaf factors, used for bilinear terms. Each binary `*` is re-bound through `RebindOperator` for the operands actually present — reusing the original multiply's signature over a reshaped factor list silently reinterprets the operands' physical representation (see `../../01_pipeline/05_optimizer/done.md` §1a).
    - Linear terms (`decide_factors.size() == 1`) fall through to `ExtractTerms` (uses `ExtractCoefficientWithoutVariable` on the original tree for type-safe coefficient extraction). All three live in `src/optimizer/decide/decide_linear_form.cpp`.
    - McCormick generation: uses `BilinearLink` metadata + resolved bounds to emit the envelope corners `w <= U*b`, `w >= x - U*(1-b)`, `w <= x - L*(1-b)`, and (only when `L < 0`) `w >= L*b`; widens the aux's lower bound to `L` for signed `x`
-   - Evaluates bilinear coefficients per-row, applies WHEN mask
+   - Evaluates bilinear coefficients per-row, applies the `when` mask
 
 5. **Model Builder** (`ilp_model_builder.cpp`):
    - Bilinear off-diagonal Q entries: `q_map[{max(flat_a,flat_b), min(flat_a,flat_b)}] += coeff`
@@ -184,7 +183,7 @@ the query, because the same SQL runs fine on a host that has Gurobi.
 - **SymEngine-expanded bilinear** (`(x+1)*y` = `x*y + y`, `(x+y)*z` = `x*z + y*z`)
 - Non-convex objectives (Real*Real, Int*Int, Int*Real — Gurobi only)
 - Mixed linear + bilinear objectives
-- Bilinear with WHEN filter
+- Bilinear with a `when`
 - Bool bilinear constraints
 - Bilinear constraint coefficients from both factor sides (`(2*x)*(3*y)`, `(a*x)*(b*y)`)
 - **Grouped data-factor bilinear constraint** (`(a*b)*(x*y) >= K` aggregate and per-row)

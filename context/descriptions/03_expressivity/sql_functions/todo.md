@@ -1,4 +1,4 @@
-# SQL Functions & Expressions — Planned Features
+# SQL Functions & Expressions — open work
 
-No SQL-function or expression extensions are currently planned. Supported forms
-and intentional rejections are recorded in `done.md` and the syntax reference.
+No open work. Supported forms and intentional rejections are recorded in
+[`done.md`](done.md) and the syntax reference.

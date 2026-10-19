@@ -119,23 +119,24 @@ Grouped by who writes it:
 **From the binder** — `decide_index`, `decide_variables`, `decide_constraints`,
 `decide_sense`, `decide_objective`, `num_auxiliary_vars`, `is_boolean_var`,
 `variable_scopes`, `entity_scopes`, `entity_key_expressions`,
-`constraint_sources`. `entity_scopes` holds every key scope — of `T.x`, of
-`SUM(T: …)`, and of `per K:` (`exact_key`, possibly spanning several relations) — and
-`variable_scopes` points each decision at one; a `per K:` decision also carries its key
-as written (`declared_key`). A reducer's own `per K'` is an exact key scope too, whose
-`key_names` are its columns as a message names them. `group_keys` holds every `by (Γ)`
-key of the clauses (`DecideGroupKey`: the bound expressions, the key as written, each
-element's name); a reducer's `__group_key_<i>__` tag names entry `i`. `scoped_objective`
-marks an objective written with a scope spelling. A scope the optimizer creates for a
+`constraint_sources`. `entity_scopes` holds every key scope, one per set of key columns
+(possibly spanning several relations): of a declaration's `per K:`, of a reducer's own
+`per K'` and of the colon form `SUM(D: …)`; a scope's `key_names` are its columns as a
+message names them. `variable_scopes` points each keyed decision at one, with its key as
+written (`declared_key`). `group_keys` holds every `by (G)` key of the clauses
+(`DecideGroupKey`: the bound expressions, the key as written, each element's name); a
+reducer's `__group_key_<i>__` tag names entry `i`. A constraint's `per K:` key lives in
+its `PER_CLASS_TAG` wrapper, and the two-level objective's in its `PER_CONSTRAINT_TAG` wrapper, as bound
+column references. A scope the optimizer creates for a
 helper decision of the value rewrite names the link it holds instead of key columns
 (`EntityScopeInfo::value_link`; its `entity_key_bindings` are empty, and the field is
 deliberately absent from the serialization: an optimized plan is never serialized). Its
 entities are the link's `by` groups among the rows the link's clause keeps.
 
 **From the canonicalizer** — `objective_constant_offset`, and `scope_checks`: the
-run-time checks of the clauses and objective written with the scope spellings
-(`DecideScopeCheck`: kind, the rows it looks at, the key, the value or decision, a
-reducer's own `when`, and the texts its message quotes). `PlanSubqueries` runs on the
+run-time checks of every clause and of the objective (`DecideScopeCheck`: kind, the
+rows it looks at, the key, the value or decision, a reducer's own `when`, and the texts
+its message quotes). `PlanSubqueries` runs on the
 `by` keys as on the trees, and `EnumerateExpressions` visits both lists, so binding
 resolution and column pruning see their columns.
 
@@ -151,8 +152,8 @@ decisions, one per occurrence of a reducer in a clause: each `ReducerValueLink` 
 the reducer a helper replaced — kind, body, its own `when` and `per`, its `by` key, its
 SQL as a label — the clause's `when`, the MIN/MAX sides any row of the clause needs, the
 clause id and removal group; `inner_terms` are flattened with the prepared form),
-`flat_objective_agg` / `flat_objective_is_easy`, the five `per_*` objective fields, the
-absorbed variable box, and the prepared linear form.
+`flat_objective_agg` / `flat_objective_is_easy`, the five `per_*` fields of the
+two-level objective, the absorbed variable box, and the prepared linear form.
 
 `optimized` marks the boundary between the first two groups and the third. It is
 set before the optimizer's first rewrite and is what takes this plan off the wire —
@@ -297,7 +298,10 @@ equal the id being read. The ids are a running checkpoint that the two sides are
 still in step, not keys that can be sought. Write order and read order must match
 exactly — which is why they are generated from one list, and why an id may be
 renumbered freely: a serialized logical plan lives for microseconds inside one
-process and is never persisted, so there is no older layout to stay readable for.
+process and is never persisted, so there is no older layout to stay readable for. A
+retired field stays in the list as a `"deleted": true` entry, for which the generated
+serializer writes nothing and the deserializer reads past (`ReadDeletedProperty`):
+`LogicalDecide`'s id 219 and `EntityScopeInfo`'s id 105.
 
 ### What exercises it
 
@@ -319,23 +323,23 @@ rows. The two PTY-driven continuation cases are likewise outside DuckDB's materi
 verifier. Model-dump assertions select one complete build when verifier paths append
 equivalent copies.
 
-The guarded suite passes 1,604 tests with no skips.
+The guarded suite passes every test.
 
 ---
 
 ## 6. EXPLAIN
 
 `GetName()` returns `"DECIDE"`. `ParamsToString()` builds the structured plan
-output, using `CollectDecideExpressionStrings` to render `WHEN` and `PER` wrappers
-back into DECIDE postfix syntax — it recurses into child 0 and appends
-` WHEN <cond>` / ` PER <cols>` to each leaf, parenthesizing a multi-column `PER` — and
-the scope spellings' wrappers back in front (`when c per K:`), the two-level objective's
-rewritten inner reducer included (`when c per k: inner(e) by (k)`, its key as written:
-`RenderDecidePerKey` reads the source fragment both binders record for a `per` key,
-falling back to the key columns' names, which `BindKeyColumns` made SQL text). A row the
-solver receives is left out where it reads as the clause above it, compared without a
-`per row:` kept in front, which no wrapper holds. Every renderer takes a
-`DecideSourceNames` (item 6): the clause registries, the relation aliases for messages,
+output, using `CollectDecideExpressionStrings` to print every clause in one style
+(D32): the `when` and `per` wrappers become one qualifier in front (`when c per K:`),
+reducers and the words `when`, `per` and `by` are lower case, a reducer's `by (G)` follows it, and the defaults
+`per row:` and `by ()` are not printed. The colon form prints as written (`sum(D: x)`,
+D38). The two-level objective prints as `outer(per k: inner(e) by (k))`, a `when` in
+front of it, its key as written: `RenderDecidePerKey` reads the source fragment both
+binders record for a `per` key, falling back to the key columns' names, which
+`BindKeyColumns` made SQL text. A row the solver receives is left out where it reads as
+the clause above it. Every renderer takes a
+`DecideSourceNames`: the clause registries, the relation aliases for messages,
 and the auxiliary labels (`aux_var_expressions`, with `decide_index`), so a decision
 column that stands for an expression -- an ABS auxiliary `abs(e)`, a product `(b * x)`,
 an indicator `(x = v)`, a helper `sum(e) by (g)` -- prints that expression wherever it
@@ -347,15 +351,17 @@ left; the objective's accounts, and the rows a rewrite added for the objective (
 under the objective. The hard MIN/MAX carrier (`__minmax_clause_`) prints as the reducer
 it marks, so its row repeats the clause and is left out; a MIN/MAX or composed objective
 prints its accounts and no carrier row, an AVG objective its sum under its account; an
-automatic L0 link's placeholder bound (`L0_AUTO_BOUND_TAG`) prints as `M`. A scoped `IN`
-and a clause whose spelling shows nowhere else (`per row:`, `by ()`) keep their front
-qualifier in the source info, so a suggested edit pastes back under the new rules; an
-infinity norm echoes its order quoted (`norm(e, 'inf')`). Parentheses follow DuckDB's
+automatic L0 link's placeholder bound (`L0_AUTO_BOUND_TAG`) prints as `M`. An `IN` under
+a scope keeps the qualifier of the wrappers above it in its source info
+(`ScopedInQualifier`), so a suggested edit pastes back with its scope; an infinity norm
+echoes its order quoted (`norm(e, 'inf')`). The diagnosis labels of a hard MIN/MAX and
+of a `<>` (`minmax_clause_labels`, `ne_clause_labels`) are spelled as the plan prints
+the clause (`max(ship)`, `sum(ship) by (D.region) <> 20`). Parentheses follow DuckDB's
 precedence: an untagged cast passes its precedence to the child it hides, the right
 operand of a non-associative operator keeps its parentheses (`x * (cap % 7)`,
 `a ** (b ** c)`), a negated negative prints `-(-x)` and an `OR` under an `AND` keeps its
-parentheses. Under a scope spelling a function prints its lower-case name and a column
-is quoted where SQL needs it (`"order"`, `"per"`); an old spelling keeps its echo (D26).
+parentheses. A function prints its lower-case name and a column is quoted where SQL
+needs it (`"order"`, `"per"`).
 
 Both the walker and the leaf renderer `RenderDecideSource` live in
 `src/planner/decide/decide_source_provenance.cpp`, beside the source-fragment
@@ -383,7 +389,8 @@ for the output itself.
 | Concern | Location |
 |---|---|
 | Operator construction, subquery provenance | `src/planner/binder/query_node/plan_select_node.cpp` |
-| Operator, entry points, serialization, EXPLAIN strings | `src/planner/operator/decide/logical_decide.cpp` |
+| Operator, entry points, EXPLAIN strings | `src/planner/operator/decide/logical_decide.cpp` |
+| Serialization, generated from `logical_operator.json` and `nodes.json` | `src/storage/serialization/serialize_logical_operator.cpp`, `serialize_nodes.cpp` |
 | Metadata contract (every field, documented) | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
 | Binding resolution shielding | `src/execution/column_binding_resolver.cpp` |
 | Logical → physical, entity key physical indices | `src/execution/physical_plan/plan_decide.cpp` |

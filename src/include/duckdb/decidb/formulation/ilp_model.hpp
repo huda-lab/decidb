@@ -150,7 +150,7 @@ struct ConstraintProvenance {
     idx_t repair_group_id = DConstants::INVALID_INDEX;
     //! Atomic DROP identity. All rows and native constructs sharing it are omitted together.
     idx_t removal_group_id = DConstants::INVALID_INDEX;
-    //! PER/WHEN group id at emission (or the row id for per-row clauses).
+    //! `by`/`when` group id at emission (or the row id for per-row clauses).
     //! DConstants::INVALID_INDEX when the clause is ungrouped.
     idx_t group_key = DConstants::INVALID_INDEX;
     //! User parameter vs rigid mechanism/structural row (see ConstraintKind).
@@ -178,9 +178,9 @@ struct ConstraintProvenance {
     //! Describes the formulation itself; atomic DROP identity lives independently in
     //! `removal_group_id`, and display identity in `source_clause_id`.
     idx_t indicator_col = DConstants::INVALID_INDEX;
-    //! Printable PER key of this row's group (`'a'`, or `EU, 2024` for a composite key).
-    //! Empty when the clause is ungrouped or not PER-grouped. Lets infeasible diagnosis
-    //! identify which group an edit belongs to and populate the finding's `group` column, so PER
+    //! Printable `per` key of this row's group (`'a'`, or `EU, 2024` for a composite key).
+    //! Empty when the clause is ungrouped. Lets infeasible diagnosis identify which group
+    //! an edit belongs to and populate the finding's `group` column, so grouped
     //! aggregates can fold to `SUM(x)` without colliding in the relation (Facet A).
     string group_label;
     //! The classes this row's group stands for (SolverModel::class_sets), or
@@ -189,7 +189,7 @@ struct ConstraintProvenance {
     //! The data row a per-row model row was emitted at -- what DIAGNOSE's `row` column
     //! reports for a row that stands for it -- or INVALID_INDEX for a group's row.
     idx_t data_row = DConstants::INVALID_INDEX;
-    //! A per-row row of a clause written with the scope spellings that stands for no class
+    //! A per-row row of a clause that stands for no class
     //! set (no `per` key): each kept row is a class of its own, so the expanded scope
     //! reports it once per row rather than folding the clause's rows into one finding (D28).
     bool per_kept_row = false;
@@ -198,10 +198,6 @@ struct ConstraintProvenance {
     //! per-row fan-out to key on (distinct from SHARED_SCALAR, which a per-row
     //! query-wide bound also carries) (Facet B).
     bool is_aggregate = false;
-    //! WHEN/PER qualifier text (`PER grp`, `PER (region, year)`, or a `WHEN` predicate)
-    //! appended to the reconstructed clause label so it is fully recognizable. Empty when
-    //! the clause has no WHEN/PER qualifier (Facet C).
-    string qualifier;
     //! Symbolic coefficient label per summed decide variable, for a data-weighted aggregate
     //! (`SUM(buy * l_extendedprice)`): `decide_var_idx → "l_extendedprice"`. Lets infeasible
     //! diagnosis render `SUM(buy * l_extendedprice)` instead of the per-row numeric fan-out

@@ -45,6 +45,8 @@ import pytest
 from solver.types import VarType, ObjSense, SolverStatus
 from comparison.compare import compare_solutions
 from ._oracle_helpers import emit_inner_max, emit_inner_min
+from ._scope_cases import answer, scope_solver  # noqa: F401
+from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 
 
 # ============================================================================
@@ -919,7 +921,7 @@ def test_minimize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 
 
 # ============================================================================
-# PER Modifier
+# `per` Modifier
 # ============================================================================
 
 @pytest.mark.min_max
@@ -939,14 +941,14 @@ def test_max_constraint_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     """
     decidb_result, decidb_cols = decidb_cli.execute(sql)
 
-    # MAX(x) <= 0 per group → all x = 0 (same as without PER for easy case)
+    # MAX(x) <= 0 per group → all x = 0 (same as without `per` for easy case)
     ci = {name: i for i, name in enumerate(decidb_cols)}
     for row in decidb_result:
         assert int(row[ci["x"]]) == 0, f"Expected x=0, got {row[ci['x']]}"
 
 
 # ============================================================================
-# WHEN + PER Composition
+# `when` + `per` Composition
 # ============================================================================
 
 @pytest.mark.min_max
@@ -1185,7 +1187,7 @@ def test_sum_plus_max_leq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
     vnames = [f"x_{i}" for i in range(n)]
     for v in vnames:
         oracle_solver.add_variable(v, VarType.BINARY)
-    # z = MAX(x*v) WHEN w. Easy case (pushed down): z >= x*v for each w-matching row.
+    # z = max(when w: x*v). Easy case (pushed down): z >= x*v for each w-matching row.
     z_ub = max(d[1] for d in data if d[2]) + 1.0
     oracle_solver.add_variable("z_max", VarType.CONTINUOUS, lb=0.0, ub=z_ub)
     for i, d in enumerate(data):
@@ -1275,7 +1277,7 @@ def test_min_plus_min_geq_composed(decidb_cli, duckdb_conn, oracle_solver, perf_
     MIN aggregates to at least K/2 each (roughly) via per-row constraints
     z_k <= v_i * x_i, so the outer z1+z2 >= K can be satisfied.
     """
-    # Use positive decision problem: SUM(x) >= 1 PER group so solution exists.
+    # Use positive decision problem: sum(x) >= 1 per group so solution exists.
     # Simpler: force x=1 on the binding rows by constraint direction.
     sql = """
         SELECT id, v, x FROM (
@@ -1432,75 +1434,97 @@ def test_composed_minmax_scalar_mult_hard_max(decidb_cli):
 
 
 @pytest.mark.min_max
-@pytest.mark.error_binder
-def test_composed_minmax_per_wrapper_rejected(decidb_cli):
-    """PER on a composed MIN/MAX constraint is rejected in v1."""
-    # old spelling until item 7
-    decidb_cli.assert_error("""
-        SELECT id, v, g FROM (VALUES (1, 10.0, true, 'A'), (2, 5.0, true, 'B')) t(id, v, w, g)
+@pytest.mark.correctness
+def test_composed_minmax_per_scope_answers(decidb_cli, scope_solver):
+    """A composed MIN/MAX under `per g:` is generated once per class, both reducers
+    reading the class's rows."""
+    rows = [{"id": 1, "v": 3.0, "w": True, "g": "A"}, {"id": 2, "v": 6.0, "w": False, "g": "A"},
+            {"id": 3, "v": 6.0, "w": True, "g": "B"}, {"id": 4, "v": 5.0, "w": True, "g": "B"}]
+    model = ScopedModel(rows, [Decision("x", var_type=VarType.BINARY)])
+    xv = lambda r: {"x": r["v"]}  # noqa: E731
+    clauses = [Scoped((Reduce("sum", xv, by=("g",)), Reduce("max", xv, when=lambda r: r["w"], by=("g",))),
+                      "<=", (lambda r: {CONSTANT: 12},), per=("g",))]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", xv),))
+    result = answer(decidb_cli, """
+        SELECT id, v, g, x FROM (VALUES (1, 3.0, true, 'A'), (2, 6.0, false, 'A'), (3, 6.0, true, 'B'),
+                                     (4, 5.0, true, 'B')) t(id, v, w, g)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= 12 PER g
+        SUCH THAT per g: sum(x * v) by (g) + max(when w: x * v) by (g) <= 12
         MAXIMIZE SUM(x * v)
-    """, match=r"does not support outer WHEN/PER")
+        ORDER BY id
+    """)
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4)
 
 
 @pytest.mark.min_max
-@pytest.mark.error_binder
-def test_composed_minmax_nonconst_rhs_subquery_rejected(decidb_cli):
-    """Composed MIN/MAX with a scalar-subquery RHS is rejected in v1.
-
-    v1 requires the outer RHS of a composed MIN/MAX constraint to be a
-    constant literal (possibly cast-wrapped). A scalar subquery — even
-    one that returns a constant — trips the dedicated guard.
-    """
-    # old spelling until item 7
-    decidb_cli.assert_error("""
-        SELECT id, v FROM (VALUES (1, 10.0, true), (2, 5.0, true)) t(id, v, w)
+@pytest.mark.correctness
+def test_composed_minmax_subquery_rhs_answers(decidb_cli, scope_solver):
+    """A composed MIN/MAX with a scalar-subquery bound takes the value rewrite: the
+    subquery is one value, and no message names an internal column."""
+    rows = [{"id": 1, "v": 10.0, "w": True}, {"id": 2, "v": 5.0, "w": False}, {"id": 3, "v": 4.0, "w": False}]
+    model = ScopedModel(rows, [Decision("x", var_type=VarType.BINARY)])
+    xv = lambda r: {"x": r["v"]}  # noqa: E731
+    clauses = [Scoped((Reduce("sum", xv), Reduce("max", xv, when=lambda r: r["w"])), "<=",
+                      (lambda r: {CONSTANT: 12},))]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", xv),))
+    result = answer(decidb_cli, """
+        SELECT id, v, x FROM (VALUES (1, 10.0, true), (2, 5.0, false), (3, 4.0, false)) t(id, v, w)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= (SELECT 12)
+        SUCH THAT sum(x * v) + max(when w: x * v) <= (SELECT 12)
         MAXIMIZE SUM(x * v)
-    """, match=r"Composed MIN/MAX in DECIDE v1 requires a constant RHS")
+        ORDER BY id
+    """)
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4)
 
 
 @pytest.mark.min_max
-@pytest.mark.error_binder
-def test_composed_minmax_nonconst_rhs_column_rejected(decidb_cli):
-    """Composed MIN/MAX with a column-reference RHS is rejected in v1.
-
-    Same rejection path as the subquery shape now (C1): a bare column is a legal
-    decision-free bound in general, so the generic SUM-comparison gate no longer
-    fires here — the composed-MIN/MAX-specific guard does, one step later, naming
-    the actual requirement (a constant RHS) instead of a generic one.
-    """
-    # old spelling until item 7
-    decidb_cli.assert_error("""
-        SELECT id, v FROM (VALUES (1, 10.0, true, 12), (2, 5.0, true, 12)) t(id, v, w, cap)
+@pytest.mark.correctness
+def test_composed_minmax_column_rhs_answers(decidb_cli, scope_solver):
+    """A composed MIN/MAX with a column bound is generated once per row, each row
+    bounding the composed sum by its own `cap`."""
+    rows = [{"id": 1, "v": 10.0, "w": True, "cap": 30}, {"id": 2, "v": 5.0, "w": False, "cap": 8},
+            {"id": 3, "v": 4.0, "w": True, "cap": 30}]
+    model = ScopedModel(rows, [Decision("x", var_type=VarType.BINARY)])
+    xv = lambda r: {"x": r["v"]}  # noqa: E731
+    clauses = [Scoped((Reduce("sum", xv), Reduce("max", xv, when=lambda r: r["w"])), "<=",
+                      (lambda r: {CONSTANT: r["cap"]},))]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", xv),))
+    result = answer(decidb_cli, """
+        SELECT id, v, x FROM (VALUES (1, 10.0, true, 30), (2, 5.0, false, 8), (3, 4.0, true, 30)) t(id, v, w, cap)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * v) + MAX(x * v) WHEN w <= cap
+        SUCH THAT sum(x * v) + max(when w: x * v) <= cap
         MAXIMIZE SUM(x * v)
-    """, match=r"Composed MIN/MAX in DECIDE v1 requires a constant RHS")
+        ORDER BY id
+    """)
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4)
 
 
 @pytest.mark.min_max
-@pytest.mark.error_binder
-def test_composed_minmax_outer_when_rejected(decidb_cli):
-    """Outer expression-level WHEN on a composed MIN/MAX is rejected in v1.
-
-    Distinct from the PER-rejection pin above: shares the
-    "expression-level vs aggregate-local WHEN" guard rather than the
-    "outer WHEN/PER on composed" guard, but tests the same v1 limitation
-    on outer modifiers. Pinned separately so a widened composed grammar
-    that admits one but not the other is detectable.
-    """
-    # old spelling until item 7
-    decidb_cli.assert_error("""
-        SELECT id, v, tier FROM (
-            VALUES (1, 10.0, true, 'high'), (2, 5.0, true, 'low')
+@pytest.mark.correctness
+def test_composed_minmax_front_when_answers(decidb_cli, scope_solver):
+    """A front `when` on a composed MIN/MAX applies first: both reducers read only the
+    kept rows, and the reducer's own `when` filters those."""
+    rows = [{"id": 1, "v": 10.0, "w": True, "tier": "high"}, {"id": 2, "v": 4.0, "w": False, "tier": "high"},
+            {"id": 3, "v": 5.0, "w": True, "tier": "low"}]
+    model = ScopedModel(rows, [Decision("x", var_type=VarType.BINARY)])
+    xv = lambda r: {"x": r["v"]}  # noqa: E731
+    clauses = [Scoped((Reduce("sum", xv), Reduce("max", xv, when=lambda r: r["w"])), "<=",
+                      (lambda r: {CONSTANT: 6},), when=lambda r: r["tier"] == "high")]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", xv),))
+    result = answer(decidb_cli, """
+        SELECT id, v, tier, x FROM (
+            VALUES (1, 10.0, true, 'high'), (2, 4.0, false, 'high'), (3, 5.0, true, 'low')
         ) t(id, v, w, tier)
         DECIDE x(BOOL)
-        SUCH THAT (SUM(x * v) + MAX(x * v) WHEN w) <= 12 WHEN (tier = 'high')
+        SUCH THAT when tier = 'high': (sum(x * v) + max(when w: x * v)) <= 6
         MAXIMIZE SUM(x * v)
-    """, match=r"Cannot combine expression-level WHEN with aggregate-local WHEN")
+        ORDER BY id
+    """)
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4)
 
 
 @pytest.mark.min_max
@@ -1710,7 +1734,7 @@ def test_minimize_sum_plus_max_composed_objective(
     for v in vnames:
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint({v: 1.0 for v in vnames}, ">=", 1.0, name="atleastone")
-    # z = MAX(x*v) WHEN w, pushed down (easy): z >= x*v per w-matching row
+    # z = max(when w: x*v), pushed down (easy): z >= x*v per w-matching row
     z_ub = max(d[1] for d in data if d[2]) + 1.0 if any(d[2] for d in data) else 1.0
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=z_ub)
     for i, d in enumerate(data):
@@ -1773,7 +1797,7 @@ def test_maximize_min_plus_sum_composed_objective(
     for v in vnames:
         oracle_solver.add_variable(v, VarType.BINARY)
     oracle_solver.add_constraint({v: 1.0 for v in vnames}, "<=", 2.0, name="budget")
-    # z = MIN(x*v) WHEN w, pushed up (easy): z <= x*v per w-matching row
+    # z = min(when w: x*v), pushed up (easy): z <= x*v per w-matching row
     z_ub = max(d[1] for d in data if d[2]) + 1.0 if any(d[2] for d in data) else 1.0
     oracle_solver.add_variable("z", VarType.CONTINUOUS, lb=0.0, ub=z_ub)
     for i, d in enumerate(data):

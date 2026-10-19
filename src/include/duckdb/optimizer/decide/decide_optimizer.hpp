@@ -28,11 +28,11 @@ class Optimizer;
 //!   - RewriteAbs: detects ABS(expr) over decide vars, creates auxiliary REAL vars,
 //!     replaces ABS nodes with aux var refs, generates linearization constraints
 //!   - RewriteBilinear: McCormick linearization for Boolean × anything products
-//!   - RewriteScopedReducers: the value rewrite of the scope spellings -- each decision
+//!   - RewriteScopedReducers: the value rewrite of a scoped comparison -- each decision
 //!     reducer of a VALUE-shape comparison becomes a helper decision defined per group
 //!   - RewriteComposedMinMax: detects composed MIN/MAX before the single-term pass
 //!   - RewriteMinMax: classifies MIN/MAX constraints as easy/hard, rewrites to per-row
-//!     or SUM+indicator, handles objectives (flat and nested PER)
+//!     or SUM+indicator, handles objectives (flat and two-level)
 //!   - RewriteNotEqual: creates indicator variables for <> constraints
 //!   - RewriteAvgToSum: rewrites AVG(expr) → SUM(expr) with alias tag for RHS scaling
 //!   - AbsorbVariableBounds: folds simple `x OP const` bounds into the column box.
@@ -66,12 +66,12 @@ private:
 	//! Helper: recursively find COMPARE_NOTEQUAL in bound expression tree
 	void FindNotEqualConstraints(Expression &expr, LogicalDecide &decide);
 
-	//! Fold every simple `x OP const` / `x BETWEEN a AND b` constraint into the decision
-	//! column's box (`absorbed_lower_bounds` / `absorbed_upper_bounds`) rather than leaving
-	//! it to become a model row: a box is smaller and tighter for the solver than one row
-	//! per data row. Absorbed comparisons are tagged ABSORBED_BOUND_TAG so physical term
-	//! extraction skips them, and recorded in `user_absorbed_bounds` so the infeasible
-	//! diagnosis can re-emit them as slackable rows.
+	//! Fold every simple `x OP const` constraint (a BETWEEN is two of them by now) into the
+	//! decision column's box (`absorbed_lower_bounds` / `absorbed_upper_bounds`) rather than
+	//! leaving it to become a model row: a box is smaller and tighter for the solver than
+	//! one row per data row. Absorbed comparisons are tagged ABSORBED_BOUND_TAG so physical
+	//! term extraction skips them; a recorded one (`user_absorbed_bounds`) is also tagged
+	//! ABSORBED_CLAUSE_ROWS_TAG, so its clause is flattened for the repair model.
 	//!
 	//! MUST RUN LAST, after every other pass. RewriteInDomain emits a floor-lowering
 	//! `x >= min_value` for a negative all-constant IN domain, which is itself absorbable;
@@ -97,17 +97,15 @@ private:
 	//! A decision-free AVG is skipped: there is nothing to linearize, and rebinding it as SUM
 	//! would redeclare it with SUM's integral type while its value stays fractional.
 	//! `clause_alias` is the clause the walk stands in (OBJECTIVE_ROW_TAG for the
-	//! objective), under which each rewritten AVG's account is recorded; `scoped` prints
-	//! its subject as the scope spellings write it.
-	void RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const string &clause_alias,
-	                            bool scoped);
+	//! objective), under which each rewritten AVG's account is recorded.
+	void RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const string &clause_alias);
 
-	//! The value rewrite of the scope spellings (todo.md §4.2): every decision reducer of a
+	//! The value rewrite (syntax_reference.md §6.4): every decision reducer of a
 	//! comparison in the VALUE shape (VALUE_REWRITE_TAG) becomes a helper decision defined
 	//! once per `by` group (LogicalDecide::reducer_value_links), and the comparison is then
 	//! one row per class. Runs after ABS and bilinear, whose auxiliaries may stand inside a
 	//! reducer's body, and before the MIN/MAX passes, which never see these reducers. A
-	//! product of decisions left inside such a reducer is refused (spec §12).
+	//! product of decisions left inside such a reducer is refused (syntax_reference.md §10.2).
 	void RewriteScopedReducers(LogicalDecide &decide);
 
 	//! Detect composed MIN/MAX constraints — additive LHS mixing SUM/AVG/MIN/MAX terms.
@@ -117,10 +115,9 @@ private:
 	void RewriteComposedMinMax(LogicalDecide &decide);
 
 	//! Helper: walk the constraint tree looking for composed MIN/MAX comparisons.
-	//! `scoped_when` is the `when` of the scope spellings enclosing `expr`, folded into a
-	//! composed clause's terms.
-	//! `per_class` is the scope spellings' `per K:` wrapper enclosing it, whose classes a
-	//! composed clause's one row stands for (D28).
+	//! `scoped_when` is the `when` enclosing `expr`, folded into a composed clause's terms.
+	//! `per_class` is the `per K:` wrapper enclosing it, whose classes a composed clause's
+	//! one row stands for (D28).
 	void RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                                       const Expression *scoped_when = nullptr,
 	                                       const BoundConjunctionExpression *per_class = nullptr);
@@ -132,31 +129,29 @@ private:
 	void RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide);
 
 	//! Rewrite MIN/MAX aggregates in constraints and objectives.
-	//! Constraints: easy cases (MAX<=K, MIN>=K) strip aggregate; hard cases create indicators.
-	//! Objectives: detect flat and nested PER patterns, set metadata, rewrite to SUM.
+	//! Constraints: easy cases (MAX<=K, MIN>=K) keep the reducer, tagged, and bound each
+	//! member; hard cases create an extremum column. Objectives: detect the flat and the
+	//! two-level form, set metadata, rewrite to SUM.
 	void RewriteMinMax(LogicalDecide &decide);
 
 	//! Top-level constraint-side MIN/MAX rewrite
 	void RewriteMinMaxConstraints(LogicalDecide &decide);
 
 	//! Helper: recursively walk bound constraint tree, classifying and rewriting MIN/MAX.
-	//! out_was_easy is set when the rewrite produced a per-row constraint (used for PER stripping).
-	//! `scoped_when` is the `when` of the scope spellings enclosing `expr`, which the easy
-	//! half of a scoped `=` keeps.
-	//! `scoped_when` and `per_class` are the scope spellings' `when` and `per K:` around
-	//! `expr`, which a row this rewrite adds for the clause (an equality's easy half) keeps.
+	//! `scoped_when` and `per_class` are the `when` and `per K:` around `expr`, which a row
+	//! this rewrite adds for the clause (an equality's easy half) keeps.
 	void RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                               vector<unique_ptr<Expression>> &new_constraints,
-	                               bool &out_was_easy, optional_ptr<const Expression> scoped_when = nullptr,
+	                               optional_ptr<const Expression> scoped_when = nullptr,
 	                               optional_ptr<const BoundConjunctionExpression> per_class = nullptr);
 
 	//! Objective-side MIN/MAX detection and rewriting.
-	//! Handles flat (non-PER) and nested PER objectives.
+	//! Handles the flat and the two-level objective.
 	void RewriteMinMaxObjective(LogicalDecide &decide);
 	//! The tree half of RewriteMinMaxObjective, split out so the objective can be
 	//! detached, rewritten, and reinstalled through LogicalDecide::SetObjective. It
 	//! cannot detach at the end instead: the rewrite writes through a pointer that
-	//! walks INTO the tree past PER/WHEN wrappers and casts, and it has early returns.
+	//! walks INTO the tree past `per`/`when` wrappers and casts, and it has early returns.
 	void RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_ptr<Expression> &objective);
 
 	//! Detect ABS(expr) over decide variables, create auxiliary REAL variables,
@@ -200,9 +195,7 @@ private:
 		                     //        false aux pins to |inner| naturally via
 		                     //        solver pressure (MINIMIZE objective, or
 		                     //        constraint shape that upper-bounds aux).
-		//! Written with the scope spellings: the envelope rows keep the clause's rules and
-		//! read only the rows its `when` (a copy, or null) keeps.
-		bool scoped = false;
+		//! The envelope rows read only the rows the clause's `when` (a copy, or null) keeps.
 		unique_ptr<Expression> when;
 		//! The ABS as a plan prints it: the auxiliary's name there, and its account's.
 		string label;
@@ -212,7 +205,7 @@ private:
 	//! replace with auxiliary variable references, and collect AbsPairInfo entries.
 	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                       vector<AbsPairInfo> &abs_pairs, bool in_objective, const string &source_alias,
-	                       bool scoped, const Expression *when);
+	                       const Expression *when);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis

@@ -3,10 +3,10 @@
 Covers:
   - test_abs_objective_basic: MINIMIZE SUM(ABS(x - col)) with(REAL)
   - test_abs_objective_with_when: ABS in objective with WHEN condition
-  - test_abs_objective_with_per: ABS in objective with PER grouping
+  - test_abs_objective_with_per: ABS in objective with `per` grouping
   - test_abs_constraint_per_row: ABS(x - col) <= tolerance (per-row)
   - test_abs_constraint_aggregate: SUM(ABS(x - col)) <= total_tolerance
-  - test_abs_constraint_aggregate_with_when: aggregate constraint with expression-level WHEN
+  - test_abs_constraint_aggregate_with_when: aggregate constraint with a `when` in front
   - test_abs_multiple_terms: two ABS terms in one expression
   - test_abs_no_decide_var: ABS without decide variable (regular SQL)
   - test_abs_mixed_vars: BOOLEAN + REAL with ABS on REAL only
@@ -214,7 +214,7 @@ def test_abs_objective_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     for dn in dnames:
         oracle_solver.add_variable(dn, VarType.CONTINUOUS, lb=0.0)
 
-    # PER l_orderkey: SUM(new_qty) = 20 per group
+    # per l_orderkey: SUM(new_qty) = 20 per group
     for orderkey, row_indices in groups.items():
         oracle_solver.add_constraint(
             {vnames[i]: 1.0 for i in row_indices}, "=", 20.0,
@@ -1263,11 +1263,11 @@ def test_abs_data_column_coefficient_may_be_negative(decidb_cli, oracle_solver):
 
 
 # ===========================================================================
-# Path-B (sign-indicator Big-M) composed with WHEN and PER
+# Path-B (sign-indicator Big-M) composed with `when` and `per`
 #
 # The Big-M envelope that pins each `d_i` to exactly `|expr_i|` is emitted
-# unconditionally, per row. WHEN and PER act on the *aggregate* that reads those
-# auxiliaries — WHEN masks which ones enter the sum, PER partitions them into
+# unconditionally, per row. `when` and `per` act on the *aggregate* that reads those
+# auxiliaries — `when` masks which ones enter the sum, `per` partitions them into
 # group sums. The two tests below check that composition: the pinning stays
 # per-row while the aggregate is filtered or grouped.
 # ===========================================================================

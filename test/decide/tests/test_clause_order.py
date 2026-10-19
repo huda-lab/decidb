@@ -177,12 +177,11 @@ def test_scalar_declaration_in_split_slot(decidb_cli, perf_tracker):
 
 @pytest.mark.correctness
 def test_entity_scoped_declaration_in_split_slot(decidb_cli, perf_tracker):
-    """A table-scoped declaration parses in the pre-FROM slot and still shares one
+    """A keyed declaration (`per n:`) parses in the pre-FROM slot and still shares one
     variable per entity across the join's repeated rows."""
-    # old spelling until item 7
     rows, cols = decidb_cli.execute("""
         SELECT n.n_nationkey, keep
-        DECIDE n.keep(BOOL)
+        DECIDE per n: keep(BOOL)
         FROM customer c
         JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0 AND c.c_custkey <= 200
@@ -206,7 +205,7 @@ def test_entity_scoped_declaration_in_split_slot(decidb_cli, perf_tracker):
 @pytest.mark.correctness
 def test_case_when_in_join_on_between_slots(decidb_cli, perf_tracker):
     """``CASE WHEN`` in a ``JOIN ... ON`` that sits between the two slots must
-    lex as ordinary SQL, not as the DECIDE postfix ``WHEN``.
+    lex as ordinary SQL, not as the DECIDE ``when``.
 
     This is the hazard the split order introduced: the declaration arms the
     DECIDE lexer context, and everything between it and ``SUCH THAT`` is
@@ -377,7 +376,7 @@ def test_split_order_three_table_fanout_join(decidb_cli, duckdb_conn,
 
 
 # ---------------------------------------------------------------------------
-# Test 8: The split order composed with WHEN and PER
+# Test 8: The split order composed with `when` and `per`
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
@@ -409,7 +408,7 @@ def test_split_order_with_when(decidb_cli, perf_tracker):
 
 @pytest.mark.correctness
 def test_split_order_with_per(decidb_cli, perf_tracker):
-    """`PER` in the split order, compared against the single-block spelling."""
+    """`per` in the split order, compared against the single-block spelling."""
     split = """
         SELECT c_custkey, c_nationkey, x
         DECIDE x(BOOL)

@@ -45,6 +45,8 @@ static string DecideVariableToString(const ParsedExpression &expr) {
 	}
 
 	auto marker = constant.value.GetValue<string>();
+	// A `scalar_` marker or a qualified name comes only from a parse tree stored before
+	// those spellings were removed; it prints as written and is refused when bound.
 	bool scalar = StringUtil::StartsWith(marker, "scalar_");
 	if (scalar) {
 		marker = marker.substr(7);
@@ -66,8 +68,8 @@ static string DecideVariableToString(const ParsedExpression &expr) {
 //! conjunction. Keeping DuckDB's generic outer parentheses makes a following WHEN or
 //! PER unparseable, so emit the list in the grammar's own form.
 //!
-//! Each clause renders through the ordinary `ParsedExpression::ToString()`, which is
-//! where the WHEN and PER postfix wrappers are spelled back out --
+//! Each clause renders through the ordinary `ParsedExpression::ToString()`, which also
+//! spells a stored tree's removed postfix WHEN and PER back out as written --
 //! `FunctionExpression::ToString()` recognizes their operator tags itself.
 static string DecideConstraintsToString(const ParsedExpression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::CONJUNCTION ||

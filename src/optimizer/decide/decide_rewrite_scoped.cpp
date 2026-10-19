@@ -3,14 +3,14 @@
 //
 // src/optimizer/decide/decide_rewrite_scoped.cpp
 //
-// The value rewrite of the scope spellings (anr_language_extension.md §4.3, todo.md
-// §4.2). A scoped comparison in the VALUE shape -- a decision reducer beside a per-row
-// or keyed decision, under a factor that varies by row, next to a reducer with another
-// `by` key, or inside another expression -- is not one model row per `by` group. Each
-// of its decision reducers becomes a helper decision with one instance per `by` group,
-// defined once (LogicalDecide::reducer_value_links; stage 06 emits the definition), and
-// the comparison is then an ordinary row per class. Deck example 1, `ship <= 0.20 *
-// sum(ship)`, costs N rows and one helper rather than N rows of N terms.
+// The value rewrite (syntax_reference.md §6.4; 05_optimizer/done.md, "The value
+// rewrite"). A scoped comparison in the VALUE shape -- a decision reducer beside a
+// per-row or keyed decision, under a factor that varies by row, next to a reducer with
+// another `by` key, or inside another expression -- is not one model row per `by` group.
+// Each of its decision reducers becomes a helper decision with one instance per `by`
+// group, defined once (LogicalDecide::reducer_value_links; stage 06 emits the
+// definition), and the comparison is then an ordinary row per class. Deck example 1,
+// `ship <= 0.20 * sum(ship)`, costs N rows and one helper rather than N rows of N terms.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
@@ -28,6 +28,7 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_binder.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
@@ -151,16 +152,17 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	auto &agg = (*site.slot)->Cast<BoundAggregateExpression>();
 	auto agg_name = StringUtil::Lower(agg.function.name);
 	auto label = RenderDecideReducer(agg, names);
-	// Spec §12: a product or square of decisions inside a reducer is accepted only where
-	// the reducer's own row sums it -- the aggregate shape. Here its definition would be
-	// a quadratic equality. The test is on what survives the rewrites before this one:
-	// an ABS is an auxiliary by now and a Boolean product its McCormick column, both
-	// linear; what remains nonlinear is a square or a product of two non-Boolean
-	// decisions.
+	// syntax_reference.md §10.2: a product or square of decisions inside a reducer is
+	// accepted only where the reducer's own row sums it -- the aggregate shape. Here its
+	// definition would be a quadratic equality. The test is on what survives the rewrites
+	// before this one: an ABS is an auxiliary by now and a Boolean product its McCormick
+	// column, both linear; what remains nonlinear is a square or a product of two
+	// non-Boolean decisions.
 	if (!DecideExpressionDegree(*agg.children[0], decide.decide_index).IsLinear()) {
 		throw BinderException("DECIDE: '%s' is not supported yet in this constraint: a product or square of "
 		                      "decisions inside a reducer is accepted only where the constraint's reducers share "
-		                      "one by key, under a whole-query factor, with no other decision beside them",
+		                      "one by key, under a whole-query factor, with nothing beside them but data and "
+		                      "query-wide decisions, each on its own",
 		                      label);
 	}
 
@@ -174,6 +176,25 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	const bool easy = IsEasyExtremum(agg_name == "max", push);
 	const bool need_envelope = extremum && (push == ExtremumPush::NONE || easy);
 	const bool need_closing = extremum && (push == ExtremumPush::NONE || !easy);
+
+	// `<`, `>` and `<>` step onto the whole numbers, which is exact for the row only when
+	// the helper is whole. The binder admitted the clause by its own reading: a constant
+	// beside the decisions inside a SUM moves to the bound when the reducer is summed in
+	// place (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`), but a helper holds the whole
+	// value. The message is the binder's (ValidateDecideIntegralComparisonOperands).
+	const bool whole = DecideValueIsWholeNumbered(agg, decide.decide_index);
+	if (!whole && (comparison == ExpressionType::COMPARE_LESSTHAN ||
+	               comparison == ExpressionType::COMPARE_GREATERTHAN || comparison == ExpressionType::COMPARE_NOTEQUAL)) {
+		const bool not_equal = comparison == ExpressionType::COMPARE_NOTEQUAL;
+		const bool less = comparison == ExpressionType::COMPARE_LESSTHAN;
+		throw BinderException("Comparison '%s' is not supported here: '%s' can take fractional values in this "
+		                      "constraint, and %s. Compare with %s instead.",
+		                      not_equal ? "<>" : less ? "<" : ">", RenderDecideSource(agg, names),
+		                      not_equal ? "the rewrite (x <> K becomes x <= K-1 OR x >= K+1) is exact only on "
+		                                  "whole numbers"
+		                                : "stepping the bound is exact only on whole numbers",
+		                      not_equal ? "'<=' or '>='" : less ? "'<='" : "'>='");
+	}
 
 	idx_t link_idx = helpers.Find(agg, scope, source_clause_id, objective_row);
 	if (link_idx != DConstants::INVALID_INDEX) {
@@ -202,23 +223,22 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	link.need_closing = need_closing;
 	link_idx = decide.reducer_value_links.size();
 
-	// The helper decision: whole-numbered when the reducer is, so a strict bound on the
-	// rewritten row still steps on the integer lattice; a query-wide decision for `by ()`,
+	// The helper decision: whole-numbered when the reducer's value is, so a strict bound on
+	// the rewritten row still steps on the integer lattice; a query-wide decision for `by ()`,
 	// else one instance per group of the `by` key among the rows the clause keeps -- a
 	// scope of its own (EntityScopeInfo::value_link), which execution builds from the link.
 	auto var_scope = DecideVarScopeInfo::Scalar();
 	if (link.group_key != DConstants::INVALID_INDEX) {
 		EntityScopeInfo helper_scope;
 		helper_scope.table_alias = decide.group_keys[link.group_key].text;
-		helper_scope.exact_key = true;
 		helper_scope.key_names = decide.group_keys[link.group_key].names;
 		helper_scope.value_link = link_idx;
 		decide.entity_scopes.push_back(std::move(helper_scope));
 		var_scope = DecideVarScopeInfo::Entity(decide.entity_scopes.size() - 1);
 	}
-	LogicalType aux_type = agg.return_type.IsIntegral() ? LogicalType::INTEGER : LogicalType::DOUBLE;
+	LogicalType aux_type = whole ? LogicalType::INTEGER : LogicalType::DOUBLE;
 	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included.
-	auto plan_label = RenderDecideSource(agg, names, true);
+	auto plan_label = RenderDecideSource(agg, names);
 	link.value_var =
 	    AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__", aux_type, false, var_scope, plan_label);
 	AddRewriteAccount(decide, source_clause_id,

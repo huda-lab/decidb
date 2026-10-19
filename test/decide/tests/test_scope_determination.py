@@ -1,4 +1,4 @@
-"""The determination rule (anr_language_extension.md §7): a `per` key must determine
+"""The determination rule (syntax_reference.md §7.1): a `per` key must determine
 everything its body reads once per class -- every tuple term (a bound, a factor on a
 reducer), every decision outside reducers, every reducer's `by` key -- and an inner
 `per` key the body of its reducer.
@@ -6,7 +6,7 @@ reducer), every decision outside reducers, every reducer's `by` key -- and an in
 It is checked against the data, over the kept rows, before solving, so each case is a
 pair: the query runs on data where the key determines the value, and stops with the
 named error on data where it does not. The message quotes the key, the expression and
-one class holding two values, in the user's SQL only (§9). Without `per` the same clause
+one class holding two values, in the user's SQL only (§10.1). Without `per` the same clause
 is legal: one constraint per row, which is the tightest bound per group (S3).
 """
 
@@ -101,7 +101,7 @@ def test_a_decision_outside_reducers(decidb_cli):
 @pytest.mark.error
 def test_an_objective_term(decidb_cli, scope_solver):
     """A per-row decision outside the objective's reducers is legal only with a single
-    instance over the kept rows (§6)."""
+    instance over the kept rows (§4)."""
     rows, _ = decidb_cli.execute(_query("ship <= 7", objective="MAXIMIZE when S.shipmentID = 3: ship"))
     assert [ship for _, ship in rows][2] == 7
     _stops(decidb_cli, _query("ship <= 7", objective="MAXIMIZE when S.priority: ship"),
@@ -157,7 +157,7 @@ def test_without_per_the_clause_is_legal_and_takes_the_tightest_bound(decidb_cli
 
 @pytest.mark.error
 def test_raised_under_diagnose(decidb_cli):
-    """Nothing was solved, so there is nothing to diagnose (§9)."""
+    """Nothing was solved, so there is nothing to diagnose (§10.1)."""
     _stops(decidb_cli, "DIAGNOSE " + _query("per D.region: sum(ship) by (D.region) <= D.capacity", EAST_SPLIT),
            "DECIDE: per D.region does not determine D.capacity.")
 

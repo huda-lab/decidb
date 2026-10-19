@@ -171,7 +171,7 @@ Any combination of variable types, with constraints but **no** `MAXIMIZE`/`MINIM
 ```sql
 SELECT * FROM shifts
 DECIDE assigned(BOOL)
-SUCH THAT SUM(assigned) >= 3 PER day AND SUM(assigned) <= 5 PER employee
+SUCH THAT per day: sum(assigned) by (day) >= 3 AND per employee: sum(assigned) by (employee) <= 5
 ```
 
 Supported by both Gurobi and HiGHS.
@@ -200,7 +200,7 @@ SUCH THAT SUM(POWER(x - required, 2)) <= 50
 
 All syntax forms supported: `POWER(expr, 2)`, `expr ** 2`, `(expr) * (expr)` self-product. Negated and scaled forms also supported: `-POWER(expr, 2)`, `K * POWER(expr, 2)`.
 
-Composes with WHEN, PER, and linear constraints. Multiple quadratic constraints per query are supported.
+Composes with scopes (`when`, `per`, `by`) and linear constraints. Multiple quadratic constraints per query are supported.
 
 ---
 
@@ -255,7 +255,7 @@ Constraints are primarily linear. Products of two decision variables (`x * y`) a
 
 - **Boolean × anything**: Exactly linearized via McCormick envelopes (both solvers). The bilinear product is replaced with auxiliary variables and linear constraints at optimizer time, so the feasible region remains a convex polytope.
 - **General non-convex bilinear** (`Real×Real`, `Int×Int`, `Int×Real`): Gurobi only, via `GRBaddqconstr`. On HiGHS the query is refused at plan time.
-- **Quadratic constraints** (`POWER(expr, 2)` in SUCH THAT): Gurobi only, via `GRBaddqconstr`. Each `POWER(inner_expr, 2)` is expanded into Q = sign * A^T A (outer product of inner expression coefficients). Multiple quadratic groups per constraint are accumulated. Constant terms from the inner expression are moved to the RHS. Composes with WHEN, PER, and linear terms in the same constraint.
+- **Quadratic constraints** (`POWER(expr, 2)` in SUCH THAT): Gurobi only, via `GRBaddqconstr`. Each `POWER(inner_expr, 2)` is expanded into Q = sign * A^T A (outer product of inner expression coefficients). Multiple quadratic groups per constraint are accumulated. Constant terms from the inner expression are moved to the RHS. Composes with scopes and linear terms in the same constraint.
 
 ### Quadratic Objectives — Convexity and Sign
 
@@ -378,7 +378,7 @@ Several constructs (`<>`, `IN` on decision variables, hard `MIN`/`MAX` cases) us
 - **Quadratic constraint Q matrix**: `src/decidb/formulation/ilp_model_builder.cpp`
   - `BuildQuadraticConstraint` lambda builds `QuadraticConstraint` from `EvaluatedConstraint` quadratic groups
   - Computes outer product Q = sign * A^T A per group, accumulates into single Q matrix
-  - Handles PER groups (one QuadraticConstraint per group), WHEN filtering, and per-row constraints
+  - Handles grouped constraints (one QuadraticConstraint per `by` group), `when` filtering, and per-row constraints
 
 - **Feasibility support**: Grammar rule in `third_party/libpg_query/grammar/statements/select.y` accepts `DECIDE ... SUCH THAT ...` without objective. `DecideSense::FEASIBILITY` flows through parser → binder → physical → model builder. Model builder sets all objective coefficients to zero.
 

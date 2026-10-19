@@ -47,28 +47,30 @@ MINIMIZE SUM(units * unit_cost);
 SELECT select_list
 FROM table_expression
 [WHERE ...]
-DECIDE [Table.]variable_name(TYPE) [, ...]
-SUCH THAT constraint [AND constraint ...]
-[MAXIMIZE | MINIMIZE] objective_expression
+DECIDE [per key:] variable_name(TYPE) [, ...]
+SUCH THAT [scope:] constraint [AND [scope:] constraint ...]
+[MAXIMIZE | MINIMIZE [when condition:] objective_expression]
 ```
 
 The type is mandatory and written in parentheses. The declaration may also sit
 between `SELECT` and `FROM`; both orders parse to the same plan. Omitting
-`MAXIMIZE`/`MINIMIZE` asks only for a feasible assignment.
+`MAXIMIZE`/`MINIMIZE` asks only for a feasible assignment. A `scope` is
+`[when condition] [per key]`: `when` picks the rows a constraint looks at, `per`
+how many constraints it makes (one per distinct value of the key).
 
 
 | Feature                  | Details                                                                          |
 | ------------------------ | -------------------------------------------------------------------------------- |
 | **Variable types**       | `BOOL` (0/1), `INT` (non-negative), `REAL` (continuous) |
 | **Constraint operators** | `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, `IN`                                 |
-| **Variable scopes**      | `x(T)` per row, `Table.x(T)` per entity, `scalar x(T)` once per query            |
+| **Variable scopes**      | `x(T)` one per result row, `per key: x(T)` one per distinct key value (a relation name keys on all its columns), `per (): x(T)` one for the whole query |
 | **Aggregates**           | `SUM()`, `AVG()`, `MIN()`, `MAX()` — `COUNT()` over a decision is rejected; use `SUM(x)` |
 | **Beyond linear**        | bilinear `x * y`, quadratic `POWER(expr, 2)` objectives (some forms Gurobi-only) |
-| **Conditional**          | `expression WHEN condition` (postfix)                                            |
-| **Grouping**             | `SUM(expr) op rhs PER column` — one constraint per distinct group                |
+| **Conditional**          | `when condition: constraint`, `MAXIMIZE when condition: objective`, `sum(when condition: expr)` inside one aggregate |
+| **Grouping**             | `per column: sum(expr) by (column) op rhs` — `per` makes one constraint per distinct group, `by` makes the sum read only that group's rows |
 
 
-For the full syntax specification, see `[context/descriptions/00_project_overview/syntax_reference.md](context/descriptions/00_project_overview/syntax_reference.md)`.
+For the full syntax specification, see [context/descriptions/00_project_overview/syntax_reference.md](context/descriptions/00_project_overview/syntax_reference.md).
 
 ## Building from Source
 
@@ -90,7 +92,7 @@ make decide-test       # Run DECIDE differential tests
 make decide-setup      # Setup test environment only
 ```
 
-Tests are located in `[test/decide/](test/decide/)`.
+Tests are located in [test/decide/](test/decide/).
 
 ## Example Problem Domains
 
@@ -107,15 +109,15 @@ DeciDB can express a wide range of optimization problems directly in SQL:
 
 ## Documentation
 
-Full documentation lives in `[context/descriptions/](context/descriptions/)`. Start with the [README there](context/descriptions/README.md) for navigation and reading order.
+Full documentation lives in [context/descriptions/](context/descriptions/). Start with the [README there](context/descriptions/README.md) for navigation and reading order.
 
 Key areas:
 
-- `[00_project_overview/](context/descriptions/00_project_overview/)` — Syntax specification
-- `[01_pipeline/](context/descriptions/01_pipeline/)` — The eight pipeline stages, one folder each
-- `[03_expressivity/](context/descriptions/03_expressivity/)` — Feature status (WHEN, PER, aggregates, etc.)
-- `[01_pipeline/04_canonicalizer/](context/descriptions/01_pipeline/04_canonicalizer/)` — The constraint/objective shape contract
-- `[01_pipeline/05_optimizer/](context/descriptions/01_pipeline/05_optimizer/)` — Optimizer rewrite strategies
+- [00_project_overview/](context/descriptions/00_project_overview/) — Syntax specification
+- [01_pipeline/](context/descriptions/01_pipeline/) — The eight pipeline stages, one folder each
+- [03_expressivity/](context/descriptions/03_expressivity/) — Feature status (`when`, `per`, `by`, aggregates, etc.)
+- [01_pipeline/04_canonicalizer/](context/descriptions/01_pipeline/04_canonicalizer/) — The constraint/objective shape contract
+- [01_pipeline/05_optimizer/](context/descriptions/01_pipeline/05_optimizer/) — Optimizer rewrite strategies
 
 ## Research
 

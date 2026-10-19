@@ -10,7 +10,7 @@ and an outer ``WHEN`` alone worked; only the combination broke. The state is now
 saved and restored per clause (``PGDecidePushLexState`` / ``PGDecidePopLexState``),
 so these tests pin the combination rather than either half.
 
-See ``01_pipeline/01_parser/done.md`` → DECIDE/WHEN tokenization.
+See ``01_pipeline/01_parser/done.md`` §2, lexer gating.
 
 Covers:
   - Nested clause followed by an outer ``WHEN``, oracle verified

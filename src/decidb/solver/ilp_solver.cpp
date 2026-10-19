@@ -435,7 +435,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	DumpSolverModel(model);
 	// Rows as actually handed to the backend, for the benchmark's model-size metric. Read
 	// off the built model because the pre-expansion inputs are not a row count at all: one
-	// per-row spec becomes a row per data row, one PER spec a row per group. Captured here,
+	// per-row spec becomes a row per data row, one grouped spec a row per group. Captured here,
 	// before any `std::move(model)` below.
 	idx_t built_constraint_rows = model.constraints.size() + model.quadratic_constraints.size() +
 	                              model.general_constraints.size() +

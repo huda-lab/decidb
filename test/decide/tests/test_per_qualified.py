@@ -1,22 +1,18 @@
-"""Qualified column references in the PER clause.
+"""Qualified column references in a `per` key.
 
-DecidB's PER previously accepted only bare identifiers (`PER col`). Any
-qualified form (`PER table.col`) failed at parse time with
-`syntax error at or near "."`, even though every other SQL clause
-(`SELECT`, `GROUP BY`, `ORDER BY`, `WHERE`) accepts the qualified form.
-The natural place to want a qualifier is JOIN-based DECIDE queries where
-the user wants to disambiguate the group-by column — exactly the cases
-that hit this restriction.
+A `per` key may name a column with its relation (`per t.col:`), as every other
+SQL clause (`SELECT`, `GROUP BY`, `ORDER BY`, `WHERE`) allows. The natural place
+to want a qualifier is a JOIN-based DECIDE query, where the user disambiguates
+the key column.
 
-The grammar fix swaps `columnref` (bare ColId) for `columnref_opt_indirection`
-(ColId optionally followed by `.field`) in the four PER arms in select.y
-and in `columnrefList`. The transformer was already general, so no C++
-changes were needed.
+The grammar reads a key as an expression list and `makeDecideScope` accepts each
+element that is a column or relation name, qualified or not; the binder resolves
+it. The same scope rule serves a constraint, a reducer and the objective.
 
 These tests pin down both:
   - Parse acceptance: each qualified form is recognized by the parser.
   - Semantic correctness: the qualifier resolves to the right column,
-    so qualified and unqualified PER produce identical solutions for
+    so qualified and unqualified keys produce identical solutions for
     equivalent queries.
 """
 
@@ -93,10 +89,8 @@ def test_per_multi_column_all_qualified(
 ):
     """`per s.s_nationkey, n.n_regionkey:` — qualified composite key.
 
-    Catches a regression where the `columnrefList` change to
-    `columnref_opt_indirection` was missed: without it, parenthesized
-    multi-column PER with qualifiers fails even when single-column does
-    not.
+    A key of several qualified columns must parse and bind like a key of
+    one: a regression that handles only the single-column key fails here.
     """
     sql = """
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, n.n_regionkey, x
@@ -198,9 +192,9 @@ def test_per_multi_column_mixed_qualified_and_bare(decidb_cli, duckdb_conn):
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_per_qualified_equivalent_to_unqualified(decidb_cli):
-    """Adding a qualifier to PER must not change semantics — pure syntax.
+    """Adding a qualifier to a `per` key must not change semantics — pure syntax.
 
-    Runs the same DECIDE problem twice, differing only in whether the PER
+    Runs the same DECIDE problem twice, differing only in whether the key
     column carries a table qualifier, and compares the resulting objective
     values. Direct regression check that the qualifier propagates through
     the parse → bind → symbolic pipeline as a pure rename, not a different
@@ -229,7 +223,7 @@ def test_per_qualified_equivalent_to_unqualified(decidb_cli):
 def test_per_qualified_with_table_alias(decidb_cli):
     """`FROM supplier AS s` + `per s.s_nationkey:` (alias form).
 
-    The bug-report repro used aliased tables and qualified PER, so this
+    The bug-report repro used aliased tables and a qualified key, so this
     test reproduces that exact shape and asserts it both parses and
     returns a result with the right structure.
     """
@@ -248,12 +242,10 @@ def test_per_qualified_with_table_alias(decidb_cli):
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_per_with_when_qualified_column(decidb_cli):
-    """Combined `when cond per t.col: expr` — the WHEN+PER+qualifier rule arm.
+    """Combined `when cond per t.col: expr` — a qualified key after a `when`.
 
-    The grammar has separate arms for `a_expr PER col`, `a_expr WHEN b
-    PER col`, and the parenthesized variants. This test exercises the
-    WHEN+PER+qualified arm specifically — without it, that arm could
-    regress to `columnref` while the standalone PER arm stays fixed.
+    The scope in front reads `when` and `per` together; this pins that a
+    qualified key still parses and binds when a condition precedes it.
     """
     sql = """
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, x
@@ -271,11 +263,9 @@ def test_per_with_when_qualified_column(decidb_cli):
 def test_per_qualified_in_objective(decidb_cli):
     """`per s.s_nationkey:` on the objective side (the two-level form).
 
-    Objective PER goes through a separate set of grammar arms from
-    constraint PER (decide_objective_item vs decide_constraint_item). Each
-    set has its own four arms (PER bare, PER list, WHEN+PER bare, WHEN+PER
-    list). This test confirms the objective-side single-column PER arm
-    also accepts a qualified column.
+    The objective's key sits inside its outer reducer, so it goes through
+    the reducer's scope rather than a constraint's. This test confirms that
+    path also accepts a qualified column.
     """
     sql = """
         SELECT s.s_suppkey, s.s_acctbal, s.s_nationkey, x
@@ -297,7 +287,7 @@ def test_per_unknown_qualifier_gives_clean_error(decidb_cli):
     diagnostic naming the offending reference. The test asserts the
     rejection path stays well-formed even though the parser now accepts
     the qualified form — without this, a future name-resolution change
-    that mishandles PER's column ref could produce an uninformative
+    that mishandles the key's column reference could produce an uninformative
     error or even a crash.
     """
     sql = """

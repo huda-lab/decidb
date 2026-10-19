@@ -45,17 +45,18 @@ string SourceWrittenRhs(const SolverModel &model, const ConstraintProvenance &pr
 string SourceAwareQuadraticLhs(const SolverModel &model, const SolverModel::QuadraticConstraint &row,
                                const vector<ColumnProvenance> &columns);
 
-//! Provenance re-pointed at the source clause, so an edit is attributed to the
-//! clause the user typed rather than to the row the formulation emitted.
-ConstraintProvenance SourceAwareProvenance(const SolverModel &model, const ConstraintProvenance &provenance);
+//! The `when c per K:` qualifier of the clause a row came from, as the source registry
+//! holds it (`ConstraintSourceInfo::qualifier`), so a label reads as the clause the user
+//! typed. Empty when the clause has no `when` or `per`.
+string SourceQualifier(const SolverModel &model, const ConstraintProvenance &provenance);
 
 //! Render a row's RHS from its source spelling, falling back to `fallback`.
 string SourceAwareRhs(const SolverModel &model, const ConstraintProvenance &provenance, double fallback);
 
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
 //! solved slack `amount` (signed; for `=` it is the net s⁺−s⁻).
-ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, double rhs, char sense,
-                          double amount);
+ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &qualifier, const string &lhs, double rhs,
+                          char sense, double amount);
 
 //! The findings one emitted row stands for (D28): one per class of its group's `per` key
 //! (`expanded_group`, the value in `group`); in the expanded slack scope, one per kept row
@@ -76,7 +77,8 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
 //! Fold a clause's per-row data slack into one synthetic query-level offset
 //! (`x <= col + delta`; `>=` loosens downward → `col - delta`; `=` by its signed slack),
 //! a strict `<` / `>` keeping its operator.
-ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &lhs, const string &rhs_text,
+ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &qualifier, const string &lhs,
+                                 const string &rhs_text,
                                  char sense, double delta);
 
 } // namespace decide_render

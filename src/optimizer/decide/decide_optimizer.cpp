@@ -184,13 +184,11 @@ unique_ptr<Expression> decide_rewrite::MakeDecisionRef(const LogicalDecide &deci
 	return make_uniq<BoundColumnRefExpression>(ref.GetName(), ref.return_type, ref.binding);
 }
 
-string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide &decide, bool scoped) {
+string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide &decide) {
 	// The labels of the auxiliaries earlier passes made, so a construct over one prints
 	// it as what it stands for rather than by its internal name.
-	return RenderDecideSource(expr,
-	                          DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys,
-	                                          decide.decide_index, decide.aux_var_expressions),
-	                          scoped);
+	return RenderDecideSource(expr, DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys,
+	                                                decide.decide_index, decide.aux_var_expressions));
 }
 
 void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id,
@@ -306,10 +304,6 @@ unique_ptr<Expression> decide_rewrite::MakeTrueExpression(const string &source_a
 }
 
 ClauseScope decide_rewrite::EnterClauseScope(const Expression &node, ClauseScope scope) {
-	if (!HasDecideTag(node.GetAlias(), SCOPED_CLAUSE_TAG)) {
-		return scope;
-	}
-	scope.scoped = true;
 	if (node.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = node.Cast<BoundConjunctionExpression>();
 		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
@@ -320,12 +314,6 @@ ClauseScope decide_rewrite::EnterClauseScope(const Expression &node, ClauseScope
 }
 
 unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row, const ClauseScope &scope) {
-	if (!scope.scoped) {
-		return row;
-	}
-	auto alias = row->GetAlias();
-	AddDecideTag(alias, SCOPED_CLAUSE_TAG);
-	row->SetAlias(std::move(alias));
 	if (!scope.when) {
 		return row;
 	}
@@ -333,7 +321,6 @@ unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row
 	wrapper->children.push_back(std::move(row));
 	wrapper->children.push_back(scope.when->Copy());
 	wrapper->alias = WHEN_CONSTRAINT_TAG;
-	AddDecideTag(wrapper->alias, SCOPED_CLAUSE_TAG);
 	return std::move(wrapper);
 }
 

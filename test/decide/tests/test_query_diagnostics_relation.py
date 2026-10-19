@@ -97,7 +97,7 @@ def _resolve_objective(cli, sql, drop_sqls, columns):
 def _clause_edits(rows):
     """Group the EAV clause rows into one dict per edit. Each edit's rows are emitted as
     a contiguous run starting at `edit_kind`, so a new `edit_kind` row opens a new edit.
-    Lets two PER-group edits that share the same folded `subject` be told apart by their
+    Lets two `per`-group edits that share the same folded `subject` be told apart by their
     separate `group` attribute."""
     edits = []
     cur = None
@@ -131,19 +131,17 @@ def _apply_reported_fix(cli, sql, rows, subject_to_sql=None):
     edited = False
     for edit in edits:
         clause = subject_to_sql.get(edit["subject"], edit["subject"])
+        # The echo spells function names in lower case (D32); SQL reads them in any case.
         if edit["edit_kind"] == "drop":
-            assert f"{clause} AND " in fixed_sql or f" AND {clause}" in fixed_sql, (
-                f"cannot locate dropped clause {clause!r} in:\n{fixed_sql}"
-            )
-            fixed_sql = (
-                fixed_sql.replace(f"{clause} AND ", "", 1)
-                if f"{clause} AND " in fixed_sql
-                else fixed_sql.replace(f" AND {clause}", "", 1)
-            )
+            found = (re.search(re.escape(clause) + " AND ", fixed_sql, re.IGNORECASE)
+                     or re.search(" AND " + re.escape(clause), fixed_sql, re.IGNORECASE))
+            assert found, f"cannot locate dropped clause {clause!r} in:\n{fixed_sql}"
+            fixed_sql = fixed_sql[:found.start()] + fixed_sql[found.end():]
             edited = True
         elif "suggested_change" in edit:
-            assert clause in fixed_sql, f"cannot locate {clause!r} in:\n{fixed_sql}"
-            fixed_sql = fixed_sql.replace(clause, edit["suggested_change"], 1)
+            found = re.search(re.escape(clause), fixed_sql, re.IGNORECASE)
+            assert found, f"cannot locate {clause!r} in:\n{fixed_sql}"
+            fixed_sql = fixed_sql[:found.start()] + edit["suggested_change"] + fixed_sql[found.end():]
             edited = True
     assert edited, f"diagnosis reported no applicable edit:\n{rows}"
     result = cli.execute_script(".mode csv\n" + fixed_sql + ";\n")
@@ -386,7 +384,7 @@ class TestDiagnosticsRelation:
     def test_infeasible_entity_scoped_label_survives_mixed_multiplicity(
         self, request, cli_fixture
     ):
-        """Same fold, harder shape: one PER group holding several entities with *different*
+        """Same fold, harder shape: one `per` group holding several entities with *different*
         join multiplicities (nations per region own 50-72 customers each), so the accumulated
         coefficients differ across columns of the same variable. The reconstruction reads
         that spread as a data-varying weight and renders the coefficient's source text —
@@ -536,7 +534,7 @@ class TestDiagnosticsRelation:
         assert {r["state"] for r in rows} == {"infeasible"}
         amounts = [float(r["value"]) for r in rows if r["attribute"] == "amount"]
         assert sum(amounts) == pytest.approx(7.0)
-        assert _attrs(rows, "clause", "MAX(x) <= 5")
+        assert _attrs(rows, "clause", "max(x) <= 5")
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -756,7 +754,7 @@ class TestDiagnosticsRelation:
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         subjects = {r["subject"] for r in rows if r["attribute"] == "suggested_change"}
-        assert subjects and subjects <= {"x >= 1", "SUM(x) <= 2"}, subjects
+        assert subjects and subjects <= {"x >= 1", "sum(x) <= 2"}, subjects
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -819,7 +817,7 @@ class TestDiagnosticsRelation:
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
         subjects = {r["subject"] for r in rows if r["attribute"] == "suggested_change"}
-        assert subjects == {"SUM(x) >= 3"}, subjects
+        assert subjects == {"sum(x) >= 3"}, subjects
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -847,7 +845,7 @@ class TestDiagnosticsRelation:
         edits = _clause_edits(rows)
         subjects = {e["subject"] for e in edits}
         assert subjects, "expected at least one clause edit"
-        assert subjects <= {"SUM(x) >= 2", "SUM(x) + SUM(y) <= 1"}, subjects
+        assert subjects <= {"sum(x) >= 2", "sum(x) + sum(y) <= 1"}, subjects
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -1188,8 +1186,8 @@ class TestDiagnosticsRelation:
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
-        avg = _attrs(rows, "clause", "AVG(x) <= 5")
-        assert avg["suggested_change"] == "AVG(x) <= 10"
+        avg = _attrs(rows, "clause", "avg(x) <= 5")
+        assert avg["suggested_change"] == "avg(x) <= 10"
         assert avg["amount"] == "5"
         _apply_reported_fix(cli, sql, rows)
 
@@ -1212,11 +1210,11 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         # The clause and its suggested edit both name AVG, never SUM.
-        assert not any(str(r["subject"]).startswith("SUM(") for r in rows), (
+        assert not any(str(r["subject"]).startswith("sum(") for r in rows), (
             "data-varying AVG was mislabeled as SUM in the diagnosis"
         )
-        avg = _attrs(rows, "clause", "AVG(x * w) >= 100")
-        assert avg["suggested_change"] == "AVG(x * w) >= 20"
+        avg = _attrs(rows, "clause", "avg(x * w) >= 100")
+        assert avg["suggested_change"] == "avg(x * w) >= 20"
         assert avg["amount"] == "80"
         _apply_reported_fix(cli, sql, rows)
 
@@ -1234,8 +1232,8 @@ class TestDiagnosticsRelation:
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
-        edit = _attrs(rows, "clause", "SUM(x) < 10")
-        assert edit["suggested_change"] == "SUM(x) < 16"
+        edit = _attrs(rows, "clause", "sum(x) < 10")
+        assert edit["suggested_change"] == "sum(x) < 16"
         assert edit["amount"] == "6"
         _apply_reported_fix(cli, sql, rows)
 
@@ -1252,8 +1250,8 @@ class TestDiagnosticsRelation:
         result = _diagnose(cli, sql)
 
         rows = _rows(result)
-        edit = _attrs(rows, "clause", "SUM(x) > 10")
-        assert edit["suggested_change"] == "SUM(x) > 2"
+        edit = _attrs(rows, "clause", "sum(x) > 10")
+        assert edit["suggested_change"] == "sum(x) > 2"
         assert edit["amount"] == "8"
         _apply_reported_fix(cli, sql, rows)
 
@@ -1271,13 +1269,13 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        edit = _attrs(rows, "clause", "POWER(x, 2) <= 4")
-        assert edit["suggested_change"].startswith("POWER(x, 2) <= 100")
+        edit = _attrs(rows, "clause", "power(x, 2) <= 4")
+        assert edit["suggested_change"].startswith("power(x, 2) <= 100")
         # amount ≈ 96 (10² − 4), allowing for solver tolerance.
         assert abs(float(edit["amount"]) - 96.0) < 1e-3
         assert not [r for r in rows if "CAST(lo AS DOUBLE)" in r["subject"]]
         assert not [r for r in rows if r["attribute"] == "amount" and float(r["value"]) == 0.0]
-        _apply_reported_fix(cli, sql, rows, {"POWER(x, 2) <= 4": "POWER(x,2) <= 4"})
+        _apply_reported_fix(cli, sql, rows, {"power(x, 2) <= 4": "POWER(x,2) <= 4"})
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
     def test_infeasible_strict_quadratic_requotes_typed_literal(self, request, cli_fixture):
@@ -1294,10 +1292,10 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        edit = _attrs(rows, "clause", "POWER(x, 2) < 10")
-        assert edit["suggested_change"] == "POWER(x, 2) < 17"
+        edit = _attrs(rows, "clause", "power(x, 2) < 10")
+        assert edit["suggested_change"] == "power(x, 2) < 17"
         assert edit["amount"] == "7"
-        _apply_reported_fix(cli, sql, rows, {"POWER(x, 2) < 10": "POWER(x,2) < 10"})
+        _apply_reported_fix(cli, sql, rows, {"power(x, 2) < 10": "POWER(x,2) < 10"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_ne_prefers_loosen_over_drop(self, request, cli_fixture):
@@ -1379,8 +1377,8 @@ class TestDiagnosticsRelation:
             _resolve_objective(cli, sql, [drop_sql], ["x"]))
 
     @pytest.mark.parametrize("objective, expected_drop, drop_sql, expected_objective", [
-        ("MINIMIZE SUM(x)", "SUM(x) <> 0", "SUM(x) <> 0", "0"),
-        ("MAXIMIZE SUM(x)", "SUM(x) <> 1", "SUM(x) <> 1", "1"),
+        ("MINIMIZE SUM(x)", "sum(x) <> 0", "SUM(x) <> 0", "0"),
+        ("MAXIMIZE SUM(x)", "sum(x) <> 1", "SUM(x) <> 1", "1"),
     ])
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_aggregate_ne_must_drop_is_named_and_objective_best(
@@ -1689,10 +1687,10 @@ class TestInfeasibleHeadlineAndRendering:
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
-        attrs = _attrs(rows, "clause", "SUM(x) >= 999999")
-        assert attrs["suggested_change"] == "SUM(x) >= 3"
+        attrs = _attrs(rows, "clause", "sum(x) >= 999999")
+        assert attrs["suggested_change"] == "sum(x) >= 3"
         assert "x + x" not in result.stdout
-        assert [e["subject"] for e in _clause_edits(rows)] == ["SUM(x) >= 999999"], rows
+        assert [e["subject"] for e in _clause_edits(rows)] == ["sum(x) >= 999999"], rows
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
@@ -1711,12 +1709,12 @@ class TestInfeasibleHeadlineAndRendering:
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
-        assert _attrs(rows, "clause", "SUM(x * w) <= -1")["suggested_change"] == "SUM(x * w) <= 5"
+        assert _attrs(rows, "clause", "sum(x * w) <= -1")["suggested_change"] == "sum(x * w) <= 5"
         assert _attrs(rows, "model", "NULL")["achievable_objective"] == "1"
         assert "x + x" not in result.stdout
         # The single objective-preserving fix loosens only the budget clause.
-        assert [e["subject"] for e in _clause_edits(rows)] == ["SUM(x * w) <= -1"], rows
-        _apply_reported_fix(cli, sql, rows, {"SUM(5*x) <= -1": "SUM(x * w) <= -1"})
+        assert [e["subject"] for e in _clause_edits(rows)] == ["sum(x * w) <= -1"], rows
+        _apply_reported_fix(cli, sql, rows, {"sum(5*x) <= -1": "SUM(x * w) <= -1"})
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_data_weighted_sum_renders_symbolic_column(self, request, cli_fixture):
@@ -1731,9 +1729,9 @@ class TestInfeasibleHeadlineAndRendering:
         )
         result = _diagnose(cli, sql)
         rows = _rows(result)
-        cap = _attrs(rows, "clause", "SUM(x * p) <= 5")
+        cap = _attrs(rows, "clause", "sum(x * p) <= 5")
         assert cap["edit_kind"] == "loosen"
-        assert cap["suggested_change"] == "SUM(x * p) <= 30"
+        assert cap["suggested_change"] == "sum(x * p) <= 30"
         # The symbolic column name replaces the raw per-row numeric fan-out.
         assert "10*x" not in result.stdout
         assert "20*x" not in result.stdout
@@ -1810,7 +1808,7 @@ class TestInfeasibleHeadlineAndRendering:
         edits = _clause_edits(rows)
         assert len(edits) == 1, rows
         subject = edits[0]["subject"]
-        assert "MAX(x)" in subject and "SUM(x)" in subject, subject
+        assert "max(x)" in subject and "sum(x)" in subject, subject
         # No internal column name anywhere a user reads.
         for text in (result.stdout, result.stderr):
             assert not re.search(r"\bcol\d+\b", text), text
@@ -1942,7 +1940,7 @@ class TestDegenerateCoefficientFreeRow:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     @pytest.mark.parametrize("clause,subject,fixed", [
-        ("SUM(0*x) <= -1", "SUM(0 * x) <= -1", "SUM(0 * x) <= 0"),
+        ("SUM(0*x) <= -1", "sum(0 * x) <= -1", "sum(0 * x) <= 0"),
         ("x - x <= -1", "x - x <= -1", "x - x <= 0"),
         ("0*x >= 1", "0 * x >= 1", "0 * x >= 0"),
     ])
@@ -1980,11 +1978,11 @@ class TestDegenerateCoefficientFreeRow:
 
         rows = _rows(result)
         subjects = {e["subject"] for e in _clause_edits(rows)}
-        assert "SUM(0 * x) <= -1" in subjects
-        assert subjects - {"SUM(0 * x) <= -1"}, (
+        assert "sum(0 * x) <= -1" in subjects
+        assert subjects - {"sum(0 * x) <= -1"}, (
             f"the second conflict was not reported: {subjects}"
         )
-        _apply_reported_fix(cli, sql, rows, {"SUM(0 * x) <= -1": "SUM(0*x) <= -1"})
+        _apply_reported_fix(cli, sql, rows, {"sum(0 * x) <= -1": "SUM(0*x) <= -1"})
 
 
 @pytest.mark.query_diagnostics
@@ -2017,12 +2015,12 @@ class TestUnreachableBound:
         # A bare per-row bound: the shape that used to quote 1e+30 back as the amount.
         ("x >= 1e1000::DOUBLE", "x >= inf"),
         # An aggregate bound: the shape that used to name nothing at all.
-        ("SUM(x) >= 1e1000::DOUBLE", "SUM(x) >= inf"),
+        ("SUM(x) >= 1e1000::DOUBLE", "sum(x) >= inf"),
         # Hard MIN/MAX, both directions. These rows are stamped USER_MECHANISM (the
         # clause fans into Big-M rows), so they are found by tracing the row to a user
         # clause rather than by asking whether it is elastically editable.
-        ("MIN(x) <= -1e1000::DOUBLE", "MIN(x) <= -inf"),
-        ("MAX(x) >= 1e1000::DOUBLE", "MAX(x) >= inf"),
+        ("MIN(x) <= -1e1000::DOUBLE", "min(x) <= -inf"),
+        ("MAX(x) >= 1e1000::DOUBLE", "max(x) >= inf"),
     ])
     def test_unreachable_bound_names_its_clause_and_offers_no_edit(
         self, request, cli_fixture, clause, subject
@@ -2094,7 +2092,7 @@ class TestUnreachableBound:
         )
         rows = _rows(_diagnose(cli, sql))
         named = {r["subject"] for r in rows if r["attribute"] == "unreachable_bound"}
-        assert named == {"x >= inf", "SUM(x) >= inf"}
+        assert named == {"x >= inf", "sum(x) >= inf"}
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_a_vacuous_infinity_is_not_a_finding(self, request, cli_fixture):
@@ -2338,11 +2336,13 @@ class TestNativeConstructDiagnosis:
         result = _diagnose(cli, sql)
         rows = _rows(result)
         subjects = {e["subject"] for e in _clause_edits(rows)}
-        assert subjects == {"SUM(x + c) >= 100", "SUM(x + c) <= 5"}, rows
+        assert subjects == {"sum(x + c) >= 100", "sum(x + c) <= 5"}, rows
         # Every quoted clause is a substring of the query the user ran, which is what
-        # makes the suggestion pasteable.
+        # makes the suggestion pasteable. The echo spells the function name in lower
+        # case (D32), which SQL reads the same; nothing else may differ.
         for subject in subjects:
-            assert subject in sql, f"{subject!r} is not in the query:\n{sql}"
+            assert subject in sql.replace("SUM(", "sum("), (
+                f"{subject!r} is not in the query:\n{sql}")
         _apply_reported_fix(cli, sql, rows)
 
 
@@ -2372,7 +2372,7 @@ class TestComposedClauseRepairIdentity:
         rows = _rows(_diagnose(cli, self._SQL))
         edits = _clause_edits(rows)
         assert [(e["subject"], e.get("suggested_change")) for e in edits] == [
-            ("SUM(z) >= 10", "SUM(z) >= 4")], rows
+            ("sum(z) >= 10", "sum(z) >= 4")], rows
         _apply_reported_fix(cli, self._SQL, rows)
 
 
@@ -2634,7 +2634,7 @@ class TestRepairsTheModelCanReach:
         rows = _rows(_diagnose(cli, sql))
         edits = _clause_edits(rows)
         assert len(edits) == 1, f"one clause, one edit:\n{rows}"
-        assert edits[0]["subject"] == "ABS(x * 0.5) >= 5", rows
+        assert edits[0]["subject"] == "abs(x * 0.5) >= 5", rows
         assert float(edits[0]["amount"]) == pytest.approx(4.5), rows
         _apply_reported_fix(cli, sql, rows)
 

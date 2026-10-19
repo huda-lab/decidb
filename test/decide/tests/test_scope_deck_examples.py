@@ -1,4 +1,4 @@
-"""Deck examples 1-8 (anr_language_extension.md §11), as written and in their fully
+"""Deck examples 1-8 (syntax_reference.md §6.5), as written and in their fully
 explicit form.
 
 Each runs over the deck's query -- `FROM Shipment S JOIN Depot D USING (depotID)` with
@@ -10,8 +10,8 @@ literally), and the answer satisfies every clause the language generates. Exampl
 also run on data where one depot has no priority shipment: the reducer has no row for
 that class, which is an error naming it (D8, D18).
 
-Example 1's bare form, `ship <= 0.20 * sum(ship)`, has no scope spelling and keeps
-today's refusal until item 7 (D12); it is written with `per row:` here.
+Example 1 is written bare, `ship <= 0.20 * sum(ship)`: a clause with no `when`, `per` or
+`by` follows the same rules (D30).
 """
 
 import pytest
@@ -49,7 +49,7 @@ def _demand(row):
 
 EXAMPLES = [
     pytest.param(
-        "per row: ship <= 0.20 * sum(ship)",
+        "ship <= 0.20 * sum(ship)",
         "per row: ship <= 0.20 * sum(per row: ship) by ()",
         Scoped((lambda r: {"ship": 1},), "<=", (Reduce("sum", lambda r: {"ship": 1}, factor=lambda r: 0.20),)),
         5 + 1, MAXIMIZE_SHIP, id="1"),  # one row per shipment, one definition row for the total
@@ -123,7 +123,7 @@ def test_deck_example(decidb_cli, scope_solver, tmp_path, written, explicit, cla
 def test_deck_example_7_on_a_depot_without_priority_shipments(decidb_cli, scope_solver):
     """D3's only shipment is not a priority: `sum(when S.priority: ship) by (D.depotID)`
     reads no row for it, an error naming the group (D8, D18). Written in front, the
-    same condition leaves D3 out instead (§5.2)."""
+    same condition leaves D3 out instead (§5.3)."""
     shipments = SHIPMENTS[:4] + ((5, "D3", 25, False, 3, 1, "active"),)
     sql = _query("per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity",
                  "MAXIMIZE SUM(ship)", shipments)

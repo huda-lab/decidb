@@ -128,7 +128,7 @@ def test_scalar_slack_oracle_verified(decidb_cli, oracle_solver, perf_tracker):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_scalar_var_in_per_aggregate(decidb_cli):
-    """``per g: sum(x) by (g) + s <= 8`` — the PER accumulator fans out separately from the
+    """``per g: sum(x) by (g) + s <= 8`` — the `per` accumulator fans out separately from the
     ungrouped one, so it needs the same rule and would otherwise be wrong only for
     grouped constraints.
 

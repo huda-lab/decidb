@@ -834,7 +834,7 @@ row 9: sense=< rhs=0 nnz=5 | 0:1 2:1 4:1 6:1 8:-1
 === DECIDB MODEL DUMP ===
 sense: minimize
 num_vars: 9
-num_rows: 10
+num_rows: 6
 num_qrows: 0
 num_genconstrs: 0
 num_indconstrs: 0
@@ -842,21 +842,17 @@ col 0: lb=0 ub=9 int=1 bin=0 obj=1
 col 1: lb=0 ub=9 int=1 bin=0 obj=1
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
 col 3: lb=0 ub=9 int=1 bin=0 obj=1
-col 4: lb=0 ub=9 int=0 bin=0 obj=0
+col 4: lb=-9 ub=0 int=0 bin=0 obj=0
 col 5: lb=0 ub=1 int=1 bin=1 obj=0
 col 6: lb=0 ub=1 int=1 bin=1 obj=0
 col 7: lb=0 ub=1 int=1 bin=1 obj=0
 col 8: lb=0 ub=1 int=1 bin=1 obj=0
-row 0: sense=> rhs=0 nnz=2 | 0:-1 4:1
-row 1: sense=> rhs=0 nnz=2 | 1:-1 4:1
-row 2: sense=> rhs=0 nnz=2 | 2:-1 4:1
-row 3: sense=> rhs=0 nnz=2 | 3:-1 4:1
-row 4: sense=< rhs=9 nnz=3 | 0:-1 4:1 5:9
-row 5: sense=< rhs=9 nnz=3 | 1:-1 4:1 6:9
-row 6: sense=< rhs=9 nnz=3 | 2:-1 4:1 7:9
-row 7: sense=< rhs=9 nnz=3 | 3:-1 4:1 8:9
-row 8: sense=> rhs=1 nnz=4 | 5:1 6:1 7:1 8:1
-row 9: sense=< rhs=-3 nnz=1 | 4:-1
+row 0: sense=> rhs=-9 nnz=3 | 0:1 4:1 5:-9
+row 1: sense=> rhs=-9 nnz=3 | 1:1 4:1 6:-9
+row 2: sense=> rhs=-9 nnz=3 | 2:1 4:1 7:-9
+row 3: sense=> rhs=-9 nnz=3 | 3:1 4:1 8:-9
+row 4: sense=> rhs=1 nnz=4 | 5:1 6:1 7:1 8:1
+row 5: sense=< rhs=-3 nnz=1 | 4:1
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
 sense: maximize

@@ -161,7 +161,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	}
 	result["Variables"] = vars_info;
 
-	// The objective and the constraints, through the one clause walker, so WHEN/PER
+	// The objective and the constraints, through the one clause walker, so `when`/`per`
 	// wrappers print as written rather than as a generic conjunction. What the optimizer
 	// made of them: a column that stands for an expression prints it, and each rewrite's
 	// account follows its clause, the objective's its own.
@@ -184,7 +184,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	if (decide_objective) {
 		string sense_prefix = (decide_sense == DecideSense::MAXIMIZE) ? "MAXIMIZE " : "MINIMIZE ";
 		vector<string> objective_strs;
-		CollectDecideExpressionStrings(*decide_objective, names, objective_strs, nullptr, nullptr, scoped_objective);
+		CollectDecideExpressionStrings(*decide_objective, names, objective_strs, nullptr, nullptr);
 		// A MIN/MAX objective leaves a carrier in the tree -- a SUM standing for the
 		// extremum, or the composed objective's 0.0 placeholder -- that its accounts
 		// describe and a row would misread. An AVG's sum stays, under its account, as in a

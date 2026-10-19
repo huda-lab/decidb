@@ -29,10 +29,10 @@ can be moved rather than copied, plus a pre-built `VarIndexer` threaded in from
 ## 1. `VarIndexer`: the four-block layout
 
 ```
-Block 1: row-scoped vars       [0, num_rows * num_row_vars)
-Block 2: entity-scoped vars    sum of num_entities per scope
-Block 3: scalar (query-wide)   one column each
-Block 4: global auxiliaries    ABS / MIN-MAX / McCormick auxiliaries
+Block 1: per-row vars (ROW)        [0, num_rows * num_row_vars)
+Block 2: keyed vars (ENTITY)       sum of num_entities per scope
+Block 3: query-wide vars (SCALAR)  one column each
+Block 4: global auxiliaries        ABS / MIN-MAX / McCormick auxiliaries
 ```
 
 Scalars sit **below** `global_block_start` deliberately: the invariant "user
@@ -41,17 +41,17 @@ model builder and by the column labeller in diagnostics.
 
 | Block | Index formula |
 |---|---|
-| Row-scoped | `row * num_row_vars + row_var_offset[var_idx]` |
-| Entity-scoped | `entity_var_base[var_idx] + row_to_entity[row]` |
-| Scalar | `scalar_column[var_idx]` — `row` is ignored |
+| Per-row | `row * num_row_vars + row_var_offset[var_idx]` |
+| Keyed | `entity_var_base[var_idx] + row_to_entity[row]` |
+| Query-wide | `scalar_column[var_idx]` — `row` is ignored |
 | Global | `global_block_start + g` |
 
 Three accessors matter:
 
 - **`Get(var_idx, row)`** — resolve through a *result row*. A scalar ignores `row`;
   every row resolves to the same column.
-- **`InstanceColumn(var_idx, inst)`** — walk a variable's *own* instances: rows for
-  row-scoped, entity ids for entity-scoped, the single column for a scalar.
+- **`InstanceColumn(var_idx, inst)`** — walk a variable's *own* instances: rows for a
+  per-row variable, class ids for a keyed one, the single column for a query-wide one.
 - **`NumInstances(var_idx)`** — how many instances that variable has.
 
 Construction and ownership:
@@ -113,9 +113,9 @@ therefore holds a helper open below, so a diagnosis never lifts a floor it never
 A flat `obj_coeffs` of size `total_vars`, zero-initialized. For each term,
 `objective_coefficients[term][row]` is placed at `Get(var_idx, row)`.
 
-For an entity-scoped variable, several rows map to the same column, and their
-coefficients **accumulate** — which is exactly right: one entity variable
-participates in the objective across all of its rows.
+For a keyed variable, every row of a class maps to the same column, and their
+coefficients **accumulate** — which is exactly right: one keyed decision participates
+in the objective across all of its rows.
 
 `maximize` comes from `input.sense`.
 
@@ -133,7 +133,7 @@ variable appears in more than one term. Under those conditions each `(term, row)
 pair yields a unique flat index, so coefficients push straight into
 `constr.indices` / `constr.coefficients`.
 
-Anything else — entity-scoped variables, or a repeated decide variable — falls
+Anything else — keyed or query-wide variables, or a repeated decide variable — falls
 back to `SparseCoeffAccumulator`, which handles `(entity, row)` collisions. The
 accumulator picks one strategy per constraint and reuses scratch across groups:
 a dense `vector<double>` indexed by flat var index plus a `touched` list when the
@@ -144,8 +144,8 @@ Both aggregate branches use the same selector.
 
 ### A query-wide decision's term: once, or once per counted row
 
-`CanUseRowScopedFastPath()` treats a `SCALAR`-scoped term the same as an
-entity-scoped one — it always needs the accumulator, since a scalar's flat index
+`CanUseRowScopedFastPath()` treats a `SCALAR`-scoped term the same as a keyed
+one — it always needs the accumulator, since a scalar's flat index
 never changes across rows and would collide with itself under the fast path.
 Inside the accumulator, a scalar term takes one of two rules, distinguished by
 `DecideTerm::reduction` (constraint side: `EvaluatedConstraint::
@@ -155,13 +155,13 @@ carried the same way):
 - **`LinearTermReduction::NONE`** — the term is a bare additive sibling of a
   reducer, not inside one (`SUM(x) - max_shortfall <= cap`). It is row-invariant
   by construction, so it contributes its coefficient **once** — read from row 0 (or
-  the group's first row under `PER`), never summed across rows. Multiplying it by
+  the first row of its `by` group), never summed across rows. Multiplying it by
   the row count would silently change the problem.
 - **`LinearTermReduction::SUM`** — the term came from inside a real reducer's body
   (`SUM(opening_cost * cap)`), stamped by `ApplyAggregateMetadata` on the
   constraint side and by the matching inline stamp in
   `ExtractAggregateObjectiveTerms` / `AnalyzeObjective` on the objective side. It
-  falls through to the same per-row accumulation loop an entity-scoped variable
+  falls through to the same per-row accumulation loop a keyed variable
   uses, so its coefficient becomes the **sum of every counted row's data** — the
   scalar's contribution is `(Σ counted rows' coefficient) * cap`, not `1 * cap`.
 
@@ -179,7 +179,7 @@ One `ModelConstraint` summing over all rows. RHS is `rhs_values[0]`, then fixed
 LHS aggregate terms (`variable_index == INVALID_INDEX`) are summed over all rows
 and subtracted.
 
-### Path 2 — aggregate, grouped (`WHEN` and/or `PER`)
+### Path 2 — aggregate, grouped (a `when`, a reducer's own `when`, or a `by` key)
 
 A `group_to_rows` index is built, skipping `INVALID_INDEX` rows, and one
 `ModelConstraint` is emitted per non-empty group. Only that group's rows
@@ -187,19 +187,23 @@ contribute; fixed LHS terms are summed over that group's rows and subtracted.
 
 ### Path 3 — per-row
 
-One `ModelConstraint` per row, skipping rows the `WHEN` excluded. RHS is
-`rhs_values[row]`; fixed LHS terms are subtracted one row at a time.
+One `ModelConstraint` per row of the clause's row map (`row_group_ids`): a kept row, a
+member of an easy MIN/MAX, or under `per K:` a class's first kept row; every other row is
+skipped. RHS is `rhs_values[row]`; fixed LHS terms are subtracted one row at a time.
 
-AVG terms are already coefficient-scaled by stage 08 (by total active rows, by
-the `WHEN` mask, by group size, or by an aggregate-local filter's surviving rows).
-The builder consumes the evaluated coefficients directly.
+AVG terms are already coefficient-scaled by stage 08, by the rows the reducer reads in
+its group: the kept rows of its `by` group, less those its own `when` drops, one per class
+under its own `per` (`08_execution/done.md` §5). The builder consumes the evaluated
+coefficients directly.
 
 ### Quadratic and bilinear constraints
 
 Constraints with bilinear terms or `POWER(..., 2)` go through the quadratic
 constraint builder into `model.quadratic_constraints`. Linear fixed LHS terms use
 the same `INVALID_INDEX` convention and are subtracted from the RHS over the
-selected row set before the quadratic constraint is finalized.
+selected row set before the quadratic constraint is finalized. A query-wide decision
+beside the reducers (`SCALAR`, not `LinearTermReduction::SUM`) enters once per row set,
+as in the linear builder: `SUM(POWER(x, 2)) + s <= 30` is not `... + n*s`.
 
 ### Normalization on emission
 
@@ -302,11 +306,11 @@ see `05_optimizer/done.md` → "The model-class gate".
 `ConstraintProvenance` (`ilp_model.hpp`) travels with each emitted constraint so
 diagnosis can report at the **user-clause** level rather than at raw matrix rows:
 the source comparison for display, `repair_group_id` for elastic grouping (execution
-numbers every clause it evaluates -- the prepared clauses, then the absorbed scoped
-bounds, then the composed clauses, whose id `LinearizeComposedMinMaxConstraint` takes
-as given -- so no two clauses share one), the
-`PER`/`WHEN` group id and its printable key, `ConstraintKind` (user parameter vs
-rigid mechanism row), the elastic shape (does this row share one slack with its
+numbers every clause it evaluates -- the prepared clauses, then under DIAGNOSE the
+absorbed bounds' clauses, then the composed clauses, whose id
+`LinearizeComposedMinMaxConstraint` takes as given -- so no two clauses share one), the
+group id (a `by` group or a `per` class) and its printable key, `ConstraintKind` (user
+parameter vs rigid mechanism row), the elastic shape (does this row share one slack with its
 siblings or get its own), whether coefficients were pre-scaled by `1/N_g` for an
 AVG rewrite, whether the user wrote a strict comparison (with the original literal
 kept so a suggestion can be re-quoted against it), and the flat column of the `<>`
@@ -330,16 +334,20 @@ each site repeating them:
   the group's classes in `SolverModel::class_sets` (moved from `SolverInput::class_sets`
   by `Build`; D28), each of a `Kind`: `KEY_VALUES` (a `per K:`'s values), `KEPT_ROWS` (no
   `per` key) or `WHOLE_CLAUSE` (`per ()`, one class with no key value). The per-row
-  sites set it for a scoped easy MIN/MAX's member rows from their group and for a `per K:`
+  sites set it for an easy MIN/MAX's member rows from their group and for a `per K:`
   clause's row from its class, then stamp `data_row` (the row it was emitted at,
-  DIAGNOSE's `row`) and `per_kept_row` (a scoped clause's row with no class set: each
-  kept row is a class of its own) through `StampDataRow`. A flat row copies
+  DIAGNOSE's `row`) and `per_kept_row` (a row with no class set: each kept row is a
+  class of its own) through `StampDataRow`. A flat row copies
   `RawConstraint::class_set`, which the hard MIN/MAX bound row carries from its group and
   the composed clause's outer row from its evaluated clause
   (`LinearizeComposedMinMaxConstraint`).
-- `StampAggregateProvenance(provenance, eval_const)` sets `is_aggregate` and
-  `qualifier`. Only the four aggregate sites (linear and quadratic, ungrouped and
-  grouped) call this; a per-row constraint has no reducer to name.
+- `StampAggregateProvenance(provenance, eval_const)` sets `is_aggregate`. Only the four
+  aggregate sites (linear and quadratic, ungrouped and grouped) call this; a per-row
+  constraint has no reducer to name.
+
+No site stamps the clause's `when c per K:` qualifier: a diagnosis reads it from the
+source registry by `source_clause_id` (`SourceAwareProvenance`,
+`decide_diagnostic_render.cpp`), the one place it lives.
 
 `avg_scaled`, `weight_labels` and `folded_terms` stay hand-stamped at exactly the
 two **linear**-aggregate sites and are never set on the quadratic ones. That is
@@ -387,9 +395,13 @@ tree, no executor, no data scan.
 bounds. For a constraint `Sum_t a_t x_t (<=|=) K` where every variable is
 non-negative and every coefficient is non-negative, each instance satisfies
 `x <= K / a` — the other terms only help — so the shared upper bound is
-`max_r K_r / a_r`. This turns declared-unbounded variables into bounded ones,
-which is what makes a finite and tight Big-M possible. Only provably-implied
-bounds are applied, so the feasible region and the optimum are unchanged.
+`max_r K_r / a_r`. A per-row constraint over one variable (`x <= cap`) drops no
+other term, so it bounds a signed variable as well, by a bound that may be
+negative; an aggregate one (`lhs_is_aggregate`, `SUM(x) = -3`) sums every row's
+instance and keeps the sign condition. This turns declared-unbounded variables
+into bounded ones, which is what makes a finite and tight Big-M possible. Only
+provably-implied bounds are applied, so the feasible region and the optimum are
+unchanged.
 
 `a_r` is the variable's **combined** coefficient at that row. A variable can hold
 several additive terms of one constraint (`2*ship + 3*ship <= 10`, or two reducers
@@ -406,9 +418,9 @@ tightness on the table for chained implications.
 
 A row outside `row_group_ids` normally means "not constrained", which disqualifies the
 clause. `EvaluatedConstraint::rows_stand_with_their_class` says otherwise for a
-`per K:` clause of the scope spellings over every row: it is emitted once per class, at
-the class's first row, and every other row carries the same decisions and data (a scope
-check), so it is skipped instead.
+`per K:` clause with no `when`: it is emitted once per class, at the class's first row,
+and every other row carries the same decisions and data (a scope check), so it is
+skipped instead.
 
 ### The formulation box
 
@@ -484,10 +496,11 @@ rather than answering a comparison.
 
 Every MIN/MAX in the model is the same statement: some auxiliary column equals the
 extremum of a family of linear expressions. `EmitExtremumLink()` is the only thing
-that writes one, and `ExtremumLinkSpec` is the only description of one. Five sites
-feed it — a hard MIN/MAX *constraint*'s `z` per group, the flat objective's `z`, a
-`PER` group's `z_g`, the outer `w` over those or over group sums, and each composed
-term's `z_k`. Each used to write the three formulations out by hand.
+that writes one, and `ExtremumLinkSpec` is the only description of one. Six sites
+feed it — a hard MIN/MAX *constraint*'s `z` per group, the flat objective's `z`, the
+two-level objective's `z_g` per class, the outer `w` over those or over group sums, each
+composed term's `z_k`, and a MIN/MAX helper of the value rewrite per group. Each used to
+write the three formulations out by hand.
 
 A link has **two independent sides**, and which of them the surrounding model already
 supplies is a property of the *site*, not of the construct:
@@ -566,9 +579,9 @@ that bound — an ordinary infeasibility naming the user's clause, not a refusal
 the mirror image. The verdict is per group because `ReduceAggregateRhsPerGroup` has
 already collapsed a row-varying bound to the tightest one, which is also what settles a
 group whose rows mix finite and infinite bounds. A bound-side reducer is what reaches
-the mixed case from SQL — `MIN(x) <= MAX(cap) PER g` where `cap` holds an infinity in
-one group and finite values in another — so one group drops while the group beside it
-still linearizes. A literal bound gives every group the same verdict.
+the mixed case from SQL — `min(x) by (g) <= max(cap) by (g)` where `cap` holds an
+infinity in one group and finite values in another — so one group drops while the group
+beside it still linearizes. A literal bound gives every group the same verdict.
 
 **The clause reads the same on both arms, and that is the point of stating it this
 way.** The lowering used to spread the bound across a per-row Big-M family
@@ -579,20 +592,18 @@ backend the host has. The cost is one column and one row per group; the per-memb
 are the same rows the Big-M family emitted, with `z` in place of the bound.
 
 The outer row carries `ElasticShape::SHARED_SCALAR` for a literal bound, without which
-it does not fold: one `PER` clause emits one of these per group and they are all the
-same literal, so the user edits it once and every group moves. A genuinely per-group
+it does not fold: a clause with a `by` key emits one of these per group and they are all
+the same literal, so the user edits it once and every group moves. A genuinely per-group
 bound stays `PER_ROW_DATA` and reports a virtual offset. The extremum column is
-labelled with the clause text stage 05 recorded (`minmax_clause_labels`), so a repair
-names `MAX(x * c)` rather than an internal column.
+labelled with the text stage 05 recorded (`minmax_clause_labels`), the reducer as the
+plan prints it, so a repair names `max(x * c)` rather than an internal column.
 
-A clause written with the scope spellings (`EvaluatedConstraint::scoped`) steps a strict
-bound on that row, as `ApplyComparisonSense` does for any other: `z > K` is
-`z >= floor(K) + 1`, `z < K` is `z <= ceil(K) - 1`. That is exact because the binder
+A strict bound steps on that row, as `ApplyComparisonSense` does for any other: `z > K`
+is `z >= floor(K) + 1`, `z < K` is `z <= ceil(K) - 1`. That is exact because the binder
 refused any member that can be fractional, a constant inside the extremum included
-(stage 02 §4a). The row keeps the written bound (`RawConstraint::strict`, `typed_k`), so a
-diagnosis quotes `> K`. The old spellings state `z > K` as `z >= K`
-(`06_issues/bugs/todo.md`). Its factor arrives inside the extremum when negative
-(stage 05), so the row's relation is the clause's own.
+(`ValidateDecideIntegralComparisonOperands`, stage 02 §4). The row keeps the written bound
+(`RawConstraint::strict`, `typed_k`), so a diagnosis quotes `> K`. A negative factor
+arrives inside the extremum (stage 05), so the row's relation is the clause's own.
 
 **No indicator is allocated before the rows that read it.** Stage 05 records only the
 marking — `minmax_agg_type`, and a `minmax_clause_idx` naming the clause. The binaries
@@ -601,7 +612,7 @@ members it actually writes, so the native arm allocates none at all.
 
 ### Helper decisions of the value rewrite
 
-Stage 05 replaced each decision reducer of a VALUE-shape scoped clause by a helper
+Stage 05 replaced each decision reducer of a VALUE-shape clause by a helper
 decision (`05_optimizer/done.md`); stage 08 evaluated that reducer's members per `by`
 group into a `ReducerValueLinkSpec` (`solver_input.hpp`): an `EvaluatedConstraint` whose
 terms are the body's, nonzero only on the rows the clause and the reducer keep, grouped
@@ -636,8 +647,8 @@ for every other MIN/MAX.
 
 `LinearizeMinMaxObjective()` is the objective-side counterpart. A MIN/MAX
 objective cannot be a coefficient vector, so it becomes a global auxiliary the
-rows pin: `z` for the flat `MAXIMIZE MAX(expr)` spelling, and for the nested
-`OUTER(INNER(expr)) PER key` spelling a `z_g` per group plus an outer `w` over
+rows pin: `z` for the flat `MAXIMIZE max(e)`, and for the two-level
+`outer(per k: inner(e) by (k))` a `z_g` per class of `k` plus an outer `w` over
 them. The objective is then just that auxiliary.
 
 Each level is *easy* or *hard*, and that classification is exactly which of the two
@@ -655,22 +666,14 @@ place, by the rule described above — and a query cannot take the native arm fo
 inner aggregate and the lowered arm for its outer one, because all four read the same
 row family's derivability.
 
-Rows are skipped where every coefficient is zero, which keeps a binary and a row
-off each vacuous row; a `PER` group left with no active row has its `z_g` pinned to
-0 by its bounds instead, since the vacuous rows it used to emit were what held it
-there. The outer link over group *sums* drops an identically-zero group from the
-**envelope** only: there the optimization direction settles it, while on the closing
-side every group is a real member of the extremum and an all-zero one participates as
-the constant 0 it is. That filter is applied where the members are built, not inside
-the emitter, because it is a fact about the site. The shape flags (`flat_agg`, `per_inner_agg`, easy/hard per level, the
-inner-AVG rewrite) arrive from stage 05 as `MinMaxObjectiveSpec`; the `WHEN` mask
-and the coefficients arrive evaluated.
-
-For an objective written with the scope spellings, `MinMaxObjectiveSpec::member_rows`
-lists the rows its reducer reads (stage 08 folds its `when` into the terms' filters).
-Those rows are the members, whatever their coefficients: a row whose data is 0 is the
-member 0, not an absent one, so neither the zero-coefficient skip nor the outer
-envelope's zero-group skip applies. The old spellings keep both.
+The members are the rows the objective's reducer reads, `MinMaxObjectiveSpec::member_rows`
+(stage 08 folds the objective's `when` into the terms' filters), whatever their
+coefficients: a row whose data is 0 is the member 0, not an absent one, and every class of
+the two-level form, an all-zero one included, is a member of the outer link. An objective
+with no member row is an `InternalException`, since the scope checks refuse an objective
+reducer that reads no row (D4, D8). The shape flags (`flat_agg`, `per_inner_agg`,
+easy/hard per level, the inner-AVG rewrite) arrive from stage 05 as `MinMaxObjectiveSpec`;
+the coefficients arrive evaluated.
 
 ### Composed MIN/MAX
 
@@ -680,17 +683,15 @@ in an objective. `LinearizeComposedMinMaxConstraint()` and
 pinned by the same `EmitExtremumLink` every other MIN/MAX uses, then compose: the constraint
 sums the `z_k`s and the SUM/AVG terms into one outer row against the constant RHS,
 the objective writes the same composition into `global_obj_coeffs` and
-`objective_coefficients`. Each `z_k` is labelled with the user's source text
-(`MAX(x)`) through the global-label channel, so diagnosis names the clause rather
+`objective_coefficients`. Each `z_k` is labelled with its term as the plan prints it
+(`max(x)`) through the global-label channel, so diagnosis names the clause rather
 than an internal column.
 
 Terms arrive as `ComposedMinMaxTermData`: everything data-dependent — per-row
 coefficients, the query-wide factor the canonicalizer peeled off the reducer, the
-row mask the reducer runs over — is already evaluated by stage 08, and an empty row
-set is refused there before these functions see it. The terms of a clause written with
-the scope spellings are marked `scoped`, and its outer row steps a strict bound by one
-(`> 30` is `>= 31`), keeping the written bound for a diagnosis; the old spellings solve it
-as `>= 30` (`06_issues/bugs/todo.md`).
+row mask the reducer runs over, the clause's `when` folded in — is already evaluated by
+stage 08; the scope checks have refused an empty one. The outer row steps a strict bound
+onto the lattice (`> 30` is `>= 31`), keeping the written bound for a diagnosis.
 
 A composed term needs **both** sides of its link in the hard direction, and that is the
 one place the two-flag spec earns its keep. An outer `=` needs both sides on *every*
@@ -797,7 +798,10 @@ A row dropped as a tautology allocates nothing at all.
 **Aggregate spellings expand per group.** They need one binary per group rather than per
 row, and their LHS is the group's rows summed onto one row, so `ExpandAggregateNotEqual`
 accumulates each group's coefficients and emits the same two conditional rows over the
-sum. Groups skipped by the integer-RHS guard allocate no binary, so the model stays
+sum. A query-wide decision beside the reducers (`SCALAR`, not SUM-reduced) enters once
+per group, read off the group's first row, as in the linear builder (`SUM(x) + s <> 5`
+is not `... + n*s`); a clause with one takes no range collapse, since the per-row
+ranges would count it once per row. Groups skipped by the integer-RHS guard allocate no binary, so the model stays
 clean.
 
 ### Bilinear products

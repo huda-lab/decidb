@@ -5,11 +5,12 @@ Covers:
   - Multiple WHEN constraints with different categories
   - Numeric comparison in WHEN condition
   - Boundary: all rows match (equivalent to no WHEN)
-  - Boundary: no rows match (constraint is trivially satisfied)
+  - Boundary: no rows match (an error: the when matches no rows)
   - Mixed conditional + unconditional constraints
   - Constant coefficient in SUM with WHEN
 """
 
+import re
 import time
 
 import pytest
@@ -272,19 +273,21 @@ def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 @pytest.mark.obj_maximize
 @pytest.mark.error_infeasible
 def test_when_no_rows_match(decidb_cli):
-    """Aggregate constraint with WHEN matching no rows — now rejected pre-solver
-    per the "reject all empty aggregate sets" rule."""
-    # old spelling until item 7: pins the old "empty row set" error; a when that keeps no rows is a different error
+    """Aggregate constraint whose `when` matches no rows — rejected pre-solver
+    per the "reject all empty aggregate sets" rule: a front ``when`` that keeps
+    no row is refused as "when l_returnflag = 'Z' matches no rows." (D4)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'Z'
+        SUCH THAT when l_returnflag = 'Z': SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    decidb_cli.assert_error(sql, match=r"empty|WHEN")
+    decidb_cli.assert_error(
+        sql, match=re.escape("DECIDE: when l_returnflag = 'Z' matches no rows.")
+    )
 
 
 @pytest.mark.when_constraint
@@ -582,13 +585,12 @@ def test_when_null_condition_column(decidb_cli, duckdb_conn, oracle_solver, perf
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
-    """WHEN (col IS NOT NULL) — explicit IS NOT NULL predicate in WHEN.
+    """when (col IS NOT NULL): — explicit IS NOT NULL predicate in a `when`.
 
     Companion to ``test_when_null_condition_column`` (which exercises NULL
-    *values* in an equality predicate). Here the WHEN condition itself is
-    the IS NOT NULL predicate. The parentheses around the predicate come from
-    the old postfix spelling, where ``WHEN col IS NOT NULL AND ...`` was a
-    parser error; a scope in front ends at its colon, so they are optional now.
+    *values* in an equality predicate). Here the `when` condition itself is
+    the IS NOT NULL predicate. A scope in front ends at its colon, so the
+    parentheses around the predicate are optional.
     """
     sql = """
         SELECT id, val, note, x FROM (
@@ -618,7 +620,7 @@ def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.BINARY)
 
-    # WHEN (note IS NOT NULL): rows 1, 3 contribute to the aggregate.
+    # when note IS NOT NULL: rows 1, 3 contribute to the aggregate.
     not_null_coeffs = {
         vnames[i]: data[i][1] for i in range(n) if data[i][2] is not None
     }

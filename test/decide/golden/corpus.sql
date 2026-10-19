@@ -101,27 +101,27 @@ SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) = 6 AND x <= 9 MAXIMIZE S
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT AVG(x) <= 2 AND x <= 9 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
--- WHEN / PER
+-- when / per
 -- ---------------------------------------------------------------------------
 
--- 20 constraint-level WHEN
+-- 20 when in front of a constraint
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT when grp = 'A' per (): sum(x) <= 5 AND x <= 9 MAXIMIZE SUM(x);
 
--- 21 aggregate-local WHEN (comparison condition parenthesized before the bound)
+-- 21 a reducer's own when
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT sum(when grp = 'A': x) <= 5 AND x <= 9 MAXIMIZE SUM(x);
 
--- 21b two aggregate-local WHENs, additive
+-- 21b two reducers with their own when, additive
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT sum(when grp = 'A': x) + sum(when grp = 'B': x) <= 6 AND x <= 9 MAXIMIZE SUM(x);
 
--- 22 PER
+-- 22 per
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT per grp: sum(x) by (grp) <= 4 AND x <= 9 MAXIMIZE SUM(x);
 
--- 23 PER + WHEN
+-- 23 per + when
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT when price > 15 per grp: sum(x) by (grp) <= 4 AND x <= 9 MAXIMIZE SUM(x);
 
--- 24 per-row constraint under WHEN
+-- 24 per-row constraint under when
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT when grp = 'A': x <= 2 AND x <= 9 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
@@ -171,15 +171,15 @@ SUCH THAT x <= 5 AND SUM(b * x) <= 8 MAXIMIZE SUM(b * x);
 -- Variable scopes
 -- ---------------------------------------------------------------------------
 
--- 36 scalar (query-wide) variable as a shared bound
+-- 36 query-wide variable as a shared bound
 SELECT id, ship, cap FROM items DECIDE ship(INT), per (): cap(INT)
 SUCH THAT ship <= cap AND ship <= 10 AND cap <= 8 MAXIMIZE SUM(ship) - 20 * cap;
 
--- 37 scalar variable inside a reducer constraint
+-- 37 query-wide variable inside a reducer constraint
 SELECT id, ship, cap FROM items DECIDE ship(INT), per (): cap(INT)
 SUCH THAT SUM(ship) <= 20 AND ship <= cap AND cap <= 6 MAXIMIZE SUM(ship);
 
--- 38 table-scoped variable with a join
+-- 38 keyed variable with a join
 SELECT i.id, keep FROM items i JOIN groups g ON i.grp = g.g
 DECIDE per i: keep(BOOL) SUCH THAT SUM(i.price * keep) <= 60 MAXIMIZE SUM(i.price * keep);
 
@@ -226,7 +226,7 @@ SUCH THAT 3 - MAX(x) <= 0 AND x <= 9 MINIMIZE SUM(x);
 -- spine before physical extraction consumes the canonical form.
 -- ---------------------------------------------------------------------------
 
--- 45 two aggregate-local WHEN reducers, one negated, under a DECIMAL->DOUBLE
+-- 45 two reducers with their own `when`, one negated, under a DECIMAL->DOUBLE
 -- cast lid. All terms are decision-bearing, so the split changes placement for
 -- none of them; it is the spine reaching them at all that is being pinned.
 SELECT id, x FROM items DECIDE x(INT)
@@ -293,16 +293,16 @@ SUCH THAT (SELECT max(budget) FROM groups) * SUM(x) <= 1000 AND x <= 9
 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
--- Query-wide (`scalar`) decisions as terms of an aggregate constraint (K3).
+-- Query-wide (`per ()`) decisions as terms of an aggregate constraint (K3).
 -- Rejected before B.3 by the physical extractor; the model builder also had to
 -- stop fanning a one-column variable out over the group's rows.
 -- ---------------------------------------------------------------------------
 
--- 55 the paper's max_shortfall shape: a scalar slack absorbing the overflow
+-- 55 the paper's max_shortfall shape: a query-wide slack absorbing the overflow
 SELECT id, x, s FROM items DECIDE x(INT), per (): s(INT)
 SUCH THAT x >= 3 AND x <= 3 AND SUM(x) - s <= 4 MINIMIZE s;
 
--- 56 scalar variable added to an aggregate, under PER
+-- 56 query-wide variable added to an aggregate, under per
 SELECT id, grp, x, s FROM items DECIDE x(INT), per (): s(INT)
 SUCH THAT x <= 9 AND s >= 2 AND s <= 2 AND per grp: sum(x) by (grp) + s <= 8
 MAXIMIZE SUM(x);
@@ -361,12 +361,12 @@ SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT x <= 9 AND per grp: sum(x * price) by (grp) <= max(price) by (grp) * 2
 MAXIMIZE SUM(x);
 
--- 62 COUNT(*) under PER. Regression pin for a live wrong answer: count_star was
+-- 62 count(*) by a group key. Regression pin for a live wrong answer: count_star was
 -- folded to the operator's TOTAL input cardinality, so both groups here received
 -- the bound 4 instead of 2. The dump is the evidence -- the query still returned
 -- rows before, just against the wrong model.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 9 AND SUM(x) <= COUNT(*) PER grp
+SUCH THAT x <= 9 AND per grp: sum(x) by (grp) <= count(*) by (grp)
 MAXIMIZE SUM(x);
 
 -- 63 a reducer mixed with an ordinary term. The reducer collapses to one value per
@@ -387,19 +387,19 @@ SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT x <= 9 AND SUM(x) <= (SELECT budget FROM groups WHERE g = items.grp)
 MAXIMIZE SUM(x);
 
--- 65 the same bound under PER, where each group takes its own tightest value (100
+-- 65 the same bound under `per grp:`, where each group takes its own tightest value (100
 -- for A, 200 for B) rather than one global minimum.
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT x <= 90 AND per grp: sum(x) by (grp) <= (SELECT budget FROM groups WHERE g = items.grp)
 MAXIMIZE SUM(x);
 
--- 66 an aggregate-local WHEN on the left, a row-varying bound on the right. The
--- local WHEN scopes its own reducer, never the per-tuple fan-out, so the bound is
+-- 66 a reducer's own `when` on the left, a row-varying bound on the right. That
+-- `when` scopes its own reducer, never the per-tuple fan-out, so the bound is
 -- the tightest over EVERY selected row (100) and not over the B rows the left side
 -- keeps (200). Results do not reveal this -- x is capped at 9 either way -- so the
 -- dump's `rhs` is the whole evidence, as with 62.
 SELECT id, x FROM items DECIDE x(INT)
-SUCH THAT x <= 9 AND (SUM(x) WHEN (grp = 'B'))
+SUCH THAT x <= 9 AND sum(when grp = 'B': x)
                      <= (SELECT budget FROM groups WHERE g = items.grp)
 MAXIMIZE SUM(x);
 
@@ -413,7 +413,7 @@ MAXIMIZE SUM(x);
 -- ---------------------------------------------------------------------------
 -- Shapes unlocked by B.4 + C.1 (data reducers stay right; the bind-time hoist
 -- is gone). The first three were BUILT by B.5 and unreachable -- the binder's
--- RHS check treated a WHEN predicate / PER key / relation alias as if it were a
+-- RHS check treated a `when` predicate / `per` key / relation alias as if it were a
 -- value on the bound side and rejected the whole wrapper.
 -- ---------------------------------------------------------------------------
 
@@ -655,7 +655,7 @@ MINIMIZE min(per grp: sum(x) by (grp));
 -- Until 2026-08-25 a bare column reaching IsAllowedDecisionFreeBoundExpression's
 -- default case was refused, which blocked the paper's own running example below.
 
--- 93 the paper's Figure 1, verbatim data. Two PER'd constraints (line 8, line 9)
+-- 93 the paper's Figure 1, verbatim data. Two grouped constraints (line 8, line 9)
 -- each bound by a plain column -- `stock`, `demand` -- collapsing to the tightest
 -- per-group value (C1). The published output is 450 / 0 / 0, D1 open, D2 closed.
 WITH Depots(depotID, stock, opening_cost) AS (
@@ -678,18 +678,18 @@ SUCH THAT
     when priority = 'critical' per regionID: sum(ship) by (regionID) >= demand
 MINIMIZE SUM(unit_cost * ship) + sum(per D: opening_cost * open);
 
--- 94 `<>` with a bound that varies within a PER group (C3): every excluded value
+-- 94 `<>` with a bound that varies within a `by` group (C3): every excluded value
 -- is kept -- `SUM(x) <> 3 AND SUM(x) <> 7` for group 'a' -- rather than collapsed
 -- to one, so one binary and one Big-M pair is allocated per distinct value.
 SELECT id, grp, x FROM (VALUES (1, 'a', 3), (2, 'a', 7)) t(id, grp, cap)
 DECIDE x(INT)
 SUCH THAT x BETWEEN 0 AND 10
     AND SUM(x) >= 3 AND SUM(x) <= 7
-    AND SUM(x) <> cap PER grp
+    AND sum(x) by (grp) <> cap
 MAXIMIZE SUM(x);
 
 -- ---------------------------------------------------------------------------
--- The value rewrite (ANR item 5). A scoped constraint whose decision side mixes a
+-- The value rewrite. A scoped constraint whose decision side mixes a
 -- reducer with a per-row or keyed decision, a factor that varies by row, a second
 -- by key or an enclosing expression is built from a helper decision per reducer:
 -- one instance per by group, defined once (an equality row for SUM/AVG, an

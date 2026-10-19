@@ -1,5 +1,5 @@
 # name: test/decidb/test_scope_parser.test
-# description: The scope spellings of the DECIDE extension parse and run (PER key:, WHEN condition:, BY (key), PER ROW:); inside an ordinary subquery they answer not supported yet
+# description: The scopes of the DECIDE extension parse and run (per key:, when condition:, by (key), per row:); inside an ordinary subquery they answer not supported yet; the removed spellings name their replacement
 # group: [decidb]
 
 statement ok
@@ -21,8 +21,8 @@ statement ok
 INSERT INTO kw VALUES (1, 2, 3, 1, 5), (4, 5, 6, 2, 7);
 
 # ---------------------------------------------------------------------------
-# New spellings parse and bind (items 2-4; their meaning is tested in
-# test/decide/tests/test_scope_*.py). A spelling inside an ordinary SQL subquery
+# Scopes parse and bind (their meaning is tested in
+# test/decide/tests/test_scope_*.py). A scope inside an ordinary SQL subquery
 # written in the clause still answers "not supported yet" -- a Binder Error, which
 # proves the parser accepted it there too.
 # ---------------------------------------------------------------------------
@@ -98,8 +98,8 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority: 
 ----
 Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 
-# reducer: by () and by (expression); a decision beside a reducer is the value rewrite
-# (item 5): every shipment arrives on its own depot-day, so a quarter of its group's
+# reducer: by () and by (expression); a decision beside a reducer is the value
+# rewrite: every shipment arrives on its own depot-day, so a quarter of its group's
 # total is a quarter of itself, and nothing ships
 query II rowsort
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) by () <= 100 AND ship <= 0.25 * sum(ship) by (depotID, dispatchDay + transitDays) MAXIMIZE SUM(ship);
@@ -132,11 +132,11 @@ SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship
 ----
 Invalid Input Error: DECIDE: per () does not determine D.region (in by (D.region)). The kept rows have more than one value: 'East', 'West'.
 
-# reducer: by on the kept colon form
+# reducer: by on the kept colon form, which takes the data check of sum(per D: e) (S4)
 statement error
 SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT SUM(D: ship) by (D.region) <= 100 MAXIMIZE SUM(ship);
 ----
-Binder Error: 'ship' is not a decision of D, so SUM(D: ...) cannot use it; declare it as D.ship(...) or move that term into its own reducer
+Invalid Input Error: DECIDE: per D does not determine the decision ship (in sum(D: ship)).
 
 # objective: when in front
 statement ok
@@ -168,7 +168,7 @@ DIAGNOSE SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per de
 ----
 feasible	NULL	NULL	NULL	NULL	NULL	NULL	NULL	NULL
 
-# a new spelling inside a nested DECIDE subquery
+# a scope inside a nested DECIDE subquery
 statement ok
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT MAX(d) FROM Shipment DECIDE d(INT) SUCH THAT per (): sum(d) <= 4 MAXIMIZE SUM(d)) MAXIMIZE SUM(ship);
 
@@ -180,7 +180,7 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT
 2	4
 3	2
 
-# a new spelling inside an ordinary subquery written in the clause
+# a scope inside an ordinary subquery written in the clause
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT sum(demand) by (depotID) FROM Shipment) MAXIMIZE SUM(ship);
 ----
@@ -218,8 +218,8 @@ SELECT g, x FROM kw DECIDE per "per": x(INT) SUCH THAT per "row", "by": sum(x) b
 2	6
 
 # ---------------------------------------------------------------------------
-# PER ROW is the default written out. It is a spelling of the scoping language
-# like the others (D19): it names no key, and the clause follows the new rules.
+# per row is the default written out (D19): it names no key, and the clause follows
+# the same rules as a bare one.
 # ---------------------------------------------------------------------------
 
 query II
@@ -229,7 +229,7 @@ SELECT shipmentID, ship FROM Shipment DECIDE per row: ship(INT) SUCH THAT per ro
 2	20
 3	30
 
-# the new rules: a strict bound on a hard MAX steps to the next whole number (12),
+# a strict bound on a hard MAX steps to the next whole number (12),
 # in front of the clause and inside the reducer alike
 query II
 SELECT MAX(ship), SUM(ship) FROM (SELECT ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= demand AND per row: max(ship) > 11 MINIMIZE SUM(ship));
@@ -249,13 +249,13 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= demand 
 2	20
 3	30
 
-# a new spelling, so it does not mix with the old postfix PER (D14)
+# a removed spelling after it is refused like any other (removed spelling)
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(per row: ship) <= 100 PER depotID MAXIMIZE SUM(ship);
 ----
-Binder Error: DECIDE: PER depotID after a constraint cannot be combined with when, per or by; write per depotID: in front of it, with by (depotID) on each reducer
+Parser Error: DECIDE: the postfix PER is removed; write per depotID: in front of the constraint and by (depotID) after each of its reducers
 
-# ... and inside an ordinary subquery it answers like the other spellings
+# ... and inside an ordinary subquery it answers like the other scopes
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT sum(per row: demand) FROM Shipment) MAXIMIZE SUM(ship);
 ----
@@ -329,13 +329,13 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID whe
 ----
 Parser Error: syntax error at or near "when"
 
-# a postfix WHEN after a scoped constraint
+# a trailing WHEN after a scoped constraint
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID: ship <= 5 WHEN priority MAXIMIZE SUM(ship);
 ----
 Parser Error: syntax error at or near "WHEN"
 
-# a postfix PER after a scoped constraint
+# a trailing PER after a scoped constraint
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT when priority: sum(ship) <= 5 PER depotID MAXIMIZE SUM(ship);
 ----
@@ -371,14 +371,9 @@ SELECT g, x FROM kw DECIDE x(INT) SUCH THAT per row, g: sum(x) by (g) <= 10 MAXI
 ----
 Parser Error: syntax error at or near ","
 
-# ... so the old postfix PER takes a column named row only quoted
-statement error
-SELECT g, x FROM kw DECIDE x(INT) SUCH THAT SUM(x) <= 10 PER row AND x <= v MAXIMIZE SUM(x);
-----
-Parser Error: syntax error at or near "PER"
-
+# ... so a key names the column row only quoted
 query II
-SELECT g, x FROM kw DECIDE x(INT) SUCH THAT SUM(x) <= 10 PER "row" AND x <= v MAXIMIZE SUM(x) ORDER BY g;
+SELECT g, x FROM kw DECIDE x(INT) SUCH THAT per "row": sum(x) by ("row") <= 10 AND x <= v MAXIMIZE SUM(x) ORDER BY g;
 ----
 1	5
 2	7
@@ -395,18 +390,64 @@ SELECT g, x FROM kw DECIDE x(INT) SUCH THAT x <= row AND x <= by MAXIMIZE SUM(x)
 2	5
 
 # ---------------------------------------------------------------------------
-# Old spellings are unchanged.
+# The removed spellings are refused with the spelling that replaces each one
+# (test/decide/tests/test_scope_removed_syntax.py has every form); the
+# replacements give the answers the removed forms gave.
 # ---------------------------------------------------------------------------
 
+# the postfix PER (removed spelling)
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT SUM(ship) <= 25 PER depotID MAXIMIZE SUM(ship);
+----
+Parser Error: DECIDE: the postfix PER is removed; write per depotID: in front of the constraint and by (depotID) after each of its reducers; a NULL depotID is now its own group, so write when depotID is not null per depotID: to leave those rows out
+
+# the postfix PER with a parenthesized key (removed spelling)
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT SUM(ship) <= 100 PER (depotID, customerID) MAXIMIZE SUM(ship);
+----
+Parser Error: DECIDE: the postfix PER is removed; write per depotID, customerID: in front of the constraint and by (depotID, customerID) after each of its reducers
+
+# the postfix WHEN (removed spelling)
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 60 WHEN priority MAXIMIZE SUM(ship);
+----
+Parser Error: DECIDE: the postfix WHEN is removed; write when priority: in front of the constraint
+
+# the WHEN after a reducer (removed spelling)
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT SUM(ship) WHEN (priority) <= 90 MAXIMIZE SUM(ship);
+----
+Parser Error: DECIDE: the WHEN after sum(ship) is removed; write sum(when priority: ship)
+
+# the WHEN after the objective (removed spelling)
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= 60 MAXIMIZE SUM(ship) WHEN priority;
+----
+Parser Error: DECIDE: the postfix WHEN is removed; write MAXIMIZE when priority: sum(ship)
+
+# the same constraints and objective as the messages write them
 query II
-SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT SUM(ship) <= 25 PER depotID AND SUM(ship) <= 100 PER (depotID, customerID) AND ship <= 60 WHEN priority AND SUM(ship) WHEN (priority) <= 90 MAXIMIZE SUM(ship) WHEN priority ORDER BY shipmentID;
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT per depotID: sum(ship) by (depotID) <= 25 AND per depotID, customerID: sum(ship) by (depotID, customerID) <= 100 AND when priority: ship <= 60 AND sum(when priority: ship) <= 90 MAXIMIZE when priority: sum(ship) ORDER BY shipmentID;
 ----
 1	25
 2	0
 3	25
 
+# the relation-qualified declaration (removed spelling)
+statement error
+SELECT shipmentID, ship, open FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT), D.open(BOOL) SUCH THAT ship <= 10 * open MAXIMIZE SUM(ship);
+----
+Parser Error: DECIDE: the declaration D.open(BOOL) is removed; write per D: open(BOOL)
+
+# the scalar declaration (removed spelling)
+statement error
+SELECT shipmentID, ship FROM Shipment DECIDE ship(INT), scalar cap(REAL) SUCH THAT ship <= cap AND cap <= 8 MAXIMIZE SUM(ship);
+----
+Parser Error: DECIDE: scalar cap(REAL) is removed; write per (): cap(REAL)
+
+# the same declarations as the messages write them; the colon form stays
 query III
-SELECT shipmentID, ship, open FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT), D.open(BOOL), scalar cap(REAL) SUCH THAT SUM(D: opening_cost * open) <= 15 AND ship <= 10 * open AND ship <= cap AND cap <= 8 MAXIMIZE SUM(ship) ORDER BY shipmentID;
+SELECT shipmentID, ship, open FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT), per D: open(BOOL), per (): cap(REAL) SUCH THAT SUM(D: opening_cost * open) <= 15 AND ship <= 10 * open AND ship <= cap AND cap <= 8 MAXIMIZE SUM(ship) ORDER BY shipmentID;
 ----
 1	8	1
 2	8	1
@@ -444,7 +485,7 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT ship <= (SELECT
 2	2
 3	2
 
-# a new spelling outside a DECIDE clause is still a syntax error
+# a scope outside a DECIDE clause is a syntax error
 statement error
 SELECT sum(demand) by (depotID) FROM Shipment;
 ----

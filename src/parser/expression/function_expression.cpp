@@ -138,6 +138,8 @@ string FunctionExpression::ToString() const {
 		}
 		return children[0]->ToString() + " BY (" + DecideKeyToString(*this) + ")";
 	}
+	// The removed postfix WHEN and PER print as written: a parse tree stored before they
+	// were removed (a view) still shows its own SQL, and is refused when bound.
 	if (is_operator && function_name == WHEN_CONSTRAINT_TAG) {
 		if (children.size() != 2) {
 			throw InternalException("DECIDE WHEN marker has %s children, expected 2", children.size());

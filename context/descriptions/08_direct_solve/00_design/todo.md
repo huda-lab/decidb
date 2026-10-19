@@ -8,7 +8,7 @@ earlier, but is not design approval.
 
 - [ ] **BASE-01 — Record the prototype baseline.** Depends: documentation review.
   Commit the documentation checkpoint, create a separate branch from a recorded
-  `master` SHA, and keep current DECIDE syntax fixed there. Do not merge the
+  `master` SHA, and keep `master`'s DECIDE syntax fixed there. Do not merge the
   concurrent language branch into the first rule.
 - [ ] **DES-01 — External output interface.** Depends: none. Specify how either
   the logical-only boundary or a scoped remap preserves old bindings, positional

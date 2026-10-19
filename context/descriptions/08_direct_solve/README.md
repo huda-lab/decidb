@@ -64,7 +64,7 @@ is not marked done merely because it is written down.
 ## Dependency order
 
 ```text
-source facts + current-syntax baseline
+source facts + master-syntax baseline
                |
        design gates (DES)
                |
@@ -99,3 +99,10 @@ performance estimate as a substitute for a correctness proof.
   compatibility from the current bound-tree adapter.
 - Prototype on a separate branch from a recorded `master` commit. Do not change
   DECIDE syntax on that branch; the language merge happens through the adapter.
+  This pin is deliberate and stays: the first rule, its baseline corpus
+  ([VAL-00](03_correctness/todo.md)) and its adapter read `master`'s DECIDE syntax
+  and bound tree, not the `per` / `when` / `by` language of this branch, which
+  reaches direct solve only through the ANR adapter
+  ([NEXT-04](05_follow_on/todo.md)). These files name a construct by that
+  language's words (a `when` or `per` scope, a `by` key, a keyed or query-wide
+  decision), whichever spelling `master` gives it.

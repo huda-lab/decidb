@@ -102,12 +102,11 @@ class TestInfeasibleModels:
         self, decidb_cli, duckdb_conn, oracle_solver
     ):
         """WHEN forces ``x=0`` for every qualifying row; aggregate still demands SUM(x)>=1."""
-        # old spelling until item 7
         decidb_cli.assert_error("""
             SELECT l_orderkey, l_quantity, l_returnflag, x
             FROM lineitem WHERE l_orderkey < 10
             DECIDE x(BOOL)
-            SUCH THAT x <= 0 WHEN l_quantity > 0
+            SUCH THAT when l_quantity > 0: x <= 0
                 AND SUM(x) >= 1
             MAXIMIZE SUM(x * l_quantity)
         """, match=r"(?i)(infeasible|WHEN conditions)")
@@ -174,15 +173,26 @@ class TestInfeasibleModels:
         would mean a different constraint), unlike `<>` (C3), which keeps every
         excluded value instead of contradicting.
         """
-        # old spelling until item 7
         decidb_cli.assert_error("""
             SELECT id, grp, x FROM (
                 VALUES (1, 'a', 500), (2, 'a', 350)
             ) t(id, grp, cap)
             DECIDE x(INT)
-            SUCH THAT SUM(x) = cap PER grp
+            SUCH THAT sum(x) by (grp) = cap
             MAXIMIZE SUM(x)
         """, match=r"(?i)cannot hold two different values.*infeasible")
+
+    def test_equal_bound_varying_within_a_per_class_does_not_determine(self, decidb_cli):
+        """The `per grp:` spelling of the clause above generates it once per class, so a
+        bound that varies within the class is refused before any model is built."""
+        decidb_cli.assert_error("""
+            SELECT id, grp, x FROM (
+                VALUES (1, 'a', 500), (2, 'a', 350)
+            ) t(id, grp, cap)
+            DECIDE x(INT)
+            SUCH THAT per grp: sum(x) by (grp) = cap
+            MAXIMIZE SUM(x)
+        """, match=r"per grp does not determine cap\. grp = 'a' has more than one value: 500, 350\.")
 
     def test_user_overridden_negative_lower_is_feasible(self, decidb_cli):
         """Part C guard: `x <= -1 AND x >= -5` explicitly lowers the floor below 0, so

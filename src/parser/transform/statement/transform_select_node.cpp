@@ -1,5 +1,6 @@
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/parser/decide/decide_removed_spellings.hpp"
 #include "duckdb/parser/expression/star_expression.hpp"
 #include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/query_node/set_operation_node.hpp"
@@ -126,6 +127,10 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 		result.qualify = TransformExpression(stmt.qualifyClause);
 		// sample
 		result.sample = TransformSampleOptions(stmt.sampleOptions);
+		// DecidB: the removed spellings still parse so that the error can name the new one.
+		// A subquery inside a DECIDE clause is read with its spellings too, so every node
+		// is checked, not only the one that holds the clause.
+		RefuseRemovedDecideSpellings(result);
 		break;
 	}
 	case duckdb_libpgquery::PG_SETOP_UNION:

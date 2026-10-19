@@ -29,9 +29,9 @@ enum class DecideExpression : uint8_t {
 };
 
 //! How one DECIDE declaration maps onto solver columns.
-//!   ROW    — `x(INT)`                    one column per result row
-//!   ENTITY — `T.x(INT)`, `per K: x(INT)` one column per distinct value of a key scope
-//!   SCALAR — `scalar x(INT)`, `per (): x(INT)` one column for the whole query
+//!   ROW    — `x(INT)`, `per row: x(INT)` one column per result row
+//!   ENTITY — `per K: x(INT)`             one column per distinct value of the key
+//!   SCALAR — `per (): x(INT)`            one column for the whole query
 enum class DecideVarScope : uint8_t {
     ROW = 0,
     ENTITY = 1,
@@ -77,7 +77,7 @@ struct DecideVarScopeInfo {
     bool IsScalar() const {
         return scope == DecideVarScope::SCALAR;
     }
-    //! Declared `per K: x(TYPE)` rather than `T.x(TYPE)`.
+    //! Declared `per K: x(TYPE)` with a non-empty key.
     bool IsKeyed() const {
         return !declared_key.empty();
     }
@@ -196,10 +196,15 @@ inline bool ExtractDecideTagPayload(const string &alias, const string &prefix, s
 	return !payload.empty();
 }
 
-//! Tag used to identify WHEN-conditional constraints throughout the pipeline
+//! Tag on the bound `when c:` wrapper of a constraint or the objective: child 0 is the
+//! body, child 1 the condition. The parser emits it only for a removed spelling, which
+//! RefuseRemovedDecideSpellings refuses (syntax_reference.md §10.3).
 static constexpr const char *WHEN_CONSTRAINT_TAG = "__when_constraint__";
 
-//! Tag used to identify PER-grouped constraints throughout the pipeline
+//! Tag on the two-level objective's bound wrapper, `outer(per k: inner(e) by (k))`:
+//! child 0 is the objective body, children 1..N the key columns. A constraint's
+//! `per K:` is PER_CLASS_TAG. The parser emits it only for a removed spelling, which
+//! RefuseRemovedDecideSpellings refuses (syntax_reference.md §10.3).
 static constexpr const char *PER_CONSTRAINT_TAG = "__per_constraint__";
 
 //! Returns true if the alias is PER_CONSTRAINT_TAG
@@ -207,18 +212,20 @@ inline bool IsPerConstraintTag(const string &alias) {
 	return HasDecideTag(alias, PER_CONSTRAINT_TAG);
 }
 
-//! Tag used by the parser to mark a relation-qualified reducer, `sum(D: expr)`.
-//! Shape mirrors the aggregate-local WHEN tag: children[0] is the aggregate,
-//! children[1] is the qualifier's relation name. The binder consumes and
-//! discards it, folding the resolved relation into the tag below.
+//! Tag used by the parser to mark the colon form, `sum(D: expr)`: children[0] is the
+//! aggregate, children[1..] the relation names before the colon. The binder consumes
+//! and discards it, folding the resolved relations into the tag below.
 static constexpr const char *QUALIFIED_REDUCER_TAG = "__qualified_reducer__";
 
-//! Tag prefix recording a bound qualified reducer (on BoundAggregateExpression.alias).
-//! Format: "__qualified_by_<entity_scope_idx>__" — the index is into
-//! LogicalDecide::entity_scopes, whose entry supplies the tuple-identity key the
-//! reducer de-duplicates by. A qualifier is an entity scope that may have no
-//! variable declared on it, so the two share one table of keys and one mapping.
+//! Tag prefix recording a reducer's own key, `sum(per K: e)` or `SUM(D: e)` (on
+//! BoundAggregateExpression.alias). Format: "__qualified_by_<entity_scope_idx>__" — the
+//! index is into LogicalDecide::entity_scopes, whose entry supplies the classes
+//! the reducer takes one value from. The scope may have no variable declared on it.
 static constexpr const char *QUALIFIED_REDUCER_SCOPE_TAG_PREFIX = "__qualified_by_";
+
+//! On a bound reducer written in the colon form `SUM(D: e)`, which means `sum(per D: e)`
+//! and shares its scope: the tag keeps only the spelling, for the echo (D38).
+static constexpr const char *COLON_FORM_TAG = "__colon_form__";
 
 //! Builds the alias tag naming the entity scope a reducer is qualified by.
 inline string MakeQualifiedReducerTag(idx_t entity_scope_idx) {
@@ -240,12 +247,11 @@ inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
 }
 
 //! Tags the parser uses for the scope written in front of a constraint, an objective, a
-//! declared variable or a reducer's argument: `[WHEN condition] [PER key]: body`.
+//! declared variable or a reducer's argument: `[when condition] [per key]: body`.
 //! children[0] is the body. SCOPE_WHEN_TAG holds the condition in children[1];
-//! SCOPE_PER_TAG holds the key in children[1..], none for `PER ()`. With both, PER is
-//! the outer tag. `PER ROW`, the default written out, is SCOPE_PER_ROW_TAG over the body
-//! alone: it names no key, but it is a spelling of the scoping language, so the clause
-//! follows its rules (D19).
+//! SCOPE_PER_TAG holds the key in children[1..], none for `per ()`. With both,
+//! SCOPE_PER_TAG is the outer tag. `per row`, the default written out, is
+//! SCOPE_PER_ROW_TAG over the body alone: it names no key (D19).
 static constexpr const char *SCOPE_WHEN_TAG = "__scope_when__";
 static constexpr const char *SCOPE_PER_TAG = "__scope_per__";
 static constexpr const char *SCOPE_PER_ROW_TAG = "__scope_per_row__";
@@ -254,22 +260,10 @@ static constexpr const char *SCOPE_PER_ROW_TAG = "__scope_per_row__";
 //! children[1..] the key, none for `BY ()`.
 static constexpr const char *REDUCER_BY_TAG = "__reducer_by__";
 
-//! Tag on a clause written with the scope spellings -- a `when` or `per` in front, a `by`,
-//! or a scope inside a reducer. The binder puts it on every constraint of such a scope (a
-//! comparison, an `IN` marker), on the scope's WHEN wrapper and on the PER wrapper of the
-//! objective's two-level form; a row the optimizer adds for such a clause (IN, ABS, norm,
-//! MIN/MAX) carries it, and so does that row's WHEN wrapper. Readers take it from the
-//! comparison, or from the WHEN wrapper when they need the clause's `when` with it. Such a
-//! clause follows the scoping language rather than the old postfix one: NULL is a key
-//! value, every reducer reads its own `by` group of the kept rows, nothing is computed on
-//! a row its `when` drops, and LogicalDecide::scope_checks guard it at run time. An old
-//! spelling never carries it.
-static constexpr const char *SCOPED_CLAUSE_TAG = "__scoped_clause__";
-
-//! The bound form of a constraint's `PER key:`: a conjunction whose child 0 is the
-//! constraint and whose children[1..] are the key's columns, none for `PER ()`. The
-//! constraint is generated once per class of the key among the kept rows. Unlike the
-//! old PER wrapper it groups no reducer, and NULL is a class.
+//! The bound form of a constraint's `per key:`: a conjunction whose child 0 is the
+//! constraint and whose children[1..] are the key's columns, none for `per ()`. The
+//! constraint is generated once per class of the key among the kept rows; it groups no
+//! reducer, and NULL is a class.
 static constexpr const char *PER_CLASS_TAG = "__per_class__";
 
 //! Tag on a scoped comparison in the VALUE shape (CanonicalConstraintClass::VALUE): the
@@ -304,11 +298,11 @@ static constexpr const char *MINMAX_CLAUSE_TAG_PREFIX = "__minmax_clause_";
 //! Format: "__ne_clause_tag_<clause_idx>__", indexing `LogicalDecide::ne_clause_labels`.
 static constexpr const char *NE_CLAUSE_TAG_PREFIX = "__ne_clause_tag_";
 
-//! Tag marking a comparison whose LHS was an easy-direction MIN/MAX aggregate
-//! (MAX(e) <= K, MIN(e) >= K) that the optimizer stripped to a per-row form.
-//! Preserves the empty-WHEN rejection guard: an empty row set for what the user
-//! wrote as MIN/MAX must reject, even though the optimized constraint is now
-//! per-row. Set on the BoundComparisonExpression.alias during RewriteMinMax.
+//! Tag marking a comparison whose LHS is an easy-direction MIN/MAX reducer
+//! (MAX(e) <= K, MIN(e) >= K). The reducer stays in the tree: the linear form expands it
+//! to one row per member, the bound reduced over each `by` group, and bound absorption
+//! folds a bare one into the column box (D41). Set on the
+//! BoundComparisonExpression.alias during RewriteMinMax.
 static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 
 //! Tag marking optimizer-generated helper constraints that define auxiliaries or
@@ -336,10 +330,9 @@ static constexpr const char *L0_AUTO_BOUND_TAG = "__l0_auto_bound__";
 //! moving the rendering.
 static constexpr const char *ABSORBED_BOUND_TAG = "__absorbed_bound__";
 
-//! Beside ABSORBED_BOUND_TAG on a recorded bound of a clause written with the scope
-//! spellings: a repair model loosens it through the clause's own rows, one per kept row or
-//! class (DecidePreparedModel::absorbed_constraints, D28), not one knob per column. Set by
-//! DecideOptimizer::AbsorbVariableBounds with UserBoundSpec::repair_rows_from_clause.
+//! Beside ABSORBED_BOUND_TAG on a recorded bound: a repair model loosens it through the
+//! clause's own rows, one per kept row or class (DecidePreparedModel::absorbed_constraints,
+//! D28), not one knob per column. Set by DecideOptimizer::AbsorbVariableBounds.
 static constexpr const char *ABSORBED_CLAUSE_ROWS_TAG = "__absorbed_clause_rows__";
 
 //! A private aggregate marker emitted by the DECIDE binder for norm(expr, p).

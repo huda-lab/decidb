@@ -208,7 +208,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // diagnosis to label escaping categorical groups (affected_rows).
     //
     // Harvest names from the DECIDE clause's own bound references to source columns
-    // (WHEN / PER / objective / constraint / entity-key columns). By physical-plan
+    // (`when` / `per` / `by` / objective / constraint / entity-key columns). By physical-plan
     // time the column-binding resolver has rewritten table-column references to
     // BoundReferenceExpressions whose `index` is the position in the child data chunk
     // — exactly the indexing of gstate.data — so this aligns directly and survives

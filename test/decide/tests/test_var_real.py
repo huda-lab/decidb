@@ -5,7 +5,7 @@ Covers:
   - test_real_with_bounds: REAL variable with explicit upper bound
   - test_real_mixed: mixed BOOLEAN + REAL variables
   - test_real_with_when: REAL variable + WHEN conditional
-  - test_real_with_per: REAL variable + PER grouping
+  - test_real_with_per: REAL variable + `per` grouping
   - test_real_minimize: REAL variable with MINIMIZE (coefficient-sign path)
 """
 
@@ -393,7 +393,7 @@ def test_real_fractional_readback(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_real_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """REAL variable with PER grouping constraint."""
+    """REAL variable with `per` grouping constraint."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
         FROM lineitem
@@ -414,7 +414,7 @@ def test_real_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         FROM lineitem WHERE l_orderkey <= 5
     """).fetchall()
 
-    # Group by l_orderkey for PER constraint
+    # Group by l_orderkey for `per` constraint
     groups = {}
     for i, row in enumerate(data):
         groups.setdefault(row[0], []).append(i)

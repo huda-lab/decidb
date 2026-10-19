@@ -5,9 +5,13 @@ match current DecidB behavior.  Some older error cases (SUM(x+x), strict <)
 now succeed and are omitted.
 """
 
+import re
+
 import pytest
 
 from decidb_cli import DecidBCliError
+
+from ._output_helpers import assert_no_internal_leak
 
 
 @pytest.mark.error_binder
@@ -193,7 +197,7 @@ class TestBinderErrors:
     def test_sum_rhs_non_scalar(self, decidb_cli):
         """A bare column RHS is now a legal bound of a reduced constraint (C1).
 
-        Without PER there is one group, so `SUM(x) <= l_quantity` is the
+        Without `by` there is one group, so `SUM(x) <= l_quantity` is the
         conjunction of every row's own bound — `SUM(x) <= MIN(l_quantity)`. See
         `test_canonicalize_side_agnostic.py::test_row_varying_bound_collapses_to_tightest_on_either_side`
         for the oracle-verified proof of the collapse itself.
@@ -286,23 +290,6 @@ class TestBinderErrors:
                 SUCH THAT SUM(x) <= (SELECT l_quantity FROM t)
                 MAXIMIZE SUM(x)
             """, match=r"More than one row returned by a subquery")
-
-    def test_per_on_perrow_constraint_rejection(self, decidb_cli):
-        """PER attached to a per-row constraint must be rejected with a clear message.
-
-        PER requires an aggregate constraint — each row already owns its own
-        constraint, so partitioning has no meaning. Closes both
-        `per/todo.md` and `error_handling/todo.md` gaps.
-        """
-        # old spelling until item 7: pins the old "PER can only be applied" message
-        decidb_cli.assert_error("""
-                WITH t AS (SELECT 1 AS l_quantity, 'A' AS grp
-                    UNION ALL SELECT 2, 'B')
-                SELECT l_quantity, x FROM t
-                DECIDE x(INT)
-                SUCH THAT x <= 5 PER grp
-                MAXIMIZE SUM(x * l_quantity)
-            """, match=r"PER can only be applied to aggregate \(SUM\) constraints")
 
     # `SUM(x*v) <= SUM(y*v)` used to be rejected here, sharing this file's "not a
     # scalar or aggregate without DECIDE variables" message because the bound was
@@ -580,24 +567,22 @@ class TestBinderErrors:
     @pytest.mark.when_constraint
     def test_when_decide_variable_in_condition(self, decidb_cli):
         """WHEN condition must not reference DECIDE variables."""
-        # old spelling until item 7: pins the old "WHEN conditions cannot reference" message
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
-                SUCH THAT SUM(x * l_quantity) <= 50 WHEN x = 1
+                SUCH THAT when x = 1: SUM(x * l_quantity) <= 50
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
-            """, match=r"WHEN conditions cannot reference DECIDE variables")
+            """, match=r"x is a decision; when, per and by may only use data")
 
     @pytest.mark.when_compound
     def test_when_decide_variable_in_compound_condition(self, decidb_cli):
         """WHEN compound condition must not hide a DECIDE variable."""
-        # old spelling until item 7: pins the old "WHEN conditions cannot reference" message
         decidb_cli.assert_error("""
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
-                SUCH THAT x <= 1 WHEN (x = 1 AND l_returnflag = 'R')
+                SUCH THAT when (x = 1 AND l_returnflag = 'R'): x <= 1
                 MAXIMIZE SUM(x * l_quantity) LIMIT 1
-            """, match=r"WHEN conditions cannot reference DECIDE variables")
+            """, match=r"x is a decision; when, per and by may only use data")
 
     # --- Correlated subquery on aggregate RHS ---
     # A row-varying RHS on a reduced constraint used to be refused here. It is now
@@ -664,3 +649,140 @@ class TestBinderErrors:
                 SUCH THAT x <= 10 AND y <= 10
                 MAXIMIZE SUM(x / y)
             """, match=r"Division by a DECIDE variable is not supported")
+
+
+# --- Refusals that hold in every spelling ---
+# A shape the engine cannot model is refused whether its clause is bare or written
+# with a scope in front: never answered as a different constraint, never an
+# internal error.
+
+TABLES = """WITH t AS (SELECT * FROM (VALUES (1, 3, 'A'), (2, 5, 'A'), (3, 7, 'B'), (4, 9, 'B'))
+                v(id, cap, g)),
+                f AS (SELECT * FROM (VALUES ('A', 2), ('B', 4)) v(g, k))"""
+
+SPELLINGS = ["", "per row: ", "per (): "]
+
+
+def _refusal(decidb_cli, sql, match, context):
+    result = decidb_cli.execute_raw(sql)
+    assert re.search(match, result.stderr), result.stderr
+    assert_no_internal_leak(result, context)
+
+
+@pytest.mark.error_binder
+@pytest.mark.error
+class TestRefusalsInEverySpelling:
+
+    @pytest.mark.parametrize("clause", [
+        "x <= cap OR x <= 1",
+        "x <= 40 AND (x >= cap OR x <= 2)",
+        "x <= 40 AND (x <= 1 OR (x <= 2 AND x >= 1))",
+        "sum(x) <= 4 OR sum(x) >= 10",
+        "x <= 40 AND when id > 0: (x >= cap OR x <= 2)",
+        "x <= 40 AND per row: (x >= cap OR x <= 2)",
+        "x <= 40 AND per (): (sum(x) <= 4 OR sum(x) >= 10)",
+    ])
+    def test_or_between_constraints_refused(self, decidb_cli, clause):
+        """`OR` between constraints used to be read as `AND`: `x <= cap OR x <= 1`
+        answered x = 1 on every row. A disjunction needs an indicator the engine does
+        not build, so it is refused."""
+        _refusal(decidb_cli, f"""{TABLES}
+            SELECT id, x FROM t DECIDE x(INT) SUCH THAT {clause} MAXIMIZE SUM(x)""",
+                 r"joins constraints with OR, which is not supported", "OR between constraints")
+
+    def test_or_inside_a_when_condition_still_filters(self, decidb_cli):
+        """An `OR` inside a condition is data, not a disjunction of constraints."""
+        query = f"""{TABLES}
+            SELECT id, x FROM t DECIDE x(INT)
+            SUCH THAT x <= cap AND sum(when {{}}: x) <= 4 AND x <= (SELECT max(cap) FROM t WHERE {{}})
+                AND when {{}}: x <= 1
+            MAXIMIZE SUM(x)"""
+        written = query.format(*["g = 'A' OR id = 3"] * 3)
+        equivalent = query.format(*["id IN (1, 2, 3)"] * 3)
+        assert decidb_cli.execute(written)[0] == decidb_cli.execute(equivalent)[0]
+
+    @pytest.mark.parametrize("spelling", SPELLINGS)
+    @pytest.mark.parametrize("clause", [
+        "x / sum(cap) <= 1",
+        "sum(x) / sum(cap) <= 1",
+        "sum(x) / avg(cap) <= 1",
+        "sum(x) / max(cap) <= 1",
+        "sum(x) / min(cap) <= 1",
+        "sum(x) / count(*) <= 2",
+        "avg(x) / sum(cap) <= 1",
+        "max(x) / sum(cap) <= 1",
+        "sum(x * cap) / sum(cap) <= 5",
+        "sum(x) / (1 + sum(cap)) <= 1",
+        "x <= sum(x) / sum(cap)",
+    ])
+    def test_data_only_aggregate_divisor_rejected(self, decidb_cli, spelling, clause):
+        """A data-only aggregate stays on the bound side (S10). As a divisor of a
+        decision term it is refused like the same aggregate as a multiplier, never
+        reaching term extraction ('INTERNAL Error: ... VALUE shape reached term
+        extraction')."""
+        _refusal(decidb_cli, f"""{TABLES}
+            SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap AND {spelling}{clause} MAXIMIZE SUM(x)""",
+                 r"aggregate over table columns .* cannot divide a decision variable",
+                 "a data-only aggregate divisor")
+
+    @pytest.mark.parametrize("spelling", SPELLINGS + ["per g: ", "when id > 0: "])
+    @pytest.mark.parametrize("clause", [
+        "(sum(x) + sum(cap)) / 2 <= 20",
+        "20 >= (sum(x) + sum(cap)) / 2",
+        "(sum(x) - avg(cap)) / 2 <= 1",
+        "(sum(x) + count(*)) / 2 <= 5",
+        "(avg(x) + avg(cap)) / 2 <= 5",
+        "(max(x) + sum(cap)) / 2 <= 15",
+        "-(sum(x) + sum(cap)) / 2 >= -20",
+        "(sum(x) + sum(cap)) / (SELECT 2) <= 20",
+    ])
+    def test_data_only_aggregate_in_a_divided_term_rejected(self, decidb_cli, spelling, clause):
+        """A data-only aggregate divided together with a decision term is the scaled term
+        the multiplier rule already refuses (`2 * (sum(x) - avg(cap))`); under a scope
+        spelling it, too, reached term extraction as an internal error."""
+        _refusal(decidb_cli, f"""{TABLES}
+            SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap AND {spelling}{clause} MAXIMIZE SUM(x)""",
+                 r"aggregate over table columns .* cannot be divided together with a decision variable",
+                 "a data-only aggregate in a divided term")
+
+    def test_data_only_aggregate_in_a_divided_term_as_a_scalar_or_moved(self, decidb_cli):
+        """The two ways out the message implies give one answer: the aggregate as a scalar
+        subquery, or moved to the bound side."""
+        query = f"""{TABLES}
+            SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap AND per row: {{}} MAXIMIZE SUM(x)"""
+        scalar = query.format("(sum(x) + (SELECT sum(cap) FROM t)) / 2 <= 20")
+        moved = query.format("sum(x) / 2 <= 20 - sum(cap) / 2")
+        assert decidb_cli.execute(scalar)[0] == decidb_cli.execute(moved)[0]
+
+    def test_and_or_inside_a_data_value_bind_as_data(self, decidb_cli):
+        """A conjunction inside an operand is a value, not a list of constraints: its
+        `OR` is no disjunction of constraints, and a column under it is no constraint."""
+        query = f"""{TABLES}, b AS (SELECT *, cap > 4 AS big FROM t)
+            SELECT id, x FROM b DECIDE x(INT) SUCH THAT x <= cap AND x <= 1 + CAST({{}} AS INT)
+            MAXIMIZE SUM(x)"""
+        nested = query.format("((SELECT true) AND ((SELECT true) OR (SELECT false)))")
+        assert decidb_cli.execute(nested)[0] == decidb_cli.execute(query.format("true"))[0]
+        assert decidb_cli.execute(query.format("(big AND big)"))[0] == decidb_cli.execute(query.format("big"))[0]
+
+    def test_data_only_aggregate_bound_and_scalar_divisor_still_allowed(self, decidb_cli):
+        """Guard against over-rejecting: divided on the bound side, or replaced by the
+        scalar subquery the message suggests, the aggregate is one number."""
+        query = f"""{TABLES}
+            SELECT id, x FROM t DECIDE x(INT)
+            SUCH THAT x <= cap AND per row: x <= {{}} / 3 AND per row: x / {{}} <= 0.25
+            MAXIMIZE SUM(x)"""
+        written = query.format("sum(cap)", "(SELECT sum(cap) FROM t)")
+        precomputed = query.format(*["(SELECT sum(cap) FROM t)"] * 2)
+        assert decidb_cli.execute(written)[0] == decidb_cli.execute(precomputed)[0]
+
+    def test_decision_free_objective_term_named_in_sql(self, decidb_cli):
+        """The refusal of a row-varying objective term names the term in SQL, not by
+        an internal alias ('__source_fragment_0____row_varying_subquery__'). A subquery
+        prints as DuckDB renders it (logged in 06_issues/bugs), so only its text is
+        pinned."""
+        result = decidb_cli.execute_raw(f"""{TABLES}
+            SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= cap
+            MAXIMIZE per (): sum(x) + (SELECT k FROM f WHERE f.g = t.g)""")
+        assert re.search(r"'\(SELECT k FROM f WHERE [^']*\)' does not reference a decision", result.stderr), \
+            result.stderr
+        assert_no_internal_leak(result, "a decision-free objective term")

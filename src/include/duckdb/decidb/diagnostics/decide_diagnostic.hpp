@@ -61,7 +61,7 @@ struct DiagnosticFinding {
 	//!   source_literal      a literal the user wrote, loosened in place
 	//!   virtual_offset      a synthetic offset over a data-backed RHS (`x <= col + d`)
 	//!   expanded_row        one emitted row's own overshoot (`expanded` scope)
-	//!   expanded_group      one PER group's own overshoot (`expanded` scope)
+	//!   expanded_group      one group's own overshoot (`expanded` scope)
 	//!   remove_only         a `<>` that cannot be loosened, only deleted
 	//!   unreachable_bound   a bound no assignment can reach
 	//!   rigid_conflict      loosening the editable clauses cannot restore feasibility
@@ -71,7 +71,7 @@ struct DiagnosticFinding {
 	//!   unbounded_after_fix   the repaired problem has no finite optimum
 	//!   undiagnosed         the state is known but the engine could not name a cause
 	string edit_source;
-	//! Printable PER key of this finding's group (`EU, 2024`), or the categorical slice
+	//! Printable `per` key of this finding's group (`EU, 2024`), or the categorical slice
 	//! an unbounded variable escapes on (`region = 'EU'`). Empty => NULL.
 	string group;
 	//! Identity of the single emitted row this finding covers, under the `expanded`
@@ -202,7 +202,7 @@ struct ClauseEdit {
 	string suggestion; //!< the constraint after the minimal loosening (LOOSEN only)
 	bool has_amount = false; //!< LOOSEN only; false => the `amount` column is NULL
 	double amount = 0.0;     //!< magnitude of the loosening, in the user's own units
-	string group;      //!< printable PER key of this edit's group (empty if ungrouped),
+	string group;      //!< printable `per` key of this edit's group (empty if ungrouped),
 	                   //!< so folded SUM clauses stay distinguishable in the relation
 	//! Identity of the single emitted row this edit covers, under the `expanded` slack
 	//! scope. INVALID_INDEX (the `query`-scope case) => the `row` column is NULL.
@@ -238,10 +238,10 @@ DecideDiagnostic BuildElasticInfeasibleDiagnostic();
 
 //! One user clause whose bound no assignment can reach (`x >= inf`). A pre-solve
 //! finding, so there is no slack to read and no edit to suggest — only the clause to
-//! name. `group` carries the printable PER key when the clause is grouped.
+//! name. `group` carries the printable `per` key when the clause is grouped.
 struct UnreachableClause {
 	string label; //!< the constraint as the user wrote it
-	string group; //!< printable PER key of this clause's group (empty if ungrouped)
+	string group; //!< printable `per` key of this clause's group (empty if ungrouped)
 	idx_t row = DConstants::INVALID_INDEX; //!< the kept row this finding stands for (D28), or none
 };
 

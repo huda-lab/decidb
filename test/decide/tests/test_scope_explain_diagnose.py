@@ -1,11 +1,12 @@
-"""What EXPLAIN and DIAGNOSE print for the scope spellings (item 6, D26-D28).
+"""What EXPLAIN and DIAGNOSE print for scoped clauses (D27, D28, D32).
 
 EXPLAIN shows a clause as written, its canonical reading when that differs, and what the
 optimizer made of it: an auxiliary decision prints as the expression it stands for, and
-each rewrite leaves one account line under its clause. A clause typed in the OLD spelling
-keeps its old echo until item 7 removes it (D26). DIAGNOSE, in the expanded slack scope,
-reports a `by`-grouped clause once per class the group's row stands for: per value of its
-`per` key, or per kept row when it has no `per` key (D28, ANR deck p. 16-17 and 110).
+each rewrite leaves one account line under its clause. Every clause prints lower-case,
+`when c per K:` in front and a reducer's `by (G)` after it. DIAGNOSE, in the expanded
+slack scope, reports a `by`-grouped clause once per class the group's row stands for: per
+value of its `per` key, or per kept row when it has no `per` key (D28, ANR deck p. 16-17
+and 110).
 """
 
 import re
@@ -66,7 +67,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
                  "whenpriority:shipIN(0,5,10)", "whenpriority:(ship=0)+(ship=5)+(ship=10)=1", None,
                  id="scoped-in-keeps-its-when"),
     pytest.param("ship(INT)", "per row: ship <= 0.2 * sum(ship) by ()",
-                 "perrow:ship<=0.2*sum(ship)", None, None, id="per-row-stays-written"),
+                 "ship<=0.2*sum(ship)", None, "perrow:", id="per-row-prints-as-bare"),
     pytest.param("ship(INT)", "per D.region: avg(ship) by (D.region) >= 10",
                  "avg(ship)by(D.region)becomesasumdividedbyitsrowcount", "perD.region:sum(ship)by(D.region)>=10",
                  None, id="avg"),
@@ -90,9 +91,10 @@ def test_explain_accounts_for_each_rewrite(decidb_cli, decide, clause, account, 
     """Each rewrite leaves an account line under the clause it came from, and the rows
     the solver receives name an auxiliary by what it stands for, never by `__name__` --
     an auxiliary made by an earlier rewrite included. A row that repeats the clause
-    (the hard MIN/MAX carrier, printed as its reducer) is not shown again. A scoped
-    `IN`, and a `per row:` with nothing else to show the spelling, keep their front. An
-    automatic L0 link's bound, which stage 06 derives from the box, prints as `M`."""
+    (the hard MIN/MAX carrier, printed as its reducer) is not shown again. A scoped `IN`
+    keeps its front; `per row:` and an empty `by ()`, the defaults, print as a bare clause
+    (D32). An automatic L0 link's bound, which stage 06 derives from the box, prints as
+    `M`."""
     text = _plan(decidb_cli, _ship_query(decide, clause))
     assert account in text, text
     if row:
@@ -111,7 +113,7 @@ def test_explain_accounts_for_a_sum_of_squares(decidb_cli_gurobi):
 
 @pytest.mark.explain
 def test_explain_names_functions_as_the_scope_spellings_write_them(decidb_cli):
-    """Under a scope spelling a function prints lower-case, as the docs write it; the
+    """A function prints lower-case, as the docs write it; the
     written layer and the solver rows agree."""
     text = _plan(decidb_cli, _ship_query("ship(INT)", "when S.priority: abs(ship - 20) <= 3"))
     assert "whenpriority:abs(ship-20)<=3" in text, text
@@ -121,7 +123,7 @@ def test_explain_names_functions_as_the_scope_spellings_write_them(decidb_cli):
 @pytest.mark.explain
 def test_explain_two_level_objective_rows_are_written_in_front(decidb_cli):
     """The two-level objective's inner reducer, once per class, prints with its `per` in
-    front and its `by`, never as a postfix `PER`; the outer extremum has its account."""
+    front and its `by`, with no upper-case `PER`; the outer extremum has its account."""
     text = _plan(decidb_cli, _ship_query("ship(INT)", "ship >= 1",
                                          "MINIMIZE max(per D.region: sum(ship) by (D.region))"))
     assert "MINIMIZEmax(perD.region:sum(ship)by(D.region))" in text, text
@@ -155,26 +157,12 @@ def test_explain_accounts_for_the_objectives_rewrites_too(decidb_cli):
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_an_outer_avg_over_the_classes_is_refused(decidb_cli):
-    """§10.4 admits sum, min and max over the classes; an outer avg would be formulated
-    as a sum (the old nested objective's arithmetic) and is refused instead."""
+    """syntax_reference.md §4 admits sum, min and max over the classes; an outer avg would
+    be formulated as a sum and is refused instead."""
     result = decidb_cli.execute_raw(_ship_query("ship(INT)", "ship >= 1",
                                                 "MINIMIZE avg(per D.region: sum(ship) by (D.region))"))
     assert "avg over the classes of avg(per D.region: sum(...) by (D.region)) is not supported yet" in result.stderr
     assert_no_internal_leak(result, "an outer avg")
-
-
-@pytest.mark.explain
-def test_explain_keeps_the_old_spellings_echo_until_item_7(decidb_cli):
-    """D26: a clause typed in the old spelling is echoed as written; only its auxiliaries
-    gain their names and its rewrites their accounts."""
-    # old spelling until item 7
-    # (the point of the test: an old-spelling clause keeps its old echo)
-    text = _plan(decidb_cli, _ship_query("ship(INT)", "MAX(ship) >= 12 PER D.region AND ABS(ship - 20) <= 3",
-                                         "MINIMIZE SUM(ship)"))
-    assert "MAX(ship)>=12PERregion" in text, text
-    assert "MAX(ship)becomesanextremumcolumnpinnedbyindicatorrows" in text, text
-    assert "ABS(ship-20)<=3" in text and "ABS(ship-20)becomesanauxiliaryvariable" in text, text
-    assert "__abs_aux" not in text, text
 
 
 @pytest.mark.explain
@@ -186,7 +174,7 @@ def test_explain_prints_no_row_that_repeats_a_per_row_clause(decidb_cli):
         DECIDE x(INT)
         SUCH THAT x <= t.cap AND per row: x >= 3 AND per row: x <= t.cap - 1
         MAXIMIZE SUM(x)""")
-    assert "perrow:x>=3" in text and "perrow:x<=cap-1" in text, text
+    assert "x>=3" in text and "x<=cap-1" in text and "perrow:" not in text, text
     assert "↳" not in text, text
 
 
@@ -257,13 +245,13 @@ def test_a_hard_min_or_max_reports_once_per_class_too(decidb_cli):
 
 @pytest.mark.diagnose
 @pytest.mark.parametrize("clause, expected", [
-    pytest.param("per t.depot: max(x) by (t.region) <= -5",
-                 [("D1", "NULL", 5, "expanded_group", "per t.depot: max(x) by (t.region) <= 0"),
-                  ("D2", "NULL", 5, "expanded_group", "per t.depot: max(x) by (t.region) <= 0"),
-                  ("D3", "NULL", 5, "expanded_group", "per t.depot: max(x) by (t.region) <= 0")],
+    pytest.param("per t.depot: max(2 * x) by (t.region) <= -10",
+                 [("D1", "NULL", 10, "expanded_group", "per t.depot: max(2 * x) by (t.region) <= 0"),
+                  ("D2", "NULL", 10, "expanded_group", "per t.depot: max(2 * x) by (t.region) <= 0"),
+                  ("D3", "NULL", 10, "expanded_group", "per t.depot: max(2 * x) by (t.region) <= 0")],
                  id="easy-max-per-key"),
-    pytest.param("max(x) by (t.region) <= -5",
-                 [("NULL", str(row), 5, "expanded_row", "max(x) by (t.region) <= 0") for row in range(4)],
+    pytest.param("max(2 * x) by (t.region) <= -10",
+                 [("NULL", str(row), 10, "expanded_row", "max(2 * x) by (t.region) <= 0") for row in range(4)],
                  id="easy-max-no-per"),
     pytest.param("per t.region: max(x) by (t.region) <= min(t.cap) by (t.region) - 30",
                  [("E", "NULL", 20, "expanded_group",
@@ -283,7 +271,8 @@ def test_a_hard_min_or_max_reports_once_per_class_too(decidb_cli):
 def test_every_grouped_clause_kind_reports_once_per_class(decidb_cli, clause, expected):
     """An easy MIN/MAX (a bound on each member, its group's bound moving once) and a
     composed clause (one row) report like a sum: once per class of the `per` key, or per
-    kept row with none. The amounts are each group's own shortfall."""
+    kept row with none. The amounts are each group's own shortfall. (The easy MAX scales
+    its body: over a bare decision it is a column bound, D41.)"""
     assert _findings(_diagnose(decidb_cli, clause)) == sorted(expected)
     # The query scope still folds each clause into one edit.
     folded = _findings(_diagnose(decidb_cli, clause, scope="query"))
@@ -308,7 +297,7 @@ def test_an_infinity_norm_echo_pastes_back(decidb_cli):
 
 @pytest.mark.diagnose
 def test_a_per_key_equal_to_the_by_key_reports_once_per_group(decidb_cli):
-    """`per t.region: ... by (t.region)`: the class is the group, as before item 6."""
+    """`per t.region: ... by (t.region)`: the class is the group."""
     findings = _findings(_diagnose(decidb_cli, "per t.region: sum(x) by (t.region) >= 100"))
     change = "per t.region: sum(x) by (t.region) >= {}"
     assert findings == [("E", "NULL", 40, "expanded_group", change.format(60)),
@@ -356,11 +345,26 @@ def test_per_global_is_one_class(decidb_cli):
 
 @pytest.mark.diagnose
 def test_per_global_equality_reports_once(decidb_cli):
-    """`per (): max(x) = -5`: its `<=` half bounds every member, and `per ()` is one class
-    with no key value, so it reports once with no group or row, as `<= -5` alone does."""
-    rows = _diagnose(decidb_cli, "per (): max(x) = -5")
+    """`per (): max(2 * x) = -10`: its `<=` half bounds every member, and `per ()` is one
+    class with no key value, so it reports once with no group or row, as `<= -10` alone
+    does."""
+    rows = _diagnose(decidb_cli, "per (): max(2 * x) = -10")
     assert [(row["group"], row["row"], int(float(row["amount"])), row["edit_source"]) for row in rows] == \
-        [("NULL", "NULL", 5, "source_literal")], rows
+        [("NULL", "NULL", 10, "source_literal")], rows
+
+
+@pytest.mark.diagnose
+@pytest.mark.parametrize("clause", ["max(x) by (t.region) <= -5", "per (): max(x) = -5"])
+def test_an_easy_max_below_the_floor_is_refused_as_written(decidb_cli, clause):
+    """An easy `max(x) <= -5` is the column bound `x <= -5` (D41), which a non-negative x
+    cannot meet: refused before solving, as `x <= -5` is, naming the clause as written --
+    under DIAGNOSE too."""
+    sql = f"""
+        SELECT id, x {table('t', T_COLUMNS, T_ROWS)}
+        DECIDE x(INT) SUCH THAT x <= t.cap AND {clause} MAXIMIZE SUM(x)"""
+    message = f"DECIDE optimization is infeasible: {clause} cannot hold because x is non-negative (>= 0)."
+    assert message in decidb_cli.execute_raw(sql).stderr
+    assert message in decidb_cli.execute_raw(f"DIAGNOSE {sql}").stderr
 
 
 @pytest.mark.diagnose
@@ -370,8 +374,8 @@ def test_per_global_equality_reports_once(decidb_cli):
                   ("W", "NULL", 80, "expanded_group", "per t.region: abs(sum(x) by (t.region) - 100) <= 85")],
                  id="per-key"),
     pytest.param("per row: x >= 18",
-                 [("NULL", "0", 8, "expanded_row", "per row: x >= 10"),
-                  ("NULL", "3", 3, "expanded_row", "per row: x >= 15")],
+                 [("NULL", "0", 8, "expanded_row", "x >= 10"),
+                  ("NULL", "3", 3, "expanded_row", "x >= 15")],
                  id="per-row"),
 ])
 def test_a_bound_folded_into_a_column_box_reports_per_class(decidb_cli, clause, expected):
@@ -450,8 +454,8 @@ def test_an_absorbed_bound_shares_no_slack_with_a_composed_clause(decidb_cli):
     assert_no_internal_leak(result, "composed and absorbed")
     rows = [row for row in _diagnose_relation.rows(result) if row["edit_source"] != "achievable_objective"]
     assert sorted((row["clause"], row["suggested_change"], int(float(row["amount"]))) for row in rows) == [
-        ("MAX(y) + SUM(z) <= 4", "MAX(y) + SUM(z) <= 9", 5),
-        ("SUM(z) >= 10", "SUM(z) >= 9", 1)], rows
+        ("max(y) + sum(z) <= 4", "max(y) + sum(z) <= 9", 5),
+        ("sum(z) >= 10", "sum(z) >= 9", 1)], rows
 
 
 @pytest.mark.diagnose
@@ -463,7 +467,7 @@ def test_a_dropped_ne_leaves_the_composed_clause_its_own_slack(decidb_cli):
                                  "per (): sum(x) + max(x) <= -5 AND per row: x >= 18", scope="query")
     assert sorted((row["clause"], row["suggested_change"], int(float(row["amount"]))) for row in rows) == [
         ("per (): sum(x) + max(x) <= -5", "per (): sum(x) + max(x) <= 0", 5),
-        ("per row: x >= 18", "per row: x >= 0", 18)], rows
+        ("x >= 18", "x >= 0", 18)], rows
 
 
 @pytest.mark.diagnose
@@ -529,18 +533,22 @@ def test_a_quadratic_clause_reports_per_class(decidb_cli_gurobi, clause, expecte
 
 
 @pytest.mark.diagnose
-def test_diagnose_keeps_the_spelling_that_opts_a_clause_in(decidb_cli):
-    """`per row: x >= 0.5 * sum(x) by () + 1` has no `by` key and no scope inside a
-    reducer to show its spelling: its echo keeps `per row:` in front, so the suggested
-    change pastes back into a clause the new rules accept (D19, D23)."""
+def test_diagnose_echo_of_a_decision_beside_its_reducer_pastes_back(decidb_cli):
+    """`per row: x >= 0.5 * sum(x) by () + 1` echoes as the bare clause it means (D32),
+    and the suggested change pastes back: a bare clause follows the scope rules (D30)."""
     rows = _diagnose(decidb_cli, "per row: x >= 0.5 * sum(x) by () + 1", scope="query")
-    assert rows[0]["clause"] == "per row: x >= 0.5 * sum(x) + 1", rows
-    assert rows[0]["suggested_change"].startswith("per row: x >= 0.5 * sum(x) + 1 - "), rows
+    assert rows[0]["clause"] == "x >= 0.5 * sum(x) + 1", rows
+    change = rows[0]["suggested_change"]
+    assert change.startswith("x >= 0.5 * sum(x) + 1 - "), rows
+    pasted = decidb_cli.execute_raw(f"""
+        SELECT id, x {table('t', T_COLUMNS, T_ROWS)}
+        DECIDE x(INT) SUCH THAT x <= t.cap AND {change} MAXIMIZE SUM(x)""")
+    assert pasted.returncode == 0 and not pasted.stderr.strip(), pasted.stderr
 
 
 @pytest.mark.diagnose
 def test_diagnose_names_functions_as_the_scope_spellings_write_them(decidb_cli):
-    """A clause's echo under a scope spelling prints its functions lower-case."""
+    """A clause's echo prints its functions lower-case."""
     rows = _diagnose(decidb_cli, "when t.id = 1: abs(x - 50) <= 3", scope="query")
     assert rows[0]["clause"] == "when id = 1: abs(x - 50) <= 3", rows
     assert rows[0]["suggested_change"].startswith("when id = 1: abs(x - 50) <= "), rows
@@ -548,7 +556,7 @@ def test_diagnose_names_functions_as_the_scope_spellings_write_them(decidb_cli):
 
 @pytest.mark.error
 @pytest.mark.parametrize("clause, quoted", [
-    pytest.param("per row: x >= 'inf'::DOUBLE", "`per row: x >= inf`", id="per-row"),
+    pytest.param("per row: x >= 'inf'::DOUBLE", "`x >= inf`", id="per-row"),
     pytest.param("when t.id > 1: x >= 'inf'::DOUBLE", "`when id > 1: x >= inf`", id="when"),
 ])
 def test_a_highs_refusal_quotes_the_scope_in_front(decidb_cli_highs, clause, quoted):

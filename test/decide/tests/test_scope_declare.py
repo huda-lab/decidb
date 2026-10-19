@@ -3,7 +3,7 @@
 A key lists columns and/or relations of the FROM clause (a relation stands for all
 its stored columns). Rows with equal key values share one decision, NULL included;
 `per ()` is one decision for the whole query and no `per` is one per row. Each
-declarator has its own key. Behaviour: anr_language_extension.md §2.
+declarator has its own key. Behaviour: syntax_reference.md §2.3.
 
 Model size is read from DECIDB_DUMP_MODEL (`num_vars`: one solver column per decision).
 Optima are judged against `_scope_oracle`, which builds the same model from Python data,
@@ -11,14 +11,14 @@ and DeciDB's answer is checked to show one value per class and to satisfy every 
 
 Covers:
   - a column key, a relation key (= all its stored columns), a key across two relations
-  - `per ()` is one decision (the same model as `scalar`); no `per` is one per row
+  - `per ()` is one decision, its objective coefficient counted once; no `per` is one per row
   - a key column absent from SELECT, WHERE and the clause survives column pruning, on a
     base table and on VALUES, and through a serialization round trip
   - a key is a set: order and repetition do not matter
   - NULL is a key value
   - both clause orders
   - several declarators, each with its own key
-  - the old `T.x` keeps dropping the columns its clause reads as data; a `per` key does not
+  - `per T` keys on every stored column of T, the columns its clause reads as data included
   - result types, EXPLAIN, and every error a key raises
 """
 
@@ -28,7 +28,9 @@ import textwrap
 import pytest
 
 from ._output_helpers import assert_no_internal_leak
-from ._scope_oracle import GLOBAL, Decision, Objective, RowClause, ScopeModel, SumClause
+from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
+from ._scope_oracle import (CONSTANT, GLOBAL, Decision, Objective, Reduce, RowClause, ScopeModel, Scoped,
+                            ScopedModel, ScopedObjective, SumClause)
 from solver.types import ObjSense, VarType
 
 # Shipments joined to their depots: five result rows, three depots in two regions.
@@ -200,7 +202,7 @@ def test_key_across_two_relations(decidb_cli, scope_solver, tmp_path):
 @pytest.mark.correctness
 def test_per_empty_is_one_decision_and_no_per_is_one_per_row(decidb_cli, scope_solver, tmp_path):
     """`per (): cap` is one decision for the query, with its objective coefficient
-    counted once -- the same model as `scalar cap` -- while `ship` stays one per row."""
+    counted once, while `ship` stays one per row."""
     def query(cap):
         return f"""
             SELECT shipmentID, cap, ship {_from()}
@@ -209,7 +211,6 @@ def test_per_empty_is_one_decision_and_no_per_is_one_per_row(decidb_cli, scope_s
             MAXIMIZE SUM(ship) - cap
             ORDER BY shipmentID"""
     keyed = decidb_cli.dump_model(query("per (): cap"), tmp_path / "per.dump")
-    assert keyed == decidb_cli.dump_model(query("scalar cap"), tmp_path / "scalar.dump")
 
     model = ScopeModel(_joined(), [Decision("cap", GLOBAL), Decision("ship")])
     clauses = [RowClause(lambda r: {"ship": 1, "cap": -1}, "<=", lambda r: 0),
@@ -412,16 +413,16 @@ def test_two_declarators_with_one_key(decidb_cli, scope_solver, tmp_path):
 
 
 # ---------------------------------------------------------------------------
-# The old table-scoped spelling keeps its own key rule
+# A relation key is every column of the relation
 # ---------------------------------------------------------------------------
 
 TRIM = "(VALUES (1, 'a', 5), (1, 'a', 7), (2, 'b', 3)) T(k, name, cost)"
 
 
 @pytest.mark.correctness
-def test_old_table_scope_drops_data_columns_but_a_per_key_does_not(decidb_cli, tmp_path):
-    """`T.x` keeps dropping from its key the columns its clause reads as data (cost
-    here), until the old spelling is removed; `per T` means every column of T."""
+def test_a_relation_key_is_every_column_of_the_relation(decidb_cli, tmp_path):
+    """`per T` keys on every stored column of T, the columns a clause reads as data
+    included (cost here); `per T.k` keys on the one column."""
     def count(declaration, name):
         sql = f"""
             SELECT T.k, x FROM {TRIM}
@@ -429,23 +430,8 @@ def test_old_table_scope_drops_data_columns_but_a_per_key_does_not(decidb_cli, t
             SUCH THAT x <= 4
             MAXIMIZE SUM(cost * x)"""
         return _num_vars(decidb_cli.dump_model(sql, tmp_path / f"{name}.dump"))
-    assert count("T.x(INT)", "table") == 2
     assert count("per T: x(INT)", "relation") == 3
     assert count("per T.k: x(INT)", "column") == 2
-    # In one query: the per scope is neither shared with T.x's nor trimmed with it.
-    assert count("T.x(INT), per T: y(INT)", "mixed") == 2 + 3
-
-
-@pytest.mark.correctness
-def test_per_relation_equals_old_table_scope_when_no_column_is_data(decidb_cli, tmp_path):
-    def query(declaration):
-        return f"""
-            SELECT T.k, x FROM {TRIM}
-            DECIDE {declaration}
-            SUCH THAT x <= 4
-            MAXIMIZE SUM(x)"""
-    assert (decidb_cli.dump_model(query("T.x(INT)"), tmp_path / "table.dump") ==
-            decidb_cli.dump_model(query("per T: x(INT)"), tmp_path / "relation.dump"))
 
 
 @pytest.mark.correctness
@@ -545,10 +531,7 @@ KEY_ERRORS = [
     _binder_error(_decide("per ship: x(INT), ship(INT)"), f"DECIDE: ship {DECISION}", "decision-declared-after"),
     _binder_error(_decide("ship(INT), per ship: x(INT)"), f"DECIDE: ship {DECISION}", "decision-declared-before"),
     _binder_error(_decide("per x: x(INT)"), f"DECIDE: x {DECISION}", "its-own-name"),
-    # A table-scoped decision is a decision by its qualified spelling too ...
-    _binder_error(_decide("D.open(BOOL), per D.open: x(INT)"), f"DECIDE: D.open {DECISION}",
-                  "table-scoped-decision"),
-    # ... but a qualified name over a per decision or a query-wide one names nothing.
+    # A qualified name over a per decision or a query-wide one names nothing.
     _binder_error(_decide("per D: open(BOOL), per D.open: x(INT)"), f"DECIDE: D.open {NEITHER}",
                   "qualified-per-decision"),
     _binder_error(_decide("per (): cap(INT), per S.cap: x(INT)"), f"DECIDE: S.cap {NEITHER}",
@@ -611,29 +594,38 @@ def test_generated_column_is_not_a_key_column(decidb_cli, tmp_path):
     assert _num_vars(dump) == 2
 
 
-@pytest.mark.error
-@pytest.mark.error_binder
-def test_per_decision_in_an_old_qualified_reducer_is_refused(decidb_cli):
-    result = decidb_cli.execute_raw(f"""
-        SELECT shipmentID {_from()}
+@pytest.mark.correctness
+def test_per_decision_in_a_qualified_reducer_answers(decidb_cli, scope_solver):
+    """``SUM(D: capacity * open)`` with `open` per D is ``sum(per D: ...)`` (S4): each
+    depot's capacity counts once, so D2 and D3 fit under 50 together."""
+    model = ScopedModel(_joined(), [Decision("open", DEPOT_COLUMNS, VarType.BINARY, ub=1.0)])
+    clauses = [Scoped((Reduce("sum", lambda r: {"open": r["capacity"]}, per=DEPOT_COLUMNS),), "<=",
+                      (lambda r: {CONSTANT: 50},))]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"open": 1}),))
+    result = answer(decidb_cli, f"""
+        SELECT shipmentID, open {_from()}
         DECIDE per D: open(BOOL)
         SUCH THAT SUM(D: capacity * open) <= 50
-        MAXIMIZE SUM(open)""")
-    assert ("DECIDE: 'open' is declared with per; using it inside SUM(D: ...) is not supported yet"
-            in result.stderr), result.stderr
-    assert_no_internal_leak(result, "a per decision inside SUM(D: ...)")
+        MAXIMIZE SUM(open)
+        ORDER BY shipmentID""")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4)
 
 
-@pytest.mark.error
-@pytest.mark.error_binder
-def test_aggregate_constraint_names_a_per_decision_as_written(decidb_cli):
-    """A keyed decision beside a reducer is refused, naming it the way it was declared."""
-    result = decidb_cli.execute_raw(f"""
-        SELECT shipmentID {_from()}
+@pytest.mark.correctness
+def test_keyed_decision_beside_a_reducer_answers(decidb_cli, scope_solver):
+    """``SUM(x) + open <= 5`` with `open` per depot is generated once per row (D30): each
+    row bounds the total plus its depot's `open`."""
+    model = ScopedModel(_joined(), [Decision("open", ("depotID",)), Decision("x")])
+    x = lambda r: {"x": 1}  # noqa: E731
+    clauses = [Scoped((Reduce("sum", x), lambda r: {"open": 1}), "<=", (lambda r: {CONSTANT: 5},)),
+               Scoped((x,), "<=", (lambda r: {CONSTANT: 1},))]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", x),))
+    result = answer(decidb_cli, f"""
+        SELECT shipmentID, open, x {_from()}
         DECIDE per D.depotID: open(INT), x(INT)
         SUCH THAT SUM(x) + open <= 5 AND x <= 1
-        MAXIMIZE SUM(x)""")
-    assert ("decision 'open' (declared per D.depotID) cannot appear outside a reducer in an aggregate "
-            "constraint. Put it inside SUM/AVG/MIN/MAX, or declare it per () when one query-wide value "
-            "is intended." in result.stderr), result.stderr
-    assert_no_internal_leak(result, "a per decision beside a reducer")
+        MAXIMIZE SUM(x)
+        ORDER BY shipmentID""")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4)
