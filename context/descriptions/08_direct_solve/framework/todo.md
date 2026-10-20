@@ -113,12 +113,35 @@ What exists today is in `done.md`.
   they are, so the oracle cache still hits.
 - **Done when.** The five checks pass with no oracle re-run.
 
-## H-29 — Review the whole test suite for waste
+## H-29 — Prune the direct-solve tests
 
-- **Problem.** The suite is large (3,443 tests; S1's oracle file alone has 1,131) and the five-check matrix takes about
-  3 minutes. Some tests may repeat each other across files, pin how a rule is built instead of what the user gets, or
-  cover a grid whose extra cases add no new behavior.
-- **Change.** Read-only first. For each test file, list what behavior it pins, and report the overlaps, the tests
-  that pin internals, and the cases that add nothing, with the cost of each. The owner picks what to cut; each cut is
-  a task of its own.
+- **Needs.** S1-17 and H-26, so the tests are weighed against the final code and the final coverage.
+- **Problem.** The direct-solve tests are about half of the suite (1,746 of 3,445 tests; S1's oracle file alone has
+  1,141, from parametrized grids) and the matrix runs each test four times. Some tests may repeat each other across files,
+  pin how a rule is built instead of what the user gets, or sit in a grid whose extra cases reach no new branch.
+- **Change.** Rebuild the catalogue of the direct-solve tests by category (what each category checks, against what,
+  and which behavior it pins; the first catalogue had 19 categories and the owner judged each a meaningful check).
+  With the per-test branch coverage (`run_coverage.sh`, `framework/done.md`), list per category the tests whose removal leaves the set of covered branches
+  unchanged. Tests that pin a behavior the owner finds arbitrary go to the owner as a question about the system, not the
+  test. The owner picks what to cut; each cut is a task of its own, and the coverage run after it must show no branch lost.
 - **Done when.** The owner has the report and has said which cuts to make.
+
+## H-31 — Test the decline branches on the IR
+
+- **Needs.** H-26.
+- **Problem.** Each "not exactly this shape" branch in `CheckCondition` is tested by a full SQL query on up to four
+  paths, though a rule's input is a plain `DirectIR` struct. The branches cost most of the suite.
+- **Change.** A C++ helper that builds a small `DirectIR` and calls a rule's `CheckCondition`, with one case per decline
+  branch for S1, A1 and the shared driver check. The SQL and oracle tests stay for what they prove, which is that
+  answers are right.
+- **Done when.** Every decline branch of S1 and A1 has an IR-level case and the per-test coverage shows the same branches
+  covered. Which SQL tests it makes unneeded is H-29's work.
+
+## H-32 — Coverage and complexity in the daily checks
+
+- **Problem.** The `CLAUDE.md` rule that tests follow decision points has no check behind it, and coverage runs only
+  when someone sets it up. Running a subset of tests by hand also deletes the other tests' oracle-cache entries unless
+  `-m` is passed (`conftest.py` prunes after a run with no `-k` or `-m`).
+- **Change.** A `make decide-coverage` target around `run_coverage.sh`, and `/orchestrate`'s exit gate reports the
+  complexity change of the functions a task touches and the tests that reach each branch it adds.
+- **Done when.** The target runs from the repository root, and the orchestrate skill and `.claude/CLAUDE.md` name it.

@@ -174,5 +174,14 @@ default box.
 - Result adapter parent contexts, identical under `auto`, `off` and `require`: `CREATE TABLE AS`, `INSERT ... SELECT`, a
   view, a window over the result, `UNION ALL` of an S1 and an A1 query, a joined source with a filter above, a self-join
   of results, an empty source and a prepared statement with a parameter.
+- Branch coverage per test: `test/decide/run_coverage.sh OUT_DIR <pytest args>` runs tests against an instrumented
+  `build/coverage/decidb` (the cmake recipe is in the script's header; `-fprofile-list` instruments only
+  `src/optimizer/decide/direct/*.cpp` and `decide_rewrite_rhs_window.cpp`) and keeps one small profile per test, about 72 KB.
+  `coverage_report.py report OUT_DIR` prints, per file, per test function and per test, the branch arms reached and the
+  arms only that test reaches, and writes `report.json` with each test's arm set. The six `test_direct_*.py` files (1,746
+  tests) take about 50 seconds on 8 workers and 119 MB. Last measured on 2026-10-20: 1,644 of 2,008 arms reached, 364
+  never reached; a greedy cover needs 67 tests for the same 1,644 arms and 6 for 90% of them. Branch coverage shows
+  which branches a test runs, not whether its assertion would catch a wrong value there. A subset run by hand needs
+  `-m` (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
   clauses 0.13 s, 8 clauses with `WHEN` 0.26 s, 3 decisions and 8 clauses 0.29 s.

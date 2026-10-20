@@ -38,6 +38,8 @@ Follow surrounding DuckDB conventions: C++ types and methods use PascalCase; var
 
 Use pytest files/functions named `test_*` and existing category markers. Correctness tests compare CLI results with independent Python solver oracles; the oracle suite requires a valid Gurobi license. Add behavior-focused regressions for changed semantics, including relevant error cases.
 
+Keep tests linked to the decision points of the code they test. Measure with lizard (installed in the test venv by `make decide-setup`): `test/decide/.venv/bin/python -m lizard -l cpp <files>` prints the cyclomatic complexity (CCN) of each function. Every decision point a change adds needs a test that reaches it and fails if that branch is removed. A parametrized grid case must reach a branch no other case reaches; name the branch before adding it. When a change deletes code, delete the tests that only reached that code in the same change.
+
 For solver changes, also run `DECIDB_FORCE_SOLVER=highs make decide-test`. Direct solve is on by default; `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` runs the whole suite on the solver path alone. For serialization changes, run `DECIDB_VERIFY_SERIALIZER=1 make decide-test` and C++ serialization regressions. Inspect golden differences before regenerating baselines; include intentional baseline changes with the implementation.
 
 ## Commit & Pull Request Guidelines
