@@ -3,19 +3,10 @@
 What S1 does today is in `done.md`; the class is in `definition.md`. How to work and the checks are in
 `../../framework/todo.md` § How to work any task. Every widening also meets the exit gate at the end of this file.
 
-## S1-16 — Delete S1's own reading of a right-hand aggregate
-
-- **Problem.** The shared right-hand-side rewrite hands S1 each `COUNT`, `MIN`, `MAX`, `SUM` and `AVG` limit as a source
-  column, so S1's own code for aggregates on the right of a count bound can no longer run: `ReducerProblem`,
-  `RowCountBoundProblem`, `IsSmallIntegerType`, `IsPlainCountStar`, `ReplaceAggregates`, `OnlyWhereCovered` and the reducer
-  windows in `CountRows`, about 270 lines, with the `Condition::SourceBound` fields only they use. What S1 still meets is an
-  aggregate the rewrite leaves on the solver's fold (an own `WHEN`, a qualified reducer), which S1 declines.
-- **Change.** Delete that code. A right-hand aggregate in the IR is a decline with its reason.
-- **Done when.** The S1 differential oracle, conformance and fuzz suites pass with no edit to a test file, no S1 code reads
-  an aggregate node, and `done.md` states S1's decline for an aggregate with its own `WHEN`.
-
 ## S1-17 — Constant terms in the count body
 
+- **Needs.** `../../framework/todo.md` § H-20: under a `SUM` with an aggregate-local `WHEN`, the `COUNT(*)` the
+  canonicalizer writes carries its own `WHEN`, which the right-hand-side rewrite reads only after H-20.
 - **Problem.** S1 admits `SUM(x + c)` and `SUM(c - x)` by shifting the limit by `n*c` per group (`ReadCountBody`,
   `MAX_OFFSET`, the `HUGEINT` widening in `AddBoundValidation`, the covered-row count in `CountRows`, about 90 lines).
   The class definition does not ask for it, and `done.md` records a known difference near the top of `HUGEINT`.
@@ -40,7 +31,7 @@ What S1 does today is in `done.md`; the class is in `definition.md`. How to work
 
 ## S1-18 — S1 builds its expressions with `ExpressionBuilder`
 
-- **Needs.** `../../framework/todo.md` § H-25, and S1-16 so deleted code is not converted.
+- **Needs.** `../../framework/todo.md` § H-25.
 - **Problem.** S1 builds every expression by hand (`make_uniq<Bound...>`, 51 times in the rule and 17 in its helpers)
   and never uses `ExpressionBuilder`; `AnyCondition` copies `ExpressionBuilder::Any`. `SourceLimit` takes about 30
   lines for what the builder writes in about 8.

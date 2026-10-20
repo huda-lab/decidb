@@ -1,6 +1,6 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-10-19 on top of `d7dfe9e8a9`: `make decide-test` (3,443 passed, also with
+Verified on 2026-10-20 on top of `6d2ecb6ad6`: `make decide-test` (3,443 passed, also with
 `DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,442
 passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,322 assertions in 46
 cases). `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check). Code:
@@ -20,7 +20,9 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   right of a count bound, alone or inside `+ - * / //` and other arithmetic (`SUM(x) <= COUNT(*) / 2`, `>= COUNT(*) * 0.1`,
   `<= MIN(cap) PER warehouse`, `>= MAX(lo) / 2`, `<= SUM(cap)`). The shared right-hand-side rewrite (`framework/done.md`) hands S1
   each such aggregate as a source column holding the group's value, so S1 reads the bound like any per-row source bound and
-  checks it for NULL and NaN on every row. The value is DuckDB's, in its own types: `SUM` over any numeric type is exact, a bound of
+  checks it for NULL and NaN on every row. S1 has no reader of its own for an aggregate: one the rewrite leaves on the
+  solver's fold (an own `WHEN`, a relation-qualified one, `DISTINCT` or `ORDER BY` inside it, another reducer) reaches S1
+  as an aggregate node, and S1 declines the query. The value is DuckDB's, in its own types: `SUM` over any numeric type is exact, a bound of
   `COUNT(*) * 0.57` over 100 rows is exactly 57, and over the `BIGINT` values 2^60, 1, -2^60 `SUM(cap)` is 1. `COUNT(*)` counts the
   rows the clause covers in each group: a clause-level `WHEN` or a NULL `PER` key narrows it, while an aggregate-local `WHEN` on the
   left (`SUM(x) WHEN active <= COUNT(*) / 2`) does not narrow the right, which counts every row of the group. An infinite value is a

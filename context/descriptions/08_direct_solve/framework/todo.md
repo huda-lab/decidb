@@ -99,10 +99,10 @@ What exists today is in `done.md`.
 - **Problem.** Every rule opens `CheckCondition` with the same checks of the IR's status: decisions, source,
   constraints, each constraint, the objective, a finite objective offset and a known sense (S1 and A1, about 25 lines
   each). R1 would copy them.
-- **Change.** The rule driver checks once and offers the IR to no rule when it fails. `require` gives one reason
-  (`ir_not_proved: ...`) in place of one per rule. Each rule drops its copy; a rule keeps only the checks that are about
-  its own class.
-- **Done when.** Neither rule repeats the checks, and the `require` tests match the new wording.
+- **Needs.** H-28.
+- **Change.** The rule driver checks once and offers the IR to no rule when it fails. Each rule drops its copy; a rule
+  keeps only the checks that are about its own class.
+- **Done when.** Neither rule repeats the checks and the five checks pass.
 
 ## H-27 — Test literals and rule headers
 
@@ -113,3 +113,32 @@ What exists today is in `done.md`.
   every rule's factory function. `architecture/rules.md` § Adding a rule step 1 follows. Test function bodies stay as
   they are, so the oracle cache still hits.
 - **Done when.** The five checks pass with no oracle re-run.
+
+## H-28 — A decline is a plain yes or no
+
+- **Problem.** Every rule check returns a reason string for each "no" (`CheckCondition`, `DirectReadBounds` and the
+  `reason` fields in `direct_rule.hpp`; about 65 message sites in S1, A1, the IR reader, the plan factory and the
+  driver). Nobody sees them under `auto`, which falls back to the solver silently. They show only in the `require`
+  error, the `EXPLAIN` annotation and `DIAGNOSE`, and the tests already know which queries must decline. They are
+  code and test bloat, and each new rule or widening adds more.
+- **Change.** A rule's check returns true or false and takes no reason. `require` raises one fixed short line saying
+  the solver is needed. `EXPLAIN` says whether a rule applied and not why a rule did not. `DIAGNOSE` is unchanged.
+  Delete every reason string, the `reason` out-parameters and fields, and `RequireNotAppliedText`'s per-rule text.
+  Tests assert that a query applies or declines (a near miss must decline under `require` and its plain form must
+  apply), not the reason text. The owner has approved editing the test files for this. Update the docs that mention
+  reasons (`architecture/rules.md`, `architecture/ir.md`, `architecture/glossary.md`, `framework/done.md`).
+  Also sweep the direct-solve layer for other decorative output (per-rule `EXPLAIN` summaries, diagnostic text) and
+  list what you find for the owner. Delete none of it without a yes.
+- **Done when.** The five checks pass, no test asserts reason text, no rule file builds a reason string, and the
+  sweep list is in the report.
+
+## H-29 — Review the whole test suite for waste
+
+- **Needs.** H-28, so the review does not weigh tests that pin reason text.
+- **Problem.** The suite is large (3,443 tests; S1's oracle file alone has 1,131) and the five-check matrix takes about
+  3 minutes. Some tests may repeat each other across files, pin how a rule is built instead of what the user gets, or
+  cover a grid whose extra cases add no new behavior.
+- **Change.** Read-only first. For each test file, list what behavior it pins, and report the overlaps, the tests
+  that pin internals, and the cases that add nothing, with the cost of each. The owner picks what to cut; each cut is
+  a task of its own.
+- **Done when.** The owner has the report and has said which cuts to make.
