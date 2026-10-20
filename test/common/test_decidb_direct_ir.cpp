@@ -73,12 +73,11 @@ DirectSolveRule *FindS1Rule(duckdb::vector<duckdb::unique_ptr<DirectSolveRule>> 
 	return FindRuleByName(rules, "S1_UNIFORM_MATROID");
 }
 
-//! Whether `rule` applies to the query, and why not when it does not. A rule that does not apply comes back as false.
+//! Whether `rule` applies to the query.
 bool RuleApplies(DirectSolveRule &rule, Connection &con, const string &declaration, const string &constraints,
-                 const string &objective, string &reason, string *condition_text = nullptr) {
+                 const string &objective, string *condition_text = nullptr) {
 	QueryIR query(con, IRQuery(declaration, constraints, objective));
-	reason.clear();
-	auto condition = rule.CheckCondition(query.ir, *con.context, reason);
+	auto condition = rule.CheckCondition(query.ir, *con.context);
 	if (!condition) {
 		return false;
 	}
@@ -114,12 +113,10 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(ir.constraints.size() == 1);
 	REQUIRE(ir.constraints[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.constraints[0].source_clause_id == 0);
-	REQUIRE(ir.constraints[0].clause_text == "SUM(x) <= 1");
 	auto rules = RegisteredDirectRules();
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
-	string reason;
-	auto condition = s1->CheckCondition(ir, *con.context, reason);
+	auto condition = s1->CheckCondition(ir, *con.context);
 	REQUIRE(condition != nullptr);
 	REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 
@@ -130,9 +127,7 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(damaged.constraints.size() == 1);
 	REQUIRE(damaged.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
 	REQUIRE(damaged.constraints[0].source_clause_id == DConstants::INVALID_INDEX);
-	reason.clear();
-	REQUIRE(s1->CheckCondition(damaged, *con.context, reason) == nullptr);
-	REQUIRE(reason.find("constraint_provenance") != string::npos);
+	REQUIRE(s1->CheckCondition(damaged, *con.context) == nullptr);
 }
 
 TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]") {
@@ -153,8 +148,7 @@ TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]")
 		auto ir = DirectIR::Read(*con.context, *decide);
 		REQUIRE(ir.constraints_status == DirectAnalysisStatus::PROVED);
 		REQUIRE(ir.constraints.size() == ir.source_clause_count);
-		string reason;
-		auto condition = s1->CheckCondition(ir, *con.context, reason);
+		auto condition = s1->CheckCondition(ir, *con.context);
 		REQUIRE(condition != nullptr);
 		REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 	}
@@ -176,8 +170,7 @@ TEST_CASE("S1 condition normalizes finite count bounds", "[decidb]") {
 		auto *decide = FindDirectIRInput(*plan);
 		REQUIRE(decide != nullptr);
 		auto ir = DirectIR::Read(*con.context, *decide);
-		string reason;
-		auto condition = s1->CheckCondition(ir, *con.context, reason);
+		auto condition = s1->CheckCondition(ir, *con.context);
 		REQUIRE(condition != nullptr);
 		REQUIRE(s1->Summary() == "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi");
 	}
@@ -191,31 +184,20 @@ TEST_CASE("S1 condition rejects an unrepresentable bound and volatile coefficien
 	auto rules = RegisteredDirectRules();
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
-	struct RejectedCase {
-		string constraint;
-		string objective;
-		//! What the check this case is about writes, so an early shape check cannot pass for it.
-		string reason_prefix;
-	};
-	const duckdb::vector<RejectedCase> cases = {
-	    {"SUM(x)<=9007199254740993", "SUM(score*x)",
-	     "constraint_shape: cardinality bound must be a finite consistent foldable numeric expression"},
-	    {"SUM(x)<=1", "SUM((score+random())*x)",
-	     "coefficient_shape: expected a deterministic numeric expression without decisions"},
-	};
-	for (auto &test : cases) {
+	auto applies = [&](const string &constraint, const string &objective) {
 		auto plan = con.ExtractPlan("SELECT id, x FROM ("
 		                            " FROM (VALUES (1, 9.0::DOUBLE)) s(id,score)"
 		                            " DECIDE x(BOOL) SUCH THAT " +
-		                            test.constraint + " MAXIMIZE " + test.objective + ") q");
+		                            constraint + " MAXIMIZE " + objective + ") q");
 		auto *decide = FindDirectIRInput(*plan);
 		REQUIRE(decide != nullptr);
 		auto ir = DirectIR::Read(*con.context, *decide);
-		string reason;
-		REQUIRE(s1->CheckCondition(ir, *con.context, reason) == nullptr);
-		INFO(reason);
-		REQUIRE(reason.find(test.reason_prefix) == 0);
-	}
+		return s1->CheckCondition(ir, *con.context) != nullptr;
+	};
+	// The plain form of each case applies, so the case declines for the one thing it changes.
+	REQUIRE(applies("SUM(x)<=1", "SUM(score*x)"));
+	REQUIRE(!applies("SUM(x)<=9007199254740993", "SUM(score*x)"));
+	REQUIRE(!applies("SUM(x)<=1", "SUM((score+random())*x)"));
 }
 
 TEST_CASE("Direct-solve IR retains WHEN and declines unresolved PER keys", "[decidb]") {
@@ -248,13 +230,11 @@ TEST_CASE("Direct-solve IR retains WHEN and declines unresolved PER keys", "[dec
 	auto per_ir = DirectIR::Read(*con.context, *per_decide);
 	// ExtractPlan precedes the optimizer's reference resolution. Its PER key is
 	// still a positional BoundReferenceExpression; do not invent a binding. The
-	// clause is not proved and says why; the rest of the problem is still read.
+	// clause is not proved; the rest of the problem is still read.
 	// End-to-end direct tests exercise the resolved key at the DECIDE operator.
 	REQUIRE(per_ir.constraints_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(per_ir.constraints.size() == 1);
 	REQUIRE(per_ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
-	REQUIRE(per_ir.constraints[0].reason.find("PER keys") != string::npos);
-	REQUIRE(per_ir.FirstNotProvedReason().find("SUM(x) <= 1") != string::npos);
 
 	auto objective_plan = con.ExtractPlan("SELECT id, x FROM ("
 	                                      " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
@@ -343,8 +323,6 @@ TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norm
 	REQUIRE(constraints[4].lhs[0].qualifier == 0);
 	REQUIRE(constraints[5].lhs[0].scale != nullptr);
 	REQUIRE(constraints[6].lhs[0].status == DirectAnalysisStatus::NOT_PROVED);
-	REQUIRE(constraints[6].lhs[0].reason == "norm of order 0 is not modelled");
-	REQUIRE(constraints[6].reason == constraints[6].lhs[0].reason);
 	// L1 reads as its definition: SUM of an absolute value.
 	REQUIRE(constraints[7].lhs[0].reducer == DirectReducer::SUM);
 	REQUIRE(constraints[7].lhs[0].terms.size() == 1);
@@ -364,7 +342,6 @@ TEST_CASE("Direct-solve IR reads an unexpected norm tag as a not-proved part, ne
 			auto &constraint = query.ir.constraints[0];
 			REQUIRE(constraint.status == DirectAnalysisStatus::NOT_PROVED);
 			REQUIRE(constraint.lhs[0].status == DirectAnalysisStatus::NOT_PROVED);
-			REQUIRE(!constraint.lhs[0].reason.empty());
 		}
 	}
 }
@@ -389,7 +366,7 @@ TEST_CASE("Direct-solve IR models products, squares, and nested objective reduce
 	REQUIRE(parts[0].terms.empty());
 }
 
-TEST_CASE("Direct-solve IR reports what it cannot model as not proved, with a reason", "[decidb]") {
+TEST_CASE("Direct-solve IR reports what it cannot model as not proved", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	// A decision under ABS inside a square is not linear algebra the splitter can read.
@@ -399,8 +376,6 @@ TEST_CASE("Direct-solve IR reports what it cannot model as not proved, with a re
 	REQUIRE(ir.constraints.size() == 2);
 	REQUIRE(ir.constraints[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
-	REQUIRE(!ir.constraints[1].reason.empty());
-	REQUIRE(ir.FirstNotProvedReason().find("clause `") != string::npos);
 }
 
 TEST_CASE("Direct-solve IR says which bounds the solver folds into a variable's box", "[decidb]") {
@@ -511,51 +486,47 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	REQUIRE(types.ir.decisions[2].output_type == LogicalType::INTEGER);
 }
 
-TEST_CASE("A1 accepts a separable box-constrained problem and names why it declines anything else", "[decidb]") {
+TEST_CASE("A1 accepts a separable box-constrained problem and declines anything else", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	auto rules = RegisteredDirectRules();
 	auto *a1 = FindRuleByName(rules, "A1_SEPARABLE_BOX");
 	REQUIRE(a1 != nullptr);
-	string reason, condition;
+	string condition;
 
 	// What it accepts.
 	REQUIRE(
-	    RuleApplies(*a1, con, "x(REAL)", "x BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(x - w, 2))", reason, &condition));
+	    RuleApplies(*a1, con, "x(REAL)", "x BETWEEN 0 AND cap", "MINIMIZE SUM(POWER(x - w, 2))", &condition));
 	REQUIRE(condition == "min/max SUM(c*x), l <= x <= u, each row independent");
-	REQUIRE(RuleApplies(*a1, con, "x(INT)", "x <= cap AND x >= 0", "MAXIMIZE SUM(w*x)", reason));
-	REQUIRE(RuleApplies(*a1, con, "x(BOOL)", "x <= flag", "MAXIMIZE SUM(w*x)", reason));
-	REQUIRE(RuleApplies(*a1, con, "x(REAL), y(INT)", "x <= cap AND y <= 5", "MINIMIZE SUM(x) + SUM(w*y)", reason));
-	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= cap", "", reason));
+	REQUIRE(RuleApplies(*a1, con, "x(INT)", "x <= cap AND x >= 0", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(RuleApplies(*a1, con, "x(BOOL)", "x <= flag", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL), y(INT)", "x <= cap AND y <= 5", "MINIMIZE SUM(x) + SUM(w*y)"));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= cap", ""));
 	REQUIRE(
-	    RuleApplies(*a1, con, "x(REAL)", "2*x <= cap AND w*x >= -1 AND x >= -3 WHEN flag", "MAXIMIZE SUM(x)", reason));
-	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 3, 2)) WHEN flag", reason));
+	    RuleApplies(*a1, con, "x(REAL)", "2*x <= cap AND w*x >= -1 AND x >= -3 WHEN flag", "MAXIMIZE SUM(x)"));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 3, 2)) WHEN flag"));
 	// A cast that can throw is read per row and raises as the solver does, so it is admitted.
-	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= CAST(cap AS TINYINT)", "MAXIMIZE SUM(x)", reason));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= CAST(cap AS TINYINT)", "MAXIMIZE SUM(x)"));
 
-	// What it declines, and the reason it names.
-	auto declines = [&](const string &declaration, const string &constraints, const string &objective,
-	                    const string &expected) {
+	// What it declines.
+	auto declines = [&](const string &declaration, const string &constraints, const string &objective) {
 		INFO(declaration << " | " << constraints << " | " << objective);
-		REQUIRE(!RuleApplies(*a1, con, declaration, constraints, objective, reason));
-		REQUIRE(reason.find(expected) != string::npos);
+		REQUIRE(!RuleApplies(*a1, con, declaration, constraints, objective));
 	};
-	declines("x(REAL)", "SUM(x) <= 5", "MAXIMIZE SUM(w*x)", "found an aggregate constraint");
-	declines("x(REAL), y(REAL)", "x + y <= 3", "MAXIMIZE SUM(x)", "constraint_shape");
-	declines("x(REAL), y(REAL)", "x <= cap AND y <= cap", "MAXIMIZE SUM(x*y)", "objective_shape");
-	declines("x(INT)", "x <= cap AND x <> 2", "MAXIMIZE SUM(w*x)", "found <> or IN");
-	declines("x(INT)", "x IN (1, 2, 3)", "MAXIMIZE SUM(w*x)", "found <> or IN");
-	declines("x(REAL)", "x <= cap", "MAXIMIZE SUM(w*x) PER id", "objective_not_proved");
-	declines("x(REAL)", "x <= cap", "MAXIMIZE AVG(w*x)", "objective_shape");
-	declines("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(x - w, 2)) + SUM(POWER(x - cap, 2))",
-	         "at most one squared term");
-	declines("x(REAL)", "x <= cap", "MINIMIZE SUM(w*POWER(x - 1, 2))", "objective_not_proved");
-	declines("x(REAL)", "x <= cap", "MAXIMIZE SUM(random()*x)", "coefficient_shape");
-	declines("x(REAL)", "x <= cap WHEN (random() < 2)", "MAXIMIZE SUM(x)", "constraint_scope");
-	declines("x(REAL)", "POWER(x, 2) <= 9", "MAXIMIZE SUM(x)", "constraint_shape");
-	declines("x(REAL)", "ABS(x) <= 3", "MAXIMIZE SUM(x)", "constraint_");
-	declines("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 1, 2)) + SUM(POWER(x - 1, 2))",
-	         "at most one squared term");
+	declines("x(REAL)", "SUM(x) <= 5", "MAXIMIZE SUM(w*x)");
+	declines("x(REAL), y(REAL)", "x + y <= 3", "MAXIMIZE SUM(x)");
+	declines("x(REAL), y(REAL)", "x <= cap AND y <= cap", "MAXIMIZE SUM(x*y)");
+	declines("x(INT)", "x <= cap AND x <> 2", "MAXIMIZE SUM(w*x)");
+	declines("x(INT)", "x IN (1, 2, 3)", "MAXIMIZE SUM(w*x)");
+	declines("x(REAL)", "x <= cap", "MAXIMIZE SUM(w*x) PER id");
+	declines("x(REAL)", "x <= cap", "MAXIMIZE AVG(w*x)");
+	declines("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(x - w, 2)) + SUM(POWER(x - cap, 2))");
+	declines("x(REAL)", "x <= cap", "MINIMIZE SUM(w*POWER(x - 1, 2))");
+	declines("x(REAL)", "x <= cap", "MAXIMIZE SUM(random()*x)");
+	declines("x(REAL)", "x <= cap WHEN (random() < 2)", "MAXIMIZE SUM(x)");
+	declines("x(REAL)", "POWER(x, 2) <= 9", "MAXIMIZE SUM(x)");
+	declines("x(REAL)", "ABS(x) <= 3", "MAXIMIZE SUM(x)");
+	declines("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 1, 2)) + SUM(POWER(x - 1, 2))");
 }
 
 TEST_CASE("S1 and A1 never both apply to one query", "[decidb]") {
@@ -566,7 +537,6 @@ TEST_CASE("S1 and A1 never both apply to one query", "[decidb]") {
 	auto *a1 = FindRuleByName(rules, "A1_SEPARABLE_BOX");
 	REQUIRE(s1 != nullptr);
 	REQUIRE(a1 != nullptr);
-	string reason;
 	struct Shape {
 		string declaration, constraints, objective;
 		bool s1, a1;
@@ -587,8 +557,8 @@ TEST_CASE("S1 and A1 never both apply to one query", "[decidb]") {
 	};
 	for (auto &shape : shapes) {
 		INFO(shape.declaration << " | " << shape.constraints << " | " << shape.objective);
-		bool applies_s1 = RuleApplies(*s1, con, shape.declaration, shape.constraints, shape.objective, reason);
-		bool applies_a1 = RuleApplies(*a1, con, shape.declaration, shape.constraints, shape.objective, reason);
+		bool applies_s1 = RuleApplies(*s1, con, shape.declaration, shape.constraints, shape.objective);
+		bool applies_a1 = RuleApplies(*a1, con, shape.declaration, shape.constraints, shape.objective);
 		REQUIRE(!(applies_s1 && applies_a1));
 		REQUIRE(applies_s1 == shape.s1);
 		REQUIRE(applies_a1 == shape.a1);

@@ -124,74 +124,59 @@ public:
 		return RULE_NAME;
 	}
 
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context,
-	                                                        string &reason) const override {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
 		if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.decisions.empty() || !ir.entity_scopes.empty() ||
 		    ir.source_status != DirectAnalysisStatus::PROVED) {
-			reason = "variable_shape: expected row-scoped BOOL, INT or REAL decisions";
 			return nullptr;
 		}
 		for (auto &decision : ir.decisions) {
 			if (decision.scope != DecideVarScope::ROW) {
-				reason = "variable_shape: expected row-scoped BOOL, INT or REAL decisions";
 				return nullptr;
 			}
 		}
 		if (!std::isfinite(ir.objective.offset) ||
 		    (ir.objective.sense != DecideSense::MAXIMIZE && ir.objective.sense != DecideSense::MINIMIZE &&
 		     ir.objective.sense != DecideSense::FEASIBILITY)) {
-			reason = "problem_shape: expected a finite objective constant and MINIMIZE, MAXIMIZE or no objective";
 			return nullptr;
 		}
 		if (ir.constraints_status != DirectAnalysisStatus::PROVED) {
-			reason = "constraints_not_proved: " + ir.constraints_reason;
 			return nullptr;
 		}
 		for (auto &ir_node : ir.constraints) {
 			if (ir_node.status != DirectAnalysisStatus::PROVED) {
-				reason = "constraints_not_proved: " + ir.FirstNotProvedReason();
 				return nullptr;
 			}
 			if (ir_node.aggregate) {
-				reason = "constraint_shape: expected a bound on one decision, found an aggregate constraint";
 				return nullptr;
 			}
 			if (ir_node.comparison == ExpressionType::COMPARE_IN ||
 			    ir_node.comparison == ExpressionType::COMPARE_NOTEQUAL) {
-				reason = "constraint_shape: expected an interval bound, found <> or IN";
 				return nullptr;
 			}
 			if (ir_node.comparison != ExpressionType::COMPARE_EQUAL && !DirectIsLowerBound(ir_node.comparison) &&
 			    !DirectIsUpperBound(ir_node.comparison)) {
-				reason = "constraint_shape: expected an interval bound";
 				return nullptr;
 			}
 			if (!ir_node.scope.per_key_slots.empty()) {
-				reason = "constraint_scope: PER does not apply to a bound on one row";
 				return nullptr;
 			}
 			if (!ReadsOneDecision(ir_node, ir.decisions.size())) {
-				reason = "constraint_shape: expected a bound of the form a*x <comparison> value on one decision";
 				return nullptr;
 			}
 		}
 		if (ir.objective.status != DirectAnalysisStatus::PROVED) {
-			reason = "objective_not_proved: " + ir.objective.reason;
 			return nullptr;
 		}
 		if (!ir.objective.scope.per_key_slots.empty()) {
-			reason = "objective_scope: expected an objective without PER";
 			return nullptr;
 		}
 		for (auto &part : ir.objective.parts) {
 			if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX) {
-				reason = "objective_shape: expected SUM(...) terms";
 				return nullptr;
 			}
 			for (auto &term : part.terms) {
 				if (term.kind != DecideTermKind::LINEAR && term.kind != DecideTermKind::CONSTANT &&
 				    term.kind != DecideTermKind::SQUARE) {
-					reason = "objective_shape: expected linear, constant or squared terms in independent decisions";
 					return nullptr;
 				}
 			}
@@ -206,7 +191,7 @@ public:
 			prepared.output_type = decision.output_type;
 			condition->decisions.push_back(std::move(prepared));
 		}
-		if (!ProveBounds(ir, context, *condition, reason) || !ProveObjective(ir, context, *condition, reason)) {
+		if (!ProveBounds(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
 			return nullptr;
 		}
 		condition->constant_problem = IsConstantProblem(*condition);
@@ -240,14 +225,14 @@ private:
 		return decision < decision_count;
 	}
 
-	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const;
+	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
 
 //! The decision's box before any per-row bound, and the clauses the plan evaluates per row, from the shared reader.
-bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const {
+bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	DirectBoundReading reading;
-	if (!DirectReadBounds(ir, context, reading, reason)) {
+	if (!DirectReadBounds(ir, context, reading)) {
 		return false;
 	}
 	condition.clauses = std::move(reading.clauses);
@@ -258,11 +243,10 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 	return true;
 }
 
-bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const {
+bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	auto &objective = ir.objective;
 	if (objective.scope.when) {
 		if (!DirectIsSourceOnlyPredicate(*objective.scope.when, ir.decide_index, ir.source_bindings)) {
-			reason = "objective_scope: WHEN must be a deterministic source-only predicate";
 			return false;
 		}
 		condition.objective_when = objective.scope.when->Copy();
@@ -273,13 +257,11 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		prepared.sign = part.sign;
 		prepared.scaled = part.scale != nullptr;
 		if (!DirectPartScale(context, part, prepared.scale)) {
-			reason = "objective_shape: a factor on SUM(...) must be a finite constant (not zero when dividing)";
 			return false;
 		}
 		prepared.divides = part.scale_divides;
 		if (part.filter) {
 			if (!DirectIsSourceOnlyPredicate(*part.filter, ir.decide_index, ir.source_bindings)) {
-				reason = "objective_scope: WHEN must be a deterministic source-only predicate";
 				return false;
 			}
 			prepared.filter = part.filter->Copy();
@@ -291,13 +273,11 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 				built.kind = term.kind == DecideTermKind::LINEAR ? Term::Kind::LINEAR : Term::Kind::CONSTANT;
 				if (term.kind == DecideTermKind::LINEAR) {
 					if (term.var_a >= decision_count) {
-						reason = "objective_shape: expected a coefficient times one decision";
 						return false;
 					}
 					built.decision = term.var_a;
 				}
 				if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
-					reason = "coefficient_shape: expected a deterministic numeric expression over the source columns";
 					return false;
 				}
 				built.value = term.coefficient->Copy();
@@ -305,11 +285,9 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 				built.kind = Term::Kind::SQUARE;
 				built.square_scale = term.square_scale;
 				if (!std::isfinite(term.square_scale) || term.square_scale == 0.0) {
-					reason = "objective_shape: the factor on a squared term must be a finite nonzero constant";
 					return false;
 				}
 				if (condition.has_square) {
-					reason = "objective_shape: expected at most one squared term, as the solver accepts";
 					return false;
 				}
 				condition.has_square = true;
@@ -317,24 +295,19 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 				for (auto &inner : term.inner) {
 					if (inner.kind == DecideTermKind::LINEAR) {
 						if (inner.var_a >= decision_count || (has_decision && built.decision != inner.var_a)) {
-							reason = "objective_shape: a squared term must hold one decision";
 							return false;
 						}
 						built.decision = inner.var_a;
 						has_decision = true;
 					} else if (inner.kind != DecideTermKind::CONSTANT) {
-						reason = "objective_shape: a squared term must be linear in one decision";
 						return false;
 					}
 				}
 				if (!has_decision) {
-					reason = "objective_shape: a squared term must be linear in one decision";
 					return false;
 				}
 				for (auto &inner : term.inner) {
 					if (!inner.coefficient || !DirectProveValue(ir, *inner.coefficient)) {
-						reason = "coefficient_shape: expected a deterministic numeric expression over the source "
-						         "columns";
 						return false;
 					}
 					DirectSignedValue value;

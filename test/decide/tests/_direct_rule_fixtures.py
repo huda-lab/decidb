@@ -2,18 +2,12 @@
 
 What a direct-solve rule owes the user is the same for every rule: the DECIDE
 schema and rows, the solver's read of every input row before any row is released,
-prepared plans, plan serialization, EXPLAIN, `require` reasons, and the solver path
+prepared plans, plan serialization, EXPLAIN, `require` declines, and the solver path
 under `off`, a forced backend, and `DIAGNOSE`. A rule supplies the queries below and the
 suite checks all of it. Adding a rule means adding one `RuleFixture` to `RULE_FIXTURES`.
 """
 
 from dataclasses import dataclass
-
-# A near miss that now applies: a right-hand aggregate is a window column of the source (H-19) and a bound that can
-# raise is read on every row, so S1 reads it as a source-valued bound. The conformance test asserts that `require`
-# applies and that `auto`, `off` and `require` answer alike; `S1_AGGREGATE_BOUNDS_NOW_APPLIED` gives the oracle the
-# bound's value.
-APPLIES_UNDER_REQUIRE = "<applies under require>"
 
 # Per-row bounds on x with no WHEN that S1 leaves on the solver, as (comparison, constant). The solver reads them as
 # Boolean arithmetic, and each one here cannot hold, so the query is infeasible before the solver reads a row. S1 does
@@ -61,9 +55,13 @@ class RuleFixture:
     table_setup: str
     table_applies: str
     table_change: str
-    #: (declaration, constraints, objective, reason substring) over the source in `near_miss_source`, each one
-    #: condition away from applying. The rule must decline it with that reason.
+    #: (declaration, constraints, objective) over the source in `near_miss_source`, each one condition away from
+    #: applying. The rule must decline it under `require`.
     near_misses: tuple
+    #: The same kind of triple that applies: the plain form every near miss is measured against.
+    near_miss_plain: tuple
+    #: More triples over the same source that the rule applies to, though they look like near misses.
+    near_miss_applies: tuple
     near_miss_source: str
     #: A column of `near_miss_source` the near-miss queries select.
     near_miss_column: str
@@ -116,75 +114,66 @@ S1 = RuleFixture(
         ) q
     """,
     table_change="ALTER TABLE direct_life ADD COLUMN extra INTEGER;",
-    near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 1), (2, 10.0::DOUBLE, 1)) t(id,p,cap)",
-    near_miss_column="id",
     near_misses=(
-        ("x(BOOL), y(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
-        ("x(BOOL)", "SUM(x)<=1 AND x<=cap+1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=1 PER id AND SUM(x)>=1 PER cap", "MAXIMIZE SUM(p*x)", "constraint_scope"),
-        ("x(BOOL)", "SUM(x)<>1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(BOOL), y(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=1 AND x<=cap+1", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=1 PER id AND SUM(x)>=1 PER cap", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<>1", "MAXIMIZE SUM(p*x)"),
         # A count body with an offset or a negation is admitted (`SUM(x+1)`, `SUM(1-x)`); one with a column in it, or a
         # weight on x other than 1 or -1, is not. A bound that can raise is admitted: the plan evaluates it on every row,
-        # as the solver does, so both raise on the same inputs (the three marked APPLIES_UNDER_REQUIRE).
-        ("x(BOOL)", "SUM(x+cap)<=3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(2*x+1)<=3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=CAST(cap AS TINYINT)", "MAXIMIZE SUM(p*x)", APPLIES_UNDER_REQUIRE),
-        ("x(BOOL)", "SUM(id*x)<=2", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=cap+1", "MAXIMIZE SUM(p*x)", APPLIES_UNDER_REQUIRE),
+        # as the solver does, so both raise on the same inputs (those are in `near_miss_applies`).
+        ("x(BOOL)", "SUM(x+cap)<=3", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(2*x+1)<=3", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(id*x)<=2", "MAXIMIZE SUM(p*x)"),
         # The WHEN scopes only the count here, while the left side still sums every row.
-        ("x(BOOL)", "SUM(x)<=COUNT(*) WHEN (id>0)", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=1.5+cap", "MAXIMIZE SUM(p*x)", APPLIES_UNDER_REQUIRE),
-        ("t.x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
-        ("t.x(BOOL)", "SUM(t: x)<=1", "MAXIMIZE SUM(p*x)", "variable_shape"),
-        ("x(BOOL)", "SUM(x)<=random()", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM((p+random())*x)", "coefficient_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)+SUM(CAST(cap::VARCHAR AS DOUBLE)*x)", "coefficient_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(MAX(p*x)) PER id", "objective_scope"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) WHEN id=1", "objective_scope"),
-        ("x(BOOL)", "SUM(x)<=9007199254740993", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "norm(x,'inf')<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "norm(x,1)<=1", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) - norm(p*x,1)", "objective_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MINIMIZE norm(p*x,2)", "objective_shape"),
-        ("x(BOOL)", "SUM(x)<='Infinity'::DOUBLE", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(BOOL)", "SUM(x)<=COUNT(*) WHEN (id>0)", "MAXIMIZE SUM(p*x)"),
+        ("t.x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)"),
+        ("t.x(BOOL)", "SUM(t: x)<=1", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=random()", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM((p+random())*x)"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)+SUM(CAST(cap::VARCHAR AS DOUBLE)*x)"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(MAX(p*x)) PER id"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) WHEN id=1"),
+        ("x(BOOL)", "SUM(x)<=9007199254740993", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "norm(x,'inf')<=1", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "norm(x,1)<=1", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) - norm(p*x,1)"),
+        ("x(BOOL)", "SUM(x)<=1", "MINIMIZE norm(p*x,2)"),
+        ("x(BOOL)", "SUM(x)<='Infinity'::DOUBLE", "MAXIMIZE SUM(p*x)"),
         # A per-row bound that can raise at runtime.
-        ("x(BOOL)", "SUM(x)<=2 AND x<=CAST(cap AS TINYINT)", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(BOOL)", "SUM(x)<=2 AND x<=CAST(cap AS TINYINT)", "MAXIMIZE SUM(p*x)"),
         # A constant factor that is not usable: the solver reads a NULL factor as an objective of zeros, and a subquery
         # factor has no known sign when the plan is built.
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)/0", "objective_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE CAST(NULL AS DOUBLE)*SUM(p*x)", "objective_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT 2)*SUM(p*x)", "objective_shape"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT -2)*SUM(p*x)", "objective_shape"),
-        # A bound that reads the group through aggregates. H-19 turned the ones below that apply into window columns; the one
-        # with its own WHEN stays on the solver's fold.
-        (
-            "x(BOOL)",
-            "SUM(x)<=(COUNT(*) WHEN (id>0))/2",
-            "MAXIMIZE SUM(p*x)",
-            "a WHEN on the right-hand aggregate",
-        ),
-        (
-            "x(BOOL)",
-            "SUM(x)<=MIN(p+1)/2",
-            "MAXIMIZE SUM(p*x)",
-            APPLIES_UNDER_REQUIRE,
-        ),
-        ("x(BOOL)", "SUM(x)<=AVG(p)", "MAXIMIZE SUM(p*x)", APPLIES_UNDER_REQUIRE),
-        ("x(BOOL)", "SUM(x)<=COUNT(*)/0", "MAXIMIZE SUM(p*x)", APPLIES_UNDER_REQUIRE),
-        ("x(BOOL)", "SUM(x)<=COUNT(*)/COUNT(*)", "MAXIMIZE SUM(p*x)", APPLIES_UNDER_REQUIRE),
-        ("x(BOOL)", "SUM(x)<=abs(COUNT(*)-5)", "MAXIMIZE SUM(p*x)", APPLIES_UNDER_REQUIRE),
-        # 1e23 is not a double: the window column keeps its exact value.
-        (
-            "x(BOOL)",
-            "SUM(x)<=COUNT(*)*100000000000000000000000",
-            "MAXIMIZE SUM(p*x)",
-            APPLIES_UNDER_REQUIRE,
-        ),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)/0"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE CAST(NULL AS DOUBLE)*SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT 2)*SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT -2)*SUM(p*x)"),
+        # A bound that reads the group through an aggregate with a WHEN of its own stays on the solver's fold.
+        ("x(BOOL)", "SUM(x)<=(COUNT(*) WHEN (id>0))/2", "MAXIMIZE SUM(p*x)"),
     )
     + tuple(
-        ("x(BOOL)", f"SUM(x)<=2 AND x{op}{constant}", "MAXIMIZE SUM(p*x)", "constraint_shape")
+        ("x(BOOL)", f"SUM(x)<=2 AND x{op}{constant}", "MAXIMIZE SUM(p*x)")
         for op, constant in sorted(S1_SOLVER_ONLY_ROW_BOUNDS, key=lambda bound: (bound[0], float(bound[1])))
     ),
+    # Queries that look like near misses and apply: a right-hand aggregate is a window column of the source (H-19) and
+    # a bound that can raise is read on every row, so S1 reads it as a source-valued bound. The conformance test
+    # asserts that `require` applies and that `auto`, `off` and `require` answer alike;
+    # `S1_AGGREGATE_BOUNDS_NOW_APPLIED` gives the oracle the bound's value.
+    near_miss_plain=("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)"),
+    near_miss_applies=(
+        ("x(BOOL)", "SUM(x)<=CAST(cap AS TINYINT)", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=cap+1", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=1.5+cap", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=MIN(p+1)/2", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=AVG(p)", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=COUNT(*)/0", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=COUNT(*)/COUNT(*)", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=abs(COUNT(*)-5)", "MAXIMIZE SUM(p*x)"),
+        # 1e23 is not a double: the window column keeps its exact value.
+        ("x(BOOL)", "SUM(x)<=COUNT(*)*100000000000000000000000", "MAXIMIZE SUM(p*x)"),
+    ),
+    near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 1), (2, 10.0::DOUBLE, 1)) t(id,p,cap)",
+    near_miss_column="id",
     late_errors=tuple(
         (
             f"""
@@ -261,28 +250,30 @@ A1 = RuleFixture(
     table_change="ALTER TABLE direct_a1_life ADD COLUMN extra INTEGER;",
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 5), (2, 10.0::DOUBLE, 3)) t(id,p,cap)",
     near_miss_column="id",
+    near_miss_plain=("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x)"),
+    near_miss_applies=(),
     near_misses=(
         # Decisions that are not row-scoped, or rows that are coupled.
-        ("t.x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x)", "variable_shape"),
-        ("x(REAL), y(REAL)", "x+y<=3 AND x<=cap", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(REAL), y(REAL)", "x<=cap AND y<=cap", "MAXIMIZE SUM(x*y)", "objective_shape"),
-        ("x(REAL)", "SUM(x)<=5", "MAXIMIZE SUM(p*x)", "found an aggregate constraint"),
-        ("x(REAL)", "norm(x,1)<=5", "MAXIMIZE SUM(p*x)", "found an aggregate constraint"),
+        ("t.x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL), y(REAL)", "x+y<=3 AND x<=cap", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL), y(REAL)", "x<=cap AND y<=cap", "MAXIMIZE SUM(x*y)"),
+        ("x(REAL)", "SUM(x)<=5", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "norm(x,1)<=5", "MAXIMIZE SUM(p*x)"),
         # Bounds that are not intervals, or not bounds.
-        ("x(INT)", "x<=cap AND x<>1", "MAXIMIZE SUM(p*x)", "found <> or IN"),
-        ("x(INT)", "x IN (1,2,3)", "MAXIMIZE SUM(p*x)", "found <> or IN"),
-        ("x(REAL)", "POWER(x,2)<=9", "MAXIMIZE SUM(p*x)", "constraint_shape"),
-        ("x(REAL)", "ABS(x)<=3", "MAXIMIZE SUM(p*x)", "constraint_shape"),
+        ("x(INT)", "x<=cap AND x<>1", "MAXIMIZE SUM(p*x)"),
+        ("x(INT)", "x IN (1,2,3)", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "POWER(x,2)<=9", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "ABS(x)<=3", "MAXIMIZE SUM(p*x)"),
         # Values that are not per-row source values.
-        ("x(REAL)", "x<=random()", "MAXIMIZE SUM(p*x)", "coefficient_shape"),
-        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(random()*x)", "coefficient_shape"),
-        ("x(REAL)", "x<=cap WHEN (random()<2)", "MAXIMIZE SUM(p*x)", "constraint_scope"),
-        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x) WHEN (random()<2)", "objective_scope"),
+        ("x(REAL)", "x<=random()", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(random()*x)"),
+        ("x(REAL)", "x<=cap WHEN (random()<2)", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x) WHEN (random()<2)"),
         # Objectives outside the class. Ones the solver itself rejects are in test_direct_a1_separable_box.py.
-        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x) PER id", "objective_scope"),
-        ("x(REAL)", "x<=cap", "MAXIMIZE AVG(p*x)", "objective_shape"),
-        ("x(REAL)", "x<=cap", "MAXIMIZE MIN(p*x)", "objective_shape"),
-        ("x(REAL)", "x<=cap", "MINIMIZE norm(x,1)", "objective_shape"),
+        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x) PER id"),
+        ("x(REAL)", "x<=cap", "MAXIMIZE AVG(p*x)"),
+        ("x(REAL)", "x<=cap", "MAXIMIZE MIN(p*x)"),
+        ("x(REAL)", "x<=cap", "MINIMIZE norm(x,1)"),
     ),
     late_errors=(
         # Every kind of error A1 raises, on the last of 5,000 rows.
@@ -363,7 +354,7 @@ A1 = RuleFixture(
 RULE_FIXTURES = (S1, A1)
 
 
-# The near misses marked APPLIES_UNDER_REQUIRE, as (constraint, the bound's value over the source `t(id, p, cap)` of
+# The `near_miss_applies` of S1, as (constraint, the bound's value over the source `t(id, p, cap)` of
 # rows (1, 9.0, 1) and (2, 10.0, 1)). A count divided by zero is infinity in DuckDB: no limit.
 S1_AGGREGATE_BOUNDS_NOW_APPLIED = (
     # A source column or an expression over it that can raise: read on every row, as the solver reads it.

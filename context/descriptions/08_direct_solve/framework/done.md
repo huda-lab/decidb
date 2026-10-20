@@ -1,9 +1,9 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-19 on top of `d7dfe9e8a9`, with the right-hand-side rewrite and S1 and A1 registered: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,443
-passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,442 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,322 assertions in
+Verified on 2026-10-20 on top of `0e9e4c27a9`, with the right-hand-side rewrite and S1 and A1 registered: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,445
+passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,444 passed and one failure,
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,298 assertions in
 46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
@@ -14,8 +14,8 @@ check). Design: `../architecture/`.
   a forced backend use the solver and conflict with `require`. A prepared plan keeps its selection until rebound.
   `require` also fails when the DECIDE optimizer is off.
 - **IR.** One read-only front end turns the bound tree into the IR: decision domains and scopes, each constraint with
-  aggregate, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Unmodeled parts are *not proved*
-  with a reason, and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the
+  aggregate, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Unmodeled parts are *not proved*,
+  and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the
   front end does not expect are not-proved parts. No IR node is kept that no rule reads. It uses the same term splitter
   as the solver path.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
@@ -162,7 +162,7 @@ default box.
 
 - C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts, and a norm tag it does not expect reading
   as a not-proved part, not an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
-  with every reason, a rule that applies beside one that does not, two rules applying as an internal error, mismatched
+  when no rule applies, a rule that applies beside one that does not, two rules applying as an internal error, mismatched
   slot, breaker under `LIMIT 1` and `COUNT(*)`).
 - Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read,
   serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE`, an empty source, and constant bounds that

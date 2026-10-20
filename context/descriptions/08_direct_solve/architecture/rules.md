@@ -19,7 +19,7 @@ for production use. If any required condition cannot be proved, the query stays 
 has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 
 - **CheckCondition** checks the shape first, then certifies every constraint, objective part, decision, runtime value
-  check and output. It returns the applicability condition `Apply` reads, or a reason. A not-proved IR node means the
+  check and output. It returns the applicability condition `Apply` reads, or nothing. A not-proved IR node means the
   rule does not apply; it is not an error. Shape and certification are one step because a DECIDE query offers each
   rule a single node, so a separate cheap pattern step (as in Cascades, where one pattern is tried on many subtrees)
   saves nothing.
@@ -37,7 +37,7 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    is `RULE_NAME`, the upper-cased `<ID>_<SLUG>`. Declare `Make<Id><Slug>Rule()` (`MakeS1UniformMatroidRule()`) in a
    header, list the file in the folder's `CMakeLists.txt`.
 2. Register it with one line in `direct_registry.cpp`. No other engine file changes.
-3. Read only the IR (`direct_rule.hpp`). Use `FirstNotProvedReason()` to name a blocking clause. The rule must be
+3. Read only the IR (`direct_rule.hpp`). A not-proved node is a decline. The rule must be
    disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible, and the
    plan factory functions in `direct_plan_factory.cpp` for the empty-aggregate error, the number checks, the all-rows
@@ -67,8 +67,8 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 - **Results.** Every source column in order, then one column per decision: `INTEGER` 0/1 for `BOOL`, `BIGINT` for
   `INT`, `DOUBLE` for `REAL`. Duplicate rows stay separate rows. When several assignments are optimal, a rule may
   return a different one than the solver.
-- **User-facing wording.** Name the object the user wrote and the smallest edit. Internal detail belongs in `require`
-  reasons and `EXPLAIN`. A runtime error uses the solver's text, built by the function the solver calls, never a copy of
+- **User-facing wording.** Name the object the user wrote and the smallest edit. Internal detail belongs in `EXPLAIN` and
+  `decide_diagnostics()`. A runtime error uses the solver's text, built by the function the solver calls, never a copy of
   the string: `decide_value_messages.hpp` (NULL, and NaN or infinite, values), `decide_numeric_policy.hpp` (a whole
   number beyond the exact range). A NULL value names the columns that are NULL on the failing row, so the plan carries
   the value's source columns to its check and builds the message per row. A new rule builds its errors with these
@@ -96,8 +96,8 @@ test, adding one is a task in that rule's `todo.md`.
 
 1. **Conformance suite** (`test_direct_rule_conformance.py`): add a `RuleFixture` in `_direct_rule_fixtures.py`. It
    checks schema and rows, the all-rows read, prepared-plan selection, serializer round trip, `EXPLAIN` and profiling,
-   `require` reasons, `off`, a forced backend, `DIAGNOSE`, and near misses. Each near miss must also answer under `auto`
-   exactly as it does under `off`.
+   the `require` error, `off`, a forced backend, `DIAGNOSE`, and near misses. Each near miss must decline under
+   `require` and answer under `auto` exactly as it does under `off`; one plain form per rule must apply.
 2. **Differential oracle test** (`test_direct_<id>_<slug>.py`: `test_direct_s1_uniform_matroid.py`,
    `test_direct_a1_separable_box.py`): the rule adds its own file with its own case table, a function that builds the
    oracle model from the rows, and a function that checks one DeciDB assignment against its constraints. The shared

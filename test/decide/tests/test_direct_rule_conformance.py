@@ -3,7 +3,7 @@
 Each rule supplies a `RuleFixture` (`_direct_rule_fixtures.py`). Its own mathematics is
 tested in its own file; this suite checks what must hold whichever rule applied to
 the query: the DECIDE schema and rows, the all-rows read, prepared plans, serialization,
-EXPLAIN, `require` reasons, and the solver path under `off`, a forced backend and
+EXPLAIN, `require` declines, and the solver path under `off`, a forced backend and
 `DIAGNOSE`.
 """
 
@@ -18,7 +18,6 @@ from solver.types import ObjSense, SolverStatus, VarType
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._direct_rule_fixtures import (
-    APPLIES_UNDER_REQUIRE,
     RULE_FIXTURES,
     S1_AGGREGATE_BOUNDS_NOW_APPLIED,
     late_error_cases,
@@ -174,31 +173,20 @@ def test_prepared_plan_keeps_its_selection_until_rebound(decidb_cli, fixture):
     assert _has_decide_operator(rebound) and "Direct solve" not in rebound
 
 
-@pytest.mark.correctness
-@pytest.mark.parametrize("fixture,case", _NEAR_MISSES, ids=_case_ids(_NEAR_MISSES))
-def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixture, case):
-    declaration, constraint, objective, reason = case
-    sql = (
+def _near_miss_sql(fixture, case):
+    declaration, constraint, objective = case
+    return (
         f"SELECT {fixture.near_miss_column} FROM ({fixture.near_miss_source} "
         f"DECIDE {declaration} SUCH THAT {constraint} {objective}) q"
     )
-    if reason == APPLIES_UNDER_REQUIRE:
-        # A right-hand aggregate is a window column of the source (H-19), so the rule reads it and applies. The three
-        # modes answer alike; `test_aggregate_bounds_that_apply_agree_with_the_oracle` checks the answer itself.
-        required = _raw(decidb_cli, sql)
-        assert "decide_direct_solve=require:" not in required.stderr, (sql, required.stderr)
-        assert "Direct solve" not in required.stderr, (sql, required.stderr)
-        plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="require")
-        assert f"{fixture.rule}" in plan.stdout and not _has_decide_operator(plan.stdout), (sql, plan.stderr)
-        # A direct plan may return the rows in another order than the solver path (the query has no ORDER BY).
-        require, off, auto = (_outcome(decidb_cli, sql, mode) for mode in ("require", "off", "auto"))
-        assert require[0] == off[0] == auto[0], (sql, require, off, auto)
-        assert sorted(require[1], key=str) == sorted(off[1], key=str) == sorted(auto[1], key=str), (sql, require, off)
-        return
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("fixture,case", _NEAR_MISSES, ids=_case_ids(_NEAR_MISSES))
+def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixture, case):
+    sql = _near_miss_sql(fixture, case)
     required = _raw(decidb_cli, sql).stderr
     assert "decide_direct_solve=require:" in required, (sql, required)
-    assert f"{fixture.rule}: " in required and reason in required, (sql, required)
-    assert "solver skipped=true" in required, (sql, required)
     plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="auto")
     assert _has_decide_operator(plan.stdout) and "Direct solve" not in plan.stdout, (sql, plan.stderr)
 
@@ -208,6 +196,29 @@ def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixt
     assert bool(auto.stderr.strip()) == bool(off.stderr.strip()), (sql, auto.stderr, off.stderr)
     if "random()" not in sql:
         assert (auto.stdout, auto.stderr) == (off.stdout, off.stderr), sql
+
+
+_PLAIN_FORMS = [(fixture, fixture.near_miss_plain) for fixture in RULE_FIXTURES] + [
+    (fixture, case) for fixture in RULE_FIXTURES for case in fixture.near_miss_applies
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("fixture,case", _PLAIN_FORMS, ids=_case_ids(_PLAIN_FORMS))
+def test_plain_forms_of_the_near_misses_apply(decidb_cli, fixture, case):
+    # The near misses decline for the one thing each changes: the plain form over the same source applies. So do the
+    # forms that look like near misses and are not (a right-hand aggregate is a window column of the source, H-19).
+    # The three modes answer alike; `test_aggregate_bounds_that_apply_agree_with_the_oracle` checks the answer itself.
+    sql = _near_miss_sql(fixture, case)
+    required = _raw(decidb_cli, sql)
+    assert "decide_direct_solve=require:" not in required.stderr, (sql, required.stderr)
+    assert "Direct solve" not in required.stderr, (sql, required.stderr)
+    plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="require")
+    assert f"{fixture.rule}" in plan.stdout and not _has_decide_operator(plan.stdout), (sql, plan.stderr)
+    # A direct plan may return the rows in another order than the solver path (the query has no ORDER BY).
+    require, off, auto = (_outcome(decidb_cli, sql, mode) for mode in ("require", "off", "auto"))
+    assert require[0] == off[0] == auto[0], (sql, require, off, auto)
+    assert sorted(require[1], key=str) == sorted(off[1], key=str) == sorted(auto[1], key=str), (sql, require, off)
 
 
 @pytest.mark.correctness

@@ -10,7 +10,7 @@ Conventions that apply to every row:
   prefix and no class id: the namespace already says both.
 - A problem class keeps its id (A1, S1, ...) as a prefix and adds the textbook name of its **problem**, not of the
   algorithm that solves it. Where operations research and databases disagree, the optimization term wins.
-- User-visible text follows the names: `EXPLAIN` keys and values, `require` reasons, the syntax reference and the
+- User-visible text follows the names: `EXPLAIN` keys and values, the `require` error, the syntax reference and the
   website.
 
 ## The feature
@@ -26,7 +26,7 @@ Conventions that apply to every row:
 |---|---|---|---|
 | IR | Intermediate representation: a neutral form of the program that later passes read instead of the source tree | Compiler texts (front end, IR, back end) | `DirectIR`, `DirectIRDecision`, `DirectIRConstraint`, `DirectIRObjective`, `DirectIRScope`, `DirectIREntityScope`, `FindDirectIRInput`; variables `ir`, `ir_node`; test helpers `QueryIR`, `IRQuery`; `direct_ir.cpp`; `architecture/ir.md` |
 | front end | The pass that reads the source tree and builds the IR; the only code that knows `LogicalDecide`'s layout | Compiler texts | `DirectFrontEnd` |
-| conservative analysis | An analysis that reports only what it can prove, and "not proved" for anything else, so a wrong rewrite cannot follow from it | Static analysis (soundness) | `DirectAnalysisStatus` with `PROVED` / `NOT_PROVED`; `FirstNotProvedReason`; `MarkNotProved`; `require` reasons `constraints_not_proved:` and `objective_not_proved:`. Not the canonicalizer's `DecideTermKind::UNKNOWN` |
+| conservative analysis | An analysis that reports only what it can prove, and "not proved" for anything else, so a wrong rewrite cannot follow from it | Static analysis (soundness) | `DirectAnalysisStatus` with `PROVED` / `NOT_PROVED`; `MarkNotProved`. Not the canonicalizer's `DecideTermKind::UNKNOWN` |
 | reducer | An aggregate function (`SUM`, `AVG`, `MIN`, `MAX`, `COUNT`) applied over DECIDE variables; DECIDE's name for it, so it is never confused with a SQL aggregate over data | DeciDB term | `DirectReducer`, the S1 rule's `Reducer`, `QUALIFIED_REDUCER_TAG` (`__qualified_reducer__`), `ContainsReducer`, `ReadReducer`, `ClassifyReducerCall`, `EvaluateRhsReducerPerGroup`, `04_testing/qualified_reducer/` |
 | singleton-row bound | A constraint on one variable, folded into that variable's bounds before the model is built | Presolve (Andersen & Andersen 1995; Achterberg et al. 2020) | `FoldSingletonRows`, `DecideFoldSingletonRow`, `DecideIsSingletonRowBound`, `FoldSingletonRowsInExpression`, `SingletonRowBound`, `TryReadSingletonRowBound`, `singleton_row_boxes`, `user_singleton_row_bounds`, `SINGLETON_ROW_BOUND_TAG`, phase `optimizer.fold_singleton_rows` |
 | fixed variable | A decision whose value the problem fixes before optimizing | Optimization texts | `ProveFixedVariables`, `FixedTerms`, `FixedDomain`, `ConstantFixedDomain`, `SourceFixedValue`, `SourceBooleanFixedValue` |

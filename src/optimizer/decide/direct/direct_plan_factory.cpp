@@ -420,7 +420,7 @@ DirectBoundClause DirectBoundClause::Copy() const {
 	return result;
 }
 
-bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading, string &reason) {
+bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading) {
 	constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
 	constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 	idx_t decision_count = ir.decisions.size();
@@ -436,26 +436,21 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 		auto &rhs = *ir_node.rhs;
 		auto comparison = ir_node.comparison;
 		if (!DirectIsSourceOnlyValue(rhs, ir.decide_index, ir.source_bindings)) {
-			reason = "coefficient_shape: expected a deterministic numeric expression over the source columns on the "
-			         "right of a bound";
 			return false;
 		}
 		if (ir_node.scope.when &&
 		    !DirectIsSourceOnlyPredicate(*ir_node.scope.when, ir.decide_index, ir.source_bindings)) {
-			reason = "constraint_scope: WHEN must be a deterministic source-only predicate";
 			return false;
 		}
 		if (ir_node.variable_bound) {
 			double k;
 			if (!TryEvaluateFoldableDouble(context, rhs, k, DIRECT_CONSTANT | FOLD_ALLOW_BOOLEAN)) {
-				reason = "constraint_shape: expected a finite constant on the right of a bound on the decision";
 				return false;
 			}
 			bool whole = DirectIsWholeNumbered(domain);
 			bool strict =
 			    comparison == ExpressionType::COMPARE_LESSTHAN || comparison == ExpressionType::COMPARE_GREATERTHAN;
 			if (strict && !whole) {
-				reason = "constraint_shape: a strict bound on a continuous decision";
 				return false;
 			}
 			bool lower = DirectIsLowerBound(comparison);
@@ -468,7 +463,6 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 		clause.decision = decision;
 		clause.comparison = comparison;
 		if (!DirectProveValues(ir, ir_node.lhs[0].terms, clause.coefficient)) {
-			reason = "coefficient_shape: expected a deterministic numeric coefficient over the source columns";
 			return false;
 		}
 		clause.rhs = ir_node.rhs->Copy();
@@ -492,9 +486,6 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 		// (DecideBoxContradictsDomain). It says so on an empty source too, so the query is left to the solver, which
 		// reports it, rather than proved here and answered with no rows.
 		if (DecideBoxContradictsDomain(boxes[decision], ir.decisions[decision].domain == DirectDomain::BOOL)) {
-			reason =
-			    "variable_bound: a bound contradicts the decision's built-in domain (non-negative, or BOOL 0 or 1); "
-			    "the solver reports it";
 			return false;
 		}
 	}

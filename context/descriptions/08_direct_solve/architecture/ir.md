@@ -17,9 +17,8 @@ IR and back end; the rules are the back end.
 ## Conservative analysis
 
 The front end models the whole language. Anything it cannot model is recorded as **not proved**, per constraint and
-per objective part, with a reason. A rule must decline a problem with a not-proved IR node in a clause it depends on,
-so a wrong rewrite cannot follow from a gap in the front end. `require` mode prints that reason, for example
-`constraint_shape: expected SUM(x) with unit contribution`.
+per objective part. A rule must decline a problem with a not-proved IR node in a clause it depends on, so a wrong
+rewrite cannot follow from a gap in the front end. A decline carries no reason: the rule applies or it does not.
 
 ## Things worth knowing
 

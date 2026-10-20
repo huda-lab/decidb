@@ -28,8 +28,8 @@ enum class DirectAnalysisStatus : uint8_t { PROVED, NOT_PROVED };
 // ir.md). The front end is the only code that knows LogicalDecide's layout and the
 // bound-tree spelling of DECIDE constructs; rules read meaning. Data-valued expressions
 // (coefficients, bounds, WHEN predicates) stay DuckDB expressions over the source.
-// The IR owns everything it holds. Anything the front end cannot model is NOT_PROVED with
-// a reason, per constraint and per objective part.
+// The IR owns everything it holds. Anything the front end cannot model is NOT_PROVED,
+// per constraint and per objective part.
 
 enum class DirectDomain : uint8_t { BOOL, INT, REAL };
 
@@ -65,7 +65,6 @@ enum class DirectReducer : uint8_t {
 //! One additive part of a constraint's left side or of the objective: `sign * scale * reducer(terms)`.
 struct DirectPart {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
-	string reason;
 	int sign = 1;
 	//! A query-wide factor canonicalization left on the reducer; null for none.
 	unique_ptr<Expression> scale;
@@ -89,12 +88,9 @@ struct DirectIRScope {
 
 struct DirectIRConstraint {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
-	string reason;
 	//! Index into the source-clause registry: the user's clause this constraint came from, shared by the constraints
 	//! one clause expands into.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	//! The clause as the user wrote it, for messages that name it.
-	string clause_text;
 	//! True for a reduced constraint, false for one constraint per row.
 	bool aggregate = false;
 	//! COMPARE_LESSTHANOREQUALTO ... COMPARE_NOTEQUAL, or COMPARE_IN for a membership `x IN (v, ...)`.
@@ -115,7 +111,6 @@ struct DirectIRConstraint {
 
 struct DirectIRObjective {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
-	string reason;
 	DecideSense sense = DecideSense::FEASIBILITY;
 	//! Decision-free additive constant canonicalization folded out of the objective.
 	double offset = 0;
@@ -137,12 +132,8 @@ struct DirectIR {
 	//! NOT_PROVED only when the constraint tree's wrappers themselves cannot be read; one unmodelled clause leaves it
 	//! PROVED and marks that constraint.
 	DirectAnalysisStatus constraints_status = DirectAnalysisStatus::NOT_PROVED;
-	string constraints_reason;
 	vector<DirectIRConstraint> constraints;
 	DirectIRObjective objective;
-
-	//! The first not-proved constraint or objective part, as a `require` reason; empty when every IR node is proved.
-	string FirstNotProvedReason() const;
 };
 
 //! Only CheckCondition can construct an applicability condition. Apply receives this
@@ -172,15 +163,15 @@ struct DirectSubstitute {
 };
 
 //! The lifecycle the rule driver runs: CheckCondition, then Apply. CheckCondition checks the query's shape and then
-//! establishes what the plan relies on; when the condition does not hold it leaves the DECIDE node untouched and
-//! reports `reason`. Summary is the one line the rule adds to the EXPLAIN annotation. Rules are disjoint: each requires
+//! establishes what the plan relies on; when the condition does not hold it returns null and leaves the DECIDE node
+//! untouched. Summary is the one line the rule adds to the EXPLAIN annotation. Rules are disjoint: each requires
 //! IR the others forbid, so at most one applies to a query, and the rule driver raises an internal error when two do.
 class DirectSolveRule {
 public:
 	virtual ~DirectSolveRule() = default;
 	virtual const char *Name() const = 0;
-	virtual unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context,
-	                                                                string &reason) const = 0;
+	virtual unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir,
+	                                                                ClientContext &context) const = 0;
 	virtual string Summary() const = 0;
 	//! `source` is the DECIDE input with its types resolved.
 	virtual DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,

@@ -825,9 +825,8 @@ def test_a1_declines_a_bound_that_contradicts_the_built_in_domain(decidb_cli, or
     # The oracle agrees the problem is infeasible; the solver and the default path raise it, and `require` reports
     # that no rule applies to the query.
     _agree(decidb_cli, oracle_solver, case_, modes=("off", "auto"))
-    with pytest.raises(DecidBCliError, match="decide_direct_solve=require") as declined:
+    with pytest.raises(DecidBCliError, match="decide_direct_solve=require"):
         _run(decidb_cli, _sql(case_), "require")
-    assert "A1_SEPARABLE_BOX: variable_bound" in str(declined.value)
 
 
 @pytest.mark.error

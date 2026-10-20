@@ -134,9 +134,8 @@ struct CountBody {
 
 //! Reads a reducer body as `a*x + c`. The signed constant coefficients of `x` must add up to exactly +1 or -1, as the
 //! solver's like-term collection sums them, and every other term must be a finite foldable constant of at most
-//! MAX_OFFSET in magnitude. False with `problem` filled otherwise.
-bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms, CountBody &body, string &problem) {
-	const string not_a_count = "expected SUM(x) with unit contribution";
+//! MAX_OFFSET in magnitude.
+bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms, CountBody &body) {
 	double slope = 0;
 	bool has_decision = false;
 	vector<const DecideSplitTerm *> constants;
@@ -148,14 +147,12 @@ bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms,
 		double value;
 		if (term.kind != DecideTermKind::LINEAR || term.var_a != 0 || !term.coefficient ||
 		    !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
-			problem = not_a_count;
 			return false;
 		}
 		slope += term.sign * value;
 		has_decision = true;
 	}
 	if (!has_decision || (slope != 1.0 && slope != -1.0)) {
-		problem = not_a_count;
 		return false;
 	}
 	body.direction = slope > 0 ? 1 : -1;
@@ -163,11 +160,9 @@ bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms,
 		double value;
 		if (!term->coefficient || !term->coefficient->return_type.IsNumeric() ||
 		    !TryEvaluateFoldableDouble(context, *term->coefficient, value, DIRECT_FINITE_CONSTANT)) {
-			problem = "a term added to x in the count must be a finite constant, not a column or NULL";
 			return false;
 		}
 		if (std::fabs(value) > MAX_OFFSET) {
-			problem = "a constant added to x in the count is larger than 2097152";
 			return false;
 		}
 		auto copy = term->coefficient->Copy();
@@ -360,43 +355,35 @@ public:
 	const char *Name() const override {
 		return RULE_NAME;
 	}
-	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context,
-	                                                        string &reason) const override {
+	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
 		if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.decisions.size() != 1 ||
 		    ir.decisions[0].domain != DirectDomain::BOOL || ir.decisions[0].scope != DecideVarScope::ROW ||
 		    ir.decisions[0].output_type != LogicalType::INTEGER || !ir.entity_scopes.empty() ||
 		    ir.source_status != DirectAnalysisStatus::PROVED) {
-			reason = "variable_shape: expected one row-scoped BOOL";
 			return nullptr;
 		}
 		// No objective (`DecideSense::FEASIBILITY`) is admitted: every score is 0.
 		if (!std::isfinite(ir.objective.offset) ||
 		    (ir.objective.sense != DecideSense::MAXIMIZE && ir.objective.sense != DecideSense::MINIMIZE &&
 		     ir.objective.sense != DecideSense::FEASIBILITY)) {
-			reason = "problem_shape: expected a linear objective or no objective, and cardinality bounds";
 			return nullptr;
 		}
 		if (ir.constraints_status != DirectAnalysisStatus::PROVED) {
-			reason = "constraints_not_proved: " + ir.constraints_reason;
 			return nullptr;
 		}
 		if (ir.constraints.empty() || ir.source_clause_count != ir.constraints.size()) {
-			reason = "constraint_shape: expected attributed cardinality bounds and optional fixed Boolean values";
 			return nullptr;
 		}
 		auto condition = make_uniq<Condition>();
 		vector<uint8_t> seen_sources(ir.source_clause_count, 0);
 		for (auto &ir_node : ir.constraints) {
 			if (ir_node.source_clause_id >= seen_sources.size() || seen_sources[ir_node.source_clause_id]++) {
-				reason = "constraint_provenance: expected one distinct attributed source clause per factor";
 				return nullptr;
 			}
 			if (ir_node.status != DirectAnalysisStatus::PROVED) {
-				reason = "constraints_not_proved: " + ir.FirstNotProvedReason();
 				return nullptr;
 			}
 			if (ir_node.comparison == ExpressionType::COMPARE_IN) {
-				reason = "constraint_shape: expected SUM(x) bounds or fixed Boolean values";
 				return nullptr;
 			}
 			if (FixedTerms(ir_node)) {
@@ -404,31 +391,26 @@ public:
 				continue;
 			}
 			if (!DirectIsLowerBound(ir_node.comparison) && !DirectIsUpperBound(ir_node.comparison)) {
-				reason = "constraint_shape: expected SUM(x) cardinality bounds";
 				return nullptr;
 			}
 			condition->bound_factors.push_back(&ir_node);
 		}
 		if (condition->bound_factors.empty()) {
-			reason = "constraint_shape: expected a SUM(x) cardinality bound";
 			return nullptr;
 		}
 		if (ir.objective.status != DirectAnalysisStatus::PROVED) {
-			reason = "objective_not_proved: " + ir.objective.reason;
 			return nullptr;
 		}
 		if (ir.objective.scope.when || !ir.objective.scope.per_key_slots.empty()) {
-			reason = "objective_scope: expected an objective without WHEN or PER";
 			return nullptr;
 		}
 		if (ir.objective.parts.empty() && ir.objective.sense != DecideSense::FEASIBILITY) {
-			reason = "objective_shape: expected additive SUM(coefficient * x) terms";
 			return nullptr;
 		}
 		condition->decide_index = ir.decide_index;
 		condition->sense = ir.objective.sense;
-		if (!ProveScope(ir, *condition, reason) || !ProveFixedVariables(ir, context, *condition, reason) ||
-		    !ProveBounds(ir, context, *condition, reason) || !ProveObjective(ir, context, *condition, reason)) {
+		if (!ProveScope(ir, *condition) || !ProveFixedVariables(ir, context, *condition) ||
+		    !ProveBounds(ir, context, *condition) || !ProveObjective(ir, context, *condition)) {
 			return nullptr;
 		}
 		return std::move(condition);
@@ -440,42 +422,37 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	bool ProveScope(const DirectIR &ir, Condition &condition, string &reason) const;
-	bool ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const;
-	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const;
-	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const;
+	bool ProveScope(const DirectIR &ir, Condition &condition) const;
+	bool ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const;
+	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
 
 //! Every bound counts the same rows: one `SUM(x)` per bound with the same PER keys and the same WHEN membership.
 //! Records the group keys and membership the plan scopes by.
-bool Rule::ProveScope(const DirectIR &ir, Condition &condition, string &reason) const {
+bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 	const auto &first_scope = *condition.bound_factors.front();
 	bool ok;
 	const Expression *first_when = BoundMembership(first_scope, ok);
 	if (!ok) {
-		reason = "constraint_shape: expected one SUM(x) membership filter";
 		return false;
 	}
 	for (auto factor : condition.bound_factors) {
 		const Expression *when = BoundMembership(*factor, ok);
 		if (!ok) {
-			reason = "constraint_shape: expected one SUM(x) membership filter";
 			return false;
 		}
 		if (factor->scope.per_key_slots != first_scope.scope.per_key_slots ||
 		    static_cast<bool>(when) != static_cast<bool>(first_when)) {
-			reason = "constraint_scope: cardinality bounds use different PER or WHEN membership";
 			return false;
 		}
 		if (when && !Expression::Equals(*when, *first_when)) {
-			reason = "constraint_scope: cardinality bounds use different WHEN membership";
 			return false;
 		}
 	}
 	condition.group_key_slots = first_scope.scope.per_key_slots;
 	if (first_when) {
 		if (!DirectIsSourceOnlyPredicate(*first_when, ir.decide_index, ir.source_bindings)) {
-			reason = "constraint_scope: WHEN must be a deterministic source-only predicate";
 			return false;
 		}
 		condition.when_condition = first_when->Copy();
@@ -486,28 +463,22 @@ bool Rule::ProveScope(const DirectIR &ir, Condition &condition, string &reason) 
 
 //! Per-row fixed Boolean values: `x = 0/1` and its one-sided forms against a constant, or against a source Boolean.
 //! Each becomes a condition under which the row is fixed to one or to zero.
-bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const {
+bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	for (auto factor : condition.local_fixes) {
 		if (!factor->scope.per_key_slots.empty()) {
-			reason = "constraint_scope: fixed Boolean values must be per-row without PER keys";
 			return false;
 		}
 		if (!IsUnitContribution(context, *FixedTerms(*factor))) {
-			reason = "constraint_shape: expected a fixed Boolean value on x itself";
 			return false;
 		}
 		auto &when = factor->scope.when;
 		if (when && !DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
-			reason = "constraint_scope: fixed Boolean value WHEN must be deterministic and source-only";
 			return false;
 		}
 		double constant;
 		if (TryEvaluateFoldableDouble(context, *factor->rhs, constant, DIRECT_FINITE_CONSTANT)) {
 			FixedDomain domain;
 			if (!ConstantFixedDomain(*factor, constant, domain)) {
-				reason =
-				    "constraint_shape: an unconditional bound on x that the solver reads differently from a Boolean "
-				    "(negative lower bound, or a bound that cannot hold)";
 				return false;
 			}
 			// Both values allowed is no constraint. Neither allowed fixes the row to both, which the plan reports as
@@ -556,8 +527,6 @@ bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condi
 		// and is infeasible when it allows neither.
 		auto &value = *factor->rhs;
 		if (value.IsFoldable() || !DirectIsSourceOnlyNumeric(value, ir.decide_index, ir.source_bindings)) {
-			reason = "constraint_shape: a bound on x must be a finite constant, a source column, or a deterministic "
-			         "nonthrowing numeric expression over source columns";
 			return false;
 		}
 		idx_t column_slot;
@@ -586,13 +555,10 @@ bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condi
 //! `SUM(x) <op> B - n*c` and `SUM(c - x) <op> B` is `SUM(x) <flipped op> n*c - B`, where n is the number of rows the
 //! SUM covers in the group. A constant bound without a constant term in the body folds here; every other bound is
 //! shifted per group by the plan.
-bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const {
+bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	auto fold_bound = [&](const Expression &bound, ExpressionType side, idx_t &target, bool negate) {
 		bool impossible = false;
 		if (!NormalizeCapacity(context, bound, side, target, impossible, negate)) {
-			reason = "constraint_shape: cardinality bound must be a finite consistent foldable numeric expression "
-			         "with an inclusive limit in [0, 2^53], or a deterministic nonthrowing source-only "
-			         "numeric expression";
 			return false;
 		}
 		condition.impossible |= impossible;
@@ -601,10 +567,7 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 	for (auto factor : condition.bound_factors) {
 		auto sum = factor->PlainSum(true);
 		CountBody body;
-		string problem;
-		if (!sum || !ReadCountBody(context, sum->terms, body, problem)) {
-			reason =
-			    "constraint_shape: " + (problem.empty() ? string("expected SUM(x) with unit contribution") : problem);
+		if (!sum || !ReadCountBody(context, sum->terms, body)) {
 			return false;
 		}
 		auto &bound = *factor->rhs;
@@ -625,9 +588,6 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 		// The right-hand-side rewrite turns an aggregate on the right into a source column. One it leaves (a WHEN of
 		// its own on the aggregate) is not a value this rule can read per row.
 		if (bound.IsAggregate()) {
-			reason =
-			    "constraint_shape: an aggregate on the right of a count bound was not read as a column (a WHEN on the "
-			    "right-hand aggregate, for one)";
 			return false;
 		}
 		// The plan evaluates a source-valued count bound on every row, as the solver does, so an expression that can
@@ -643,9 +603,6 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 			double constant;
 			if (!TryEvaluateFoldableDouble(context, bound, constant, DIRECT_FINITE_CONSTANT) ||
 			    !DecideIsWithinExactRange(constant)) {
-				reason = "constraint_shape: cardinality bound must be a finite consistent foldable numeric expression "
-				         "with an inclusive limit in [0, 2^53], or a deterministic nonthrowing source-only "
-				         "numeric expression";
 				return false;
 			}
 			add_source_bound(DConstants::INVALID_INDEX, bound.return_type, string());
@@ -678,7 +635,7 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 }
 
 //! The objective: a signed sum of `SUM(coefficient * x)` terms. Each coefficient must be evaluable per source row.
-bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition, string &reason) const {
+bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	// Every linear term in x scores separately: `SUM((p + q) * x)` splits into `p * x` and `q * x`, and the score
 	// adds the signed coefficients in order, as the solver's like-term collection does.
 	auto &parts = ir.objective.parts;
@@ -686,12 +643,10 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	for (auto &part : parts) {
 		if (part.reducer != DirectReducer::SUM || part.filter || part.inner ||
 		    part.qualifier != DConstants::INVALID_INDEX) {
-			reason = "objective_shape: expected unfiltered SUM(coefficient * x) terms";
 			return false;
 		}
 		for (auto &term : part.terms) {
 			if (term.kind != DecideTermKind::LINEAR || term.var_a != 0) {
-				reason = "objective_shape: expected a coefficient times x";
 				return false;
 			}
 		}
@@ -702,17 +657,14 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
 		double scale;
 		if (!DirectPartScale(context, part, scale)) {
-			reason = "objective_shape: a factor on SUM(...) must be a finite constant (not zero when dividing)";
 			return false;
 		}
 		for (auto &term : part.terms) {
 			if (!DirectIsNumericDecisionFree(*term.coefficient, ir.decide_index)) {
-				reason = "coefficient_shape: expected a deterministic numeric expression without decisions";
 				return false;
 			}
 			if (!DirectReferencesOnlySource(*term.coefficient, ir.source_bindings) ||
 			    (term_count > 1 && DirectMayThrow(*term.coefficient))) {
-				reason = "coefficient_shape: multiple terms need nonthrowing source-only numeric coefficients";
 				return false;
 			}
 			condition.objective_parts.push_back(

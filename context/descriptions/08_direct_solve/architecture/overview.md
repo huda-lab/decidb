@@ -30,7 +30,7 @@ executing, so a rule's condition has to be complete before it applies.
 ## Modes
 
 `SET decide_direct_solve = 'auto' | 'off' | 'require'`. `auto` is the default: try direct, fall back silently. `off`
-always uses the solver. `require` raises an error naming the clause that kept each rule from applying. `DIAGNOSE`
+always uses the solver. `require` raises one fixed error when no rule applies, without saying which clause kept a rule out. `DIAGNOSE`
 queries and the test-only `DECIDB_FORCE_SOLVER` always use the solver. Details: `policy.md`.
 
 ## Principles

@@ -40,10 +40,8 @@ public:
 	const char *Name() const override {
 		return name.c_str();
 	}
-	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &, ClientContext &,
-	                                                                string &reason) const override {
+	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &, ClientContext &) const override {
 		if (!applies) {
-			reason = "stub_not_applied: " + name;
 			return nullptr;
 		}
 		return make_uniq<StubCondition>();
@@ -139,7 +137,7 @@ TEST_CASE("Direct rule driver commits a stub rule that applies", "[decidb]") {
 	REQUIRE(plan.find("STUB_ONE") != string::npos);
 }
 
-TEST_CASE("Direct rule driver falls back to the solver and lists why each rule does not apply under require",
+TEST_CASE("Direct rule driver falls back to the solver and raises one fixed line under require",
           "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
@@ -158,9 +156,9 @@ TEST_CASE("Direct rule driver falls back to the solver and lists why each rule d
 	auto required = con.Query(QUERY);
 	REQUIRE(required->HasError());
 	auto &message = required->GetError();
-	REQUIRE(message.find("STUB_A: stub_not_applied: STUB_A") != string::npos);
-	REQUIRE(message.find("STUB_B: stub_not_applied: STUB_B") != string::npos);
-	REQUIRE(message.find("solver skipped=true") != string::npos);
+	REQUIRE(message.find("decide_direct_solve=require") != string::npos);
+	REQUIRE(message.find("STUB_A") == string::npos);
+	REQUIRE(message.find("STUB_B") == string::npos);
 }
 
 TEST_CASE("Direct rule driver runs the rule that applies when another does not", "[decidb]") {
@@ -315,11 +313,12 @@ TEST_CASE("With both real rules registered each query shape reaches the rule tha
 		REQUIRE(a1_plan.find("A1_SEPARABLE_BOX") != string::npos);
 		REQUIRE(a1_plan.find("S1_UNIFORM_MATROID") == string::npos);
 	}
-	// A query neither rule applies to lists both rules' reasons and leaves the solver to run.
+	// A query neither rule applies to raises the one fixed line, which names no rule.
 	auto no_rule = con.Query("SELECT id, x FROM items DECIDE x(INT) SUCH THAT SUM(x) <= 5 MAXIMIZE SUM(score*x)");
 	REQUIRE(no_rule->HasError());
-	REQUIRE(no_rule->GetError().find("S1_UNIFORM_MATROID: ") != string::npos);
-	REQUIRE(no_rule->GetError().find("A1_SEPARABLE_BOX: ") != string::npos);
+	REQUIRE(no_rule->GetError().find("decide_direct_solve=require") != string::npos);
+	REQUIRE(no_rule->GetError().find("S1_UNIFORM_MATROID") == string::npos);
+	REQUIRE(no_rule->GetError().find("A1_SEPARABLE_BOX") == string::npos);
 }
 
 TEST_CASE("The late materialization happens only for a stored table and a column the rule does not use", "[decidb]") {

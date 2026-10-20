@@ -41,11 +41,6 @@ DirectSolveMode GetDirectSolveMode(ClientContext &context) {
 
 namespace {
 
-//! The `require` error for a query no rule applies to: why each rule does not apply, and that no solver ran.
-string RequireNotAppliedText(const string &reason) {
-	return StringUtil::Format("%s (rule=none; solver skipped=true)", reason);
-}
-
 const char *ModeName(DirectSolveMode mode) {
 	return mode == DirectSolveMode::AUTO ? "auto" : mode == DirectSolveMode::REQUIRE ? "require" : "off";
 }
@@ -85,11 +80,8 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 	auto forced_solver = std::getenv("DECIDB_FORCE_SOLVER");
 	if (decide.diagnose || (forced_solver && *forced_solver)) {
 		if (mode == DirectSolveMode::REQUIRE) {
-			auto reason = decide.diagnose ? "policy_diagnose: DIAGNOSE requires the solver"
-			                              : "policy_forced_solver: DECIDB_FORCE_SOLVER is set";
-			throw InvalidInputException("decide_direct_solve=require conflicts with %s: %s",
-			                            decide.diagnose ? "DIAGNOSE" : "DECIDB_FORCE_SOLVER",
-			                            RequireNotAppliedText(reason));
+			throw InvalidInputException("decide_direct_solve=require conflicts with %s: the solver is required",
+			                            decide.diagnose ? "DIAGNOSE" : "DECIDB_FORCE_SOLVER");
 		}
 		// A DIAGNOSE query or a forced backend keeps the solver path; there is nothing to report.
 		return op;
@@ -104,24 +96,20 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 		unique_ptr<DirectApplicabilityCondition> condition;
 	};
 	vector<AppliedCandidate> applied;
-	vector<string> not_applied;
 	auto rules = RulesFor(optimizer.context);
 	for (auto &rule : rules) {
-		string reason;
-		auto condition = rule->CheckCondition(ir, optimizer.context, reason);
+		auto condition = rule->CheckCondition(ir, optimizer.context);
 		if (!condition) {
-			not_applied.push_back(rule->Name() + string(": ") + reason);
 			continue;
 		}
 		applied.push_back({rule.get(), std::move(condition)});
 	}
 	if (applied.empty()) {
 		if (mode == DirectSolveMode::REQUIRE) {
-			throw InvalidInputException("decide_direct_solve=require: %s",
-			                            RequireNotAppliedText(StringUtil::Join(not_applied, "; ")));
+			throw InvalidInputException("decide_direct_solve=require: direct solve did not apply; the solver is required");
 		}
 		// A query no rule applies to under auto leaves the DECIDE node, and its EXPLAIN output, exactly as the solver
-		// path has it. `require` is how a user asks why no rule applied to a query.
+		// path has it.
 		return op;
 	}
 	// Every rule ran, so a second rule that applies is seen. Rules tell queries apart by the IR they require; two rules

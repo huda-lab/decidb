@@ -182,9 +182,9 @@ struct DirectBoundReading {
 //! <comparison> value`; the rule's CheckCondition has already checked the shape). A bound the solver folds into the
 //! variable
 //! (`variable_bound`: an unconditional comparison of the bare decision against a constant) replaces the default lower
-//! bound of 0 and tightens the upper one; every other bound is a clause. Returns false with a `reason` when a bound
+//! bound of 0 and tightens the upper one; every other bound is a clause. Returns false when a bound
 //! cannot be proved, or when the folded box contradicts the decision's built-in domain, which the solver reports.
-bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading, string &reason);
+bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading);
 
 //! The columns of one clause's raw values, evaluated on every row.
 struct DirectBoundColumns {

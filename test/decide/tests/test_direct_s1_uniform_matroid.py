@@ -1389,25 +1389,22 @@ def test_s1_offset_is_read_exactly_in_decimal_arithmetic(decidb_cli, op, body):
             assert direct == ("ok", [(expected,)]), (sql, direct, expected)
 
 
-# Constant terms the plan cannot read exactly, and bodies that are not one `x`, stay on the solver. Each must say why
+# Constant terms the plan cannot read exactly, and bodies that are not one `x`, stay on the solver. Each must decline
 # under `require` and give under `auto` the answer `off` gives.
 S1_OFFSET_DECLINED = {
-    "offset_is_a_column": ("SUM(x + cap) <= 20", "a term added to x in the count must be a finite constant"),
-    "offset_is_a_column_negated": ("SUM(cap - x) <= 20", "a term added to x in the count must be a finite constant"),
-    "offset_is_null_column": ("SUM(x + ncap) <= 20", "a term added to x in the count must be a finite constant"),
-    "offset_is_nan": ("SUM(x + 'NaN'::DOUBLE) <= 20", "a term added to x in the count must be a finite constant"),
-    "offset_is_infinite": (
-        "SUM(x + 'Infinity'::DOUBLE) <= 20",
-        "a term added to x in the count must be a finite constant",
-    ),
-    "offset_is_too_large": ("SUM(x + 1e15) <= 3e15", "larger than 2097152"),
-    "offset_is_just_too_large": ("SUM(x + 2097153) <= 30000000", "larger than 2097152"),
-    "offset_beyond_a_double": ("SUM(x + 1e300) <= 1e300", "larger than 2097152"),
-    "weight_two": ("SUM(2*x + 1) <= 20", "expected SUM(x) with unit contribution"),
-    "weight_cancels": ("SUM(x - x + 1) <= 20", "expected SUM(x) with unit contribution"),
-    "weight_is_a_column": ("SUM(cap*x + 1) <= 20", "expected SUM(x) with unit contribution"),
-    "constant_bound_beyond_2_pow_53": ("SUM(x + 1) <= 9007199254740993", "cardinality bound must be a finite"),
-    "infinite_constant_bound": ("SUM(x + 1) <= 'Infinity'::DOUBLE", "cardinality bound must be a finite"),
+    "offset_is_a_column": "SUM(x + cap) <= 20",
+    "offset_is_a_column_negated": "SUM(cap - x) <= 20",
+    "offset_is_null_column": "SUM(x + ncap) <= 20",
+    "offset_is_nan": "SUM(x + 'NaN'::DOUBLE) <= 20",
+    "offset_is_infinite": "SUM(x + 'Infinity'::DOUBLE) <= 20",
+    "offset_is_too_large": "SUM(x + 1e15) <= 3e15",
+    "offset_is_just_too_large": "SUM(x + 2097153) <= 30000000",
+    "offset_beyond_a_double": "SUM(x + 1e300) <= 1e300",
+    "weight_two": "SUM(2*x + 1) <= 20",
+    "weight_cancels": "SUM(x - x + 1) <= 20",
+    "weight_is_a_column": "SUM(cap*x + 1) <= 20",
+    "constant_bound_beyond_2_pow_53": "SUM(x + 1) <= 9007199254740993",
+    "infinite_constant_bound": "SUM(x + 1) <= 'Infinity'::DOUBLE",
 }
 
 
@@ -1416,7 +1413,7 @@ S1_OFFSET_DECLINED = {
 @pytest.mark.correctness
 @pytest.mark.parametrize("name", sorted(S1_OFFSET_DECLINED))
 def test_s1_offset_count_body_declines_what_it_cannot_read_exactly(decidb_cli, name):
-    constraint, reason = S1_OFFSET_DECLINED[name]
+    constraint = S1_OFFSET_DECLINED[name]
     records = [{**row, "ncap": row["ncap"]} for row in MAIN]
     sql = (
         f"SELECT id, x FROM (FROM (VALUES {_values(records)}) t({', '.join(NAMES)}) "
@@ -1424,7 +1421,7 @@ def test_s1_offset_count_body_declines_what_it_cannot_read_exactly(decidb_cli, n
     )
     with pytest.raises(DecidBCliError) as declined:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" in str(declined.value) and reason in str(declined.value), declined.value
+    assert "decide_direct_solve=require" in str(declined.value), declined.value
     assert _outcome(decidb_cli, sql, "auto") == _outcome(decidb_cli, sql, "off")
 
 
@@ -1627,18 +1624,13 @@ def test_s1_reducer_bound_reads_infinity_like_the_solver(decidb_cli, name):
     assert direct == _outcome(decidb_cli, sql, "off")
 
 
-# What stays on the solver. Each says why under `require`, and `auto` gives the answer `off` gives. A reducer with a WHEN
+# What stays on the solver. Each declines under `require`, and `auto` gives the answer `off` gives. A reducer with a WHEN
 # of its own (H-20) and a relation-qualified reducer keep the solver's fold; every other COUNT, MIN, MAX, SUM and AVG on
 # the right is a window column of the source (H-19) and is exact, so it moved to `S1_REDUCER_NOW_APPLIED` below.
 S1_REDUCER_DECLINED = {
-    "min_with_its_own_when": ("INTEGER", ("1", "2", "3"), "MIN(v) WHEN (id > 0)", "a WHEN on the right-hand aggregate"),
-    "min_with_its_own_when_in_arithmetic": (
-        "INTEGER",
-        ("1", "2", "3"),
-        "(MIN(v) WHEN (id > 0)) + 1",
-        "a WHEN on the right-hand aggregate",
-    ),
-    "qualified_reducer": ("INTEGER", ("1", "2", "3"), "MIN(t: v)", "variable_shape"),
+    "min_with_its_own_when": ("INTEGER", ("1", "2", "3"), "MIN(v) WHEN (id > 0)"),
+    "min_with_its_own_when_in_arithmetic": ("INTEGER", ("1", "2", "3"), "(MIN(v) WHEN (id > 0)) + 1"),
+    "qualified_reducer": ("INTEGER", ("1", "2", "3"), "MIN(t: v)"),
 }
 
 
@@ -1647,7 +1639,7 @@ S1_REDUCER_DECLINED = {
 @pytest.mark.correctness
 @pytest.mark.parametrize("name", sorted(S1_REDUCER_DECLINED))
 def test_s1_reducer_bound_declines_what_it_cannot_read_exactly(decidb_cli, name):
-    column_type, values, reducer, reason = S1_REDUCER_DECLINED[name]
+    column_type, values, reducer = S1_REDUCER_DECLINED[name]
     rows = ", ".join(f"({i}, {9 - i}.0, CAST({value} AS {column_type}))" for i, value in enumerate(values))
     declaration = "t.x(BOOL)" if "t:" in reducer else "x(BOOL)"
     sql = (
@@ -1656,7 +1648,7 @@ def test_s1_reducer_bound_declines_what_it_cannot_read_exactly(decidb_cli, name)
     )
     with pytest.raises(DecidBCliError) as declined:
         _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" in str(declined.value) and reason in str(declined.value), declined.value
+    assert "decide_direct_solve=require" in str(declined.value), declined.value
     assert _outcome(decidb_cli, sql, "auto") == _outcome(decidb_cli, sql, "off")
 
 

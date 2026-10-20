@@ -25,25 +25,21 @@ struct WrapperScope {
 	const Expression *when = nullptr;
 };
 
-//! The reason of the first unknown term, including terms nested in a square or an absolute value.
-bool FindUnknownTerm(const vector<DecideSplitTerm> &terms, string &reason) {
+//! Whether any term is unknown, including terms nested in a square or an absolute value.
+bool HasUnknownTerm(const vector<DecideSplitTerm> &terms) {
 	for (auto &term : terms) {
 		if (term.kind == DecideTermKind::UNKNOWN) {
-			reason = term.reason;
 			return true;
 		}
-		if (FindUnknownTerm(term.inner, reason)) {
+		if (HasUnknownTerm(term.inner)) {
 			return true;
 		}
 	}
 	return false;
 }
 
-void MarkNotProved(DirectAnalysisStatus &status, string &reason, const string &why) {
-	if (status == DirectAnalysisStatus::PROVED) {
-		status = DirectAnalysisStatus::NOT_PROVED;
-		reason = why;
-	}
+void MarkNotProved(DirectAnalysisStatus &status) {
+	status = DirectAnalysisStatus::NOT_PROVED;
 }
 
 //! Reads one DECIDE node into the IR. It is the only direct-solve code that knows LogicalDecide's layout and the
@@ -151,7 +147,7 @@ private:
 
 	void ReadReducer(const BoundAggregateExpression &aggregate, DirectPart &part) const {
 		if (aggregate.IsDistinct() || aggregate.order_bys || aggregate.children.size() != 1) {
-			MarkNotProved(part.status, part.reason, "a reducer with DISTINCT, ORDER BY or several arguments");
+			MarkNotProved(part.status);
 			return;
 		}
 		string order;
@@ -159,9 +155,7 @@ private:
 		if (ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, order)) {
 			// Canonicalization replaced every order but 0 with its definition. Order 0 needs indicator variables, so no
 			// rule models it, and any other tag is not one this reader knows: both decline instead of throwing.
-			MarkNotProved(part.status, part.reason,
-			              order.rfind("0_", 0) == 0 ? string("norm of order 0 is not modelled")
-			                                        : StringUtil::Format("norm tag '%s' is not modelled", order));
+			MarkNotProved(part.status);
 			return;
 		} else if (name == "sum") {
 			part.reducer = DirectReducer::SUM;
@@ -172,7 +166,7 @@ private:
 		} else if (name == "max") {
 			part.reducer = DirectReducer::MAX;
 		} else {
-			MarkNotProved(part.status, part.reason, StringUtil::Format("reducer '%s' is not modelled", name));
+			MarkNotProved(part.status);
 			return;
 		}
 		if (aggregate.filter) {
@@ -184,7 +178,7 @@ private:
 			part.inner = make_uniq<DirectPart>();
 			ReadReducer(body->Cast<BoundAggregateExpression>(), *part.inner);
 			if (part.inner->status == DirectAnalysisStatus::NOT_PROVED) {
-				MarkNotProved(part.status, part.reason, part.inner->reason);
+				MarkNotProved(part.status);
 			}
 			return;
 		}
@@ -206,9 +200,8 @@ private:
 		} else {
 			splitter.Split(*root, 1, part.terms);
 		}
-		string reason;
-		if (FindUnknownTerm(part.terms, reason)) {
-			MarkNotProved(part.status, part.reason, reason);
+		if (HasUnknownTerm(part.terms)) {
+			MarkNotProved(part.status);
 		}
 		return part;
 	}
@@ -223,19 +216,18 @@ private:
 	DirectPart ReadRowPart(const Expression &side) const {
 		DirectPart part;
 		splitter.Split(side, 1, part.terms);
-		string reason;
-		if (FindUnknownTerm(part.terms, reason)) {
-			MarkNotProved(part.status, part.reason, reason);
+		if (HasUnknownTerm(part.terms)) {
+			MarkNotProved(part.status);
 		}
 		return part;
 	}
 
 	void ReadScope(const vector<const Expression *> &per_keys, const Expression *when, DirectIRScope &scope,
-	               DirectAnalysisStatus &status, string &reason) const {
+	               DirectAnalysisStatus &status) const {
 		for (auto key : per_keys) {
 			idx_t slot;
 			if (!SourceSlot(*key, slot)) {
-				MarkNotProved(status, reason, "PER keys must be source columns");
+				MarkNotProved(status);
 				continue;
 			}
 			scope.per_key_slots.push_back(slot);
@@ -251,21 +243,13 @@ private:
 
 	DirectIRConstraint ReadConstraint(const Expression &leaf, const WrapperScope &wrappers) const {
 		DirectIRConstraint ir_node;
-		auto not_proved = [&](const string &why) {
-			MarkNotProved(ir_node.status, ir_node.reason, why);
-		};
 		idx_t source_id;
 		if (TryParseSourceClauseTag(leaf.GetAlias(), source_id) && source_id < decide.constraint_sources.size()) {
 			ir_node.source_clause_id = source_id;
-			auto &source = decide.constraint_sources[source_id];
-			ir_node.clause_text = source.written_lhs + " " + source.written_cmp + " " + source.written_rhs;
-			if (!source.qualifier.empty()) {
-				ir_node.clause_text += " " + source.qualifier;
-			}
 		} else {
-			not_proved("the clause carries no source attribution");
+			MarkNotProved(ir_node.status);
 		}
-		ReadScope(wrappers.per_keys, wrappers.when, ir_node.scope, ir_node.status, ir_node.reason);
+		ReadScope(wrappers.per_keys, wrappers.when, ir_node.scope, ir_node.status);
 
 		if (leaf.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR && leaf.type == ExpressionType::COMPARE_IN) {
 			auto &membership = leaf.Cast<BoundOperatorExpression>();
@@ -277,7 +261,7 @@ private:
 			ir_node.comparison = comparison.type;
 			auto shape = canonicalizer.ClassifyCanonicalComparison(comparison);
 			if (shape == CanonicalConstraintClass::INVALID) {
-				not_proved("the clause is neither one constraint per row nor one reduced constraint");
+				MarkNotProved(ir_node.status);
 			}
 			ir_node.aggregate = shape == CanonicalConstraintClass::AGGREGATE;
 			if (ir_node.aggregate) {
@@ -290,49 +274,46 @@ private:
 			// Folding never reads a clause under a WHEN: `x <= 0 WHEN c` does not bound `x` everywhere.
 			ir_node.variable_bound = !wrappers.when && DecideIsSingletonRowBound(context, decide, comparison);
 		} else {
-			not_proved("the clause is not a comparison or an IN list");
+			MarkNotProved(ir_node.status);
 		}
 		for (auto &part : ir_node.lhs) {
 			if (part.status == DirectAnalysisStatus::NOT_PROVED) {
-				not_proved(part.reason);
+				MarkNotProved(ir_node.status);
 			}
 		}
 		return ir_node;
 	}
 
-	bool CollectConstraints(const Expression &expression, const WrapperScope &wrappers, vector<DirectIRConstraint> &out,
-	                        string &reason) const {
+	bool CollectConstraints(const Expression &expression, const WrapperScope &wrappers,
+	                        vector<DirectIRConstraint> &out) const {
 		if (expression.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
 			out.push_back(ReadConstraint(expression, wrappers));
 			return true;
 		}
 		auto &conjunction = expression.Cast<BoundConjunctionExpression>();
 		if (conjunction.type != ExpressionType::CONJUNCTION_AND || conjunction.children.empty()) {
-			reason = "the constraint tree holds a conjunction that is not AND";
 			return false;
 		}
 		if (IsPerConstraintWrapper(conjunction)) {
 			if (!wrappers.per_keys.empty() || conjunction.children.size() < 2) {
-				reason = "a PER wrapper is nested or has no keys";
 				return false;
 			}
 			WrapperScope nested = wrappers;
 			for (idx_t i = 1; i < conjunction.children.size(); i++) {
 				nested.per_keys.push_back(conjunction.children[i].get());
 			}
-			return CollectConstraints(*conjunction.children[0], nested, out, reason);
+			return CollectConstraints(*conjunction.children[0], nested, out);
 		}
 		if (IsWhenConstraintWrapper(conjunction)) {
 			if (wrappers.when || conjunction.children.size() != 2) {
-				reason = "a WHEN wrapper is nested or malformed";
 				return false;
 			}
 			WrapperScope nested = wrappers;
 			nested.when = conjunction.children[1].get();
-			return CollectConstraints(*conjunction.children[0], nested, out, reason);
+			return CollectConstraints(*conjunction.children[0], nested, out);
 		}
 		for (auto &child : conjunction.children) {
-			if (!CollectConstraints(*child, wrappers, out, reason)) {
+			if (!CollectConstraints(*child, wrappers, out)) {
 				return false;
 			}
 		}
@@ -344,7 +325,7 @@ private:
 			ir.constraints_status = DirectAnalysisStatus::PROVED;
 			return;
 		}
-		if (CollectConstraints(*decide.decide_constraints, {}, ir.constraints, ir.constraints_reason)) {
+		if (CollectConstraints(*decide.decide_constraints, {}, ir.constraints)) {
 			ir.constraints_status = DirectAnalysisStatus::PROVED;
 		} else {
 			ir.constraints.clear();
@@ -381,15 +362,15 @@ private:
 			when = wrapper.children[1].get();
 			body = UnwrapDecideCasts(*wrapper.children[0], index);
 		}
-		ReadScope(per_keys, when, objective.scope, objective.status, objective.reason);
+		ReadScope(per_keys, when, objective.scope, objective.status);
 		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			MarkNotProved(objective.status, objective.reason, "the objective holds an unrecognised wrapper");
+			MarkNotProved(objective.status);
 			return;
 		}
 		ReadParts(*body, objective.parts);
 		for (auto &part : objective.parts) {
 			if (part.status == DirectAnalysisStatus::NOT_PROVED) {
-				MarkNotProved(objective.status, objective.reason, part.reason);
+				MarkNotProved(objective.status);
 			}
 		}
 	}
@@ -399,24 +380,6 @@ private:
 
 DirectIR DirectIR::Read(ClientContext &context, LogicalDecide &decide) {
 	return DirectFrontEnd(context, decide).Read();
-}
-
-string DirectIR::FirstNotProvedReason() const {
-	if (constraints_status == DirectAnalysisStatus::NOT_PROVED) {
-		return "constraints: " + constraints_reason;
-	}
-	for (auto &constraint : constraints) {
-		if (constraint.status == DirectAnalysisStatus::NOT_PROVED) {
-			if (constraint.clause_text.empty()) {
-				return "a clause: " + constraint.reason;
-			}
-			return StringUtil::Format("clause `%s`: %s", constraint.clause_text, constraint.reason);
-		}
-	}
-	if (objective.status == DirectAnalysisStatus::NOT_PROVED) {
-		return "objective: " + objective.reason;
-	}
-	return string();
 }
 
 const DirectPart *DirectIRConstraint::PlainSum(bool allow_filter) const {
