@@ -16,6 +16,21 @@ What S1 does today is in `done.md`; the class is in `definition.md`. How to work
 - **Done when.** The S1 suites pass, the solver path gives the same answers on these bodies, and `done.md` states how
   the known difference near the top of `HUGEINT` stands.
 
+## S1-19 — Four S1 behaviors that look arbitrary to a user
+
+- **Decision needed.** Keep each behavior, or change the system and let the tests follow.
+- **Problem.** Tests pin four behaviors that are hard to explain to a user:
+  1. `SUM(x) WHEN active <= COUNT(*) / 2`: `COUNT(*)` counts every row of the group, not only the flagged rows.
+  2. A per-row bound on `x` with no `WHEN`: `x >= -3` is admitted and means no bound, while `x <= -1`, `x >= 2`, `x < 0` and
+     `x = -1` are declined and the solver raises its infeasible error. With a `WHEN` all are admitted.
+  3. A count bound that can raise (`SUM(x) <= cap + 1`) applies, while a per-row bound that can raise declines.
+  4. `SUM(x) <= 1.9999999` selects 1 row on the direct path where the solver's 1e-6 tolerance selects 2. `done.md` calls
+     it a known difference and advises rounding the bound.
+- **Options.** 1. Keep all four. 2. Change any of them (name which); its rule, tests and `done.md` change with it.
+- **Recommendation.** Keep 1 to 3, where the answer matches the solver's or the solver answers. Decide 4 with the owner,
+  as the only one where the two paths give different answers.
+- **Done when.** The owner has chosen for each item and the chosen changes are queued as tasks.
+
 ## S1-12 — S1 reads a per-row bound on `x` in its own way, and so does A1
 
 - **Needs.** `../../framework/todo.md` § H-21.

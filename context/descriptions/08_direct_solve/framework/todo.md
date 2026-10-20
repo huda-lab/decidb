@@ -36,7 +36,8 @@ What exists today is in `done.md`.
   row raises the empty-aggregate error, as the fold does.
 - **Done when.** Differential cases for a reducer `WHEN` with and without `PER`, a group the filter empties, and a
   `WHEN` on both the clause and the reducer pass under `off` and `require`. The C++ fold holds only the relation-qualified
-  reducers.
+  reducers. The two own-`WHEN` cases in `S1_REDUCER_DECLINED` (`test_direct_s1_uniform_matroid.py`) stop declining; they
+  become applying cases, and the owner approves that test edit first.
 
 ## H-21 — Split `direct_plan_factory` by job
 
@@ -115,15 +116,14 @@ What exists today is in `done.md`.
 
 ## H-29 — Prune the direct-solve tests
 
-- **Needs.** S1-17 and H-26, so the tests are weighed against the final code and the final coverage.
-- **Problem.** The direct-solve tests are about half of the suite (1,746 of 3,445 tests; S1's oracle file alone has
-  1,141, from parametrized grids) and the matrix runs each test four times. Some tests may repeat each other across files,
-  pin how a rule is built instead of what the user gets, or sit in a grid whose extra cases reach no new branch.
-- **Change.** Rebuild the catalogue of the direct-solve tests by category (what each category checks, against what,
-  and which behavior it pins; the first catalogue had 19 categories and the owner judged each a meaningful check).
-  With the per-test branch coverage (`run_coverage.sh`, `framework/done.md`), list per category the tests whose removal leaves the set of covered branches
-  unchanged. Tests that pin a behavior the owner finds arbitrary go to the owner as a question about the system, not the
-  test. The owner picks what to cut; each cut is a task of its own, and the coverage run after it must show no branch lost.
+- **Needs.** S1-17, H-26 and H-35, so the tests are weighed against the final code.
+- **Problem.** The direct-solve tests are 1,746 of the suite's 3,445 and the matrix runs each four times. Their per-test
+  branch coverage (`framework/done.md`) shows 67 tests reaching every arm that any test reaches; S1's file has 1,141
+  tests and 16 are in that cover.
+- **Change.** Rebuild a catalogue of the direct-solve tests by category: what each checks, against what, and which
+  behavior it pins. With the coverage and H-35's table, list per category the tests that add no branch and catch no
+  mutation. The owner picks what to cut; each cut is a task of its own, and the coverage run after it must show no
+  branch lost.
 - **Done when.** The owner has the report and has said which cuts to make.
 
 ## H-31 — Test the decline branches on the IR
@@ -145,3 +145,44 @@ What exists today is in `done.md`.
 - **Change.** A `make decide-coverage` target around `run_coverage.sh`, and `/orchestrate`'s exit gate reports the
   complexity change of the functions a task touches and the tests that reach each branch it adds.
 - **Done when.** The target runs from the repository root, and the orchestrate skill and `.claude/CLAUDE.md` name it.
+
+## H-33 — EXPLAIN says only that a rule applied
+
+- **Decision needed.** Whether to cut two lines from the `EXPLAIN` annotation of a direct plan.
+- **Problem.** A hit prints `Direct solve mode` (always `auto` or `require`) and `Direct solve condition` (a per-rule
+  formula such as `min/max SUM(c*x), l <= x <= u`) beside `Direct solve rule`. The owner wants `EXPLAIN` to say that a rule
+  applied and nothing more. Tests pin the formula: `RuleFixture.condition`, the serializer and `EXPLAIN` test in
+  `test_direct_rule_conformance.py`, and `test_decidb_direct_ir.cpp`.
+- **Options.** 1. Keep both lines. 2. Cut both and keep `Direct solve rule`. 3. Cut only the condition line.
+- **Recommendation.** 2.
+- **Change.** For option 2: delete `Summary()` and the two lines, delete the formula assertions, rename
+  `test_near_misses_name_their_reason_and_keep_the_solver_plan` to `test_near_misses_decline_and_keep_the_solver_plan`
+  (it uses no oracle), and update `rules.md` and `glossary.md`.
+- **Done when.** The five checks pass and a direct plan's `EXPLAIN` shows one `Direct solve rule` line.
+
+## H-34 — Branches no test reaches
+
+- **Needs.** S1-17 and H-26, which delete code first.
+- **Problem.** 364 of 2,008 branch arms in the direct-solve files are reached by no test (`s1_uniform_matroid_rule.cpp` 80,
+  `direct_late_materialization.cpp` 53, `direct_ir.cpp` 50, `a1_separable_box_rule.cpp` 38, `direct_expression.cpp` 35,
+  `decide_rewrite_rhs_window.cpp` 32, `direct_result_adapter.cpp` 28, `direct_plan_factory.cpp` 23,
+  `direct_rule_driver.cpp` 17, `s1_uniform_matroid_helpers.cpp` 8). Each is an untested guard or dead code.
+- **Change.** Re-run the coverage and list the unreached arms with file and line. For each, name a query that reaches it
+  and add that test, or delete the code when no query can.
+- **Done when.** Every listed arm is reached by a test or gone, and the five checks pass.
+
+## H-35 — Which overlapping tests catch a wrong value
+
+- **Decision needed.** When to run the check: before H-20, or after S1-17 and H-26 on the final code.
+- **Problem.** Branch coverage cannot say whether a test that reaches a branch another test also reaches would catch a
+  wrong value there (a limit conversion, an operator, a constant). A change to the code that makes some tests fail
+  shows which tests do.
+- **Options.** 1. Run now on the large grids: the S1 oracle grid (277 tests), the S1 reducer grid (242), the A1 oracle
+  grid (135), `test_direct_source_values.py` (108) and the near misses (61), skipping the offset tests that S1-17
+  deletes. 2. Run after S1-17 and H-26, on the code that stays.
+- **Recommendation.** 1.
+- **Change.** Pick about 40 changes in the value-handling code of the direct-solve files (a comparison operator, a
+  constant, an arithmetic step). For each: edit, rebuild the `shell` target in `build/coverage`, run the six
+  `test_direct_*.py` files with `run_coverage.sh`, record which tests fail, restore the file. Time one change first and
+  tell the owner the estimate. No other task may build or run tests meanwhile.
+- **Done when.** The owner has a table of tests that failed for no change, by file, and the time it took.
