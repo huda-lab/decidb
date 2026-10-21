@@ -80,15 +80,6 @@ What exists today is in `done.md`.
 - **Done when.** The five checks pass with no edit to a test file. Outside S1, a hand-built expression remains only
   where the builder has no operation for it, with a comment saying so.
 
-## H-26 — The driver turns away an IR it cannot read
-
-- **Problem.** Every rule opens `CheckCondition` with the same checks of the IR's status: decisions, source,
-  constraints, each constraint, the objective, a finite objective offset and a known sense (S1 and A1, about 25 lines
-  each). R1 would copy them.
-- **Change.** The rule driver checks once and offers the IR to no rule when it fails. Each rule drops its copy; a rule
-  keeps only the checks that are about its own class.
-- **Done when.** Neither rule repeats the checks and the five checks pass.
-
 ## H-27 — Test literals and rule headers
 
 - **Problem.** The S1 and A1 oracle suites each define `_literal`, differently (S1 wraps in `CAST`, A1 writes `::DOUBLE`
@@ -101,7 +92,7 @@ What exists today is in `done.md`.
 
 ## H-29 — Prune the direct-solve tests
 
-- **Needs.** S1-17 and H-26, so the tests are weighed against the final code.
+- **Needs.** S1-17, so the tests are weighed against the final code.
 - **Problem.** The direct-solve tests are 1,746 of the suite's 3,445 and the matrix runs each four times. Their per-test
   branch coverage (`framework/done.md`) shows 67 tests reaching every arm that any test reaches; S1's file has 1,141
   tests and 16 are in that cover.
@@ -116,7 +107,7 @@ What exists today is in `done.md`.
   coefficient and no lower bound, a Boolean lower bound below 0 in `DirectReadBounds`, and the rounding steps of the
   integer search in `direct_bound_reader.cpp`. The per-change and per-test data, the change list and the runner are in
   `framework/h35/`, which git ignores; its change list names `direct_plan_factory.cpp`, whose code now lives in `direct_plan_fragments.cpp`,
-  `direct_runtime_checks.cpp` and `direct_bound_reader.cpp`, and S1-17 and H-26 shift line numbers, so re-map the change
+  `direct_runtime_checks.cpp` and `direct_bound_reader.cpp`, and later changes shift line numbers, so re-map the change
   list before a re-run.
 - **Change.** Rebuild a catalogue of the direct-solve tests by category: what each checks, against what, and which
   behavior it pins. With the coverage and H-35's table, list per category the tests that add no branch and catch no
@@ -126,7 +117,6 @@ What exists today is in `done.md`.
 
 ## H-31 — Test the decline branches on the IR
 
-- **Needs.** H-26.
 - **Problem.** Each "not exactly this shape" branch in `CheckCondition` is tested by a full SQL query on up to four
   paths, though a rule's input is a plain `DirectIR` struct. The branches cost most of the suite.
 - **Change.** A C++ helper that builds a small `DirectIR` and calls a rule's `CheckCondition`, with one case per decline
@@ -146,7 +136,7 @@ What exists today is in `done.md`.
 
 ## H-34 — Branches no test reaches
 
-- **Needs.** S1-17 and H-26, which delete code first.
+- **Needs.** S1-17, which deletes code first.
 - **Problem.** 364 of 2,008 branch arms in the direct-solve files are reached by no test (`s1_uniform_matroid_rule.cpp` 80,
   `direct_late_materialization.cpp` 53, `direct_ir.cpp` 50, `a1_separable_box_rule.cpp` 38, `direct_expression.cpp` 35,
   `decide_rewrite_rhs_window.cpp` 32, `direct_result_adapter.cpp` 28, the three files split from the plan factory 23,

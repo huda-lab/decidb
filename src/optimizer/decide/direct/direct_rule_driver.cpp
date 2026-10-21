@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <cstdlib>
 
 #include "duckdb/common/decide_profile.hpp"
@@ -120,6 +121,25 @@ bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
 
 } // namespace
 
+bool DirectIRIsReadable(const DirectIR &ir) {
+	if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.source_status != DirectAnalysisStatus::PROVED ||
+	    ir.constraints_status != DirectAnalysisStatus::PROVED || ir.objective.status != DirectAnalysisStatus::PROVED ||
+	    !std::isfinite(ir.objective.offset)) {
+		return false;
+	}
+	// No objective (`DecideSense::FEASIBILITY`) is a sense the rules know.
+	if (ir.objective.sense != DecideSense::MAXIMIZE && ir.objective.sense != DecideSense::MINIMIZE &&
+	    ir.objective.sense != DecideSense::FEASIBILITY) {
+		return false;
+	}
+	for (auto &constraint : ir.constraints) {
+		if (constraint.status != DirectAnalysisStatus::PROVED) {
+			return false;
+		}
+	}
+	return true;
+}
+
 void RegisterDirectSolve(DBConfig &config) {
 	config.AddExtensionOption(
 	    "decide_direct_solve",
@@ -155,7 +175,8 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 		unique_ptr<DirectApplicabilityCondition> condition;
 	};
 	vector<AppliedCandidate> applied;
-	auto rules = RulesFor(optimizer.context);
+	// An IR the front end could not read is offered to no rule, which leaves the node as a query no rule applies to.
+	auto rules = DirectIRIsReadable(ir) ? RulesFor(optimizer.context) : vector<unique_ptr<DirectSolveRule>>();
 	for (auto &rule : rules) {
 		auto condition = rule->CheckCondition(ir, optimizer.context);
 		if (!condition) {

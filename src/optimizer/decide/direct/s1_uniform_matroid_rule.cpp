@@ -358,19 +358,9 @@ public:
 		return RULE_NAME;
 	}
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.decisions.size() != 1 ||
-		    ir.decisions[0].domain != DirectDomain::BOOL || ir.decisions[0].scope != DecideVarScope::ROW ||
-		    ir.decisions[0].output_type != LogicalType::INTEGER || !ir.entity_scopes.empty() ||
-		    ir.source_status != DirectAnalysisStatus::PROVED) {
-			return nullptr;
-		}
-		// No objective (`DecideSense::FEASIBILITY`) is admitted: every score is 0.
-		if (!std::isfinite(ir.objective.offset) ||
-		    (ir.objective.sense != DecideSense::MAXIMIZE && ir.objective.sense != DecideSense::MINIMIZE &&
-		     ir.objective.sense != DecideSense::FEASIBILITY)) {
-			return nullptr;
-		}
-		if (ir.constraints_status != DirectAnalysisStatus::PROVED) {
+		if (ir.decisions.size() != 1 || ir.decisions[0].domain != DirectDomain::BOOL ||
+		    ir.decisions[0].scope != DecideVarScope::ROW || ir.decisions[0].output_type != LogicalType::INTEGER ||
+		    !ir.entity_scopes.empty()) {
 			return nullptr;
 		}
 		if (ir.constraints.empty() || ir.source_clause_count != ir.constraints.size()) {
@@ -380,9 +370,6 @@ public:
 		vector<uint8_t> seen_sources(ir.source_clause_count, 0);
 		for (auto &ir_node : ir.constraints) {
 			if (ir_node.source_clause_id >= seen_sources.size() || seen_sources[ir_node.source_clause_id]++) {
-				return nullptr;
-			}
-			if (ir_node.status != DirectAnalysisStatus::PROVED) {
 				return nullptr;
 			}
 			if (ir_node.comparison == ExpressionType::COMPARE_IN) {
@@ -398,9 +385,6 @@ public:
 			condition->bound_factors.push_back(&ir_node);
 		}
 		if (condition->bound_factors.empty()) {
-			return nullptr;
-		}
-		if (ir.objective.status != DirectAnalysisStatus::PROVED) {
 			return nullptr;
 		}
 		if (ir.objective.scope.when || !ir.objective.scope.per_key_slots.empty()) {

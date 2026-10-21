@@ -1,10 +1,10 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-20 on top of `2c61b2fe4c`, with the right-hand-side rewrite and S1 and A1 registered: `make
+Verified on 2026-10-21 on top of `a905005cb8`, with the right-hand-side rewrite and S1 and A1 registered: `make
 decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,445
 passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,444 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,298 assertions in
-46 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,324 assertions in
+47 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
 ## What it does
@@ -20,7 +20,9 @@ check). Design: `../architecture/`.
   as the solver path.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
-  rule driver runs CheckCondition for every rule. Rules are disjoint, so at most one applies to a query; two that apply
+  rule driver first checks that the front end read the whole IR (`DirectIRIsReadable`: decisions, source, every
+  constraint and the objective proved, a finite offset, a known sense); an IR that fails is offered to no rule, so each
+  rule checks only what concerns its own class. Otherwise the driver runs CheckCondition for every rule. Rules are disjoint, so at most one applies to a query; two that apply
   raise an internal error naming both rules.
 - **Result adapter** (`DIRECT_RESULT_ADAPTER` in `EXPLAIN`). Keeps original bindings and types, serializes, prunes
   outputs only when skipping is proved safe, and always keeps the rule's validated columns live.
@@ -164,8 +166,8 @@ default box.
 
 - C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts, and a norm tag it does not expect reading
   as a not-proved part, not an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
-  when no rule applies, a rule that applies beside one that does not, two rules applying as an internal error, mismatched
-  slot, breaker under `LIMIT 1` and `COUNT(*)`).
+  when no rule applies, a rule that applies beside one that does not, two rules applying as an internal error, an IR the
+  front end could not read offered to no rule, mismatched slot, breaker under `LIMIT 1` and `COUNT(*)`).
 - Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read,
   serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE`, an empty source, and constant bounds that
   contradict the decision's built-in domain: under `auto`, `off` and `require` each gives the solver's outcome, or

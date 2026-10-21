@@ -162,6 +162,11 @@ struct DirectSubstitute {
 	bool pipelined = false;
 };
 
+//! Whether the front end read the whole IR: the decisions, the source, the constraints and the objective are all proved
+//! (each constraint too), the objective offset is finite and the sense is one the rules know. The rule driver offers a
+//! rule an IR only when this holds, so a rule checks only what concerns its own class.
+bool DirectIRIsReadable(const DirectIR &ir);
+
 //! The lifecycle the rule driver runs: CheckCondition, then Apply. CheckCondition checks the query's shape and then
 //! establishes what the plan relies on; when the condition does not hold it returns null and leaves the DECIDE node
 //! untouched. Summary is the one line the rule adds to the EXPLAIN annotation. Rules are disjoint: each requires

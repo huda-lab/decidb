@@ -17,7 +17,6 @@ Read first: `08_direct_solve/architecture/overview.md`, `08_direct_solve/archite
 - [ ] H-23 One reader for a linear objective — 08_direct_solve/framework/todo.md § H-23
 - [ ] H-24 Shared helpers for "true, or raise" — 08_direct_solve/framework/todo.md § H-24
 - [ ] S1-12 S1 takes the shared bound reader — 08_direct_solve/rules/s1_uniform_matroid/todo.md § S1-12
-- [ ] H-26 Driver turns away an unreadable IR — 08_direct_solve/framework/todo.md § H-26
 
 ## 5. Prune the tests (needs: 3, 4)
 - [ ] H-34 Branches no test reaches — 08_direct_solve/framework/todo.md § H-34

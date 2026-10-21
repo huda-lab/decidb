@@ -77,6 +77,10 @@ DirectSolveRule *FindS1Rule(duckdb::vector<duckdb::unique_ptr<DirectSolveRule>> 
 bool RuleApplies(DirectSolveRule &rule, Connection &con, const string &declaration, const string &constraints,
                  const string &objective, string *condition_text = nullptr) {
 	QueryIR query(con, IRQuery(declaration, constraints, objective));
+	// Mirrors the rule driver, which offers a rule only an IR it could read.
+	if (!DirectIRIsReadable(query.ir)) {
+		return false;
+	}
 	auto condition = rule.CheckCondition(query.ir, *con.context);
 	if (!condition) {
 		return false;

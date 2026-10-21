@@ -125,8 +125,7 @@ public:
 	}
 
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.decisions.empty() || !ir.entity_scopes.empty() ||
-		    ir.source_status != DirectAnalysisStatus::PROVED) {
+		if (ir.decisions.empty() || !ir.entity_scopes.empty()) {
 			return nullptr;
 		}
 		for (auto &decision : ir.decisions) {
@@ -134,18 +133,7 @@ public:
 				return nullptr;
 			}
 		}
-		if (!std::isfinite(ir.objective.offset) ||
-		    (ir.objective.sense != DecideSense::MAXIMIZE && ir.objective.sense != DecideSense::MINIMIZE &&
-		     ir.objective.sense != DecideSense::FEASIBILITY)) {
-			return nullptr;
-		}
-		if (ir.constraints_status != DirectAnalysisStatus::PROVED) {
-			return nullptr;
-		}
 		for (auto &ir_node : ir.constraints) {
-			if (ir_node.status != DirectAnalysisStatus::PROVED) {
-				return nullptr;
-			}
 			if (ir_node.aggregate) {
 				return nullptr;
 			}
@@ -163,9 +151,6 @@ public:
 			if (!ReadsOneDecision(ir_node, ir.decisions.size())) {
 				return nullptr;
 			}
-		}
-		if (ir.objective.status != DirectAnalysisStatus::PROVED) {
-			return nullptr;
 		}
 		if (!ir.objective.scope.per_key_slots.empty()) {
 			return nullptr;

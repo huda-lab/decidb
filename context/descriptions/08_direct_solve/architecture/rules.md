@@ -37,7 +37,8 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    is `RULE_NAME`, the upper-cased `<ID>_<SLUG>`. Declare `Make<Id><Slug>Rule()` (`MakeS1UniformMatroidRule()`) in a
    header, list the file in the folder's `CMakeLists.txt`.
 2. Register it with one line in `direct_registry.cpp`. No other engine file changes.
-3. Read only the IR (`direct_rule.hpp`). A not-proved node is a decline. The rule must be
+3. Read only the IR (`direct_rule.hpp`). The driver offers a rule only an IR that `DirectIRIsReadable` accepts, so a
+   rule does not re-check the IR's statuses, offset or sense; any other not-proved node is a decline. The rule must be
    disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible
    (`DirectProveValue`). Take the empty-aggregate guard and the all-rows breaker from `direct_plan_fragments.cpp`, the
