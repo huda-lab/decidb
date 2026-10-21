@@ -30,8 +30,5 @@ Read first: `08_direct_solve/architecture/overview.md`, `08_direct_solve/archite
 - [ ] H-31 Test the decline branches on the IR — 08_direct_solve/framework/todo.md § H-31
 - [ ] H-32 Coverage and complexity in the daily checks — 08_direct_solve/framework/todo.md § H-32
 
-## 8. Quick cleanups
-- [ ] H-27 Test literals and rule headers — 08_direct_solve/framework/todo.md § H-27
-
-## 9. Blocked
+## 8. Blocked
 - [ ] H-02 Front end for the new language — 08_direct_solve/framework/todo.md § H-02

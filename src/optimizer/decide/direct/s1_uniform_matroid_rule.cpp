@@ -1,4 +1,4 @@
-#include "duckdb/optimizer/decide/direct/s1_uniform_matroid_rule.hpp"
+#include "duckdb/optimizer/decide/direct/direct_rules.hpp"
 
 #include <algorithm>
 #include <cmath>

@@ -34,8 +34,8 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 
 1. Create `src/optimizer/decide/direct/<id>_<slug>_rule.cpp`. Keep the rule and its helpers in `namespace
    direct_<id>_<slug>` (unity builds merge anonymous namespaces); inside it the class is `Rule` and its `EXPLAIN` value
-   is `RULE_NAME`, the upper-cased `<ID>_<SLUG>`. Declare `Make<Id><Slug>Rule()` (`MakeS1UniformMatroidRule()`) in a
-   header, list the file in the folder's `CMakeLists.txt`.
+   is `RULE_NAME`, the upper-cased `<ID>_<SLUG>`. Declare `Make<Id><Slug>Rule()` (`MakeS1UniformMatroidRule()`) in
+   `direct_rules.hpp`, which declares every rule's factory, and list the file in the folder's `CMakeLists.txt`.
 2. Register it with one line in `direct_registry.cpp`. No other engine file changes.
 3. Read only the IR (`direct_rule.hpp`). The driver offers a rule only an IR that `DirectIRIsReadable` accepts, so a
    rule does not re-check the IR's statuses, offset or sense; any other not-proved node is a decline. The rule must be

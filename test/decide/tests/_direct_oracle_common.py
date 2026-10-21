@@ -4,12 +4,14 @@
 A rule's suite supplies its own case table, its own function that builds the oracle model, and its own check of one
 DeciDB assignment. This module supplies the rest: the fixture that keeps a forced backend out of the way, running a
 query under a `decide_direct_solve` mode, the outcome of a query as a value to compare, the `VALUES` list for a table of
-records, and the "oracle, `off`, `require`" comparison itself.
+records, `sql_literal` (the one spelling of a constant), and the "oracle, `off`, `require`" comparison itself.
 
 Test functions stay in their own files with their own names: `oracle_solver` caches each result under the test node id
 plus a hash of the test function's source, so moving a test or editing its body would re-run the oracle. Only helpers
 live here, and the helpers are not part of that hash.
 """
+
+import math
 
 import pytest
 
@@ -44,6 +46,23 @@ def outcome(cli, sql, mode):
 def values_clause(records, names, types, literal):
     """The body of a `VALUES` list: one tuple per record, `names` in order, each value through `literal(value, type)`."""
     return ", ".join("(" + ", ".join(literal(record[n], types[n]) for n in names) + ")" for record in records)
+
+
+def sql_literal(value, sql_type):
+    """The SQL text of one Python value as a `sql_type` constant.
+
+    Every value but a Boolean goes through `CAST`, so a column's type does not depend on which row comes first, and
+    the infinities and NaN are spelled as strings, which `repr` cannot write.
+    """
+    if value is None:
+        return f"CAST(NULL AS {sql_type})"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and math.isinf(value):
+        return f"CAST('{'' if value > 0 else '-'}Infinity' AS {sql_type})"
+    if isinstance(value, float) and math.isnan(value):
+        return f"CAST('NaN' AS {sql_type})"
+    return f"CAST({value!r} AS {sql_type})"
 
 
 def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require")):

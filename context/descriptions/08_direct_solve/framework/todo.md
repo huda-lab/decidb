@@ -80,16 +80,6 @@ What exists today is in `done.md`.
 - **Done when.** The five checks pass with no edit to a test file. Outside S1, a hand-built expression remains only
   where the builder has no operation for it, with a comment saying so.
 
-## H-27 — Test literals and rule headers
-
-- **Problem.** The S1 and A1 oracle suites each define `_literal`, differently (S1 wraps in `CAST`, A1 writes `::DOUBLE`
-  and spells infinities). Each rule has a header holding one factory declaration, so every class adds a one-line
-  header.
-- **Change.** One `sql_literal` in `_direct_oracle_common.py` that both suites call; one `direct_rules.hpp` declaring
-  every rule's factory function. `architecture/rules.md` § Adding a rule step 1 follows. Test function bodies stay as
-  they are, so the oracle cache still hits.
-- **Done when.** The five checks pass with no oracle re-run.
-
 ## H-29 — Prune the direct-solve tests
 
 - **Needs.** S1-17, so the tests are weighed against the final code.

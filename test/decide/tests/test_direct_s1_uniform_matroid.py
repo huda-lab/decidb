@@ -38,7 +38,7 @@ from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import agree_with_oracle, outcome as _outcome, run as _run, values_clause
+from ._direct_oracle_common import agree_with_oracle, outcome as _outcome, run as _run, sql_literal, values_clause
 from ._direct_rule_fixtures import S1_SOLVER_ONLY_ROW_BOUNDS
 
 
@@ -170,16 +170,8 @@ def _dataset(case):
     return DATASETS[case.get("data", "main")]
 
 
-def _literal(value, sql_type):
-    if value is None:
-        return f"CAST(NULL AS {sql_type})"
-    if isinstance(value, bool):
-        return str(value).lower()
-    return f"CAST({value!r} AS {sql_type})"
-
-
 def _values(records, names=NAMES):
-    return values_clause(records, names, dict(COLUMNS), _literal)
+    return values_clause(records, names, dict(COLUMNS), sql_literal)
 
 
 # ---------------------------------------------------------------------------

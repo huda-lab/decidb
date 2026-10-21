@@ -144,7 +144,9 @@ check). Design: `../architecture/`.
   like any bound of magnitude 1e20 or more, and only a decision with no lower bound written takes the default floor of 0
   (`EffectiveLower`). No value is reserved to mean "unset".
 - **One test scaffold.** `test/decide/tests/_direct_oracle_common.py` holds what the oracle suites share: the autouse
-  fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, and `agree_with_oracle` (oracle model, `off`,
+  fixture that lifts a forced backend, `run`, `outcome`, `values_clause`, `sql_literal` (one spelling of a constant: a `CAST` to the column's type, so a
+  column's type does not depend on which row comes first, with infinities and NaN spelled as strings), and
+  `agree_with_oracle` (oracle model, `off`,
   `require`, then a rule-supplied check of one assignment). `test_direct_s1_uniform_matroid.py` and
   `test_direct_a1_separable_box.py` keep their case tables, oracle-model builders and assignment checks. Every direct
   suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can

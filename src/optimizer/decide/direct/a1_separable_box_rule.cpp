@@ -1,4 +1,4 @@
-#include "duckdb/optimizer/decide/direct/a1_separable_box_rule.hpp"
+#include "duckdb/optimizer/decide/direct/direct_rules.hpp"
 
 #include <algorithm>
 #include <cmath>

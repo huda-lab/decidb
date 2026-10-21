@@ -1,6 +1,5 @@
-#include "duckdb/optimizer/decide/direct/a1_separable_box_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
-#include "duckdb/optimizer/decide/direct/s1_uniform_matroid_rule.hpp"
+#include "duckdb/optimizer/decide/direct/direct_rules.hpp"
 
 namespace duckdb {
 

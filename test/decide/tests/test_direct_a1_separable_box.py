@@ -40,7 +40,7 @@ from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import agree_with_oracle, outcome as _run_all, run as _run, values_clause
+from ._direct_oracle_common import agree_with_oracle, outcome as _run_all, run as _run, sql_literal, values_clause
 
 
 INF = math.inf
@@ -75,22 +75,8 @@ ROWS = (
 )
 
 
-def _literal(value, sql_type):
-    if value is None:
-        return "NULL"
-    if sql_type == "BOOLEAN":
-        return "true" if value else "false"
-    if sql_type == "INTEGER":
-        return str(value)
-    if math.isinf(value):
-        return "'Infinity'::DOUBLE" if value > 0 else "'-Infinity'::DOUBLE"
-    if math.isnan(value):
-        return "'NaN'::DOUBLE"
-    return f"{value!r}::DOUBLE"
-
-
 def _values(rows):
-    return values_clause(rows, NAMES, dict(COLUMNS), _literal)
+    return values_clause(rows, NAMES, dict(COLUMNS), sql_literal)
 
 
 # ---------------------------------------------------------------------------
@@ -255,7 +241,7 @@ def _sql(case_, wrap="plain"):
     select = f"SELECT id, {names}"
     without_s = [n for n in NAMES if n != "s"]
     base = f"(VALUES {_values_without(case_.rows, 's')}) t({', '.join(without_s)})"
-    scores = f"(VALUES {', '.join('(' + str(r['id']) + ', ' + _literal(r['s'], 'DOUBLE') + ')' for r in case_.rows)}) z(id, s)"
+    scores = f"(VALUES {', '.join('(' + str(r['id']) + ', ' + sql_literal(r['s'], 'DOUBLE') + ')' for r in case_.rows)}) z(id, s)"
     ids = ", ".join(f"({r['id']})" for r in case_.rows)
     middle = case_.rows[len(case_.rows) // 2]["id"]
     if wrap == "plain":
@@ -289,7 +275,7 @@ def _sql(case_, wrap="plain"):
 
 
 def _values_without(rows, dropped):
-    return values_clause(rows, [n for n in NAMES if n != dropped], dict(COLUMNS), _literal)
+    return values_clause(rows, [n for n in NAMES if n != dropped], dict(COLUMNS), sql_literal)
 
 
 def _solve_with_oracle(oracle_solver, case_):
