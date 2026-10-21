@@ -64,10 +64,6 @@ bool DirectPartScale(ClientContext &context, const DirectPart &part, double &sca
 //! the expression is anything else.
 const BoundColumnRefExpression *DirectBareNumericColumn(const Expression &expr);
 
-//! A numeric, deterministic expression independent of the decisions: a coefficient a rule may evaluate per row. It
-//! may still raise; check DirectMayThrow where the order of errors matters.
-bool DirectIsNumericDecisionFree(const Expression &expr, idx_t decide_index);
-
 //! The source column a data-valued bound is exactly, as DirectBareNumericColumn reads it: its slot in the source, its
 //! type, and the name the user wrote, for an error that names it. False for anything else.
 bool DirectSourceNumericColumn(const Expression &expr, const vector<ColumnBinding> &source_bindings, idx_t &slot,

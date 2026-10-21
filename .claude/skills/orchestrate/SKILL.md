@@ -106,6 +106,10 @@ SendMessage to the same agent (it keeps its own context).
 2. Read the diff. Check it against the brief's outcome, the layer that owns the behavior, and the working rules. Any
    doc edit by the agent is a review finding.
 3. Re-run the exit-gate checks yourself, piping to `tail` (or the script's summary) so only result lines enter context.
+   For a change to the direct-solve code, also report: the lizard CCN before and after of each function the diff
+   touches (`test/decide/.venv/bin/python -m lizard -l cpp <files>`), and from `make decide-coverage` run before and
+   after the change (`COVERAGE_RUN_DIR=<dir>`), `coverage_report.py compare` (no arm lost but deleted ones) and the
+   tests that reach each arm the change adds. A warm run takes about 4 minutes.
 4. If problems: SendMessage the same agent with a numbered list of concrete fixes, then repeat step 4. If the second
    round still fails, stop and bring it to the owner.
 

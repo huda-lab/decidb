@@ -13,7 +13,7 @@ namespace duckdb {
 static bool DirectProveValues(const DirectIR &ir, const vector<DecideSplitTerm> &terms,
                               vector<DirectSignedValue> &out) {
 	for (auto &term : terms) {
-		if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
+		if (!DirectProveValue(ir, *term.coefficient)) {
 			return false;
 		}
 		DirectSignedValue value;
@@ -62,9 +62,6 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 	// to infinity), combined by the one function the solver's own folding pass calls.
 	vector<DecideBoundBox> boxes(decision_count);
 	for (auto &ir_node : ir.constraints) {
-		if (ir_node.aggregate) {
-			continue;
-		}
 		idx_t decision = ir_node.lhs[0].terms[0].var_a;
 		auto domain = ir.decisions[decision].domain;
 		auto &rhs = *ir_node.rhs;

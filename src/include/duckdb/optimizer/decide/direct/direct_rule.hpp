@@ -105,8 +105,8 @@ struct DirectIRConstraint {
 	idx_t degree = 0;
 
 	//! The reduced left side when it is one plain `SUM(...)`: unsigned, unscaled, unqualified, not nested; null
-	//! otherwise. Its aggregate-local WHEN is allowed only when `allow_filter`.
-	const DirectPart *PlainSum(bool allow_filter) const;
+	//! otherwise. Its aggregate-local WHEN, if any, is the returned part's `filter`.
+	const DirectPart *PlainSum() const;
 };
 
 struct DirectIRObjective {

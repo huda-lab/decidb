@@ -1,10 +1,10 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-21 on top of `82d1c7d2db`, with the right-hand-side rewrite and S1 and A1 registered: `make
+Verified on 2026-10-21 on top of `8b028d9360`, with the right-hand-side rewrite and S1 and A1 registered: `make
 decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,090
 passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,089 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,324 assertions in
-47 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,800 assertions in
+52 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
 ## What it does
@@ -84,7 +84,7 @@ check). Design: `../architecture/`.
   `DirectCastMayThrow` and `DirectMayThrow` copy DuckDB's `CanThrow` on purpose: DuckDB's counts `TRY_CAST` as throwing,
   and fixing that would change DuckDB itself. Test: `test/common/test_decidb_numeric_policy.cpp` (`[numeric_policy]`, 5
   cases).
-- **Shared admission predicates.** `DirectIsNumericDecisionFree`, `DirectSourceNumericColumn`,
+- **Shared admission predicates.** `DirectIsDecisionFreeDeterministic`, `DirectSourceNumericColumn`,
   `DirectIsSourceOnlyNumeric`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
   `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT` and `DirectIRConstraint::PlainSum` answer "may a rule use this value"
   once for all rules.
@@ -183,7 +183,13 @@ default box.
 - C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts, and a norm tag it does not expect reading
   as a not-proved part, not an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
   when no rule applies, a rule that applies beside one that does not, two rules applying as an internal error, an IR the
-  front end could not read offered to no rule, mismatched slot, breaker under `LIMIT 1` and `COUNT(*)`).
+  front end could not read offered to no rule, mismatched slot, breaker under `LIMIT 1` and `COUNT(*)`),
+  `test_decidb_direct_decline.cpp` (each decline branch of S1's and A1's `CheckCondition` and of `DirectIRIsReadable`,
+  tested on the IR: a probe rule installed through the rule driver's test seam receives the IR the driver reads from a
+  small query that is only planned, edits it for the few shapes SQL cannot write, and asks S1 or A1 whether it
+  applies; each case reaches an arm no other case of its rule reaches, and each rule has forms that apply). The IR comes
+  from a query rather than from a hand-built struct because a hand-built IR has no resolved source columns, so the
+  source-column checks would pass without checking anything.
 - Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read,
   serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE`, an empty source, and constant bounds that
   contradict the decision's built-in domain: under `auto`, `off` and `require` each gives the solver's outcome, or
@@ -194,13 +200,17 @@ default box.
 - Result adapter parent contexts, identical under `auto`, `off` and `require`: `CREATE TABLE AS`, `INSERT ... SELECT`, a
   view, a window over the result, `UNION ALL` of an S1 and an A1 query, a joined source with a filter above, a self-join
   of results, an empty source and a prepared statement with a parameter.
-- Branch coverage per test: `test/decide/run_coverage.sh OUT_DIR <pytest args>` runs tests against an instrumented
-  `build/coverage/decidb` (the cmake recipe is in the script's header; `-fprofile-list` instruments only
-  `src/optimizer/decide/direct/*.cpp` and `decide_rewrite_rhs_window.cpp`) and keeps one small profile per test, about 72 KB.
-  `coverage_report.py report OUT_DIR` prints, per file, per test function and per test, the branch arms reached and the
-  arms only that test reaches, and writes `report.json` with each test's arm set. The six `test_direct_*.py` files (1,746
-  tests) take about 50 seconds on 8 workers and 119 MB. Branch coverage shows which branches a test runs, not whether
-  its assertion would catch a wrong value there. A subset run by hand needs `-m` (the script passes a marker that
-  matches every test), or `conftest.py` prunes the oracle cache.
+- Branch coverage: `make decide-coverage` (repository root) builds `build/coverage` when it is missing (an instrumented
+  copy of the build; `-fprofile-list` instruments only `src/optimizer/decide/direct/*.cpp` and
+  `decide_rewrite_rhs_window.cpp`; `build/release` is untouched) and otherwise rebuilds what changed, runs the DECIDE
+  pytest suite with one profile per test (`test/decide/run_coverage.sh`) and `unittest "[decidb]"` as one combined
+  profile, and prints the report into `COVERAGE_RUN_DIR` (default `build/coverage/run`). A warm run takes about 4
+  minutes. `coverage_report.py report DIR` prints, per file, per test function and per test, the arms reached and the
+  arms only that test reaches (`--unreached` also lists every arm no test reaches), and writes `report.json` with each
+  arm's condition text and function. `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not
+  (exit 1 when there are any) and the reverse, matching an arm by file, function, condition text and its occurrence in
+  the function, so lines that move are not read as lost. 1,761 of 1,954 arms are reached. Branch coverage shows which
+  branches a test runs, not whether its assertion would catch a wrong value there. A subset run by hand needs `-m`
+  (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
   clauses 0.13 s, 8 clauses with `WHEN` 0.26 s, 3 decisions and 8 clauses 0.29 s.

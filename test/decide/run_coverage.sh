@@ -5,18 +5,16 @@
 # Usage:
 #   ./run_coverage.sh OUT_DIR [pytest args...]      # e.g. OUT_DIR=build/coverage/run1
 #   DECIDE_TEST_JOBS=0 ./run_coverage.sh OUT_DIR ... # serial run (cleanest per-test times)
-#   ./coverage_report.py report OUT_DIR              # then read the report
+#   ./coverage_report.py report OUT_DIR              # then read the report (pytest profiles only
+#                                                    # unless OUT_DIR/cpp holds the C++ profile)
 #
-# One-time build of the instrumented binary, from the repository root (build/release is untouched):
-#   mkdir -p build/coverage && cd build/coverage
-#   printf '[clang]\nsrc:*/src/optimizer/decide/direct/*\nsrc:*/src/optimizer/decide/decide_rewrite_rhs_window.cpp\n' > profile_list.txt
-#   F="-fprofile-instr-generate -fcoverage-mapping -fprofile-list=$PWD/profile_list.txt"
-#   cmake -DENABLE_EXTENSION_AUTOLOADING= -DENABLE_EXTENSION_AUTOINSTALL= -DLOCAL_EXTENSION_REPO="" \
-#         -DOVERRIDE_GIT_DESCRIBE="" -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS="$F" -DCMAKE_C_FLAGS="$F" \
-#         -DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate" ../..
-#   cmake --build . --target shell -- -j8
-# (The cmake variables are the ones `make release` passes.) Do not run build/coverage/decidb by hand
-# without LLVM_PROFILE_FILE set: it drops a default.profraw in the current directory.
+# `make decide-coverage` (repository root) is the usual entry point: it builds build/coverage when missing,
+# calls this script for the pytest suite, runs `unittest "[decidb]"` as one combined profile and prints the
+# report. The instrumented build (build/release is untouched) is made by `make decide-coverage-build`:
+# -fprofile-instr-generate -fcoverage-mapping -fprofile-list limited to src/optimizer/decide/direct/* and
+# src/optimizer/decide/decide_rewrite_rhs_window.cpp, with the cmake variables `make release` passes.
+# Do not run build/coverage/decidb by hand without LLVM_PROFILE_FILE set: it drops a default.profraw in the
+# current directory.
 
 # This wraps run_tests.sh, so the test selection arguments are the usual pytest ones.
 

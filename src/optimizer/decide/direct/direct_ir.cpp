@@ -382,13 +382,13 @@ DirectIR DirectIR::Read(ClientContext &context, LogicalDecide &decide) {
 	return DirectFrontEnd(context, decide).Read();
 }
 
-const DirectPart *DirectIRConstraint::PlainSum(bool allow_filter) const {
+const DirectPart *DirectIRConstraint::PlainSum() const {
 	if (!aggregate || lhs.size() != 1) {
 		return nullptr;
 	}
 	auto &part = lhs[0];
 	if (part.sign != 1 || part.scale || part.reducer != DirectReducer::SUM ||
-	    part.qualifier != DConstants::INVALID_INDEX || part.inner || (!allow_filter && part.filter)) {
+	    part.qualifier != DConstants::INVALID_INDEX || part.inner) {
 		return nullptr;
 	}
 	return &part;

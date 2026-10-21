@@ -1,4 +1,4 @@
-.PHONY: all opt unit clean debug release test unittest allunit benchmark docs doxygen format sqlite decide-setup decide-test decide-golden decide-bench decide-bench-setup decide-bench-manual decide-view grammar grammar-build
+.PHONY: all opt unit clean debug release test unittest allunit benchmark docs doxygen format sqlite decide-setup decide-test decide-golden decide-coverage decide-coverage-build decide-bench decide-bench-setup decide-bench-manual decide-view grammar grammar-build
 
 all: release
 opt: release
@@ -550,6 +550,36 @@ decide-test: decide-golden
 
 decide-golden:
 	test/decide/golden/check.sh
+
+# Branch coverage of the direct-solve code (build/coverage is an instrumented copy of the build; build/release is
+# untouched). decide-coverage-build creates it when missing and otherwise only rebuilds what changed.
+# decide-coverage runs the DECIDE pytest suite with one profile per test (test/decide/run_coverage.sh) and
+# `unittest "[decidb]"` with one combined profile, then prints coverage_report.py's report over both.
+# Results land in COVERAGE_RUN_DIR (replaced on every run).
+COVERAGE_BUILD_DIR ?= build/coverage
+COVERAGE_RUN_DIR ?= build/coverage/run
+COVERAGE_COMPILE_FLAGS = -fprofile-instr-generate -fcoverage-mapping -fprofile-list=$(PROJ_DIR)$(COVERAGE_BUILD_DIR)/profile_list.txt
+
+decide-coverage-build:
+	mkdir -p $(COVERAGE_BUILD_DIR)
+	printf '[clang]\nsrc:*/src/optimizer/decide/direct/*\nsrc:*/src/optimizer/decide/decide_rewrite_rhs_window.cpp\n' \
+		> $(COVERAGE_BUILD_DIR)/profile_list.txt.new
+	cmp -s $(COVERAGE_BUILD_DIR)/profile_list.txt.new $(COVERAGE_BUILD_DIR)/profile_list.txt \
+		&& rm $(COVERAGE_BUILD_DIR)/profile_list.txt.new \
+		|| mv $(COVERAGE_BUILD_DIR)/profile_list.txt.new $(COVERAGE_BUILD_DIR)/profile_list.txt
+	cd $(COVERAGE_BUILD_DIR) && \
+	{ test -f CMakeCache.txt || cmake $(GENERATOR) $(FORCE_COLOR) ${WARNINGS_AS_ERRORS} ${FORCE_WARN_UNUSED_FLAG} ${FORCE_32_BIT_FLAG} ${DISABLE_UNITY_FLAG} ${DISABLE_SANITIZER_FLAG} ${STATIC_LIBCPP} ${CMAKE_VARS} ${CMAKE_VARS_BUILD} -DCMAKE_BUILD_TYPE=Release \
+		-DCMAKE_CXX_FLAGS="$(COVERAGE_COMPILE_FLAGS)" -DCMAKE_C_FLAGS="$(COVERAGE_COMPILE_FLAGS)" \
+		-DCMAKE_EXE_LINKER_FLAGS="-fprofile-instr-generate" ../..; } && \
+	cmake --build . --config Release --target shell --target unittest -- -j$(BUILD_JOBS)
+
+decide-coverage: decide-coverage-build
+	rm -rf $(COVERAGE_RUN_DIR)
+	mkdir -p $(COVERAGE_RUN_DIR)/cpp/raw
+	test/decide/run_coverage.sh $(COVERAGE_RUN_DIR)
+	LLVM_PROFILE_FILE="$(abspath $(COVERAGE_RUN_DIR))/cpp/raw/%p.profraw" $(COVERAGE_BUILD_DIR)/test/unittest "[decidb]"
+	python3 test/decide/coverage_report.py merge-cpp $(COVERAGE_RUN_DIR)
+	python3 test/decide/coverage_report.py report --unreached $(COVERAGE_RUN_DIR)
 
 decide-bench-setup:
 	python3 benchmark/decide/generate_databases.py

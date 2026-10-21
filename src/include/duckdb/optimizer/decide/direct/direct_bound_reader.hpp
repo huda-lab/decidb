@@ -58,12 +58,12 @@ struct DirectBoundReading {
 	vector<DirectDecisionBox> boxes;
 };
 
-//! Reads every non-aggregate constraint of `ir` as a bound on one decision (a constraint of the form `a*x
-//! <comparison> value`; the rule's CheckCondition has already checked the shape). A bound the solver folds into the
-//! variable
-//! (`variable_bound`: an unconditional comparison of the bare decision against a constant) replaces the default lower
-//! bound of 0 and tightens the upper one; every other bound is a clause. Returns false when a bound
-//! cannot be proved, or when the folded box contradicts the decision's built-in domain, which the solver reports.
+//! Reads every constraint of `ir` as a bound on one decision (a constraint of the form `a*x <comparison> value`). The
+//! rule's CheckCondition has already declined an aggregate and checked each constraint with DirectReadsOneDecision. A
+//! bound the solver folds into the variable (`variable_bound`: an unconditional comparison of the bare decision
+//! against a constant) replaces the default lower bound of 0 and tightens the upper one; every other bound is a
+//! clause. Returns false when a bound cannot be proved, or when the folded box contradicts the decision's built-in
+//! domain, which the solver reports.
 bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading);
 
 //! One unfiltered per-row left side: only linear terms, in one decision of the `decision_count`, and no constant. The

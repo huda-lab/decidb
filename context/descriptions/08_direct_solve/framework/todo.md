@@ -47,6 +47,9 @@ What exists today is in `done.md`.
   branch coverage (`framework/done.md`) shows 67 tests reaching every arm that any test reaches; S1's file has 786
   tests and 16 were in that cover before S1-17 removed the offset tests. `S1_OFFSET_CASES` and the offset-named
   helpers beside it now hold only negations (`SUM(-x)`); their names predate S1-17.
+  `test_decidb_direct_decline.cpp` reaches every decline arm of S1's and A1's `CheckCondition` from the IR, so a SQL
+  near miss or decline case that reaches no other arm adds nothing to the coverage; `make decide-coverage` counts the
+  C++ run as one test, `unittest [decidb]`.
 - **Mutation table.** 45 one-line changes to value-handling code (a comparison, a constant, an operator) were each
   run against the six `test_direct_*.py` files on the October 2026 code. 38 were caught and 7 survived. 14 tests catch
   all 38, and 577 of the 1,746 tests caught none. The tests that catch nothing count only where the changes could reach
@@ -66,33 +69,14 @@ What exists today is in `done.md`.
   branch lost.
 - **Done when.** The owner has the report and has said which cuts to make.
 
-## H-31 — Test the decline branches on the IR
-
-- **Problem.** Each "not exactly this shape" branch in `CheckCondition` is tested by a full SQL query on up to four
-  paths, though a rule's input is a plain `DirectIR` struct. The branches cost most of the suite.
-- **Change.** A C++ helper that builds a small `DirectIR` and calls a rule's `CheckCondition`, with one case per decline
-  branch for S1, A1 and the shared driver check. The SQL and oracle tests stay for what they prove, which is that
-  answers are right.
-- **Done when.** Every decline branch of S1 and A1 has an IR-level case and the per-test coverage shows the same branches
-  covered. Which SQL tests it makes unneeded is H-29's work.
-
-## H-32 — Coverage and complexity in the daily checks
-
-- **Problem.** The `CLAUDE.md` rule that tests follow decision points has no check behind it, and coverage runs only
-  when someone sets it up. Running a subset of tests by hand also deletes the other tests' oracle-cache entries unless
-  `-m` is passed (`conftest.py` prunes after a run with no `-k` or `-m`).
-- **Change.** A `make decide-coverage` target around `run_coverage.sh`, and `/orchestrate`'s exit gate reports the
-  complexity change of the functions a task touches and the tests that reach each branch it adds.
-- **Done when.** The target runs from the repository root, and the orchestrate skill and `.claude/CLAUDE.md` name it.
-
 ## H-34 — Branches no test reaches
 
-- **Problem.** 364 of 2,008 branch arms in the direct-solve files are reached by no test (`s1_uniform_matroid_rule.cpp` 80,
-  `direct_late_materialization.cpp` 53, `direct_ir.cpp` 50, `a1_separable_box_rule.cpp` 38, `direct_expression.cpp` 35,
-  `decide_rewrite_rhs_window.cpp` 32, `direct_result_adapter.cpp` 28, the three files split from the plan factory 23,
-  `direct_rule_driver.cpp` 17, `s1_uniform_matroid_helpers.cpp` 8). Each is an untested guard or dead code. Known arms no
-  SQL reaches: `DirectIRIsReadable` on a not-proved decisions or source status and on an unknown sense, and the
+- **Problem.** 193 of 1,954 branch arms in the direct-solve files are reached by no test
+  (`make decide-coverage` prints them under "Arms no test reaches"). Each is an untested guard or dead code. Three are
+  kept on purpose and need no test: `ref.depth == 0` in `DirectReferencesOnlySource`, which every caller's earlier
+  determinism check rules out today but which the function's contract promises on its own, and the `default` arms of
+  the `ExpressionType` switches in S1's `NormalizeCapacity` and `SatisfiesComparison`. A known arm no SQL reaches: the
   right-hand-side rewrite's clause-`WHEN` path under a reducer's own `WHEN` (the binder rejects both `WHEN`s together).
-- **Change.** Re-run the coverage and list the unreached arms with file and line. For each, name a query that reaches it
+- **Change.** List the unreached arms with file and line. For each, name a query that reaches it
   and add that test, or delete the code when no query can.
-- **Done when.** Every listed arm is reached by a test or gone, and the five checks pass.
+- **Done when.** Every listed arm but the three kept ones is reached by a test or gone, and the five checks pass.

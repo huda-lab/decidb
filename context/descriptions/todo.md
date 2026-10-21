@@ -14,9 +14,5 @@ Read first: `08_direct_solve/architecture/overview.md`, `08_direct_solve/archite
 - [ ] H-25 `ExpressionBuilder` is the one way — 08_direct_solve/framework/todo.md § H-25
 - [ ] S1-18 S1 builds with `ExpressionBuilder` — 08_direct_solve/rules/s1_uniform_matroid/todo.md § S1-18 (needs: H-25)
 
-## 3. Test tooling for the long run
-- [ ] H-31 Test the decline branches on the IR — 08_direct_solve/framework/todo.md § H-31
-- [ ] H-32 Coverage and complexity in the daily checks — 08_direct_solve/framework/todo.md § H-32
-
-## 4. Blocked
+## 3. Blocked
 - [ ] H-02 Front end for the new language — 08_direct_solve/framework/todo.md § H-02

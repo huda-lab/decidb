@@ -100,9 +100,6 @@ bool OnlyDecisionTerms(const vector<DecideSplitTerm> &terms) {
 //! The terms add up to exactly one `x`: `x`, `1*x`, `x*1.0`, `(1+0)*x`. Their signed constant coefficients are
 //! summed as the solver's like-term collection sums them; a constant term (`x + 0`) is not a unit contribution.
 bool IsUnitContribution(ClientContext &context, const vector<DecideSplitTerm> &terms) {
-	if (!OnlyDecisionTerms(terms)) {
-		return false;
-	}
 	double total = 0;
 	for (auto &term : terms) {
 		double value;
@@ -157,10 +154,10 @@ ExpressionType FlipComparison(ExpressionType comparison) {
 	}
 }
 
-//! The decision's terms on a per-row left side, as in a fixed value `x = 1`; null otherwise. CheckCondition checks that
-//! they add up to exactly one `x`.
+//! The decision's terms on a per-row left side, as in a fixed value `x = 1`; null otherwise. CheckCondition has
+//! declined a membership constraint before it asks, and checks that the terms add up to exactly one `x`.
 const vector<DecideSplitTerm> *FixedTerms(const DirectIRConstraint &ir_node) {
-	if (ir_node.aggregate || ir_node.comparison == ExpressionType::COMPARE_IN || ir_node.lhs.size() != 1) {
+	if (ir_node.aggregate || ir_node.lhs.size() != 1) {
 		return nullptr;
 	}
 	auto &part = ir_node.lhs[0];
@@ -300,7 +297,7 @@ const Expression *SourceBooleanFixedValue(const Expression &expr, idx_t decide_i
 //! The membership filter of one bound factor: the aggregate-local WHEN on `SUM(x)` or the clause-level WHEN, never
 //! both. Null when the bound has none; `ok` is false when the factor is not a plain `SUM(x)` with one filter.
 const Expression *BoundMembership(const DirectIRConstraint &ir_node, bool &ok) {
-	auto sum = ir_node.PlainSum(true);
+	auto sum = ir_node.PlainSum();
 	ok = sum && !(sum->filter && ir_node.scope.when);
 	if (!ok) {
 		return nullptr;
@@ -505,9 +502,9 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 		return true;
 	};
 	for (auto factor : condition.bound_factors) {
-		auto sum = factor->PlainSum(true);
+		auto sum = factor->PlainSum();
 		CountBody body;
-		if (!sum || !ReadCountBody(context, sum->terms, body)) {
+		if (!ReadCountBody(context, sum->terms, body)) {
 			return false;
 		}
 		auto &bound = *factor->rhs;

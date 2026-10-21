@@ -21,8 +21,9 @@
 namespace duckdb {
 
 bool DirectIsDecisionFreeDeterministic(const Expression &expr, idx_t decide_index) {
-	if (BoundExpressionReferencesDecide(expr, decide_index) || !expr.IsConsistent() || expr.IsVolatile() ||
-	    expr.HasSubquery() || expr.HasParameter() || expr.IsAggregate() || expr.IsWindow()) {
+	// A volatile expression is not consistent, so the consistency test covers both.
+	if (BoundExpressionReferencesDecide(expr, decide_index) || !expr.IsConsistent() || expr.HasSubquery() ||
+	    expr.HasParameter() || expr.IsAggregate() || expr.IsWindow()) {
 		return false;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
@@ -122,10 +123,6 @@ const BoundColumnRefExpression *DirectBareNumericColumn(const Expression &expr) 
 	}
 	auto &ref = current->Cast<BoundColumnRefExpression>();
 	return ref.depth == 0 && ref.return_type.IsNumeric() ? &ref : nullptr;
-}
-
-bool DirectIsNumericDecisionFree(const Expression &expr, idx_t decide_index) {
-	return expr.return_type.IsNumeric() && DirectIsDecisionFreeDeterministic(expr, decide_index);
 }
 
 bool DirectSourceNumericColumn(const Expression &expr, const vector<ColumnBinding> &source_bindings, idx_t &slot,
@@ -250,7 +247,7 @@ bool DirectIsWholeNumbered(DirectDomain domain) {
 }
 
 bool DirectProveValue(const DirectIR &ir, const Expression &expr) {
-	return expr.return_type.IsNumeric() && DirectIsNumericDecisionFree(expr, ir.decide_index) &&
+	return expr.return_type.IsNumeric() && DirectIsDecisionFreeDeterministic(expr, ir.decide_index) &&
 	       DirectReferencesOnlySource(expr, ir.source_bindings);
 }
 

@@ -115,7 +115,9 @@ test, adding one is a task in that rule's `todo.md`.
 3. **Differential fuzz** (`test_direct_fuzz.py`, comparator in `_direct_differential.py`): supply a seeded query
    generator. Direct (`require`) and solver (`off`) must succeed or fail together (any error counts) and agree on
    row count and primary objective. It finds interactions between shapes that no table lists.
-4. **C++ cases** (`test/common/`) for the rule's applicability condition and for the IR it relies on.
+4. **C++ cases** (`test/common/`) for the rule's applicability condition and for the IR it relies on. Each decline
+   branch of `CheckCondition` gets a case in `test_decidb_direct_decline.cpp`, which hands the rule the IR of a small
+   planned query; `make decide-coverage` shows each new case reaching an arm no other case of the rule reaches.
 
 Run after any change: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` (the solver path alone),
 `DECIDB_VERIFY_SERIALIZER=1 make decide-test`, `DECIDB_FORCE_SOLVER=highs make decide-test`, and
