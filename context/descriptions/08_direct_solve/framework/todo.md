@@ -71,23 +71,25 @@ What exists today is in `done.md`.
 
 ## H-34 — Branches no test reaches
 
-- **Problem.** 119 of 1,824 branch arms in the direct-solve files are reached by no test
-  (`make decide-coverage` prints them under "Arms no test reaches"). Each is an untested guard or dead code: 32 in
-  `direct_ir.cpp`, 30 in `decide_rewrite_rhs_window.cpp`, 22 in `direct_rule_driver.cpp`, 13 in
-  `s1_uniform_matroid_rule.cpp`, 8 in `s1_uniform_matroid_helpers.cpp`, 6 in `direct_expression.cpp`, 4 in
-  `direct_plan_fragments.cpp`, 3 in `a1_separable_box_rule.cpp`. Four are kept on purpose and need no test:
+- **Problem.** 78 of 1,766 branch arms in the direct-solve files are reached by no test
+  (`make decide-coverage` prints them under "Arms no test reaches"). Each is an untested guard or dead code: 30 in
+  `decide_rewrite_rhs_window.cpp`, 22 in `direct_rule_driver.cpp`, 13 in `s1_uniform_matroid_rule.cpp`, 8 in
+  `s1_uniform_matroid_helpers.cpp`, 3 in `a1_separable_box_rule.cpp`. Four are kept on purpose and need no test:
   `ref.depth == 0` in `DirectReferencesOnlySource`, which every caller's earlier determinism check rules out today but
   which the function's contract promises on its own; the `default` arms of the `ExpressionType` switches in S1's
   `NormalizeCapacity` and `SatisfiesComparison`; and the extension-name check in late materialization's
   `VisitForAdapters`, which keeps an operator of another extension from being cast to the adapter. A known arm no SQL
   reaches: the right-hand-side rewrite's clause-`WHEN` path under a reducer's own `WHEN` (the binder rejects both
   `WHEN`s together). `direct_rule_driver.cpp`'s `DirectCanSkipSourceOutput` repeats the table-scan and projection-binding
-  checks of late materialization's `IsRepeatableTableScan` and `StoredColumnOf`.
+  checks of late materialization's `IsRepeatableTableScan` and `StoredColumnOf`, and its `children.size() != 1` check
+  repeats the IR reader's. The IR's `source_status`, `decisions_status` and entity-scope `status` are always proved, so
+  `DirectIRIsReadable`'s checks of them, and the fields, are dead.
 - **Change.** List the unreached arms with file and line. For each, name a query that reaches it and add that test.
   When no query can: a check on what a rule hands the engine stays a release throw and gets a stub-rule C++ test in
-  `test_decidb_direct_rule_driver.cpp`; a check on a plan or IR the engine builds itself becomes a `D_ASSERT`; dead
-  code is deleted. Work one group per sitting: (1) `direct_ir.cpp`, `direct_expression.cpp`, `direct_plan_fragments.cpp`;
-  (2) `decide_rewrite_rhs_window.cpp`; (3) `direct_rule_driver.cpp`, `s1_uniform_matroid_rule.cpp`,
-  `s1_uniform_matroid_helpers.cpp`, `a1_separable_box_rule.cpp`.
+  `test_decidb_direct_rule_driver.cpp`; a check on a plan or IR the engine builds itself becomes a `D_ASSERT`; a type
+  check that guards a cast stays; any other code no query reaches is deleted, fallbacks for shapes the binder never
+  produces included. Work one group per sitting: (1) `decide_rewrite_rhs_window.cpp`; (2) `direct_rule_driver.cpp`
+  with the IR's dead status fields, `s1_uniform_matroid_rule.cpp`, `s1_uniform_matroid_helpers.cpp`,
+  `a1_separable_box_rule.cpp`.
 - **Done when.** Every listed arm but the four kept ones is reached by a test or gone, `coverage_report.py compare`
   against a run before the change loses no arm of surviving code, and the five checks pass.

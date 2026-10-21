@@ -568,3 +568,33 @@ TEST_CASE("S1 and A1 never both apply to one query", "[decidb]") {
 		REQUIRE(applies_a1 == shape.a1);
 	}
 }
+
+TEST_CASE("Direct-solve IR marks a clause the front end cannot read as not proved", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+
+	// An OR inside an AND: the constraint tree cannot be walked, so no constraint is read.
+	QueryIR nested_or(con, IRQuery("x(INT)", "SUM(x) <= 4 AND (SUM(x) >= 0 OR SUM(x) >= 1)", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(nested_or.ir.constraints_status == DirectAnalysisStatus::NOT_PROVED);
+	REQUIRE(nested_or.ir.constraints.empty());
+	// The control: the same AND without the OR is read in full.
+	QueryIR plain_and(con, IRQuery("x(INT)", "SUM(x) <= 4 AND SUM(x) >= 0", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(plain_and.ir.constraints_status == DirectAnalysisStatus::PROVED);
+	REQUIRE(plain_and.ir.constraints.size() == 2);
+
+	// A per-row side with a decision under ABS inside a square has a term the splitter cannot read.
+	QueryIR unknown_row(con, IRQuery("x(INT)", "POWER(ABS(x - cap), 2) <= 9", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(unknown_row.ir.constraints_status == DirectAnalysisStatus::PROVED);
+	REQUIRE(unknown_row.ir.constraints.size() == 1);
+	REQUIRE(unknown_row.ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
+	QueryIR known_row(con, IRQuery("x(INT)", "ABS(x - cap) <= 9", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(known_row.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
+
+	// An order-0 norm needs indicator variables: nested in a reducer it leaves the outer reducer not proved too.
+	QueryIR nested_norm(con, IRQuery("x(INT)", "SUM(MAX(norm(x, 0))) <= 2", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(nested_norm.ir.constraints.size() == 1);
+	auto &outer = nested_norm.ir.constraints[0].lhs[0];
+	REQUIRE(outer.status == DirectAnalysisStatus::NOT_PROVED);
+	REQUIRE(outer.inner != nullptr);
+	REQUIRE(outer.inner->status == DirectAnalysisStatus::NOT_PROVED);
+}

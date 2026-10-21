@@ -1,10 +1,10 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-21 on top of `82004f2a33`, with the right-hand-side rewrite and S1 and A1 registered: `make
+Verified on 2026-10-21 on top of `9dbbc8ff48`, with the right-hand-side rewrite and S1 and A1 registered: `make
 decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,095
 passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,094 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,814 assertions in
-53 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,847 assertions in
+55 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
 ## What it does
@@ -14,10 +14,10 @@ check). Design: `../architecture/`.
   a forced backend use the solver and conflict with `require`. A prepared plan keeps its selection until rebound.
   `require` also fails when the DECIDE optimizer is off.
 - **IR.** One read-only front end turns the bound tree into the IR: decision domains and scopes, each constraint with
-  aggregate, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Unmodeled parts are *not proved*,
-  and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm tag the
-  front end does not expect are not-proved parts. No IR node is kept that no rule reads. It uses the same term splitter
-  as the solver path.
+  aggregate, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Parts the binder admits and no rule
+  models are *not proved*, and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm
+  tag the front end does not expect are not-proved parts. Shapes the binder never produces are `D_ASSERT`s
+  (`../architecture/ir.md`). No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
   rule driver first checks that the front end read the whole IR (`DirectIRIsReadable`: decisions, source, every
@@ -183,11 +183,13 @@ default box.
 
 ## Verified by
 
-- C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts, and a norm tag it does not expect reading
-  as a not-proved part, not an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
+- C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts: an `OR` inside an `AND`, a per-row term the
+  splitter cannot read, an order-0 norm in a reducer, and a norm tag it does not expect, each as a not-proved part, not
+  an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
   when no rule applies, a rule that applies beside one that does not, two rules applying as an internal error, an IR the
-  front end could not read offered to no rule, mismatched slot, each way a substitute can misfit the adapter (no
-  child, a slot too many, a missing prunable flag, a slot, validated column or row id slot beyond the child), breaker under `LIMIT 1` and `COUNT(*)`),
+  front end could not read offered to no rule, mismatched slot, a shared plan fragment handed an input that does not
+  fit, each way a substitute can misfit the adapter (no child, a slot too many, a missing prunable flag, a slot,
+  validated column or row id slot beyond the child), breaker under `LIMIT 1` and `COUNT(*)`),
   `test_decidb_direct_decline.cpp` (each decline branch of S1's and A1's `CheckCondition` and of `DirectIRIsReadable`,
   tested on the IR: a probe rule installed through the rule driver's test seam receives the IR the driver reads from a
   small query that is only planned, edits it for the few shapes SQL cannot write, and asks S1 or A1 whether it
@@ -213,7 +215,7 @@ default box.
   arms only that test reaches (`--unreached` also lists every arm no test reaches), and writes `report.json` with each
   arm's condition text and function. `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not
   (exit 1 when there are any) and the reverse, matching an arm by file, function, condition text and its occurrence in
-  the function, so lines that move are not read as lost. 1,705 of 1,824 arms are reached. Branch coverage shows which
+  the function, so lines that move are not read as lost. 1,688 of 1,766 arms are reached. Branch coverage shows which
   branches a test runs, not whether its assertion would catch a wrong value there. A subset run by hand needs `-m`
   (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3

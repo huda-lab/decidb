@@ -53,17 +53,14 @@ public:
 
 	DirectIR Read() {
 		// The IR describes what the user wrote. After OptimizeDecide the tree holds a solver formulation instead.
-		if (decide.optimized || decide.num_auxiliary_vars) {
-			throw InternalException("Direct solve IR must be read before DECIDE rewrites the node");
-		}
+		D_ASSERT(!decide.optimized && !decide.num_auxiliary_vars);
 		DirectIR ir;
 		ir.decide_index = decide.decide_index;
 		ir.source_clause_count = decide.constraint_sources.size();
-		if (decide.children.size() == 1 && decide.children[0]) {
-			source_bindings = decide.children[0]->GetColumnBindings();
-			ir.source_bindings = source_bindings;
-			ir.source_status = DirectAnalysisStatus::PROVED;
-		}
+		D_ASSERT(decide.children.size() == 1 && decide.children[0]);
+		source_bindings = decide.children[0]->GetColumnBindings();
+		ir.source_bindings = source_bindings;
+		ir.source_status = DirectAnalysisStatus::PROVED;
 		ReadDecisions(ir);
 		ReadEntityScopes(ir);
 		ReadConstraints(ir);
@@ -85,24 +82,17 @@ private:
 		}
 		auto &ref = expr.Cast<BoundColumnRefExpression>();
 		auto found = std::find(source_bindings.begin(), source_bindings.end(), ref.binding);
-		if (ref.depth != 0 || found == source_bindings.end()) {
-			return false;
-		}
+		// A resolved PER key is a column of the source, never of an outer query.
+		D_ASSERT(ref.depth == 0 && found != source_bindings.end());
 		slot = NumericCast<idx_t>(found - source_bindings.begin());
 		return true;
 	}
 
 	void ReadDecisions(DirectIR &ir) const {
 		auto count = decide.decide_variables.size();
-		if (decide.is_boolean_var.size() != count || decide.variable_scopes.size() != count) {
-			return;
-		}
+		D_ASSERT(decide.is_boolean_var.size() == count && decide.variable_scopes.size() == count);
 		for (idx_t i = 0; i < count; i++) {
 			auto &variable = decide.decide_variables[i];
-			if (!variable) {
-				ir.decisions.clear();
-				return;
-			}
 			DirectIRDecision decision;
 			decision.name = variable->GetName();
 			decision.output_type = variable->return_type;
@@ -114,11 +104,9 @@ private:
 				decision.domain = DirectDomain::BOOL;
 			} else if (variable->return_type == LogicalType::DOUBLE) {
 				decision.domain = DirectDomain::REAL;
-			} else if (variable->return_type.IsIntegral()) {
-				decision.domain = DirectDomain::INT;
 			} else {
-				ir.decisions.clear();
-				return;
+				D_ASSERT(variable->return_type.IsIntegral());
+				decision.domain = DirectDomain::INT;
 			}
 			ir.decisions.push_back(std::move(decision));
 		}
@@ -131,10 +119,8 @@ private:
 			ir_node.relations = scope.source_table_indices;
 			for (auto &binding : scope.entity_key_bindings) {
 				auto found = std::find(source_bindings.begin(), source_bindings.end(), binding);
-				if (found == source_bindings.end()) {
-					ir_node.status = DirectAnalysisStatus::NOT_PROVED;
-					continue;
-				}
+				// The binder keeps every entity key live in the source.
+				D_ASSERT(found != source_bindings.end());
 				ir_node.key_slots.push_back(NumericCast<idx_t>(found - source_bindings.begin()));
 			}
 			ir.entity_scopes.push_back(std::move(ir_node));
@@ -146,10 +132,7 @@ private:
 	//===--------------------------------------------------------------------===//
 
 	void ReadReducer(const BoundAggregateExpression &aggregate, DirectPart &part) const {
-		if (aggregate.IsDistinct() || aggregate.order_bys || aggregate.children.size() != 1) {
-			MarkNotProved(part.status);
-			return;
-		}
+		D_ASSERT(!aggregate.IsDistinct() && !aggregate.order_bys && aggregate.children.size() == 1);
 		string order;
 		auto name = StringUtil::Lower(aggregate.function.name);
 		if (ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, order)) {
@@ -163,11 +146,10 @@ private:
 			part.reducer = DirectReducer::AVG;
 		} else if (name == "min") {
 			part.reducer = DirectReducer::MIN;
-		} else if (name == "max") {
-			part.reducer = DirectReducer::MAX;
 		} else {
-			MarkNotProved(part.status);
-			return;
+			// The binder admits no other reducer in a DECIDE clause.
+			D_ASSERT(name == "max");
+			part.reducer = DirectReducer::MAX;
 		}
 		if (aggregate.filter) {
 			part.filter = aggregate.filter->Copy();
@@ -244,25 +226,28 @@ private:
 	DirectIRConstraint ReadConstraint(const Expression &leaf, const WrapperScope &wrappers) const {
 		DirectIRConstraint ir_node;
 		idx_t source_id;
-		if (TryParseSourceClauseTag(leaf.GetAlias(), source_id) && source_id < decide.constraint_sources.size()) {
+		if (TryParseSourceClauseTag(leaf.GetAlias(), source_id)) {
+			D_ASSERT(source_id < decide.constraint_sources.size());
 			ir_node.source_clause_id = source_id;
 		} else {
 			MarkNotProved(ir_node.status);
 		}
 		ReadScope(wrappers.per_keys, wrappers.when, ir_node.scope, ir_node.status);
 
-		if (leaf.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR && leaf.type == ExpressionType::COMPARE_IN) {
+		// The binder admits only comparisons and IN as a constraint leaf.
+		if (leaf.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
+			D_ASSERT(leaf.type == ExpressionType::COMPARE_IN);
 			auto &membership = leaf.Cast<BoundOperatorExpression>();
 			ir_node.comparison = ExpressionType::COMPARE_IN;
 			ir_node.degree = 1;
 			ir_node.lhs.push_back(ReadRowPart(*membership.children[0]));
-		} else if (leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+		} else {
+			D_ASSERT(leaf.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON);
 			auto &comparison = leaf.Cast<BoundComparisonExpression>();
 			ir_node.comparison = comparison.type;
 			auto shape = canonicalizer.ClassifyCanonicalComparison(comparison);
-			if (shape == CanonicalConstraintClass::INVALID) {
-				MarkNotProved(ir_node.status);
-			}
+			// The canonicalizer rejected an invalid comparison when it bound the query.
+			D_ASSERT(shape != CanonicalConstraintClass::INVALID);
 			ir_node.aggregate = shape == CanonicalConstraintClass::AGGREGATE;
 			if (ir_node.aggregate) {
 				ReadParts(*comparison.left, ir_node.lhs);
@@ -273,8 +258,6 @@ private:
 			ir_node.degree = DecideExpressionDegree(*comparison.left, decide.decide_index).degree;
 			// Folding never reads a clause under a WHEN: `x <= 0 WHEN c` does not bound `x` everywhere.
 			ir_node.variable_bound = !wrappers.when && DecideIsSingletonRowBound(context, decide, comparison);
-		} else {
-			MarkNotProved(ir_node.status);
 		}
 		for (auto &part : ir_node.lhs) {
 			if (part.status == DirectAnalysisStatus::NOT_PROVED) {
@@ -291,13 +274,12 @@ private:
 			return true;
 		}
 		auto &conjunction = expression.Cast<BoundConjunctionExpression>();
-		if (conjunction.type != ExpressionType::CONJUNCTION_AND || conjunction.children.empty()) {
+		if (conjunction.type != ExpressionType::CONJUNCTION_AND) {
 			return false;
 		}
+		D_ASSERT(!conjunction.children.empty());
 		if (IsPerConstraintWrapper(conjunction)) {
-			if (!wrappers.per_keys.empty() || conjunction.children.size() < 2) {
-				return false;
-			}
+			D_ASSERT(wrappers.per_keys.empty() && conjunction.children.size() >= 2);
 			WrapperScope nested = wrappers;
 			for (idx_t i = 1; i < conjunction.children.size(); i++) {
 				nested.per_keys.push_back(conjunction.children[i].get());
@@ -305,9 +287,7 @@ private:
 			return CollectConstraints(*conjunction.children[0], nested, out);
 		}
 		if (IsWhenConstraintWrapper(conjunction)) {
-			if (wrappers.when || conjunction.children.size() != 2) {
-				return false;
-			}
+			D_ASSERT(!wrappers.when && conjunction.children.size() == 2);
 			WrapperScope nested = wrappers;
 			nested.when = conjunction.children[1].get();
 			return CollectConstraints(*conjunction.children[0], nested, out);
@@ -321,10 +301,8 @@ private:
 	}
 
 	void ReadConstraints(DirectIR &ir) const {
-		if (!decide.decide_constraints) {
-			ir.constraints_status = DirectAnalysisStatus::PROVED;
-			return;
-		}
+		// The parser requires a SUCH THAT clause.
+		D_ASSERT(decide.decide_constraints);
 		if (CollectConstraints(*decide.decide_constraints, {}, ir.constraints)) {
 			ir.constraints_status = DirectAnalysisStatus::PROVED;
 		} else {
@@ -355,18 +333,14 @@ private:
 			}
 			body = UnwrapDecideCasts(*per.children[0], index);
 		}
-		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
-		    IsWhenConstraintWrapper(body->Cast<BoundConjunctionExpression>()) &&
-		    body->Cast<BoundConjunctionExpression>().children.size() == 2) {
+		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &wrapper = body->Cast<BoundConjunctionExpression>();
+			D_ASSERT(IsWhenConstraintWrapper(wrapper) && wrapper.children.size() == 2);
 			when = wrapper.children[1].get();
 			body = UnwrapDecideCasts(*wrapper.children[0], index);
 		}
 		ReadScope(per_keys, when, objective.scope, objective.status);
-		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			MarkNotProved(objective.status);
-			return;
-		}
+		D_ASSERT(body->GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION);
 		ReadParts(*body, objective.parts);
 		for (auto &part : objective.parts) {
 			if (part.status == DirectAnalysisStatus::NOT_PROVED) {

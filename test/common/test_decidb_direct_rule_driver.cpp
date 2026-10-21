@@ -4,12 +4,14 @@
 #include <functional>
 
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
@@ -19,6 +21,18 @@ using namespace duckdb;
 namespace {
 
 struct StubCondition final : DirectApplicabilityCondition {};
+
+//! A plan that reports one binding fewer than it has columns, as no real operator does.
+class ProjectionWithoutLastBinding final : public LogicalProjection {
+public:
+	using LogicalProjection::LogicalProjection;
+
+	duckdb::vector<ColumnBinding> GetColumnBindings() override {
+		auto bindings = LogicalProjection::GetColumnBindings();
+		bindings.pop_back();
+		return bindings;
+	}
+};
 
 //! How a stub plan reads its input before it releases rows.
 enum class StubValidation : uint8_t {
@@ -47,7 +61,18 @@ public:
 		SLOT_OUT_OF_RANGE,
 		VALIDATED_COLUMN_OUT_OF_RANGE,
 		//! The slot of the source row id, which the rule driver appends to a stored source, is out of range.
-		ROW_ID_SLOT_OUT_OF_RANGE
+		ROW_ID_SLOT_OUT_OF_RANGE,
+		//! What the rule passes to a shared plan fragment is wrong, and the fragment raises while the rule builds.
+		//! The condition handed to DirectValidationBreaker is not Boolean.
+		BREAKER_CONDITION_NOT_BOOLEAN,
+		//! The plan handed to DirectValidationBreaker reports a different number of bindings than types.
+		BREAKER_INPUT_BINDINGS_MISMATCH,
+		//! A value handed to DirectOverProjection reads a column of an outer query.
+		OVER_PROJECTION_OUTER_COLUMN,
+		//! A value handed to DirectOverProjection reads a column the source does not carry.
+		OVER_PROJECTION_FOREIGN_COLUMN,
+		//! The same, in the first operand of a sum whose second operand is fine.
+		OVER_PROJECTION_FOREIGN_FIRST_OPERAND
 	};
 	Fault fault = Fault::NONE;
 
@@ -67,6 +92,7 @@ public:
 	                       const DirectApplicabilityCondition &) const override {
 		auto bindings = source->GetColumnBindings();
 		auto types = source->types;
+		RaiseFromSharedFragment(source, bindings, types, optimizer);
 		auto valid = [&](const duckdb::vector<ColumnBinding> &input) {
 			auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
 			is_null->children.push_back(DirectColumn(types[0], input[0]));
@@ -132,6 +158,46 @@ public:
 	}
 
 private:
+	//! Hands a shared plan fragment what the fault says is wrong with it. The fragment raises, so no plan results.
+	void RaiseFromSharedFragment(duckdb::unique_ptr<LogicalOperator> &source,
+	                             const duckdb::vector<ColumnBinding> &bindings,
+	                             const duckdb::vector<LogicalType> &types, Optimizer &optimizer) const {
+		auto column = [&](ColumnBinding binding, idx_t depth = 0) {
+			return duckdb::unique_ptr<Expression>(make_uniq<BoundColumnRefExpression>(types[0], binding, depth));
+		};
+		const ColumnBinding foreign(9999, 0);
+		switch (fault) {
+		case Fault::BREAKER_CONDITION_NOT_BOOLEAN:
+			DirectValidationBreaker(optimizer.binder, std::move(source), column(bindings[0]));
+			break;
+		case Fault::BREAKER_INPUT_BINDINGS_MISMATCH: {
+			duckdb::vector<duckdb::unique_ptr<Expression>> expressions;
+			for (idx_t i = 0; i < bindings.size(); i++) {
+				expressions.push_back(DirectColumn(types[i], bindings[i]));
+			}
+			auto input =
+			    make_uniq<ProjectionWithoutLastBinding>(optimizer.binder.GenerateTableIndex(), std::move(expressions));
+			input->children.push_back(std::move(source));
+			DirectValidationBreaker(optimizer.binder, std::move(input), DirectConstantBool(true));
+			break;
+		}
+		case Fault::OVER_PROJECTION_OUTER_COLUMN:
+			DirectOverProjection(*column(bindings[0], 1), bindings, 0);
+			break;
+		case Fault::OVER_PROJECTION_FOREIGN_COLUMN:
+			DirectOverProjection(*column(foreign), bindings, 0);
+			break;
+		case Fault::OVER_PROJECTION_FOREIGN_FIRST_OPERAND: {
+			ExpressionBuilder build(optimizer);
+			auto sum = build.Add(build.Col(types[0], foreign), build.Col(types[0], bindings[0]));
+			DirectOverProjection(*build.Out(sum), bindings, 0);
+			break;
+		}
+		default:
+			break;
+		}
+	}
+
 	string name;
 	bool applies;
 	int32_t value;
@@ -371,6 +437,50 @@ TEST_CASE("Direct rule driver rejects each way a rule can hand the adapter a sub
 		return rules;
 	});
 	auto control = con.Query(stored_query);
+	REQUIRE(CHECK_COLUMN(control, 1, {1, 1, 1}));
+}
+
+TEST_CASE("Direct rule driver rejects each way a rule can hand a shared plan fragment an input that does not fit",
+          "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	struct Case {
+		const char *name;
+		StubRule::Fault fault;
+		const char *error;
+	};
+	const Case cases[] = {{"a validation condition that is not Boolean", StubRule::Fault::BREAKER_CONDITION_NOT_BOOLEAN,
+	                       "validation breaker received an invalid input"},
+	                      {"a breaker input with fewer bindings than columns",
+	                       StubRule::Fault::BREAKER_INPUT_BINDINGS_MISMATCH,
+	                       "validation breaker received an invalid input"},
+	                      {"a value that reads an outer query", StubRule::Fault::OVER_PROJECTION_OUTER_COLUMN,
+	                       "could not re-point a value"},
+	                      {"a value that reads a column the source lacks",
+	                       StubRule::Fault::OVER_PROJECTION_FOREIGN_COLUMN, "could not re-point a value"},
+	                      {"a sum whose first operand reads a column the source lacks",
+	                       StubRule::Fault::OVER_PROJECTION_FOREIGN_FIRST_OPERAND, "could not re-point a value"}};
+	for (auto &test_case : cases) {
+		INFO(test_case.name);
+		auto fault = test_case.fault;
+		InstallRules(con, [fault] {
+			RuleList rules;
+			auto rule = make_uniq<StubRule>("STUB_BROKEN", true, 1);
+			rule->fault = fault;
+			rules.push_back(std::move(rule));
+			return rules;
+		});
+		auto result = con.Query(QUERY);
+		REQUIRE(result->HasError());
+		REQUIRE(result->GetError().find(test_case.error) != string::npos);
+	}
+	// The control: the same stub with no fault answers.
+	InstallRules(con, [] {
+		RuleList rules;
+		rules.push_back(make_uniq<StubRule>("STUB_FINE", true, 1));
+		return rules;
+	});
+	auto control = con.Query(QUERY);
 	REQUIRE(CHECK_COLUMN(control, 1, {1, 1, 1}));
 }
 
