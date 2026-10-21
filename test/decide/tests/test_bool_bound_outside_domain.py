@@ -151,3 +151,27 @@ def test_bool_bound_outside_domain_over_empty_source_raises(decidb_cli, bound):
             decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
         messages[mode] = str(error.value)
     assert messages["off"] == messages["auto"]
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_perrow
+@pytest.mark.error
+@pytest.mark.parametrize("bound", ["1*x >= 2", "x >= 1+1"])
+def test_bool_bound_outside_domain_unfolded_spelling_is_read_per_row(decidb_cli, monkeypatch, bound):
+    # Arithmetic on either side keeps the solver from folding the bound into the variable's box, so S1's direct solve
+    # reads it per row, finds no value of x allowed, and raises the infeasible error the solver raises. `require`
+    # proves direct solve applied, because a declined query would raise the "did not apply" error instead. A forced
+    # solver backend rejects `require`, so the run that forces one leaves it unset here.
+    monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
+    sql = f"""
+        SELECT id, x FROM (
+            SELECT * FROM {_SOURCE}
+            DECIDE x(BOOL) SUCH THAT {bound} AND SUM(x) <= 2 MINIMIZE SUM(v * x)
+        ) q
+    """
+    messages = {}
+    for mode in ("off", "require"):
+        with pytest.raises(DecidBCliError, match=_INFEASIBLE) as error:
+            decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
+        messages[mode] = str(error.value)
+    assert messages["off"] == messages["require"]

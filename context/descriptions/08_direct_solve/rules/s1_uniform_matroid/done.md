@@ -1,7 +1,7 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-10-21 on top of `21eb782d9a`: `make decide-test` (3,088 passed, also with
-`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,087
+Verified on 2026-10-21 on top of `82d1c7d2db`: `make decide-test` (3,090 passed, also with
+`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,089
 passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,324 assertions in 47 cases). `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check). Code:
 `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`, with the helpers only S1 uses in
 `s1_uniform_matroid_helpers.{hpp,cpp}`. Class definition: [definition.md](definition.md).
@@ -45,7 +45,12 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   is left to the solver (see the out-of-scope table). A strict bound against a fraction is first shifted to a whole
   number by `DecideStrictBound`, the function the solver uses (`x > 0.5` is `x >= 1`, `x < 1.5` is `x <= 1`, `x < 0.5`
   is `x <= 0`, `x > -0.5` is `x >= 0`), and then read like any other bound; a column value is read as arithmetic with or
-  without a `WHEN`, as the solver does. A source Boolean column is also a fixed value value (`x = flag`). Contradictory
+  without a `WHEN`, as the solver does. A source Boolean column is also a fixed value (`x = flag`). Whether a constant bound is one the solver folds into the
+  variable's box is the IR's `variable_bound` flag (`DecideIsSingletonRowBound`: a bare `x` against a cast-wrapped
+  constant, no `WHEN`), the same flag A1 reads; any other bound, `1*x >= 2` and `x >= 1+1` included, is read per row like
+  a column bound. The rest of the reading stays S1's own and is not the shared bound reader's: S1 asks which of {0, 1} a
+  row allows, A1 asks for an interval, and S1 alone admits `!=` and Boolean sources, requires a coefficient of exactly 1
+  and a finite constant, and keeps its own NULL and NaN messages. Contradictory
   active bounds are infeasible. A NULL or NaN column value raises on every row, including rows the `WHEN` excludes, and
   names the column.
 - **Objective:** a signed sum of per-row coefficients times `x`, `MAXIMIZE` or `MINIMIZE`, plus an optional finite constant,
@@ -96,7 +101,7 @@ A query S1 does not apply to keeps its answer: it runs on the solver, and `requi
 | A count body with a constant or a column term (`SUM(x + 1)`, `SUM(x + bonus)`) | The class is a count of `x`; the solver answers these exactly | A rewrite to `SUM(x) <op> B - c*COUNT(*)` before both paths, which changes the solver's overflow, `DIAGNOSE` and error text |
 | A count body with a weight on `x` other than 1 or -1 (`SUM(2*x + 1)`) | A weighted constraint (S3, S4) | A weighted rule |
 | A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor, a NULL factor, or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. The solver reads a NULL factor as an objective of zeros, which is not a result worth copying. A subquery factor has no sign when the plan is built, and the sign decides whether the sense reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
-| A bound on `x` with no `WHEN` that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises DECIDE's usual infeasible error before it reads a row, so an empty source raises it too, and skips that error under `DIAGNOSE`. A query that can only fail has no speed to win, so S1 declines it (`DecideBoxContradictsDomain`) and the solver answers. The same bound with a `WHEN` is admitted | Not planned |
+| A bound on `x` the solver folds (`variable_bound`) that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises DECIDE's usual infeasible error before it reads a row, so an empty source raises it too, and skips that error under `DIAGNOSE`. A query that can only fail has no speed to win, so S1 declines it (`DecideBoxContradictsDomain`) and the solver answers. The same bound with a `WHEN`, or spelled with arithmetic the solver does not fold (`1*x >= 2`), is admitted and raises the same infeasible error from the plan | Not planned |
 
 **Belongs to another problem class or is intentional:** weighted constraints such as `SUM(w * x) <= B` (S3 and S4 cover two special cases of them); `INT` and
 `REAL` variables (A1 and the R classes); more than one decision, entity or scalar decisions (D1); lower and upper bounds with

@@ -43,7 +43,7 @@ What exists today is in `done.md`.
 
 ## H-29 — Prune the direct-solve tests
 
-- **Problem.** The direct-solve tests are 1,367 of the suite's 3,088 and the matrix runs each four times. Their per-test
+- **Problem.** The direct-solve tests are 1,369 of the suite's 3,090 and the matrix runs each four times. Their per-test
   branch coverage (`framework/done.md`) shows 67 tests reaching every arm that any test reaches; S1's file has 786
   tests and 16 were in that cover before S1-17 removed the offset tests. `S1_OFFSET_CASES` and the offset-named
   helpers beside it now hold only negations (`SUM(-x)`); their names predate S1-17.
