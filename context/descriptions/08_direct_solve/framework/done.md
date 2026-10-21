@@ -1,10 +1,10 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-21 on top of `8b028d9360`, with the right-hand-side rewrite and S1 and A1 registered: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,090
-passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,089 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,800 assertions in
-52 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+Verified on 2026-10-21 on top of `82004f2a33`, with the right-hand-side rewrite and S1 and A1 registered: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,095
+passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,094 passed and one failure,
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,814 assertions in
+53 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
 ## What it does
@@ -25,7 +25,10 @@ check). Design: `../architecture/`.
   rule checks only what concerns its own class. Otherwise the driver runs CheckCondition for every rule. Rules are disjoint, so at most one applies to a query; two that apply
   raise an internal error naming both rules.
 - **Result adapter** (`DIRECT_RESULT_ADAPTER` in `EXPLAIN`). Keeps original bindings and types, serializes, prunes
-  outputs only when skipping is proved safe, and always keeps the rule's validated columns live.
+  outputs only when skipping is proved safe, and always keeps the rule's validated columns live. What a rule hands it
+  (a child, a slot map that fits the DECIDE outputs, the validated columns and the source row id) is checked in release
+  builds and a misfit raises an internal error, because rules are plug-ins and a broken one must fail loudly. Checks on
+  plans the engine builds itself, in the adapter and in late materialization, are `D_ASSERT`s, which debug builds run.
   `DirectValidationBreaker` builds the all-rows read for a plan that could stream. Because every row is checked before
   any is released, rows are held in memory (`../architecture/result_adapter.md`, "Memory of holding rows").
 - **Late materialization of a stored table** (`direct_late_materialization.cpp`). The rule driver appends the table's
@@ -183,7 +186,8 @@ default box.
 - C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts, and a norm tag it does not expect reading
   as a not-proved part, not an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
   when no rule applies, a rule that applies beside one that does not, two rules applying as an internal error, an IR the
-  front end could not read offered to no rule, mismatched slot, breaker under `LIMIT 1` and `COUNT(*)`),
+  front end could not read offered to no rule, mismatched slot, each way a substitute can misfit the adapter (no
+  child, a slot too many, a missing prunable flag, a slot, validated column or row id slot beyond the child), breaker under `LIMIT 1` and `COUNT(*)`),
   `test_decidb_direct_decline.cpp` (each decline branch of S1's and A1's `CheckCondition` and of `DirectIRIsReadable`,
   tested on the IR: a probe rule installed through the rule driver's test seam receives the IR the driver reads from a
   small query that is only planned, edits it for the few shapes SQL cannot write, and asks S1 or A1 whether it
@@ -209,7 +213,7 @@ default box.
   arms only that test reaches (`--unreached` also lists every arm no test reaches), and writes `report.json` with each
   arm's condition text and function. `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not
   (exit 1 when there are any) and the reverse, matching an arm by file, function, condition text and its occurrence in
-  the function, so lines that move are not read as lost. 1,761 of 1,954 arms are reached. Branch coverage shows which
+  the function, so lines that move are not read as lost. 1,705 of 1,824 arms are reached. Branch coverage shows which
   branches a test runs, not whether its assertion would catch a wrong value there. A subset run by hand needs `-m`
   (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3

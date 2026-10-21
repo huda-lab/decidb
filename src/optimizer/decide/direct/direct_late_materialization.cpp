@@ -25,11 +25,14 @@ namespace {
 //! A scan the late materialization can repeat: a DuckDB base table read through the ordinary table scan, with nothing
 //! that changes which rows it returns from one read to the next.
 bool IsRepeatableTableScan(LogicalGet &get) {
-	if (get.function.function != TableScanFunction::GetFunction().function || !get.GetTable() ||
-	    !get.GetTable()->IsDuckTable()) {
+	if (get.function.function != TableScanFunction::GetFunction().function) {
 		return false;
 	}
-	return get.children.empty() && !get.extra_info.sample_options;
+	// The table scan function reads a DuckDB table only. It has no child, and a TABLESAMPLE reaches the scan later
+	// (SAMPLING_PUSHDOWN runs after this step), as a separate sample operator that a source chain never accepts.
+	D_ASSERT(get.GetTable() && get.GetTable()->IsDuckTable());
+	D_ASSERT(get.children.empty() && !get.extra_info.sample_options);
+	return true;
 }
 
 //! The stored column a source column forwards unchanged, or invalid. `chain` runs from the source's top operator down
@@ -41,26 +44,20 @@ idx_t StoredColumnOf(const vector<reference<LogicalOperator>> &chain, LogicalGet
 			continue; // a filter passes its child's bindings through
 		}
 		auto &projection = op.Cast<LogicalProjection>();
-		if (binding.table_index != projection.table_index || binding.column_index >= projection.expressions.size()) {
-			return DConstants::INVALID_INDEX;
-		}
+		// The binding came from the operator above, so it names an output of this projection.
+		D_ASSERT(binding.table_index == projection.table_index && binding.column_index < projection.expressions.size());
 		auto &expression = *projection.expressions[binding.column_index];
 		if (expression.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 			return DConstants::INVALID_INDEX;
 		}
 		auto &ref = expression.Cast<BoundColumnRefExpression>();
-		if (ref.depth != 0) {
-			return DConstants::INVALID_INDEX;
-		}
+		D_ASSERT(ref.depth == 0); // a correlated reference is gone before the optimizer runs
 		binding = ref.binding;
 	}
-	if (binding.table_index != get.table_index || binding.column_index >= get.GetColumnIds().size()) {
-		return DConstants::INVALID_INDEX;
-	}
+	D_ASSERT(binding.table_index == get.table_index && binding.column_index < get.GetColumnIds().size());
 	auto &column = get.GetColumnIds()[binding.column_index];
-	if (column.IsRowIdColumn() || column.HasChildren()) {
-		return DConstants::INVALID_INDEX;
-	}
+	// The caller returned early for a source that reads the row id, and no struct field is pushed into a scan yet.
+	D_ASSERT(!column.IsRowIdColumn() && !column.HasChildren());
 	return column.GetPrimaryIndex();
 }
 
@@ -79,13 +76,12 @@ bool RefersToAny(Expression &expression, const column_binding_set_t &bindings) {
 }
 
 //! Every operator below `op`, `op` excluded. False when one of them is a kind whose handling of bindings this step does
-//! not follow: projections, filters, windows, orders and the scan are the ones a rule's plan is made of.
+//! not follow: projections, filters, windows and the scan are the ones a rule's plan is made of.
 bool CollectPlanOperators(LogicalOperator &op, vector<reference<LogicalOperator>> &operators) {
 	for (auto &child : op.children) {
 		switch (child->type) {
 		case LogicalOperatorType::LOGICAL_PROJECTION:
 		case LogicalOperatorType::LOGICAL_WINDOW:
-		case LogicalOperatorType::LOGICAL_ORDER_BY:
 		case LogicalOperatorType::LOGICAL_GET:
 			break;
 		case LogicalOperatorType::LOGICAL_FILTER:
@@ -126,19 +122,18 @@ bool IsOnlyForwarded(LogicalDirectResultAdapter &adapter, idx_t output, ColumnBi
 					continue;
 				}
 				auto &ref = expression.Cast<BoundColumnRefExpression>();
-				if (ref.depth == 0 && aliases.find(ref.binding) != aliases.end() &&
+				D_ASSERT(ref.depth == 0);
+				if (aliases.find(ref.binding) != aliases.end() &&
 				    aliases.insert(ColumnBinding(projection.table_index, i)).second) {
 					changed = true;
 				}
 			}
 		}
 	}
-	// The adapter must read the column through an alias, and read it for this output alone.
-	auto &dependency = *adapter.expressions[output];
-	if (dependency.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF ||
-	    aliases.find(dependency.Cast<BoundColumnRefExpression>().binding) == aliases.end()) {
-		return false;
-	}
+	// The adapter reads the column through an alias (the rule's plan passes a source column along unchanged), and it
+	// reads it for this output alone.
+	D_ASSERT(adapter.expressions[output]->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF);
+	D_ASSERT(aliases.find(adapter.expressions[output]->Cast<BoundColumnRefExpression>().binding) != aliases.end());
 	for (idx_t i = 0; i < adapter.expressions.size(); i++) {
 		if (i != output && RefersToAny(*adapter.expressions[i], aliases)) {
 			return false;
@@ -150,15 +145,17 @@ bool IsOnlyForwarded(LogicalDirectResultAdapter &adapter, idx_t output, ColumnBi
 		bool projection = op.type == LogicalOperatorType::LOGICAL_PROJECTION;
 		idx_t index = 0;
 		LogicalOperatorVisitor::EnumerateExpressions(op, [&](unique_ptr<Expression> *expression) {
-			auto position = index++;
+			index++;
 			if (used) {
 				return;
 			}
 			if (projection && (*expression)->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 				auto &ref = (*expression)->Cast<BoundColumnRefExpression>();
-				if (ref.depth == 0 && aliases.find(ref.binding) != aliases.end() &&
-				    aliases.find(ColumnBinding(op.Cast<LogicalProjection>().table_index, position)) != aliases.end()) {
-					return; // forwarded unchanged
+				if (aliases.find(ref.binding) != aliases.end()) {
+					// forwarded unchanged, so the closure above holds this output of the projection too
+					D_ASSERT(aliases.find(ColumnBinding(op.Cast<LogicalProjection>().table_index, index - 1)) !=
+					         aliases.end());
+					return;
 				}
 			}
 			used = RefersToAny(**expression, aliases);
@@ -170,17 +167,13 @@ bool IsOnlyForwarded(LogicalDirectResultAdapter &adapter, idx_t output, ColumnBi
 	return true;
 }
 
-LogicalGet *FindScan(LogicalOperator &op, idx_t table_index) {
-	if (op.type == LogicalOperatorType::LOGICAL_GET && op.Cast<LogicalGet>().table_index == table_index) {
-		return &op.Cast<LogicalGet>();
-	}
-	for (auto &child : op.children) {
-		auto found = FindScan(*child, table_index);
-		if (found) {
-			return found;
-		}
-	}
-	return nullptr;
+//! The scan among the operators of a plan that CollectPlanOperators accepted. That plan is a chain, so it holds one.
+LogicalGet &FindScan(const vector<reference<LogicalOperator>> &operators) {
+	auto found = std::find_if(operators.begin(), operators.end(), [](const reference<LogicalOperator> &entry) {
+		return entry.get().type == LogicalOperatorType::LOGICAL_GET;
+	});
+	D_ASSERT(found != operators.end());
+	return found->get().Cast<LogicalGet>();
 }
 
 //! Removes unused columns again below an adapter, as if a parent read every output it still computes. The adapter
@@ -211,9 +204,7 @@ void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &opt
 	if (!adapter.has_rowid_dependency) {
 		return;
 	}
-	if (adapter.expressions.size() != adapter.ExpectedDependencyCount() || adapter.children.size() != 1) {
-		throw InternalException("Direct solve result adapter has invalid output dependencies");
-	}
+	D_ASSERT(adapter.expressions.size() == adapter.ExpectedDependencyCount() && adapter.children.size() == 1);
 	auto &rowid_dependency = *adapter.expressions.back();
 	if (rowid_dependency.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		// No parent read a column that could move; the row id was already dropped.
@@ -223,39 +214,36 @@ void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &opt
 	auto rowid_binding = rowid_dependency.Cast<BoundColumnRefExpression>().binding;
 	auto rowid_type = rowid_dependency.return_type;
 	vector<reference<LogicalOperator>> operators;
-	auto scan = FindScan(*adapter.children[0], adapter.scan_table_index);
-	bool supported = scan && IsRepeatableTableScan(*scan) && CollectPlanOperators(adapter, operators) &&
-	                 rowid_type == scan->GetRowIdType();
+	bool supported = CollectPlanOperators(adapter, operators);
 	// Outputs a parent reads, whose stored column nothing else in the plan uses. Only a variable-width column moves
 	// (VARCHAR, BLOB, BIT, lists, arrays, structs, maps, unions), because holding one is what costs memory. A
 	// fixed-width column is cheaper held than read back, so it stays in the single read.
 	vector<idx_t> moved_outputs;
 	vector<idx_t> moved_columns;
+	optional_ptr<LogicalGet> first_scan;
 	if (supported) {
-		auto scan_bindings = scan->GetColumnBindings();
+		auto &scan = FindScan(operators);
+		first_scan = &scan;
+		D_ASSERT(scan.table_index == adapter.scan_table_index);
+		D_ASSERT(IsRepeatableTableScan(scan) && rowid_type == scan.GetRowIdType());
+		D_ASSERT(adapter.stored_columns.size() == adapter.output_types.size());
+		auto scan_bindings = scan.GetColumnBindings();
 		for (idx_t i = 0; i < adapter.output_types.size(); i++) {
-			if (i >= adapter.stored_columns.size() || adapter.stored_columns[i] == DConstants::INVALID_INDEX ||
+			if (adapter.stored_columns[i] == DConstants::INVALID_INDEX ||
 			    adapter.expressions[i]->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 				continue;
 			}
 			if (TypeIsConstantSize(adapter.output_types[i].InternalType())) {
 				continue;
 			}
+			// A parent-read output that forwards a stored column is read by the scan under that column's own type.
 			auto stored = adapter.stored_columns[i];
-			if (stored >= scan->returned_types.size() || scan->returned_types[stored] != adapter.output_types[i]) {
-				continue;
-			}
-			bool found = false;
-			ColumnBinding source_binding;
-			for (auto &binding : scan_bindings) {
-				auto &column = scan->GetColumnIds()[binding.column_index];
-				if (!column.IsRowIdColumn() && !column.HasChildren() && column.GetPrimaryIndex() == stored) {
-					source_binding = binding;
-					found = true;
-					break;
-				}
-			}
-			if (found && IsOnlyForwarded(adapter, i, source_binding, operators)) {
+			D_ASSERT(stored < scan.returned_types.size() && scan.returned_types[stored] == adapter.output_types[i]);
+			auto source = std::find_if(scan_bindings.begin(), scan_bindings.end(), [&](const ColumnBinding &binding) {
+				return scan.GetColumnIds()[binding.column_index].GetPrimaryIndex() == stored;
+			});
+			D_ASSERT(source != scan_bindings.end() && !scan.GetColumnIds()[source->column_index].HasChildren());
+			if (IsOnlyForwarded(adapter, i, *source, operators)) {
 				moved_outputs.push_back(i);
 				moved_columns.push_back(stored);
 			}
@@ -270,16 +258,13 @@ void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &opt
 
 	// The late materialization: the moved columns and the row id, from a fresh scan of the same table.
 	auto second_index = optimizer.binder.GenerateTableIndex();
-	auto second = make_uniq<LogicalGet>(second_index, scan->function, scan->bind_data->Copy(), scan->returned_types,
-	                                    scan->names, scan->GetRowIdType());
-	vector<idx_t> second_columns;
-	for (auto column : moved_columns) {
-		if (std::find(second_columns.begin(), second_columns.end(), column) == second_columns.end()) {
-			second_columns.push_back(column);
-		}
-	}
+	auto &scan = *first_scan;
+	auto second = make_uniq<LogicalGet>(second_index, scan.function, scan.bind_data->Copy(), scan.returned_types,
+	                                    scan.names, scan.GetRowIdType());
+	// IsOnlyForwarded lets one output alone read a stored column, so no column moves twice.
+	D_ASSERT(unordered_set<idx_t>(moved_columns.begin(), moved_columns.end()).size() == moved_columns.size());
 	vector<ColumnIndex> column_ids;
-	for (auto column : second_columns) {
+	for (auto column : moved_columns) {
 		column_ids.emplace_back(column);
 	}
 	column_ids.emplace_back(COLUMN_IDENTIFIER_ROW_ID);
@@ -287,10 +272,8 @@ void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &opt
 	second->SetColumnIds(std::move(column_ids));
 
 	for (idx_t k = 0; k < moved_outputs.size(); k++) {
-		auto position = NumericCast<idx_t>(std::find(second_columns.begin(), second_columns.end(), moved_columns[k]) -
-		                                   second_columns.begin());
 		adapter.expressions[moved_outputs[k]] =
-		    DirectColumn(adapter.output_types[moved_outputs[k]], ColumnBinding(second_index, position));
+		    DirectColumn(adapter.output_types[moved_outputs[k]], ColumnBinding(second_index, k));
 	}
 
 	auto join = make_uniq<LogicalComparisonJoin>(JoinType::INNER);
@@ -326,13 +309,11 @@ bool DirectExposeStoredRowId(LogicalOperator &source, DirectLateMaterialization 
 		if (op.children.size() != 1) {
 			return false;
 		}
-		if (op.type == LogicalOperatorType::LOGICAL_FILTER) {
-			if (op.Cast<LogicalFilter>().HasProjectionMap()) {
-				return false;
-			}
-		} else if (op.type != LogicalOperatorType::LOGICAL_PROJECTION) {
+		if (op.type != LogicalOperatorType::LOGICAL_FILTER && op.type != LogicalOperatorType::LOGICAL_PROJECTION) {
 			return false;
 		}
+		// Projection maps come from later passes (the IN-clause rewriter, column lifetime).
+		D_ASSERT(!op.HasProjectionMap());
 		for (auto &expression : op.expressions) {
 			if (expression->IsVolatile()) {
 				return false;
@@ -342,9 +323,10 @@ bool DirectExposeStoredRowId(LogicalOperator &source, DirectLateMaterialization 
 		current = *op.children[0];
 	}
 	auto &get = current.get().Cast<LogicalGet>();
-	if (!IsRepeatableTableScan(get) || !get.projection_ids.empty()) {
+	if (!IsRepeatableTableScan(get)) {
 		return false;
 	}
+	D_ASSERT(get.projection_ids.empty()); // set by the unused-column pass, which runs later
 	auto &column_ids = get.GetMutableColumnIds();
 	for (auto &column : column_ids) {
 		if (column.IsRowIdColumn()) {
@@ -370,10 +352,8 @@ bool DirectExposeStoredRowId(LogicalOperator &source, DirectLateMaterialization 
 			rowid_binding = ColumnBinding(projection.table_index, projection.expressions.size() - 1);
 		}
 	}
-	if (source.GetColumnBindings().size() != bindings.size() + 1 ||
-	    source.GetColumnBindings().back() != rowid_binding) {
-		throw InternalException("Direct solve could not append the source row id");
-	}
+	D_ASSERT(source.GetColumnBindings().size() == bindings.size() + 1 &&
+	         source.GetColumnBindings().back() == rowid_binding);
 	return true;
 }
 

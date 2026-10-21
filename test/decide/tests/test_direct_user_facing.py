@@ -728,3 +728,67 @@ def test_a1_pipelined_plan_does_not_read_twice(decidb_cli):
     rows, _ = _run(decidb_cli, setup + query)
     solver, _ = _run(decidb_cli, setup + query, mode="off")
     _same_answers(rows, solver)
+
+
+def _single_read_and_solver_answers(cli, setup, query):
+    """The direct plan reads the table once (no late materialization) and answers like the solver."""
+    plan = _raw(cli, setup + f"EXPLAIN {query}").stdout
+    assert "Direct solve rule" in plan and _table_scans(plan) == 1, plan
+    direct, _ = _run(cli, setup + query)
+    solver, _ = _run(cli, setup + query, mode="off")
+    assert len(direct) > 0
+    _same_answers(direct, solver)
+    return plan
+
+
+@pytest.mark.correctness
+def test_second_read_is_skipped_when_the_source_already_reads_the_row_id(decidb_cli):
+    # A source that selects `rowid` has its own use of the row id, so direct solve leaves its scan alone.
+    setup = _late_materialization_setup("s1")
+    decide = _late_materialization_decide("s1", "(SELECT rowid AS rid, * FROM rr_src) s")
+    query = f"SELECT id, payload, rid, x FROM ({decide}) q ORDER BY id"
+    _single_read_and_solver_answers(decidb_cli, setup, query)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "column",
+    [
+        pytest.param("payload AS payload_copy", id="read_by_two_outputs"),
+        pytest.param("payload || '!' AS payload_copy", id="read_by_a_computed_column"),
+    ],
+)
+def test_second_read_is_skipped_when_another_column_reads_the_stored_column(decidb_cli, column):
+    # The payload is read by a second output (an alias of it) or by an expression of the source, so it is not only
+    # forwarded and stays in the single read.
+    setup = _late_materialization_setup("s1")
+    decide = _late_materialization_decide("s1", f"(SELECT *, {column} FROM rr_src) s")
+    query = f"SELECT id, payload, payload_copy, x FROM ({decide}) q ORDER BY id"
+    _single_read_and_solver_answers(decidb_cli, setup, query)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "relation,query_columns",
+    [
+        # A long IN list in a projection becomes a MARK join under it.
+        pytest.param(
+            "(SELECT *, id % 100 IN (0, 1, 2, 3, 4, 5, 6, 7) AS flagged FROM rr_src) s",
+            "id, payload, flagged, x",
+            id="join_under_a_projection",
+        ),
+        # In a filter it becomes a MARK join under a filter that carries a projection map, which is kept when the
+        # parent reads every column.
+        pytest.param(
+            "(SELECT * FROM rr_src WHERE id % 100 IN (0, 1, 2, 3, 4, 5, 6, 7)) s",
+            "*",
+            id="join_under_a_filter_with_a_projection_map",
+        ),
+    ],
+)
+def test_second_read_is_skipped_when_a_later_pass_adds_a_join_to_the_source(decidb_cli, relation, query_columns):
+    setup = _late_materialization_setup("s1")
+    decide = _late_materialization_decide("s1", relation)
+    query = f"SELECT {query_columns} FROM ({decide}) q ORDER BY id"
+    plan = _single_read_and_solver_answers(decidb_cli, setup, query)
+    assert "Join Type: MARK" in plan

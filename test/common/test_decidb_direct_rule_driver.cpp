@@ -38,6 +38,19 @@ public:
 
 	bool wrong_slot_map = false;
 
+	//! What a broken rule hands back to the adapter, one fault per variant.
+	enum class Fault : uint8_t {
+		NONE,
+		NO_CHILD,
+		EXTRA_SLOT,
+		NO_PRUNABLE_DECISION,
+		SLOT_OUT_OF_RANGE,
+		VALIDATED_COLUMN_OUT_OF_RANGE,
+		//! The slot of the source row id, which the rule driver appends to a stored source, is out of range.
+		ROW_ID_SLOT_OUT_OF_RANGE
+	};
+	Fault fault = Fault::NONE;
+
 	const char *Name() const override {
 		return name.c_str();
 	}
@@ -92,6 +105,29 @@ public:
 		}
 		substitute.prunable_decisions.push_back(1);
 		substitute.child = std::move(projection);
+		switch (fault) {
+		case Fault::NONE:
+			break;
+		case Fault::NO_CHILD:
+			substitute.child.reset();
+			break;
+		case Fault::EXTRA_SLOT:
+			substitute.slot_map.push_back(0);
+			break;
+		case Fault::NO_PRUNABLE_DECISION:
+			substitute.prunable_decisions.clear();
+			break;
+		case Fault::SLOT_OUT_OF_RANGE:
+			substitute.slot_map.back() = 1000;
+			break;
+		case Fault::VALIDATED_COLUMN_OUT_OF_RANGE:
+			substitute.validated_columns.push_back(1000);
+			break;
+		case Fault::ROW_ID_SLOT_OUT_OF_RANGE:
+			// The rowid is the last source column, just before the decision.
+			substitute.slot_map[input.size() - 1] = 1000;
+			break;
+		}
 		return substitute;
 	}
 
@@ -289,6 +325,53 @@ TEST_CASE("Direct rule driver treats a broken rule as an internal error", "[deci
 		REQUIRE(result->HasError());
 		REQUIRE(result->GetError().find("slot map that does not match") != string::npos);
 	}
+}
+
+TEST_CASE("Direct rule driver rejects each way a rule can hand the adapter a substitute that does not fit",
+          "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	// A stored table, so the rule driver appends its row id and the late materialization is enabled.
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE stub_src AS SELECT i AS v FROM range(3) t(i)"));
+	const string stored_query = "SELECT v, x FROM (FROM stub_src DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE "
+	                            "SUM(v*x)) q ORDER BY v";
+	struct Case {
+		const char *name;
+		StubRule::Fault fault;
+		bool stored;
+		const char *error;
+	};
+	const Case cases[] = {
+	    {"no child", StubRule::Fault::NO_CHILD, false, "incomplete result substitute"},
+	    {"a slot more than the outputs", StubRule::Fault::EXTRA_SLOT, false, "incomplete result substitute"},
+	    {"no prunable flag for the decision", StubRule::Fault::NO_PRUNABLE_DECISION, false,
+	     "incomplete result substitute"},
+	    {"a slot beyond the child", StubRule::Fault::SLOT_OUT_OF_RANGE, false, "slot map that does not match"},
+	    {"a validated column beyond the child", StubRule::Fault::VALIDATED_COLUMN_OUT_OF_RANGE, false,
+	     "lost a required validated column"},
+	    {"a row id slot beyond the child", StubRule::Fault::ROW_ID_SLOT_OUT_OF_RANGE, true, "lost the source row id"}};
+	for (auto &test_case : cases) {
+		INFO(test_case.name);
+		auto fault = test_case.fault;
+		InstallRules(con, [fault] {
+			RuleList rules;
+			auto rule = make_uniq<StubRule>("STUB_BROKEN", true, 1);
+			rule->fault = fault;
+			rules.push_back(std::move(rule));
+			return rules;
+		});
+		auto result = con.Query(test_case.stored ? stored_query : QUERY);
+		REQUIRE(result->HasError());
+		REQUIRE(result->GetError().find(test_case.error) != string::npos);
+	}
+	// The control: the same stub on a stored table, with no fault, answers.
+	InstallRules(con, [] {
+		RuleList rules;
+		rules.push_back(make_uniq<StubRule>("STUB_STORED", true, 1));
+		return rules;
+	});
+	auto control = con.Query(stored_query);
+	REQUIRE(CHECK_COLUMN(control, 1, {1, 1, 1}));
 }
 
 TEST_CASE("Direct validation breaker reads every row before an outer LIMIT or COUNT returns", "[decidb]") {

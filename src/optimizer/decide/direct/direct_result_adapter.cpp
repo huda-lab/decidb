@@ -55,10 +55,8 @@ vector<ColumnBinding> LogicalDirectResultAdapter::GetColumnBindings() {
 }
 
 void LogicalDirectResultAdapter::PruneUnusedOutputs(const vector<bool> &referenced_outputs) {
-	if (referenced_outputs.size() != output_types.size() || prunable_outputs.size() != output_types.size() ||
-	    expressions.size() != ExpectedDependencyCount()) {
-		throw InternalException("Direct solve result adapter has invalid output dependencies");
-	}
+	D_ASSERT(referenced_outputs.size() == output_types.size() && prunable_outputs.size() == output_types.size() &&
+	         expressions.size() == ExpectedDependencyCount());
 	bool movable_output_read = false;
 	for (idx_t i = 0; i < referenced_outputs.size(); i++) {
 		if (!referenced_outputs[i] && prunable_outputs[i]) {
@@ -127,30 +125,22 @@ unique_ptr<LogicalExtensionOperator> LogicalDirectResultAdapter::Read(Deserializ
 }
 
 unique_ptr<PhysicalOperator> LogicalDirectResultAdapter::CreatePlan(ClientContext &, PhysicalPlanGenerator &generator) {
-	if (children.size() != 1 || output_bindings.size() != output_types.size() ||
-	    prunable_outputs.size() != output_types.size() || expressions.size() != ExpectedDependencyCount()) {
-		throw InternalException("Direct solve result adapter has an invalid output map");
-	}
+	D_ASSERT(children.size() == 1 && output_bindings.size() == output_types.size() &&
+	         prunable_outputs.size() == output_types.size() && expressions.size() == ExpectedDependencyCount());
 	auto child = generator.CreatePlanChild(*children[0]);
 	vector<unique_ptr<Expression>> select_list;
 	select_list.reserve(output_types.size());
 	for (idx_t i = 0; i < expressions.size(); i++) {
 		auto &dependency = *expressions[i];
-		bool is_rowid = has_rowid_dependency && i + 1 == expressions.size();
-		if (dependency.GetExpressionClass() == ExpressionClass::BOUND_REF) {
-			auto slot = dependency.Cast<BoundReferenceExpression>().index;
-			if (slot >= child->types.size() || child->types[slot] != dependency.return_type) {
-				throw InternalException("Direct solve dependency refers to the wrong child slot");
-			}
-		} else if ((i >= output_types.size() && !is_rowid) ||
-		           dependency.GetExpressionClass() != ExpressionClass::BOUND_CONSTANT ||
-		           !dependency.Cast<BoundConstantExpression>().value.IsNull()) {
-			throw InternalException("Direct solve output or validation dependency was not bound");
-		}
+		// A dependency is a slot of the child, or a typed NULL standing in for an output (or the row id) that nothing
+		// reads. The validated columns that follow the outputs are always slots.
+		D_ASSERT(dependency.GetExpressionClass() == ExpressionClass::BOUND_REF
+		             ? dependency.Cast<BoundReferenceExpression>().index < child->types.size() &&
+		                   child->types[dependency.Cast<BoundReferenceExpression>().index] == dependency.return_type
+		             : dependency.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+		                   dependency.Cast<BoundConstantExpression>().value.IsNull());
 		if (i < output_types.size()) {
-			if (dependency.return_type != output_types[i]) {
-				throw InternalException("Direct solve output dependency has the wrong type");
-			}
+			D_ASSERT(dependency.return_type == output_types[i]);
 			select_list.push_back(dependency.Copy());
 		}
 	}
@@ -172,8 +162,8 @@ unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vecto
                                               vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
                                               idx_t decide_index, DirectExplainAnnotation annotation,
                                               const DirectLateMaterialization &late_materialization) {
-	if (!substitute.child || output_bindings.size() != output_types.size() ||
-	    substitute.slot_map.size() != output_bindings.size() ||
+	D_ASSERT(output_bindings.size() == output_types.size()); // both built by the rule driver, not by the rule
+	if (!substitute.child || substitute.slot_map.size() != output_bindings.size() ||
 	    prunable_sources.size() + substitute.prunable_decisions.size() != output_bindings.size()) {
 		throw InternalException("Direct solve rule returned an incomplete result substitute");
 	}
@@ -183,9 +173,7 @@ unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vecto
 	substitute.child->ResolveOperatorTypes();
 	auto child_bindings = substitute.child->GetColumnBindings();
 	auto &child_types = substitute.child->types;
-	if (child_bindings.size() != child_types.size()) {
-		throw InternalException("Direct solve child bindings and types differ");
-	}
+	D_ASSERT(child_bindings.size() == child_types.size());
 	for (idx_t i = 0; i < substitute.slot_map.size(); i++) {
 		auto slot = substitute.slot_map[i];
 		if (slot >= child_types.size() || child_types[slot] != output_types[i]) {
@@ -197,9 +185,11 @@ unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vecto
 			throw InternalException("Direct solve rule lost a required validated column");
 		}
 	}
-	if (late_materialization.Enabled() &&
-	    (late_materialization.rowid_slot >= child_types.size() ||
-	     late_materialization.stored_columns.size() + substitute.prunable_decisions.size() != output_bindings.size())) {
+	// The driver builds the stored columns, and the check above fixes the decision count.
+	D_ASSERT(!late_materialization.Enabled() ||
+	         late_materialization.stored_columns.size() + substitute.prunable_decisions.size() ==
+	             output_bindings.size());
+	if (late_materialization.Enabled() && late_materialization.rowid_slot >= child_types.size()) {
 		throw InternalException("Direct solve rule lost the source row id");
 	}
 	auto adapter = make_uniq<LogicalDirectResultAdapter>(decide_index, std::move(output_bindings),
