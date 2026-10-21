@@ -3,17 +3,6 @@
 What S1 does today is in `done.md`; the class is in `definition.md`. How to work and the checks are in
 `../../framework/todo.md` § How to work any task. Every widening also meets the exit gate at the end of this file.
 
-## S1-17 — Constant terms in the count body
-
-- **Problem.** S1 admits `SUM(x + c)` and `SUM(c - x)` by shifting the limit by `n*c` per group (`ReadCountBody`,
-  `MAX_OFFSET`, the `HUGEINT` widening in `AddBoundValidation`, the covered-row count in `CountRows`, about 90 lines).
-  The class definition does not ask for it, and `done.md` records a known difference near the top of `HUGEINT`.
-- **Change.** The shared canonicalizer rewrites `SUM(x + c) <op> B` into `SUM(x) <op> B - c*COUNT(*)` and
-  `SUM(c - x) <op> B` into `SUM(x) <flipped op> c*COUNT(*) - B`, with the `COUNT(*)` filtered by the `SUM`'s own `WHEN`.
-  The right-hand-side rewrite evaluates the shift for both paths. S1 deletes its offset code.
-- **Done when.** The S1 suites pass, the solver path gives the same answers on these bodies, and `done.md` states how
-  the known difference near the top of `HUGEINT` stands.
-
 ## S1-12 — S1 reads a per-row bound on `x` in its own way, and so does A1
 
 - **Problem.** S1 decides "which of {0, 1} may this row take" for a per-row bound on `x` with its own code

@@ -1,7 +1,7 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-10-21 on top of `a5d0f1a5db`: `make decide-test` (3,467 passed, also with
-`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,466
+Verified on 2026-10-21 on top of `21eb782d9a`: `make decide-test` (3,088 passed, also with
+`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,087
 passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,324 assertions in 47 cases). `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check). Code:
 `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`, with the helpers only S1 uses in
 `s1_uniform_matroid_helpers.{hpp,cpp}`. Class definition: [definition.md](definition.md).
@@ -28,16 +28,10 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   value. An overflow (`COUNT(*) * 4611686018427387904` over 3 rows) raises as on the solver path; a row outside every group reads 0,
   so a NULL-key group or a group the `WHEN` excludes cannot raise where the solver does not. The use case is a top-fraction query
   ("the best 10% of each group": `SUM(x) <= COUNT(*) * 0.1 PER g`).
-- **Count bodies:** `SUM(a*x + c)` where the terms in `x` add up to exactly `a = 1` or `a = -1` (`SUM(x)`, `SUM(1*x)`,
-  `SUM(2*x - x)`, `SUM(-x)`) and `c` is a finite foldable constant, whole or fractional, of magnitude at most 2^21
-  (`SUM(x + 1)`, `SUM(1 - x)`, `SUM(x + 0.5)`, `SUM(x + 3 - 1)`). `SUM(x + c) <op> B` is `SUM(x) <op> B - n*c`, and
-  `SUM(c - x) <op> B` is `SUM(x) <flipped op> n*c - B`, where `n` is the number of rows the `SUM` covers in the group:
-  the `WHEN` holds, whether the clause's or the aggregate's own, and no `PER` key is NULL. The aggregate-local `WHEN`
-  narrows `n` even though it does not narrow a `COUNT(*)` on the right. The shift is computed in DuckDB's own types
-  (integers widened to `HUGEINT`), so a decimal offset stays exact: 100 rows of `x + 0.57` shift the limit by exactly 57,
-  where a `DOUBLE` sum gives 56.99999999999999. The cap of 2^21 keeps `n*c` exact up to 2^32 rows, which the plan
-  cannot check because `n` is known only at run time. The solver reads these bodies as the same arithmetic, strict and
-  fractional bounds included.
+- **Count bodies:** `SUM(a*x)` where the terms in `x` add up to exactly `a = 1` or `a = -1` (`SUM(x)`, `SUM(1*x)`,
+  `SUM(2*x - x)`, `SUM(-x)`); `SUM(-x) <op> B` is `SUM(x) <flipped op> -B`. A body with a constant term (`SUM(x + 1)`,
+  `SUM(1 - x)`, `SUM(x + 0.5)`) declines, and the solver answers it. The class asks only for a count of `x`, and
+  admitting a constant meant shifting the limit by `n*c` per group with an exactness cap and its own overflow cases.
 - **Scope:** global, or `PER` one or more source columns, optionally with a deterministic source-only `WHEN` (top level or
   inside the aggregate). All count clauses must share identical membership. Rows with a NULL `PER` key or a false aggregate
   `WHEN` bypass the bound but still obey per-row fixed values.
@@ -79,12 +73,6 @@ solver. Chosen over declining near-integer bounds because a column value is only
 decline it. To avoid the difference, round the bound. `test_s1_direct_reads_bounds_exactly_near_an_integer` pins the
 behavior, so changing it is deliberate.
 
-**Known difference: an offset against a limit near the top of `HUGEINT` or `DECIMAL(38)`.** With an offset in the count
-body, the shift `B - n*c` is computed in the limit column's own type. A `HUGEINT` or 38-digit `DECIMAL` value within `n*c`
-of its type's maximum (around 1.7e38 and 1e38) overflows and raises, where the solver reads the value as `DOUBLE` and
-answers. Accepted rather than declined because no realistic limit is that large. `BIGINT` and smaller types reach the
-solver as `DOUBLE` and cannot overflow.
-
 **Error wording** (`../../architecture/policy.md`). The messages are the solver's, built by the same functions. A NULL
 count bound, fixed value or `SUM` source column that is one column raises `DECIDE: column "cap" is NULL. Impute it with
 COALESCE(cap, 0) or filter those rows out with a WHERE clause.`, and a NaN one `DECIDE constraint right-hand side
@@ -105,7 +93,8 @@ A query S1 does not apply to keeps its answer: it runs on the solver, and `requi
 | Shape | Why it is out | How to reopen it |
 |---|---|---|
 | A right-hand aggregate whose own `WHEN` is volatile (`MIN(v) WHEN (random() < 2)`), a relation-qualified one, `DISTINCT` or `ORDER BY` inside it, or another reducer (`MEDIAN`) | Kept on the solver by decision | A separate task per shape |
-| A count body whose added term is not a usable constant: a column (`SUM(x + bonus)`), NULL, NaN, an infinity, a constant above 2^21 in magnitude, or a weight on `x` other than 1 or -1 (`SUM(2*x + 1)`) | A column term adds a different amount per row, so the shift is not `n*c`. A non-finite or NULL term raises on the solver. Above 2^21 the plan cannot prove `n*c` exact. A weight other than ±1 is a weighted constraint (S3, S4) | Raise the 2^21 cap with a run-time check of `n` |
+| A count body with a constant or a column term (`SUM(x + 1)`, `SUM(x + bonus)`) | The class is a count of `x`; the solver answers these exactly | A rewrite to `SUM(x) <op> B - c*COUNT(*)` before both paths, which changes the solver's overflow, `DIAGNOSE` and error text |
+| A count body with a weight on `x` other than 1 or -1 (`SUM(2*x + 1)`) | A weighted constraint (S3, S4) | A weighted rule |
 | A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor, a NULL factor, or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. The solver reads a NULL factor as an objective of zeros, which is not a result worth copying. A subquery factor has no sign when the plan is built, and the sign decides whether the sense reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
 | A bound on `x` with no `WHEN` that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises DECIDE's usual infeasible error before it reads a row, so an empty source raises it too, and skips that error under `DIAGNOSE`. A query that can only fail has no speed to win, so S1 declines it (`DecideBoxContradictsDomain`) and the solver answers. The same bound with a `WHEN` is admitted | Not planned |
 
@@ -118,7 +107,7 @@ different `PER` or `WHEN` membership (S2); `SUM(x) <> k` (not an interval); boun
 
 | Check | What it covers |
 |---|---|
-| `test_direct_s1_uniform_matroid.py` (1,141 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so the test fails if S1 does not apply); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. Cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `PER` and NULL keys, top and aggregate-local `WHEN`, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic, and `test_s1_count_bound_raises_only_where_the_solver_does` for where an overflow may raise), group-aggregate bounds (`MIN`, `MAX`, `COUNT(col)`, small-integer `SUM` and `AVG`, in arithmetic, with `PER`, top and local `WHEN`, their NULL, NaN, infinity and empty-group errors, and every declined reducer), offset and negated count bodies (each comparison and an interval, whole and fractional offsets, every scope, a group whose local `WHEN` covers no row, an unreachable limit, constant, column, `COALESCE`, `COUNT(*)` and group-aggregate limits, exact decimal shifts, limits near the `BIGINT` limit, and every declined body), pins and per-row bounds on `x` (a generated grid with and without `WHEN`), column pins, no objective (every count bound shape, with and without `PER` and `WHEN`, checked for feasibility only), 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, tied scores, and infeasible problems. Parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. Error cases that must fail on both paths (bad scores, empty aggregates, bad bounds on rows the problem does not read, late rows under `LIMIT` and `COUNT`, pins). Boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum |
+| `test_direct_s1_uniform_matroid.py` (786 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so the test fails if S1 does not apply); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. Cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `PER` and NULL keys, top and aggregate-local `WHEN`, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic, and `test_s1_count_bound_raises_only_where_the_solver_does` for where an overflow may raise), group-aggregate bounds (`MIN`, `MAX`, `COUNT(col)`, small-integer `SUM` and `AVG`, in arithmetic, with `PER`, top and local `WHEN`, their NULL, NaN, infinity and empty-group errors, and every declined reducer), negated count bodies (each comparison and an interval, every scope, a group whose local `WHEN` covers no row, an unreachable limit, constant, column, `COALESCE`, `COUNT(*)` and group-aggregate limits) and every declined body, constant terms with and without `PER` and an own `WHEN` included, pins and per-row bounds on `x` (a generated grid with and without `WHEN`), column pins, no objective (every count bound shape, with and without `PER` and `WHEN`, checked for feasibility only), 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, tied scores, and infeasible problems. Parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. Error cases that must fail on both paths (bad scores, empty aggregates, bad bounds on rows the problem does not read, late rows under `LIMIT` and `COUNT`, pins). Boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum |
 | `test_direct_rule_conformance.py` (118 tests, shared with A1) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced backend, `DIAGNOSE`, an empty source, constant bounds that contradict the built-in domain, and near misses, each of which must decline under `require`, keep the solver plan, and answer under `auto` as under `off` (this is where the shapes S1 leaves on the solver are tested) |
 | `test_direct_fuzz.py` (24 tests, 8 seeds per rule) | Seeded differential fuzz: random small S1 queries with and without an objective, direct (`require`) against solver (`off`), over per-row bounds (including lower bounds below 0 with no `WHEN`), scaled objectives, row-count bounds and offset or negated count bodies. Finds interactions the tables do not list |
 | `test_direct_user_facing.py` (75 tests, shared with A1) | What a SQL user sees besides the answer: direct solve on by default, the pinned exact reading of a bound near an integer, the full text of every NULL and NaN error compared with the solver's, unused wide columns pruned, forced-backend and binder-error policy |

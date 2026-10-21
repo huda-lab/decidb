@@ -71,10 +71,10 @@ What exists today is in `done.md`.
 
 ## H-29 — Prune the direct-solve tests
 
-- **Needs.** S1-17, so the tests are weighed against the final code.
-- **Problem.** The direct-solve tests are 1,746 of the suite's 3,445 and the matrix runs each four times. Their per-test
-  branch coverage (`framework/done.md`) shows 67 tests reaching every arm that any test reaches; S1's file has 1,141
-  tests and 16 are in that cover.
+- **Problem.** The direct-solve tests are 1,367 of the suite's 3,088 and the matrix runs each four times. Their per-test
+  branch coverage (`framework/done.md`) shows 67 tests reaching every arm that any test reaches; S1's file has 786
+  tests and 16 were in that cover before S1-17 removed the offset tests. `S1_OFFSET_CASES` and the offset-named
+  helpers beside it now hold only negations (`SUM(-x)`); their names predate S1-17.
 - **Mutation table.** 45 one-line changes to value-handling code (a comparison, a constant, an operator) were each
   run against the six `test_direct_*.py` files on the October 2026 code. 38 were caught and 7 survived. 14 tests catch
   all 38, and 577 of the 1,746 tests caught none. The tests that catch nothing count only where the changes could reach
@@ -115,7 +115,6 @@ What exists today is in `done.md`.
 
 ## H-34 — Branches no test reaches
 
-- **Needs.** S1-17, which deletes code first.
 - **Problem.** 364 of 2,008 branch arms in the direct-solve files are reached by no test (`s1_uniform_matroid_rule.cpp` 80,
   `direct_late_materialization.cpp` 53, `direct_ir.cpp` 50, `a1_separable_box_rule.cpp` 38, `direct_expression.cpp` 35,
   `decide_rewrite_rhs_window.cpp` 32, `direct_result_adapter.cpp` 28, the three files split from the plan factory 23,

@@ -109,8 +109,9 @@ def _fuzz_query(rng, with_objective=True):
     if rng.random() < 0.12:
         clauses.append(rng.choice(_S1_STRICT_FRACTION_BOUNDS))
     if rng.random() < 0.3:
-        # A constant term or a negation in the count body. The comparison and the bound are left as drawn.
-        body = rng.choice(["x + 1", "x - 1", "x + 0.5", "1 - x", "-x", "0.5 - x", "x + 2 - 1"])
+        # A negation in the count body (a constant term stays on the solver). The comparison and the bound are left as
+        # drawn. Seven slots, as when the offset bodies were drawn too, so every later draw of a seed is unchanged.
+        body = rng.choice(["-x"] * 7)
         clauses = [
             clause.replace("SUM(x)", f"SUM({body})", 1) if clause.startswith("SUM(x)") else clause for clause in clauses
         ]

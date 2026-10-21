@@ -582,17 +582,14 @@ def _s1_constraints(case):
                 counted = members
             if not counted:
                 continue  # nothing to count: the group is left free
-            # A count body `a*x + c` adds `a` per selected row and `c` per row the SUM covers.
+            # A count body `a*x` adds `a` per selected row.
             coefficients = {names[i]: float(case.get("body_a", 1)) for i in counted}
-            shift = Fraction(str(case.get("body_c", 0))) * len(counted)
             # `COUNT(*)` counts the rows that state the bound: every row of the group under a local WHEN, the
             # flagged ones under a top WHEN.
             group_rows = [rows[j] for j in members]
             limits = {limit_of(limit, rows[i], len(members), group_rows) for i in members}
             sum_op = op
             for rhs in sorted(limits):
-                if shift:
-                    rhs = float(Fraction(repr(rhs)) - shift)
                 sum_op, rhs = _inclusive(op, rhs)
                 constraints.append((coefficients, sum_op, rhs))
 
@@ -1194,39 +1191,24 @@ def test_s1_tiny_scores_pick_the_exact_best(decidb_cli, scores, sense):
 
 
 # ---------------------------------------------------------------------------
-# S1: a count body with a constant term or a negation, `SUM(x + c)` and `SUM(c - x)`
+# S1: a count body that is a negation, `SUM(-x)`
 # ---------------------------------------------------------------------------
 #
-# `SUM(x + c) <op> B` adds `c` for each row the SUM covers, so it is `SUM(x) <op> B - n*c`, with n the number of rows the
-# SUM covers in the group (the clause's WHEN holds, the PER key is not NULL, and an aggregate-local WHEN on the SUM
-# holds). `SUM(c - x) <op> B` is `SUM(x) <flipped op> n*c - B`. The oracle never rewrites the comparison: it states
-# `a*x_1 + ... + a*x_n <op> B - n*c` over the rows the SUM covers (`body_a` and `body_c` in `_s1_constraints`).
+# `SUM(-x) <op> B` is `SUM(x) <flipped op> -B`. The oracle never rewrites the comparison: it states `-x_1 - ... - x_n
+# <op> B` over the rows the SUM covers (`body_a` in `_s1_constraints`). A constant term in the body (`SUM(x + c)`) stays
+# on the solver (`S1_OFFSET_DECLINED`).
 
-# (a, c) as the user writes them; c is a decimal string so that the oracle reads the same exact value as DuckDB.
-OFFSET_BODIES = [(1, "1"), (1, "-1"), (1, "0.5"), (-1, "0"), (-1, "1"), (-1, "0.5"), (-1, "-1")]
-
-# scope name -> (case keys, the rows one group's SUM covers). The bound is chosen so the count threshold is one in a
-# group of that size: B = a*1 + n*c.
+# scope name -> case keys.
 _OFFSET_SCOPES = {
-    "global": ({}, 10),
-    "per": ({"per": True}, 3),
-    "top_per": ({"per": True, "when": "top"}, 2),
-    "local_per": ({"per": True, "when": "local"}, 2),
-    "top": ({"when": "top"}, 5),
-    "local": ({"when": "local"}, 5),
+    "global": {},
+    "per": {"per": True},
+    "top_per": {"per": True, "when": "top"},
+    "local_per": {"per": True, "when": "local"},
 }
 
 
-def _offset_body(a, c):
-    """The SQL of `a*x + c` for a = 1 or -1."""
-    if a > 0:
-        return f"x - {c[1:]}" if c.startswith("-") else f"x + {c}"
-    return "-x" if c == "0" else f"{c} - x"
-
-
-def _offset_case(a, c, bounds, scope="per", **extra):
-    keys, _ = _OFFSET_SCOPES[scope]
-    return {"count_body": _offset_body(a, c), "body_a": a, "body_c": c, "bounds": bounds, **keys, **extra}
+def _offset_case(bounds, scope="per", **extra):
+    return {"count_body": "-x", "body_a": -1, "bounds": bounds, **_OFFSET_SCOPES[scope], **extra}
 
 
 def _binds_from_below(op, a):
@@ -1236,103 +1218,20 @@ def _binds_from_below(op, a):
 
 S1_OFFSET_CASES = {}
 _CORE_SCOPES = ("global", "per", "top_per", "local_per")
-for (_a, _c), _op, _scope, _delta in itertools.product(OFFSET_BODIES, _OPNAMES, _CORE_SCOPES, (0, 0.5)):
+for _op, _scope, _delta in itertools.product(_OPNAMES, _CORE_SCOPES, (0, 0.5)):
     if _op == "<>":
         continue
-    _n = _OFFSET_SCOPES[_scope][1]
-    _bound = float(Fraction(_a) + _n * Fraction(_c) + Fraction(str(_delta)))
-    S1_OFFSET_CASES[f"offset_{_a:+d}_{_tag(_c)}_{_OPNAMES[_op]}_{_scope}_{_tag(_delta)}"] = _offset_case(
-        _a,
-        _c,
-        [(_op, _bound)],
-        _scope,
-        sense="MINIMIZE" if _binds_from_below(_op, _a) else "MAXIMIZE",
-    )
-# The same shapes under a WHEN with no PER (one group of the flagged rows), for a representative set.
-for (_a, _c), _op, _scope in itertools.product([(1, "1"), (-1, "1"), (-1, "0.5")], _OPNAMES, ("top", "local")):
-    if _op == "<>":
-        continue
-    _bound = float(Fraction(_a) + _OFFSET_SCOPES[_scope][1] * Fraction(_c))
-    S1_OFFSET_CASES[f"offset_{_a:+d}_{_tag(_c)}_{_OPNAMES[_op]}_{_scope}"] = _offset_case(
-        _a, _c, [(_op, _bound)], _scope, sense="MINIMIZE" if _binds_from_below(_op, _a) else "MAXIMIZE"
+    S1_OFFSET_CASES[f"offset_-1_0_{_OPNAMES[_op]}_{_scope}_{_tag(_delta)}"] = _offset_case(
+        [(_op, float(-1 + _delta))], _scope, sense="MINIMIZE" if _binds_from_below(_op, -1) else "MAXIMIZE"
     )
 
-# An interval, a negation alone, and bodies written other ways.
+# An interval and a negation alone.
 S1_OFFSET_CASES.update(
     {
-        "offset_interval_pos_per": _offset_case(1, "1", [(">=", 4), ("<=", 5)], "per"),
-        "offset_interval_pos_local_per": _offset_case(1, "0.5", [(">=", 2.5), ("<=", 4)], "local_per"),
-        "offset_interval_neg_per": _offset_case(-1, "1", [(">=", 0), ("<=", 1)], "per"),
-        "offset_interval_neg_global": _offset_case(-1, "0", [(">=", -6), ("<=", -2)], "global"),
-        "offset_interval_mixed_bodies": {
-            "count_body": "x + 1",
-            "body_a": 1,
-            "body_c": "1",
-            "bounds": [(">=", 4), ("<=", 5)],
-            "per": True,
-        },
-        "offset_negation_only_global_upper": _offset_case(-1, "0", [("<=", -3)], "global", sense="MINIMIZE"),
-        "offset_negation_only_per_lower": _offset_case(-1, "0", [(">=", -1)], "per"),
-        "offset_negation_only_strict_per": _offset_case(-1, "0", [(">", -2)], "per"),
-        "offset_two_terms_one_x": _offset_case(1, "2", [("<=", 8)], "per", count_body="x + 3 - 1"),
-        "offset_unit_weights": _offset_case(1, "1", [("<=", 4)], "per", count_body="2*x - x + 1"),
-        "offset_negative_weight_sum": _offset_case(-1, "1", [("<=", 1)], "per", count_body="1 - 2*x + x"),
-        "offset_zero_constant": _offset_case(1, "0", [("<=", 1)], "per", count_body="x + 0"),
-        "offset_constant_cancels": _offset_case(1, "0", [("<=", 1)], "per", count_body="x + 0.1 + 0.2 - 0.3"),
-        # A constant that makes the limit unreachable: every path says infeasible.
-        "offset_infeasible_upper": _offset_case(1, "100", [("<=", 5)], "per"),
-        "offset_infeasible_negated_upper": _offset_case(-1, "100", [("<=", 5)], "per", sense="MINIMIZE"),
-        "offset_infeasible_lower": _offset_case(1, "100", [(">=", 2000)], "global", sense="MINIMIZE"),
-        "offset_infeasible_negated_lower": _offset_case(-1, "100", [(">=", 2000)], "global"),
-        "offset_infeasible_fractional": _offset_case(1, "0.5", [("<", 1.5)], "per"),
-        "offset_infeasible_local_when": _offset_case(1, "100", [("<=", 5)], "local_per"),
-        "offset_infeasible_equality": _offset_case(1, "0.5", [("=", 3.25)], "per"),
-        # Group c has rows, but the aggregate-local WHEN covers none of them, so n = 0 there and the group states no
-        # bound. Read as a bound on an empty sum, `0 >= 2` and `0 >= 1` would fail it.
-        "offset_empty_group_local_when_interval": _offset_case(1, "1", [(">=", 3), ("<=", 5)], "local_per"),
-        "offset_empty_group_local_when_negated_interval": _offset_case(-1, "1", [(">=", 1), ("<=", 3)], "local_per"),
-        "offset_empty_group_local_when_fractional_interval": _offset_case(
-            1, "0.5", [(">=", 1.5), ("<=", 2.5)], "local_per"
-        ),
-        "offset_empty_group_local_when_source_bounds": _offset_case(
-            1, "1", [(">=", "cap2"), ("<=", "cap")], "local_per"
-        ),
-        # The right side is a source column, an expression over columns, COUNT(*) or an expression of it.
-        "offset_source_bound_per": _offset_case(1, "1", [("<=", "cap")], "per"),
-        "offset_source_bound_negated_per": _offset_case(-1, "1", [("<=", "cap")], "per", sense="MINIMIZE"),
-        "offset_source_bound_fractional_per": _offset_case(1, "0.5", [("<=", "cap2")], "per"),
-        "offset_source_bound_strict_per": _offset_case(1, "1", [("<", "cap")], "per"),
-        "offset_source_bound_global": _offset_case(1, "-1", [("<=", "cap")], "global"),
-        "offset_source_bound_lower_per": _offset_case(1, "1", [(">=", "cap")], "per", sense="MINIMIZE"),
-        "offset_source_bound_local_when_per": _offset_case(1, "1", [("<=", "cap")], "local_per"),
-        "offset_source_bound_local_when_negated": _offset_case(-1, "0.5", [(">=", "cap2")], "local_per"),
-        "offset_source_bound_top_when_per": _offset_case(1, "1", [("<=", "cap")], "top_per"),
-        "offset_source_equality_per": _offset_case(1, "0.5", [("=", "geq")], "per"),
-        "offset_source_equality_local_when_per": _offset_case(-1, "1", [("=", "geq")], "local_per"),
-        "offset_coalesce_bound_per": _offset_case(1, "1", [("<=", "COALESCE(ncap, fb)")], "per"),
-        "offset_coalesce_interval_local_when": _offset_case(
-            1, "1", [(">=", "COALESCE(nlo, 1.0)"), ("<=", "COALESCE(nhi, 2.0)")], "local_per"
-        ),
-        "offset_source_bounds_two_sides": _offset_case(1, "0.5", [(">=", "cap2"), ("<=", "cap")], "per"),
-        "offset_count_star_per": _offset_case(1, "1", [("<=", "COUNT(*)")], "per"),
-        "offset_count_star_half_per": _offset_case(1, "0.5", [("<=", "COUNT(*) / 2")], "per"),
-        "offset_count_star_negated_per": _offset_case(-1, "1", [("<=", "COUNT(*) - 1")], "per", sense="MINIMIZE"),
-        # A bare `COUNT(*) WHEN flag` would give the WHEN to the COUNT alone, so the bound is a product.
-        "offset_count_star_top_when_per": _offset_case(1, "1", [("<=", "COUNT(*) * 1")], "top_per"),
-        # An aggregate-local WHEN narrows the SUM but not the COUNT(*) on the right: three rows against two.
-        "offset_count_star_local_when_per": _offset_case(1, "1", [("<=", "COUNT(*)")], "local_per"),
-        "offset_count_star_local_when_fraction": _offset_case(1, "0.5", [("<=", "COUNT(*) * 0.4")], "local_per"),
-        "offset_count_star_local_when_negated": _offset_case(-1, "1", [("<=", "COUNT(*) / 2")], "local_per"),
-        "offset_count_star_interval_local_when": _offset_case(
-            1, "0.5", [(">=", "COUNT(*) / 3"), ("<=", "COUNT(*) - 1")], "local_per"
-        ),
-        "offset_count_star_global_local_when": _offset_case(1, "1", [("<=", "COUNT(*)")], "local"),
-        "offset_count_star_with_source_bound": _offset_case(1, "1", [("<=", "COUNT(*)"), ("<=", "cap")], "per"),
-        # Fixed values and per-row bounds beside the offset bound.
-        "offset_with_fixed": _offset_case(1, "1", [("<=", 4)], "per", fixed=[(1, [4]), (0, [0, 8])]),
-        "offset_no_objective": _offset_case(1, "1", [(">=", 4)], "per", objective="none"),
-        "offset_no_objective_negated_local": _offset_case(-1, "1", [("<=", 1)], "local_per", objective="none"),
-        "offset_ties": _offset_case(1, "1", [("<=", 4)], "per", data="ties"),
+        "offset_interval_neg_global": _offset_case([(">=", -6), ("<=", -2)], "global"),
+        "offset_negation_only_global_upper": _offset_case([("<=", -3)], "global", sense="MINIMIZE"),
+        "offset_negation_only_per_lower": _offset_case([(">=", -1)], "per"),
+        "offset_negation_only_strict_per": _offset_case([(">", -2)], "per"),
     }
 )
 
@@ -1345,13 +1244,7 @@ def test_s1_offset_count_body_oracle_solver_and_direct_agree(decidb_cli, oracle_
     _agree(decidb_cli, oracle_solver, S1_OFFSET_CASES[name])
 
 
-OFFSET_CONTEXT_CASES = [
-    ("offset_+1_1_le_per_0", "wide_source"),
-    ("offset_-1_0p5_ge_local_per_0p5", "recombined_filters"),
-    ("offset_source_bound_local_when_per", "joined_source"),
-    ("offset_count_star_local_when_per", "cte_materialized"),
-    ("offset_negation_only_per_lower", "parent_join"),
-]
+OFFSET_CONTEXT_CASES = [("offset_negation_only_per_lower", "parent_join")]
 
 
 @pytest.mark.var_boolean
@@ -1365,42 +1258,7 @@ def test_s1_offset_count_body_agrees_inside_a_parent_context(decidb_cli, oracle_
     _agree(decidb_cli, oracle_solver, S1_OFFSET_CASES[base], wrap)
 
 
-# The offset is read exactly. 100 rows of 0.57 add up to exactly 57 in DuckDB's decimal arithmetic, where a double sum
-# of 0.57 is 56.99999999999999: `SUM(x + 0.57) <= 57 + k` must leave room for exactly k rows.
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize("op", ["<=", ">=", "<", ">"])
-@pytest.mark.parametrize("body", ["x + 0.57", "0.57 - x"])
-def test_s1_offset_is_read_exactly_in_decimal_arithmetic(decidb_cli, op, body):
-    score = "1.0 + i" if op in ("<=", "<") else "-1.0 - i"
-    for limit in ("57", "58", "56", "57.5"):
-        sql = (
-            f"SELECT SUM(x) FROM (SELECT * FROM (SELECT i AS id, {score} AS score FROM range(100) r(i)) t "
-            f"DECIDE x(BOOL) SUCH THAT SUM({body}) {op} {limit} MAXIMIZE SUM(score * x)) q"
-        )
-        direct = _outcome(decidb_cli, sql, "require")
-        assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
-        # Exact arithmetic over 100 rows: a*count + 57 <op> limit.
-        a = 1 if body.startswith("x") else -1
-        wanted = [
-            k
-            for k in range(101)
-            if {
-                "<=": a * k + 57 <= Fraction(limit),
-                "<": a * k + 57 < Fraction(limit),
-                ">=": a * k + 57 >= Fraction(limit),
-                ">": a * k + 57 > Fraction(limit),
-            }[op]
-        ]
-        if not wanted:
-            assert direct[0] == "error", (sql, direct)
-        else:
-            expected = max(wanted) if score.startswith("1.0") else min(wanted)
-            assert direct == ("ok", [(expected,)]), (sql, direct, expected)
-
-
-# Constant terms the plan cannot read exactly, and bodies that are not one `x`, stay on the solver. Each must decline
+# A constant term in the count body, and bodies that are not one `x`, stay on the solver. Each must decline
 # under `require` and give under `auto` the answer `off` gives.
 S1_OFFSET_DECLINED = {
     "offset_is_a_column": "SUM(x + cap) <= 20",
@@ -1416,6 +1274,15 @@ S1_OFFSET_DECLINED = {
     "weight_is_a_column": "SUM(cap*x + 1) <= 20",
     "constant_bound_beyond_2_pow_53": "SUM(x + 1) <= 9007199254740993",
     "infinite_constant_bound": "SUM(x + 1) <= 'Infinity'::DOUBLE",
+    # A constant term in the body is the solver's: the shift depends on the rows the SUM covers in each group.
+    "constant_added": "SUM(x + 1) <= 20",
+    "constant_subtracted": "SUM(x - 1) <= 20",
+    "constant_minus_x": "SUM(1 - x) <= 20",
+    "constant_fractional": "SUM(x + 0.5) <= 20",
+    "constant_zero": "SUM(x + 0) <= 20",
+    "constant_with_negative_weights": "SUM(1 - 2*x + x) <= 20",
+    "constant_per_group": "SUM(x + 1) <= 20 PER g",
+    "constant_with_own_when": "SUM(x + 1) WHEN flag <= 20",
 }
 
 
@@ -1436,34 +1303,6 @@ def test_s1_offset_count_body_declines_what_it_cannot_read_exactly(decidb_cli, n
     assert _outcome(decidb_cli, sql, "auto") == _outcome(decidb_cli, sql, "off")
 
 
-# A bound column near the BIGINT limit with a nonzero offset: the solver subtracts in DOUBLE and cannot overflow, so
-# the shifted bound must not raise a subtraction overflow on the direct path either. Whatever the solver does (an
-# answer, or an error), direct solve does the same.
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize(
-    "column_type,cap",
-    [
-        ("BIGINT", "9223372036854775807"),
-        ("BIGINT", "-9223372036854775808"),
-        ("BIGINT", "9223372036854775800"),
-        ("UBIGINT", "18446744073709551615"),
-    ],
-)
-@pytest.mark.parametrize("body", ["x + 1", "x - 1", "1 - x", "-1 - x", "x + 0.5", "0.5 - x"])
-@pytest.mark.parametrize("op", ["<=", ">="])
-def test_s1_offset_bound_near_the_bigint_limit_matches_the_solver(decidb_cli, column_type, cap, body, op):
-    sql = (
-        f"SELECT id, x FROM (FROM (VALUES (1, 9.0, CAST({cap} AS {column_type})), "
-        f"(2, 8.0, CAST({cap} AS {column_type})), (3, 7.0, CAST({cap} AS {column_type}))) t(id, score, cap) "
-        f"DECIDE x(BOOL) SUCH THAT SUM({body}) {op} cap MAXIMIZE SUM(score*x)) q ORDER BY id"
-    )
-    direct = _outcome(decidb_cli, sql, "require")
-    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
-    assert direct == _outcome(decidb_cli, sql, "off")
-
-
 # ---------------------------------------------------------------------------
 # S1: a count bound read through an aggregate of a data column, `SUM(x) <= MIN(cap) PER g`
 # ---------------------------------------------------------------------------
@@ -1479,7 +1318,7 @@ for _base, _op, _scope in itertools.product(_REDUCER_BASES, _REDUCER_OPS, _CORE_
     # A bare aggregate before a top WHEN would take the WHEN for its own.
     _bound = f"{_base} + 0" if _scope == "top_per" else _base
     S1_REDUCER_CASES[f"reducer_{_tag(_base.replace(' ', ''))}_{_OPNAMES[_op]}_{_scope}"] = {
-        **_OFFSET_SCOPES[_scope][0],
+        **_OFFSET_SCOPES[_scope],
         "bounds": [(_op, _bound)],
         "sense": "MINIMIZE" if _op in (">", ">=") else "MAXIMIZE",
     }
@@ -1561,19 +1400,9 @@ S1_REDUCER_CASES.update(
             "bounds": [("<=", "MAX(cap) WHEN (flag)")],
             "when": "local",
         },
-        # A count body with an offset or a negation against an aggregate bound.
-        "reducer_offset_min_per": _offset_case(1, "1", [("<=", "MIN(cap)")], "per"),
-        "reducer_offset_max_negated_per": _offset_case(-1, "1", [("<=", "MAX(cap)")], "per", sense="MINIMIZE"),
-        "reducer_offset_fractional_avg_local_when": _offset_case(1, "0.5", [("<=", "AVG(sm) + 2")], "local_per"),
-        "reducer_offset_count_col_local_when": _offset_case(1, "1", [("<=", "COUNT(cap)")], "local_per"),
+        # A negated count body against an aggregate bound.
         "reducer_offset_negation_sum_local_when": _offset_case(
-            -1, "0", [(">=", "SUM(sm) / 2 + 1")], "local_per", sense="MINIMIZE"
-        ),
-        "reducer_offset_top_when": _offset_case(1, "-1", [("<=", "MAX(cap) + 0")], "top_per"),
-        "reducer_offset_global": _offset_case(1, "1", [("<=", "MAX(cap)")], "global"),
-        "reducer_offset_interval_per": _offset_case(1, "0.5", [(">=", "MIN(cap2)"), ("<=", "MAX(cap)")], "per"),
-        "reducer_offset_negated_interval_local_when": _offset_case(
-            -1, "1", [(">=", "MIN(cap)"), ("<=", "MAX(cap)")], "local_per"
+            [(">=", "SUM(sm) / 2 + 1")], "local_per", sense="MINIMIZE"
         ),
     }
 )
@@ -1590,7 +1419,6 @@ def test_s1_reducer_bound_oracle_solver_and_direct_agree(decidb_cli, oracle_solv
 REDUCER_CONTEXT_CASES = [
     ("reducer_MIN(cap)_le_per", "wide_source"),
     ("reducer_local_when_reads_unflagged_rows", "recombined_filters"),
-    ("reducer_offset_count_col_local_when", "joined_source"),
     ("reducer_AVG(sm)_ge_top_per", "parent_join"),
 ]
 

@@ -46,12 +46,8 @@ struct Condition final : DirectApplicabilityCondition {
 		bool rhs_all_group_rows;
 		//! Name of the source column when the bound is exactly one; empty for a computed bound.
 		string column_name;
-		//! The count body is `c - x`, so `comparison` is already flipped and the value to compare against is `n*c - B`
-		//! (or `-B` without a constant).
+		//! The count body is `-x`, so `comparison` is already flipped and the value to compare against is `-B`.
 		bool negated = false;
-		//! The constant `c` of a count body `x + c` or `c - x`, in its own SQL type; null for a body with no constant
-		//! term. The plan shifts the bound by `n*c`, where `n` is the number of rows the SUM covers in the group.
-		unique_ptr<Expression> offset;
 	};
 	//! A fixed value that comes from the row: it must be neither NULL nor, for a floating point value, NaN.
 	struct SourceFixedValue {
@@ -119,69 +115,29 @@ bool IsUnitContribution(ClientContext &context, const vector<DecideSplitTerm> &t
 	return total == 1.0;
 }
 
-//! The largest magnitude of a constant term in a count body (`SUM(x + c)`). The plan shifts the bound by `n*c`, where
-//! `n` is the number of rows the SUM covers, known only at run time. A constant this small keeps `|n*c|` within 2^53
-//! (exact in a DOUBLE and in BIGINT) for any `n` up to 2^32 rows, so DuckDB's own arithmetic and the solver's DOUBLE
-//! arithmetic read the same shifted bound. A larger constant stays on the solver.
-constexpr double MAX_OFFSET = 2097152.0;
-
-//! What the sum counts: `direction * (number of selected rows) + n * offset`, where n is the number of rows the sum
-//! covers in the group.
+//! What the sum counts: `direction * (number of selected rows)`.
 struct CountBody {
-	//! +1 for `x`, `x + c`; -1 for `-x`, `c - x`.
+	//! +1 for `x`; -1 for `-x`.
 	int direction = 1;
-	//! The constant terms added up, in their own types; null when the body has none.
-	unique_ptr<Expression> offset;
 };
 
-//! Reads a reducer body as `a*x + c`. The signed constant coefficients of `x` must add up to exactly +1 or -1, as the
-//! solver's like-term collection sums them, and every other term must be a finite foldable constant of at most
-//! MAX_OFFSET in magnitude.
+//! Reads a reducer body as `a*x`. The signed constant coefficients of `x` must add up to exactly +1 or -1, as the
+//! solver's like-term collection sums them. Any other term, a constant included, is a decline: a constant term in the
+//! body shifts the limit by an amount that depends on the group's row count, and the solver answers that.
 bool ReadCountBody(ClientContext &context, const vector<DecideSplitTerm> &terms, CountBody &body) {
 	double slope = 0;
-	bool has_decision = false;
-	vector<const DecideSplitTerm *> constants;
 	for (auto &term : terms) {
-		if (term.kind == DecideTermKind::CONSTANT) {
-			constants.push_back(&term);
-			continue;
-		}
 		double value;
 		if (term.kind != DecideTermKind::LINEAR || term.var_a != 0 || !term.coefficient ||
 		    !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
 			return false;
 		}
 		slope += term.sign * value;
-		has_decision = true;
 	}
-	if (!has_decision || (slope != 1.0 && slope != -1.0)) {
+	if (slope != 1.0 && slope != -1.0) {
 		return false;
 	}
 	body.direction = slope > 0 ? 1 : -1;
-	for (auto term : constants) {
-		double value;
-		if (!term->coefficient || !term->coefficient->return_type.IsNumeric() ||
-		    !TryEvaluateFoldableDouble(context, *term->coefficient, value, DIRECT_FINITE_CONSTANT)) {
-			return false;
-		}
-		if (std::fabs(value) > MAX_OFFSET) {
-			return false;
-		}
-		auto copy = term->coefficient->Copy();
-		if (!body.offset) {
-			if (term->sign < 0) {
-				vector<unique_ptr<Expression>> negate;
-				negate.push_back(std::move(copy));
-				copy = DecideRebindOperator(context, "-", std::move(negate));
-			}
-			body.offset = std::move(copy);
-		} else {
-			vector<unique_ptr<Expression>> operands;
-			operands.push_back(std::move(body.offset));
-			operands.push_back(std::move(copy));
-			body.offset = DecideRebindOperator(context, term->sign < 0 ? "-" : "+", std::move(operands));
-		}
-	}
 	return true;
 }
 
@@ -537,10 +493,8 @@ bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condi
 }
 
 //! The count bounds: constant ones fold into one inclusive interval, source-valued ones are kept for the plan to
-//! reduce per group. Every bound counts `x` once, as `x`, `x + c`, `-x` or `c - x`: `SUM(x + c) <op> B` is
-//! `SUM(x) <op> B - n*c` and `SUM(c - x) <op> B` is `SUM(x) <flipped op> n*c - B`, where n is the number of rows the
-//! SUM covers in the group. A constant bound without a constant term in the body folds here; every other bound is
-//! shifted per group by the plan.
+//! reduce per group. Every bound counts `x` once, as `x` or `-x`; `SUM(-x) <op> B` is `SUM(x) <flipped op> -B`. A
+//! constant term in the body (`SUM(x + c)`) is a decline.
 bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	auto fold_bound = [&](const Expression &bound, ExpressionType side, idx_t &target, bool negate) {
 		bool impossible = false;
@@ -568,7 +522,6 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 			Condition::SourceBound source_bound {
 			    slot, bound_type, type, bound.Copy(), sum->filter != nullptr, std::move(column_name)};
 			source_bound.negated = negated;
-			source_bound.offset = std::move(body.offset);
 			condition.source_bounds.push_back(std::move(source_bound));
 		};
 		// The right-hand-side rewrite turns an aggregate on the right into a source column. One it leaves (a WHEN of
@@ -582,16 +535,6 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 		    (source_column || DirectIsSourceOnlyNumericMayRaise(bound, ir.decide_index, ir.source_bindings))) {
 			add_source_bound(source_slot, source_column ? source_type : bound.return_type,
 			                 source_column ? source_name : string());
-			continue;
-		}
-		if (body.offset) {
-			// The shift depends on the group's row count, so the constant bound is reduced per group like any other.
-			double constant;
-			if (!TryEvaluateFoldableDouble(context, bound, constant, DIRECT_FINITE_CONSTANT) ||
-			    !DecideIsWithinExactRange(constant)) {
-				return false;
-			}
-			add_source_bound(DConstants::INVALID_INDEX, bound.return_type, string());
 			continue;
 		}
 		if (DirectIsLowerBound(type)) {
@@ -703,10 +646,8 @@ public:
 		ScopeBindings scope;
 		source = ProjectScopeState(std::move(source), scope);
 		source = GuardEmptyAggregate(std::move(source), scope);
-		RowCounts counts;
-		source = CountRows(std::move(source), scope, counts);
 		BoundChecks bounds(condition.source_bounds.size());
-		source = AddBoundValidation(std::move(source), scope, counts, bounds);
+		source = AddBoundValidation(std::move(source), scope, bounds);
 		source = ProjectScore(std::move(source), scope, bounds);
 		auto ranked = RankAndFilterFeasibility(std::move(source), bounds);
 		auto result = ProjectAssignment(std::move(ranked), bounds);
@@ -739,14 +680,6 @@ private:
 		//! Slots of the same extrema once the score projection forwards them.
 		idx_t min_score = DConstants::INVALID_INDEX;
 		idx_t max_score = DConstants::INVALID_INDEX;
-	};
-
-	//! Where the per-group row count a shifted bound reads lives.
-	struct RowCounts {
-		idx_t window_index = DConstants::INVALID_INDEX;
-		//! The rows the SUM itself covers in each group, whatever row reads it: the rows whose WHEN holds (the clause's
-		//! or the aggregate-local one) and whose PER keys are not NULL. A bound shifted by a constant term reads it.
-		idx_t covered_slot = DConstants::INVALID_INDEX;
 	};
 
 	//! The window the source-valued bounds were validated in, and the slots later stages read from it.
@@ -820,48 +753,10 @@ private:
 		return DirectGuardEmptyAggregate(optimizer, std::move(source), scope.eligible_binding);
 	}
 
-	//! Stage 2b: the row count a bound shifted by a constant term in the count body (`SUM(x + c)`) reads: the number of
-	//! rows the SUM itself covers, which an aggregate-local WHEN does narrow. Nothing is added when no bound reads it.
-	unique_ptr<LogicalOperator> CountRows(unique_ptr<LogicalOperator> source, const ScopeBindings &scope,
-	                                      RowCounts &counts) const {
-		bool covered_needed = false;
-		for (auto &bound : condition.source_bounds) {
-			covered_needed |= bound.offset != nullptr;
-		}
-		if (!covered_needed) {
-			return source;
-		}
-		counts.window_index = binder.GenerateTableIndex();
-		auto window = make_uniq<LogicalWindow>(counts.window_index);
-		// Counted over the whole group, so a row the SUM does not cover (and a bound reduced over every group row)
-		// reads the same n as the rows it does cover.
-		if (!condition.scoped) {
-			auto count =
-			    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, LogicalType::BIGINT,
-			                                     make_uniq<AggregateFunction>(CountStarFun::GetFunction()), nullptr);
-			count->start = WindowBoundary::UNBOUNDED_PRECEDING;
-			count->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-			for (auto slot : condition.group_key_slots) {
-				count->partitions.push_back(DirectColumn(source_types[slot], scope.input_bindings[slot]));
-			}
-			counts.covered_slot = window->expressions.size();
-			window->expressions.push_back(std::move(count));
-		} else {
-			auto covered = DirectWindowMatchingCount(DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
-			for (auto slot : condition.group_key_slots) {
-				covered->partitions.push_back(DirectColumn(source_types[slot], scope.input_bindings[slot]));
-			}
-			counts.covered_slot = window->expressions.size();
-			window->expressions.push_back(std::move(covered));
-		}
-		window->children.push_back(std::move(source));
-		return std::move(window);
-	}
-
 	//! Stage 3: validate source-valued bounds and fixed values on every row, and reduce each bound to its group
 	//! extremum.
 	unique_ptr<LogicalOperator> AddBoundValidation(unique_ptr<LogicalOperator> source, const ScopeBindings &scope,
-	                                               const RowCounts &counts, BoundChecks &bounds) const {
+	                                               BoundChecks &bounds) const {
 		vector<BoundSpec> specs;
 		for (auto &bound : condition.source_bounds) {
 			if (!bound.value ||
@@ -872,25 +767,7 @@ private:
 			BoundSpec spec;
 			spec.comparison = bound.comparison;
 			spec.value = CopyIntoState(*bound.value, scope, "bound");
-			if (bound.offset) {
-				// `SUM(x + c) <op> B` is `SUM(x) <op> B - n*c`; `SUM(c - x) <op> B` is `SUM(x) <flipped op> n*c - B`.
-				// Evaluated in DuckDB's own types so that a decimal offset keeps its exact value.
-				auto covered =
-				    DirectColumn(LogicalType::BIGINT, ColumnBinding(counts.window_index, counts.covered_slot));
-				auto shift = optimizer.BindScalarFunction("*", std::move(covered), bound.offset->Copy());
-				// An integer bound next to an integer shift is subtracted in HUGEINT, so a bound near the BIGINT limit
-				// cannot overflow where the solver (which subtracts in DOUBLE) does not.
-				auto widen = [&](unique_ptr<Expression> value) {
-					return value->return_type.IsIntegral() && value->return_type.id() != LogicalTypeId::UHUGEINT
-					           ? BoundCastExpression::AddCastToType(optimizer.context, std::move(value),
-					                                                LogicalType::HUGEINT)
-					           : std::move(value);
-				};
-				shift = widen(std::move(shift));
-				spec.value = widen(std::move(spec.value));
-				spec.value = bound.negated ? optimizer.BindScalarFunction("-", std::move(shift), std::move(spec.value))
-				                           : optimizer.BindScalarFunction("-", std::move(spec.value), std::move(shift));
-			} else if (bound.negated) {
+			if (bound.negated) {
 				spec.value = DirectScaledTerm(optimizer, std::move(spec.value), -1, false, 1.0, false);
 			}
 			if (bound.source_slot != DConstants::INVALID_INDEX) {
