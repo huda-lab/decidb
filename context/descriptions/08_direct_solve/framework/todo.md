@@ -1,6 +1,7 @@
 # Shared engine — open work
 
-The engine is everything that is not one problem class: IR, rule driver, plan factory functions, result adapter, policy.
+The engine is everything that is not one problem class: IR, rule driver, plan fragments, runtime checks, bound reader,
+result adapter, policy.
 What exists today is in `done.md`.
 
 ## How to work any task in these todo files
@@ -39,22 +40,8 @@ What exists today is in `done.md`.
   reducers. The two own-`WHEN` cases in `S1_REDUCER_DECLINED` (`test_direct_s1_uniform_matroid.py`) stop declining; they
   become applying cases, and the owner approves that test edit first.
 
-## H-21 — Split `direct_plan_factory` by job
-
-- **Problem.** `direct_plan_factory.{hpp,cpp}` holds four jobs: plan fragments (breaker, empty-aggregate guard, count
-  windows), runtime checks and their messages (`DirectValid*Predicate`, `DirectNullMessageOf`, the infeasible and
-  unbounded errors), the per-row bound reader (`DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`, which read the
-  IR and are not plan fragments), and source analysis that only the driver calls (`DirectCanSkipSourceOutput`).
-  `DirectProveValue` is an admission predicate living outside `direct_expression`. The two infinity constants are
-  defined three times. A third rule would add to the pile.
-- **Change.** Three files: plan fragments, runtime checks, bound reader. `DirectCanSkipSourceOutput` goes beside the
-  driver, `DirectProveValue` into `direct_expression`, and the infinity constants are defined once. No behavior change.
-  `architecture/rules.md` § Adding a rule step 4 and `framework/done.md` name the new homes.
-- **Done when.** The five checks pass with no edit to a test file.
-
 ## H-22 — The bound reader holds what R1 needs from A1
 
-- **Needs.** H-21.
 - **Problem.** R1 needs two pieces A1 keeps to itself: the shape check that a per-row bound reads one decision
   (`ReadsOneDecision`) and the empty-box test in A1's answer stage (`ComputeAnswers`).
 - **Change.** Both move into the bound reader; A1 calls them there.
@@ -62,7 +49,6 @@ What exists today is in `done.md`.
 
 ## H-23 — One reader for a linear objective
 
-- **Needs.** H-21.
 - **Problem.** S1 (`ProveObjective`) and A1 (the linear branch of its `ProveObjective`) each turn `SUM(c*x)` parts into
   sign, coefficient and scale, into two structs with the same fields (S1's `Condition::ObjectivePart`, A1's `Part`).
   R1 would write a third.
@@ -72,7 +58,6 @@ What exists today is in `done.md`.
 
 ## H-24 — Shared helpers for "true, or raise"
 
-- **Needs.** H-21.
 - **Problem.** Plan code raises errors through `CASE ok THEN true ELSE error(...)`, written by hand in six places (S1's
   `FeasiblePredicate`, A1's `ValidAnswers`, `ValidateBounds`, `DirectGuardEmptyAggregate`, `DirectValidNumberPredicate`,
   `DirectValidBoundPredicate`). A list of such checks is joined in five places, two ways: a `CASE` chain (A1's
@@ -86,10 +71,10 @@ What exists today is in `done.md`.
 
 - **Needs.** H-24.
 - **Problem.** Direct-solve code builds bound expressions three ways: by hand with `make_uniq<Bound...>` (S1 51 times,
-  its helpers 17, A1 16, the plan factory 27), through `DirectColumn` and `DirectConstantBool`, and through
+  its helpers 17, A1 16, the shared plan files 27), through `DirectColumn` and `DirectConstantBool`, and through
   `ExpressionBuilder` (A1 46 times, S1 never). S1's `AnyCondition` copies `ExpressionBuilder::Any`. A new rule copies
   whichever style it reads first.
-- **Change.** Give `ExpressionBuilder` the operations S1 and the plan factory need (`And`, `IsNull`, `Cast`, and any
+- **Change.** Give `ExpressionBuilder` the operations S1 and the shared plan files need (`And`, `IsNull`, `Cast`, and any
   other the conversion finds), and convert the shared files and A1. S1 is S1-18. `architecture/rules.md` names the
   builder as the way to build an expression.
 - **Done when.** The five checks pass with no edit to a test file. Outside S1, a hand-built expression remains only
@@ -129,8 +114,10 @@ What exists today is in `done.md`.
   `optimal_when_the_open_row_is_outside_the_objective` (A1 oracle grid), and every fuzz case (all 24 caught a change).
   Survivors that may be untested boundaries: a strict count bound at exactly 2^53 in S1, an A1 row with a zero
   coefficient and no lower bound, a Boolean lower bound below 0 in `DirectReadBounds`, and the rounding steps of the
-  integer search in `direct_plan_factory.cpp`. The per-change and per-test data, the change list and the runner are in
-  `framework/h35/`, which git ignores; S1-17 and H-26 shift line numbers, so re-check the change list before a re-run.
+  integer search in `direct_bound_reader.cpp`. The per-change and per-test data, the change list and the runner are in
+  `framework/h35/`, which git ignores; its change list names `direct_plan_factory.cpp`, whose code now lives in `direct_plan_fragments.cpp`,
+  `direct_runtime_checks.cpp` and `direct_bound_reader.cpp`, and S1-17 and H-26 shift line numbers, so re-map the change
+  list before a re-run.
 - **Change.** Rebuild a catalogue of the direct-solve tests by category: what each checks, against what, and which
   behavior it pins. With the coverage and H-35's table, list per category the tests that add no branch and catch no
   mutation. The owner picks what to cut; each cut is a task of its own, and the coverage run after it must show no
@@ -162,7 +149,7 @@ What exists today is in `done.md`.
 - **Needs.** S1-17 and H-26, which delete code first.
 - **Problem.** 364 of 2,008 branch arms in the direct-solve files are reached by no test (`s1_uniform_matroid_rule.cpp` 80,
   `direct_late_materialization.cpp` 53, `direct_ir.cpp` 50, `a1_separable_box_rule.cpp` 38, `direct_expression.cpp` 35,
-  `decide_rewrite_rhs_window.cpp` 32, `direct_result_adapter.cpp` 28, `direct_plan_factory.cpp` 23,
+  `decide_rewrite_rhs_window.cpp` 32, `direct_result_adapter.cpp` 28, the three files split from the plan factory 23,
   `direct_rule_driver.cpp` 17, `s1_uniform_matroid_helpers.cpp` 8). Each is an untested guard or dead code.
 - **Change.** Re-run the coverage and list the unreached arms with file and line. For each, name a query that reaches it
   and add that test, or delete the code when no query can.

@@ -101,6 +101,7 @@ so a bad last row under `LIMIT 1` still raises.
 A declared `BOOL` decision has a 0/1 domain but returns SQL `INTEGER`, as on the solver path.
 
 Details: `direct_result_adapter.cpp` (map checks, serialization, pruning hook), `direct_late_materialization.cpp` (late
-materialization) and `direct_plan_factory.cpp` (breaker and pruning proof). The optimizer passes that run after DECIDE
+materialization) and `direct_plan_fragments.cpp` (breaker) and `direct_rule_driver.cpp`
+(pruning proof). The optimizer passes that run after DECIDE
 are covered for parent filter, join, aggregate, nested, and serializer cases by the parent-context rows in
 `test_direct_s1_uniform_matroid.py` and the pruning tests in `test_direct_user_facing.py`.

@@ -48,13 +48,15 @@ pattern step and the condition step are one, because a DECIDE query has a single
 | test seam | A point where a test substitutes its own rules without editing the code under test | Feathers, *Working Effectively with Legacy Code* | `DirectRuleTestSeam`, `DIRECT_RULE_TEST_SEAM_KEY` |
 | plan builder | An object that assembles a rule's plan step by step | GoF Builder | `PlanBuilder` in each rule's namespace |
 | summary | The one line a rule contributes to the `EXPLAIN` annotation | none (plain word) | `Summary` |
-| rule-local helpers | Helpers only one rule uses; they move to the plan factory functions when a second rule needs them | none (plain word) | `s1_uniform_matroid_helpers.{hpp,cpp}`, `direct_s1_uniform_matroid::ProjectScope` |
+| rule-local helpers | Helpers only one rule uses; they move to the shared files when a second rule needs them | none (plain word) | `s1_uniform_matroid_helpers.{hpp,cpp}`, `direct_s1_uniform_matroid::ProjectScope` |
 
 ## Plan and output (back end)
 
 | Name | Standard idea | Source | Covers |
 |---|---|---|---|
-| plan factory functions | Free functions that each return one plan fragment | GoF Factory Method (function form) | `direct_plan_factory.{hpp,cpp}` |
+| plan fragments | Free functions that each return one plan fragment | GoF Factory Method (function form) | `direct_plan_fragments.{hpp,cpp}` |
+| runtime checks | Predicates that raise an error while the plan runs, and their messages | none (plain word) | `direct_runtime_checks.{hpp,cpp}` |
+| bound reader | Reads each decision's static box and per-row bound clauses from the IR | none (plain word) | `direct_bound_reader.{hpp,cpp}` |
 | expression builder | A small fluent helper that builds bound expressions | Fowler (Expression Builder) | `ExpressionBuilder`, `ExprPtr` |
 | pipeline breaker | A blocking operator that reads every input row before it emits one; here it validates the inputs the solver path would reject | DuckDB, HyPer (pipeline breakers) | `DirectValidationBreaker`, `DirectPipelineBreaker`, field `breaker`, `validated_columns`, `pipelined` |
 | late materialization | Read the narrow columns first and fetch the wide ones by row id after the plan has chosen its rows. Distinct from DuckDB's `LATE_MATERIALIZATION` pass, and it runs inside `UNUSED_COLUMNS` | Column-store texts; DuckDB | `DirectLateMaterialization`, `late_materialization`, `direct_late_materialization.{hpp,cpp}`, `ApplyDirectLateMaterialization`, `LateMaterializeOneAdapter`, `DirectExposeStoredRowId` |

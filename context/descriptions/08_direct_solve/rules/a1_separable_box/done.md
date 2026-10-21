@@ -6,7 +6,7 @@ and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,445 passed (no failures
 (`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 1,298 assertions in 46 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_separable_box_rule.cpp`; its per-row bounds come from the shared reader in
-`direct_plan_factory.cpp`. Class definition: [definition.md](definition.md).
+`direct_bound_reader.cpp`. Class definition: [definition.md](definition.md).
 
 ## What it admits
 

@@ -50,7 +50,7 @@ with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 
 | [O2](rules/o2_monge_transportation/) | Monge transportation problem | Prototype | Not started |
 | [D1](rules/d1_block_decomposition/) | Block-diagonal decomposition | Exact | Not started |
 
-The shared engine (IR, rule driver, plan factory functions, result adapter) is in [framework/](framework/).
+The shared engine (IR, rule driver, plan fragments, runtime checks, bound reader, result adapter) is in [framework/](framework/).
 
 ## How these docs are kept
 

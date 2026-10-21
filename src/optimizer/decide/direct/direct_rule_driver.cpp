@@ -1,18 +1,24 @@
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 
 #include "duckdb/common/decide_profile.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
-#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/planner/operator/logical_comparison_join.hpp"
+#include "duckdb/planner/operator/logical_filter.hpp"
+#include "duckdb/planner/operator/logical_get.hpp"
+#include "duckdb/planner/operator/logical_projection.hpp"
 
 namespace duckdb {
 
@@ -57,6 +63,59 @@ void DirectSolveModeSetCallback(ClientContext &, SetScope, Value &parameter) {
 vector<unique_ptr<DirectSolveRule>> RulesFor(ClientContext &context) {
 	auto seam_rules = context.registered_state->Get<DirectRuleTestSeam>(DIRECT_RULE_TEST_SEAM_KEY);
 	return seam_rules ? seam_rules->make_rules() : RegisteredDirectRules();
+}
+
+//! The solver consumes every source output. Skipping an unreferenced output must not suppress a computed error
+//! or volatile expression. This proves only stored columns, constants, and their passthrough aliases safe,
+//! including passthrough bindings from one child of an inner comparison join.
+bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
+	switch (source.type) {
+	case LogicalOperatorType::LOGICAL_GET: {
+		auto &get = source.Cast<LogicalGet>();
+		if (get.function.function != TableScanFunction::GetFunction().function || !get.GetTable()) {
+			return false;
+		}
+		auto bindings = get.GetColumnBindings();
+		return std::find(bindings.begin(), bindings.end(), binding) != bindings.end();
+	}
+	case LogicalOperatorType::LOGICAL_PROJECTION: {
+		auto &projection = source.Cast<LogicalProjection>();
+		if (binding.table_index != projection.table_index || binding.column_index >= projection.expressions.size()) {
+			return false;
+		}
+		auto &expression = *projection.expressions[binding.column_index];
+		if (expression.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
+			return true;
+		}
+		if (expression.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF || source.children.size() != 1) {
+			return false;
+		}
+		auto &child_ref = expression.Cast<BoundColumnRefExpression>();
+		return child_ref.depth == 0 && DirectCanSkipSourceOutput(*source.children[0], child_ref.binding);
+	}
+	case LogicalOperatorType::LOGICAL_FILTER:
+		return source.children.size() == 1 && DirectCanSkipSourceOutput(*source.children[0], binding);
+	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN: {
+		auto &join = source.Cast<LogicalComparisonJoin>();
+		if (join.join_type != JoinType::INNER || source.children.size() != 2) {
+			return false;
+		}
+		auto output_bindings = source.GetColumnBindings();
+		if (std::find(output_bindings.begin(), output_bindings.end(), binding) == output_bindings.end()) {
+			return false;
+		}
+		auto left_bindings = source.children[0]->GetColumnBindings();
+		auto right_bindings = source.children[1]->GetColumnBindings();
+		bool on_left = std::find(left_bindings.begin(), left_bindings.end(), binding) != left_bindings.end();
+		bool on_right = std::find(right_bindings.begin(), right_bindings.end(), binding) != right_bindings.end();
+		if (on_left == on_right) {
+			return false;
+		}
+		return DirectCanSkipSourceOutput(*source.children[on_right ? 1 : 0], binding);
+	}
+	default:
+		return false;
+	}
 }
 
 } // namespace

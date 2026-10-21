@@ -1,5 +1,4 @@
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
-#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 
 #include <algorithm>
@@ -239,6 +238,20 @@ ExprPtr ExpressionBuilder::Extremum(const char *name, const vector<ExprPtr> &val
 		children.push_back(value->Copy());
 	}
 	return Wrap(optimizer.BindScalarFunction(name, std::move(children)));
+}
+
+string DirectTextOf(const Expression &expr) {
+	auto column = DirectBareNumericColumn(expr);
+	return column ? column->GetAlias() : expr.ToString();
+}
+
+bool DirectIsWholeNumbered(DirectDomain domain) {
+	return domain != DirectDomain::REAL;
+}
+
+bool DirectProveValue(const DirectIR &ir, const Expression &expr) {
+	return expr.return_type.IsNumeric() && DirectIsNumericDecisionFree(expr, ir.decide_index) &&
+	       DirectReferencesOnlySource(expr, ir.source_bindings);
 }
 
 } // namespace duckdb

@@ -1,7 +1,8 @@
 #include "s1_uniform_matroid_helpers.hpp"
 
 #include "duckdb/function/aggregate/distributive_functions.hpp"
-#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
+#include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"

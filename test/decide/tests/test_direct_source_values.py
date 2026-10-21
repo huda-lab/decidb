@@ -1,7 +1,7 @@
 """Both paths read a bad source value the same way: NaN, +inf, -inf and NULL in every slot a rule reads.
 
 The direct path rejects bad values in SQL (`DirectValidNumberPredicate` for coefficients, `DirectValidBoundPredicate`
-for bounds, `direct_plan_factory.cpp`); the solver path rejects them in C++ (`ExtractDoubleColumn`,
+for bounds, `direct_runtime_checks.cpp`); the solver path rejects them in C++ (`ExtractDoubleColumn`,
 `physical_decide.cpp`). The two cannot share code, and they do not apply the same test: a coefficient must be finite,
 while a bound only has to be a number, because an infinite bound means "no bound" or "nothing satisfies it". This file
 puts one bad value on one row of a four-row source, in each place a rule reads a source value, and asserts that

@@ -4,7 +4,7 @@
 
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/function/table/table_scan.hpp"
-#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/optimizer/remove_unused_columns.hpp"
 #include "duckdb/planner/binder.hpp"

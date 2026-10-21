@@ -14,6 +14,8 @@ class BoundCastExpression;
 class BoundColumnRefExpression;
 class ClientContext;
 class Optimizer;
+enum class DirectDomain : uint8_t;
+struct DirectIR;
 struct DirectPart;
 
 //! Rule-independent questions about a bound expression. A rule asks them while proving that an expression may be
@@ -86,6 +88,17 @@ bool DirectIsSourceOnlyNumericMayRaise(const Expression &expr, idx_t decide_inde
 //! only, with or without a column. Unlike DirectIsSourceOnlyNumeric it may raise when evaluated, for a rule that
 //! evaluates it on every row (the solver raises on every row, including rows a WHEN excludes).
 bool DirectIsSourceOnlyValue(const Expression &expr, idx_t decide_index, const vector<ColumnBinding> &source_bindings);
+
+//! What a NULL value quotes when none of its columns is NULL: the source column when the value is exactly one,
+//! otherwise the expression.
+string DirectTextOf(const Expression &expr);
+
+//! True for an INT or BOOL decision, whose bounds round to whole numbers.
+bool DirectIsWholeNumbered(DirectDomain domain);
+
+//! A coefficient or value the plan evaluates per row: numeric, deterministic, independent of the decisions, over the
+//! source. It may raise when evaluated; the plan evaluates it on every row, as the solver does.
+bool DirectProveValue(const DirectIR &ir, const Expression &expr);
 
 //! `x >= v`, `x > v`, and `x = v` all bound a count from below; `x <= v`, `x < v`, and `x = v` from above.
 bool DirectIsLowerBound(ExpressionType comparison);

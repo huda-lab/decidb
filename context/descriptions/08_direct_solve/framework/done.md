@@ -32,22 +32,24 @@ check). Design: `../architecture/`.
   joins, aggregates, volatile or computed columns, a source that already reads `rowid`, and a pipelined plan
   (`DirectSubstitute::pipelined`, set by A1's constant problem) keep the single read. Rules and measurements:
   `../architecture/result_adapter.md`.
-- **Plan factory functions.** `direct_plan_factory.hpp` holds free functions that each return one plan fragment (the
-  function form of a factory method). It lists only helpers with two or more users: `DirectGuardEmptyAggregate`,
+- **Plan fragments.** `direct_plan_fragments.hpp` holds free functions that each return one plan fragment (the function
+  form of a factory method). It lists only helpers with two or more users: `DirectGuardEmptyAggregate`,
   `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBreaker`, `DirectScaledTerm` (sign and constant factor
-  of a coefficient), `DirectIsNull`, `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`,
-  `DirectValidBoundPredicate` and `DirectValidNumberPredicate`. Which of several errors a query reports is not
-  specified.
-- **Per-row bound reader** (in `direct_plan_factory.cpp`; A1 is its only user until R1 is built on it). It makes sure two
-  rules cannot read a bound differently. `DirectReadBounds` folds `variable_bound`s into each decision's static box
+  of a coefficient) and `DirectIsNull`.
+- **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
+  their messages: `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`, `DirectValidBoundPredicate`,
+  `DirectValidNumberPredicate` and `DirectNullMessageOf`. Which of several errors a query reports is not specified.
+- **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
+  two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
+  every direct-solve file. `DirectReadBounds` folds `variable_bound`s into each decision's static box
   (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude 1e20 or more infinite) and lists every other bound as a
   per-row clause, an equality split into its two halves. `DirectClauseBounds` turns one clause's row values into a lower
   and an upper bound as the solver reads them. `DirectRowBox` intersects them with the box.
 - **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
   expressions that passes them as `ExprPtr`. A1 uses it; S1 builds expressions by hand.
 - **Rule-local helpers.** The helpers only S1 uses (`ProjectScope`, `ValidateBounds`, `WindowExtremum`, `AnyCondition`)
-  live in `s1_uniform_matroid_helpers.{hpp,cpp}` in `namespace direct_s1_uniform_matroid`, and move to the plan factory
-  functions when a second rule needs them. Inside a rule's namespace, names drop the `Direct` and class prefixes.
+  live in `s1_uniform_matroid_helpers.{hpp,cpp}` in `namespace direct_s1_uniform_matroid`, and move to the shared
+  files when a second rule needs them. Inside a rule's namespace, names drop the `Direct` and class prefixes.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
   DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
   rules, the model builder and the solver backends all read it without including each other. It holds:

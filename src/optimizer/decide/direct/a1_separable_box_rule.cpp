@@ -8,7 +8,9 @@
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/string_util.hpp"
-#include "duckdb/optimizer/decide/direct/direct_plan_factory.hpp"
+#include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
+#include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -28,8 +30,6 @@ namespace duckdb {
 namespace direct_a1_separable_box {
 
 constexpr const char *RULE_NAME = "A1_SEPARABLE_BOX";
-constexpr double POSITIVE_INFINITY = std::numeric_limits<double>::infinity();
-constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 
 struct Term {
 	enum class Kind : uint8_t { LINEAR, CONSTANT, SQUARE };

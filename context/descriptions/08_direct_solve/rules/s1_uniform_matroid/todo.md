@@ -18,7 +18,6 @@ What S1 does today is in `done.md`; the class is in `definition.md`. How to work
 
 ## S1-12 — S1 reads a per-row bound on `x` in its own way, and so does A1
 
-- **Needs.** `../../framework/todo.md` § H-21.
 - **Problem.** S1 decides "which of {0, 1} may this row take" for a per-row bound on `x` with its own code
   (`FixedDomain`, `ConstantFixedDomain`, `SourceBooleanFixedValue`, and the numeric fixed-value code in
   `ProveFixedVariables`, about 140 lines). A1 decides "what interval may this row take" for the same kind of bound

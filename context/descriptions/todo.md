@@ -13,11 +13,10 @@ Read first: `08_direct_solve/architecture/overview.md`, `08_direct_solve/archite
 - [ ] S1-17 Constant terms in the count body — 08_direct_solve/rules/s1_uniform_matroid/todo.md § S1-17
 
 ## 4. Toolkit layout
-- [ ] H-21 Split `direct_plan_factory` by job — 08_direct_solve/framework/todo.md § H-21
-- [ ] H-22 Bound reader holds what R1 needs — 08_direct_solve/framework/todo.md § H-22 (needs: H-21)
-- [ ] H-23 One reader for a linear objective — 08_direct_solve/framework/todo.md § H-23 (needs: H-21)
-- [ ] H-24 Shared helpers for "true, or raise" — 08_direct_solve/framework/todo.md § H-24 (needs: H-21)
-- [ ] S1-12 S1 takes the shared bound reader — 08_direct_solve/rules/s1_uniform_matroid/todo.md § S1-12 (needs: H-21)
+- [ ] H-22 Bound reader holds what R1 needs — 08_direct_solve/framework/todo.md § H-22
+- [ ] H-23 One reader for a linear objective — 08_direct_solve/framework/todo.md § H-23
+- [ ] H-24 Shared helpers for "true, or raise" — 08_direct_solve/framework/todo.md § H-24
+- [ ] S1-12 S1 takes the shared bound reader — 08_direct_solve/rules/s1_uniform_matroid/todo.md § S1-12
 - [ ] H-26 Driver turns away an unreadable IR — 08_direct_solve/framework/todo.md § H-26
 
 ## 5. Prune the tests (needs: 3, 4)
