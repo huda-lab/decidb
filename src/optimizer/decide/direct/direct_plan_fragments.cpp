@@ -130,9 +130,8 @@ unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, uniq
 	auto has_active_rows = make_uniq<BoundComparisonExpression>(
 	    ExpressionType::COMPARE_GREATERTHAN, DirectColumn(LogicalType::BIGINT, ColumnBinding(active_window_index, 0)),
 	    make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
-	auto active_predicate = make_uniq<BoundCaseExpression>(
-	    std::move(has_active_rows), DirectConstantBool(true),
-	    DirectErrorPredicate(optimizer, DecideEmptyRowSetMessage("aggregate", clause)));
+	auto active_predicate = DirectRaiseUnless(
+	    std::move(has_active_rows), DirectErrorPredicate(optimizer, DecideEmptyRowSetMessage("aggregate", clause)));
 	auto active_guard = make_uniq<LogicalFilter>(std::move(active_predicate));
 	active_guard->children.push_back(std::move(active_window));
 	return std::move(active_guard);

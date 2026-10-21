@@ -24,6 +24,22 @@ unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &
 	return DirectErrorPredicate(optimizer, make_uniq<BoundConstantExpression>(Value(message)));
 }
 
+unique_ptr<Expression> DirectRaiseUnless(unique_ptr<Expression> ok, unique_ptr<Expression> error) {
+	return make_uniq<BoundCaseExpression>(std::move(ok), DirectConstantBool(true), std::move(error));
+}
+
+unique_ptr<Expression> DirectRaiseIf(unique_ptr<Expression> bad, unique_ptr<Expression> error) {
+	return make_uniq<BoundCaseExpression>(std::move(bad), std::move(error), DirectConstantBool(true));
+}
+
+unique_ptr<Expression> DirectAllHold(vector<unique_ptr<Expression>> checks) {
+	unique_ptr<Expression> chain = DirectConstantBool(true);
+	for (idx_t i = checks.size(); i > 0; i--) {
+		chain = make_uniq<BoundCaseExpression>(std::move(checks[i - 1]), std::move(chain), DirectConstantBool(false));
+	}
+	return chain;
+}
+
 unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer) {
 	return DirectErrorPredicate(optimizer, "DECIDE optimization is infeasible. Prefix the query with DIAGNOSE to see "
 	                                       "which clause to change.");
@@ -163,26 +179,28 @@ unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expressio
 unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
                                                   ColumnBinding number_binding, const Expression *source,
                                                   DirectNumberKind kind) {
-	auto is_null = DirectIsNull(DirectColumn(number_type, number_binding));
-	auto is_finite = optimizer.BindScalarFunction("isfinite", DirectColumn(number_type, number_binding));
-	auto finite_or_error = make_uniq<BoundCaseExpression>(std::move(is_finite), DirectConstantBool(true),
-	                                                      DirectInvalidNumberError(optimizer, kind));
 	auto null_message =
 	    source
 	        ? DirectNullMessageOf(optimizer, *source)
 	        : unique_ptr<Expression>(make_uniq<BoundConstantExpression>(Value(DecideNullValueMessage({}, string()))));
-	return make_uniq<BoundCaseExpression>(std::move(is_null), DirectErrorPredicate(optimizer, std::move(null_message)),
-	                                      std::move(finite_or_error));
+	vector<unique_ptr<Expression>> checks;
+	checks.push_back(DirectRaiseIf(DirectIsNull(DirectColumn(number_type, number_binding)),
+	                               DirectErrorPredicate(optimizer, std::move(null_message))));
+	checks.push_back(
+	    DirectRaiseUnless(optimizer.BindScalarFunction("isfinite", DirectColumn(number_type, number_binding)),
+	                      DirectInvalidNumberError(optimizer, kind)));
+	return DirectAllHold(std::move(checks));
 }
 
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
                                                  const Expression &source_value) {
-	auto is_nan = optimizer.BindScalarFunction("isnan", DirectColumn(LogicalType::DOUBLE, bound_binding));
-	auto not_nan = make_uniq<BoundCaseExpression>(
-	    std::move(is_nan), DirectErrorPredicate(optimizer, DirectBoundNaNMessage()), DirectConstantBool(true));
-	return make_uniq<BoundCaseExpression>(DirectIsNull(DirectColumn(LogicalType::DOUBLE, bound_binding)),
-	                                      DirectErrorPredicate(optimizer, DirectNullMessageOf(optimizer, source_value)),
-	                                      std::move(not_nan));
+	vector<unique_ptr<Expression>> checks;
+	checks.push_back(DirectRaiseIf(DirectIsNull(DirectColumn(LogicalType::DOUBLE, bound_binding)),
+	                               DirectErrorPredicate(optimizer, DirectNullMessageOf(optimizer, source_value))));
+	checks.push_back(
+	    DirectRaiseIf(optimizer.BindScalarFunction("isnan", DirectColumn(LogicalType::DOUBLE, bound_binding)),
+	                  DirectErrorPredicate(optimizer, DirectBoundNaNMessage())));
+	return DirectAllHold(std::move(checks));
 }
 
 string DirectInvalidBoundMessage() {

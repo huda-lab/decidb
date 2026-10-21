@@ -1026,13 +1026,11 @@ private:
 	                                         const BoundChecks &bounds) const {
 		// `ok` must hold; a NULL `ok` fails.
 		auto must_hold = [&](unique_ptr<Expression> ok) -> unique_ptr<Expression> {
-			return make_uniq<BoundCaseExpression>(std::move(ok), DirectConstantBool(true),
-			                                      DirectInfeasibleErrorPredicate(optimizer));
+			return DirectRaiseUnless(std::move(ok), DirectInfeasibleErrorPredicate(optimizer));
 		};
 		// `bad` must not hold; a NULL `bad` passes.
 		auto must_not_hold = [&](unique_ptr<Expression> bad) -> unique_ptr<Expression> {
-			return make_uniq<BoundCaseExpression>(std::move(bad), DirectInfeasibleErrorPredicate(optimizer),
-			                                      DirectConstantBool(true));
+			return DirectRaiseIf(std::move(bad), DirectInfeasibleErrorPredicate(optimizer));
 		};
 		auto fixed_count = [&]() {
 			return DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, ranked.fixed_count_slot));
@@ -1075,11 +1073,7 @@ private:
 		}
 		vector<unique_ptr<Expression>> checks;
 		if (!group_checks.empty()) {
-			unique_ptr<Expression> group = std::move(group_checks[0]);
-			for (idx_t i = 1; i < group_checks.size(); i++) {
-				group = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(group),
-				                                              std::move(group_checks[i]));
-			}
+			auto group = DirectAllHold(std::move(group_checks));
 			checks.push_back(condition.scoped
 			                     ? make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, eligible_binding),
 			                                                      std::move(group), DirectConstantBool(true))
@@ -1091,15 +1085,7 @@ private:
 			    DirectColumn(LogicalType::BOOLEAN, fixed_one_binding),
 			    DirectColumn(LogicalType::BOOLEAN, fixed_zero_binding), DirectConstantBool(false))));
 		}
-		if (checks.empty()) {
-			return DirectConstantBool(true);
-		}
-		unique_ptr<Expression> predicate = std::move(checks[0]);
-		for (idx_t i = 1; i < checks.size(); i++) {
-			predicate = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(predicate),
-			                                                  std::move(checks[i]));
-		}
-		return predicate;
+		return DirectAllHold(std::move(checks));
 	}
 
 	//! Stage 6: the 0/1 assignment (fixed values, then scope, then upper and lower rank limits, then score sign), the

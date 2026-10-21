@@ -201,39 +201,29 @@ BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator>
 	};
 	vector<unique_ptr<Expression>> clause_checks;
 	for (idx_t i = 0; i < bounds.size(); i++) {
-		unique_ptr<Expression> equality_valid = DirectConstantBool(true);
-		if (bounds[i].comparison == ExpressionType::COMPARE_EQUAL) {
-			equality_valid = make_uniq<BoundCaseExpression>(
-			    none(equality_window_index, equality_slots[i]), DirectConstantBool(true),
-			    DirectErrorPredicate(optimizer, "DECIDE source-valued equality bound varies within a group"));
-		}
-		if (nan_slots[i] != DConstants::INVALID_INDEX) {
-			equality_valid =
-			    make_uniq<BoundCaseExpression>(none(result.window_index, nan_slots[i]), std::move(equality_valid),
-			                                   DirectErrorPredicate(optimizer, bounds[i].nan_message));
-		}
+		// A bound is checked for NULL first, then for NaN, then (an equality) for a value that varies in its group.
 		const auto &null_message = bounds[i].null_message.empty() ? bounds[i].invalid_message : bounds[i].null_message;
-		clause_checks.push_back(make_uniq<BoundCaseExpression>(none(result.window_index, invalid_slots[i]),
-		                                                       std::move(equality_valid),
-		                                                       DirectErrorPredicate(optimizer, null_message)));
+		clause_checks.push_back(DirectRaiseUnless(none(result.window_index, invalid_slots[i]),
+		                                          DirectErrorPredicate(optimizer, null_message)));
+		if (nan_slots[i] != DConstants::INVALID_INDEX) {
+			clause_checks.push_back(DirectRaiseUnless(none(result.window_index, nan_slots[i]),
+			                                          DirectErrorPredicate(optimizer, bounds[i].nan_message)));
+		}
+		if (bounds[i].comparison == ExpressionType::COMPARE_EQUAL) {
+			clause_checks.push_back(DirectRaiseUnless(
+			    none(equality_window_index, equality_slots[i]),
+			    DirectErrorPredicate(optimizer, "DECIDE source-valued equality bound varies within a group")));
+		}
 	}
 	for (idx_t i = 0; i < not_null.size(); i++) {
-		unique_ptr<Expression> not_nan = DirectConstantBool(true);
+		clause_checks.push_back(DirectRaiseUnless(none(result.window_index, null_slots[i]),
+		                                          DirectErrorPredicate(optimizer, not_null[i].message)));
 		if (not_null_nan_slots[i] != DConstants::INVALID_INDEX) {
-			not_nan = make_uniq<BoundCaseExpression>(none(result.window_index, not_null_nan_slots[i]),
-			                                         DirectConstantBool(true),
-			                                         DirectErrorPredicate(optimizer, not_null[i].nan_message));
+			clause_checks.push_back(DirectRaiseUnless(none(result.window_index, not_null_nan_slots[i]),
+			                                          DirectErrorPredicate(optimizer, not_null[i].nan_message)));
 		}
-		clause_checks.push_back(make_uniq<BoundCaseExpression>(none(result.window_index, null_slots[i]),
-		                                                       std::move(not_nan),
-		                                                       DirectErrorPredicate(optimizer, not_null[i].message)));
 	}
-	unique_ptr<Expression> valid = DirectConstantBool(true);
-	for (idx_t i = clause_checks.size(); i > 0; i--) {
-		valid = make_uniq<BoundCaseExpression>(std::move(clause_checks[i - 1]), std::move(valid),
-		                                       DirectConstantBool(false));
-	}
-	auto guard = make_uniq<LogicalFilter>(std::move(valid));
+	auto guard = make_uniq<LogicalFilter>(DirectAllHold(std::move(clause_checks)));
 	guard->children.push_back(std::move(ready));
 	result.plan = std::move(guard);
 	return result;

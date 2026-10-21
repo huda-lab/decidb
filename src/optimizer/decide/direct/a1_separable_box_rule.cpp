@@ -659,12 +659,7 @@ private:
 			bounds.b.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), b_total))));
 		}
 		// Every check is true or raises; a row passes when all of them do.
-		unique_ptr<Expression> valid = DirectConstantBool(true);
-		for (idx_t i = checks.size(); i > 0; i--) {
-			valid =
-			    make_uniq<BoundCaseExpression>(std::move(checks[i - 1]), std::move(valid), DirectConstantBool(false));
-		}
-		bounds.valid_data = p2.Add(std::move(valid));
+		bounds.valid_data = p2.Add(DirectAllHold(std::move(checks)));
 	}
 
 	//===------------------------------------------------------------------===//
@@ -763,6 +758,8 @@ private:
 	//! answer cannot hold exactly. Every raw value was checked in P2 and arrives as `valid_data`.
 	unique_ptr<Expression> ValidAnswers(const Answers &answers) const {
 		vector<unique_ptr<Expression>> checks;
+		// The raw values come first: P2 folded their checks into one flag that is true or false, never an error.
+		checks.push_back(DirectColumn(LogicalType::BOOLEAN, answers.valid_data));
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			auto value = [&]() {
 				return DirectColumn(LogicalType::DOUBLE, answers.value[d]);
@@ -772,25 +769,16 @@ private:
 			                                            DirectNumberKind::OBJECTIVE));
 			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.b[d], nullptr,
 			                                            DirectNumberKind::OBJECTIVE));
-			checks.push_back(make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, answers.infeasible[d]),
-			                                                DirectInfeasibleErrorPredicate(optimizer),
-			                                                DirectConstantBool(true)));
-			checks.push_back(make_uniq<BoundCaseExpression>(optimizer.BindScalarFunction("isfinite", value()),
-			                                                DirectConstantBool(true),
-			                                                DirectUnboundedErrorPredicate(optimizer)));
+			checks.push_back(DirectRaiseIf(DirectColumn(LogicalType::BOOLEAN, answers.infeasible[d]),
+			                               DirectInfeasibleErrorPredicate(optimizer)));
+			checks.push_back(DirectRaiseUnless(optimizer.BindScalarFunction("isfinite", value()),
+			                                   DirectUnboundedErrorPredicate(optimizer)));
 			if (DirectIsWholeNumbered(condition.decisions[d].domain)) {
-				checks.push_back(
-				    make_uniq<BoundCaseExpression>(WithinExactRange(answers.value[d]), DirectConstantBool(true),
+				checks.push_back(DirectRaiseUnless(WithinExactRange(answers.value[d]),
 				                                   OutOfRangeError(condition.decisions[d].name, answers.value[d])));
 			}
 		}
-		unique_ptr<Expression> chain = DirectConstantBool(true);
-		for (idx_t i = checks.size(); i > 0; i--) {
-			chain =
-			    make_uniq<BoundCaseExpression>(std::move(checks[i - 1]), std::move(chain), DirectConstantBool(false));
-		}
-		return make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, answers.valid_data), std::move(chain),
-		                                      DirectConstantBool(false));
+		return DirectAllHold(std::move(checks));
 	}
 
 	//! The answer in the decision's own output type. The breaker has already raised for anything that is not finite or

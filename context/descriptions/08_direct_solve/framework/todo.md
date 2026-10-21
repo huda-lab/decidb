@@ -29,20 +29,8 @@ What exists today is in `done.md`.
   teach a rule parser spelling.
 - **Done when.** The IR contract and the direct/solver tests run on both syntaxes where comparable.
 
-## H-24 — Shared helpers for "true, or raise"
-
-- **Problem.** Plan code raises errors through `CASE ok THEN true ELSE error(...)`, written by hand in six places (S1's
-  `FeasiblePredicate`, A1's `ValidAnswers`, `ValidateBounds`, `DirectGuardEmptyAggregate`, `DirectValidNumberPredicate`,
-  `DirectValidBoundPredicate`). A list of such checks is joined in five places, two ways: a `CASE` chain (A1's
-  `ComputeBounds` and `ValidAnswers`, `ValidateBounds`) and an `AND` chain (twice in S1's `FeasiblePredicate`).
-- **Change.** `DirectRaiseUnless(ok, error)`, `DirectRaiseIf(bad, error)` and `DirectAllHold(checks)` among the runtime
-  checks, one way of joining; every caller uses them. Which error a query reports among several stays unspecified
-  (`architecture/rules.md`).
-- **Done when.** The five checks pass with no edit to a test file.
-
 ## H-25 — `ExpressionBuilder` is the one way to build an expression
 
-- **Needs.** H-24.
 - **Problem.** Direct-solve code builds bound expressions three ways: by hand with `make_uniq<Bound...>` (S1 51 times,
   its helpers 17, A1 16, the shared plan files 27), through `DirectColumn` and `DirectConstantBool`, and through
   `ExpressionBuilder` (A1 46 times, S1 never). S1's `AnyCondition` copies `ExpressionBuilder::Any`. A new rule copies

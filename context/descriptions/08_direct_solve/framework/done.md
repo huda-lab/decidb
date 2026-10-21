@@ -40,7 +40,10 @@ check). Design: `../architecture/`.
   of a coefficient) and `DirectIsNull`.
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
   their messages: `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`, `DirectValidBoundPredicate`,
-  `DirectValidNumberPredicate` and `DirectNullMessageOf`. Which of several errors a query reports is not specified.
+  `DirectValidNumberPredicate` and `DirectNullMessageOf`. Every check that raises is built with `DirectRaiseUnless(ok,
+  error)` or `DirectRaiseIf(bad, error)`, which return true or raise, and a list of checks is joined by `DirectAllHold`, a
+  `CASE` chain in the order given, so an earlier check (a NULL test) guards the later ones. Which of several errors a
+  query reports is not specified.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
   every direct-solve file. `DirectReadBounds` folds `variable_bound`s into each decision's static box

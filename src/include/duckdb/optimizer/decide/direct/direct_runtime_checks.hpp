@@ -18,6 +18,17 @@ unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &
 //! The same, with a message computed per row. The message is evaluated only on a row where the predicate is reached.
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, unique_ptr<Expression> message);
 
+//! A check that is true when `ok` is true and raises `error` otherwise; a NULL `ok` raises.
+unique_ptr<Expression> DirectRaiseUnless(unique_ptr<Expression> ok, unique_ptr<Expression> error);
+
+//! A check that raises `error` when `bad` is true and is true otherwise; a NULL `bad` passes.
+unique_ptr<Expression> DirectRaiseIf(unique_ptr<Expression> bad, unique_ptr<Expression> error);
+
+//! Joins checks into one BOOLEAN expression that is true when every check is. The checks run in the order given, as a
+//! CASE chain, so an earlier check guards the later ones: a row raises the error of the first check it fails. A check
+//! that is false or NULL, not an error, makes the whole false. No checks join to true.
+unique_ptr<Expression> DirectAllHold(vector<unique_ptr<Expression>> checks);
+
 //! DECIDE's infeasibility error, as a BOOLEAN expression that raises it when evaluated.
 unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer);
 
