@@ -148,7 +148,7 @@ public:
 			if (!ir_node.scope.per_key_slots.empty()) {
 				return nullptr;
 			}
-			if (!ReadsOneDecision(ir_node, ir.decisions.size())) {
+			if (!DirectReadsOneDecision(ir_node, ir.decisions.size())) {
 				return nullptr;
 			}
 		}
@@ -191,25 +191,6 @@ public:
 	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
-	//! One unfiltered per-row left side: only linear terms, in one decision, and no constant.
-	static bool ReadsOneDecision(const DirectIRConstraint &ir_node, idx_t decision_count) {
-		if (ir_node.lhs.size() != 1 || ir_node.degree != 1) {
-			return false;
-		}
-		auto &part = ir_node.lhs[0];
-		if (part.sign != 1 || part.reducer != DirectReducer::NONE || part.scale || part.filter || part.inner ||
-		    part.terms.empty()) {
-			return false;
-		}
-		idx_t decision = part.terms[0].var_a;
-		for (auto &term : part.terms) {
-			if (term.kind != DecideTermKind::LINEAR || term.var_a != decision || !term.coefficient) {
-				return false;
-			}
-		}
-		return decision < decision_count;
-	}
-
 	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
@@ -717,9 +698,7 @@ private:
 			bool whole = DirectIsWholeNumbered(condition.decisions[d].domain);
 
 			// No row holds when the box is empty; the answer is then never read.
-			auto infeasible = calc.Any({calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, lower, upper),
-			                            calc.Cmp(ExpressionType::COMPARE_EQUAL, lower, calc.Num(POSITIVE_INFINITY)),
-			                            calc.Cmp(ExpressionType::COMPARE_EQUAL, upper, calc.Num(NEGATIVE_INFINITY))});
+			auto infeasible = DirectBoxIsEmpty(calc, lower, upper);
 
 			// Convex: the turning point, clamped into the box (for whole numbers, the first integer whose next step
 			// no longer improves, which keeps the smaller one on a tie).

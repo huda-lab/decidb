@@ -43,7 +43,8 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible
    (`DirectProveValue`). Take the empty-aggregate guard and the all-rows breaker from `direct_plan_fragments.cpp`, the
    number checks and error predicates from `direct_runtime_checks.cpp`, and the per-row bounds on a decision
-   (`DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`) from `direct_bound_reader.cpp`. Build
+   (`DirectReadsOneDecision`, `DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`, `DirectBoxIsEmpty`) from
+   `direct_bound_reader.cpp`. Build
    expressions with the `ExpressionBuilder` (`direct_expression.hpp`). A helper only your rule uses (S1's scope
    projection and bound validation are in `s1_uniform_matroid_helpers.cpp`) stays in your rule's own files until a
    second rule needs it. Inside the rule's namespace, names carry no `Direct` or class prefix (`Condition`,

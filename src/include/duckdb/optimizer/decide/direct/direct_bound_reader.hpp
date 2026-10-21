@@ -66,6 +66,10 @@ struct DirectBoundReading {
 //! cannot be proved, or when the folded box contradicts the decision's built-in domain, which the solver reports.
 bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading);
 
+//! One unfiltered per-row left side: only linear terms, in one decision of the `decision_count`, and no constant. The
+//! shape a per-row bound must have for DirectReadBounds to read it.
+bool DirectReadsOneDecision(const DirectIRConstraint &ir_node, idx_t decision_count);
+
 //! The columns of one clause's raw values, evaluated on every row.
 struct DirectBoundColumns {
 	ColumnBinding coefficient;
@@ -84,5 +88,9 @@ void DirectClauseBounds(const ExpressionBuilder &calc, ExpressionType comparison
 void DirectRowBox(const ExpressionBuilder &calc, double static_lower, double static_upper,
                   const vector<ColumnBinding> &clause_lowers, const vector<ColumnBinding> &clause_uppers,
                   ExprPtr &lower, ExprPtr &upper);
+
+//! True on a row where no value of the decision satisfies its box: the lower end is above the upper, the lower end is
+//! +infinity, or the upper end is -infinity.
+ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, const ExprPtr &upper);
 
 } // namespace duckdb

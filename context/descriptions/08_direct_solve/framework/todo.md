@@ -29,13 +29,6 @@ What exists today is in `done.md`.
   teach a rule parser spelling.
 - **Done when.** The IR contract and the direct/solver tests run on both syntaxes where comparable.
 
-## H-22 — The bound reader holds what R1 needs from A1
-
-- **Problem.** R1 needs two pieces A1 keeps to itself: the shape check that a per-row bound reads one decision
-  (`ReadsOneDecision`) and the empty-box test in A1's answer stage (`ComputeAnswers`).
-- **Change.** Both move into the bound reader; A1 calls them there.
-- **Done when.** The A1 suites pass unchanged and A1 has no copy of either.
-
 ## H-23 — One reader for a linear objective
 
 - **Problem.** S1 (`ProveObjective`) and A1 (the linear branch of its `ProveObjective`) each turn `SUM(c*x)` parts into

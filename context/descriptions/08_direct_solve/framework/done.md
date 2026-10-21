@@ -46,7 +46,9 @@ check). Design: `../architecture/`.
   every direct-solve file. `DirectReadBounds` folds `variable_bound`s into each decision's static box
   (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude 1e20 or more infinite) and lists every other bound as a
   per-row clause, an equality split into its two halves. `DirectClauseBounds` turns one clause's row values into a lower
-  and an upper bound as the solver reads them. `DirectRowBox` intersects them with the box.
+  and an upper bound as the solver reads them. `DirectRowBox` intersects them with the box. `DirectReadsOneDecision` is the shape a per-row bound must have to be read
+  (one unfiltered linear left side in one decision, no constant), and `DirectBoxIsEmpty` is true on a row whose box no
+  value satisfies.
 - **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
   expressions that passes them as `ExprPtr`. A1 uses it; S1 builds expressions by hand.
 - **Rule-local helpers.** The helpers only S1 uses (`ProjectScope`, `ValidateBounds`, `WindowExtremum`, `AnyCondition`)

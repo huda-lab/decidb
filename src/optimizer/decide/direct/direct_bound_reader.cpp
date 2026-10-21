@@ -38,6 +38,24 @@ DirectBoundClause DirectBoundClause::Copy() const {
 	return result;
 }
 
+bool DirectReadsOneDecision(const DirectIRConstraint &ir_node, idx_t decision_count) {
+	if (ir_node.lhs.size() != 1 || ir_node.degree != 1) {
+		return false;
+	}
+	auto &part = ir_node.lhs[0];
+	if (part.sign != 1 || part.reducer != DirectReducer::NONE || part.scale || part.filter || part.inner ||
+	    part.terms.empty()) {
+		return false;
+	}
+	idx_t decision = part.terms[0].var_a;
+	for (auto &term : part.terms) {
+		if (term.kind != DecideTermKind::LINEAR || term.var_a != decision || !term.coefficient) {
+			return false;
+		}
+	}
+	return decision < decision_count;
+}
+
 bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading) {
 	idx_t decision_count = ir.decisions.size();
 	// The box as the solver folds it: the raw values it reads (after the strict shift, before any rounding or mapping
@@ -195,6 +213,12 @@ void DirectRowBox(const ExpressionBuilder &calc, double static_lower, double sta
 	}
 	lower = calc.Max(lowers);
 	upper = calc.Min(uppers);
+}
+
+ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, const ExprPtr &upper) {
+	return calc.Any({calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, lower, upper),
+	                 calc.Cmp(ExpressionType::COMPARE_EQUAL, lower, calc.Num(POSITIVE_INFINITY)),
+	                 calc.Cmp(ExpressionType::COMPARE_EQUAL, upper, calc.Num(NEGATIVE_INFINITY))});
 }
 
 } // namespace duckdb

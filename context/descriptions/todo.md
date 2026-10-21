@@ -7,7 +7,6 @@ Read first: `08_direct_solve/architecture/overview.md`, `08_direct_solve/archite
 `08_direct_solve/framework/done.md`. Checks: `08_direct_solve/framework/todo.md` § How to work any task.
 
 ## 1. Toolkit layout
-- [ ] H-22 Bound reader holds what R1 needs — 08_direct_solve/framework/todo.md § H-22
 - [ ] H-23 One reader for a linear objective — 08_direct_solve/framework/todo.md § H-23
 - [ ] H-24 Shared helpers for "true, or raise" — 08_direct_solve/framework/todo.md § H-24
 - [ ] S1-12 S1 takes the shared bound reader — 08_direct_solve/rules/s1_uniform_matroid/todo.md § S1-12
