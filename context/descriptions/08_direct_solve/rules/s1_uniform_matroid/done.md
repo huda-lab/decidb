@@ -1,7 +1,7 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-10-21 on top of `af46877987`: `make decide-test` (3,465 passed, also with
-`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,464
+Verified on 2026-10-21 on top of `a5d0f1a5db`: `make decide-test` (3,467 passed, also with
+`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,466
 passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,324 assertions in 47 cases). `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check). Code:
 `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`, with the helpers only S1 uses in
 `s1_uniform_matroid_helpers.{hpp,cpp}`. Class definition: [definition.md](definition.md).

@@ -170,6 +170,9 @@ _REDUCER_OWN_WHEN = {
         sum(r["sm"] for r in rows if r["cap"] > 1), sum(1 for r in rows if r["cap"] > 1)
     ),
     "MIN(cap) WHEN (flag)": lambda rows: min(r["cap"] for r in rows if r["flag"]),
+    "COUNT(*) WHEN (id > 4)": lambda rows: sum(1 for r in rows if r["id"] > 4),
+    # Row 0 has id 0, so the WHEN leaves it out of the count.
+    "(COUNT(*) WHEN (id > 0)) / 2": lambda rows: Fraction(sum(1 for r in rows if r["id"] > 0), 2),
     # Two COUNT(*) that differ only in their WHEN are two window columns.
     "(COUNT(*) WHEN (cap > 1)) - (COUNT(*) WHEN (cap < 3))": lambda rows: sum(1 for r in rows if r["cap"] > 1)
     - sum(1 for r in rows if r["cap"] < 3),
@@ -1519,6 +1522,10 @@ S1_REDUCER_CASES.update(
         # window has no partition and its FILTER is the reducer's WHEN alone.
         "reducer_own_when_count_star_global": {"bounds": [(">=", "COUNT(*) WHEN (cap > 1)")], "sense": "MINIMIZE"},
         "reducer_own_when_min_global": {"bounds": [("<=", "MIN(cap) WHEN (cap > 1)")]},
+        # The reducer's WHEN scopes only the count on the right; the left side still sums every row. Five rows have
+        # id > 4 and seven have a positive score, so the count is what limits the optimum.
+        "reducer_own_when_count_star_le_global": {"bounds": [("<=", "COUNT(*) WHEN (id > 4)")]},
+        "reducer_own_when_count_star_halved_le_global": {"bounds": [("<=", "(COUNT(*) WHEN (id > 0)) / 2")]},
         # With PER, rows no group covers (the NULL key) form partitions of their own. A COUNT reads 0 there because
         # its FILTER keeps nothing; the other kinds keep every such row and read their 0 argument.
         "reducer_own_when_count_star_per": {
