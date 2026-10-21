@@ -120,6 +120,7 @@ BOUND_EXPRS = {
     "cap": lambda r, n: r["cap"],
     "cap2": lambda r, n: r["cap2"],
     "geq": lambda r, n: r["geq"],
+    "geq + 0": lambda r, n: r["geq"],
     "COALESCE(nlo, 1.0)": lambda r, n: 1.0 if r["nlo"] is None else r["nlo"],
     "COALESCE(nhi, 2.0)": lambda r, n: 2.0 if r["nhi"] is None else r["nhi"],
     "COALESCE(ncap, fb)": lambda r, n: r["fb"] if r["ncap"] is None else r["ncap"],
@@ -249,6 +250,8 @@ S1_CASES = {
         "bounds": [(">", "cap2")], "per": True, "when": "local", "sense": "MINIMIZE"
     },
     "source_equality_constant_in_group": {"bounds": [("=", "geq")], "per": True},
+    # Each equality has its own check that the bound does not vary within a group.
+    "two_source_equalities_per": {"bounds": [("=", "geq"), ("=", "geq + 0")], "per": True},
     "coalesce_bound_per": {"bounds": [("<=", "COALESCE(ncap, fb)")], "per": True},
     "coalesce_bound_global": {"bounds": [("<=", "COALESCE(ncap, fb)")], "sense": "MINIMIZE"},
     # --- several source-valued bounds ---
@@ -1011,6 +1014,25 @@ S1_ERROR_CASES = {
             "(1, 9.0, 'NaN'::DOUBLE), (2, 5.0, 1.0::DOUBLE)",
             "id, score, fixed_value",
             "SUM(x) <= 2 AND x <= fixed_value",
+        ),
+        "null_bound",
+        None,
+    ),
+    # A computed value has no single column to name, so it raises direct solve's own NULL and NaN errors.
+    "fixed_computed_value_null": (
+        _problem(
+            "(1, 9.0, '1'), (2, 5.0, 'bad')",
+            "id, score, fixed_raw",
+            "SUM(x) <= 2 AND x <= TRY_CAST(fixed_raw AS DOUBLE)",
+        ),
+        "null_bound",
+        None,
+    ),
+    "fixed_computed_value_nan": (
+        _problem(
+            "(1, 9.0, 'NaN'), (2, 5.0, '1')",
+            "id, score, fixed_raw",
+            "SUM(x) <= 2 AND x <= TRY_CAST(fixed_raw AS DOUBLE)",
         ),
         "null_bound",
         None,

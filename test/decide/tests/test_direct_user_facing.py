@@ -530,6 +530,55 @@ def test_inner_join_passthrough_prunes_stored_payload_but_keeps_computed_errors(
 
 
 @pytest.mark.correctness
+def test_left_join_source_keeps_the_payload_in_the_plan_and_answers_like_the_solver(decidb_cli):
+    # Only an inner join passes a column through untouched, so the payload of a left join is read even when no parent
+    # does, while the inner join of the test above drops it.
+    setup = """
+        CREATE TEMP TABLE left_join_source AS
+        SELECT i, (i % 101)::DOUBLE AS score, repeat('p', 200) AS payload
+        FROM range(5000) t(i);
+        CREATE TEMP TABLE left_join_weights AS
+        SELECT k, 1.0 + (k % 3)::DOUBLE / 10.0 AS weight FROM range(7) t(k);
+    """
+
+    def aggregate(join):
+        return f"""
+            SELECT COUNT(*), SUM(x), SUM(score*x) FROM (
+                FROM (SELECT s.i, s.score * w.weight AS score, s.payload
+                      FROM left_join_source s {join} JOIN left_join_weights w ON s.i % 7 = w.k) j
+                DECIDE x(BOOL) SUCH THAT SUM(x)<=500 MAXIMIZE SUM(score*x)
+            ) q
+        """
+
+    left_plan = _raw(decidb_cli, setup + f"EXPLAIN {aggregate('LEFT')}").stdout
+    assert "Direct solve rule" in left_plan and "HASH_JOIN" in left_plan and "payload" in left_plan
+    inner_plan = _raw(decidb_cli, setup + f"EXPLAIN {aggregate('INNER')}").stdout
+    assert "Direct solve rule" in inner_plan and "payload" not in inner_plan
+
+    direct, _ = _run(decidb_cli, setup + aggregate("LEFT"))
+    solver, _ = _run(decidb_cli, setup + aggregate("LEFT"), mode="off")
+    assert direct[0][:2] == solver[0][:2] == (5000, 500)
+    assert math.isclose(direct[0][2], solver[0][2], rel_tol=0, abs_tol=1e-7)
+
+
+@pytest.mark.correctness
+def test_a_filter_over_a_computed_column_keeps_the_computed_error(decidb_cli):
+    # A filter passes its child's columns through, so whether a column may be dropped is the child's answer: a
+    # computed column that can raise is read on every row, as the solver reads it.
+    throwing = """
+        SELECT COUNT(*) FROM (
+            FROM (SELECT i, i::DOUBLE AS score,
+                         CASE WHEN i=4999 THEN error('filtered payload boom') ELSE 'ok' END AS payload
+                  FROM range(5000) t(i)) s
+            WHERE i >= 0
+            DECIDE x(BOOL) SUCH THAT SUM(x)<=1 MAXIMIZE SUM(score*x)
+        ) q
+    """
+    for mode in ("require", "off"):
+        assert "filtered payload boom" in _raw(decidb_cli, throwing, mode=mode).stderr
+
+
+@pytest.mark.correctness
 def test_invalid_forced_solver_and_disabled_optimizer_policy(decidb_cli):
     # DIAGNOSE and a valid forced backend are checked for every rule in the conformance suite
     # (test_direct_rule_conformance.py).
@@ -540,6 +589,21 @@ def test_invalid_forced_solver_and_disabled_optimizer_policy(decidb_cli):
 
     disabled = _raw(decidb_cli, f"SET disabled_optimizers='decide_optimizer'; {sql}").stderr
     assert "DECIDE optimizer did not run" in disabled
+
+
+@pytest.mark.correctness
+def test_an_unknown_direct_solve_mode_is_rejected(decidb_cli):
+    result = decidb_cli.execute_raw("SET decide_direct_solve='sometimes'")
+    assert "decide_direct_solve must be off, auto, or require" in result.stderr, result.stderr
+
+
+@pytest.mark.correctness
+def test_an_empty_forced_solver_name_forces_nothing(decidb_cli):
+    # DECIDB_FORCE_SOLVER set to the empty string is no forced backend: direct solve applies under `require`.
+    sql = _source_query((2.0, 9.0, -1.0), 1)
+    unforced = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": ""})
+    assert "S1_UNIFORM_MATROID" in _raw(unforced, f"EXPLAIN {sql}").stdout
+    assert _run(unforced, sql)[0] == _run(decidb_cli, sql, mode="off")[0]
 
 
 @pytest.mark.correctness

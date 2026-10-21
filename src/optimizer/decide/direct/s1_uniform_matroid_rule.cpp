@@ -609,9 +609,7 @@ public:
 		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
 		source_types = source.types;
-		if (source_bindings.size() != source_types.size()) {
-			throw InternalException("Direct solve source bindings and types differ");
-		}
+		D_ASSERT(source_bindings.size() == source_types.size());
 		score_index = binder.GenerateTableIndex();
 		window_index = binder.GenerateTableIndex();
 		result_index = binder.GenerateTableIndex();
@@ -709,11 +707,13 @@ private:
 	ColumnBinding fixed_zero_binding;
 
 	//! Copy of a proved expression whose source references follow the state projection, when there is one.
-	unique_ptr<Expression> CopyIntoState(const Expression &expr, const ScopeBindings &scope, const char *what) const {
+	unique_ptr<Expression> CopyIntoState(const Expression &expr, const ScopeBindings &scope) const {
 		auto value = expr.Copy();
-		if (scope.state_index != DConstants::INVALID_INDEX &&
-		    !DirectRemapSourceReferences(*value, source_bindings, scope.state_index)) {
-			throw InternalException(string("S1 direct solve could not remap its proved ") + what);
+		if (scope.state_index != DConstants::INVALID_INDEX) {
+			// CheckCondition proved the expression reads source columns only.
+			bool remapped = DirectRemapSourceReferences(*value, source_bindings, scope.state_index);
+			D_ASSERT(remapped);
+			(void)remapped;
 		}
 		return value;
 	}
@@ -752,14 +752,12 @@ private:
 	                                               BoundChecks &bounds) const {
 		vector<BoundSpec> specs;
 		for (auto &bound : condition.source_bounds) {
-			if (!bound.value ||
-			    (bound.source_slot != DConstants::INVALID_INDEX &&
-			     (bound.source_slot >= source_types.size() || source_types[bound.source_slot] != bound.source_type))) {
-				throw InternalException("S1 direct solve received an invalid source bound slot");
-			}
+			D_ASSERT(bound.value && (bound.source_slot == DConstants::INVALID_INDEX ||
+			                         (bound.source_slot < source_types.size() &&
+			                          source_types[bound.source_slot] == bound.source_type)));
 			BoundSpec spec;
 			spec.comparison = bound.comparison;
-			spec.value = CopyIntoState(*bound.value, scope, "bound");
+			spec.value = CopyIntoState(*bound.value, scope);
 			if (bound.negated) {
 				spec.value = DirectScaledTerm(optimizer, std::move(spec.value), -1, false, 1.0, false);
 			}
@@ -783,7 +781,7 @@ private:
 		vector<NotNullSpec> not_null;
 		for (auto &fixed : condition.source_fixed_values) {
 			NotNullSpec spec;
-			spec.value = CopyIntoState(*fixed.value, scope, "per-row fixed value");
+			spec.value = CopyIntoState(*fixed.value, scope);
 			spec.reject_nan = fixed.reject_nan;
 			if (fixed.column_name.empty()) {
 				spec.message = fixed.invalid_message;
@@ -818,9 +816,7 @@ private:
 	                                         BoundChecks &bounds) const {
 		vector<unique_ptr<Expression>> score_expressions;
 		auto append_at = [&](const ColumnBinding &slot, unique_ptr<Expression> expression) {
-			if (slot.table_index != score_index || slot.column_index != score_expressions.size()) {
-				throw InternalException("S1 direct solve score projection does not match its layout");
-			}
+			D_ASSERT(slot.table_index == score_index && slot.column_index == score_expressions.size());
 			score_expressions.push_back(std::move(expression));
 		};
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
@@ -832,7 +828,7 @@ private:
 			combined_score = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
 		}
 		for (auto &part : condition.objective_parts) {
-			auto coefficient = CopyIntoState(*part.coefficient, scope, "coefficient");
+			auto coefficient = CopyIntoState(*part.coefficient, scope);
 			auto term =
 			    DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.scaled, part.scale, part.divides);
 			combined_score = combined_score
@@ -871,9 +867,8 @@ private:
 		auto &bound = condition.source_bounds[index];
 		auto &slots = bounds.slots[index];
 		auto slot = upper ? slots.min_score : slots.max_score;
-		if (slot == DConstants::INVALID_INDEX) {
-			throw InternalException("S1 direct solve lost its source-valued count limit");
-		}
+		// Every caller asks for a side the bound has: an upper limit of an upper bound, a lower of a lower bound.
+		D_ASSERT(slot != DConstants::INVALID_INDEX);
 		auto cap = [&]() {
 			return DirectColumn(LogicalType::DOUBLE, ColumnBinding(score_index, slot));
 		};
@@ -913,7 +908,7 @@ private:
 		return limits.size() == 1 ? std::move(limits[0]) : optimizer.BindScalarFunction("greatest", std::move(limits));
 	}
 
-	//! Smallest upper limit across the constant and source-valued bounds; null when there is none.
+	//! Smallest upper limit across the constant and source-valued bounds. Only asked for when there is an upper bound.
 	unique_ptr<Expression> UpperLimit(const BoundChecks &bounds) const {
 		vector<unique_ptr<Expression>> limits;
 		if (condition.has_upper) {
@@ -924,9 +919,7 @@ private:
 				limits.push_back(SourceLimit(i, true, bounds));
 			}
 		}
-		if (limits.empty()) {
-			return nullptr;
-		}
+		D_ASSERT(!limits.empty());
 		return limits.size() == 1 ? std::move(limits[0]) : optimizer.BindScalarFunction("least", std::move(limits));
 	}
 
@@ -1151,9 +1144,8 @@ private:
 DirectSubstitute Rule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	if (condition.objective_parts.empty() && condition.sense != DecideSense::FEASIBILITY) {
-		throw InternalException("S1 direct solve received a condition without an objective");
-	}
+	// CheckCondition declines an objective that is not there, and an objective that has no linear term.
+	D_ASSERT(!condition.objective_parts.empty() || condition.sense == DecideSense::FEASIBILITY);
 	PlanBuilder plan_builder(condition, optimizer, *source);
 	return plan_builder.Build(std::move(source));
 }

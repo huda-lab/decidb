@@ -33,9 +33,10 @@ InsertionOrderPreservingMap<string> DirectExplainAnnotation::Render() const {
 
 DirectSolveMode GetDirectSolveMode(ClientContext &context) {
 	Value value;
-	if (!context.TryGetCurrentSetting("decide_direct_solve", value) || value.IsNull()) {
-		return DirectSolveMode::AUTO;
-	}
+	// The option is registered with a default, and its callback rejects any value but the three modes.
+	bool found = context.TryGetCurrentSetting("decide_direct_solve", value);
+	D_ASSERT(found && !value.IsNull());
+	(void)found;
 	auto mode = StringUtil::Lower(value.GetValue<string>());
 	if (mode == "auto") {
 		return DirectSolveMode::AUTO;
@@ -49,7 +50,9 @@ DirectSolveMode GetDirectSolveMode(ClientContext &context) {
 namespace {
 
 const char *ModeName(DirectSolveMode mode) {
-	return mode == DirectSolveMode::AUTO ? "auto" : mode == DirectSolveMode::REQUIRE ? "require" : "off";
+	// An `off` query leaves the rule driver before anything is annotated.
+	D_ASSERT(mode != DirectSolveMode::OFF);
+	return mode == DirectSolveMode::AUTO ? "auto" : "require";
 }
 
 void DirectSolveModeSetCallback(ClientContext &, SetScope, Value &parameter) {
@@ -66,52 +69,52 @@ vector<unique_ptr<DirectSolveRule>> RulesFor(ClientContext &context) {
 	return seam_rules ? seam_rules->make_rules() : RegisteredDirectRules();
 }
 
+bool ContainsBinding(const vector<ColumnBinding> &bindings, const ColumnBinding &binding) {
+	return std::find(bindings.begin(), bindings.end(), binding) != bindings.end();
+}
+
 //! The solver consumes every source output. Skipping an unreferenced output must not suppress a computed error
 //! or volatile expression. This proves only stored columns, constants, and their passthrough aliases safe,
-//! including passthrough bindings from one child of an inner comparison join.
+//! including passthrough bindings from one child of an inner comparison join. The binding is always an output of
+//! `source`: the caller took it from the source's own bindings or from a reference in the operator above.
 bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
 	switch (source.type) {
 	case LogicalOperatorType::LOGICAL_GET: {
 		auto &get = source.Cast<LogicalGet>();
-		if (get.function.function != TableScanFunction::GetFunction().function || !get.GetTable()) {
+		if (get.function.function != TableScanFunction::GetFunction().function) {
 			return false;
 		}
-		auto bindings = get.GetColumnBindings();
-		return std::find(bindings.begin(), bindings.end(), binding) != bindings.end();
+		// The table scan function reads a stored table only (the late materialization asserts the same).
+		D_ASSERT(get.GetTable());
+		return ContainsBinding(get.GetColumnBindings(), binding);
 	}
 	case LogicalOperatorType::LOGICAL_PROJECTION: {
 		auto &projection = source.Cast<LogicalProjection>();
-		if (binding.table_index != projection.table_index || binding.column_index >= projection.expressions.size()) {
-			return false;
-		}
+		D_ASSERT(binding.table_index == projection.table_index && binding.column_index < projection.expressions.size());
 		auto &expression = *projection.expressions[binding.column_index];
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
 			return true;
 		}
-		if (expression.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF || source.children.size() != 1) {
+		if (expression.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 			return false;
 		}
 		auto &child_ref = expression.Cast<BoundColumnRefExpression>();
-		return child_ref.depth == 0 && DirectCanSkipSourceOutput(*source.children[0], child_ref.binding);
+		// A projection has one child, and a correlated reference is gone before the optimizer runs.
+		D_ASSERT(source.children.size() == 1 && child_ref.depth == 0);
+		return DirectCanSkipSourceOutput(*source.children[0], child_ref.binding);
 	}
 	case LogicalOperatorType::LOGICAL_FILTER:
-		return source.children.size() == 1 && DirectCanSkipSourceOutput(*source.children[0], binding);
+		D_ASSERT(source.children.size() == 1);
+		return DirectCanSkipSourceOutput(*source.children[0], binding);
 	case LogicalOperatorType::LOGICAL_COMPARISON_JOIN: {
 		auto &join = source.Cast<LogicalComparisonJoin>();
-		if (join.join_type != JoinType::INNER || source.children.size() != 2) {
+		if (join.join_type != JoinType::INNER) {
 			return false;
 		}
-		auto output_bindings = source.GetColumnBindings();
-		if (std::find(output_bindings.begin(), output_bindings.end(), binding) == output_bindings.end()) {
-			return false;
-		}
-		auto left_bindings = source.children[0]->GetColumnBindings();
-		auto right_bindings = source.children[1]->GetColumnBindings();
-		bool on_left = std::find(left_bindings.begin(), left_bindings.end(), binding) != left_bindings.end();
-		bool on_right = std::find(right_bindings.begin(), right_bindings.end(), binding) != right_bindings.end();
-		if (on_left == on_right) {
-			return false;
-		}
+		// An inner join outputs its two children's columns, so the binding comes from exactly one of them.
+		D_ASSERT(source.children.size() == 2 && ContainsBinding(source.GetColumnBindings(), binding));
+		bool on_right = ContainsBinding(source.children[1]->GetColumnBindings(), binding);
+		D_ASSERT(ContainsBinding(source.children[0]->GetColumnBindings(), binding) != on_right);
 		return DirectCanSkipSourceOutput(*source.children[on_right ? 1 : 0], binding);
 	}
 	default:
@@ -122,8 +125,7 @@ bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
 } // namespace
 
 bool DirectIRIsReadable(const DirectIR &ir) {
-	if (ir.decisions_status != DirectAnalysisStatus::PROVED || ir.source_status != DirectAnalysisStatus::PROVED ||
-	    ir.constraints_status != DirectAnalysisStatus::PROVED || ir.objective.status != DirectAnalysisStatus::PROVED ||
+	if (ir.constraints_status != DirectAnalysisStatus::PROVED || ir.objective.status != DirectAnalysisStatus::PROVED ||
 	    !std::isfinite(ir.objective.offset)) {
 		return false;
 	}
@@ -165,9 +167,7 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 		// A DIAGNOSE query or a forced backend keeps the solver path; there is nothing to report.
 		return op;
 	}
-	if (decide.children.size() != 1 || !decide.children[0]) {
-		throw InternalException("Direct solve expected one DECIDE input");
-	}
+	D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 	auto &source = *decide.children[0];
 	auto ir = DirectIR::Read(optimizer.context, decide);
 	struct AppliedCandidate {
@@ -212,9 +212,7 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 	source.ResolveOperatorTypes();
 	auto output_bindings = source.GetColumnBindings();
 	auto output_types = source.types;
-	if (output_bindings.size() != output_types.size()) {
-		throw InternalException("Direct solve source bindings and types differ");
-	}
+	D_ASSERT(output_bindings.size() == output_types.size());
 	vector<uint8_t> prunable_sources;
 	for (auto &binding : output_bindings) {
 		prunable_sources.push_back(DirectCanSkipSourceOutput(source, binding) ? 1 : 0);
@@ -223,9 +221,7 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 		output_bindings.emplace_back(decide.decide_index, i);
 		output_types.push_back(decide.decide_variables[i]->return_type);
 	}
-	if (output_bindings != decide.GetColumnBindings()) {
-		throw InternalException("Direct solve derived bindings differ from the DECIDE output");
-	}
+	D_ASSERT(output_bindings == decide.GetColumnBindings());
 	auto decide_index = decide.decide_index;
 	// A stored source carries its row id as one more source column, so a column the rule never uses can be read again
 	// later, past the plan that holds rows. The rule passes it along like any other source column.

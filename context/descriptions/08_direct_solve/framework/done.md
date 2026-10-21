@@ -1,9 +1,9 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-21 on top of `9eb61e407e`, with the right-hand-side rewrite and S1 and A1 registered: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,110
-passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,109 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,847 assertions in
+Verified on 2026-10-21 on top of `34f859f8ab`, with the right-hand-side rewrite and S1 and A1 registered: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,119
+passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,118 passed and one failure,
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,844 assertions in
 55 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
@@ -20,7 +20,7 @@ check). Design: `../architecture/`.
   (`../architecture/ir.md`). No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
-  rule driver first checks that the front end read the whole IR (`DirectIRIsReadable`: decisions, source, every
+  rule driver first checks that the front end read the whole IR (`DirectIRIsReadable`: every
   constraint and the objective proved, a finite offset, a known sense); an IR that fails is offered to no rule, so each
   rule checks only what concerns its own class. Otherwise the driver runs CheckCondition for every rule. Rules are disjoint, so at most one applies to a query; two that apply
   raise an internal error naming both rules.
@@ -217,8 +217,16 @@ default box.
   arms only that test reaches (`--unreached` also lists every arm no test reaches), and writes `report.json` with each
   arm's condition text and function. `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not
   (exit 1 when there are any) and the reverse, matching an arm by file, function, condition text and its occurrence in
-  the function, so lines that move are not read as lost. 1,673 of 1,722 arms are reached. Branch coverage shows which
-  branches a test runs, not whether its assertion would catch a wrong value there. A subset run by hand needs `-m`
-  (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
+  the function, so lines that move are not read as lost. 1,637 of 1,642 arms are reached. Of the five no test reaches,
+  four are kept on purpose: `ref.depth == 0` in `DirectReferencesOnlySource`, which every caller's earlier determinism
+  check rules out but which the function's contract promises on its own; the `default` arms of the `ExpressionType`
+  switches in S1's `NormalizeCapacity` and `SatisfiesComparison`; and the extension-name check in late materialization's
+  `VisitForAdapters`, which keeps an operator of another extension from being cast to the adapter. The fifth, the
+  right-hand-side rewrite's decline of an order-0 norm, is reachable, but that query raises an internal error on both
+  paths (`../../06_issues/bugs/todo.md`). Every other check follows one policy: a query reaches it and a test runs it; a
+  check on what a rule hands the engine raises in release builds and a stub-rule C++ test reaches it; a check on a plan,
+  IR or setting the engine builds itself is a `D_ASSERT`, which debug builds run; code no query reaches is deleted.
+  Branch coverage shows which branches a test runs, not whether its assertion would catch a wrong value there. A subset
+  run by hand needs `-m` (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
   clauses 0.13 s, 8 clauses with `WHEN` 0.26 s, 3 decisions and 8 clauses 0.29 s.

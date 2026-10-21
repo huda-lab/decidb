@@ -335,9 +335,7 @@ public:
 		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
 		source_types = source.types;
-		if (source_bindings.size() != source_types.size()) {
-			throw InternalException("Direct solve source bindings and types differ");
-		}
+		D_ASSERT(source_bindings.size() == source_types.size());
 	}
 
 	DirectSubstitute Build(unique_ptr<LogicalOperator> source) const {

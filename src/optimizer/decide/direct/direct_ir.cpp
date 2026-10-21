@@ -60,7 +60,6 @@ public:
 		D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 		source_bindings = decide.children[0]->GetColumnBindings();
 		ir.source_bindings = source_bindings;
-		ir.source_status = DirectAnalysisStatus::PROVED;
 		ReadDecisions(ir);
 		ReadEntityScopes(ir);
 		ReadConstraints(ir);
@@ -110,7 +109,6 @@ private:
 			}
 			ir.decisions.push_back(std::move(decision));
 		}
-		ir.decisions_status = DirectAnalysisStatus::PROVED;
 	}
 
 	void ReadEntityScopes(DirectIR &ir) const {

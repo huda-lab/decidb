@@ -746,6 +746,23 @@ A1_CASES["two_decisions_one_infeasible"] = Case(
     (("x", "REAL"), ("y", "INT")),
 )
 
+# An objective with a WHEN over a sum of parts: every part shares the one membership mask. And a part with two terms
+# that read no decision: their sum is validated once.
+A1_CASES["real_objective_parenthesized_sums_when"] = Case(
+    (LOWER_ZERO_BOX,),
+    Objective(
+        "MINIMIZE (SUM(POWER(x - t, 2)) + SUM(s*x)) WHEN (f)",
+        False,
+        lambda r: {"x": _masked(r, 1.0, -2.0 * r["t"] + r["s"], lambda q: q["f"])},
+    ),
+    (("x", "REAL"),),
+)
+A1_CASES["real_objective_two_constant_terms"] = Case(
+    (LOWER_ZERO_BOX,),
+    Objective("MINIMIZE SUM(s*x + 5 + w)", False, lambda r: {"x": (0.0, r["s"])}),
+    (("x", "REAL"),),
+)
+
 # A bare strict bound against a fractional literal on a whole-numbered decision (the solver once moved it by a whole unit
 # before rounding). Checked against the oracle on the direct path and on the solver path.
 SOLVER_OFF_BY_ONE = {

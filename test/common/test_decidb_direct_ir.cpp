@@ -106,7 +106,6 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	auto *decide = FindDirectIRInput(*plan);
 	REQUIRE(decide != nullptr);
 	auto ir = DirectIR::Read(*con.context, *decide);
-	REQUIRE(ir.decisions_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.decisions.size() == 1);
 	REQUIRE(ir.decisions[0].domain == DirectDomain::BOOL);
 	REQUIRE(ir.decisions[0].scope == DecideVarScope::ROW);
@@ -261,7 +260,6 @@ TEST_CASE("Direct-solve IR models every decision domain and scope", "[decidb]") 
 	                           "x <= 1 AND n <= 3 AND r <= 2 AND s <= 4 AND e <= 1",
 	                           "MAXIMIZE SUM(w*x) + SUM(n) + SUM(r) + s + SUM(e)"));
 	auto &ir = query.ir;
-	REQUIRE(ir.decisions_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.decisions.size() == 5);
 	REQUIRE(ir.decisions[0].domain == DirectDomain::BOOL);
 	REQUIRE(ir.decisions[0].output_type == LogicalType::INTEGER);
@@ -271,7 +269,6 @@ TEST_CASE("Direct-solve IR models every decision domain and scope", "[decidb]") 
 	REQUIRE(ir.decisions[4].scope == DecideVarScope::ENTITY);
 	REQUIRE(ir.decisions[4].entity_scope == 0);
 	REQUIRE(ir.entity_scopes.size() == 1);
-	REQUIRE(ir.entity_scopes[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(!ir.entity_scopes[0].key_slots.empty());
 	// The query-wide decision is a row-level part beside the reducers.
 	REQUIRE(ir.objective.parts.size() == 5);

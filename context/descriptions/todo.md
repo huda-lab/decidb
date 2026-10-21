@@ -7,7 +7,6 @@ Read first: `08_direct_solve/architecture/overview.md`, `08_direct_solve/archite
 `08_direct_solve/framework/done.md`. Checks: `08_direct_solve/framework/todo.md` § How to work any task.
 
 ## 1. Prune the tests
-- [ ] H-34 Branches no test reaches — 08_direct_solve/framework/todo.md § H-34
 - [ ] H-29 Prune the direct-solve tests — 08_direct_solve/framework/todo.md § H-29
 
 ## 2. One expression style

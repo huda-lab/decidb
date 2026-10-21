@@ -62,6 +62,9 @@ public:
 		VALIDATED_COLUMN_OUT_OF_RANGE,
 		//! The slot of the source row id, which the rule driver appends to a stored source, is out of range.
 		ROW_ID_SLOT_OUT_OF_RANGE,
+		//! The slot map covers the outputs but not the source row id, which the rule driver appended to a stored
+		//! source.
+		ROW_ID_NOT_PASSED,
 		//! What the rule passes to a shared plan fragment is wrong, and the fragment raises while the rule builds.
 		//! The condition handed to DirectValidationBreaker is not Boolean.
 		BREAKER_CONDITION_NOT_BOOLEAN,
@@ -152,6 +155,9 @@ public:
 		case Fault::ROW_ID_SLOT_OUT_OF_RANGE:
 			// The rowid is the last source column, just before the decision.
 			substitute.slot_map[input.size() - 1] = 1000;
+			break;
+		case Fault::ROW_ID_NOT_PASSED:
+			substitute.slot_map.erase(substitute.slot_map.begin() + NumericCast<int64_t>(input.size() - 1));
 			break;
 		}
 		return substitute;
@@ -415,7 +421,9 @@ TEST_CASE("Direct rule driver rejects each way a rule can hand the adapter a sub
 	    {"a slot beyond the child", StubRule::Fault::SLOT_OUT_OF_RANGE, false, "slot map that does not match"},
 	    {"a validated column beyond the child", StubRule::Fault::VALIDATED_COLUMN_OUT_OF_RANGE, false,
 	     "lost a required validated column"},
-	    {"a row id slot beyond the child", StubRule::Fault::ROW_ID_SLOT_OUT_OF_RANGE, true, "lost the source row id"}};
+	    {"a row id slot beyond the child", StubRule::Fault::ROW_ID_SLOT_OUT_OF_RANGE, true, "lost the source row id"},
+	    {"a slot map without the source row id", StubRule::Fault::ROW_ID_NOT_PASSED, true,
+	     "did not pass the source row id through"}};
 	for (auto &test_case : cases) {
 		INFO(test_case.name);
 		auto fault = test_case.fault;

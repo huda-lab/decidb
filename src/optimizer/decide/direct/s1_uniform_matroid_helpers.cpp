@@ -60,9 +60,7 @@ ScopeState ProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool 
 	if (scoped) {
 		unique_ptr<Expression> eligible = DirectActiveWhen(when);
 		for (auto slot : key_slots) {
-			if (slot >= bindings.size()) {
-				throw InternalException("Direct solve received an invalid PER key slot");
-			}
+			D_ASSERT(slot < bindings.size());
 			eligible = make_uniq<BoundCaseExpression>(DirectIsNull(DirectColumn(types[slot], bindings[slot])),
 			                                          DirectConstantBool(false), std::move(eligible));
 		}
@@ -104,9 +102,10 @@ BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator>
 		unique_ptr<Expression> is_invalid =
 		    DirectIsNull(bound.is_column ? DirectColumn(bound.column_type, bound.column) : value());
 		// A bound with its own NULL message counts NULL rows here and NaN rows apart; any other counts both together.
+		// Only a bound that is exactly one named column has its own message, so any other is computed.
 		bool own_messages = !bound.null_message.empty();
-		if (!own_messages &&
-		    (!bound.is_column || bound.column_type == LogicalType::FLOAT || bound.column_type == LogicalType::DOUBLE)) {
+		D_ASSERT(own_messages || !bound.is_column);
+		if (!own_messages) {
 			is_invalid = make_uniq<BoundCaseExpression>(std::move(is_invalid), DirectConstantBool(true),
 			                                            optimizer.BindScalarFunction("isnan", value()));
 		}

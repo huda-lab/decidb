@@ -50,7 +50,6 @@ struct DirectIREntityScope {
 	vector<idx_t> relations;
 	//! Source slots of the identity key columns.
 	vector<idx_t> key_slots;
-	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 };
 
 enum class DirectReducer : uint8_t {
@@ -122,10 +121,8 @@ struct DirectIR {
 	static DirectIR Read(ClientContext &context, LogicalDecide &decide);
 
 	idx_t decide_index;
-	DirectAnalysisStatus decisions_status = DirectAnalysisStatus::NOT_PROVED;
 	vector<DirectIRDecision> decisions;
 	vector<DirectIREntityScope> entity_scopes;
-	DirectAnalysisStatus source_status = DirectAnalysisStatus::NOT_PROVED;
 	vector<ColumnBinding> source_bindings;
 	//! Number of entries in the source-clause registry.
 	idx_t source_clause_count = 0;
@@ -162,9 +159,10 @@ struct DirectSubstitute {
 	bool pipelined = false;
 };
 
-//! Whether the front end read the whole IR: the decisions, the source, the constraints and the objective are all proved
-//! (each constraint too), the objective offset is finite and the sense is one the rules know. The rule driver offers a
-//! rule an IR only when this holds, so a rule checks only what concerns its own class.
+//! Whether the front end read the whole IR: the constraints and the objective are all proved (each constraint too),
+//! the objective offset is finite and the sense is one the rules know. The decisions, the entity scopes and the source
+//! are always read in full. The rule driver offers a rule an IR only when this holds, so a rule checks only what
+//! concerns its own class.
 bool DirectIRIsReadable(const DirectIR &ir);
 
 //! The lifecycle the rule driver runs: CheckCondition, then Apply. CheckCondition checks the query's shape and then
