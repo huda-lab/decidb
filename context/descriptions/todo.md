@@ -6,11 +6,6 @@ this file when it is empty.
 Read first: `08_direct_solve/architecture/overview.md`, `08_direct_solve/architecture/rules.md`,
 `08_direct_solve/framework/done.md`. Checks: `08_direct_solve/framework/todo.md` § How to work any task.
 
-## 1. Owner decisions
-- [ ] S1-19 Four S1 behaviors that look arbitrary — 08_direct_solve/rules/s1_uniform_matroid/todo.md § S1-19
-- [ ] H-33 EXPLAIN says only that a rule applied — 08_direct_solve/framework/todo.md § H-33
-- [ ] H-35 Which overlapping tests catch a wrong value — 08_direct_solve/framework/todo.md § H-35
-
 ## 2. S1 on the shared reading
 - [ ] H-20 Reducer `WHEN` and empty group in the rewrite — 08_direct_solve/framework/todo.md § H-20
 
@@ -27,7 +22,7 @@ Read first: `08_direct_solve/architecture/overview.md`, `08_direct_solve/archite
 
 ## 5. Prune the tests (needs: 3, 4)
 - [ ] H-34 Branches no test reaches — 08_direct_solve/framework/todo.md § H-34
-- [ ] H-29 Prune the direct-solve tests — 08_direct_solve/framework/todo.md § H-29 (needs: H-35)
+- [ ] H-29 Prune the direct-solve tests — 08_direct_solve/framework/todo.md § H-29
 
 ## 6. One expression style (needs: 3, 4)
 - [ ] H-25 `ExpressionBuilder` is the one way — 08_direct_solve/framework/todo.md § H-25
