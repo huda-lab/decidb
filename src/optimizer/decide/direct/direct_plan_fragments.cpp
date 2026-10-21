@@ -1,5 +1,6 @@
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
@@ -131,8 +132,7 @@ unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, uniq
 	    make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
 	auto active_predicate = make_uniq<BoundCaseExpression>(
 	    std::move(has_active_rows), DirectConstantBool(true),
-	    DirectErrorPredicate(optimizer, "DECIDE empty row set for aggregate in " + clause +
-	                                        ". An empty aggregate has no well-defined value; check your WHEN clause."));
+	    DirectErrorPredicate(optimizer, DecideEmptyRowSetMessage("aggregate", clause)));
 	auto active_guard = make_uniq<LogicalFilter>(std::move(active_predicate));
 	active_guard->children.push_back(std::move(active_window));
 	return std::move(active_guard);

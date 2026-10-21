@@ -601,10 +601,7 @@ static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
 // floats free and silently vacates the outer constraint or objective.
 static void RejectEmptyAggregate(idx_t effective_row_count, const char *what, const char *ctx) {
     if (effective_row_count == 0) {
-        throw InvalidInputException(
-            "DECIDE empty row set for %s in %s. "
-            "An empty aggregate has no well-defined value; check your WHEN clause.",
-            what, ctx);
+        throw InvalidInputException(DecideEmptyRowSetMessage(what, ctx));
     }
 }
 

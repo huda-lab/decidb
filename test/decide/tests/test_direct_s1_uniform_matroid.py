@@ -159,9 +159,25 @@ _REDUCER_EXTRAS = {
     "SUM(sm) + 100": lambda rows: sum(r["sm"] for r in rows) + 100,
     "AVG(sm) + 2": lambda rows: Fraction(sum(r["sm"] for r in rows), len(rows)) + 2,
 }
+# A reducer with a WHEN of its own reads the rows of the clause's group that the WHEN keeps. Written without a top WHEN,
+# which the binder does not allow beside it (it is the left side's own WHEN that scopes the clause).
+_REDUCER_OWN_WHEN = {
+    "COUNT(*) WHEN (cap > 1)": lambda rows: sum(1 for r in rows if r["cap"] > 1),
+    "COUNT(cap) WHEN (cap > 1)": lambda rows: sum(1 for r in rows if r["cap"] > 1),
+    "MIN(cap) WHEN (cap > 1)": lambda rows: min(r["cap"] for r in rows if r["cap"] > 1),
+    "MAX(cap) WHEN (flag)": lambda rows: max(r["cap"] for r in rows if r["flag"]),
+    "AVG(sm) WHEN (cap > 1)": lambda rows: Fraction(
+        sum(r["sm"] for r in rows if r["cap"] > 1), sum(1 for r in rows if r["cap"] > 1)
+    ),
+    "MIN(cap) WHEN (flag)": lambda rows: min(r["cap"] for r in rows if r["flag"]),
+    # Two COUNT(*) that differ only in their WHEN are two window columns.
+    "(COUNT(*) WHEN (cap > 1)) - (COUNT(*) WHEN (cap < 3))": lambda rows: sum(1 for r in rows if r["cap"] > 1)
+    - sum(1 for r in rows if r["cap"] < 3),
+}
 REDUCER_BOUND_EXPRS = {
     **_REDUCER_BASES,
     **_REDUCER_EXTRAS,
+    **_REDUCER_OWN_WHEN,
     **{f"{key} + 0": function for key, function in _REDUCER_BASES.items()},
 }
 
@@ -1499,6 +1515,45 @@ S1_REDUCER_CASES.update(
         },
         "reducer_infeasible_lower_above_group": {"bounds": [(">=", "SUM(sm) + 100")], "per": True},
         "reducer_ties": {"data": "ties", "bounds": [("<=", "MAX(cap)")], "per": True},
+        # A reducer with a WHEN of its own. Without PER the group is every row (the clause covers no row less), so the
+        # window has no partition and its FILTER is the reducer's WHEN alone.
+        "reducer_own_when_count_star_global": {"bounds": [(">=", "COUNT(*) WHEN (cap > 1)")], "sense": "MINIMIZE"},
+        "reducer_own_when_min_global": {"bounds": [("<=", "MIN(cap) WHEN (cap > 1)")]},
+        # With PER, rows no group covers (the NULL key) form partitions of their own. A COUNT reads 0 there because
+        # its FILTER keeps nothing; the other kinds keep every such row and read their 0 argument.
+        "reducer_own_when_count_star_per": {
+            "bounds": [(">=", "COUNT(*) WHEN (cap > 1)")],
+            "per": True,
+            "sense": "MINIMIZE",
+        },
+        "reducer_own_when_count_column_per": {
+            "bounds": [(">=", "COUNT(cap) WHEN (cap > 1)")],
+            "per": True,
+            "sense": "MINIMIZE",
+        },
+        "reducer_own_when_avg_per": {"bounds": [(">=", "AVG(sm) WHEN (cap > 1)")], "per": True, "sense": "MINIMIZE"},
+        "reducer_own_when_min_per": {"bounds": [("<=", "MIN(cap) WHEN (cap > 1)")], "per": True},
+        "reducer_own_when_differences_of_two_counts_per": {
+            "bounds": [(">=", "(COUNT(*) WHEN (cap > 1)) - (COUNT(*) WHEN (cap < 3))")],
+            "per": True,
+            "sense": "MINIMIZE",
+        },
+        # Both sides have a WHEN. The right one scopes the reducer within the group, the left one decides which
+        # groups are read at all: group c has no flagged row, so its reducer is never read and an empty one is no error.
+        "reducer_own_when_beside_a_left_local_when": {
+            "bounds": [("<=", "MIN(cap) WHEN (cap > 1)")],
+            "per": True,
+            "when": "local",
+        },
+        "reducer_own_when_empties_a_group_the_left_side_never_reads": {
+            "bounds": [("<=", "MIN(cap) WHEN (flag)")],
+            "per": True,
+            "when": "local",
+        },
+        "reducer_own_when_max_beside_a_left_local_when_global": {
+            "bounds": [("<=", "MAX(cap) WHEN (flag)")],
+            "when": "local",
+        },
         # A count body with an offset or a negation against an aggregate bound.
         "reducer_offset_min_per": _offset_case(1, "1", [("<=", "MIN(cap)")], "per"),
         "reducer_offset_max_negated_per": _offset_case(-1, "1", [("<=", "MAX(cap)")], "per", sense="MINIMIZE"),
@@ -1567,6 +1622,17 @@ S1_REDUCER_ERROR_CASES = {
     # No row of the clause's group: the aggregate has no value.
     "empty_group_top_when": ("INTEGER", ("1", "2", "3", "4"), "SUM(x) <= MIN(v) + 0 WHEN (id > 100)"),
     "empty_group_top_when_per": ("SMALLINT", ("1", "2", "3", "4"), "SUM(x) <= AVG(v) + 0 WHEN (id > 100) PER g"),
+    # The reducer's own WHEN keeps no row of the group the clause reads.
+    "empty_own_when_global": ("INTEGER", ("1", "2", "3", "4"), "SUM(x) <= MIN(v) WHEN (id > 100)"),
+    "empty_own_when_count_star": ("INTEGER", ("1", "2", "3", "4"), "SUM(x) <= COUNT(*) WHEN (id > 100)"),
+    "empty_own_when_count_column_per": ("INTEGER", ("1", "2", "3", "4"), "SUM(x) <= COUNT(v) WHEN (id > 100) PER g"),
+    # Group a keeps ids 1 and 2, group b keeps none: one empty group is enough.
+    "empty_own_when_in_one_group": ("INTEGER", ("1", "2", "3", "4"), "SUM(x) <= MAX(v) WHEN (id <> 3) PER g"),
+    "empty_own_when_beside_a_left_local_when": (
+        "INTEGER",
+        ("1", "2", "3", "4"),
+        "SUM(x) WHEN flag <= MIN(v) WHEN (id > 100) PER g",
+    ),
 }
 
 
@@ -1589,6 +1655,24 @@ def test_s1_reducer_bound_errors_fail_on_both_paths(decidb_cli, name):
         messages[mode] = str(error.value)
     assert "decide_direct_solve=require" not in messages["require"], f"direct solve declined:\n{messages['require']}"
     assert error_class(messages["require"]) == error_class(messages["off"]), messages
+
+
+# The error is the solver's empty-aggregate error, not the NULL bound a window over no row would otherwise read.
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(key for key in S1_REDUCER_ERROR_CASES if key.startswith("empty_own_when")))
+def test_s1_reducer_own_when_that_empties_a_group_raises_the_empty_aggregate_error(decidb_cli, name):
+    column_type, values, constraint = S1_REDUCER_ERROR_CASES[name]
+    typed = tuple(f"CAST({value} AS {column_type})" for value in values)
+    rows = _REDUCER_ROWS.format(v1=typed[0], v2=typed[1], v3=typed[2], v4=typed[3])
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, g, flag, score, v) "
+        f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    for mode in ("off", "require"):
+        with pytest.raises(DecidBCliError, match="empty row set for aggregate in constraint right-hand side"):
+            _run(decidb_cli, sql, mode)
 
 
 # Infinity is a value of the aggregate, not an error: no limit above, or a limit no count meets.
@@ -1616,12 +1700,12 @@ def test_s1_reducer_bound_reads_infinity_like_the_solver(decidb_cli, name):
     assert direct == _outcome(decidb_cli, sql, "off")
 
 
-# What stays on the solver. Each declines under `require`, and `auto` gives the answer `off` gives. A reducer with a WHEN
-# of its own (H-20) and a relation-qualified reducer keep the solver's fold; every other COUNT, MIN, MAX, SUM and AVG on
-# the right is a window column of the source (H-19) and is exact, so it moved to `S1_REDUCER_NOW_APPLIED` below.
+# What stays on the solver. Each declines under `require`, and `auto` gives the answer `off` gives. A relation-qualified
+# reducer and a reducer whose own WHEN cannot be read over the source (`random()` changes between rows) keep the solver's
+# fold; every other COUNT, MIN, MAX, SUM and AVG on the right, with or without a WHEN of its own, is a window column of
+# the source (H-19, H-20) and is exact, so it moved to `S1_REDUCER_NOW_APPLIED` below.
 S1_REDUCER_DECLINED = {
-    "min_with_its_own_when": ("INTEGER", ("1", "2", "3"), "MIN(v) WHEN (id > 0)"),
-    "min_with_its_own_when_in_arithmetic": ("INTEGER", ("1", "2", "3"), "(MIN(v) WHEN (id > 0)) + 1"),
+    "min_with_a_volatile_own_when": ("INTEGER", ("1", "2", "3"), "MIN(v) WHEN (random() < 2)"),
     "qualified_reducer": ("INTEGER", ("1", "2", "3"), "MIN(t: v)"),
 }
 
@@ -1672,6 +1756,14 @@ S1_REDUCER_NOW_APPLIED = {
     ),
     "sum_bigint_past_2_pow_53": ("BIGINT", ("9007199254740992", "9007199254740993", "1"), "SUM(v)", _EXACT["sum"]),
     "min_of_an_expression": ("INTEGER", ("1", "2", "3"), "MIN(v + 1)", lambda values: min(values) + 1),
+    # The reducer's own WHEN keeps ids 1 and 2 (the id is the position): their values are 2 and 3.
+    "min_with_its_own_when": ("INTEGER", ("1", "2", "3"), "MIN(v) WHEN (id > 0)", lambda values: min(values[1:])),
+    "min_with_its_own_when_in_arithmetic": (
+        "INTEGER",
+        ("1", "2", "3"),
+        "(MIN(v) WHEN (id > 0)) + 1",
+        lambda values: min(values[1:]) + 1,
+    ),
     "divisor_is_an_aggregate": (
         "INTEGER",
         ("1", "2", "3"),
@@ -1738,6 +1830,12 @@ WINDOW_OVERFLOW_CASES = {
     "plain_cap_times_huge": (f"SUM(x) <= cap * {_K}", "error"),
     "plain_cap_times_huge_on_a_row_the_when_leaves_out": (f"SUM(x) <= cap * {_K} WHEN flag", "error"),
     "plain_cap_times_small": ("SUM(x) <= cap * 3", "ok"),
+    # The reducer's own WHEN keeps one row in each covered group (ids 1, 3 and 5) and two in the NULL-key group, which no
+    # group covers: a COUNT that read 2 there would overflow, so a COUNT reads 0 where its group is not covered.
+    "own_when_count_in_uncovered_rows_would_overflow": (
+        "SUM(x) <= (COUNT(*) WHEN (id IN (1, 3, 5, 7, 8))) * 4611686018427387904 PER g",
+        "ok",
+    ),
 }
 
 

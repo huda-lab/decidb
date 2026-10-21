@@ -243,6 +243,14 @@ static constexpr const char *NE_CLAUSE_TAG_PREFIX = "__ne_clause_tag_";
 //! per-row. Set on the BoundComparisonExpression.alias during RewriteMinMax.
 static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 
+//! The error for an aggregate whose WHEN leaves it no row: `aggregate` names what is empty ("aggregate",
+//! "aggregate term", ...) and `place` the clause it sits in ("constraint", "objective", "constraint right-hand side").
+//! The solver's fold and the direct-solve plans raise this one text.
+inline string DecideEmptyRowSetMessage(const string &aggregate, const string &place) {
+	return "DECIDE empty row set for " + aggregate + " in " + place +
+	       ". An empty aggregate has no well-defined value; check your WHEN clause.";
+}
+
 //! Tag marking optimizer-generated helper constraints that define auxiliaries or
 //! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
 static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";

@@ -29,17 +29,6 @@ What exists today is in `done.md`.
   teach a rule parser spelling.
 - **Done when.** The IR contract and the direct/solver tests run on both syntaxes where comparable.
 
-## H-20 — A reducer's own `WHEN` and its empty group in the rewrite
-
-- **Problem.** `SUM(x) <= SUM(cap) WHEN active` scopes the right-hand reducer apart from the clause. The rewrite leaves these
-  on the C++ fold.
-- **Change.** The rewrite carries the reducer's `WHEN` as the window aggregate's `FILTER`. A group whose filter keeps no
-  row raises the empty-aggregate error, as the fold does.
-- **Done when.** Differential cases for a reducer `WHEN` with and without `PER`, a group the filter empties, and a
-  `WHEN` on both the clause and the reducer pass under `off` and `require`. The C++ fold holds only the relation-qualified
-  reducers. The two own-`WHEN` cases in `S1_REDUCER_DECLINED` (`test_direct_s1_uniform_matroid.py`) stop declining; they
-  become applying cases, and the owner approves that test edit first.
-
 ## H-22 — The bound reader holds what R1 needs from A1
 
 - **Problem.** R1 needs two pieces A1 keeps to itself: the shape check that a per-row bound reads one decision
@@ -130,7 +119,9 @@ What exists today is in `done.md`.
 - **Problem.** 364 of 2,008 branch arms in the direct-solve files are reached by no test (`s1_uniform_matroid_rule.cpp` 80,
   `direct_late_materialization.cpp` 53, `direct_ir.cpp` 50, `a1_separable_box_rule.cpp` 38, `direct_expression.cpp` 35,
   `decide_rewrite_rhs_window.cpp` 32, `direct_result_adapter.cpp` 28, the three files split from the plan factory 23,
-  `direct_rule_driver.cpp` 17, `s1_uniform_matroid_helpers.cpp` 8). Each is an untested guard or dead code.
+  `direct_rule_driver.cpp` 17, `s1_uniform_matroid_helpers.cpp` 8). Each is an untested guard or dead code. Known arms no
+  SQL reaches: `DirectIRIsReadable` on a not-proved decisions or source status and on an unknown sense, and the
+  right-hand-side rewrite's clause-`WHEN` path under a reducer's own `WHEN` (the binder rejects both `WHEN`s together).
 - **Change.** Re-run the coverage and list the unreached arms with file and line. For each, name a query that reaches it
   and add that test, or delete the code when no query can.
 - **Done when.** Every listed arm is reached by a test or gone, and the five checks pass.

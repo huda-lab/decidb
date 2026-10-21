@@ -1,7 +1,7 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-10-21 on top of `a905005cb8`: `make decide-test` (3,445 passed, also with
-`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,444
+Verified on 2026-10-21 on top of `af46877987`: `make decide-test` (3,465 passed, also with
+`DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,464
 passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,324 assertions in 47 cases). `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check). Code:
 `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`, with the helpers only S1 uses in
 `s1_uniform_matroid_helpers.{hpp,cpp}`. Class definition: [definition.md](definition.md).
@@ -20,7 +20,7 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   `<= MIN(cap) PER warehouse`, `>= MAX(lo) / 2`, `<= SUM(cap)`). The shared right-hand-side rewrite (`framework/done.md`) hands S1
   each such aggregate as a source column holding the group's value, so S1 reads the bound like any per-row source bound and
   checks it for NULL and NaN on every row. S1 has no reader of its own for an aggregate: one the rewrite leaves on the
-  solver's fold (an own `WHEN`, a relation-qualified one, `DISTINCT` or `ORDER BY` inside it, another reducer) reaches S1
+  solver's fold (an own `WHEN` it cannot read over the source, a relation-qualified one, `DISTINCT` or `ORDER BY` inside it, another reducer) reaches S1
   as an aggregate node, and S1 declines the query. The value is DuckDB's, in its own types: `SUM` over any numeric type is exact, a bound of
   `COUNT(*) * 0.57` over 100 rows is exactly 57, and over the `BIGINT` values 2^60, 1, -2^60 `SUM(cap)` is 1. `COUNT(*)` counts the
   rows the clause covers in each group: a clause-level `WHEN` or a NULL `PER` key narrows it, while an aggregate-local `WHEN` on the
@@ -104,7 +104,7 @@ A query S1 does not apply to keeps its answer: it runs on the solver, and `requi
 
 | Shape | Why it is out | How to reopen it |
 |---|---|---|
-| A right-hand aggregate with its own `WHEN` (`SUM(x) <= COUNT(*) WHEN active`), a relation-qualified one, `DISTINCT` or `ORDER BY` inside it, or another reducer (`MEDIAN`) | Kept on the solver by decision | A separate task per shape |
+| A right-hand aggregate whose own `WHEN` is volatile (`MIN(v) WHEN (random() < 2)`), a relation-qualified one, `DISTINCT` or `ORDER BY` inside it, or another reducer (`MEDIAN`) | Kept on the solver by decision | A separate task per shape |
 | A count body whose added term is not a usable constant: a column (`SUM(x + bonus)`), NULL, NaN, an infinity, a constant above 2^21 in magnitude, or a weight on `x` other than 1 or -1 (`SUM(2*x + 1)`) | A column term adds a different amount per row, so the shift is not `n*c`. A non-finite or NULL term raises on the solver. Above 2^21 the plan cannot prove `n*c` exact. A weight other than ±1 is a weighted constraint (S3, S4) | Raise the 2^21 cap with a run-time check of `n` |
 | A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor, a NULL factor, or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. The solver reads a NULL factor as an objective of zeros, which is not a result worth copying. A subquery factor has no sign when the plan is built, and the sign decides whether the sense reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
 | A bound on `x` with no `WHEN` that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises DECIDE's usual infeasible error before it reads a row, so an empty source raises it too, and skips that error under `DIAGNOSE`. A query that can only fail has no speed to win, so S1 declines it (`DecideBoxContradictsDomain`) and the solver answers. The same bound with a `WHEN` is admitted | Not planned |

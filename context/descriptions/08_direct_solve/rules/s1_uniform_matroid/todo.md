@@ -5,8 +5,6 @@ What S1 does today is in `done.md`; the class is in `definition.md`. How to work
 
 ## S1-17 — Constant terms in the count body
 
-- **Needs.** `../../framework/todo.md` § H-20: under a `SUM` with an aggregate-local `WHEN`, the `COUNT(*)` the
-  canonicalizer writes carries its own `WHEN`, which the right-hand-side rewrite reads only after H-20.
 - **Problem.** S1 admits `SUM(x + c)` and `SUM(c - x)` by shifting the limit by `n*c` per group (`ReadCountBody`,
   `MAX_OFFSET`, the `HUGEINT` widening in `AddBoundValidation`, the covered-row count in `CountRows`, about 90 lines).
   The class definition does not ask for it, and `done.md` records a known difference near the top of `HUGEINT`.

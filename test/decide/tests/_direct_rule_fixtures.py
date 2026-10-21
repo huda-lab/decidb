@@ -125,8 +125,6 @@ S1 = RuleFixture(
         ("x(BOOL)", "SUM(x+cap)<=3", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(2*x+1)<=3", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(id*x)<=2", "MAXIMIZE SUM(p*x)"),
-        # The WHEN scopes only the count here, while the left side still sums every row.
-        ("x(BOOL)", "SUM(x)<=COUNT(*) WHEN (id>0)", "MAXIMIZE SUM(p*x)"),
         ("t.x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)"),
         ("t.x(BOOL)", "SUM(t: x)<=1", "MAXIMIZE SUM(p*x)"),
         ("x(BOOL)", "SUM(x)<=random()", "MAXIMIZE SUM(p*x)"),
@@ -148,8 +146,6 @@ S1 = RuleFixture(
         ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE CAST(NULL AS DOUBLE)*SUM(p*x)"),
         ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT 2)*SUM(p*x)"),
         ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT -2)*SUM(p*x)"),
-        # A bound that reads the group through an aggregate with a WHEN of its own stays on the solver's fold.
-        ("x(BOOL)", "SUM(x)<=(COUNT(*) WHEN (id>0))/2", "MAXIMIZE SUM(p*x)"),
     )
     + tuple(
         ("x(BOOL)", f"SUM(x)<=2 AND x{op}{constant}", "MAXIMIZE SUM(p*x)")

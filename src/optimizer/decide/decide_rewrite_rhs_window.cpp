@@ -16,6 +16,7 @@
 
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
@@ -192,9 +193,6 @@ private:
 		if (!lhs_active) {
 			return covers;
 		}
-		if (coverage_index == DConstants::INVALID_INDEX) {
-			coverage_index = optimizer.binder.GenerateTableIndex();
-		}
 		auto active = DirectWindowMatchingCount(
 		    covers ? make_uniq<BoundCaseExpression>(covers->Copy(), lhs_active->Copy(), DirectConstantBool(false))
 		           : lhs_active->Copy());
@@ -204,19 +202,63 @@ private:
 		for (auto key : per_keys) {
 			active->partitions.push_back(key->Copy());
 		}
-		coverage_slot = coverage_windows.size();
-		coverage_windows.push_back(std::move(active));
-		auto positive = make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_GREATERTHAN,
-		    DirectColumn(LogicalType::BIGINT, ColumnBinding(coverage_index, coverage_slot)),
-		    make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
+		auto positive = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHAN,
+		                                                     PlaceCoverageCount(std::move(active)),
+		                                                     make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
 		return make_uniq<BoundCaseExpression>(
 		    std::move(positive), covers ? std::move(covers) : DirectConstantBool(true), DirectConstantBool(false));
 	}
 
+	//! Adds a per-group count to the stage above DECIDE's child that the aggregate windows read, and returns the
+	//! column that carries it.
+	unique_ptr<Expression> PlaceCoverageCount(unique_ptr<BoundWindowExpression> count) {
+		if (coverage_index == DConstants::INVALID_INDEX) {
+			coverage_index = optimizer.binder.GenerateTableIndex();
+		}
+		auto slot = coverage_windows.size();
+		coverage_windows.push_back(std::move(count));
+		return DirectColumn(LogicalType::BIGINT, ColumnBinding(coverage_index, slot));
+	}
+
+	//! Whether the group a row sits in is evaluated and the reducer's own WHEN keeps none of its rows. The solver
+	//! raises its empty-aggregate error for such a group and for no other, so a group nobody evaluates stays silent.
+	//! The count is over the rows of the row's PER key that the clause covers and the WHEN keeps, so a row `eligible`
+	//! accepts reads the count of its own group.
+	unique_ptr<Expression> EmptyOwnWhen(const Expression &own, const Expression *eligible) {
+		auto covers = ClauseCovers();
+		auto kept = DirectWindowMatchingCount(
+		    covers ? make_uniq<BoundCaseExpression>(covers->Copy(), own.Copy(), DirectConstantBool(false))
+		           : own.Copy());
+		for (auto key : per_keys) {
+			kept->partitions.push_back(key->Copy());
+		}
+		unique_ptr<Expression> none =
+		    make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, PlaceCoverageCount(std::move(kept)),
+		                                         make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
+		if (eligible) {
+			none = make_uniq<BoundCaseExpression>(eligible->Copy(), std::move(none), DirectConstantBool(false));
+		}
+		return none;
+	}
+
+	//! The FILTER of a reducer's window. A COUNT counts only the rows the group covers, because it reads 0 where
+	//! nothing is covered. The reducer's own WHEN narrows the rows every kind reads; the rows the group does not
+	//! cover keep passing for the other kinds, so their partitions read the 0 argument rather than an empty aggregate.
+	unique_ptr<Expression> ReducerFilter(const BoundAggregateExpression &aggregate, const Expression *eligible,
+	                                     const Expression *own) const {
+		bool counts = aggregate.function.name == "count" || aggregate.function.name == "count_star";
+		if (!own) {
+			return eligible && counts ? eligible->Copy() : nullptr;
+		}
+		if (!eligible) {
+			return own->Copy();
+		}
+		return make_uniq<BoundCaseExpression>(eligible->Copy(), own->Copy(), DirectConstantBool(!counts));
+	}
+
 	//! The reducers whose window equals the solver's reading: COUNT, MIN, MAX, SUM and AVG of one numeric expression
-	//! over the source, with no WHEN, relation qualifier, DISTINCT, ORDER BY or norm of its own. Every other reducer
-	//! stays on the solver's fold.
+	//! over the source, with a WHEN (readable over the source) or without one, and with no relation qualifier,
+	//! DISTINCT, ORDER BY or norm of its own. Every other reducer stays on the solver's fold.
 	bool IsRewritable(const BoundAggregateExpression &aggregate) const {
 		// The clause's own PER keys and WHEN define the group, so they must be values the window can read.
 		for (auto key : per_keys) {
@@ -234,8 +276,8 @@ private:
 		}
 		string payload;
 		idx_t scope;
-		if (aggregate.filter || aggregate.IsDistinct() || aggregate.order_bys ||
-		    TryParseQualifiedReducerTag(aggregate.GetAlias(), scope) ||
+		if ((aggregate.filter && !ReadableOverSource(*aggregate.filter)) || aggregate.IsDistinct() ||
+		    aggregate.order_bys || TryParseQualifiedReducerTag(aggregate.GetAlias(), scope) ||
 		    ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, payload) ||
 		    ExtractDecideTagPayload(aggregate.GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload) ||
 		    HasDecideTag(aggregate.GetAlias(), AVG_REWRITE_TAG)) {
@@ -255,8 +297,10 @@ private:
 
 	//! The aggregate's argument, checked on every row as the solver checks it (a NULL or NaN raises even where the
 	//! clause covers no row), and read as 0 where the group does not cover the row. The NULL message names the columns
-	//! that are NULL on the row; the NaN message is the solver's without its row position.
-	unique_ptr<Expression> GuardedArgument(const Expression &argument, unique_ptr<Expression> eligible) {
+	//! that are NULL on the row; the NaN message is the solver's without its row position. `empty`, when given, raises
+	//! the solver's empty-aggregate error on a row of a group the reducer's own WHEN leaves with no row.
+	unique_ptr<Expression> GuardedArgument(const Expression &argument, unique_ptr<Expression> eligible,
+	                                       unique_ptr<Expression> empty) {
 		auto type = argument.return_type;
 		auto raise = [&](unique_ptr<Expression> message) {
 			return BoundCastExpression::AddCastToType(optimizer.context,
@@ -276,8 +320,19 @@ private:
 			guarded = make_uniq<BoundCaseExpression>(optimizer.BindScalarFunction("isnan", std::move(as_double)),
 			                                         raise(std::move(nan_message)), std::move(guarded));
 		}
-		return make_uniq<BoundCaseExpression>(DirectIsNull(argument.Copy()),
-		                                      raise(DirectNullMessageOf(optimizer, argument)), std::move(guarded));
+		guarded = make_uniq<BoundCaseExpression>(DirectIsNull(argument.Copy()),
+		                                         raise(DirectNullMessageOf(optimizer, argument)), std::move(guarded));
+		return empty ? EmptyGroupGuard(std::move(empty), std::move(guarded), type) : std::move(guarded);
+	}
+
+	//! `value`, except on a row of a group the reducer's own WHEN empties, where the solver's error is raised.
+	unique_ptr<Expression> EmptyGroupGuard(unique_ptr<Expression> empty, unique_ptr<Expression> value,
+	                                       const LogicalType &type) {
+		auto message = make_uniq<BoundConstantExpression>(
+		    Value(DecideEmptyRowSetMessage("aggregate", "constraint right-hand side")));
+		auto raise = BoundCastExpression::AddCastToType(
+		    optimizer.context, optimizer.BindScalarFunction("error", std::move(message)), type);
+		return make_uniq<BoundCaseExpression>(std::move(empty), std::move(raise), std::move(value));
 	}
 
 	bool SameScope(const Placed &placed) const {
@@ -296,6 +351,43 @@ private:
 		return !when || placed.when->Equals(*when);
 	}
 
+	//! The window that reads `aggregate` over the clause's group. The group is the clause's covered rows by PER key.
+	//! Rows it does not cover form partitions of their own whose argument is 0, so they read 0; a count reads 0 there
+	//! because its FILTER keeps no row. The reducer's own WHEN is the window's FILTER.
+	unique_ptr<BoundWindowExpression> MakeWindow(const BoundAggregateExpression &aggregate) {
+		idx_t coverage_slot = DConstants::INVALID_INDEX;
+		auto eligible = Eligible(coverage_slot);
+		unique_ptr<Expression> own;
+		unique_ptr<Expression> empty;
+		if (aggregate.filter) {
+			own = DirectActiveWhen(aggregate.filter.get());
+			empty = EmptyOwnWhen(*own, eligible.get());
+		}
+		// COUNT(*) has no argument to carry the empty-group error, so it counts a constant that carries it.
+		bool carries_in_constant = aggregate.children.empty() && empty;
+		auto function = carries_in_constant ? CountFun::GetFunctions().GetFunctionByOffset(0) : aggregate.function;
+		auto window = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, aggregate.return_type,
+		                                               make_uniq<AggregateFunction>(function),
+		                                               aggregate.bind_info ? aggregate.bind_info->Copy() : nullptr);
+		window->start = WindowBoundary::UNBOUNDED_PRECEDING;
+		window->end = WindowBoundary::UNBOUNDED_FOLLOWING;
+		if (eligible) {
+			window->partitions.push_back(eligible->Copy());
+			for (auto key : per_keys) {
+				window->partitions.push_back(key->Copy());
+			}
+		}
+		window->filter_expr = ReducerFilter(aggregate, eligible.get(), own.get());
+		if (!aggregate.children.empty()) {
+			window->children.push_back(
+			    GuardedArgument(*aggregate.children[0], eligible ? eligible->Copy() : nullptr, std::move(empty)));
+		} else if (carries_in_constant) {
+			auto one = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+			window->children.push_back(EmptyGroupGuard(std::move(empty), std::move(one), LogicalType::INTEGER));
+		}
+		return window;
+	}
+
 	unique_ptr<Expression> MakeWindowColumn(unique_ptr<Expression> aggregate_p) {
 		auto &aggregate = aggregate_p->Cast<BoundAggregateExpression>();
 		if (window_index == DConstants::INVALID_INDEX) {
@@ -309,28 +401,7 @@ private:
 			}
 		}
 		if (slot == DConstants::INVALID_INDEX) {
-			auto window = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, aggregate.return_type,
-			                                               make_uniq<AggregateFunction>(aggregate.function),
-			                                               aggregate.bind_info ? aggregate.bind_info->Copy() : nullptr);
-			window->start = WindowBoundary::UNBOUNDED_PRECEDING;
-			window->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-			// The group is the clause's covered rows by PER key. Rows it does not cover form partitions of their own
-			// whose argument is 0, so they read 0; a count reads 0 there because its FILTER keeps no row.
-			idx_t coverage_slot = DConstants::INVALID_INDEX;
-			auto eligible = Eligible(coverage_slot);
-			if (eligible) {
-				window->partitions.push_back(eligible->Copy());
-				for (auto key : per_keys) {
-					window->partitions.push_back(key->Copy());
-				}
-				if (aggregate.function.name == "count" || aggregate.function.name == "count_star") {
-					window->filter_expr = eligible->Copy();
-				}
-			}
-			if (!aggregate.children.empty()) {
-				window->children.push_back(
-				    GuardedArgument(*aggregate.children[0], eligible ? eligible->Copy() : nullptr));
-			}
+			auto window = MakeWindow(aggregate);
 			slot = windows.size();
 			windows.push_back(std::move(window));
 			Placed placed;
