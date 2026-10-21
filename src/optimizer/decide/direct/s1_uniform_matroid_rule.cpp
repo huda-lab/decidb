@@ -584,20 +584,16 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	for (auto &part : parts) {
 		// A query-wide factor on the reducer (`2 * SUM(...)`, `SUM(...) / 2`) scales every term of that part and no
 		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
-		double scale;
-		if (!DirectPartScale(context, part, scale)) {
+		DirectLinearObjectivePart read;
+		if (!DirectReadLinearObjective(ir, context, part, read)) {
 			return false;
 		}
-		for (auto &term : part.terms) {
-			if (!DirectIsNumericDecisionFree(*term.coefficient, ir.decide_index)) {
-				return false;
-			}
-			if (!DirectReferencesOnlySource(*term.coefficient, ir.source_bindings) ||
-			    (term_count > 1 && DirectMayThrow(*term.coefficient))) {
+		for (auto &term : read.terms) {
+			if (term_count > 1 && DirectMayThrow(*term.coefficient)) {
 				return false;
 			}
 			condition.objective_parts.push_back(
-			    {part.sign * term.sign, term.coefficient->Copy(), part.scale != nullptr, scale, part.scale_divides});
+			    {read.sign * term.sign, std::move(term.coefficient), read.scaled, read.scale, read.divides});
 		}
 	}
 	return true;

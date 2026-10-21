@@ -29,15 +29,6 @@ What exists today is in `done.md`.
   teach a rule parser spelling.
 - **Done when.** The IR contract and the direct/solver tests run on both syntaxes where comparable.
 
-## H-23 — One reader for a linear objective
-
-- **Problem.** S1 (`ProveObjective`) and A1 (the linear branch of its `ProveObjective`) each turn `SUM(c*x)` parts into
-  sign, coefficient and scale, into two structs with the same fields (S1's `Condition::ObjectivePart`, A1's `Part`).
-  R1 would write a third.
-- **Change.** A shared `DirectReadLinearObjective` beside `DirectReadBounds`, the same shared-reader pattern. S1 calls
-  it; A1 calls it for linear terms and keeps squares as its own.
-- **Done when.** The S1 and A1 suites pass unchanged.
-
 ## H-24 — Shared helpers for "true, or raise"
 
 - **Problem.** Plan code raises errors through `CASE ok THEN true ELSE error(...)`, written by hand in six places (S1's

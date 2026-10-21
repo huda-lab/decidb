@@ -6,7 +6,6 @@ goal is the full definition with its § Admitted class.
 
 ## R1-02 — The core rule: one decision, one `<=` budget
 
-- **Needs.** `../../framework/todo.md` § H-22 and § H-23.
 - **Problem.** `DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND available AND SUM(w*amount) <= B MAXIMIZE
   SUM(v*amount)` runs on the solver.
 - **Change.** `r1_continuous_knapsack_rule.cpp`, registered in `direct_registry.cpp`. One row-scoped `REAL` decision;

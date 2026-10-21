@@ -31,12 +31,15 @@ namespace direct_a1_separable_box {
 
 constexpr const char *RULE_NAME = "A1_SEPARABLE_BOX";
 
+//! A term of an objective part that is not linear: a constant, or a square. The linear terms are read by the shared
+//! DirectReadLinearObjective.
 struct Term {
-	enum class Kind : uint8_t { LINEAR, CONSTANT, SQUARE };
-	Kind kind = Kind::LINEAR;
+	enum class Kind : uint8_t { CONSTANT, SQUARE };
+	Kind kind = Kind::CONSTANT;
+	//! SQUARE: the decision the inner expression is linear in.
 	idx_t decision = 0;
 	int sign = 1;
-	//! LINEAR: the coefficient of the decision. CONSTANT: the value.
+	//! CONSTANT: the value.
 	unique_ptr<Expression> value;
 	//! SQUARE: `square_scale * (inner)^2`, where the inner expression is linear in one decision.
 	double square_scale = 1.0;
@@ -45,11 +48,10 @@ struct Term {
 };
 
 struct Part {
-	int sign = 1;
-	bool scaled = false;
-	double scale = 1.0;
-	bool divides = false;
+	//! The part's sign and constant factor, and its linear terms.
+	DirectLinearObjectivePart linear;
 	unique_ptr<Expression> filter;
+	//! The constant and square terms, in the order they came.
 	vector<Term> terms;
 };
 
@@ -100,6 +102,11 @@ bool IsConstantProblem(const Condition &condition) {
 	for (auto &part : condition.parts) {
 		if (part.filter) {
 			return false;
+		}
+		for (auto &term : part.linear.terms) {
+			if (!constant(*term.coefficient)) {
+				return false;
+			}
 		}
 		for (auto &term : part.terms) {
 			if (term.kind == Term::Kind::SQUARE) {
@@ -220,12 +227,14 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	idx_t decision_count = ir.decisions.size();
 	for (auto &part : objective.parts) {
 		Part prepared;
-		prepared.sign = part.sign;
-		prepared.scaled = part.scale != nullptr;
-		if (!DirectPartScale(context, part, prepared.scale)) {
+		if (!DirectReadLinearObjective(ir, context, part, prepared.linear)) {
 			return false;
 		}
-		prepared.divides = part.scale_divides;
+		for (auto &term : prepared.linear.terms) {
+			if (term.decision >= decision_count) {
+				return false;
+			}
+		}
 		if (part.filter) {
 			if (!DirectIsSourceOnlyPredicate(*part.filter, ir.decide_index, ir.source_bindings)) {
 				return false;
@@ -233,16 +242,13 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 			prepared.filter = part.filter->Copy();
 		}
 		for (auto &term : part.terms) {
+			if (term.kind == DecideTermKind::LINEAR) {
+				continue;
+			}
 			Term built;
 			built.sign = term.sign;
-			if (term.kind == DecideTermKind::LINEAR || term.kind == DecideTermKind::CONSTANT) {
-				built.kind = term.kind == DecideTermKind::LINEAR ? Term::Kind::LINEAR : Term::Kind::CONSTANT;
-				if (term.kind == DecideTermKind::LINEAR) {
-					if (term.var_a >= decision_count) {
-						return false;
-					}
-					built.decision = term.var_a;
-				}
+			if (term.kind == DecideTermKind::CONSTANT) {
+				built.kind = Term::Kind::CONSTANT;
 				if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
 					return false;
 				}
@@ -539,13 +545,14 @@ private:
 		vector<vector<DirectSignedValue>> linear_terms(condition.decisions.size());
 		unique_ptr<Expression> constant_sum;
 		vector<DirectSignedValue> constant_terms;
+		for (auto &term : part.linear.terms) {
+			auto value = DirectScaledTerm(optimizer, term.coefficient->Copy(), term.sign, false, 1.0, false);
+			auto &sum = linear_sums[term.decision];
+			sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value)) : std::move(value);
+			linear_terms[term.decision].push_back({term.sign, term.coefficient->Copy()});
+		}
 		for (auto &term : part.terms) {
-			if (term.kind == Term::Kind::LINEAR) {
-				auto value = DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false);
-				auto &sum = linear_sums[term.decision];
-				sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value)) : std::move(value);
-				linear_terms[term.decision].push_back({term.sign, term.value->Copy()});
-			} else if (term.kind == Term::Kind::CONSTANT) {
+			if (term.kind == Term::Kind::CONSTANT) {
 				auto value = DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false);
 				constant_sum = constant_sum
 				                   ? optimizer.BindScalarFunction("+", std::move(constant_sum), std::move(value))
@@ -636,10 +643,10 @@ private:
 				if (!touched) {
 					continue;
 				}
-				auto a_scaled = calc.Wrap(
-				    DirectScaledTerm(optimizer, calc.Out(a_part), part.sign, part.scaled, part.scale, part.divides));
-				auto b_scaled = calc.Wrap(
-				    DirectScaledTerm(optimizer, calc.Out(b_part), part.sign, part.scaled, part.scale, part.divides));
+				auto a_scaled = calc.Wrap(DirectScaledTerm(optimizer, calc.Out(a_part), part.linear.sign,
+				                                           part.linear.scaled, part.linear.scale, part.linear.divides));
+				auto b_scaled = calc.Wrap(DirectScaledTerm(optimizer, calc.Out(b_part), part.linear.sign,
+				                                           part.linear.scaled, part.linear.scale, part.linear.divides));
 				if (columns.has_mask) {
 					auto mask = calc.Col(LogicalType::BOOLEAN, columns.mask);
 					a_scaled = calc.If(mask, a_scaled, calc.Num(0.0));

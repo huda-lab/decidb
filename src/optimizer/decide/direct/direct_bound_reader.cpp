@@ -221,4 +221,24 @@ ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, co
 	                 calc.Cmp(ExpressionType::COMPARE_EQUAL, upper, calc.Num(NEGATIVE_INFINITY))});
 }
 
+bool DirectReadLinearObjective(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+                               DirectLinearObjectivePart &out) {
+	out.sign = part.sign;
+	out.scaled = part.scale != nullptr;
+	out.divides = part.scale_divides;
+	if (!DirectPartScale(context, part, out.scale)) {
+		return false;
+	}
+	for (auto &term : part.terms) {
+		if (term.kind != DecideTermKind::LINEAR) {
+			continue;
+		}
+		if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
+			return false;
+		}
+		out.terms.push_back({term.var_a, term.sign, term.coefficient->Copy()});
+	}
+	return true;
+}
+
 } // namespace duckdb

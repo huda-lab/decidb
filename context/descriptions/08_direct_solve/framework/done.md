@@ -48,7 +48,11 @@ check). Design: `../architecture/`.
   per-row clause, an equality split into its two halves. `DirectClauseBounds` turns one clause's row values into a lower
   and an upper bound as the solver reads them. `DirectRowBox` intersects them with the box. `DirectReadsOneDecision` is the shape a per-row bound must have to be read
   (one unfiltered linear left side in one decision, no constant), and `DirectBoxIsEmpty` is true on a row whose box no
-  value satisfies.
+  value satisfies. `DirectReadLinearObjective` reads one objective part into a `DirectLinearObjectivePart`: its sign and
+  constant factor, and each linear term's decision, sign and proved coefficient; it skips other term kinds. Each rule keeps
+  its own policy around it: S1 declines a filtered part, a non-linear term, a second decision and a coefficient that may
+  raise beside other terms, and flattens the part per term; A1 reads constants and squares itself and sums a part's
+  linear terms per decision before applying the part's sign and scale.
 - **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
   expressions that passes them as `ExprPtr`. A1 uses it; S1 builds expressions by hand.
 - **Rule-local helpers.** The helpers only S1 uses (`ProjectScope`, `ValidateBounds`, `WindowExtremum`, `AnyCondition`)

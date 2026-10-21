@@ -93,4 +93,33 @@ void DirectRowBox(const ExpressionBuilder &calc, double static_lower, double sta
 //! +infinity, or the upper end is -infinity.
 ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, const ExprPtr &upper);
 
+//===--------------------------------------------------------------------===//
+// Linear terms of an objective part
+//===--------------------------------------------------------------------===//
+
+//! One linear term of an objective part: `sign * coefficient * x[decision]`, the coefficient a numeric value of the
+//! source row.
+struct DirectLinearObjectiveTerm {
+	idx_t decision = 0;
+	int sign = 1;
+	unique_ptr<Expression> coefficient;
+};
+
+//! One objective part `sign * scale * SUM(...)`, with the part's constant factor (`2 * SUM(...)`, `SUM(...) / 2`) and
+//! its linear terms in the order they came. A term of any other kind is left to the rule.
+struct DirectLinearObjectivePart {
+	int sign = 1;
+	bool scaled = false;
+	double scale = 1.0;
+	bool divides = false;
+	vector<DirectLinearObjectiveTerm> terms;
+};
+
+//! Reads the sign and constant factor of one objective part and each of its linear terms. Returns false when the
+//! factor is not a finite constant (or divides by zero) or when a linear term's coefficient is not a numeric value of
+//! the source row. A term that is not linear is skipped, and so are the part's reducer, filter and qualifier: the rule
+//! checks those, and which decision a term names.
+bool DirectReadLinearObjective(const DirectIR &ir, ClientContext &context, const DirectPart &part,
+                               DirectLinearObjectivePart &out);
+
 } // namespace duckdb
