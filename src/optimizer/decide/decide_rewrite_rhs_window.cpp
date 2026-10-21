@@ -53,9 +53,8 @@ public:
 	}
 
 	void Run() {
-		if (!decide.decide_constraints) {
-			return;
-		}
+		// The parser requires a SUCH THAT clause with at least one constraint.
+		D_ASSERT(decide.decide_constraints);
 		Walk(*decide.decide_constraints);
 		Install();
 	}
@@ -78,9 +77,12 @@ private:
 			auto saved_when = when;
 			if (IsPerConstraintWrapper(conjunction)) {
 				for (idx_t i = 1; i < conjunction.children.size(); i++) {
+					// PER names table columns, which the window can always read.
+					D_ASSERT(ReadableOverSource(*conjunction.children[i]));
 					per_keys.push_back(conjunction.children[i].get());
 				}
-			} else if (IsWhenConstraintWrapper(conjunction) && conjunction.children.size() == 2) {
+			} else if (IsWhenConstraintWrapper(conjunction)) {
+				D_ASSERT(conjunction.children.size() == 2);
 				when = conjunction.children[1].get();
 			}
 			for (idx_t i = 0; i < conjunction.children.size(); i++) {
@@ -116,9 +118,11 @@ private:
 		vector<const Expression *> filters;
 		bool unfiltered = false;
 		CollectLeftFilters(left, filters, unfiltered);
-		if (unfiltered || filters.empty()) {
+		if (unfiltered) {
 			return;
 		}
+		// The caller found a decision reducer on the left, and it is filtered or `unfiltered` is set.
+		D_ASSERT(!filters.empty());
 		unique_ptr<Expression> any = DirectConstantBool(false);
 		for (auto filter : filters) {
 			if (!ReadableOverSource(*filter)) {
@@ -132,9 +136,8 @@ private:
 
 	void CollectLeftFilters(const Expression &expr, vector<const Expression *> &filters, bool &unfiltered) const {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			if (!BoundExpressionReferencesDecide(expr, decide.decide_index)) {
-				return;
-			}
+			// Canonicalization moved every decision-free term to the right side.
+			D_ASSERT(BoundExpressionReferencesDecide(expr, decide.decide_index));
 			auto &aggregate = expr.Cast<BoundAggregateExpression>();
 			if (aggregate.filter) {
 				filters.push_back(aggregate.filter.get());
@@ -168,8 +171,12 @@ private:
 	}
 
 	bool ReadableOverSource(const Expression &expr) const {
-		return DirectIsDecisionFreeDeterministic(expr, decide.decide_index) &&
-		       DirectReferencesOnlySource(expr, child_bindings);
+		if (!DirectIsDecisionFreeDeterministic(expr, decide.decide_index)) {
+			return false;
+		}
+		// The DECIDE node's expressions are bound over its child, so a decision-free column is a source column.
+		D_ASSERT(DirectReferencesOnlySource(expr, child_bindings));
+		return true;
 	}
 
 	//! Whether the clause covers a row: its WHEN holds (a NULL WHEN does not) and no PER key is NULL. Null when the
@@ -257,42 +264,35 @@ private:
 	}
 
 	//! The reducers whose window equals the solver's reading: COUNT, MIN, MAX, SUM and AVG of one numeric expression
-	//! over the source, with a WHEN (readable over the source) or without one, and with no relation qualifier,
-	//! DISTINCT, ORDER BY or norm of its own. Every other reducer stays on the solver's fold.
+	//! over the source, with a WHEN (readable over the source) or without one, and with no relation qualifier or norm
+	//! of its own. The binder admits no other function, rejects DISTINCT and drops an ORDER BY these functions ignore.
+	//! The rest stay on the solver's fold.
 	bool IsRewritable(const BoundAggregateExpression &aggregate) const {
-		// The clause's own PER keys and WHEN define the group, so they must be values the window can read.
-		for (auto key : per_keys) {
-			if (!ReadableOverSource(*key)) {
-				return false;
-			}
-		}
+		// The clause's own WHEN defines the group, so it must be a value the window can read. PER keys always are.
 		if (when && !ReadableOverSource(*when)) {
 			return false;
 		}
 		auto name = StringUtil::Lower(aggregate.function.name);
-		if (name != "count" && name != "count_star" && name != "min" && name != "max" && name != "sum" &&
-		    name != "avg") {
-			return false;
-		}
+		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "sum" ||
+		         name == "avg");
+		// The AVG rewrite of `<>` runs after this pass, so no aggregate carries its tag yet.
+		D_ASSERT(!aggregate.IsDistinct() && !aggregate.order_bys &&
+		         !HasDecideTag(aggregate.GetAlias(), AVG_REWRITE_TAG));
 		string payload;
 		idx_t scope;
-		if ((aggregate.filter && !ReadableOverSource(*aggregate.filter)) || aggregate.IsDistinct() ||
-		    aggregate.order_bys || TryParseQualifiedReducerTag(aggregate.GetAlias(), scope) ||
+		if ((aggregate.filter && !ReadableOverSource(*aggregate.filter)) ||
+		    TryParseQualifiedReducerTag(aggregate.GetAlias(), scope) ||
 		    ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, payload) ||
-		    ExtractDecideTagPayload(aggregate.GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload) ||
-		    HasDecideTag(aggregate.GetAlias(), AVG_REWRITE_TAG)) {
+		    ExtractDecideTagPayload(aggregate.GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload)) {
 			return false;
 		}
 		if (name == "count_star") {
 			return aggregate.children.empty();
 		}
-		if (aggregate.children.size() != 1) {
-			return false;
-		}
+		// `COUNT()` is `count_star`, and the binder rejects the two-argument MIN and MAX.
+		D_ASSERT(aggregate.children.size() == 1);
 		auto &argument = *aggregate.children[0];
-		return argument.return_type.IsNumeric() && !argument.IsAggregate() && !argument.HasSubquery() &&
-		       DirectIsDecisionFreeDeterministic(argument, decide.decide_index) &&
-		       DirectReferencesOnlySource(argument, child_bindings);
+		return argument.return_type.IsNumeric() && ReadableOverSource(argument);
 	}
 
 	//! The aggregate's argument, checked on every row as the solver checks it (a NULL or NaN raises even where the
@@ -421,13 +421,9 @@ private:
 		// The column carries the written text of the aggregate as its name, so every place that quotes a bound
 		// (the canonical EXPLAIN layer, the infeasible diagnosis) still reads `SUM(cap)`.
 		auto text = RenderDecideSource(aggregate, decide.source_fragments, decide.entity_scopes);
-		auto column =
-		    make_uniq<BoundColumnRefExpression>(text, aggregate.return_type, ColumnBinding(window_index, slot));
-		auto alias = aggregate.GetAlias();
-		if (!alias.empty()) {
-			column->SetAlias(text + alias);
-		}
-		return std::move(column);
+		// IsRewritable declined every aggregate that carries a tag, and no other tag lands on a data reducer.
+		D_ASSERT(aggregate.GetAlias().empty());
+		return make_uniq<BoundColumnRefExpression>(text, aggregate.return_type, ColumnBinding(window_index, slot));
 	}
 
 	void Install() {
@@ -469,9 +465,7 @@ private:
 } // namespace
 
 void DecideOptimizer::RewriteRhsAggregates(LogicalDecide &decide) {
-	if (decide.children.size() != 1) {
-		return;
-	}
+	D_ASSERT(decide.children.size() == 1);
 	RhsWindowRewriter(optimizer, decide).Run();
 }
 

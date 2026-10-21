@@ -54,7 +54,7 @@
 - **Impact:** a wrong answer with no error: the solver applies a bound the user made conditional. Under the default
   `auto`, an A1-shaped query takes direct solve and is right, so the solver and direct paths disagree on the same query.
 
-## An order-0 norm inside a reducer raises an internal error
+## An order-0 norm over a reducer or over data raises an internal error
 
 - **Location:** not traced; the solver path's linearization of `norm(x, 0)` (its indicator variables) when the norm sits
   inside another reducer. Direct solve declines this form, so the error comes from the solver path under every setting.
@@ -62,7 +62,10 @@
   `FROM t DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 1 AND SUM(MAX(norm(x,0))) <= 2 MAXIMIZE SUM(v*x)` raises
   `INTERNAL Error: DECIDE term 'max(sum(__l0auto_ind_0__))' holds a decision variable under an expression that is not
   linear algebra`, with `decide_direct_solve` `off` and `auto` alike. `MINIMIZE SUM(MAX(norm(x,0))) PER id` fails the
-  same way.
+  same way. On the right side over data, `SUM(x*w) <= norm(cap, 0)` raises `INTERNAL Error: DECIDE constraint reached
+  term extraction with invalid aggregate/per-row homogeneity: '(sum((x * w)) <= sum(__l0auto_ind_0__))'` on both
+  paths. The right-hand-side rewrite declines the order-0 norm tag, so that decline has no passing test until this is
+  fixed.
 - **Expected:** either the model is solved or the user gets an ordinary error that names the form it does not support;
   never an internal error.
 - **Impact:** a query a user can write crashes with an internal error that points at generated names.
@@ -74,10 +77,21 @@
 - **Observed:** with `g(k)` and `t(id, k, v)`,
   `SELECT g.k, q.id, q.x FROM g, LATERAL (FROM t WHERE t.k = g.k DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE
   SUM(v*x)) q` raises `INTERNAL Error: Logical operator type "DECIDE" for dependent join`, with `decide_direct_solve`
-  `off` and `auto` alike, and with a `PER` clause added.
+  `off` and `auto` alike, and with a `PER` clause added. When only the right side refers to the outer query,
+  `... LATERAL (FROM t DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 1 AND SUM(x*w) <= SUM(cap) + g.k MAXIMIZE SUM(w*x)) q`
+  raises `INTERNAL Error: Failed to bind column reference "k"`.
 - **Expected:** a correlated DECIDE either runs once per outer row or is rejected at bind time with an ordinary error
   that says a DECIDE cannot refer to an outer query.
 - **Impact:** a user who writes one problem per group with `LATERAL` gets an internal error instead of a pointer to
   `PER`.
+
+## `COUNT` of a text column on the right side raises a conversion error
+
+- **Location:** not traced; the solver path's reading of a data-only `COUNT` on the right side of a constraint.
+- **Observed:** with `g` a `VARCHAR` column, `FROM t DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 1 AND SUM(x*w) <=
+  COUNT(g) MAXIMIZE SUM(w*x)` raises `Conversion Error: Could not convert string 'a' to DOUBLE`, with
+  `decide_direct_solve` `off` and `auto` alike. `COUNT` of a numeric column answers.
+- **Expected:** `COUNT(g)` counts the non-null values of `g` whatever its type.
+- **Impact:** a valid query fails with an error that points at the column's values, not at DECIDE.
 
 Resolved behavior is documented by its owning `done.md`.

@@ -1,8 +1,8 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-21 on top of `9dbbc8ff48`, with the right-hand-side rewrite and S1 and A1 registered: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,095
-passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,094 passed and one failure,
+Verified on 2026-10-21 on top of `9eb61e407e`, with the right-hand-side rewrite and S1 and A1 registered: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,110
+passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,109 passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,847 assertions in
 55 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
@@ -98,25 +98,27 @@ check). Design: `../architecture/`.
   `FOLD_CATCH_ALL`. The planner passes `FOLD_PLAIN` and lets a conversion error reach its own error policy; the sign test
   for a scale factor and the `IN` rewrite catch everything; direct rules pass `DIRECT_CONSTANT` or
   `DIRECT_FINITE_CONSTANT`.
-- **Right-hand-side aggregates are window columns** (`decide_rewrite_rhs_window.cpp`, called by `DecideOptimizer::Optimize` before the
-  direct rules, in every mode). In a reduced constraint, a `COUNT`, `MIN`, `MAX`, `SUM` or `AVG` of one numeric source expression on the
-  right side, with no `DISTINCT`, `ORDER BY` or relation qualifier of its own, becomes a column of the DECIDE source: the same
-  DuckDB aggregate as a window over the clause's `PER` keys and covered rows. A reducer's own `WHEN` (`SUM(x) <= SUM(cap) WHEN
-  active`) becomes the window's `FILTER`, so it scopes the reducer apart from the clause; a group the `WHEN` empties raises the
-  solver's empty-row-set error (`DecideEmptyRowSetMessage` in `common/enums/decide.hpp`, the one text the fold and the direct-solve
-  plans raise), `COUNT` included, and only on a group the solver evaluates. A `COUNT(*)` with its own `WHEN` counts a constant that
-  carries that error. A `WHEN` on both the clause and the reducer cannot be written: the binder rejects it. The solver and the direct rules read DuckDB's value, so
-  `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1, -2^60 reads the limit 1 on `off` and `require`; the solver's row-by-row
-  `DOUBLE` fold reads 0. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's types. A row the clause does not cover
-  reads 0, so no overflow raises there, and a group where no row has a left-hand reducer active reads 0 because the solver never
-  evaluates it. A NULL or NaN argument raises on every row, as the solver does: the NULL text is built by `DirectNullMessageOf` and names
-  the argument's NULL columns; the NaN text lacks the solver's ` at row N`. The solver's C++ fold (`EvaluateRhsReducerPerGroup`) still
-  reads relation-qualified reducers, a reducer whose own `WHEN` the window cannot read over the source (a volatile one such as
-  `random() < 2`), `DISTINCT`, `ORDER BY`, a non-numeric argument and a clause whose
-  left side holds no decision reducer. The window sits directly above the DECIDE source, so it appends columns and renumbers none
-  (the physical plan's column naming reads through it). It ends late materialization for an S1 source with an aggregate limit, and a
-  window over `PER` keys or a `WHEN` regroups rows, so output row order and the choice among equal optima are not guaranteed. Test:
-  `test_rhs_aggregate_window.py`.
+- **Right-hand-side aggregates are window columns** (`decide_rewrite_rhs_window.cpp`, called by
+  `DecideOptimizer::Optimize` before the direct rules, in every mode). In a reduced constraint, a `COUNT`, `MIN`, `MAX`,
+  `SUM` or `AVG` of one numeric source expression on the right side, with no relation qualifier of its own, becomes a
+  column of the DECIDE source: the same DuckDB aggregate as a window over the clause's `PER` keys and covered rows. A
+  reducer's own `WHEN` (`SUM(x) <= SUM(cap) WHEN active`) becomes the window's `FILTER`, so it scopes the reducer apart
+  from the clause; a group the `WHEN` empties raises the solver's empty-row-set error (`DecideEmptyRowSetMessage` in
+  `common/enums/decide.hpp`, the one text the fold and the direct-solve plans raise), `COUNT` included, and only on a
+  group the solver evaluates. A `COUNT(*)` with its own `WHEN` counts a constant that carries that error. A `WHEN` on
+  both the clause and the reducer cannot be written: the binder rejects it. The binder rejects `DISTINCT` and drops an
+  `ORDER BY` inside these reducers, so neither reaches the rewrite. The solver and the direct rules read DuckDB's value,
+  so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1, -2^60 reads the limit 1 on `off` and `require`; the solver's
+  row-by-row `DOUBLE` fold reads 0. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's types. A row the
+  clause does not cover reads 0, so no overflow raises there, and a group where no row has a left-hand reducer active
+  reads 0 because the solver never evaluates it. A NULL or NaN argument raises on every row, as the solver does: the
+  NULL text is built by `DirectNullMessageOf` and names the argument's NULL columns; the NaN text lacks the solver's `
+  at row N`. The solver's C++ fold (`EvaluateRhsReducerPerGroup`) still reads relation-qualified reducers, a reducer
+  whose own `WHEN` the window cannot read over the source (a volatile one such as `random() < 2`), a written norm, a
+  non-numeric argument and a clause whose left side holds no decision reducer. The window sits directly above the DECIDE
+  source, so it appends columns and renumbers none (the physical plan's column naming reads through it). It ends late
+  materialization for an S1 source with an aggregate limit, and a window over `PER` keys or a `WHEN` regroups rows, so
+  output row order and the choice among equal optima are not guaranteed. Test: `test_rhs_aggregate_window.py`.
 - **Number messages.** The NULL and NaN texts have one author for both paths, `decide_value_messages.hpp`
   (`DecideNullValueMessage`, `DecideInvalidValueMessage`, and `DecideCollectNamedColumns`, which decides which columns
   of a value are named).
@@ -215,7 +217,7 @@ default box.
   arms only that test reaches (`--unreached` also lists every arm no test reaches), and writes `report.json` with each
   arm's condition text and function. `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not
   (exit 1 when there are any) and the reverse, matching an arm by file, function, condition text and its occurrence in
-  the function, so lines that move are not read as lost. 1,688 of 1,766 arms are reached. Branch coverage shows which
+  the function, so lines that move are not read as lost. 1,673 of 1,722 arms are reached. Branch coverage shows which
   branches a test runs, not whether its assertion would catch a wrong value there. A subset run by hand needs `-m`
   (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
