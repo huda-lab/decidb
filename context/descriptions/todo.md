@@ -1,16 +1,30 @@
-# Work queue: direct solve — finished
+# Work queue: direct solve — R1 continuous knapsack
 
-The queue is empty. What this round did, in plain words:
+Scratchpad. Each line points to a task in a nested todo; details live there. Delete a line when its task ships; delete
+this file when it is empty.
 
-- **Tests trimmed.** 475 direct-solve test cases that checked nothing another test did not already check were removed,
-  after measuring both which code each test runs and which planted mistakes it catches. Four new tests cover edges no
-  test checked before. The suite went from 3,119 to about 2,700 tests per run with no loss of what it checks.
-- **One way to build expressions.** All direct-solve code now builds its plan expressions through one helper
-  (`ExpressionBuilder`), so a new rule has one style to copy.
-- **Three wrong-answer or crash bugs fixed:**
-  - a `WHEN` or `PER` on a `BETWEEN` or a bracketed `AND` was ignored by the solver;
-  - an `OR` between constraints was silently treated as `AND` (it is now an error that says so);
-  - direct solve crashed when the input ended in `ORDER BY`, `DISTINCT` or a large join and the outer query read a
-    source column (the result operator now owns its column addresses, as a projection does).
+Read first: `08_direct_solve/architecture/rules.md`, `08_direct_solve/rules/r1_continuous_knapsack/definition.md`,
+`08_direct_solve/framework/done.md`. Checks: `08_direct_solve/framework/todo.md` § How to work any task.
 
-Next: build the queue for the next problem class (R1, continuous knapsack) with `/make-queue`.
+## 1. Foundations
+- [ ] R1-08 Construction and proof for the admitted class — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-08
+- [ ] R1-09 Share S1's scope and bound-reduction helpers — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-09
+- [ ] H-36 Remove the fuzz suite — 08_direct_solve/framework/todo.md § H-36
+
+## 2. Core rule (needs: 1)
+- [ ] R1-02 One decision, one `<=` budget — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-02 (needs: R1-08)
+
+## 3. Widenings (needs: 2)
+- [ ] R1-03 Conformance fixture — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-03
+- [ ] R1-04 Budget as `=`, `>=` or `BETWEEN` — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-04
+- [ ] R1-05 Budget per group and under `WHEN` — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-05 (needs: R1-09)
+- [ ] R1-06 Several decisions in one budget — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-06
+
+## 4. Data-valued budget (needs: 3)
+- [ ] R1-10 Budget from a column or an aggregate — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-10 (needs: R1-05)
+
+## 5. Measurement (needs: 4)
+- [ ] R1-07 Performance table — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-07
+
+## Blocked
+- [ ] H-02 Front end for the new language — 08_direct_solve/framework/todo.md § H-02 (needs: a stable language branch)

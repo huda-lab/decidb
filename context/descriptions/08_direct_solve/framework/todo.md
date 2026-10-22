@@ -28,3 +28,14 @@ What exists today is in `done.md`.
 - **Change.** A second front end builds the same IR from the new syntax. Extend the IR when semantics change; do not
   teach a rule parser spelling.
 - **Done when.** The IR contract and the direct/solver tests run on both syntaxes where comparable.
+
+## H-36 — Remove the fuzz suite
+
+- **Problem.** `test_direct_fuzz.py` (24 cases) reaches no branch another test does not reach, and in the mutation run
+  (`h35/results.jsonl`) a named test also catches every planted change it catches. It stays only by an owner
+  exception to the coverage rule in the repository `CLAUDE.md`.
+- **Change.** Delete `test_direct_fuzz.py`; keep `_direct_differential.py`, which the oracle and conformance suites
+  use. Drop the fuzz from `../architecture/rules.md` § The standard tests every rule ships,
+  this folder's `done.md` and the S1 and A1 `done.md` tables.
+- **Done when.** With A1's domain check disabled, a remaining test fails (`done.md` names the fuzz as the test that
+  does); the five checks pass with the fuzz cases gone; no doc names the fuzz suite.

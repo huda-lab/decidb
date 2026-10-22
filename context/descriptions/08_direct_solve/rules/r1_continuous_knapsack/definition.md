@@ -146,7 +146,7 @@ What DeciDB admits beyond, or in place of, the catalogue text. Where the two dif
 > • **Pieces.** DECIDE has no piecewise syntax. Pieces written as rows are plain R1. Pieces written as several `REAL`
 > decisions on one row sharing the budget are admitted, each (row, decision) an item in the ranking; nothing in the
 > query orders or recombines them, so the ranking matches the solver whatever the piece values. Concavity is not
-> required, pending the check in `todo.md` § R1-06. A constraint or objective term that links decisions stays on the
+> required, pending the argument in `todo.md` § R1-08. A constraint or objective term that links decisions stays on the
 > solver.
 >
 > • **Budget direction.** `<=`, `=`, `>=` and `BETWEEN`. Each row starts at its own best end; when that spend misses

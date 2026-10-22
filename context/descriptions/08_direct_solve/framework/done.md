@@ -1,6 +1,6 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-22 on top of `d85818e4e3`, with the right-hand-side rewrite and S1 and A1 registered: `make
+Verified on 2026-10-22 on top of `d9bf29ad23`, with the right-hand-side rewrite and S1 and A1 registered: `make
 decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,706
 passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,705 passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,819 assertions in
@@ -181,7 +181,7 @@ check). Design: `../architecture/`.
   suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can
   see it). A new rule's suite imports the scaffold (`architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
-  example `auto: 2322 passed, 0 xfailed, 0 failed`. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `PER` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
+  example `auto: 2706 passed, 0 xfailed, 0 failed`. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `PER` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
 
 ## Registering a rule
 
