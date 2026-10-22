@@ -20,17 +20,6 @@ goal is the full definition with its § Admitted class.
 - **Done when.** The owner has reviewed both sections, and every shape R1-02, R1-04, R1-05, R1-06 and R1-10 admit has
   an argument in them.
 
-## R1-09 — Share S1's scope and bound-reduction helpers
-
-- **Problem.** R1-05 and R1-10 need code S1 keeps in its own files (`s1_uniform_matroid_helpers.cpp`): the scope
-  projection (`ProjectScope`: a row joins when its `WHEN` holds and no `PER` key is NULL), the per-group reduction and
-  validation of a data-valued bound (`BoundSpec`, `BoundValidation`) and `WindowExtremum`. `../../architecture/rules.md`
-  moves a helper to the shared files when a second rule needs it.
-- **Change.** Move the parts that are not S1-specific to `direct_plan_fragments`, with `Direct` names in `namespace
-  duckdb`; S1 calls the shared versions. No behavior changes.
-- **Done when.** The five checks pass with the stamp's counts; S1's helpers file keeps only what S1 alone uses;
-  `../../architecture/rules.md` § Adding a rule names the shared fragments.
-
 ## R1-02 — The core rule: one decision, one `<=` budget
 
 - **Needs.** R1-08.
@@ -75,7 +64,7 @@ goal is the full definition with its § Admitted class.
 
 ## R1-05 — Budget per group and under `WHEN`
 
-- **Needs.** R1-02, R1-09.
+- **Needs.** R1-02.
 - **Problem.** `SUM(w*x) <= B PER region` and a budget clause with `WHEN` run on the solver.
 - **Change.** Rank and fill within each group, one price per group, with the shared scope projection. A `WHEN` on the
   budget, written on the clause or on the aggregate, and a NULL `PER` key leave a row out of every budget; that row
@@ -96,11 +85,11 @@ goal is the full definition with its § Admitted class.
 
 ## R1-10 — Budget from a column or an aggregate
 
-- **Needs.** R1-05, R1-09.
+- **Needs.** R1-05.
 - **Problem.** A budget read from the data runs on the solver: a source column or expression (`SUM(w*x) <= budget`),
   or an aggregate of the source (`<= 0.5*SUM(cost)`, which the right-hand-side rewrite turns into a per-row window
   value). S1 admits both for its count bound.
-- **Change.** Read the budget per group through the shared bound reduction (R1-09), as S1 reads its data-valued
+- **Change.** Read the budget per group through the shared bound reduction (`DirectValidateBounds`), as S1 reads its data-valued
   bound: an upper budget takes the group's MIN, a lower one its MAX, an equality both, which must agree. A NULL or NaN
   budget raises the solver's error. Add the shape to `definition.md` § Admitted class.
 - **Done when.** Three-way cases pass for a column budget, global and per group, an aggregate budget, and a budget

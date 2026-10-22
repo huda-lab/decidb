@@ -27,7 +27,6 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
-#include "s1_uniform_matroid_helpers.hpp"
 
 namespace duckdb {
 
@@ -731,8 +730,8 @@ private:
 			fixed_flags.push_back(any_of(condition.fixed_one_conditions));
 			fixed_flags.push_back(any_of(condition.fixed_zero_conditions));
 		}
-		auto state = ProjectScope(binder, std::move(source), condition.scoped, condition.when_condition.get(),
-		                          condition.group_key_slots, std::move(fixed_flags));
+		auto state = DirectProjectScope(binder, std::move(source), condition.scoped, condition.when_condition.get(),
+		                                condition.group_key_slots, std::move(fixed_flags));
 		scope.input_bindings = std::move(state.input_bindings);
 		scope.state_index = state.state_index;
 		scope.eligible_binding = state.eligible;
@@ -756,12 +755,12 @@ private:
 	//! extremum.
 	unique_ptr<LogicalOperator> AddBoundValidation(unique_ptr<LogicalOperator> source, const ScopeBindings &scope,
 	                                               BoundChecks &bounds) const {
-		vector<BoundSpec> specs;
+		vector<DirectBoundSpec> specs;
 		for (auto &bound : condition.source_bounds) {
 			D_ASSERT(bound.value && (bound.source_slot == DConstants::INVALID_INDEX ||
 			                         (bound.source_slot < source_types.size() &&
 			                          source_types[bound.source_slot] == bound.source_type)));
-			BoundSpec spec;
+			DirectBoundSpec spec;
 			spec.comparison = bound.comparison;
 			spec.value = CopyIntoState(*bound.value, scope);
 			if (bound.negated) {
@@ -784,9 +783,9 @@ private:
 			}
 			specs.push_back(std::move(spec));
 		}
-		vector<NotNullSpec> not_null;
+		vector<DirectNotNullSpec> not_null;
 		for (auto &fixed : condition.source_fixed_values) {
-			NotNullSpec spec;
+			DirectNotNullSpec spec;
 			spec.value = CopyIntoState(*fixed.value, scope);
 			spec.reject_nan = fixed.reject_nan;
 			if (fixed.column_name.empty()) {
@@ -805,8 +804,8 @@ private:
 			keys.push_back(scope.input_bindings[slot]);
 			key_types.push_back(source_types[slot]);
 		}
-		auto validation = ValidateBounds(optimizer, std::move(source), specs, not_null,
-		                                 condition.scoped ? &scope.eligible_binding : nullptr, keys, key_types);
+		auto validation = DirectValidateBounds(optimizer, std::move(source), specs, not_null,
+		                                       condition.scoped ? &scope.eligible_binding : nullptr, keys, key_types);
 		bounds.window_index = validation.window_index;
 		for (idx_t i = 0; i < bounds.slots.size(); i++) {
 			bounds.slots[i].min_window = validation.min_slots[i];

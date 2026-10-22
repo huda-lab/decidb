@@ -8,7 +8,6 @@ Read first: `08_direct_solve/architecture/rules.md`, `08_direct_solve/rules/r1_c
 
 ## 1. Foundations
 - [ ] R1-08 Construction and proof for the admitted class — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-08
-- [ ] R1-09 Share S1's scope and bound-reduction helpers — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-09
 - [ ] H-36 Remove the fuzz suite — 08_direct_solve/framework/todo.md § H-36
 
 ## 2. Core rule (needs: 1)
@@ -17,7 +16,7 @@ Read first: `08_direct_solve/architecture/rules.md`, `08_direct_solve/rules/r1_c
 ## 3. Widenings (needs: 2)
 - [ ] R1-03 Conformance fixture — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-03
 - [ ] R1-04 Budget as `=`, `>=` or `BETWEEN` — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-04
-- [ ] R1-05 Budget per group and under `WHEN` — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-05 (needs: R1-09)
+- [ ] R1-05 Budget per group and under `WHEN` — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-05
 - [ ] R1-06 Several decisions in one budget — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-06
 
 ## 4. Data-valued budget (needs: 3)

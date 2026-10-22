@@ -48,7 +48,7 @@ pattern step and the condition step are one, because a DECIDE query has a single
 | test seam | A point where a test substitutes its own rules without editing the code under test | Feathers, *Working Effectively with Legacy Code* | `DirectRuleTestSeam`, `DIRECT_RULE_TEST_SEAM_KEY` |
 | plan builder | An object that assembles a rule's plan step by step | GoF Builder | `PlanBuilder` in each rule's namespace |
 | summary | The one line a rule contributes to the `EXPLAIN` annotation | none (plain word) | `Summary` |
-| rule-local helpers | Helpers only one rule uses; they move to the shared files when a second rule needs them | none (plain word) | `s1_uniform_matroid_helpers.{hpp,cpp}`, `direct_s1_uniform_matroid::ProjectScope` |
+| rule-local helpers | Helpers only one rule uses; they move to the shared files when a second rule needs them | none (plain word) | a function in `namespace direct_<id>_<slug>` in the rule's own file |
 
 ## Plan and output (back end)
 

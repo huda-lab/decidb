@@ -3,8 +3,8 @@
 Verified on 2026-10-21 on top of `82d1c7d2db`: `make decide-test` (3,090 passed, also with
 `DECIDB_TEST_DIRECT_SOLVE=off` and `DECIDB_VERIFY_SERIALIZER=1`), `DECIDB_FORCE_SOLVER=highs make decide-test` (3,089
 passed, 1 unrelated failure that needs Gurobi), and `build/release/test/unittest "[decidb]"` (1,324 assertions in 47 cases). `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check). Code:
-`src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`, with the helpers only S1 uses in
-`s1_uniform_matroid_helpers.{hpp,cpp}`. Class definition: [definition.md](definition.md).
+`src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`; its scope projection and bound validation are the shared
+fragments in `direct_plan_fragments.{hpp,cpp}`. Class definition: [definition.md](definition.md).
 
 ## What it admits
 

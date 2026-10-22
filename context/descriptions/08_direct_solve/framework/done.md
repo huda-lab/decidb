@@ -69,9 +69,11 @@ check). Design: `../architecture/`.
   expressions, and the typed NULLs in `LogicalDirectResultAdapter::PruneUnusedOutputs`, an overridden DuckDB method
   that gets no context. `Any` tests its first condition first; S1's fixed-value flags and the rewrite's left-side
   filter reverse their lists to test the last first.
-- **Rule-local helpers.** The helpers only S1 uses (`ProjectScope`, `ValidateBounds`, `WindowExtremum`)
-  live in `s1_uniform_matroid_helpers.{hpp,cpp}` in `namespace direct_s1_uniform_matroid`, and move to the shared
-  files when a second rule needs them. Inside a rule's namespace, names drop the `Direct` and class prefixes.
+- **Rule-local helpers.** A helper only one rule uses stays in that rule's files, in its namespace, and moves to the
+  shared files when a second rule needs it. Inside a rule's namespace, names drop the `Direct` and class prefixes. The
+  scope projection (`DirectProjectScope`), the per-group validation of a data-valued bound (`DirectValidateBounds`) and
+  `DirectWindowExtremum` are shared in `direct_plan_fragments.{hpp,cpp}`: any rule whose aggregate takes `WHEN` or `PER`,
+  or whose bound comes from the data, needs them.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
   DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
   rules, the model builder and the solver backends all read it without including each other. It holds:

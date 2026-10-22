@@ -41,14 +41,16 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    rule does not re-check the IR's statuses, offset or sense; any other not-proved node is a decline. The rule must be
    disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible
-   (`DirectProveValue`). Take the empty-aggregate guard and the all-rows breaker from `direct_plan_fragments.cpp`, the
+   (`DirectProveValue`). Take the empty-aggregate guard, the all-rows breaker, the scope projection
+   (`DirectProjectScope`), the per-group validation of a data-valued bound (`DirectValidateBounds`) and
+   `DirectWindowExtremum` from `direct_plan_fragments.cpp`, the
    number checks and error predicates from `direct_runtime_checks.cpp`, and the per-row bounds on a decision
    (`DirectReadsOneDecision`, `DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`, `DirectBoxIsEmpty`) and the
    linear terms of an objective part (`DirectReadLinearObjective`) from `direct_bound_reader.cpp`. Build
    every expression with the `ExpressionBuilder` (`direct_expression.hpp`); build a node by hand only when the builder
-   has no operation for it (a window expression), and say so in a comment. A helper only your rule uses (S1's scope
-   projection and bound validation are in `s1_uniform_matroid_helpers.cpp`) stays in your rule's own files until a
-   second rule needs it. Inside the rule's namespace, names carry no `Direct` or class prefix (`Condition`,
+   has no operation for it (a window expression), and say so in a comment. A helper only your rule uses stays in
+   your rule's own files until a second rule needs it. Inside the rule's namespace, names carry no `Direct` or class
+   prefix (`Condition`,
    `PlanBuilder`); names in `namespace duckdb` keep `Direct`.
 5. State the plan's slot map (where each DECIDE output lives), which decision outputs may be skipped, and its validated
    columns.
