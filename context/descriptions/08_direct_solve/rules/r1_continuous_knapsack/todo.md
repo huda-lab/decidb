@@ -4,28 +4,11 @@ R1 splits one shared budget among `REAL` decisions by filling the best value per
 [definition.md](definition.md). How to work and the checks are in `../../framework/todo.md` § How to work any task. The
 goal is the full definition with its § Admitted class.
 
-## R1-08 — Construction and correctness argument for the admitted class
-
-- **Problem.** `definition.md` § Relational construction and § Correctness cover positive weights under one `<=`
-  budget. The admitted class (weights of any sign, bounds of 1e20 or more, every budget direction, groups, several
-  decisions per row) has no written construction and no proof, and the exit gate needs an independent proof before
-  code.
-- **Change.** Rewrite both sections for the admitted class. The price per unit of budget is found by one sort over
-  every row's break-even price (value ÷ weight) and one running sum, because spend falls as the price rises: a
-  positive-weight row leaves its upper end, a negative-weight row reaches it. Cover zero weights; uncapped and
-  floorless rows, what the running sum does at an infinite bound, and the unbounded test; how `=`, `>=` and `BETWEEN`
-  reuse the same search; one price per group. Include the argument that several `REAL` decisions on one row are
-  separate items in the ranking: the solver's model links them by nothing, so the greedy fill matches it whether or not
-  the piece values shrink. Replace the "pending the check" sentence in § Admitted class. Doc only.
-- **Done when.** The owner has reviewed both sections, and every shape R1-02, R1-04, R1-05, R1-06 and R1-10 admit has
-  an argument in them.
-
 ## R1-02 — The core rule: one decision, one `<=` budget
 
-- **Needs.** R1-08.
 - **Problem.** `DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND available AND SUM(w*amount) <= B MAXIMIZE
   SUM(v*amount)` runs on the solver.
-- **Change.** `r1_continuous_knapsack_rule.cpp`, registered in `direct_registry.cpp`, built as R1-08 describes. One
+- **Change.** `r1_continuous_knapsack_rule.cpp`, registered in `direct_registry.cpp`, built as `definition.md` § Relational construction describes. One
   row-scoped `REAL` decision; per-row ranges and the one-decision shape check from the shared bound reader, positive
   lower bounds included (the baseline is taken first); one `SUM(w*x) <= B` with a constant or foldable `B`; a linear
   objective (`MAXIMIZE`, `MINIMIZE` or none). The budget's terms and the objective's come from one shared reader: rename
@@ -54,10 +37,11 @@ goal is the full definition with its § Admitted class.
 
 - **Needs.** R1-02.
 - **Problem.** An exact-fill or minimum-spend budget runs on the solver.
-- **Change.** Admit `=`, `>=` and `BETWEEN` through the search R1-08 describes: each row starts at its own best end;
-  over a limit, rows pull back losing the least value per unit of budget first; under a minimum, rows push up losing the
-  least value per unit first (a negative price). `BETWEEN` binds on at most one side. An exact fill continues past
-  nonpositive values; a required amount outside the range the boxes can reach is infeasible.
+- **Change.** Admit `=`, `>=` and `BETWEEN` through the search in `definition.md` § Relational construction: each row
+  starts at its own best end; over a limit, rows pull back losing the least value per unit of budget first; under a
+  minimum, rows push up losing the least value per unit first (a negative price). `BETWEEN` binds on at most one side.
+  An exact fill continues past nonpositive values; a required amount outside the range the boxes can reach is
+  infeasible.
 - **Done when.** Three-way and error cases for each direction pass, under `MAXIMIZE` and `MINIMIZE`, including a
   budget that does not bind and an unreachable fill; the minimum-cost cover (`MINIMIZE SUM(c*x)`, `SUM(x) >= d`) is
   among them.
@@ -75,7 +59,7 @@ goal is the full definition with its § Admitted class.
 
 ## R1-06 — Several decisions in one budget
 
-- **Needs.** R1-02, R1-08.
+- **Needs.** R1-02.
 - **Problem.** A piecewise benefit written as several `REAL` decisions in one budget runs on the solver.
 - **Change.** Admit several `REAL` decisions in one budget, each (row, decision) an item in the ranking with its own
   weight, value and box, each decision answered in its own column (`definition.md` § Correctness). A per-row

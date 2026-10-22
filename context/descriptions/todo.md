@@ -7,11 +7,10 @@ Read first: `08_direct_solve/architecture/rules.md`, `08_direct_solve/rules/r1_c
 `08_direct_solve/framework/done.md`. Checks: `08_direct_solve/framework/todo.md` § How to work any task.
 
 ## 1. Foundations
-- [ ] R1-08 Construction and proof for the admitted class — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-08
 - [ ] H-36 Remove the fuzz suite — 08_direct_solve/framework/todo.md § H-36
 
 ## 2. Core rule (needs: 1)
-- [ ] R1-02 One decision, one `<=` budget — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-02 (needs: R1-08)
+- [ ] R1-02 One decision, one `<=` budget — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-02
 
 ## 3. Widenings (needs: 2)
 - [ ] R1-03 Conformance fixture — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-03

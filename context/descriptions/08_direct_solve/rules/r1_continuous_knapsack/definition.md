@@ -84,31 +84,112 @@ For an exact-fill equality, the required resource must lie between the resource 
 
 ## Relational construction
 
-For each independent resource component, SQL:
+This construction covers the § Admitted class. The worked example is its special case: positive weights, zero lower
+bounds, a `<=` budget.
 
-> 1\. starts every decision at its lower bound;
->
-> 2\. subtracts that baseline resource from the available amount;
->
-> 3\. converts each remaining linear piece into a row containing its resource capacity and marginal benefit per unit of resource;
->
-> 4\. ranks the segment rows by decreasing marginal benefit per resource;
->
-> 5\. computes the resource consumed by earlier segments;
->
-> 6\. fills each segment completely or partially using LEAST and GREATEST;
->
-> 7\. combines the selected segments back into one value per decision.
+An *item* is one `REAL` decision on one row; a row with several decisions gives several items. An item has a box
+[l, u], where a bound of magnitude 1e20 or more is infinite; a weight w, its coefficient in the budget; and a value v,
+its objective coefficient, negated under `MINIMIZE` and zero with no objective. The budget asks L ≤ Σ w·x ≤ U: `<=`
+has L = −∞, `>=` has U = +∞, `=` has L = U. At a price λ per unit of budget, an item earns v − λ·w per unit.
 
-The translation uses arithmetic, sorting, windowed prefix sums, clamping, grouping, and joins.
+An item with w ≠ 0 has:
+
+> • a *break-even price* t = v / w;
+>
+> • a *high end*, the box end that spends more (u when w > 0, l when w < 0), and a *low end*, the other;
+>
+> • an *anchor* a, 0 clamped into the box, always finite;
+>
+> • *room up* w·(high − a) and *room down* w·(a − low), both nonnegative and in units of budget, either possibly
+> infinite.
+
+At a price λ, an item with t > λ belongs at its high end and one with t < λ at its low end. Spend therefore falls as the
+price rises: a positive-weight row leaves its upper end, a negative-weight row reaches it. One sort by t finds the price.
+
+For each group (the whole input when there is no `PER`):
+
+> 1\. Items of rows outside the budget (its `WHEN` does not hold, or a `PER` key is NULL) and items with w = 0 take
+> their own best end: u when v > 0, l when v < 0, the anchor when v = 0.
+>
+> 2\. Infeasible when a box is empty or the reachable spend [S − Σ down, S + Σ up] misses [L, U], where S = Σ w·a.
+>
+> 3\. Unbounded when a step-1 item has v ≠ 0 and an infinite best end, or when lo > hi. Here lo is the highest t of an
+> item with infinite room up and hi the lowest t of one with infinite room down; under `<=` lo is raised to 0, under
+> `>=` hi is lowered to 0.
+>
+> 4\. The target spend T is the zero-price spend S + Σ{t > 0} up − Σ{t < 0} down, clamped into [L, U]. When the
+> zero-price spend already lies in [L, U], the budget does not bind.
+>
+> 5\. Sort the items by t, highest first. For each distinct t, running sums give A, the room up of every item with a
+> higher t, and B, the room down of every item with a lower t. At price t the spend can be anything in
+> S + A − B + [−Σ down, Σ up], the last two summed over the items tied at t. These ranges fall as t falls and meet end
+> to end. The price λ* is the t whose range holds T.
+>
+> 6\. Items with t > λ* take their high end and items with t < λ* their low end. The items tied at λ* share
+> D = T − (S + A − B): starting from their anchors, they move up when D > 0 and down when D < 0, each by its room or
+> by what remains, found by a running sum over the tie. An infinite room takes all that remains.
+>
+> 7\. The items of a row return to one column per decision.
+
+Steps 2 and 3 are aggregates over the group, decided after every row is read, infeasibility first. After them, every
+sum steps 4 to 6 use at λ* is finite. When T lies on the shared end of two adjacent ranges, both give the same
+assignment.
+
+The budget directions differ only in T. `<=` and `>=` bind on their one side. `=` fixes T, so an exact fill continues
+past items whose value is nonpositive, at a negative price if it must. `BETWEEN` takes the nearer side, so it binds on
+at most one. A positive lower bound needs no baseline step: it is the low end of a positive-weight item. A data-valued
+budget is one L and U per group (§ Admitted class), so the steps are unchanged.
+
+The translation uses arithmetic, one sort, windowed running sums, grouped aggregates, clamping and, for several
+decisions per row, an unpivot and a join back.
 
 ## Correctness
 
-Suppose an allocation uses resource in a lower-density segment while a higher-density segment still has capacity. Moving the same amount of resource to the higher-density segment improves the objective or leaves it unchanged when the densities tie.
+The argument runs item by item. It uses no sign of a weight, no order between items and no finite bound except at the
+answer.
 
-Repeating this exchange produces the density-ordered prefix used by SQL. Concavity ensures that an earlier segment of one decision never appears after one of its later segments, so the reconstructed decision remains legal.
+**Certificate.** Take a price λ and an assignment x inside every box with L ≤ Σ w·x ≤ U. Suppose each item with
+v − λ·w > 0 is at u, each with v − λ·w < 0 is at l, λ > 0 only when Σ w·x = U, and λ < 0 only when Σ w·x = L. Then for
+any feasible y,
 
-Every selected segment stays within its capacity. Continuous decisions allow the final segment to use exactly the remaining resource when equality requires it.
+    Σ v·y = Σ (v − λ·w)·y + λ·Σ w·y ≤ Σ (v − λ·w)·x + λ·Σ w·x = Σ v·x.
+
+The first sum cannot grow when y replaces x, because each x sits at the end its own net value prefers. The second
+cannot grow by the sign rule. So x is optimal. An item outside every budget enters only the first sum, with net value v.
+
+**The construction meets it at λ*.** An item's net value at λ* is w·(t − λ*). For t > λ* it has the sign of w, so the
+item prefers u when w > 0 and l when w < 0, its high end either way. For t < λ* the sign flips and the item prefers its
+low end. So step 6 puts every item with a nonzero net value at the end that value prefers. Items tied at λ* have net value zero, and any point of their
+box serves. The spend is T by construction. When λ* > 0 the zero-price spend exceeds T, because spend falls as the
+price rises, so T is U; when λ* < 0, T is L. Step 1 is the same rule with λ = 0.
+
+**Several decisions on one row.** The certificate sums over items, and nothing in it ties two items on one row
+together. The solver's model has the same items and the same single constraint, since a linking constraint or
+objective term keeps the query on the solver. The pieces of a benefit are therefore separate items in the ranking, and
+the greedy fill matches the solver whether the piece values shrink or grow. The catalogue needs concavity only to
+rebuild one variable from its pieces; R1 never rebuilds, because each decision answers in its own column.
+
+**Infeasible.** Every assignment spends inside [S − Σ down, S + Σ up], so when that range misses [L, U], or a box is
+empty, no assignment exists. Infeasibility is tested before boundedness because a problem with no assignment is
+infeasible whatever its open bounds would allow.
+
+**Unbounded.** When step 3 fails, a direction improves without end from any feasible assignment:
+
+> • a step-1 item with v > 0 and u infinite, or v < 0 and l infinite, moves toward its open end;
+>
+> • an item with infinite room up and an item with infinite room down, the first with the higher t, move together at
+> equal spend, and each unit of budget gains the difference of their t;
+>
+> • under `<=`, an item with infinite room down and t < 0 moves down: spend falls and value rises. Under `>=`, an item
+> with infinite room up and t > 0 moves up.
+
+When step 3 passes, an item with infinite room up and t > λ* would make A infinite, and one with infinite room down and
+t < λ* would make B infinite, so neither holds at the range that holds a finite T. T is finite because step 3 rules out
+an infinite zero-price spend on an open side. The answer is finite.
+
+**Groups and scope.** Groups share no item and the objective is a sum over items, so each group is its own problem with
+its own price. A row outside every budget is a group with no budget. The empty-aggregate error for a `WHEN` that covers
+no row comes before any of this, as on the solver.
 
 ## Eligibility conditions
 
@@ -146,7 +227,7 @@ What DeciDB admits beyond, or in place of, the catalogue text. Where the two dif
 > • **Pieces.** DECIDE has no piecewise syntax. Pieces written as rows are plain R1. Pieces written as several `REAL`
 > decisions on one row sharing the budget are admitted, each (row, decision) an item in the ranking; nothing in the
 > query orders or recombines them, so the ranking matches the solver whatever the piece values. Concavity is not
-> required, pending the argument in `todo.md` § R1-08. A constraint or objective term that links decisions stays on the
+> required (§ Correctness). A constraint or objective term that links decisions stays on the
 > solver.
 >
 > • **Budget direction.** `<=`, `=`, `>=` and `BETWEEN`. Each row starts at its own best end; when that spend misses
