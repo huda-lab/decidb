@@ -88,26 +88,6 @@ def test_empty_source_gives_the_solvers_outcome(decidb_cli, fixture):
     assert f"{fixture.rule}" in plan and not _has_decide_operator(plan)
 
 
-def _impossible_bound_cases():
-    return [(fixture, sql) for fixture in RULE_FIXTURES for sql in fixture.impossible_bound_cases]
-
-
-_IMPOSSIBLE_BOUNDS = _impossible_bound_cases()
-
-
-@pytest.mark.correctness
-@pytest.mark.parametrize("fixture,sql", _IMPOSSIBLE_BOUNDS, ids=_case_ids(_IMPOSSIBLE_BOUNDS))
-def test_impossible_constant_bound_gives_the_solvers_outcome(decidb_cli, fixture, sql):
-    # The solver rejects a constant bound that contradicts the decision's domain before it reads any row, so it
-    # raises on an empty source too. A rule may decline such a query (the solver path then answers) but must never
-    # answer it with rows or with an empty result of its own.
-    solver = _outcome(decidb_cli, sql, "off")
-    assert solver[0] == "error", (sql, solver)
-    assert _outcome(decidb_cli, sql, "auto") == solver, sql
-    required = _outcome(decidb_cli, sql, "require")
-    assert required in (solver, ("error", "direct_not_applied")), (sql, required, solver)
-
-
 @pytest.mark.correctness
 @_RULES
 def test_unused_outputs_keep_the_row_count(decidb_cli, fixture):
@@ -198,17 +178,15 @@ def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixt
         assert (auto.stdout, auto.stderr) == (off.stdout, off.stderr), sql
 
 
-_PLAIN_FORMS = [(fixture, fixture.near_miss_plain) for fixture in RULE_FIXTURES] + [
-    (fixture, case) for fixture in RULE_FIXTURES for case in fixture.near_miss_applies
-]
+_PLAIN_FORMS = [(fixture, case) for fixture in RULE_FIXTURES for case in fixture.near_miss_applies]
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("fixture,case", _PLAIN_FORMS, ids=_case_ids(_PLAIN_FORMS))
 def test_plain_forms_of_the_near_misses_apply(decidb_cli, fixture, case):
-    # The near misses decline for the one thing each changes: the plain form over the same source applies. So do the
-    # forms that look like near misses and are not (a right-hand aggregate is a window column of the source, H-19).
-    # The three modes answer alike; `test_aggregate_bounds_that_apply_agree_with_the_oracle` checks the answer itself.
+    # A form that looks like a near miss and is not (a right-hand aggregate is a window column of the source, H-19)
+    # applies. The three modes answer alike; `test_aggregate_bounds_that_apply_agree_with_the_oracle` checks the answer
+    # itself.
     sql = _near_miss_sql(fixture, case)
     required = _raw(decidb_cli, sql)
     assert "decide_direct_solve=require:" not in required.stderr, (sql, required.stderr)

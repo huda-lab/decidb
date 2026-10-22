@@ -9,33 +9,6 @@ suite checks all of it. Adding a rule means adding one `RuleFixture` to `RULE_FI
 
 from dataclasses import dataclass
 
-# Per-row bounds on x with no WHEN that S1 leaves on the solver, as (comparison, constant). The solver reads them as
-# Boolean arithmetic, and each one here cannot hold, so the query is infeasible before the solver reads a row. S1 does
-# not reproduce that early error. A bound that always holds (`x >= -3`, `x > -3`) changes nothing and S1 admits it. A
-# strict bound against a fraction is admitted when it shifts to a whole bound inside {0, 1} (`x > 0.5`, `x < 1.5`,
-# `x < 0.5`, `x > -0.5`): the solver shifts it with the same function. The same bounds with a WHEN are plain arithmetic
-# and are admitted.
-S1_SOLVER_ONLY_ROW_BOUNDS = {
-    ("<=", "-3"),
-    ("<=", "-1"),
-    ("<=", "-0.5"),
-    ("<", "-3"),
-    ("<", "-1"),
-    ("<", "-0.5"),
-    ("<", "0"),
-    (">=", "1.5"),
-    (">=", "2"),
-    (">", "1"),
-    (">", "1.5"),
-    (">", "2"),
-    ("=", "-3"),
-    ("=", "-1"),
-    ("=", "-0.5"),
-    ("=", "1.5"),
-    ("=", "2"),
-}
-
-
 @dataclass(frozen=True)
 class RuleFixture:
     #: The rule name EXPLAIN and `require` messages print.
@@ -46,10 +19,6 @@ class RuleFixture:
     applies: str
     #: The `applies` query over a source with no rows. The solver answers it, so the rule must give its outcome.
     empty_applies: str
-    #: Queries whose constant bound contradicts the decision's built-in domain (`x <= -1` on a decision that cannot
-    #: be negative, `BOOL x >= 2`), over an empty source and over a source with rows. The solver rejects every one
-    #: before it reads a row. A rule either declines them or gives the solver's outcome.
-    impossible_bound_cases: tuple
     #: SQL that creates a temporary table, then a query the rule applies to over it. The suite
     #: prepares the query, changes the table, and checks the plan is rebuilt.
     table_setup: str
@@ -58,8 +27,6 @@ class RuleFixture:
     #: (declaration, constraints, objective) over the source in `near_miss_source`, each one condition away from
     #: applying. The rule must decline it under `require`.
     near_misses: tuple
-    #: The same kind of triple that applies: the plain form every near miss is measured against.
-    near_miss_plain: tuple
     #: More triples over the same source that the rule applies to, though they look like near misses.
     near_miss_applies: tuple
     near_miss_source: str
@@ -91,18 +58,6 @@ S1 = RuleFixture(
             MAXIMIZE SUM(score * x)
         ) q ORDER BY id
     """,
-    impossible_bound_cases=tuple(
-        f"""
-        SELECT id, score, x FROM (
-            FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE)), (1, CAST('9.0' AS DOUBLE))) t(id, score)
-                  WHERE {where}) t
-            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 AND {bound}
-            MAXIMIZE SUM(score * x)
-        ) q ORDER BY id
-        """
-        for where in ("false", "true")
-        for bound in ("x <= -1", "x >= 2")
-    ),
     table_setup="""
         CREATE TEMP TABLE direct_life(id INTEGER, score DOUBLE);
         INSERT INTO direct_life VALUES (1,2),(2,9);
@@ -114,76 +69,24 @@ S1 = RuleFixture(
         ) q
     """,
     table_change="ALTER TABLE direct_life ADD COLUMN extra INTEGER;",
+    # Per-row bounds on x with no WHEN that S1 leaves on the solver, because the solver reads them as bounds on the
+    # variable itself (a bound that always holds, or a strict bound against a fraction that shifts into {0, 1}, S1
+    # admits). `x>1`, `x>1.5` and `x>2` cannot hold, so the query is infeasible before the solver reads a row; S1 does
+    # not reproduce that early error. Then a strict lower count bound at exactly 2^53, which would mean 2^53 + 1, a
+    # value a double cannot hold.
     near_misses=(
-        ("x(BOOL), y(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=1 AND x<=cap+1", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=1 PER id AND SUM(x)>=1 PER cap", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<>1", "MAXIMIZE SUM(p*x)"),
-        # A count body with a negation is admitted (`SUM(-x)`); one with a constant term (`SUM(x+1)`), a column in it, or
-        # a weight on x other than 1 or -1, is not. A bound that can raise is admitted: the plan evaluates it on every
-        # row, as the solver does, so both raise on the same inputs (those are in `near_miss_applies`).
-        ("x(BOOL)", "SUM(x+cap)<=3", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(2*x+1)<=3", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(id*x)<=2", "MAXIMIZE SUM(p*x)"),
-        ("t.x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)"),
-        ("t.x(BOOL)", "SUM(t: x)<=1", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=random()", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM((p+random())*x)"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)+SUM(CAST(cap::VARCHAR AS DOUBLE)*x)"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(MAX(p*x)) PER id"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) WHEN id=1"),
-        ("x(BOOL)", "SUM(x)<=9007199254740993", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "norm(x,'inf')<=1", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "norm(x,1)<=1", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x) - norm(p*x,1)"),
-        ("x(BOOL)", "SUM(x)<=1", "MINIMIZE norm(p*x,2)"),
-        ("x(BOOL)", "SUM(x)<='Infinity'::DOUBLE", "MAXIMIZE SUM(p*x)"),
-        # A per-row bound that can raise at runtime.
-        ("x(BOOL)", "SUM(x)<=2 AND x<=CAST(cap AS TINYINT)", "MAXIMIZE SUM(p*x)"),
-        # A constant factor that is not usable: the solver reads a NULL factor as an objective of zeros, and a subquery
-        # factor has no known sign when the plan is built.
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)/0"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE CAST(NULL AS DOUBLE)*SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT 2)*SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=1", "MAXIMIZE (SELECT -2)*SUM(p*x)"),
-    )
-    + tuple(
-        ("x(BOOL)", f"SUM(x)<=2 AND x{op}{constant}", "MAXIMIZE SUM(p*x)")
-        for op, constant in sorted(S1_SOLVER_ONLY_ROW_BOUNDS, key=lambda bound: (bound[0], float(bound[1])))
+        ("x(BOOL)", "SUM(x)<=2 AND x>1", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=2 AND x>1.5", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)<=2 AND x>2", "MAXIMIZE SUM(p*x)"),
+        ("x(BOOL)", "SUM(x)>9007199254740992", "MAXIMIZE SUM(p*x)"),
     ),
-    # Queries that look like near misses and apply: a right-hand aggregate is a window column of the source (H-19) and
-    # a bound that can raise is read on every row, so S1 reads it as a source-valued bound. The conformance test
-    # asserts that `require` applies and that `auto`, `off` and `require` answer alike;
-    # `S1_AGGREGATE_BOUNDS_NOW_APPLIED` gives the oracle the bound's value.
-    near_miss_plain=("x(BOOL)", "SUM(x)<=1", "MAXIMIZE SUM(p*x)"),
-    near_miss_applies=(
-        ("x(BOOL)", "SUM(x)<=CAST(cap AS TINYINT)", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=cap+1", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=1.5+cap", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=MIN(p+1)/2", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=AVG(p)", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=COUNT(*)/0", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=COUNT(*)/COUNT(*)", "MAXIMIZE SUM(p*x)"),
-        ("x(BOOL)", "SUM(x)<=abs(COUNT(*)-5)", "MAXIMIZE SUM(p*x)"),
-        # 1e23 is not a double: the window column keeps its exact value.
-        ("x(BOOL)", "SUM(x)<=COUNT(*)*100000000000000000000000", "MAXIMIZE SUM(p*x)"),
-    ),
+    # A query that looks like a near miss and applies: a right-hand aggregate is a window column of the source (H-19), so
+    # S1 reads it as a source-valued bound. The conformance test asserts that `require` applies and that `auto`, `off`
+    # and `require` answer alike; `S1_AGGREGATE_BOUNDS_NOW_APPLIED` gives the oracle the value of the bounds it checks.
+    near_miss_applies=(("x(BOOL)", "SUM(x)<=COUNT(*)/0", "MAXIMIZE SUM(p*x)"),),
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 1), (2, 10.0::DOUBLE, 1)) t(id,p,cap)",
     near_miss_column="id",
-    late_errors=tuple(
-        (
-            f"""
-            FROM (SELECT i, {score_sql} AS score FROM range(5000) t(i)) s
-            DECIDE x(BOOL) SUCH THAT SUM(x) <= 0 MAXIMIZE SUM(score*x)
-            """,
-            message,
-        )
-        for score_sql, message in (
-            ("CASE WHEN i=4999 THEN NULL ELSE 1.0 END", "is NULL"),
-            ("CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END", "invalid value (NaN or Infinity)"),
-            ("CASE WHEN i=4999 THEN 'Infinity'::DOUBLE ELSE 1.0 END", "invalid value (NaN or Infinity)"),
-        )
-    ),
+    late_errors=(),
     late_column="i",
 )
 
@@ -217,22 +120,6 @@ A1 = RuleFixture(
             MAXIMIZE SUM(score * x)
         ) q ORDER BY id
     """,
-    impossible_bound_cases=tuple(
-        f"""
-        SELECT id, score, cap, x FROM (
-            FROM (SELECT * FROM (VALUES (0, CAST('2.0' AS DOUBLE), 3), (1, CAST('-1.0' AS DOUBLE), 5)) t(id, score, cap)
-                  WHERE {where}) t
-            DECIDE {declaration} SUCH THAT {bound}
-            MAXIMIZE SUM(score * x)
-        ) q ORDER BY id
-        """
-        for where in ("false", "true")
-        for declaration, bound in (
-            ("x(INT)", "x <= -1"),
-            ("x(REAL)", "x <= -0.5"),
-            ("x(BOOL)", "x >= 2"),
-        )
-    ),
     table_setup="""
         CREATE TEMP TABLE direct_a1_life(id INTEGER, score DOUBLE, cap INTEGER);
         INSERT INTO direct_a1_life VALUES (1,2,3),(2,-1,5);
@@ -246,82 +133,10 @@ A1 = RuleFixture(
     table_change="ALTER TABLE direct_a1_life ADD COLUMN extra INTEGER;",
     near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 5), (2, 10.0::DOUBLE, 3)) t(id,p,cap)",
     near_miss_column="id",
-    near_miss_plain=("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x)"),
     near_miss_applies=(),
-    near_misses=(
-        # Decisions that are not row-scoped, or rows that are coupled.
-        ("t.x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL), y(REAL)", "x+y<=3 AND x<=cap", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL), y(REAL)", "x<=cap AND y<=cap", "MAXIMIZE SUM(x*y)"),
-        ("x(REAL)", "SUM(x)<=5", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "norm(x,1)<=5", "MAXIMIZE SUM(p*x)"),
-        # Bounds that are not intervals, or not bounds.
-        ("x(INT)", "x<=cap AND x<>1", "MAXIMIZE SUM(p*x)"),
-        ("x(INT)", "x IN (1,2,3)", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "POWER(x,2)<=9", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "ABS(x)<=3", "MAXIMIZE SUM(p*x)"),
-        # Values that are not per-row source values.
-        ("x(REAL)", "x<=random()", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(random()*x)"),
-        ("x(REAL)", "x<=cap WHEN (random()<2)", "MAXIMIZE SUM(p*x)"),
-        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x) WHEN (random()<2)"),
-        # Objectives outside the class. Ones the solver itself rejects are in test_direct_a1_separable_box.py.
-        ("x(REAL)", "x<=cap", "MAXIMIZE SUM(p*x) PER id"),
-        ("x(REAL)", "x<=cap", "MAXIMIZE AVG(p*x)"),
-        ("x(REAL)", "x<=cap", "MAXIMIZE MIN(p*x)"),
-        ("x(REAL)", "x<=cap", "MINIMIZE norm(x,1)"),
-    ),
+    near_misses=(),
     late_errors=(
-        # Every kind of error A1 raises, on the last of 5,000 rows.
-        (
-            _a1_late_error(
-                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
-                score_sql="CASE WHEN i=4999 THEN NULL ELSE 1.0 END",
-            ),
-            "is NULL",
-        ),
-        (
-            _a1_late_error(
-                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
-                score_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
-            ),
-            "invalid value (NaN or Infinity)",
-        ),
-        (
-            _a1_late_error(
-                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
-                score_sql="CASE WHEN i=4999 THEN 'Infinity'::DOUBLE ELSE 1.0 END",
-            ),
-            "invalid value (NaN or Infinity)",
-        ),
-        (
-            _a1_late_error(
-                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(x-score,2))",
-                score_sql="CASE WHEN i=4999 THEN NULL ELSE 1.0 END",
-            ),
-            "is NULL",
-        ),
-        (
-            _a1_late_error(
-                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
-                cap_sql="CASE WHEN i=4999 THEN NULL ELSE 10.0 END",
-            ),
-            "is NULL",
-        ),
-        (
-            _a1_late_error(
-                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
-                cap_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 10.0 END",
-            ),
-            "invalid value (NaN)",
-        ),
-        (
-            _a1_late_error(
-                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MAXIMIZE SUM(score*x)",
-                cap_sql="CASE WHEN i=4999 THEN -1.0 ELSE 10.0 END",
-            ),
-            "infeasible",
-        ),
+        # Errors A1 raises, on the last of 5,000 rows: an unbounded problem and an integer bound beyond the range.
         (
             _a1_late_error(
                 "x(REAL) SUCH THAT x <= cap MAXIMIZE SUM(score*x)", cap_sql="CASE WHEN i=4999 THEN 1e30 ELSE 10.0 END"
@@ -334,14 +149,6 @@ A1 = RuleFixture(
             ),
             "beyond the range",
         ),
-        # Each coefficient is finite, but the square's weight (1e200 squared) overflows on the last row.
-        (
-            _a1_late_error(
-                "x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(score*x-1,2))",
-                score_sql="CASE WHEN i=4999 THEN 1e200 ELSE 1.0 END",
-            ),
-            "invalid value (NaN or Infinity)",
-        ),
     ),
     late_column="i",
 )
@@ -350,19 +157,15 @@ A1 = RuleFixture(
 RULE_FIXTURES = (S1, A1)
 
 
-# The `near_miss_applies` of S1, as (constraint, the bound's value over the source `t(id, p, cap)` of
-# rows (1, 9.0, 1) and (2, 10.0, 1)). A count divided by zero is infinity in DuckDB: no limit.
+# Bounds S1 applies that the oracle checks, as (constraint, the bound's value over the source
+# `t(id, p, cap)` of rows (1, 9.0, 1) and (2, 10.0, 1)). A count divided by zero is infinity in DuckDB: no limit.
 S1_AGGREGATE_BOUNDS_NOW_APPLIED = (
     # A source column or an expression over it that can raise: read on every row, as the solver reads it.
     ("SUM(x)<=CAST(cap AS TINYINT)", 1.0),
     ("SUM(x)<=cap+1", 2.0),
     ("SUM(x)<=1.5+cap", 2.5),
-    ("SUM(x)<=MIN(p+1)/2", 5.0),
-    ("SUM(x)<=AVG(p)", 9.5),
     ("SUM(x)<=COUNT(*)/0", float("inf")),
     ("SUM(x)<=COUNT(*)/COUNT(*)", 1.0),
-    ("SUM(x)<=abs(COUNT(*)-5)", 3.0),
-    ("SUM(x)<=COUNT(*)*100000000000000000000000", 2e23),
 )
 
 

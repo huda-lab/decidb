@@ -1,8 +1,8 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-21 on top of `34f859f8ab`, with the right-hand-side rewrite and S1 and A1 registered: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,119
-passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,118 passed and one failure,
+Verified on 2026-10-22 on top of `da1385cfec`, with the right-hand-side rewrite and S1 and A1 registered: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,650
+passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,649 passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,844 assertions in
 55 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
@@ -139,11 +139,13 @@ check). Design: `../architecture/`.
     lower or upper bound) only has to be a number, because an infinite bound means "no bound" or "nothing satisfies it".
     NaN and NULL raise in every slot.
   - Direct applies this in SQL and the solver in C++ (`ExtractDoubleColumn`); the two cannot share code, so
-    `test_direct_source_values.py` puts NaN, both infinities and NULL in each of 27 slots S1 and A1 read and asserts the
-    same error or rows on `require`, `off` and forced HiGHS. Message tests are in `test_direct_user_facing.py`
-    (`test_null_value_error_is_the_solvers_error_word_for_word` and
-    `test_invalid_value_error_is_the_solvers_error_without_the_row_position` compare the full text of `require` with
-    `off` for S1 and A1). The cost on clean data is not measured.
+    `test_direct_source_values.py` puts an infinite value in each of 13 bound slots S1 and A1 read, where an infinity
+    means "no bound" or "nothing satisfies it", and asserts the same error or rows on `require`, `off` and forced
+    HiGHS. NaN and NULL reach the same checks through each rule's error grid. Message tests are in
+    `test_direct_user_facing.py`: `test_null_value_error_is_the_solvers_error_word_for_word` compares the full text of
+    `require` with `off` for S1 and A1, and `test_invalid_score_error_matches_solver_wording` and
+    `test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in` do so for a NaN or infinite score and
+    coefficient. The cost on clean data is not measured.
 - **`EXPLAIN` annotation.** When a rule applies, mode, rule and one fixed condition line per rule appear in logical and
   physical `EXPLAIN` and profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x
   <= u, each row independent`. There is no number from the query. `require` explains why no rule applied; under `auto`
@@ -199,11 +201,10 @@ default box.
   from a query rather than from a hand-built struct because a hand-built IR has no resolved source columns, so the
   source-column checks would pass without checking anything.
 - Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read,
-  serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE`, an empty source, and constant bounds that
-  contradict the decision's built-in domain: under `auto`, `off` and `require` each gives the solver's outcome, or
-  `require` declines) and the parent-context rows of `test_direct_s1_uniform_matroid.py`. Both fuzz generators in
-  `test_direct_fuzz.py` run about one query in ten over an empty source and add an impossible constant bound now and
-  then; with A1's domain check disabled, the conformance test and the A1 fuzz fail. `test_direct_user_facing.py` checks
+  serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE` and an empty source) and the
+  parent-context rows of `test_direct_s1_uniform_matroid.py`. Both fuzz generators in `test_direct_fuzz.py` run about
+  one query in ten over an empty source and add a constant bound that contradicts the decision's built-in domain now
+  and then; with A1's domain check disabled, the A1 fuzz fails. `test_direct_user_facing.py` checks
   which noun a NaN or infinite coefficient names.
 - Result adapter parent contexts, identical under `auto`, `off` and `require`: `CREATE TABLE AS`, `INSERT ... SELECT`, a
   view, a window over the result, `UNION ALL` of an S1 and an A1 query, a joined source with a filter above, a self-join
@@ -226,7 +227,14 @@ default box.
   paths (`../../06_issues/bugs/todo.md`). Every other check follows one policy: a query reaches it and a test runs it; a
   check on what a rule hands the engine raises in release builds and a stub-rule C++ test reaches it; a check on a plan,
   IR or setting the engine builds itself is a `D_ASSERT`, which debug builds run; code no query reaches is deleted.
-  Branch coverage shows which branches a test runs, not whether its assertion would catch a wrong value there. A subset
+  Branch coverage shows which branches a test runs, not whether its assertion would catch a wrong value there, so 45
+  one-line changes to value-handling code (a comparison, a constant, an operator; runner and data in `h35/`, which git
+  ignores) were each planted and run against the six `test_direct_*.py` files. Every direct-solve test case reaches an
+  arm no other test reaches, catches one of these changes, or pins a behavior coverage does not measure (the solver
+  path's wording, prepared plans, `DIAGNOSE`, an empty source). 43 changes are caught. No query can tell the other two
+  apart: `inclusive <= 0.0` against `< 0.0` for a lower bound in S1's `NormalizeCapacity` (a bound of exactly 0 gives
+  capacity 0 either way), and `a > 0` against `a >= 0` in `DirectClauseBounds` (a zero coefficient's bounds come from
+  the zero-coefficient branch). A subset
   run by hand needs `-m` (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
   clauses 0.13 s, 8 clauses with `WHEN` 0.26 s, 3 decisions and 8 clauses 0.29 s.

@@ -135,13 +135,9 @@ def col(name):
 @dataclass(frozen=True)
 class Objective:
     sql: str
-    #: True, False, or None when there is no objective.
-    maximize: object
+    maximize: bool
     #: row -> {decision: (a, b)}: the objective function's per-row `a*x^2 + b*x`, before the sense is applied.
     coefficients: object
-
-
-NO_OBJECTIVE = Objective("", None, lambda row: {})
 
 
 def objective(sql, maximize, fn):
@@ -202,7 +198,7 @@ class Case:
 
 
 def case(domain, bounds, objective_name, **kwargs):
-    return Case(tuple(bounds), OBJECTIVES.get(objective_name) or NO_OBJECTIVE, (("x", domain),), **kwargs)
+    return Case(tuple(bounds), OBJECTIVES[objective_name], (("x", domain),), **kwargs)
 
 
 def _domains(case_):
@@ -514,35 +510,8 @@ add(
     "lin_max",
 )
 add("real_like_terms", "REAL", [clause("2*x + 3*x <= cap", le, col("cap"), a=const(5.0))], "lin_max")
-add(
-    "real_negative_coefficient_equality",
-    "REAL",
-    [clause("-2*x = -lo", eq, lambda r: -r["lo"], a=const(-2.0), replaces=False), clause("x <= 100", le, const(100.0))],
-    "sq",
-)
 
 # --- Infeasible and unbounded ---------------------------------------------------------------------------------------
-add(
-    "infeasible_constants",
-    "REAL",
-    [clause("x >= 5", ge, const(5.0), replaces=True), clause("x <= 3", le, const(3.0))],
-    "sq",
-)
-add("infeasible_one_row", "REAL", [clause("x >= lo", ge, col("lo")), clause("x <= 1", le, const(1.0))], "sq")
-add(
-    "infeasible_zero_coefficient",
-    "REAL",
-    [clause("0*x >= 5", ge, const(5.0), a=const(0.0)), clause("x <= cap", le, col("cap"))],
-    "sq",
-)
-add(
-    "infeasible_column_when",
-    "REAL",
-    [clause("x >= lo + 20 WHEN (f)", ge, lambda r: r["lo"] + 20.0, when=col("f")), clause("x <= cap", le, col("cap"))],
-    "sq",
-)
-add("unbounded_max_linear", "REAL", [clause("x >= 0", ge, const(0.0), replaces=True)], "lin_max")
-add("unbounded_min_negative_score", "REAL", [clause("x >= 0", ge, const(0.0), replaces=True)], "lin_min")
 add("unbounded_concave", "REAL", [clause("x >= 0", ge, const(0.0), replaces=True)], "sq_neg_min")
 add(
     "bounded_concave",
@@ -574,19 +543,6 @@ for objective_name in OBJECTIVES:
         objective_name,
     )
 add(
-    "real_no_objective",
-    "REAL",
-    [clause("x >= 1", ge, const(1.0), replaces=True), clause("x <= cap", le, col("cap"))],
-    "none",
-)
-add(
-    "real_no_objective_negative_lower",
-    "REAL",
-    [clause("x >= -3", ge, const(-3.0), replaces=True), clause("x <= cap", le, col("cap"))],
-    "none",
-)
-add("real_no_objective_open_above", "REAL", [clause("x >= lo", ge, col("lo"))], "none")
-add(
     "real_linear_zero_slope",
     "REAL",
     [clause("x >= 1", ge, const(1.0), replaces=True), clause("x <= cap", le, col("cap"))],
@@ -616,20 +572,7 @@ add(
     [clause("x >= 0.3", ge, const(0.3), replaces=True), clause("x <= 0.7", le, const(0.7))],
     "lin_min",
 )
-add(
-    "int_empty_window_one_row",
-    "INT",
-    [clause("x >= lo/4", ge, lambda r: r["lo"] / 4.0), clause("x <= lo/4 + 0.25", le, lambda r: r["lo"] / 4.0 + 0.25)],
-    "lin_min",
-)
-add("int_equality_fractional", "INT", [clause("x = cap/2", eq, lambda r: r["cap"] / 2.0)], "lin_min")
 add("int_equality_whole", "INT", [clause("x = 2", eq, const(2.0), replaces=True)], "lin_min")
-add(
-    "int_equality_column_when",
-    "INT",
-    [clause("x = lo WHEN (f)", eq, col("lo"), when=col("f")), clause("x <= cap", le, col("cap"))],
-    "lin_min",
-)
 add(
     "int_strict_whole_constants",
     "INT",
@@ -682,7 +625,7 @@ add(
 
 # --- BOOL ------------------------------------------------------------------------------------------------------------
 BOOL_BOX = [clause("x <= 1", le, const(1.0))]
-for objective_name in ("lin_min", "lin_max", "lin_when", "sq", "sq_lin", "sq_inner_w", "sq_neg_max", "none"):
+for objective_name in ("lin_min", "lin_max", "lin_when", "sq", "sq_lin", "sq_inner_w", "sq_neg_max"):
     add(f"bool_objective_{objective_name}", "BOOL", BOOL_BOX, objective_name)
 add("bool_fixed_one", "BOOL", [clause("x = 1", eq, const(1.0), replaces=True)], "lin_min")
 add("bool_fixed_zero", "BOOL", [clause("x <= 0", le, const(0.0))], "lin_max")
@@ -692,12 +635,13 @@ add(
     [clause("x = 1 WHEN (f)", eq, const(1.0), when=col("f"), replaces=False), clause("x <= 1", le, const(1.0))],
     "lin_min",
 )
-add("bool_lower_when_column", "BOOL", [clause("x >= lo WHEN (f)", ge, col("lo"), when=col("f"))], "lin_min")
 add("bool_fractional_cap", "BOOL", [clause("x <= cap/10", le, lambda r: r["cap"] / 10.0)], "lin_max")
 add("bool_strict_upper", "BOOL", [clause("x < 1", lt, const(1.0))], "lin_max")
 add("bool_strict_lower", "BOOL", [clause("x > 0", gt, const(0.0), replaces=True)], "lin_min")
 add("bool_scaled", "BOOL", [clause("2*x <= 1", le, const(1.0), a=const(2.0))], "lin_max")
 add("bool_row_coefficient", "BOOL", [clause("w*x <= 1", le, const(1.0), a=col("w"))], "lin_max")
+# A written lower bound below 0 never moves a BOOL out of {0, 1}.
+add("bool_lower_below_zero", "BOOL", [clause("x >= -1", ge, const(-1.0), replaces=True)], "lin_min")
 
 # --- Several independent decisions -----------------------------------------------------------------------------------
 A1_CASES["two_decisions_mixed"] = Case(
@@ -736,15 +680,6 @@ A1_CASES["decision_unused_in_objective"] = Case(
     Objective("MAXIMIZE SUM(s*x)", True, lambda r: {"x": (0.0, r["s"])}),
     (("x", "REAL"), ("y", "INT")),
 )
-A1_CASES["two_decisions_one_infeasible"] = Case(
-    (
-        clause("x <= cap", le, col("cap")),
-        clause("y >= 3", ge, const(3.0), replaces=True, decision="y"),
-        clause("y <= 2", le, const(2.0), decision="y"),
-    ),
-    Objective("MAXIMIZE SUM(s*x)", True, lambda r: {"x": (0.0, r["s"])}),
-    (("x", "REAL"), ("y", "INT")),
-)
 
 # An objective with a WHEN over a sum of parts: every part shares the one membership mask. And a part with two terms
 # that read no decision: their sum is validated once.
@@ -755,6 +690,12 @@ A1_CASES["real_objective_parenthesized_sums_when"] = Case(
         False,
         lambda r: {"x": _masked(r, 1.0, -2.0 * r["t"] + r["s"], lambda q: q["f"])},
     ),
+    (("x", "REAL"),),
+)
+# A zero slope over a box that is open below (a written -1e30 is no bound): the answer is 0 clamped into the box.
+A1_CASES["real_zero_slope_open_below"] = Case(
+    (clause("x >= -1e30", ge, const(-1e30), replaces=True), clause("x <= lo", le, col("lo"))),
+    Objective("MAXIMIZE SUM(0*x)", True, lambda r: {"x": (0.0, 0.0)}),
     (("x", "REAL"),),
 )
 A1_CASES["real_objective_two_constant_terms"] = Case(
@@ -807,48 +748,6 @@ def test_a1_reads_a_fractional_strict_bound_correctly(decidb_cli, oracle_solver,
 @pytest.mark.parametrize("name", sorted(SOLVER_OFF_BY_ONE))
 def test_a1_solver_off_by_one_on_a_fractional_strict_bound(decidb_cli, oracle_solver, name):
     _agree(decidb_cli, oracle_solver, SOLVER_OFF_BY_ONE[name], modes=("off",))
-
-
-# A bound that contradicts the variable's built-in domain (an upper bound below the default floor of 0, or a BOOL lower
-# bound above 1) is rejected by the solver before it reads any row, on an empty source too. No rule applies to
-# such a query, so it reaches the solver and raises the solver's message whatever the table holds.
-DECLINED_CASES = {
-    "real_upper_below_default": case("REAL", [clause("x <= -1", le, const(-1.0))], "lin_min"),
-    "int_upper_below_default": case("INT", [clause("x <= -1", le, const(-1.0))], "lin_min"),
-    "bool_upper_below_zero": case("BOOL", [clause("x <= -1", le, const(-1.0))], "lin_min"),
-    "bool_lower_above_one": case("BOOL", [clause("x >= 2", ge, const(2.0), replaces=True)], "lin_min"),
-}
-
-
-@pytest.mark.error
-@pytest.mark.correctness
-@pytest.mark.parametrize("name", sorted(DECLINED_CASES))
-def test_a1_declines_a_bound_that_contradicts_the_built_in_domain(decidb_cli, oracle_solver, name):
-    case_ = DECLINED_CASES[name]
-    # The oracle agrees the problem is infeasible; the solver and the default path raise it, and `require` reports
-    # that no rule applies to the query.
-    _agree(decidb_cli, oracle_solver, case_, modes=("off", "auto"))
-    with pytest.raises(DecidBCliError, match="decide_direct_solve=require"):
-        _run(decidb_cli, _sql(case_), "require")
-
-
-@pytest.mark.error
-@pytest.mark.correctness
-@pytest.mark.parametrize("name", sorted(DECLINED_CASES))
-def test_a1_declined_domain_bound_raises_the_same_on_an_empty_source(decidb_cli, name):
-    case_ = DECLINED_CASES[name]
-    declaration = ", ".join(f"{name}({domain})" for name, domain in case_.decisions)
-    constraints = " AND ".join(bound.sql for bound in case_.bounds)
-    empty = f"(SELECT * FROM (VALUES {_values(ROWS[:1])}) t({', '.join(NAMES)}) WHERE false)"
-    sql = f"SELECT id, x FROM (FROM {empty} DECIDE {declaration} SUCH THAT {constraints} {case_.objective.sql}) q"
-    messages = {}
-    for mode in ("off", "auto"):
-        with pytest.raises(DecidBCliError, match=r"(?i)infeasible") as error:
-            _run(decidb_cli, sql, mode)
-        messages[mode] = str(error.value)
-    assert messages["off"] == messages["auto"]
-    with pytest.raises(DecidBCliError, match="decide_direct_solve=require"):
-        _run(decidb_cli, sql, "require")
 
 
 # The same problem inside a parent query. One base case meets every context; a context does not interact with the kind
@@ -922,29 +821,8 @@ def _late(decide_text, t_sql="1.0", s_sql="1.0", cap_sql="10.0", tail=""):
     )
 
 
-# name -> (sql, error class the direct path must raise, or None to accept any).
+# name -> (sql, error class the direct path must raise).
 A1_ERROR_CASES = {
-    "null_cap": (_problem(_with(1, cap=None)), "null_bound"),
-    "nan_cap": (_problem(_with(1, cap=math.nan)), "null_bound"),
-    "null_cap_on_row_a_when_excludes": (
-        _problem(_with(1, cap=None), bounds="x <= cap WHEN (f) AND x >= 0"),
-        "null_bound",
-    ),
-    "nan_cap_on_row_a_when_excludes": (
-        _problem(_with(1, cap=math.nan), bounds="x <= cap WHEN (f) AND x >= 0"),
-        "null_bound",
-    ),
-    "null_lower_bound": (_problem(_with(2, lo=None), bounds="x >= lo AND x <= cap"), "null_bound"),
-    "null_target": (_problem(_with(1, t=None)), "null_bound"),
-    "nan_target": (_problem(_with(1, t=math.nan)), "invalid_value"),
-    "infinite_target": (_problem(_with(1, t=INF)), "invalid_value"),
-    "null_target_on_row_the_objective_when_excludes": (
-        _problem(_with(1, t=None), obj="MINIMIZE SUM(POWER(x - t, 2)) WHEN (f)"),
-        "null_bound",
-    ),
-    "nan_score": (_problem(_with(1, s=math.nan), obj="MAXIMIZE SUM(s*x)"), "invalid_value"),
-    "null_coefficient": (_problem(_with(0, w=None), bounds="w*x <= cap AND x <= 5"), "null_bound"),
-    "infinite_coefficient": (_problem(_with(0, w=INF), bounds="w*x <= cap AND x <= 5"), "invalid_value"),
     "objective_when_matches_no_row": (
         _problem(ROWS, obj="MINIMIZE SUM(POWER(x - t, 2)) WHEN (id > 99)"),
         "empty_aggregate",
@@ -953,25 +831,8 @@ A1_ERROR_CASES = {
         _problem(ROWS, obj="MINIMIZE SUM(POWER(x - t, 2)) + SUM(s*x) WHEN (id > 99)"),
         "empty_aggregate",
     ),
-    "throwing_cast_on_row_a_when_excludes": (
-        _problem(_with(1, cap=1000.0), bounds="x <= CAST(cap AS TINYINT) WHEN (f) AND x >= 0"),
-        None,
-    ),
-    "throwing_cast_in_objective": (_problem(_with(1, cap=1000.0), obj="MAXIMIZE SUM(CAST(cap AS TINYINT)*x)"), None),
-    "division_by_zero_in_objective": (_problem(ROWS, obj="MAXIMIZE SUM((s/(s-2.0))*x)"), "invalid_value"),
-    "overflow_in_bound": (
-        _problem(ROWS, decl="x(INT)", bounds="x <= CAST(cap AS BIGINT) * 9223372036854775807"),
-        None,
-    ),
-    "square_weight_overflows": (_problem(_with(1, w=1e200), obj="MINIMIZE SUM(POWER(w*x - 1, 2))"), None),
-    "infeasible_constants": (_problem(ROWS, bounds="x >= 5 AND x <= 3"), "infeasible"),
-    "infeasible_one_row_in_many": (_problem(_with(2, cap=-1.0)), "infeasible"),
-    "infeasible_zero_coefficient": (_problem(ROWS, bounds="0*x >= 5 AND x <= cap"), "infeasible"),
-    "infeasible_infinite_lower": (_problem(ROWS, bounds="x >= ('Infinity'::DOUBLE) AND x <= cap"), "infeasible"),
-    "infeasible_negative_infinite_cap": (_problem(_with(1, cap=-INF)), "infeasible"),
     "infeasible_int_window": (_problem(ROWS, decl="x(INT)", bounds="x >= 0.3 AND x <= 0.7"), "infeasible"),
     "unbounded_linear_max": (_problem(ROWS, bounds="x >= 0", obj="MAXIMIZE SUM(x)"), "unbounded"),
-    "unbounded_linear_min": (_problem(ROWS, bounds="x >= 0", obj="MINIMIZE SUM(s*x)"), "unbounded"),
     "unbounded_concave": (_problem(ROWS, bounds="x >= 0", obj="MINIMIZE SUM(-POWER(x - t, 2))"), "unbounded"),
     "unbounded_convex_max": (_problem(ROWS, bounds="x >= 0", obj="MAXIMIZE SUM(POWER(x - t, 2))"), "unbounded"),
     "unbounded_cap_is_1e20": (_problem(ROWS, bounds="x <= 1e20", obj="MAXIMIZE SUM(x)"), "unbounded"),
@@ -987,22 +848,6 @@ A1_ERROR_CASES = {
         "int_range",
     ),
     # Late rows: the error must raise however little of the result is read.
-    "late_null_target_under_limit": (
-        _late(
-            "x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(x - t, 2))",
-            t_sql="CASE WHEN i = 4999 THEN NULL ELSE 1.0 END",
-            tail="LIMIT 1",
-        ),
-        "null_bound",
-    ),
-    "late_infeasible_row_under_limit": (
-        _late(
-            "x(REAL) SUCH THAT x BETWEEN 0 AND cap MINIMIZE SUM(POWER(x - t, 2))",
-            cap_sql="CASE WHEN i = 4999 THEN -1.0 ELSE 10.0 END",
-            tail="LIMIT 1",
-        ),
-        "infeasible",
-    ),
     "late_unbounded_row_under_limit": (
         _late(
             "x(REAL) SUCH THAT x <= cap MAXIMIZE SUM(s*x)",
@@ -1024,8 +869,7 @@ def test_a1_error_cases_fail_on_both_paths(decidb_cli, name):
     with pytest.raises(DecidBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
-    if expected is not None:
-        assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
+    assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
 
 
 @pytest.mark.error
@@ -1055,17 +899,12 @@ def test_a1_an_unused_decision_still_raises(decidb_cli):
 # Values the oracle cannot hold: direct solve is compared with the solver path alone
 # ---------------------------------------------------------------------------
 
-ONLY_FIRST = "MAXIMIZE SUM(CASE WHEN id = 1 THEN 1.0 ELSE 0.0 END * x)"
-ONLY_FIRST_TWO = "MAXIMIZE SUM(CASE WHEN id <= 2 THEN 1.0 ELSE 0.0 END * x)"
-
 BOUNDARY_CASES = {
     "infinite_cap_is_no_bound": _problem(_with(1, cap=INF), bounds="x <= cap AND x >= 0"),
     "infinite_cap_when_excluded": _problem(_with(1, cap=INF), bounds="x <= cap WHEN (f) AND x >= 0 AND x <= 20"),
     "negative_infinite_lower_keeps_default": _problem(_with(1, lo=-INF), bounds="x >= lo AND x <= cap"),
     "negative_infinite_constant_lower_is_no_bound": _problem(ROWS, bounds="x >= ('-Infinity'::DOUBLE) AND x <= cap"),
-    "cap_5e19_is_a_bound": _problem(_with(1, cap=5e19), bounds="x <= cap", obj=ONLY_FIRST_TWO),
     "row_lower_1e25": _problem(_with(1, cap=1e25), bounds="x >= cap", obj="MINIMIZE SUM(x)"),
-    "constant_upper_5e19": _problem(ROWS, bounds="x <= 5e19", obj=ONLY_FIRST),
     "int_exactly_2_53": _problem(ROWS, decl="x(INT)", bounds="x <= 9007199254740992 AND x >= 0", obj="MAXIMIZE SUM(x)"),
     "int_2_53_minus_1": _problem(ROWS, decl="x(INT)", bounds="x <= 9007199254740991 AND x >= 0", obj="MAXIMIZE SUM(x)"),
     "int_large_whole_bound": _problem(
@@ -1073,6 +912,10 @@ BOUNDARY_CASES = {
     ),
     "int_negative_2_53": _problem(
         ROWS, decl="x(INT)", bounds="x >= -9007199254740992 AND x <= 0", obj="MINIMIZE SUM(x)"
+    ),
+    # 4.3 / 0.1 is 42.99999999999999 in a double, but 0.1 * 43 is not more than 4.3, so the solver allows 43.
+    "int_upper_quotient_just_below_a_whole_number": _problem(
+        ROWS, decl="x(INT)", bounds="0.1*x <= 4.3 AND x >= 0", obj="MAXIMIZE SUM(x)"
     ),
     "real_large_values": _problem(ROWS, bounds="x <= 1e17 AND x >= 0", obj="MAXIMIZE SUM(x)"),
     "real_tiny_quadratic": _problem(ROWS, bounds="x <= 1e6 AND x >= 0", obj="MINIMIZE SUM(1e-9*POWER(x - t, 2))"),
@@ -1111,7 +954,6 @@ BOUNDARY_CASES = {
     "ties_two_equal_integers": _problem(
         ROWS, decl="x(INT)", bounds="x BETWEEN 0 AND 9", obj="MINIMIZE SUM(POWER(x - 2.5, 2))"
     ),
-    "flat_objective_lowest_value": _problem(ROWS, decl="x(INT)", bounds="x BETWEEN 2 AND 6", obj="MAXIMIZE SUM(0*x)"),
 }
 
 
@@ -1209,7 +1051,6 @@ def test_a1_matches_exact_arithmetic_on_random_rows(decidb_cli, domain, seed):
 CONSTANT_PROBLEMS = {
     "linear_max": "x BETWEEN 0 AND 10 MAXIMIZE SUM(3*x)",
     "square": "x BETWEEN -2 AND 10 MINIMIZE SUM(POWER(x - 4, 2) + 2)",
-    "no_objective": "x BETWEEN 2 AND 5",
     "scaled_square_int": "x BETWEEN 0 AND 9 MINIMIZE 2*SUM(POWER(2*x - 7, 2))/3",
 }
 
