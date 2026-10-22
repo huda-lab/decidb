@@ -150,10 +150,10 @@ void RegisterDirectSolve(DBConfig &config) {
 	config.operator_extensions.push_back(MakeDirectResultAdapterExtension());
 }
 
-unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op, Optimizer &optimizer,
-                                                  DirectSolveMode mode) {
+void ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root, Optimizer &optimizer,
+                           DirectSolveMode mode) {
 	if (mode == DirectSolveMode::OFF) {
-		return op;
+		return;
 	}
 	DecideProfileScope direct_profile("optimizer.direct.analyze");
 	auto &decide = op->Cast<LogicalDecide>();
@@ -164,7 +164,7 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 			                            decide.diagnose ? "DIAGNOSE" : "DECIDB_FORCE_SOLVER");
 		}
 		// A DIAGNOSE query or a forced backend keeps the solver path; there is nothing to report.
-		return op;
+		return;
 	}
 	D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 	auto &source = *decide.children[0];
@@ -189,7 +189,7 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 		}
 		// A query no rule applies to under auto leaves the DECIDE node, and its EXPLAIN output, exactly as the solver
 		// path has it.
-		return op;
+		return;
 	}
 	// Every rule ran, so a second rule that applies is seen. Rules tell queries apart by the IR they require; two rules
 	// that apply to one query mean the rules overlap, which no ordering or cost can settle safely.
@@ -207,7 +207,7 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 	annotation.rule = selected.rule->Name();
 	annotation.condition = selected.rule->Summary();
 	direct_profile.Next("optimizer.direct.construct");
-	// The replacement answers to the DECIDE node's identity: every source column, then one column per decision.
+	// The replacement answers with the DECIDE node's outputs: every source column, then one column per decision.
 	source.ResolveOperatorTypes();
 	auto output_bindings = source.GetColumnBindings();
 	auto output_types = source.types;
@@ -221,7 +221,6 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 		output_types.push_back(decide.decide_variables[i]->return_type);
 	}
 	D_ASSERT(output_bindings == decide.GetColumnBindings());
-	auto decide_index = decide.decide_index;
 	// A stored source carries its row id as one more source column, so a column the rule never uses can be read again
 	// later, past the plan that holds rows. The rule passes it along like any other source column.
 	auto source_columns = prunable_sources.size();
@@ -242,9 +241,13 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 			late_materialization = DirectLateMaterialization();
 		}
 	}
-	return AdaptDirectResult(optimizer.context, std::move(substitute), std::move(output_bindings),
-	                         std::move(output_types), std::move(prunable_sources), decide_index, std::move(annotation),
-	                         late_materialization);
+	auto adapter = AdaptDirectResult(optimizer.context, std::move(substitute), optimizer.binder.GenerateTableIndex(),
+	                                 std::move(output_types), std::move(prunable_sources), std::move(annotation),
+	                                 late_materialization);
+	auto &installed = *adapter;
+	op = std::move(adapter);
+	// The operators above read the DECIDE node's bindings; from here they read the adapter's own.
+	RebindAboveAdapter(*root, installed, output_bindings);
 }
 
 } // namespace duckdb

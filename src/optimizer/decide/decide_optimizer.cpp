@@ -46,24 +46,25 @@ static void VerifyNormMarkersLowered(LogicalDecide &decide);
 DecideOptimizer::DecideOptimizer(Optimizer &optimizer) : optimizer(optimizer) {
 }
 
-unique_ptr<LogicalOperator> DecideOptimizer::Optimize(unique_ptr<LogicalOperator> op) {
+unique_ptr<LogicalOperator> DecideOptimizer::Optimize(unique_ptr<LogicalOperator> plan) {
+	OptimizeSubtree(plan, plan);
+	return plan;
+}
+
+void DecideOptimizer::OptimizeSubtree(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root) {
 	// Recurse into children first (bottom-up)
 	for (auto &child : op->children) {
-		child = Optimize(std::move(child));
+		OptimizeSubtree(child, root);
 	}
 
 	// If this is a LogicalDecide node, apply DECIDE-specific optimizations
 	if (op->type == LogicalOperatorType::LOGICAL_DECIDE) {
 		RewriteRhsAggregates(op->Cast<LogicalDecide>());
-		op = ApplyDirectSolveRules(std::move(op), optimizer, GetDirectSolveMode(optimizer.context));
-		if (op->type != LogicalOperatorType::LOGICAL_DECIDE) {
-			return op;
+		ApplyDirectSolveRules(op, root, optimizer, GetDirectSolveMode(optimizer.context));
+		if (op->type == LogicalOperatorType::LOGICAL_DECIDE) {
+			OptimizeDecide(op->Cast<LogicalDecide>());
 		}
-		auto &decide = op->Cast<LogicalDecide>();
-		OptimizeDecide(decide);
 	}
-
-	return op;
 }
 
 void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {

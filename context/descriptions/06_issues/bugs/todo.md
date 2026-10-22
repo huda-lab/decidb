@@ -26,23 +26,6 @@
   the query hang indefinitely on HiGHS once the model is large enough; there
   is no DeciDB-level safety net.
 
-## Direct solve fails to bind any source column a parent reads when the source ends in `ORDER BY`
-
-- **Location:** not traced; the direct-solve plan or its unused-column pruning
-  (`src/optimizer/decide/direct/`). The error is raised by `ColumnBindingResolver`.
-- **Observed:** with a source subquery that ends in `ORDER BY` and a parent that reads any source column (one the rule
-  uses, such as `score`, as well as one it does not), direct solve raises an internal error, for S1 and A1 alike and
-  under the default `auto`:
-  `SELECT SUM(length(payload)) FROM (SELECT * FROM s ORDER BY id DESC) t DECIDE x(BOOL) SUCH THAT SUM(x) <= 3 MAXIMIZE SUM(score * x)`
-  gives `INTERNAL Error: Failed to bind column reference "payload"`. The same query with `decide_direct_solve = 'off'`
-  answers, and so does the direct path when the parent reads only `x` or the source has no `ORDER BY`. The parent asks
-  for the subquery's output bindings (`[19.0]`) while the plan offers only the table's (`#[1.0]`, `#[1.1]`, ...): the
-  projection above the `ORDER BY` appears to be skipped without remapping the parent's references (not traced). Late
-  materialization of a stored table does not apply to this source (an `ORDER BY` is neither a projection nor a filter), and the error
-  also occurs with that step disabled.
-- **Expected:** the same answer as the solver path.
-- **Impact:** a valid query fails with an internal error in the default mode instead of answering.
-
 ## An order-0 norm over a reducer or over data raises an internal error
 
 - **Location:** not traced; the solver path's linearization of `norm(x, 0)` (its indicator variables) when the norm sits

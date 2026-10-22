@@ -5,6 +5,7 @@
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/optimizer/column_binding_replacer.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -16,7 +17,7 @@ namespace duckdb {
 
 namespace {
 
-constexpr const char *DIRECT_RESULT_EXTENSION = "decidb_direct_solve_result_v3";
+constexpr const char *DIRECT_RESULT_EXTENSION = "decidb_direct_solve_result_v4";
 
 class DirectResultAdapterExtension final : public OperatorExtension {
 public:
@@ -41,18 +42,17 @@ const char *DirectResultExtensionName() {
 	return DIRECT_RESULT_EXTENSION;
 }
 
-LogicalDirectResultAdapter::LogicalDirectResultAdapter(idx_t decide_index_p, vector<ColumnBinding> output_bindings_p,
-                                                       vector<LogicalType> output_types_p,
+LogicalDirectResultAdapter::LogicalDirectResultAdapter(idx_t table_index_p, vector<LogicalType> output_types_p,
                                                        idx_t required_dependency_count_p,
                                                        vector<uint8_t> prunable_outputs_p,
                                                        DirectExplainAnnotation annotation_p)
-    : decide_index(decide_index_p), output_bindings(std::move(output_bindings_p)),
-      output_types(std::move(output_types_p)), required_dependency_count(required_dependency_count_p),
-      prunable_outputs(std::move(prunable_outputs_p)), annotation(std::move(annotation_p)) {
+    : table_index(table_index_p), output_types(std::move(output_types_p)),
+      required_dependency_count(required_dependency_count_p), prunable_outputs(std::move(prunable_outputs_p)),
+      annotation(std::move(annotation_p)) {
 }
 
 vector<ColumnBinding> LogicalDirectResultAdapter::GetColumnBindings() {
-	return output_bindings;
+	return GenerateColumnBindings(table_index, output_types.size());
 }
 
 void LogicalDirectResultAdapter::PruneUnusedOutputs(const vector<bool> &referenced_outputs) {
@@ -77,7 +77,7 @@ void LogicalDirectResultAdapter::PruneUnusedOutputs(const vector<bool> &referenc
 }
 
 vector<idx_t> LogicalDirectResultAdapter::GetTableIndex() const {
-	return {decide_index};
+	return {table_index};
 }
 
 string LogicalDirectResultAdapter::GetName() const {
@@ -96,8 +96,7 @@ InsertionOrderPreservingMap<string> LogicalDirectResultAdapter::ParamsToString()
 
 void LogicalDirectResultAdapter::Serialize(Serializer &serializer) const {
 	LogicalExtensionOperator::Serialize(serializer);
-	serializer.WriteProperty(201, "decide_index", decide_index);
-	serializer.WriteProperty(202, "output_bindings", output_bindings);
+	serializer.WriteProperty(201, "table_index", table_index);
 	serializer.WriteProperty(203, "output_types", output_types);
 	serializer.WriteProperty(204, "required_dependency_count", required_dependency_count);
 	serializer.WriteProperty(205, "dependencies", expressions);
@@ -112,8 +111,7 @@ void LogicalDirectResultAdapter::Serialize(Serializer &serializer) const {
 
 unique_ptr<LogicalExtensionOperator> LogicalDirectResultAdapter::Read(Deserializer &deserializer) {
 	auto result = make_uniq<LogicalDirectResultAdapter>();
-	result->decide_index = deserializer.ReadProperty<idx_t>(201, "decide_index");
-	result->output_bindings = deserializer.ReadProperty<vector<ColumnBinding>>(202, "output_bindings");
+	result->table_index = deserializer.ReadProperty<idx_t>(201, "table_index");
 	result->output_types = deserializer.ReadProperty<vector<LogicalType>>(203, "output_types");
 	result->required_dependency_count = deserializer.ReadProperty<idx_t>(204, "required_dependency_count");
 	result->expressions = deserializer.ReadProperty<vector<unique_ptr<Expression>>>(205, "dependencies");
@@ -128,8 +126,8 @@ unique_ptr<LogicalExtensionOperator> LogicalDirectResultAdapter::Read(Deserializ
 }
 
 unique_ptr<PhysicalOperator> LogicalDirectResultAdapter::CreatePlan(ClientContext &, PhysicalPlanGenerator &generator) {
-	D_ASSERT(children.size() == 1 && output_bindings.size() == output_types.size() &&
-	         prunable_outputs.size() == output_types.size() && expressions.size() == ExpectedDependencyCount());
+	D_ASSERT(children.size() == 1 && prunable_outputs.size() == output_types.size() &&
+	         expressions.size() == ExpectedDependencyCount());
 	auto child = generator.CreatePlanChild(*children[0]);
 	vector<unique_ptr<Expression>> select_list;
 	select_list.reserve(output_types.size());
@@ -161,14 +159,13 @@ unique_ptr<OperatorExtension> MakeDirectResultAdapterExtension() {
 	return make_uniq<DirectResultAdapterExtension>();
 }
 
-unique_ptr<LogicalOperator> AdaptDirectResult(ClientContext &context, DirectSubstitute substitute,
-                                              vector<ColumnBinding> output_bindings, vector<LogicalType> output_types,
-                                              vector<uint8_t> prunable_sources, idx_t decide_index,
-                                              DirectExplainAnnotation annotation,
-                                              const DirectLateMaterialization &late_materialization) {
-	D_ASSERT(output_bindings.size() == output_types.size()); // both built by the rule driver, not by the rule
-	if (!substitute.child || substitute.slot_map.size() != output_bindings.size() ||
-	    prunable_sources.size() + substitute.prunable_decisions.size() != output_bindings.size()) {
+unique_ptr<LogicalDirectResultAdapter> AdaptDirectResult(ClientContext &context, DirectSubstitute substitute,
+                                                         idx_t table_index, vector<LogicalType> output_types,
+                                                         vector<uint8_t> prunable_sources,
+                                                         DirectExplainAnnotation annotation,
+                                                         const DirectLateMaterialization &late_materialization) {
+	if (!substitute.child || substitute.slot_map.size() != output_types.size() ||
+	    prunable_sources.size() + substitute.prunable_decisions.size() != output_types.size()) {
 		throw InternalException("Direct solve rule returned an incomplete result substitute");
 	}
 	auto prunable_outputs = std::move(prunable_sources);
@@ -191,15 +188,14 @@ unique_ptr<LogicalOperator> AdaptDirectResult(ClientContext &context, DirectSubs
 	}
 	// The driver builds the stored columns, and the check above fixes the decision count.
 	D_ASSERT(!late_materialization.Enabled() ||
-	         late_materialization.stored_columns.size() + substitute.prunable_decisions.size() ==
-	             output_bindings.size());
+	         late_materialization.stored_columns.size() + substitute.prunable_decisions.size() == output_types.size());
 	if (late_materialization.Enabled() && late_materialization.rowid_slot >= child_types.size()) {
 		throw InternalException("Direct solve rule lost the source row id");
 	}
 	ExpressionBuilder calc(context);
-	auto adapter = make_uniq<LogicalDirectResultAdapter>(decide_index, std::move(output_bindings),
-	                                                     std::move(output_types), substitute.validated_columns.size(),
-	                                                     std::move(prunable_outputs), std::move(annotation));
+	auto adapter =
+	    make_uniq<LogicalDirectResultAdapter>(table_index, std::move(output_types), substitute.validated_columns.size(),
+	                                          std::move(prunable_outputs), std::move(annotation));
 	// The positional map is materialized as one dependency per advertised output.
 	// The required suffix stays live even when all outputs are unused by a parent.
 	for (auto slot : substitute.slot_map) {
@@ -217,7 +213,19 @@ unique_ptr<LogicalOperator> AdaptDirectResult(ClientContext &context, DirectSubs
 		    calc.Col(child_types[late_materialization.rowid_slot], child_bindings[late_materialization.rowid_slot])));
 	}
 	adapter->children.push_back(std::move(substitute.child));
-	return std::move(adapter);
+	return adapter;
+}
+
+void RebindAboveAdapter(LogicalOperator &root, LogicalDirectResultAdapter &adapter,
+                        const vector<ColumnBinding> &replaced) {
+	auto bindings = adapter.GetColumnBindings();
+	D_ASSERT(replaced.size() == bindings.size());
+	ColumnBindingReplacer replacer;
+	for (idx_t i = 0; i < bindings.size(); i++) {
+		replacer.replacement_bindings.emplace_back(replaced[i], bindings[i]);
+	}
+	replacer.stop_operator = &adapter;
+	replacer.VisitOperator(root);
 }
 
 } // namespace duckdb

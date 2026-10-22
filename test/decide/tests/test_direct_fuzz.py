@@ -67,11 +67,39 @@ def _fuzz_rowbound(rng):
     return f"x {op} {rng.choice(['-1', '-0.5', '0', '0.5', '1', '1.5', '2'])} WHEN id = {row}"
 
 
-def _fuzz_query(rng, with_objective=True):
+# A source that ends in an operator DuckDB's later passes rewrite bindings above: the fuzz table is stored as a temp
+# table, so the statistics the compressed-materialization pass needs exist. A parent that reads `id` (`count(id)`) sees
+# the result adapter's source bindings. Used only by the boundary tests, so the queries of the other seeds are
+# unchanged.
+_BOUNDARY_SHAPES = ["order_by", "distinct", "join", "cte"]
+
+
+def _boundary_source(rng, source):
+    """Returns `(setup, extra CTEs, FROM item, parent WHERE)` for the rows of `source`, in a shape drawn from rng."""
+    setup = f"CREATE TEMP TABLE fz_src AS SELECT * FROM {source}; "
+    shape = rng.choice(_BOUNDARY_SHAPES)
+    if shape == "order_by":
+        return setup, "", "(SELECT * FROM fz_src ORDER BY id DESC) fz", ""
+    if shape == "distinct":
+        return setup, "", "(SELECT DISTINCT * FROM fz_src) fz", ""
+    if shape == "join":
+        return setup, "", "(SELECT a.* FROM fz_src a JOIN fz_src b ON a.id = b.id) fz", ""
+    # The second filtered reference lets the CTE filter pusher derive one filter for the materialized definition.
+    return (
+        setup,
+        "c AS MATERIALIZED (SELECT * FROM fz_src), ",
+        "(SELECT * FROM c WHERE id >= -1) fz",
+        " WHERE (SELECT COUNT(*) FROM c WHERE id < 100) >= 0",
+    )
+
+
+def _fuzz_query(rng, with_objective=True, boundary=False):
     """Returns the query and whether it was built as an S1 shape rather than a near miss.
 
     Without an objective the query reports its row count and a constant: which rows a feasibility problem selects is
     the backend's choice, so no score of the selection can be compared. Every random choice is drawn either way.
+    `boundary` moves the rows into a temp table read through a drawn source shape (`_boundary_source`) and counts `id`
+    in the parent; it draws after every other choice, so a query without it is unchanged.
     """
     near_miss = rng.choice([None] * 8 + ["clause", "objective"])
     rows = []
@@ -123,9 +151,13 @@ def _fuzz_query(rng, with_objective=True):
             "SELECT count(*), 0 FROM r"
         )
         return sql, near_miss != "clause"
+    setup, ctes, parent_where, count = "", "", "", "*"
+    if boundary:
+        setup, ctes, source, parent_where = _boundary_source(rng, source)
+        count = "id"
     sql = (
-        f"WITH r AS (SELECT * FROM {source} DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)} "
-        f"{sense} {objective}) SELECT count(*), {objectives[objective]} FROM r"
+        f"{setup}WITH {ctes}r AS (SELECT * FROM {source} DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)} "
+        f"{sense} {objective}) SELECT count({count}), {objectives[objective]} FROM r{parent_where}"
     )
     return sql, near_miss is None
 
@@ -142,6 +174,20 @@ _FUZZ_CASES_PER_SEED = 30
 @pytest.mark.parametrize("seed", _FUZZ_SEEDS)
 def test_direct_s1_seeded_fuzz_matches_solver_path(decidb_cli, seed):
     compare_direct_with_solver(decidb_cli, _fuzz_query, random.Random(seed), _FUZZ_CASES_PER_SEED)
+
+
+# Seeds of their own: a boundary query draws its source shape last, and the seeds above keep their queries.
+_BOUNDARY_FUZZ_SEEDS = [21, 22, 23, 24]
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("seed", _BOUNDARY_FUZZ_SEEDS)
+def test_direct_s1_boundary_seeded_fuzz_matches_solver_path(decidb_cli, seed):
+    compare_direct_with_solver(
+        decidb_cli, lambda rng: _fuzz_query(rng, boundary=True), random.Random(seed), _FUZZ_CASES_PER_SEED
+    )
 
 
 @pytest.mark.var_boolean
@@ -222,8 +268,11 @@ _A1_OBJECTIVES = {
 }
 
 
-def _a1_query(rng):
-    """Returns the query and whether it was built as an A1 shape rather than a near miss."""
+def _a1_query(rng, boundary=False):
+    """Returns the query and whether it was built as an A1 shape rather than a near miss.
+
+    `boundary` is as for `_fuzz_query`.
+    """
     near_miss = rng.choice([None] * 9 + ["aggregate", "not_equal", "two_squares"])
     domain = rng.choice(["REAL", "REAL", "INT", "INT", "BOOL"])
     source = _a1_rows(rng)
@@ -251,9 +300,13 @@ def _a1_query(rng):
         source = _empty_source(source)
     if rng.random() < 0.08:
         clauses.append(rng.choice(_A1_IMPOSSIBLE_BOUNDS[domain]))
+    setup, ctes, parent_where, count = "", "", "", "*"
+    if boundary:
+        setup, ctes, source, parent_where = _boundary_source(rng, source)
+        count = "id"
     sql = (
-        f"WITH r AS (SELECT * FROM {source} DECIDE x({domain}) SUCH THAT {' AND '.join(clauses)} {objective}) "
-        f"SELECT count(*), sum({per_row}) FROM r"
+        f"{setup}WITH {ctes}r AS (SELECT * FROM {source} DECIDE x({domain}) SUCH THAT {' AND '.join(clauses)} "
+        f"{objective}) SELECT count({count}), sum({per_row}) FROM r{parent_where}"
     )
     return sql, near_miss is None
 
@@ -272,3 +325,18 @@ _A1_FUZZ_CASES_PER_SEED = 30
 @pytest.mark.parametrize("seed", _A1_FUZZ_SEEDS)
 def test_direct_a1_seeded_fuzz_matches_solver_path(decidb_cli, seed):
     compare_direct_with_solver(decidb_cli, _a1_query, random.Random(seed), _A1_FUZZ_CASES_PER_SEED)
+
+
+_A1_BOUNDARY_FUZZ_SEEDS = [31, 32, 33, 34]
+
+
+@pytest.mark.var_real
+@pytest.mark.var_integer
+@pytest.mark.var_boolean
+@pytest.mark.cons_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("seed", _A1_BOUNDARY_FUZZ_SEEDS)
+def test_direct_a1_boundary_seeded_fuzz_matches_solver_path(decidb_cli, seed):
+    compare_direct_with_solver(
+        decidb_cli, lambda rng: _a1_query(rng, boundary=True), random.Random(seed), _A1_FUZZ_CASES_PER_SEED
+    )

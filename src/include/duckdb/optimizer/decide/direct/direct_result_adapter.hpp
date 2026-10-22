@@ -27,7 +27,10 @@ struct DirectLateMaterialization {
 	}
 };
 
-//! The logical-only operator that gives a direct-solve plan the bindings and types of the DECIDE node it replaces.
+//! The logical-only operator that gives a direct-solve plan the types of the DECIDE node it replaces, under bindings of
+//! its own: a table index taken from the binder and the outputs `(table_index, i)`, as a projection has. When the
+//! operator is installed, every reference above it to the DECIDE node's bindings is rewritten to these once
+//! (RebindAboveAdapter), so a later pass that changes the bindings below it rewrites the dependencies and stops here.
 //! The leading expressions map each output to a child binding; the next `required_dependency_count` pin validation
 //! dependencies; an optional last one carries the stored table's row id for the late materialization. Unused outputs
 //! can become typed NULL placeholders without dropping the validation suffix. Physical planning lowers this to an
@@ -35,12 +38,11 @@ struct DirectLateMaterialization {
 class LogicalDirectResultAdapter final : public LogicalExtensionOperator {
 public:
 	LogicalDirectResultAdapter() = default;
-	LogicalDirectResultAdapter(idx_t decide_index_p, vector<ColumnBinding> output_bindings_p,
-	                           vector<LogicalType> output_types_p, idx_t required_dependency_count_p,
-	                           vector<uint8_t> prunable_outputs_p, DirectExplainAnnotation annotation_p);
+	LogicalDirectResultAdapter(idx_t table_index_p, vector<LogicalType> output_types_p,
+	                           idx_t required_dependency_count_p, vector<uint8_t> prunable_outputs_p,
+	                           DirectExplainAnnotation annotation_p);
 
-	idx_t decide_index;
-	vector<ColumnBinding> output_bindings;
+	idx_t table_index;
 	vector<LogicalType> output_types;
 	idx_t required_dependency_count = 0;
 	vector<uint8_t> prunable_outputs;
@@ -71,16 +73,23 @@ protected:
 	void ResolveTypes() override;
 };
 
-//! Wraps a rule's relational substitute in the result adapter. The adapter keeps DECIDE's external bindings and
-//! types, checks the substitute's slot map against its child, and pins validation-only slots as live.
+//! Wraps a rule's relational substitute in the result adapter. The adapter keeps DECIDE's output types under the
+//! bindings `(table_index, i)`, checks the substitute's slot map against its child, and pins validation-only slots as
+//! live. The caller rewrites the references above it with RebindAboveAdapter.
 //! `prunable_sources` says, per source column, whether a parent that does not read it may skip evaluating it.
 //! An enabled `late_materialization` also carries the source row id as a dependency that a parent-read stored column
 //! can use.
-unique_ptr<LogicalOperator> AdaptDirectResult(ClientContext &context, DirectSubstitute substitute,
-                                              vector<ColumnBinding> output_bindings, vector<LogicalType> output_types,
-                                              vector<uint8_t> prunable_sources, idx_t decide_index,
-                                              DirectExplainAnnotation annotation,
-                                              const DirectLateMaterialization &late_materialization);
+unique_ptr<LogicalDirectResultAdapter> AdaptDirectResult(ClientContext &context, DirectSubstitute substitute,
+                                                         idx_t table_index, vector<LogicalType> output_types,
+                                                         vector<uint8_t> prunable_sources,
+                                                         DirectExplainAnnotation annotation,
+                                                         const DirectLateMaterialization &late_materialization);
+
+//! Points every reference in the plan under `root` to the DECIDE node's outputs, `replaced` (in output order), at the
+//! adapter's outputs. The adapter's own subtree is left alone, as DuckDB's passes that insert a projection do it
+//! (ColumnBindingReplacer with the new operator as the stop operator).
+void RebindAboveAdapter(LogicalOperator &root, LogicalDirectResultAdapter &adapter,
+                        const vector<ColumnBinding> &replaced);
 
 //! Lets a serialized plan containing the result adapter be read back.
 unique_ptr<OperatorExtension> MakeDirectResultAdapterExtension();

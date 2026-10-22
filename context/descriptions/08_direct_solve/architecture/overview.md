@@ -59,8 +59,9 @@ Names follow [glossary.md](glossary.md).
 - **Template Method.** The rule driver runs the same steps for every rule: build the IR, offer it to each rule, accept
   at most one, apply it, wrap the substitute.
 - **Transformation rules** (Volcano, Cascades). A rule replaces the DECIDE node with an equivalent relational plan.
-- **Adapter with an optimization fence.** The result adapter presents the substitute under the DECIDE node's bindings
-  and keeps parent filters and limits from crossing it.
+- **Adapter with an optimization fence.** The result adapter presents the substitute with the DECIDE node's columns
+  and types under bindings it owns (a binding boundary, as a projection is) and keeps parent filters and limits from
+  crossing it.
 - **Pipeline breaker and late materialization** (DuckDB, column stores). Inputs the solver path would reject are
   validated before any row is emitted, and wide columns are fetched by row id after the plan has chosen its rows.
 

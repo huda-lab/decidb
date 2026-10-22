@@ -42,9 +42,13 @@ public:
 	explicit DecideOptimizer(Optimizer &optimizer);
 
 	//! Recursively optimize the plan, transforming any LogicalDecide nodes found
-	unique_ptr<LogicalOperator> Optimize(unique_ptr<LogicalOperator> op);
+	unique_ptr<LogicalOperator> Optimize(unique_ptr<LogicalOperator> plan);
 
 private:
+	//! Optimize the subtree held by `op`, which sits inside the plan held by `root`. A direct-solve rule that replaces
+	//! a DECIDE node rewrites the references above it from `root`.
+	void OptimizeSubtree(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root);
+
 	//! Replace each COUNT/MIN/MAX/SUM/AVG on the right of a reduced constraint by a window column of the DECIDE
 	//! source (the same aggregate over the clause's group), so the solver and the direct-solve rules read one number
 	//! that DuckDB computed. Runs before the direct-solve rules, in every mode, because both paths must see it.

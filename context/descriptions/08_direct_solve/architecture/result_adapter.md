@@ -1,18 +1,25 @@
 # Result adapter: keeping DECIDE's output intact
 
 The replacement plan must look exactly like the DECIDE node it replaces: every source column, then one column per
-decision, with the same bindings and types. A small **logical-only** operator wraps the generated plan to guarantee
+decision, with the same types. A small **logical-only** operator wraps the generated plan to guarantee
 that. It has no problem-specific logic and lowers to ordinary projections, so there is no new physical operator.
 
-It is two standard ideas in one operator. It is a GoF **Adapter**: the substitute presents the interface (bindings and
-types) of the DECIDE node it replaces. It is also an **optimization fence**: parent filters and limits cannot cross it.
+It is three standard ideas in one operator. It is a GoF **Adapter**: the substitute presents the interface (columns and
+types) of the DECIDE node it replaces. It is a **binding boundary**, as a DuckDB projection is: it owns a table index
+and its outputs are `(index, i)`. It is also an **optimization fence**: parent filters and limits cannot cross it.
 In `EXPLAIN` it shows as `DIRECT_RESULT_ADAPTER`; the code is `LogicalDirectResultAdapter`, built by
 `AdaptDirectResult`.
 
 ## What it does
 
 - **Explicit slot map.** Each DECIDE output maps to one slot of the generated child (`DirectSubstitute::slot_map`).
-  Parents keep reading the old bindings.
+- **Owns its bindings.** When a rule applies, the rule driver gives the adapter a new table index and rewrites every
+  reference above the DECIDE from DECIDE's bindings (its source's and `(decide_index, j)`) to the adapter's, once, with
+  DuckDB's `ColumnBindingReplacer` run from the plan root and stopped at the adapter (`RebindAboveAdapter`). A DuckDB
+  pass that later moves bindings below the adapter rewrites the adapter's own expressions and stops there, so parents
+  never see it. Compressed materialization does this: it puts a decompressing projection with a new table index above
+  an `ORDER BY`, a `DISTINCT` or a join in the source and rewrites the references above it. A copy of DECIDE's
+  bindings kept in the adapter would go stale and leave the parent's references unbound.
 - **Blocks parent work from crossing it.** A filter or limit above the DECIDE result cannot move into the rank input,
   since that would change which rows are ranked. Optimizing inside the child is fine.
 - **Carries the `EXPLAIN` annotation**: the mode, rule and condition lines that `EXPLAIN` and profiling show when a
@@ -22,8 +29,9 @@ In `EXPLAIN` it shows as `DIRECT_RESULT_ADAPTER`; the code is `LogicalDirectResu
 
 The adapter declares one dependency per output, plus the rule's validated columns, so the optimizer cannot prune the
 child below what a parent still reads. A transparent wrapper does not work: the optimizer prunes the child to the
-columns it can see used, and a parent that reads another column gets wrong data. Never substitute table indexes globally
-or re-resolve bindings while lowering.
+columns it can see used, and a parent that reads another column gets wrong data. The one rewrite above is limited to
+DECIDE's own bindings, which no operator outside its ancestors reads; never substitute other table indexes or re-resolve
+bindings while lowering.
 
 ## Pruning unused columns
 

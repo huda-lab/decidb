@@ -60,7 +60,7 @@ pattern step and the condition step are one, because a DECIDE query has a single
 | expression builder | A small fluent helper that builds bound expressions | Fowler (Expression Builder) | `ExpressionBuilder`, `ExprPtr` |
 | pipeline breaker | A blocking operator that reads every input row before it emits one; here it validates the inputs the solver path would reject | DuckDB, HyPer (pipeline breakers) | `DirectValidationBreaker`, `DirectPipelineBreaker`, field `breaker`, `validated_columns`, `pipelined` |
 | late materialization | Read the narrow columns first and fetch the wide ones by row id after the plan has chosen its rows. Distinct from DuckDB's `LATE_MATERIALIZATION` pass, and it runs inside `UNUSED_COLUMNS` | Column-store texts; DuckDB | `DirectLateMaterialization`, `late_materialization`, `direct_late_materialization.{hpp,cpp}`, `ApplyDirectLateMaterialization`, `LateMaterializeOneAdapter`, `DirectExposeStoredRowId` |
-| result adapter | The operator that presents the substitute under the DECIDE node's bindings (GoF Adapter) and stops parent filters and limits from crossing it (an optimization fence) | GoF Adapter; optimizer texts (optimization fence) | `LogicalDirectResultAdapter`, `EXPLAIN` operator `DIRECT_RESULT_ADAPTER`, `AdaptDirectResult`, `DirectResultAdapterExtension`, `MakeDirectResultAdapterExtension`, `direct_result_adapter.{hpp,cpp}`, `slot_map`, `architecture/result_adapter.md` |
+| result adapter | The operator that presents the substitute with the DECIDE node's columns and types under bindings it owns (GoF Adapter; a binding boundary, as a projection is) and stops parent filters and limits from crossing it (an optimization fence) | GoF Adapter; optimizer texts (optimization fence) | `LogicalDirectResultAdapter`, `EXPLAIN` operator `DIRECT_RESULT_ADAPTER`, `AdaptDirectResult`, `RebindAboveAdapter`, `DirectResultAdapterExtension`, `MakeDirectResultAdapterExtension`, `direct_result_adapter.{hpp,cpp}`, `slot_map`, `architecture/result_adapter.md` |
 | column pruning | Dropping columns no parent reads | Optimizer texts; DuckDB `RemoveUnusedColumns` | `prunable_outputs`, `prunable_sources`, `prunable_decisions` |
 | `EXPLAIN` annotation | The keys direct solve adds to the plan's `EXPLAIN` output: mode, rule, condition | DuckDB (`ParamsToString`) | `DirectExplainAnnotation`, field `annotation`, `Render` |
 
@@ -106,7 +106,7 @@ value. Classes without code take the name in docs only until their code exists.
 A few names stay as they are because renaming them would break something or because the word means something else there.
 
 - **Serialized names.** The plan serializer's property `"proof"` (id 209, `direct_result_adapter.cpp`; the field behind it
-  is `condition`), the extension name `decidb_direct_solve_result_v3` (`DIRECT_RESULT_EXTENSION`), and the parser tag
+  is `condition`), the extension name `decidb_direct_solve_result_v4` (`DIRECT_RESULT_EXTENSION`), and the parser tag
   string `__qualified_reducer__` (`QUALIFIED_REDUCER_TAG`), which a saved view stores. Renaming any of them would stop
   older plans or database files from reading back.
 - **Oracle cache keys.** A Python test's cached oracle answer is keyed on its node id and its function's source, so
