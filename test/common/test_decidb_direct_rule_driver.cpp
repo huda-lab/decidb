@@ -93,14 +93,15 @@ public:
 	}
 	DirectSubstitute Apply(duckdb::unique_ptr<LogicalOperator> source, Optimizer &optimizer,
 	                       const DirectApplicabilityCondition &) const override {
+		ExpressionBuilder build(optimizer.context);
 		auto bindings = source->GetColumnBindings();
 		auto types = source->types;
 		RaiseFromSharedFragment(source, bindings, types, optimizer);
 		auto valid = [&](const duckdb::vector<ColumnBinding> &input) {
 			auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
-			is_null->children.push_back(DirectColumn(types[0], input[0]));
+			is_null->children.push_back(build.Out(build.Col(types[0], input[0])));
 			return make_uniq<BoundCaseExpression>(std::move(is_null), DirectErrorPredicate(optimizer, "stub: NULL"),
-			                                      DirectConstantBool(true));
+			                                      build.Out(build.Bool(true)));
 		};
 		duckdb::vector<ColumnBinding> input = bindings;
 		duckdb::unique_ptr<LogicalOperator> plan = std::move(source);
@@ -109,14 +110,14 @@ public:
 			auto breaker = DirectValidationBreaker(optimizer.binder, std::move(plan), valid(bindings));
 			plan = std::move(breaker.plan);
 			input = breaker.input_bindings;
-			check = DirectColumn(LogicalType::BIGINT, breaker.breaker);
+			check = build.Out(build.Col(LogicalType::BIGINT, breaker.breaker));
 		} else if (validation == StubValidation::PIPELINED) {
 			check = valid(bindings);
 		}
 		auto index = optimizer.binder.GenerateTableIndex();
 		duckdb::vector<duckdb::unique_ptr<Expression>> expressions;
 		for (idx_t i = 0; i < input.size(); i++) {
-			expressions.push_back(DirectColumn(types[i], input[i]));
+			expressions.push_back(build.Out(build.Col(types[i], input[i])));
 		}
 		expressions.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(value)));
 		DirectSubstitute substitute;
@@ -168,6 +169,7 @@ private:
 	void RaiseFromSharedFragment(duckdb::unique_ptr<LogicalOperator> &source,
 	                             const duckdb::vector<ColumnBinding> &bindings,
 	                             const duckdb::vector<LogicalType> &types, Optimizer &optimizer) const {
+		ExpressionBuilder build(optimizer.context);
 		auto column = [&](ColumnBinding binding, idx_t depth = 0) {
 			return duckdb::unique_ptr<Expression>(make_uniq<BoundColumnRefExpression>(types[0], binding, depth));
 		};
@@ -179,12 +181,12 @@ private:
 		case Fault::BREAKER_INPUT_BINDINGS_MISMATCH: {
 			duckdb::vector<duckdb::unique_ptr<Expression>> expressions;
 			for (idx_t i = 0; i < bindings.size(); i++) {
-				expressions.push_back(DirectColumn(types[i], bindings[i]));
+				expressions.push_back(build.Out(build.Col(types[i], bindings[i])));
 			}
 			auto input =
 			    make_uniq<ProjectionWithoutLastBinding>(optimizer.binder.GenerateTableIndex(), std::move(expressions));
 			input->children.push_back(std::move(source));
-			DirectValidationBreaker(optimizer.binder, std::move(input), DirectConstantBool(true));
+			DirectValidationBreaker(optimizer.binder, std::move(input), build.Out(build.Bool(true)));
 			break;
 		}
 		case Fault::OVER_PROJECTION_OUTER_COLUMN:
@@ -194,7 +196,6 @@ private:
 			DirectOverProjection(*column(foreign), bindings, 0);
 			break;
 		case Fault::OVER_PROJECTION_FOREIGN_FIRST_OPERAND: {
-			ExpressionBuilder build(optimizer);
 			auto sum = build.Add(build.Col(types[0], foreign), build.Col(types[0], bindings[0]));
 			DirectOverProjection(*build.Out(sum), bindings, 0);
 			break;

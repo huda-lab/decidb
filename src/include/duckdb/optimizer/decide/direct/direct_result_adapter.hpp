@@ -9,6 +9,8 @@
 
 namespace duckdb {
 
+class ClientContext;
+
 //! What the rule driver learned about a DECIDE source that reads one stored table, so the result adapter can later
 //! move a column the rule never uses out of the rule's plan and read it from the table again
 //! (direct_late_materialization.hpp).
@@ -74,9 +76,10 @@ protected:
 //! `prunable_sources` says, per source column, whether a parent that does not read it may skip evaluating it.
 //! An enabled `late_materialization` also carries the source row id as a dependency that a parent-read stored column
 //! can use.
-unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
-                                              vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
-                                              idx_t decide_index, DirectExplainAnnotation annotation,
+unique_ptr<LogicalOperator> AdaptDirectResult(ClientContext &context, DirectSubstitute substitute,
+                                              vector<ColumnBinding> output_bindings, vector<LogicalType> output_types,
+                                              vector<uint8_t> prunable_sources, idx_t decide_index,
+                                              DirectExplainAnnotation annotation,
                                               const DirectLateMaterialization &late_materialization);
 
 //! Lets a serialized plan containing the result adapter be read back.

@@ -403,6 +403,7 @@ bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 //! Per-row fixed Boolean values: `x = 0/1` and its one-sided forms against a constant, or against a source Boolean.
 //! Each becomes a condition under which the row is fixed to one or to zero.
 bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condition &condition) const {
+	ExpressionBuilder calc(context);
 	for (auto factor : condition.local_fixes) {
 		if (!factor->scope.per_key_slots.empty()) {
 			return false;
@@ -424,7 +425,7 @@ bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condi
 			// DECIDE's infeasible error.
 			if (!domain.zero || !domain.one) {
 				auto row_condition = [&]() {
-					return when ? when->Copy() : make_uniq<BoundConstantExpression>(Value::BOOLEAN(true));
+					return calc.Out(when ? calc.Of(*when) : calc.Bool(true));
 				};
 				if (!domain.zero) {
 					condition.fixed_one_conditions.push_back(row_condition());
@@ -436,22 +437,19 @@ bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condi
 			continue;
 		}
 		auto type = factor->comparison;
-		auto active = [&](unique_ptr<Expression> value) -> unique_ptr<Expression> {
-			return when ? make_uniq<BoundCaseExpression>(when->Copy(), std::move(value),
-			                                             make_uniq<BoundConstantExpression>(Value::BOOLEAN(false)))
-			            : std::move(value);
+		auto active = [&](const ExprPtr &value) {
+			return calc.Out(when ? calc.If(calc.Of(*when), value, calc.Bool(false)) : value);
 		};
 		auto source_value = SourceBooleanFixedValue(*factor->rhs, ir.decide_index, ir.source_bindings);
 		if (source_value &&
 		    (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 		     type == ExpressionType::COMPARE_GREATERTHANOREQUALTO)) {
 			if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
-				condition.fixed_one_conditions.push_back(active(source_value->Copy()));
+				condition.fixed_one_conditions.push_back(active(calc.Of(*source_value)));
 			}
 			if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
-				condition.fixed_zero_conditions.push_back(active(
-				    make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, source_value->Copy(),
-				                                         make_uniq<BoundConstantExpression>(Value::BOOLEAN(false)))));
+				condition.fixed_zero_conditions.push_back(
+				    active(calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Of(*source_value), calc.Bool(false))));
 			}
 			string column_name;
 			if (source_value->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -473,12 +471,10 @@ bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condi
 		string column_name;
 		bool is_column = DirectSourceNumericColumn(value, ir.source_bindings, column_slot, column_type, column_name);
 		auto invalid_type = is_column ? column_type : value.return_type;
-		auto disallows = [&](double allowed_value) -> unique_ptr<Expression> {
-			auto as_double = BoundCastExpression::AddCastToType(context, value.Copy(), LogicalType::DOUBLE);
-			auto allowed = make_uniq<BoundComparisonExpression>(
-			    type, make_uniq<BoundConstantExpression>(Value::DOUBLE(allowed_value)), std::move(as_double));
-			return make_uniq<BoundCaseExpression>(std::move(allowed), DirectConstantBool(false),
-			                                      DirectConstantBool(true));
+		auto disallows = [&](double allowed_value) {
+			auto as_double = calc.Cast(calc.Of(value), LogicalType::DOUBLE);
+			auto allowed = calc.Cmp(type, calc.Num(allowed_value), as_double);
+			return calc.If(allowed, calc.Bool(false), calc.Bool(true));
 		};
 		condition.fixed_one_conditions.push_back(active(disallows(0.0)));
 		condition.fixed_zero_conditions.push_back(active(disallows(1.0)));
@@ -605,7 +601,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
-	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder) {
+	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context) {
 		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
 		source_types = source.types;
@@ -691,6 +687,7 @@ private:
 	const Condition &condition;
 	Optimizer &optimizer;
 	Binder &binder;
+	ExpressionBuilder calc;
 	vector<ColumnBinding> source_bindings;
 	vector<LogicalType> source_types;
 	idx_t score_index;
@@ -722,8 +719,17 @@ private:
 	unique_ptr<LogicalOperator> ProjectScopeState(unique_ptr<LogicalOperator> source, ScopeBindings &scope) const {
 		vector<unique_ptr<Expression>> fixed_flags;
 		if (has_fixes) {
-			fixed_flags.push_back(AnyCondition(condition.fixed_one_conditions));
-			fixed_flags.push_back(AnyCondition(condition.fixed_zero_conditions));
+			// `Any` tests its first condition first; this plan tests the last first.
+			auto any_of = [&](const vector<unique_ptr<Expression>> &conditions) {
+				vector<ExprPtr> ordered;
+				for (auto &condition : conditions) {
+					ordered.push_back(calc.Of(*condition));
+				}
+				std::reverse(ordered.begin(), ordered.end());
+				return calc.Out(calc.Any(ordered));
+			};
+			fixed_flags.push_back(any_of(condition.fixed_one_conditions));
+			fixed_flags.push_back(any_of(condition.fixed_zero_conditions));
 		}
 		auto state = ProjectScope(binder, std::move(source), condition.scoped, condition.when_condition.get(),
 		                          condition.group_key_slots, std::move(fixed_flags));
@@ -820,40 +826,38 @@ private:
 			score_expressions.push_back(std::move(expression));
 		};
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			score_expressions.push_back(DirectColumn(source_types[i], scope.input_bindings[i]));
+			score_expressions.push_back(calc.Out(calc.Col(source_types[i], scope.input_bindings[i])));
 		}
-		unique_ptr<Expression> combined_score;
+		ExprPtr combined_score;
 		// Without an objective there are no parts and every row scores 0.
 		if (condition.objective_parts.size() != 1 || condition.objective_parts[0].sign < 0) {
-			combined_score = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
+			combined_score = calc.Num(0.0);
 		}
 		for (auto &part : condition.objective_parts) {
 			auto coefficient = CopyIntoState(*part.coefficient, scope);
-			auto term =
-			    DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.scaled, part.scale, part.divides);
-			combined_score = combined_score
-			                     ? optimizer.BindScalarFunction("+", std::move(combined_score), std::move(term))
-			                     : std::move(term);
+			auto term = calc.Wrap(
+			    DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.scaled, part.scale, part.divides));
+			combined_score = combined_score ? calc.Add(combined_score, term) : term;
 		}
-		append_at(score_binding, std::move(combined_score));
+		append_at(score_binding, calc.Out(combined_score));
 		if (condition.scoped) {
-			append_at(eligible_binding, DirectColumn(LogicalType::BOOLEAN, scope.eligible_binding));
+			append_at(eligible_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.eligible_binding)));
 		}
 		if (has_fixes) {
-			append_at(fixed_one_binding, DirectColumn(LogicalType::BOOLEAN, scope.fixed_one_binding));
-			append_at(fixed_zero_binding, DirectColumn(LogicalType::BOOLEAN, scope.fixed_zero_binding));
+			append_at(fixed_one_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.fixed_one_binding)));
+			append_at(fixed_zero_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.fixed_zero_binding)));
 		}
 		for (idx_t i = 0; i < bounds.slots.size(); i++) {
 			auto &slots = bounds.slots[i];
 			if (slots.min_window != DConstants::INVALID_INDEX) {
 				slots.min_score = score_expressions.size();
 				score_expressions.push_back(
-				    DirectColumn(LogicalType::DOUBLE, ColumnBinding(bounds.window_index, slots.min_window)));
+				    calc.Out(calc.Col(LogicalType::DOUBLE, ColumnBinding(bounds.window_index, slots.min_window))));
 			}
 			if (slots.max_window != DConstants::INVALID_INDEX) {
 				slots.max_score = score_expressions.size();
 				score_expressions.push_back(
-				    DirectColumn(LogicalType::DOUBLE, ColumnBinding(bounds.window_index, slots.max_window)));
+				    calc.Out(calc.Col(LogicalType::DOUBLE, ColumnBinding(bounds.window_index, slots.max_window))));
 			}
 		}
 		auto score = make_uniq<LogicalProjection>(score_index, std::move(score_expressions));
@@ -863,56 +867,49 @@ private:
 
 	//! Inclusive count limit of one source-valued bound, as BIGINT: its group extremum rounded, clamped to the
 	//! BIGINT range, and -1 (upper) or 0 (lower) when the value is below zero.
-	unique_ptr<Expression> SourceLimit(idx_t index, bool upper, const BoundChecks &bounds) const {
+	ExprPtr SourceLimit(idx_t index, bool upper, const BoundChecks &bounds) const {
 		auto &bound = condition.source_bounds[index];
 		auto &slots = bounds.slots[index];
 		auto slot = upper ? slots.min_score : slots.max_score;
 		// Every caller asks for a side the bound has: an upper limit of an upper bound, a lower of a lower bound.
 		D_ASSERT(slot != DConstants::INVALID_INDEX);
 		auto cap = [&]() {
-			return DirectColumn(LogicalType::DOUBLE, ColumnBinding(score_index, slot));
+			return calc.Col(LogicalType::DOUBLE, ColumnBinding(score_index, slot));
 		};
 		bool strict =
 		    bound.comparison == (upper ? ExpressionType::COMPARE_LESSTHAN : ExpressionType::COMPARE_GREATERTHAN);
-		auto rounded = optimizer.BindScalarFunction(upper == strict ? "ceil" : "floor", cap());
-		unique_ptr<Expression> inclusive =
-		    BoundCastExpression::AddCastToType(optimizer.context, std::move(rounded), LogicalType::BIGINT);
+		auto inclusive = calc.Cast(calc.Fn(upper == strict ? "ceil" : "floor", cap()), LogicalType::BIGINT);
 		if (strict) {
-			inclusive = optimizer.BindScalarFunction(upper ? "-" : "+", std::move(inclusive),
-			                                         make_uniq<BoundConstantExpression>(Value::BIGINT(1)));
+			auto one = calc.Constant(Value::BIGINT(1));
+			inclusive = upper ? calc.Sub(inclusive, one) : calc.Add(inclusive, one);
 		}
-		auto beyond_bigint = make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_GREATERTHANOREQUALTO, cap(),
-		    make_uniq<BoundConstantExpression>(Value::DOUBLE(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT)));
-		auto bounded = make_uniq<BoundCaseExpression>(
-		    std::move(beyond_bigint),
-		    make_uniq<BoundConstantExpression>(Value::BIGINT(std::numeric_limits<int64_t>::max())),
-		    std::move(inclusive));
-		auto below_zero = make_uniq<BoundComparisonExpression>(
-		    strict == upper ? ExpressionType::COMPARE_LESSTHANOREQUALTO : ExpressionType::COMPARE_LESSTHAN, cap(),
-		    make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)));
-		return make_uniq<BoundCaseExpression>(std::move(below_zero),
-		                                      make_uniq<BoundConstantExpression>(Value::BIGINT(upper ? -1 : 0)),
-		                                      std::move(bounded));
+		auto beyond_bigint =
+		    calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, cap(), calc.Num(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT));
+		auto bounded =
+		    calc.If(beyond_bigint, calc.Constant(Value::BIGINT(std::numeric_limits<int64_t>::max())), inclusive);
+		auto below_zero =
+		    calc.Cmp(strict == upper ? ExpressionType::COMPARE_LESSTHANOREQUALTO : ExpressionType::COMPARE_LESSTHAN,
+		             cap(), calc.Num(0.0));
+		return calc.If(below_zero, calc.Constant(Value::BIGINT(upper ? -1 : 0)), bounded);
 	}
 
 	//! Largest lower limit across the constant and source-valued bounds.
-	unique_ptr<Expression> LowerLimit(const BoundChecks &bounds) const {
-		vector<unique_ptr<Expression>> limits;
-		limits.push_back(make_uniq<BoundConstantExpression>(Value::BIGINT(NumericCast<int64_t>(condition.lower))));
+	ExprPtr LowerLimit(const BoundChecks &bounds) const {
+		vector<ExprPtr> limits;
+		limits.push_back(calc.Constant(Value::BIGINT(NumericCast<int64_t>(condition.lower))));
 		for (idx_t i = 0; i < bounds.slots.size(); i++) {
 			if (bounds.slots[i].max_score != DConstants::INVALID_INDEX) {
 				limits.push_back(SourceLimit(i, false, bounds));
 			}
 		}
-		return limits.size() == 1 ? std::move(limits[0]) : optimizer.BindScalarFunction("greatest", std::move(limits));
+		return calc.Max(limits);
 	}
 
 	//! Smallest upper limit across the constant and source-valued bounds. Only asked for when there is an upper bound.
-	unique_ptr<Expression> UpperLimit(const BoundChecks &bounds) const {
-		vector<unique_ptr<Expression>> limits;
+	ExprPtr UpperLimit(const BoundChecks &bounds) const {
+		vector<ExprPtr> limits;
 		if (condition.has_upper) {
-			limits.push_back(make_uniq<BoundConstantExpression>(Value::BIGINT(NumericCast<int64_t>(condition.upper))));
+			limits.push_back(calc.Constant(Value::BIGINT(NumericCast<int64_t>(condition.upper))));
 		}
 		for (idx_t i = 0; i < bounds.slots.size(); i++) {
 			if (bounds.slots[i].min_score != DConstants::INVALID_INDEX) {
@@ -920,7 +917,7 @@ private:
 			}
 		}
 		D_ASSERT(!limits.empty());
-		return limits.size() == 1 ? std::move(limits[0]) : optimizer.BindScalarFunction("least", std::move(limits));
+		return calc.Min(limits);
 	}
 
 	//! Partition a rank or count window by eligibility and PER key.
@@ -928,18 +925,17 @@ private:
 		if (!condition.scoped) {
 			return;
 		}
-		expression.partitions.push_back(DirectColumn(LogicalType::BOOLEAN, eligible_binding));
+		expression.partitions.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, eligible_binding)));
 		for (auto slot : condition.group_key_slots) {
-			expression.partitions.push_back(DirectColumn(source_types[slot], ColumnBinding(score_index, slot)));
+			expression.partitions.push_back(calc.Out(calc.Col(source_types[slot], ColumnBinding(score_index, slot))));
 		}
 	}
 
 	//! A row with no fixed value, neither to one nor to zero.
 	unique_ptr<Expression> FreeRow() const {
-		return make_uniq<BoundCaseExpression>(
-		    DirectColumn(LogicalType::BOOLEAN, fixed_one_binding), DirectConstantBool(false),
-		    make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, fixed_zero_binding),
-		                                   DirectConstantBool(false), DirectConstantBool(true)));
+		return calc.Out(
+		    calc.If(calc.Col(LogicalType::BOOLEAN, fixed_one_binding), calc.Bool(false),
+		            calc.If(calc.Col(LogicalType::BOOLEAN, fixed_zero_binding), calc.Bool(false), calc.Bool(true))));
 	}
 
 	//! Order a window: free rows first when fixed values exist, then best score first.
@@ -947,9 +943,9 @@ private:
 		if (has_fixes) {
 			expression.orders.emplace_back(OrderType::DESCENDING, OrderByNullType::NULLS_LAST, FreeRow());
 		}
-		expression.orders.emplace_back(condition.sense == DecideSense::MAXIMIZE ? OrderType::DESCENDING
-		                                                                        : OrderType::ASCENDING,
-		                               OrderByNullType::NULLS_LAST, DirectColumn(LogicalType::DOUBLE, score_binding));
+		expression.orders.emplace_back(
+		    condition.sense == DecideSense::MAXIMIZE ? OrderType::DESCENDING : OrderType::ASCENDING,
+		    OrderByNullType::NULLS_LAST, calc.Out(calc.Col(LogicalType::DOUBLE, score_binding)));
 	}
 
 	//! Stage 5: validate the score, rank rows within their scope, and raise the infeasibility error when the
@@ -964,6 +960,8 @@ private:
 		auto guard = make_uniq<LogicalFilter>(DirectValidNumberPredicate(
 		    optimizer, LogicalType::DOUBLE, score_binding, score_source.get(), DirectNumberKind::OBJECTIVE));
 		guard->children.push_back(std::move(score));
+		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
+		// for.
 		auto rank =
 		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
 		rank->start = WindowBoundary::UNBOUNDED_PRECEDING;
@@ -976,19 +974,19 @@ private:
 		idx_t free_count_slot = DConstants::INVALID_INDEX;
 		if (has_fixes) {
 			result.fixed_count_slot = window->expressions.size();
-			auto count = DirectWindowMatchingCount(DirectColumn(LogicalType::BOOLEAN, fixed_one_binding));
+			auto count = DirectWindowMatchingCount(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, fixed_one_binding)));
 			AddOrder(*count);
 			AddScope(*count);
 			window->expressions.push_back(std::move(count));
 			if (has_lower && !condition.impossible) {
 				free_count_slot = window->expressions.size();
-				auto free_count = DirectWindowMatchingCount(FreeRow());
+				auto free_count = DirectWindowMatchingCount(calc, FreeRow());
 				AddOrder(*free_count);
 				AddScope(*free_count);
 				window->expressions.push_back(std::move(free_count));
 			}
 		} else if (has_lower && !condition.impossible) {
-			// Match the rank's order so the full-partition count can share its sort.
+			// Match the rank's order so the full-partition count can share its sort. Hand-built, like the rank above.
 			auto count =
 			    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, LogicalType::BIGINT,
 			                                     make_uniq<AggregateFunction>(CountStarFun::GetFunction()), nullptr);
@@ -1015,67 +1013,65 @@ private:
 	unique_ptr<Expression> FeasiblePredicate(const RankedRows &ranked, idx_t free_count_slot,
 	                                         const BoundChecks &bounds) const {
 		// `ok` must hold; a NULL `ok` fails.
-		auto must_hold = [&](unique_ptr<Expression> ok) -> unique_ptr<Expression> {
-			return DirectRaiseUnless(std::move(ok), DirectInfeasibleErrorPredicate(optimizer));
+		auto must_hold = [&](const ExprPtr &ok) {
+			return DirectRaiseUnless(calc, calc.Out(ok), DirectInfeasibleErrorPredicate(optimizer));
 		};
 		// `bad` must not hold; a NULL `bad` passes.
-		auto must_not_hold = [&](unique_ptr<Expression> bad) -> unique_ptr<Expression> {
-			return DirectRaiseIf(std::move(bad), DirectInfeasibleErrorPredicate(optimizer));
+		auto must_not_hold = [&](const ExprPtr &bad) {
+			return DirectRaiseIf(calc, calc.Out(bad), DirectInfeasibleErrorPredicate(optimizer));
 		};
 		auto fixed_count = [&]() {
-			return DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, ranked.fixed_count_slot));
+			return calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, ranked.fixed_count_slot));
 		};
 		vector<unique_ptr<Expression>> group_checks;
 		if (condition.impossible) {
 			// No bound can hold, so a group with any row is infeasible.
-			group_checks.push_back(must_not_hold(make_uniq<BoundComparisonExpression>(
-			    ExpressionType::COMPARE_GREATERTHANOREQUALTO, DirectColumn(LogicalType::BIGINT, ranked.rank_binding),
-			    make_uniq<BoundConstantExpression>(Value::BIGINT(1)))));
+			group_checks.push_back(must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+			                                              calc.Col(LogicalType::BIGINT, ranked.rank_binding),
+			                                              calc.Constant(Value::BIGINT(1)))));
 		} else {
 			if (has_lower) {
-				unique_ptr<Expression> available_rows =
-				    has_fixes ? optimizer.BindScalarFunction(
-				                    "+", fixed_count(),
-				                    DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, free_count_slot)))
-				              : DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, 1));
-				group_checks.push_back(must_hold(make_uniq<BoundComparisonExpression>(
-				    ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(available_rows), LowerLimit(bounds))));
+				auto available_rows =
+				    has_fixes ? calc.Add(fixed_count(),
+				                         calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, free_count_slot)))
+				              : calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, 1));
+				group_checks.push_back(must_hold(
+				    calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, available_rows, LowerLimit(bounds))));
 			}
 			if ((source_lower || source_upper) && has_upper) {
-				group_checks.push_back(must_hold(make_uniq<BoundComparisonExpression>(
-				    ExpressionType::COMPARE_LESSTHANOREQUALTO, LowerLimit(bounds), UpperLimit(bounds))));
+				group_checks.push_back(must_hold(
+				    calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, LowerLimit(bounds), UpperLimit(bounds))));
 			}
 			if (source_lower) {
 				for (auto &slots : bounds.slots) {
 					if (slots.max_score == DConstants::INVALID_INDEX) {
 						continue;
 					}
-					group_checks.push_back(must_not_hold(make_uniq<BoundComparisonExpression>(
-					    ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-					    DirectColumn(LogicalType::DOUBLE, ColumnBinding(score_index, slots.max_score)),
-					    make_uniq<BoundConstantExpression>(Value::DOUBLE(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT)))));
+					group_checks.push_back(must_not_hold(
+					    calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+					             calc.Col(LogicalType::DOUBLE, ColumnBinding(score_index, slots.max_score)),
+					             calc.Num(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT))));
 				}
 			}
 			if (has_fixes && has_upper) {
-				group_checks.push_back(must_hold(make_uniq<BoundComparisonExpression>(
-				    ExpressionType::COMPARE_LESSTHANOREQUALTO, fixed_count(), UpperLimit(bounds))));
+				group_checks.push_back(
+				    must_hold(calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, fixed_count(), UpperLimit(bounds))));
 			}
 		}
 		vector<unique_ptr<Expression>> checks;
 		if (!group_checks.empty()) {
-			auto group = DirectAllHold(std::move(group_checks));
-			checks.push_back(condition.scoped
-			                     ? make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, eligible_binding),
-			                                                      std::move(group), DirectConstantBool(true))
-			                     : std::move(group));
+			auto group = DirectAllHold(calc, std::move(group_checks));
+			checks.push_back(condition.scoped ? calc.Out(calc.If(calc.Col(LogicalType::BOOLEAN, eligible_binding),
+			                                                     calc.Wrap(std::move(group)), calc.Bool(true)))
+			                                  : std::move(group));
 		}
 		if (has_fixes) {
 			// A row fixed to both values.
-			checks.push_back(must_not_hold(make_uniq<BoundCaseExpression>(
-			    DirectColumn(LogicalType::BOOLEAN, fixed_one_binding),
-			    DirectColumn(LogicalType::BOOLEAN, fixed_zero_binding), DirectConstantBool(false))));
+			checks.push_back(
+			    must_not_hold(calc.If(calc.Col(LogicalType::BOOLEAN, fixed_one_binding),
+			                          calc.Col(LogicalType::BOOLEAN, fixed_zero_binding), calc.Bool(false))));
 		}
-		return DirectAllHold(std::move(checks));
+		return DirectAllHold(calc, std::move(checks));
 	}
 
 	//! Stage 6: the 0/1 assignment (fixed values, then scope, then upper and lower rank limits, then score sign), the
@@ -1085,56 +1081,39 @@ private:
 		auto fixed_count_slot = ranked.fixed_count_slot;
 		vector<unique_ptr<Expression>> result_expressions;
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			result_expressions.push_back(DirectColumn(source_types[i], ColumnBinding(score_index, i)));
+			result_expressions.push_back(calc.Out(calc.Col(source_types[i], ColumnBinding(score_index, i))));
 		}
-		auto improving = make_uniq<BoundComparisonExpression>(
-		    condition.sense == DecideSense::MAXIMIZE ? ExpressionType::COMPARE_GREATERTHAN
-		                                             : ExpressionType::COMPARE_LESSTHAN,
-		    DirectColumn(LogicalType::DOUBLE, score_binding), make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)));
-		auto free_choose = improving->Copy();
-		unique_ptr<Expression> choose = std::move(improving);
+		auto improving = calc.Cmp(condition.sense == DecideSense::MAXIMIZE ? ExpressionType::COMPARE_GREATERTHAN
+		                                                                   : ExpressionType::COMPARE_LESSTHAN,
+		                          calc.Col(LogicalType::DOUBLE, score_binding), calc.Num(0.0));
+		auto free_choose = improving;
+		auto choose = improving;
+		auto rank = calc.Col(LogicalType::BIGINT, rank_binding);
+		auto fixed_count = [&]() {
+			return calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, fixed_count_slot));
+		};
 		if (has_lower) {
-			unique_ptr<Expression> remaining_lower = LowerLimit(bounds);
-			if (has_fixes) {
-				remaining_lower = optimizer.BindScalarFunction(
-				    "-", std::move(remaining_lower),
-				    DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, fixed_count_slot)));
-			}
-			auto within_lower = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
-			                                                         DirectColumn(LogicalType::BIGINT, rank_binding),
-			                                                         std::move(remaining_lower));
-			choose =
-			    make_uniq<BoundCaseExpression>(std::move(within_lower), DirectConstantBool(true), std::move(choose));
+			auto remaining_lower = has_fixes ? calc.Sub(LowerLimit(bounds), fixed_count()) : LowerLimit(bounds);
+			auto within_lower = calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, rank, remaining_lower);
+			choose = calc.If(within_lower, calc.Bool(true), choose);
 		}
 		if (has_upper) {
-			unique_ptr<Expression> remaining_upper = UpperLimit(bounds);
-			if (has_fixes) {
-				remaining_upper = optimizer.BindScalarFunction(
-				    "-", std::move(remaining_upper),
-				    DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, fixed_count_slot)));
-			}
-			auto within_upper = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
-			                                                         DirectColumn(LogicalType::BIGINT, rank_binding),
-			                                                         std::move(remaining_upper));
-			choose =
-			    make_uniq<BoundCaseExpression>(std::move(within_upper), std::move(choose), DirectConstantBool(false));
+			auto remaining_upper = has_fixes ? calc.Sub(UpperLimit(bounds), fixed_count()) : UpperLimit(bounds);
+			auto within_upper = calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, rank, remaining_upper);
+			choose = calc.If(within_upper, choose, calc.Bool(false));
 		}
 		if (condition.scoped) {
-			choose = make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, eligible_binding),
-			                                        std::move(choose), std::move(free_choose));
+			choose = calc.If(calc.Col(LogicalType::BOOLEAN, eligible_binding), choose, free_choose);
 		}
 		if (has_fixes) {
-			choose = make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, fixed_zero_binding),
-			                                        DirectConstantBool(false), std::move(choose));
-			choose = make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, fixed_one_binding),
-			                                        DirectConstantBool(true), std::move(choose));
+			choose = calc.If(calc.Col(LogicalType::BOOLEAN, fixed_zero_binding), calc.Bool(false), choose);
+			choose = calc.If(calc.Col(LogicalType::BOOLEAN, fixed_one_binding), calc.Bool(true), choose);
 		}
 		result_expressions.push_back(
-		    make_uniq<BoundCaseExpression>(std::move(choose), make_uniq<BoundConstantExpression>(Value::INTEGER(1)),
-		                                   make_uniq<BoundConstantExpression>(Value::INTEGER(0))));
+		    calc.Out(calc.If(choose, calc.Constant(Value::INTEGER(1)), calc.Constant(Value::INTEGER(0)))));
 		// The otherwise unused rank is a blocking dependency. It forces a complete
 		// value read before an outer LIMIT, COUNT, or column-pruning parent can return.
-		result_expressions.push_back(DirectColumn(LogicalType::BIGINT, rank_binding));
+		result_expressions.push_back(calc.Out(rank));
 		auto result = make_uniq<LogicalProjection>(result_index, std::move(result_expressions));
 		result->children.push_back(std::move(ranked.plan));
 		return std::move(result);

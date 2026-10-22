@@ -8,7 +8,9 @@
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/execution/expression_executor.hpp"
-#include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/catalog/catalog.hpp"
+#include "duckdb/function/function_binder.hpp"
+#include "duckdb/main/client_context.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
@@ -16,6 +18,7 @@
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
 namespace duckdb {
@@ -167,7 +170,7 @@ bool DirectIsUpperBound(ExpressionType comparison) {
 	       comparison == ExpressionType::COMPARE_EQUAL;
 }
 
-ExpressionBuilder::ExpressionBuilder(Optimizer &optimizer_p) : optimizer(optimizer_p) {
+ExpressionBuilder::ExpressionBuilder(ClientContext &context_p) : context(context_p) {
 }
 
 ExprPtr ExpressionBuilder::Wrap(unique_ptr<Expression> expr) const {
@@ -176,20 +179,53 @@ ExprPtr ExpressionBuilder::Wrap(unique_ptr<Expression> expr) const {
 unique_ptr<Expression> ExpressionBuilder::Out(const ExprPtr &expr) const {
 	return expr->Copy();
 }
+ExprPtr ExpressionBuilder::Of(const Expression &expr) const {
+	return Wrap(expr.Copy());
+}
 ExprPtr ExpressionBuilder::Num(double value) const {
 	return Wrap(make_uniq<BoundConstantExpression>(Value::DOUBLE(value)));
 }
 ExprPtr ExpressionBuilder::Bool(bool value) const {
-	return Wrap(DirectConstantBool(value));
+	return Constant(Value::BOOLEAN(value));
+}
+ExprPtr ExpressionBuilder::Constant(const Value &value) const {
+	return Wrap(make_uniq<BoundConstantExpression>(value));
 }
 ExprPtr ExpressionBuilder::Col(const LogicalType &type, ColumnBinding binding) const {
-	return Wrap(DirectColumn(type, binding));
+	return Wrap(make_uniq<BoundColumnRefExpression>(type, binding));
 }
 ExprPtr ExpressionBuilder::Fn(const string &name, const ExprPtr &a) const {
-	return Wrap(optimizer.BindScalarFunction(name, a->Copy()));
+	return Fn(name, vector<ExprPtr> {a});
 }
 ExprPtr ExpressionBuilder::Fn(const string &name, const ExprPtr &a, const ExprPtr &b) const {
-	return Wrap(optimizer.BindScalarFunction(name, a->Copy(), b->Copy()));
+	return Fn(name, vector<ExprPtr> {a, b});
+}
+ExprPtr ExpressionBuilder::Fn(const string &name, const vector<ExprPtr> &args) const {
+	vector<unique_ptr<Expression>> children;
+	for (auto &arg : args) {
+		children.push_back(arg->Copy());
+	}
+	FunctionBinder binder(context);
+	ErrorData error;
+	auto expr = binder.BindScalarFunction(DEFAULT_SCHEMA, name, std::move(children), error);
+	// The direct-solve code names only built-in functions over arguments it typed itself.
+	D_ASSERT(!error.HasError() && expr);
+	return Wrap(std::move(expr));
+}
+ExprPtr ExpressionBuilder::IsNull(const ExprPtr &a) const {
+	auto is_null = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NULL, LogicalType::BOOLEAN);
+	is_null->children.push_back(a->Copy());
+	return Wrap(std::move(is_null));
+}
+ExprPtr ExpressionBuilder::Cast(const ExprPtr &a, const LogicalType &type) const {
+	return Wrap(BoundCastExpression::AddCastToType(context, a->Copy(), type));
+}
+ExprPtr ExpressionBuilder::Coalesce(const vector<ExprPtr> &values) const {
+	auto coalesce = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, values[0]->return_type);
+	for (auto &value : values) {
+		coalesce->children.push_back(value->Copy());
+	}
+	return Wrap(std::move(coalesce));
 }
 ExprPtr ExpressionBuilder::Add(const ExprPtr &a, const ExprPtr &b) const {
 	return Fn("+", a, b);
@@ -227,14 +263,7 @@ ExprPtr ExpressionBuilder::Any(const vector<ExprPtr> &conditions) const {
 }
 
 ExprPtr ExpressionBuilder::Extremum(const char *name, const vector<ExprPtr> &values) const {
-	if (values.size() == 1) {
-		return values[0];
-	}
-	vector<unique_ptr<Expression>> children;
-	for (auto &value : values) {
-		children.push_back(value->Copy());
-	}
-	return Wrap(optimizer.BindScalarFunction(name, std::move(children)));
+	return values.size() == 1 ? values[0] : Fn(name, values);
 }
 
 string DirectTextOf(const Expression &expr) {

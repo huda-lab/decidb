@@ -4,6 +4,7 @@
 
 #include "duckdb/catalog/catalog_entry/table_catalog_entry.hpp"
 #include "duckdb/function/table/table_scan.hpp"
+#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/optimizer/remove_unused_columns.hpp"
@@ -179,11 +180,12 @@ LogicalGet &FindScan(const vector<reference<LogicalOperator>> &operators) {
 //! Removes unused columns again below an adapter, as if a parent read every output it still computes. The adapter
 //! stays where it is.
 void PruneBelowAdapter(unique_ptr<LogicalOperator> &adapter_slot, Optimizer &optimizer) {
+	ExpressionBuilder calc(optimizer.context);
 	auto &adapter = adapter_slot->Cast<LogicalDirectResultAdapter>();
 	auto bindings = adapter.GetColumnBindings();
 	vector<unique_ptr<Expression>> reads;
 	for (idx_t i = 0; i < bindings.size(); i++) {
-		reads.push_back(DirectColumn(adapter.output_types[i], bindings[i]));
+		reads.push_back(calc.Out(calc.Col(adapter.output_types[i], bindings[i])));
 	}
 	auto reader = make_uniq<LogicalProjection>(optimizer.binder.GenerateTableIndex(), std::move(reads));
 	reader->children.push_back(std::move(adapter_slot));
@@ -200,6 +202,7 @@ void LetGoOfRowId(LogicalDirectResultAdapter &adapter) {
 }
 
 void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &optimizer) {
+	ExpressionBuilder calc(optimizer.context);
 	auto &adapter = slot->Cast<LogicalDirectResultAdapter>();
 	if (!adapter.has_rowid_dependency) {
 		return;
@@ -250,7 +253,7 @@ void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &opt
 		}
 	}
 	if (moved_outputs.empty()) {
-		adapter.expressions.back() = make_uniq<BoundConstantExpression>(Value(rowid_type));
+		adapter.expressions.back() = calc.Out(calc.Constant(Value(rowid_type)));
 		LetGoOfRowId(adapter);
 		PruneBelowAdapter(slot, optimizer);
 		return;
@@ -273,14 +276,14 @@ void LateMaterializeOneAdapter(unique_ptr<LogicalOperator> &slot, Optimizer &opt
 
 	for (idx_t k = 0; k < moved_outputs.size(); k++) {
 		adapter.expressions[moved_outputs[k]] =
-		    DirectColumn(adapter.output_types[moved_outputs[k]], ColumnBinding(second_index, k));
+		    calc.Out(calc.Col(adapter.output_types[moved_outputs[k]], ColumnBinding(second_index, k)));
 	}
 
 	auto join = make_uniq<LogicalComparisonJoin>(JoinType::INNER);
 	JoinCondition condition;
 	condition.comparison = ExpressionType::COMPARE_EQUAL;
-	condition.left = DirectColumn(rowid_type, second_rowid);
-	condition.right = DirectColumn(rowid_type, rowid_binding);
+	condition.left = calc.Out(calc.Col(rowid_type, second_rowid));
+	condition.right = calc.Out(calc.Col(rowid_type, rowid_binding));
 	join->conditions.push_back(std::move(condition));
 	join->children.push_back(std::move(second));
 	join->children.push_back(std::move(adapter.children[0]));
@@ -301,7 +304,9 @@ void VisitForAdapters(unique_ptr<LogicalOperator> &op, Optimizer &optimizer) {
 
 } // namespace
 
-bool DirectExposeStoredRowId(LogicalOperator &source, DirectLateMaterialization &late_materialization) {
+bool DirectExposeStoredRowId(ClientContext &context, LogicalOperator &source,
+                             DirectLateMaterialization &late_materialization) {
+	ExpressionBuilder calc(context);
 	vector<reference<LogicalOperator>> chain;
 	reference<LogicalOperator> current = source;
 	while (current.get().type != LogicalOperatorType::LOGICAL_GET) {
@@ -347,8 +352,9 @@ bool DirectExposeStoredRowId(LogicalOperator &source, DirectLateMaterialization 
 		auto &op = chain[i - 1].get();
 		if (op.type == LogicalOperatorType::LOGICAL_PROJECTION) {
 			auto &projection = op.Cast<LogicalProjection>();
-			projection.expressions.push_back(
-			    make_uniq<BoundColumnRefExpression>("rowid", get.GetRowIdType(), rowid_binding));
+			auto rowid = calc.Out(calc.Col(get.GetRowIdType(), rowid_binding));
+			rowid->SetAlias("rowid");
+			projection.expressions.push_back(std::move(rowid));
 			rowid_binding = ColumnBinding(projection.table_index, projection.expressions.size() - 1);
 		}
 	}

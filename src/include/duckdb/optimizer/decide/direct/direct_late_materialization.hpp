@@ -5,6 +5,7 @@
 
 namespace duckdb {
 
+class ClientContext;
 class LogicalOperator;
 class Optimizer;
 
@@ -19,7 +20,8 @@ class Optimizer;
 //! record which source columns forward a stored column unchanged. The rule passes the row id along like any other
 //! source column. Returns false and leaves the source untouched for any other source (a join, a subquery with an
 //! aggregate or a limit, a volatile expression, a table function).
-bool DirectExposeStoredRowId(LogicalOperator &source, DirectLateMaterialization &late_materialization);
+bool DirectExposeStoredRowId(ClientContext &context, LogicalOperator &source,
+                             DirectLateMaterialization &late_materialization);
 
 //! Step two, once unused columns are removed and the parents' reads are known: for every result adapter whose parent
 //! reads a variable-width stored column (VARCHAR, BLOB, a nested type) that nothing else in the rule's plan uses, read

@@ -5,6 +5,7 @@
 #include "duckdb/common/serializer/serializer.hpp"
 #include "duckdb/execution/operator/projection/physical_projection.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
+#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -60,6 +61,7 @@ void LogicalDirectResultAdapter::PruneUnusedOutputs(const vector<bool> &referenc
 	bool movable_output_read = false;
 	for (idx_t i = 0; i < referenced_outputs.size(); i++) {
 		if (!referenced_outputs[i] && prunable_outputs[i]) {
+			// Hand-built: an overridden DuckDB method has no ClientContext, which the builder needs.
 			expressions[i] = make_uniq<BoundConstantExpression>(Value(output_types[i]));
 		}
 		if (referenced_outputs[i] && i < stored_columns.size() && stored_columns[i] != DConstants::INVALID_INDEX) {
@@ -69,6 +71,7 @@ void LogicalDirectResultAdapter::PruneUnusedOutputs(const vector<bool> &referenc
 	if (has_rowid_dependency && !movable_output_read) {
 		// No parent reads a stored column the late materialization could take over, so the row id has no use.
 		auto &rowid = expressions.back();
+		// Hand-built, like the typed NULL above.
 		rowid = make_uniq<BoundConstantExpression>(Value(rowid->return_type));
 	}
 }
@@ -158,9 +161,10 @@ unique_ptr<OperatorExtension> MakeDirectResultAdapterExtension() {
 	return make_uniq<DirectResultAdapterExtension>();
 }
 
-unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vector<ColumnBinding> output_bindings,
-                                              vector<LogicalType> output_types, vector<uint8_t> prunable_sources,
-                                              idx_t decide_index, DirectExplainAnnotation annotation,
+unique_ptr<LogicalOperator> AdaptDirectResult(ClientContext &context, DirectSubstitute substitute,
+                                              vector<ColumnBinding> output_bindings, vector<LogicalType> output_types,
+                                              vector<uint8_t> prunable_sources, idx_t decide_index,
+                                              DirectExplainAnnotation annotation,
                                               const DirectLateMaterialization &late_materialization) {
 	D_ASSERT(output_bindings.size() == output_types.size()); // both built by the rule driver, not by the rule
 	if (!substitute.child || substitute.slot_map.size() != output_bindings.size() ||
@@ -192,24 +196,25 @@ unique_ptr<LogicalOperator> AdaptDirectResult(DirectSubstitute substitute, vecto
 	if (late_materialization.Enabled() && late_materialization.rowid_slot >= child_types.size()) {
 		throw InternalException("Direct solve rule lost the source row id");
 	}
+	ExpressionBuilder calc(context);
 	auto adapter = make_uniq<LogicalDirectResultAdapter>(decide_index, std::move(output_bindings),
 	                                                     std::move(output_types), substitute.validated_columns.size(),
 	                                                     std::move(prunable_outputs), std::move(annotation));
 	// The positional map is materialized as one dependency per advertised output.
 	// The required suffix stays live even when all outputs are unused by a parent.
 	for (auto slot : substitute.slot_map) {
-		adapter->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
+		adapter->expressions.push_back(calc.Out(calc.Col(child_types[slot], child_bindings[slot])));
 	}
 	for (auto slot : substitute.validated_columns) {
-		adapter->expressions.push_back(DirectColumn(child_types[slot], child_bindings[slot]));
+		adapter->expressions.push_back(calc.Out(calc.Col(child_types[slot], child_bindings[slot])));
 	}
 	if (late_materialization.Enabled()) {
 		adapter->has_rowid_dependency = true;
 		adapter->scan_table_index = late_materialization.scan_table_index;
 		adapter->stored_columns = late_materialization.stored_columns;
 		adapter->stored_columns.resize(adapter->output_types.size(), DConstants::INVALID_INDEX);
-		adapter->expressions.push_back(DirectColumn(child_types[late_materialization.rowid_slot],
-		                                            child_bindings[late_materialization.rowid_slot]));
+		adapter->expressions.push_back(calc.Out(
+		    calc.Col(child_types[late_materialization.rowid_slot], child_bindings[late_materialization.rowid_slot])));
 	}
 	adapter->children.push_back(std::move(substitute.child));
 	return std::move(adapter);

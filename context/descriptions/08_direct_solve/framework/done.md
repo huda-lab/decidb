@@ -1,6 +1,6 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-22 on top of `da1385cfec`, with the right-hand-side rewrite and S1 and A1 registered: `make
+Verified on 2026-10-22 on top of `5b7f64e141`, with the right-hand-side rewrite and S1 and A1 registered: `make
 decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,650
 passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,649 passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,844 assertions in
@@ -60,8 +60,15 @@ check). Design: `../architecture/`.
   raise beside other terms, and flattens the part per term; A1 reads constants and squares itself and sums a part's
   linear terms per decision before applying the part's sign and scale.
 - **`ExpressionBuilder`** (`direct_expression.hpp`; Fowler's Expression Builder) is a small fluent helper over bound
-  expressions that passes them as `ExprPtr`. A1 uses it; S1 builds expressions by hand.
-- **Rule-local helpers.** The helpers only S1 uses (`ProjectScope`, `ValidateBounds`, `WindowExtremum`, `AnyCondition`)
+  expressions that passes them as `ExprPtr`. It is the one way the direct-solve code and the right-hand-side rewrite
+  build an expression: constants (`Num`, `Bool`, and `Constant` for any other type), columns, scalar functions,
+  arithmetic, comparisons, `IsNull`, `Cast`, `Coalesce`, `If`, `Min`, `Max` and `Any`. It takes the `ClientContext`,
+  which it binds functions with (as DuckDB's `FunctionBinder` does), so a rule's `CheckCondition`, a binder and the
+  optimizer can all make one. The nodes it has no operation for are built by hand, each with a comment: the window
+  expressions, and the typed NULLs in `LogicalDirectResultAdapter::PruneUnusedOutputs`, an overridden DuckDB method
+  that gets no context. `Any` tests its first condition first; S1's fixed-value flags and the rewrite's left-side
+  filter reverse their lists to test the last first.
+- **Rule-local helpers.** The helpers only S1 uses (`ProjectScope`, `ValidateBounds`, `WindowExtremum`)
   live in `s1_uniform_matroid_helpers.{hpp,cpp}` in `namespace direct_s1_uniform_matroid`, and move to the shared
   files when a second rule needs them. Inside a rule's namespace, names drop the `Direct` and class prefixes.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
@@ -218,7 +225,7 @@ default box.
   arms only that test reaches (`--unreached` also lists every arm no test reaches), and writes `report.json` with each
   arm's condition text and function. `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not
   (exit 1 when there are any) and the reverse, matching an arm by file, function, condition text and its occurrence in
-  the function, so lines that move are not read as lost. 1,637 of 1,642 arms are reached. Of the five no test reaches,
+  the function, so lines that move are not read as lost. 1,635 of 1,640 arms are reached. Of the five no test reaches,
   four are kept on purpose: `ref.depth == 0` in `DirectReferencesOnlySource`, which every caller's earlier determinism
   check rules out but which the function's contract promises on its own; the `default` arms of the `ExpressionType`
   switches in S1's `NormalizeCapacity` and `SatisfiesComparison`; and the extension-name check in late materialization's

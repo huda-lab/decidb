@@ -331,7 +331,7 @@ struct Stage {
 class PlanBuilder {
 public:
 	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
-	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p) {
+	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context) {
 		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
 		source_types = source.types;
@@ -382,7 +382,7 @@ public:
 			// source has no row to raise on and returns no rows. A bound the solver rejects outright (against the
 			// variable's built-in domain) is never proved, so it cannot differ on an empty input.
 			for (idx_t i = 0; i < source_bindings.size(); i++) {
-				p5.Add(DirectColumn(source_types[i], passthrough4[i]));
+				p5.Add(calc.Out(calc.Col(source_types[i], passthrough4[i])));
 			}
 			for (idx_t d = 0; d < condition.decisions.size(); d++) {
 				p5.Add(TypedAnswer(d, answers.value[d]));
@@ -394,12 +394,12 @@ public:
 		}
 		auto breaker = DirectValidationBreaker(binder, std::move(plan), ValidAnswers(answers));
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			p5.Add(DirectColumn(source_types[i], breaker.input_bindings[i]));
+			p5.Add(calc.Out(calc.Col(source_types[i], breaker.input_bindings[i])));
 		}
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			p5.Add(TypedAnswer(d, breaker.input_bindings[answers.value[d].column_index]));
 		}
-		p5.Add(DirectColumn(LogicalType::BIGINT, breaker.breaker));
+		p5.Add(calc.Out(calc.Col(LogicalType::BIGINT, breaker.breaker)));
 		substitute.child = p5.Finish(std::move(breaker.plan));
 		return substitute;
 	}
@@ -465,13 +465,9 @@ private:
 	vector<ColumnBinding> Passthrough(Stage &stage, const vector<ColumnBinding> &columns) const {
 		vector<ColumnBinding> result;
 		for (idx_t i = 0; i < columns.size(); i++) {
-			result.push_back(stage.Add(DirectColumn(source_types[i], columns[i])));
+			result.push_back(stage.Add(calc.Out(calc.Col(source_types[i], columns[i]))));
 		}
 		return result;
-	}
-
-	unique_ptr<Expression> AsDouble(unique_ptr<Expression> value) const {
-		return BoundCastExpression::AddCastToType(optimizer.context, std::move(value), LogicalType::DOUBLE);
 	}
 
 	//! `sum(sign * value)` over the proved values, read as DOUBLE. Null for none.
@@ -479,7 +475,8 @@ private:
 		unique_ptr<Expression> total;
 		for (auto &value : values) {
 			auto term = DirectScaledTerm(optimizer, value.expr->Copy(), value.sign, false, 1.0, false);
-			total = total ? optimizer.BindScalarFunction("+", std::move(total), std::move(term)) : std::move(term);
+			total =
+			    total ? calc.Out(calc.Add(calc.Wrap(std::move(total)), calc.Wrap(std::move(term)))) : std::move(term);
 		}
 		return total;
 	}
@@ -490,15 +487,15 @@ private:
 
 	void LayoutRawValues(Stage &p1, vector<unique_ptr<Expression>> &checks, Raw &raw) const {
 		for (idx_t i = 0; i < source_bindings.size(); i++) {
-			raw.source.push_back(p1.Add(DirectColumn(source_types[i], source_bindings[i])));
+			raw.source.push_back(p1.Add(calc.Out(calc.Col(source_types[i], source_bindings[i]))));
 		}
 		for (auto &clause : condition.clauses) {
 			DirectBoundColumns columns;
 			columns.coefficient = p1.Add(SumOf(clause.coefficient));
-			columns.rhs = p1.Add(AsDouble(clause.rhs->Copy()));
+			columns.rhs = p1.Add(calc.Out(calc.Cast(calc.Of(*clause.rhs), LogicalType::DOUBLE)));
 			if (clause.when) {
 				columns.has_when = true;
-				columns.when = p1.Add(DirectActiveWhen(clause.when.get()));
+				columns.when = p1.Add(DirectActiveWhen(calc, clause.when.get()));
 			}
 			auto coefficient_source =
 			    DirectMergedOverProjection(optimizer.context, clause.coefficient, source_bindings, p1.index);
@@ -517,12 +514,11 @@ private:
 				if (!part.filter && has_shared_mask) {
 					columns.mask = shared_mask;
 				} else {
-					auto base = DirectActiveWhen(condition.objective_when.get());
+					auto base = calc.Wrap(DirectActiveWhen(calc, condition.objective_when.get()));
 					if (part.filter) {
-						base = make_uniq<BoundCaseExpression>(std::move(base), DirectActiveWhen(part.filter.get()),
-						                                      DirectConstantBool(false));
+						base = calc.If(base, calc.Wrap(DirectActiveWhen(calc, part.filter.get())), calc.Bool(false));
 					}
-					columns.mask = p1.Add(std::move(base));
+					columns.mask = p1.Add(calc.Out(base));
 					raw.guarded_masks.push_back(columns.mask);
 					if (!part.filter) {
 						has_shared_mask = true;
@@ -538,23 +534,21 @@ private:
 	void AddObjectiveValues(Stage &p1, vector<unique_ptr<Expression>> &checks, const Part &part,
 	                        Raw::PartColumns &columns) const {
 		// Linear coefficients add up per decision; a constant adds nothing to the answer but must still be valid.
-		vector<unique_ptr<Expression>> linear_sums(condition.decisions.size());
+		vector<ExprPtr> linear_sums(condition.decisions.size());
 		// The values each sum is made of, so a NULL in P2's check names the column it came from.
 		vector<vector<DirectSignedValue>> linear_terms(condition.decisions.size());
-		unique_ptr<Expression> constant_sum;
+		ExprPtr constant_sum;
 		vector<DirectSignedValue> constant_terms;
 		for (auto &term : part.linear.terms) {
-			auto value = DirectScaledTerm(optimizer, term.coefficient->Copy(), term.sign, false, 1.0, false);
+			auto value = calc.Wrap(DirectScaledTerm(optimizer, term.coefficient->Copy(), term.sign, false, 1.0, false));
 			auto &sum = linear_sums[term.decision];
-			sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value)) : std::move(value);
+			sum = sum ? calc.Add(sum, value) : value;
 			linear_terms[term.decision].push_back({term.sign, term.coefficient->Copy()});
 		}
 		for (auto &term : part.terms) {
 			if (term.kind == Term::Kind::CONSTANT) {
-				auto value = DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false);
-				constant_sum = constant_sum
-				                   ? optimizer.BindScalarFunction("+", std::move(constant_sum), std::move(value))
-				                   : std::move(value);
+				auto value = calc.Wrap(DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false));
+				constant_sum = constant_sum ? calc.Add(constant_sum, value) : value;
 				constant_terms.push_back({term.sign, term.value->Copy()});
 			} else {
 				Raw::SquareColumns square;
@@ -572,7 +566,7 @@ private:
 					checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.constant,
 					                                            constant_source.get(), DirectNumberKind::OBJECTIVE));
 				} else {
-					square.constant = p1.Add(make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)));
+					square.constant = p1.Add(calc.Out(calc.Num(0.0)));
 				}
 				columns.squares.push_back(square);
 			}
@@ -581,7 +575,7 @@ private:
 			if (!linear_sums[d]) {
 				continue;
 			}
-			auto binding = p1.Add(std::move(linear_sums[d]));
+			auto binding = p1.Add(calc.Out(linear_sums[d]));
 			auto linear_source =
 			    DirectMergedOverProjection(optimizer.context, linear_terms[d], source_bindings, p1.index);
 			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding, linear_source.get(),
@@ -590,7 +584,7 @@ private:
 			columns.linear.push_back(binding);
 		}
 		if (constant_sum) {
-			auto binding = p1.Add(std::move(constant_sum));
+			auto binding = p1.Add(calc.Out(constant_sum));
 			auto constant_source =
 			    DirectMergedOverProjection(optimizer.context, constant_terms, source_bindings, p1.index);
 			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding, constant_source.get(),
@@ -657,7 +651,7 @@ private:
 			bounds.b.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), b_total))));
 		}
 		// Every check is true or raises; a row passes when all of them do.
-		bounds.valid_data = p2.Add(DirectAllHold(std::move(checks)));
+		bounds.valid_data = p2.Add(DirectAllHold(calc, std::move(checks)));
 	}
 
 	//===------------------------------------------------------------------===//
@@ -678,10 +672,10 @@ private:
 			             lower, upper);
 			box.lower.push_back(p3.Add(calc.Out(lower)));
 			box.upper.push_back(p3.Add(calc.Out(upper)));
-			box.a.push_back(p3.Add(DirectColumn(LogicalType::DOUBLE, bounds.a[d])));
-			box.b.push_back(p3.Add(DirectColumn(LogicalType::DOUBLE, bounds.b[d])));
+			box.a.push_back(p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, bounds.a[d]))));
+			box.b.push_back(p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, bounds.b[d]))));
 		}
-		box.valid_data = p3.Add(DirectColumn(LogicalType::BOOLEAN, bounds.valid_data));
+		box.valid_data = p3.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, bounds.valid_data)));
 	}
 
 	//===------------------------------------------------------------------===//
@@ -719,36 +713,33 @@ private:
 			auto value = calc.Add(chosen, zero);
 
 			answers.infeasible.push_back(p4.Add(calc.Out(infeasible)));
-			answers.a.push_back(p4.Add(DirectColumn(LogicalType::DOUBLE, box.a[d])));
-			answers.b.push_back(p4.Add(DirectColumn(LogicalType::DOUBLE, box.b[d])));
+			answers.a.push_back(p4.Add(calc.Out(calc.Col(LogicalType::DOUBLE, box.a[d]))));
+			answers.b.push_back(p4.Add(calc.Out(calc.Col(LogicalType::DOUBLE, box.b[d]))));
 			answers.value.push_back(p4.Add(calc.Out(value)));
 		}
-		answers.valid_data = p4.Add(DirectColumn(LogicalType::BOOLEAN, box.valid_data));
+		answers.valid_data = p4.Add(calc.Out(calc.Col(LogicalType::BOOLEAN, box.valid_data)));
 	}
 
 	//! The answer rounded as the solver rounds it (`round`, half away from zero).
 	unique_ptr<Expression> RoundedAnswer(ColumnBinding value) const {
-		return optimizer.BindScalarFunction("round", DirectColumn(LogicalType::DOUBLE, value));
+		return calc.Out(calc.Fn("round", calc.Col(LogicalType::DOUBLE, value)));
 	}
 
 	//! `abs(round(value)) <= 2^53`, the SQL spelling of `DecideRoundedAnswerWithin(value, -2^53, 2^53)`, the test the
 	//! solver path applies to an answer on its way into a BIGINT column. Callers test finiteness first, so an infinite
 	//! or NaN value never reaches it.
 	unique_ptr<Expression> WithinExactRange(ColumnBinding value) const {
-		return make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_LESSTHANOREQUALTO, optimizer.BindScalarFunction("abs", RoundedAnswer(value)),
-		    make_uniq<BoundConstantExpression>(Value::DOUBLE(DECIDE_MAX_EXACT_INTEGER)));
+		return calc.Out(calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+		                         calc.Fn("abs", calc.Wrap(RoundedAnswer(value))), calc.Num(DECIDE_MAX_EXACT_INTEGER)));
 	}
 
 	//! The solver's error for an answer beyond the exact range, character for character: the name is filled in now and
 	//! the value (`%.0f` of the rounded answer, as the solver prints it) at run time.
 	unique_ptr<Expression> OutOfRangeError(const string &name, ColumnBinding value) const {
-		vector<unique_ptr<Expression>> parts;
-		parts.push_back(make_uniq<BoundConstantExpression>(Value(DecideWholeNumberRangeMessageBefore(name))));
-		parts.push_back(optimizer.BindScalarFunction("printf", make_uniq<BoundConstantExpression>(Value("%.0f")),
-		                                             RoundedAnswer(value)));
-		parts.push_back(make_uniq<BoundConstantExpression>(Value(DecideWholeNumberRangeMessageAfter(name))));
-		return DirectErrorPredicate(optimizer, optimizer.BindScalarFunction("concat", std::move(parts)));
+		vector<ExprPtr> parts {calc.Constant(Value(DecideWholeNumberRangeMessageBefore(name))),
+		                       calc.Fn("printf", calc.Constant(Value("%.0f")), calc.Wrap(RoundedAnswer(value))),
+		                       calc.Constant(Value(DecideWholeNumberRangeMessageAfter(name)))};
+		return DirectErrorPredicate(optimizer, calc.Out(calc.Fn("concat", parts)));
 	}
 
 	//! The condition the breaker evaluates on every row. It is true, or the row raises the error that applies: a
@@ -757,26 +748,26 @@ private:
 	unique_ptr<Expression> ValidAnswers(const Answers &answers) const {
 		vector<unique_ptr<Expression>> checks;
 		// The raw values come first: P2 folded their checks into one flag that is true or false, never an error.
-		checks.push_back(DirectColumn(LogicalType::BOOLEAN, answers.valid_data));
+		checks.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, answers.valid_data)));
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			auto value = [&]() {
-				return DirectColumn(LogicalType::DOUBLE, answers.value[d]);
+				return calc.Col(LogicalType::DOUBLE, answers.value[d]);
 			};
 			// Raw values were named in P2; these are derived, so a NULL here has no source to name.
 			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.a[d], nullptr,
 			                                            DirectNumberKind::OBJECTIVE));
 			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.b[d], nullptr,
 			                                            DirectNumberKind::OBJECTIVE));
-			checks.push_back(DirectRaiseIf(DirectColumn(LogicalType::BOOLEAN, answers.infeasible[d]),
+			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, answers.infeasible[d])),
 			                               DirectInfeasibleErrorPredicate(optimizer)));
-			checks.push_back(DirectRaiseUnless(optimizer.BindScalarFunction("isfinite", value()),
+			checks.push_back(DirectRaiseUnless(calc, calc.Out(calc.Fn("isfinite", value())),
 			                                   DirectUnboundedErrorPredicate(optimizer)));
 			if (DirectIsWholeNumbered(condition.decisions[d].domain)) {
-				checks.push_back(DirectRaiseUnless(WithinExactRange(answers.value[d]),
+				checks.push_back(DirectRaiseUnless(calc, WithinExactRange(answers.value[d]),
 				                                   OutOfRangeError(condition.decisions[d].name, answers.value[d])));
 			}
 		}
-		return DirectAllHold(std::move(checks));
+		return DirectAllHold(calc, std::move(checks));
 	}
 
 	//! The answer in the decision's own output type. The breaker has already raised for anything that is not finite or
@@ -784,15 +775,12 @@ private:
 	unique_ptr<Expression> TypedAnswer(idx_t decision, ColumnBinding value) const {
 		auto &prepared = condition.decisions[decision];
 		if (!DirectIsWholeNumbered(prepared.domain)) {
-			return DirectColumn(LogicalType::DOUBLE, value);
+			return calc.Out(calc.Col(LogicalType::DOUBLE, value));
 		}
-		auto finite = make_uniq<BoundCaseExpression>(
-		    optimizer.BindScalarFunction("isfinite", DirectColumn(LogicalType::DOUBLE, value)), WithinExactRange(value),
-		    DirectConstantBool(false));
-		auto cast = BoundCastExpression::AddCastToType(optimizer.context, DirectColumn(LogicalType::DOUBLE, value),
-		                                               prepared.output_type);
-		return make_uniq<BoundCaseExpression>(std::move(finite), std::move(cast),
-		                                      make_uniq<BoundConstantExpression>(Value(prepared.output_type)));
+		auto column = calc.Col(LogicalType::DOUBLE, value);
+		auto finite = calc.If(calc.Fn("isfinite", column), calc.Wrap(WithinExactRange(value)), calc.Bool(false));
+		return calc.Out(
+		    calc.If(finite, calc.Cast(column, prepared.output_type), calc.Constant(Value(prepared.output_type))));
 	}
 };
 

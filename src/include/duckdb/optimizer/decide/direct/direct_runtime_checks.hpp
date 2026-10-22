@@ -6,6 +6,7 @@
 
 namespace duckdb {
 
+class ExpressionBuilder;
 class Optimizer;
 
 //! Runtime checks of direct-solve plans and the messages they raise: BOOLEAN expressions that evaluate to true for an
@@ -19,15 +20,17 @@ unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, unique_ptr<Expression> message);
 
 //! A check that is true when `ok` is true and raises `error` otherwise; a NULL `ok` raises.
-unique_ptr<Expression> DirectRaiseUnless(unique_ptr<Expression> ok, unique_ptr<Expression> error);
+unique_ptr<Expression> DirectRaiseUnless(const ExpressionBuilder &calc, unique_ptr<Expression> ok,
+                                         unique_ptr<Expression> error);
 
 //! A check that raises `error` when `bad` is true and is true otherwise; a NULL `bad` passes.
-unique_ptr<Expression> DirectRaiseIf(unique_ptr<Expression> bad, unique_ptr<Expression> error);
+unique_ptr<Expression> DirectRaiseIf(const ExpressionBuilder &calc, unique_ptr<Expression> bad,
+                                     unique_ptr<Expression> error);
 
 //! Joins checks into one BOOLEAN expression that is true when every check is. The checks run in the order given, as a
 //! CASE chain, so an earlier check guards the later ones: a row raises the error of the first check it fails. A check
 //! that is false or NULL, not an error, makes the whole false. No checks join to true.
-unique_ptr<Expression> DirectAllHold(vector<unique_ptr<Expression>> checks);
+unique_ptr<Expression> DirectAllHold(const ExpressionBuilder &calc, vector<unique_ptr<Expression>> checks);
 
 //! DECIDE's infeasibility error, as a BOOLEAN expression that raises it when evaluated.
 unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer);

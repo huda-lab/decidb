@@ -45,7 +45,8 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    number checks and error predicates from `direct_runtime_checks.cpp`, and the per-row bounds on a decision
    (`DirectReadsOneDecision`, `DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`, `DirectBoxIsEmpty`) and the
    linear terms of an objective part (`DirectReadLinearObjective`) from `direct_bound_reader.cpp`. Build
-   expressions with the `ExpressionBuilder` (`direct_expression.hpp`). A helper only your rule uses (S1's scope
+   every expression with the `ExpressionBuilder` (`direct_expression.hpp`); build a node by hand only when the builder
+   has no operation for it (a window expression), and say so in a comment. A helper only your rule uses (S1's scope
    projection and bound validation are in `s1_uniform_matroid_helpers.cpp`) stays in your rule's own files until a
    second rule needs it. Inside the rule's namespace, names carry no `Direct` or class prefix (`Condition`,
    `PlanBuilder`); names in `namespace duckdb` keep `Direct`.

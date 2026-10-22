@@ -6,38 +6,35 @@
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
-#include "duckdb/planner/expression/bound_case_expression.hpp"
-#include "duckdb/planner/expression/bound_cast_expression.hpp"
-#include "duckdb/planner/expression/bound_columnref_expression.hpp"
-#include "duckdb/planner/expression/bound_comparison_expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
-#include "duckdb/planner/expression/bound_operator_expression.hpp"
 
 namespace duckdb {
 
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, unique_ptr<Expression> message) {
-	auto error = optimizer.BindScalarFunction("error", std::move(message));
-	return BoundCastExpression::AddCastToType(optimizer.context, std::move(error), LogicalType::BOOLEAN);
+	ExpressionBuilder calc(optimizer.context);
+	return calc.Out(calc.Cast(calc.Fn("error", calc.Wrap(std::move(message))), LogicalType::BOOLEAN));
 }
 
 unique_ptr<Expression> DirectErrorPredicate(Optimizer &optimizer, const string &message) {
-	return DirectErrorPredicate(optimizer, make_uniq<BoundConstantExpression>(Value(message)));
+	ExpressionBuilder calc(optimizer.context);
+	return DirectErrorPredicate(optimizer, calc.Out(calc.Constant(Value(message))));
 }
 
-unique_ptr<Expression> DirectRaiseUnless(unique_ptr<Expression> ok, unique_ptr<Expression> error) {
-	return make_uniq<BoundCaseExpression>(std::move(ok), DirectConstantBool(true), std::move(error));
+unique_ptr<Expression> DirectRaiseUnless(const ExpressionBuilder &calc, unique_ptr<Expression> ok,
+                                         unique_ptr<Expression> error) {
+	return calc.Out(calc.If(calc.Wrap(std::move(ok)), calc.Bool(true), calc.Wrap(std::move(error))));
 }
 
-unique_ptr<Expression> DirectRaiseIf(unique_ptr<Expression> bad, unique_ptr<Expression> error) {
-	return make_uniq<BoundCaseExpression>(std::move(bad), std::move(error), DirectConstantBool(true));
+unique_ptr<Expression> DirectRaiseIf(const ExpressionBuilder &calc, unique_ptr<Expression> bad,
+                                     unique_ptr<Expression> error) {
+	return calc.Out(calc.If(calc.Wrap(std::move(bad)), calc.Wrap(std::move(error)), calc.Bool(true)));
 }
 
-unique_ptr<Expression> DirectAllHold(vector<unique_ptr<Expression>> checks) {
-	unique_ptr<Expression> chain = DirectConstantBool(true);
+unique_ptr<Expression> DirectAllHold(const ExpressionBuilder &calc, vector<unique_ptr<Expression>> checks) {
+	auto chain = calc.Bool(true);
 	for (idx_t i = checks.size(); i > 0; i--) {
-		chain = make_uniq<BoundCaseExpression>(std::move(checks[i - 1]), std::move(chain), DirectConstantBool(false));
+		chain = calc.If(calc.Wrap(std::move(checks[i - 1])), chain, calc.Bool(false));
 	}
-	return chain;
+	return calc.Out(chain);
 }
 
 unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer) {
@@ -48,14 +45,6 @@ unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer) {
 unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
 	return DirectErrorPredicate(optimizer, "DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see "
 	                                       "which decision needs a bound.");
-}
-
-static unique_ptr<Expression> DirectVarchar(const string &text) {
-	return make_uniq<BoundConstantExpression>(Value(text));
-}
-
-static unique_ptr<Expression> DirectBigint(int64_t value) {
-	return make_uniq<BoundConstantExpression>(Value::BIGINT(value));
 }
 
 //! The error for a NaN or infinite number, naming the kind of coefficient the user wrote it in. The solver adds the
@@ -75,18 +64,6 @@ string DirectBoundNaNMessage() {
 	return DecideInvalidValueMessage("constraint right-hand side", "NaN", string());
 }
 
-static unique_ptr<Expression> DirectNullVarchar() {
-	return make_uniq<BoundConstantExpression>(Value(LogicalType::VARCHAR));
-}
-
-static unique_ptr<Expression> DirectConcat(Optimizer &optimizer, vector<unique_ptr<Expression>> parts) {
-	return optimizer.BindScalarFunction("concat", std::move(parts));
-}
-
-static unique_ptr<Expression> DirectMinus(Optimizer &optimizer, unique_ptr<Expression> value, idx_t amount) {
-	return optimizer.BindScalarFunction("-", std::move(value), DirectBigint(NumericCast<int64_t>(amount)));
-}
-
 //! The NULL message of one value, as a VARCHAR expression over the row it is evaluated on: it names the columns of the
 //! value that are NULL on that row, and quotes the value when none is. The wording comes from the pieces in
 //! `decide_value_messages.hpp`, the ones `DecideNullValueMessage` joins for the solver.
@@ -98,6 +75,7 @@ static unique_ptr<Expression> DirectMinus(Optimizer &optimizer, unique_ptr<Expre
 //! and the text follows from them: no NULL column when `last` is NULL, one when `all = last`, otherwise the names
 //! before the last one, ` and `, and the last one.
 unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expression &value) {
+	ExpressionBuilder calc(optimizer.context);
 	vector<const Expression *> leaves;
 	DecideCollectNamedColumns(value, leaves);
 	vector<string> names;
@@ -108,99 +86,91 @@ unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expressio
 			columns.push_back(leaf);
 		}
 	}
+	auto varchar = [&](const string &text) {
+		return calc.Constant(Value(text));
+	};
+	auto bigint = [&](idx_t number) {
+		return calc.Constant(Value::BIGINT(NumericCast<int64_t>(number)));
+	};
+	auto is_null = [&](idx_t i) {
+		return calc.IsNull(calc.Wrap(columns[i]->Copy()));
+	};
 	auto text = DirectTextOf(value);
 	auto no_column = DecideNullValueMessage({}, text);
 	if (names.empty()) {
-		return DirectVarchar(no_column);
+		return calc.Out(varchar(no_column));
 	}
 	if (names.size() == 1) {
-		return make_uniq<BoundCaseExpression>(DirectIsNull(columns[0]->Copy()),
-		                                      DirectVarchar(DecideNullValueMessage(names, text)),
-		                                      DirectVarchar(no_column));
+		return calc.Out(calc.If(is_null(0), varchar(DecideNullValueMessage(names, text)), varchar(no_column)));
 	}
 	auto piece = [&](idx_t i) {
-		return unique_ptr<Expression>(make_uniq<BoundCaseExpression>(
-		    DirectIsNull(columns[i]->Copy()), DirectVarchar(DecideNullNameQuote() + names[i] + DecideNullNameQuote()),
-		    DirectNullVarchar()));
+		return calc.If(is_null(i), varchar(DecideNullNameQuote() + names[i] + DecideNullNameQuote()),
+		               calc.Constant(Value(LogicalType::VARCHAR)));
 	};
 	auto last = [&]() {
-		auto coalesce = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, LogicalType::VARCHAR);
+		vector<ExprPtr> pieces;
 		for (idx_t i = names.size(); i > 0; i--) {
-			coalesce->children.push_back(piece(i - 1));
+			pieces.push_back(piece(i - 1));
 		}
-		return unique_ptr<Expression>(std::move(coalesce));
+		return calc.Coalesce(pieces);
 	};
 	auto all = [&]() {
-		vector<unique_ptr<Expression>> parts;
-		parts.push_back(DirectVarchar(DecideNullNameSeparator()));
+		vector<ExprPtr> parts;
+		parts.push_back(varchar(DecideNullNameSeparator()));
 		for (idx_t i = 0; i < names.size(); i++) {
 			parts.push_back(piece(i));
 		}
-		return optimizer.BindScalarFunction("concat_ws", std::move(parts));
+		return calc.Fn("concat_ws", parts);
 	};
-	auto length_of = [&](unique_ptr<Expression> text_value) {
-		return optimizer.BindScalarFunction("length", std::move(text_value));
+	auto length_of = [&](const ExprPtr &text_value) {
+		return calc.Fn("length", text_value);
 	};
-	auto substr = [&](unique_ptr<Expression> text_value, unique_ptr<Expression> from, unique_ptr<Expression> count) {
-		vector<unique_ptr<Expression>> args;
-		args.push_back(std::move(text_value));
-		args.push_back(std::move(from));
-		args.push_back(std::move(count));
-		return optimizer.BindScalarFunction("substr", std::move(args));
+	auto substr = [&](const ExprPtr &text_value, const ExprPtr &from, const ExprPtr &count) {
+		return calc.Fn("substr", vector<ExprPtr> {text_value, from, count});
 	};
 	// One NULL column: its quoted name, without the quotes, goes in twice.
-	auto one_column_name = substr(last(), DirectBigint(NumericCast<int64_t>(1 + DecideNullNameQuote().size())),
-	                              DirectMinus(optimizer, length_of(last()), 2 * DecideNullNameQuote().size()));
-	vector<unique_ptr<Expression>> one_column;
-	one_column.push_back(DirectVarchar(DecideNullOneColumnBefore()));
-	one_column.push_back(one_column_name->Copy());
-	one_column.push_back(DirectVarchar(DecideNullOneColumnMiddle()));
-	one_column.push_back(std::move(one_column_name));
-	one_column.push_back(DirectVarchar(DecideNullOneColumnAfter()));
+	auto one_column_name = substr(last(), bigint(1 + DecideNullNameQuote().size()),
+	                              calc.Sub(length_of(last()), bigint(2 * DecideNullNameQuote().size())));
+	vector<ExprPtr> one_column {varchar(DecideNullOneColumnBefore()), one_column_name,
+	                            varchar(DecideNullOneColumnMiddle()), one_column_name,
+	                            varchar(DecideNullOneColumnAfter())};
 	// Several: the comma-joined names without the last one (and the comma before it), then the last.
 	auto leading_names =
-	    substr(all(), DirectBigint(1),
-	           DirectMinus(optimizer, optimizer.BindScalarFunction("-", length_of(all()), length_of(last())),
-	                       DecideNullNameSeparator().size()));
-	vector<unique_ptr<Expression>> joined_names;
-	joined_names.push_back(std::move(leading_names));
-	joined_names.push_back(DirectVarchar(DecideNullLastNameSeparator()));
-	joined_names.push_back(last());
-	vector<unique_ptr<Expression>> several;
-	several.push_back(DirectVarchar(DecideNullColumnsBefore()));
-	several.push_back(DirectConcat(optimizer, std::move(joined_names)));
-	several.push_back(DirectVarchar(DecideNullColumnsAfter()));
-	auto exactly_one = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, all(), last());
-	auto some = make_uniq<BoundCaseExpression>(std::move(exactly_one), DirectConcat(optimizer, std::move(one_column)),
-	                                           DirectConcat(optimizer, std::move(several)));
-	return make_uniq<BoundCaseExpression>(DirectIsNull(last()), DirectVarchar(no_column), std::move(some));
+	    substr(all(), bigint(1),
+	           calc.Sub(calc.Sub(length_of(all()), length_of(last())), bigint(DecideNullNameSeparator().size())));
+	vector<ExprPtr> joined_names {leading_names, varchar(DecideNullLastNameSeparator()), last()};
+	vector<ExprPtr> several {varchar(DecideNullColumnsBefore()), calc.Fn("concat", joined_names),
+	                         varchar(DecideNullColumnsAfter())};
+	auto exactly_one = calc.Cmp(ExpressionType::COMPARE_EQUAL, all(), last());
+	auto some = calc.If(exactly_one, calc.Fn("concat", one_column), calc.Fn("concat", several));
+	return calc.Out(calc.If(calc.IsNull(last()), varchar(no_column), some));
 }
 
 unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
                                                   ColumnBinding number_binding, const Expression *source,
                                                   DirectNumberKind kind) {
-	auto null_message =
-	    source
-	        ? DirectNullMessageOf(optimizer, *source)
-	        : unique_ptr<Expression>(make_uniq<BoundConstantExpression>(Value(DecideNullValueMessage({}, string()))));
+	ExpressionBuilder calc(optimizer.context);
+	auto number = calc.Col(number_type, number_binding);
+	auto null_message = source ? DirectNullMessageOf(optimizer, *source)
+	                           : calc.Out(calc.Constant(Value(DecideNullValueMessage({}, string()))));
 	vector<unique_ptr<Expression>> checks;
-	checks.push_back(DirectRaiseIf(DirectIsNull(DirectColumn(number_type, number_binding)),
-	                               DirectErrorPredicate(optimizer, std::move(null_message))));
 	checks.push_back(
-	    DirectRaiseUnless(optimizer.BindScalarFunction("isfinite", DirectColumn(number_type, number_binding)),
-	                      DirectInvalidNumberError(optimizer, kind)));
-	return DirectAllHold(std::move(checks));
+	    DirectRaiseIf(calc, calc.Out(calc.IsNull(number)), DirectErrorPredicate(optimizer, std::move(null_message))));
+	checks.push_back(
+	    DirectRaiseUnless(calc, calc.Out(calc.Fn("isfinite", number)), DirectInvalidNumberError(optimizer, kind)));
+	return DirectAllHold(calc, std::move(checks));
 }
 
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
                                                  const Expression &source_value) {
+	ExpressionBuilder calc(optimizer.context);
+	auto bound = calc.Col(LogicalType::DOUBLE, bound_binding);
 	vector<unique_ptr<Expression>> checks;
-	checks.push_back(DirectRaiseIf(DirectIsNull(DirectColumn(LogicalType::DOUBLE, bound_binding)),
+	checks.push_back(DirectRaiseIf(calc, calc.Out(calc.IsNull(bound)),
 	                               DirectErrorPredicate(optimizer, DirectNullMessageOf(optimizer, source_value))));
-	checks.push_back(
-	    DirectRaiseIf(optimizer.BindScalarFunction("isnan", DirectColumn(LogicalType::DOUBLE, bound_binding)),
-	                  DirectErrorPredicate(optimizer, DirectBoundNaNMessage())));
-	return DirectAllHold(std::move(checks));
+	checks.push_back(DirectRaiseIf(calc, calc.Out(calc.Fn("isnan", bound)),
+	                               DirectErrorPredicate(optimizer, DirectBoundNaNMessage())));
+	return DirectAllHold(calc, std::move(checks));
 }
 
 string DirectInvalidBoundMessage() {

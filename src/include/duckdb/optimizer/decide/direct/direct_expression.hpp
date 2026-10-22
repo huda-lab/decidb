@@ -105,15 +105,27 @@ using ExprPtr = std::shared_ptr<Expression>;
 
 class ExpressionBuilder {
 public:
-	explicit ExpressionBuilder(Optimizer &optimizer_p);
+	explicit ExpressionBuilder(ClientContext &context_p);
 
 	ExprPtr Wrap(unique_ptr<Expression> expr) const;
 	unique_ptr<Expression> Out(const ExprPtr &expr) const;
+	//! A copy of an existing expression, to combine with others.
+	ExprPtr Of(const Expression &expr) const;
 	ExprPtr Num(double value) const;
 	ExprPtr Bool(bool value) const;
+	//! A constant of exactly this value and type (`Num` always makes a DOUBLE). A NULL of a type is `Value(type)`.
+	ExprPtr Constant(const Value &value) const;
 	ExprPtr Col(const LogicalType &type, ColumnBinding binding) const;
 	ExprPtr Fn(const string &name, const ExprPtr &a) const;
 	ExprPtr Fn(const string &name, const ExprPtr &a, const ExprPtr &b) const;
+	//! A scalar function of any number of arguments.
+	ExprPtr Fn(const string &name, const vector<ExprPtr> &args) const;
+	//! `a IS NULL`.
+	ExprPtr IsNull(const ExprPtr &a) const;
+	//! `a` converted to `type`; `a` itself when it already has that type.
+	ExprPtr Cast(const ExprPtr &a, const LogicalType &type) const;
+	//! The first value that is not NULL, of the first value's type.
+	ExprPtr Coalesce(const vector<ExprPtr> &values) const;
 	ExprPtr Add(const ExprPtr &a, const ExprPtr &b) const;
 	ExprPtr Sub(const ExprPtr &a, const ExprPtr &b) const;
 	ExprPtr Mul(const ExprPtr &a, const ExprPtr &b) const;
@@ -127,7 +139,7 @@ public:
 	ExprPtr Any(const vector<ExprPtr> &conditions) const;
 
 private:
-	Optimizer &optimizer;
+	ClientContext &context;
 
 	ExprPtr Extremum(const char *name, const vector<ExprPtr> &values) const;
 };

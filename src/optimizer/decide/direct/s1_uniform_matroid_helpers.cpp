@@ -7,10 +7,6 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
-#include "duckdb/planner/expression/bound_case_expression.hpp"
-#include "duckdb/planner/expression/bound_cast_expression.hpp"
-#include "duckdb/planner/expression/bound_comparison_expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
@@ -18,19 +14,12 @@
 namespace duckdb {
 namespace direct_s1_uniform_matroid {
 
-unique_ptr<Expression> AnyCondition(const vector<unique_ptr<Expression>> &conditions) {
-	unique_ptr<Expression> result = DirectConstantBool(false);
-	for (auto &condition : conditions) {
-		result = make_uniq<BoundCaseExpression>(condition->Copy(), DirectConstantBool(true), std::move(result));
-	}
-	return result;
-}
-
 unique_ptr<BoundWindowExpression> WindowExtremum(Optimizer &optimizer, const char *name, unique_ptr<Expression> value) {
 	vector<unique_ptr<Expression>> children;
 	children.push_back(std::move(value));
 	auto bound = optimizer.BindAggregateFunction(name, std::move(children));
 	auto &aggregate = bound->Cast<BoundAggregateExpression>();
+	// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation for.
 	auto result = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, aggregate.return_type,
 	                                               make_uniq<AggregateFunction>(aggregate.function),
 	                                               std::move(aggregate.bind_info));
@@ -42,6 +31,7 @@ unique_ptr<BoundWindowExpression> WindowExtremum(Optimizer &optimizer, const cha
 
 ScopeState ProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped, const Expression *when,
                         const vector<idx_t> &key_slots, vector<unique_ptr<Expression>> extra) {
+	ExpressionBuilder calc(binder.context);
 	input->ResolveOperatorTypes();
 	auto bindings = input->GetColumnBindings();
 	auto &types = input->types;
@@ -54,18 +44,17 @@ ScopeState ProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool 
 	state.state_index = binder.GenerateTableIndex();
 	vector<unique_ptr<Expression>> expressions;
 	for (idx_t i = 0; i < bindings.size(); i++) {
-		expressions.push_back(DirectColumn(types[i], bindings[i]));
+		expressions.push_back(calc.Out(calc.Col(types[i], bindings[i])));
 		state.input_bindings[i] = ColumnBinding(state.state_index, i);
 	}
 	if (scoped) {
-		unique_ptr<Expression> eligible = DirectActiveWhen(when);
+		auto eligible = calc.Wrap(DirectActiveWhen(calc, when));
 		for (auto slot : key_slots) {
 			D_ASSERT(slot < bindings.size());
-			eligible = make_uniq<BoundCaseExpression>(DirectIsNull(DirectColumn(types[slot], bindings[slot])),
-			                                          DirectConstantBool(false), std::move(eligible));
+			eligible = calc.If(calc.IsNull(calc.Col(types[slot], bindings[slot])), calc.Bool(false), eligible);
 		}
 		state.eligible = ColumnBinding(state.state_index, expressions.size());
-		expressions.push_back(std::move(eligible));
+		expressions.push_back(calc.Out(eligible));
 	}
 	for (auto &column : extra) {
 		state.extra.emplace_back(state.state_index, expressions.size());
@@ -80,6 +69,7 @@ ScopeState ProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool 
 BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input, vector<BoundSpec> &bounds,
                                vector<NotNullSpec> &not_null, const ColumnBinding *eligible,
                                const vector<ColumnBinding> &keys, const vector<LogicalType> &key_types) {
+	ExpressionBuilder calc(optimizer.context);
 	BoundValidation result;
 	result.min_slots.assign(bounds.size(), DConstants::INVALID_INDEX);
 	result.max_slots.assign(bounds.size(), DConstants::INVALID_INDEX);
@@ -97,38 +87,35 @@ BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator>
 	for (idx_t i = 0; i < bounds.size(); i++) {
 		auto &bound = bounds[i];
 		auto value = [&]() {
-			return BoundCastExpression::AddCastToType(optimizer.context, bound.value->Copy(), LogicalType::DOUBLE);
+			return calc.Cast(calc.Of(*bound.value), LogicalType::DOUBLE);
 		};
-		unique_ptr<Expression> is_invalid =
-		    DirectIsNull(bound.is_column ? DirectColumn(bound.column_type, bound.column) : value());
+		auto is_invalid = calc.IsNull(bound.is_column ? calc.Col(bound.column_type, bound.column) : value());
 		// A bound with its own NULL message counts NULL rows here and NaN rows apart; any other counts both together.
 		// Only a bound that is exactly one named column has its own message, so any other is computed.
 		bool own_messages = !bound.null_message.empty();
 		D_ASSERT(own_messages || !bound.is_column);
 		if (!own_messages) {
-			is_invalid = make_uniq<BoundCaseExpression>(std::move(is_invalid), DirectConstantBool(true),
-			                                            optimizer.BindScalarFunction("isnan", value()));
+			is_invalid = calc.If(is_invalid, calc.Bool(true), calc.Fn("isnan", value()));
 		}
 		invalid_slots.push_back(window->expressions.size());
-		window->expressions.push_back(DirectWindowMatchingCount(std::move(is_invalid)));
+		window->expressions.push_back(DirectWindowMatchingCount(calc, calc.Out(is_invalid)));
 		if (!bound.nan_message.empty()) {
 			nan_slots[i] = window->expressions.size();
-			window->expressions.push_back(DirectWindowMatchingCount(optimizer.BindScalarFunction("isnan", value())));
+			window->expressions.push_back(DirectWindowMatchingCount(calc, calc.Out(calc.Fn("isnan", value()))));
 		}
 		auto add_extremum = [&](const char *name) {
-			unique_ptr<Expression> reduced = value();
+			auto reduced = value();
 			bool masked = eligible && !bound.all_group_rows;
 			if (masked) {
-				reduced =
-				    make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, *eligible), std::move(reduced),
-				                                   make_uniq<BoundConstantExpression>(Value(LogicalType::DOUBLE)));
+				reduced = calc.If(calc.Col(LogicalType::BOOLEAN, *eligible), reduced,
+				                  calc.Constant(Value(LogicalType::DOUBLE)));
 			}
-			auto extremum = WindowExtremum(optimizer, name, std::move(reduced));
+			auto extremum = WindowExtremum(optimizer, name, calc.Out(reduced));
 			if (masked) {
-				extremum->partitions.push_back(DirectColumn(LogicalType::BOOLEAN, *eligible));
+				extremum->partitions.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, *eligible)));
 			}
 			for (idx_t k = 0; k < keys.size(); k++) {
-				extremum->partitions.push_back(DirectColumn(key_types[k], keys[k]));
+				extremum->partitions.push_back(calc.Out(calc.Col(key_types[k], keys[k])));
 			}
 			auto slot = window->expressions.size();
 			window->expressions.push_back(std::move(extremum));
@@ -145,21 +132,18 @@ BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator>
 	vector<idx_t> not_null_nan_slots(not_null.size(), DConstants::INVALID_INDEX);
 	for (idx_t i = 0; i < not_null.size(); i++) {
 		auto &check = not_null[i];
-		unique_ptr<Expression> is_invalid = DirectIsNull(check.value->Copy());
+		auto is_invalid = calc.IsNull(calc.Of(*check.value));
+		auto is_nan = [&]() {
+			return calc.Fn("isnan", calc.Cast(calc.Of(*check.value), LogicalType::DOUBLE));
+		};
 		if (!check.nan_message.empty()) {
-			auto as_double =
-			    BoundCastExpression::AddCastToType(optimizer.context, check.value->Copy(), LogicalType::DOUBLE);
 			not_null_nan_slots[i] = window->expressions.size();
-			window->expressions.push_back(
-			    DirectWindowMatchingCount(optimizer.BindScalarFunction("isnan", std::move(as_double))));
+			window->expressions.push_back(DirectWindowMatchingCount(calc, calc.Out(is_nan())));
 		} else if (check.reject_nan) {
-			auto as_double =
-			    BoundCastExpression::AddCastToType(optimizer.context, check.value->Copy(), LogicalType::DOUBLE);
-			is_invalid = make_uniq<BoundCaseExpression>(std::move(is_invalid), DirectConstantBool(true),
-			                                            optimizer.BindScalarFunction("isnan", std::move(as_double)));
+			is_invalid = calc.If(is_invalid, calc.Bool(true), is_nan());
 		}
 		null_slots.push_back(window->expressions.size());
-		window->expressions.push_back(DirectWindowMatchingCount(std::move(is_invalid)));
+		window->expressions.push_back(DirectWindowMatchingCount(calc, calc.Out(is_invalid)));
 	}
 	window->children.push_back(std::move(input));
 	unique_ptr<LogicalOperator> ready = std::move(window);
@@ -176,16 +160,14 @@ BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator>
 			equality_window_index = optimizer.binder.GenerateTableIndex();
 			equality_window = make_uniq<LogicalWindow>(equality_window_index);
 		}
-		unique_ptr<Expression> varies = make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_NOTEQUAL,
-		    DirectColumn(LogicalType::DOUBLE, ColumnBinding(result.window_index, result.min_slots[i])),
-		    DirectColumn(LogicalType::DOUBLE, ColumnBinding(result.window_index, result.max_slots[i])));
+		auto varies = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL,
+		                       calc.Col(LogicalType::DOUBLE, ColumnBinding(result.window_index, result.min_slots[i])),
+		                       calc.Col(LogicalType::DOUBLE, ColumnBinding(result.window_index, result.max_slots[i])));
 		if (eligible) {
-			varies = make_uniq<BoundCaseExpression>(DirectColumn(LogicalType::BOOLEAN, *eligible), std::move(varies),
-			                                        DirectConstantBool(false));
+			varies = calc.If(calc.Col(LogicalType::BOOLEAN, *eligible), varies, calc.Bool(false));
 		}
 		equality_slots[i] = equality_window->expressions.size();
-		equality_window->expressions.push_back(DirectWindowMatchingCount(std::move(varies)));
+		equality_window->expressions.push_back(DirectWindowMatchingCount(calc, calc.Out(varies)));
 	}
 	if (equality_window) {
 		equality_window->children.push_back(std::move(ready));
@@ -194,35 +176,35 @@ BoundValidation ValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator>
 
 	// One predicate raises an error when any clause fails. Which failing clause is named is not specified.
 	auto none = [&](idx_t window_index, idx_t slot) {
-		return make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_EQUAL, DirectColumn(LogicalType::BIGINT, ColumnBinding(window_index, slot)),
-		    make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
+		return calc.Out(calc.Cmp(ExpressionType::COMPARE_EQUAL,
+		                         calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, slot)),
+		                         calc.Constant(Value::BIGINT(0))));
 	};
 	vector<unique_ptr<Expression>> clause_checks;
 	for (idx_t i = 0; i < bounds.size(); i++) {
 		// A bound is checked for NULL first, then for NaN, then (an equality) for a value that varies in its group.
 		const auto &null_message = bounds[i].null_message.empty() ? bounds[i].invalid_message : bounds[i].null_message;
-		clause_checks.push_back(DirectRaiseUnless(none(result.window_index, invalid_slots[i]),
+		clause_checks.push_back(DirectRaiseUnless(calc, none(result.window_index, invalid_slots[i]),
 		                                          DirectErrorPredicate(optimizer, null_message)));
 		if (nan_slots[i] != DConstants::INVALID_INDEX) {
-			clause_checks.push_back(DirectRaiseUnless(none(result.window_index, nan_slots[i]),
+			clause_checks.push_back(DirectRaiseUnless(calc, none(result.window_index, nan_slots[i]),
 			                                          DirectErrorPredicate(optimizer, bounds[i].nan_message)));
 		}
 		if (bounds[i].comparison == ExpressionType::COMPARE_EQUAL) {
 			clause_checks.push_back(DirectRaiseUnless(
-			    none(equality_window_index, equality_slots[i]),
+			    calc, none(equality_window_index, equality_slots[i]),
 			    DirectErrorPredicate(optimizer, "DECIDE source-valued equality bound varies within a group")));
 		}
 	}
 	for (idx_t i = 0; i < not_null.size(); i++) {
-		clause_checks.push_back(DirectRaiseUnless(none(result.window_index, null_slots[i]),
+		clause_checks.push_back(DirectRaiseUnless(calc, none(result.window_index, null_slots[i]),
 		                                          DirectErrorPredicate(optimizer, not_null[i].message)));
 		if (not_null_nan_slots[i] != DConstants::INVALID_INDEX) {
-			clause_checks.push_back(DirectRaiseUnless(none(result.window_index, not_null_nan_slots[i]),
+			clause_checks.push_back(DirectRaiseUnless(calc, none(result.window_index, not_null_nan_slots[i]),
 			                                          DirectErrorPredicate(optimizer, not_null[i].nan_message)));
 		}
 	}
-	auto guard = make_uniq<LogicalFilter>(DirectAllHold(std::move(clause_checks)));
+	auto guard = make_uniq<LogicalFilter>(DirectAllHold(calc, std::move(clause_checks)));
 	guard->children.push_back(std::move(ready));
 	result.plan = std::move(guard);
 	return result;

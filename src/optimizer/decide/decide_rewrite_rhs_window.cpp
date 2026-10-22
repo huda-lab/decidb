@@ -14,6 +14,8 @@
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
+#include <algorithm>
+
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
@@ -47,7 +49,8 @@ namespace {
 //! binding the DECIDE node (its entity scopes, source column names, clauses) holds changes.
 class RhsWindowRewriter {
 public:
-	RhsWindowRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p) : optimizer(optimizer_p), decide(decide_p) {
+	RhsWindowRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)
+	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context) {
 		decide.children[0]->ResolveOperatorTypes();
 		child_bindings = decide.children[0]->GetColumnBindings();
 	}
@@ -123,15 +126,17 @@ private:
 		}
 		// The caller found a decision reducer on the left, and it is filtered or `unfiltered` is set.
 		D_ASSERT(!filters.empty());
-		unique_ptr<Expression> any = DirectConstantBool(false);
+		vector<ExprPtr> conditions;
 		for (auto filter : filters) {
 			if (!ReadableOverSource(*filter)) {
 				lhs_readable = false;
 				return;
 			}
-			any = make_uniq<BoundCaseExpression>(filter->Copy(), DirectConstantBool(true), std::move(any));
+			conditions.push_back(calc.Of(*filter));
 		}
-		lhs_active = std::move(any);
+		// `Any` tests its first condition first; this clause tests the last first.
+		std::reverse(conditions.begin(), conditions.end());
+		lhs_active = calc.Out(calc.Any(conditions));
 	}
 
 	void CollectLeftFilters(const Expression &expr, vector<const Expression *> &filters, bool &unfiltered) const {
@@ -185,12 +190,11 @@ private:
 		if (per_keys.empty() && !when) {
 			return nullptr;
 		}
-		unique_ptr<Expression> eligible = DirectActiveWhen(when);
+		auto eligible = calc.Wrap(DirectActiveWhen(calc, when));
 		for (auto key : per_keys) {
-			eligible = make_uniq<BoundCaseExpression>(DirectIsNull(key->Copy()), DirectConstantBool(false),
-			                                          std::move(eligible));
+			eligible = calc.If(calc.IsNull(calc.Of(*key)), calc.Bool(false), eligible);
 		}
-		return eligible;
+		return calc.Out(eligible);
 	}
 
 	//! Whether the group a row sits in is evaluated at all: the clause covers the row's group and the left side is
@@ -201,30 +205,28 @@ private:
 			return covers;
 		}
 		auto active = DirectWindowMatchingCount(
-		    covers ? make_uniq<BoundCaseExpression>(covers->Copy(), lhs_active->Copy(), DirectConstantBool(false))
-		           : lhs_active->Copy());
+		    calc, calc.Out(covers ? calc.If(calc.Of(*covers), calc.Of(*lhs_active), calc.Bool(false))
+		                          : calc.Of(*lhs_active)));
 		if (covers) {
 			active->partitions.push_back(covers->Copy());
 		}
 		for (auto key : per_keys) {
 			active->partitions.push_back(key->Copy());
 		}
-		auto positive = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHAN,
-		                                                     PlaceCoverageCount(std::move(active)),
-		                                                     make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
-		return make_uniq<BoundCaseExpression>(
-		    std::move(positive), covers ? std::move(covers) : DirectConstantBool(true), DirectConstantBool(false));
+		auto positive = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, PlaceCoverageCount(std::move(active)),
+		                         calc.Constant(Value::BIGINT(0)));
+		return calc.Out(calc.If(positive, covers ? calc.Of(*covers) : calc.Bool(true), calc.Bool(false)));
 	}
 
 	//! Adds a per-group count to the stage above DECIDE's child that the aggregate windows read, and returns the
 	//! column that carries it.
-	unique_ptr<Expression> PlaceCoverageCount(unique_ptr<BoundWindowExpression> count) {
+	ExprPtr PlaceCoverageCount(unique_ptr<BoundWindowExpression> count) {
 		if (coverage_index == DConstants::INVALID_INDEX) {
 			coverage_index = optimizer.binder.GenerateTableIndex();
 		}
 		auto slot = coverage_windows.size();
 		coverage_windows.push_back(std::move(count));
-		return DirectColumn(LogicalType::BIGINT, ColumnBinding(coverage_index, slot));
+		return calc.Col(LogicalType::BIGINT, ColumnBinding(coverage_index, slot));
 	}
 
 	//! Whether the group a row sits in is evaluated and the reducer's own WHEN keeps none of its rows. The solver
@@ -234,18 +236,16 @@ private:
 	unique_ptr<Expression> EmptyOwnWhen(const Expression &own, const Expression *eligible) {
 		auto covers = ClauseCovers();
 		auto kept = DirectWindowMatchingCount(
-		    covers ? make_uniq<BoundCaseExpression>(covers->Copy(), own.Copy(), DirectConstantBool(false))
-		           : own.Copy());
+		    calc, calc.Out(covers ? calc.If(calc.Of(*covers), calc.Of(own), calc.Bool(false)) : calc.Of(own)));
 		for (auto key : per_keys) {
 			kept->partitions.push_back(key->Copy());
 		}
-		unique_ptr<Expression> none =
-		    make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_EQUAL, PlaceCoverageCount(std::move(kept)),
-		                                         make_uniq<BoundConstantExpression>(Value::BIGINT(0)));
+		auto none = calc.Cmp(ExpressionType::COMPARE_EQUAL, PlaceCoverageCount(std::move(kept)),
+		                     calc.Constant(Value::BIGINT(0)));
 		if (eligible) {
-			none = make_uniq<BoundCaseExpression>(eligible->Copy(), std::move(none), DirectConstantBool(false));
+			none = calc.If(calc.Of(*eligible), none, calc.Bool(false));
 		}
-		return none;
+		return calc.Out(none);
 	}
 
 	//! The FILTER of a reducer's window. A COUNT counts only the rows the group covers, because it reads 0 where
@@ -260,7 +260,7 @@ private:
 		if (!eligible) {
 			return own->Copy();
 		}
-		return make_uniq<BoundCaseExpression>(eligible->Copy(), own->Copy(), DirectConstantBool(!counts));
+		return calc.Out(calc.If(calc.Of(*eligible), calc.Of(*own), calc.Bool(!counts)));
 	}
 
 	//! The reducers whose window equals the solver's reading: COUNT, MIN, MAX, SUM and AVG of one numeric expression
@@ -302,37 +302,31 @@ private:
 	unique_ptr<Expression> GuardedArgument(const Expression &argument, unique_ptr<Expression> eligible,
 	                                       unique_ptr<Expression> empty) {
 		auto type = argument.return_type;
-		auto raise = [&](unique_ptr<Expression> message) {
-			return BoundCastExpression::AddCastToType(optimizer.context,
-			                                          optimizer.BindScalarFunction("error", std::move(message)), type);
+		auto raise = [&](const ExprPtr &message) {
+			return calc.Cast(calc.Fn("error", message), type);
 		};
-		unique_ptr<Expression> guarded = argument.Copy();
+		auto guarded = calc.Of(argument);
 		if (eligible) {
-			auto zero = BoundCastExpression::AddCastToType(optimizer.context,
-			                                               make_uniq<BoundConstantExpression>(Value::INTEGER(0)), type);
-			guarded = make_uniq<BoundCaseExpression>(std::move(eligible), std::move(guarded), std::move(zero));
+			auto zero = calc.Cast(calc.Constant(Value::INTEGER(0)), type);
+			guarded = calc.If(calc.Wrap(std::move(eligible)), guarded, zero);
 		}
 		if (type == LogicalType::FLOAT || type == LogicalType::DOUBLE) {
-			auto as_double =
-			    BoundCastExpression::AddCastToType(optimizer.context, argument.Copy(), LogicalType::DOUBLE);
-			auto nan_message = make_uniq<BoundConstantExpression>(
+			auto as_double = calc.Cast(calc.Of(argument), LogicalType::DOUBLE);
+			auto nan_message = calc.Constant(
 			    Value(DecideInvalidValueMessage("constraint right-hand side aggregate", "NaN", string())));
-			guarded = make_uniq<BoundCaseExpression>(optimizer.BindScalarFunction("isnan", std::move(as_double)),
-			                                         raise(std::move(nan_message)), std::move(guarded));
+			guarded = calc.If(calc.Fn("isnan", as_double), raise(nan_message), guarded);
 		}
-		guarded = make_uniq<BoundCaseExpression>(DirectIsNull(argument.Copy()),
-		                                         raise(DirectNullMessageOf(optimizer, argument)), std::move(guarded));
-		return empty ? EmptyGroupGuard(std::move(empty), std::move(guarded), type) : std::move(guarded);
+		guarded = calc.If(calc.IsNull(calc.Of(argument)), raise(calc.Wrap(DirectNullMessageOf(optimizer, argument))),
+		                  guarded);
+		return empty ? EmptyGroupGuard(std::move(empty), calc.Out(guarded), type) : calc.Out(guarded);
 	}
 
 	//! `value`, except on a row of a group the reducer's own WHEN empties, where the solver's error is raised.
 	unique_ptr<Expression> EmptyGroupGuard(unique_ptr<Expression> empty, unique_ptr<Expression> value,
 	                                       const LogicalType &type) {
-		auto message = make_uniq<BoundConstantExpression>(
-		    Value(DecideEmptyRowSetMessage("aggregate", "constraint right-hand side")));
-		auto raise = BoundCastExpression::AddCastToType(
-		    optimizer.context, optimizer.BindScalarFunction("error", std::move(message)), type);
-		return make_uniq<BoundCaseExpression>(std::move(empty), std::move(raise), std::move(value));
+		auto message = calc.Constant(Value(DecideEmptyRowSetMessage("aggregate", "constraint right-hand side")));
+		auto raise = calc.Cast(calc.Fn("error", message), type);
+		return calc.Out(calc.If(calc.Wrap(std::move(empty)), raise, calc.Wrap(std::move(value))));
 	}
 
 	bool SameScope(const Placed &placed) const {
@@ -360,12 +354,14 @@ private:
 		unique_ptr<Expression> own;
 		unique_ptr<Expression> empty;
 		if (aggregate.filter) {
-			own = DirectActiveWhen(aggregate.filter.get());
+			own = DirectActiveWhen(calc, aggregate.filter.get());
 			empty = EmptyOwnWhen(*own, eligible.get());
 		}
 		// COUNT(*) has no argument to carry the empty-group error, so it counts a constant that carries it.
 		bool carries_in_constant = aggregate.children.empty() && empty;
 		auto function = carries_in_constant ? CountFun::GetFunctions().GetFunctionByOffset(0) : aggregate.function;
+		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
+		// for.
 		auto window = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, aggregate.return_type,
 		                                               make_uniq<AggregateFunction>(function),
 		                                               aggregate.bind_info ? aggregate.bind_info->Copy() : nullptr);
@@ -382,7 +378,7 @@ private:
 			window->children.push_back(
 			    GuardedArgument(*aggregate.children[0], eligible ? eligible->Copy() : nullptr, std::move(empty)));
 		} else if (carries_in_constant) {
-			auto one = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+			auto one = calc.Out(calc.Constant(Value::INTEGER(1)));
 			window->children.push_back(EmptyGroupGuard(std::move(empty), std::move(one), LogicalType::INTEGER));
 		}
 		return window;
@@ -423,7 +419,9 @@ private:
 		auto text = RenderDecideSource(aggregate, decide.source_fragments, decide.entity_scopes);
 		// IsRewritable declined every aggregate that carries a tag, and no other tag lands on a data reducer.
 		D_ASSERT(aggregate.GetAlias().empty());
-		return make_uniq<BoundColumnRefExpression>(text, aggregate.return_type, ColumnBinding(window_index, slot));
+		auto column = calc.Out(calc.Col(aggregate.return_type, ColumnBinding(window_index, slot)));
+		column->SetAlias(text);
+		return column;
 	}
 
 	void Install() {
@@ -446,6 +444,7 @@ private:
 
 	Optimizer &optimizer;
 	LogicalDecide &decide;
+	ExpressionBuilder calc;
 	vector<ColumnBinding> child_bindings;
 	vector<const Expression *> per_keys;
 	const Expression *when = nullptr;

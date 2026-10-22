@@ -15,9 +15,6 @@ class Optimizer;
 //! (`architecture/rules.md`).
 namespace direct_s1_uniform_matroid {
 
-//! True when any condition is true (false for an empty list), as nested CASE expressions.
-unique_ptr<Expression> AnyCondition(const vector<unique_ptr<Expression>> &conditions);
-
 //! A one-argument aggregate (MIN, MAX or SUM, by function name) of the value over the whole partition.
 unique_ptr<BoundWindowExpression> WindowExtremum(Optimizer &optimizer, const char *name, unique_ptr<Expression> value);
 

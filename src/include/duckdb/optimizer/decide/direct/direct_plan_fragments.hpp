@@ -11,22 +11,16 @@ namespace duckdb {
 
 class Binder;
 class ClientContext;
+class ExpressionBuilder;
 class Optimizer;
 
 //! Plan factory functions for direct-solve relational plans: free functions that each return one plan fragment (a
 //! factory method in function form, not a builder). A rule composes these into its own construction; none of them
 //! knows which problem class it is serving.
 
-//! Typed reference to a child column.
-unique_ptr<Expression> DirectColumn(const LogicalType &type, ColumnBinding binding);
-
-unique_ptr<Expression> DirectConstantBool(bool value);
-
-//! `value IS NULL`.
-unique_ptr<Expression> DirectIsNull(unique_ptr<Expression> value);
-
 //! COUNT over the whole partition of rows where the predicate holds.
-unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(unique_ptr<Expression> predicate);
+unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(const ExpressionBuilder &calc,
+                                                            unique_ptr<Expression> predicate);
 
 //! A per-row numeric value read as the solver reads a coefficient: cast to DOUBLE, negated when `sign` is negative,
 //! then multiplied or divided by the query-wide factor of its reducer (`scale`, when `scaled`).
@@ -65,7 +59,7 @@ DirectPipelineBreaker DirectValidationBreaker(Binder &binder, unique_ptr<Logical
 //===--------------------------------------------------------------------===//
 
 //! Whether a clause's WHEN holds on a row: true without a WHEN, and false when the WHEN is false or NULL.
-unique_ptr<Expression> DirectActiveWhen(const Expression *when);
+unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Expression *when);
 
 //! DECIDE's empty-aggregate error: a scoped aggregate over a nonempty input with no eligible row has no value.
 //! `clause` names where the aggregate sits in the message (`constraint` or `objective`). Which error is reported

@@ -227,7 +227,7 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 	// later, past the plan that holds rows. The rule passes it along like any other source column.
 	auto source_columns = prunable_sources.size();
 	DirectLateMaterialization late_materialization;
-	bool carries_rowid = DirectExposeStoredRowId(source, late_materialization);
+	bool carries_rowid = DirectExposeStoredRowId(optimizer.context, source, late_materialization);
 	if (carries_rowid) {
 		source.ResolveOperatorTypes();
 	}
@@ -243,8 +243,9 @@ unique_ptr<LogicalOperator> ApplyDirectSolveRules(unique_ptr<LogicalOperator> op
 			late_materialization = DirectLateMaterialization();
 		}
 	}
-	return AdaptDirectResult(std::move(substitute), std::move(output_bindings), std::move(output_types),
-	                         std::move(prunable_sources), decide_index, std::move(annotation), late_materialization);
+	return AdaptDirectResult(optimizer.context, std::move(substitute), std::move(output_bindings),
+	                         std::move(output_types), std::move(prunable_sources), decide_index, std::move(annotation),
+	                         late_materialization);
 }
 
 } // namespace duckdb
