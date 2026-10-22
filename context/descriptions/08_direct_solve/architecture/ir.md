@@ -20,11 +20,12 @@ The front end models the whole language. Anything it cannot model is recorded as
 per objective part. A rule must decline a problem with a not-proved IR node in a clause it depends on, so a wrong
 rewrite cannot follow from a gap in the front end. A decline carries no reason: the rule applies or it does not.
 
-Not proved covers what the binder admits and no rule models: an `OR` inside an `AND`, a per-row term the splitter cannot
-read, an order-0 norm. The reader trusts the invariants of the bound tree for everything else (one source child, the
-four reducers, comparison and `IN` leaves, at most one `PER` and one `WHEN` per clause, a `SUCH THAT` clause) and states
-them as `D_ASSERT`s, because no query can break them and untestable fallbacks would be dead code. A front end that
-admits a new shape teaches the reader to read it or to mark it not proved.
+Not proved covers what the binder admits and no rule models: a per-row term the splitter cannot read, an order-0 norm.
+The reader trusts the invariants of the bound tree for everything else (one source child, the four reducers, comparison
+and `IN` leaves, a `SUCH THAT` that is an `AND` of clauses (the binder rejects `OR` between constraints), at most one
+`PER` and one `WHEN` per clause, a `SUCH THAT` clause) and states them as `D_ASSERT`s, because no query can break them
+and untestable fallbacks would be dead code. A front end that admits a new shape teaches the reader to read it or to
+mark it not proved.
 
 ## Things worth knowing
 

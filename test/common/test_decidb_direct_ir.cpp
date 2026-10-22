@@ -111,7 +111,6 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE(ir.decisions[0].scope == DecideVarScope::ROW);
 	REQUIRE(ir.objective.status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.objective.parts.size() == 1);
-	REQUIRE(ir.constraints_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.source_clause_count == 1);
 	REQUIRE(ir.constraints.size() == 1);
 	REQUIRE(ir.constraints[0].status == DirectAnalysisStatus::PROVED);
@@ -126,7 +125,6 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	// Missing provenance must become a not-proved IR node, never an invented source id.
 	decide->decide_constraints->SetAlias("");
 	auto damaged = DirectIR::Read(*con.context, *decide);
-	REQUIRE(damaged.constraints_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(damaged.constraints.size() == 1);
 	REQUIRE(damaged.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
 	REQUIRE(damaged.constraints[0].source_clause_id == DConstants::INVALID_INDEX);
@@ -149,7 +147,6 @@ TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]")
 		auto *decide = FindDirectIRInput(*plan);
 		REQUIRE(decide != nullptr);
 		auto ir = DirectIR::Read(*con.context, *decide);
-		REQUIRE(ir.constraints_status == DirectAnalysisStatus::PROVED);
 		REQUIRE(ir.constraints.size() == ir.source_clause_count);
 		auto condition = s1->CheckCondition(ir, *con.context);
 		REQUIRE(condition != nullptr);
@@ -217,7 +214,6 @@ TEST_CASE("Direct-solve IR retains WHEN and declines unresolved PER keys", "[dec
 	auto *constraint_decide = FindDirectIRInput(*constraint_plan);
 	REQUIRE(constraint_decide != nullptr);
 	auto constraint_ir = DirectIR::Read(*con.context, *constraint_decide);
-	REQUIRE(constraint_ir.constraints_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(constraint_ir.constraints.size() == 1);
 	REQUIRE(constraint_ir.constraints[0].scope.when != nullptr);
 	REQUIRE(constraint_ir.constraints[0].scope.per_key_slots.empty());
@@ -235,7 +231,6 @@ TEST_CASE("Direct-solve IR retains WHEN and declines unresolved PER keys", "[dec
 	// still a positional BoundReferenceExpression; do not invent a binding. The
 	// clause is not proved; the rest of the problem is still read.
 	// End-to-end direct tests exercise the resolved key at the DECIDE operator.
-	REQUIRE(per_ir.constraints_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(per_ir.constraints.size() == 1);
 	REQUIRE(per_ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
 
@@ -283,7 +278,6 @@ TEST_CASE("Direct-solve IR models comparisons, membership, and right-hand sides"
 	                           "SUM(y) <= (SELECT 5) AND SUM(x) BETWEEN 1 AND 2",
 	                           "MAXIMIZE SUM(w*x)"));
 	auto &constraints = query.ir.constraints;
-	REQUIRE(query.ir.constraints_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(constraints.size() == 7);
 	for (auto &constraint : constraints) {
 		REQUIRE(constraint.status == DirectAnalysisStatus::PROVED);
@@ -373,7 +367,6 @@ TEST_CASE("Direct-solve IR reports what it cannot model as not proved", "[decidb
 	// A decision under ABS inside a square is not linear algebra the splitter can read.
 	QueryIR query(con, IRQuery("x(INT)", "x <= 3 AND SUM(POWER(ABS(x - cap), 2)) <= 9", "MAXIMIZE SUM(w*x)"));
 	auto &ir = query.ir;
-	REQUIRE(ir.constraints_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.constraints.size() == 2);
 	REQUIRE(ir.constraints[0].status == DirectAnalysisStatus::PROVED);
 	REQUIRE(ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
@@ -570,18 +563,8 @@ TEST_CASE("Direct-solve IR marks a clause the front end cannot read as not prove
 	DuckDB db(nullptr);
 	Connection con(db);
 
-	// An OR inside an AND: the constraint tree cannot be walked, so no constraint is read.
-	QueryIR nested_or(con, IRQuery("x(INT)", "SUM(x) <= 4 AND (SUM(x) >= 0 OR SUM(x) >= 1)", "MAXIMIZE SUM(w*x)"));
-	REQUIRE(nested_or.ir.constraints_status == DirectAnalysisStatus::NOT_PROVED);
-	REQUIRE(nested_or.ir.constraints.empty());
-	// The control: the same AND without the OR is read in full.
-	QueryIR plain_and(con, IRQuery("x(INT)", "SUM(x) <= 4 AND SUM(x) >= 0", "MAXIMIZE SUM(w*x)"));
-	REQUIRE(plain_and.ir.constraints_status == DirectAnalysisStatus::PROVED);
-	REQUIRE(plain_and.ir.constraints.size() == 2);
-
 	// A per-row side with a decision under ABS inside a square has a term the splitter cannot read.
 	QueryIR unknown_row(con, IRQuery("x(INT)", "POWER(ABS(x - cap), 2) <= 9", "MAXIMIZE SUM(w*x)"));
-	REQUIRE(unknown_row.ir.constraints_status == DirectAnalysisStatus::PROVED);
 	REQUIRE(unknown_row.ir.constraints.size() == 1);
 	REQUIRE(unknown_row.ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
 	QueryIR known_row(con, IRQuery("x(INT)", "ABS(x - cap) <= 9", "MAXIMIZE SUM(w*x)"));

@@ -8,4 +8,3 @@ Read first: `08_direct_solve/architecture/overview.md`, `08_direct_solve/archite
 
 ## 1. Bugs before the next rule
 - [ ] Direct solve fails on an `ORDER BY` source — 06_issues/bugs/todo.md § Direct solve fails to bind any source column a parent reads when the source ends in `ORDER BY`
-- [ ] `OR` between constraints is read as `AND` — 06_issues/bugs/todo.md § `OR` between constraints is read as `AND`

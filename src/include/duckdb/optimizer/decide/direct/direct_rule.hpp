@@ -126,9 +126,6 @@ struct DirectIR {
 	vector<ColumnBinding> source_bindings;
 	//! Number of entries in the source-clause registry.
 	idx_t source_clause_count = 0;
-	//! NOT_PROVED only when the constraint tree's wrappers themselves cannot be read; one unmodelled clause leaves it
-	//! PROVED and marks that constraint.
-	DirectAnalysisStatus constraints_status = DirectAnalysisStatus::NOT_PROVED;
 	vector<DirectIRConstraint> constraints;
 	DirectIRObjective objective;
 };

@@ -661,3 +661,56 @@ class TestBinderErrors:
                 SUCH THAT x <= 10 AND y <= 10
                 MAXIMIZE SUM(x / y)
             """, match=r"Division by a DECIDE variable is not supported")
+
+    @pytest.mark.parametrize(
+        "such_that, quoted",
+        [
+            pytest.param("(x <= 1 OR x >= 3)", r"\(x <= 1\) OR \(x >= 3\)", id="per_row"),
+            pytest.param("(SUM(x) <= 1 OR SUM(x) >= 3)", r"\(sum\(x\) <= 1\) OR \(sum\(x\) >= 3\)", id="aggregate"),
+            pytest.param("x <= 5 AND (x <= 1 OR x >= 3)", r"\(x <= 1\) OR \(x >= 3\)", id="under_and"),
+            pytest.param("(x <= 1 OR x >= 3) WHEN c = 1", r"\(x <= 1\) OR \(x >= 3\)", id="under_when"),
+            pytest.param("(x <= 1 OR x >= 3) PER id", r"\(x <= 1\) OR \(x >= 3\)", id="under_per"),
+        ],
+    )
+    def test_or_between_constraints_rejected(self, decidb_cli, such_that, quoted):
+        """An OR whose operands are constraints is rejected at bind time, whichever
+        wrapper it sits under. Regression: it used to bind and the solver path split
+        it like an AND, so `x <= 1 OR x >= 3` enforced both sides."""
+        decidb_cli.assert_error(
+            f"""
+                FROM (VALUES (1, 1.0, 0), (2, 2.0, 1)) t(id, s, c)
+                DECIDE x(REAL)
+                SUCH THAT x >= 0 AND x <= 5 AND {such_that}
+                MAXIMIZE SUM(s * x)
+            """,
+            match=r"Binder Error: SUCH THAT does not support OR between constraints: '\(" + quoted + r"\)'",
+        )
+
+    def test_or_in_when_condition_accepted(self, decidb_cli):
+        """An OR inside a WHEN condition is a row predicate, not a disjunction of
+        constraints, and still binds."""
+        rows, _ = decidb_cli.execute(
+            """
+                FROM (VALUES (1, 1.0, 0), (2, 2.0, 1), (3, 3.0, 0)) t(id, s, c)
+                DECIDE x(INT)
+                SUCH THAT x BETWEEN 0 AND 3 AND x = 1 WHEN (c = 1 OR id = 1)
+                MAXIMIZE SUM(s * x)
+            """
+        )
+        assert len(rows) == 3
+        gated = {row[0]: row[-1] for row in rows}
+        assert gated[1] == 1 and gated[2] == 1
+
+    def test_not_equal_still_accepted(self, decidb_cli):
+        """`<>` is rewritten into an OR only after binding, so the OR check never sees it."""
+        rows, _ = decidb_cli.execute(
+            """
+                FROM (VALUES (1, 1.0), (2, 2.0)) t(id, s)
+                DECIDE x(INT)
+                SUCH THAT x BETWEEN 0 AND 3 AND SUM(x) <> 6 AND x <> 3
+                MAXIMIZE SUM(s * x)
+            """
+        )
+        assert len(rows) == 2
+        assert all(row[-1] != 3 for row in rows)
+        assert sum(row[-1] for row in rows) != 6

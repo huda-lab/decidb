@@ -1,9 +1,9 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-22 on top of `5b7f64e141`, with the right-hand-side rewrite and S1 and A1 registered: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,650
-passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,649 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,844 assertions in
+Verified on 2026-10-22 on top of `7ef0881e25`, with the right-hand-side rewrite and S1 and A1 registered: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,684
+passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,683 passed and one failure,
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,819 assertions in
 55 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
@@ -194,8 +194,7 @@ default box.
 
 ## Verified by
 
-- C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts: an `OR` inside an `AND`, a per-row term the
-  splitter cannot read, an order-0 norm in a reducer, and a norm tag it does not expect, each as a not-proved part, not
+- C++: `test_decidb_direct_ir.cpp` (every IR node kind and not-proved parts: a per-row term the splitter cannot read, an order-0 norm in a reducer, and a norm tag it does not expect, each as a not-proved part, not
   an exception), `test_decidb_direct_rule_driver.cpp` (stub rules: one rule applying, fallback
   when no rule applies, a rule that applies beside one that does not, two rules applying as an internal error, an IR the
   front end could not read offered to no rule, mismatched slot, a shared plan fragment handed an input that does not
@@ -225,7 +224,7 @@ default box.
   arms only that test reaches (`--unreached` also lists every arm no test reaches), and writes `report.json` with each
   arm's condition text and function. `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not
   (exit 1 when there are any) and the reverse, matching an arm by file, function, condition text and its occurrence in
-  the function, so lines that move are not read as lost. 1,635 of 1,640 arms are reached. Of the five no test reaches,
+  the function, so lines that move are not read as lost. 1,627 of 1,632 arms are reached. Of the five no test reaches,
   four are kept on purpose: `ref.depth == 0` in `DirectReferencesOnlySource`, which every caller's earlier determinism
   check rules out but which the function's contract promises on its own; the `default` arms of the `ExpressionType`
   switches in S1's `NormalizeCapacity` and `SatisfiesComparison`; and the extension-name check in late materialization's

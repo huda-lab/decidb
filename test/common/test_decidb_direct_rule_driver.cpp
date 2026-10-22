@@ -318,12 +318,10 @@ TEST_CASE("Direct rule driver offers a rule no IR the front end could not read",
 	// The control: a readable IR is offered to the rule.
 	REQUIRE(ExplainText(con, query_of("SUM(x) <= 1 MAXIMIZE SUM(v*x)")).find("STUB_OFFERED") != string::npos);
 
-	// Each query leaves one part of the IR unread. The first is a constraint tree the front end cannot walk, the
-	// second a single constraint it cannot model, the third an objective it cannot model, the fourth a non-finite
-	// objective offset.
-	for (string clauses :
-	     {"SUM(x) <= 1 OR SUM(x) >= 2 MAXIMIZE SUM(v*x)", "SUM(x) <= 1 AND norm(x, 0) <= 1 MAXIMIZE SUM(v*x)",
-	      "SUM(x) <= 1 MAXIMIZE norm(x, 0, 100)", "SUM(x) <= 1 MAXIMIZE SUM(v*x) + 'inf'::DOUBLE"}) {
+	// Each query leaves one part of the IR unread. The first is a single constraint the front end cannot model, the
+	// second an objective it cannot model, the third a non-finite objective offset.
+	for (string clauses : {"SUM(x) <= 1 AND norm(x, 0) <= 1 MAXIMIZE SUM(v*x)", "SUM(x) <= 1 MAXIMIZE norm(x, 0, 100)",
+	                       "SUM(x) <= 1 MAXIMIZE SUM(v*x) + 'inf'::DOUBLE"}) {
 		INFO(clauses);
 		REQUIRE(ExplainText(con, query_of(clauses)).find("Direct solve") == string::npos);
 		REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='require'"));

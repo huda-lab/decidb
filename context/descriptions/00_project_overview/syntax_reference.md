@@ -403,6 +403,8 @@ SUCH THAT
 
 A `WHEN` or `PER` on a `BETWEEN` or on a parenthesised `AND` applies to each bound: `x BETWEEN 0 AND cap WHEN c` and `(x >= 0 AND x <= cap) WHEN c` are `x >= 0 WHEN c AND x <= cap WHEN c`, and likewise for `SUM(x) BETWEEN 1 AND 2 PER g`. The binder rewrites the wrapper onto each conjunct, so every later stage sees a `WHEN` or `PER` over one comparison. Without parentheses, `x >= 0 AND x <= cap WHEN c` applies the `WHEN` to the last comparison only.
 
+`SUCH THAT` is an `AND` of constraints. `OR` between constraints is rejected at bind time (`SUCH THAT does not support OR between constraints`); write each constraint on its own, or use `<>` or `IN` where that is the choice meant. `OR` inside a `WHEN` condition is a row filter and is accepted.
+
 ### 6.2 WHEN on Objective
 
 ```sql

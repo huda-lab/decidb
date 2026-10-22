@@ -125,8 +125,7 @@ bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
 } // namespace
 
 bool DirectIRIsReadable(const DirectIR &ir) {
-	if (ir.constraints_status != DirectAnalysisStatus::PROVED || ir.objective.status != DirectAnalysisStatus::PROVED ||
-	    !std::isfinite(ir.objective.offset)) {
+	if (ir.objective.status != DirectAnalysisStatus::PROVED || !std::isfinite(ir.objective.offset)) {
 		return false;
 	}
 	// No objective (`DecideSense::FEASIBILITY`) is a sense the rules know.

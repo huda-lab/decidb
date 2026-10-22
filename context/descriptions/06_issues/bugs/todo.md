@@ -43,18 +43,6 @@
 - **Expected:** the same answer as the solver path.
 - **Impact:** a valid query fails with an internal error in the default mode instead of answering.
 
-## `OR` between constraints is read as `AND`
-
-- **Location:** not traced; the binder accepts a user-written `OR` in `SUCH THAT`, and the solver path splits it as a
-  conjunction. The `OR` that `<>` rewrites into is a separate, tagged form and is not affected.
-- **Observed:** on `(VALUES (1, 1.0), (2, 2.0)) t(id, s)`, `DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 AND (x <= 1 OR
-  x >= 0.5) MAXIMIZE SUM(s*x)` answers x = 1.0 on both rows with `decide_direct_solve` `off` and `auto`; with the
-  `OR`, x = 5 satisfies every constraint and is better. `(x <= 1 OR x >= 3) AND x <= 5 AND x >= 0` raises
-  `DECIDE optimization is infeasible`.
-- **Expected:** a disjunction of constraints is either solved as one (at least one side holds) or rejected at bind time
-  with an ordinary error; `syntax_reference.md` does not list `OR` between constraints.
-- **Impact:** a wrong answer with no error: the solver enforces both sides of a condition the user made optional.
-
 ## An order-0 norm over a reducer or over data raises an internal error
 
 - **Location:** not traced; the solver path's linearization of `norm(x, 0)` (its indicator variables) when the norm sits

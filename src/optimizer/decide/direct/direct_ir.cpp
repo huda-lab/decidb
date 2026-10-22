@@ -265,16 +265,15 @@ private:
 		return ir_node;
 	}
 
-	bool CollectConstraints(const Expression &expression, const WrapperScope &wrappers,
+	void CollectConstraints(const Expression &expression, const WrapperScope &wrappers,
 	                        vector<DirectIRConstraint> &out) const {
 		if (expression.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
 			out.push_back(ReadConstraint(expression, wrappers));
-			return true;
+			return;
 		}
 		auto &conjunction = expression.Cast<BoundConjunctionExpression>();
-		if (conjunction.type != ExpressionType::CONJUNCTION_AND) {
-			return false;
-		}
+		// The binder rejects a user-written OR between constraints; nothing else builds one before the IR.
+		D_ASSERT(conjunction.type == ExpressionType::CONJUNCTION_AND);
 		D_ASSERT(!conjunction.children.empty());
 		if (IsPerConstraintWrapper(conjunction)) {
 			D_ASSERT(wrappers.per_keys.empty() && conjunction.children.size() >= 2);
@@ -282,30 +281,25 @@ private:
 			for (idx_t i = 1; i < conjunction.children.size(); i++) {
 				nested.per_keys.push_back(conjunction.children[i].get());
 			}
-			return CollectConstraints(*conjunction.children[0], nested, out);
+			CollectConstraints(*conjunction.children[0], nested, out);
+			return;
 		}
 		if (IsWhenConstraintWrapper(conjunction)) {
 			D_ASSERT(!wrappers.when && conjunction.children.size() == 2);
 			WrapperScope nested = wrappers;
 			nested.when = conjunction.children[1].get();
-			return CollectConstraints(*conjunction.children[0], nested, out);
+			CollectConstraints(*conjunction.children[0], nested, out);
+			return;
 		}
 		for (auto &child : conjunction.children) {
-			if (!CollectConstraints(*child, wrappers, out)) {
-				return false;
-			}
+			CollectConstraints(*child, wrappers, out);
 		}
-		return true;
 	}
 
 	void ReadConstraints(DirectIR &ir) const {
 		// The parser requires a SUCH THAT clause.
 		D_ASSERT(decide.decide_constraints);
-		if (CollectConstraints(*decide.decide_constraints, {}, ir.constraints)) {
-			ir.constraints_status = DirectAnalysisStatus::PROVED;
-		} else {
-			ir.constraints.clear();
-		}
+		CollectConstraints(*decide.decide_constraints, {}, ir.constraints);
 	}
 
 	//===--------------------------------------------------------------------===//

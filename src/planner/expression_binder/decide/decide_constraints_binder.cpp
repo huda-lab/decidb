@@ -316,6 +316,15 @@ BindResult DecideConstraintsBinder::BindBetween(unique_ptr<ParsedExpression> &ex
 BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &conj = expr.Cast<ConjunctionExpression>();
+	// An OR met in constraint position is one the user wrote: `<>` becomes an OR only later, in the
+	// optimizer, and WHEN conditions and reducer arguments bind with is_top_expression false.
+	if (conj.GetExpressionType() == ExpressionType::CONJUNCTION_OR && is_top_expression) {
+		return BindResult(BinderException::Unsupported(
+		    expr, StringUtil::Format(
+		              "SUCH THAT does not support OR between constraints: '%s'. "
+		              "Write each constraint on its own, joined with AND; use <> or IN if that says what you mean.",
+		              expr.ToString())));
+	}
     // first try to bind the children of the case expression
     ErrorData error;
     for (idx_t i = 0; i < conj.children.size(); i++) {

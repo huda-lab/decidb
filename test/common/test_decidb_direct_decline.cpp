@@ -580,7 +580,6 @@ TEST_CASE("A1 declines each shape that is not exactly its class", "[decidb]") {
 //! An IR the front end read in full, built by hand: one proved constraint, a finite offset and a known sense.
 DirectIR ReadableIR() {
 	DirectIR ir;
-	ir.constraints_status = DirectAnalysisStatus::PROVED;
 	ir.constraints.emplace_back();
 	ir.objective.status = DirectAnalysisStatus::PROVED;
 	ir.objective.sense = DecideSense::MAXIMIZE;
@@ -598,9 +597,6 @@ TEST_CASE("The rule driver offers a rule only an IR the front end read in full",
 	}
 
 	// Each case breaks the one thing it names.
-	auto constraints = ReadableIR();
-	constraints.constraints_status = DirectAnalysisStatus::NOT_PROVED;
-	CHECK(!DirectIRIsReadable(constraints));
 	auto objective = ReadableIR();
 	objective.objective.status = DirectAnalysisStatus::NOT_PROVED;
 	CHECK(!DirectIRIsReadable(objective));
