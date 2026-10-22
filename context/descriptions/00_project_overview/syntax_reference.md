@@ -401,6 +401,8 @@ SUCH THAT
 
 **Execution**: WHEN conditions create per-row boolean masks. For aggregate constraints (`SUM`), masked-out rows are excluded from the summation. For per-row constraints, masked-out rows skip constraint generation entirely.
 
+A `WHEN` or `PER` on a `BETWEEN` or on a parenthesised `AND` applies to each bound: `x BETWEEN 0 AND cap WHEN c` and `(x >= 0 AND x <= cap) WHEN c` are `x >= 0 WHEN c AND x <= cap WHEN c`, and likewise for `SUM(x) BETWEEN 1 AND 2 PER g`. The binder rewrites the wrapper onto each conjunct, so every later stage sees a `WHEN` or `PER` over one comparison. Without parentheses, `x >= 0 AND x <= cap WHEN c` applies the `WHEN` to the last comparison only.
+
 ### 6.2 WHEN on Objective
 
 ```sql

@@ -4,13 +4,17 @@ Covers:
   - q10_logic_dependency: per-row x BETWEEN 0 AND 5, with aggregate constraint
   - test_aggregate_between_standalone: SUM(x*w) BETWEEN lo AND hi — desugar
     path without aggregate-local WHEN (distinct from test_aggregate_local_when.py)
+  - test_between_when_*, test_between_per_*: a WHEN (and a PER) on a BETWEEN, or
+    on the AND of two bounds written out (parenthesised, nested), applies to
+    every bound, on the solver path and under auto
 """
 
 import time
 
 import pytest
 
-from solver.types import VarType, ObjSense
+from decidb_cli import DecidBCliError
+from solver.types import VarType, ObjSense, SolverStatus
 from comparison.compare import compare_solutions
 
 
@@ -206,3 +210,166 @@ def test_real_between_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
+
+
+# ---------------------------------------------------------------------------
+# WHEN / PER on a BETWEEN: the wrapper reaches both bounds
+# ---------------------------------------------------------------------------
+
+_WRAPPED_BETWEEN_ROWS = (
+    "(VALUES (1, 'a', 1.0, 2.0, true), (2, 'a', 0.5, 3.0, false), "
+    "(3, 'b', 3.0, 4.0, true), (4, 'b', 5.0, 5.0, false)) t(id, g, s, cap, flag)"
+)
+_WRAPPED_BETWEEN_MODES = ("off", "auto")
+
+
+def _wrapped_between_data(duckdb_conn):
+    return duckdb_conn.execute(
+        "SELECT CAST(id AS BIGINT), g, CAST(s AS DOUBLE), CAST(cap AS DOUBLE), flag "
+        f"FROM {_WRAPPED_BETWEEN_ROWS} ORDER BY id"
+    ).fetchall()
+
+
+def _two_sided(form, lhs, lower, upper):
+    """The bounds spelled `lhs BETWEEN lower AND upper`, as `(lhs >= lower AND lhs <= upper)`, or with the upper bound
+    stated twice inside a nested AND."""
+    if form == "between":
+        return f"{lhs} BETWEEN {lower} AND {upper}"
+    if form == "parenthesised":
+        return f"({lhs} >= {lower} AND {lhs} <= {upper})"
+    return f"({lhs} >= {lower} AND ({lhs} <= {upper} AND {lhs} <= {upper}))"
+
+
+_TWO_SIDED_FORMS = pytest.mark.parametrize("form", ["between", "parenthesised", "nested"])
+
+
+def _run_mode(decidb_cli, mode, sql):
+    return decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
+
+
+def _check_wrapped_between(decidb_cli, oracle_solver, data, sense, query_tail, build):
+    """Solves the oracle model `build` makes, then requires the same optimum from DeciDB on `off` and `auto`."""
+    sql = (
+        f"SELECT id, g, s, flag, x FROM {_WRAPPED_BETWEEN_ROWS} "
+        f"DECIDE x(REAL) SUCH THAT {query_tail} {sense} SUM(s * x)"
+    )
+    oracle_solver.create_model("wrapped_between")
+    names = [f"x_{i}" for i in range(len(data))]
+    build(oracle_solver, names)
+    oracle_solver.set_objective(
+        {names[i]: data[i][2] for i in range(len(data))},
+        ObjSense.MAXIMIZE if sense == "MAXIMIZE" else ObjSense.MINIMIZE,
+    )
+    result = oracle_solver.solve()
+    if result.status == SolverStatus.UNBOUNDED:
+        for mode in _WRAPPED_BETWEEN_MODES:
+            with pytest.raises(DecidBCliError, match=r"(?i)unbounded"):
+                _run_mode(decidb_cli, mode, sql)
+        return
+    for mode in _WRAPPED_BETWEEN_MODES:
+        rows, cols = _run_mode(decidb_cli, mode, sql)
+        try:
+            compare_solutions(
+                rows,
+                cols,
+                result,
+                data,
+                ["x"],
+                coeff_fn=lambda row: {"x": float(row[cols.index("s")])},
+            )
+        except AssertionError as error:
+            raise AssertionError(f"[{mode}] {error}") from None
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_between
+@pytest.mark.when_perrow
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+@_TWO_SIDED_FORMS
+def test_between_when_perrow_matches_no_row(decidb_cli, duckdb_conn, oracle_solver, form):
+    """`x BETWEEN 0 AND cap WHEN id > 5` where no row has id > 5 bounds nothing, so the problem is unbounded.
+
+    The solver path used to apply `x <= cap` on every row and answer; `x <= cap WHEN id > 5` was already unbounded.
+    """
+    data = _wrapped_between_data(duckdb_conn)
+
+    def build(oracle, names):
+        for name in names:
+            oracle.add_variable(name, VarType.CONTINUOUS, lb=0.0)
+
+    _check_wrapped_between(
+        decidb_cli, oracle_solver, data, "MAXIMIZE", _two_sided(form, "x", 0, "cap") + " WHEN id > 5", build
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_between
+@pytest.mark.when_perrow
+@pytest.mark.correctness
+@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
+@_TWO_SIDED_FORMS
+def test_between_when_perrow_matches_some_rows(decidb_cli, duckdb_conn, oracle_solver, sense, form):
+    """The bounds hold on the rows where the WHEN holds and nowhere else.
+
+    MAXIMIZE sees the upper bound (the unflagged row with the best payoff is not capped at `cap`), MINIMIZE sees the
+    lower bound (flagged rows are raised to 1, unflagged rows stay at 0). `SUM(x) <= 10` keeps the problem bounded.
+    """
+    data = _wrapped_between_data(duckdb_conn)
+
+    def build(oracle, names):
+        for name, row in zip(names, data):
+            oracle.add_variable(name, VarType.CONTINUOUS, lb=1.0 if row[4] else 0.0, ub=row[3] if row[4] else None)
+        oracle.add_constraint({name: 1.0 for name in names}, "<=", 10.0, name="total")
+
+    _check_wrapped_between(
+        decidb_cli, oracle_solver, data, sense, _two_sided(form, "x", 1, "cap") + " WHEN flag AND SUM(x) <= 10", build
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_between
+@pytest.mark.cons_aggregate
+@pytest.mark.when_constraint
+@pytest.mark.correctness
+@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
+@_TWO_SIDED_FORMS
+def test_between_when_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, form):
+    """`SUM(x) BETWEEN 2 AND 4 WHEN flag` sums the flagged rows only, for both its bounds."""
+    data = _wrapped_between_data(duckdb_conn)
+
+    def build(oracle, names):
+        for name in names:
+            oracle.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=3.0)
+        flagged = {names[i]: 1.0 for i, row in enumerate(data) if row[4]}
+        oracle.add_constraint(dict(flagged), ">=", 2.0, name="flagged_lo")
+        oracle.add_constraint(dict(flagged), "<=", 4.0, name="flagged_hi")
+
+    _check_wrapped_between(
+        decidb_cli, oracle_solver, data, sense, "x <= 3 AND " + _two_sided(form, "SUM(x)", 2, 4) + " WHEN flag", build
+    )
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_between
+@pytest.mark.cons_aggregate
+@pytest.mark.when_constraint
+@pytest.mark.per_clause
+@pytest.mark.correctness
+@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
+@pytest.mark.parametrize("when", [False, True])
+@_TWO_SIDED_FORMS
+def test_between_per_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, when, form):
+    """`SUM(x) BETWEEN 1 AND 2 [WHEN flag] PER g` bounds each group's sum, over the flagged rows when there is a WHEN."""
+    data = _wrapped_between_data(duckdb_conn)
+
+    def build(oracle, names):
+        for name in names:
+            oracle.add_variable(name, VarType.CONTINUOUS, lb=0.0, ub=3.0)
+        for group in ("a", "b"):
+            members = {names[i]: 1.0 for i, row in enumerate(data) if row[1] == group and (row[4] or not when)}
+            oracle.add_constraint(dict(members), ">=", 1.0, name=f"{group}_lo")
+            oracle.add_constraint(dict(members), "<=", 2.0, name=f"{group}_hi")
+
+    clause = _two_sided(form, "SUM(x)", 1, 2) + (" WHEN flag" if when else "") + " PER g"
+    _check_wrapped_between(decidb_cli, oracle_solver, data, sense, f"x <= 3 AND {clause}", build)

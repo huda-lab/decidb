@@ -244,22 +244,73 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
     }
 }
 
+//! `input BETWEEN lower AND upper` as the conjunction `input >= lower AND input <= upper`.
+static unique_ptr<ConjunctionExpression> ExpandBetween(const BetweenExpression &between) {
+	auto lower_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+	                                                   between.input->Copy(), between.lower->Copy());
+	auto upper_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, between.input->Copy(),
+	                                                   between.upper->Copy());
+	return make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower_bound),
+	                                        std::move(upper_bound));
+}
+
+//! The conjuncts `expr` stands for once its WHEN / PER wrappers are peeled, each wrapped the way `expr` is.
+//!
+//! `(a AND b) WHEN c` is `(a WHEN c) AND (b WHEN c)`, and likewise for PER and for both together. A BETWEEN
+//! counts as the AND it expands to. Every later pass reads a WHEN or PER wrapper over ONE constraint: a
+//! wrapper over an untagged AND hands neither its condition nor its grouping to the conjuncts beneath it. So
+//! the wrapper is carried onto each conjunct here, where the wrapper and the AND first meet, and nothing
+//! downstream has to know a second shape. A conjunct that is itself an AND is split when it binds. Returns
+//! false, leaving `conjuncts` untouched, when `expr` does not end in an AND once its wrappers are peeled.
+static bool SplitWrappedConjunction(const ParsedExpression &expr, vector<unique_ptr<ParsedExpression>> &conjuncts) {
+	if (expr.GetExpressionClass() == ExpressionClass::BETWEEN) {
+		auto expanded = ExpandBetween(expr.Cast<BetweenExpression>());
+		conjuncts = std::move(expanded->children);
+		return true;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::CONJUNCTION) {
+		auto &conjunction = expr.Cast<ConjunctionExpression>();
+		if (conjunction.type != ExpressionType::CONJUNCTION_AND) {
+			return false;
+		}
+		for (auto &child : conjunction.children) {
+			conjuncts.push_back(child->Copy());
+		}
+		return true;
+	}
+	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
+		return false;
+	}
+	auto &wrapper = expr.Cast<FunctionExpression>();
+	if (!wrapper.is_operator ||
+	    (wrapper.function_name != WHEN_CONSTRAINT_TAG && !IsPerConstraintTag(wrapper.function_name))) {
+		return false;
+	}
+	vector<unique_ptr<ParsedExpression>> inner;
+	if (!SplitWrappedConjunction(*wrapper.children[0], inner)) {
+		return false;
+	}
+	for (auto &conjunct : inner) {
+		auto rewrapped = wrapper.Copy();
+		rewrapped->Cast<FunctionExpression>().children[0] = std::move(conjunct);
+		conjuncts.push_back(std::move(rewrapped));
+	}
+	return true;
+}
+
+//! Replaces a WHEN / PER wrapper around an AND with the AND of wrapped conjuncts (see SplitWrappedConjunction).
+static bool DistributeWrapperOverConjunction(unique_ptr<ParsedExpression> &expr_ptr) {
+	vector<unique_ptr<ParsedExpression>> conjuncts;
+	if (!SplitWrappedConjunction(*expr_ptr, conjuncts)) {
+		return false;
+	}
+	expr_ptr = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(conjuncts));
+	return true;
+}
+
 BindResult DecideConstraintsBinder::BindBetween(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-    auto &expr = *expr_ptr;
-    auto &between = expr.Cast<BetweenExpression>();
-
-    // Transform BETWEEN into (input >= lower) AND (input <= upper)
-    auto input_copy = between.input->Copy();
-    
-    auto lower_comp = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO, std::move(between.input), std::move(between.lower));
-    auto upper_comp = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, std::move(input_copy), std::move(between.upper));
-
-    auto conjunction = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower_comp), std::move(upper_comp));
-    
-    // Bind the new conjunction
-    // We need to replace the current expression pointer with the new conjunction
-    expr_ptr = std::move(conjunction);
-    return BindConjunction(expr_ptr, depth);
+	expr_ptr = ExpandBetween(expr_ptr->Cast<BetweenExpression>());
+	return BindConjunction(expr_ptr, depth);
 }
 
 BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
@@ -287,8 +338,11 @@ BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression>
 }
 
 BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-    auto &func = expr_ptr->Cast<FunctionExpression>();
-    D_ASSERT(func.children.size() == 2);
+	if (DistributeWrapperOverConjunction(expr_ptr)) {
+		return BindConjunction(expr_ptr, depth);
+	}
+	auto &func = expr_ptr->Cast<FunctionExpression>();
+	D_ASSERT(func.children.size() == 2);
 
     // Validate: WHEN condition (child[1]) cannot reference DECIDE variables
     if (ExpressionContainsDecideVariable(*func.children[1], variables)) {
@@ -372,8 +426,11 @@ BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpressi
 }
 
 BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-    auto &func = expr_ptr->Cast<FunctionExpression>();
-    D_ASSERT(func.children.size() >= 2);
+	if (DistributeWrapperOverConjunction(expr_ptr)) {
+		return BindConjunction(expr_ptr, depth);
+	}
+	auto &func = expr_ptr->Cast<FunctionExpression>();
+	D_ASSERT(func.children.size() >= 2);
 
     auto &constraint_child = func.children[0];  // constraint (possibly WHEN-wrapped)
 

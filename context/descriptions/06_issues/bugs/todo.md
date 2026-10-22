@@ -26,33 +26,34 @@
   the query hang indefinitely on HiGHS once the model is large enough; there
   is no DeciDB-level safety net.
 
-## Direct solve fails to bind a parent-read column when the source ends in `ORDER BY`
+## Direct solve fails to bind any source column a parent reads when the source ends in `ORDER BY`
 
 - **Location:** not traced; the direct-solve plan or its unused-column pruning
   (`src/optimizer/decide/direct/`). The error is raised by `ColumnBindingResolver`.
-- **Observed:** with a source subquery that ends in `ORDER BY` and a parent that reads a source column the rule does not
-  use, direct solve raises an internal error, for S1 and A1 alike and under the default `auto`:
+- **Observed:** with a source subquery that ends in `ORDER BY` and a parent that reads any source column (one the rule
+  uses, such as `score`, as well as one it does not), direct solve raises an internal error, for S1 and A1 alike and
+  under the default `auto`:
   `SELECT SUM(length(payload)) FROM (SELECT * FROM s ORDER BY id DESC) t DECIDE x(BOOL) SUCH THAT SUM(x) <= 3 MAXIMIZE SUM(score * x)`
   gives `INTERNAL Error: Failed to bind column reference "payload"`. The same query with `decide_direct_solve = 'off'`
-  answers, and so does the direct path when the parent reads only `x` or the source is a `WHERE` filter. Late
+  answers, and so does the direct path when the parent reads only `x` or the source has no `ORDER BY`. The parent asks
+  for the subquery's output bindings (`[19.0]`) while the plan offers only the table's (`#[1.0]`, `#[1.1]`, ...): the
+  projection above the `ORDER BY` appears to be skipped without remapping the parent's references (not traced). Late
   materialization of a stored table does not apply to this source (an `ORDER BY` is neither a projection nor a filter), and the error
   also occurs with that step disabled.
 - **Expected:** the same answer as the solver path.
 - **Impact:** a valid query fails with an internal error in the default mode instead of answering.
 
-## The solver path ignores a `WHEN` on a `BETWEEN` constraint
+## `OR` between constraints is read as `AND`
 
-- **Location:** not traced; the solver path's handling of a `BETWEEN` clause with `WHEN` (its expansion into two
-  bounds, or the bound folding into the decision's box). Direct solve is not affected.
-- **Observed:** on `(VALUES (1,1.0,2.0),(2,1.0,3.0)) t(id,s,cap)`, no row has `id > 5`, so the bound applies to no row:
-  - `DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap WHEN id>5 MAXIMIZE SUM(s*x)` with `decide_direct_solve = 'off'`
-    answers x = 2.0 and 3.0 on Gurobi and on HiGHS (`DECIDB_FORCE_SOLVER=highs`): the `WHEN` is dropped and
-    `x <= cap` holds on every row. Direct solve (`require`) raises `DECIDE optimization is unbounded`.
-  - The same clause written as `x <= cap WHEN id>5` is unbounded on both paths.
-- **Expected:** a `WHEN` on a `BETWEEN` excludes the rows where it does not hold, as it does for `<=`; this query is
-  unbounded.
-- **Impact:** a wrong answer with no error: the solver applies a bound the user made conditional. Under the default
-  `auto`, an A1-shaped query takes direct solve and is right, so the solver and direct paths disagree on the same query.
+- **Location:** not traced; the binder accepts a user-written `OR` in `SUCH THAT`, and the solver path splits it as a
+  conjunction. The `OR` that `<>` rewrites into is a separate, tagged form and is not affected.
+- **Observed:** on `(VALUES (1, 1.0), (2, 2.0)) t(id, s)`, `DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 AND (x <= 1 OR
+  x >= 0.5) MAXIMIZE SUM(s*x)` answers x = 1.0 on both rows with `decide_direct_solve` `off` and `auto`; with the
+  `OR`, x = 5 satisfies every constraint and is better. `(x <= 1 OR x >= 3) AND x <= 5 AND x >= 0` raises
+  `DECIDE optimization is infeasible`.
+- **Expected:** a disjunction of constraints is either solved as one (at least one side holds) or rejected at bind time
+  with an ordinary error; `syntax_reference.md` does not list `OR` between constraints.
+- **Impact:** a wrong answer with no error: the solver enforces both sides of a condition the user made optional.
 
 ## An order-0 norm over a reducer or over data raises an internal error
 
