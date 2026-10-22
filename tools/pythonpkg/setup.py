@@ -529,7 +529,7 @@ setup(
     ],
     ext_modules=[libduckdb],
     maintainer="HUDA Lab",
-    maintainer_email="huda-lab@nyu.edu",
+    maintainer_email="support@decidb.com",
     cmdclass={"build_ext": build_ext},
     project_urls={
         "Documentation": "https://huda-lab.github.io/decidb/documentation.html",

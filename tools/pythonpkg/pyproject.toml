@@ -12,7 +12,7 @@ description = "DuckDB with a DECIDE clause for constrained optimization in SQL"
 readme = "README.md"
 license = {text = "MIT"}
 authors = [
-    {name = "HUDA Lab", email = "huda-lab@nyu.edu"}
+    {name = "HUDA Lab", email = "support@decidb.com"}
 ]
 keywords = [
     "sql", "database", "duckdb", "decidb",

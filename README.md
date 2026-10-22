@@ -127,7 +127,7 @@ DeciDB is developed by the [HUDA Lab](https://huda-lab.github.io/) (NYU Abu Dhab
 - *Scalable Computation of High-Order Optimization Queries* (ACM Communications, 2019)
 - *Scaling Package Queries to a Billion Tuples* (VLDB 2024)
 
-Contact: [huda-lab@nyu.edu](mailto:huda-lab@nyu.edu)
+Contact: [support@decidb.com](mailto:support@decidb.com)
 
 ## License
 
