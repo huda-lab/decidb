@@ -115,16 +115,13 @@ test, adding one is a task in that rule's `todo.md`.
    (bad data) go in the error table, where `off` and `require` must both fail (the choice among several errors need not
    match; a NULL or NaN message must, apart from ` at row N`), and values the oracle cannot hold (infinities, 2^53) go
    in the boundary table, where direct is compared with the solver only. Add the shape inside parent queries too.
-3. **Differential fuzz** (`test_direct_fuzz.py`, comparator in `_direct_differential.py`): supply a seeded query
-   generator. Direct (`require`) and solver (`off`) must succeed or fail together (any error counts) and agree on
-   row count and primary objective. It finds interactions between shapes that no table lists.
-4. **C++ cases** (`test/common/`) for the rule's applicability condition and for the IR it relies on. Each decline
+3. **C++ cases** (`test/common/`) for the rule's applicability condition and for the IR it relies on. Each decline
    branch of `CheckCondition` gets a case in `test_decidb_direct_decline.cpp`, which hands the rule the IR of a small
    planned query; `make decide-coverage` shows each new case reaching an arm no other case of the rule reaches.
 
 Run after any change: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` (the solver path alone),
 `DECIDB_VERIFY_SERIALIZER=1 make decide-test`, `DECIDB_FORCE_SOLVER=highs make decide-test`, and
 `build/release/test/unittest "[decidb]"`. Each takes about 30 seconds. `test/decide/run_direct_matrix.sh` runs all five
-and prints one summary line each (`auto: 2706 passed, 0 xfailed, 0 failed`); run `make release` first. The forced-HiGHS
+and prints one summary line each (`auto: 2674 passed, 0 xfailed, 0 failed`); run `make release` first. The forced-HiGHS
 line shows the one failure that needs Gurobi (`test_norm_combined_l1_l2_objective`), and the script's exit code allows
 exactly that one.

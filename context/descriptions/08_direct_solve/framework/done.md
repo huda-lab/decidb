@@ -1,8 +1,8 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-22 on top of `d9bf29ad23`, with the right-hand-side rewrite and S1 and A1 registered: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,706
-passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,705 passed and one failure,
+Verified on 2026-10-22 on top of `cf64948648`, with the right-hand-side rewrite and S1 and A1 registered: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,674
+passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,673 passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,819 assertions in
 55 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
@@ -183,7 +183,7 @@ check). Design: `../architecture/`.
   suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can
   see it). A new rule's suite imports the scaffold (`architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
-  example `auto: 2706 passed, 0 xfailed, 0 failed`. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `PER` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
+  example `auto: 2674 passed, 0 xfailed, 0 failed`. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `PER` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
 
 ## Registering a rule
 
@@ -211,9 +211,9 @@ default box.
   source-column checks would pass without checking anything.
 - Python: `test_direct_rule_conformance.py` (one `RuleFixture` per rule, S1's and A1's: schema, all-rows read,
   serializer, prepared plans, near misses, `off`, forced backend, `DIAGNOSE` and an empty source) and the
-  parent-context rows of `test_direct_s1_uniform_matroid.py`. Both fuzz generators in `test_direct_fuzz.py` run about
-  one query in ten over an empty source and add a constant bound that contradicts the decision's built-in domain now
-  and then; with A1's domain check disabled, the A1 fuzz fails. `test_direct_user_facing.py` checks
+  parent-context rows of `test_direct_s1_uniform_matroid.py`. With A1's domain check disabled,
+  `test_bool_bound_outside_domain.py` (a bound against the domain over an empty source) and two cases of
+  `test_error_infeasible.py` fail. `test_direct_user_facing.py` checks
   which noun a NaN or infinite coefficient names.
 - Result adapter parent contexts, identical under `auto`, `off` and `require`: `CREATE TABLE AS`, `INSERT ... SELECT`, a
   view, a window over the result, `UNION ALL` of an S1 and an A1 query, a joined source with a filter above, a self-join
