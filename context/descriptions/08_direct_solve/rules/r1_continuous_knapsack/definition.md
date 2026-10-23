@@ -128,22 +128,64 @@ For each group (the whole input when there is no `PER`):
 > reaches down to T.
 >
 > 6\. Items with t > λ* take their high end and items with t < λ* their low end. The items tied at λ* share
-> D = T − (S + A − B): starting from their anchors, they move up when D > 0 and down when D < 0, each by its room or
-> by what remains, found by a running sum over the tie. An infinite room takes all that remains.
+> D = T − (S + A − B), with A and B taken at λ*: starting from their anchors, they move up when D > 0 and down when
+> D < 0. Let F be the finite room the tie has in that direction and n the number of its infinite rooms. Each finite
+> room moves by its room × min(|D|, F) / F, and the infinite rooms share |D| − min(|D|, F) evenly. The share needs no
+> order among the tied items, so the answer is the same on every run.
 >
-> 7\. The items of a row return to one column per decision.
+> 7\. Each decision of a row answers in its own column.
 
-Steps 2 and 3 are aggregates over the group, decided after every row is read, infeasibility first. After them, every
-sum steps 4 to 6 use at λ* is finite. When T lies on the shared end of two adjacent ranges, both give the same
-assignment.
+Steps 2 and 3 are aggregates over the group, decided after every row is read. A NULL or NaN value raises first, as on
+the solver, then infeasibility, then unboundedness. After them, every sum steps 4 to 6 use at λ* is finite. When T lies
+on the shared end of two adjacent ranges, both give the same assignment.
 
 The budget directions differ only in T. `<=` and `>=` bind on their one side. `=` fixes T, so an exact fill continues
 past items whose value is nonpositive, at a negative price if it must. `BETWEEN` takes the nearer side, so it binds on
 at most one. A positive lower bound needs no baseline step: it is the low end of a positive-weight item. A data-valued
 budget is one L and U per group (§ Admitted class), so the steps are unchanged.
 
-The translation uses arithmetic, one sort, windowed running sums, grouped aggregates, clamping and, for several
-decisions per row, an unpivot and a join back.
+### The plan
+
+The plan follows aggregate-then-join: each group is reduced to one row of numbers (its totals, its price, its sums at
+the price), and every source row joins its group's row and computes its answers in one projection. A *group key* is
+whether the row belongs to a budget, then its `PER` keys, compared with IS NOT DISTINCT FROM so a NULL key matches.
+With no scope there is one group: the aggregates have no `GROUP BY` and the join is a cross product with one row.
+
+| Stage | Operator | Columns it carries | Holds every row |
+|---|---|---|---|
+| 1. Item values | projection over a read of the source | group keys; per decision l, u, w, v, t, anchor, finite room up and down, open-room flags, anchor spend, best end | no |
+| 2. Group totals | hash aggregate per group, then a projection | per group: S, the finite room sums and open-room counts, empty boxes, unbounded items, lo and hi, the zero-price spend parts, data-limit MIN and MAX; then L, U, over or under, T and the verdicts | no (one row per group) |
+| 3. Price | narrow items, one window partitioned by group and ordered by t, joined to stage 2, then a hash aggregate | group keys, t, finite rooms, open-room counts and their running sums; out: λ* per group | the narrow items, in the sort |
+| 4. Sums at the price | hash aggregate per group over stage 1 joined to λ* | per group: finite room above, below and at λ*, open rooms at λ*; then D and the two shares of step 6 | no (one row per group) |
+| 5. Answer | the source rows joined to the group's numbers, then a projection | the source columns the parent reads, one answer per decision, the verdict column | no |
+
+Stage 1 reads the source for stages 2, 3, 4 and 5. Stage 3 holds only the narrow items, so the one sort carries a few
+columns, never the source's. With several decisions, stage 3 unpivots only the narrow columns (an unnest of one list
+per column, one entry per decision); stages 2 and 4 sum over the decisions of a row inside one aggregate input, and
+stage 5 computes each decision's answer in its own column. No row number, unnest of source columns or group-back is
+needed, because a row's answer reads only its own values and its group's numbers.
+
+**Every row is checked before any is released.** Stage 2 evaluates every row's NULL and NaN checks and raises on the
+first bad value, and its projection raises infeasible, then unbounded. Stage 5's rows come out of a join with the
+group's numbers, which exist only once stages 2 to 4 have read every row. The verdict column rides into the output, so
+a parent that reads no answer still raises.
+
+**Reading the source several times.** This is the recompute-or-materialize choice DuckDB makes for a CTE. A source
+that is a chain of non-volatile projections and filters over one scan of a DuckDB base table (what
+`DirectExposeStoredRowId` accepts) is rebuilt once per read with fresh table indexes, so each read is a parallel scan
+and no copy of the rows is kept. Any other source (a join, a subquery with an aggregate, a table function, a volatile
+expression) is materialized once (`LogicalMaterializedCTE`) and read through `LogicalCTERef`s. Both reads return the
+same rows, and no stage depends on their order. The row-id late materialization does not apply to R1: its answers join
+on group keys, not on a row id.
+
+**What a query skips**, decided from the proved condition and never from the data: with no scope, the group keys;
+with no limit read from the data, the MIN and MAX; with no objective, v (zero); when every box end is a finite
+constant and no per-row bound clause applies, the open-room columns and counts.
+
+**Several cases, one plan.** Weights of each sign and zero, infinite rooms, the budget directions, ties, `PER` and
+`WHEN` change values inside stages 1, 2 and 4 (the high and low ends, the open-room counts, L and U, the group key);
+they add no stage. A row outside every budget is a group whose items are all outside the ranking: stage 5 gives each
+its best end, and of the verdicts only an empty box and an unbounded item apply to it.
 
 ## Correctness
 
@@ -162,7 +204,9 @@ cannot grow by the sign rule. So x is optimal. An item outside every budget ente
 **The construction meets it at λ*.** An item's net value at λ* is w·(t − λ*). For t > λ* it has the sign of w, so the
 item prefers u when w > 0 and l when w < 0, its high end either way. For t < λ* the sign flips and the item prefers its
 low end. So step 6 puts every item with a nonzero net value at the end that value prefers. Items tied at λ* have net value zero, and any point of their
-box serves. The spend is T by construction. When λ* > 0 the zero-price spend exceeds T, because spend falls as the
+box serves. Each finite room moves at most its room, since min(|D|, F) / F ≤ 1, so every tied item stays in its box;
+the moves sum to min(|D|, F) + (|D| − min(|D|, F)) = |D|, and when the tie has no infinite room the choice of λ* gives
+|D| ≤ F. The spend is T by construction. When λ* > 0 the zero-price spend exceeds T, because spend falls as the
 price rises, so T is U; when λ* < 0, T is L. Step 1 is the same rule with λ = 0.
 
 **Several decisions on one row.** The certificate sums over items, and nothing in it ties two items on one row

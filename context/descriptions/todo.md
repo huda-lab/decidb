@@ -7,11 +7,11 @@ Read first: `08_direct_solve/rules/r1_continuous_knapsack/done.md` § Performanc
 `08_direct_solve/rules/r1_continuous_knapsack/definition.md`, `benchmark/decide/profile_r1_floor.py`. Checks:
 `08_direct_solve/framework/todo.md` § How to work any task in these todo files.
 
-## 1. Owner decision
-- [ ] R1-20 Design the plan to the floor's shape — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-20
+## 1. Build the new plan
+- [ ] R1-24 Read a source several times — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-24
+- [ ] R1-25 New plan for one decision, constant limits — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-25 (needs: R1-24)
+- [ ] R1-26 Several decisions on the new plan — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-26 (needs: R1-25)
+- [ ] R1-27 Data limits on the new plan — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-27 (needs: R1-26)
 
-## 2. Build (needs: R1-20)
-- [ ] R1-21 Build the redesigned plan — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-21
-
-## 3. Measure last (needs: 2)
+## 2. Measure last (needs: 1)
 - [ ] R1-18 Re-run the performance sweep — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-18
