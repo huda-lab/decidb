@@ -8,10 +8,10 @@ R1 admits, or a measured account of why a shape cannot.
 ## R1-11 — Choose how to make the plan cheaper than the solver on one global budget
 
 - **Decision needed.**
-- **Needs.** R1-12, R1-13 and R1-14.
+- **Needs.** R1-13, R1-19 and R1-14.
 - **Problem.** `done.md` § Performance: with one budget over the whole input, direct solve runs at 0.7x to 1.2x
-  Gurobi's time and the solver's memory. Only `PER` shapes win. A window with no `PARTITION BY` is one partition, so
-  each whole-input window is one large unit of work.
+  Gurobi's time and the solver's memory. Only `PER` shapes win. The plan's time does not fall with more threads on one
+  global budget, and the floor's does.
 - **Options.**
   1. Accept the numbers. R1 stays on by default because it is never wrong and beats HiGHS on every shape but two
      decisions. No work.
@@ -24,45 +24,51 @@ R1 admits, or a measured account of why a shape cannot.
      needs a second pass. Parallel and linear. It needs its own proof in `definition.md`. About two days.
   4. Option 2 or 3, and R1 off by default for shapes it does not win, decided from the plan shape (no `PER`). About
      half a day more; it adds a cost rule to a layer that has none.
-- **Recommendation.** Choose after R1-12. Option 2 when the hand-written narrow SQL of R1-12 beats Gurobi's time.
-  Option 3 only when a plan with a sort cannot. Option 1 or 4 when nothing beats Gurobi.
+- **Recommendation.** Options 1 and 4 no longer fit: the hand-written narrow SQL beats Gurobi at every size
+  (`done.md` § Performance), and it contains a sort. Choose between 2 and 3 after R1-19. Option 2 when the ladder shows
+  that row width and the unpartitioned windows are the cost. Option 3 only when no plan with a sort comes near the floor.
 - **Done when.** The chosen option is written into this task as its **Change**, then built; `done.md` § Performance
   (R1-18) shows the effect; the five checks pass. For option 3 also: the proof is in `definition.md`; R1 entries for
   the price-search terms are in the mutation harness (`../../framework/h35/run_mutations.py`) and every surviving
   mutation has a test that kills it; and a seeded random comparison of the search against the oracle and the solver
   path passes. Option 3 rewrites the verdict and price terms, which the hand-picked cases pin only in part.
 
-## R1-12 — Measure the least the plan could cost
-
-- **Problem.** No one knows whether R1's time on one global budget is the cost of the method or of our plan. There is
-  no floor to compare against. The sorted window takes 0.81 s of 1.52 s at 1,000,000 rows, which looks like far more
-  than a sort of the same numbers.
-- **Change.** A benchmark script under `benchmark/decide/` that runs on the same databases as
-  `profile_direct_r1.py` and times:
-  1. A hand-written DuckDB query of the narrow shape (keys, `t`, rooms; sort by `t`; running sum; the price; the
-     answer for every row by a join back), at one thread and at all threads.
-  2. A bare scan of the source that writes one `DOUBLE` per row, the cost of reading and returning the rows.
-  3. The solver path split into model load, solve and result return, from the solver's own log or timers around
-     those calls.
-- **Done when.** `done.md` § Performance lists the floor beside the direct and Gurobi times for the `<=` shape at
-  1,000,000 and 5,000,000 rows, and says which reading holds: R1 is at the floor, R1 is above the floor because of the
-  plan, or the floor is above Gurobi's time. The script is committed.
 
 ## R1-13 — Profile the R1 plan operator by operator
 
 - **Problem.** `done.md` § Performance says half the time is the sorted window and that every window carries every
-  source column. Nothing records time, memory and threads per operator, or whether a window with no `PARTITION BY`
-  uses more than one thread.
-- **Change.** Profile the plan with `EXPLAIN ANALYZE` (or the profiler's JSON output) at 1,000,000 and 5,000,000
-  rows, for the `<=` positive-weight shape and the two-decision shape. Record per operator the time, the rows, the
-  peak memory and the threads in use (CPU time over wall time). Run the same query on a source table that holds only
-  the columns the query reads, to isolate the cost of width. Count the sorts and materializations the plan holds.
-- **Done when.** `done.md` § Performance, "Where the time goes", is replaced by these numbers, and each cost is named
-  as made by the plan (width, one-thread windows, extra materialization) or by the method (the sort itself).
+  source column. Nothing records time, memory and threads per operator, how long planning takes, whether any operator
+  spills, or how time grows with the width of the source.
+- **Change.** Profile the plan with `EXPLAIN ANALYZE` (or the profiler's JSON output) at 1,000,000 and 5,000,000 rows,
+  for `le_positive`, `per_groups`, `when_budget`, `count_only` and `two_decisions`. Record per operator the time, the
+  rows, the peak memory and the threads in use. Record the time of planning and optimizing alone, and whether any
+  operator writes to the temporary directory. Run `le_positive` on three copies of the source: the table as it is,
+  one narrowed to the columns the query reads, and one widened by twenty more `DOUBLE` columns. Count the sorts,
+  windows and materializations the plan holds, and list the columns each window outputs.
+- **Done when.** `done.md` § Performance, "Where the time goes", is replaced by these numbers, with the time as a
+  function of width, and each cost is named as made by the plan or by the method.
+
+## R1-19 — Attribute the cost to plan features
+
+- **Needs.** R1-13.
+- **Problem.** A per-operator profile says where time is spent, not what removing a feature would save, because the
+  operators of a pipeline overlap and compete for memory and cores.
+- **Change.** A ladder of queries from the floor up to R1's plan, each adding one feature to the last, each timed as
+  `benchmark/decide/profile_r1_floor.py` does: (1) the narrow floor; (2) the same on all source columns; (3) the four-window chain (totals, running sums,
+  price, price sums) on narrow columns; (4) the chain on all columns; (5) the chain with each window that has no
+  `ORDER BY` replaced by an ungrouped aggregate joined in; (6) the chain with a synthetic `PARTITION BY` of 2, 10 and
+  1,000 keys; (7) the validation breaker, which holds every row until all are checked; (8) the per-row expression
+  projections; (9) the real plan. For several decisions, a second ladder from the one-decision plan: row numbering, the
+  unnest, and the hash group-back, one rung each. A rung that costs more than its parts is an interaction; report
+  it.
+- **Done when.** `done.md` § Performance holds the ladder (time, CPU over wall and memory per rung) and a ranked list of
+  causes, each named as made by the plan or by the method with the rung that shows it. R1-14, R1-15 and R1-11 are
+  rewritten where the ladder contradicts what they assume.
+
 
 ## R1-14 — Carry only the narrow columns through the windows
 
-- **Needs.** R1-13.
+- **Needs.** R1-19.
 - **Problem.** `done.md` says late materialization does not apply to R1's plan, so every window and the sort carry
   every source column and peak memory is the solver's size. S1 and A1 use late materialization
   (`direct_late_materialization.cpp`).
@@ -75,11 +81,11 @@ R1 admits, or a measured account of why a shape cannot.
 
 ## R1-15 — Make several decisions no slower than one
 
-- **Needs.** R1-13.
+- **Needs.** R1-19.
 - **Problem.** Two decisions run at 0.3x Gurobi's speed. The plan numbers the rows, unnests each into one item per
   decision carrying every source column, and groups the items back with a hash aggregate that applies `any_value` to
   each source column.
-- **Change.** Remove the cost R1-13 attributes to the unnest and the group-back. The target is a plan for two
+- **Change.** Remove the cost R1-19 attributes to the unnest and the group-back. The target is a plan for two
   decisions no slower than the one-decision plan on the same number of items. Answers and errors stay identical.
 - **Done when.** The five checks pass; the two-decision tests of `test_direct_r1_continuous_knapsack.py` still pass;
   R1-13's profile, re-run on the two-decision shape, shows the change.

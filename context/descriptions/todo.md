@@ -8,18 +8,20 @@ Read first: `08_direct_solve/README.md`, `08_direct_solve/rules/r1_continuous_kn
 task in these todo files.
 
 ## 1. Diagnose: slow by nature or by our plan
-- [ ] R1-12 Measure the least the plan could cost — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-12
 - [ ] R1-13 Profile the plan operator by operator — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-13
 
-## 2. Make the plan cheaper (needs: 1)
+## 2. Attribute the cost (needs: 1)
+- [ ] R1-19 Attribute the cost to plan features — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-19
+
+## 3. Make the plan cheaper (needs: 2)
 - [ ] R1-14 Carry only narrow columns through windows — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-14
 - [ ] R1-15 Make several decisions no slower than one — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-15
 
-## 3. Owner decision (needs: 2)
+## 4. Owner decision (needs: 3)
 - [ ] R1-11 Choose how to beat the solver on one global budget — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-11
 
-## 4. Cleanup (needs: 3)
+## 5. Cleanup (needs: 4)
 - [ ] R1-17 Choose how PlanBuilder names its columns — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-17
 
-## 5. Measure last (needs: 4)
+## 6. Measure last (needs: 5)
 - [ ] R1-18 Re-run the performance sweep — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-18

@@ -150,9 +150,52 @@ why `PER` shapes, whose windows split into many partitions, are the only clear w
 memory is the solver's size rather than A1's. Two decisions add the unnest and the hash aggregate that groups items
 back, and late materialization does not apply to that plan.
 
+**Floor and scaling.** Measured 2026-10-23 on top of `4e34b663f5` with `benchmark/decide/profile_r1_floor.py`, on a
+machine with 11 cores and a background load average of 2 to 6 from other applications. Medians of 3 interleaved runs;
+for runs over 1 s min and max lie within 10% of the median, and the floor's sub-second runs vary more (0.46 to 0.69 s
+at 5,000,000 rows, all threads). The floor is a hand-written DuckDB query of the narrow shape for
+`le_positive`: keys, `t = v / w` and rooms; one sort by `t`; a running sum; a join back that gives every row its
+answer. It returns the same objective and `SUM(x)` as the direct plan at every size.
+
+| `le_positive` | Rows | 1 thread | All threads | CPU / wall (all) | Peak (all) |
+|---|---:|---:|---:|---:|---:|
+| Floor | 1M | 0.29 s | 0.11 s | 4.2 | 218 MiB |
+| Floor | 2M | 0.62 s | 0.23 s | 5.2 | 431 MiB |
+| Floor | 5M | 1.56 s | 0.51 s | 5.0 | 1.2 GiB |
+| Direct | 1M | 1.41 s | 1.43 s | 1.7 | 731 MiB |
+| Direct | 2M | 2.89 s | 2.96 s | 1.7 | 1.5 GiB |
+| Direct | 5M | 7.41 s | 7.74 s | 2.0 | 3.8 GiB |
+| Gurobi | 1M | | 1.17 s | 1.05 | 1.4 GiB |
+| Gurobi | 2M | | 2.80 s | 1.01 | 2.3 GiB |
+| Gurobi | 5M | | 7.46 s | 1.02 | 3.3 GiB |
+
+A bare scan that returns one `DOUBLE` per row takes 0.02 to 0.03 s at every size. Gurobi's time is its solver call;
+model construction is 2% to 3% of the wall time at every size, and everything outside the solver call together
+(model construction, process start, planning, reading and returning rows) is under 7%.
+
+With one global budget the direct plan runs at Gurobi's speed and about 15 times the floor at 5,000,000 rows. At one
+thread it does about 4.8 times the floor's work (7.41 s against 1.56 s), and unlike the floor it gains nothing from
+more threads (the floor runs 3.1 times faster at 5,000,000 rows). The floor beats Gurobi at every size, with one
+thread too (1.56 s against 7.46 s). Time grows about linearly in rows for the floor, the direct plan and Gurobi (5M
+against 1M: 4.6, 5.4 and 6.4 times).
+
+Threads help the direct plan when the budget is split into many partitions: one thread against all threads at
+1,000,000 rows, `per_groups` 1.68 s to 0.69 s and `when_budget` 1.75 s to 0.97 s; `two_decisions` 11.21 s to 11.00 s.
+At 5,000,000 rows `per_groups` runs 9.16 s to 3.76 s (Gurobi 9.74 s). The plan's time on one global budget is the
+plan's, not the method's: the floor shows the method needs a small fraction of it.
+
 **Reproduce** (after `make release`; the sweep took about 20 minutes, building the databases included):
 
 ```sh
 python3 benchmark/decide/profile_direct_r1.py --rows 1000000 5000000 --repeats 3 --solver-budget 60 --db-dir build/r1db
+```
+
+The floor and scaling table (about 10 minutes at 1,000,000 rows; the larger sizes and `two_decisions` at one thread add
+much more):
+
+```sh
+python3 benchmark/decide/profile_r1_floor.py --rows 1000000 --repeats 3 --floor-threads 1 2 4 all --db-dir build/r1db
+python3 benchmark/decide/profile_r1_floor.py --rows 2000000 5000000 --shapes le_positive per_groups --threads 1 all \
+    --floor-threads 1 all --repeats 3 --db-dir build/r1db
 ```
 
