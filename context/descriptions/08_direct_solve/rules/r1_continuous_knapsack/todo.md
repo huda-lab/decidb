@@ -18,13 +18,11 @@ checks are in `../../framework/todo.md` § How to work any task. The goal is a p
 - **Done when.** The cause is fixed with a regression that fails without the fix, or `done.md` § Where it differs
   records the sanitizer runs that found no fault.
 
-## R1-18 — Re-run the performance sweep
+## R1-30 — Bring two decisions within twice one decision
 
-- **Problem.** `done.md` § Performance describes the plan before the redesign.
-- **Change.** Run the sweep of `done.md` § Performance with the same commands, the 1,000,000-row sweep first; the
-  5,000,000-row sweep takes about 20 minutes of full CPU. Replace the tables, the stamps and the "Where the time goes"
-  text, and state which shapes beat Gurobi and which do not, with the reason. The target at 5,000,000 rows, all threads:
-  `le_positive` within 1.5 times the floor, `per_groups` no slower than `le_positive`, `two_decisions` within 2 times
-  `le_positive`, CPU over wall 3 or more, and peak memory below Gurobi's.
-- **Done when.** `done.md` § Performance matches the measurements, every shape's objective agrees with Gurobi within
-  1e-6 before timing, and the five checks pass.
+- **Problem.** `done.md` § Performance: `two_decisions` at 5,000,000 rows runs 2.52 s against 0.60 s for one decision
+  (4.2 times; 21.2 s of CPU against 4.9 s), where the target was 2 times. Every one of the four reads computes both
+  decisions' item values, though stages 2 to 4 need only some of them, and the sort holds 10,000,000 items.
+- **Change.** Profile `two_decisions` with `benchmark/decide/profile_r1_plan.py` (the profiler is honest now) and cut
+  the work each read does to the columns its stage reads. Answers and errors stay the same.
+- **Done when.** The five checks pass; `two_decisions` at 5,000,000 rows runs within 2 times `le_positive`.

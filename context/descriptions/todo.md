@@ -10,5 +10,5 @@ Read first: `08_direct_solve/rules/r1_continuous_knapsack/done.md` § Performanc
 ## 1. A suspected fault
 - [ ] R1-28 Find the one-off serializer garbage rows — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-28
 
-## 2. Measure
-- [ ] R1-18 Re-run the performance sweep — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-18
+## 2. Faster several decisions
+- [ ] R1-30 Two decisions within twice one — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-30

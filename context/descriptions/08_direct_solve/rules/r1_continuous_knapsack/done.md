@@ -137,93 +137,67 @@ An empty source returns no rows, whatever the limits are, as on the solver.
 
 ## Performance
 
-Measured 2026-10-23 on top of `aa9ee8fe6b` with this rule's changes in the working tree, on this machine, with
-`benchmark/decide/profile_direct_r1.py`. Each run is a fresh `decidb` process that opens the stored database; peak
-memory is the process's own. Direct 3 runs (median), each solver 1 run; the solver path is `off` with
-`DECIDB_FORCE_SOLVER` set to `gurobi` or `highs`. The parent reads one aggregate row, so the time is the plan, not the
-transfer. Before timing, every shape's objective on direct and on Gurobi agreed within 1e-6.
+Measured 2026-10-23 on top of `c13fd57669`, on a machine with 11 cores and a background load average of 5 to 14 from
+other applications, with `benchmark/decide/profile_direct_r1.py`. Each run is a fresh `decidb` process that opens the
+stored database; peak memory is the process's own. Direct 3 runs (median), each solver 1 run; the solver path is `off`
+with `DECIDB_FORCE_SOLVER` set to `gurobi` or `highs`. The parent reads one aggregate row, so the time is the plan, not
+the transfer. Before timing, every shape's objective on direct and on Gurobi agreed within 1e-6.
 
 | Shape, 5,000,000 rows | Direct | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | vs Gurobi | vs HiGHS |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `<=` budget, positive weights | 8.27 s | 3.0 GiB | 7.20 s | 3.3 GiB | 24.0 s | 4.6 GiB | 0.9x | 2.9x |
-| `<=` budget, weights of mixed sign | 8.02 s | 4.0 GiB | 5.75 s | 3.8 GiB | 9.32 s | 4.7 GiB | 0.7x | 1.2x |
-| `>=` cover, `MINIMIZE` | 7.52 s | 4.0 GiB | 7.04 s | 3.7 GiB | 23.7 s | 4.5 GiB | 0.9x | 3.2x |
-| `=` budget | 7.43 s | 4.0 GiB | 7.10 s | 3.7 GiB | 24.5 s | 4.5 GiB | 1.0x | 3.3x |
-| `BETWEEN` budget | 7.37 s | 4.0 GiB | 8.07 s | 3.9 GiB | 27.5 s | 3.2 GiB | 1.1x | 3.7x |
-| `PER` 1,000 groups | 3.39 s | 3.6 GiB | 9.36 s | 4.1 GiB | 31.0 s | 4.4 GiB | 2.8x | 9.1x |
-| `WHEN` on the budget | 5.14 s | 4.7 GiB | 6.16 s | 4.6 GiB | 17.7 s | 4.7 GiB | 1.2x | 3.4x |
-| two decisions | 58.0 s | 4.0 GiB | 14.9 s | 4.2 GiB | 46.6 s | 5.9 GiB | 0.3x | 0.8x |
-| budget from a column, `PER` | 3.40 s | 4.0 GiB | 8.89 s | 5.7 GiB | 31.0 s | 5.6 GiB | 2.6x | 9.1x |
-| budget from an aggregate | 10.8 s | 5.4 GiB | 7.53 s | 4.8 GiB | 24.3 s | 5.5 GiB | 0.7x | 2.2x |
-| `<=` budget, parent reads only `COUNT(*)` | 6.22 s | 3.1 GiB | 6.76 s | 5.6 GiB | 23.6 s | 5.5 GiB | 1.1x | 3.8x |
+| `<=` budget, positive weights | 0.74 s | 0.9 GiB | 7.60 s | 4.4 GiB | 24.8 s | 5.0 GiB | 10.2x | 33.4x |
+| `<=` budget, weights of mixed sign | 0.64 s | 0.8 GiB | 5.90 s | 4.6 GiB | 9.20 s | 4.7 GiB | 9.2x | 14.4x |
+| `>=` cover, `MINIMIZE` | 0.55 s | 0.9 GiB | 7.20 s | 5.0 GiB | 25.2 s | 5.1 GiB | 13.1x | 45.9x |
+| `=` budget | 0.61 s | 0.9 GiB | 7.34 s | 4.8 GiB | 25.3 s | 4.9 GiB | 12.0x | 41.4x |
+| `BETWEEN` budget | 0.66 s | 0.9 GiB | 8.35 s | 4.4 GiB | 27.1 s | 5.3 GiB | 12.7x | 41.3x |
+| `PER` 1,000 groups | 0.60 s | 0.4 GiB | 9.57 s | 5.2 GiB | 32.7 s | 5.3 GiB | 16.0x | 54.6x |
+| `WHEN` on the budget | 0.67 s | 0.9 GiB | 6.13 s | 5.3 GiB | 18.3 s | 5.5 GiB | 9.2x | 27.4x |
+| two decisions | 2.45 s | 1.6 GiB | 14.8 s | 5.0 GiB | 47.8 s | 6.0 GiB | 6.0x | 19.6x |
+| budget from a column, `PER` | 0.61 s | 0.4 GiB | 9.20 s | 6.0 GiB | 32.5 s | 5.9 GiB | 15.0x | 53.2x |
+| budget from an aggregate | 1.02 s | 1.4 GiB | 7.86 s | 4.9 GiB | 25.3 s | 4.4 GiB | 7.7x | 24.7x |
+| `<=` budget, parent reads only `COUNT(*)` | 0.57 s | 0.9 GiB | 7.28 s | 4.7 GiB | 24.8 s | 4.9 GiB | 12.7x | 43.3x |
 
-At 1,000,000 rows the ratios are the same (0.2x to 3.8x against Gurobi, 0.8x to 9.4x against HiGHS), direct peaks at
-0.6 to 1.6 GiB and Gurobi at 1.4 to 2.3 GiB.
+At 1,000,000 rows direct runs 0.14 to 0.48 s (5.0x to 16.0x Gurobi, 9.5x to 39.3x HiGHS) and peaks at 0.2 to 0.4 GiB,
+against 1.4 to 2.6 GiB for Gurobi. Every shape beats both solvers at both sizes.
 
-**Where the time goes.** From DuckDB's JSON profiler: the operator times at 1,000,000 rows, and the window widths,
-planning time, spill and two-decision run at 100,000 rows from `benchmark/decide/profile_r1_plan.py` (the widths and the
-plan do not depend on the row count). At 1,000,000 rows (`le_positive`, all threads, 1.52 s) the operators use 1.37 s of CPU: the window that sorts 0.81 s,
-the four windows without an order 0.39 s together, and eighteen projections under 0.2 s together. The query keeps
-about one core busy (1.38 s of CPU in 1.52 s). The parent reads only `COUNT(*)` and `SUM(x)`, so the optimizer drops
-the source columns the plan does not read; the four largest windows each carry 24 to 36 columns, of which one is a
-source column and the rest are the plan's own stage columns, which every stage forwards to the next. The floor's one
-sort carries 3. Planning and optimizing take under 5 ms, and no operator writes to the temporary directory. For one
-global budget the plan holds 5 windows, one of which sorts and none of which is partitioned, and no join. With two decisions at 100,000 rows the
-query runs 1.10 s on 1.32 s of CPU without the profiler: about one core busy, and about 11 s per million rows against
-1.5 s for one decision, so the cost is the plan's serial work, not a wait. Profiled with `EXTRA_INFO` on, the same
-query runs 1.15 s. The profiler renders each operator's EXPLAIN text once, after execution, from the operator's final
-state (`QueryProfiler::RenderExtraInfo`, called from `EndQuery` and from `EXPLAIN ANALYZE`'s finalize). Rendered per
-chunk, as stock DuckDB does, the same query runs 5.9 s on 11.6 s of CPU: the plan's projections hold up to 6.7 KB of
-nested `CASE` text each, and that work runs outside the operator timers, so the profile's `cpu_time` does not show it.
-The operator times and latencies above were taken with the per-chunk render, so their latencies are inflated by it.
+**Floor and scaling.** Measured with `benchmark/decide/profile_r1_floor.py` in the same session; medians of 3
+interleaved runs. The floor is a hand-written DuckDB query of the narrow shape for `le_positive`: keys, `t = v / w` and
+rooms; one sort by `t`; a running sum; a join back that gives every row its answer. It returns the same objective and
+`SUM(x)` as the direct plan at both sizes.
 
-**Floor and scaling.** Measured 2026-10-23 on top of `4e34b663f5` with `benchmark/decide/profile_r1_floor.py`, on a
-machine with 11 cores and a background load average of 2 to 6 from other applications. Medians of 3 interleaved runs;
-for runs over 1 s min and max lie within 10% of the median, and the floor's sub-second runs vary more (0.46 to 0.69 s
-at 5,000,000 rows, all threads). The floor is a hand-written DuckDB query of the narrow shape for
-`le_positive`: keys, `t = v / w` and rooms; one sort by `t`; a running sum; a join back that gives every row its
-answer. It returns the same objective and `SUM(x)` as the direct plan at every size.
+| Rows | Method | Shape | 1 thread | All threads | CPU / wall (all) | Peak (all) |
+|---|---|---|---:|---:|---:|---:|
+| 1M | floor | `le_positive` | 0.30 s | 0.11 s | 4.6 | 217 MiB |
+| 1M | direct | `le_positive` | 0.61 s | 0.16 s | 6.0 | 178 MiB |
+| 1M | direct | `per_groups` | 0.71 s | 0.16 s | 6.5 | 168 MiB |
+| 1M | direct | `two_decisions` | 1.99 s | 0.47 s | 8.1 | 345 MiB |
+| 1M | Gurobi | `le_positive` | | 1.20 s | 1.06 | 1.4 GiB |
+| 5M | floor | `le_positive` | 1.62 s | 0.51 s | 5.3 | 1.2 GiB |
+| 5M | direct | `le_positive` | 3.04 s | 0.60 s | 8.2 | 873 MiB |
+| 5M | direct | `per_groups` | 3.58 s | 0.61 s | 8.3 | 391 MiB |
+| 5M | direct | `two_decisions` | 15.72 s | 2.52 s | 8.4 | 1.5 GiB |
+| 5M | Gurobi | `le_positive` | | 7.15 s | 1.02 | 4.8 GiB |
+| 5M | Gurobi | `per_groups` | | 9.47 s | 3.66 | 5.3 GiB |
+| 5M | Gurobi | `two_decisions` | | 14.73 s | 1.00 | 5.0 GiB |
 
-| `le_positive` | Rows | 1 thread | All threads | CPU / wall (all) | Peak (all) |
-|---|---:|---:|---:|---:|---:|
-| Floor | 1M | 0.29 s | 0.11 s | 4.2 | 218 MiB |
-| Floor | 2M | 0.62 s | 0.23 s | 5.2 | 431 MiB |
-| Floor | 5M | 1.56 s | 0.51 s | 5.0 | 1.2 GiB |
-| Direct | 1M | 1.41 s | 1.43 s | 1.7 | 731 MiB |
-| Direct | 2M | 2.89 s | 2.96 s | 1.7 | 1.5 GiB |
-| Direct | 5M | 7.41 s | 7.74 s | 2.0 | 3.8 GiB |
-| Gurobi | 1M | | 1.17 s | 1.05 | 1.4 GiB |
-| Gurobi | 2M | | 2.80 s | 1.01 | 2.3 GiB |
-| Gurobi | 5M | | 7.46 s | 1.02 | 3.3 GiB |
+**Where the time goes.** On one budget the plan runs 1.2 times the floor with all threads (0.60 s against 0.51 s at
+5,000,000 rows) and about twice its work on one thread (3.04 s against 1.62 s): it reads the source four times, and each
+read evaluates the per-row checks and item values the floor does not have. It keeps 6 to 8 cores busy. `PER` costs no
+more than one budget. Two decisions run 4.2 times one decision at 5,000,000 rows: every read computes both decisions'
+item values, and the one sort holds 10,000,000 items; CPU is 21.2 s against 4.9 s. A budget from an aggregate adds the
+right-hand-side rewrite's window over the source, which also makes the source a materialized CTE.
 
-A bare scan that returns one `DOUBLE` per row takes 0.02 to 0.03 s at every size. Gurobi's time is its solver call;
-model construction is 2% to 3% of the wall time at every size, and everything outside the solver call together
-(model construction, process start, planning, reading and returning rows) is under 7%.
-
-With one global budget the direct plan runs at Gurobi's speed and about 15 times the floor at 5,000,000 rows. At one
-thread it does about 4.8 times the floor's work (7.41 s against 1.56 s), and unlike the floor it gains nothing from
-more threads (the floor runs 3.1 times faster at 5,000,000 rows). The floor beats Gurobi at every size, with one
-thread too (1.56 s against 7.46 s). Time grows about linearly in rows for the floor, the direct plan and Gurobi (5M
-against 1M: 4.6, 5.4 and 6.4 times).
-
-Threads help the direct plan when the budget is split into many partitions: one thread against all threads at
-1,000,000 rows, `per_groups` 1.68 s to 0.69 s and `when_budget` 1.75 s to 0.97 s; `two_decisions` 11.21 s to 11.00 s.
-At 5,000,000 rows `per_groups` runs 9.16 s to 3.76 s (Gurobi 9.74 s). The plan's time on one global budget is the
-plan's, not the method's: the floor shows the method needs a small fraction of it.
-
-**Reproduce** (after `make release`; the sweep took about 20 minutes, building the databases included):
+**Reproduce** (after `make release`; the sweep takes about 20 minutes, building the databases included):
 
 ```sh
 python3 benchmark/decide/profile_direct_r1.py --rows 1000000 5000000 --repeats 3 --solver-budget 60 --db-dir build/r1db
 ```
 
-The floor and scaling table (about 10 minutes at 1,000,000 rows; the larger sizes and `two_decisions` at one thread add
-much more):
+The floor and scaling table (about 8 minutes):
 
 ```sh
-python3 benchmark/decide/profile_r1_floor.py --rows 1000000 --repeats 3 --floor-threads 1 2 4 all --db-dir build/r1db
-python3 benchmark/decide/profile_r1_floor.py --rows 2000000 5000000 --shapes le_positive per_groups --threads 1 all \
-    --floor-threads 1 all --repeats 3 --db-dir build/r1db
+python3 benchmark/decide/profile_r1_floor.py --rows 1000000 5000000 --shapes le_positive per_groups two_decisions \
+    --methods floor direct gurobi --threads 1 all --floor-threads 1 all --repeats 3 --db-dir build/r1db
 ```
 
 The operator profile (one run per cell; `--variants` and `--repeats` widen it):
