@@ -7,8 +7,5 @@ Read first: `08_direct_solve/rules/r1_continuous_knapsack/done.md` § Performanc
 `08_direct_solve/rules/r1_continuous_knapsack/definition.md`, `benchmark/decide/profile_r1_floor.py`. Checks:
 `08_direct_solve/framework/todo.md` § How to work any task in these todo files.
 
-## 1. A suspected fault
-- [ ] R1-28 Find the one-off serializer garbage rows — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-28
-
-## 2. Faster several decisions
+## 1. Faster several decisions
 - [ ] R1-30 Two decisions within twice one — 08_direct_solve/rules/r1_continuous_knapsack/todo.md § R1-30

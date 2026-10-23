@@ -75,6 +75,14 @@ from S1, which counts `BOOL` decisions.
   row lies, as on the solver; the empty-aggregate error of a `WHEN` that covers no row comes after a data error.
 - **Error wording.** Infeasible, unbounded, NULL and NaN errors read as the solver's; `test_direct_user_facing.py`
   compares them in full.
+- **One unexplained garbage result.** Once, in a full `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
+  `test_correlated_subquery_is_real` (its source is materialized as a `LogicalMaterializedCTE`) returned an `l_orderkey`
+  near 4.6e18 and an `x` near 1e-317. The values look like one type's bits read as another. It has not recurred: not in
+  40 runs of the test alone, 10 parallel runs with every R1 test, or three full serializer suites, and not in 900
+  runs of its query on a Debug build with AddressSanitizer and UndefinedBehaviorSanitizer (300 with the serializer
+  check, 300 without, 300 concurrent with it; the plan shows the materialized CTE and its scan). Serialization of
+  `LogicalCTERef` (table and CTE index, chunk types, bound columns, materialize flag) and `LogicalMaterializedCTE`
+  (table index, column count, name) round-trips what the plan needs. No fault is known.
 
 ## How it works
 
