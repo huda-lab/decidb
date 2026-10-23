@@ -5,19 +5,21 @@ R1 splits one shared budget among `REAL` decisions by filling the best value per
 checks are in `../../framework/todo.md` § How to work any task. The goal is a plan near the floor that `done.md`
 § Performance measures, with the answers and errors R1 gives today.
 
-## R1-27 — Move limits read from the data to the new plan
+## R1-28 — Find the one-off garbage rows under the serializer check
 
-- **Needs.** R1-26.
-- **Problem.** A limit read from the data is reduced per group by `DirectValidateBounds`, a window over every row.
-- **Change.** Stage 2 takes the group's MIN and MAX of each data limit and checks every value, as § Admitted class
-  states (an equality limit must agree within its group; NULL and NaN raise). The rule routes every condition to the
-  new builder, and `PlanBuilder` is deleted with the tests that only it reached. `DirectValidateBounds` stays if S1 or
-  another rule still uses it.
-- **Done when.** The five checks pass; `coverage_report.py compare` lists no arm lost except arms of deleted code; no R1 plan holds a window over source columns.
+- **Problem.** Once, during R1-27's first run of `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
+  `test_cons_correlated_subquery.py::test_correlated_subquery_is_real` returned garbage rows (an `l_orderkey` near
+  4.6e18, `x` near 1e-317). Its source is not a table scan, so R1 materializes it (`LogicalMaterializedCTE` in
+  `DirectSourceReader`). It did not recur in 40 runs of the test alone, 10 parallel runs of it with every R1 test, and
+  three full serializer suites.
+- **Change.** Run the test in a loop under an AddressSanitizer build (and under the serializer check) until it fails
+  or a few hundred runs pass; if it fails, name the cause with the stack. Check whether `LogicalCTERef` or
+  `LogicalMaterializedCTE` keeps column types, names and the materialize flag through serialization.
+- **Done when.** The cause is fixed with a regression that fails without the fix, or `done.md` § Where it differs
+  records the sanitizer runs that found no fault.
 
 ## R1-18 — Re-run the performance sweep
 
-- **Needs.** R1-27.
 - **Problem.** `done.md` § Performance describes the plan before the redesign.
 - **Change.** Run the sweep of `done.md` § Performance with the same commands, the 1,000,000-row sweep first; the
   5,000,000-row sweep takes about 20 minutes of full CPU. Replace the tables, the stamps and the "Where the time goes"

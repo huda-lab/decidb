@@ -69,81 +69,57 @@ from S1, which counts `BOOL` decisions.
 - **An equality limit that varies within a group.** Both paths raise; the wording differs ("varies within a group"
   against the solver's "takes more than one value here").
 - **Ties at the price.** The solver returns a vertex: one tied item partly filled, the others at an end. The aggregate
-  plan moves every tied item by the same fraction of its room, so the answer is the same on every run; the window plan (limits
-  read from the data) fills the tie in sort order. The objective is the same.
-- **Which error wins.** On the aggregate plan a NULL or NaN value raises before infeasible or unbounded, wherever the
+  plan moves every tied item by the same fraction of its room, so the answer is the same on every run. The objective is the
+  same.
+- **Which error wins.** A NULL or NaN value raises before infeasible or unbounded, wherever the
   row lies, as on the solver; the empty-aggregate error of a `WHEN` that covers no row comes after a data error.
 - **Error wording.** Infeasible, unbounded, NULL and NaN errors read as the solver's; `test_direct_user_facing.py`
   compares them in full.
 
 ## How it works
 
-`definition.md` § Relational construction. Constant limits, with one decision or several, run on the plan of § The plan
-(`AggregatePlanBuilder`); limits read from the data run on the window plan below (`PlanBuilder`). `Rule::Apply` routes each condition to its builder. Both share the item algebra (`ItemAlgebra`: the
-verdicts, the candidate price, the price, the sums at the price and the answer) and the per-row item stages.
+`definition.md` § Relational construction and § The plan, built by `AggregatePlanBuilder` for every condition R1
+admits. The per-row values of an item (stage 1 of § The plan) come from `ItemStages`: every raw value (coefficient,
+bound, mask, data limit) evaluated on every row with its NULL and NaN check, each clause's bounds, the value `v`
+(negated under `MINIMIZE`, zero with no objective), the box `[l, u]`, and per decision whether the box is empty, the
+anchor, the break-even price `t = v / w` (items with `w = 0` or outside every budget take their best end and enter no
+sum), and the finite room up and down. An infinite room is a flag, counted apart, so no sum adds infinity to minus
+infinity. `ItemAlgebra` holds the verdicts, the candidate price, the price, the sums at the price and the answer.
 
-**The aggregate plan.** `DirectSourceReader` (`direct_source_reader.cpp`) hands out one read of the source per stage.
-A source that `DirectRepeatableSourceChain` accepts (non-volatile projections and filters over one repeatable DuckDB
-table scan) is rebuilt per read with fresh table indexes, its pushed-down table filters copied; any other source is one
+`DirectSourceReader` (`direct_source_reader.cpp`) hands out one read of the source per stage. A source that
+`DirectRepeatableSourceChain` accepts (non-volatile projections and filters over one repeatable DuckDB table scan) is
+rebuilt per read with fresh table indexes, its pushed-down table filters copied; any other source is one
 `LogicalMaterializedCTE`, defined through a projection that names its columns (a join under it may reorder its output
-in later passes) and read by `LogicalCTERef`s. Each read computes the item values with `PlanBuilder`'s item stages. The
-group key is the eligibility flag and the `PER` keys, joined with IS NOT DISTINCT FROM; with no scope the aggregates
-are ungrouped and the joins are cross products with one row.
+in later passes) and read by `LogicalCTERef`s. The group key is the eligibility flag (the budget's `WHEN` holds and no
+`PER` key is NULL) and the `PER` keys, joined with IS NOT DISTINCT FROM; with no scope the aggregates are ungrouped and
+the joins are cross products with one row.
 
-1. Group totals: a hash aggregate of every item's sums, the row count, and the check of every raw value and `v`, so a
-   NULL or NaN raises here, before any verdict. With a scope a window over the group rows (one per group) counts the
-   eligible groups for the empty-aggregate error. A projection raises the empty-aggregate error, then infeasible, then
-   unbounded, and gives the stages after it `S`, the finite room down, the highest price of an infinite room up and the
-   lowest of one down, and which limit binds.
+1. Group totals: a hash aggregate of every item's sums, the row count, each data limit's MIN and MAX, and the check of
+   every raw value and `v`, so a NULL or NaN raises here, before any verdict. An upper data limit takes the group's
+   MIN, a lower one its MAX, and an equality both, which must agree in a group with a budget ("varies within a group").
+   A limit on a sum with its own `WHEN` is reduced over the budget's rows and the other rows with the same `PER` keys,
+   by a window over the group rows. With a scope a window over the group rows counts the eligible groups for the
+   empty-aggregate error. A projection raises the empty-aggregate error, then infeasible, then unbounded, and gives the
+   stages after it `S`, `L`, `U`, the finite room down, the highest price of an infinite room up and the lowest of one
+   down, and which limit binds.
 2. The price: the narrow items (group key, `t`, finite room up plus finite room down) go through the plan's one window,
    partitioned by group and ordered by `t` highest first, with one running sum of the two rooms: the most the group can
    spend with the items so far at their high end is `(S - down) + run`. Joined to the totals, each item tests whether
    it fixes the price; where the infinite rooms lie is read from the group's extreme open prices, which agree with
-   running counts on the item each test reads. A hash aggregate takes the highest or lowest candidate per group.
+   running counts on the item each test reads. Both tests are monotone along the sort, because rounded sums do not
+   land exactly on a limit. A hash aggregate takes the highest or lowest candidate per group.
 3. The sums at the price: a hash aggregate over the items joined to the price gives the finite rooms above, below and
    at it and the infinite rooms at it, then the two shares of step 6.
-4. The answer: the source rows join their group's numbers, and one projection gives `x` and the verdict column, which
-   the adapter keeps so a parent that reads no answer still raises.
+4. The answer: the source rows join their group's numbers, and one projection gives one answer per decision, held to
+   its box, and the verdict column, which the adapter keeps so a parent that reads no answer still raises.
 
 With several decisions, each read computes every decision's item values in columns of their own (`t_0`, `t_1`, ...).
 Stages 1 and 3 sum over the decisions of a row inside one aggregate input, and the extreme open prices combine with
 `greatest` and `least`. Stage 2 unnests only two narrow lists per row, the decisions' prices and their rooms, so the
 sort carries the group key, the price, the room and its running sum. Stage 4 gives one answer column per decision.
 
-No row number, breaker, group-back or window over source columns is in this plan, and the row id the driver appends to a stored
-source is passed through as a source column.
-
-**The window plan.** The scope projection (`DirectProjectScope`) marks each row eligible when the budget's `WHEN` holds
-and no `PER` key is NULL, and the empty-aggregate guard (`DirectGuardEmptyAggregate`) runs on it. A data-valued limit
-is validated and reduced per group by `DirectValidateBounds` before the stages below, and each row reads its group's
-`L` and `U` as columns. Every window and the one sort are partitioned by eligibility and the `PER` keys, so each group
-gets its own verdicts, target and price; an ineligible row answers as a zero-weight row. Each stage is a projection or
-a window over every column so far; the plan has one sort.
-
-With several decisions, the plan first unpivots the rows into items, as DuckDB's own `UNPIVOT` does: it numbers the
-rows with `ROW_NUMBER() OVER ()` (no order, so no sort) and unnests each into one item per decision, carrying that
-decision's weight, value and box and every source column. The stages below run on items. After the breaker a hash
-aggregate on the row number groups the items back: the source columns by `any_value`, each decision's answer by
-`any_value` of the answer where the item is that decision. Late materialization does not apply to this plan, so a
-wide source column is carried once per decision through the sort.
-
-1. Raw values (every coefficient, bound, mask), evaluated on every row; each clause's bounds, the value `v` (negated
-   under `MINIMIZE`, zero with no objective) and the check on every raw value; the box `[l, u]`.
-2. Per item: whether the box is empty, the anchor, the break-even price `t = v / w` (items with `w = 0` sort last and
-   take their best end), and the finite room up and down. An infinite room is a flag, counted beside the finite sums,
-   so no window adds infinity to minus infinity; a NaN would sort above every price and pick the wrong one.
-3. Whole-input windows: the anchors' spend, the finite room down and the count of infinite ones, the extreme prices of
-   the items with infinite room, and the zero-price spend.
-4. The one sort, by `t` highest first, ties in any order: running sums of the finite rooms and of the infinite counts.
-5. The verdicts (infeasible before unbounded). When the zero-price spend is above `U`, the price is the highest `t`
-   among the items whose spend, with the items before them at their high end, reaches `U`. When it is below `L`, the
-   price is the lowest `t` among the items whose spend, with them and the items after them at their low end, does not
-   pass `L`. Both tests are monotone along the one sort, because rounded sums do not land exactly on a limit.
-6. Whole-input windows of the rooms above, below and at the price; each item takes its high end, its low end or its
-   share of what the budget leaves the items at the price, from its anchor, held to its box. Infinite rooms at the price
-   share the remainder evenly.
-7. The rows are held until the check has run on all of them (`DirectValidationBreaker`), then `x` is projected as
-   `DOUBLE`.
+No row number, breaker, group-back or window over source columns is in the plan, and the row id the driver appends to
+a stored source is passed through as a source column.
 
 An empty source returns no rows, whatever the limits are, as on the solver.
 
@@ -151,7 +127,7 @@ An empty source returns no rows, whatever the limits are, as on the solver.
 
 | Check | What it covers |
 |---|---|
-| `test_direct_r1_continuous_knapsack.py` | The answers on the independent oracle (`oracle_solver`), the solver path (`off`) and the direct path (`require`): weights of each sign and zero, positive lower bounds, per-row and constant bounds, a lone free row, an improving pair, no objective, `MINIMIZE`, a budget that does not bind, ties; each budget direction binding and not binding, an exact fill reached from above and from below and at a negative price, `BETWEEN` binding at either side, and the minimum-cost cover. A parent query that joins the source, an empty source, a nested `DECIDE`, a parent filter and `LIMIT`, duplicate rows. Sources: a stored table read with a pushed filter, a filter operator, a projection, a join and a `LIMIT`, with and without a scope, against the solver; a volatile source read once; a source with a correlated subquery; a non-table source materialized once. Proportional tie shares with finite and with infinite rooms; a NULL or NaN value raising before a verdict. Several decisions: two with shrinking and with growing piece values, three, a decision outside the budget, mixed signs, `MINIMIZE`, `=`, `PER`, late errors on a second decision; with constant limits a plan whose one sort and one unnest carry only narrow columns and that has no group-back, and with a limit read from the data the window plan's row-wide unnest and group-back; tied items of several decisions sharing in proportion to their room. Scoped cases: several `PER` groups at different prices, `WHEN` in both spellings, `PER` with `WHEN`, a NULL key, a group with no covered row, `PER` with `>=` and `BETWEEN`; scopes that differ stay on the solver. Error cases that must fail on both paths (a `WHEN` covering no row, an unbounded row outside the `WHEN`, empty box, unreachable budget or fill, crossed limits, unbounded rows, including an uncapped improving row under `>=`, NULL and NaN values, late bad rows). Boundary cases against the solver only (a `BOOLEAN` column as a weight; an upper data limit of −infinity beside a row with no floor). Data-valued limits: a column, global and per group, an expression, an aggregate, global and with `PER`, under `WHEN`, a lower and an equality limit, a constant and a data clause mixed, two decisions with a column limit; errors for an equality limit that varies in a group and NULL and NaN limits; an equality to a data limit of 1e19, which is a number and not "no bound". Constant limits the solver reads by the rows stay on the solver. The plan has one sort and no solver operator; on the aggregate plan the sort carries only narrow columns (checked with twenty unused source columns), a stored table is read four times, and a scoped budget adds hash aggregates and joins. |
+| `test_direct_r1_continuous_knapsack.py` | The answers on the independent oracle (`oracle_solver`), the solver path (`off`) and the direct path (`require`): weights of each sign and zero, positive lower bounds, per-row and constant bounds, a lone free row, an improving pair, no objective, `MINIMIZE`, a budget that does not bind, ties; each budget direction binding and not binding, an exact fill reached from above and from below and at a negative price, `BETWEEN` binding at either side, and the minimum-cost cover. A parent query that joins the source, an empty source, a nested `DECIDE`, a parent filter and `LIMIT`, duplicate rows. Sources: a stored table read with a pushed filter, a filter operator, a projection, a join and a `LIMIT`, with and without a scope, against the solver; a volatile source read once; a source with a correlated subquery; a non-table source materialized once. Proportional tie shares with finite and with infinite rooms; a NULL or NaN value raising before a verdict. Several decisions: two with shrinking and with growing piece values, three, a decision outside the budget, mixed signs, `MINIMIZE`, `=`, `PER`, late errors on a second decision; a plan whose one sort and one unnest carry only narrow columns and that has no group-back; tied items of several decisions sharing in proportion to their room. Scoped cases: several `PER` groups at different prices, `WHEN` in both spellings, `PER` with `WHEN`, a NULL key, a group with no covered row, `PER` with `>=` and `BETWEEN`; scopes that differ stay on the solver. Error cases that must fail on both paths (a `WHEN` covering no row, an unbounded row outside the `WHEN`, empty box, unreachable budget or fill, crossed limits, unbounded rows, including an uncapped improving row under `>=`, NULL and NaN values, late bad rows). Boundary cases against the solver only (a `BOOLEAN` column as a weight; an upper data limit of −infinity beside a row with no floor). Data-valued limits: a column, global and per group, an expression, an aggregate, global and with `PER`, under `WHEN`, a lower and an equality limit, a constant and a data clause mixed, two decisions with a column limit; errors for an equality limit that varies in a group and NULL and NaN limits; an equality to a data limit of 1e19, which is a number and not "no bound"; an equality that differs without a scope, and over the rows outside the sum's `WHEN`, raises, and one that differs only among rows outside the `WHEN` does not; a lower limit on a sum with its own `WHEN` takes the maximum over the rows outside it too, and is infeasible when that maximum is out of reach; a data limit, global and per group, with one and two decisions, runs the plan of a constant limit. Constant limits the solver reads by the rows stay on the solver. The plan has one sort and no solver operator; on the aggregate plan the sort carries only narrow columns (checked with twenty unused source columns), a stored table is read four times, and a scoped budget adds hash aggregates and joins. |
 | `test_direct_rule_conformance.py` | R1's fixture: the checks every rule owes, applying forms with `>=`, `=` and one sum compared twice, and a two-decision form, a column budget, an aggregate budget, and near misses that must decline (a per-row constraint linking two decisions, an `INT` decision, two budgets with different weights, a nonlinear objective term). |
 | `test_direct_user_facing.py` | R1's NULL, NaN, infinite and overflow errors name the right clause, and the infeasible and unbounded text match the solver's, compared in full. |
 | C++ `[decidb]` | R1's applicability condition: each decline branch, and the forms that apply; R1 never applies where S1 or A1 does; the rule driver reaches R1, S1 and A1 each for their own shapes. |

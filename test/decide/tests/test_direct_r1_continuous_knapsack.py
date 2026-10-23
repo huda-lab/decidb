@@ -1303,6 +1303,18 @@ data_budget(
     when=lambda r: r["f"],
     when_on_the_sum=True,
 )
+# The same on a lower limit: it takes the largest value over the whole group (a: 12, b: 7), the rows left out included,
+# and the minimum cover binds on it.
+data_budget(
+    "sum_when_lower_per_group",
+    WHEN_ROWS,
+    "SUM(w*amount) WHEN f >= b PER g",
+    [(">=", _limit)],
+    per=("g",),
+    when=lambda r: r["f"],
+    when_on_the_sum=True,
+    objective="min",
+)
 # Both limits from the data, one an expression: a range of at least cost - 2 (a: 4, b: 2) and at most b (a: 9, b: 5),
 # minimized so it binds at the lower end.
 data_budget(
@@ -1543,6 +1555,13 @@ R1_ERROR_CASES.update(
 )
 
 
+# Group a has two rows outside the WHEN, with limits that differ, and one covered row whose limit is the group's; group b
+# is covered and agrees.
+OUTSIDE_ROWS = tuple(
+    dict(row, f=row["id"] not in (2, 3), b={1: 6.0, 2: 3.0, 3: 4.0}.get(row["id"], row["b"])) for row in AGREEING_ROWS
+)
+
+
 # A budget read from the data. Each case reaches a check only a limit from the data has.
 def _data_error(rows, budget, objective="max"):
     return _data_sql(DataBudgetCase(tuple(rows), budget, (), objective=objective))
@@ -1558,6 +1577,26 @@ R1_ERROR_CASES.update(
         "data_budget_equality_differs_within_a_group": (
             _data_error(DATA_ROWS, "SUM(w*amount) = b PER g"),
             "equality_varies",
+        ),
+        # The same without a scope: the one budget reads one value.
+        "data_budget_equality_differs_without_a_scope": (
+            _data_error(DATA_ROWS, "SUM(w*amount) = b"),
+            "equality_varies",
+        ),
+        # A sum with a WHEN of its own reads its limit over every row of the group, the rows it leaves out included.
+        "data_budget_equality_differs_over_the_rows_outside_the_sum_when": (
+            _data_error(OUTSIDE_ROWS, "SUM(w*amount) WHEN f = b PER g"),
+            "equality_varies",
+        ),
+        # A lower limit of a sum with a WHEN of its own is the largest over the whole group: row 6 is left out of the
+        # budget, yet its limit of 20 is beyond what the covered rows of group b reach.
+        "data_budget_lower_over_the_rows_outside_the_sum_when_is_unreachable": (
+            _data_error(
+                [dict(row, b=20.0) if row["id"] == 6 else row for row in WHEN_ROWS],
+                "SUM(w*amount) WHEN f >= b PER g",
+                "min",
+            ),
+            "infeasible",
         ),
         # A NULL or NaN limit, on the last row, in a column and in an expression (which cannot name its column).
         "data_budget_column_null": (_data_error(_with_limit(DATA_ROWS, 5, None), "SUM(w*amount) <= b"), "null_bound"),
@@ -1607,6 +1646,20 @@ def test_r1_error_cases_fail_on_both_paths(decidb_cli, name):
     assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
     assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_an_equality_limit_that_differs_only_among_rows_outside_the_when_is_not_an_error(decidb_cli):
+    # The limit of a clause with a WHEN is read over the rows the WHEN covers, so the two rows left out, whose limits
+    # differ, are not a second required spend.
+    sql = _data_error(OUTSIDE_ROWS, "SUM(w*amount) = b WHEN f PER g")
+    values = {row["id"]: row["v"] for row in OUTSIDE_ROWS}
+    totals = []
+    for mode in ("off", "require"):
+        rows, _ = _run(decidb_cli, sql, mode)
+        totals.append(sum(values[row[0]] * row[1] for row in rows))
+    assert totals[1] == pytest.approx(totals[0])
 
 
 @pytest.mark.error
@@ -2514,18 +2567,31 @@ def test_r1_several_decisions_plan_has_one_sort_one_unnest_and_one_aggregate(dec
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_r1_several_decisions_with_a_limit_from_the_data_still_unnest_whole_rows_and_group_back(decidb_cli, tmp_path):
-    # A limit read from the data stays on the window plan: it numbers the rows, unnests every source column once per
-    # decision, sorts them, and groups the items back into rows with a hash aggregate on the row number.
-    pair = _wide_pair_query("SUM(w*x + w*y) <= cap * 500")
-    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {pair}").stdout
+@pytest.mark.parametrize("decisions", [1, 2])
+@pytest.mark.parametrize("scope", ["", " PER g"], ids=["global", "per"])
+def test_r1_a_limit_from_the_data_runs_the_plan_of_a_constant_limit(decidb_cli, tmp_path, decisions, scope):
+    # The group's limits come from the stage that totals the group, so a limit read from the data adds no operator to
+    # the plan of a constant one: one sort over narrow columns, and no window over source columns (a window left is
+    # over the groups, one row each).
+    def query(limit):
+        if decisions == 1:
+            return _wide_query(f"SUM(w*x) <= {limit}{scope}")
+        return _wide_pair_query(f"SUM(w*x + w*y) <= {limit}{scope}")
+
+    plans = {}
+    for name, limit in (("data", "cap * 500"), ("constant", "1500")):
+        plans[name] = decidb_cli.execute_raw(
+            f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {query(limit)}"
+        ).stdout
+    plan = plans["data"]
     assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
-    assert "ORDER_BY" not in plan and len(_ordered_windows(plan)) == 1, plan
-    assert _count(plan, "UNNEST") == 1 and _count(plan, "HASH_GROUP_BY") == 1, plan
-    ((ordered, rows, width),) = [window for window in _profiled_windows(decidb_cli, tmp_path, pair) if window[0]]
-    assert rows == 4000 and width > 20 * 8, (rows, width)  # the source columns ride through the sort
-    ((rows, inputs),) = _profiled_unnest_inputs(decidb_cli, tmp_path, pair)
-    assert rows == 4000 and len(inputs) > 20, inputs
+    assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan and len(_ordered_windows(plan)) == 1, plan
+    for operator in ("HASH_GROUP_BY", "UNGROUPED_AGGREGATE", "HASH_JOIN", "CROSS_PRODUCT", "WINDOW", "UNNEST"):
+        assert _count(plan, operator) == _count(plans["constant"], operator), (operator, plan)
+    windows = _profiled_windows(decidb_cli, tmp_path, query("cap * 500"))
+    ((_, rows, width),) = [window for window in windows if window[0]]
+    assert rows == 2000 * decisions and width <= 6 * 8, (rows, width)
+    assert all(rows <= 8 for ordered, rows, _ in windows if not ordered), windows
 
 
 @pytest.mark.cons_aggregate
