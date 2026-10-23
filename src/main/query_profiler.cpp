@@ -107,6 +107,7 @@ void QueryProfiler::StartQuery(string query, bool is_explain_analyze_p, bool sta
 	running = true;
 	query_info.query_name = std::move(query);
 	tree_map.clear();
+	extra_info_pending.clear();
 	root = nullptr;
 	phase_timings.clear();
 	phase_stack.clear();
@@ -197,6 +198,7 @@ Value GetCumulativeOptimizers(ProfilingNode &node) {
 }
 
 void QueryProfiler::EndQuery() {
+	RenderExtraInfo();
 	unique_lock<std::mutex> guard(lock);
 	if (!IsEnabled() || !running) {
 		return;
@@ -373,12 +375,6 @@ void OperatorProfiler::StartOperator(optional_ptr<const PhysicalOperator> phys_o
 	active_operator = phys_op;
 
 	if (!settings.empty()) {
-		if (ProfilingInfo::Enabled(settings, MetricsType::EXTRA_INFO)) {
-			auto &info = GetOperatorInfo(*active_operator);
-			auto params = active_operator->GetExplainInfo();
-			info.extra_info = params;
-		}
-
 		// Start the timing of the current operator.
 		if (ProfilingInfo::Enabled(settings, MetricsType::OPERATOR_TIMING)) {
 			op.Start();
@@ -468,10 +464,23 @@ void QueryProfiler::Flush(OperatorProfiler &profiler) {
 			info.AddToMetric<idx_t>(MetricsType::RESULT_SET_SIZE, node.second.result_set_size);
 		}
 		if (ProfilingInfo::Enabled(profiler.settings, MetricsType::EXTRA_INFO)) {
-			info.extra_info = node.second.extra_info;
+			extra_info_pending.insert(op);
 		}
 	}
 	profiler.operator_infos.clear();
+}
+
+void QueryProfiler::RenderExtraInfo() {
+	lock_guard<std::mutex> guard(lock);
+	if (!IsEnabled() || !running) {
+		return;
+	}
+	for (auto &op : extra_info_pending) {
+		auto entry = tree_map.find(op);
+		D_ASSERT(entry != tree_map.end());
+		entry->second.get().GetProfilingInfo().extra_info = op.get().GetExplainInfo();
+	}
+	extra_info_pending.clear();
 }
 
 void QueryProfiler::SetInfo(const double &blocked_thread_time) {

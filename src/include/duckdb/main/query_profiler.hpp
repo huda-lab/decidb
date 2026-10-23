@@ -43,7 +43,6 @@ struct OperatorInformation {
 	idx_t elements_returned;
 	idx_t result_set_size;
 	string name;
-	InsertionOrderPreservingMap<string> extra_info;
 
 	void AddTime(double n_time) {
 		time += n_time;
@@ -132,6 +131,8 @@ public:
 
 	//! Adds the timings gathered by an OperatorProfiler to this query profiler
 	DUCKDB_API void Flush(OperatorProfiler &profiler);
+	//! Renders the EXPLAIN text of every operator that ran, once, from its final state. Called once execution is over.
+	DUCKDB_API void RenderExtraInfo();
 	//! Adds the top level query information to the global profiler.
 	DUCKDB_API void SetInfo(const double &blocked_thread_time);
 
@@ -193,6 +194,8 @@ private:
 	Profiler main_query;
 	//! A map of a Physical Operator pointer to a tree node
 	TreeMap tree_map;
+	//! The operators that ran and still await their final EXPLAIN text
+	reference_set_t<const PhysicalOperator> extra_info_pending;
 	//! Whether or not we are running as part of a explain_analyze query
 	bool is_explain_analyze;
 

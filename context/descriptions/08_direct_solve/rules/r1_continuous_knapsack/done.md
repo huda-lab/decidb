@@ -143,12 +143,22 @@ transfer. Before timing, every shape's objective on direct and on Gurobi agreed 
 At 1,000,000 rows the ratios are the same (0.2x to 3.8x against Gurobi, 0.8x to 9.4x against HiGHS), direct peaks at
 0.6 to 1.6 GiB and Gurobi at 1.4 to 2.3 GiB.
 
-**Where the time goes.** At 1,000,000 rows (`<=`, positive weights, 1.52 s) the sorted window takes 0.81 s and the
-three whole-input windows about 0.1 s each; the projections are under 0.08 s each. A window with no `PARTITION BY` is
-one partition, and every window carries every source column, so the plan holds the whole input several times. That is
-why `PER` shapes, whose windows split into many partitions, are the only clear wins against Gurobi, and why peak
-memory is the solver's size rather than A1's. Two decisions add the unnest and the hash aggregate that groups items
-back, and late materialization does not apply to that plan.
+**Where the time goes.** From DuckDB's JSON profiler: the operator times at 1,000,000 rows, and the window widths,
+planning time, spill and two-decision run at 100,000 rows from `benchmark/decide/profile_r1_plan.py` (the widths and the
+plan do not depend on the row count). At 1,000,000 rows (`le_positive`, all threads, 1.52 s) the operators use 1.37 s of CPU: the window that sorts 0.81 s,
+the four windows without an order 0.39 s together, and eighteen projections under 0.2 s together. The query keeps
+about one core busy (1.38 s of CPU in 1.52 s). The parent reads only `COUNT(*)` and `SUM(x)`, so the optimizer drops
+the source columns the plan does not read; the four largest windows each carry 24 to 36 columns, of which one is a
+source column and the rest are the plan's own stage columns, which every stage forwards to the next. The floor's one
+sort carries 3. Planning and optimizing take under 5 ms, and no operator writes to the temporary directory. For one
+global budget the plan holds 5 windows, one of which sorts and none of which is partitioned, and no join. With two decisions at 100,000 rows the
+query runs 1.10 s on 1.32 s of CPU without the profiler: about one core busy, and about 11 s per million rows against
+1.5 s for one decision, so the cost is the plan's serial work, not a wait. Profiled with `EXTRA_INFO` on, the same
+query runs 1.15 s. The profiler renders each operator's EXPLAIN text once, after execution, from the operator's final
+state (`QueryProfiler::RenderExtraInfo`, called from `EndQuery` and from `EXPLAIN ANALYZE`'s finalize). Rendered per
+chunk, as stock DuckDB does, the same query runs 5.9 s on 11.6 s of CPU: the plan's projections hold up to 6.7 KB of
+nested `CASE` text each, and that work runs outside the operator timers, so the profile's `cpu_time` does not show it.
+The operator times and latencies above were taken with the per-chunk render, so their latencies are inflated by it.
 
 **Floor and scaling.** Measured 2026-10-23 on top of `4e34b663f5` with `benchmark/decide/profile_r1_floor.py`, on a
 machine with 11 cores and a background load average of 2 to 6 from other applications. Medians of 3 interleaved runs;
@@ -197,5 +207,12 @@ much more):
 python3 benchmark/decide/profile_r1_floor.py --rows 1000000 --repeats 3 --floor-threads 1 2 4 all --db-dir build/r1db
 python3 benchmark/decide/profile_r1_floor.py --rows 2000000 5000000 --shapes le_positive per_groups --threads 1 all \
     --floor-threads 1 all --repeats 3 --db-dir build/r1db
+```
+
+The operator profile (one run per cell; `--variants` and `--repeats` widen it):
+
+```sh
+python3 benchmark/decide/profile_r1_plan.py --rows 1000000 --shapes le_positive two_decisions --threads 1 all \
+    --db-dir build/r1db_plan
 ```
 

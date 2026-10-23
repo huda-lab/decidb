@@ -1,0 +1,35 @@
+# name: test/sql/pragma/profiling/test_profiling_runtime_extra_info.test
+# description: EXTRA_INFO shows facts that only exist at run time, here an IN filter a hash join pushes into a scan.
+# group: [profiling]
+
+statement ok
+CREATE TABLE tbl AS SELECT range AS i FROM range(500000);
+
+statement ok
+ALTER TABLE tbl ADD PRIMARY KEY (i);
+
+statement ok
+CREATE TABLE probe AS SELECT * FROM (VALUES (3), (50), (299), (123)) t(i);
+
+# The join filter turns the scan into an index scan during execution; the JSON written at the end of the query shows it.
+# test_hash_join_in_filter_index_scan.test covers the same fact under EXPLAIN ANALYZE.
+
+statement ok
+PRAGMA enable_profiling = 'json';
+
+statement ok
+PRAGMA profiling_output = '__TEST_DIR__/profiling_runtime_extra_info.json';
+
+statement ok
+PRAGMA profiling_mode = 'detailed';
+
+statement ok
+SELECT tbl.i FROM tbl WHERE tbl.i IN (SELECT UNNEST(LIST(i)) FROM probe) ORDER BY ALL;
+
+statement ok
+PRAGMA disable_profiling;
+
+query I
+SELECT content LIKE '%Type%Index Scan%' FROM read_text('__TEST_DIR__/profiling_runtime_extra_info.json');
+----
+true
