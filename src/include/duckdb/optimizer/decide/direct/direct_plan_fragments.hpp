@@ -61,6 +61,12 @@ DirectPipelineBreaker DirectValidationBreaker(Binder &binder, unique_ptr<Logical
 //! Whether a clause's WHEN holds on a row: true without a WHEN, and false when the WHEN is false or NULL.
 unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Expression *when);
 
+//! The check DirectGuardEmptyAggregate makes, over a BIGINT column that counts the eligible rows: true when the count
+//! is positive, and the empty-aggregate error otherwise. For a plan that has the count already (from a window or an
+//! aggregate of its own) and checks it where it likes.
+unique_ptr<Expression> DirectActiveRowsCheck(Optimizer &optimizer, ColumnBinding active_count,
+                                             const string &clause = "constraint");
+
 //! DECIDE's empty-aggregate error: a scoped aggregate over a nonempty input with no eligible row has no value.
 //! `clause` names where the aggregate sits in the message (`constraint` or `objective`). Which error is reported
 //! when the query has several is not specified.

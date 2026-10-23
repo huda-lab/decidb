@@ -304,24 +304,22 @@ void VisitForAdapters(unique_ptr<LogicalOperator> &op, Optimizer &optimizer) {
 
 } // namespace
 
-bool DirectExposeStoredRowId(ClientContext &context, LogicalOperator &source,
-                             DirectLateMaterialization &late_materialization) {
-	ExpressionBuilder calc(context);
-	vector<reference<LogicalOperator>> chain;
+optional_ptr<LogicalGet> DirectRepeatableSourceChain(LogicalOperator &source,
+                                                     vector<reference<LogicalOperator>> &chain) {
 	reference<LogicalOperator> current = source;
 	while (current.get().type != LogicalOperatorType::LOGICAL_GET) {
 		auto &op = current.get();
 		if (op.children.size() != 1) {
-			return false;
+			return nullptr;
 		}
 		if (op.type != LogicalOperatorType::LOGICAL_FILTER && op.type != LogicalOperatorType::LOGICAL_PROJECTION) {
-			return false;
+			return nullptr;
 		}
 		// Projection maps come from later passes (the IN-clause rewriter, column lifetime).
 		D_ASSERT(!op.HasProjectionMap());
 		for (auto &expression : op.expressions) {
 			if (expression->IsVolatile()) {
-				return false;
+				return nullptr;
 			}
 		}
 		chain.push_back(op);
@@ -329,8 +327,20 @@ bool DirectExposeStoredRowId(ClientContext &context, LogicalOperator &source,
 	}
 	auto &get = current.get().Cast<LogicalGet>();
 	if (!IsRepeatableTableScan(get)) {
+		return nullptr;
+	}
+	return get;
+}
+
+bool DirectExposeStoredRowId(ClientContext &context, LogicalOperator &source,
+                             DirectLateMaterialization &late_materialization) {
+	ExpressionBuilder calc(context);
+	vector<reference<LogicalOperator>> chain;
+	auto scan = DirectRepeatableSourceChain(source, chain);
+	if (!scan) {
 		return false;
 	}
+	auto &get = *scan;
 	D_ASSERT(get.projection_ids.empty()); // set by the unused-column pass, which runs later
 	auto &column_ids = get.GetMutableColumnIds();
 	for (auto &column : column_ids) {

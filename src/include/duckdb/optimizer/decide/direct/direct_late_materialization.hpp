@@ -1,11 +1,13 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/optional_ptr.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
 
 namespace duckdb {
 
 class ClientContext;
+class LogicalGet;
 class LogicalOperator;
 class Optimizer;
 
@@ -15,6 +17,14 @@ class Optimizer;
 //! late materialization, the technique behind DuckDB's own LATE_MATERIALIZATION pass; it is a separate step, and it
 //! runs inside the UNUSED_COLUMNS pass (see optimizer.cpp).
 //!
+//! The shape both reads of a stored table need: a chain of non-volatile projections and filters over one scan of a
+//! DuckDB base table, read through the ordinary table scan. Fills `chain` with the chain's operators, `source` first
+//! and the scan excluded, and returns the scan; returns null for any other source (a join, a subquery with an aggregate
+//! or a limit, a volatile expression, a table function). Late materialization and the repeated reads of
+//! DirectSourceReader share it.
+optional_ptr<LogicalGet> DirectRepeatableSourceChain(LogicalOperator &source,
+                                                     vector<reference<LogicalOperator>> &chain);
+
 //! Step one, in the rule driver before the rule applies: if the source is a chain of non-volatile projections
 //! and filters over one scan of a DuckDB base table, append that table's row id to the source as a trailing column and
 //! record which source columns forward a stored column unchanged. The rule passes the row id along like any other

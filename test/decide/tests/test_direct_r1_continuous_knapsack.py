@@ -23,6 +23,7 @@ tables live outside that source, so editing a case does not invalidate the cache
 objective mismatch. After changing a case or the model builder, remove its entries from `results/oracle_cache.json`.
 """
 
+import json
 import math
 import re
 from dataclasses import dataclass
@@ -1427,6 +1428,21 @@ R1_ERROR_CASES = {
         ),
         "infeasible",
     ),
+    # A NULL or NaN value raises before any verdict, whichever row holds it: the budget is unreachable on every row, yet
+    # the bad value on the last row is what the query reports.
+    "nan_weight_before_infeasible_budget": (
+        _late(LATE_DECIDE, w_sql=_last_row("'NaN'::DOUBLE", "1.0"), limit="-1"),
+        "invalid_value",
+    ),
+    "null_value_before_unbounded": (
+        _late(
+            LATE_DECIDE,
+            w_sql="CASE WHEN i = 0 THEN -1.0 ELSE 1.0 END",
+            v_sql=_last_row("NULL::DOUBLE", "1.0"),
+            cap_sql="CASE WHEN i = 0 THEN 1e30 ELSE 10.0 END",
+        ),
+        "null_bound",
+    ),
 }
 
 
@@ -1757,18 +1773,112 @@ def test_r1_leaves_budgets_that_are_not_one_sum_to_the_solver(decidb_cli, budget
 # ---------------------------------------------------------------------------
 
 
+def _count(plan, operator):
+    """How many times an operator's box appears in a physical plan."""
+    return len(re.findall(rf"│\s+{operator}\s+(?:│|├)", plan))
+
+
+def _ordered_windows(plan):
+    """The WINDOW boxes whose expressions carry an ORDER BY: the sorts."""
+    windows = plan.split("│           WINDOW          │")[1:]
+    return [body for body in windows if "ORDER BY" in body.split("└")[0]]
+
+
+# A stored table whose parent reads 20 columns the plan never uses (`pad_0` ... `pad_19`), so a window over source
+# columns would be 20 DOUBLEs wider than one over the plan's own.
+WIDE_SETUP = (
+    "CREATE OR REPLACE TEMP TABLE r1_wide AS SELECT i AS id, 1.0 + (i % 3) AS w, 2.0 + (i % 5) AS v, 3.0 AS cap, "
+    "i % 4 AS g, i % 7 > 0 AS f, "
+    + ", ".join(f"((i * {k + 1}) % 101)::DOUBLE AS pad_{k}" for k in range(20))
+    + " FROM range(2000) t(i);"
+)
+WIDE_READ = "id, x, " + ", ".join(f"pad_{k}" for k in range(20))
+
+
+def _wide_query(budget):
+    return f"SELECT {WIDE_READ} FROM (FROM r1_wide DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND {budget} MAXIMIZE SUM(v*x)) q"
+
+
+def _profiled_windows(decidb_cli, tmp_path, query):
+    """Runs the query under the JSON profiler; returns (sorts, rows, bytes per row) for each WINDOW operator."""
+    path = tmp_path / "profile.json"
+    decidb_cli.execute_raw(
+        f"SET decide_direct_solve='require'; {WIDE_SETUP} "
+        f"PRAGMA enable_profiling='json'; PRAGMA profiling_output='{path}'; {query}"
+    )
+    widths = []
+
+    def visit(node):
+        if node.get("operator_type") == "WINDOW":
+            ordered = "ORDER BY" in str(node["extra_info"])
+            widths.append(
+                (ordered, node["operator_cardinality"], node["result_set_size"] / node["operator_cardinality"])
+            )
+        for child in node.get("children", []):
+            visit(child)
+
+    visit(json.loads(path.read_text()))
+    return widths
+
+
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_r1_plan_has_one_sort_and_no_solver_operator(decidb_cli):
+    # A VALUES source is not a table scan, so it is materialized once and read through four CTE scans.
     sql = _sql(R1_CASES["mixed_binding_max"]).replace(" ORDER BY id", "")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
     assert "R1_CONTINUOUS_KNAPSACK" in plan and "min/max SUM(v*x)" in plan.replace("\n", ""), plan
     assert not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
-    assert "ORDER_BY" not in plan and "HASH_JOIN" not in plan and "CROSS_PRODUCT" not in plan, plan
-    # The one sort is the ordered window; every other window has no ORDER BY.
-    windows = plan.split("│           WINDOW          │")[1:]
-    ordered = [body for body in windows if "ORDER BY" in body.split("└")[0]]
-    assert len(windows) >= 4 and len(ordered) == 1, plan
+    assert "ORDER_BY" not in plan, plan
+    assert _count(plan, "CTE_SCAN") == 4 and _count(plan, "COLUMN_DATA_SCAN") == 1, plan
+    assert _count(plan, "WINDOW") == 1 and len(_ordered_windows(plan)) == 1, plan
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_plan_reads_a_stored_table_four_times_and_sorts_narrow_columns(decidb_cli, tmp_path):
+    # One budget: the aggregates have no GROUP BY and each stage meets the group's one row in a cross product.
+    query = _wide_query("SUM(w*x) <= 2000")
+    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {query}").stdout
+    assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
+    assert _count(plan, "SEQ_SCAN") == 4 and "CTE" not in plan, plan
+    assert "ORDER_BY" not in plan and _count(plan, "WINDOW") == 1 and len(_ordered_windows(plan)) == 1, plan
+    assert _count(plan, "UNGROUPED_AGGREGATE") == 3 and _count(plan, "CROSS_PRODUCT") == 3, plan
+    assert _count(plan, "HASH_GROUP_BY") == 0 and _count(plan, "HASH_JOIN") == 0, plan
+    # The sort carries the price, the rooms and their running sum, never a source column.
+    ((ordered, rows, width),) = _profiled_windows(decidb_cli, tmp_path, query)
+    assert ordered and rows == 2000 and width <= 5 * 8, (rows, width)
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key(decidb_cli, tmp_path):
+    # PER and WHEN: the group key is (in the budget, g). Each group-level stage is a hash aggregate, and the stages meet
+    # the items in hash joins on that key. The empty-aggregate guard is a window over the groups, not over the rows.
+    query = _wide_query("SUM(w*x) <= 500 WHEN f PER g")
+    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {query}").stdout
+    assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan, plan
+    assert _count(plan, "HASH_GROUP_BY") == 3 and _count(plan, "HASH_JOIN") == 3, plan
+    assert _count(plan, "CROSS_PRODUCT") == 0 and len(_ordered_windows(plan)) == 1, plan
+    assert _count(plan, "WINDOW") == 2, plan
+    guard, sort = sorted(_profiled_windows(decidb_cli, tmp_path, query))
+    assert not guard[0] and guard[1] <= 8, guard  # one row per group
+    assert sort[0] and sort[1] == 2000 and sort[2] <= 6 * 8, sort
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_plan_materializes_a_source_that_is_not_a_table_scan(decidb_cli):
+    # A join is read once, as a materialized CTE, and each stage reads the copy.
+    setup = (
+        "CREATE OR REPLACE TEMP TABLE r1_left AS SELECT i AS id, 1.0 + (i % 3) AS w, 2.0 + (i % 5) AS v FROM range(50) t(i); "
+        "CREATE OR REPLACE TEMP TABLE r1_right AS SELECT i AS id, 3.0 AS cap FROM range(50) t(i);"
+    )
+    source = "(SELECT a.id, a.w, a.v, b.cap FROM r1_left a JOIN r1_right b USING (id))"
+    sql = f"{setup} EXPLAIN SELECT id, x FROM (FROM {source} DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= 60 MAXIMIZE SUM(v*x)) q"
+    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {sql}").stdout
+    assert _count(plan, "CTE_SCAN") == 4 and _count(plan, "HASH_JOIN") == 1 and _count(plan, "SEQ_SCAN") == 2, plan
+    assert "ORDER_BY" not in plan and len(_ordered_windows(plan)) == 1, plan
 
 
 @pytest.mark.cons_aggregate
@@ -1782,6 +1892,120 @@ def test_r1_plan_has_one_sort_under_a_minimum_an_exact_fill_and_a_range(decidb_c
     windows = plan.split("│           WINDOW          │")[1:]
     ordered = [body for body in windows if "ORDER BY" in body.split("└")[0]]
     assert "ORDER_BY" not in plan and len(ordered) == 1, plan
+
+
+# ---------------------------------------------------------------------------
+# Sources the plan reads four times
+# ---------------------------------------------------------------------------
+
+# A source is re-read when it is a chain of projections and filters over one table scan, and materialized otherwise.
+# `FROM r1_wide` stores 2000 rows; each source below keeps some of them in a different way.
+STORED_SOURCES = {
+    # A comparison on a column: filter pushdown turns it into a filter of the scan itself, which every read must carry.
+    "scan_filter": "SELECT * FROM r1_wide WHERE g > 0",
+    # A filter on an expression of two columns stays a filter operator above the scan.
+    "filter_operator": "SELECT * FROM r1_wide WHERE w * v > g + 3",
+    # Both, under a projection that computes the columns the problem reads.
+    "projection_over_filters": "SELECT id, w * 2 AS w, v + g AS v, cap, g, f FROM r1_wide WHERE g > 0 AND w * v > 4",
+    # Not a chain over one scan: a join and a source with a LIMIT are read once.
+    "join": "SELECT a.id, a.w, a.v, b.cap, a.g, a.f FROM r1_wide a JOIN r1_wide b ON a.id = b.id WHERE b.id % 3 > 0",
+    "limit": "SELECT * FROM r1_wide ORDER BY id LIMIT 700",
+}
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(STORED_SOURCES))
+@pytest.mark.parametrize("scope", [pytest.param("", id="one_budget"), pytest.param(" WHEN f PER g", id="scoped")])
+def test_r1_sources_over_a_stored_table_agree_with_the_solver(decidb_cli, name, scope):
+    # The answers of the direct plan are an optimum of the problem over exactly the rows the source keeps, whichever way
+    # the rows are read: the objective and the spend match the solver's (rows may differ on ties).
+    sql = (
+        f"{WIDE_SETUP} SELECT COUNT(*), SUM(x), SUM(v*x), SUM(w*x) FROM "
+        f"(FROM ({STORED_SOURCES[name]}) DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= 300{scope} "
+        f"MAXIMIZE SUM(v*x)) q"
+    )
+    direct = _run(decidb_cli, sql, "require")[0][0]
+    solver = _run(decidb_cli, sql, "off")[0][0]
+    assert direct[0] == solver[0] > 0
+    assert direct[2] == pytest.approx(solver[2], rel=1e-9)
+    assert direct[3] == pytest.approx(solver[3], rel=1e-9)
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_a_source_with_a_correlated_subquery_agrees_with_the_solver(decidb_cli):
+    # The subquery in the bound makes the source a delim join, whose output order the optimizer may change after the plan
+    # is built. The materialized copy must keep the order the reads expect.
+    sql = (
+        f"{WIDE_SETUP} SELECT COUNT(*), SUM(x), SUM(v*x), SUM(w*x) FROM "
+        "(FROM r1_wide a DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND (SELECT AVG(b.cap) + 1 FROM r1_wide b WHERE b.g = a.g) "
+        "AND SUM(w*x) <= 300 MAXIMIZE SUM(v*x)) q"
+    )
+    direct = _run(decidb_cli, sql, "require")[0][0]
+    solver = _run(decidb_cli, sql, "off")[0][0]
+    assert direct[0] == solver[0] == 2000
+    assert direct[2] == pytest.approx(solver[2], rel=1e-9)
+    assert direct[3] == pytest.approx(solver[3], rel=1e-9)
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_a_volatile_source_is_read_once(decidb_cli):
+    # random() changes on every evaluation, so the plan must not evaluate it once per stage: the rows it returns are one
+    # set of rows, and the answer is an optimum for them. The check is independent of the solver: a greedy fill of the
+    # returned rows by v / w.
+    sql = (
+        "SELECT i, w, v, x FROM (FROM (SELECT i, 1.0 + floor(random() * 4) AS w, 1.0 + floor(random() * 9) AS v, 3.0 AS cap "
+        "FROM range(300) t(i)) DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= 400 MAXIMIZE SUM(v*x)) q"
+    )
+    rows = _run(decidb_cli, sql, "require")[0]
+    assert len(rows) == 300
+    assert all(0 <= x <= 3.0 for _, _, _, x in rows)
+    assert sum(w * x for _, w, _, x in rows) <= 400 + 1e-6
+    budget, best = 400.0, 0.0
+    for _, w, v, _ in sorted(rows, key=lambda row: row[2] / row[1], reverse=True):
+        take = min(3.0, budget / w)
+        best += v * take
+        budget -= w * take
+    assert sum(v * x for _, _, v, x in rows) == pytest.approx(best, rel=1e-9)
+
+
+# Items tied at the price share what the budget leaves them in proportion to their room: every tied item moves the same
+# share of its own room. All rows have the price 1 (v = w); the rows' rooms are 3, 8 and 1.
+TIED_ROWS = "(1, 3.0, 1.0, 1.0), (2, 4.0, 2.0, 2.0), (3, 2.0, 0.5, 0.5)"
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("limit", [3.0, 9.0])
+def test_r1_tied_items_share_in_proportion_to_their_room(decidb_cli, limit):
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {TIED_ROWS}) t(id, cap, w, v) "
+        f"DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= {limit} MAXIMIZE SUM(v*x)) q ORDER BY id"
+    )
+    direct = _run(decidb_cli, sql, "require")[0]
+    solver = _run(decidb_cli, sql, "off")[0]
+    caps = {1: 3.0, 2: 4.0, 3: 2.0}
+    weights = {1: 1.0, 2: 2.0, 3: 0.5}
+    fraction = min(1.0, limit / 12.0)
+    for id, x in direct:
+        assert x == pytest.approx(fraction * caps[id])
+    # The same spend and objective as the solver's, whose split of the tie may differ.
+    assert sum(weights[id] * x for id, x in direct) == pytest.approx(sum(weights[id] * x for id, x in solver))
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_tied_items_with_infinite_rooms_share_what_the_finite_rooms_leave_evenly(decidb_cli):
+    # Price 1 for all. Row 1 has a room of 2; rows 2 and 3 have no cap (weights 1 and 2). The budget of 10 fills row 1
+    # (2) and leaves 8, which the two open rows share evenly in units of budget: 4 each.
+    sql = (
+        "SELECT id, x FROM (FROM (VALUES (1, 2.0, 1.0, 1.0), (2, 1e30, 1.0, 1.0), (3, 1e30, 2.0, 2.0)) t(id, cap, w, v) "
+        "DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= 10 MAXIMIZE SUM(v*x)) q ORDER BY id"
+    )
+    direct = _run(decidb_cli, sql, "require")[0]
+    assert [row[1] for row in direct] == pytest.approx([2.0, 4.0, 2.0])
 
 
 @pytest.mark.cons_aggregate
@@ -2247,7 +2471,7 @@ def test_r1_several_decisions_plan_has_one_sort_one_unnest_and_one_aggregate(dec
     assert len(windows) >= 4 and len(ordered) == 1, plan
     assert plan.count("│           UNNEST          │") == 1, plan
     assert plan.count("│       HASH_GROUP_BY       │") == 1, plan
-    # One decision keeps its plan: no unnest, no aggregate.
+    # One decision runs the aggregate-then-join plan: no unnest, and no hash aggregate that groups rows back.
     single = _sql(R1_CASES["mixed_binding_max"]).replace(" ORDER BY id", "")
     single_plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {single}").stdout
     assert "UNNEST" not in single_plan and "HASH_GROUP_BY" not in single_plan, single_plan

@@ -153,9 +153,9 @@ With no scope there is one group: the aggregates have no `GROUP BY` and the join
 
 | Stage | Operator | Columns it carries | Holds every row |
 |---|---|---|---|
-| 1. Item values | projection over a read of the source | group keys; per decision l, u, w, v, t, anchor, finite room up and down, open-room flags, anchor spend, best end | no |
+| 1. Item values | projections over a read of the source | group keys; per decision l, u, w, v, t, anchor, finite room up and down, open-room flags, anchor spend, best end | no |
 | 2. Group totals | hash aggregate per group, then a projection | per group: S, the finite room sums and open-room counts, empty boxes, unbounded items, lo and hi, the zero-price spend parts, data-limit MIN and MAX; then L, U, over or under, T and the verdicts | no (one row per group) |
-| 3. Price | narrow items, one window partitioned by group and ordered by t, joined to stage 2, then a hash aggregate | group keys, t, finite rooms, open-room counts and their running sums; out: λ* per group | the narrow items, in the sort |
+| 3. Price | narrow items, one window partitioned by group and ordered by t, joined to stage 2, then a hash aggregate | group keys, t, the finite room up plus down and its running sum (where the open rooms lie is read from stage 2's highest and lowest open price); out: λ* per group | the narrow items, in the sort |
 | 4. Sums at the price | hash aggregate per group over stage 1 joined to λ* | per group: finite room above, below and at λ*, open rooms at λ*; then D and the two shares of step 6 | no (one row per group) |
 | 5. Answer | the source rows joined to the group's numbers, then a projection | the source columns the parent reads, one answer per decision, the verdict column | no |
 

@@ -104,6 +104,14 @@ unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Exp
 	return calc.Out(when ? calc.If(calc.Wrap(when->Copy()), calc.Bool(true), calc.Bool(false)) : calc.Bool(true));
 }
 
+unique_ptr<Expression> DirectActiveRowsCheck(Optimizer &optimizer, ColumnBinding active_count, const string &clause) {
+	ExpressionBuilder calc(optimizer.context);
+	auto has_active_rows = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Col(LogicalType::BIGINT, active_count),
+	                                calc.Constant(Value::BIGINT(0)));
+	return DirectRaiseUnless(calc, calc.Out(has_active_rows),
+	                         DirectErrorPredicate(optimizer, DecideEmptyRowSetMessage("aggregate", clause)));
+}
+
 unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
                                                       ColumnBinding eligible, const string &clause) {
 	ExpressionBuilder calc(optimizer.context);
@@ -112,13 +120,8 @@ unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, uniq
 	auto active_window = make_uniq<LogicalWindow>(active_window_index);
 	active_window->expressions.push_back(std::move(active_count));
 	active_window->children.push_back(std::move(input));
-	auto has_active_rows =
-	    calc.Cmp(ExpressionType::COMPARE_GREATERTHAN,
-	             calc.Col(LogicalType::BIGINT, ColumnBinding(active_window_index, 0)), calc.Constant(Value::BIGINT(0)));
-	auto active_predicate =
-	    DirectRaiseUnless(calc, calc.Out(has_active_rows),
-	                      DirectErrorPredicate(optimizer, DecideEmptyRowSetMessage("aggregate", clause)));
-	auto active_guard = make_uniq<LogicalFilter>(std::move(active_predicate));
+	auto active_guard =
+	    make_uniq<LogicalFilter>(DirectActiveRowsCheck(optimizer, ColumnBinding(active_window_index, 0), clause));
 	active_guard->children.push_back(std::move(active_window));
 	return std::move(active_guard);
 }
