@@ -1821,6 +1821,26 @@ def _profiled_windows(decidb_cli, tmp_path, query):
     return widths
 
 
+def _profiled_unnest_inputs(decidb_cli, tmp_path, query, setup=WIDE_SETUP):
+    """Runs the query under the JSON profiler; returns (rows, expressions of the child projection) for each UNNEST."""
+    path = tmp_path / "profile_unnest.json"
+    decidb_cli.execute_raw(
+        f"SET decide_direct_solve='require'; {setup} "
+        f"PRAGMA enable_profiling='json'; PRAGMA profiling_output='{path}'; {query}"
+    )
+    unnests = []
+
+    def visit(node):
+        if node.get("operator_type") == "UNNEST":
+            (child,) = node["children"]
+            unnests.append((node["operator_cardinality"], child["extra_info"]["Projections"]))
+        for child in node.get("children", []):
+            visit(child)
+
+    visit(json.loads(path.read_text()))
+    return unnests
+
+
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_r1_plan_has_one_sort_and_no_solver_operator(decidb_cli):
@@ -2420,7 +2440,7 @@ def test_r1_several_decisions_error_cases_fail_on_both_paths(decidb_cli, name):
 @pytest.mark.correctness
 def test_r1_several_decisions_unread_decisions_still_raise(decidb_cli):
     # A parent that reads no decision (or one) leaves the others unevaluated, but the solver reads the whole problem: the
-    # group-back keeps the check alive. The first row's second decision has an empty box.
+    # verdict column that rides into the output keeps the check alive. The first row's second decision has an empty box.
     rows = "(1, 2.0, -1.0, 1.0, 5.0, 4.0), (2, 3.0, 1.0, 2.0, 5.0, 4.0)"
     source = f"SELECT * FROM (VALUES {rows}) t(id, cap_a, cap_b, w, v, z)"
     decide = (
@@ -2436,9 +2456,8 @@ def test_r1_several_decisions_unread_decisions_still_raise(decidb_cli):
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_r1_several_decisions_a_parent_reads_one_decision_and_a_stored_payload(decidb_cli):
-    # A stored table with a wide column read by the parent: the late materialization does not apply to a plan with a
-    # group-back, so the payload rides through the unnest and comes back by ANY_VALUE. A parent that reads only one of the
-    # two decisions gets that decision's answers.
+    # A stored table with a wide column read by the parent: the payload is read once more by the last stage, not carried
+    # through the sort. A parent that reads only one of the two decisions gets that decision's answers.
     setup = (
         "CREATE OR REPLACE TEMP TABLE r1_pieces AS SELECT i AS id, 1.0 + (i % 3) AS w, 2.0 + (i % 5) AS va, "
         "1.0 + (i % 4) AS vb, 3.0 AS cap, repeat('p', 50) || i::VARCHAR AS payload FROM range(40) t(i);"
@@ -2459,19 +2478,66 @@ def test_r1_several_decisions_a_parent_reads_one_decision_and_a_stored_payload(d
     assert _run(decidb_cli, sql, "require")[0][0][0] == pytest.approx(_run(decidb_cli, sql, "off")[0][0][0])
 
 
+def _wide_pair_query(budget):
+    return (
+        f"SELECT {WIDE_READ}, y FROM (FROM r1_wide DECIDE x(REAL), y(REAL) SUCH THAT x BETWEEN 0 AND cap "
+        f"AND y BETWEEN 0 AND cap AND {budget} MAXIMIZE SUM(v*x + pad_0*y)) q"
+    )
+
+
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_r1_several_decisions_plan_has_one_sort_one_unnest_and_one_aggregate(decidb_cli):
-    sql = _piece_sql(PIECE_CASES["two_decisions_shrinking_piece_values"]).replace(" ORDER BY id", "")
-    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
+def test_r1_several_decisions_plan_has_one_sort_one_unnest_and_one_aggregate(decidb_cli, tmp_path):
+    # Two decisions with constant limits run the same aggregate-then-join plan as one: one sort over narrow columns (the
+    # price, the rooms and their running sum, never a source column), one unnest of the narrow lists of prices and rooms
+    # only, and no row number and no hash aggregate that groups the items back into rows.
+    scopes = (("<= 2000", False), ("<= 500 WHEN f PER g", True))
+    for limit, scoped in scopes:
+        pair = _wide_pair_query(f"SUM(w*x + w*y) {limit}")
+        plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {pair}").stdout
+        assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
+        assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan, plan
+        assert len(_ordered_windows(plan)) == 1 and _count(plan, "UNNEST") == 1, plan
+        assert "ROW_NUMBER" not in plan, plan
+        # The operators that group and join are those of one decision: nothing groups items back.
+        single = _wide_query(f"SUM(w*x) {limit}")
+        single_plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {single}").stdout
+        assert _count(single_plan, "UNNEST") == 0, single_plan
+        for operator in ("HASH_GROUP_BY", "UNGROUPED_AGGREGATE", "HASH_JOIN", "CROSS_PRODUCT", "WINDOW"):
+            assert _count(plan, operator) == _count(single_plan, operator), (operator, plan)
+        sorts = [window for window in _profiled_windows(decidb_cli, tmp_path, pair) if window[0]]
+        assert [(rows, width <= (6 if scoped else 5) * 8) for _, rows, width in sorts] == [(4000, True)], sorts
+        # The unnest reads the group key (with a scope) and the two lists, nothing else.
+        unnests = _profiled_unnest_inputs(decidb_cli, tmp_path, pair)
+        assert [(rows, len(inputs)) for rows, inputs in unnests] == [(4000, 4 if scoped else 2)], unnests
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_several_decisions_with_a_limit_from_the_data_still_unnest_whole_rows_and_group_back(decidb_cli, tmp_path):
+    # A limit read from the data stays on the window plan: it numbers the rows, unnests every source column once per
+    # decision, sorts them, and groups the items back into rows with a hash aggregate on the row number.
+    pair = _wide_pair_query("SUM(w*x + w*y) <= cap * 500")
+    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {pair}").stdout
     assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
-    assert "ORDER_BY" not in plan and "HASH_JOIN" not in plan and "CROSS_PRODUCT" not in plan, plan
-    windows = plan.split("│           WINDOW          │")[1:]
-    ordered = [body for body in windows if "ORDER BY" in body.split("└")[0]]
-    assert len(windows) >= 4 and len(ordered) == 1, plan
-    assert plan.count("│           UNNEST          │") == 1, plan
-    assert plan.count("│       HASH_GROUP_BY       │") == 1, plan
-    # One decision runs the aggregate-then-join plan: no unnest, and no hash aggregate that groups rows back.
-    single = _sql(R1_CASES["mixed_binding_max"]).replace(" ORDER BY id", "")
-    single_plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {single}").stdout
-    assert "UNNEST" not in single_plan and "HASH_GROUP_BY" not in single_plan, single_plan
+    assert "ORDER_BY" not in plan and len(_ordered_windows(plan)) == 1, plan
+    assert _count(plan, "UNNEST") == 1 and _count(plan, "HASH_GROUP_BY") == 1, plan
+    ((ordered, rows, width),) = [window for window in _profiled_windows(decidb_cli, tmp_path, pair) if window[0]]
+    assert rows == 4000 and width > 20 * 8, (rows, width)  # the source columns ride through the sort
+    ((rows, inputs),) = _profiled_unnest_inputs(decidb_cli, tmp_path, pair)
+    assert rows == 4000 and len(inputs) > 20, inputs
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_tied_items_of_several_decisions_share_in_proportion_to_their_room(decidb_cli):
+    # Both decisions of every row have the price 1 (v = w), so the six items tie; their rooms are 3, 6, 8, 4, 1 and 2
+    # units of budget. A budget of 12 of the 24 moves every item half of its own room.
+    sql = (
+        "SELECT id, x, y FROM (FROM (VALUES (1, 3.0, 1.0, 6.0, 1.0), (2, 4.0, 2.0, 2.0, 2.0), (3, 2.0, 0.5, 4.0, 0.5)) "
+        "t(id, cap_x, w, cap_y, w2) DECIDE x(REAL), y(REAL) SUCH THAT x BETWEEN 0 AND cap_x AND y BETWEEN 0 AND cap_y "
+        "AND SUM(w*x + w2*y) <= 12 MAXIMIZE SUM(w*x + w2*y)) q ORDER BY id"
+    )
+    direct = _run(decidb_cli, sql, "require")[0]
+    assert [row[1] for row in direct] == pytest.approx([1.5, 2.0, 1.0])
+    assert [row[2] for row in direct] == pytest.approx([3.0, 1.0, 2.0])

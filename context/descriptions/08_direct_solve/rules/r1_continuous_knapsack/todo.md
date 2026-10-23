@@ -5,16 +5,6 @@ R1 splits one shared budget among `REAL` decisions by filling the best value per
 checks are in `../../framework/todo.md` § How to work any task. The goal is a plan near the floor that `done.md`
 § Performance measures, with the answers and errors R1 gives today.
 
-## R1-26 — Move several decisions to the new plan
-
-- **Problem.** Two decisions run at 0.3 times Gurobi's speed: the row number, the unnest of every source column and the
-  hash group-back.
-- **Change.** The new builder takes several decisions: stage 3 unnests only the narrow per-decision lists; stages 2 and
-  4 sum over the decisions of a row; stage 5 answers each decision in its own column. The rule routes them to it.
-  `PlanBuilder`'s row number, unnest and group-back are deleted with the tests that only they reached.
-- **Done when.** The five checks pass; `coverage_report.py compare` lists no arm lost except arms of deleted code; `two_decisions` at 1,000,000 rows runs within 2 times
-  `le_positive`.
-
 ## R1-27 — Move limits read from the data to the new plan
 
 - **Needs.** R1-26.
