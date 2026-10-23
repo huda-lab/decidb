@@ -554,6 +554,50 @@ TEST_CASE("With both real rules registered each query shape reaches the rule tha
 	REQUIRE(no_rule->GetError().find("A1_SEPARABLE_BOX") == string::npos);
 }
 
+TEST_CASE("With all three real rules registered each query shape reaches the rule that applies to it", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	REQUIRE_NO_FAIL(con.Query("CREATE TABLE items AS SELECT * FROM (VALUES (1, 2.0, 5.0, 1.5), (2, -1.0, 4.0, 2.0), "
+	                          "(3, 3.0, 6.0, 1.0)) v(id, score, cap, w)"));
+	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='require'"));
+	auto rule_of = [&](const string &query) {
+		auto result = con.Query("EXPLAIN " + query);
+		REQUIRE_NO_FAIL(*result);
+		auto plan = result->ToString();
+		string rule;
+		for (string name : {"S1_UNIFORM_MATROID", "A1_SEPARABLE_BOX", "R1_CONTINUOUS_KNAPSACK"}) {
+			if (plan.find(name) != string::npos) {
+				REQUIRE(rule.empty());
+				rule = name;
+			}
+		}
+		return rule;
+	};
+	// One REAL decision under a SUM budget is R1's, with or without a bound beside it; the same decision without the
+	// budget is A1's; a BOOL count bound is S1's. The three ask for disjoint IR, so none needs to know the others.
+	REQUIRE(rule_of("SELECT id, x FROM items DECIDE x(REAL) SUCH THAT x <= cap AND SUM(w*x) <= 7 "
+	                "MAXIMIZE SUM(score*x)") == "R1_CONTINUOUS_KNAPSACK");
+	REQUIRE(rule_of("SELECT id, x FROM items DECIDE x(REAL) SUCH THAT SUM(w*x) <= 7 MINIMIZE SUM(score*x)") ==
+	        "R1_CONTINUOUS_KNAPSACK");
+	REQUIRE(rule_of("SELECT id, x FROM items DECIDE x(REAL) SUCH THAT x <= cap MAXIMIZE SUM(score*x)") ==
+	        "A1_SEPARABLE_BOX");
+	REQUIRE(rule_of("SELECT id, x FROM items DECIDE x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(score*x)") ==
+	        "S1_UNIFORM_MATROID");
+	// A budget read from the data is R1's too: a column, and an aggregate of the source (a window column by then).
+	REQUIRE(rule_of("SELECT id, x FROM items DECIDE x(REAL) SUCH THAT x <= cap AND SUM(w*x) <= cap "
+	                "MAXIMIZE SUM(score*x)") == "R1_CONTINUOUS_KNAPSACK");
+	REQUIRE(rule_of("SELECT id, x FROM items DECIDE x(REAL) SUCH THAT x <= cap AND SUM(w*x) <= 0.5 * SUM(cap) "
+	                "MAXIMIZE SUM(score*x)") == "R1_CONTINUOUS_KNAPSACK");
+	// A weighted budget on a BOOL or INT decision is nobody's: it needs a knapsack that is not continuous.
+	for (string declaration : {"x(BOOL)", "x(INT)"}) {
+		auto result = con.Query("SELECT id, x FROM items DECIDE " + declaration +
+		                        " SUCH THAT SUM(w*x) <= 7 MAXIMIZE SUM(score*x)");
+		INFO(declaration);
+		REQUIRE(result->HasError());
+		REQUIRE(result->GetError().find("decide_direct_solve=require") != string::npos);
+	}
+}
+
 TEST_CASE("The late materialization happens only for a stored table and a column the rule does not use", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);

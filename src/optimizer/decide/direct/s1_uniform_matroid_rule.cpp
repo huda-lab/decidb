@@ -293,17 +293,6 @@ const Expression *SourceBooleanFixedValue(const Expression &expr, idx_t decide_i
 	return cast.child.get();
 }
 
-//! The membership filter of one bound factor: the aggregate-local WHEN on `SUM(x)` or the clause-level WHEN, never
-//! both. Null when the bound has none; `ok` is false when the factor is not a plain `SUM(x)` with one filter.
-const Expression *BoundMembership(const DirectIRConstraint &ir_node, bool &ok) {
-	auto sum = ir_node.PlainSum();
-	ok = sum && !(sum->filter && ir_node.scope.when);
-	if (!ok) {
-		return nullptr;
-	}
-	return sum->filter ? sum->filter.get() : ir_node.scope.when.get();
-}
-
 class Rule final : public DirectSolveRule {
 public:
 	const char *Name() const override {
@@ -371,12 +360,12 @@ private:
 bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 	const auto &first_scope = *condition.bound_factors.front();
 	bool ok;
-	const Expression *first_when = BoundMembership(first_scope, ok);
+	const Expression *first_when = first_scope.Membership(ok);
 	if (!ok) {
 		return false;
 	}
 	for (auto factor : condition.bound_factors) {
-		const Expression *when = BoundMembership(*factor, ok);
+		const Expression *when = factor->Membership(ok);
 		if (!ok) {
 			return false;
 		}
@@ -576,8 +565,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	for (auto &part : parts) {
 		// A query-wide factor on the reducer (`2 * SUM(...)`, `SUM(...) / 2`) scales every term of that part and no
 		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
-		DirectLinearObjectivePart read;
-		if (!DirectReadLinearObjective(ir, context, part, read)) {
+		DirectLinearPart read;
+		if (!DirectReadLinearPart(ir, context, part, read)) {
 			return false;
 		}
 		for (auto &term : read.terms) {

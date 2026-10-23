@@ -1,10 +1,10 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-22 on top of `cf64948648`, with the right-hand-side rewrite and S1 and A1 registered: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,674
-passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,673 passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 1,819 assertions in
-55 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+Verified on 2026-10-22 on top of `aa9ee8fe6b`, with the right-hand-side rewrite and S1, A1 and R1 registered: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,089
+passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,088 passed and one failure,
+`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,302 assertions in
+59 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
 ## What it does
@@ -55,7 +55,7 @@ check). Design: `../architecture/`.
   per-row clause, an equality split into its two halves. `DirectClauseBounds` turns one clause's row values into a lower
   and an upper bound as the solver reads them. `DirectRowBox` intersects them with the box. `DirectReadsOneDecision` is the shape a per-row bound must have to be read
   (one unfiltered linear left side in one decision, no constant), and `DirectBoxIsEmpty` is true on a row whose box no
-  value satisfies. `DirectReadLinearObjective` reads one objective part into a `DirectLinearObjectivePart`: its sign and
+  value satisfies. `DirectReadLinearPart` reads one linear part (an objective part or a budget) into a `DirectLinearPart`: its sign and
   constant factor, and each linear term's decision, sign and proved coefficient; it skips other term kinds. Each rule keeps
   its own policy around it: S1 declines a filtered part, a non-linear term, a second decision and a coefficient that may
   raise beside other terms, and flattens the part per term; A1 reads constants and squares itself and sums a part's
@@ -100,7 +100,8 @@ check). Design: `../architecture/`.
 - **Shared admission predicates.** `DirectIsDecisionFreeDeterministic`, `DirectSourceNumericColumn`,
   `DirectIsSourceOnlyNumeric`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
   `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT` and `DirectIRConstraint::PlainSum` answer "may a rule use this value"
-  once for all rules.
+  once for all rules. `DirectIRConstraint::Membership` gives the rows an aggregate constraint covers: its
+  aggregate-local `WHEN` or its clause-level `WHEN`, never both.
 - **One evaluate-to-DOUBLE function.** `TryEvaluateFoldableDouble(context, expr, out, flags)` (`decide_cast_policy.hpp`)
   is the only code that folds a constant expression to a `DOUBLE`, for the planner, the rewrites and the direct rules.
   Callers differ only in the flags they pass: `FOLD_STABLE` (no row, parameter or subquery can change it),
@@ -183,7 +184,7 @@ check). Design: `../architecture/`.
   suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can
   see it). A new rule's suite imports the scaffold (`architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
-  example `auto: 2674 passed, 0 xfailed, 0 failed`. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `PER` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
+  example `auto: 3089 passed, 0 xfailed, 0 failed`. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `PER` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
 
 ## Registering a rule
 

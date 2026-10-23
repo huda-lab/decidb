@@ -46,7 +46,7 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    `DirectWindowExtremum` from `direct_plan_fragments.cpp`, the
    number checks and error predicates from `direct_runtime_checks.cpp`, and the per-row bounds on a decision
    (`DirectReadsOneDecision`, `DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`, `DirectBoxIsEmpty`) and the
-   linear terms of an objective part (`DirectReadLinearObjective`) from `direct_bound_reader.cpp`. Build
+   linear terms of an objective part or a budget (`DirectReadLinearPart`) from `direct_bound_reader.cpp`. Build
    every expression with the `ExpressionBuilder` (`direct_expression.hpp`); build a node by hand only when the builder
    has no operation for it (a window expression), and say so in a comment. A helper only your rule uses stays in
    your rule's own files until a second rule needs it. Inside the rule's namespace, names carry no `Direct` or class
@@ -122,6 +122,6 @@ test, adding one is a task in that rule's `todo.md`.
 Run after any change: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` (the solver path alone),
 `DECIDB_VERIFY_SERIALIZER=1 make decide-test`, `DECIDB_FORCE_SOLVER=highs make decide-test`, and
 `build/release/test/unittest "[decidb]"`. Each takes about 30 seconds. `test/decide/run_direct_matrix.sh` runs all five
-and prints one summary line each (`auto: 2674 passed, 0 xfailed, 0 failed`); run `make release` first. The forced-HiGHS
+and prints one summary line each (`auto: 3089 passed, 0 xfailed, 0 failed`); run `make release` first. The forced-HiGHS
 line shows the one failure that needs Gurobi (`test_norm_combined_l1_l2_objective`), and the script's exit code allows
 exactly that one.

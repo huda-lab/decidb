@@ -559,6 +559,48 @@ TEST_CASE("S1 and A1 never both apply to one query", "[decidb]") {
 	}
 }
 
+TEST_CASE("R1 never applies to a query S1 or A1 applies to", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	auto rules = RegisteredDirectRules();
+	auto *s1 = FindS1Rule(rules);
+	auto *a1 = FindRuleByName(rules, "A1_SEPARABLE_BOX");
+	auto *r1 = FindRuleByName(rules, "R1_CONTINUOUS_KNAPSACK");
+	REQUIRE(s1 != nullptr);
+	REQUIRE(a1 != nullptr);
+	REQUIRE(r1 != nullptr);
+	struct Shape {
+		string declaration, constraints, objective;
+		bool s1, a1, r1;
+	};
+	duckdb::vector<Shape> shapes = {
+	    // R1 needs a REAL decision under exactly one SUM budget; S1 needs a BOOL count bound; A1 forbids any aggregate.
+	    {"x(REAL)", "SUM(w*x) <= 5", "MAXIMIZE SUM(w*x)", false, false, true},
+	    {"x(REAL)", "x <= cap AND SUM(w*x) <= 5", "MINIMIZE SUM(w*x)", false, false, true},
+	    {"x(REAL)", "SUM(x) <= 5", "MAXIMIZE SUM(w*x)", false, false, true},
+	    // The budget's direction does not change whose it is.
+	    {"x(REAL)", "SUM(w*x) >= 5", "MINIMIZE SUM(w*x)", false, false, true},
+	    {"x(REAL)", "SUM(w*x) BETWEEN 1 AND 5", "MAXIMIZE SUM(w*x)", false, false, true},
+	    {"x(BOOL)", "SUM(x) >= 1", "MAXIMIZE SUM(w*x)", true, false, false},
+	    {"x(REAL)", "x <= cap", "MAXIMIZE SUM(w*x)", false, true, false},
+	    {"x(REAL)", "x <= cap AND SUM(w*x) <= 5", "MINIMIZE SUM(POWER(x - w, 2))", false, false, false},
+	    {"x(BOOL)", "SUM(x) <= 2", "MAXIMIZE SUM(w*x)", true, false, false},
+	    {"x(BOOL)", "SUM(w*x) <= 2", "MAXIMIZE SUM(w*x)", false, false, false},
+	    {"x(INT)", "SUM(x) <= 5", "MAXIMIZE SUM(w*x)", false, false, false},
+	    {"x(INT)", "x <= 5", "MAXIMIZE SUM(w*x)", false, true, false},
+	};
+	for (auto &shape : shapes) {
+		INFO(shape.declaration << " | " << shape.constraints << " | " << shape.objective);
+		bool applies_s1 = RuleApplies(*s1, con, shape.declaration, shape.constraints, shape.objective);
+		bool applies_a1 = RuleApplies(*a1, con, shape.declaration, shape.constraints, shape.objective);
+		bool applies_r1 = RuleApplies(*r1, con, shape.declaration, shape.constraints, shape.objective);
+		REQUIRE(applies_s1 + applies_a1 + applies_r1 <= 1);
+		REQUIRE(applies_s1 == shape.s1);
+		REQUIRE(applies_a1 == shape.a1);
+		REQUIRE(applies_r1 == shape.r1);
+	}
+}
+
 TEST_CASE("Direct-solve IR marks a clause the front end cannot read as not proved", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);

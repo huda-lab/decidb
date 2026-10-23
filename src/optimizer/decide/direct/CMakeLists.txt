@@ -11,5 +11,6 @@ add_library_unity(
   direct_registry.cpp
   direct_result_adapter.cpp
   direct_late_materialization.cpp
+  r1_continuous_knapsack_rule.cpp
   s1_uniform_matroid_rule.cpp)
 set(ALL_OBJECT_FILES ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_optimizer_decide_direct> PARENT_SCOPE)

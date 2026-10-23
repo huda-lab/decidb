@@ -549,6 +549,230 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	return shapes;
 }
 
+//===--------------------------------------------------------------------===//
+// R1
+//===--------------------------------------------------------------------===//
+
+const char *R1_OBJECTIVE = "MAXIMIZE SUM(w*x)";
+
+//! The budget is the second constraint: `x <= cap` comes first, so an edit of constraint 0 reaches a bound and an edit
+//! of constraint 1 reaches the budget.
+Shape R1(const string &branch, const string &constraints, Edit edit = nullptr, const string &objective = R1_OBJECTIVE,
+         const string &declaration = "x(REAL)") {
+	return {branch, declaration, constraints, objective, std::move(edit)};
+}
+
+duckdb::vector<Shape> R1AppliesShapes() {
+	duckdb::vector<Shape> shapes;
+	shapes.push_back(R1("plain form: a bound, a budget and a linear objective", "x <= cap AND SUM(cap*x) <= 5"));
+	shapes.push_back(R1("a budget with no per-row bound", "SUM(cap*x) <= 5"));
+	shapes.push_back(R1("an equality and a bound under a WHEN, a folded lower bound",
+	                    "x = cap WHEN flag AND x >= -3 AND x <= cap WHEN (NOT flag) AND SUM(cap*x) <= 5"));
+	shapes.push_back(R1("no objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, ""));
+	shapes.push_back(R1("a minimizing objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MINIMIZE SUM(w*x)"));
+	shapes.push_back(R1("an objective of two scaled parts", "x <= cap AND SUM(cap*x) <= 5", nullptr,
+	                    "MAXIMIZE 2 * SUM(w*x) - SUM(f*x) / 4"));
+	shapes.push_back(R1("a budget of two terms", "x <= cap AND SUM(cap*x + w*x) <= 5"));
+	shapes.push_back(R1("a budget limit that is an expression", "x <= cap AND SUM(cap*x) <= 2 + 3.5::DECIMAL(5,1)"));
+	shapes.push_back(R1("a negative budget limit", "x <= cap AND SUM(cap*x) <= -3"));
+	// A limit read from the data: a column (an integer one, and a floating point one, which can hold NaN), an
+	// expression, an aggregate of the source (a column by the time the rule reads it), on either side, with other
+	// limits, under a scope.
+	shapes.push_back(R1("a budget limit read from an integer column", "x <= cap AND SUM(w*x) <= cap"));
+	shapes.push_back(R1("a budget limit read from a floating point column", "x <= cap AND SUM(w*x) <= f"));
+	shapes.push_back(R1("a budget limit that is an expression of columns", "x <= cap AND SUM(w*x) <= cap * 2 + w"));
+	shapes.push_back(
+	    R1("a budget limit that is an aggregate of the source", "x <= cap AND SUM(w*x) <= 0.5 * SUM(cap)"));
+	shapes.push_back(R1("a minimum read from a column", "x <= cap AND SUM(w*x) >= cap"));
+	shapes.push_back(R1("an exact fill read from a column", "x <= cap AND SUM(w*x) = cap"));
+	shapes.push_back(R1("a range read from the data", "SUM(w*x) >= cap AND SUM(w*x) <= cap + 10"));
+	shapes.push_back(R1("a column limit beside a constant one", "SUM(w*x) >= 1 AND SUM(w*x) <= cap"));
+	shapes.push_back(R1("a column limit and a constant one on the same side", "SUM(w*x) <= 7 AND SUM(w*x) <= cap"));
+	shapes.push_back(R1("a column limit with a PER key and a WHEN", "SUM(w*x) <= cap WHEN flag PER name"));
+	shapes.push_back(R1("a column limit under a WHEN of the sum", "SUM(w*x) WHEN flag <= cap"));
+	shapes.push_back(R1("a column limit on two decisions", "x <= cap AND y <= cap AND SUM(w*x + w*y) <= cap", nullptr,
+	                    "MAXIMIZE SUM(w*x + f*y)", "x(REAL), y(REAL)"));
+	// The budget's direction: a lower limit, both limits, a range, one sum compared twice.
+	shapes.push_back(R1("a budget that is a minimum", "x <= cap AND SUM(cap*x) >= 1"));
+	shapes.push_back(R1("a budget that is an exact fill", "x <= cap AND SUM(cap*x) = 3"));
+	shapes.push_back(R1("a budget that is a range", "x <= cap AND SUM(cap*x) BETWEEN 1 AND 5"));
+	shapes.push_back(R1("a budget that is a range written as two comparisons", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5"));
+	shapes.push_back(R1("a budget compared twice from above, the sum of two terms",
+	                    "SUM(cap*x + w*x) <= 5 AND SUM(cap*x + w*x) <= 3"));
+	shapes.push_back(R1("a budget whose limits cross", "SUM(cap*x) >= 5 AND SUM(cap*x) <= 3"));
+	// The budget's scope: a PER key, a WHEN written on the clause or on the aggregate, and the same scope on every
+	// clause of one budget, written either way.
+	shapes.push_back(R1("a budget with a PER key", "x <= cap AND SUM(cap*x) <= 5 PER name"));
+	shapes.push_back(
+	    R1("a budget with a PER key edited into the IR", "x <= cap AND SUM(cap*x) <= 5", PerKeyOnConstraint(1)));
+	shapes.push_back(R1("a budget with two PER keys", "SUM(cap*x) <= 5 PER (name, flag)"));
+	shapes.push_back(R1("a budget under a WHEN", "x <= cap AND SUM(cap*x) <= 5 WHEN flag"));
+	shapes.push_back(R1("a budget with an aggregate WHEN", "x <= cap AND SUM(cap*x) WHEN flag <= 5"));
+	shapes.push_back(R1("a budget with a PER key and a WHEN", "SUM(cap*x) <= 5 WHEN flag PER name"));
+	shapes.push_back(
+	    R1("a range with the same PER key on both clauses", "SUM(cap*x) >= 1 PER name AND SUM(cap*x) <= 5 PER name"));
+	shapes.push_back(
+	    R1("a range under a WHEN written on both clauses", "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) <= 5 WHEN flag"));
+	shapes.push_back(R1("a range with the WHEN on the clause of one and the aggregate of the other",
+	                    "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) WHEN flag <= 5"));
+	shapes.push_back(R1("a range with the WHEN on the aggregate of both",
+	                    "SUM(cap*x) WHEN flag >= 1 AND SUM(cap*x) WHEN flag <= 5"));
+	// Several decisions in one budget: the pieces of a benefit. Each decision has its own weight, value and bounds.
+	shapes.push_back(R1("two decisions in one budget, each with its own bound and its own weight",
+	                    "x <= cap AND y <= cap AND SUM(cap*x + w*y) <= 5", nullptr, "MAXIMIZE SUM(w*x + cap*y)",
+	                    "x(REAL), y(REAL)"));
+	shapes.push_back(R1("three decisions in one budget",
+	                    "x <= cap AND y <= cap AND z <= cap AND SUM(w*x + w*y + w*z) <= 5", nullptr,
+	                    "MAXIMIZE SUM(cap*x + cap*y + cap*z)", "x(REAL), y(REAL), z(REAL)"));
+	shapes.push_back(R1("a decision the budget does not name", "SUM(cap*x) <= 5 AND y <= 1", nullptr, R1_OBJECTIVE,
+	                    "x(REAL), y(REAL)"));
+	shapes.push_back(R1("a decision the objective does not name", "SUM(cap*x + cap*y) <= 5", nullptr,
+	                    "MAXIMIZE SUM(w*x)", "x(REAL), y(REAL)"));
+	shapes.push_back(R1("a decision with a bound of its own under a WHEN",
+	                    "x <= cap AND y <= cap WHEN flag AND SUM(cap*x + cap*y) <= 5", nullptr,
+	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
+	shapes.push_back(R1("two decisions in a budget with a PER key", "SUM(cap*x + cap*y) <= 5 PER name", nullptr,
+	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
+	return shapes;
+}
+
+duckdb::vector<Shape> R1DeclineShapes() {
+	duckdb::vector<Shape> shapes;
+	// CheckCondition: the decision.
+	shapes.push_back(R1("no decision", "x <= cap AND SUM(cap*x) <= 5", [](DirectIR &ir) { ir.decisions.clear(); }));
+	// ProveDecision reads every decision, not the first alone.
+	shapes.push_back(
+	    R1("an INT second decision", "SUM(cap*x + cap*y) <= 5", nullptr, "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(INT)"));
+	shapes.push_back(R1(
+	    "a second decision whose output is not DOUBLE", "SUM(cap*x + cap*y) <= 5",
+	    [](DirectIR &ir) { ir.decisions[1].output_type = LogicalType::BIGINT; }, "MAXIMIZE SUM(w*x + w*y)",
+	    "x(REAL), y(REAL)"));
+	shapes.push_back(R1("a query-wide second decision", "SUM(cap*x + cap*s) <= 5", nullptr, "MAXIMIZE SUM(w*x) + s",
+	                    "x(REAL), scalar s(REAL)"));
+	shapes.push_back(R1("an INT decision", "SUM(cap*x) <= 5", nullptr, R1_OBJECTIVE, "x(INT)"));
+	shapes.push_back(R1("a BOOL decision", "SUM(cap*x) <= 5", nullptr, R1_OBJECTIVE, "x(BOOL)"));
+	shapes.push_back(R1("a query-wide decision", "SUM(cap*s) <= 5", nullptr, "MAXIMIZE s", "scalar s(REAL)"));
+	shapes.push_back(R1("a decision whose output is not DOUBLE", "SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.decisions[0].output_type = LogicalType::BIGINT; }));
+	shapes.push_back(R1("an entity scope", "SUM(cap*x) <= 5", [](DirectIR &ir) { ir.entity_scopes.emplace_back(); }));
+	// CheckCondition: the constraints.
+	shapes.push_back(R1("no budget, only a bound", "x <= cap"));
+	// Aggregate constraints are one budget only when their sums have the same terms (ProveBudgetClause).
+	shapes.push_back(R1("two budgets with different weights", "SUM(cap*x) <= 5 AND SUM(w*x) <= 7"));
+	shapes.push_back(R1("two budgets with different numbers of terms", "SUM(cap*x) >= 1 AND SUM(cap*x + w*x) <= 5"));
+	shapes.push_back(
+	    R1("two budgets with a term of the other sign", "SUM(cap*x + w*x) >= 1 AND SUM(cap*x - w*x) <= 5"));
+	// Two decisions share the budget; the clauses of one budget name the same decisions (SameBudgetTerms).
+	shapes.push_back(R1("two budgets with the same weights over different decisions",
+	                    "SUM(cap*x) >= 1 AND SUM(cap*y) <= 5", nullptr, "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
+	// A per-row constraint that reads two decisions links them (DirectReadsOneDecision).
+	shapes.push_back(R1("a per-row constraint that links two decisions",
+	                    "x <= cap AND y <= cap AND x + y <= 4 AND SUM(cap*x + cap*y) <= 5", nullptr,
+	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
+	shapes.push_back(R1("a membership constraint", "x IN (1, 2) AND SUM(cap*x) <= 5"));
+	// The binder rejects `x <> 2` on a REAL decision, so the comparison is edited.
+	shapes.push_back(R1("a not-equal constraint", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.constraints[0].comparison = ExpressionType::COMPARE_NOTEQUAL; }));
+	shapes.push_back(R1("a comparison that is not a bound", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.constraints[0].comparison = ExpressionType::COMPARE_DISTINCT_FROM; }));
+	shapes.push_back(R1("a bound with a PER key", "x <= cap AND SUM(cap*x) <= 5", PerKeyOnConstraint(0)));
+	shapes.push_back(R1("a bound with a negative sign", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { LeftPart(ir, 0).sign = -1; }));
+	// ProveBudgetScope: every clause of the budget covers the same rows.
+	shapes.push_back(R1("a PER key on one clause of the budget only", "SUM(cap*x) >= 1 PER name AND SUM(cap*x) <= 5"));
+	shapes.push_back(
+	    R1("another PER key on the second clause", "SUM(cap*x) >= 1 PER name AND SUM(cap*x) <= 5 PER flag"));
+	shapes.push_back(R1("the PER keys in another order on the second clause",
+	                    "SUM(cap*x) >= 1 PER (name, flag) AND SUM(cap*x) <= 5 PER (flag, name)"));
+	shapes.push_back(
+	    R1("a PER key more on the second clause", "SUM(cap*x) >= 1 PER name AND SUM(cap*x) <= 5 PER (name, flag)"));
+	shapes.push_back(R1("a WHEN on one clause of the budget only", "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) <= 5"));
+	shapes.push_back(
+	    R1("another WHEN on the second clause", "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) <= 5 WHEN (NOT flag)"));
+	shapes.push_back(R1("another WHEN on the aggregate of the second clause",
+	                    "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) WHEN (cap > 1) <= 5"));
+	shapes.push_back(R1("a WHEN on the clause and on the aggregate", "SUM(cap*x) WHEN flag <= 5",
+	                    [](DirectIR &ir) { ir.constraints[0].scope.when = True(); }));
+	shapes.push_back(R1("a WHEN on the clause and on the aggregate of the second clause",
+	                    "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) WHEN flag <= 5",
+	                    [](DirectIR &ir) { ir.constraints[1].scope.when = True(); }));
+	shapes.push_back(
+	    R1("a second clause of the budget that is not a plain sum", "SUM(cap*x) >= 1 AND 2 * SUM(cap*x) <= 5"));
+	shapes.push_back(R1("a WHEN that reads more than the source", "SUM(cap*x) <= 5 WHEN (random() < 2)"));
+	shapes.push_back(R1("an aggregate WHEN that reads more than the source", "SUM(cap*x) WHEN (random() < 2) <= 5"));
+	// ProveBudget.
+	shapes.push_back(R1("a strict budget", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.constraints[1].comparison = ExpressionType::COMPARE_LESSTHAN; }));
+	shapes.push_back(R1("a scaled budget", "x <= cap AND 2 * SUM(cap*x) <= 5"));
+	shapes.push_back(R1("a negated budget", "x <= cap AND 0 - SUM(cap*x) >= -5"));
+	shapes.push_back(R1("a budget of two sums", "x <= cap AND SUM(cap*x) + SUM(w*x) <= 5"));
+	shapes.push_back(R1("an average budget", "x <= cap AND AVG(cap*x) <= 5"));
+	shapes.push_back(R1("a nested budget", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { LeftPart(ir, 1).inner = make_uniq<DirectPart>(); }));
+	shapes.push_back(R1("a budget with a constant term", "x <= cap AND SUM(cap*x + 1) <= 5"));
+	shapes.push_back(R1("a squared budget", "x <= cap AND SUM(POWER(x, 2)) <= 5"));
+	shapes.push_back(R1("a budget with no term", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { LeftPart(ir, 1).terms.clear(); }));
+	shapes.push_back(R1("a budget term over another decision", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].var_a = 1; }));
+	shapes.push_back(R1("a budget term with no coefficient", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].coefficient.reset(); }));
+	shapes.push_back(R1("a budget with a random weight", "x <= cap AND SUM(random()*x) <= 5"));
+	shapes.push_back(R1("a budget with a weight outside the source", "x <= cap AND SUM(cap*x) <= 5", [](DirectIR &ir) {
+		LeftPart(ir, 1).terms[0].coefficient = ForeignColumn(LogicalType::DOUBLE);
+	}));
+	// A limit of the data must be a numeric value of the source row (ProveDataLimit); a constant is read as a number.
+	shapes.push_back(R1("a budget limit that is random", "x <= cap AND SUM(w*x) <= cap * random()"));
+	shapes.push_back(
+	    R1("a budget limit that is an aggregate the rewrite left", "x <= cap AND SUM(w*x) <= 5", [](DirectIR &ir) {
+		    ir.constraints[1].rhs = make_uniq<BoundAggregateExpression>(
+		        CountStarFun::GetFunction(), duckdb::vector<duckdb::unique_ptr<Expression>>(), nullptr, nullptr,
+		        AggregateType::NON_DISTINCT);
+	    }));
+	shapes.push_back(R1("a budget limit that is infinite", "x <= cap AND SUM(cap*x) <= 'inf'::DOUBLE"));
+	shapes.push_back(R1("a budget limit of 1e20", "x <= cap AND SUM(cap*x) <= 1e20"));
+	shapes.push_back(R1("a budget limit of minus 1e20", "x <= cap AND SUM(cap*x) <= -1e20"));
+	shapes.push_back(R1("a minimum of 1e20", "x <= cap AND SUM(cap*x) >= 1e20"));
+	shapes.push_back(R1("an exact fill that is infinite", "x <= cap AND SUM(cap*x) = 'inf'::DOUBLE"));
+	// Every comparison of the budget is checked, not only the first.
+	shapes.push_back(
+	    R1("a second comparison of the budget with a limit of 1e20", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 1e20"));
+	// ProveBounds.
+	shapes.push_back(R1("a bound whose value is a subquery", "x <= cap AND SUM(cap*x) <= 5", [](DirectIR &ir) {
+		ir.constraints[0].rhs = make_uniq<BoundSubqueryExpression>(LogicalType::DOUBLE);
+	}));
+	shapes.push_back(R1("a bound below the built-in domain", "x <= -1 AND SUM(cap*x) <= 5"));
+	// The binder rejects a strict bound on a REAL decision, so the comparison is edited.
+	shapes.push_back(R1("a strict folded bound on a real decision", "x <= 3 AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.constraints[0].comparison = ExpressionType::COMPARE_LESSTHAN; }));
+	// CheckCondition and ProveObjective: the objective.
+	shapes.push_back(R1("an objective PER key", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.objective.scope.per_key_slots.push_back(0); }));
+	shapes.push_back(R1("an objective WHEN", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(w*x) WHEN flag"));
+	shapes.push_back(R1("an average objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE AVG(w*x)"));
+	shapes.push_back(R1("an objective part with a filter", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.objective.parts[0].filter = True(); }));
+	shapes.push_back(R1("a nested objective part", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }));
+	shapes.push_back(R1("a qualified objective part", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.objective.parts[0].qualifier = 0; }));
+	// A term that multiplies two decisions is not a value per decision (OnlyLinearTerms).
+	shapes.push_back(R1("an objective product of two decisions", "x <= cap AND y <= cap AND SUM(cap*x + cap*y) <= 5",
+	                    nullptr, "MAXIMIZE SUM(x*y)", "x(REAL), y(REAL)"));
+	shapes.push_back(R1("an objective constant", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(w*x + 1)"));
+	shapes.push_back(
+	    R1("an objective square", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MINIMIZE SUM(POWER(x - w, 2))"));
+	shapes.push_back(R1("an objective term over another decision", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.objective.parts[0].terms[0].var_a = 1; }));
+	shapes.push_back(R1("an objective term with no coefficient", "x <= cap AND SUM(cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.objective.parts[0].terms[0].coefficient.reset(); }));
+	shapes.push_back(
+	    R1("an objective divided by zero", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(w*x) / 0"));
+	shapes.push_back(
+	    R1("a random objective coefficient", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(random()*x)"));
+	return shapes;
+}
+
 TEST_CASE("S1 applies to the forms of its class", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
@@ -571,6 +795,18 @@ TEST_CASE("A1 declines each shape that is not exactly its class", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	ExpectDeclines(MakeA1SeparableBoxRule, con, A1DeclineShapes());
+}
+
+TEST_CASE("R1 applies to the forms of its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectApplies(MakeR1ContinuousKnapsackRule, con, R1AppliesShapes());
+}
+
+TEST_CASE("R1 declines each shape that is not exactly its class", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, R1DeclineShapes());
 }
 
 //===--------------------------------------------------------------------===//

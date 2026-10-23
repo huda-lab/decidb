@@ -360,4 +360,13 @@ const DirectPart *DirectIRConstraint::PlainSum() const {
 	return &part;
 }
 
+const Expression *DirectIRConstraint::Membership(bool &ok) const {
+	auto sum = PlainSum();
+	ok = sum && !(sum->filter && scope.when);
+	if (!ok) {
+		return nullptr;
+	}
+	return sum->filter ? sum->filter.get() : scope.when.get();
+}
+
 } // namespace duckdb

@@ -177,6 +177,28 @@ _NULL_ERROR_CASES = {
         "FROM (VALUES (1, 1.0, 2.0, 1.0), (2, 1.0, NULL::DOUBLE, 1.0)) t(id, score, cap, k) "
         "DECIDE x(REAL) SUCH THAT x <= cap * k MAXIMIZE SUM(score * x)"
     ),
+    # R1: the weight of a budget, the value of an objective and a per-row bound.
+    "r1_budget_weight_two_null_columns": (
+        "FROM (VALUES (1, 1.0, 1.0, 2.0), (2, 1.0, NULL::DOUBLE, NULL::DOUBLE)) t(id, score, a, b) "
+        "DECIDE x(REAL) SUCH THAT x <= 5 AND SUM((a + b) * x) <= 9 MAXIMIZE SUM(score * x)"
+    ),
+    "r1_budget_weight_like_terms": (
+        "FROM (VALUES (1, 1.0, 1.0, 2.0), (2, 1.0, NULL::DOUBLE, 3.0)) t(id, score, a, b) "
+        "DECIDE x(REAL) SUCH THAT x <= 5 AND SUM(a * x + b * x) <= 9 MAXIMIZE SUM(score * x)"
+    ),
+    "r1_objective_value": (
+        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, 1.0)) t(id, score, w) "
+        "DECIDE x(REAL) SUCH THAT x <= 5 AND SUM(w * x) <= 9 MAXIMIZE SUM(score * x)"
+    ),
+    "r1_bound_expression": (
+        "FROM (VALUES (1, 1.0, 2.0, 1.0), (2, 1.0, NULL::DOUBLE, 1.0)) t(id, score, cap, k) "
+        "DECIDE x(REAL) SUCH THAT x <= cap * k AND SUM(score * x) <= 9 MAXIMIZE SUM(score * x)"
+    ),
+    # R1: a budget limit read from a column.
+    "r1_budget_limit_column": (
+        "FROM (VALUES (1, 1.0, 2.0, 9.0), (2, 1.0, 3.0, NULL::DOUBLE)) t(id, score, w, lim) "
+        "DECIDE x(REAL) SUCH THAT x <= 5 AND SUM(w * x) <= lim MAXIMIZE SUM(score * x)"
+    ),
 }
 
 
@@ -275,6 +297,69 @@ def test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in(decidb_cli
 
 
 @pytest.mark.correctness
+@pytest.mark.parametrize("bad", ["'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
+def test_r1_invalid_number_names_the_clause_the_user_wrote_it_in(decidb_cli, bad):
+    # The weight of the budget is a constraint coefficient and the value in the objective an objective coefficient,
+    # on both paths. The solver adds `at row N`, which a plan has no row to name.
+    def error(weight, value, mode):
+        sql = f"""
+            SELECT id, x FROM (
+                FROM (VALUES (1, 1.0, 1.0), (2, 2.0, {bad}), (3, 3.0, 1.0)) t(id, a, b)
+                DECIDE x(REAL) SUCH THAT x <= 5 AND SUM({weight} * x) <= 9 MAXIMIZE SUM({value} * x)
+            ) q
+        """
+        return _raw(decidb_cli, sql, mode=mode).stderr
+
+    for mode in ("require", "off"):
+        in_budget = error("b", "a", mode)
+        assert "constraint coefficient contains invalid value" in in_budget, (mode, in_budget)
+        assert "objective coefficient" not in in_budget, (mode, in_budget)
+        in_objective = error("a", "b", mode)
+        assert "objective coefficient contains invalid value" in in_objective, (mode, in_objective)
+        assert "constraint coefficient" not in in_objective, (mode, in_objective)
+    direct = error("b", "a", "require")
+    assert re.sub(r" at row \d+", "", error("b", "a", "off")) == direct
+
+
+@pytest.mark.correctness
+def test_r1_objective_factor_that_overflows_is_an_objective_coefficient_error_like_the_solvers(decidb_cli):
+    sql = """
+        SELECT id, x FROM (
+            FROM (VALUES (1, 4.0, 2.0, 10.0), (2, 3.0, 3.0, 9.0)) t(id, cap, w, v)
+            DECIDE x(REAL) SUCH THAT x <= cap AND SUM(w * x) <= 9 MAXIMIZE 1e308 * SUM(v * x)
+        ) q
+    """
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    solver = _raw(decidb_cli, sql, mode="off").stderr
+    assert "objective coefficient contains invalid value" in direct, direct
+    assert re.sub(r" at row \d+", "", solver) == direct
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "name,rows,decide",
+    [
+        ("infeasible_budget", "(1, 4.0, 2.0, 10.0), (2, 3.0, 3.0, 9.0)", "x >= 1 AND x <= cap AND SUM(w * x) <= 3"),
+        ("infeasible_empty_box", "(1, 4.0, 2.0, 10.0), (2, 3.0, 3.0, 9.0)", "x >= 2 AND x <= 1 AND SUM(w * x) <= 30"),
+        ("unbounded_negative_weight", "(1, 4.0, -2.0, 10.0), (2, 3.0, 3.0, 9.0)", "x >= 0 AND SUM(w * x) <= 30"),
+        ("unbounded_zero_weight", "(1, 4.0, 0.0, 10.0), (2, 3.0, 3.0, 9.0)", "x >= 0 AND SUM(w * x) <= 30"),
+    ],
+)
+def test_r1_infeasible_and_unbounded_errors_are_the_solvers_error_word_for_word(decidb_cli, name, rows, decide):
+    # The two errors have no row position: one function builds each text for both paths. A budget that cannot be met
+    # and a box that is empty are both infeasible; a row that gains without end is unbounded.
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, cap, w, v) "
+        f"DECIDE x(REAL) SUCH THAT {decide} MAXIMIZE SUM(v * x)) q"
+    )
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    solver = _raw(decidb_cli, sql, mode="off").stderr
+    assert ("infeasible" in direct) == name.startswith("infeasible"), direct
+    assert ("unbounded" in direct) == name.startswith("unbounded"), direct
+    assert direct == solver
+
+
+@pytest.mark.correctness
 def test_s1_source_bound_error_for_a_column_is_the_solvers_and_for_a_computed_bound_is_direct_solves_own(decidb_cli):
     """A bound that is one column raises the solver's NULL and NaN errors. A computed bound has no single column to name."""
 
@@ -295,6 +380,31 @@ def test_s1_source_bound_error_for_a_column_is_the_solvers_and_for_a_computed_bo
     assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
     assert re.sub(r" at row \d+", "", solver) == direct
     computed, _ = error("VARCHAR", "'bad'", bound="TRY_CAST(cap AS INTEGER)")
+    assert "the bound expression" in computed and "COALESCE()" in computed, computed
+
+
+@pytest.mark.correctness
+def test_r1_budget_limit_error_for_a_column_is_the_solvers_and_for_a_computed_limit_is_direct_solves_own(decidb_cli):
+    """A budget limit that is one column raises the solver's NULL and NaN errors. A computed limit has no single column to name."""
+
+    def error(lim_type, lim, limit="lim"):
+        sql = f"""
+            SELECT x FROM (
+                FROM (VALUES (1,2.0,9.0,{lim}::{lim_type}),(2,3.0,5.0,{lim}::{lim_type})) t(id,w,score,lim)
+                DECIDE x(REAL) SUCH THAT x<=5 AND SUM(w*x)<={limit} MAXIMIZE SUM(score*x)
+            ) q
+        """
+        return _raw(decidb_cli, sql, mode="require").stderr, _raw(decidb_cli, sql, mode="off").stderr
+
+    for lim_type in ("INTEGER", "DOUBLE"):
+        direct, solver = error(lim_type, "NULL")
+        assert 'column "lim" is NULL' in direct and "COALESCE(lim, 0)" in direct and "WHERE" in direct, direct
+        assert direct == solver
+    for lim_type in ("FLOAT", "DOUBLE"):
+        direct, solver = error(lim_type, "'NaN'")
+        assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
+        assert re.sub(r" at row \d+", "", solver) == direct
+    computed, _ = error("VARCHAR", "'bad'", limit="TRY_CAST(lim AS DOUBLE)")
     assert "the bound expression" in computed and "COALESCE()" in computed, computed
 
 

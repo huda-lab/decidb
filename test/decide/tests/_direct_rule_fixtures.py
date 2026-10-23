@@ -154,7 +154,110 @@ A1 = RuleFixture(
 )
 
 
-RULE_FIXTURES = (S1, A1)
+def _r1_late_error(decision_sql, w_sql="1.0", cap_sql="10.0"):
+    """A 5,000-row problem whose last row is invalid. Rows 0 to 4998 are ordinary."""
+    return f"""
+        FROM (SELECT i, {w_sql} AS w, 1.0 AS v, {cap_sql} AS cap FROM range(5000) t(i)) s
+        DECIDE {decision_sql}
+        """
+
+
+R1 = RuleFixture(
+    rule="R1_CONTINUOUS_KNAPSACK",
+    condition="min/max SUM(v*x), l <= x <= u, L <= SUM(w*x) <= U",
+    # The worked example of the rule's definition: the budget is used up, row 2 is partly filled (x = 4, 2, 0). Every
+    # value is a whole number, so the rows equal the solver's exactly and the query also runs on forced HiGHS.
+    applies="""
+        SELECT id, w, v, cap, x FROM (
+            FROM (VALUES (1, 2.0::DOUBLE, 10.0::DOUBLE, 4.0::DOUBLE), (2, 3.0::DOUBLE, 9.0::DOUBLE, 3.0::DOUBLE),
+                         (3, 2.0::DOUBLE, 4.0::DOUBLE, 5.0::DOUBLE)) t(id, w, v, cap)
+            DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w * x) <= 14
+            MAXIMIZE SUM(v * x)
+        ) q ORDER BY id
+    """,
+    empty_applies="""
+        SELECT id, w, v, cap, x FROM (
+            FROM (SELECT * FROM (VALUES (1, 2.0::DOUBLE, 10.0::DOUBLE, 4.0::DOUBLE),
+                                        (2, 3.0::DOUBLE, 9.0::DOUBLE, 3.0::DOUBLE)) t(id, w, v, cap) WHERE false) t
+            DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w * x) <= 14
+            MAXIMIZE SUM(v * x)
+        ) q ORDER BY id
+    """,
+    table_setup="""
+        CREATE TEMP TABLE direct_r1_life(id INTEGER, w DOUBLE, v DOUBLE, cap DOUBLE);
+        INSERT INTO direct_r1_life VALUES (1,2,10,4),(2,3,9,3);
+    """,
+    table_applies="""
+        SELECT id,x FROM (
+            FROM direct_r1_life DECIDE x(REAL)
+            SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x)<=10 MAXIMIZE SUM(v*x)
+        ) q
+    """,
+    table_change="ALTER TABLE direct_r1_life ADD COLUMN extra INTEGER;",
+    # Each is the plain form with one condition changed, so the rule has to decline it: an INT decision (a unit cannot
+    # be partly filled), two budgets with different weights (no single price per unit of budget), an objective with a
+    # square (a term that is not a per-row linear value; the closest the IR offers to a coupled term for one
+    # decision), and a constraint that reads two decisions of a row (it links them).
+    near_misses=(
+        ("x(INT)", "x <= cap AND SUM(w*x) <= 5", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "x <= cap AND SUM(w*x) <= 5 AND SUM(p*x) <= 7", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "x <= cap AND SUM(w*x) <= 5", "MAXIMIZE SUM(p*x) - SUM(POWER(x, 2))"),
+        # Two decisions in one budget apply; a per-row constraint that reads both links them.
+        ("x(REAL), y(REAL)", "x <= cap AND y <= cap AND x + y <= 4 AND SUM(w*x + w*y) <= 5", "MAXIMIZE SUM(p*x + p*y)"),
+    ),
+    # Forms that look like near misses and apply: a minimum, an exact fill, and one sum compared twice (a range), two
+    # decisions in one budget (the pieces of a benefit), and a budget read from the data (a column of the source, and
+    # an aggregate of it, which the right-hand-side rewrite makes a column).
+    near_miss_applies=(
+        ("x(REAL)", "x <= cap AND SUM(w*x) <= lim", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "x <= cap AND SUM(w*x) <= 0.5 * SUM(cap*w)", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "x <= cap AND SUM(w*x) >= 3", "MINIMIZE SUM(p*x)"),
+        ("x(REAL)", "x <= cap AND SUM(w*x) = 5", "MAXIMIZE SUM(p*x)"),
+        ("x(REAL)", "x <= cap AND SUM(w*x) >= 3 AND SUM(w*x) <= 7", "MINIMIZE SUM(p*x)"),
+        ("x(REAL), y(REAL)", "x <= cap AND y <= cap AND SUM(w*x + w*y) <= 5", "MAXIMIZE SUM(p*x + p*y)"),
+    ),
+    near_miss_source="FROM (VALUES (1, 9.0::DOUBLE, 2.0::DOUBLE, 5.0::DOUBLE, 6.0::DOUBLE), "
+    "(2, 10.0::DOUBLE, 3.0::DOUBLE, 3.0::DOUBLE, 6.0::DOUBLE)) t(id,p,w,cap,lim)",
+    near_miss_column="id",
+    late_errors=(
+        # Errors R1 raises, on the last of 5,000 rows: an empty box, an unbounded problem and a NaN weight.
+        (
+            _r1_late_error(
+                "x(REAL) SUCH THAT x >= 0 AND x <= cap AND SUM(w*x) <= 3000 MAXIMIZE SUM(v*x)",
+                cap_sql="CASE WHEN i=4999 THEN -1.0 ELSE 10.0 END",
+            ),
+            "infeasible",
+        ),
+        (
+            _r1_late_error(
+                "x(REAL) SUCH THAT x >= 0 AND x <= cap AND SUM(w*x) <= 3000 MAXIMIZE SUM(v*x)",
+                w_sql="CASE WHEN i=4999 THEN -1.0 ELSE 1.0 END",
+                cap_sql="CASE WHEN i=4999 THEN 1e30 ELSE 10.0 END",
+            ),
+            "unbounded",
+        ),
+        (
+            _r1_late_error(
+                "x(REAL) SUCH THAT x >= 0 AND x <= cap AND SUM(w*x) <= 3000 MAXIMIZE SUM(v*x)",
+                w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
+            ),
+            "invalid value",
+        ),
+        # A budget read from the data that is NULL on the last row.
+        (
+            f"""
+        FROM (SELECT i, 1.0 AS w, 1.0 AS v, 10.0 AS cap, CASE WHEN i=4999 THEN NULL ELSE 3000.0 END AS lim
+              FROM range(5000) t(i)) s
+        DECIDE x(REAL) SUCH THAT x >= 0 AND x <= cap AND SUM(w*x) <= lim MAXIMIZE SUM(v*x)
+        """,
+            "is NULL",
+        ),
+    ),
+    late_column="i",
+)
+
+
+RULE_FIXTURES = (S1, A1, R1)
 
 
 # Bounds S1 applies that the oracle checks, as (constraint, the bound's value over the source

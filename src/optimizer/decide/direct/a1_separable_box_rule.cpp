@@ -32,7 +32,7 @@ namespace direct_a1_separable_box {
 constexpr const char *RULE_NAME = "A1_SEPARABLE_BOX";
 
 //! A term of an objective part that is not linear: a constant, or a square. The linear terms are read by the shared
-//! DirectReadLinearObjective.
+//! DirectReadLinearPart.
 struct Term {
 	enum class Kind : uint8_t { CONSTANT, SQUARE };
 	Kind kind = Kind::CONSTANT;
@@ -49,7 +49,7 @@ struct Term {
 
 struct Part {
 	//! The part's sign and constant factor, and its linear terms.
-	DirectLinearObjectivePart linear;
+	DirectLinearPart linear;
 	unique_ptr<Expression> filter;
 	//! The constant and square terms, in the order they came.
 	vector<Term> terms;
@@ -227,7 +227,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	idx_t decision_count = ir.decisions.size();
 	for (auto &part : objective.parts) {
 		Part prepared;
-		if (!DirectReadLinearObjective(ir, context, part, prepared.linear)) {
+		if (!DirectReadLinearPart(ir, context, part, prepared.linear)) {
 			return false;
 		}
 		for (auto &term : prepared.linear.terms) {

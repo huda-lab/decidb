@@ -42,7 +42,7 @@ with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 
 | [S2](rules/s2_laminar_matroid/) | Laminar-matroid optimization | Exact | Not started |
 | [S3](rules/s3_max_cardinality_knapsack/) | Maximum-cardinality knapsack | Exact | Not started |
 | [S4](rules/s4_bottleneck_knapsack/) | Cardinality-constrained bottleneck knapsack | Exact | Not started |
-| [R1](rules/r1_continuous_knapsack/) | Continuous (fractional) knapsack | Exact | Not started |
+| [R1](rules/r1_continuous_knapsack/) | Continuous (fractional) knapsack | Exact | **Works**, on by default |
 | [R2](rules/r2_discrete_resource_allocation/) | Discrete separable convex resource allocation | Exact | Not started |
 | [R3](rules/r3_quadratic_knapsack/) | Continuous quadratic knapsack | Prototype | Not started |
 | [R4](rules/r4_max_min_fairness/) | Weighted max-min fair allocation | Exact | Not started |

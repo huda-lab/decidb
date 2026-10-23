@@ -58,8 +58,9 @@ struct DirectBoundReading {
 	vector<DirectDecisionBox> boxes;
 };
 
-//! Reads every constraint of `ir` as a bound on one decision (a constraint of the form `a*x <comparison> value`). The
-//! rule's CheckCondition has already declined an aggregate and checked each constraint with DirectReadsOneDecision. A
+//! Reads every per-row constraint of `ir` as a bound on one decision (a constraint of the form `a*x <comparison>
+//! value`). An aggregate constraint is not a bound and is skipped: the rule reads it, and A1, which has none, declines
+//! it. The rule's CheckCondition has checked each per-row constraint with DirectReadsOneDecision. A
 //! bound the solver folds into the variable (`variable_bound`: an unconditional comparison of the bare decision
 //! against a constant) replaces the default lower bound of 0 and tightens the upper one; every other bound is a
 //! clause. Returns false when a bound cannot be proved, or when the folded box contradicts the decision's built-in
@@ -94,32 +95,31 @@ void DirectRowBox(const ExpressionBuilder &calc, double static_lower, double sta
 ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, const ExprPtr &upper);
 
 //===--------------------------------------------------------------------===//
-// Linear terms of an objective part
+// Linear terms of a part
 //===--------------------------------------------------------------------===//
 
-//! One linear term of an objective part: `sign * coefficient * x[decision]`, the coefficient a numeric value of the
-//! source row.
-struct DirectLinearObjectiveTerm {
+//! One linear term of a part: `sign * coefficient * x[decision]`, the coefficient a numeric value of the source row.
+struct DirectLinearTerm {
 	idx_t decision = 0;
 	int sign = 1;
 	unique_ptr<Expression> coefficient;
 };
 
-//! One objective part `sign * scale * SUM(...)`, with the part's constant factor (`2 * SUM(...)`, `SUM(...) / 2`) and
-//! its linear terms in the order they came. A term of any other kind is left to the rule.
-struct DirectLinearObjectivePart {
+//! One part `sign * scale * SUM(...)` of an objective or of a constraint's left side, with the part's constant factor
+//! (`2 * SUM(...)`, `SUM(...) / 2`) and its linear terms in the order they came. A term of any other kind is left to
+//! the rule.
+struct DirectLinearPart {
 	int sign = 1;
 	bool scaled = false;
 	double scale = 1.0;
 	bool divides = false;
-	vector<DirectLinearObjectiveTerm> terms;
+	vector<DirectLinearTerm> terms;
 };
 
-//! Reads the sign and constant factor of one objective part and each of its linear terms. Returns false when the
-//! factor is not a finite constant (or divides by zero) or when a linear term's coefficient is not a numeric value of
-//! the source row. A term that is not linear is skipped, and so are the part's reducer, filter and qualifier: the rule
-//! checks those, and which decision a term names.
-bool DirectReadLinearObjective(const DirectIR &ir, ClientContext &context, const DirectPart &part,
-                               DirectLinearObjectivePart &out);
+//! Reads the sign and constant factor of one part and each of its linear terms. Returns false when the factor is not a
+//! finite constant (or divides by zero) or when a linear term's coefficient is not a numeric value of the source row.
+//! A term that is not linear is skipped, and so are the part's reducer, filter and qualifier: the rule checks those,
+//! and which decision a term names.
+bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, DirectLinearPart &out);
 
 } // namespace duckdb

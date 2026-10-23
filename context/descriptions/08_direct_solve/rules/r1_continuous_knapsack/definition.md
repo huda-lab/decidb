@@ -122,8 +122,10 @@ For each group (the whole input when there is no `PER`):
 >
 > 5\. Sort the items by t, highest first. For each distinct t, running sums give A, the room up of every item with a
 > higher t, and B, the room down of every item with a lower t. At price t the spend can be anything in
-> S + A − B + [−Σ down, Σ up], the last two summed over the items tied at t. These ranges fall as t falls and meet end
-> to end. The price λ* is the t whose range holds T.
+> S + A − B + [−Σ down, Σ up], the last two summed over the items tied at t. These ranges rise as t falls and meet end
+> to end. The price λ* is the t whose range holds T. With rounded sums, the plan finds it by a monotone test instead: when
+> T is below the zero-price spend, the highest t whose range reaches up to T; when above, the lowest t whose range
+> reaches down to T.
 >
 > 6\. Items with t > λ* take their high end and items with t < λ* their low end. The items tied at λ* share
 > D = T − (S + A − B): starting from their anchors, they move up when D > 0 and down when D < 0, each by its room or
@@ -238,5 +240,10 @@ What DeciDB admits beyond, or in place of, the catalogue text. Where the two dif
 > aggregate (the same meaning for a constant budget), and a NULL `PER` key, leave a row out of every budget; such a
 > row takes its own best end, as an A1 row does. A budget whose `WHEN` covers no row of a nonempty source raises the
 > empty-aggregate error, as the solver does.
+>
+> • **Budget from the data.** A limit may be a source column or expression, or an aggregate of the source. Each group
+> reads one L and one U: an upper limit takes the group's MIN, a lower one its MAX, and an equality needs one value in
+> the group. The steps are unchanged, since a group's limits are constants within it. A data value is the number it is;
+> an infinite one is infinite.
 >
 > • **Errors.** An empty box on any row is infeasible; NULL or NaN values raise as they do on the solver.

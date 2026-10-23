@@ -62,6 +62,9 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 	// to infinity), combined by the one function the solver's own folding pass calls.
 	vector<DecideBoundBox> boxes(decision_count);
 	for (auto &ir_node : ir.constraints) {
+		if (ir_node.aggregate) {
+			continue;
+		}
 		idx_t decision = ir_node.lhs[0].terms[0].var_a;
 		auto domain = ir.decisions[decision].domain;
 		auto &rhs = *ir_node.rhs;
@@ -218,8 +221,7 @@ ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, co
 	                 calc.Cmp(ExpressionType::COMPARE_EQUAL, upper, calc.Num(NEGATIVE_INFINITY))});
 }
 
-bool DirectReadLinearObjective(const DirectIR &ir, ClientContext &context, const DirectPart &part,
-                               DirectLinearObjectivePart &out) {
+bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, DirectLinearPart &out) {
 	out.sign = part.sign;
 	out.scaled = part.scale != nullptr;
 	out.divides = part.scale_divides;

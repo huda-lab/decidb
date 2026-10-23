@@ -106,6 +106,10 @@ struct DirectIRConstraint {
 	//! The reduced left side when it is one plain `SUM(...)`: unsigned, unscaled, unqualified, not nested; null
 	//! otherwise. Its aggregate-local WHEN, if any, is the returned part's `filter`.
 	const DirectPart *PlainSum() const;
+
+	//! The rows the constraint's sum covers: the aggregate-local WHEN on the plain SUM or the clause-level WHEN, never
+	//! both. Null for none. `ok` is false when the constraint is not a plain SUM or has both.
+	const Expression *Membership(bool &ok) const;
 };
 
 struct DirectIRObjective {
