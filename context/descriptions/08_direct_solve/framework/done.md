@@ -1,8 +1,9 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-22 on top of `aa9ee8fe6b`, with the right-hand-side rewrite and S1, A1 and R1 registered: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,089
-passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,088 passed and one failure,
+Verified on 2026-10-23 on top of `d808c5f9f2` with the trimmed R1 tests, with the right-hand-side rewrite and S1, A1 and
+R1 registered: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make
+decide-test` each 2,987 passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,986
+passed and one failure,
 `test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,302 assertions in
 59 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.

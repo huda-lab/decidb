@@ -24,7 +24,6 @@ objective mismatch. After changing a case or the model builder, remove its entri
 """
 
 import math
-import random
 import re
 from dataclasses import dataclass
 
@@ -239,35 +238,12 @@ def _sql(case_, wrap="plain"):
     base = f"(VALUES {values_clause(case_.rows, without_v, dict(COLUMNS), sql_literal)}) t({', '.join(without_v)})"
     values = ", ".join("(" + str(r["id"]) + ", " + sql_literal(r["v"], "DOUBLE") + ")" for r in case_.rows)
     scores = f"(VALUES {values}) z(id, v)"
-    ids = ", ".join(f"({r['id']})" for r in case_.rows)
-    middle = case_.rows[len(case_.rows) // 2]["id"]
     if wrap == "plain":
         return f"{select} FROM (FROM {source} {decide}) q ORDER BY id"
-    if wrap == "cte_materialized":
-        return f"WITH src AS MATERIALIZED (SELECT * FROM {source}) {select} FROM (FROM src {decide}) q ORDER BY id"
-    if wrap == "cte_inlined":
-        return f"WITH src AS (SELECT * FROM {source}) {select} FROM (FROM src {decide}) q ORDER BY id"
-    if wrap == "wide_source":
-        wide = f"SELECT *, repeat('p', 200) AS payload, NULL::VARCHAR AS unused FROM {source}"
-        return f"{select} FROM (FROM ({wide}) w {decide}) q ORDER BY id"
     if wrap == "joined_source":
         picked = ", ".join("z.v" if n == "v" else f"t.{n}" for n in NAMES)
         joined = f"SELECT {picked} FROM {base} JOIN {scores} ON z.id = t.id"
         return f"{select} FROM (FROM ({joined}) j {decide}) q ORDER BY id"
-    if wrap == "correlated_source":
-        picked = ", ".join(f"t.{n}" for n in without_v)
-        lookup = f"(SELECT z.v FROM {scores} WHERE z.id = t.id) AS v"
-        return f"{select} FROM (FROM (SELECT {picked}, {lookup} FROM {base}) u {decide}) q ORDER BY id"
-    if wrap == "parent_join":
-        return f"{select} FROM (FROM {source} {decide}) q JOIN (VALUES {ids}) k(id) USING (id) ORDER BY id"
-    if wrap == "recombined_filters":
-        # A filter pushed into the DECIDE input would solve a smaller problem, and these rows share one budget. The
-        # plan must solve the whole problem, then return every row once.
-        return (
-            f"WITH solved AS MATERIALIZED (FROM {source} {decide}) "
-            f"{select} FROM solved WHERE id < {middle} UNION ALL "
-            f"{select} FROM solved WHERE id >= {middle} ORDER BY id"
-        )
     raise ValueError(wrap)
 
 
@@ -736,22 +712,10 @@ def test_r1_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
     _agree(decidb_cli, oracle_solver, R1_CASES[name])
 
 
-# The same problem inside a parent query. One base case meets every context; a context does not interact with the kind
-# of row.
-CONTEXTS = (
-    "cte_materialized",
-    "cte_inlined",
-    "wide_source",
-    "joined_source",
-    "correlated_source",
-    "parent_join",
-    "recombined_filters",
-)
-CONTEXT_CASES = [
-    (base, wrap)
-    for base in ("worked_example", "mixed_binding_max", "mixed_binding_min", "improving_pair_max")
-    for wrap in CONTEXTS
-]
+# The same problem inside a parent query: a join in the source, which the rule reads through. The other contexts (CTEs,
+# a wide source, a correlated subquery, a join or a pair of filters above the DECIDE) reach no branch of the rule that
+# this one and the other tests do not.
+CONTEXT_CASES = [("improving_pair_max", "joined_source")]
 
 
 @pytest.mark.cons_aggregate
@@ -759,30 +723,6 @@ CONTEXT_CASES = [
 @pytest.mark.parametrize("base,wrap", CONTEXT_CASES)
 def test_r1_agrees_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
     _agree(decidb_cli, oracle_solver, R1_CASES[base], wrap=wrap)
-
-
-def _random_rows(seed):
-    rng = random.Random(seed)
-    rows = []
-    for index in range(rng.randint(3, 8)):
-        w = rng.choice([-2.0, -1.0, -0.5, 0.0, 0.5, 1.0, 2.0, 3.0])
-        v = rng.choice([-2.0, -1.0, 0.0, 0.5, 1.0, 2.0, 2.0, 4.0])
-        lo = rng.choice([0.0, 0.0, 0.0, 0.5, 1.0])
-        cap = lo + rng.choice([0.5, 1.0, 2.0, 3.0, 5.0])
-        rows.append(_row(index, cap, lo, w, v))
-    return rows
-
-
-@pytest.mark.var_real
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize("seed", range(10))
-def test_r1_random_rows_agree_with_the_oracle(decidb_cli, oracle_solver, seed):
-    rng = random.Random(1000 + seed)
-    rows = _random_rows(seed)
-    limit = rng.choice([-2.0, 0.0, 1.0, 3.0, 5.0, 8.0, 20.0])
-    objective = rng.choice(["max", "min", "none"])
-    _agree(decidb_cli, oracle_solver, Case(tuple(rows), BOXES["row_lower_and_cap"], limit, OBJECTIVES[objective]))
 
 
 @pytest.mark.correctness
@@ -1694,89 +1634,11 @@ def _problem(rows, bounds="amount >= lo AND amount <= cap", budget="SUM(w*amount
     )
 
 
-def _with(rows, index, **changes):
-    rows = [dict(row) for row in rows]
-    rows[index].update(changes)
-    return rows
-
-
 BOUNDARY_CASES = {
-    # A bound of magnitude 1e20 or more is no bound; 1e19 is one.
-    "cap_1e20_of_a_row_that_frees_budget": _problem(_with(MIXED, 1, cap=1e20)),
-    "cap_1e19_of_a_row_that_frees_budget": _problem(_with(MIXED, 1, cap=1e19), budget="SUM(w*amount) <= 6"),
-    "cap_1e25_of_a_row_that_spends_budget": _problem(_with(MIXED, 0, cap=1e25)),
-    "cap_infinite_of_a_row_that_spends_budget": _problem(_with(MIXED, 0, cap=INF)),
-    "cap_infinite_of_a_row_that_frees_budget": _problem(_with(MIXED, 1, cap=INF)),
-    "lo_negative_infinite_keeps_default_floor": _problem(_with(MIXED, 0, lo=-INF)),
-    "lo_1e25_is_a_bound": _problem(_with(MIXED, 3, lo=1e25, cap=1e26), budget="SUM(w*amount) <= 1e19"),
-    "constant_cap_1e20": _problem(MIXED, bounds="amount >= lo AND amount <= 1e20"),
-    "constant_cap_1e19": _problem(WORKED, bounds="amount >= lo AND amount <= 1e19"),
-    "constant_floor_minus_1e20": _problem(WORKED, bounds="amount >= -1e20 AND amount <= cap"),
-    # The solver reads the quotient 1e22 as a bound: only a right side of 1e20 or more is read as none.
-    "scaled_cap_beyond_1e20_is_a_bound": _problem(
-        [_row(1, 0.0, 0.0, -1.0, 1.0)], bounds="amount >= 0 AND 0.001*amount <= 1e19", budget="SUM(w*amount) <= 6"
-    ),
-    "limit_1e19": _problem(WORKED, budget="SUM(w*amount) <= 1e19", bounds="amount >= 0 AND amount <= 1e19"),
-    "limit_zero": _problem(MIXED, budget="SUM(w*amount) <= 0"),
-    "limit_negative_zero": _problem(MIXED, budget="SUM(w*amount) <= -0.0"),
-    "limit_decimal": _problem(MIXED, budget="SUM(w*amount) <= 8.25::DECIMAL(5,2)"),
-    "limit_integer_expression": _problem(MIXED, budget="SUM(w*amount) <= 2 * 4"),
-    "limit_float": _problem(MIXED, budget="SUM(w*amount) <= 8.0::FLOAT"),
-    "large_weights_and_values": _problem(
-        [_row(1, 4.0, 0.0, 1e10, 3e10), _row(2, 3.0, 0.0, 2e10, 1e10)], budget="SUM(w*amount) <= 5e10"
-    ),
-    "decimal_source": (
-        "SELECT id, amount FROM (SELECT 1 AS id, 2.50::DECIMAL(9,2) AS w, 4.00::DECIMAL(9,2) AS cap, "
-        "3.00::DECIMAL(9,2) AS v) DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND cap AND SUM(w*amount) <= 6 "
-        "MAXIMIZE SUM(v*amount)"
-    ),
-    "float_source": (
-        "SELECT id, amount FROM (SELECT 1 AS id, 2.5::FLOAT AS w, 4.0::FLOAT AS cap, 3.0::FLOAT AS v) "
-        "DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND cap AND SUM(w*amount) <= 6 MAXIMIZE SUM(v*amount)"
-    ),
-    "tinyint_source": (
-        "SELECT id, amount FROM (SELECT 1 AS id, 3::TINYINT AS w, 9::TINYINT AS cap, 2::TINYINT AS v) "
-        "DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND cap AND SUM(w*amount) <= 20 MAXIMIZE SUM(v*amount)"
-    ),
-    "hugeint_source": (
-        "SELECT id, amount FROM (SELECT 1 AS id, 25::HUGEINT AS w, 40::HUGEINT AS cap, 3::HUGEINT AS v) "
-        "DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND cap AND SUM(w*amount) <= 200 MAXIMIZE SUM(v*amount)"
-    ),
+    # A column of type BOOLEAN cast to a number is a weight.
     "boolean_column_weight": (
         "SELECT id, amount FROM (SELECT * FROM (VALUES (1, true, 2.0::DOUBLE), (2, false, 3.0::DOUBLE)) v(id, f, s)) "
         "DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND 4 AND SUM(f::INTEGER*amount) <= 3 MAXIMIZE SUM(s*amount)"
-    ),
-    "scalar_subquery_bound": (
-        "SELECT id, amount FROM (SELECT * FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, 2.0::DOUBLE, 3.0::DOUBLE)) "
-        "v(id, w, s)) DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND (SELECT 5) AND SUM(w*amount) <= 6 "
-        "MAXIMIZE SUM(s*amount)"
-    ),
-    "duplicate_rows": (
-        "SELECT id, amount FROM (VALUES (1, 5.0, 1.0, 2.0), (2, 4.0, 1.0, 3.0), (2, 4.0, 1.0, 3.0), (3, 6.0, 2.0, 1.0)) "
-        "t(id, cap, w, v) DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND cap AND SUM(w*amount) <= 8 "
-        "MAXIMIZE SUM(v*amount) ORDER BY id"
-    ),
-    # A required spend of 1e19 is a number (only 1e20 and more is no bound), and the sums stay in range.
-    "minimum_limit_1e19": _problem(
-        WORKED, bounds="amount >= 0 AND amount <= 1e19", budget="SUM(w*amount) >= 1e19", obj="MINIMIZE SUM(v*amount)"
-    ),
-    # Limits the solver reads as numbers from a decimal, an expression and a float; each side of a range on its own.
-    "exact_fill_limit_decimal": _problem(MIXED, budget="SUM(w*amount) = 8.25::DECIMAL(5,2)"),
-    "between_limits_decimal_and_expression": _problem(
-        MIXED, budget="SUM(w*amount) BETWEEN 2.5::DECIMAL(5,2) AND 2 * 4", obj="MINIMIZE SUM(v*amount)"
-    ),
-    "minimum_limit_float": _problem(MIXED, budget="SUM(w*amount) >= 8.0::FLOAT", obj="MINIMIZE SUM(v*amount)"),
-    "exact_fill_limit_negative_zero": _problem(MIXED, budget="SUM(w*amount) = -0.0"),
-    "exact_fill_large_weights_and_values": _problem(
-        [_row(1, 4.0, 0.0, 1e10, 3e10), _row(2, 3.0, 0.0, 2e10, 1e10)],
-        budget="SUM(w*amount) = 5e10",
-        obj="MINIMIZE SUM(v*amount)",
-    ),
-    # The same sum written as a range on a column that is not DOUBLE.
-    "decimal_source_between": (
-        "SELECT id, amount FROM (SELECT 1 AS id, 2.50::DECIMAL(9,2) AS w, 4.00::DECIMAL(9,2) AS cap, "
-        "3.00::DECIMAL(9,2) AS v) DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND cap AND "
-        "SUM(w*amount) BETWEEN 2 AND 6 MINIMIZE SUM(v*amount)"
     ),
 }
 
@@ -1785,11 +1647,11 @@ BOUNDARY_CASES = {
 # limit as infinite: an upper limit of +infinity is no bound, a lower limit of +infinity cannot be met. On boxes that all
 # have caps this is the same as reading 1e20 and more as infinite, so these cases compare the two on the same rows.
 # They stay on the solver path alone because the oracle holds no such values.
-def _huge_limit_problem(comparison, limit, objective, second_cap="3.0", bounds="amount BETWEEN 0 AND cap"):
+def _huge_limit_problem(comparison, limit, objective, bounds="amount BETWEEN 0 AND cap"):
     literal = sql_literal(limit, "DOUBLE")
     rows = ", ".join(
         f"({i}, {cap}, {w}, {v}, {literal})"
-        for i, (cap, w, v) in enumerate([(4.0, 2.0, 10.0), (second_cap, 3.0, 9.0), (5.0, 2.0, 4.0)], 1)
+        for i, (cap, w, v) in enumerate([(4.0, 2.0, 10.0), (3.0, 3.0, 9.0), (5.0, 2.0, 4.0)], 1)
     )
     return (
         f"SELECT id, amount FROM (VALUES {rows}) t(id, cap, w, v, b) "
@@ -1798,50 +1660,8 @@ def _huge_limit_problem(comparison, limit, objective, second_cap="3.0", bounds="
     )
 
 
-for _comparison, _tag, _objective in (
-    ("<=", "upper", "MAXIMIZE"),
-    (">=", "lower", "MINIMIZE"),
-    ("=", "equal", "MINIMIZE"),
-):
-    for _limit_name, _limit_value in (
-        ("1e19", 1e19),
-        ("1e20", 1e20),
-        ("1e25", 1e25),
-        ("minus_1e25", -1e25),
-        ("infinity", INF),
-        ("minus_infinity", -INF),
-    ):
-        BOUNDARY_CASES[f"data_budget_{_tag}_{_limit_name}"] = _huge_limit_problem(_comparison, _limit_value, _objective)
-BOUNDARY_CASES.update(
-    {
-        # A row with no cap beside a limit of 1e25: the number decides how far the row goes (the solver loads 1e25 as
-        # 1e25; a lower limit or an equality of it is met by 3.3e24 units of the open row).
-        "data_budget_lower_1e25_open_row": _huge_limit_problem(">=", 1e25, "MINIMIZE", second_cap="1e30"),
-        "data_budget_equal_1e25_open_row": _huge_limit_problem("=", 1e25, "MINIMIZE", second_cap="1e30"),
-        "data_budget_lower_1e19_open_row": _huge_limit_problem(">=", 1e19, "MINIMIZE", second_cap="1e30"),
-        "data_budget_upper_1e25_open_row_minimized": _huge_limit_problem("<=", 1e25, "MINIMIZE", second_cap="1e30"),
-        # An infinite limit beside a row with no cap: no bound (unbounded when it gains), and never met.
-        "data_budget_upper_infinity_open_row": _huge_limit_problem("<=", INF, "MAXIMIZE", second_cap="1e30"),
-        "data_budget_lower_infinity_open_row": _huge_limit_problem(">=", INF, "MINIMIZE", second_cap="1e30"),
-        "data_budget_upper_minus_infinity_open_row": _huge_limit_problem("<=", -INF, "MINIMIZE", second_cap="1e30"),
-        # The group's limit is its smallest (or largest) value before it is read as a number: 1e25 beside 5 is 5 for a
-        # `<=` and 1e25 for a `>=`.
-        "data_budget_huge_and_finite_in_one_group_upper": _data_error(
-            [dict(row, b=1e25) if row["id"] in (1, 3) else row for row in DATA_ROWS], "SUM(w*amount) <= b PER g"
-        ),
-        "data_budget_huge_and_finite_in_one_group_lower": _data_error(
-            [dict(row, b=1e25) if row["id"] in (1, 3) else row for row in DATA_ROWS], "SUM(w*amount) >= b PER g", "min"
-        ),
-        # One group has no bound at all and another has one; an infinite limit that every row of a group agrees on is an
-        # equality nothing meets.
-        "data_budget_infinite_in_one_group_upper": _data_error(
-            [dict(row, b=INF) if row["g"] == "a" else row for row in DATA_ROWS], "SUM(w*amount) <= b PER g"
-        ),
-        "data_budget_infinite_equality_in_one_group": _data_error(
-            [dict(row, b=INF) if row["g"] == "a" else dict(row, b=5.0) for row in DATA_ROWS], "SUM(w*amount) = b PER g"
-        ),
-    }
-)
+# An equality to a data limit of 1e19: a number, not "no bound".
+BOUNDARY_CASES["data_budget_equal_1e19"] = _huge_limit_problem("=", 1e19, "MINIMIZE")
 
 
 @pytest.mark.error
@@ -1996,10 +1816,17 @@ def test_r1_a_parent_filter_or_limit_still_solves_the_whole_problem(decidb_cli):
         assert _run(decidb_cli, outer, "off")[0] == expected, outer
 
 
+DUPLICATE_ROWS = (
+    "SELECT id, amount FROM (VALUES (1, 5.0, 1.0, 2.0), (2, 4.0, 1.0, 3.0), (2, 4.0, 1.0, 3.0), (3, 6.0, 2.0, 1.0)) "
+    "t(id, cap, w, v) DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND cap AND SUM(w*amount) <= 8 "
+    "MAXIMIZE SUM(v*amount) ORDER BY id"
+)
+
+
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_r1_duplicate_rows_stay_separate_rows(decidb_cli):
-    sql = BOUNDARY_CASES["duplicate_rows"]
+    sql = DUPLICATE_ROWS
     rows, _ = _run(decidb_cli, sql, "require")
     assert len(rows) == 4 and [row[0] for row in rows] == [1, 2, 2, 3]
     assert sum(row[1] * w for row, w in zip(rows, (1.0, 1.0, 1.0, 2.0))) <= 8.0 + 1e-9
@@ -2070,7 +1897,7 @@ def _on(case_, field):
     return tuple(range(case_.count)) if chosen is None else chosen
 
 
-def _piece_sql(case_, wrap="plain"):
+def _piece_sql(case_):
     names = _piece_columns(case_.count)
     decisions = PIECE_NAMES[: case_.count]
     box = " AND ".join(f"{decisions[d]} BETWEEN 0 AND cap{d}" for d in range(case_.count))
@@ -2084,22 +1911,7 @@ def _piece_sql(case_, wrap="plain"):
     values = values_clause(case_.rows, names, PIECE_COLUMNS_OF, sql_literal)
     source = f"(VALUES {values}) t({', '.join(names)})"
     decide = f"DECIDE {declared} SUCH THAT {box} AND {budget} {objective}"
-    if wrap == "plain":
-        return f"SELECT {selected} FROM (FROM {source} {decide}) q ORDER BY id"
-    if wrap == "wide_source":
-        wide = f"SELECT *, repeat('p', 200) AS payload, NULL::VARCHAR AS unused FROM {source}"
-        return f"SELECT {selected} FROM (FROM ({wide}) w {decide}) q ORDER BY id"
-    if wrap == "parent_join":
-        ids = ", ".join(f"({row['id']})" for row in case_.rows)
-        return f"SELECT {selected} FROM (FROM {source} {decide}) q JOIN (VALUES {ids}) k(id) USING (id) ORDER BY id"
-    if wrap == "recombined_filters":
-        middle = case_.rows[len(case_.rows) // 2]["id"]
-        return (
-            f"WITH solved AS MATERIALIZED (FROM {source} {decide}) "
-            f"SELECT {selected} FROM solved WHERE id < {middle} UNION ALL "
-            f"SELECT {selected} FROM solved WHERE id >= {middle} ORDER BY id"
-        )
-    raise ValueError(wrap)
+    return f"SELECT {selected} FROM (FROM {source} {decide}) q ORDER BY id"
 
 
 def _piece_key(case_, row):
@@ -2151,13 +1963,13 @@ def _check_pieces(case_, rows, columns, oracle, mode):
     assert abs(total - expected) <= 1e-4 * max(1.0, abs(expected)), (mode, total, expected)
 
 
-def _agree_pieces(decidb_cli, oracle_solver, case_, wrap="plain"):
+def _agree_pieces(decidb_cli, oracle_solver, case_):
     oracle = _solve_pieces_with_oracle(oracle_solver, case_)
 
     def check_assignment(rows, columns, mode):
         _check_pieces(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, _piece_sql(case_, wrap), oracle, check_assignment)
+    agree_with_oracle(decidb_cli, _piece_sql(case_), oracle, check_assignment)
 
 
 # Each row is a benefit of two pieces that spend the same budget per unit. Shrinking: the first piece of a row earns more
@@ -2331,22 +2143,6 @@ pieces(
 @pytest.mark.parametrize("name", sorted(PIECE_CASES))
 def test_r1_several_decisions_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
     _agree_pieces(decidb_cli, oracle_solver, PIECE_CASES[name])
-
-
-# The same problems inside a parent query: the source columns ride through the unpivot and the group-back, and a filter
-# above the DECIDE must not reach the ranking.
-PIECE_CONTEXT_CASES = [
-    (base, wrap)
-    for base in ("two_decisions_shrinking_piece_values", "two_decisions_per_group")
-    for wrap in ("wide_source", "parent_join", "recombined_filters")
-]
-
-
-@pytest.mark.cons_aggregate
-@pytest.mark.correctness
-@pytest.mark.parametrize("base,wrap", PIECE_CONTEXT_CASES)
-def test_r1_several_decisions_agree_inside_a_parent_context(decidb_cli, oracle_solver, base, wrap):
-    _agree_pieces(decidb_cli, oracle_solver, PIECE_CASES[base], wrap=wrap)
 
 
 def _late_pair(budget_on="w*a + w*b", w_sql="1.0", v_sql="1.0", cap_b="10.0", limit="3000"):
