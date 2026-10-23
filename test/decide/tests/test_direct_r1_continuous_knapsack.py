@@ -1941,6 +1941,38 @@ def test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key(decidb_
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
+@pytest.mark.parametrize(
+    "budget, groups",
+    [("SUM(w*x) <= 20000 WHEN f", 2), ("SUM(w*x) <= 2000 PER g", 4)],
+    ids=["when", "per"],
+)
+def test_r1_hash_joins_build_on_the_group_rows(decidb_cli, tmp_path, budget, groups):
+    # The aggregates over the items are estimated as large as the join that feeds them, so an inner join of the items
+    # to the group rows used to build its hash table on the items. A keyed join builds on the group rows.
+    setup = (
+        "CREATE OR REPLACE TEMP TABLE r1_many AS SELECT i AS id, 1.0 + (i % 3) AS w, 2.0 + (i % 5) AS v, 3.0 AS cap, "
+        "i % 4 AS g, i % 2 = 0 AS f FROM range(20000) t(i);"
+    )
+    path = tmp_path / "profile_joins.json"
+    query = f"SELECT id, x FROM (FROM r1_many DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND {budget} MAXIMIZE SUM(v*x)) q"
+    decidb_cli.execute_raw(
+        f"SET decide_direct_solve='require'; {setup} "
+        f"PRAGMA enable_profiling='json'; PRAGMA profiling_output='{path}'; {query}"
+    )
+    builds = []
+
+    def visit(node):
+        if node.get("operator_type") == "HASH_JOIN":
+            builds.append(node["children"][1]["operator_cardinality"])
+        for child in node.get("children", []):
+            visit(child)
+
+    visit(json.loads(path.read_text()))
+    assert len(builds) == 3 and max(builds) <= groups, builds
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
 def test_r1_plan_materializes_a_source_that_is_not_a_table_scan(decidb_cli):
     # A join is read once, as a materialized CTE, and each stage reads the copy.
     setup = (

@@ -1276,13 +1276,17 @@ private:
 	}
 
 	//! Joins an item plan to a group plan on the group key, compared with IS NOT DISTINCT FROM: the cross product with
-	//! the group's one row when there is no key.
+	//! the group's one row when there is no key. With a key the join is a SINGLE join, the form DuckDB uses to give
+	//! each row of a scalar subquery its one matching row: the group key is unique in the group plan and every item's
+	//! group is in it. A SINGLE join has no inverse, so BuildProbeSideOptimizer keeps the group plan the build side,
+	//! and JOIN_ORDER estimates it as its item child, whereas an inner join is estimated from the aggregates' child/2
+	//! cardinalities as far larger than either side and gets flipped to build on the items.
 	unique_ptr<LogicalOperator> JoinOnKey(unique_ptr<LogicalOperator> items, const vector<ColumnBinding> &item_key,
 	                                      unique_ptr<LogicalOperator> groups, const vector<ColumnBinding> &group_key) {
 		if (key_types.empty()) {
 			return LogicalCrossProduct::Create(std::move(items), std::move(groups));
 		}
-		auto join = make_uniq<LogicalComparisonJoin>(JoinType::INNER);
+		auto join = make_uniq<LogicalComparisonJoin>(JoinType::SINGLE);
 		for (idx_t i = 0; i < key_types.size(); i++) {
 			JoinCondition key_equal;
 			key_equal.comparison = ExpressionType::COMPARE_NOT_DISTINCT_FROM;
