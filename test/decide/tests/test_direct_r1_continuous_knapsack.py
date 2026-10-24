@@ -1874,24 +1874,26 @@ def _profiled_windows(decidb_cli, tmp_path, query):
     return widths
 
 
-def _profiled_unnest_inputs(decidb_cli, tmp_path, query, setup=WIDE_SETUP):
-    """Runs the query under the JSON profiler; returns (rows, expressions of the child projection) for each UNNEST."""
-    path = tmp_path / "profile_unnest.json"
+def _profiled_unpivots(decidb_cli, tmp_path, query, setup=WIDE_SETUP):
+    """Runs the query under the JSON profiler; returns (rows, expressions of the left child) for each CROSS_PRODUCT whose
+    right child is a scan of the decision numbers (a COLUMN_DATA_SCAN)."""
+    path = tmp_path / "profile_unpivot.json"
     decidb_cli.execute_raw(
         f"SET decide_direct_solve='require'; {setup} "
         f"PRAGMA enable_profiling='json'; PRAGMA profiling_output='{path}'; {query}"
     )
-    unnests = []
+    unpivots = []
 
     def visit(node):
-        if node.get("operator_type") == "UNNEST":
-            (child,) = node["children"]
-            unnests.append((node["operator_cardinality"], child["extra_info"]["Projections"]))
+        if node.get("operator_type") == "CROSS_PRODUCT":
+            left, right = node["children"]
+            if right["operator_type"] == "COLUMN_DATA_SCAN":
+                unpivots.append((node["operator_cardinality"], left["extra_info"]["Projections"]))
         for child in node.get("children", []):
             visit(child)
 
     visit(json.loads(path.read_text()))
-    return unnests
+    return unpivots
 
 
 @pytest.mark.cons_aggregate
@@ -2572,29 +2574,32 @@ def _wide_pair_query(budget):
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_r1_several_decisions_plan_has_one_sort_one_unnest_and_one_aggregate(decidb_cli, tmp_path):
+def test_r1_several_decisions_plan_has_one_sort_one_unpivot_and_one_aggregate(decidb_cli, tmp_path):
     # Two decisions with constant limits run the same aggregate-then-join plan as one: one sort over narrow columns (the
-    # price, the rooms and their running sum, never a source column), one unnest of the narrow lists of prices and rooms
-    # only, and no row number and no hash aggregate that groups the items back into rows.
+    # price, the rooms and their running sum, never a source column), one unpivot (a cross product with the decision
+    # numbers, not an UNNEST) of the narrow prices and rooms only, and no row number and no hash aggregate that groups the items back into rows.
     scopes = (("<= 2000", False), ("<= 500 WHEN f PER g", True))
     for limit, scoped in scopes:
         pair = _wide_pair_query(f"SUM(w*x + w*y) {limit}")
         plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {pair}").stdout
         assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
         assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan, plan
-        assert len(_ordered_windows(plan)) == 1 and _count(plan, "UNNEST") == 1, plan
+        assert len(_ordered_windows(plan)) == 1 and _count(plan, "UNNEST") == 0, plan
         assert "ROW_NUMBER" not in plan, plan
         # The operators that group and join are those of one decision: nothing groups items back.
         single = _wide_query(f"SUM(w*x) {limit}")
         single_plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {single}").stdout
-        assert _count(single_plan, "UNNEST") == 0, single_plan
-        for operator in ("HASH_GROUP_BY", "UNGROUPED_AGGREGATE", "HASH_JOIN", "CROSS_PRODUCT", "WINDOW"):
+        assert _count(single_plan, "UNNEST") == 0 and _count(single_plan, "COLUMN_DATA_SCAN") == 0, single_plan
+        for operator in ("HASH_GROUP_BY", "UNGROUPED_AGGREGATE", "HASH_JOIN", "WINDOW"):
             assert _count(plan, operator) == _count(single_plan, operator), (operator, plan)
+        # The one cross product the pair adds is the unpivot.
+        assert _count(plan, "CROSS_PRODUCT") == _count(single_plan, "CROSS_PRODUCT") + 1, plan
+        assert _count(plan, "COLUMN_DATA_SCAN") == 1, plan
         sorts = [window for window in _profiled_windows(decidb_cli, tmp_path, pair) if window[0]]
         assert [(rows, width <= (6 if scoped else 5) * 8) for _, rows, width in sorts] == [(4000, True)], sorts
-        # The unnest reads the group key (with a scope) and the two lists, nothing else.
-        unnests = _profiled_unnest_inputs(decidb_cli, tmp_path, pair)
-        assert [(rows, len(inputs)) for rows, inputs in unnests] == [(4000, 4 if scoped else 2)], unnests
+        # The unpivot reads the group key (with a scope), and the price and room of each decision, nothing else.
+        unpivots = _profiled_unpivots(decidb_cli, tmp_path, pair)
+        assert [(rows, len(inputs)) for rows, inputs in unpivots] == [(4000, 6 if scoped else 4)], unpivots
 
 
 @pytest.mark.cons_aggregate
@@ -2618,7 +2623,14 @@ def test_r1_a_limit_from_the_data_runs_the_plan_of_a_constant_limit(decidb_cli, 
     plan = plans["data"]
     assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
     assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan and len(_ordered_windows(plan)) == 1, plan
-    for operator in ("HASH_GROUP_BY", "UNGROUPED_AGGREGATE", "HASH_JOIN", "CROSS_PRODUCT", "WINDOW", "UNNEST"):
+    for operator in (
+        "HASH_GROUP_BY",
+        "UNGROUPED_AGGREGATE",
+        "HASH_JOIN",
+        "CROSS_PRODUCT",
+        "WINDOW",
+        "COLUMN_DATA_SCAN",
+    ):
         assert _count(plan, operator) == _count(plans["constant"], operator), (operator, plan)
     windows = _profiled_windows(decidb_cli, tmp_path, query("cap * 500"))
     ((_, rows, width),) = [window for window in windows if window[0]]

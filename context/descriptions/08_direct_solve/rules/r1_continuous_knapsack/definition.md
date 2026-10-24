@@ -161,10 +161,11 @@ With no scope there is one group: the aggregates have no `GROUP BY` and the join
 | 5. Answer | the source rows joined to the group's numbers, then a projection | the source columns the parent reads, one answer per decision, the verdict column | no |
 
 Stage 1 reads the source for stages 2, 3, 4 and 5. Stage 3 holds only the narrow items, so the one sort carries a few
-columns, never the source's. With several decisions, stage 3 unpivots only the narrow columns (an unnest of one list
-per column, one entry per decision); stages 2 and 4 sum over the decisions of a row inside one aggregate input, and
-stage 5 computes each decision's answer in its own column. No row number, unnest of source columns or group-back is
-needed, because a row's answer reads only its own values and its group's numbers.
+columns, never the source's. With several decisions, stage 3 unpivots only the narrow columns (a cross product with a
+constant relation of the decision numbers, then a projection that picks each decision's column); stages 2 and 4 sum
+over the decisions of a row inside one aggregate input, and stage 5 computes each decision's answer in its own column.
+No row number, unnest of source columns or group-back is needed, because a row's answer reads only its own values and
+its group's numbers.
 
 **Every row is checked before any is released.** Stage 2 evaluates every row's NULL and NaN checks and raises on the
 first bad value, and its projection raises infeasible, then unbounded. Stage 5's rows come out of a join with the

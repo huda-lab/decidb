@@ -1,8 +1,8 @@
 # R1 (continuous knapsack) — what works today
 
-Verified on 2026-10-23 on top of `d808c5f9f2` with the trimmed R1 tests: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 2,987 passed (no
-failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,986 passed and one failure that needs Gurobi
+Verified on 2026-10-24 on top of `99488c2b04` with the cross-product unpivot: `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,019 passed (no
+failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,018 passed and one failure that needs Gurobi
 (`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 2,302 assertions in 59 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp`; its per-row bounds and the linear terms of the
@@ -126,8 +126,11 @@ products with one row.
 
 With several decisions, each read computes every decision's item values in columns of their own (`t_0`, `t_1`, ...).
 Stages 1 and 3 sum over the decisions of a row inside one aggregate input, and the extreme open prices combine with
-`greatest` and `least`. Stage 2 unnests only two narrow lists per row, the decisions' prices and their rooms, so the
-sort carries the group key, the price, the room and its running sum. Stage 4 gives one answer column per decision.
+`greatest` and `least`. Stage 3 unpivots only the narrow items: the row, with each decision's price and room in columns of
+its own, is crossed with a constant relation of the decision numbers, and a projection picks the price and room of the
+decision a number names. That costs a fraction of DuckDB's `UNNEST` of two lists (10,000,000 items took 0.03 s in
+isolation against 0.85 s), which the plan used before. The sort carries the group key, the price, the room and its
+running sum. Stage 4 gives one answer column per decision.
 
 No row number, breaker, group-back or window over source columns is in the plan, and the row id the driver appends to
 a stored source is passed through as a source column.
@@ -178,12 +181,12 @@ rooms; one sort by `t`; a running sum; a join back that gives every row its answ
 | 1M | floor | `le_positive` | 0.30 s | 0.11 s | 4.6 | 217 MiB |
 | 1M | direct | `le_positive` | 0.61 s | 0.16 s | 6.0 | 178 MiB |
 | 1M | direct | `per_groups` | 0.71 s | 0.16 s | 6.5 | 168 MiB |
-| 1M | direct | `two_decisions` | 1.99 s | 0.47 s | 8.1 | 345 MiB |
+| 1M | direct | `two_decisions` | 1.24 s | 0.35 s | 5.6 | 403 MiB |
 | 1M | Gurobi | `le_positive` | | 1.20 s | 1.06 | 1.4 GiB |
 | 5M | floor | `le_positive` | 1.62 s | 0.51 s | 5.3 | 1.2 GiB |
 | 5M | direct | `le_positive` | 3.04 s | 0.60 s | 8.2 | 873 MiB |
 | 5M | direct | `per_groups` | 3.58 s | 0.61 s | 8.3 | 391 MiB |
-| 5M | direct | `two_decisions` | 15.72 s | 2.52 s | 8.4 | 1.5 GiB |
+| 5M | direct | `two_decisions` | 6.04 s | 1.31 s | 8.2 | 1.7 GiB |
 | 5M | Gurobi | `le_positive` | | 7.15 s | 1.02 | 4.8 GiB |
 | 5M | Gurobi | `per_groups` | | 9.47 s | 3.66 | 5.3 GiB |
 | 5M | Gurobi | `two_decisions` | | 14.73 s | 1.00 | 5.0 GiB |
@@ -191,8 +194,12 @@ rooms; one sort by `t`; a running sum; a join back that gives every row its answ
 **Where the time goes.** On one budget the plan runs 1.2 times the floor with all threads (0.60 s against 0.51 s at
 5,000,000 rows) and about twice its work on one thread (3.04 s against 1.62 s): it reads the source four times, and each
 read evaluates the per-row checks and item values the floor does not have. It keeps 6 to 8 cores busy. `PER` costs no
-more than one budget. Two decisions run 4.2 times one decision at 5,000,000 rows: every read computes both decisions'
-item values, and the one sort holds 10,000,000 items; CPU is 21.2 s against 4.9 s. A budget from an aggregate adds the
+more than one budget. Two decisions run about 2 times one decision at 5,000,000 rows (1.8 to 2.2 times over repeated
+runs with all threads, 2.03 on one thread, 2.1 times the CPU: 10.5 s against 4.9 s), because the one sort holds
+10,000,000 items and each read computes both decisions' item values. The cross-product unpivot of stage 3 brought this
+down from 4.2 times; what remains is the work of twice the items. The `two_decisions` rows of this table were measured
+on 2026-10-24 on top of `99488c2b04` with the cross-product unpivot, three runs each; the `two decisions` row of the
+table above is from the earlier sweep. A budget from an aggregate adds the
 right-hand-side rewrite's window over the source, which also makes the source a materialized CTE.
 
 **Reproduce** (after `make release`; the sweep takes about 20 minutes, building the databases included):

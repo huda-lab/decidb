@@ -14,14 +14,14 @@
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
-#include "duckdb/planner/expression/bound_unnest_expression.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_aggregate.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_cross_product.hpp"
+#include "duckdb/planner/operator/logical_dummy_scan.hpp"
+#include "duckdb/planner/operator/logical_expression_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
-#include "duckdb/planner/operator/logical_unnest.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
@@ -1122,8 +1122,8 @@ private:
 //!
 //! Each stage reads the source once more (DirectSourceReader) through ItemStages::Build, which computes the
 //! values of every item on that read, and keeps what it needs of them in its own struct of bindings. A row has one
-//! item per decision, each in columns of its own; no stage unpivots the row except the price, which unnests the narrow
-//! lists of prices and rooms (Narrow):
+//! item per decision, each in columns of its own; no stage unpivots the row except the price, which crosses the narrow
+//! prices and rooms with the decision numbers (Narrow):
 //!
 //!   1. item values      ItemColumns   a projection over a read of the source; per decision, DecisionColumns
 //!   2. group totals     TotalColumns  a hash aggregate per group over stage 1 (a row adds the sum of its items, and
@@ -1462,10 +1462,12 @@ private:
 	}
 
 	//! The narrow items of stage 3: the group key, the price t and the finite room up plus the finite room down of
-	//! every item. With several decisions a row's items are unpivoted here, and only here: one list of the prices and
-	//! one of the rooms, one entry per decision, unnested in step (DuckDB's UNNEST of two lists). A projection after
-	//! the unnest drops the lists, so the window carries nothing else. No row number or group-back is needed, because
-	//! an item of the price is read for its price and room alone.
+	//! every item. With several decisions a row's items are unpivoted here, and only here: the row, with each
+	//! decision's price and room in columns of their own, is crossed with a constant relation of the decision numbers
+	//! (the unpivot of a fixed list of columns; DuckDB's UNNEST of two lists costs far more per item), and a
+	//! projection after the cross product picks the price and room of the decision the number names, so the window
+	//! carries nothing else. No row number or group-back is needed, because an item of the price is read for its
+	//! price and room alone.
 	struct Narrow {
 		unique_ptr<LogicalOperator> plan;
 		vector<ColumnBinding> key;
@@ -1480,36 +1482,51 @@ private:
 			rooms.push_back(calc.Add(item.up_fin, item.down_fin));
 		}
 		Narrow narrow;
-		ProjectionStage lists(binder, calc);
-		vector<ColumnBinding> list_key;
+		ProjectionStage narrowed(binder, calc);
+		vector<ColumnBinding> item_key;
 		for (idx_t i = 0; i < key_types.size(); i++) {
-			list_key.push_back(lists.Add(KeyColumn(i, columns.keys)));
+			item_key.push_back(narrowed.Add(KeyColumn(i, columns.keys)));
 		}
 		if (prices.size() == 1) {
-			narrow.key = list_key;
-			narrow.price = lists.Add(prices[0]);
-			narrow.rooms = lists.Add(rooms[0]);
-			narrow.plan = lists.Finish(std::move(items.plan));
+			narrow.key = item_key;
+			narrow.price = narrowed.Add(prices[0]);
+			narrow.rooms = narrowed.Add(rooms[0]);
+			narrow.plan = narrowed.Finish(std::move(items.plan));
 			return narrow;
 		}
-		auto list_type = LogicalType::LIST(LogicalType::DOUBLE);
-		auto price_list = lists.Add(calc.Fn("list_value", prices));
-		auto room_list = lists.Add(calc.Fn("list_value", rooms));
-		auto unnest_index = binder.GenerateTableIndex();
-		auto unnest = make_uniq<LogicalUnnest>(unnest_index);
-		for (auto list : {price_list, room_list}) {
-			auto element = make_uniq<BoundUnnestExpression>(LogicalType::DOUBLE);
-			element->child = calc.Out(calc.Col(list_type, list));
-			unnest->expressions.push_back(std::move(element));
+		// One item per decision: the row's plan is crossed with a constant relation that numbers the decisions, and
+		// each item takes the price and room of the decision its number names.
+		vector<ColumnBinding> price_columns, room_columns;
+		vector<vector<unique_ptr<Expression>>> numbers;
+		for (idx_t k = 0; k < prices.size(); k++) {
+			price_columns.push_back(narrowed.Add(prices[k]));
+			room_columns.push_back(narrowed.Add(rooms[k]));
+			vector<unique_ptr<Expression>> row;
+			row.push_back(calc.Out(calc.Constant(Value::BIGINT(NumericCast<int64_t>(k)))));
+			numbers.push_back(std::move(row));
 		}
-		unnest->children.push_back(lists.Finish(std::move(items.plan)));
+		auto numbers_index = binder.GenerateTableIndex();
+		auto numbers_get = make_uniq<LogicalExpressionGet>(numbers_index, vector<LogicalType> {LogicalType::BIGINT},
+		                                                   std::move(numbers));
+		numbers_get->children.push_back(make_uniq<LogicalDummyScan>(binder.GenerateTableIndex()));
+		auto crossed = LogicalCrossProduct::Create(narrowed.Finish(std::move(items.plan)), std::move(numbers_get));
+		auto number = calc.Col(LogicalType::BIGINT, ColumnBinding(numbers_index, 0));
+		auto pick = [&](const vector<ColumnBinding> &values) {
+			auto chosen = DoubleColumn(values.back());
+			for (idx_t k = values.size() - 1; k > 0; k--) {
+				auto named = calc.Cmp(ExpressionType::COMPARE_EQUAL, number,
+				                      calc.Constant(Value::BIGINT(NumericCast<int64_t>(k - 1))));
+				chosen = calc.If(named, DoubleColumn(values[k - 1]), chosen);
+			}
+			return chosen;
+		};
 		ProjectionStage out(binder, calc);
 		for (idx_t i = 0; i < key_types.size(); i++) {
-			narrow.key.push_back(out.Add(KeyColumn(i, list_key)));
+			narrow.key.push_back(out.Add(KeyColumn(i, item_key)));
 		}
-		narrow.price = out.Add(DoubleColumn(ColumnBinding(unnest_index, 0)));
-		narrow.rooms = out.Add(DoubleColumn(ColumnBinding(unnest_index, 1)));
-		narrow.plan = out.Finish(std::move(unnest));
+		narrow.price = out.Add(pick(price_columns));
+		narrow.rooms = out.Add(pick(room_columns));
+		narrow.plan = out.Finish(std::move(crossed));
 		return narrow;
 	}
 
