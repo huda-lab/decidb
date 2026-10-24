@@ -148,28 +148,27 @@ An empty source returns no rows, whatever the limits are, as on the solver.
 
 ## Performance
 
-Measured 2026-10-23 on top of `c13fd57669`, on a machine with 11 cores and a background load average of 5 to 14 from
-other applications, with `benchmark/decide/profile_direct_r1.py`. Each run is a fresh `decidb` process that opens the
-stored database; peak memory is the process's own. Direct 3 runs (median), each solver 1 run; the solver path is `off`
-with `DECIDB_FORCE_SOLVER` set to `gurobi` or `highs`. The parent reads one aggregate row, so the time is the plan, not
-the transfer. Before timing, every shape's objective on direct and on Gurobi agreed within 1e-6.
+Measured 2026-10-24 on top of `5269ad7c5e`, on a machine with 11 cores, with `benchmark/decide/profile_direct_r1.py`.
+Each run is a fresh `decidb` process that opens the stored database; peak memory is the process's own. Direct 3 runs
+(median), each solver 1 run; the solver path is `off` with `DECIDB_FORCE_SOLVER` set to `gurobi` or `highs`. The parent
+reads one aggregate row, so the time is the plan, not the transfer. Before timing, every shape's objective on direct and on Gurobi agreed within 1e-6.
 
 | Shape, 5,000,000 rows | Direct | Direct peak | Gurobi | Gurobi peak | HiGHS | HiGHS peak | vs Gurobi | vs HiGHS |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| `<=` budget, positive weights | 0.74 s | 0.9 GiB | 7.60 s | 4.4 GiB | 24.8 s | 5.0 GiB | 10.2x | 33.4x |
-| `<=` budget, weights of mixed sign | 0.64 s | 0.8 GiB | 5.90 s | 4.6 GiB | 9.20 s | 4.7 GiB | 9.2x | 14.4x |
-| `>=` cover, `MINIMIZE` | 0.55 s | 0.9 GiB | 7.20 s | 5.0 GiB | 25.2 s | 5.1 GiB | 13.1x | 45.9x |
-| `=` budget | 0.61 s | 0.9 GiB | 7.34 s | 4.8 GiB | 25.3 s | 4.9 GiB | 12.0x | 41.4x |
-| `BETWEEN` budget | 0.66 s | 0.9 GiB | 8.35 s | 4.4 GiB | 27.1 s | 5.3 GiB | 12.7x | 41.3x |
-| `PER` 1,000 groups | 0.60 s | 0.4 GiB | 9.57 s | 5.2 GiB | 32.7 s | 5.3 GiB | 16.0x | 54.6x |
-| `WHEN` on the budget | 0.67 s | 0.9 GiB | 6.13 s | 5.3 GiB | 18.3 s | 5.5 GiB | 9.2x | 27.4x |
-| two decisions | 2.45 s | 1.6 GiB | 14.8 s | 5.0 GiB | 47.8 s | 6.0 GiB | 6.0x | 19.6x |
-| budget from a column, `PER` | 0.61 s | 0.4 GiB | 9.20 s | 6.0 GiB | 32.5 s | 5.9 GiB | 15.0x | 53.2x |
-| budget from an aggregate | 1.02 s | 1.4 GiB | 7.86 s | 4.9 GiB | 25.3 s | 4.4 GiB | 7.7x | 24.7x |
-| `<=` budget, parent reads only `COUNT(*)` | 0.57 s | 0.9 GiB | 7.28 s | 4.7 GiB | 24.8 s | 4.9 GiB | 12.7x | 43.3x |
+| `<=` budget, positive weights | 0.63 s | 0.9 GiB | 7.37 s | 3.8 GiB | 24.0 s | 4.5 GiB | 11.7x | 38.1x |
+| `<=` budget, weights of mixed sign | 0.65 s | 0.9 GiB | 5.80 s | 3.7 GiB | 8.98 s | 4.7 GiB | 8.9x | 13.7x |
+| `>=` cover, `MINIMIZE` | 0.62 s | 0.8 GiB | 7.06 s | 4.6 GiB | 24.0 s | 4.7 GiB | 11.4x | 38.6x |
+| `=` budget | 0.70 s | 0.9 GiB | 7.10 s | 4.4 GiB | 24.7 s | 4.7 GiB | 10.1x | 35.0x |
+| `BETWEEN` budget | 0.63 s | 0.9 GiB | 8.15 s | 4.3 GiB | 26.1 s | 4.4 GiB | 13.0x | 41.6x |
+| `PER` 1,000 groups | 0.58 s | 0.4 GiB | 9.33 s | 4.6 GiB | 31.6 s | 4.5 GiB | 16.1x | 54.6x |
+| `WHEN` on the budget | 0.73 s | 0.9 GiB | 6.23 s | 4.3 GiB | 18.2 s | 4.6 GiB | 8.5x | 24.9x |
+| two decisions | 1.36 s | 1.6 GiB | 14.7 s | 4.7 GiB | 46.9 s | 5.7 GiB | 10.8x | 34.4x |
+| budget from a column, `PER` | 0.61 s | 0.4 GiB | 8.96 s | 5.8 GiB | 31.5 s | 5.6 GiB | 14.7x | 51.5x |
+| budget from an aggregate | 1.08 s | 1.4 GiB | 7.46 s | 4.5 GiB | 24.5 s | 5.4 GiB | 6.9x | 22.7x |
+| `<=` budget, parent reads only `COUNT(*)` | 0.55 s | 0.9 GiB | 6.75 s | 5.6 GiB | 23.3 s | 5.5 GiB | 12.3x | 42.5x |
 
-At 1,000,000 rows direct runs 0.14 to 0.48 s (5.0x to 16.0x Gurobi, 9.5x to 39.3x HiGHS) and peaks at 0.2 to 0.4 GiB,
-against 1.4 to 2.6 GiB for Gurobi. Every shape beats both solvers at both sizes.
+At 1,000,000 rows direct runs 0.13 to 0.35 s (4.5x to 16.5x Gurobi, 9.0x to 41.2x HiGHS) and peaks at 0.2 to 0.4 GiB,
+against 1.4 to 2.2 GiB for Gurobi. Every shape beats both solvers at both sizes.
 
 **Floor and scaling.** Measured with `benchmark/decide/profile_r1_floor.py` in the same session; medians of 3
 interleaved runs. The floor is a hand-written DuckDB query of the narrow shape for `le_positive`: keys, `t = v / w` and
@@ -198,8 +197,7 @@ more than one budget. Two decisions run about 2 times one decision at 5,000,000 
 runs with all threads, 2.03 on one thread, 2.1 times the CPU: 10.5 s against 4.9 s), because the one sort holds
 10,000,000 items and each read computes both decisions' item values. The cross-product unpivot of stage 3 brought this
 down from 4.2 times; what remains is the work of twice the items. The `two_decisions` rows of this table were measured
-on 2026-10-24 on top of `99488c2b04` with the cross-product unpivot, three runs each; the `two decisions` row of the
-table above is from the earlier sweep. A budget from an aggregate adds the
+on 2026-10-24 on top of `99488c2b04` with the cross-product unpivot, three runs each. A budget from an aggregate adds the
 right-hand-side rewrite's window over the source, which also makes the source a materialized CTE.
 
 **Reproduce** (after `make release`; the sweep takes about 20 minutes, building the databases included):
