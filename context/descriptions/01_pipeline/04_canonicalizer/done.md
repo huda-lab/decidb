@@ -118,7 +118,7 @@ a rendering job rather than a re-plumbing job.
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
 | **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
-| **C4** | Both additive spines contain only `+`, binary `-`, unary `-`, and binder-generated casts over decision algebra. Data casts are atoms. The pass never opens an atom or distributes a cast. |
+| **C4** | Both additive spines contain only `+`, binary `-`, unary `-`, and binder-generated casts over decision algebra. Data casts are atoms. A factor known before the query runs distributes over an additive child (`2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`), as a negation does; a row-varying factor or a subquery over a sum stays one atom. Like decision terms under such factors merge into one (`x + x` is `2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`); a group whose factors cancel is left as written. The pass never opens an atom or distributes a cast. |
 | **C5** | Every comparison takes one shape of §3.10: per-row (no decision reducer), aggregate (decision reducers sharing one `by` key, beside query-wide terms only) or value (any other side with a decision reducer, which the value rewrite turns per-row). A shape §3.10 refuses is rejected here. |
 | **C6** | A factor attached to a decision-bearing reducer has one canonical representation, outside the reducer. In the objective it is one value for the whole query; in a constraint it may vary by row, which makes the comparison VALUE. A decision is never a factor. |
 | **C7** | Structural tags and source provenance survive rebuilding. The result is a fixed point: `Canon(Canon(c)) == Canon(c)`. |
@@ -241,7 +241,10 @@ and had nothing to fall back on when the sign was unknown.
 What may be a factor (`PeelScale`, the single place that judges it):
 
 - literals and foldable expressions, uncorrelated scalar subqueries, and arithmetic
-  made entirely of query-wide values — anywhere;
+  made entirely of query-wide values — anywhere; so too a factor that is identically
+  zero before the query runs whatever its data factors hold (`0 * w`, read by
+  `PlanTimeSignOf` in `decide_cast_policy`): it is one value, 0, for the whole query, and
+  the term it scales vanishes rather than taking the VALUE shape;
 - a row-varying column or a correlated subquery — in a constraint, where it is a term
   of each row's constraint: the comparison takes the VALUE shape (§3.10), whose helper
   decision the row's factor multiplies. The objective is produced once, so there it is
@@ -263,6 +266,30 @@ nesting level is judged separately, so an illegal inner factor names itself —
 The pass does not pre-evaluate a query-wide subquery; composition builds an
 expression, so `(SELECT a) * ((SELECT b) * SUM(x))` emits the factor
 `(SELECT a) * (SELECT b)` and the values still arrive at execution.
+
+**A factor known before the query runs distributes over an additive spine.**
+`2 * (min(x) - 1) >= -6` is emitted as `2 * min(x) >= -6 + 2 * 1` and
+`(min(x) + 1) / 2 >= -0.5` as `min(x) / 2 >= -0.5 - 1 / 2` (`Decompose` carries the
+factor down and `ComposeScale` folds it into each atom's own factor), exactly as a
+negation already distributes. Without it the product was one atom holding a reducer
+inside an expression, the VALUE shape, and a bound written that way never reached the
+MIN/MAX rewrite or bound absorption (2026-10-23). A factor that varies by row, or a
+subquery, is not distributed: the product stays one atom and takes the VALUE shape.
+
+**Like terms merge.** After decomposition, decision atoms that are multiples of one
+term, each by a factor known before the query runs (a reducer's peeled factor, none
+counting as 1 and a divisor as its reciprocal; for a bare decision the constant factors
+it stands under, `PeelBareDecisionFactors`), become one atom scaled by the sum of their
+signed factors (`MergeLikeAtoms`): `x + x >= -4` is emitted as `2 * x >= -4`,
+`x - 3 * x <= 4` as `-2 * x <= 4`, `2 * min(x) + min(x) >= -6` as `3 * min(x) >= -6`. The
+merge runs on each written side and again on the partitioned decision side, where a term
+that crossed the relation meets its twin: `3 * x >= x - 4` is `2 * x >= -4`, and the
+result is a fixed point (C7). The linear form merged
+like terms at extraction already, so no model row changes; what changes is that a
+bound written as a repeated term now reaches the MIN/MAX rewrite and bound absorption
+as the scaled single term it is (2026-10-25). A group whose factors cancel (`x - x`) is
+left as written rather than dropped, which could empty the side. A row-varying factor
+or a subquery is not summable and its atom is not merged.
 
 **A lone negated reducer** carries its sign in its factor:
 `-max(e) <= -cap` is emitted as `-1 * max(e) <= -cap`, `-(2 * max(e))` as

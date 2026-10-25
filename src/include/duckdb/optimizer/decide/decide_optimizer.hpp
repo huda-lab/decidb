@@ -23,7 +23,7 @@ class Optimizer;
 //! Current passes, in the order OptimizeDecide runs them:
 //!   - RewriteNorm: lowers the bound NORM marker, including L0 indicators/links
 //!   - RewriteInDomain: lowers DECIDE variable IN lists to indicator formulations
-//!   - TagAbsConstraintsForBigM: marks the ABS nodes needing a Big-M envelope.
+//!   - TagAbsForBigM: marks the ABS nodes needing a Big-M envelope, in the constraints and the objective.
 //!     Must precede RewriteAbs, which replaces the nodes it marks
 //!   - RewriteAbs: detects ABS(expr) over decide vars, creates auxiliary REAL vars,
 //!     replaces ABS nodes with aux var refs, generates linearization constraints
@@ -185,16 +185,16 @@ private:
 	struct AbsPairInfo {
 		idx_t aux_idx;
 		unique_ptr<Expression> inner_expr;
-		bool in_objective;   // true = ABS came from the objective, false = from a constraint
 		//! Alias of the user comparison this ABS was written in, so the envelope rows
-		//! it generates carry the clause id back to EXPLAIN and diagnostics. Empty for
-		//! an ABS in the objective, which is not inside a comparison.
+		//! it generates carry the clause id back to EXPLAIN and diagnostics; the
+		//! objective's tag for an ABS in the objective.
 		string source_alias;
-		bool needs_bigm;     // true = aux needs Big-M upper envelope (constraint
-		                     //        hard-direction or MAXIMIZE+objective). When
-		                     //        false aux pins to |inner| naturally via
-		                     //        solver pressure (MINIMIZE objective, or
-		                     //        constraint shape that upper-bounds aux).
+		bool needs_bigm;     // true = aux needs Big-M upper envelope (a constraint
+		                     //        hard direction, an objective term the sense
+		                     //        pushes up or of unknown sign, or an ABS nested
+		                     //        inside another ABS). When false aux pins to
+		                     //        |inner| naturally via solver pressure or a
+		                     //        constraint shape that upper-bounds it.
 		//! The envelope rows read only the rows the clause's `when` (a copy, or null) keeps.
 		unique_ptr<Expression> when;
 		//! The ABS as a plan prints it: the auxiliary's name there, and its account's.
@@ -202,10 +202,11 @@ private:
 	};
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
-	//! replace with auxiliary variable references, and collect AbsPairInfo entries.
+	//! replace with auxiliary variable references, and collect AbsPairInfo entries,
+	//! innermost first. Whether an auxiliary is pinned exactly is read off the tag
+	//! TagAbsForBigM left on the node; this pass decides nothing about it.
 	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                       vector<AbsPairInfo> &abs_pairs, bool in_objective, const string &source_alias,
-	                       const Expression *when);
+	                       vector<AbsPairInfo> &abs_pairs, const string &source_alias, const Expression *when);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis

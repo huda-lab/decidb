@@ -335,6 +335,8 @@ The lower-envelope alone forces `d >= |expr|`. To pin `d` to exactly `|expr|`, o
 
 Classification is **per ABS occurrence and by sign**, not by which side of the comparison the ABS was written on. The constraint is read as `E <op> 0` with `E = LHS - RHS`; each ABS then carries an effective sign, and the question "does this comparison push `d` down?" has a single answer per occurrence. Sign is tracked through `+`, binary and unary `-`, casts, aggregate bodies, and numeric literal factors. A factor whose sign is known only at execution — a data column, as in `SUM(w * ABS(x - t))` — is classified as unknown and conservatively takes the Big-M path.
 
+**An ABS inside an ABS** — `ABS(ABS(e) - k)`, or `ABS(ABS(SUM(x) BY (g)) - k)` over a reducer — is supported: each ABS gets its own auxiliary, innermost first, and an ABS nested under another takes Path B, whatever the outer clause's direction or the objective's sense; under a factor of exactly zero neither the outer nor the inner needs anything, since the term is dead. The outer ABS is not monotone in its argument, so nothing else pins the inner auxiliary: held by its lower envelope alone it could float to wherever the outer clause is easiest to satisfy (over `x` in `[-1, 1]`, `abs(abs(x) - 2) <= 0` would hold at an inner value of 2 with no `x` reaching it). Over `x` in `[-2, 3]`, `abs(abs(sum(x) by (g)) - 2) <= 0` keeps every group's total at magnitude 2, so `MINIMIZE sum(x)` reaches -4. Tests: `test_nested_abs_*` in `test/decide/tests/test_abs_linearization.py`.
+
 **Path A (lower-envelope only) — when the constraint pushes `d` down.** The effective sign is positive under `<` / `<=`, or negative under `>` / `>=`. Covers `ABS(...) <= K` (LHS), `K >= ABS(...)` (RHS), the aggregate forms `SUM(ABS) <= K`, `MAX(ABS) <= K`, `MIN(ABS) <= K`, `AVG(ABS) <= K`, and the *positively-signed* ABS of a shape like `ABS(a - k) - ABS(b - k) <= 0`. The constraint itself caps `d` from above; the solver picks `d_i = |e_i|` to minimize slack. No extra variables.
 
 **On a backend that expresses ABS natively, Path B is not taken.** Gurobi states
@@ -352,15 +354,11 @@ backend still gets, and the two reach the same optimum wherever both can run. Se
 
 Combined with the lower envelope, these force `d = |expr|` exactly regardless of constraint direction. `M` is computed at execution time from the bounds of variables in `expr` — when Path B is used, **every DECIDE variable referenced inside `ABS(expr)` must have a finite bound, either declared or inferred** by implied-bound propagation (e.g. `SUM(x) = K` implies `x <= K`; see `../../01_pipeline/05_optimizer/done.md`). Only when no bound can be derived is the query rejected. (Path A queries don't need bounds because the constraint itself bounds `d`.)
 
-The classifier (`TagAbsConstraintsForBigM` in `decide_rewrite_abs.cpp`, via `CollectAbsWithSign`) walks the constraint tree once and tags each ABS occurrence with `ABS_NEEDS_BIGM_TAG` if it falls into Path B. A scope doesn't change classification — the per-row Big-M envelope is unconditional, and the scope only affects which rows participate in the outer aggregate or constraint.
+The classifier (`TagAbsForBigM` in `decide_rewrite_abs.cpp`, via `CollectAbsWithSign`) walks the constraint tree and the objective once and tags each ABS occurrence with `ABS_NEEDS_BIGM_TAG` if it falls into Path B. A scope doesn't change classification — the per-row Big-M envelope is unconditional, and the scope only affects which rows participate in the outer aggregate or constraint.
 
-### ABS in MINIMIZE objectives (lower-envelope)
+### ABS in objectives (by sign under the sense)
 
-Same lower-envelope rewrite applies. When minimizing `d`, the solver naturally pushes `d` down to `|expr|` — the lower bounds suffice.
-
-### ABS in MAXIMIZE objectives (Big-M upper-bound)
-
-For `MAXIMIZE SUM(ABS(expr))`, the lower-envelope alone is unsound: `d` has no ceiling and the solver pushes it to +∞, producing a spurious "unbounded" error. The fix introduces a binary sign indicator `y ∈ {0,1}` and two Big-M upper-bound constraints that pin `d = |expr|` exactly:
+The objective reads like a constraint, with the sense standing in for the relation: `MINIMIZE E` pins what `E <= K` pins and `MAXIMIZE E` what `E >= K` pins. A positive ABS under MINIMIZE (`MINIMIZE SUM(ABS(expr))`) and a negative one under MAXIMIZE (`MAXIMIZE -ABS(expr)`) are pushed down by the solver, so the lower envelope suffices. The other sign — `MAXIMIZE SUM(ABS(expr))`, `MINIMIZE 0 * SUM(x) - ABS(SUM(x) - 9)` — leaves `d` with no ceiling and the solver pushes it to +∞, a spurious "unbounded"; so does a data weight whose sign is unknown before the query runs (`MINIMIZE SUM(w * ABS(x - t))` with a negative `w` on some row). These take Path B, and so does an ABS under a MIN or MAX pushed its hard way (`MINIMIZE MIN(ABS(expr))`, `MAXIMIZE -MIN(ABS(expr))`, `MAXIMIZE MAX(ABS(expr))`): the extremum's own Big-M needs every member's box, which only the exact envelope gives an auxiliary. A factor that is exactly zero (`0 * SUM(ABS(expr))`) makes the term vanish and needs neither. Path B is a binary sign indicator `y ∈ {0,1}` and two Big-M upper-bound constraints that pin `d = |expr|` exactly:
 
 - `d <= expr  + 2M·(1−y)`  (upper-bound when `y=1` selects the positive branch)
 - `d <= −expr + 2M·y`      (upper-bound when `y=0` selects the negative branch)
@@ -368,12 +366,17 @@ For `MAXIMIZE SUM(ABS(expr))`, the lower-envelope alone is unsound: `d` has no c
 `M` is computed at execution time from the variable bounds involved in `expr`: `M = max_r(|rhs[r]| + Σ |coeff[t][r]| · max(|lb_t|, |ub_t|))` over all non-aux terms (this shares `DecideRowTermRange` with the other Big-M sites). **All DECIDE variables referenced inside `ABS(expr)` must have finite bounds** — declared or inferred by implied-bound propagation. Only if a variable still lacks a bound (lb ≤ −1e20 or ub ≥ 1e20) is an `InvalidInputException` raised naming the unbounded variable.
 
 ```sql
--- MINIMIZE: lower-envelope, no extra variables needed
+-- Pushed down by the sense: lower-envelope, no extra variables needed
 MINIMIZE SUM(ABS(new_hours - hours))
+MAXIMIZE SUM(x) - ABS(SUM(x) - 9)
 
--- MAXIMIZE: Big-M upper-bound, binary indicator y allocated per ABS term
+-- Pushed up by the sense: Big-M upper-bound, binary indicator y allocated per ABS term
 MAXIMIZE SUM(ABS(x - target))
+MINIMIZE 0 * SUM(x) - ABS(SUM(x) - 9)
 -- requires: x <= <upper_bound> (and optionally x >= <lower_bound>)
+
+-- A data weight: its sign is unknown before the query runs, so Big-M as well
+MINIMIZE SUM(w * ABS(x - target))
 
 -- In per-row constraints: bound deviation per row (lower-envelope, always correct)
 SUCH THAT ABS(new_qty - l_quantity) <= 5
@@ -385,8 +388,8 @@ SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
 `ABS()` without decision variables (e.g., `ABS(col1 - col2)`) is left as regular SQL — no rewrite occurs.
 
 **Code**:
-- Constraint classifier: `TagAbsConstraintsForBigM` in `decide_rewrite_abs.cpp` runs before `RewriteAbs`. Walks the constraint tree; for each comparison, `CollectAbsWithSign` gathers every ABS occurrence with the sign it carries in `LHS - RHS`, classifies each as Path A (sign pushes `d` down) or Path B (it does not), and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG`. BETWEEN/IN/equality/<> subtrees are conservatively tagged.
-- Optimizer rewrite: `DecideOptimizer::RewriteAbs` in `decide_rewrite_abs.cpp`. Phase 1 (`FindAndReplaceAbs`) reads the tag and propagates `needs_bigm` to `AbsPairInfo`. Phase 2 emits the lower envelope unconditionally. For each pair where `needs_bigm || (in_objective && MAXIMIZE)`, tags the lower-bound constraints with `ABS_UB_POS_TAG_PREFIX` / `ABS_UB_NEG_TAG_PREFIX` (payload: the **auxiliary's** index) and pushes an `AbsMaximizeLink{aux_idx, y_idx}` to `LogicalDecide::abs_maximize_links`. The `y` binary is allocated **only when the query is being lowered** (`!decide.use_native_constructs.abs`); a backend that states `aux = |t|` natively emits no Big-M, so there is nothing for a sign indicator to switch and `y_idx` stays `INVALID_INDEX`. `y` is one per row, so allocating it on the native arm would cost one dead binary per data row. The link vector is named `abs_maximize_links` for historical reasons but covers both Big-M users (objective MAXIMIZE and constraint hard-direction).
+- Classifier: `TagAbsForBigM` in `decide_rewrite_abs.cpp` runs before `RewriteAbs`. Walks the constraint tree and the objective; for each comparison, and for the objective body under its sense, `CollectAbsWithSign` gathers every ABS occurrence with the sign it carries in `LHS - RHS`, classifies each as Path A (sign pushes `d` down) or Path B (it does not), and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG`. BETWEEN/IN/equality/<> subtrees are conservatively tagged.
+- Optimizer rewrite: `DecideOptimizer::RewriteAbs` in `decide_rewrite_abs.cpp`. Phase 1 (`FindAndReplaceAbs`) reads the tag and propagates `needs_bigm` to `AbsPairInfo` (an ABS nested inside another ABS is pinned regardless). Phase 2 emits the lower envelope unconditionally. For each pair where `needs_bigm`, tags the lower-bound constraints with `ABS_UB_POS_TAG_PREFIX` / `ABS_UB_NEG_TAG_PREFIX` (payload: the **auxiliary's** index) and pushes an `AbsMaximizeLink{aux_idx, y_idx}` to `LogicalDecide::abs_maximize_links`. The `y` binary is allocated **only when the query is being lowered** (`!decide.use_native_constructs.abs`); a backend that states `aux = |t|` natively emits no Big-M, so there is nothing for a sign indicator to switch and `y_idx` stays `INVALID_INDEX`. `y` is one per row, so allocating it on the native arm would cost one dead binary per data row. The link vector is named `abs_maximize_links` for historical reasons but covers both Big-M users (objective MAXIMIZE and constraint hard-direction).
 - Tag constants: `ABS_UB_POS_TAG_PREFIX`, `ABS_UB_NEG_TAG_PREFIX`, `ABS_NEEDS_BIGM_TAG` in `decide.hpp`.
 - Tag parsing in `AnalyzeConstraint` (`decide_linear_form.cpp`) sets `DecideConstraint::abs_aux_idx`/`abs_is_pos_bound` (the field keys on the auxiliary because only the lowering arm has a `y`); execution copies them onward: these are copied to `EvaluatedConstraint`; the Big-M finalization block (after the bilinear block) iterates `abs_maximize_links`, computes M from variable bounds, and emits two derived `EvaluatedConstraint`s (C_ub1 and C_ub2) per ABS term. The error message at finite-bound check is generic (covers both objective-MAXIMIZE and constraint hard-direction triggers).
 - Transfer: `plan_decide.cpp` moves `abs_maximize_links` from logical to physical operator.

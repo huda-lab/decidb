@@ -519,7 +519,7 @@ not the code.
 | D38 | The colon form takes an exact key on `D`'s stored columns, the run-time data check and a keyed decision inside it, and echoes as written |
 | D39 | Test changes are permitted by category, each one listed |
 | D40 | `OR` between constraints is refused; a data-only reducer on the decision side is refused with a message; no internal name in "does not reference a decision" |
-| D41 | An easy `min(x) >= K` / `max(x) <= K` means `x >= K` / `x <= K` on every row it reads; with no `when` and no reducer filter it is absorbed into the decision's box, so a negative `K` makes `x` signed |
+| D41 | An easy `min(x) >= K` / `max(x) <= K` means `x >= K` / `x <= K` on every row it reads; with no `when` and no reducer filter it is absorbed into the decision's box, so a negative `K` makes `x` signed. Since 2026-10-23 the bound is read by value: any affine or scaled spelling with a constant other side (`min(x) - 1 >= K - 1`, `2 * min(x) >= 2K`, `-min(x) <= -K`) is absorbed like the literal one, for `x` and for `min(x)` alike |
 | D42 | Item 7 was built without intermediate commits |
 | D43 | `D.x` is refused at bind time only when `D` is a `FROM` relation and `D.x` binds to no column (*"write open, not D.open; a decision is referenced by its bare name"*); in a `when`, `per` or `by`: *"D.open is a decision; when, per and by may only use data"* |
 | D44 | The NULL class label in DIAGNOSE's `group` column is open: it prints as the text `NULL` (`../07_query_diagnostics/infeasible/todo.md` §2) |

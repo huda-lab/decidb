@@ -15,11 +15,14 @@ Covers:
     explicit bound but SUM(x)=K; the bound is inferred from the constraint so it solves
 """
 
+import re
 import time
 
 import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
+from ._brute_force import judge_rows
+from ._scope_cases import answer, error_of
 
 
 def _compute_abs_objective(decidb_rows, decidb_cols, var_name, ref_col):
@@ -1459,3 +1462,258 @@ def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
+
+
+# ===========================================================================
+# An ABS inside an ABS
+# ===========================================================================
+#
+# Every ABS over a decision becomes its own auxiliary, innermost first, and an ABS
+# nested under another is always pinned to its exact value: the outer ABS is not
+# monotone in its argument, so a lower envelope alone would let the inner auxiliary
+# float to wherever the outer clause is easiest to satisfy. Judged by enumeration on
+# both solvers.
+
+_NESTED_SOLVERS = pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+_GROUPED_NESTED = """SELECT id, x FROM (VALUES (1, 'A', 3), (2, 'A', 3), (3, 'B', 3)) t(id, g, cap)
+    DECIDE x(INT) SUCH THAT x <= cap AND x >= -2 AND abs(abs(sum(x) by (g)) - 2) <= 0
+    MINIMIZE sum(x) ORDER BY id"""
+
+
+def _per_row_nested(clause, objective):
+    return f"""SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT) SUCH THAT x >= -3 AND x <= 3 AND {clause} {objective} ORDER BY id"""
+
+
+def _judge_grouped_nested(cli):
+    """Each group's total has magnitude 2, so the minimum of SUM(x) is -4; a dropped
+    inner ABS answers +4."""
+    judge_rows(answer(cli, _GROUPED_NESTED), {f"x{i}": range(-2, 4) for i in range(3)},
+               lambda a: abs(abs(a["x0"] + a["x1"]) - 2) <= 0 and abs(abs(a["x2"]) - 2) <= 0,
+               lambda a: a["x0"] + a["x1"] + a["x2"], maximize=False)
+
+
+@_NESTED_SOLVERS
+@pytest.mark.correctness
+def test_nested_abs_over_a_grouped_reducer(request, cli_fixture):
+    _judge_grouped_nested(request.getfixturevalue(cli_fixture))
+
+
+@pytest.mark.correctness
+def test_nested_abs_over_a_grouped_reducer_lowered(decidb_cli_gurobi):
+    """The same on Gurobi with every construct lowered: the sign-indicator envelope
+    rather than the native ABS."""
+    _judge_grouped_nested(decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"}))
+
+
+@_NESTED_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, holds", [
+    pytest.param("abs(abs(x) - 2) <= 0", lambda x: abs(abs(x) - 2) <= 0, id="two-levels"),
+    pytest.param("abs(2 - abs(x)) <= 0", lambda x: abs(2 - abs(x)) <= 0, id="negated-inner"),
+    pytest.param("abs(abs(abs(x) - 1) - 1) <= 0", lambda x: abs(abs(abs(x) - 1) - 1) <= 0, id="three-levels"),
+])
+@pytest.mark.parametrize("objective, maximize", [("MINIMIZE sum(x)", False), ("MAXIMIZE sum(x)", True)])
+def test_nested_abs_per_row(request, cli_fixture, clause, holds, objective, maximize):
+    """A per-row nested ABS over x in [-3, 3]: the answer satisfies the clause as written
+    and reaches the enumerated optimum (both signs of x are reachable, so a dropped
+    inner ABS misses the negative optimum)."""
+    cli = request.getfixturevalue(cli_fixture)
+    judge_rows(answer(cli, _per_row_nested(clause, objective)), {"x0": range(-3, 4), "x1": range(-3, 4)},
+               lambda a: holds(a["x0"]) and holds(a["x1"]), lambda a: a["x0"] + a["x1"], maximize)
+
+
+@_NESTED_SOLVERS
+@pytest.mark.parametrize("clause", ["abs(abs(x) - 2) <= 0", "abs(abs(x) - 2) = 0", "abs(abs(x) - 2) BETWEEN 0 AND 0",
+                                    "0 >= abs(abs(x) - 2)"])
+def test_nested_abs_inner_auxiliary_cannot_float(request, cli_fixture, clause):
+    """Over x in [-1, 1], `abs(abs(x) - 2) <= 0` has no solution, in any comparison shape.
+    An inner auxiliary held only by its lower envelope could sit at 2 and satisfy the outer
+    clause with any x."""
+    cli = request.getfixturevalue(cli_fixture)
+    assert "infeasible" in error_of(cli, f"""SELECT id, x FROM (VALUES (1)) t(id)
+        DECIDE x(INT) SUCH THAT x >= -1 AND x <= 1 AND {clause} MINIMIZE sum(x)""")
+
+
+@_NESTED_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("sense, maximize", [("MINIMIZE", False), ("MAXIMIZE", True)])
+def test_nested_abs_in_the_objective(request, cli_fixture, sense, maximize):
+    """`sum(abs(abs(x) - 2))` over x in [-3, 3]: 0 at |x| = 2 when minimized, 2 per row at
+    x = 0 when maximized."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = f"""SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT) SUCH THAT x >= -3 AND x <= 3 {sense} sum(abs(abs(x) - 2)) ORDER BY id"""
+    judge_rows(answer(cli, sql), {"x0": range(-3, 4), "x1": range(-3, 4)}, lambda a: True,
+               lambda a: abs(abs(a["x0"]) - 2) + abs(abs(a["x1"]) - 2), maximize)
+
+
+def test_nested_abs_explain_names_both(decidb_cli):
+    """EXPLAIN accounts for the inner and the outer ABS, each by the text the user wrote."""
+    out = decidb_cli.execute_raw("EXPLAIN " + _per_row_nested("abs(abs(x) - 2) <= 0", "MINIMIZE sum(x)")).stdout
+    text = re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", out)
+    assert "↳abs(x)becomesanauxiliaryvariable" in text, text
+    assert "↳abs(abs(x)-2)becomesanauxiliaryvariable" in text, text
+
+
+# ===========================================================================
+# An ABS in the objective is pinned by its sign under the sense
+# ===========================================================================
+#
+# MINIMIZE pushes a positive term down and MAXIMIZE a negative one, so those auxiliaries
+# are pinned by pressure alone. The other sign -- `MINIMIZE -abs(e)`, `MAXIMIZE abs(e)` --
+# and a data weight whose sign is unknown before the query runs take the exact envelope.
+# Before the fix only the sense was read, and `MINIMIZE -abs(...)` was "unbounded".
+
+_SIGNED_ROWS = "(VALUES (1, 3), (2, 3), (3, 2)) t(id, cap)"
+_SIGNED_DOMAINS = {"x0": range(4), "x1": range(4), "x2": range(3)}
+
+
+def _total(a):
+    return a["x0"] + a["x1"] + a["x2"]
+
+
+def _signed_objective(objective, when=""):
+    return f"""SELECT id, x FROM {_SIGNED_ROWS}
+        DECIDE x(INT) SUCH THAT x <= cap {objective} ORDER BY id"""
+
+
+@_NESTED_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("objective, value, maximize", [
+    pytest.param("MINIMIZE 0 * sum(x) - abs(sum(x) - 9)", lambda a: -abs(_total(a) - 9), False,
+                 id="minimize-negated-reducer"),
+    pytest.param("MAXIMIZE 0 * sum(x) + abs(sum(x) - 9)", lambda a: abs(_total(a) - 9), True,
+                 id="maximize-reducer"),
+    pytest.param("MAXIMIZE 0 * sum(x) - abs(sum(x) - 9)", lambda a: -abs(_total(a) - 9), True,
+                 id="maximize-negated-reducer"),
+    pytest.param("MINIMIZE sum(x) - 2 * abs(sum(x) - 9)", lambda a: _total(a) - 2 * abs(_total(a) - 9), False,
+                 id="minimize-negative-factor"),
+    pytest.param("MINIMIZE sum(x) - abs(sum(x) - 9) / 2", lambda a: _total(a) - abs(_total(a) - 9) / 2, False,
+                 id="minimize-negative-divided"),
+    pytest.param("MINIMIZE sum(-abs(x - 2))", lambda a: -sum(abs(a[n] - 2) for n in a), False,
+                 id="minimize-negated-rowwise"),
+    pytest.param("MAXIMIZE sum(-abs(x - 2))", lambda a: -sum(abs(a[n] - 2) for n in a), True,
+                 id="maximize-negated-rowwise"),
+    pytest.param("MINIMIZE sum(abs(x - 2))", lambda a: sum(abs(a[n] - 2) for n in a), False,
+                 id="minimize-rowwise-control"),
+    pytest.param("MINIMIZE when id <= 2: 0 * sum(x) - abs(sum(x) - 9)", lambda a: -abs(a["x0"] + a["x1"] - 9),
+                 False, id="minimize-negated-scoped"),
+])
+def test_abs_objective_sign_under_sense(request, cli_fixture, objective, value, maximize):
+    cli = request.getfixturevalue(cli_fixture)
+    judge_rows(answer(cli, _signed_objective(objective)), _SIGNED_DOMAINS, lambda a: True, value, maximize)
+
+
+@_NESTED_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("weights", [(1, 1, 1), (-1, 1, 1), (-1, -1, -1), (0, 1, -1)],
+                         ids=["positive", "one-negative", "negative", "mixed-with-zero"])
+@pytest.mark.parametrize("sense, maximize", [("MINIMIZE", False), ("MAXIMIZE", True)])
+def test_abs_objective_data_weight_of_any_sign(request, cli_fixture, weights, sense, maximize):
+    """`sum(w * abs(x - 2))` with `w` a column: its sign is unknown before the query runs,
+    so the auxiliary is pinned exactly and a negative weight answers rather than
+    reporting "unbounded"."""
+    cli = request.getfixturevalue(cli_fixture)
+    rows = ", ".join(f"({i + 1}, {cap}, {w})" for i, (cap, w) in enumerate(zip((3, 3, 2), weights)))
+    sql = f"""SELECT id, x FROM (VALUES {rows}) t(id, cap, w)
+        DECIDE x(INT) SUCH THAT x <= cap {sense} sum(w * abs(x - 2)) ORDER BY id"""
+    judge_rows(answer(cli, sql), _SIGNED_DOMAINS, lambda a: True,
+               lambda a: sum(w * abs(a[f"x{i}"] - 2) for i, w in enumerate(weights)), maximize)
+
+
+def test_abs_objective_explain_says_how_it_is_pinned(decidb_cli):
+    """With every construct lowered, a negated ABS under MINIMIZE gets the sign indicator
+    and the same ABS under MAXIMIZE keeps the plain envelope."""
+    cli = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
+
+    def accounts(objective):
+        out = cli.execute_raw("EXPLAIN " + _signed_objective(objective)).stdout
+        return re.sub(r"[│┌┐└┘├┤┬┴┼─\s]", "", out)
+
+    assert "↳abs(sum(x)-9)becomesanauxiliaryvariablewithasignindicator" in accounts(
+        "MINIMIZE 0 * sum(x) - abs(sum(x) - 9)")
+    maximized = accounts("MAXIMIZE 0 * sum(x) - abs(sum(x) - 9)")
+    assert "↳abs(sum(x)-9)becomesanauxiliaryvariable" in maximized, maximized
+    assert "signindicator" not in maximized, maximized
+
+
+# ---------------------------------------------------------------------------
+# An ABS under a hard MIN/MAX, and under a zero factor
+# ---------------------------------------------------------------------------
+
+_HARD_SOLVERS = pytest.mark.parametrize("cli_fixture, extra_env", [
+    ("decidb_cli_gurobi", {}),
+    ("decidb_cli_gurobi", {"DECIDB_NATIVE_CONSTRUCTS": "off"}),
+    ("decidb_cli_highs", {}),
+], ids=["gurobi-native", "gurobi-lowered", "highs"])
+
+
+@_HARD_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("objective, value, maximize", [
+    pytest.param("MAXIMIZE -min(abs(x - 1))", lambda a: -min(abs(a[n] - 1) for n in a), True, id="maximize-neg-min"),
+    pytest.param("MINIMIZE min(abs(x - 1))", lambda a: min(abs(a[n] - 1) for n in a), False, id="minimize-min"),
+    pytest.param("MINIMIZE max(abs(x - 1))", lambda a: max(abs(a[n] - 1) for n in a), False, id="minimize-max"),
+    pytest.param("MAXIMIZE max(abs(x - 1))", lambda a: max(abs(a[n] - 1) for n in a), True, id="maximize-max"),
+])
+def test_abs_under_an_extremum_objective(request, cli_fixture, extra_env, objective, value, maximize):
+    """An ABS under a MIN or MAX objective pushed its hard way (`MINIMIZE min`, `MAXIMIZE
+    -min`, `MAXIMIZE max`) is pinned exactly, which boxes its auxiliary for the extremum's
+    Big-M; before the fix the lowering arms demanded a bound on the internal auxiliary.
+    The cheap way (`MINIMIZE max`) keeps the plain envelope."""
+    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
+    judge_rows(answer(cli, _signed_objective(objective)), _SIGNED_DOMAINS, lambda a: True, value, maximize)
+
+
+@_HARD_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("objective", ["MAXIMIZE 0 * -min(abs(x - 2))", "MAXIMIZE 0 * max(abs(x - 2))",
+                                       "MINIMIZE 0 * min(abs(x - 2)) + 0 * sum(x)"])
+def test_abs_under_a_vanishing_extremum_objective(request, cli_fixture, extra_env, objective):
+    """A MIN or MAX over ABS under a factor of exactly zero contributes nothing: the cheap
+    envelope stands whichever way the sense pushes, and no member box is demanded."""
+    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
+    judge_rows(answer(cli, _signed_objective(objective)), _SIGNED_DOMAINS, lambda a: True, lambda a: 0.0, True)
+
+
+@_HARD_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("dead", ["0 * min(abs(x - 2))", "0 * w * min(abs(x - 2))", "(0 * w) * max(abs(x - 2))"])
+def test_abs_under_a_vanishing_extremum_constraint(request, cli_fixture, extra_env, dead):
+    """`sum(x) + 0 * min(abs(x - 2)) <= 5` is `sum(x) <= 5`: the vanished MIN asks for
+    nothing, neither an indicator nor a box on its members. A factor `0 * w` with a data
+    column is zero whatever `w` holds, so it is one value for the whole query, not a
+    row-varying factor."""
+    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
+    sql = f"""SELECT id, x FROM (VALUES (1, 3, 1), (2, 3, 1), (3, 2, 2)) t(id, cap, w)
+        DECIDE x(INT) SUCH THAT x <= cap AND sum(x) + {dead} <= 5 MAXIMIZE sum(x) ORDER BY id"""
+    judge_rows(answer(cli, sql), _SIGNED_DOMAINS, lambda a: _total(a) <= 5, _total, True)
+
+
+@_HARD_SOLVERS
+@pytest.mark.correctness
+def test_abs_under_a_hard_min_constraint(request, cli_fixture, extra_env):
+    """`min(abs(x - 1)) <= 1` is the hard direction of a MIN: some member must reach 1."""
+    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
+    sql = f"""SELECT id, x FROM {_SIGNED_ROWS}
+        DECIDE x(INT) SUCH THAT x <= cap AND min(abs(x - 1)) <= 1 MAXIMIZE sum(x) ORDER BY id"""
+    judge_rows(answer(cli, sql), _SIGNED_DOMAINS, lambda a: min(abs(a[n] - 1) for n in a) <= 1, _total, True)
+
+
+@_HARD_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("dead", ["0 * sum(abs(x - 1))", "sum(0 * abs(x - 1))", "sum(0 * -abs(abs(x) - 2))",
+                                  "0 * abs(sum(x) - 4)", "sum(0 * w * -abs(x - 2))", "sum(w * 0 * abs(x - 2))",
+                                  "sum(-(0 * w) * abs(x - 2))", "sum((0 * w) / 3 * abs(x - 2))"])
+@pytest.mark.parametrize("sense, maximize", [("MAXIMIZE -sum(x)", True), ("MINIMIZE sum(x)", False)])
+def test_abs_under_a_zero_factor_needs_no_bound(request, cli_fixture, extra_env, dead, sense, maximize):
+    """An ABS under a factor of exactly zero -- outside or inside the reducer, nested in
+    another ABS, over a reducer, or under a product with a data column that is zero
+    whatever the column holds -- contributes nothing, so no auxiliary of it needs pinning
+    or a box: the query answers although x has no upper bound."""
+    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
+    sql = f"""SELECT id, x FROM (VALUES (1, 1), (2, 1), (3, 2)) t(id, w)
+        DECIDE x(INT) SUCH THAT sum(x) >= 0 {sense} + {dead} ORDER BY id"""
+    judge_rows(answer(cli, sql), {f"x{i}": range(4) for i in range(3)}, lambda a: True,
+               lambda a: -_total(a) if maximize else _total(a), maximize)

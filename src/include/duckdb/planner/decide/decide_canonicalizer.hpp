@@ -296,9 +296,23 @@ private:
 	};
 
 	//! Split an expression into signed additive terms. Descends through `+`,
-	//! binary `-`, unary `-`, and binder-inserted casts over decision algebra;
-	//! every other node, including a data-only cast, is a term boundary.
-	void Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause = Clause::CONSTRAINT) const;
+	//! binary `-`, unary `-`, and binder-inserted casts over decision algebra, and
+	//! distributes a factor known before the query runs over an additive child
+	//! (`2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`), carried down as `factor`; every
+	//! other node, including a data-only cast, is a term boundary.
+	void Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause = Clause::CONSTRAINT,
+	               const Expression *factor = nullptr, bool factor_divides = false) const;
+
+	//! Merge like decision atoms -- the same term, each under a factor known before the
+	//! query runs -- into one atom scaled by the sum of their signed factors: `x + x` is
+	//! `2 * x`, `x - 3 * x` is `-2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`. A group
+	//! whose factors cancel is left as written. Returns whether anything merged.
+	bool MergeLikeAtoms(vector<Atom> &atoms) const;
+
+	//! The one factor `outer` stands for when applied outside a term already scaled by
+	//! `inner`: `M`, `D` or `M / D`, in the spelling PeelScale emits. Either may be null.
+	unique_ptr<Expression> ComposeScale(const Expression *outer, bool outer_divides, unique_ptr<Expression> inner,
+	                                    bool inner_divides, bool &out_divides) const;
 
 	//! If `expr` is a decision-bearing reducer with factors on it, split them out into
 	//! `out_scale` / `out_divides` and return the bare reducer term. Returns `expr`

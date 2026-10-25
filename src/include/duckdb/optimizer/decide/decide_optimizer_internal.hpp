@@ -60,8 +60,10 @@ ClauseScope EnterClauseScope(const Expression &node, ClauseScope scope);
 //! `when` when it has one.
 unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const ClauseScope &scope);
 
-//! Mark the ABS nodes that need a Big-M envelope. Must run before RewriteAbs.
-void TagAbsConstraintsForBigM(ClientContext &context, LogicalDecide &decide);
+//! Mark the ABS nodes, in the constraints and the objective, that need a Big-M
+//! envelope: those whose sign under the relation or the sense does not push the
+//! auxiliary down, or is not known until the query runs. Must run before RewriteAbs.
+void TagAbsForBigM(ClientContext &context, LogicalDecide &decide);
 
 //! Allocate an auxiliary decision column `name` of `type`: its reference in
 //! `decide_variables`, its Boolean flag, and its scope -- recorded only when the plan

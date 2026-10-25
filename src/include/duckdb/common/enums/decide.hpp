@@ -441,7 +441,7 @@ static constexpr const char *ABS_UB_NEG_TAG_PREFIX = "__abs_ub_neg_";
 //! AbsPairInfo::needs_bigm so RewriteAbs pins the auxiliary's upper side too --
 //! with a sign-indicator y and a Big-M envelope on the lowering arm, or with a
 //! native `aux = |t|` on a backend that states ABS itself. The tag is set by
-//! TagAbsConstraintsForBigM (formerly ValidateAbsConstraintDirection).
+//! TagAbsForBigM (formerly ValidateAbsConstraintDirection).
 static constexpr const char *ABS_NEEDS_BIGM_TAG = "__abs_needs_bigm__";
 
 } // namespace duckdb

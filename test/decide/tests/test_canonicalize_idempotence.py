@@ -62,6 +62,28 @@ _PAIRS = [
     ),
     pytest.param(
         """
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(INT) SUCH THAT x <= 9 AND 2 * (SUM(x) - 1) <= 4 MAXIMIZE SUM(x)
+        """,
+        """
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(INT) SUCH THAT x <= 9 AND 2 * SUM(x) <= 6 MAXIMIZE SUM(x)
+        """,
+        id="factor_over_a_sum",
+    ),
+    pytest.param(
+        """
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(INT) SUCH THAT x <= 9 AND (SUM(x) + 1) / 2 <= 3 MAXIMIZE SUM(x)
+        """,
+        """
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(INT) SUCH THAT x <= 9 AND SUM(x) / 2 <= 2.5 MAXIMIZE SUM(x)
+        """,
+        id="divisor_over_a_sum",
+    ),
+    pytest.param(
+        """
             SELECT id, grp, active, x
             FROM (VALUES (1,'a',true),(2,'a',false),(3,'b',true),(4,'b',true))
                  t(id,grp,active)

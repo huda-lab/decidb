@@ -20,7 +20,7 @@ from comparison.compare import compare_solutions
 from ._oracle_helpers import (
     add_bool_and, add_ne_indicator, group_indices,
 )
-from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
+from ._scope_cases import answer, scope_solver, table, table_rows  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 
 
@@ -1818,3 +1818,113 @@ def test_when_with_data_column_moved_inside(
         decide_sql=decide_sql, data_sql=data_sql,
         build_oracle=build, decidb_obj_fn=decidb_obj,
     )
+
+
+# ===========================================================================
+# An easy MIN/MAX with its own `when` reads only its members
+# ===========================================================================
+#
+# `min(when p: x + 2) >= 3` is `x + 2 >= 3` on every member row -- the rows `p`
+# keeps -- and says nothing about the others. A row the reducer's own `when`
+# drops is never sent to the model and its body is never evaluated, whatever the
+# body holds: a constant, a data column, a `by` key or a `per` in front. Judged
+# by the scope oracle on both solvers.
+
+_MEMBER_COLUMNS = ("id", "g", "p", "w")
+_MEMBER_ROWS = ((1, "A", True, 1.0), (2, "A", False, 1.0), (3, "B", True, 2.0))
+_BOTH_SOLVERS = pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+
+_X = lambda r: {"x": 1}  # noqa: E731
+_P = lambda r: r["p"]  # noqa: E731
+_X_CAP = Scoped((_X,), "<=", (lambda r: {CONSTANT: 5},))
+_SUM_X = Reduce("sum", _X)
+
+
+def _const(value):
+    return lambda r: {CONSTANT: value}
+
+
+def _body(offset):
+    """``x + offset(row)``, the reducer's body on one row."""
+    return lambda r: {"x": 1, CONSTANT: offset(r)}
+
+
+def _members_query(clause, sense, select="id, x"):
+    objective = "MINIMIZE SUM(x)" if sense == ObjSense.MINIMIZE else "MAXIMIZE SUM(x)"
+    return f"""SELECT {select} {table('t', _MEMBER_COLUMNS, _MEMBER_ROWS)}
+        DECIDE x(INT) SUCH THAT x <= 5 AND {clause} {objective} ORDER BY id"""
+
+
+def _judged_members(cli, solver, sql, rows, clauses, sense):
+    model = ScopedModel(rows, [Decision("x")])
+    objective = ScopedObjective(sense, (_SUM_X,))
+    result = answer(cli, sql)
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(solver, clauses, objective), abs=1e-4)
+    return [row["x"] for row in result]
+
+
+@_BOTH_SOLVERS
+@pytest.mark.when
+@pytest.mark.min_max
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause_sql, clauses, sense", [
+    pytest.param("min(when p: x + 2) >= 3",
+                 [Scoped((Reduce("min", _body(lambda r: 2), when=_P),), ">=", (_const(3),))],
+                 ObjSense.MINIMIZE, id="constant"),
+    pytest.param("min(when p: x + 0) >= 1",
+                 [Scoped((Reduce("min", _body(lambda r: 0), when=_P),), ">=", (_const(1),))],
+                 ObjSense.MINIMIZE, id="zero"),
+    pytest.param("min(when p: x - 1) = 0",
+                 [Scoped((Reduce("min", _body(lambda r: -1), when=_P),), "=", (_const(0),))],
+                 ObjSense.MINIMIZE, id="equality"),
+    pytest.param("max(when p: x + w) <= 2",
+                 [Scoped((Reduce("max", _body(lambda r: r["w"]), when=_P),), "<=", (_const(2),))],
+                 ObjSense.MAXIMIZE, id="column"),
+    pytest.param("max(when p: x - w) by (g) <= -1",
+                 [Scoped((Reduce("max", _body(lambda r: -r["w"]), when=_P, by=("g",)),), "<=", (_const(-1),))],
+                 ObjSense.MAXIMIZE, id="by"),
+    pytest.param("per g: min(when p: x + 1) by (g) >= 2",
+                 [Scoped((Reduce("min", _body(lambda r: 1), when=_P, by=("g",)),), ">=", (_const(2),),
+                         per=("g",))],
+                 ObjSense.MINIMIZE, id="per-key"),
+    pytest.param("per (): min(when p: x + 3) >= 5",
+                 [Scoped((Reduce("min", _body(lambda r: 3), when=_P),), ">=", (_const(5),), per=())],
+                 ObjSense.MINIMIZE, id="per-query"),
+    pytest.param("min(when p: x + 2) BETWEEN 3 AND 10",
+                 [Scoped((Reduce("min", _body(lambda r: 2), when=_P),), ">=", (_const(3),)),
+                  Scoped((Reduce("min", _body(lambda r: 2), when=_P),), "<=", (_const(10),))],
+                 ObjSense.MINIMIZE, id="between"),
+])
+def test_easy_extremum_own_when_binds_only_its_members(request, scope_solver, cli_fixture, clause_sql, clauses,
+                                                        sense):
+    """The easy direction of a MIN/MAX bounds each member; a row its own `when` drops is
+    free of it. Before the fix a body with a constant or a cast-wrapped data term sent the
+    dropped rows to the model as `constant >= K`, and the query was called infeasible."""
+    cli = request.getfixturevalue(cli_fixture)
+    _judged_members(cli, scope_solver, _members_query(clause_sql, sense),
+                    table_rows(_MEMBER_COLUMNS, _MEMBER_ROWS), [_X_CAP, *clauses], sense)
+
+
+@_BOTH_SOLVERS
+@pytest.mark.when
+@pytest.mark.min_max
+@pytest.mark.correctness
+def test_easy_extremum_own_when_never_reads_a_dropped_row(request, scope_solver, cli_fixture):
+    """A NULL in the body on a row the reducer's own `when` drops is never read: the row
+    is not a member, so the query answers."""
+    cli = request.getfixturevalue(cli_fixture)
+    columns, rows = ("id", "p", "a"), ((1, True, 2), (2, False, None))
+    sql = f"""SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT) SUCH THAT x <= 5 AND min(when p: x + a) >= 3 MINIMIZE SUM(x) ORDER BY id"""
+    clauses = [_X_CAP, Scoped((Reduce("min", _body(lambda r: r["a"]), when=_P),), ">=", (_const(3),))]
+    assert _judged_members(cli, scope_solver, sql, table_rows(columns, rows), clauses, ObjSense.MINIMIZE) == [1, 0]
+
+
+@pytest.mark.when
+@pytest.mark.min_max
+def test_easy_extremum_own_when_still_reads_its_members(decidb_cli):
+    """A NULL in the body on a member row is still the error naming the column."""
+    decidb_cli.assert_error("""SELECT id, x FROM (VALUES (1, true, NULL), (2, false, 2)) t(id, p, a)
+        DECIDE x(INT) SUCH THAT x <= 5 AND min(when p: x + a) >= 3 MINIMIZE SUM(x)""",
+                            match=re.escape('column "a" is NULL'))

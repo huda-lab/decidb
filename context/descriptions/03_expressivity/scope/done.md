@@ -148,7 +148,9 @@ supported yet"*): the two rows a `<>` becomes hold a linear left side only.
 - **An easy `max(x) <= K` / `min(x) >= K`** with no `when` and no reducer filter is a
   bound on every row it reads, absorbed into the decision's box
   (`TryMatchEasyExtremumTarget`, `decide_bound_absorption.cpp`, D41), so a negative `K`
-  makes `x` signed. With a `by`, each member is bounded by its group's bound; the
+  makes `x` signed — in any spelling whose other side is a constant known before the
+  query runs (`min(x) - 1 >= K - 1`, `2 * min(x) >= 2K`, `-min(x) <= -K`), exactly as
+  for `x >= K`. With a `by`, each member is bounded by its group's bound; the
   reducer stays in the tree, so EXPLAIN and DIAGNOSE quote the clause as written.
 
 ## 4. Reducers — `agg([when c] [per K]: e) by (G)`

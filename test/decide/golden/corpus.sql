@@ -47,13 +47,18 @@ SELECT id, x, y FROM items DECIDE x(INT), y(INT)
 SUCH THAT x + y = 3 AND x <= 5 AND y <= 5 MAXIMIZE SUM(x);
 
 -- 07 per-row with a constant folded on the left
--- Canonicalization changed this model, intentionally and for the better: before,
--- the emitted row was `x <= 6` but the absorbed column bound was ub=8 (read off
--- the un-migrated `x + 2 <= 8`), i.e. correct but loose. Canonical input lets the
--- absorption pass derive ub=6. Rows and query results were unchanged.
+-- A bound is read by value, not by spelling: `x + 2 <= 8` is the column bound
+-- `x <= 6`, absorbed into the box with no row (since 2026-10-23; before that the
+-- absorption pass took only a literal other side, so the clause stayed a row
+-- `x <= 6` beside the box ub=6 the canonical form had let it derive). Query
+-- results were unchanged either time.
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT x + 2 <= 8 MAXIMIZE SUM(x);
 
 -- 08 repeated reference to the same variable (see bounds-absorption bug)
+-- Since 2026-10-25 like terms merge in the canonicalizer: `2*x + 3*x` is `5 * x`, and
+-- the bound is read by value, so this is the column bound `x <= 2` with no row (before,
+-- one `5x <= 10` row per member beside the box ub=2 implied bounds had derived). Query
+-- results were unchanged.
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT 2*x + 3*x <= 10 MAXIMIZE SUM(x);
 
 -- 09 BETWEEN
@@ -277,7 +282,10 @@ SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT SUM(x) + 2 * MAX(x * weight) <= 30 AND x <= 9 MAXIMIZE SUM(x);
 
 -- 52 NEGATIVE factor on MAX. The aggregate must come out of the fold as a MIN.
--- Before B.3 this was a silent wrong answer, not a rejection.
+-- Before B.3 this was a silent wrong answer, not a rejection. Since 2026-10-23 the
+-- easy bound is read by value under its factor: `-2 * MAX(x) >= -8` is the column
+-- bound `x <= 4`, absorbed into the box with no row (before, one `-2x >= -8` row
+-- per member). Query results were unchanged.
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT -2 * MAX(x) >= -8 AND x <= 9 MAXIMIZE SUM(x);
 

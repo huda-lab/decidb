@@ -10,7 +10,7 @@ runs on both solvers; where one cannot load the model, its refusal is asserted i
 
 import pytest
 
-from ._brute_force import judge, optimum
+from ._brute_force import judge_rows
 from ._scope_cases import answer, scope_solver, table, table_rows  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense, VarType
@@ -47,15 +47,7 @@ def _judged(cli, solver, sql, clauses, objective, decisions=(Decision("x"),)):
 def _enumerated(cli, sql, domains, feasible, objective, maximize=True):
     """Judge DeciDB's answer against every assignment of ``domains`` (solver columns named
     ``x0``, ``x1``, ... for a per-row decision, the bare name for a query-wide one)."""
-    rows = answer(cli, sql)
-    assignment = {}
-    for name in {n.rstrip("0123456789") for n in domains}:
-        if name in domains:
-            assert len({row[name] for row in rows}) == 1, f"query-wide {name} differs across rows: {rows}"
-            assignment[name] = rows[0][name]
-        else:
-            assignment.update({f"{name}{i}": row[name] for i, row in enumerate(rows)})
-    assert judge(assignment, feasible, objective) == optimum(domains, feasible, objective, maximize)
+    judge_rows(answer(cli, sql), domains, feasible, objective, maximize)
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +186,94 @@ def test_easy_max_bound_builds_the_model_of_a_column_bound(decidb_cli, tmp_path,
     sql = _query("x(INT)", "x <= cap AND {}", "MAXIMIZE SUM(x)")
     assert decidb_cli.dump_model(sql.format(bound), tmp_path / "max.dump") == \
         decidb_cli.dump_model(sql.format("x <= 3"), tmp_path / "column.dump")
+
+
+# ---------------------------------------------------------------------------
+# A bound is read by value, not by spelling: the negative floor in every spelling
+# ---------------------------------------------------------------------------
+
+_X_TIMES = lambda c: (lambda r: {"x": c})  # noqa: E731
+_SIGNED_X = (Decision("x", lb=float("-inf")),)
+
+NEGATIVE_FLOOR_SPELLINGS = [
+    pytest.param("x - 1 >= -3", Scoped((X, _const(-1)), ">=", (_const(-3),)), id="x-shift"),
+    pytest.param("x >= -2 + 0", Scoped((X,), ">=", (_const(-2),)), id="x-folded-bound"),
+    pytest.param("2 * x >= -4", Scoped((_X_TIMES(2),), ">=", (_const(-4),)), id="x-factor"),
+    pytest.param("x * 2 >= -4", Scoped((_X_TIMES(2),), ">=", (_const(-4),)), id="x-factor-right"),
+    pytest.param("-x <= 2", Scoped((_X_TIMES(-1),), "<=", (_const(2),)), id="x-negated"),
+    pytest.param("x / 2 >= -1", Scoped((_X_TIMES(0.5),), ">=", (_const(-1),)), id="x-divided"),
+    pytest.param("2 * x > -5", Scoped((_X_TIMES(2),), ">", (_const(-5),)), id="x-strict-factor"),
+    pytest.param("min(x) - 1 >= -3", Scoped((Reduce("min", X), _const(-1)), ">=", (_const(-3),)), id="min-shift"),
+    pytest.param("2 * min(x) >= -4", Scoped((Reduce("min", X, factor=lambda r: 2.0),), ">=", (_const(-4),)),
+                 id="min-factor"),
+    pytest.param("-min(x) <= 2", Scoped((Reduce("min", X, factor=lambda r: -1.0),), "<=", (_const(2),)),
+                 id="min-negated"),
+    pytest.param("min(x) / 2 >= -1", Scoped((Reduce("min", X, factor=lambda r: 0.5),), ">=", (_const(-1),)),
+                 id="min-divided"),
+    pytest.param("per g: min(x) by (g) - 1 >= -3",
+                 Scoped((Reduce("min", X, by=("g",)), _const(-1)), ">=", (_const(-3),), per=("g",)),
+                 id="min-per-shift"),
+    pytest.param("2 * (x - 1) >= -6", Scoped((_X_TIMES(2), _const(-2)), ">=", (_const(-6),)),
+                 id="x-shift-under-factor"),
+    pytest.param("-(x - 1) <= 3", Scoped((_X_TIMES(-1), _const(1)), "<=", (_const(3),)),
+                 id="x-shift-under-minus"),
+    pytest.param("2 * (min(x) - 1) >= -6",
+                 Scoped((Reduce("min", X, factor=lambda r: 2.0), _const(-2)), ">=", (_const(-6),)),
+                 id="min-shift-under-factor"),
+    pytest.param("(min(x) - 1) * 2 >= -6",
+                 Scoped((Reduce("min", X, factor=lambda r: 2.0), _const(-2)), ">=", (_const(-6),)),
+                 id="min-shift-under-factor-right"),
+    pytest.param("(min(x) + 1) / 2 >= -0.5",
+                 Scoped((Reduce("min", X, factor=lambda r: 0.5), _const(0.5)), ">=", (_const(-0.5),)),
+                 id="min-shift-under-division"),
+    pytest.param("3 - min(x) <= 5", Scoped((_const(3), Reduce("min", X, factor=lambda r: -1.0)), "<=", (_const(5),)),
+                 id="min-subtracted-from-constant"),
+    pytest.param("x + x >= -4", Scoped((_X_TIMES(2),), ">=", (_const(-4),)), id="x-repeated"),
+    pytest.param("2 * x + x >= -6", Scoped((_X_TIMES(3),), ">=", (_const(-6),)), id="x-repeated-under-factor"),
+    pytest.param("x - 3 * x <= 4", Scoped((_X_TIMES(-2),), "<=", (_const(4),)), id="x-repeated-cancelling-to-negative"),
+    pytest.param("min(x) + min(x) >= -4", Scoped((Reduce("min", X, factor=lambda r: 2.0),), ">=", (_const(-4),)),
+                 id="min-repeated"),
+    pytest.param("2 * min(x) + min(x) >= -6", Scoped((Reduce("min", X, factor=lambda r: 3.0),), ">=", (_const(-6),)),
+                 id="min-repeated-under-factor"),
+    pytest.param("3 * x >= x - 4", Scoped((_X_TIMES(3),), ">=", (X, _const(-4))), id="x-repeated-across"),
+    pytest.param("3 * min(x) >= min(x) - 4", Scoped((Reduce("min", X, factor=lambda r: 3.0),), ">=",
+                                                     (Reduce("min", X), _const(-4))), id="min-repeated-across"),
+]
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("bound, clause", NEGATIVE_FLOOR_SPELLINGS)
+def test_negative_floor_is_read_by_value(request, scope_solver, cli_fixture, bound, clause):
+    """Every spelling of the bound `x >= -2` -- shifted, scaled, negated, divided, on `x` or
+    on an easy `min(x)` -- lets the decision reach -2 (D41 by value). Before the fix only a
+    literal `x >= -2` / `min(x) >= -2` did, and `x - 1 >= -3` kept `x >= 0`."""
+    cli = request.getfixturevalue(cli_fixture)
+    xs = _judged(cli, scope_solver, _query("x(INT)", f"x <= cap AND {bound}", "MINIMIZE SUM(x)"),
+                 [CAP_BOUND, clause], MINIMIZE_X, _SIGNED_X)
+    assert min(xs) == -2, xs
+
+
+@pytest.mark.parametrize("bound", [
+    "x - 1 >= -3", "2 * x >= -4", "-x <= 2", "2 * (x - 1) >= -6", "x + x >= -4", "3 * x >= x - 4",
+    "min(x) - 1 >= -3", "2 * min(x) >= -4", "-min(x) <= 2", "2 * (min(x) - 1) >= -6", "min(x) + min(x) >= -4",
+    "3 * min(x) >= min(x) - 4",
+])
+def test_affine_bound_builds_the_model_of_a_column_bound(decidb_cli, tmp_path, bound):
+    """Absorbed into the column box, a shifted, scaled or negated bound adds no row: its
+    model is the one `x >= -2` builds."""
+    sql = _query("x(INT)", "x <= cap AND {}", "MINIMIZE SUM(x)")
+    assert decidb_cli.dump_model(sql.format(bound), tmp_path / "spelled.dump") == \
+        decidb_cli.dump_model(sql.format("x >= -2"), tmp_path / "column.dump")
+
+
+@pytest.mark.parametrize("bound", ["x >= w - 4", "2 * x >= (SELECT -4)", "w * x >= -4", "max(-x) <= 2"])
+def test_a_data_bound_stays_a_row(decidb_cli, tmp_path, bound):
+    """A side that is data -- a column, a subquery, a column factor -- is not a bound known
+    before the query runs, and a MIN/MAX whose member is not a bare decision bounds that
+    member: each stays a row, and the decision keeps its default floor."""
+    sql = _query("x(INT)", f"x <= cap AND {bound}", "MINIMIZE SUM(x)")
+    assert [row["x"] for row in answer(decidb_cli, sql)] == [0, 0, 0]
 
 
 # ---------------------------------------------------------------------------

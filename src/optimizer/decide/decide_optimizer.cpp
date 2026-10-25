@@ -91,7 +91,7 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	phase.Next("optimizer.in_domain");
 	RewriteInDomain(decide);
 	phase.Next("optimizer.abs");
-	TagAbsConstraintsForBigM(optimizer.context, decide); // Must run before RewriteAbs: marks ABS nodes that need Big-M
+	TagAbsForBigM(optimizer.context, decide); // Must run before RewriteAbs: marks ABS nodes that need Big-M
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
 	phase.Next("optimizer.bilinear");
 	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products

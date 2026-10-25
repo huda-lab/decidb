@@ -44,15 +44,26 @@ namespace duckdb {
 // than in `num_rows` identical model rows. Choosing between the two is a
 // formulation decision, which is why it lives here and not in physical execution.
 //
-// The pass reads a comparison, a decision variable and a foldable literal. It never
-// touches data, so it needs types, not rows.
+// The pass reads a comparison, a decision variable and a bound known before the query
+// runs. It never touches data, so it needs types, not rows.
+//
+// A bound is read by value, not by spelling (D41): `x - 1 >= -3`, `2 * x >= -4`,
+// `-x <= 2`, `2 * (x - 1) >= -6` and `x >= -2` are one fact, the column bound `x >= -2`,
+// and each makes `x` signed the same way. So the decision may stand under any affine
+// spelling whose constants are known before the query runs, and the other side may be
+// any expression that folds to a number then. A side that is data -- a column, a
+// subquery -- is not a bound and stays a row.
 
-//! One decision variable, resolved, plus the type facts absorption needs about it.
+//! One decision variable, resolved, plus the type facts absorption needs about it, and
+//! the affine spelling it stands in: the comparison's side is `scale * x + offset`
+//! (`2 * x`: 2 and 0; `-x`: -1 and 0; `2 * (x - 1)`: 2 and -2).
 struct AbsorptionTarget {
 	LogicalDecide *decide = nullptr;
 	idx_t var_idx = DConstants::INVALID_INDEX;
 	bool is_integer = false;
 	bool is_boolean = false;
+	double scale = 1.0;
+	double offset = 0.0;
 
 	//! A bound that merely restates a BOOLEAN's intrinsic [0,1] box is not a loosenable
 	//! parameter: the domain is applied to the solver column directly and never
@@ -94,15 +105,88 @@ struct AbsorptionTarget {
 	}
 };
 
-//! Resolve `expr` to a decision variable. Fails for anything that is not a bare
-//! decision reference under casts — a multi-variable LHS (`x - 3*z_1 - 5*z_2 = 0`,
-//! the IN linking row) is a genuine relation, not a bound.
-static bool TryMatchAbsorptionTarget(const Expression &expr, LogicalDecide &decide, AbsorptionTarget &out) {
-	auto *unwrapped = UnwrapDecideCasts(const_cast<Expression &>(expr), decide.decide_index);
-	if (unwrapped->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+//! Read `expr` as the affine spelling `scale * e + offset` of the term `e` beneath its
+//! factors and shifts -- `c * e`, `e * c`, `-e`, `e / c`, `e + c`, `c + e`, `e - c` and
+//! `c - e`, with `c` a finite number known before the query runs and a factor nonzero --
+//! and return `e`, under the binder's casts. A constant that is data, a subquery, or not
+//! finite is not peeled: the term is then no bound, and the caller declines on its shape.
+//! Canonicalization moves a top-level shift to the other side already; one under a
+//! factor (`2 * (x - 1)`) it leaves in place, which is what the shifts are here for.
+static const Expression *PeelAffine(ClientContext &context, const Expression &expr, idx_t decide_index,
+                                    double &scale, double &offset) {
+	scale = 1.0;
+	offset = 0.0;
+	const Expression *current = UnwrapDecideCasts(expr, decide_index);
+	if (current->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return current;
+	}
+	auto &func = current->Cast<BoundFunctionExpression>();
+	const auto &name = func.function.name;
+	auto constant = [&](const Expression &candidate, double &value) {
+		return TryEvaluateFoldableDoubleNoThrow(context, candidate, value) && std::isfinite(value);
+	};
+	double c;
+	if (name == "-" && func.children.size() == 1) {
+		auto *term = PeelAffine(context, *func.children[0], decide_index, scale, offset);
+		scale = -scale;
+		offset = -offset;
+		return term;
+	}
+	if (func.children.size() != 2) {
+		return current;
+	}
+	if (name == "*") {
+		for (idx_t side = 0; side < 2; side++) {
+			if (constant(*func.children[side], c) && c != 0.0) {
+				auto *term = PeelAffine(context, *func.children[1 - side], decide_index, scale, offset);
+				scale *= c;
+				offset *= c;
+				return term;
+			}
+		}
+		return current;
+	}
+	if (name == "/" && constant(*func.children[1], c) && c != 0.0) {
+		auto *term = PeelAffine(context, *func.children[0], decide_index, scale, offset);
+		scale /= c;
+		offset /= c;
+		return term;
+	}
+	if (name == "+") {
+		for (idx_t side = 0; side < 2; side++) {
+			if (constant(*func.children[side], c)) {
+				auto *term = PeelAffine(context, *func.children[1 - side], decide_index, scale, offset);
+				offset += c;
+				return term;
+			}
+		}
+		return current;
+	}
+	if (name == "-") {
+		if (constant(*func.children[1], c)) {
+			auto *term = PeelAffine(context, *func.children[0], decide_index, scale, offset);
+			offset -= c;
+			return term;
+		}
+		if (constant(*func.children[0], c)) {
+			auto *term = PeelAffine(context, *func.children[1], decide_index, scale, offset);
+			scale = -scale;
+			offset = c - offset;
+			return term;
+		}
+	}
+	return current;
+}
+
+//! Resolve `expr`, one bare decision reference under casts, to its variable. Anything
+//! else -- a multi-variable LHS (`x - 3*z_1 - 5*z_2 = 0`, the IN linking row), a product
+//! -- is a genuine relation, not a bound.
+static bool TryMatchBareDecision(const Expression &expr, LogicalDecide &decide, AbsorptionTarget &out) {
+	auto *term = UnwrapDecideCasts(expr, decide.decide_index);
+	if (term->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
 		return false;
 	}
-	auto &colref = unwrapped->Cast<BoundColumnRefExpression>();
+	auto &colref = term->Cast<BoundColumnRefExpression>();
 	for (idx_t i = 0; i < decide.decide_variables.size(); i++) {
 		auto &decide_var = decide.decide_variables[i]->Cast<BoundColumnRefExpression>();
 		if (colref.binding != decide_var.binding) {
@@ -113,31 +197,53 @@ static bool TryMatchAbsorptionTarget(const Expression &expr, LogicalDecide &deci
 		out.var_idx = i;
 		out.is_integer = (type_id == LogicalTypeId::INTEGER || type_id == LogicalTypeId::BIGINT);
 		out.is_boolean = i < decide.is_boolean_var.size() && decide.is_boolean_var[i];
+		out.scale = 1.0;
+		out.offset = 0.0;
 		return true;
 	}
 	return false;
 }
 
-//! Resolve an easy `max(x) <= K` / `min(x) >= K` (MINMAX_EASY_REWRITE_TAG) to its
-//! decision. It bounds every row its reducer reads: with no reducer filter and no
-//! front `when` (whose wrapper this pass never enters) that is every kept row, so it is the
-//! column bound `x <= K` / `x >= K`, and a negative K lets x go negative as `x >= -5` does
-//! (D41). The reducer stays in the tree, so EXPLAIN and DIAGNOSE read the clause as written.
-static bool TryMatchEasyExtremumTarget(const BoundComparisonExpression &comp, LogicalDecide &decide,
-                                       AbsorptionTarget &out) {
+//! Resolve `expr`, one decision in an affine spelling (`2 * x`, `-x`, `x / 2`,
+//! `2 * (x - 1)`), to its variable and the spelling it stands in.
+static bool TryMatchAbsorptionTarget(ClientContext &context, const Expression &expr, LogicalDecide &decide,
+                                     AbsorptionTarget &out) {
+	double scale, offset;
+	auto *term = PeelAffine(context, expr, decide.decide_index, scale, offset);
+	if (!TryMatchBareDecision(*term, decide, out)) {
+		return false;
+	}
+	out.scale = scale;
+	out.offset = offset;
+	return true;
+}
+
+//! Resolve an easy `max(x) <= K` / `min(x) >= K` (MINMAX_EASY_REWRITE_TAG), in an affine
+//! spelling outside the reducer (`2 * min(x)`, `-min(x)`, `2 * (min(x) - 1)`), to its
+//! decision. The member is a bare decision: `max(2 * x) <= K` bounds the member `2 * x`,
+//! and stays one row per member. It bounds every row its reducer reads: with no reducer
+//! filter and no front `when` (whose wrapper this pass never enters) that is every kept
+//! row, so it is the column bound `x <= K` / `x >= K`, and a negative K lets x go negative
+//! as `x >= -5` does (D41). The reducer stays in the tree, so EXPLAIN and DIAGNOSE read
+//! the clause as written.
+static bool TryMatchEasyExtremumTarget(ClientContext &context, const BoundComparisonExpression &comp,
+                                       LogicalDecide &decide, AbsorptionTarget &out) {
 	if (!HasDecideTag(comp.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
 		return false;
 	}
-	const Expression *left = comp.left.get();
-	while (left->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		left = left->Cast<BoundCastExpression>().child.get();
-	}
-	if (left->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	double scale, offset;
+	auto *term = PeelAffine(context, *comp.left, decide.decide_index, scale, offset);
+	if (term->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return false;
 	}
-	auto &agg = left->Cast<BoundAggregateExpression>();
-	return (agg.function.name == "min" || agg.function.name == "max") && !agg.filter && agg.children.size() == 1 &&
-	       TryMatchAbsorptionTarget(*agg.children[0], decide, out);
+	auto &agg = term->Cast<BoundAggregateExpression>();
+	if ((agg.function.name != "min" && agg.function.name != "max") || agg.filter || agg.children.size() != 1 ||
+	    !TryMatchBareDecision(*agg.children[0], decide, out)) {
+		return false;
+	}
+	out.scale = scale;
+	out.offset = offset;
+	return true;
 }
 
 void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &decide) {
@@ -164,11 +270,15 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		idx_t removal_group_id = DConstants::INVALID_INDEX;
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
 		AbsorptionTarget target;
-		if (!TryMatchAbsorptionTarget(*comp.left, decide, target) &&
-		    !TryMatchEasyExtremumTarget(comp, decide, target)) {
+		if (!TryMatchAbsorptionTarget(optimizer.context, *comp.left, decide, target) &&
+		    !TryMatchEasyExtremumTarget(optimizer.context, comp, decide, target)) {
 			break;
 		}
 
+		// The bound is whatever the other side folds to before the query runs: a literal
+		// under casts, or the `1 + -3` canonicalization leaves of `x - 1 >= -3`. A side that
+		// does not fold -- a column, a subquery -- is data, and the comparison stays a row.
+		//
 		// A non-finite bound is left for the constraint path, which already reads it the
 		// way the solver does: `x <= +inf` is no bound, `x >= +inf` has no solution, and
 		// NaN is an error naming the arithmetic. Absorbing it instead would write it into
@@ -176,10 +286,14 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		// but not a lower one — the same infinity silently vanishing in one direction and
 		// reaching the model validator as an internal error in the other.
 		double k;
-		if (!IsCastWrappedConstant(*comp.right) ||
-		    !TryEvaluateFoldableDouble(optimizer.context, *comp.right, k) || !std::isfinite(k)) {
+		if (!TryEvaluateFoldableDouble(optimizer.context, *comp.right, k) || !std::isfinite(k)) {
 			break;
 		}
+		// The spelling the decision stands in is undone on the bound: a shift moves
+		// across, a factor divides and, when negative, reverses the relation. `2 * x >= -4`
+		// is `x >= -2`, and so are `-x <= 2` and `2 * (x - 1) >= -6`.
+		k = (k - target.offset) / target.scale;
+		const auto relation = target.scale < 0 ? FlipComparisonExpression(comp.type) : comp.type;
 
 		// `=` intersects both sides rather than assigning, so `x = 5 AND x = 10` inverts
 		// the box and the conflict is caught instead of resolving to whichever was
@@ -192,7 +306,7 @@ void DecideOptimizer::AbsorbBoundsInExpression(Expression &expr, LogicalDecide &
 		const double above = std::floor(k) + 1.0;
 		bool absorbed = true;
 		bool recorded = false;
-		switch (comp.type) {
+		switch (relation) {
 		case ExpressionType::COMPARE_LESSTHANOREQUALTO:
 			recorded = target.Absorb('<', k, false, 0.0, source_clause_id, removal_group_id);
 			break;

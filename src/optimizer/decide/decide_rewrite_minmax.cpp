@@ -217,8 +217,12 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 		// until the query runs leaves the direction open (ExtremumPush::NONE either way):
 		// neither has a cheap direction, so the indicator layer pins z to the true MIN/MAX
 		// from both sides -- right for an equality, and right for either sign.
+		// A factor that is exactly zero makes the term vanish: nothing pushes z, so the
+		// cheap envelope is right whichever way the clause faces, and it asks for no
+		// member box (`sum(x) + 0 * min(abs(x - 2)) <= 5` was refused for one).
 		int scale_sign = ScaleSignAtPlanTime(context, scale, scale_divides);
-		term.is_easy = IsEasyExtremum(is_max, ExtremumPushOf(outer_push, sign * scale_sign));
+		term.is_easy = ScaleVanishesAtPlanTime(context, scale, scale_divides) ||
+		               IsEasyExtremum(is_max, ExtremumPushOf(outer_push, sign * scale_sign));
 		AddRewriteAccount(decide, source_clause_id,
 		                  term.is_easy ? LogicalDecide::RewriteAccount::Kind::EXTREMUM
 		                               : LogicalDecide::RewriteAccount::Kind::EXTREMUM_PINNED,

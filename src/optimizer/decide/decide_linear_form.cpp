@@ -709,6 +709,15 @@ private:
 			// Constant term
 			out_terms.push_back(DecideTerm {DConstants::INVALID_INDEX, expr.Copy()});
 		} else {
+			// Only a bare reference is a coefficient-1 term. Anything else that holds a
+			// decision -- a function no rewrite lowered, an operator, a CASE -- has no
+			// linear reading, and reading it as its decision would drop the construct
+			// without a word: an ABS a rewrite left behind was read as its argument.
+			if (expr.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+				throw InternalException("DECIDE term extraction met '%s', which holds a decision but was not "
+				                        "lowered to a linear term by any rewrite",
+				                        expr.ToString());
+			}
 			// Just a variable (coefficient = 1)
 			out_terms.push_back(
 			    DecideTerm {var_idx, make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1))});
@@ -813,12 +822,31 @@ private:
 		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
 		idx_t qualifier_scope = QualifierScopeOf(agg);
 		for (idx_t i = begin; i < terms.size(); i++) {
-			if (agg.filter) {
-				terms[i].filter = agg.filter->Copy();
-			}
 			terms[i].avg_scale = is_avg;
 			terms[i].qualifier_scope_idx = qualifier_scope;
 			terms[i].reduction = LinearTermReduction::SUM;
+		}
+	}
+
+	//! Attach a reducer's own `when` to every term extracted from its body since the given
+	//! marks: linear terms, bilinear terms and quadratic groups alike. It is done here, once,
+	//! after extraction, rather than threaded through every extraction branch: a branch that
+	//! forgot it -- the decision-free cast arm once did -- left one term unfiltered, and the
+	//! executor then read every kept row as a member of an easy MIN/MAX, so the rows the
+	//! reducer dropped reached the model with the body's constant as their whole left side.
+	static void AttachReducerFilter(DecideConstraint &constraint, idx_t linear_before, idx_t bilinear_before,
+	                                idx_t quadratic_before, const Expression *filter) {
+		if (!filter) {
+			return;
+		}
+		for (idx_t i = linear_before; i < constraint.lhs_terms.size(); i++) {
+			constraint.lhs_terms[i].filter = filter->Copy();
+		}
+		for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
+			constraint.bilinear_terms[i].filter = filter->Copy();
+		}
+		for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
+			constraint.quadratic_groups[i].filter = filter->Copy();
 		}
 	}
 
@@ -1045,18 +1073,13 @@ private:
 		idx_t bilinear_before = constraint.bilinear_terms.size();
 		idx_t quadratic_before = constraint.quadratic_groups.size();
 		ExtractConstraintTerms(*agg.children[0], constraint, sign);
+		AttachReducerFilter(constraint, linear_before, bilinear_before, quadratic_before, agg.filter.get());
 		ApplyAggregateMetadata(constraint.lhs_terms, linear_before, agg);
 		for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
-			if (agg.filter) {
-				constraint.bilinear_terms[i].filter = agg.filter->Copy();
-			}
 			constraint.bilinear_terms[i].avg_scale = is_avg;
 			constraint.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
 		}
 		for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
-			if (agg.filter) {
-				constraint.quadratic_groups[i].filter = agg.filter->Copy();
-			}
 			constraint.quadratic_groups[i].avg_scale = is_avg;
 			constraint.quadratic_groups[i].qualifier_scope_idx = qualifier_scope;
 		}
@@ -1091,32 +1114,32 @@ private:
 		}
 		D_ASSERT(constraint.lhs_terms.empty() && constraint.bilinear_terms.empty() &&
 		         constraint.quadratic_groups.empty());
-		ExtractConstraintTerms(*agg->children[0], constraint, 1, agg->filter.get());
+		ExtractConstraintTerms(*agg->children[0], constraint, 1);
+		AttachReducerFilter(constraint, 0, 0, 0, agg->filter.get());
 		if (scale_match.aggregate) {
 			ApplyScaleToExtracted(*scale_match.function, *scale_match.scale, scale_match.divides, constraint, 0, 0, 0);
 		}
 	}
 
 	//! Extract linear and bilinear terms from a SUM argument in a constraint.
-	void ExtractConstraintTerms(const Expression &expr, DecideConstraint &constr, int sign,
-	                            const Expression *filter = nullptr) {
+	void ExtractConstraintTerms(const Expression &expr, DecideConstraint &constr, int sign) {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 			auto &func = expr.Cast<BoundFunctionExpression>();
 			string fname = func.function.name;
 
 			if (fname == "+") {
 				for (auto &child : func.children) {
-					ExtractConstraintTerms(*child, constr, sign, filter);
+					ExtractConstraintTerms(*child, constr, sign);
 				}
 				return;
 			}
 			if (fname == "-" && func.children.size() == 2) {
-				ExtractConstraintTerms(*func.children[0], constr, sign, filter);
-				ExtractConstraintTerms(*func.children[1], constr, -sign, filter);
+				ExtractConstraintTerms(*func.children[0], constr, sign);
+				ExtractConstraintTerms(*func.children[1], constr, -sign);
 				return;
 			}
 			if (fname == "-" && func.children.size() == 1) {
-				ExtractConstraintTerms(*func.children[0], constr, -sign, filter);
+				ExtractConstraintTerms(*func.children[0], constr, -sign);
 				return;
 			}
 			// POWER(e,2) / POW / ** / (e)*(e), on its own or scaled by a constant.
@@ -1127,9 +1150,6 @@ private:
 			if (quad_pattern.inner_linear_expr) {
 				DecideConstraint::QuadraticGroup qg;
 				qg.sign = static_cast<double>(sign) * quad_pattern.sign;
-				if (filter) {
-					qg.filter = filter->Copy();
-				}
 				ExtractTerms(*quad_pattern.inner_linear_expr, qg.inner_terms);
 				constr.quadratic_groups.push_back(std::move(qg));
 				constr.has_quadratic = true;
@@ -1145,7 +1165,7 @@ private:
 					auto distributed = TryDistributeMultiplyOverAdd(context, func, decide_index);
 					if (!distributed.empty()) {
 						for (auto &kv : distributed) {
-							ExtractConstraintTerms(*kv.second, constr, sign * kv.first, filter);
+							ExtractConstraintTerms(*kv.second, constr, sign * kv.first);
 						}
 						return;
 					}
@@ -1158,9 +1178,6 @@ private:
 						bt.var_b = product.decide_factors[1];
 						bt.coefficient = BuildCoefficientFromFactors(context, product.coefficient_factors);
 						bt.sign = sign;
-						if (filter) {
-							bt.filter = filter->Copy();
-						}
 						constr.bilinear_terms.push_back(std::move(bt));
 						constr.has_bilinear = true;
 						return;
@@ -1185,7 +1202,7 @@ private:
 				// Decision-bearing casts surviving binding are DuckDB's internal
 				// type-reconciliation wrappers; explicit source casts were rejected
 				// on the parsed tree.
-				ExtractConstraintTerms(*cast.child, constr, sign, filter);
+				ExtractConstraintTerms(*cast.child, constr, sign);
 			}
 			return;
 		}
@@ -1195,11 +1212,6 @@ private:
 		if (sign == -1) {
 			for (idx_t i = before; i < constr.lhs_terms.size(); i++) {
 				constr.lhs_terms[i].sign *= -1;
-			}
-		}
-		if (filter) {
-			for (idx_t i = before; i < constr.lhs_terms.size(); i++) {
-				constr.lhs_terms[i].filter = filter->Copy();
 			}
 		}
 	}

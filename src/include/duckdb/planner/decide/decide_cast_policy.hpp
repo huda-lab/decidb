@@ -125,15 +125,31 @@ bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, d
 //! TryEvaluateFoldableDouble, returning false instead of throwing when evaluation fails.
 bool TryEvaluateFoldableDoubleNoThrow(ClientContext &context, const Expression &expr, double &out);
 
+//! What is known of a factor's sign before the query runs. Read structurally, not only
+//! by folding: a product is ZERO when any multiplier is, whatever the others
+//! (`0 * w` with a data column `w`), and NEGATIVE or POSITIVE when every factor's sign is
+//! known; a negation flips; a quotient follows its numerator unless the divisor is zero
+//! or unknown. A data column, a subquery, or arithmetic that only the rows decide is
+//! UNKNOWN. Every consumer that asks "which way does this factor push, if at all" --
+//! the MIN/MAX rewrites and the ABS classifier -- reads the one answer from here.
+enum class PlanTimeSign : uint8_t { ZERO, POSITIVE, NEGATIVE, UNKNOWN };
+PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr);
+
 //! The sign a factor on a reducer contributes: +1, -1, or 0 when it is not known until
-//! the query runs. Any foldable numeric expression is decidable here; a scalar subquery
-//! is not. The canonicalizer and the MIN/MAX rewrite read it alike: a MIN or MAX under a
-//! factor of unknown sign takes the composed formulation.
+//! the query runs (PlanTimeSignOf). A factor that is exactly zero reads as +1: the term
+//! vanishes and any direction is right for it. The canonicalizer and the MIN/MAX
+//! rewrite read it alike: a MIN or MAX under a factor of unknown sign takes the
+//! composed formulation.
 //!
 //! Nothing depends on this for correctness -- it selects between an exact cheap
 //! linearization and an exact expensive one. 0 must therefore be treated as "assume
 //! the expensive one", never as an error.
 int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides);
+
+//! True when a factor on a reducer is exactly zero before the query runs
+//! (PlanTimeSignOf), so the term vanishes: nothing pushes its extremum anywhere, and the
+//! cheap formulation is right in every direction. A divisor is never a vanishing factor.
+bool ScaleVanishesAtPlanTime(ClientContext &context, const Expression *scale, bool divides);
 
 //! The way a comparison drives a term on its decision side, read before the query runs.
 //! `<=` and `<` push a positive term DOWN and a negative one UP; `>=` and `>` the mirror.
@@ -154,13 +170,5 @@ ExtremumPush ExtremumPushOf(ExtremumPush outer, int sign);
 inline bool IsEasyExtremum(bool is_max, ExtremumPush push) {
 	return push == (is_max ? ExtremumPush::DOWN : ExtremumPush::UP);
 }
-
-//! True for a literal under any number of cast wrappers.
-//!
-//! This is an ELIGIBILITY test, not a folder: it asks whether an expression is a
-//! constant the user wrote, so bound absorption stays a shape optimization rather
-//! than becoming a general constant folder. Pair it with TryEvaluateFoldableDouble,
-//! which evaluates the whole expression so a data cast keeps its SQL semantics.
-bool IsCastWrappedConstant(const Expression &expr);
 
 } // namespace duckdb

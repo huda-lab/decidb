@@ -20,6 +20,8 @@
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
+#include <cmath>
+
 namespace duckdb {
 
 static void CollectExpressionChildren(const Expression &expr, vector<const Expression *> &children) {
@@ -165,6 +167,11 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 		return subq.subquery_type == SubqueryType::SCALAR && !subq.IsCorrelated();
 	}
 	if (expr.IsFoldable()) {
+		return true;
+	}
+	// A factor that is identically zero before the query runs is one value for the
+	// whole query -- 0 -- whatever its data factors hold: `0 * w` does not vary by row.
+	if (PlanTimeSignOf(context, expr) == PlanTimeSign::ZERO) {
 		return true;
 	}
 	// Arithmetic over query-wide values is itself query-wide, which is what makes
@@ -390,22 +397,78 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 	return *cur;
 }
 
-void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause) const {
+//! An additive spine over decisions: `+`, binary or unary `-` under the binder's casts.
+static bool IsAdditiveSpine(const Expression &expr, idx_t decide_index) {
+	auto *cur = UnwrapDecideCasts(expr, decide_index);
+	if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = cur->Cast<BoundFunctionExpression>();
+	return (func.function.name == "+" && func.children.size() == 2) ||
+	       (func.function.name == "-" && (func.children.size() == 1 || func.children.size() == 2));
+}
+
+unique_ptr<Expression> DecideCanonicalizer::ComposeScale(const Expression *outer, bool outer_divides,
+                                                         unique_ptr<Expression> inner, bool inner_divides,
+                                                         bool &out_divides) const {
+	if (!outer) {
+		out_divides = inner_divides;
+		return inner;
+	}
+	if (!inner) {
+		out_divides = outer_divides;
+		return outer->Copy();
+	}
+	// The same three results PeelScale composes to: `M`, `D` or `M / D`.
+	if (!outer_divides && !inner_divides) {
+		out_divides = false;
+		return BindOp("*", outer->Copy(), std::move(inner)); // c * (d * e) = (c * d) * e
+	}
+	if (outer_divides && inner_divides) {
+		out_divides = true;
+		return BindOp("*", std::move(inner), outer->Copy()); // (e / d) / c = e / (d * c)
+	}
+	out_divides = false;
+	return outer_divides ? BindOp("/", std::move(inner), outer->Copy())   // (d * e) / c = (d / c) * e
+	                     : BindOp("/", outer->Copy(), std::move(inner)); // c * (e / d) = (c / d) * e
+}
+
+void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause,
+                                    const Expression *factor, bool factor_divides) const {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		if (func.function.name == "+" && func.children.size() == 2) {
-			Decompose(*func.children[0], sign, out, clause);
-			Decompose(*func.children[1], sign, out, clause);
+			Decompose(*func.children[0], sign, out, clause, factor, factor_divides);
+			Decompose(*func.children[1], sign, out, clause, factor, factor_divides);
 			return;
 		}
 		if (func.function.name == "-" && func.children.size() == 2) {
-			Decompose(*func.children[0], sign, out, clause);
-			Decompose(*func.children[1], -sign, out, clause);
+			Decompose(*func.children[0], sign, out, clause, factor, factor_divides);
+			Decompose(*func.children[1], -sign, out, clause, factor, factor_divides);
 			return;
 		}
 		if (func.function.name == "-" && func.children.size() == 1) {
-			Decompose(*func.children[0], -sign, out, clause);
+			Decompose(*func.children[0], -sign, out, clause, factor, factor_divides);
 			return;
+		}
+		// A factor known before the query runs distributes over an additive spine, as a
+		// negation does above: `2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`, the one spelling
+		// a scaled reducer beside a constant has, so the MIN/MAX rewrite and bound
+		// absorption read it as they read `2 * min(x) - 2`. A factor that varies by row,
+		// or a subquery, stays on the spine as one atom: its value is the VALUE shape's.
+		if ((func.function.name == "*" || func.function.name == "/") && func.children.size() == 2) {
+			const bool divides = func.function.name == "/";
+			for (idx_t side = divides ? 1 : 0; side < 2; side++) {
+				auto &candidate = *func.children[side];
+				auto &spine = *func.children[1 - side];
+				if (candidate.IsFoldable() && !ReferencesDecideVar(candidate) && IsAdditiveSpine(spine, decide_index) &&
+				    ReferencesDecideVar(spine)) {
+					bool composed_divides;
+					auto composed = ComposeScale(factor, factor_divides, candidate.Copy(), divides, composed_divides);
+					Decompose(spine, sign, out, clause, composed.get(), composed_divides);
+					return;
+				}
+			}
 		}
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
@@ -414,20 +477,120 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 			// The parsed boundary rejected every user-authored decision cast.
 			// Anything left here was inserted by binding and is transparent in the
 			// solver's single DOUBLE domain. Data-only casts stay atomic.
-			Decompose(*cast.child, sign, out, clause);
+			Decompose(*cast.child, sign, out, clause, factor, factor_divides);
 			return;
 		}
 	}
 	// Every other node is a term boundary -- but a factor sitting on a reducer is
 	// peeled off it first, so the term the rest of the pipeline sees is the bare
-	// reducer and the factor travels beside it.
+	// reducer and the factor travels beside it; a factor distributed from above
+	// composes with it.
 	unique_ptr<Expression> scale;
 	bool divides = false;
 	auto &term = PeelScale(expr, scale, divides, clause);
+	if (factor) {
+		scale = ComposeScale(factor, factor_divides, std::move(scale), divides, divides);
+	}
 	// Classify on the whole original term. The factors are decision-free and
 	// reducer-free by construction, so this agrees with classifying `term` -- stated
 	// rather than assumed, because Classify is the part that was wrong twice before.
 	out.push_back(Atom {sign, &term, Classify(expr), std::move(scale), divides});
+}
+
+//! The bare decision `expr` is a constant multiple of, with that multiple folded into
+//! `value` -- `2 * x`, `x * 2`, `-x`, `x / 2` -- or `expr` itself with `value` untouched
+//! when it is not one. PeelScale peels factors off reducers only, so a plain decision
+//! carries its factor inside the atom; the like-term merge needs it outside.
+static const Expression *PeelBareDecisionFactors(ClientContext &context, const Expression &expr, idx_t decide_index,
+                                                 double &value) {
+	auto *cur = UnwrapDecideCasts(expr, decide_index);
+	if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return cur;
+	}
+	auto &func = cur->Cast<BoundFunctionExpression>();
+	const auto &name = func.function.name;
+	auto constant = [&](const Expression &candidate, double &c) {
+		return TryEvaluateFoldableDoubleNoThrow(context, candidate, c) && std::isfinite(c) && c != 0.0;
+	};
+	double c;
+	double inner = 1.0;
+	const Expression *term = nullptr;
+	if (name == "-" && func.children.size() == 1) {
+		term = PeelBareDecisionFactors(context, *func.children[0], decide_index, inner);
+		inner = -inner;
+	} else if (name == "*" && func.children.size() == 2) {
+		for (idx_t side = 0; side < 2 && !term; side++) {
+			if (constant(*func.children[side], c)) {
+				term = PeelBareDecisionFactors(context, *func.children[1 - side], decide_index, inner);
+				inner *= c;
+			}
+		}
+	} else if (name == "/" && func.children.size() == 2 && constant(*func.children[1], c)) {
+		term = PeelBareDecisionFactors(context, *func.children[0], decide_index, inner);
+		inner /= c;
+	}
+	if (!term || term->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		return cur;
+	}
+	value *= inner;
+	return term;
+}
+
+bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
+	// The term an atom is a multiple of, and that multiple as a number known before the
+	// query runs: the factor PeelScale peeled off a reducer (none is 1, a divisor its
+	// reciprocal), with the constant factors a bare decision stands under folded in.
+	// False when the factor is data or a subquery, which is not summable here.
+	auto key_of = [&](const Atom &atom, const Expression *&term, double &value) {
+		value = 1.0;
+		if (atom.scale) {
+			double scale;
+			if (!TryEvaluateFoldableDouble(context, *atom.scale, scale) || !std::isfinite(scale) ||
+			    (atom.scale_divides && scale == 0.0)) {
+				return false;
+			}
+			value = atom.scale_divides ? 1.0 / scale : scale;
+			term = atom.expr;
+			return true;
+		}
+		term = PeelBareDecisionFactors(context, *atom.expr, decide_index, value);
+		return true;
+	};
+	bool merged = false;
+	for (idx_t i = 0; i < atoms.size(); i++) {
+		const Expression *term;
+		double total;
+		if (atoms[i].placement != Placement::LEFT || !key_of(atoms[i], term, total)) {
+			continue;
+		}
+		total *= atoms[i].sign;
+		vector<idx_t> like;
+		for (idx_t j = i + 1; j < atoms.size(); j++) {
+			const Expression *other;
+			double value;
+			if (atoms[j].placement == Placement::LEFT && key_of(atoms[j], other, value) &&
+			    CanonicalTreesEqual(*term, *other)) {
+				total += atoms[j].sign * value;
+				like.push_back(j);
+			}
+		}
+		// A group whose factors cancel is left as written: dropping it could empty the
+		// side, and `x - x` is the user's to resolve.
+		if (like.empty() || total == 0.0) {
+			continue;
+		}
+		const bool whole = total == std::floor(total) && std::fabs(total) < 2147483647.0;
+		atoms[i].sign = 1;
+		atoms[i].expr = term;
+		atoms[i].scale = make_uniq_base<Expression, BoundConstantExpression>(
+		    whole ? Value::INTEGER(static_cast<int32_t>(total)) : Value::DOUBLE(total));
+		atoms[i].scale_divides = false;
+		for (auto it = like.rbegin(); it != like.rend(); ++it) {
+			atoms.erase(atoms.begin() + static_cast<int64_t>(*it));
+		}
+		merged = true;
+	}
+	return merged;
 }
 
 unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_ptr<Expression> left,
@@ -522,6 +685,14 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 	vector<Atom> right_atoms;
 	Decompose(*cmp.left, 1, left_atoms, Clause::CONSTRAINT);
 	Decompose(*cmp.right, 1, right_atoms, Clause::CONSTRAINT);
+	// Like terms under factors known before the query runs are one term: `x + x` is
+	// `2 * x`, `min(x) + min(x)` is `2 * min(x)`, so a bound written as a repeated term
+	// is read as the bound it is. Merged here so a side that is otherwise canonical does
+	// not take the early return below with its twins intact (a merged atom carries a
+	// scale, which forces the rebuild), and again on the partitioned decision side,
+	// where a term that crossed the relation meets its twin (`3 * x >= x - 4`).
+	MergeLikeAtoms(left_atoms);
+	MergeLikeAtoms(right_atoms);
 
 	auto Has = [](const vector<Atom> &atoms, Placement placement) {
 		for (auto &atom : atoms) {
@@ -606,6 +777,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 		}
 	}
 
+	MergeLikeAtoms(new_left);
 	if (IsLoneNegatedReducer(new_left)) {
 		FoldNegationIntoFactor(new_left[0]);
 	}
@@ -652,6 +824,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expressi
 
 	vector<Atom> atoms;
 	Decompose(objective, 1, atoms, Clause::OBJECTIVE);
+	MergeLikeAtoms(atoms);
 
 	vector<Atom> decision_atoms;
 	for (auto &atom : atoms) {
@@ -663,9 +836,15 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expressi
 		// argmax/argmin, so it is peeled here and the body downstream is pure decision
 		// algebra. Peeling it requires knowing its value, which is exactly the
 		// foldable case; a row-varying or query-executed term has no single value to
-		// fold and does not belong in an objective at all.
+		// fold and does not belong in an objective at all. A factor distributed onto
+		// it (`2 * (sum(x) - 1)`) is part of its value.
 		double value = 0;
-		if (!TryEvaluateFoldableDouble(context, *atom.expr, value)) {
+		unique_ptr<Expression> scaled;
+		if (atom.scale) {
+			scaled = atom.scale_divides ? BindOp("/", atom.expr->Copy(), atom.scale->Copy())
+			                            : BindOp("*", atom.scale->Copy(), atom.expr->Copy());
+		}
+		if (!TryEvaluateFoldableDouble(context, scaled ? *scaled : *atom.expr, value)) {
 			throw BinderException(
 			    "MAXIMIZE/MINIMIZE: '%s' does not reference a decision, so it cannot be part of "
 			    "the objective. Remove it, or move it to the SELECT list.",

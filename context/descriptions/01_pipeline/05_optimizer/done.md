@@ -153,7 +153,7 @@ short fails loudly instead of handing a backend a model it cannot load.
 |---|---|---|
 | 1 | `RewriteNorm` | Lowers bound NORM markers before later passes see their ABS, POWER, MAX, or L0 links. |
 | 2 | `RewriteInDomain` | Lowers bound DECIDE-variable IN markers to their indicator formulation. |
-| 3 | `TagAbsConstraintsForBigM` | Marks the ABS nodes that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
+| 3 | `TagAbsForBigM` | Marks the ABS nodes, in the constraints and the objective, that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
 | 4 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes; must be first of the remaining rewrites so later passes see plain variables. |
 | 5 | `RewriteBilinear` | McCormick linearization for Boolean × anything. |
 | 6 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers become helper decisions. After ABS and bilinear, whose auxiliaries may stand in a reducer's body; before the MIN/MAX passes, which never see these reducers. |
@@ -209,9 +209,17 @@ their `by` groups and their members and only stand for the classes (D28). The
 comparison's `by` stamp gives `group_key`, an index into `LogicalDecide::group_keys`. An
 easy MIN/MAX (`MINMAX_EASY_REWRITE_TAG` on the comparison, its reducer kept:
 `was_minmax_easy`) extracts its body's terms with the reducer's `when` as their filter,
-one row per member (`ExtractEasyExtremumTerms`). A comparison classified `INVALID`, or
-still in the VALUE shape, is an `InternalException`: stage 04 refuses the first and the
-value rewrite replaces the second.
+one row per member (`ExtractEasyExtremumTerms`). The filter is attached once, after
+extraction, to every term the body produced — linear, bilinear and quadratic alike
+(`AttachReducerFilter`, shared with the aggregate shape) — rather than threaded through
+the extraction branches: a branch that forgot it (the decision-free cast arm once did)
+left one term unfiltered, and stage 08 then read every kept row as a member, so the rows
+the reducer's own `when` dropped reached the model as `constant >= K` and a feasible query
+was called infeasible. A comparison classified `INVALID`, or still in the VALUE shape, is
+an `InternalException`: stage 04 refuses the first and the value rewrite replaces the
+second. So is a term that holds a decision under anything but a bare reference
+(`ExtractTerms`): no rewrite lowered it, and reading it as its decision would drop the
+construct without a word.
 
 The objective's `when` wrapper gives `DecideObjective::when_condition`, and the two-level
 form's wrapper (`PER_CONSTRAINT_TAG`, outside the `when`) gives `DecideObjective::per_columns`,
@@ -279,21 +287,62 @@ auxiliary `REAL` variables, replaces the ABS nodes with references to them, and
 emits `aux >= inner` and `aux >= -inner`.
 
 `AbsPairInfo::needs_bigm` records whether the auxiliary needs an upper envelope.
-It is false when solver pressure pins `aux` to `|inner|` naturally — a `MINIMIZE`
-objective, or a constraint shape that already upper-bounds `aux`. When true
-(constraint hard direction, or `MAXIMIZE` + objective), `abs_maximize_links`
-carries the auxiliary and a binary sign indicator, and execution derives the two
-upper-bound rows from the tagged lower-bound constraints.
+It is false when solver pressure or the clause's shape pins `aux` to `|inner|`
+naturally — an objective term the sense pushes down (a positive ABS under
+`MINIMIZE`, a negative one under `MAXIMIZE`), or a constraint shape that already
+upper-bounds `aux`. When true (a constraint hard direction, an objective term the
+sense pushes up, or a term of unknown sign), `abs_maximize_links` carries the
+auxiliary and a binary sign indicator, and execution derives the two upper-bound
+rows from the tagged lower-bound constraints.
 
-`TagAbsConstraintsForBigM` decides this by reading the constraint as `E <op> 0`
-and asking whether each ABS term's signed position pushes its auxiliary down.
+`TagAbsForBigM` decides this by reading a constraint as `E <op> 0` and asking
+whether each ABS term's signed position pushes its auxiliary down, and the
+objective the same way with the sense standing in for the relation: `MINIMIZE E`
+pins what `E <= K` pins, `MAXIMIZE E` what `E >= K` pins. So `MINIMIZE -abs(e)` and
+`MAXIMIZE abs(e)` take the envelope, `MAXIMIZE -abs(e)` does not (until 2026-10-23 only
+the sense was read, and `MINIMIZE 0 * sum(x) - abs(sum(x) - 9)` was "unbounded").
 `CollectAbsWithSign` folds signs through `+`, unary and binary `-`, casts,
 aggregate bodies, and constant factors. A factor whose value is not known until
 execution — a data column, as in `SUM(w * ABS(x - t))` — yields sign 0, which
-never matches the pinning direction and so forces Big-M.
+never matches the pinning direction and so forces Big-M, in the objective as in a
+constraint: `MINIMIZE SUM(w * ABS(x - t))` with a negative `w` on one row answers
+rather than reporting "unbounded", at the price of needing a finite box for the
+decisions inside the ABS on the lowering arm. A factor's sign is read by
+`PlanTimeSignOf` (`decide_cast_policy`), structurally rather than only by folding: a
+product with a zero constant among its factors is zero whatever its data factors hold
+(`0 * w`), a negation flips, a quotient follows its numerator. A factor that is exactly
+zero makes the term vanish: nothing pins it and nothing boxes it, and neither is
+anything nested in it. The MIN/MAX rewrites' `ScaleSignAtPlanTime` and
+`ScaleVanishesAtPlanTime` read the same classifier, so every pass agrees on what a
+factor does. A MIN or MAX on the path pushed its
+hard way (`MINIMIZE min(abs(e))`, `MAXIMIZE -min(abs(e))`, `min(abs(e)) <= K`) also
+yields sign 0 beneath it: the extremum is encoded with a Big-M over its members, which
+needs each member's box, and an auxiliary held by pressure alone has none. Pushed its
+cheap way (`MINIMIZE max(abs(e))`) the extremum's envelope bounds every member and the
+plain envelope stands. A MIN or MAX under a factor that is exactly zero
+(`ScaleVanishesAtPlanTime`) is classified easy in every direction by the composed
+rewrite: the term vanishes, nothing pushes its extremum, and the cheap envelope asks for
+no member box, so `sum(x) + 0 * min(abs(x - 2)) <= 5` and `MAXIMIZE 0 * -min(abs(x - 2))`
+answer instead of demanding a bound on the ABS auxiliary.
 
 The two envelope rows keep the clause's `when` (`ScopeHelperRow`), so they read only the
 rows the clause keeps; the objective's keep the objective's `when`.
+
+**An ABS inside an ABS.** `FindAndReplaceAbs` rewrites the argument before the node, so
+an inner ABS becomes its own auxiliary first and the outer's envelope rows refer to it
+(an ABS left in a row was read by term extraction as its argument, and the sign
+vanished). The pairs are appended innermost first, the order `DeriveAbsAuxiliaryBounds`
+boxes them in: the outer range needs the inner box. An ABS beneath another is pinned
+exactly, because the outer ABS is not monotone in it: over `x` in `[-1, 1]`,
+`abs(abs(x) - 2) <= 0` with an inner auxiliary held by its lower envelope alone would hold
+at 2. `TagAbsForBigM` is the one place that decides this, as it decides every other
+pinning: `CollectAbsWithSign` records an ABS and then descends into its argument with
+sign 0, so a nested ABS never classifies as pinned, and `TagAbsSubtreeForBigM` tags the
+nested ones under a BETWEEN, IN or equality too. The rewrite only reads the tag. So a
+dead ABS -- under a factor of exactly zero, which the walk skips -- and everything nested
+in it get no envelope and demand no box (`MINIMIZE sum(0 * -abs(abs(x) - 2))` answers with
+no upper bound on `x`). The label is rendered before the argument is rewritten, so each
+account names the ABS as written.
 
 That is deliberately conservative: a row whose `w` happens to be positive gets
 an envelope it does not need. Assuming such a factor positive is unsound, since
@@ -583,18 +632,32 @@ arrives as its two comparisons, split by the binder) into `absorbed_lower_bounds
 `absorbed_upper_bounds` on `LogicalDecide`, and tags the comparison `ABSORBED_BOUND_TAG`
 so physical extraction skips it.
 
-A bound qualifies when the LHS is a bare decision variable under casts — not inside a
-reducer — and the RHS is a literal under any number of casts. Recursion goes through
-`AND` and a `per K:` wrapper, whose key children hold no comparison, so `per row: x >= -5`
-is absorbed like `x >= -5`. **A `when`-guarded comparison is never absorbed**:
-`when c: x <= 0` is conditional per row, not a domain, so the pass stops at the wrapper.
-This is why it keeps its own descent rather than `ForEachConstraintLeaf`.
+A bound is read by value, not by spelling. It qualifies when the LHS is one decision
+variable under casts — not inside a reducer — in any affine spelling whose constants
+are known before the query runs (`2 * x`, `x * 2`, `-x`, `x / 2`, `2 * (x - 1)`:
+`PeelAffine` reads the side as `scale * x + offset`), and the RHS is anything that folds
+to a finite number then: a literal under casts, or the `1 + -3` canonicalization leaves
+of `x - 1 >= -3`. The shift moves across, the factor divides the bound and, when
+negative, reverses the relation, so `x - 1 >= -3`, `2 * x >= -4`, `-x <= 2`,
+`2 * (x - 1) >= -6` and `x >= -2` are one fact, the column bound `x >= -2`, and each
+makes `x` signed the same way (D41 by value, 2026-10-23; before that only a literal RHS
+qualified and `x - 1 >= -3` kept `x >= 0`). A side that is data — a column, a subquery,
+a column factor — is not a bound known before the query runs: the comparison stays a
+row.
+Recursion goes through `AND` and a `per K:` wrapper, whose key children hold no
+comparison, so `per row: x >= -5` is absorbed like `x >= -5`. **A `when`-guarded
+comparison is never absorbed**: `when c: x <= 0` is conditional per row, not a domain,
+so the pass stops at the wrapper. This is why it keeps its own descent rather than
+`ForEachConstraintLeaf`.
 
-An easy `max(x) <= K` / `min(x) >= K` over a bare decision, with no filter on the reducer
+An easy `max(x) <= K` / `min(x) >= K` over one decision, with no filter on the reducer
 (`TryMatchEasyExtremumTarget`, `MINMAX_EASY_REWRITE_TAG`), bounds every row its reducer
 reads, and with no `when` that is every row: it is the column bound `x <= K` / `x >= K`
-and is absorbed the same way (D41), so a negative `K` makes `x` signed, as `x >= -5` does.
-The reducer stays in the tree, so EXPLAIN and DIAGNOSE read the clause as written.
+and is absorbed the same way, in the same affine spellings outside the reducer
+(`2 * min(x) >= -4`, `-min(x) <= 2`, `2 * (min(x) - 1) >= -6`), so a negative `K` makes
+`x` signed, as `x >= -5` does. The member itself is a bare decision: `max(2 * x) <= K`
+bounds the member `2 * x` and stays one row per member. The reducer stays in the tree,
+so EXPLAIN and DIAGNOSE read the clause as written.
 
 - `<=` tightens the upper bound (`min`), `>=` the lower (`max`), `=` intersects both.
   Intersecting rather than assigning is what makes `x = 5 AND x = 10` invert the box

@@ -146,10 +146,14 @@ A scope inside an ordinary SQL subquery written in the clause is refused
   range ($2^{53}$) is refused by name rather than rounded.
 - **Default lower bound is 0** for `INT` and `REAL`. This is a
   *default*, not a floor: a variable becomes **signed** (may take negative
-  values) when the query gives it an explicit negative lower bound —
-  `x >= -K`, `x BETWEEN -K AND K`, `min(x) >= -K` (an easy `MIN` with no `when` and
+  values) when the query bounds it alone below zero. The bound is read by value, not
+  by spelling: `x >= -K` in any affine spelling whose constants are known before
+  the query runs (`x - 1 >= -3`, `2 * x >= -4`, `-x <= 2`, `x / 2 >= -1`,
+  `2 * (x - 1) >= -6`),
+  `x BETWEEN -K AND K`, an easy `min(x) >= -K` in the same spellings (no `when` and
   no filter of its own, whatever its `per` or `by`, §5), or a negative literal in an
-  `IN` domain (`x IN (-5, 0, 5)`). A variable the query never lowers stays
+  `IN` domain (`x IN (-5, 0, 5)`). A bound whose other side is data (`x >= w - 4`, a
+  subquery) is a row, not a floor. A variable the query never lowers stays
   non-negative, and so does one lowered only under a `when`
   (`when g = 'A': x >= -5` keeps `x >= 0`; an open issue in
   `06_issues/bugs/todo.md`). There is no fully-free ($-\infty$) domain: signed
@@ -442,7 +446,8 @@ Tests: `test/decide/tests/test_scope_objective.py`.
 - `MIN(expr)` and `MAX(expr)` are supported. Easy cases (`MAX(expr) <= K`,
   `MIN(expr) >= K`) become a bound on each member, with no auxiliary variable; with no
   `when` and no filter of its own, a member that is a single decision is bounded in its
-  column box instead of by a row (so `min(x) >= -5` makes `x` signed, §2). Hard cases
+  column box instead of by a row, in any affine or scaled spelling (so `min(x) >= -5`,
+  `min(x) - 1 >= -6` and `-min(x) <= 5` all make `x` signed, §2). Hard cases
   (the opposite direction, equality) add an extremum column per `by` group, pinned by
   Big-M indicator rows. In objectives,
   `MINIMIZE MAX(expr)` and `MAXIMIZE MIN(expr)` use one auxiliary; `MAXIMIZE MAX(expr)`
