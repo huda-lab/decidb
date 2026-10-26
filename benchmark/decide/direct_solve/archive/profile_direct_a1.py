@@ -9,7 +9,7 @@ Each measured run is a fresh `decidb` process that only opens the stored databas
 Machine-heat rule: shapes run one at a time, smallest size first, and a size runs on the solver only when the
 previous size finished within `--solver-budget` seconds.
 
-    python3 benchmark/decide/profile_direct_a1.py --rows 100000 1000000 --db-dir /tmp/a1db
+    python3 benchmark/decide/direct_solve/archive/profile_direct_a1.py --rows 100000 1000000 --db-dir /tmp/a1db
 """
 
 import argparse
@@ -20,7 +20,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-BINARY = HERE.parent.parent / "build" / "release" / "decidb"
+BINARY = HERE.parents[3] / "build" / "release" / "decidb"
 
 # name -> (source table, DECIDE clause, what the parent reads)
 SHAPES = {

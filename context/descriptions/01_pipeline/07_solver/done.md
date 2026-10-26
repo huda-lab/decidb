@@ -210,6 +210,18 @@ Diagnostic follow-up solves are budgeted separately
 and the diagnostic cap, so a failed solve is not followed by several full-length
 internal re-solves before the user sees anything.
 
+### Optimality gap
+
+A mixed-integer solve answers with the optimum, not with an incumbent inside the
+solver's default relative gap of 1e-4. Both backends set the gap to 0: Gurobi
+`MIPGap` on the environment (`gurobi_solver.cpp`), HiGHS `mip_rel_gap` in
+`HighsSession::Load` (`deterministic_naive.cpp`). With the default, Gurobi returned
+a 1.6M-row selection up to 0.005% short of the optimum, a different incumbent on
+every run, while direct solve and HiGHS returned the optimum
+(`05_performance/benchmarking/direct_solve.md`). A solve that cannot prove the
+optimum in time stops at the time limit and reports `TIME_LIMIT` with its incumbent
+and gap.
+
 ---
 
 ## 3. `SolveModel`
@@ -354,6 +366,17 @@ Uses the **C++ API** (`Highs.h`). The class is named `DeterministicNaive` for
 historical reasons; it is a full MIP solver.
 
 HiGHS has no binary variable type — a binary is an integer with bounds `[0,1]`.
+
+A `kError` from `highs.run()` is a solve HiGHS could not finish, not a DeciDB fault, so
+`HighsSession` returns it as `SolverStatus::OTHER` with the model status in
+`raw_status`, and the operator raises the ordinary `DECIDE optimization failed (solver
+status N).` The known case is HiGHS's QP solver: it is an active-set method that keeps a
+dense matrix over the variables that end strictly inside their bounds, and it stops with
+"Large nullspace" (model status 4) when there are more than its `qp_nullspace_limit` of
+4,000. A box-bounded QP on 9,000 rows with about half the optima inside their range hits
+it in under a second (`test_quadratic.py::test_highs_qp_it_cannot_finish_is_an_ordinary_error`).
+Raising the limit does not scale: at 100,000 such variables the matrix needs about 20 GB.
+Gurobi solves the same model.
 
 Sense characters convert to HiGHS's range rows:
 

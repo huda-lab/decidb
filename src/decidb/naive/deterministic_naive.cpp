@@ -277,6 +277,8 @@ void HighsSession::Load(const SolverModel &model) {
     //===--------------------------------------------------------------------===//
 
     highs.setOptionValue("log_to_console", std::getenv("DECIDB_PROFILE_SOLVER_LOG") != nullptr);
+    // The optimum, not an incumbent within the default relative gap of 1e-4; Gurobi's `MIPGap` is set the same way.
+    highs.setOptionValue("mip_rel_gap", 0.0);
     // Note: the time_limit is NOT set here — it is a per-chunk budget applied in
     // RunAndReadback(), so a warm Continue() can extend it without a reload.
 
@@ -525,12 +527,16 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
         }
     }
     // HiGHS returns kWarning (not kOk) at the time limit while still exposing a
-    // valid model status + incumbent, so throwing on any non-kOk return would
-    // crash a diagnosable timeout with INTERNAL. Throw only on a genuine kError;
-    // let kWarning fall through to the model-status switch below.
+    // valid model status + incumbent, so kWarning falls through to the
+    // model-status switch below. A kError is a solve HiGHS could not finish (its
+    // QP solver can fail to converge on a large model), not a DeciDB fault: it is
+    // reported as OTHER, so the operator raises its ordinary solve-failed error,
+    // or DIAGNOSE takes it, instead of an INTERNAL error that ends the session.
     if (status == HighsStatus::kError) {
-        HighsModelStatus model_status = highs.getModelStatus();
-        throw InternalException("HiGHS solver failed: status %d, model_status %d", (int)status, (int)model_status);
+        SolverResult result;
+        result.raw_status = (int)highs.getModelStatus();
+        result.status = SolverStatus::OTHER;
+        return result;
     }
 
     //===--------------------------------------------------------------------===//

@@ -16,14 +16,16 @@ import re
 import subprocess
 import time
 from datetime import datetime, timezone
+import sys
 from pathlib import Path
 
-import profile_pipeline as pipeline
-import run_benchmarks as bench
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # profile_pipeline and run_benchmarks live in benchmark/decide/
+import profile_pipeline as pipeline  # noqa: E402
+import run_benchmarks as bench  # noqa: E402
 
 
 HERE = Path(__file__).resolve().parent
-EXE = HERE.parents[1] / "build/release/decidb"
+EXE = HERE.parents[3] / "build/release/decidb"
 MODES = ("direct", "highs", "gurobi")
 PHASES = {
     "direct_analyze_ms": ("optimizer.direct.analyze",),
@@ -166,7 +168,7 @@ def main() -> None:
     if not EXE.exists():
         parser.error(f"build the release CLI first: {EXE}")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output = args.output or HERE / "results" / f"direct_s1_{stamp}.csv"
+    output = args.output or HERE.parents[1] / "results" / f"direct_s1_{stamp}.csv"
     output.parent.mkdir(parents=True, exist_ok=True)
     raw_dir = output.with_suffix("")
     manifest = {

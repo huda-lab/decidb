@@ -17,7 +17,7 @@ within 1e-6 relative; a mismatch is printed loudly and the script exits non-zero
 Machine-heat rule: shapes run one at a time, smallest size first, and a size runs on a solver only when that solver
 finished the previous size of the shape within `--solver-budget` seconds.
 
-    python3 benchmark/decide/profile_direct_r1.py --rows 100000 1000000 --db-dir /tmp/r1db
+    python3 benchmark/decide/direct_solve/archive/profile_direct_r1.py --rows 100000 1000000 --db-dir /tmp/r1db
 """
 
 import argparse
@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-BINARY = HERE.parent.parent / "build" / "release" / "decidb"
+BINARY = HERE.parents[3] / "build" / "release" / "decidb"
 
 GROUPS = 1000
 FRACTION = 0.3  # a budget binds at this share of the full spend

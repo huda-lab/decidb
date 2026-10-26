@@ -42,7 +42,7 @@ A run over `--timeout` is killed with its whole process group and recorded as `t
 `error`. Neither is ever reported as a time. `--repeats` runs a cell more than once; the operator profile is the first
 run's, latency / wall / peak memory are reported as min / median / max over all finished runs.
 
-    python3 benchmark/decide/profile_r1_plan.py --rows 100000 --source-dir build/r1db_smoke --db-dir build/r1db_plan_smoke
+    python3 benchmark/decide/direct_solve/archive/profile_r1_plan.py --rows 100000 --source-dir build/r1db_smoke --db-dir build/r1db_plan_smoke
 """
 
 import argparse

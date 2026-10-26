@@ -1,3 +1,16 @@
 # Edge Cases & Data Shapes Test Coverage — Todo
 
-No open coverage gaps. Shipped coverage is recorded in `done.md`.
+Shipped coverage is recorded in `done.md`.
+
+## No differential test is large enough to see a solver's optimality gap
+
+- **Gap:** a MIP solver with a nonzero relative gap may stop at an incumbent short of the optimum. The differential
+  suite cannot see this. Its datasets are small enough that Gurobi and HiGHS always close the gap, and
+  `compare_objectives` (`test/decide/comparison/compare.py`) accepts an absolute difference of 1e-4, which a relative
+  gap of 1e-4 on a large objective exceeds by orders of magnitude while staying inside it on a small one.
+- **Found by:** the direct-solve benchmark on S1 at 1.6M rows, where Gurobi at its default `MIPGap` of 1e-4 returned
+  objectives 5.5e-6 to 4.6e-5 relative short of direct solve's (`05_performance/benchmarking/direct_solve.md`). Both
+  backends now solve to a gap of 0 (`01_pipeline/07_solver/done.md`, Optimality gap), but no test fails if that is
+  undone.
+- **Test to add:** one MIP whose objective is large and whose default-gap incumbent is short of the optimum, compared
+  with a relative tolerance, so that removing the gap-0 setting from either backend fails it.

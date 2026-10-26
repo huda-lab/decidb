@@ -84,7 +84,9 @@ constructor. Three consumers read them:
 Flattening skips any comparison tagged `SINGLETON_ROW_BOUND_TAG`, so an
 singleton-row bound does not also produce `num_rows` redundant per-row model rows. The
 comparison itself stays in the tree, which is why `EXPLAIN` still renders the bound
-the user wrote.
+the user wrote. A bound against a data column (`x <= cap`) is not tagged: it flattens to a
+per-row spec, and the model builder folds each row into its column box when no diagnosis
+is armed (`06_model_formulation/done.md`, Path 3).
 
 ### The elastic box
 

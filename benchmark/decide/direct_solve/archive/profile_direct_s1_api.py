@@ -20,15 +20,17 @@ import platform
 import subprocess
 import time
 from datetime import datetime, timezone
+import sys
 from pathlib import Path
 
-import profile_pipeline as pipeline
-import run_benchmarks as bench
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # profile_pipeline and run_benchmarks live in benchmark/decide/
+import profile_pipeline as pipeline  # noqa: E402
+import run_benchmarks as bench  # noqa: E402
 from profile_direct_s1 import PHASES
 
 
 HERE = Path(__file__).resolve().parent
-DEFAULT_BINARY = HERE / "results" / "profile_direct_s1_api"
+DEFAULT_BINARY = HERE.parents[1] / "results" / "profile_direct_s1_api"
 MODES = ("direct", "highs", "gurobi")
 DELIVERIES = ("materialized", "stream")
 CARDINALITIES = ("upper", "lower", "exact", "interval")
@@ -193,7 +195,7 @@ def main() -> None:
     if not args.binary.exists():
         parser.error(f"build the API benchmark first: {args.binary}")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output = args.output or HERE / "results" / f"direct_s1_api_{stamp}.csv"
+    output = args.output or HERE.parents[1] / "results" / f"direct_s1_api_{stamp}.csv"
     output.parent.mkdir(parents=True, exist_ok=True)
     raw_dir = output.with_suffix("")
     manifest = {

@@ -1,6 +1,6 @@
 // S1 API timing for materialized and streamed query results.
 // Build from the repository root with:
-// clang++ -std=c++17 -O2 -I src/include benchmark/decide/profile_direct_s1_api.cpp \
+// clang++ -std=c++17 -O2 -I src/include benchmark/decide/direct_solve/archive/profile_direct_s1_api.cpp \
 //   -L build/release/src -lduckdb -Wl,-rpath,$PWD/build/release/src \
 //   -o benchmark/decide/results/profile_direct_s1_api
 

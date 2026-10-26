@@ -186,6 +186,31 @@ contribute; fixed LHS terms are summed over that group's rows and subtracted.
 One `ModelConstraint` per row, skipping rows the `WHEN` excluded. RHS is
 `rhs_values[row]`; fixed LHS terms are subtracted one row at a time.
 
+**A row that bounds one decision goes into its column box instead** (`TryFoldPerRowBound`).
+When the row has one term with coefficient exactly 1 or -1 and a finite right-hand side
+(`x <= cap`, `x >= lo`, `x = v`, `-x >= -cap`), it narrows that column's `col_lower` /
+`col_upper` and is not emitted. This is the per-row counterpart of singleton-row folding
+(`decide_singleton_row_folding.cpp`), which folds a literal bound once per decision in the
+optimizer; a data-valued bound differs per row and is known only here. The fold:
+
+- **narrows, never replaces.** The bound is intersected with the box it finds, so it keeps
+  the meaning of the row: a negative data value does not lower a decision's floor of 0,
+  unlike a literal `x >= -3`. Several rows on one column (an entity-scoped decision) all hold.
+- **does not divide.** `2*x <= cap` stays a row, so the bound is the row's own right-hand
+  side, with no rounding. A row with two decisions stays a row.
+- **leaves non-finite bounds alone.** `x <= +inf` stays a row with its existing handling.
+- **does not run under diagnosis** (`tolerate_infeasible_bounds`, set by the `DIAGNOSE`
+  prefix). The elastic engine relaxes rows and quotes the clause from their provenance
+  (`x <= cap_col + delta`), so a diagnosed statement keeps the rows.
+
+A box the fold inverts is caught by the sanity check (§8), which answers INFEASIBLE as the
+row would have. Constants derived from the formulation box (Big-M, McCormick) are computed
+before the fold, against a box at least as wide, so they stay valid. Gurobi's presolve turns
+such rows into bounds on its own; HiGHS's QP solver does not, and a 9,600-row box-bounded QP
+that ran past 60 s as rows solves in 0.4 s as bounds. The golden corpus (cases 95 to 101)
+shows each branch: lower, equality, coefficient -1, coefficient 2, two decisions, an
+infinite bound, and `DIAGNOSE`.
+
 AVG terms are already coefficient-scaled by stage 08 (by total active rows, by
 the `WHEN` mask, by group size, or by an aggregate-local filter's surviving rows).
 The builder consumes the evaluated coefficients directly.

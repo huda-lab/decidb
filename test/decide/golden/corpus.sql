@@ -687,3 +687,31 @@ SUCH THAT x BETWEEN 0 AND 10
     AND SUM(x) >= 3 AND SUM(x) <= 7
     AND SUM(x) <> cap PER grp
 MAXIMIZE SUM(x);
+
+-- ---------------------------------------------------------------------------
+-- Per-row data bounds folded into the column box (ilp_model_builder.cpp, TryFoldPerRowBound)
+-- ---------------------------------------------------------------------------
+-- A bound on one decision with coefficient 1 or -1 against a data value becomes that column's bound, not a row.
+-- Every case carries `SUM(x) <= 100` over INT decisions so no direct-solve rule takes it and the solver builds it.
+
+-- 95 lower bound from data: each column's lb is its weight
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT x >= weight AND SUM(x) <= 100 MINIMIZE SUM(price * x);
+
+-- 96 equality to data: lb and ub both become the weight
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT x = weight AND SUM(x) <= 100 MAXIMIZE SUM(x);
+
+-- 97 coefficient -1: `-x >= -price` is `x <= price`, an upper bound
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT -x >= -price AND SUM(x) <= 100 MAXIMIZE SUM(weight * x);
+
+-- 98 coefficient 2 stays a row: folding it would divide
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT 2 * x <= price AND SUM(x) <= 100 MAXIMIZE SUM(weight * x);
+
+-- 99 two decisions in one row stay a row
+SELECT id, x, y FROM items DECIDE x(INT), y(INT) SUCH THAT x + y <= price AND SUM(x) <= 100 MAXIMIZE SUM(x + y);
+
+-- 100 an infinite data bound stays a row (row 1 has no cap); the finite ones fold
+SELECT id, x FROM (SELECT id, CASE WHEN id = 1 THEN 'infinity'::DOUBLE ELSE price END AS cap FROM items) t
+DECIDE x(INT) SUCH THAT x <= cap AND SUM(x) <= 100 MAXIMIZE SUM(x);
+
+-- 101 under DIAGNOSE the bounds stay rows, so the elastic engine can relax them
+DIAGNOSE SELECT id, x FROM items DECIDE x(INT) SUCH THAT x >= weight AND SUM(x) <= 100 MINIMIZE SUM(price * x);

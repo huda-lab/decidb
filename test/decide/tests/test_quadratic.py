@@ -2031,6 +2031,32 @@ class TestHighsRejection:
             comparison_status="optimal",
         )
 
+
+@pytest.mark.quadratic
+@pytest.mark.error
+def test_highs_qp_it_cannot_finish_is_an_ordinary_error(decidb_cli_highs):
+    """A solve HiGHS gives up on is the ordinary solve-failed error, not an INTERNAL one.
+
+    HiGHS's QP solver stops with "Large nullspace" when more than 4,000 variables
+    end strictly inside their bounds: here about half of 9,000 rows have a cap
+    above the target of 5,000. ``HighsSession`` reports that ``kError`` as a
+    failed solve (``deterministic_naive.cpp``), so the query raises
+    ``DECIDE optimization failed`` and the session survives. Direct solve is off,
+    or A1 would answer the query without HiGHS.
+    """
+    cli = decidb_cli_highs.with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    sql = """
+        SELECT COUNT(*) FROM (
+            SELECT x FROM (SELECT i, 1 + (i * 37) % 9999 AS cap FROM range(9000) r(i))
+            DECIDE x(REAL)
+            SUCH THAT x BETWEEN 0 AND cap
+            MINIMIZE SUM(POWER(x - 5000, 2)))
+    """
+    result = cli.execute_raw(sql)
+    output = result.stderr + result.stdout
+    assert "DECIDE optimization failed" in output, output[:500]
+    assert "INTERNAL" not in output, output[:500]
+
 # ---------------------------------------------------------------------------
 # HiGHS-solved QP correctness (require DECIDB_FORCE_SOLVER=highs)
 # ---------------------------------------------------------------------------

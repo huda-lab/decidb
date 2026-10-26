@@ -681,6 +681,39 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         // Tautology (0 <= k>=0, 0 >= k<=0, 0 = 0) — drop.
     };
 
+    // A per-row bound on one decision (`x <= cap`, `x >= lo`, `-x <= -cap`) is a fact about one column, so it goes
+    // into that column's box rather than becoming a model row, as a literal bound already does
+    // (decide_singleton_row_folding.cpp). A literal is the same for every row and folds once in the optimizer; a
+    // data-valued bound differs per row and is known only here. The bound narrows the box it finds, as the row did:
+    // it never replaces the default floor of 0. Only a coefficient of exactly 1 or -1 folds, so the bound is the
+    // row's own right-hand side with no division to round, and only a finite one (a row the backend refuses or
+    // ignores keeps its existing handling). A box the folds invert is caught by the sanity check below, which
+    // answers INFEASIBLE as the row would have.
+    //
+    // HiGHS's QP solver does not turn such rows back into bounds: a 9,600-row box-bounded QP ran past 60 s as rows
+    // and solves in 0.4 s as bounds. Under diagnosis the rows stay, because the elastic engine relaxes rows and
+    // quotes the clause from their provenance (`x <= cap_col + delta`).
+    auto TryFoldPerRowBound = [&](const ModelConstraint &constr) -> bool {
+        if (input.tolerate_infeasible_bounds || constr.indices.size() != 1 || !std::isfinite(constr.rhs)) {
+            return false;
+        }
+        double coefficient = constr.coefficients[0];
+        if (coefficient != 1.0 && coefficient != -1.0) {
+            return false;
+        }
+        idx_t col = (idx_t)constr.indices[0];
+        double bound = coefficient * constr.rhs;
+        // `-x <= -cap` is `x >= cap`: a negative coefficient turns the sense around.
+        char sense = constr.sense == '=' ? '=' : ((constr.sense == '<') == (coefficient > 0.0) ? '<' : '>');
+        if (sense != '>') {
+            model.col_upper[col] = std::min(model.col_upper[col], bound);
+        }
+        if (sense != '<') {
+            model.col_lower[col] = std::max(model.col_lower[col], bound);
+        }
+        return true;
+    };
+
     // Rough upper-bound on total model.constraints rows to avoid repeated
     // vector reallocation — aggregate w/o groups contributes 1, aggregate w/
     // groups contributes num_groups, per-row contributes num_rows. Plus any
@@ -1056,6 +1089,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         : string();
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, row_group_key,
                                           row_group_label, rhs_adjustment);
+                if (TryFoldPerRowBound(constr)) {
+                    continue;
+                }
                 PushNormalizedConstraint(std::move(constr));
             }
         }

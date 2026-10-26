@@ -24,7 +24,7 @@ Before anything is timed, the floor and the direct plan must give the same `le_p
 relative at every size; a mismatch or a failed check exits non-zero. A run over `--timeout` is killed with its whole
 process group and recorded as `timeout`; a failed run is recorded as `error`. Neither is ever reported as a time.
 
-    python3 benchmark/decide/profile_r1_floor.py --rows 100000 --db-dir build/r1db_smoke
+    python3 benchmark/decide/direct_solve/archive/profile_r1_floor.py --rows 100000 --db-dir build/r1db_smoke
 """
 
 import argparse
