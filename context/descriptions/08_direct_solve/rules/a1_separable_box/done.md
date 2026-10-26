@@ -108,7 +108,7 @@ the parent reads does, so reading a wide column back costs memory in proportion 
 
 ## Performance
 
-Measured 2026-10-13 at `7a480a1a71` on this machine, with `benchmark/decide/profile_direct_a1.py`. Each run is a fresh
+Measured 2026-10-13 at `7a480a1a71` on this machine, with `benchmark/decide/direct_solve/archive/profile_direct_a1.py`. Each run is a fresh
 `decidb` process that opens the stored database; peak memory is the process's own. Direct 3 runs, solver (Gurobi) 1 run.
 The result is one aggregate row, so the time is the plan, not the transfer.
 
@@ -133,8 +133,8 @@ cheap on a bound-only problem. Footprint numbers for both rules are in `../../ar
 **Reproduce** (after `make release`; the sweeps above took under a minute in total, building the databases included):
 
 ```sh
-python3 benchmark/decide/profile_direct_a1.py --rows 100000 1000000 --db-dir /tmp/a1db
-python3 benchmark/decide/profile_direct_a1.py --rows 5000000 --repeats 3 --db-dir /tmp/a1db \
+python3 benchmark/decide/direct_solve/archive/profile_direct_a1.py --rows 100000 1000000 --db-dir /tmp/a1db
+python3 benchmark/decide/direct_solve/archive/profile_direct_a1.py --rows 5000000 --repeats 3 --db-dir /tmp/a1db \
   --shapes real_quadratic real_quadratic_when int_linear bool_bounds constant_problem count_only
 ```
 

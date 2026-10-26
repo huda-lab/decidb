@@ -313,7 +313,7 @@ bash run_tests.sh -k "test_q01"            # Single test
 bash run_tests.sh -m "var_boolean"         # By marker
 bash run_tests.sh -m "correctness"         # All oracle comparisons
 bash run_tests.sh -m "error"              # All error tests
-bash run_tests.sh -m "not large_scale"    # Skip perf tests
+bash run_tests.sh -m "not large_scale"    # no-op today: no collected test carries large_scale
 ```
 
 `run_tests.sh` creates a `.venv/` virtualenv on first run, installs
@@ -346,7 +346,7 @@ an in-process binding.
 | `error_binder` | Binder-level semantic errors |
 | `error_infeasible` | Infeasible models |
 | `per_clause` | PER keyword |
-| `large_scale` | Performance / scale tests |
+| `large_scale` | Performance / scale tests (only in `benchmark/decide/test_large_scale.py`, which is not collected) |
 | `correctness` | Meta: all oracle comparison tests |
 | `error` | Meta: all error tests |
 | `performance` | Meta: all performance tests |
@@ -364,7 +364,7 @@ map of the categories. Run `bash run_tests.sh -m <marker>` to select a category
 - **Constraints** (`test_cons_aggregate.py`, `test_cons_perrow.py`, `test_cons_mixed.py`, `test_cons_between.py`, `test_cons_subquery.py`, `test_cons_multi.py`) — aggregate budgets, per-row bounds (constant and column-valued), BETWEEN, scalar-subquery RHS (resolved via plain SQL first), multi-constraint with joins.
 - **Objectives** (`test_obj_minimize.py`, `test_obj_complex_coeffs.py`) — MINIMIZE with `>=` covering constraints; multi-column coefficient arithmetic like `x * price * (1 - discount) * (1 + tax)` (oracle pre-computes the coefficient per row).
 - **SQL features** (`test_sql_joins.py`) — JOIN in FROM; oracle builds the model on the joined rows.
-- **Scale** (`benchmark/decide/test_large_scale.py`) — ~500- and ~2200-row instances; compare objective values and record timing.
+- **Scale** (`benchmark/decide/test_large_scale.py`): ~500- and ~2200-row instances that compare objective values and record timing. The file sits outside `tests/`, so `run_tests.sh` does not collect it, and it fails at import when run directly (`No module named 'solver'`). It does not run today; see `05_performance/benchmarking/scale_tests.md`.
 
 **Error tests** (no oracle; assert exception type + message):
 - **Parser** (`test_error_parser.py`) — missing SUCH THAT / variable name / DECIDE keyword, empty constraint. Expect `decidb.ParserException`.

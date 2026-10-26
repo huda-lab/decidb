@@ -66,4 +66,51 @@
 - **Expected:** `COUNT(g)` counts the non-null values of `g` whatever its type.
 - **Impact:** a valid query fails with an error that points at the column's values, not at DECIDE.
 
+## Q10 on HiGHS at the large tier is killed for memory, and the profiler records it as a timeout
+
+- **Location:** HiGHS on `benchmark/decide/queries/q10_maximize_abs.sql` at `large`; the skip is
+  `SKIP = {("Q10", "highs")}` in `benchmark/decide/profile_pipeline.py`, whose comment says the bug is recorded here.
+- **Observed:** in the 2026-09-09 large sweep (`benchmark/decide/results/pipeline_profile_large.csv`,
+  `sweep_large.log`), Q10 on Gurobi finishes in all three passes (about 72 to 75 s, peak 6.1 to 6.5 GiB). Q10 on HiGHS
+  repeat 0 is recorded as `process_timeout` with an empty `query_s`, and the sweep restarts twice at that cell before the
+  skip was added. On `medium`, Q10 on HiGHS peaks at 6,525 MiB at 2.5M variables (`05_performance/08_memory_and_scaling/done.md`).
+- **Expected:** the query finishes, or fails with an ordinary out-of-memory error; the profiler records a memory kill
+  as a memory failure, not a timeout.
+- **Impact:** a large HiGHS query can take the whole process down, and the profile misreports why.
+- **Reproduce:** `make decide-bench-setup`, remove the entry from `SKIP`, run `profile_pipeline.py`. Memory-heavy.
+
+## `test_large_scale.py` is never collected
+
+- **Location:** `benchmark/decide/test_large_scale.py`, moved out of `test/decide/tests/` in `9943450ca1`.
+- **Observed:** `test/decide/pytest.ini` collects only `tests/`, so `run_tests.sh -m large_scale` selects no test. Run
+  directly (`test/decide/.venv/bin/python -m pytest --setup-plan benchmark/decide/test_large_scale.py`), it fails with
+  `ModuleNotFoundError: No module named 'solver'`: it imports `solver.types` and `comparison.compare` and uses fixtures
+  from `test/decide/conftest.py`, which apply only under `test/decide/`.
+- **Expected:** the two scale cases (501 and 2,204 rows) run with the suite, or the file is deleted.
+- **Impact:** the scale cases are unverified while docs list them.
+
+## `make decide-view` opens the newest JSON in `results/`, whichever tool wrote it
+
+- **Location:** `benchmark/decide/view_results.py`, `find_result_file`.
+- **Observed:** the archived S1 profilers (`benchmark/decide/direct_solve/archive/profile_direct_s1.py`,
+  `profile_direct_s1_api.py`) write `direct_s1_*.json` manifests into `benchmark/decide/results/`. After one runs,
+  `make decide-view` with no argument tries to render that manifest as a suite result.
+- **Expected:** the viewer picks only suite results (by name or by shape), or the profilers write elsewhere, as
+  `direct_solve/run.py` does (`results/direct_solve/`).
+- **Impact:** the default view shows the wrong file after a profiler run.
+
+## With a gap of 0, HiGHS cannot finish an entity-scoped MIP the test suite runs
+
+- **Location:** `HighsSession::Load` in `src/decidb/naive/deterministic_naive.cpp`, which sets `mip_rel_gap` to 0
+  (`01_pipeline/07_solver/done.md`, Optimality gap); the test is
+  `test/decide/tests/test_entity_scope.py::test_entity_scoped_mixed_when_per`.
+- **Observed:** under `DECIDB_FORCE_SOLVER=highs` (the matrix's `highs` run), HiGHS reaches incumbent 74,999.84 against
+  bound 75,000 within seconds, a gap of 0.0002%, and then fails to close it before the test's 120 s timeout. With HiGHS's
+  default gap of 1e-4 the test passed. Gurobi closes the same model at gap 0. The test is unchanged.
+- **Expected:** a query answers with the optimum by default, and a user who accepts a near-optimal answer can say so.
+  The proposed fix is a `decide_mip_gap` setting, default 0, passed to both backends in place of the hard-coded 0;
+  this test would then set 1e-4 on HiGHS.
+- **Impact:** the `highs` matrix run has a second failure besides `test_norm_combined_l1_l2_objective`. A HiGHS user
+  with a hard MIP can wait far longer than before for a proof the answer did not need.
+
 Resolved behavior is documented by its owning `done.md`.

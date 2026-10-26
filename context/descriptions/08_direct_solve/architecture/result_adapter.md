@@ -52,7 +52,7 @@ column plus a whole-input window. That holds the rows in memory, so memory grows
 
 Peak memory of one query in a fresh `decidb -readonly` process with `decide_direct_solve='require'`, on a stored
 database with a narrow table `src` (id, t, cap, score, f) and `src_wide` (the same plus `repeat('p', 512) AS payload`).
-The shapes are those of `benchmark/decide/profile_direct_a1.py`: A1 is `x(REAL) ... BETWEEN 0 AND cap MINIMIZE
+The shapes are those of `benchmark/decide/direct_solve/archive/profile_direct_a1.py`: A1 is `x(REAL) ... BETWEEN 0 AND cap MINIMIZE
 SUM(POWER(x - t, 2))`; S1 is `x(BOOL) ... SUM(x) <= rows/10 MAXIMIZE SUM(score * x)`. Peak is the macOS memory
 footprint from `/usr/bin/time -l` (maximum resident size reads lower once the system compresses pages). The payload is
 488 MiB per 1,000,000 rows.

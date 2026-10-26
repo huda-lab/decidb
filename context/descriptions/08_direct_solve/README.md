@@ -22,6 +22,8 @@ with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 
 | See what is open for S1 or A1 | [rules/s1_uniform_matroid/todo.md](rules/s1_uniform_matroid/todo.md), [rules/a1_separable_box/todo.md](rules/a1_separable_box/todo.md) |
 | Work on the shared engine, a third rule, error wording | [framework/](framework/) |
 | See a class that is not built yet | `rules/<id>_<slug>/todo.md` (table below) |
+| Time direct solve against Gurobi and HiGHS on TPC-H | [05_performance/benchmarking/direct_solve.md](../05_performance/benchmarking/direct_solve.md) |
+| Rerun a measurement a rule's `done.md` cites | [05_performance/benchmarking/archive_profilers.md](../05_performance/benchmarking/archive_profilers.md) |
 | Know why `auto` is the default, or what a user can notice | [architecture/policy.md](architecture/policy.md) |
 | Read the definition and correctness argument of a class | `rules/<id>_<slug>/definition.md` |
 | Check current DECIDE syntax | `../00_project_overview/syntax_reference.md` |

@@ -2,7 +2,7 @@
 
 Tests live in:
 - `test/decide/tests/test_edge_cases.py` — boundary conditions and degenerate inputs
-- `benchmark/decide/test_large_scale.py` — scale/performance checks
+- `benchmark/decide/test_large_scale.py`: scale checks; not collected by `pytest.ini` and fails at import, so it does not run (see `05_performance/benchmarking/scale_tests.md`)
 - `test/decide/tests/test_sql_joins.py` — JOIN sources
 - `test/decide/tests/test_explain.py` — EXPLAIN output
 
@@ -40,8 +40,8 @@ JOIN + entity-scoped (many tests in `test_entity_scope.py`).
 
 ## Scale / performance
 
-Oracle-verified in `benchmark/decide/test_large_scale.py`: 501-row knapsack, 2204-row order
-selection. Plus a 1500-customer problem in
+`benchmark/decide/test_large_scale.py` holds a 501-row knapsack and a 2204-row order selection,
+but the file is not collected and does not run, so neither is verified today. The collected scale case is the 1500-customer problem in
 `test_entity_scope.py::test_entity_scoped_mixed_when_per` (Gurobi-only).
 
 ## Solver coverage

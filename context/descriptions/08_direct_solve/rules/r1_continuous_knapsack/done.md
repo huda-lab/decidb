@@ -148,7 +148,7 @@ An empty source returns no rows, whatever the limits are, as on the solver.
 
 ## Performance
 
-Measured 2026-10-24 on top of `5269ad7c5e`, on a machine with 11 cores, with `benchmark/decide/profile_direct_r1.py`.
+Measured 2026-10-24 on top of `5269ad7c5e`, on a machine with 11 cores, with `benchmark/decide/direct_solve/archive/profile_direct_r1.py`.
 Each run is a fresh `decidb` process that opens the stored database; peak memory is the process's own. Direct 3 runs
 (median), each solver 1 run; the solver path is `off` with `DECIDB_FORCE_SOLVER` set to `gurobi` or `highs`. The parent
 reads one aggregate row, so the time is the plan, not the transfer. Before timing, every shape's objective on direct and on Gurobi agreed within 1e-6.
@@ -170,7 +170,7 @@ reads one aggregate row, so the time is the plan, not the transfer. Before timin
 At 1,000,000 rows direct runs 0.13 to 0.35 s (4.5x to 16.5x Gurobi, 9.0x to 41.2x HiGHS) and peaks at 0.2 to 0.4 GiB,
 against 1.4 to 2.2 GiB for Gurobi. Every shape beats both solvers at both sizes.
 
-**Floor and scaling.** Measured with `benchmark/decide/profile_r1_floor.py` in the same session; medians of 3
+**Floor and scaling.** Measured with `benchmark/decide/direct_solve/archive/profile_r1_floor.py` in the same session; medians of 3
 interleaved runs. The floor is a hand-written DuckDB query of the narrow shape for `le_positive`: keys, `t = v / w` and
 rooms; one sort by `t`; a running sum; a join back that gives every row its answer. It returns the same objective and
 `SUM(x)` as the direct plan at both sizes.
@@ -203,20 +203,20 @@ right-hand-side rewrite's window over the source, which also makes the source a 
 **Reproduce** (after `make release`; the sweep takes about 20 minutes, building the databases included):
 
 ```sh
-python3 benchmark/decide/profile_direct_r1.py --rows 1000000 5000000 --repeats 3 --solver-budget 60 --db-dir build/r1db
+python3 benchmark/decide/direct_solve/archive/profile_direct_r1.py --rows 1000000 5000000 --repeats 3 --solver-budget 60 --db-dir build/r1db
 ```
 
 The floor and scaling table (about 8 minutes):
 
 ```sh
-python3 benchmark/decide/profile_r1_floor.py --rows 1000000 5000000 --shapes le_positive per_groups two_decisions \
+python3 benchmark/decide/direct_solve/archive/profile_r1_floor.py --rows 1000000 5000000 --shapes le_positive per_groups two_decisions \
     --methods floor direct gurobi --threads 1 all --floor-threads 1 all --repeats 3 --db-dir build/r1db
 ```
 
 The operator profile (one run per cell; `--variants` and `--repeats` widen it):
 
 ```sh
-python3 benchmark/decide/profile_r1_plan.py --rows 1000000 --shapes le_positive two_decisions --threads 1 all \
+python3 benchmark/decide/direct_solve/archive/profile_r1_plan.py --rows 1000000 --shapes le_positive two_decisions --threads 1 all \
     --db-dir build/r1db_plan
 ```
 

@@ -114,7 +114,7 @@ A few names stay as they are because renaming them would break something or beca
   bodies keep older wording. In `test_direct_user_facing.py` the same holds for
   `test_a1_unused_wide_columns_stay_out_of_the_barrier_and_computed_errors_stay_in` and the four `test_second_read_*`
   tests. Changing any of them means re-solving those tests with Gurobi.
-- **Benchmark flags.** `--pins` and the JSON key `pins` in `benchmark/decide/profile_direct_s1_api.*`, because the
+- **Benchmark flags.** `--pins` and the JSON key `pins` in `benchmark/decide/direct_solve/archive/profile_direct_s1_api.*`, because the
   measurement commands in `rules/s1_uniform_matroid/done.md` use them.
 - **Other meanings.** DuckDB's aggregate-state `Absorb`; `AbsorbAdditive` (`decide_degree.cpp`, merging a child's degree
   into its parent); `DecideTermKind::UNKNOWN`; "pin" (a test pins `require`) and "boundary" in their everyday senses;

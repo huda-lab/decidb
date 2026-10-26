@@ -165,10 +165,10 @@ in 0.04 s at 1,000,000 rows and 0.07 s at 5,000,000 (clean: 0.06 and 0.19 s), an
 **Reproduce** (after `make release`; the sweep above took about 4.5 minutes):
 
 ```sh
-clang++ -std=c++17 -O2 -I src/include benchmark/decide/profile_direct_s1_api.cpp \
+clang++ -std=c++17 -O2 -I src/include benchmark/decide/direct_solve/archive/profile_direct_s1_api.cpp \
   -L build/release/src -lduckdb -Wl,-rpath,$PWD/build/release/src \
   -o benchmark/decide/results/profile_direct_s1_api
-P="python3 benchmark/decide/profile_direct_s1_api.py --rows 5000000 --db-dir /tmp/s1db --keep-db --timeout 180"
+P="python3 benchmark/decide/direct_solve/archive/profile_direct_s1_api.py --rows 5000000 --db-dir /tmp/s1db --keep-db --timeout 180"
 $P --widths 0 512 --output-kinds full consume --modes direct gurobi --repeats 2
 $P --widths 512 --output-kinds aggregate --modes direct gurobi --scopes global --cardinalities upper --repeats 2
 $P --widths 0 --output-kinds aggregate --modes direct gurobi --scopes grouped_local_when --cardinalities interval --bound-kinds constant source --repeats 1
