@@ -1296,6 +1296,61 @@ class TestDiagnosticsRelation:
         assert edit["amount"] == "7"
         _apply_reported_fix(cli, sql, rows, {"power(x, 2) < 10": "POWER(x,2) < 10"})
 
+    @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
+    @pytest.mark.parametrize(
+        "clause, written_op",
+        [
+            ("SUM(POWER(x - 5, 2)) <= 3", "sum(power(x - 5, 2)) <= 3"),
+            ("per (): norm(x - 5, 2) <= 3", "per (): norm(x - 5, 2) <= 3"),
+            ("SUM(POWER(x - 5, 2)) < 3", "sum(power(x - 5, 2)) < 3"),
+        ],
+    )
+    def test_infeasible_quadratic_with_constant_echoes_written_bound(
+        self, request, cli_fixture, clause, written_op
+    ):
+        """A quadratic clause whose body has a constant (`(x - 5)^2` expands to `x^2 - 10x + 25`)
+        is built with that constant moved into its bound. The echo and the suggested change
+        quote the bound the user typed, not the moved one, so pasting the suggestion back
+        repairs the query. The `<` case covers the typed literal a strict bound re-quotes."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
+            f"DECIDE x(INT) SUCH THAT x >= 12 AND {clause} MINIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+
+        rows = _rows(result)
+        edit = _attrs(rows, "clause", written_op)
+        assert edit["suggested_change"].startswith(written_op.rsplit(" ", 1)[0] + " ")
+        assert float(edit["suggested_change"].rsplit(" ", 1)[1]) > 3
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        "decision, other_clause, op, bad_edit",
+        [("INT", "x >= 12 AND ", "<", "above"), ("BOOL", "", ">", "below")],
+    )
+    def test_infeasible_strict_linear_with_constant_echoes_written_bound(
+        self, request, cli_fixture, decision, other_clause, op, bad_edit
+    ):
+        """A strict bound over a body with a constant (`SUM(x - 5) < 3`) is built with that constant
+        moved into its bound and a step onto the integer lattice. The echo and the suggested change
+        quote the typed literal 3, so pasting the suggestion back repairs the query."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
+            f"DECIDE x({decision}) SUCH THAT {other_clause}SUM(x - 5) {op} 3 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+
+        rows = _rows(result)
+        written = f"sum(x - 5) {op} 3"
+        edit = _attrs(rows, "clause", written)
+        suggested = float(edit["suggested_change"].rsplit(" ", 1)[1])
+        assert edit["suggested_change"].startswith(f"sum(x - 5) {op} ")
+        assert suggested > 3 if bad_edit == "above" else suggested < 3
+        _apply_reported_fix(cli, sql, rows)
+
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_ne_prefers_loosen_over_drop(self, request, cli_fixture):
         """I4 prefer-loosen: `<>` is remove-only, and I4 now offers a removal dial for it,

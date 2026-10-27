@@ -506,13 +506,17 @@ preferred when it can restore feasibility. Two parts:
   symbolically (`SUM(keepS * cost)`).
 - **Strict `<` / `>`.** The δ offset (`< K → <= ceil(K)-1`, `> K → >= floor(K)+1`) is baked into
   `rhs` at the δ site (`ApplyComparisonSense`, `ilp_model_builder.cpp`), which now also sets
-  `provenance.strict` + `provenance.typed_k` (the user's literal). `MakeLoosenEdit` re-quotes the
+  `provenance.strict` + `provenance.typed_k` (the user's literal: a constant moved off the body,
+  as in `SUM(x - 5) < 3`, is added back). `MakeLoosenEdit` re-quotes the
   suggestion against `typed_k` and renders `<` / `>`, e.g. `x < 10` → `x < 16`.
 - **Quadratic.** `BuildElasticModel` loops `model.quadratic_constraints` and slacks the **linear
   RHS only** (never the Q matrix): `e(x) + xᵀQx ≤ K` loosens to `… ≤ K + s`. The `BlockSlackRef`
   carries a `quadratic` flag (its `rows` then index `quadratic_constraints`); `FormatQuadraticLhs`
   renders `POWER(x, 2)` / `x*y` terms. Quadratic slacks are always editable-weighted (a quadratic
-  is always a LOOSEN edit, never a data conflict). QCQP is Gurobi-only.
+  is always a LOOSEN edit, never a data conflict). QCQP is Gurobi-only. A constant in the
+  quadratic body (`SUM(POWER(x - 5, 2)) <= 3`) is folded into the bound as on the linear path,
+  and stamped as `lhs_offset` the same way, so the echo and the suggestion quote the written
+  `3`, not the folded `-72`; a strict `<` / `>` keeps the typed literal as `typed_k`.
 
 ### Group identity (group label + scope)
 

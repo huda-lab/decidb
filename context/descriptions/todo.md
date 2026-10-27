@@ -53,7 +53,6 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 - [ ] Two keys over the same columns share one key text — [bugs § operands](06_issues/bugs/todo.md#messages-operands-coefficients-and-keys)
 - [ ] A column reference is named in two forms (key SQL spelling vs bare name) — [bugs § operands](06_issues/bugs/todo.md#messages-operands-coefficients-and-keys)
 - [ ] Refusal inside a nested DECIDE is masked — [bugs § nested DECIDE](06_issues/bugs/todo.md#messages-nested-decide-and-refusals)
-- [ ] Quadratic bound echoed with the moved constant — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
 - [ ] `BETWEEN` echoes its lower half only — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
 - [ ] Quadratic clause reported once per row in query scope — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
 - [ ] HiGHS expanded repair carries a 1e-5 cushion — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)

@@ -629,8 +629,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
     // Helper: apply comparison sense to a constraint.
     // Strict `<` / `>` require a provably integer-valued LHS; otherwise reject.
+    // `rhs` already has the LHS constant `lhs_offset` moved off it; the typed K added back.
     auto ApplyComparisonSense = [&](ModelConstraint &constr, ExpressionType cmp, double rhs,
-                                    LhsIntegrality lhs_integrality) {
+                                    LhsIntegrality lhs_integrality, double lhs_offset) {
         if (cmp == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
             constr.sense = '>'; constr.rhs = rhs;
         } else if (cmp == ExpressionType::COMPARE_GREATERTHAN) {
@@ -640,7 +641,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             // δ site: `> K` becomes `>= floor(K)+1`. Remember the user's typed K so
             // diagnosis can re-quote a suggestion against `> K`, not the δ-adjusted rhs.
             constr.sense = '>'; constr.rhs = DecideStrictBound(true, rhs);
-            constr.provenance.strict = true; constr.provenance.typed_k = rhs;
+            constr.provenance.strict = true; constr.provenance.typed_k = rhs + lhs_offset;
         } else if (cmp == ExpressionType::COMPARE_LESSTHANOREQUALTO) {
             constr.sense = '<'; constr.rhs = rhs;
         } else if (cmp == ExpressionType::COMPARE_LESSTHAN) {
@@ -649,7 +650,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
             // δ site: `< K` becomes `<= ceil(K)-1`. Remember the user's typed K.
             constr.sense = '<'; constr.rhs = DecideStrictBound(false, rhs);
-            constr.provenance.strict = true; constr.provenance.typed_k = rhs;
+            constr.provenance.strict = true; constr.provenance.typed_k = rhs + lhs_offset;
         } else if (cmp == ExpressionType::COMPARE_EQUAL) {
             constr.sense = '='; constr.rhs = rhs;
         } else {
@@ -909,7 +910,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 double lhs_offset = SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows,
                                                                "fixed aggregate LHS term");
                 rhs -= lhs_offset;
-                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality);
+                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality, lhs_offset);
                 // F2 site 1: aggregate, ungrouped.
                 StampConstraintProvenance(constr.provenance, eval_const, repair_group_id,
                                           DConstants::INVALID_INDEX, string(), lhs_offset);
@@ -1017,7 +1018,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end,
                                                    "fixed aggregate LHS term");
                     double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
-                    ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality);
+                    ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality,
+                                         group_lhs_offset);
                     // F2 site 2: grouped aggregate (`by` and/or `when`).
                     string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
                     StampConstraintProvenance(constr.provenance, eval_const, repair_group_id, g, group_label,
@@ -1082,7 +1084,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 }
 
                 double rhs = eval_const.rhs_values[row] - rhs_adjustment;
-                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality);
+                ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality, rhs_adjustment);
                 // F2 site 3: per-row. The group label is stamped here for the same reason
                 // the aggregate sites stamp it: a diagnosis over a grouped clause has to
                 // name the group its failure sits in, not just the clause. It matters most
@@ -1117,10 +1119,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // Helper: build QuadraticConstraint from one set of rows (aggregate or per-row).
     // lhs_integrality: precomputed from the user's EvaluatedConstraint; gates the
     // strict-inequality rewrite (`< K → <= K-1`) in the same way as the linear path.
+    // lhs_constant: out, the constant part of the LHS folded into the bound (the linear
+    // path's `lhs_offset`), for the stamp call.
     auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec,
                                         const vector<idx_t> &row_set,
                                         double rhs,
-                                        LhsIntegrality lhs_integrality) -> SolverModel::QuadraticConstraint {
+                                        LhsIntegrality lhs_integrality,
+                                        double &lhs_constant) -> SolverModel::QuadraticConstraint {
         SolverModel::QuadraticConstraint qc;
         std::unordered_map<int, double> linear_accum;
         std::unordered_map<uint64_t, double> q_accum;
@@ -1241,6 +1246,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         // otherwise reject.
         double adjusted_rhs = rhs - rhs_adjustment;
         qc.rhs = adjusted_rhs;
+        lhs_constant = rhs_adjustment;
         switch (ec.comparison_type) {
         case ExpressionType::COMPARE_LESSTHANOREQUALTO:
             qc.sense = '<'; break;
@@ -1255,7 +1261,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             qc.sense = '<';
             qc.rhs = DecideStrictBound(false, adjusted_rhs);
             qc.provenance.strict = true;
-            qc.provenance.typed_k = adjusted_rhs;
+            qc.provenance.typed_k = rhs;
             break;
         case ExpressionType::COMPARE_GREATERTHAN:
             if (lhs_integrality != LhsIntegrality::INTEGER) {
@@ -1264,7 +1270,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             qc.sense = '>';
             qc.rhs = DecideStrictBound(true, adjusted_rhs);
             qc.provenance.strict = true;
-            qc.provenance.typed_k = adjusted_rhs;
+            qc.provenance.typed_k = rhs;
             break;
         default:
             throw InternalException("Unsupported comparison type in ILP model builder (quadratic)");
@@ -1298,9 +1304,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // Single aggregate: all rows
                 vector<idx_t> all_rows(num_rows);
                 std::iota(all_rows.begin(), all_rows.end(), 0);
-                auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_integrality);
+                double lhs_constant;
+                auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_integrality, lhs_constant);
                 // F2 site 4: quadratic aggregate, ungrouped.
-                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id);
+                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX, string(),
+                                          lhs_constant);
                 StampAggregateProvenance(qc.provenance, eval_const);
                 qc.provenance.class_set = ClassSetOf(eval_const, 0);
                 model.quadratic_constraints.push_back(std::move(qc));
@@ -1322,10 +1330,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     // is the wrong row to read once the RHS varies by group.
                     double group_rhs =
                         eval_const.rhs_values.Empty() ? 0.0 : eval_const.rhs_values.Get(flat_rows[g_begin]);
-                    auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_integrality);
+                    double lhs_constant;
+                    auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_integrality,
+                                                       lhs_constant);
                     // F2 site 5: grouped quadratic aggregate.
                     string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
-                    StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, group_label);
+                    StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, group_label, lhs_constant);
                     StampAggregateProvenance(qc.provenance, eval_const);
                     qc.provenance.class_set = ClassSetOf(eval_const, g);
                     model.quadratic_constraints.push_back(std::move(qc));
@@ -1339,10 +1349,12 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 }
                 vector<idx_t> single_row{row};
                 double rhs = eval_const.rhs_values.Get(row);
-                auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_integrality);
+                double lhs_constant;
+                auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_integrality, lhs_constant);
                 // F2 site 6: quadratic per-row.
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
-                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key);
+                StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key, string(),
+                                          lhs_constant);
                 qc.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
                 StampDataRow(qc.provenance, row);
                 model.quadratic_constraints.push_back(std::move(qc));

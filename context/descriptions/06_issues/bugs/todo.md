@@ -246,11 +246,6 @@ Each reproduces on the current build.
 
 Each reproduces on the current build.
 
-- **A quadratic bound is echoed with the constant canonicalization moved:** `x >= 12 AND
-  SUM(POWER(x - 5, 2)) <= 3` over three rows (also `per (): norm(x - 5, 2) <= 3`) echoes
-  `sum(power(x - 5, 2)) <= -72` and suggests `<= -66.70061`, a bound no assignment meets.
-  Location: `SourceAwareQuadraticLhs` (`decide_diagnostic_render.cpp`) pairs the written
-  body with the row's moved bound.
 - **A `BETWEEN` echoes its lower half only:** `x BETWEEN 18 AND 25` beside `SUM(x) <= 20`
   over two rows reports the clause `x >= 18` and suggests `x >= 10`; pasted back, the upper
   half is lost. The binder splits a BETWEEN into two comparisons that share the clause.
