@@ -88,12 +88,14 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 // ---------------------------------------------------------------------------
 
 void DecideOptimizer::RewriteAvgToSum(LogicalDecide &decide) {
+	// Rewrites mutate in place, so each clause is detached, rewritten, and
+	// reinstalled through the boundary rather than edited where it sits.
 	if (decide.decide_constraints) {
-		RewriteAvgInExpression(decide.decide_constraints, decide, string());
+		auto constraints = std::move(decide.decide_constraints);
+		RewriteAvgInExpression(constraints, decide, string());
+		AppendConstraint(decide, std::move(constraints));
 	}
 	if (decide.decide_objective) {
-		// Rewrites mutate in place, so the objective is detached, rewritten, and
-		// reinstalled through the boundary rather than edited where it sits.
 		auto objective = std::move(decide.decide_objective);
 		RewriteAvgInExpression(objective, decide, OBJECTIVE_ROW_TAG);
 		decide.SetObjective(optimizer.context, std::move(objective));

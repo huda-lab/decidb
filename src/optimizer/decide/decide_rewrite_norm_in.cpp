@@ -147,8 +147,14 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		expr = make_aggregate("sum", std::move(z));
 	};
 
-	rewrite(decide.decide_objective, OBJECTIVE_ROW_TAG, ClauseScope());
-	rewrite(decide.decide_constraints, string(), ClauseScope());
+	// Lowering swaps a marker for a `SUM` of indicators under the factor the canonicalizer peeled, so each clause is
+	// detached, lowered, and reinstalled through the canonicalizing boundary rather than left as it was edited.
+	auto objective = std::move(decide.decide_objective);
+	rewrite(objective, OBJECTIVE_ROW_TAG, ClauseScope());
+	decide.SetObjective(optimizer.context, std::move(objective));
+	auto constraints = std::move(decide.decide_constraints);
+	rewrite(constraints, string(), ClauseScope());
+	if (constraints) AppendConstraint(decide, std::move(constraints));
 	for (auto &link : links) AppendConstraint(decide, std::move(link));
 }
 

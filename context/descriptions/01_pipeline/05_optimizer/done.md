@@ -378,8 +378,11 @@ Canonicalization (stage 04) replaces L1, L2, and infinity norms with `SUM(ABS)`,
 `SUM(POWER(_, 2))`, and `MAX(ABS)`, tagged with their written order for display only;
 `RewriteNorm` drops that tag, so every layer after it shows the definition the solver
 receives. L0 needs indicator variables, so it reaches this pass as a marker and emits
-its Boolean indicator and exact forward/reverse links. A desugarable marker reaching
-this pass is an internal error.
+its Boolean indicator and exact forward/reverse links. Lowering swaps the marker for a
+`SUM` of indicators under any factor the canonicalizer peeled (`2 * norm(e, 0) <= 6`), so
+the pass detaches the objective and the constraints, lowers them, and reinstalls them
+through `SetObjective` and `AddConstraint`; an edit left where it sits would not be
+canonical (C4/C6/C7). A desugarable marker reaching this pass is an internal error.
 
 **A marker is lowered wherever it stands.** `RewriteNorm` descends through every
 expression container, not only comparisons and conjunctions, because a norm is a
@@ -639,7 +642,10 @@ coefficient evaluation divides the terms by the number of rows the reducer reads
 group: the kept rows of its `by` group, less those its own `when` drops, one per class
 under its own `per`. A **decision-free** `AVG` is
 skipped: there is nothing to linearize, and rebinding it as `SUM` would redeclare
-it with `SUM`'s integral type while its value stays fractional. Keeping the tag on
+it with `SUM`'s integral type while its value stays fractional. The swap happens under
+any factor the canonicalizer peeled (`2 * avg(x) >= 4`), so the constraints and the
+objective are each detached, rewritten and reinstalled through `AddConstraint` and
+`SetObjective`, which canonicalize them again. Keeping the tag on
 objective terms is what makes a mixed `AVG(a) + SUM(b)` preserve true AVG
 semantics.
 

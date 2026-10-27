@@ -42,8 +42,6 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 - [ ] Correlated DECIDE (LATERAL, outer reference) raises an internal error — [bugs § outer query](06_issues/bugs/todo.md#a-decide-that-refers-to-an-outer-query-raises-an-internal-error)
 - [ ] Lambda in a coefficient raises an internal error — [bugs § Coefficients and keys](06_issues/bugs/todo.md#coefficients-and-keys)
 - [ ] Prepared-statement and table-macro parameters fail in a clause — [bugs § parameters](06_issues/bugs/todo.md#parameters-of-a-prepared-statement-or-a-table-macro-fail-in-a-decide-clause)
-- [ ] Scaled `norm(e, 0)` non-canonical on debug builds — [bugs § scaled norm](06_issues/bugs/todo.md#a-scaled-norme-0-leaves-a-constraint-the-debug-verifier-calls-non-canonical)
-- [ ] Scaled `AVG` non-canonical on debug builds — [bugs § scaled AVG](06_issues/bugs/todo.md#a-scaled-avg-leaves-a-constraint-the-debug-verifier-calls-non-canonical)
 
 ## 5. Bugs: messages and diagnosis text
 

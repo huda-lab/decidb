@@ -106,21 +106,6 @@
   does? Every key compares plain values.
 - **Impact:** more classes than SQL grouping would give on collated text keys.
 
-## A scaled `norm(e, 0)` leaves a constraint the debug verifier calls non-canonical
-
-- **Location:** `RewriteNorm` in `src/optimizer/decide/decide_rewrite_norm_in.cpp` lowers
-  the marker in place (`2 * norm(e, 0, M)` becomes `2 * SUM(z)`), so the comparison is not
-  canonicalized again, and `VerifyCanonical` at `PhysicalPlanGenerator::CreatePlan`
-  finds that it would be.
-- **Observed:** on a debug build, `test/decide/tests/test_norm.py::test_norm_scaled_l0_constraint`
-  (`2 * norm(new_qty - l_quantity, 0, 1000) <= 6`) raises *"INTERNAL Error: DECIDE
-  canonical invariant C4/C6/C7 violated: canonicalizing the tree again changes its
-  structure, reducer scale, or provenance tags"*. A release build runs it and answers
-  correctly.
-- **Expected:** a lowered clause re-enters through `LogicalDecide::AddConstraint` (or is
-  canonical as emitted), so the debug check holds.
-- **Impact:** debug builds only; release skips the check.
-
 ## Messages print a subquery, a condition or a `by` key as DuckDB renders it
 
 - **Location:** a subquery's source fragment, and a `by` key's text, is its parsed
@@ -269,19 +254,6 @@ Each reproduces on the current build.
   clause!"*.
 - **Expected:** a parameter is data, bound like a constant.
 - **Impact:** a prepared or macro DECIDE query cannot take a value.
-
-## A scaled `AVG` leaves a constraint the debug verifier calls non-canonical
-
-- **Location:** `RewriteAvgInExpression` (`src/optimizer/decide/decide_rewrite_notequal_avg.cpp`)
-  swaps AVG for SUM in place, under the factor the canonicalizer peeled, without going
-  back through `LogicalDecide::AddConstraint`; the same class as the scaled `norm(e, 0)`
-  entry above.
-- **Observed:** on a debug build, `2 * avg(x) >= 4` (also `2 * avg(x) = 4`,
-  `2 * avg(x) <> 4`, `-avg(x) <> -2`, `per (): 2 * avg(x) >= 4`) raises *"INTERNAL Error:
-  DECIDE canonical invariant C4/C6/C7 violated"*. `avg(2 * x) <> 4` and `avg(x) <> 2`
-  pass. A release build answers correctly.
-- **Expected:** the lowered clause is canonical, or re-enters through `AddConstraint`.
-- **Impact:** debug builds only; no test covers a scaled `AVG` on the decision side.
 
 ## Direct solve reads an integer bound just below a whole number more strictly than both backends
 

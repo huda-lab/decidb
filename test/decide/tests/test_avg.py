@@ -574,6 +574,75 @@ def test_avg_not_equal_with_when(
 
 
 @pytest.mark.avg_rewrite
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause, factor, op, bound, sense, extra",
+    [
+        pytest.param("2 * avg(x) >= 4", 2.0, ">=", 4.0, "MINIMIZE", "", id="ge"),
+        pytest.param("2 * avg(x) = 4", 2.0, "=", 4.0, "MINIMIZE", "", id="eq"),
+        pytest.param("2 * avg(x) <> 4", 2.0, "<>", 4.0, "MAXIMIZE", "AND SUM(x) <= 6", id="ne"),
+        pytest.param("-avg(x) <> -2", -1.0, "<>", -2.0, "MAXIMIZE", "AND SUM(x) <= 6", id="ne-negative-factor"),
+        pytest.param("per (): 2 * avg(x) >= 4", 2.0, ">=", 4.0, "MINIMIZE", "", id="per-query"),
+    ],
+)
+def test_avg_scaled_constraint(
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker, clause, factor, op, bound, sense, extra
+):
+    """factor * AVG(x) op K over 3 INTEGER rows: the factor stays on the SUM the AVG becomes.
+
+    The `<>` cases are tuned so the unconstrained optimum has SUM(x) = 6, the one
+    value the clause rules out; a dropped factor or denominator moves the answer.
+    """
+    values = "VALUES ('a', 10), ('b', 5), ('c', 8)"
+    data_sql = f"SELECT * FROM ({values}) t(name, value)"
+    sql = f"""
+        SELECT name, value, x FROM ({data_sql})
+        DECIDE x(INT)
+        SUCH THAT x <= 5 AND {clause} {extra}
+        {sense} SUM(x * value)
+    """
+    t0 = time.perf_counter()
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = _fetch(
+        duckdb_conn,
+        f"SELECT CAST(name AS VARCHAR), CAST(value AS DOUBLE) FROM ({data_sql})",
+    )
+    n = len(data)
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("avg_scaled_constraint")
+    for i in range(n):
+        oracle_solver.add_variable(f"x_{i}", VarType.INTEGER, lb=0.0, ub=5.0)
+    # factor * SUM(x) / n op K  <=>  SUM(x) op K * n / factor (the factor is positive
+    # wherever the operator is an inequality, so the direction holds).
+    sum_rhs = bound * n / factor
+    sum_coeffs = {f"x_{i}": 1.0 for i in range(n)}
+    if op == "<>":
+        add_ne_indicator(oracle_solver, sum_coeffs, rhs=sum_rhs, name="avg_scaled_ne")
+        oracle_solver.add_constraint(sum_coeffs, "<=", 6.0, name="sum_cap")
+    else:
+        oracle_solver.add_constraint(sum_coeffs, op, sum_rhs, name="avg_scaled")
+    oracle_solver.set_objective(
+        {f"x_{i}": data[i][1] for i in range(n)},
+        ObjSense.MAXIMIZE if sense == "MAXIMIZE" else ObjSense.MINIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("value")])},
+    )
+    perf_tracker.record(
+        "avg_scaled_constraint", decidb_time, build_time, result.solve_time_seconds,
+        n, n, 2, result.objective_value, oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.avg_rewrite
 def test_avg_no_decide_var(decidb_cli):
     """AVG(col) without decide variables must pass through to normal DuckDB.
 
