@@ -20,10 +20,13 @@ wrapper's key with the same expressions share one entry. The wrappers would then
 their entry instead of carrying columns. Execution's half — one cache turning any key
 into row → class ids — is `../08_execution/todo.md`.
 
-**Decision needed.** The two paths number groups differently: entity ids are first-seen
-over all rows, group ids are dense in first-kept-row order. One table and one cache
-either keep both numberings or re-capture the golden dumps that print them (entries 22,
-23, 38, 39, 56, 61, 62, 65, 70 and 91–94 are known to).
+The two paths number groups differently: entity ids are first-seen over all rows, group
+ids are dense in first-kept-row order. **Ruling (owner, 2026-10-27).** Merge them into one numbering,
+the one the design calls for, and re-capture the golden dumps that print it (entries 22,
+23, 38, 39, 56, 61, 62, 65, 70 and 91–94 are known to). Keeping a numbering to spare the
+goldens is not a reason. Which numbering is chosen at the start of the task. Do it with
+the NULL-key change (`../08_execution/todo.md` §2) and collation (`../../issues/bugs.md`),
+which touch the same grouping code.
 
 **Test.** `test/common/test_decidb_plan_serialization.cpp` round-trips the merged table
 (and `DECIDB_VERIFY_SERIALIZER=1` over the suite); the golden corpus is identical on
@@ -41,8 +44,8 @@ keeps its relation. A suggested edit pasted back over a join can then be ambiguo
 column. The written layer is rendered without relation aliases (`InitializeConstraintSourceInfo`); messages, which
 quote through `QuoteMessagesWith`, already qualify a column over a join.
 
-**Decision needed.** Whether the echo qualifies a column by its relation when the query reads more than one relation
-(D45 keeps the bare name). Doing so changes every multi-relation echo and the pins of `test_explain.py`,
+**Ruling (owner, 2026-10-27).** The echo qualifies a column by its relation when the query reads more than one relation;
+a query over one relation keeps the bare name (D45). Doing so changes every multi-relation echo and the pins of `test_explain.py`,
 `test_query_diagnostics_relation.py` and `test_scope_explain_diagnose.py`.
 
 **Test.** The clause above in EXPLAIN and DIAGNOSE over a join of two relations sharing a column name; each suggested

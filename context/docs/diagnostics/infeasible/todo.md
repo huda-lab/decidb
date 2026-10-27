@@ -12,9 +12,9 @@ alone: `x <= c AND max(2 * x) = 20` reports `max(2 * x) >= 20` → `max(2 * x) >
 user wrote neither half, and pasting the suggestion back replaces the equality with a
 one-sided bound, which drops the `<=` the query had.
 
-**Decision needed.** Quote the clause as written (`max(2 * x) = 20`) and suggest a moved
-equality (`max(2 * x) = 6`), which holds the other half too; or keep the half and say
-which half moved. A moved equality is a valid repair only when the other half still
+**Ruling (owner, 2026-10-27).** Quote the clause as written (`max(2 * x) = 20`) and suggest a moved
+equality (`max(2 * x) = 6`), which holds the other half too; when the check below fails,
+fall back to naming the half and saying which half moved. A moved equality is a valid repair only when the other half still
 holds at the new value, so the first choice needs a check that it does.
 
 **Test.** In `test_query_diagnostics_relation.py`, both backends: an infeasible
@@ -36,11 +36,9 @@ read the same. Under the expanded scope, `per g: sum(x) by (g) >= 2` over
 not read as "no group". NULL is a class of its own (D5), so every `per` key over a
 nullable column meets this.
 
-**Decision needed.** Keep `NULL` (documented in `../../language/guide.md` §8.1), give a NULL
-a label no value can have, or print every label as a SQL literal (`NULL`, `'NULL'`,
-`'a'`, `''`), which changes every `group` pin and the composite form (`EU, 2024`). The
-unbounded engine's `group` label for a NULL slice should follow the same choice; its remedy
-already prints `IS NULL` (`../unbounded/done.md`, "Scoping the prescribed cap").
+**Ruling (owner, 2026-10-27).** No label change. A NULL key stops being a class
+(`../../pipeline/08_execution/todo.md` §2), so no finding names a NULL group and only the
+string `'NULL'` prints `NULL`. This section is deleted in that change.
 
 **Test.** In `test_query_diagnostics_relation.py`, beside
 `test_infeasible_per_group_expanded_mode_preserves_empty_string_group`: a key holding

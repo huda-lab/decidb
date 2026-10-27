@@ -27,19 +27,20 @@ with it (`test_aggregate_local_when.py`, `test_avg.py`, `test_cons_correlated_su
 because their grouped keys are never NULL, so the helper is a trap for the next test
 that groups on a nullable column.
 
-- Work: keep a `None` key as its own group (as `_scope_oracle.class_ids` does), or
-  replace the helper with `class_ids`; fix the docstring.
+- Work: the NULL-key ruling (`../pipeline/08_execution/todo.md` §2) makes dropping a NULL key DECIDE's rule, so
+  this helper becomes right and `_scope_oracle.class_ids`, which keeps NULL as a class, becomes the one that disagrees.
+  Do this item in that change: make both helpers drop a NULL key and fix the docstrings.
 - Test: a feature test that groups on a NULL key, judged by both helpers.
 - Update: [scope_suite.md](scope_suite.md) → "The reference pieces".
 
 ## Names that still say the removed spellings
 
-Decision needed: whether to rename the test files and markers whose names carry the
-removed vocabulary — `test_entity_scope.py` and its `test_entity_scoped_*` tests,
-`test_scalar_scope.py`, `test_aggregate_local_when.py`, and the `per_clause` and
-`when*` markers with their descriptions in `pytest.ini`. The code identifiers
-they echo (`DecideVarScope::ENTITY`, `EntityScopeInfo`, the DIAGNOSE scope label
-`entity`) are renamed in a later change; renaming the tests with them keeps one
+These test files and markers carry the removed vocabulary: `test_entity_scope.py` and its
+`test_entity_scoped_*` tests, `test_scalar_scope.py`, `test_aggregate_local_when.py`, and
+the `per_clause` and `when*` markers with their descriptions in `pytest.ini`. The code
+identifiers they echo are `DecideVarScope::ENTITY`, `EntityScopeInfo` and the DIAGNOSE
+scope label `entity`. **Ruling (owner, 2026-10-27).** Rename the tests in the same change
+as those identifiers; renaming them together keeps one
 vocabulary.
 
 - Update: the area table in [README.md](README.md) and every section of [coverage.md](coverage.md) that names these files.

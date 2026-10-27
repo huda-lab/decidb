@@ -19,7 +19,8 @@ A key used both ways — a keyed decision `per g: x(INT)` and a reducer's `by (g
 constraint's `per g:` — is evaluated twice. One cache serving both would evaluate each
 key once and give equal keys equal ids.
 
-**Decision needed.** Whether to keep both numberings or re-capture the golden dumps. The
+**Ruling (owner, 2026-10-27).** Merge into one numbering and re-capture the golden dumps; see
+`../03_logical_plan/todo.md` §1. The
 column order of keyed decisions and helpers follows the entity ids, and the row order of
 grouped rows follows the dense ids; golden corpus entries 22, 23, 38, 39, 56, 61, 62, 65,
 70 and 91–94 depend on them. A merge that keeps entity ids first-seen over every row and
@@ -40,14 +41,18 @@ more class (`../../language/guide.md` §7.2): with `sum(x) by (g) <= 2`, the row
 their own. Under the ruling those rows leave that clause, as `when g is not null` would, and keep every other clause
 and the objective. The keyed direct plans already skip NULL-key rows (`../../direct_solve/framework/todo.md` H-05).
 
-**Decision needed before coding** (the ruling names `by`; the rest is open):
+**Scope** (owner, 2026-10-27):
 
-1. `by (g)` on a reducer: rows with a NULL `g` are out of that reducer. Assumed yes.
-2. `per g:` in front of a constraint: do NULL-`g` rows get no constraint at all?
-3. `per` inside a reducer (`sum(per cap: cap)`): are NULL-`cap` rows left out of the sum?
-4. A keyed decision (`per K:` declaration): what does a NULL-key row get? Its own decision, none (fixed 0 or NULL),
-   or an error?
-5. SQL's `GROUP BY` keeps NULL as one group; the docs must say why DECIDE departs from it.
+1. `by (g)` on a reducer: rows with a NULL `g` are out of that reducer.
+2. `per g:` in front of a constraint: NULL-`g` rows get no constraint from that clause.
+3. `per` inside a reducer (`sum(per cap: cap)`): NULL-`cap` rows are left out of the sum.
+4. A keyed decision (`per K:` declaration): a NULL-key row is an error whose message suggests
+   `WHERE g IS NOT NULL`. Skipping it would drop a decision silently.
+5. SQL's `GROUP BY` keeps NULL as one group. The docs say DECIDE departs from it because a NULL key is an unknown
+   group, and a limit for an unknown group means nothing.
+
+Once this lands no finding names a NULL group, which closes `../../diagnostics/infeasible/todo.md` §2; delete that
+section in the same change.
 
 **Work.** The window partitions and class numbering in `RewriteRhsAggregates` (`decide_rewrite_rhs_window.cpp`) and
 the grouping here (§1); the scope checks and messages that quote `g = NULL` (`PhysicalDecide::RunScopeChecks`); the

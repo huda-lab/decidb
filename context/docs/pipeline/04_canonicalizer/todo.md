@@ -5,33 +5,7 @@ which only this stage decides (`done.md` §3.7, §3.10).
 
 ---
 
-## 1. `AVG` under `<>` beside another term, or with its own `when` or `per`
-
-**Today.** `avg(x) + sum(y) <> 3`, `x <> avg(x)`, `avg(when c: x) <> 2`,
-`avg(per D: x) <> 2` and an `AVG` beside a product of decisions are refused by
-`ClassifyScoped`: *"DECIDE: AVG in a
-<> constraint is not supported yet beside another term or with its own when or per"*.
-`<>` excludes an `AVG`'s value by scaling the bound with the group's row count
-(`SUM(e) <> K * n`), which is exact only when every term is a plain `AVG` reading every
-row of the group.
-
-**Design.** Two routes. The VALUE shape would hold each `AVG` in a helper decision, but
-an average's helper is fractional, and the value rewrite refuses `<>` over a fractional
-helper (`DecideValueIsWholeNumbered`). Scaling every term by its own reducer's row count
-needs a common multiple of the counts, which is data, and enlarges the Big-M of the `<>`
-disjunction.
-
-**Decision needed.** Lift it, and by which route, or leave it refused.
-
-**Test.** The shapes above, oracle-judged on both solvers
-(`test_scope_value_rewrite.py` or `test_scope_bare_clauses.py`), and the refusal kept
-for any shape not lifted.
-
-**Update.** `done.md` §3.10.
-
----
-
-## 2. A decision as a factor on a reducer
+## 1. A decision as a factor on a reducer
 
 **Today.** `b * sum(x) <= 4`, `b` a query-wide decision, is refused by `PeelScale`:
 *"DECIDE constraint: 'b' is a decision, so it cannot multiply SUM(x). Only constants and
@@ -44,7 +18,8 @@ one of them is `BOOL` (and that the quadratic path refuses otherwise). `PeelScal
 stop refusing a decision factor in a constraint and let `ClassifyScoped` send the
 comparison to VALUE.
 
-**Decision needed.** Whether this enters the language (../../language/guide.md §5 states the
+**Ruling (owner, 2026-10-27).** Lift it for a `BOOL` factor only (one McCormick helper over the reducer's
+value). An `INT` or `REAL` factor stays refused (../../language/guide.md §5 states the
 refusal).
 
 **Test.** `test_canonicalize_scale.py::test_decision_factor_rejected` and
@@ -55,7 +30,7 @@ lifted, oracle-judged on both solvers.
 
 ---
 
-## 3. A keyed decision beside a reducer without a helper
+## 2. A keyed decision beside a reducer without a helper
 
 **Today.** The facility-location link `per D: sum(ship) by (D) <= cap * open`, with
 `open` declared `per D:`, takes the VALUE shape: a keyed decision beside a reducer is
@@ -69,8 +44,8 @@ with `open`'s column for that group: the aggregate shape with a decision beside 
 reducers. `ClassifyScoped` would admit such a decision into AGGREGATE, and the linear
 form and execution would place the group's instance column in the group's row.
 
-**Decision needed.** Whether to add the shape, and whether the determination is a
-plan-time key comparison (the `by` key is the decision's `per` key) or a run-time check.
+**Ruling (owner, 2026-10-27).** Add the shape. The determination is a plan-time key comparison: the `by`
+key is the decision's `per` key.
 
 **Test.** The facility-location query against its VALUE-shape answer (same optimum,
 fewer columns and rows in the dump), on both solvers; a golden entry for the smaller

@@ -71,9 +71,9 @@
   (2, 'B') t(id, g)`, `when g = 'A': x >= -5 AND x <= 10 MINIMIZE SUM(x)` returns 0 on row
   A. Written without the `when`, either bound makes the decision signed;
   `../language/guide.md` §2 states the `when` case as open.
-- **Expected:** -5 on the rows the `when` keeps. Open: does a negative floor under `when`
-  make the decision signed on every row (for a keyed decision, its whole class), or only on
-  the rows it selects?
+- **Expected:** -5 on the rows the `when` keeps. **Ruling (owner, 2026-10-27).** A negative floor under a
+  `when` applies only to the rows the `when` keeps. A decision shared by several rows (a
+  keyed or query-wide decision) is signed when any row the `when` keeps lowers its floor.
 - **Impact:** a wrong optimum, silently.
 
 ## Key grouping ignores collation
@@ -84,8 +84,10 @@
 - **Observed:** over a `VARCHAR COLLATE NOCASE` column holding 'abc', 'ABC', 'Abc' and
   'xyz', `GROUP BY c` sees 2 groups while `DECIDE per C.c: x(INT)` builds 4 decisions, and
   `per c: sum(x) by (c) <= 1` lets each of the three spellings of 'abc' reach 1.
-- **Expected:** open — should key equality follow the column's collation, as GROUP BY
-  does? Every key compares plain values.
+- **Expected:** **Ruling (owner, 2026-10-27).** Key equality follows the column's collation, as GROUP BY
+  does. Every key compares plain values today. Do it with the NULL-key change
+  (`../pipeline/08_execution/todo.md` §2) and the one grouping path (§1 there), which touch
+  the same grouping code.
 - **Impact:** more classes than SQL grouping would give on collated text keys.
 
 ## Messages print a subquery, a condition or a `by` key as DuckDB renders it
@@ -146,15 +148,17 @@ Each reproduces on the current build.
   Q matrix. Only the easy direction (`max(power(x, 2)) <= 16`) is right, in every scope.
   `test_per_objective.py::test_maximize_sum_max_power_per` and
   `test_minimize_sum_min_power_per` pass only because their rows are independent.
-  Expected: an exact formulation (an epigraph for the convex side, indicators for the
-  hard side) or a refusal.
+  **Ruling (owner, 2026-10-27).** Refuse the directions modelled wrongly; keep the easy direction,
+  which is right in every scope. The exact formulation (an epigraph for the convex side,
+  indicators for the hard side) goes on the [roadmap](../language/roadmap.md).
 - **Gurobi accepts a row violated by 1 when its coefficients are near 10⁹:** over three
   rows with `x <= cap` (3, 5, 7), `y <= 5`, `per row: y + sum(x * 1000000000::DECIMAL(18,0))
   >= 5000000001` (or `> 5000000000`), `MINIMIZE SUM(x) + SUM(y)` answers `sum(x) = 5`,
   `y = 0` on Gurobi: `5000000000 >= 5000000001` fails. HiGHS answers `sum(x) = 6`. Presolve
   folds the helper's definition into the row and scales it, so the violation falls under
-  the feasibility tolerance. Expected: an answer that holds, or a warning that the
-  coefficients exceed what the solver resolves.
+  the feasibility tolerance. **Ruling (owner, 2026-10-27).** Warn when a clause's coefficients span more
+  than the solver resolves, naming the clause. Rescaling the model is a vendor workaround
+  and stays out of it.
 - **Impact:** a wrong optimum, or a clause violated in the answer.
 
 ## Messages: operands, coefficients and keys
@@ -218,8 +222,9 @@ Each reproduces on the current build.
   a decision, so it cannot multiply SUM(x). Only data can scale
   SUM/AVG/MIN/MAX."* (`decide_linear_form.cpp`); the product written inside the reducer,
   `sum(b * x)`, is a bilinear term and answers. `../language/guide.md` §5 states the
-  refusal. Decision needed: lift it (for a `BOOL` factor, one McCormick helper over the
-  reducer's value, as the bilinear rules of §4 linearize any `BOOL` product) or keep it.
+  refusal. **Ruling (owner, 2026-10-27).** Lift it for a `BOOL` factor only: one McCormick helper over
+  the reducer's value, as the bilinear rules of §4 linearize any `BOOL` product. An `INT`
+  or `REAL` factor stays refused; its product is not convex.
   A lift changes `test_canonicalize_scale.py::test_decision_factor_rejected` and
   `::test_decision_factor_in_objective_rejected`, and §5.
 - **A quadratic row refuses a row-varying factor on a query-wide decision that the linear
@@ -228,6 +233,7 @@ Each reproduces on the current build.
   `sum(power(x, 2)) + gcap * s <= 30` answers *"'sum(power(x, 2))' is not supported yet in
   this constraint: ... with nothing beside them but data and query-wide decisions, each on
   its own"* (`decide_rewrite_scoped.cpp`); `sum(power(x, 2)) + s <= 30` answers. No test
-  covers this shape.
+  covers this shape. **Ruling (owner, 2026-10-27).** Lift it: the linear row accepts the same factor,
+  so the refusal is an inconsistency, not a policy.
 
 Resolved behavior is documented by its owning `done.md`.

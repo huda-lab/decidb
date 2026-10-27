@@ -148,5 +148,9 @@ Constraints of the form `‖Ax + b‖ ≤ cᵀx + d`, a true Euclidean norm boun
 
 ## Not from the deck
 
+- **An exact MIN or MAX over a squared or multiplied body.** `max(power(x, 2)) <= 16` is modelled exactly; the
+  other direction (`max(power(x, 2)) >= 49`), a MIN over such a body, and the objective forms are refused. Lifting them
+  needs an epigraph for the convex side and indicators for the hard side (`../issues/bugs.md`, "Wrong answers: MIN/MAX
+  bodies and solver tolerance").
 - **DIAGNOSE on a feasible query** returns one `feasible` row. A richer report (solve time, model size, gap), as a
   true `EXPLAIN ANALYZE` counterpart, is unscheduled.

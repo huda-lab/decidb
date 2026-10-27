@@ -403,7 +403,11 @@ escape for `AGG * factor`: every consumer sees `factor * AGG` or `AGG / factor`.
 | `AVG` under `<>` unless every term is a plain `AVG` | refused | *"DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per"* |
 
 The refusal: an `AVG`'s exclusion under `<>` scales the bound by the group's row count,
-exact only when every term is a plain `AVG` over all of them. A query-wide decision
+exact only when every term is a plain `AVG` over all of them. Neither way around it pays
+for itself: a helper per `AVG` is fractional, and `<>` over a fractional helper is
+refused (`DecideValueIsWholeNumbered`); scaling each term by its own row count needs a
+common multiple of the counts, which is data, and widens the Big-M of the `<>`
+disjunction. A query-wide decision
 beside a reducer whose body multiplies decisions (`s + sum(b * x)`, `sum(power(x, 2)) +
 s`) stays AGGREGATE: the quadratic builder counts it once per grouped row, as the linear
 one does (stage 06). A clause

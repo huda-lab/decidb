@@ -10,8 +10,8 @@ smaller or the language wider without changing an answer that runs now.
 reducer over the same rows, `x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`, get two helpers
 and two definition rows that say the same thing.
 
-**Decision needed.** A definition carries one clause's provenance (`source_clause_id`,
-`removal_group_id`). A shared helper needs a rule for both: a DROP of one clause must not
+**Ruling (owner, 2026-10-27).** Share one helper. A definition carries one clause's provenance
+(`source_clause_id`, `removal_group_id`), so the shared helper needs a rule for both: a DROP of one clause must not
 remove the definition the other still reads, and DIAGNOSE must keep naming the helper by
 its reducer.
 
@@ -30,7 +30,8 @@ is per decision, not per instance. A small group's instance is boxed as wide as 
 largest group's, which loosens the LP and the closing Big-M of a MIN/MAX helper, read off
 that box.
 
-**Decision needed.** Where per-instance bounds live: `SolverInput` carries one
+**Ruling (owner, 2026-10-27).** Deferred until measured. Start it only when the helper-box measurement
+(queue §11) shows a model where the shared box slows the solve. Where per-instance bounds live: `SolverInput` carries one
 `lower_bounds` / `upper_bounds` entry per decision and stage 06 expands it across
 `NumInstances`, so this needs a per-instance box in the stage 06/08 contract, or a box per
 helper instance stated as rows.
@@ -70,7 +71,8 @@ a formulation.
 | A decision beside a `MIN` or `MAX` in the objective (`MAXIMIZE max(x) + s`): *"DECIDE: 's' beside MIN or MAX is not supported yet"* | `RewriteComposedMinMaxObjectiveTop`, through `WalkComposedLhs` (`decide_rewrite_minmax.cpp`) | the composed objective's extremum column beside a once-counted term, as the constraint's VALUE shape already does with a helper |
 | A square, or a product of two decisions outside a reducer in the objective, other than two distinct query-wide decisions or a product with a `BOOL` (`MAXIMIZE sum(x) + x * y`, `+ s * s`): *"DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet"* | `ExtractAggregateObjectiveTerms` (`decide_linear_form.cpp`, the linear-form flattening) | a once-only reading of the product in the model: a per-row product needs the determination check to give it one instance over the kept rows, then a quadratic or McCormick term counted once |
 
-**Decision needed.** Which of these enter the language, and in what order.
+**Ruling (owner, 2026-10-27).** Lift the decision beside a `MIN` or `MAX` in the objective. The other two
+stay refused: each needs a quadratic term that is convex in one direction only.
 
 **Test.** For each lifted shape, an oracle- or brute-force-judged test on both solvers
 (`test_scope_value_rewrite.py`, `test_scope_objective.py`); the pinned refusals

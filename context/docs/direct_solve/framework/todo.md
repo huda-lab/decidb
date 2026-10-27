@@ -70,7 +70,8 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Options.**
   1. Keep the key on the clause scope (`per_key_slots`). Smallest change; the kept per-group plans read it.
   2. Move the key onto the part (`DirectPart`), where the language puts it. Larger change; matches the grammar.
-- **Recommendation.** None recorded; the owner chooses.
+- **Ruling (owner, 2026-10-27).** Option 2: the key lives on the part, where `by` is written. It also fits the NULL-key
+  rule (`../../pipeline/08_execution/todo.md` §2).
 - **Change.** Read both spellings: `C` with `by (g)` after each reducer (one clause per row, each reading its
   row's group), which allows a limit that varies by row. The
   removed-spelling message suggests `per g: C` with `by (g)`: one clause per class, which needs `g` to determine the

@@ -1,102 +1,152 @@
 # Work queue: every open task in the docs
 
 Scratchpad. Each line points to a task in a nested todo; details live there. Delete a line when its task ships; delete
-this file when it is empty. "(decision)" marks a task that needs the owner's choice before code.
+this file when it is empty.
 
 Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: [direct_solve/framework/todo.md § How to work](direct_solve/framework/todo.md#how-to-work-any-task-in-these-todo-files).
 
-## 1. Transition: direct solve reads the new language
+The queue has three parts. **Part A** an agent works without the owner. **Part B** needs the owner once, before
+coding, at the question written on the line. **Part C** the owner runs, or is not ready.
 
-Not bugs: until each lands, direct solve declines the construct and the solver path answers the query.
+## Rules for working without the owner (Part A)
 
-Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` task.
+- **Done** is the nested task's "Done when" or "Test" line. A behavior change is judged by an oracle or the solver
+  path, on both backends.
+- **Stop and ask** when a fix needs a choice the nested doc does not settle, a test fails in a way the task did not
+  predict, a golden changes that the task did not name, or a user-facing message needs wording the doc does not give.
+  Never change what a test checks to make it pass. A task that turns out to need the owner moves to Part B with its
+  question.
+- **Never without the owner:** large-tier benchmarks or other long CPU-bound runs, regenerating goldens before reading
+  the diff, pushing, new branches or worktrees, `git stash`.
+- **Per item:** root-cause fix; a `decidb-architect` review for a structural change; re-run the tests; move the shipped
+  text into the owning `done.md`; delete the line here; commit (no push).
+- **Per batch:** `make decide-test`; `DECIDB_FORCE_SOLVER=highs make decide-test` for solver changes;
+  `DECIDB_VERIFY_SERIALIZER=1 make decide-test` for serialization changes; `DECIDB_TEST_DIRECT_SOLVE=off make
+  decide-test` for direct-solve changes.
+- **Order:** top to bottom. A line marked *(needs: …)* waits for that item.
 
-- [ ] H-04 Keyed scope checks in the direct plan — [framework § H-04](direct_solve/framework/todo.md#h-04--keyed-scope-checks-in-the-direct-plan)
-- [ ] H-05 Read a reducer's `by` key into the IR as a GROUP BY in the direct plan (decision; ~280 keyed cases are strict xfails on the direct path until then) — [framework § H-05](direct_solve/framework/todo.md#h-05--read-a-reducers-by-key-into-the-ir) (needs: H-04)
-- [ ] S1 reads a `by` key again — [S1 § Read a `by` key](direct_solve/rules/s1_uniform_matroid/todo.md#read-a-by-key-again-counts-per-group) (needs: H-05)
-- [ ] R1 reads a `by` key again — [R1 § Read a `by` key](direct_solve/rules/r1_continuous_knapsack/todo.md#read-a-by-key-again-one-budget-per-group) (needs: H-05)
-- [ ] H-06 Two-level objective `outer(per k: inner(e) by (k))` — [framework § H-06](direct_solve/framework/todo.md#h-06--the-two-level-objective-outerper-k-innere-by-k)
-- [ ] H-07 `per K:` on a constraint — [framework § H-07](direct_solve/framework/todo.md#h-07--per-k-on-a-constraint-one-constraint-per-class) (needs: H-04)
-- [ ] H-08 VALUE-shape clauses (helper decisions) — [framework § H-08](direct_solve/framework/todo.md#h-08--value-shape-clauses-helper-decisions)
-- [ ] `when` in front of a clause and inside its sum (R1, S1) — [R1 § A `when` in front](direct_solve/rules/r1_continuous_knapsack/todo.md#a-when-in-front-of-the-clause-and-inside-the-sum)
-- [ ] H-03 Read a data bound through the bound-side window — [framework § H-03](direct_solve/framework/todo.md#h-03--read-a-data-bound-through-the-bound-side-window)
+---
 
-## 2. Deferred until after the merge: one bound reader (Seam 2)
+# Part A — Agent works alone
+
+## A1. Direct solve: one bound reader (Seam 2)
+
+One rule for "a bound on one decision", read at plan time by the optimizer, the model builder and direct solve.
 
 - [ ] One classifier for a bound on one decision, with the scaled solver-path fold — [code_quality § classified three times](issues/code_quality.md#a-bound-on-one-decision-is-classified-three-times)
 - [ ] A1 reads a folded affine bound — [A1 § Read a folded affine bound](direct_solve/rules/a1_separable_box/todo.md#read-a-folded-affine-bound)
 - [ ] S1 reads a folded affine bound — [S1 § Read a folded affine bound](direct_solve/rules/s1_uniform_matroid/todo.md#read-a-folded-affine-bound)
 - [ ] Direct solve rounds a bound just below a whole number differently — [bugs § integer bound](issues/bugs.md#direct-solve-reads-an-integer-bound-just-below-a-whole-number-more-strictly-than-both-backends)
 
-## 3. Bugs: wrong answers
+## A2. Direct solve reads the new language: scope
 
-- [ ] Negative lower bound under a `when` stays non-negative (decision) — [bugs § negative bound under `when`](issues/bugs.md#a-negative-lower-bound-under-a-when-leaves-the-decision-non-negative)
-- [ ] Gurobi calls an infinite floor unbounded — [bugs § infinite bounds](issues/bugs.md#wrong-answers-infinite-bounds)
-- [ ] MIN/MAX over a squared or multiplied body modelled wrongly — [bugs § MIN/MAX bodies](issues/bugs.md#wrong-answers-minmax-bodies-and-solver-tolerance)
-- [ ] Gurobi accepts a row violated by 1 near 10⁹ coefficients — [bugs § solver tolerance](issues/bugs.md#wrong-answers-minmax-bodies-and-solver-tolerance)
-- [ ] Key grouping ignores collation (decision) — [bugs § collation](issues/bugs.md#key-grouping-ignores-collation)
+Until each lands, direct solve declines the construct and the solver path answers the query.
 
-## 4. Bugs: errors and hangs
+- [ ] H-04 Keyed scope checks in the direct plan — [framework § H-04](direct_solve/framework/todo.md#h-04--keyed-scope-checks-in-the-direct-plan)
+- [ ] H-08 VALUE-shape clauses (helper decisions) — [framework § H-08](direct_solve/framework/todo.md#h-08--value-shape-clauses-helper-decisions)
+- [ ] `when` in front of a clause and inside its sum (R1, S1) — [R1 § A `when` in front](direct_solve/rules/r1_continuous_knapsack/todo.md#a-when-in-front-of-the-clause-and-inside-the-sum)
+- [ ] H-03 Read a data bound through the bound-side window — [framework § H-03](direct_solve/framework/todo.md#h-03--read-a-data-bound-through-the-bound-side-window)
 
-- [ ] `DECIDB_TIME_LIMIT` not enforced on HiGHS for large models — [bugs § HiGHS time limit](issues/bugs.md#decidb_time_limit-is-not-enforced-on-highs-for-large-models)
-- [ ] HiGHS at gap 0 cannot finish an entity-scoped test MIP — [bugs § gap of 0](issues/bugs.md#with-a-gap-of-0-highs-cannot-finish-an-entity-scoped-mip-the-test-suite-runs)
+## A3. Direct solve reads the new language: grouping
 
-## 5. Bugs: messages and diagnosis text
+Every line waits for B1: the NULL-key rule changes how a key becomes groups, and these build on it.
 
-- [ ] Subquery, condition or `by` key printed as DuckDB renders it — [bugs § as DuckDB renders it](issues/bugs.md#messages-print-a-subquery-a-condition-or-a-by-key-as-duckdb-renders-it)
-- [ ] Stage-05 messages name columns without their relation — [bugs § without their relation](issues/bugs.md#messages-raised-while-choosing-a-formulation-name-columns-without-their-relation)
+- [ ] H-05 Read a reducer's `by` key into the IR as a GROUP BY in the direct plan (key on the reducer; ~280 keyed cases are strict xfails on the direct path until then) — [framework § H-05](direct_solve/framework/todo.md#h-05--read-a-reducers-by-key-into-the-ir) (needs: H-04, B1)
+- [ ] S1 reads a `by` key again — [S1 § Read a `by` key](direct_solve/rules/s1_uniform_matroid/todo.md#read-a-by-key-again-counts-per-group) (needs: H-05)
+- [ ] R1 reads a `by` key again — [R1 § Read a `by` key](direct_solve/rules/r1_continuous_knapsack/todo.md#read-a-by-key-again-one-budget-per-group) (needs: H-05)
+- [ ] H-06 Two-level objective `outer(per k: inner(e) by (k))` — [framework § H-06](direct_solve/framework/todo.md#h-06--the-two-level-objective-outerper-k-innere-by-k) (needs: B1)
+- [ ] H-07 `per K:` on a constraint — [framework § H-07](direct_solve/framework/todo.md#h-07--per-k-on-a-constraint-one-constraint-per-class) (needs: H-04, B1)
+
+## A4. Wrong answers and hangs
+
+- [ ] Negative lower bound under a `when` stays non-negative (applies to the kept rows) — [bugs § negative bound under `when`](issues/bugs.md#a-negative-lower-bound-under-a-when-leaves-the-decision-non-negative)
+- [ ] `DECIDB_TIME_LIMIT` not enforced on HiGHS for large models (override the interrupt poll, as Gurobi does; test on a small model) — [bugs § HiGHS time limit](issues/bugs.md#decidb_time_limit-is-not-enforced-on-highs-for-large-models)
+
+## A5. Language: refusals to lift
+
+Each is ruled; the nested section says which shapes lift and which stay refused.
+
+- [ ] Lift `norm(D:)` and the strict comparison over a fractional MIN/MAX — [binder § 1](pipeline/02_binder/todo.md#1-bind-time-refusals-a-later-change-may-lift)
+- [ ] Lift a decision beside MIN/MAX in the objective — [optimizer § 4](pipeline/05_optimizer/todo.md#4-refusals-a-later-change-may-lift)
+- [ ] A `BOOL` decision as a factor on a reducer — [canonicalizer § 1](pipeline/04_canonicalizer/todo.md#1-a-decision-as-a-factor-on-a-reducer) (same as bugs § Limitations, first item)
+- [ ] Quadratic row refuses a row-varying factor on a query-wide decision — [bugs § Limitations](issues/bugs.md#limitations-not-bugs)
+- [ ] Functions that behave unlike SQL: a data-only reducer skips NULL; audit the rest and bring each divergence to the owner — [binder § 2](pipeline/02_binder/todo.md#2-functions-that-behave-unlike-sql)
+
+## A6. Smaller models
+
+- [ ] One helper for a reducer several clauses hold — [optimizer § 1](pipeline/05_optimizer/todo.md#1-one-helper-for-a-reducer-that-several-clauses-hold)
+- [ ] A keyed decision beside a reducer without a helper (plan-time key comparison) — [canonicalizer § 2](pipeline/04_canonicalizer/todo.md#2-a-keyed-decision-beside-a-reducer-without-a-helper)
+- [ ] `IN` under `per K:` once per class — [optimizer § 3](pipeline/05_optimizer/todo.md#3-in-under-per-k-once-per-class)
+
+## A7. Messages and diagnosis text
+
+- [ ] `=` on MIN/MAX echoed as one half (quote as written) — [infeasible § 1](diagnostics/infeasible/todo.md#1-an--on-a-minmax-is-echoed-as-the-half-its-finding-loosens)
+- [ ] EXPLAIN columns print by bare name over a join (qualify over a join) — [logical plan § 2](pipeline/03_logical_plan/todo.md#2-columns-print-by-their-bare-name-over-a-join)
 - [ ] Two keys over the same columns share one key text — [bugs § operands](issues/bugs.md#messages-operands-coefficients-and-keys)
 - [ ] A column reference is named in two forms (key SQL spelling vs bare name) — [bugs § operands](issues/bugs.md#messages-operands-coefficients-and-keys)
 - [ ] `BETWEEN` echoes its lower half only — [bugs § Diagnosis text](issues/bugs.md#diagnosis-text)
-- [ ] Quadratic clause reported once per row in query scope — [bugs § Diagnosis text](issues/bugs.md#diagnosis-text)
-- [ ] HiGHS expanded repair carries a 1e-5 cushion — [bugs § Diagnosis text](issues/bugs.md#diagnosis-text)
-- [ ] NULL class reads like the string `'NULL'` (decision) — [infeasible § 2](diagnostics/infeasible/todo.md#2-a-null-class-reads-like-the-string-null)
-- [ ] `=` on MIN/MAX echoed as one half (decision) — [infeasible § 1](diagnostics/infeasible/todo.md#1-an--on-a-minmax-is-echoed-as-the-half-its-finding-loosens)
-- [ ] EXPLAIN columns print by bare name over a join (decision) — [logical plan § 2](pipeline/03_logical_plan/todo.md#2-columns-print-by-their-bare-name-over-a-join)
 
-## 6. Bugs: benchmark and test tooling
+## A8. Testing gaps
 
-- [ ] Q10 on HiGHS large tier killed for memory, logged as timeout — [bugs § Q10](issues/bugs.md#q10-on-highs-at-the-large-tier-is-killed-for-memory-and-the-profiler-records-it-as-a-timeout)
-- [ ] One off-mode matrix run reported one outcome fewer — [bugs § one outcome fewer](issues/bugs.md#one-matrix-run-of-decidb_test_direct_solveoff-reported-one-outcome-fewer)
-
-## 7. Testing gaps
-
-- [ ] No test sees a solver's optimality gap — [testing § optimality gap](testing/todo.md#no-differential-test-is-large-enough-to-see-a-solvers-optimality-gap)
-- [ ] `group_indices` drops NULL keys — [testing § group_indices](testing/todo.md#group_indices-drops-null-keys)
 - [ ] `MAX(x) <= MAX(v)` has no test — [testing § MAX bound](testing/todo.md#maxx--maxv-has-no-test)
 - [ ] DIAGNOSE of a hard `MIN`/`MAX` over a keyed decision has no test — [testing § DIAGNOSE MIN/MAX](testing/todo.md#diagnose-of-a-hard-minmax-over-a-keyed-decision-has-no-test)
 
-## 8. Code quality and naming
+## A9. Code quality and naming
 
 - [ ] One `DecideClauseScope` for a clause's scope copies (D47) — [code_quality § parallel copies](issues/code_quality.md#a-clauses-scope-is-carried-in-parallel-copies)
 - [ ] One step chooses direct solve, Gurobi or HiGHS — [code_quality § chosen in two places](issues/code_quality.md#how-a-query-is-answered-is-chosen-in-two-places)
-- [ ] One key table on `LogicalDecide` (decision) — [logical_plan § 1](pipeline/03_logical_plan/todo.md#1-one-key-table)
-- [ ] One key-grouping path at execution (decision) — [execution § 1](pipeline/08_execution/todo.md#1-one-key-grouping-path-optional)
-- [ ] Rename the keyed scope "keyed" everywhere (D46) — [code_quality § keyed](issues/code_quality.md#name-the-keyed-scope-keyed-everywhere)
-- [ ] Rename test files and markers with removed spellings (decision) — [testing § names](testing/todo.md#names-that-still-say-the-removed-spellings)
+- [ ] Rename the keyed scope "keyed" everywhere (D46), with the test files and markers in the same change — [code_quality § keyed](issues/code_quality.md#name-the-keyed-scope-keyed-everywhere), [testing § names](testing/todo.md#names-that-still-say-the-removed-spellings)
 - [ ] Normalize the DecidB spelling in comments — [operations](operations/todo.md#normalize-the-decidb-spelling-in-internal-comments)
 
-## 9. Language: refusals to lift (all decisions)
+---
 
-These are formulation limits, not deck features; deck features are on the [roadmap](language/roadmap.md).
+# Part B — Owner checkpoint before coding
 
-- [ ] Three bind-time refusals — [binder § 1](pipeline/02_binder/todo.md#1-bind-time-refusals-a-later-change-may-lift)
-- [ ] Three stage-05 refusals — [optimizer § 4](pipeline/05_optimizer/todo.md#4-refusals-a-later-change-may-lift)
-- [ ] `AVG` under `<>` beside another term — [canonicalizer § 1](pipeline/04_canonicalizer/todo.md#1-avg-under--beside-another-term-or-with-its-own-when-or-per)
-- [ ] A decision as a factor on a reducer — [canonicalizer § 2](pipeline/04_canonicalizer/todo.md#2-a-decision-as-a-factor-on-a-reducer) (same as bugs § Limitations, first item)
-- [ ] Quadratic row refuses a row-varying factor on a query-wide decision — [bugs § Limitations](issues/bugs.md#limitations-not-bugs)
-- [ ] A NULL key is not a class; its rows skip the keyed clause (reverses D5; scope questions open) — [execution § 2](pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)
-- [ ] Functions that behave unlike SQL: audit, and decide on NULL in SUM/MIN/MAX/AVG (decision) — [binder § 2](pipeline/02_binder/todo.md#2-functions-that-behave-unlike-sql)
+The agent may read code and investigate; it writes no fix until the owner answers the question on the line.
 
-## 10. Smaller models
+## B1. NULL keys and key grouping (one batch; blocks A3)
 
-- [ ] One helper for a reducer several clauses hold (decision) — [optimizer § 1](pipeline/05_optimizer/todo.md#1-one-helper-for-a-reducer-that-several-clauses-hold)
-- [ ] A keyed decision beside a reducer without a helper (decision) — [canonicalizer § 3](pipeline/04_canonicalizer/todo.md#3-a-keyed-decision-beside-a-reducer-without-a-helper)
-- [ ] `IN` under `per K:` once per class — [optimizer § 3](pipeline/05_optimizer/todo.md#3-in-under-per-k-once-per-class)
-- [ ] A box per helper instance (decision) — [optimizer § 2](pipeline/05_optimizer/todo.md#2-a-box-per-helper-instance) (needs: the helper-box measurement in 12)
+Ruled: a NULL key is not a class, one numbering, keys follow collation. All four touch the same grouping code.
+Owner looks at: which numbering (first-seen or dense), the NULL keyed-decision error text, and the golden diff before
+it is re-captured.
 
-## 11. Performance measurement (run last)
+- [ ] A NULL key is not a class; its rows skip the keyed clause (reverses D5; closes infeasible § 2) — [execution § 2](pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)
+- [ ] One key table on `LogicalDecide` (one numbering; re-capture goldens) — [logical_plan § 1](pipeline/03_logical_plan/todo.md#1-one-key-table)
+- [ ] One key-grouping path at execution (with the key table) — [execution § 1](pipeline/08_execution/todo.md#1-one-key-grouping-path-optional)
+- [ ] Key grouping ignores collation (follow the collation) — [bugs § collation](issues/bugs.md#key-grouping-ignores-collation)
+- [ ] `group_indices` drops NULL keys (both oracle helpers drop a NULL key) — [testing § group_indices](testing/todo.md#group_indices-drops-null-keys)
+
+## B2. Wrong answers whose fix has an open choice
+
+- [ ] MIN/MAX over a squared or multiplied body modelled wrongly (ruled: refuse the wrong directions) — owner approves the exact list of refused forms and the message — [bugs § MIN/MAX bodies](issues/bugs.md#wrong-answers-minmax-bodies-and-solver-tolerance)
+- [ ] Gurobi accepts a row violated by 1 near 10⁹ coefficients (ruled: warn) — owner sets the span threshold and where the warning shows — [bugs § solver tolerance](issues/bugs.md#wrong-answers-minmax-bodies-and-solver-tolerance)
+- [ ] Gurobi calls an infinite floor unbounded — owner rules what an infinite bound means: refuse it, or read it as no bound — [bugs § infinite bounds](issues/bugs.md#wrong-answers-infinite-bounds)
+- [ ] HiGHS at gap 0 cannot finish an entity-scoped test MIP — owner approves the proposed `decide_mip_gap` setting (a new user setting) — [bugs § gap of 0](issues/bugs.md#with-a-gap-of-0-highs-cannot-finish-an-entity-scoped-mip-the-test-suite-runs)
+
+## B3. Messages whose fix has an open route
+
+- [ ] Stage-05 messages name columns without their relation — owner picks: carry relation names into stage 05, or move the refusal to stage 04 — [bugs § without their relation](issues/bugs.md#messages-raised-while-choosing-a-formulation-name-columns-without-their-relation)
+- [ ] Subquery, condition or `by` key printed as DuckDB renders it — the parser must keep each node's source span; owner approves the parser plan — [bugs § as DuckDB renders it](issues/bugs.md#messages-print-a-subquery-a-condition-or-a-by-key-as-duckdb-renders-it)
+
+## B4. Investigate first, then bring the fix
+
+The agent finds the cause alone and stops with a proposed fix.
+
+- [ ] Quadratic clause reported once per row in query scope — [bugs § Diagnosis text](issues/bugs.md#diagnosis-text)
+- [ ] HiGHS expanded repair carries a 1e-5 cushion — [bugs § Diagnosis text](issues/bugs.md#diagnosis-text)
+
+---
+
+# Part C — Owner runs, or not ready
+
+## C1. Long or memory-heavy runs (owner starts them)
+
+- [ ] Q10 on HiGHS large tier killed for memory, logged as timeout — [bugs § Q10](issues/bugs.md#q10-on-highs-at-the-large-tier-is-killed-for-memory-and-the-profiler-records-it-as-a-timeout)
+- [ ] No test sees a solver's optimality gap (needs a large dataset) — [testing § optimality gap](testing/todo.md#no-differential-test-is-large-enough-to-see-a-solvers-optimality-gap)
+- [ ] A box per helper instance (deferred until the helper-box measurement below shows it matters) — [optimizer § 2](pipeline/05_optimizer/todo.md#2-a-box-per-helper-instance)
+
+Performance measurement (run last):
 
 - [ ] Measurement overhead, a correctness check, a second host — [methodology](performance/todo.md#methodology)
 - [ ] Backend discovery versus parsing and planning — [planning](performance/todo.md#planning)
@@ -107,10 +157,8 @@ These are formulation limits, not deck features; deck features are on the [roadm
 - [ ] Readback, temporary results and cleanup — [output and cleanup](performance/todo.md#output-and-cleanup)
 - [ ] Where each workload stops fitting in memory — [memory and scaling](performance/todo.md#memory-and-scaling)
 
-## 12. Direct solve: the second front end
+## C2. Waiting on something
 
-- [ ] H-02 Front end for the new language — [framework § H-02](direct_solve/framework/todo.md#h-02--front-end-for-the-new-language)
-
-## 13. Operations
-
-- [ ] Report peak process memory on Windows — [operations](operations/todo.md#report-peak-process-memory-on-windows)
+- [ ] One off-mode matrix run reported one outcome fewer (waits for a recurrence; the matrix now keeps its logs) — [bugs § one outcome fewer](issues/bugs.md#one-matrix-run-of-decidb_test_direct_solveoff-reported-one-outcome-fewer)
+- [ ] Report peak process memory on Windows (needs a Windows host) — [operations](operations/todo.md#report-peak-process-memory-on-windows)
+- [ ] H-02 Front end for the new language (owner confirms it still applies: it waited for "a stable language branch", and the merge brought one language) — [framework § H-02](direct_solve/framework/todo.md#h-02--front-end-for-the-new-language)
