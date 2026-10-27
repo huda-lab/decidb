@@ -23,6 +23,7 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_expanded_expression.hpp"
+#include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_binder/column_alias_binder.hpp"
 #include "duckdb/planner/expression_binder/group_binder.hpp"
 #include "duckdb/planner/expression_binder/having_binder.hpp"
@@ -409,6 +410,27 @@ void Binder::BindWhereStarExpression(unique_ptr<ParsedExpression> &expr) {
 	}
 }
 
+//! WHERE is planned below DECIDE, so a decision has no value there, yet the DECIDE binding in the bind context lets
+//! the name bind. A reference to that binding in the bound filter, direct or as a correlated column of a subquery,
+//! is refused.
+static void RefuseDecisionInWhere(const Expression &expr, const BoundSelectNode &node) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &colref = expr.Cast<BoundColumnRefExpression>();
+		if (colref.binding.table_index == node.decide_index) {
+			throw BinderException("DECIDE: %s is a decision; WHERE may only use data",
+			                      node.decide_variables[colref.binding.column_index]->GetAlias());
+		}
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
+		for (auto &correlated : expr.Cast<BoundSubqueryExpression>().binder->correlated_columns) {
+			if (correlated.binding.table_index == node.decide_index) {
+				throw BinderException("DECIDE: %s is a decision; WHERE may only use data", correlated.name);
+			}
+		}
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { RefuseDecisionInWhere(child, node); });
+}
 
 unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_ptr<BoundTableRef> from_table) {
 	DecideProfileScope profile("frontend.bind_select");
@@ -468,6 +490,9 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 		WhereBinder where_binder(*this, context, &alias_binder);
 		unique_ptr<ParsedExpression> condition = std::move(statement.where_clause);
 		result->where_clause = where_binder.Bind(condition);
+		if (statement.HasDecideClause()) {
+			RefuseDecisionInWhere(*result->where_clause, *result);
+		}
 	}
 
 	// now bind all the result modifiers; including DISTINCT and ORDER BY targets

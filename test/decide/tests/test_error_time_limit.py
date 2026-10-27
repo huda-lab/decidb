@@ -24,9 +24,7 @@ becomes unreachable and case 1 below would catch it.
 
 from __future__ import annotations
 
-import os
 import re
-import subprocess
 
 import pytest
 
@@ -56,33 +54,23 @@ _FAST_QUERY_SQL = """
 """
 
 
-def _run_decidb(decidb_exe_path, decidb_db_path, sql, *, time_limit=None,
-                subprocess_timeout=30):
-    """Invoke the decidb CLI with optional DECIDB_TIME_LIMIT in the env.
+def _run_decidb(cli, sql, *, time_limit=None, subprocess_timeout=30):
+    """Run ``sql`` on the Gurobi CLI with optional DECIDB_TIME_LIMIT in the env.
 
     time_limit can be a number (seconds) or a string (e.g. ``"abc"``,
     ``"-5"``, ``""``) so invalid-value cases can pass arbitrary garbage.
     Returns the CompletedProcess.
     """
-    env = {**os.environ, "DECIDB_FORCE_SOLVER": "gurobi"}
     if time_limit is not None:
-        env["DECIDB_TIME_LIMIT"] = str(time_limit)
-    return subprocess.run(
-        [decidb_exe_path, decidb_db_path, "-readonly", "-c", sql],
-        capture_output=True,
-        text=True,
-        timeout=subprocess_timeout,
-        env=env,
-    )
+        cli = cli.with_env({"DECIDB_TIME_LIMIT": str(time_limit)})
+    return cli.execute_raw(sql, timeout=subprocess_timeout)
 
 
 @pytest.mark.error
 class TestTimeLimit:
     """DECIDB_TIME_LIMIT env-var contract."""
 
-    def test_env_var_surfaces_friendly_error(
-        self, decidb_exe_path, decidb_db_path, _raw_oracle_solver
-    ):
+    def test_env_var_surfaces_friendly_error(self, decidb_cli_gurobi):
         """Short DECIDB_TIME_LIMIT must surface the friendly TIME_LIMIT message.
 
         Primary regression test for the bug: hardcoded 300s used to clobber
@@ -91,12 +79,11 @@ class TestTimeLimit:
         both that the env var is plumbed through to Gurobi AND that the
         GRB_TIME_LIMIT branch produces the documented user message.
         """
-        if _raw_oracle_solver is None:
-            pytest.skip("Gurobi not available — time-limit test requires it")
-
         result = _run_decidb(
-            decidb_exe_path, decidb_db_path, _PATHOLOGICAL_MIQP_SQL,
-            time_limit=1, subprocess_timeout=15,
+            decidb_cli_gurobi,
+            _PATHOLOGICAL_MIQP_SQL,
+            time_limit=1,
+            subprocess_timeout=15,
         )
         combined = result.stderr + result.stdout
         assert re.search(r"(?i)hit the time limit", combined), (
@@ -105,21 +92,18 @@ class TestTimeLimit:
             f"  stderr: {result.stderr[:400]}"
         )
 
-    def test_default_does_not_break_normal_queries(
-        self, decidb_exe_path, decidb_db_path, _raw_oracle_solver
-    ):
+    def test_default_does_not_break_normal_queries(self, decidb_cli_gurobi):
         """No env var → 300s default → cheap query completes successfully.
 
         Guards against an accidental default change (e.g. someone lowering
         the constant to 1s) or a regression in the env-var read path that
         silently neutralizes the limit.
         """
-        if _raw_oracle_solver is None:
-            pytest.skip("Gurobi not available — time-limit test requires it")
-
         result = _run_decidb(
-            decidb_exe_path, decidb_db_path, _FAST_QUERY_SQL,
-            time_limit=None, subprocess_timeout=10,
+            decidb_cli_gurobi,
+            _FAST_QUERY_SQL,
+            time_limit=None,
+            subprocess_timeout=10,
         )
         combined = result.stderr + result.stdout
         assert not re.search(r"(?i)hit the time limit", combined), (
@@ -134,9 +118,7 @@ class TestTimeLimit:
         )
 
     @pytest.mark.parametrize("garbage", ["abc", "-5", "0", ""])
-    def test_invalid_env_var_falls_back_to_default(
-        self, decidb_exe_path, decidb_db_path, _raw_oracle_solver, garbage
-    ):
+    def test_invalid_env_var_falls_back_to_default(self, decidb_cli_gurobi, garbage):
         """Garbage DECIDB_TIME_LIMIT values must silently fall back to default.
 
         ``std::stod`` throws on non-numeric input; negative/zero values are
@@ -144,12 +126,11 @@ class TestTimeLimit:
         exception and reject non-positive parsed values without leaking
         either failure mode to the user.
         """
-        if _raw_oracle_solver is None:
-            pytest.skip("Gurobi not available — time-limit test requires it")
-
         result = _run_decidb(
-            decidb_exe_path, decidb_db_path, _FAST_QUERY_SQL,
-            time_limit=garbage, subprocess_timeout=10,
+            decidb_cli_gurobi,
+            _FAST_QUERY_SQL,
+            time_limit=garbage,
+            subprocess_timeout=10,
         )
         combined = result.stderr + result.stdout
         assert not re.search(r"(?i)hit the time limit", combined), (
@@ -163,9 +144,7 @@ class TestTimeLimit:
             f"{result.stderr[:400]}"
         )
 
-    def test_sub_second_value_kills_pathological_query(
-        self, decidb_exe_path, decidb_db_path, _raw_oracle_solver
-    ):
+    def test_sub_second_value_kills_pathological_query(self, decidb_cli_gurobi):
         """DECIDB_TIME_LIMIT=0.5 must actually fire on a hard MIQP.
 
         Catches an off-by-orders-of-magnitude parsing bug (e.g. someone
@@ -174,12 +153,11 @@ class TestTimeLimit:
         within 0.5s, so observing the friendly message proves the value
         was plumbed through faithfully.
         """
-        if _raw_oracle_solver is None:
-            pytest.skip("Gurobi not available — time-limit test requires it")
-
         result = _run_decidb(
-            decidb_exe_path, decidb_db_path, _PATHOLOGICAL_MIQP_SQL,
-            time_limit=0.5, subprocess_timeout=10,
+            decidb_cli_gurobi,
+            _PATHOLOGICAL_MIQP_SQL,
+            time_limit=0.5,
+            subprocess_timeout=10,
         )
         combined = result.stderr + result.stdout
         assert re.search(r"(?i)hit the time limit", combined), (

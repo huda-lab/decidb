@@ -36,16 +36,6 @@ square, an `abs` around a helper, a product beside a reducer, an `AVG` under `<>
   where it can state the shape.
 - Update: `done.md` → "The suites" and "Coverage tiers".
 
-## Two files bypass the CLI guards
-
-`test_error_time_limit.py` and `test_query_diagnostics_slow.py` start the CLI with
-`subprocess` directly, so neither the leak guard nor the removed-spelling guard runs on
-their queries.
-
-- Work: route them through `decidb_cli.py`, or call `assert_no_internal_leak` and
-  `assert_no_removed_spelling` on their results.
-- Update: `done.md` → "Keeping removed spellings out".
-
 ## Names that still say the removed spellings
 
 Decision needed: whether to rename the test files and markers whose names carry the

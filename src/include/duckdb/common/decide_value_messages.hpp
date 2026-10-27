@@ -126,10 +126,10 @@ inline string DecideNullSubqueryMessage(const string &subquery) {
 }
 
 //! The error for a NaN or infinite value. `context` names where the value sits (`objective coefficient`), `kind` what
-//! is not allowed (`NaN` or `NaN or Infinity`), and `location` is empty or the position the solver adds (` at row 3`).
-inline string DecideInvalidValueMessage(const string &context, const string &kind, const string &location) {
-	return "DECIDE " + context + " contains invalid value (" + kind + ")" + location +
-	       ". Common causes:\n"
+//! is not allowed (`NaN` or `NaN or Infinity`). It names no row: a row's position in the input depends on the scan.
+inline string DecideInvalidValueMessage(const string &context, const string &kind) {
+	return "DECIDE " + context + " contains invalid value (" + kind +
+	       "). Common causes:\n"
 	       "  • Division by zero in the expression\n"
 	       "  • Arithmetic overflow in calculations\n"
 	       "  • NULL values that propagated through math operations\n"

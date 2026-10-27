@@ -1191,6 +1191,10 @@ void ValidateDecideIntegralComparisonOperands(const Expression &expr, idx_t deci
 	});
 }
 
+string DecideWrittenFunctionName(const FunctionExpression &func) {
+	return StringUtil::CIEquals(func.function_name, "count_star") ? "count(*)" : func.function_name;
+}
+
 const char *DecideCaseUnsupportedMessage() {
 	return "CASE expressions are not supported inside DECIDE constraints or "
 	       "objectives. Write the condition as a scope in front of the clause "
@@ -1407,9 +1411,8 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
         error_msg = DecideCaseUnsupportedMessage();
         return false;
     default:
-        error_msg = StringUtil::Format("Unsupported expression of type ExpressionClass::%s inside DECIDE SUM expression",
-                                       EnumUtil::ToString(expr.GetExpressionClass()));
-        return false;
+		error_msg = StringUtil::Format("SUM expression does not support '%s'", expr.ToString());
+		return false;
     }
 }
 
@@ -1490,7 +1493,7 @@ bool DecideBinder::ClassifyReducerCall(FunctionExpression &func, DecideExpressio
 		auto body = func.children.empty()
 		                ? nullptr
 		                : &const_cast<ParsedExpression &>(ReducerArgumentBody(*func.children.front()));
-		if (body && IsRowInvariantExpression(*body)) {
+		if (body && ExpressionContainsDecideVariable(*body, variables) && IsRowInvariantExpression(*body)) {
 			auto body_text = body->ToString();
 			error_msg = StringUtil::Format(
 			    "%s is a query-wide decision, so %s(%s) has nothing to aggregate over; "

@@ -152,10 +152,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         case_insensitive_set_t declared_names;
         for (const auto &expr_ptr : statement.decide_variables) {
             auto &name = SplitDeclaration(*expr_ptr).name->GetColumnName();
-            if (bind_context.GetMatchingBinding(name)) {
-                throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
-            }
-            if (!declared_names.insert(name).second) {
+		    // GetMatchingBinding skips a USING column (its binding is the join's merged column), so a
+		    // decision named like one has to be asked for separately.
+		    if (bind_context.GetMatchingBinding(name) || bind_context.GetUsingBinding(name)) {
+			    throw BinderException(*expr_ptr, "DECIDE variable '%s' conflicts with an existing column name.", name);
+		    }
+		    if (!declared_names.insert(name).second) {
                 throw BinderException(*expr_ptr, "Duplicate DECIDE variable name '%s'.", name);
             }
         }

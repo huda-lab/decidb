@@ -94,7 +94,8 @@ never be the solver timed against itself.
 ## Output
 
 Each sweep writes two files to `benchmark/decide/results/direct_solve/` (gitignored), named by the UTC start time. They
-sit in their own folder because `view_results.py` opens the newest JSON in `results/`.
+sit in their own folder, as the archived S1 profilers' do, because `view_results.py` opens the newest JSON in
+`results/`.
 
 - `direct_solve_<stamp>.csv`: one row per (query, scale factor) with the decision count, direct solve's objective,
   the agreement flag, each mode's median, minimum and maximum seconds and peak MiB, and the speedup of direct solve

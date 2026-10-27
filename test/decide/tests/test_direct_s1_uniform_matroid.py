@@ -1040,16 +1040,18 @@ def test_s1_boundary_values_read_like_the_solver(decidb_cli, name):
 # A bound built from COUNT(*) is evaluated by DuckDB's own arithmetic, so it can overflow. The solver evaluates it once
 # per group that has a row the clause keeps: a row whose `when` holds. The direct plan must raise on exactly those
 # queries. Groups: a = 2 rows (1 flagged), b = 2 (both flagged), c = 4 (none flagged),
-# NULL key = 3 (all flagged). With a factor of 3e18, a count of 3 or more overflows INT64.
+# NULL key = 4 (all flagged). With a factor of 3e18, a count of 4 or more overflows INT64 (3 * 3e18 = 9e18 still fits;
+# INT64 holds up to about 9.22e18), so groups c and NULL overflow if their bound is evaluated and a, b never do.
 _OVERFLOW_ROWS = (
     "(1,'a',9.0,true),(2,'a',8.0,false),(3,'b',7.0,true),(4,'b',6.0,true),"
     "(5,'c',5.0,false),(6,'c',4.0,false),(7,'c',3.0,false),(8,'c',2.0,false),"
-    "(9,NULL,3.0,true),(10,NULL,2.0,true),(11,NULL,1.0,true)"
+    "(9,NULL,3.0,true),(10,NULL,2.0,true),(11,NULL,1.0,true),(12,NULL,0.5,true)"
 )
 _BIG = "3000000000000000000"
 # name -> (constraint, outcome on both paths)
 COUNT_OVERFLOW_CASES = {
-    # The NULL-key group counts three flagged rows; the `when` leaves it out, so the solver never evaluates its bound.
+    # The NULL-key group counts four flagged rows, so its bound overflows if evaluated; the `when` leaves it out, so the
+    # solver never evaluates it and a plan that did would raise here.
     "null_key_group_with_when": (
         f"when flag AND g IS NOT NULL: SUM(x) by (g) <= COUNT(*) by (g) * {_BIG}",
         "ok",

@@ -29,9 +29,7 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 
 ## 3. Bugs: wrong answers
 
-- [ ] Decision named like a USING column is ignored — [bugs § USING column](06_issues/bugs/todo.md#a-decision-named-like-a-using-column-is-silently-ignored)
 - [ ] Negative lower bound under a `when` stays non-negative (decision) — [bugs § negative bound under `when`](06_issues/bugs/todo.md#a-negative-lower-bound-under-a-when-leaves-the-decision-non-negative)
-- [ ] Decision named in WHERE filters on an input column — [bugs § WHERE](06_issues/bugs/todo.md#a-decision-named-in-where-filters-on-an-input-column)
 - [ ] Negative `IN` value with a negative upper bound refused — [bugs § `IN`, bounds and rounding](06_issues/bugs/todo.md#wrong-answers-or-refusals-in-bounds-and-rounding)
 - [ ] Gurobi calls an infinite floor unbounded — [bugs § `IN`, bounds and rounding](06_issues/bugs/todo.md#wrong-answers-or-refusals-in-bounds-and-rounding)
 - [ ] MIN/MAX over a squared or multiplied body modelled wrongly — [bugs § MIN/MAX bodies](06_issues/bugs/todo.md#wrong-answers-minmax-bodies-and-solver-tolerance)
@@ -53,15 +51,9 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 - [ ] Subquery, condition or `by` key printed as DuckDB renders it — [bugs § as DuckDB renders it](06_issues/bugs/todo.md#messages-print-a-subquery-a-condition-or-a-by-key-as-duckdb-renders-it)
 - [ ] Stage-05 messages name columns without their relation — [bugs § without their relation](06_issues/bugs/todo.md#messages-raised-while-choosing-a-formulation-name-columns-without-their-relation)
 - [ ] Data comparison inside an operand bound as a constraint — [bugs § operands](06_issues/bugs/todo.md#messages-operands-coefficients-and-keys)
-- [ ] Invalid coefficient names a row by internal position — [bugs § operands](06_issues/bugs/todo.md#messages-operands-coefficients-and-keys)
-- [ ] Reducer over a constant called a query-wide decision — [bugs § operands](06_issues/bugs/todo.md#messages-operands-coefficients-and-keys)
 - [ ] Two keys over the same columns share one key text — [bugs § operands](06_issues/bugs/todo.md#messages-operands-coefficients-and-keys)
 - [ ] Refusal inside a nested DECIDE is masked — [bugs § nested DECIDE](06_issues/bugs/todo.md#messages-nested-decide-and-refusals)
-- [ ] Refusals name engine enums — [bugs § nested DECIDE and refusals](06_issues/bugs/todo.md#messages-nested-decide-and-refusals)
-- [ ] Objective refusal quotes a bound tree — [bugs § nested DECIDE and refusals](06_issues/bugs/todo.md#messages-nested-decide-and-refusals)
 - [ ] Quadratic bound echoed with the moved constant — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
-- [ ] Repair amount rounds down and under-repairs — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
-- [ ] Bound at minus infinity says "lower this bound" — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
 - [ ] `BETWEEN` echoes its lower half only — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
 - [ ] Unbounded remedy names a column unquoted — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
 - [ ] Quadratic clause reported once per row in query scope — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
@@ -75,9 +67,6 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 ## 6. Bugs: benchmark and test tooling
 
 - [ ] Q10 on HiGHS large tier killed for memory, logged as timeout — [bugs § Q10](06_issues/bugs/todo.md#q10-on-highs-at-the-large-tier-is-killed-for-memory-and-the-profiler-records-it-as-a-timeout)
-- [ ] `test_large_scale.py` is never collected — [bugs § test_large_scale](06_issues/bugs/todo.md#test_large_scalepy-is-never-collected)
-- [ ] `make decide-view` opens the wrong JSON — [bugs § decide-view](06_issues/bugs/todo.md#make-decide-view-opens-the-newest-json-in-results-whichever-tool-wrote-it)
-- [ ] S1 overflow test passes either way on the NULL-key group — [bugs § S1 overflow test](06_issues/bugs/todo.md#an-s1-overflow-test-passes-whether-or-not-the-null-key-group-is-evaluated)
 - [ ] One off-mode matrix run reported one outcome fewer — [bugs § one outcome fewer](06_issues/bugs/todo.md#one-matrix-run-of-decidb_test_direct_solveoff-reported-one-outcome-fewer)
 
 ## 7. Testing gaps
@@ -85,8 +74,6 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 - [ ] No test sees a solver's optimality gap — [edge_cases](04_testing/edge_cases/todo.md#no-differential-test-is-large-enough-to-see-a-solvers-optimality-gap)
 - [ ] `group_indices` drops NULL keys — [testing/scope § group_indices](04_testing/scope/todo.md#group_indices-drops-null-keys)
 - [ ] Hand-checked scope tests judged by an oracle — [testing/scope § hand-checked](04_testing/scope/todo.md#hand-checked-scope-tests)
-- [ ] Two test files bypass the CLI guards — [testing/scope § CLI guards](04_testing/scope/todo.md#two-files-bypass-the-cli-guards)
-- [ ] Two fixed bug shapes have no regression test — [code_quality § regression test](06_issues/code_quality/todo.md#two-fixed-bug-shapes-have-no-regression-test)
 
 ## 8. Code quality and naming
 
@@ -129,25 +116,9 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 - [ ] Readback, temporary results and cleanup — [output and cleanup](05_performance/07_output_and_cleanup/todo.md)
 - [ ] Where each workload stops fitting in memory — [memory and scaling](05_performance/08_memory_and_scaling/todo.md)
 
-## 12. Direct solve: new rules and the second front end
+## 12. Direct solve: the second front end
 
 - [ ] H-02 Front end for the new language — [framework § H-02](08_direct_solve/framework/todo.md#h-02--front-end-for-the-new-language)
-- [ ] R-A2-01 Split A2 (single-facility location) into tasks — [A2](08_direct_solve/rules/a2_single_facility_location/todo.md#r-a2-01--break-this-class-into-pickable-tasks)
-- [ ] R-A3-01 Split A3 (multilinear box) into tasks — [A3](08_direct_solve/rules/a3_multilinear_box/todo.md#r-a3-01--break-this-class-into-pickable-tasks)
-- [ ] R-A4-01 Split A4 (bounded least squares) into tasks — [A4](08_direct_solve/rules/a4_bounded_least_squares/todo.md#r-a4-01--break-this-class-into-pickable-tasks)
-- [ ] R-A5-01 Split A5 (monotone) into tasks — [A5](08_direct_solve/rules/a5_monotone/todo.md#r-a5-01--break-this-class-into-pickable-tasks)
-- [ ] R-A6-01 Split A6 (rank-one least squares) into tasks — [A6](08_direct_solve/rules/a6_rank_one_least_squares/todo.md#r-a6-01--break-this-class-into-pickable-tasks)
-- [ ] R-D1-01 Split D1 (block decomposition) into tasks — [D1](08_direct_solve/rules/d1_block_decomposition/todo.md#r-d1-01--break-this-class-into-pickable-tasks)
-- [ ] R-N1-01 Split N1 (Euclidean ball) into tasks — [N1](08_direct_solve/rules/n1_euclidean_ball/todo.md#r-n1-01--break-this-class-into-pickable-tasks)
-- [ ] R-N2-01 Split N2 (ellipsoid support) into tasks — [N2](08_direct_solve/rules/n2_ellipsoid_support/todo.md#r-n2-01--break-this-class-into-pickable-tasks)
-- [ ] R-O1-01 Split O1 (Monge assignment) into tasks — [O1](08_direct_solve/rules/o1_monge_assignment/todo.md#r-o1-01--break-this-class-into-pickable-tasks)
-- [ ] R-O2-01 Split O2 (Monge transportation) into tasks — [O2](08_direct_solve/rules/o2_monge_transportation/todo.md#r-o2-01--break-this-class-into-pickable-tasks)
-- [ ] R-R2-01 Split R2 (discrete resource allocation) into tasks — [R2](08_direct_solve/rules/r2_discrete_resource_allocation/todo.md#r-r2-01--break-this-class-into-pickable-tasks)
-- [ ] R-R3-01 Split R3 (quadratic knapsack) into tasks — [R3](08_direct_solve/rules/r3_quadratic_knapsack/todo.md#r-r3-01--break-this-class-into-pickable-tasks)
-- [ ] R-R4-01 Split R4 (max-min fairness) into tasks — [R4](08_direct_solve/rules/r4_max_min_fairness/todo.md#r-r4-01--break-this-class-into-pickable-tasks)
-- [ ] R-S2-01 Split S2 (laminar matroid) into tasks — [S2](08_direct_solve/rules/s2_laminar_matroid/todo.md#r-s2-01--break-this-class-into-pickable-tasks)
-- [ ] R-S3-01 Split S3 (max-cardinality knapsack) into tasks — [S3](08_direct_solve/rules/s3_max_cardinality_knapsack/todo.md#r-s3-01--break-this-class-into-pickable-tasks)
-- [ ] R-S4-01 Split S4 (bottleneck knapsack) into tasks — [S4](08_direct_solve/rules/s4_bottleneck_knapsack/todo.md#r-s4-01--break-this-class-into-pickable-tasks)
 
 ## 13. Operations
 

@@ -337,9 +337,8 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, ve
 		}
 		double dv = data[idx];
 		if (allow_infinite ? std::isnan(dv) : !std::isfinite(dv)) {
-			throw InvalidInputException(DecideInvalidValueMessage(err_context,
-			                                                      allow_infinite ? "NaN" : "NaN or Infinity",
-			                                                      StringUtil::Format(" at row %llu", out.size())));
+			throw InvalidInputException(
+			    DecideInvalidValueMessage(err_context, allow_infinite ? "NaN" : "NaN or Infinity"));
 		}
 		out.push_back(dv * sign);
 	}

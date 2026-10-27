@@ -348,7 +348,7 @@ bash run_tests.sh -k "test_q01"            # Single test
 bash run_tests.sh -m "var_boolean"         # By marker
 bash run_tests.sh -m "correctness"         # All oracle comparisons
 bash run_tests.sh -m "error"              # All error tests
-bash run_tests.sh -m "not large_scale"    # no-op today: no collected test carries large_scale
+bash run_tests.sh -m "not large_scale"    # skip the scale tests
 ```
 
 `run_tests.sh` creates a `.venv/` virtualenv on first run, installs
@@ -382,7 +382,7 @@ an in-process binding.
 | `error_infeasible` | Infeasible models |
 | `when`, `when_constraint`, `when_perrow`, `when_objective`, `when_compound` | `when` in front of a clause (`test_when_*.py`) |
 | `per_clause` | `per` in front of a constraint (`test_per_*.py`) |
-| `large_scale` | Performance / scale tests (only in `benchmark/decide/test_large_scale.py`, which is not collected) |
+| `large_scale` | Performance / scale tests (`test_large_scale.py`) |
 | `correctness` | Meta: all oracle comparison tests |
 | `error` | Meta: all error tests |
 | `performance` | Meta: all performance tests |
@@ -401,7 +401,7 @@ map of the categories. Run `bash run_tests.sh -m <marker>` to select a category
 - **Objectives** (`test_obj_minimize.py`, `test_obj_complex_coeffs.py`) — MINIMIZE with `>=` covering constraints; multi-column coefficient arithmetic like `x * price * (1 - discount) * (1 + tax)` (oracle pre-computes the coefficient per row).
 - **SQL features** (`test_sql_joins.py`) — JOIN in FROM; oracle builds the model on the joined rows.
 - **Scopes** (`test_scope_*.py`) — the `per` / `when` / `by` language, judged by the scope oracle or the brute-force reference (§3.10); see [04_testing/scope/done.md](../04_testing/scope/done.md).
-- **Scale** (`benchmark/decide/test_large_scale.py`): ~500- and ~2200-row instances that compare objective values and record timing. The file sits outside `tests/`, so `run_tests.sh` does not collect it, and it fails at import when run directly (`No module named 'solver'`). It does not run today; see `05_performance/benchmarking/scale_tests.md`.
+- **Scale** (`test_large_scale.py`): ~500- and ~2200-row instances that compare objective values and record timing; see `05_performance/benchmarking/scale_tests.md`.
 
 **Error tests** (no oracle; assert exception type + message):
 - **Parser** (`test_error_parser.py`) — missing SUCH THAT / variable name / DECIDE keyword, empty constraint. Expect `decidb.ParserException`.

@@ -7,22 +7,6 @@ ordinary optimization result. Solve-correctness bugs belong in `../bugs/todo.md`
 Each entry: short title, location (`file:line`), what's wrong, why it matters,
 and when/during which task it was discovered.
 
-## Two fixed bug shapes have no regression test
-
-- **Location:** `test/decide/tests/test_scope_bare_clauses.py` (the first) and
-  `test/decide/tests/test_scope_explain_diagnose.py` (the second).
-- **What's wrong:** two logged bugs stopped reproducing once every clause followed the
-  scope rules, but no test pins the answer:
-  - `x <= 10 AND MAX(x) <= MAX(v)` over `(1, 'b', 9), (2, 'b', 1), (3, 'a', 2) t(id, g, v)`
-    answers `[9, 9, 9]`; it raised an INTERNAL error at term extraction.
-  - DIAGNOSE of `DECIDE per t.g: x(INT) SUCH THAT x >= 15 AND x <= 20 AND MIN(x) <= 12`
-    (also `per (): min(x) <= 12`) suggests `min(x) <= 15`, as the per-row `x(INT)` does;
-    it answered `undiagnosed`.
-- **Why it matters:** a regression would go unnoticed; the crash guard of
-  `test/decide/decidb_cli.py` sees an INTERNAL error only in a query some test runs.
-- **Discovered:** 2026-10-19, re-running every open entry of `../bugs/todo.md` for ANR
-  item 7 (`09_anr_language/done.md`).
-
 ## A clause's scope is carried in parallel copies
 
 - **Location:** `src/include/duckdb/planner/decide/decide_prepared_model.hpp`

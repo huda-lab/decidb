@@ -26,11 +26,11 @@ SELECT l_quantity FROM lineitem DECIDE y(INT) SUCH THAT x IN (1,2,3) MAXIMIZE SU
 ----
 <REGEX>:Binder Error: SUCH THAT does not support IN on 'x'. Only simple DECIDE variables are allowed as the IN target.*
 
-# Unsupported ExpressionClass::OPERATOR
+# An operator DECIDE does not read is quoted as written
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT x IS NULL MAXIMIZE SUM(x*l_quantity) LIMIT 1;
 ----
-<REGEX>:Binder Error: SUCH THAT constraint clause does not support.*
+<REGEX>:Binder Error: SUCH THAT does not support '\(x IS NULL\)'.*
 
 # Bind IN
 statement ok
@@ -138,7 +138,7 @@ SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= 3 MAXIMIZE SUM
 statement error
 SELECT l_quantity FROM lineitem DECIDE x(INT) SUCH THAT SUM(x) <= 3 MAXIMIZE l_quantity LIMIT 1;
 ----
-<REGEX>:Binder Error: \[MAXIMIZE\|MINIMIZE\] clause does not support '[a-zA-Z_][a-zA-Z0-9_]*'.*
+<REGEX>:Binder Error: MAXIMIZE l_quantity has no decision to optimize.*
 
 # Bind subquery
 statement ok

@@ -14,7 +14,9 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
+import time
 from pathlib import Path
 
 from tests._output_helpers import assert_no_internal_leak
@@ -320,7 +322,6 @@ class DecidBCli:
         independent of solver timing. Returns a ``CompletedProcess`` (stdout, stderr).
         """
         import pty
-        import time
 
         master_fd, slave_fd = pty.openpty()
         try:
@@ -350,6 +351,36 @@ class DecidBCli:
         assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
         assert_no_removed_spelling(result, sql)
         return result
+
+    def execute_interrupted(
+        self, sql: str, *, after: float, timeout: float = 30
+    ) -> tuple[subprocess.CompletedProcess, float]:
+        """Run *sql*, send SIGINT *after* seconds, and return ``(result, latency)``, where
+        latency is the wall time from the signal to the process exit.
+
+        Like ``execute_interactive``, it skips the serializer self-check: that wrapper
+        re-runs the query, so the interrupt would not land on the first solve.
+        """
+        proc = subprocess.Popen(
+            [self.exe, self.db, "-readonly", "-c", sql],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=self._subprocess_env(),
+        )
+        time.sleep(after)
+        signalled = time.time()
+        proc.send_signal(signal.SIGINT)
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            stdout, stderr = proc.communicate()
+        latency = time.time() - signalled
+        result = subprocess.CompletedProcess(proc.args, proc.returncode, stdout, stderr)
+        assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
+        assert_no_removed_spelling(result, sql)
+        return result, latency
 
     def assert_error(
         self, sql: str, *, match: str | None = None, timeout: float = 120

@@ -81,16 +81,16 @@ make decide-test
 ./test/decide/run_tests.sh -m explain                # EXPLAIN / EXPLAIN ANALYZE output tests
 ./test/decide/run_tests.sh -m sql_joins              # JOIN tests
 ./test/decide/run_tests.sh -m query_diagnostics      # DECIDE diagnostic failure/reporting tests
-./test/decide/run_tests.sh -m large_scale            # selects no test today: see Scale & Performance below
+./test/decide/run_tests.sh -m large_scale            # the two oracle-checked scale tests
 
 # Meta markers — combine multiple categories
 ./test/decide/run_tests.sh -m "correctness"          # all oracle comparison tests
 ./test/decide/run_tests.sh -m "error"                # all error tests (parser + binder + infeasible)
-./test/decide/run_tests.sh -m "not large_scale"      # no-op today: no collected test carries large_scale
+./test/decide/run_tests.sh -m "not large_scale"      # skip the scale tests
 
 # Boolean expressions on markers
 ./test/decide/run_tests.sh -m "when_constraint or when_objective"   # all when tests on constraints + objectives
-./test/decide/run_tests.sh -m "correctness and not large_scale"     # same as -m correctness today
+./test/decide/run_tests.sh -m "correctness and not large_scale"     # oracle comparisons without the scale tests
 
 # Run a specific test file or function
 ./test/decide/run_tests.sh -k test_var_boolean
@@ -196,12 +196,9 @@ corpus, the benchmark queries and `run.sh` — for a removed DECIDE spelling. On
 
 | Marker | File | Tests | Status |
 |--------|------|-------|--------|
-| `large_scale` | `benchmark/decide/test_large_scale.py` | 2 | not collected |
+| `large_scale` | `test_large_scale.py` | 2 | |
 
-The two `large_scale` tests live in `benchmark/decide/test_large_scale.py`, outside `tests/`, the only path
-`pytest.ini` collects (`testpaths = tests`). They import `solver.types` and `comparison.compare` and use this
-suite's fixtures, so they cannot run from where they are: `-m large_scale` selects nothing, and running the file
-directly fails at import. See `context/descriptions/05_performance/benchmarking/scale_tests.md`.
+See `context/descriptions/05_performance/benchmarking/scale_tests.md`.
 
 ### Meta Markers
 

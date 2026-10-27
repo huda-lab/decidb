@@ -208,7 +208,7 @@ docstring derives.
   "removed spelling" or whose `statement error` expects a syntax error, and a C++ string
   literal with "removed spelling" on its line or the two above.
 - **The runtime guard.** Every query a test runs through `decidb_cli.py` (`execute`,
-  `execute_raw`, `execute_script`, `execute_interactive`) fails its test when stderr
+  `execute_raw`, `execute_script`, `execute_interactive`, `execute_interrupted`) fails its test when stderr
   carries "is removed", so a loose error pattern cannot pass on a removed-spelling
   error by accident. `execute_raw(..., removed_spelling=True)` opts in; only
   `test_scope_removed_syntax.py` does.

@@ -1794,6 +1794,18 @@ class TestInfeasibleHeadlineAndRendering:
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_repair_amount_is_never_rounded_below_the_gap(self, request, cli_fixture):
+        """A gap of 1000000.34 is not reported as 1000000: the pasted bound must still be met."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id,x FROM (VALUES (1)) t(id) "
+            "DECIDE x(REAL) SUCH THAT x <= 1000000.16 AND SUM(x) >= 2000000.5 MAXIMIZE SUM(x)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        assert _attrs(rows, "clause", "x <= 1000000.16")["suggested_change"] == "x <= 2000000.5"
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_composed_minmax_clause_is_named(self, request, cli_fixture):
         """A3 — the composed MIN/MAX outer pin is a constraint over an internal global
         z variable; the z carries its user source text (`MAX(x)`) so the diagnosis
@@ -2015,22 +2027,21 @@ class TestUnreachableBound:
 
     @pytest.mark.parametrize("cli_fixture", _INF_BACKENDS)
     @pytest.mark.parametrize(
-        "clause,subject",
+        "clause,subject,verb",
         [
             # A bare per-row bound: the shape that used to quote 1e+30 back as the amount.
-            ("x >= 1e1000::DOUBLE", "x >= inf"),
+            ("x >= 1e1000::DOUBLE", "x >= inf", "lower"),
             # An aggregate bound: the shape that used to name nothing at all.
-            ("SUM(x) >= 1e1000::DOUBLE", "sum(x) >= inf"),
+            ("SUM(x) >= 1e1000::DOUBLE", "sum(x) >= inf", "lower"),
             # Hard MIN/MAX, both directions. These rows are stamped USER_MECHANISM (the
             # clause fans into Big-M rows), so they are found by tracing the row to a user
-            # clause rather than by asking whether it is elastically editable.
-            ("MIN(x) <= -1e1000::DOUBLE", "min(x) <= -inf"),
-            ("MAX(x) >= 1e1000::DOUBLE", "max(x) >= inf"),
+            # clause rather than by asking whether it is elastically editable. A bound at
+            # minus infinity is out of reach from below, so it is raised.
+            ("MIN(x) <= -1e1000::DOUBLE", "min(x) <= -inf", "raise"),
+            ("MAX(x) >= 1e1000::DOUBLE", "max(x) >= inf", "lower"),
         ],
     )
-    def test_unreachable_bound_names_its_clause_and_offers_no_edit(
-        self, request, cli_fixture, clause, subject
-    ):
+    def test_unreachable_bound_names_its_clause_and_offers_no_edit(self, request, cli_fixture, clause, subject, verb):
         cli = request.getfixturevalue(cli_fixture)
         sql = self._ROWS + f"DECIDE x(INT) SUCH THAT x >= 0 AND x <= 6 AND {clause} MAXIMIZE SUM(x)"
         result = _diagnose(cli, sql)
@@ -2039,6 +2050,9 @@ class TestUnreachableBound:
         assert {r["state"] for r in rows} == {"infeasible"}
         # The clause is named, and named as the user wrote it.
         assert _attrs(rows, "clause", subject) == {"unreachable_bound": "true"}
+        # The direction follows the bound: a bound too high is lowered, one too low raised.
+        advice = [r["suggested_change"] for r in _flat(result) if r["clause"] == subject]
+        assert advice == [f"{verb} this bound — no assignment can reach it"], advice
         # No edit is offered: there is no finite bound to suggest, and the old behavior
         # (suggesting the user's own text back) is what made this misleading.
         assert not [r for r in rows if r["attribute"] in

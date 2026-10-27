@@ -33,13 +33,9 @@ wide margin so the asserted branch is stable across machines. The interactive pr
 driven through a pseudo-terminal (``execute_interactive``) so ``isatty`` is true.
 """
 
-import os
 import random
 import csv
 import io
-import signal
-import subprocess
-import time
 
 import pytest
 
@@ -281,16 +277,9 @@ class TestSlowContinuation:
         # Short chunk so the HiGHS boundary-only path (no thread-safe terminate) still
         # notices the interrupt promptly; Gurobi cuts the solve short mid-search.
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 3)
-        proc = subprocess.Popen(
-            [cli.exe, cli.db, "-readonly", "-c", _KNAPSACK_SQL],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env={**os.environ, **(cli.env or {})},
-        )
-        time.sleep(1.0)
-        proc.send_signal(signal.SIGINT)
-        out, err = proc.communicate(timeout=40)
-        assert _STOP_CAVEAT in err.lower(), err[:1200]
-        assert out.strip(), "expected incumbent rows on stdout after interrupt"
+        proc, _ = cli.execute_interrupted(_KNAPSACK_SQL, after=1.0, timeout=40)
+        assert _STOP_CAVEAT in proc.stderr.lower(), proc.stderr[:1200]
+        assert proc.stdout.strip(), "expected incumbent rows on stdout after interrupt"
         assert proc.returncode == 0, f"expected success, got {proc.returncode}"
 
     def test_interrupt_is_mid_solve_gurobi(self, decidb_cli_gurobi):
@@ -299,44 +288,16 @@ class TestSlowContinuation:
         short of the ~4.5s a boundary-only stop would wait out. HiGHS is boundary-only (no
         mid-solve interrupt) and is intentionally not asserted."""
         cli = _slow_cli(decidb_cli_gurobi, 6)
-        proc = subprocess.Popen(
-            [cli.exe, cli.db, "-readonly", "-c", _KNAPSACK_SQL],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-            env={**os.environ, **(cli.env or {})},
-        )
-        time.sleep(1.5)
-        t = time.time()
-        proc.send_signal(signal.SIGINT)
-        out, err = proc.communicate(timeout=30)
-        latency = time.time() - t
-        assert proc.returncode == 0, err[:800]
-        assert out.strip(), "expected incumbent rows after the mid-solve interrupt"
-        assert _STOP_CAVEAT in err.lower(), err[:800]
+        proc, latency = cli.execute_interrupted(_KNAPSACK_SQL, after=1.5)
+        assert proc.returncode == 0, proc.stderr[:800]
+        assert proc.stdout.strip(), "expected incumbent rows after the mid-solve interrupt"
+        assert _STOP_CAVEAT in proc.stderr.lower(), proc.stderr[:800]
         # Mid-solve terminate returns in well under a second; a boundary-only stop would
         # sit out the remaining ~4.5s of the chunk. 3s cleanly separates the two.
         assert latency < 3.0, f"interrupt took {latency:.2f}s — expected mid-solve stop (<3s)"
 
 
 _STOP_REQUEST = "stopped at your request"  # interrupt report wording (vs "hit the … time limit")
-
-
-def _interrupt_run(cli, script, delay, timeout=30):
-    """Launch `script` via -c and send SIGINT after `delay` seconds; return
-    (proc, out, err, latency) where latency is wall time from the signal to exit."""
-    proc = subprocess.Popen(
-        [cli.exe, cli.db, "-readonly", "-c", script],
-        stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env={**os.environ, **(cli.env or {})},
-    )
-    time.sleep(delay)
-    t = time.time()
-    proc.send_signal(signal.SIGINT)
-    try:
-        out, err = proc.communicate(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        proc.kill()
-        out, err = proc.communicate()
-    return proc, out, err, time.time() - t
 
 
 @pytest.mark.query_diagnostics
@@ -356,9 +317,8 @@ class TestSlowFirstSolveInterrupt:
         """Gurobi, continue mode: SIGINT during the first solve returns the incumbent with
         the interrupt wording (not a timeout), fast (mid-solve, not at the far boundary)."""
         cli = _slow_cli(decidb_cli_gurobi, 20)
-        proc, out, err, latency = _interrupt_run(
-            cli, _KNAPSACK_SQL, delay=1.0
-        )
+        proc, latency = cli.execute_interrupted(_KNAPSACK_SQL, after=1.0)
+        out, err = proc.stdout, proc.stderr
         low = err.lower()
         assert proc.returncode == 0, err[:1000]
         assert out.strip(), "expected incumbent rows after a first-solve interrupt"
@@ -375,7 +335,8 @@ class TestSlowFirstSolveInterrupt:
         """Interrupting a solve that has found nothing yet has no best-so-far to hand
         back, so it reports what it knows and errors."""
         cli = _slow_cli(decidb_cli_gurobi, 20)
-        proc, out, err, _ = _interrupt_run(cli, _MARKET_SPLIT_SQL, delay=1.0)
+        proc, _ = cli.execute_interrupted(_MARKET_SPLIT_SQL, after=1.0)
+        out, err = proc.stdout, proc.stderr
         low = err.lower()
         assert _STOP_REQUEST in low, err[:1000]
         assert _STOP_CAVEAT not in low, "nothing was found, so nothing is delivered"
@@ -388,9 +349,8 @@ class TestSlowFirstSolveInterrupt:
         Probed 2026-07-04: a 0.7s signal into a 2s chunk waits out the chunk, then returns
         rows with the "time limit" wording."""
         cli = _slow_cli(decidb_cli_highs, 2)
-        proc, out, err, _ = _interrupt_run(
-            cli, _KNAPSACK_SQL, delay=0.7
-        )
+        proc, _ = cli.execute_interrupted(_KNAPSACK_SQL, after=0.7)
+        out, err = proc.stdout, proc.stderr
         low = err.lower()
         assert proc.returncode == 0, err[:1000]
         assert out.strip(), "fallback still delivers the incumbent at the boundary"

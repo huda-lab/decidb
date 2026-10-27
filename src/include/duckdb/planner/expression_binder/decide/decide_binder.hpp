@@ -58,6 +58,9 @@ bool ValidateSumArgument(ParsedExpression &expr, const case_insensitive_map_t<id
 
 bool ExpressionContainsDecideVariable(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);
 
+//! A function's name as the user wrote it: `count(*)` reaches the binder as `count_star`.
+string DecideWrittenFunctionName(const FunctionExpression &func);
+
 //! The one text for a CASE inside a constraint or an objective, whether it reaches a
 //! reducer's argument (ValidateSumArgument) or the clause itself: a user who writes one
 //! is asking for conditional logic, and the answer (a scope in front, `per`, or a CTE)

@@ -146,13 +146,19 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
     }
 }
 
+//! The refusal for a constraint shape DECIDE cannot read, quoting the part as written.
+static BindResult UnsupportedConstraint(ParsedExpression &expr) {
+	return BindResult(
+	    BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT does not support '%s'", expr.ToString())));
+}
+
 BindResult DecideConstraintsBinder::BindComparison(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &comp = expr.Cast<ComparisonExpression>();
 
     if (!IsSupportedComparison(comp.type)) {
-        return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT constraint clause does not support '%s'(ExpressionType::%s)", expr.ToString(), EnumUtil::ToString(comp.type))));
-    }
+		return UnsupportedConstraint(expr);
+	}
 
     // This function no longer rewrites the parsed tree at all. It used to do two
     // things beyond validating: flip the sides (the canonicalization refactor), and strip
@@ -227,8 +233,8 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
         return result;
     }
     default:
-        return BindResult(BinderException::Unsupported(expr, StringUtil::Format("SUCH THAT constraint clause does not support '%s'(ExpressionType::%s)", expr.ToString(), EnumUtil::ToString(op.type))));
-    }
+		return UnsupportedConstraint(expr);
+	}
 }
 
 //! `input BETWEEN lower AND upper` as the conjunction `input >= lower AND input <= upper`.
@@ -467,9 +473,7 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
     default:
         break;
     }
-    return BindResult(BinderException::Unsupported(
-        expr, StringUtil::Format("SUCH THAT clause does not support '%s'(ExpressionClass::%s)", expr.ToString(),
-                                EnumUtil::ToString(expr.GetExpressionClass()))));
+	return UnsupportedConstraint(expr);
 }
 
 DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &expr_ptr, string& error_msg){
@@ -498,8 +502,10 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
             // (e.g., z_1 + z_2 + z_3 from IN rewrite, or d - x from ABS linearization)
             return DecideExpression::VARIABLE;
         } else {
-            error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, AVG, MIN, or MAX is allowed.", func.function_name);
-            return DecideExpression::INVALID;
+			error_msg = StringUtil::Format("SUCH THAT clause does not support left-hand side function '%s', only SUM, "
+			                               "AVG, MIN, or MAX is allowed.",
+			                               DecideWrittenFunctionName(func));
+			return DecideExpression::INVALID;
         }
     }
     case ExpressionClass::CAST: {

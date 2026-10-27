@@ -102,7 +102,7 @@ def test_invalid_score_error_matches_solver_wording(decidb_cli, score):
     solver = _raw(decidb_cli, sql, mode="off").stderr
     direct = _raw(decidb_cli, sql, mode="require").stderr
     assert "Error" in direct, direct
-    assert re.sub(r" at row \d+", "", solver) == direct
+    assert solver == direct
 
 
 @pytest.mark.correctness
@@ -276,8 +276,7 @@ def test_wide_value_is_proved_by_direct_solve_and_answers_like_the_solver(decidb
 @pytest.mark.correctness
 @pytest.mark.parametrize("bad", ["'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
 def test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in(decidb_cli, bad):
-    # A bad number is reported with the noun of the clause that holds it, in both modes. `at row N` is left out of the
-    # direct message on purpose, so the two are not compared whole.
+    # A bad number is reported with the noun of the clause that holds it, in both modes.
     def error(constraint_expression, objective_expression, mode):
         sql = f"""
             SELECT id, x FROM (
@@ -300,7 +299,7 @@ def test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in(decidb_cli
 @pytest.mark.parametrize("bad", ["'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
 def test_r1_invalid_number_names_the_clause_the_user_wrote_it_in(decidb_cli, bad):
     # The weight of the budget is a constraint coefficient and the value in the objective an objective coefficient,
-    # on both paths. The solver adds `at row N`, which a plan has no row to name.
+    # on both paths, and the two messages are the same.
     def error(weight, value, mode):
         sql = f"""
             SELECT id, x FROM (
@@ -318,7 +317,7 @@ def test_r1_invalid_number_names_the_clause_the_user_wrote_it_in(decidb_cli, bad
         assert "objective coefficient contains invalid value" in in_objective, (mode, in_objective)
         assert "constraint coefficient" not in in_objective, (mode, in_objective)
     direct = error("b", "a", "require")
-    assert re.sub(r" at row \d+", "", error("b", "a", "off")) == direct
+    assert error("b", "a", "off") == direct
 
 
 @pytest.mark.correctness
@@ -332,7 +331,7 @@ def test_r1_objective_factor_that_overflows_is_an_objective_coefficient_error_li
     direct = _raw(decidb_cli, sql, mode="require").stderr
     solver = _raw(decidb_cli, sql, mode="off").stderr
     assert "objective coefficient contains invalid value" in direct, direct
-    assert re.sub(r" at row \d+", "", solver) == direct
+    assert solver == direct
 
 
 @pytest.mark.correctness
@@ -378,7 +377,7 @@ def test_s1_source_bound_error_for_a_column_is_the_solvers(decidb_cli):
         assert direct == solver
     direct, solver = _s1_source_bound_error(decidb_cli, "DOUBLE", "'NaN'")
     assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
-    assert re.sub(r" at row \d+", "", solver) == direct
+    assert solver == direct
 
 
 @pytest.mark.correctness
@@ -425,7 +424,7 @@ def test_r1_budget_limit_error_is_the_solvers_for_a_column_and_for_a_computed_li
     for lim_type in ("FLOAT", "DOUBLE"):
         direct, solver = error(lim_type, "'NaN'")
         assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
-        assert re.sub(r" at row \d+", "", solver) == direct
+        assert solver == direct
     direct, solver = error("VARCHAR", "'bad'", limit="TRY_CAST(lim AS DOUBLE)")
     assert "DECIDE: TRY_CAST(lim AS DOUBLE) is NULL. Impute it with COALESCE()" in direct, direct
     assert direct == solver

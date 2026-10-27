@@ -79,7 +79,7 @@ Compares S1 result delivery through the C++ API: `Connection::Query` (materializ
 output kind (`full`, `aggregate`, `consume`), mode (`direct`, `highs`, `gurobi`), delivery, cardinality
 (`upper`, `lower`, `exact`, `interval`), scope (`global`, `grouped`, `grouped_local_when`), pins and bound kind. With
 `--db-dir` the source is built once by a `prepare` run, so each measured run's peak memory is the query's own.
-Collection cost is the `full` time minus the `consume` time. Writes `benchmark/decide/results/direct_s1_api_<stamp>.csv`
+Collection cost is the `full` time minus the `consume` time. Writes `benchmark/decide/results/direct_solve/direct_s1_api_<stamp>.csv`
 with a JSON manifest beside it, or to `--output`.
 
 ```bash
@@ -95,7 +95,7 @@ End-to-end comparison for a global S1 (`SUM(x) <= K`, no PER) over a `range()` s
 join. It sweeps rows, payload width, K as a fraction of the rows, and score pattern (`mixed` or `tied`), on `direct`,
 `highs` and `gurobi`, with `SET threads=4`. Each run writes the full DECIDE output with `CREATE TEMP TABLE ... AS`, and
 `DECIDB_PROFILE=1` supplies phase timings. A timeout, solver limit or error is recorded, never counted as a win.
-Writes `benchmark/decide/results/direct_s1_<stamp>.csv`, a JSON manifest and raw logs, or to `--output`. It imports
+Writes `benchmark/decide/results/direct_solve/direct_s1_<stamp>.csv`, a JSON manifest and raw logs, or to `--output`. It imports
 `profile_pipeline.py` and `run_benchmarks.py` from `benchmark/decide/`. No current doc cites it.
 
 ```bash

@@ -197,7 +197,8 @@ check). Design: `../architecture/`.
   suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can
   see it). A new rule's suite imports the scaffold (`architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
-  example `auto: 3089 passed, 0 xfailed, 0 failed`. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `by` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
+  example `auto: 3089 passed, 0 xfailed, 0 failed (3089 outcomes)`; the outcome totals of the modes should agree. Logs
+  stay in `test/decide/results/matrix_<time>/` (gitignored), or `$MATRIX_LOG_DIR`, and the last line prints the path. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `by` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
 
 ## Registering a rule
 

@@ -159,6 +159,26 @@ def test_old_refusal_now_answers(request, scope_solver, cli_fixture, clause_sql,
     )
 
 
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_max_of_a_decision_bounded_by_max_of_data(request, scope_solver, cli_fixture):
+    """`MAX(x) <= MAX(v)` bounds the decision by a data reducer: it once raised an INTERNAL
+    error at term extraction."""
+    cli = request.getfixturevalue(cli_fixture)
+    columns, rows = ("id", "g", "v"), ((1, "b", 9), (2, "b", 1), (3, "a", 2))
+    sql = f"""SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT) SUCH THAT x <= 10 AND MAX(x) <= MAX(v) MAXIMIZE SUM(x) ORDER BY id"""
+    clauses = [
+        Scoped((X,), "<=", (_const(10),)),
+        Scoped((Reduce("max", X),), "<=", (Reduce("max", lambda r: {CONSTANT: r["v"]}),)),
+    ]
+    model = ScopedModel(table_rows(columns, rows), [Decision("x")])
+    result = answer(cli, sql)
+    assert model.judge_scoped(result, clauses, MAXIMIZE_X) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, MAXIMIZE_X), abs=1e-4
+    )
+
+
 # ---------------------------------------------------------------------------
 # The objective is produced once (per ())
 # ---------------------------------------------------------------------------

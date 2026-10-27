@@ -34,16 +34,18 @@ string FormatNum(double v) {
 
 //! Clean the sub-tolerance noise an I3 stage-2 read carries: the budget freeze is enforced
 //! only to the backend feasibility tolerance, so a maximizing re-solve rides it and a clean
-//! `10` would otherwise print as `10.000001`. Snap to the nearest integer when within a
-//! relative tolerance of one (recovering integer bounds at any magnitude — `1234567889.0001`
-//! → `1234567889`, which significant-figure rounding would have mangled to `1234570000`);
-//! otherwise trim a genuinely fractional value to a fixed absolute precision.
+//! `10` would otherwise print as `10.000001`. Snap to the nearest integer when within that noise:
+//! the absolute tolerance plus a relative part for a backend's arithmetic at large magnitudes
+//! (`1234567889.0001` → `1234567889`, which significant-figure rounding would have mangled to
+//! `1234570000`). No looser: at `1e6` a relative `1e-6` would erase a real `0.34` of a repair and
+//! report a bound that does not repair. Otherwise trim a genuinely fractional value to a fixed
+//! absolute precision.
 double SnapDiagnosticValue(double v) {
 	if (v == 0.0 || !std::isfinite(v)) {
 		return v;
 	}
 	double nearest_int = std::round(v);
-	if (std::fabs(v - nearest_int) <= 1e-6 * std::max(1.0, std::fabs(v))) {
+	if (std::fabs(v - nearest_int) <= 1e-6 + 1e-9 * std::fabs(v)) {
 		return nearest_int;
 	}
 	return std::round(v * 1e6) / 1e6;
@@ -607,6 +609,7 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 			c.label = finding.label;
 			c.group = finding.group;
 			c.row = finding.row;
+			c.too_low = rhs < 0.0;
 			if (seen.insert(std::make_tuple(c.label, c.group, c.row)).second) {
 				found.push_back(std::move(c));
 			}

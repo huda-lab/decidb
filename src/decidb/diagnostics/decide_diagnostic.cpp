@@ -471,7 +471,7 @@ DecideDiagnostic BuildUnreachableBoundDiagnostic(const vector<UnreachableClause>
 			f.has_row = true;
 			f.row = static_cast<int64_t>(c.row);
 		}
-		f.suggested_change = "lower this bound — no assignment can reach it";
+		f.suggested_change = string(c.too_low ? "raise" : "lower") + " this bound — no assignment can reach it";
 		f.edit_source = "unreachable_bound";
 		diag.findings.push_back(std::move(f));
 	}

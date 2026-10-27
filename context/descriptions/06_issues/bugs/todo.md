@@ -47,8 +47,8 @@
 - **Observed:** on 2026-10-27 `test/decide/run_direct_matrix.sh` printed `off: 4520 passed, 335 xfailed, 0 failed`
   (4,855 outcomes) where `auto` and `serializer` printed 4,521 + 335. The rerun of the off suite gave 4,521 passed and 0
   skipped. The matrix wrote its logs to a `mktemp -d` folder that was gone, so the missing test is unknown.
-- **Next step:** keep the matrix logs (set `MATRIX_LOG_DIR`) and compare outcome totals per mode; when it recurs, find
-  the test from the log.
+- **Next step:** the matrix now keeps its logs (`test/decide/results/matrix_<time>/`) and prints each mode's outcome
+  total; when the totals differ again, find the missing test from the logs.
 
 ## Q10 on HiGHS at the large tier is killed for memory, and the profiler records it as a timeout
 
@@ -63,26 +63,6 @@
 - **Impact:** a large HiGHS query can take the whole process down, and the profile misreports why.
 - **Reproduce:** `make decide-bench-setup`, remove the entry from `SKIP`, run `profile_pipeline.py`. Memory-heavy.
 
-## `test_large_scale.py` is never collected
-
-- **Location:** `benchmark/decide/test_large_scale.py`, moved out of `test/decide/tests/` in `9943450ca1`.
-- **Observed:** `test/decide/pytest.ini` collects only `tests/`, so `run_tests.sh -m large_scale` selects no test. Run
-  directly (`test/decide/.venv/bin/python -m pytest --setup-plan benchmark/decide/test_large_scale.py`), it fails with
-  `ModuleNotFoundError: No module named 'solver'`: it imports `solver.types` and `comparison.compare` and uses fixtures
-  from `test/decide/conftest.py`, which apply only under `test/decide/`.
-- **Expected:** the two scale cases (501 and 2,204 rows) run with the suite, or the file is deleted.
-- **Impact:** the scale cases are unverified while docs list them.
-
-## `make decide-view` opens the newest JSON in `results/`, whichever tool wrote it
-
-- **Location:** `benchmark/decide/view_results.py`, `find_result_file`.
-- **Observed:** the archived S1 profilers (`benchmark/decide/direct_solve/archive/profile_direct_s1.py`,
-  `profile_direct_s1_api.py`) write `direct_s1_*.json` manifests into `benchmark/decide/results/`. After one runs,
-  `make decide-view` with no argument tries to render that manifest as a suite result.
-- **Expected:** the viewer picks only suite results (by name or by shape), or the profilers write elsewhere, as
-  `direct_solve/run.py` does (`results/direct_solve/`).
-- **Impact:** the default view shows the wrong file after a profiler run.
-
 ## With a gap of 0, HiGHS cannot finish an entity-scoped MIP the test suite runs
 
 - **Location:** `HighsSession::Load` in `src/decidb/naive/deterministic_naive.cpp`, which sets `mip_rel_gap` to 0
@@ -96,16 +76,6 @@
   this test would then set 1e-4 on HiGHS.
 - **Impact:** the `highs` matrix run has a second failure besides `test_norm_combined_l1_l2_objective`. A HiGHS user
   with a hard MIP can wait far longer than before for a proof the answer did not need.
-
-## A decision named like a USING column is silently ignored
-
-- **Location:** the name-conflict check in `DecideDeclarationsBinder::BindDeclarations`
-  uses `BindContext::GetMatchingBinding`, which skips USING columns.
-- **Observed:** `SELECT * FROM (VALUES (1, 10), (2, 20)) A(k, v) JOIN (VALUES (1, 5),
-  (2, 6)) B(k, w) USING (k) DECIDE k(INT) SUCH THAT k <= 3 MAXIMIZE SUM(k)` runs; the
-  clause binds `k` to the join column, so the model has no row and every decision is 0.
-- **Expected:** the conflict error a decision named like any other column gets.
-- **Impact:** a silently wrong answer.
 
 ## A negative lower bound under a `when` leaves the decision non-negative
 
@@ -247,21 +217,9 @@ Each reproduces on the current build.
   AND cap < 6) AS INT)` (or `CAST(cap > 2 AS INT)`) answers *"SUCH THAT clause: Column
   'cap' must be one of the DECIDE variables"*: `DecideConstraintsBinder` binds a
   conjunction's children (`BindConjunction`) and a comparison as constraints wherever they
-  sit. Inside a reducer, `sum(x * CAST(cap > 2 AS INT))` answers *"Unsupported expression
-  of type ExpressionClass::COMPARISON inside DECIDE SUM expression"*; `CAST(cap IN (3, 4)
-  AS INT)` is accepted. Expected: the comparison read as a 0/1 data value, or a refusal in
-  SQL terms.
-- **An invalid coefficient names a row by an internal position:** `x / w <= 1` with a
-  `w = 0` row answers *"... contains invalid value (NaN or Infinity) at row 1."*; the number
-  is the row's 0-based place in the materialized input (`physical_decide.cpp:410`, the
-  count of values read so far), which a parallel scan fills in a different order each run. Direct solve's message has no row number.
-  Expected: the row named by its values, or no number.
-- **A reducer over a constant is called a query-wide decision:** `sum(1) <= 5` (or
-  `sum(per t.g: 1) <= 5`) answers *"1 is a query-wide decision, so SUM(1) has nothing to
-  aggregate over; use 1 on its own"*: `ClassifyReducerCall` (`decide_binder.cpp`) tests the
-  body for row invariance, not for a decision. `sum(cap) <= 5` gets *"SUM expression must
-  reference at least one DECIDE variable"*. Expected: that message for any decision-free
-  body.
+  sit. Inside a reducer, `sum(x * CAST(cap > 2 AS INT))` answers *"SUM expression does not
+  support '(cap > 2)'"*; `CAST(cap IN (3, 4) AS INT)` is accepted. Expected: the comparison
+  read as a 0/1 data value.
 - **Two keys over the same columns keep the key text of the one bound first**
   (cosmetic): with `per D.d, D.cost: open(BOOL)` declared, `SUM(D: D.cost * open) <= 7`
   is echoed by EXPLAIN as `sum(D.d, D."cost": "cost" * open) <= 7`, and a determination
@@ -280,14 +238,6 @@ Each reproduces on the current build.
   FROM t DECIDE y(INT) SUCH THAT y <= cap OR y <= 1 MAXIMIZE SUM(y)))` answers
   *"Referenced column "y" not found in FROM clause!"*, not the inner refusal; the same for
   any binder refusal of the inner clause.
-- **Refusals name engine enums:** `NOT (x <= 1 OR x >= 3)`, `x NOT IN (1, 2)` and `x NOT
-  BETWEEN 1 AND 2` answer *"SUCH THAT constraint clause does not support '...'
-  (ExpressionType::OPERATOR_NOT)"* (`COMPARE_NOT_IN`), and `MAXIMIZE 3` answers
-  *"[MAXIMIZE|MINIMIZE] clause does not support '3'(ExpressionClass::CONSTANT)"*.
-  Location: the default arms of `DecideConstraintsBinder::BindOperator` and of
-  `decide_objective_binder.cpp`.
-- **`MAXIMIZE count(*)` names the function `'count_star'`:** *"[MAXIMIZE|MINIMIZE] clause does
-  not support function 'count_star', only SUM, AVG, MIN, or MAX is allowed."*
 - **Impact:** messages only.
 
 ## Diagnosis text
@@ -299,13 +249,6 @@ Each reproduces on the current build.
   `sum(power(x - 5, 2)) <= -72` and suggests `<= -66.70061`, a bound no assignment meets.
   Location: `SourceAwareQuadraticLhs` (`decide_diagnostic_render.cpp`) pairs the written
   body with the row's moved bound.
-- **An amount can round down and under-repair:** `SnapDiagnosticValue` rounds to the
-  nearest integer within 1e-6 relative, so over one row `x(REAL)`, `x <= 1000000.16 AND
-  SUM(x) >= 2000000.5` suggests `x <= 2000000.16` (amount 1000000, the gap is 1000000.34)
-  and the pasted query is still infeasible. Expected: round toward the repair.
-- **An unreachable upper bound at minus infinity says "lower this bound":** `MIN(x) <=
-  -1e1000::DOUBLE` answers *"lower this bound — no assignment can reach it"*; it has to be
-  raised.
 - **A `BETWEEN` echoes its lower half only:** `x BETWEEN 18 AND 25` beside `SUM(x) <= 20`
   over two rows reports the clause `x >= 18` and suggests `x >= 10`; pasted back, the upper
   half is lost. The binder splits a BETWEEN into two comparisons that share the clause.
@@ -320,34 +263,19 @@ Each reproduces on the current build.
 - **HiGHS's expanded repair can carry a 1e-5 cushion:** `x <> -1 AND ... AND per (): sum(x)
   + max(x) <= -5 AND per row: x >= 18` suggests `per (): sum(x) + max(x) <= 1e-05`
   (amount 5.00001) in the expanded scope where Gurobi and the query scope say `<= 0`; the
-  edit over-repairs by 1e-5 (the rounding item above).
-- **Impact:** a suggested change that does not repair the query, or names the wrong
-  direction.
-
-## A decision named in WHERE filters on an input column
-
-- **Location:** WHERE binding sees the DECIDE binding that `BindDeclarations` adds
-  (`src/planner/binder/query_node/bind_select_node.cpp`); the filter is planned below the
-  DECIDE operator, where the decision's column index reads an input column.
-- **Observed:** `SELECT id, cap FROM (VALUES (1,3,'A'),(2,5,'A'),(3,7,'B')) t(id,cap,g)
-  WHERE x > 1 DECIDE x(INT) SUCH THAT x <= cap MAXIMIZE SUM(x)` returns ids 2 and 3:
-  EXPLAIN shows `FILTER (col0 > 2)` for `WHERE x > 2`, a filter on `id`. With two
-  decisions, the second reads the second input column.
-- **Expected:** a refusal -- a decision has no value before the solve, so WHERE takes
-  data only (*"DECIDE: x is a decision; WHERE may only use data"*).
-- **Impact:** a silent wrong answer. Older than the scoping language.
+  edit over-repairs by 1e-5.
+- **Impact:** a suggested change that does not repair the query, or findings the user
+  cannot tell apart.
 
 ## Parameters of a prepared statement or a table macro fail in a DECIDE clause
 
 - **Observed:** `PREPARE p AS SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= $1 AND
-  x <= cap MAXIMIZE sum(x)` answers *"SUCH THAT clause does not support
-  '$1'(ExpressionClass::PARAMETER)"*; `sum(x) <= $1` answers *"SUM cannot be compared to
+  x <= cap MAXIMIZE sum(x)` answers *"SUCH THAT does not support '$1'"*; `sum(x) <= $1` answers *"SUM cannot be compared to
   an expression that is not a scalar or aggregate without DECIDE variables"*. A table
   macro's parameter in a clause answers *"Referenced column "lim" not found in FROM
   clause!"*.
 - **Expected:** a parameter is data, bound like a constant.
-- **Impact:** a prepared or macro DECIDE query cannot take a value; the message names an
-  internal enum.
+- **Impact:** a prepared or macro DECIDE query cannot take a value.
 
 ## A scaled `AVG` leaves a constraint the debug verifier calls non-canonical
 
@@ -361,19 +289,6 @@ Each reproduces on the current build.
   pass. A release build answers correctly.
 - **Expected:** the lowered clause is canonical, or re-enters through `AddConstraint`.
 - **Impact:** debug builds only; no test covers a scaled `AVG` on the decision side.
-
-## An S1 overflow test passes whether or not the NULL-key group is evaluated
-
-- **Location:** `test/decide/tests/test_direct_s1_uniform_matroid.py`, `COUNT_OVERFLOW_CASES["null_key_group_with_when"]`
-  and the comment above `_OVERFLOW_ROWS`.
-- **Observed:** the comment says a count of 3 or more overflows INT64 at the factor 3e18, but 3 × 3e18 = 9e18 fits
-  (INT64 holds up to about 9.22e18); only 4 overflows. The NULL-key group has three rows, so its bound never overflows,
-  and the case gives "ok" whether the plan evaluates that group or leaves it out. Checked on the solver path: with the
-  NULL group kept (`SUM(x) by (g) <= COUNT(*) by (g) * 3000000000000000000`, no `when`), the only overflow is group c's
-  `4 * 3000000000000000000`. The gap predates the Sami-Active merge.
-- **Expected:** the NULL-key group holds four or more rows (or the factor is raised), so a plan that evaluated its bound
-  would raise and the case would fail.
-- **Impact:** a test gap only: no wrong answer is known.
 
 ## Direct solve reads an integer bound just below a whole number more strictly than both backends
 

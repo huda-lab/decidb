@@ -12,16 +12,17 @@
 #               test_norm_combined_l1_l2_objective)
 #   C++         build/release/test/unittest "[decidb]"
 #
-# Each pytest line reads `auto: 2322 passed, 0 xfailed, 0 failed`. A golden-model difference or a run that
-# prints no pytest summary shows as `FAILED TO RUN` with the log path. Full logs go to $MATRIX_LOG_DIR
-# (default: a fresh temp directory). The exit code is 0 only when every pytest check has no failure
+# Each pytest line reads `auto: 2322 passed, 0 xfailed, 0 failed (2322 outcomes)`; the outcome totals of the
+# modes should agree. A golden-model difference or a run that prints no pytest summary shows as `FAILED TO RUN`
+# with the log path. Full logs go to $MATRIX_LOG_DIR (default: a new test/decide/results/matrix_<time> folder,
+# which git ignores); the last line prints the path. The exit code is 0 only when every pytest check has no failure
 # except the expected highs one, and the C++ run passes.
 
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
-LOG_DIR="${MATRIX_LOG_DIR:-$(mktemp -d)}"
+LOG_DIR="${MATRIX_LOG_DIR:-${SCRIPT_DIR}/results/matrix_$(date +%Y%m%dT%H%M%S)}"
 mkdir -p "${LOG_DIR}"
 cd "${REPO_ROOT}"
 
@@ -44,11 +45,12 @@ run_pytest() {
         status=1
         return
     fi
-    local passed xfailed failed
+    local passed xfailed failed skipped
     passed="$(count "${log}" passed)"
     xfailed="$(count "${log}" xfailed)"
     failed="$(( $(count "${log}" failed) + $(count "${log}" errors?) ))"
-    echo "${label}: ${passed} passed, ${xfailed} xfailed, ${failed} failed"
+    skipped="$(count "${log}" skipped)"
+    echo "${label}: ${passed} passed, ${xfailed} xfailed, ${failed} failed ($(( passed + xfailed + failed + skipped )) outcomes)"
     local expected=0
     if [[ "${label}" == "highs" ]]; then
         expected=1
@@ -76,4 +78,5 @@ if [[ ${cpp_rc} -ne 0 ]]; then
     status=1
 fi
 
+echo "logs: ${LOG_DIR}"
 exit ${status}

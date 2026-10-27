@@ -634,6 +634,20 @@ def test_an_absorbed_bound_shares_no_slack_with_a_composed_clause(decidb_cli):
 
 
 @pytest.mark.diagnose
+@pytest.mark.parametrize("clause", ["min(x) <= 12", "per (): min(x) <= 12"])
+def test_a_min_bound_over_a_keyed_decision_is_diagnosed(decidb_cli, clause):
+    """`x >= 15` floors every keyed `x`, so `min(x) <= 12` must rise to 15; it once went undiagnosed."""
+    sql = f"""
+        SELECT id, x {table('t', T_COLUMNS, T_ROWS)}
+        DECIDE per t.depot: x(INT) SUCH THAT x >= 15 AND x <= 20 AND {clause}
+        MAXIMIZE SUM(x)"""
+    result = _diagnose_relation.run(decidb_cli, sql)
+    assert_no_internal_leak(result, clause)
+    rows = [row for row in _diagnose_relation.rows(result) if row["edit_source"] != "achievable_objective"]
+    assert [(row["clause"], row["suggested_change"]) for row in rows] == [(clause, clause.replace("12", "15"))], rows
+
+
+@pytest.mark.diagnose
 def test_a_dropped_ne_leaves_the_composed_clause_its_own_slack(decidb_cli):
     """The five `x <> -k` hold for every x >= 0, so formulation drops them without a row;
     the composed clause's repair id used to land on `per row: x >= 18`'s then, and the bound

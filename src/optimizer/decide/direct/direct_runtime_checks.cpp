@@ -48,17 +48,16 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
 	                                       "which decision needs a bound.");
 }
 
-//! The error for a NaN or infinite number, naming the kind of coefficient the user wrote it in. The solver adds the
-//! position of the row; a plan has no row position to name.
+//! The error for a NaN or infinite number, naming the kind of coefficient the user wrote it in.
 static unique_ptr<Expression> DirectInvalidNumberError(Optimizer &optimizer, DirectNumberKind kind) {
 	return DirectErrorPredicate(optimizer, DecideInvalidValueMessage(kind == DirectNumberKind::OBJECTIVE
 	                                                                     ? "objective coefficient"
 	                                                                     : "constraint coefficient",
-	                                                                 "NaN or Infinity", string()));
+	                                                                 "NaN or Infinity"));
 }
 
 string DirectBoundNaNMessage() {
-	return DecideInvalidValueMessage("constraint right-hand side", "NaN", string());
+	return DecideInvalidValueMessage("constraint right-hand side", "NaN");
 }
 
 //! The column part of the NULL message, as a VARCHAR expression over the row it is evaluated on: it names the columns

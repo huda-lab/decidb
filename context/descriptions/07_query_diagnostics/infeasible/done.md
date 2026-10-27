@@ -101,8 +101,9 @@ from `constraint_sources` in the same spelling the diagnosis uses. The error is 
 between backends: a vacuous infinity pairs cleanly with the sentinel and solves on both.
 
 **Output shape.** One finding per clause with `edit_source='unreachable_bound'`;
-`clause` names the clause and `suggested_change` explains that the bound must be lowered
-because no assignment can reach it. `amount` is NULL because there is no finite repair
+`clause` names the clause and `suggested_change` explains that no assignment can reach the
+bound, and which way it moves: a bound at `+inf` is lowered, one at `-inf` raised
+(`UnreachableClause::too_low`). `amount` is NULL because there is no finite repair
 magnitude. A clause with a `per` key reports once per class it names, the key value in
 `group`, in either scope; one with no `per` key reports once in the `query` scope and
 once per kept row (`row`) in the `expanded` one (`FanOutByClass`, below). A clause fans
@@ -782,10 +783,11 @@ objective.
 (`ReadElasticEdits`, the shared stage-1/stage-2 reader) and the objective value is reported.
 Because the budget is enforced only to the feasibility tolerance, a maximizing re-solve can
 ride that tolerance (a clean `10` arriving as `10.000001`), so stage-2 amounts and the
-objective are snapped by `SnapDiagnosticValue` — snap to the nearest integer when within a
-relative tolerance of one (recovering integer bounds at **any** magnitude; significant-figure
-rounding used to mangle `1234567890` into `1234570001`), else trim to a fixed absolute
-precision. Separately, both stage reads use one-directional, per-edit precision cleanup for
+objective are snapped by `SnapDiagnosticValue` — snap to the nearest integer when within that
+noise, an absolute `1e-6` plus a relative `1e-9` (recovering integer bounds at **any** magnitude;
+significant-figure rounding used to mangle `1234567890` into `1234570001`), else trim to a fixed
+absolute precision. The relative part is that small on purpose: a relative `1e-6` at `1e6`
+would erase a real `0.34` of a repair, and the pasted bound would not repair the query. Separately, both stage reads use one-directional, per-edit precision cleanup for
 noise introduced by the widened formulation; only stage 2 receives the additional budget-row
 snap described here.
 

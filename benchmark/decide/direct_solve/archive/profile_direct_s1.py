@@ -168,7 +168,7 @@ def main() -> None:
     if not EXE.exists():
         parser.error(f"build the release CLI first: {EXE}")
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    output = args.output or HERE.parents[1] / "results" / f"direct_s1_{stamp}.csv"
+    output = args.output or HERE.parents[1] / "results" / "direct_solve" / f"direct_s1_{stamp}.csv"
     output.parent.mkdir(parents=True, exist_ok=True)
     raw_dir = output.with_suffix("")
     manifest = {

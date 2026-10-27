@@ -253,12 +253,15 @@ class TestBinderErrors:
 
     def test_objective_bare_column(self, decidb_cli):
         """MAXIMIZE with a bare column (not SUM) is not allowed."""
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
                 SELECT l_quantity FROM lineitem
                 DECIDE x(INT)
                 SUCH THAT SUM(x) <= 3
                 MAXIMIZE l_quantity LIMIT 1
-            """, match=r"does not support")
+            """,
+            match=r"MAXIMIZE l_quantity has no decision to optimize",
+        )
 
     def test_subquery_rhs_non_scalar(self, decidb_cli):
         """Subquery RHS that references DECIDE variables.
@@ -855,3 +858,55 @@ class TestRefusalsInEverySpelling:
             r"'\(SELECT k FROM f WHERE [^']*\)' does not reference a decision", result.stderr
         ), result.stderr
         assert_no_internal_leak(result, "a decision-free objective term")
+
+
+_REFUSAL_ROWS = "SELECT id, x FROM (VALUES (1, 3), (2, 4)) t(id, cap) "
+
+
+@pytest.mark.error_binder
+@pytest.mark.error
+class TestRefusalsSpeakSql:
+    """A refusal quotes the clause as the user wrote it and names no engine enum."""
+
+    @staticmethod
+    def _refusal(decidb_cli, clauses, objective="MAXIMIZE SUM(x)"):
+        result = decidb_cli.execute_raw(f"{_REFUSAL_ROWS} DECIDE x(INT) SUCH THAT x <= 5 AND {clauses} {objective}")
+        assert "::" not in result.stderr, result.stderr
+        return result.stderr
+
+    @pytest.mark.parametrize(
+        "clause,quoted",
+        [
+            ("x IS DISTINCT FROM 3", "'(x IS DISTINCT FROM 3)'"),  # a comparison DECIDE does not read
+            ("NOT (x <= 1 OR x >= 3)", "'(NOT ((x <= 1) OR (x >= 3)))'"),  # an operator it does not read
+            ("1", "'1'"),  # a clause of no kind it reads
+        ],
+    )
+    def test_unsupported_constraint_is_quoted(self, decidb_cli, clause, quoted):
+        stderr = self._refusal(decidb_cli, clause)
+        assert f"SUCH THAT does not support {quoted}" in stderr, stderr
+
+    def test_unsupported_reducer_body_is_quoted(self, decidb_cli):
+        stderr = self._refusal(decidb_cli, "SUM(x * CAST(cap > 2 AS INT)) <= 3")
+        assert "SUM expression does not support '(cap > 2)'" in stderr, stderr
+
+    @pytest.mark.parametrize(
+        "objective,message",
+        [
+            ("MAXIMIZE 3", "MAXIMIZE 3 has no decision to optimize"),
+            ("MINIMIZE cap", "MINIMIZE cap has no decision to optimize"),
+            ("MAXIMIZE x > 1", "MAXIMIZE does not support '(x > 1)'"),
+            ("MAXIMIZE count(*)", "does not support function 'count(*)'"),
+        ],
+    )
+    def test_unsupported_objective_is_quoted(self, decidb_cli, objective, message):
+        assert message in self._refusal(decidb_cli, "SUM(x) <= 9", objective)
+
+    def test_count_star_in_a_constraint_is_quoted_as_written(self, decidb_cli):
+        stderr = self._refusal(decidb_cli, "count(*) <= 3")
+        assert "left-hand side function 'count(*)'" in stderr, stderr
+
+    def test_reducer_over_a_constant_is_not_a_query_wide_decision(self, decidb_cli):
+        """`SUM(1)` has no decision at all; only a body made of query-wide decisions is called one."""
+        stderr = self._refusal(decidb_cli, "SUM(1) <= 5")
+        assert "SUM expression must reference at least one DECIDE variable" in stderr, stderr

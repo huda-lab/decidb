@@ -30,7 +30,7 @@ resolves, so a key can be told from a decision declared before or after it. The 
 
 | Check | Message |
 |---|---|
-| Name collides with a real column | `DECIDE variable '%s' conflicts with an existing column name.` |
+| Name collides with a column of the FROM clause, a `USING` column included | `DECIDE variable '%s' conflicts with an existing column name.` |
 | Name declared twice | `Duplicate DECIDE variable name '%s'.` |
 
 A decision is registered under its bare name, and only that name references it.
@@ -41,6 +41,13 @@ D.x; a decision is referenced by its bare name"*, or, in a `when` condition, a `
 or a `by` key, *"DECIDE: D.x is a decision; when, per and by may only use data"* (D43).
 A qualified name that binds to a column, a struct field or a `USING` column is left to
 the SQL binder.
+
+WHERE is planned below the DECIDE operator, where a decision has no value yet, so it
+refuses one. After WHERE binds, `RefuseDecisionInWhere` (`bind_select_node.cpp`) looks
+for the DECIDE binding in the filter, directly or as a correlated column of a subquery:
+*"DECIDE: x is a decision; WHERE may only use data"*. HAVING, QUALIFY, GROUP BY,
+ORDER BY and the select list are planned above DECIDE and read its result, so a
+decision is a column there.
 
 ### Scope
 
@@ -410,6 +417,17 @@ Four things are deliberately **not** refused:
 > one layer, before any data is read, and the model builder's remaining checks are
 > `InternalException` invariants.
 
+### Refusals quote the clause
+
+A constraint shape the binder does not read is refused by quoting it as written,
+through one helper (`UnsupportedConstraint`): *"SUCH THAT does not support '(x IS
+NULL)'"*. A reducer body it does not read gets *"SUM expression does not support
+'(cap > 2)'"*. A function on either side is named as the user wrote it
+(`DecideWrittenFunctionName`): `count(*)`, not DuckDB's internal `count_star`. A
+reducer whose body holds no decision (`sum(1)`, `sum(cap)`) gets *"SUM expression must
+reference at least one DECIDE variable"*; only a body that holds a query-wide decision
+is told to drop the reducer.
+
 ---
 
 ## 4a. Scopes — `when`, `per`, `by`
@@ -503,6 +521,10 @@ depend on it. A scope in front (`BindScopedObjective`) and the two-level form
 rewriting: the objective's shape — its additive spine, its reducer scales, its
 constant offset — is decided once by `DecideCanonicalizer::CanonicalizeObjective` on
 the bound tree, alongside constraints.
+
+A body it cannot read is refused in SQL terms, with the sense the user wrote: a body
+with no decision gets *"MAXIMIZE 3 has no decision to optimize"*, any other *"MAXIMIZE
+does not support '(x > 1)'"*.
 
 ---
 

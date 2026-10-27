@@ -90,7 +90,7 @@ behavior, so changing it is deliberate.
 **Error wording** (`../../architecture/policy.md`). The messages are the solver's, built by the same functions. A NULL
 count bound, fixed value or `SUM` source column that is one column raises `DECIDE: column "cap" is NULL. Impute it with
 COALESCE(cap, 0) or filter those rows out with a WHERE clause.`, and a NaN one `DECIDE constraint right-hand side
-contains invalid value (NaN)...`; the solver adds `at row N` to the second. A NULL score names the NULL columns of the
+contains invalid value (NaN)...`. Neither path names a row: a row's place in the input depends on the scan. A NULL score names the NULL columns of the
 score as the solver does (`column "score"`, or `columns "a" and "b"`), and quotes the score only when no column is NULL.
 The D4 and D8 messages (`DecideWhenMatchesNoRowsMessage`, `DecideReducerHasNoRowsMessage` in
 `decide_value_messages.hpp`), the non-finite score and the infeasible messages are the solver's too. A computed bound or fixed value

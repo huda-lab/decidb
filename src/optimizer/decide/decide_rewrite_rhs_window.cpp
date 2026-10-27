@@ -272,7 +272,7 @@ private:
 		auto none = calc.Constant(Value(LogicalType::VARCHAR));
 		auto message = none;
 		if (value.return_type == LogicalType::FLOAT || value.return_type == LogicalType::DOUBLE) {
-			auto nan = calc.Constant(Value(DecideInvalidValueMessage(context, "NaN", string())));
+			auto nan = calc.Constant(Value(DecideInvalidValueMessage(context, "NaN")));
 			message = calc.If(calc.Fn("isnan", calc.Cast(calc.Of(value), LogicalType::DOUBLE)), nan, none);
 		}
 		message = calc.If(calc.IsNull(calc.Of(value)),
