@@ -1,5 +1,5 @@
 """Constraint scope: `per K:` and `when c:` written in front of a constraint
-(syntax_reference.md §6).
+(language/guide.md §6).
 
 `per K:` makes one constraint per class of K among the kept rows (`per ()`: one; no
 `per`, or `per row`: one per kept row) and does not group reducers. `when c:` keeps the

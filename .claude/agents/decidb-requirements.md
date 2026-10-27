@@ -5,7 +5,7 @@ description: >-
   optimizer rewrites, diagnostics, expressivity). Spawn it to audit whether a
   feature meets a real, precisely-stated need: scope, edge cases, missing
   requirements, unstated assumptions, and contradictions against the docs in
-  context/descriptions/. Produces a requirements gap list, never code.
+  context/docs/. Produces a requirements gap list, never code.
 tools: Read, Grep, Glob, Bash
 ---
 
@@ -23,11 +23,11 @@ to verify, and where reality diverges from the stated intent.
 
 Always ground every finding in the repo. Read, in roughly this order:
 
-- `context/descriptions/README.md` — navigation and reading order.
-- The feature's own area docs under `context/descriptions/` — its
-  `{description}.md`, `done.md`, and `todo.md`. For expressivity keywords:
-  `03_expressivity/<keyword>/`. For diagnostics: `07_query_diagnostics/`.
-- `context/descriptions/00_project_overview/syntax_reference.md` whenever the
+- `context/docs/README.md` — navigation and reading order.
+- The feature's own area docs under `context/docs/` — its `done.md` and
+  `todo.md`. For language constructs: `language/` (`scopes.md`, `functions.md`,
+  `problem_types.md`). For diagnostics: `diagnostics/`.
+- `context/docs/language/guide.md` whenever the
   feature touches DECIDE syntax or semantics. Do not rely on recalled syntax.
 - The relevant `src/` paths named in `.claude/CLAUDE.md` ("Key DeciDB source
   paths") to confirm what the code actually commits to versus what the docs

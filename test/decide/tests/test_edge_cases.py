@@ -405,7 +405,7 @@ def test_maximize_sum_max_per_with_empty_when_group(
 # Empty-set aggregate probe matrix: document concrete behavior for every
 # combination of {aggregate kind} × {position} × {empty origin}.
 #
-# Expected contract (syntax_reference.md §7.2), for SUM, AVG, MIN and MAX alike:
+# Expected contract (language/guide.md §7.2), for SUM, AVG, MIN and MAX alike:
 #   - A `when` in front of a constraint or the objective that keeps no row is an
 #     error (D4): "when c matches no rows."
 #   - A reducer whose own `when` leaves a `by` group of the kept rows empty is an
@@ -730,7 +730,7 @@ def test_minimize_min_objective_when_empty(decidb_cli):
 # `z_k` per term in the composed path) unpinned — silently wrong. All such
 # shapes (hard-direction, and composed where the SUM term would otherwise be
 # vacated) are refused before the solver by the scope checks.
-# See `syntax_reference.md` §7.2 (NULL and empty sets).
+# See `language/guide.md` §7.2 (NULL and empty sets).
 
 
 @pytest.mark.edge_case

@@ -9,7 +9,7 @@
 --       arms solve it in 0-1 nodes at Gurobi's defaults, so there is no search quality
 --       to compare; what is left is model size, and the Big-M form is smaller. Native
 --       measured 1.7x-3.3x slower across 5K-30K. MIN/MAX is now lowered unless no valid
---       Big-M exists. Full numbers in 01_pipeline/07_solver/todo.md.
+--       Big-M exists. Decision in context/docs/pipeline/07_solver/done.md § Capabilities.
 -- TAGS: type=BOOLEAN; class=ILP; obj=MAXIMIZE-MAX(hard,Big-M); func=MAX; cons=equality(=)
 SELECT l_orderkey, l_linenumber, l_extendedprice, keep
 FROM (SELECT l_orderkey, l_linenumber, l_extendedprice FROM lineitem ORDER BY l_orderkey, l_linenumber LIMIT ${Q9_ROW_LIMIT}) lineitem

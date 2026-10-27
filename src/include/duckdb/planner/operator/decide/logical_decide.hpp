@@ -75,7 +75,7 @@ struct DecideGroupKey {
 };
 
 //! One run-time requirement of a clause
-//! (syntax_reference.md §7.3): built by DecideCanonicalizer from the user's
+//! (language/guide.md §7.3): built by DecideCanonicalizer from the user's
 //! clause, before any rewrite, and run by PhysicalDecide before any model is built.
 struct DecideScopeCheck {
     DecideScopeCheckKind kind = DecideScopeCheckKind::KEEPS_A_ROW;

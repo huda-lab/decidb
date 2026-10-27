@@ -179,7 +179,7 @@ variable_type:
 /* A single typed variable declaration. The type is mandatory:
  *   "x(INT)"                  -- one decision per result row
  *   "PER key: x(INT)"         -- keyed (one per distinct key; PER () for one in all)
- * The removed "T.x(TYPE)" and "scalar x(TYPE)" (syntax_reference.md, "Removed
+ * The removed "T.x(TYPE)" and "scalar x(TYPE)" (language/errors.md, "Removed
  * spellings") keep a production each, so the error names the spelling that
  * replaces them.
  */

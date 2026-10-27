@@ -1,4 +1,4 @@
-"""`by (Γ)` after a reducer: which rows it reads (syntax_reference.md §5.2).
+"""`by (Γ)` after a reducer: which rows it reads (language/guide.md §5.2).
 
 `agg(e) by (Γ)` reads every kept row whose Γ equals the current class's Γ, including
 rows outside the class; Γ is columns or data expressions, NULL is a group (D5), and an

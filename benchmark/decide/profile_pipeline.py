@@ -33,7 +33,7 @@ RAW = RESULTS / f"pipeline_profile_raw_{DATABASE}"
 
 # Reproduced twice: Q10/HiGHS at large OOM-kills the whole process from outside (no python
 # exception to catch -- the OS/harness kills it), so it can't be handled in run_one. Recorded
-# as a bug (06_issues/bugs/todo.md); skipped here so the rest of the sweep can finish.
+# as a bug (issues/bugs.md); skipped here so the rest of the sweep can finish.
 SKIP = {("Q10", "highs")}
 
 # Each stage names parent spans only, so no time is counted twice.

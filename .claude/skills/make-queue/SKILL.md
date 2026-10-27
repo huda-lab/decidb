@@ -1,6 +1,6 @@
 ---
 name: make-queue
-description: Build or rebuild the scratchpad work queue (context/descriptions/todo.md) for a goal - organize the nested todo.md files into pickable tasks, then write a lean queue that only orders and points to them. Use when the user says /make-queue or asks to create, rebuild or refresh the work queue.
+description: Build or rebuild the scratchpad work queue (context/docs/todo.md) for a goal - organize the nested todo.md files into pickable tasks, then write a lean queue that only orders and points to them. Use when the user says /make-queue or asks to create, rebuild or refresh the work queue.
 ---
 
 # /make-queue — Organize the nested todos, then write the queue
@@ -11,7 +11,7 @@ The queue orders work and points to it. All task detail lives in nested `todo.md
 ## Arguments
 
 `$ARGUMENTS`:
-- a goal and/or folders (`direct-solve: finish S1 and A1`, `08_direct_solve/rules/s1_uniform_matroid a1_separable_box`): build a queue for it.
+- a goal and/or folders (`direct-solve: finish S1 and A1`, `direct_solve/rules/s1_uniform_matroid a1_separable_box`): build a queue for it.
 - `refresh`: rebuild the existing queue against the nested todos as they are now (drop shipped lines, add new tasks).
 - *(empty)*: ask what the goal is and which folders it covers. Do not guess.
 
@@ -44,7 +44,7 @@ done format. Keep the area's one "how to work" section.
 
 ### 4. Write the queue
 
-Write `context/descriptions/todo.md` in the queue format. Group by dependency and by what can be batched (owner
+Write `context/docs/todo.md` in the queue format. Group by dependency and by what can be batched (owner
 decisions, quick tasks, larger tasks, measurement runs last, blocked tasks). "Read first" and "Checks" are pointers, not
 copies.
 

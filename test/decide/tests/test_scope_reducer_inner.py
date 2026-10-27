@@ -1,5 +1,5 @@
 """`when` and `per` inside a reducer: `agg([when c] [per K]: e) [by (Γ)]`
-(syntax_reference.md §5.3).
+(language/guide.md §5.3).
 
 Order: the rows `by` selects, then the inner `when`, then one value per class of the
 inner `per` -- the first row the `when` keeps stands for its class, since the key

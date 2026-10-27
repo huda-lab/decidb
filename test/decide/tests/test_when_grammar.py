@@ -9,7 +9,7 @@ This file pins:
   - A simple unparenthesized comparison works on objectives and matches its
     parenthesized spelling.
 
-See `context/descriptions/03_expressivity/scope/done.md`, section 3.
+See `context/docs/language/guide.md` §6.
 """
 
 import time

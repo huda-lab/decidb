@@ -1,4 +1,4 @@
-"""Objective scope (syntax_reference.md §4): an objective is produced once -- an
+"""Objective scope (language/guide.md §4): an objective is produced once -- an
 omitted `per` is `per ()` -- `when` in front filters the rows for the whole objective,
 `when` and `per` inside reducers work as in §5.3, and the two-level form
 `outer(per k: inner(e) by (k))` evaluates `inner` once per class of `k` (NULL a class)

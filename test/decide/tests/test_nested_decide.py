@@ -10,7 +10,7 @@ and an outer ``WHEN`` alone worked; only the combination broke. The state is now
 saved and restored per clause (``PGDecidePushLexState`` / ``PGDecidePopLexState``),
 so these tests pin the combination rather than either half.
 
-See ``01_pipeline/01_parser/done.md`` §2, lexer gating.
+See ``pipeline/01_parser/done.md`` §2, lexer gating.
 
 Covers:
   - Nested clause followed by an outer ``WHEN``, oracle verified
@@ -180,7 +180,7 @@ def test_a_real_duplicate_decide_is_still_rejected(decidb_cli):
 # Every query below therefore used to fail with
 # ``Serialization Error: Cannot copy BoundSubqueryExpression``.
 #
-# See ``01_pipeline/03_logical_plan/done.md`` → DECIDE subquery flattening.
+# See ``pipeline/03_logical_plan/done.md`` → DECIDE subquery flattening.
 
 _TWO_ROWS = "(VALUES (1), (2)) u(uid)"
 

@@ -112,12 +112,12 @@ private:
 	//! objective), under which each rewritten AVG's account is recorded.
 	void RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const string &clause_alias);
 
-	//! The value rewrite (syntax_reference.md §6.4): every decision reducer of a
+	//! The value rewrite (language/guide.md §6.4): every decision reducer of a
 	//! comparison in the VALUE shape (VALUE_REWRITE_TAG) becomes a helper decision defined
 	//! once per `by` group (LogicalDecide::reducer_value_links), and the comparison is then
 	//! one row per class. Runs after ABS and bilinear, whose auxiliaries may stand inside a
 	//! reducer's body, and before the MIN/MAX passes, which never see these reducers. A
-	//! product of decisions left inside such a reducer is refused (syntax_reference.md §10.2).
+	//! product of decisions left inside such a reducer is refused (language/errors.md §2).
 	void RewriteScopedReducers(LogicalDecide &decide);
 
 	//! Detect composed MIN/MAX constraints — additive LHS mixing SUM/AVG/MIN/MAX terms.

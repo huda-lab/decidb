@@ -3,7 +3,7 @@
 //
 // src/optimizer/decide/decide_rewrite_scoped.cpp
 //
-// The value rewrite (syntax_reference.md §6.4; 05_optimizer/done.md, "The value
+// The value rewrite (language/guide.md §6.4; 05_optimizer/done.md, "The value
 // rewrite"). A scoped comparison in the VALUE shape -- a decision reducer beside a
 // per-row or keyed decision, under a factor that varies by row, next to a reducer with
 // another `by` key, or inside another expression -- is not one model row per `by` group.
@@ -151,7 +151,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	auto &agg = (*site.slot)->Cast<BoundAggregateExpression>();
 	auto agg_name = StringUtil::Lower(agg.function.name);
 	auto label = RenderDecideReducer(agg, names);
-	// syntax_reference.md §10.2: a product or square of decisions inside a reducer is
+	// language/errors.md §2: a product or square of decisions inside a reducer is
 	// accepted only where the reducer's own row sums it -- the aggregate shape. Here its
 	// definition would be a quadratic equality. The test is on what survives the rewrites
 	// before this one: an ABS is an auxiliary by now and a Boolean product its McCormick

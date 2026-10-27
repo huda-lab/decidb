@@ -211,7 +211,7 @@ protected:
     bool IsDataOperand(const ParsedExpression &expr) const;
 
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
-    //! Binds the colon form `agg(D, T: expr)` as `agg(per D, T: expr)` (syntax_reference.md §5.1): the
+    //! Binds the colon form `agg(D, T: expr)` as `agg(per D, T: expr)` (language/guide.md §5.1): the
     //! relations' stored columns as an exact key scope, the tag of that scope, and
     //! COLON_FORM_TAG for the echo.
     BindResult BindQualifiedReducer(FunctionExpression &qualified_expr, idx_t depth);

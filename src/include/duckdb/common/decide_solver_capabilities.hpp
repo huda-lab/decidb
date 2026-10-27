@@ -72,10 +72,9 @@ struct SolverConstructSupport {
 	// There is deliberately no `in_list` flag. SOS1 acceleration for `x IN (a, b, c)`
 	// was measured on the exact model shape DeciDB emits and declined: the
 	// formulation's LP relaxation is already integral, so the solve finishes at the
-	// root and branching — SOS1's only lever — has nothing to work on. The numbers are
-	// in `context/descriptions/01_pipeline/07_solver/todo.md`, "SOS1 for `IN` —
-	// measured and declined". A measured-and-rejected capability is not a field: a
-	// permanently-false flag nobody reads cannot be told apart from one whose
+	// root and branching — SOS1's only lever — has nothing to work on. See
+	// `context/docs/pipeline/07_solver/done.md` § Capabilities. A measured-and-rejected
+	// capability is not a field: a permanently-false flag nobody reads cannot be told apart from one whose
 	// implementation is merely still pending.
 };
 

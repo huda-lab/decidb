@@ -242,7 +242,7 @@ def test_bigint_to_double_cast_lid_preserves_sql_semantics(
 ):
     """Implicit ``BIGINT -> DOUBLE`` must agree with SQL inside the model domain.
 
-    DECIDE carries one numeric domain, DOUBLE (see ``syntax_reference.md`` ->
+    DECIDE carries one numeric domain, DOUBLE (see ``language/guide.md`` ->
     Numeric precision), so binder-generated wrappers over decision algebra are
     transparent. Wherever the values involved are representable there -- which is
     everything below ``2^53`` -- the model and direct SQL evaluation must give the
@@ -507,7 +507,7 @@ def test_magnitudes_beyond_double_domain_are_a_documented_limit(
     This test exists so that limit is a *recorded* property rather than an accident
     nobody notices: it asserts the divergence, not agreement.  If a future change
     makes these match, that is a real improvement -- update this test deliberately,
-    do not delete it.  See `syntax_reference.md` -> Numeric precision.
+    do not delete it.  See `language/guide.md` -> Numeric precision.
     """
     sql = """
         SELECT id, x
@@ -531,7 +531,7 @@ def test_magnitudes_beyond_double_domain_are_a_documented_limit(
     assert int(row_wise_sql) == 3
     assert decidb != row_wise_sql, (
         "DECIDE and row-wise SQL now agree past 2^53 -- if that is intentional, "
-        "update this test and syntax_reference.md together"
+        "update this test and language/guide.md together"
     )
 
 

@@ -1,6 +1,6 @@
 ---
 name: orchestrate
-description: Work the scratchpad queue (context/descriptions/todo.md), whatever it currently holds, as an orchestrator - draft a brief per item, launch a Sonnet subagent after owner approval, review its diff and re-run the tests, update the docs yourself, then commit each item with the owner's permission. Use when the user says /orchestrate, "next task", or wants a queue item delegated to Sonnet.
+description: Work the scratchpad queue (context/docs/todo.md), whatever it currently holds, as an orchestrator - draft a brief per item, launch a Sonnet subagent after owner approval, review its diff and re-run the tests, update the docs yourself, then commit each item with the owner's permission. Use when the user says /orchestrate, "next task", or wants a queue item delegated to Sonnet.
 ---
 
 # /orchestrate — Opus orchestrates, Sonnet builds
@@ -9,7 +9,7 @@ You (Opus) do not implement queue items yourself. You write the brief, Sonnet do
 review the result against the tree. Keep your own context small: read the diff and summary test lines, not build logs
 or exploration.
 
-The queue is `context/descriptions/todo.md`, a scratchpad tracked in git. Its contents change from project to project,
+The queue is `context/docs/todo.md`, a scratchpad tracked in git. Its contents change from project to project,
 so nothing below assumes a particular feature area. Everything specific to the area (state, reading list, owner rules,
 checks, where results are recorded) comes from the queue itself and the docs it points to.
 
@@ -23,7 +23,7 @@ checks, where results are recorded) comes from the queue itself and the docs it 
 
 ## 0. Orient (once per session, or when the queue changes)
 
-Read `context/descriptions/todo.md` in full. Extract and keep:
+Read `context/docs/todo.md` in full. Extract and keep:
 - **Reading list**: the docs a new agent must read before working (often a "Start here" or "Read first" section).
 - **Owner rules**: how the owner wants work done and any hard rules the queue states.
 - **Checks**: the commands that prove the tree is green (a matrix script, a suite, focused tests) and the baseline they
@@ -121,7 +121,7 @@ SendMessage to the same agent (it keeps its own context).
    - delete the task from its nested `todo.md`;
    - edit the area's `done.md` so it states what the system does now, and why when a reason is known; edit the
      paragraph that covers the behavior rather than appending; no changelog wording;
-   - delete the item's line from `context/descriptions/todo.md` (and the file, if it is now empty).
+   - delete the item's line from `context/docs/todo.md` (and the file, if it is now empty).
    Show the owner the doc diff.
 3. Propose a commit: the exact file list (this item's code, tests and docs, including its queue edit) and a subject
    in the repo's style (`decide:`, `docs:`, ...). **Ask for permission and wait.** Commit only after a yes. No

@@ -1,5 +1,5 @@
 """No test, corpus query, benchmark or script still writes a removed DECIDE spelling
-(syntax_reference.md §10.3). The removed-syntax suite is the one place that may, and a
+(language/errors.md §3). The removed-syntax suite is the one place that may, and a
 sqllogic case marked "removed spelling" is a deliberate one (`_old_spellings.scan_file`).
 """
 

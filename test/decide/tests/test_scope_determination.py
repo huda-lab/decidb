@@ -1,4 +1,4 @@
-"""The determination rule (syntax_reference.md §7.1): a `per` key must determine
+"""The determination rule (language/guide.md §7.1): a `per` key must determine
 everything its body reads once per class -- every tuple term (a bound, a factor on a
 reducer), every decision outside reducers, every reducer's `by` key -- and an inner
 `per` key the body of its reducer.

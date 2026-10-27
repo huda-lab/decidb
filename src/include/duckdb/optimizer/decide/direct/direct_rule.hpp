@@ -24,7 +24,7 @@ enum class DirectAnalysisStatus : uint8_t { PROVED, NOT_PROVED };
 //===--------------------------------------------------------------------===//
 //
 // What a rule may know about a DECIDE problem, read once from the bound, canonical
-// tree before any DECIDE rewrite (see context/descriptions/08_direct_solve/architecture/
+// tree before any DECIDE rewrite (see context/docs/direct_solve/architecture/
 // ir.md). The front end is the only code that knows LogicalDecide's layout and the
 // bound-tree spelling of DECIDE constructs; rules read meaning. Data-valued expressions
 // (coefficients, bounds, `when` conditions) stay DuckDB expressions over the source.

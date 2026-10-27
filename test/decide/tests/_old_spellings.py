@@ -1,4 +1,4 @@
-"""Find the removed DECIDE spellings in SQL text (syntax_reference.md §10.3): postfix
+"""Find the removed DECIDE spellings in SQL text (language/errors.md §3): postfix
 `WHEN` / `PER`, `T.x(TYPE)` and `scalar x(TYPE)` declarations, and `D.x` references to a
 decision. Token-aware, so the scope spellings (`when c:`, `per K:`, `by (...)`) and ordinary
 SQL (`CASE WHEN`, a relation's column) are not flagged.

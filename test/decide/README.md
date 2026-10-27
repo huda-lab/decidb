@@ -172,8 +172,8 @@ declarations, constraint scopes, `by`, a reducer's own scope, the objective,
 determination, the helper-decision rewrite, the deck examples, bare clauses,
 combinations, the EXPLAIN / DIAGNOSE echo and the removed spellings. They are judged
 by `tests/_scope_oracle.py` or `tests/_brute_force.py` rather than a hand-built
-gurobipy model; see `context/descriptions/02_operations/oracle.md` §3.10 and
-`context/descriptions/04_testing/scope/done.md`.
+gurobipy model; see `context/docs/testing/oracle.md` §3.10 and
+`context/docs/testing/scope_suite.md`.
 
 `tests/test_no_old_spellings_remain.py` (with `tests/_old_spellings.py`) scans every
 test surface — the Python tests, the sqllogic files, the C++ DECIDE tests, the golden
@@ -198,7 +198,7 @@ corpus, the benchmark queries and `run.sh` — for a removed DECIDE spelling. On
 |--------|------|-------|--------|
 | `large_scale` | `test_large_scale.py` | 2 | |
 
-See `context/descriptions/05_performance/benchmarking/scale_tests.md`.
+See `context/docs/performance/benchmarking/scale_tests.md`.
 
 ### Meta Markers
 
@@ -284,7 +284,7 @@ rm test/decide/results/oracle_cache.json
 3. Add appropriate markers (feature marker + `correctness` meta marker)
 4. The oracle cache updates automatically on the next run
 
-Write DECIDE in the current syntax (`context/descriptions/00_project_overview/syntax_reference.md`).
+Write DECIDE in the current syntax (`context/docs/language/guide.md`).
 `decidb_cli` fails a test whose query is refused with an error that says "is removed"
 (a removed spelling), unless the call passes `removed_spelling=True`; it also fails any
 run whose output shows an internal error or an internal name.

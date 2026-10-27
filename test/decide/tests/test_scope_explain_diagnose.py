@@ -260,7 +260,7 @@ def test_explain_accounts_for_the_objectives_rewrites_too(decidb_cli):
 @pytest.mark.error
 @pytest.mark.error_binder
 def test_an_outer_avg_over_the_classes_is_refused(decidb_cli):
-    """syntax_reference.md §4 admits sum, min and max over the classes; an outer avg would
+    """language/guide.md §4 admits sum, min and max over the classes; an outer avg would
     be formulated as a sum and is refused instead."""
     result = decidb_cli.execute_raw(
         _ship_query("ship(INT)", "ship >= 1", "MINIMIZE avg(per D.region: sum(ship) by (D.region))")

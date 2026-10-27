@@ -4,7 +4,7 @@ Shared by `/make-queue` and `/orchestrate`. Each fact has one home. Anything wri
 
 | File | Holds | Never holds |
 |---|---|---|
-| Queue (`context/descriptions/todo.md`) | Order, grouping, dependencies, pointers | What a task is, sizes, state, numbers, rules, history |
+| Queue (`context/docs/todo.md`) | Order, grouping, dependencies, pointers | What a task is, sizes, state, numbers, rules, history |
 | Nested `todo.md` | Open tasks, each pickable on its own | Finished work, status tables, an index of other files |
 | Nested `done.md` | What the system does now, and why | History, "added", "changed", "now", "previously", task ids |
 
@@ -19,7 +19,7 @@ this file when it is empty.
 Read first: <2–4 paths>. Checks: <one command or path § section>.
 
 ## 1. <group name>
-- [ ] <ID> <title, under 10 words> — <path from context/descriptions/> § <ID>
+- [ ] <ID> <title, under 10 words> — <path from context/docs/> § <ID>
 
 ## 2. <group name> (needs: 1)
 - [ ] <ID> <title> — <path> § <ID> (needs: <ID>)

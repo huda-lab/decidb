@@ -525,7 +525,7 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 			// An offset over the written bound is a virtual offset whichever bound it moves.
 			const char *clause_source = (data_rhs || !written_rhs.empty()) ? "virtual_offset" : "source_literal";
 			// A clause written over `by` groups reports once per class its group's row
-			// stands for (syntax_reference.md §8.1, D28), `per ()` as the clause.
+			// stands for (language/guide.md §8.1, D28), `per ()` as the clause.
 			if (prov.class_set != DConstants::INVALID_INDEX) {
 				e.edit_source = clause_source;
 				for (auto &finding : FanOutByClass(std::move(e), prov, orig_model, /*expanded=*/true)) {

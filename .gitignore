@@ -297,6 +297,7 @@ CMakeUserPresets.json
 
 # Generated documentation
 docs
+!context/docs/
 
 # tests
 test/test.sql
@@ -400,7 +401,7 @@ CITATION.cff
 .sanitizer-thread-suppressions.txt
 
 # notes
-# context/descriptions/todo.md
+# context/docs/todo.md
 context/presentations
 
 
@@ -411,4 +412,3 @@ context/presentations
 AGENT.md
 
 .pytest_cache/
-context/descriptions/08_direct_solve/framework/h35/

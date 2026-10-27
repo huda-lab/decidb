@@ -44,7 +44,7 @@
 // PURITY: Canonicalize* take their input by const reference and return a new
 // tree, leaving the input untouched. This is deliberate and load-bearing for a
 // planned EXPLAIN feature that renders as-written / canonical / rewritten side
-// by side (see context/descriptions/03_expressivity/explain/done.md): with a pure
+// by side (see context/docs/language/explain.md): with a pure
 // function both forms are live at the call site, so that feature is a rendering
 // change rather than a re-plumbing job.
 //
@@ -357,7 +357,7 @@ private:
 	//! whole query: `weight * SUM(x)` asks which row's weight scales a number that has
 	//! no row, and `s * SUM(x)` is a product of two decisions (bilinear), not a scale.
 	//! In a constraint a factor that varies by row is a tuple term of the row's constraint
-	//! (syntax_reference.md §6.4): it is peeled like any other and the comparison takes the
+	//! (language/guide.md §6.4): it is peeled like any other and the comparison takes the
 	//! VALUE shape, where the reducer becomes a helper decision the row's factor multiplies.
 	const Expression &PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale, bool &out_divides,
 	                            Clause clause = Clause::CONSTRAINT) const;
@@ -409,7 +409,7 @@ private:
 	void BuildConstraintScopeChecks(const Expression &constraints, DecideEnclosingScope enclosing,
 	                                DecideScopeChecks &scope) const;
 
-	//! The shape of a comparison's decision side (syntax_reference.md §6.4): ROWS has no
+	//! The shape of a comparison's decision side (language/guide.md §6.4): ROWS has no
 	//! decision reducer; AGGREGATE has decision reducers sharing one `by` key under
 	//! whole-query factors with only query-wide terms beside them (one model row per group);
 	//! VALUE needs the value rewrite; UNSUPPORTED is refused with `refusal`. `group_key` is

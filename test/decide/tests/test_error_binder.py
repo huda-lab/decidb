@@ -847,7 +847,7 @@ class TestRefusalsInEverySpelling:
     def test_decision_free_objective_term_named_in_sql(self, decidb_cli):
         """The refusal of a row-varying objective term names the term in SQL, not by
         an internal alias ('__source_fragment_0____row_varying_subquery__'). A subquery
-        prints as DuckDB renders it (logged in 06_issues/bugs), so only its text is
+        prints as DuckDB renders it (logged in issues/bugs.md), so only its text is
         pinned."""
         result = decidb_cli.execute_raw(
             f"""{TABLES}

@@ -3,7 +3,7 @@
 //
 // src/decidb/formulation/linearization_reducer_value.cpp
 //
-// Stage 06 — the helper decisions of the value rewrite (syntax_reference.md §6.4;
+// Stage 06 — the helper decisions of the value rewrite (language/guide.md §6.4;
 // 05_optimizer/done.md, "The value rewrite"). Stage 05 replaced each decision reducer
 // of a VALUE-shape clause by a helper decision and recorded what it holds; stage 08
 // evaluated that reducer's members per `by` group. This boxes every helper by its

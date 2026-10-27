@@ -1,4 +1,4 @@
-"""Deck examples 1-8 (syntax_reference.md §6.5), as written and in their fully
+"""Deck examples 1-8 (language/guide.md §6.5), as written and in their fully
 explicit form.
 
 Each runs over the deck's query -- `FROM Shipment S JOIN Depot D USING (depotID)` with

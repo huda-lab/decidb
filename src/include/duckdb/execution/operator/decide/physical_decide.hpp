@@ -274,7 +274,7 @@ private:
     vector<EntityMapping> BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                               ChunkExprCache &chunk_expr_cache) const;
 
-    //! PHASE 1.6: the scope checks (syntax_reference.md §7.3), before any clause is
+    //! PHASE 1.6: the scope checks (language/guide.md §7.3), before any clause is
     //! evaluated, so every later phase may assume a well-defined clause. Raises the first
     //! one the data fails: a `when` that keeps no row, a key that does not determine a
     //! value or a decision, a reducer with no row in some `by` group.

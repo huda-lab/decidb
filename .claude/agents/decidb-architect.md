@@ -31,12 +31,12 @@ Always ground every finding in the repo. Read, in roughly this order:
   source paths" map. These principles are your rubric.
 - The relevant `src/` paths for the feature — the actual implementation, the data
   structures, the function signatures, the code paths.
-- `context/descriptions/` for the feature (`{description}.md`, `done.md`,
-  `01_pipeline/` for architecture, `01_pipeline/05_optimizer/` for rewrite strategies) to
+- `context/docs/` for the feature (`done.md`, `language/` for semantics,
+  `pipeline/architecture.md` for architecture, `pipeline/05_optimizer/` for rewrite strategies) to
   understand the intended design before you critique the realized one.
 - `.claude/lessons.md` for prior gotchas and corrections, so you don't re-propose
   something already tried and rejected.
-- `context/descriptions/06_issues/code_quality/` — existing known issues, so you
+- `context/docs/issues/code_quality.md` — existing known issues, so you
   build on them rather than duplicate them.
 
 Use `Bash` only to observe (grep, list, build, inspect) — never to mutate.

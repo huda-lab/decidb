@@ -24,30 +24,31 @@ If `$ARGUMENTS` is empty, stop and say: "What do you want to learn about? Try so
 
 Based on the topic, identify which files and docs to read:
 
-**Keyword/feature topics** — map to `context/descriptions/03_expressivity/`:
-- Look for a matching subdirectory (e.g., `scope/` for `per`, `when` and `by`; `bilinear/`, `problem_types/`)
-- Read the `done.md` and `todo.md` there
+**Keyword/feature topics** — map to `context/docs/language/`:
+- Read the matching file: `scopes.md` for `per`, `when` and `by`; `functions.md` for reducers and SQL functions;
+  `problem_types.md` for LP/ILP/QP and bilinear terms; `explain.md`, `diagnose.md`
+- Read the open work the owning stage's `todo.md` lists for it
 - Also read the relevant source files listed in those docs
 
-**Pipeline topics** — map to `context/descriptions/01_pipeline/`:
+**Pipeline topics** — map to `context/docs/pipeline/`:
 - `parser` → `01_parser/done.md` + `third_party/libpg_query/grammar/statements/select.y`, `third_party/libpg_query/src_backend_parser_parser.cpp`
 - `binder` → `02_binder/done.md` + `src/planner/expression_binder/decide/decide_binder.cpp`
 - `canonicalizer`, `canonical form` → `04_canonicalizer/done.md` + `src/planner/decide/decide_canonicalizer.cpp`
 - `logical plan`, `LogicalDecide` → `03_logical_plan/done.md` + `src/planner/operator/decide/logical_decide.cpp`
 - `model building`, `VarIndexer` → `06_model_formulation/done.md` + `src/decidb/formulation/ilp_model_builder.cpp`
-- `optimizer` → `context/descriptions/01_pipeline/05_optimizer/` + `src/optimizer/decide/decide_optimizer.cpp`
+- `optimizer` → `context/docs/pipeline/05_optimizer/` + `src/optimizer/decide/decide_optimizer.cpp`
 - `execution` → `08_execution/done.md` + `src/execution/operator/decide/physical_decide.cpp`
 - `solver` → `07_solver/done.md` + `src/decidb/solver/ilp_solver.cpp` (facade), `src/decidb/gurobi/gurobi_solver.cpp` (Gurobi), `src/decidb/naive/deterministic_naive.cpp` (HiGHS)
-- `pipeline` (broad) → read `context/descriptions/01_pipeline/README.md` for the stage map, then the stage folders it names
+- `pipeline` (broad) → read `context/docs/README.md#pipeline-stages` for the stage map, then the stage folders it names
 
 **Concept topics** — read the optimizer docs and relevant source:
-- `Big-M`, `linearization`, `indicators`, `easy vs hard`, `auxiliary variables` → `context/descriptions/01_pipeline/05_optimizer/` + `src/optimizer/decide/decide_optimizer.cpp`
+- `Big-M`, `linearization`, `indicators`, `easy vs hard`, `auxiliary variables` → `context/docs/pipeline/05_optimizer/` + `src/optimizer/decide/decide_optimizer.cpp`
 
 **File path topics** — if the argument looks like a file path, read that file directly and explain it.
 
 Also always read:
-- `context/descriptions/README.md` (for navigation context)
-- `context/descriptions/00_project_overview/syntax_reference.md` (for the syntax of the feature being explained)
+- `context/docs/README.md` (for navigation context)
+- `context/docs/language/guide.md` (for the syntax of the feature being explained)
 
 ### 2. Build the explanation — 4 sections
 
@@ -109,7 +110,7 @@ If you want to go deeper, here's where to look:
 
 - `src/path/to/file.cpp` — [one-line description of what this file does for this feature]
 - `src/path/to/other.cpp` — [one-line description]
-- `context/descriptions/path/to/doc.md` — [the doc that covers this in detail]
+- `context/docs/path/to/doc.md` — [the doc that covers this in detail]
 ```
 
 ### 3. Handle follow-ups

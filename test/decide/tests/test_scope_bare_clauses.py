@@ -2,7 +2,7 @@
 
 A clause with no `when`, `per` or `by` means its fully explicit form: `per row:` in front,
 `by ()` on each reducer, and an objective produced once (`per ()`) --
-syntax_reference.md §1.1. Each test here states a query whose answer or refusal follows
+language/guide.md §1.1. Each test here states a query whose answer or refusal follows
 from that reading, judged by the scope oracle (`_scope_oracle.ScopedModel`) or, for a
 shape the oracle cannot state, by enumerating every assignment (`_brute_force`). A test
 runs on both solvers; where one cannot load the model, its refusal is asserted instead.
@@ -275,7 +275,7 @@ def test_data_reducer_on_a_bound_side_still_answers(request, scope_solver, cli_f
 )
 def test_easy_min_floor_lets_the_decision_go_negative(request, scope_solver, cli_fixture, bound):
     """`min(x) >= -5` is `x >= -5` on every row the reducer reads, a written negative lower
-    bound like `x >= -5` (syntax_reference.md §2), whatever the spelling."""
+    bound like `x >= -5` (language/guide.md §2), whatever the spelling."""
     cli = request.getfixturevalue(cli_fixture)
     _judged(
         cli,
@@ -515,7 +515,7 @@ def test_query_wide_decision_beside_a_boolean_product(request, cli_fixture):
 
 @pytest.mark.correctness
 def test_product_of_query_wide_decisions_in_the_objective(decidb_cli_gurobi, decidb_cli_highs):
-    """`MAXIMIZE SUM(x) + s * u` (syntax_reference.md §4: products of decisions in an
+    """`MAXIMIZE SUM(x) + s * u` (language/guide.md §4: products of decisions in an
     objective). HiGHS cannot load the product and says so."""
     sql = _query(
         "x(INT), per (): s(INT), per (): u(INT)",
@@ -602,7 +602,7 @@ def test_not_equal_on_an_average_of_boolean_products(request, cli_fixture):
 
 @pytest.mark.correctness
 def test_query_wide_decision_beside_a_squared_reducer(decidb_cli_gurobi, decidb_cli_highs):
-    """`SUM(POWER(x, 2)) + s <= 30` counts `s` once, not once per row (syntax_reference.md
+    """`SUM(POWER(x, 2)) + s <= 30` counts `s` once, not once per row (language/guide.md
     §10.2). HiGHS cannot load a quadratic constraint and says so."""
     sql = _query(
         "x(INT), per (): s(INT)", "x <= 3 AND SUM(POWER(x, 2)) + s <= 30", "MAXIMIZE SUM(x) + s", select="id, x, s"

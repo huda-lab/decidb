@@ -8,7 +8,7 @@
 // statement-scoped handoff, and the DIAGNOSE operator above reads it back as a flat,
 // fixed-schema relation. Nothing else
 // starts an engine: a query with no DIAGNOSE prefix never builds one of these. See
-// context/descriptions/07_query_diagnostics/.
+// context/docs/diagnostics/.
 //
 //===----------------------------------------------------------------------===//
 

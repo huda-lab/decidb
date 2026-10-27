@@ -338,7 +338,7 @@ def test_qualified_minmax(decidb_cli, duckdb_conn, agg, sense, perf_tracker):
     Nation 0 is excluded so no identity has a zero coefficient, which would pin MIN
     at 0 and make the comparison vacuous. The coefficient is a bare column rather
     than `n_nationkey + 1` because an additive coefficient inside a MIN/MAX objective
-    trips a pre-existing Gurobi load failure — see 06_issues/bugs/todo.md.
+    trips a pre-existing Gurobi load failure — see issues/bugs.md.
     """
     template = """
         SELECT c.c_custkey, n.n_nationkey, keepN

@@ -3,7 +3,7 @@
 //
 // duckdb/parser/decide/decide_removed_spellings.hpp
 //
-// The removed DECIDE spellings (syntax_reference.md, "Removed spellings"): the
+// The removed DECIDE spellings (language/errors.md, "Removed spellings"): the
 // postfix `C WHEN c`, `C PER g`, `SUM(e) WHEN c`, `MAXIMIZE E WHEN c`,
 // `MINIMIZE SUM(e) PER g`, and the declarations `T.x(TYPE)` and `scalar x(TYPE)`.
 // The grammar still parses them, so that the error can name the spelling that

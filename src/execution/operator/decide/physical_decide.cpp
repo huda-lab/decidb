@@ -238,7 +238,7 @@ static string DescribeNullSource(const NullSourceContext *ctx, idx_t row) {
 //! Runs each expression of `executor` over `chunk`, whose first row is row `row_offset` of
 //! the data, into `results`: expression i only on the rows `*reads[i]` marks (every row
 //! when null), NULL on the others. A scoped clause filters before it generates
-//! (syntax_reference.md §6.1), so nothing is computed on a row its `when` drops:
+//! (language/guide.md §6.1), so nothing is computed on a row its `when` drops:
 //! `when w > 0: x <= ln(w)` takes no logarithm of 0.
 static void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, idx_t row_offset,
                               const vector<const vector<bool> *> &reads, DataChunk &results) {
@@ -754,7 +754,7 @@ static void MaskCoefficientColumn(CoefficientColumn &column, const vector<bool> 
     }
 }
 
-//! The classes each group's rows stand for (syntax_reference.md §8.1, D28), kept for
+//! The classes each group's rows stand for (language/guide.md §8.1, D28), kept for
 //! the diagnosis: under a `per K:`, K's values among the group's kept rows (first-seen
 //! order); with no `per`, every kept row of the group; under `per ()`, the whole clause,
 //! one set its groups share. One `SolverInput::ClassSet` per group with kept rows,
@@ -888,7 +888,7 @@ static vector<vector<bool>> KeptRowsOfEach(const vector<const Expression *> &con
 }
 
 //! A scoped objective's decision outside its reducers (`MAXIMIZE when c: sum(x) + w * s`)
-//! is counted once (syntax_reference.md §4): its coefficient stays on the first
+//! is counted once (language/guide.md §4): its coefficient stays on the first
 //! kept row and every other row is zeroed. The scope checks made sure that row stands for
 //! all of them -- one instance, one value of its data. The model reads a query-wide
 //! decision's coefficient off row 0 and sums every other one over the rows, so a
@@ -2210,7 +2210,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		vector<idx_t> kept_row_group_ids;
 
 		{
-			// The clause's rows are the kept rows (syntax_reference.md §6.1):
+			// The clause's rows are the kept rows (language/guide.md §6.1):
 			// grouped by the `by` key its reducers share in the aggregate shape, one per
 			// class of its `per` key in the per-row shape, else one per kept row. NULL is a
 			// key value. The scope checks have already run, so no group or class is empty.
@@ -2567,7 +2567,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
     vector<bool> objective_when_mask;
     bool objective_has_when = false;
 	// The objective's `when` joins every term's own, only the rows a term keeps are read,
-	// and a decision outside its reducers counts once (syntax_reference.md §4).
+	// and a decision outside its reducers counts once (language/guide.md §4).
 	// Its empty-set errors are the scope checks'.
 	// A term's `when` with the objective's folded in.
 	auto fold_objective_when = [&](TermFilterState &state) {

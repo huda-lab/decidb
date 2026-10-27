@@ -1334,7 +1334,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 		// differs only in its bound, which the group's tightest bound covers once K
 		// determines it (a scope check). The wrapper stays all the same: it names the
 		// classes each group's row stands for, which a diagnosis reports one by one
-		// (syntax_reference.md §8.1, D28); the linear form reads it as the clause's class key.
+		// (language/guide.md §8.1, D28); the linear form reads it as the clause's class key.
 		return std::move(result);
 	}
 	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
@@ -1398,7 +1398,7 @@ void DecideCanonicalizer::BuildConstraintScopeChecks(const Expression &constrain
 }
 
 //===--------------------------------------------------------------------===//
-// Scope checks (syntax_reference.md §7)
+// Scope checks (language/guide.md §7)
 //===--------------------------------------------------------------------===//
 
 namespace {

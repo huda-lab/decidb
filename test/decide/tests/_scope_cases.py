@@ -1,5 +1,5 @@
 """Shared data and helpers for the scope tests: `when` and `per` in front of a clause or
-inside a reducer, and `by` after one (syntax_reference.md §5-§7).
+inside a reducer, and `by` after one (language/guide.md §5-§7).
 
 The deck's relations (§6.5), small enough to check by hand: five shipments joined to
 three depots in two regions and two countries, with a priority flag, a status and one

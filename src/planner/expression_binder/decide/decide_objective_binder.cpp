@@ -86,7 +86,7 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	                       DecideKeyToString(per), StringUtil::Lower(inner.function_name), DecideKeyToString(inner_by));
 	if (StringUtil::Lower(outer.function_name) == "avg") {
 		// The nested objective it would bind onto treats an outer AVG as a SUM, which is
-		// not an average over the classes; syntax_reference.md §4 admits sum, min and max
+		// not an average over the classes; language/guide.md §4 admits sum, min and max
 		// over them.
 		return BindResult(BinderException::Unsupported(
 		    outer, StringUtil::Format("DECIDE: avg over the classes of %s is not supported yet; write sum, min or "

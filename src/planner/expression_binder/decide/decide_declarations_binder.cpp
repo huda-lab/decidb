@@ -143,7 +143,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         vector<DecideVarScopeInfo> variable_scopes; // per variable: row / keyed / query-wide
 
         // A parse tree stored by an earlier version (a view, a macro) may still carry a
-        // removed spelling (D54, syntax_reference.md §10.3); a fresh query never does, the
+        // removed spelling (D54, language/errors.md §3); a fresh query never does, the
         // transformer refuses them.
         RefuseRemovedDecideSpellings(statement);
 

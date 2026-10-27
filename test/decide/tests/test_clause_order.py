@@ -4,7 +4,7 @@ The declaration may sit between ``SELECT`` and ``FROM`` — the paper's order,
 Figure 1 — with the constraints and objective after the joins, or the whole
 clause may sit in one block after ``WHERE``. Both parse to the same
 ``PGDecideClause``, so nothing downstream of the parser distinguishes them
-(see ``03_expressivity/decide/done.md`` → "Two clause orders").
+(see ``language/functions.md`` → "Two clause orders").
 
 Covers:
   - Split order solves correctly, oracle verified
@@ -297,7 +297,7 @@ def test_split_order_over_subquery_source(decidb_cli, perf_tracker):
 
     The declaration names a source that the parser has not read yet — it sits
     textually before the subquery it scopes over. Entity scoping over a subquery
-    regressed once before (`04_testing/entity_scope/done.md`), so the
+    regressed once before (`testing/coverage.md#keyed-decisions`), so the
     keyed (`per t:`) form is what is exercised here.
     """
     rows, cols = decidb_cli.execute(

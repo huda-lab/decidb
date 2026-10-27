@@ -8,7 +8,7 @@
 // DIAGNOSE prefix, it names the terminal the operator should route to. It owns no
 // engine invocation and no execution/operator types, so the decision tree is
 // unit-testable in isolation.
-// See context/descriptions/07_query_diagnostics/router/.
+// See context/docs/diagnostics/router/.
 //
 //===----------------------------------------------------------------------===//
 

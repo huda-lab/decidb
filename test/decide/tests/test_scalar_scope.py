@@ -326,7 +326,7 @@ def test_scalar_still_usable_as_identifier(decidb_cli, perf_tracker):
 @pytest.mark.correctness
 def test_query_wide_decision_beside_a_column_named_scalar(decidb_cli, perf_tracker):
     """A query-wide decision (`per (): cap(INT)`) beside an output column named
-    `scalar`, an ordinary identifier (syntax_reference.md §1.2)."""
+    `scalar`, an ordinary identifier (language/guide.md §1.2)."""
     rows, cols = decidb_cli.execute(
         """
         SELECT l_linenumber AS scalar, cap

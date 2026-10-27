@@ -821,7 +821,7 @@ class TestDiagnosticsRelation:
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_boolean_data_conflict_gets_real_diagnosis(self, request, cli_fixture):
-        """DomainSpec regression guard (06_issues/code_quality: "BOOL domains round-trip
+        """DomainSpec regression guard (issues/code_quality.md: "BOOL domains round-trip
         through the constraint tree instead of being variable bounds" — fixed by applying
         a BOOLEAN's `[0,1]` domain directly to the solver column instead of synthesizing
         `x >= 0 AND x <= 1` rows). Two BOOLEAN variables, no bound anywhere near the 0/1

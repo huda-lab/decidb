@@ -70,7 +70,7 @@ how many constraints it makes (one per distinct value of the key).
 | **Grouping**             | `per column: sum(expr) by (column) op rhs` — `per` makes one constraint per distinct group, `by` makes the sum read only that group's rows |
 
 
-For the full syntax specification, see [context/descriptions/00_project_overview/syntax_reference.md](context/descriptions/00_project_overview/syntax_reference.md).
+For the full syntax specification, see [context/docs/language/guide.md](context/docs/language/guide.md).
 
 ## Building from Source
 
@@ -109,15 +109,14 @@ DeciDB can express a wide range of optimization problems directly in SQL:
 
 ## Documentation
 
-Full documentation lives in [context/descriptions/](context/descriptions/). Start with the [README there](context/descriptions/README.md) for navigation and reading order.
+Full documentation lives in [context/docs/](context/docs/). Start with the [README there](context/docs/README.md) for navigation and reading order.
 
 Key areas:
 
-- [00_project_overview/](context/descriptions/00_project_overview/) — Syntax specification
-- [01_pipeline/](context/descriptions/01_pipeline/) — The eight pipeline stages, one folder each
-- [03_expressivity/](context/descriptions/03_expressivity/) — Feature status (`when`, `per`, `by`, aggregates, etc.)
-- [01_pipeline/04_canonicalizer/](context/descriptions/01_pipeline/04_canonicalizer/) — The constraint/objective shape contract
-- [01_pipeline/05_optimizer/](context/descriptions/01_pipeline/05_optimizer/) — Optimizer rewrite strategies
+- [language/](context/docs/language/guide.md) — The DECIDE language: syntax, scopes (`when`, `per`, `by`), functions, errors
+- [pipeline/](context/docs/README.md#pipeline-stages) — The eight pipeline stages, one folder each
+- [pipeline/04_canonicalizer/](context/docs/pipeline/04_canonicalizer/done.md) — The constraint/objective shape contract
+- [pipeline/05_optimizer/](context/docs/pipeline/05_optimizer/done.md) — Optimizer rewrite strategies
 
 ## Research
 

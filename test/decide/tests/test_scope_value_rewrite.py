@@ -1,4 +1,4 @@
-"""The value rewrite (syntax_reference.md §6.4; 01_pipeline/05_optimizer/done.md, "The
+"""The value rewrite (language/guide.md §6.4; pipeline/05_optimizer/done.md, "The
 value rewrite").
 
 A scoped constraint whose decision side mixes a reducer with something a grouped row

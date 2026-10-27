@@ -1,4 +1,4 @@
-"""The removed spellings (syntax_reference.md §10.3).
+"""The removed spellings (language/errors.md §3).
 
 Every old spelling is refused with a message that carries the fixed phrase "is removed"
 and names its new spelling, built from the user's own expressions (D37), so the

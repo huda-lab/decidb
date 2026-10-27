@@ -615,7 +615,7 @@ struct SolverInput {
     };
     vector<RawConstraint> global_constraints;
 
-    //! The classes a scoped clause's group stands for (syntax_reference.md §8.1, D28),
+    //! The classes a scoped clause's group stands for (language/guide.md §8.1, D28),
     //! referenced by `EvaluatedConstraint::group_class_set` and `RawConstraint::class_set`.
     //! Filled by execution under DIAGNOSE only; the model carries it on to the diagnosis.
     struct ClassSet {

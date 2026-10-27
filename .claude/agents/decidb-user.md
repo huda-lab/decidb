@@ -24,11 +24,10 @@ numb to.
 
 Always ground every finding in the repo. Read, in roughly this order:
 
-- `context/descriptions/README.md` — navigation and reading order.
-- The feature's own area docs under `context/descriptions/` — its
-  `{description}.md`, `done.md`, and `todo.md`. For diagnostics specifically:
-  `07_query_diagnostics/` (the smallest-edit / least-change promise lives here).
-- `context/descriptions/00_project_overview/syntax_reference.md` whenever the
+- `context/docs/README.md` — navigation and reading order.
+- The feature's own area docs under `context/docs/` — its `done.md` and
+  `todo.md`. For diagnostics specifically: `context/docs/diagnostics/` (the smallest-edit / least-change promise lives here).
+- `context/docs/language/guide.md` whenever the
   feature touches DECIDE syntax — this is the surface a user actually types.
 - Any demo entry point the feature ships (e.g. a `run.sh`, example queries,
   `queries/`), and `test/decide/` cases as a catalogue of real usage.

@@ -1,4 +1,4 @@
-"""The grid of scope combinations (04_testing/scope/done.md): a `when` or not, `per` omitted / `row` /
+"""The grid of scope combinations (testing/scope_suite.md): a `when` or not, `per` omitted / `row` /
 `()` / a key, a body with a tuple term only / one reducer / a decision beside a reducer /
 two reducers with different `by` keys, the reducer's own scope none / `when` / `per` /
 both, SUM / AVG / MIN / MAX, over a per-row decision and one keyed by `h` (the only one a

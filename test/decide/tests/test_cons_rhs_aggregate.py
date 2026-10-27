@@ -8,7 +8,7 @@ the explicit hoisted form the binder used to produce, (b) parity with the
 scalar-bound equivalent, and (c) `when` / `per` / AVG composition, including
 per-group RHS values.
 
-See context/descriptions/03_expressivity/sql_functions/done.md.
+See context/docs/language/functions.md.
 """
 
 import pytest

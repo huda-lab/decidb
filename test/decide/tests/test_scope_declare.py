@@ -3,7 +3,7 @@
 A key lists columns and/or relations of the FROM clause (a relation stands for all
 its stored columns). Rows with equal key values share one decision, NULL included;
 `per ()` is one decision for the whole query and no `per` is one per row. Each
-declarator has its own key. Behaviour: syntax_reference.md §2.3.
+declarator has its own key. Behaviour: language/guide.md §2.3.
 
 Model size is read from DECIDB_DUMP_MODEL (`num_vars`: one solver column per decision).
 Optima are judged against `_scope_oracle`, which builds the same model from Python data,
