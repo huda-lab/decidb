@@ -1715,6 +1715,30 @@ class TestDiagnosticsRelation:
         assert not list(csv.DictReader(io.StringIO(result.stdout)))
 
 
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize(
+        "conflict",
+        [
+            # A hard MAX: one class's `x * c` must reach 30, and `x <= c` caps it at 16.
+            "x <= c AND max(x * c) >= 30",
+            # A hard MIN: one class's `x * c` must fall to 3, and `x >= c` holds it at 4 or more.
+            "x >= c AND x <= 9 AND min(x * c) <= 3",
+        ],
+        ids=["max", "min"],
+    )
+    def test_hard_min_max_over_a_keyed_decision_repairs(self, request, cli_fixture, conflict):
+        """A hard MIN/MAX over a decision declared `per g:` (one instance per class, its members the class's rows):
+        DIAGNOSE reports an edit, and every suggested change pasted back runs."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1, 'a', 2), (2, 'a', 2), (3, 'b', 4)) t(id, g, c) "
+            f"DECIDE per g: x(INT) SUCH THAT {conflict} MAXIMIZE SUM(x)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        assert {r["state"] for r in rows} == {"infeasible"}, rows
+        _apply_reported_fix(cli, sql, rows)
+
+
 @pytest.mark.query_diagnostics
 class TestInfeasibleHeadlineAndRendering:
     """The diagnosis names the relevant clause, and clause labels read in the user's SQL

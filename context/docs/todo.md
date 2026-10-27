@@ -48,14 +48,7 @@ Each is ruled; the nested section says which shapes lift and which stay refused.
 
 ## A7. Messages and diagnosis text
 
-- [ ] EXPLAIN columns print by bare name over a join (qualify over a join) — [logical plan § 2](pipeline/03_logical_plan/todo.md#2-columns-print-by-their-bare-name-over-a-join)
-- [ ] Two keys over the same columns share one key text — [bugs § operands](issues/bugs.md#messages-operands-coefficients-and-keys)
-- [ ] A column reference is named in two forms (key SQL spelling vs bare name) — [bugs § operands](issues/bugs.md#messages-operands-coefficients-and-keys)
 - [ ] `BETWEEN` echoes its lower half only — [bugs § Diagnosis text](issues/bugs.md#diagnosis-text)
-
-## A8. Testing gaps
-
-- [ ] DIAGNOSE of a hard `MIN`/`MAX` over a keyed decision has no test — [testing § DIAGNOSE MIN/MAX](testing/todo.md#diagnose-of-a-hard-minmax-over-a-keyed-decision-has-no-test)
 
 ## A9. Code quality and naming
 
@@ -249,6 +242,24 @@ The agent finds the cause alone and stops with a proposed fix.
   for the lowered rows and Gurobi's native MAX, one solve per diagnosis that reports an `=` MIN/MAX. Recommended:
   (b). The fallback is today's output, which names the half (`max(2 * x) >= 20` → `max(2 * x) >= 6`).
   — [infeasible § 1](diagnostics/infeasible/todo.md#1-an--on-a-minmax-is-echoed-as-the-half-its-finding-loosens)
+
+## B15. Display text per occurrence: qualify over a join (D45), one name form, one key text per clause (architect review done)
+
+- [ ] One root under three A7 lines: display text lives on shared objects (`EntityScopeInfo.table_alias`, a key
+  reference's `name` set to its SQL spelling by `AddKeyColumn`, `decide_binder.cpp:390`) instead of on each
+  occurrence. A table-index → alias map on the operator would go stale: DuckDB renumbers DECIDE's bindings
+  (`ColumnBindingReplacer`, `RemoveUnusedColumns`) and the physical plan has none. Proposed: the binder gives each
+  data column reference its bare name plus a relation tag pointing into `source_fragments` (over two or more
+  relations only), `RenderSource` prints `relation.name`, and every `relations`/`no_relations` parameter goes; a
+  reducer's written key is recorded per occurrence the same way (a new tag kind; `__source_fragment_` would replace
+  the whole reducer). Needs B11 first: alias tags already leak into direct-plan EXPLAIN. Choices: (1) relation text in
+  `source_fragments`, in a new `relation_names` registry (serialized field), or in the tag payload? Recommended:
+  `source_fragments`. (2) Tag where each reference is bound, or in one pass after binding? Recommended: where bound.
+  (3) Land the per-occurrence key text with this change or with the one key table (B1)? Recommended: with this
+  change, before B1, which merges more keys into one entry. (4) Does a key written bare (`per d:`) echo qualified over
+  a join (D45 qualifies columns; keys "keep as written")? Recommended: as written.
+  — [logical plan § 2](pipeline/03_logical_plan/todo.md#2-columns-print-by-their-bare-name-over-a-join),
+  [bugs § operands](issues/bugs.md#messages-operands-coefficients-and-keys)
 
 ## C1. Long or memory-heavy runs (owner starts them)
 

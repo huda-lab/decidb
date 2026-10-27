@@ -44,9 +44,3 @@ as those identifiers; renaming them together keeps one
 vocabulary.
 
 - Update: the area table in [README.md](README.md) and every section of [coverage.md](coverage.md) that names these files.
-
-## DIAGNOSE of a hard `MIN`/`MAX` over a keyed decision has no test
-
-- Test: an infeasible query with a hard `MIN`/`MAX` over a keyed decision (`DECIDE per K: x(TYPE)`), run under
-  `DIAGNOSE`; each suggested edit pasted back runs.
-- Update: [coverage.md](coverage.md) → MIN and MAX.
