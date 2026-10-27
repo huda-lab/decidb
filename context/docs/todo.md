@@ -44,11 +44,10 @@ Every line waits for B1 (the NULL-key rule changes how a key becomes groups) and
 
 Each is ruled; the nested section says which shapes lift and which stay refused.
 
-- [ ] Lift `norm(D:)` and the strict comparison over a fractional MIN/MAX — [binder § 1](pipeline/02_binder/todo.md#1-bind-time-refusals-a-later-change-may-lift)
 - [ ] Lift a decision beside MIN/MAX in the objective — [optimizer § 4](pipeline/05_optimizer/todo.md#4-refusals-a-later-change-may-lift)
 - [ ] A `BOOL` decision as a factor on a reducer — [canonicalizer § 1](pipeline/04_canonicalizer/todo.md#1-a-decision-as-a-factor-on-a-reducer) (same as bugs § Limitations, first item)
 - [ ] Quadratic row refuses a row-varying factor on a query-wide decision — [bugs § Limitations](issues/bugs.md#limitations-not-bugs)
-- [ ] Functions that behave unlike SQL: a data-only reducer skips NULL; audit the rest and bring each divergence to the owner — [binder § 2](pipeline/02_binder/todo.md#2-functions-that-behave-unlike-sql)
+- [ ] Functions that behave unlike SQL: a data-only reducer skips NULL; audit the rest and bring each divergence to the owner — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
 
 ## A6. Smaller models
 

@@ -121,6 +121,18 @@ static void WalkAdditiveSpine(const Expression &expr, int sign, IS_DECISION &&is
 	callback(sign, expr);
 }
 
+ExtremumBody SplitExtremumBody(const Expression &body, idx_t decide_index) {
+	// Adding one number to every row does not change which row is largest; a column addend varies by row and stays.
+	auto is_decision = [&](const Expression &node) {
+		return BoundExpressionReferencesDecide(node, decide_index);
+	};
+	ExtremumBody split;
+	WalkAdditiveSpine(body, 1, is_decision, [&](int sign, const Expression &term) {
+		(term.IsFoldable() && !is_decision(term) ? split.moved : split.kept).emplace_back(sign, &term);
+	});
+	return split;
+}
+
 vector<CanonicalAtom> ReadCanonicalAtoms(const Expression &side, idx_t decide_index) {
 	vector<CanonicalAtom> atoms;
 	WalkAdditiveSpine(
@@ -542,11 +554,47 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 		    if (factor) {
 			    scale = ComposeScale(factor, factor_divides, std::move(scale), divides, divides);
 		    }
+		    if (DecomposeExtremumAddends(term_sign, term, whole, scale, divides, out)) {
+			    return;
+		    }
 		    // Classify on the whole original term. The factors are decision-free and
 		    // reducer-free by construction, so this agrees with classifying `term` -- stated
 		    // rather than assumed, because Classify is the part that was wrong twice before.
 		    out.push_back(Atom {term_sign, &term, Classify(whole), std::move(scale), divides});
 	    });
+}
+
+bool DecideCanonicalizer::DecomposeExtremumAddends(int sign, const Expression &term, const Expression &whole,
+                                                   unique_ptr<Expression> &scale, bool divides,
+                                                   vector<Atom> &out) const {
+	// `max(x + 0.5)` is `max(x) + 0.5`: each constant addend joins the side under the reducer's factor, so it reaches
+	// the bound and a strict bound steps on `max(x)`.
+	auto &reducer = *UnwrapDecideCasts(term, decide_index);
+	if (reducer.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		return false;
+	}
+	auto &aggregate = reducer.Cast<BoundAggregateExpression>();
+	const auto &name = aggregate.function.name;
+	if ((name != "min" && name != "max") || aggregate.children.size() != 1) {
+		return false;
+	}
+	auto split = SplitExtremumBody(*aggregate.children[0], decide_index);
+	if (split.moved.empty()) {
+		return false;
+	}
+	vector<Atom> kept;
+	for (auto &part : split.kept) {
+		kept.push_back(Atom {part.first, part.second, Classify(*part.second)});
+	}
+	auto owned = RebindReducer(aggregate, name, BuildAdditive(kept, false));
+	auto *rebuilt = owned.get();
+	auto *factor = scale.get();
+	out.push_back(Atom {sign, rebuilt, Classify(whole), std::move(scale), divides, std::move(owned)});
+	for (auto &part : split.moved) {
+		out.push_back(
+		    Atom {sign * part.first, part.second, Classify(*part.second), factor ? factor->Copy() : nullptr, divides});
+	}
+	return true;
 }
 
 //! Whether `expr` is a norm marker whose order has an expression for a definition: 1, 2, 'inf', and an L0 norm of
@@ -594,22 +642,19 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 	auto &body = *marker.children[0];
 	unique_ptr<Expression> definition;
 	if (order == "2") {
-		definition = BindAggregate("sum", BindOp("power", body.Copy(),
-		                                         make_uniq<BoundConstantExpression>(Value::INTEGER(2))));
+		definition = RebindReducer(marker, "sum",
+		                           BindOp("power", body.Copy(), make_uniq<BoundConstantExpression>(Value::INTEGER(2))));
 	} else if (order == "1" || order == "inf") {
-		definition = BindAggregate(order == "1" ? "sum" : "max", BindOp("abs", body.Copy()));
+		definition = RebindReducer(marker, order == "1" ? "sum" : "max", BindOp("abs", body.Copy()));
 	} else {
 		// An L0 norm of data counts the rows whose value is not 0; its `M` bounds a decision and means nothing here.
 		// SIGN reads a NaN as 0, so a value check reads the body (DecideWrittenNormBody), not this definition.
-		definition = BindAggregate("sum", BindOp("abs", BindOp("sign", body.Copy())));
+		definition = RebindReducer(marker, "sum", BindOp("abs", BindOp("sign", body.Copy())));
 	}
-	auto alias = marker.GetAlias();
+	auto alias = definition->GetAlias();
 	RemoveDecideTag(alias, string(NORM_MARKER_TAG_PREFIX) + order + "__");
 	AddDecideTag(alias, string(WRITTEN_NORM_TAG_PREFIX) + order + "__");
 	definition->SetAlias(std::move(alias));
-	if (marker.filter) {
-		definition->Cast<BoundAggregateExpression>().filter = marker.filter->Copy();
-	}
 	expr = std::move(definition);
 }
 
@@ -628,6 +673,16 @@ unique_ptr<Expression> DecideCanonicalizer::BindAggregate(const string &name, un
 	children.push_back(std::move(child));
 	return function_binder.BindAggregateFunction(entry.functions.GetFunctionByOffset(best.GetIndex()),
 	                                             std::move(children));
+}
+
+unique_ptr<Expression> DecideCanonicalizer::RebindReducer(const BoundAggregateExpression &from, const string &name,
+                                                          unique_ptr<Expression> child) const {
+	auto result = BindAggregate(name, std::move(child));
+	result->SetAlias(from.GetAlias());
+	if (from.filter) {
+		result->Cast<BoundAggregateExpression>().filter = from.filter->Copy();
+	}
+	return result;
 }
 
 //! The bare decision `expr` is a constant multiple of, with that multiple folded into

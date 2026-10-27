@@ -121,6 +121,135 @@ def test_negative_factor_on_a_hard_max(request, scope_solver, cli_fixture):
     )
 
 
+def _group_max(a, body, rows=range(len(CAPS))):
+    return max(body(a[f"x{i}"]) for i in rows)
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause_sql, objective_sql, holds, maximize",
+    [
+        pytest.param(
+            "MAX(x + 0.5) > 3", "MINIMIZE SUM(x)", lambda a: _group_max(a, lambda x: x + 0.5) > 3, False, id="max-plus"
+        ),
+        pytest.param(
+            "MIN(x - 0.5) < 2", "MAXIMIZE SUM(x)", lambda a: min(x - 0.5 for x in _xs(a)) < 2, True, id="min-minus"
+        ),
+        pytest.param(
+            "MAX(0.5 + 2 * x) > 4",
+            "MINIMIZE SUM(x)",
+            lambda a: _group_max(a, lambda x: 0.5 + 2 * x) > 4,
+            False,
+            id="addend-first",
+        ),
+        pytest.param(
+            "MAX(0.5 - x) > -2",
+            "MAXIMIZE SUM(x)",
+            lambda a: _group_max(a, lambda x: 0.5 - x) > -2,
+            True,
+            id="negated-decision",
+        ),
+        pytest.param(
+            "MAX(when g = 'A': x + 0.5) > 3",
+            "MINIMIZE SUM(x)",
+            lambda a: _group_max(a, lambda x: x + 0.5, rows=(0, 1)) > 3,
+            False,
+            id="when",
+        ),
+        pytest.param(
+            "MAX(x + 0.5) by (g) > 3",
+            "MINIMIZE SUM(x)",
+            lambda a: _group_max(a, lambda x: x + 0.5, rows=(0, 1)) > 3
+            and _group_max(a, lambda x: x + 0.5, rows=(2,)) > 3,
+            False,
+            id="by",
+        ),
+        pytest.param(
+            "SUM(x) + MAX(x + 0.5) > 6",
+            "MINIMIZE SUM(x)",
+            lambda a: sum(_xs(a)) + _group_max(a, lambda x: x + 0.5) > 6,
+            False,
+            id="composed",
+        ),
+        pytest.param(
+            "2 * MAX(x + 0.75) > 7",
+            "MINIMIZE SUM(x)",
+            lambda a: 2 * _group_max(a, lambda x: x + 0.75) > 7,
+            False,
+            id="scaled",
+        ),
+        pytest.param(
+            "x + MAX(x + 0.5) by (g) > 4",
+            "MINIMIZE SUM(x)",
+            lambda a: all(a[f"x{i}"] + _group_max(a, lambda x: x + 0.5, rows=(0, 1)) > 4 for i in (0, 1))
+            and a["x2"] + a["x2"] + 0.5 > 4,
+            False,
+            id="helper",
+        ),
+    ],
+)
+def test_a_constant_addend_leaves_a_min_or_max_for_the_bound(
+    request, cli_fixture, clause_sql, objective_sql, holds, maximize
+):
+    """`MAX(x + 0.5) > 3` is `MAX(x) > 2.5`: the constant moves onto the bound, and the strict
+    bound steps on `MAX(x)`, whole for a whole `x`. Judged literally, so a stepped `MAX(x + 0.5)
+    >= 4` would miss the optimum."""
+    cli = request.getfixturevalue(cli_fixture)
+    objective = lambda a: sum(_xs(a))  # noqa: E731
+    _enumerated(
+        cli, _query("x(INT)", f"x <= cap AND {clause_sql}", objective_sql), _x_domains(), holds, objective, maximize
+    )
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_a_constant_addend_leaves_a_min_or_max_under_not_equal(request, cli_fixture):
+    """`MAX(x + 0.5) + y <> 0.5` is `MAX(x) + y <> 0` on each row: the helper holds `MAX(x)`,
+    whole, so `<>` splits it exactly."""
+    cli = request.getfixturevalue(cli_fixture)
+    _enumerated(
+        cli,
+        _query(
+            "x(INT), y(INT)",
+            "x <= cap AND y <= 2 AND per row: MAX(x + 0.5) + y <> 0.5",
+            "MINIMIZE SUM(x) + SUM(y)",
+            select="id, x, y",
+        ),
+        _x_domains(**{f"y{i}": range(3) for i in range(len(CAPS))}),
+        lambda a: all(max(_xs(a)) + 0.5 + a[f"y{i}"] != 0.5 for i in range(len(CAPS))),
+        lambda a: sum(_xs(a)) + sum(a[f"y{i}"] for i in range(len(CAPS))),
+        maximize=False,
+    )
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_a_constant_addend_leaves_a_min_or_max_in_the_objective(request, cli_fixture):
+    """`MINIMIZE MAX(x + 0.5) + SUM(x)` minimizes `MAX(x) + SUM(x)`, shifted by 0.5."""
+    cli = request.getfixturevalue(cli_fixture)
+    _enumerated(
+        cli,
+        _query("x(INT)", "x <= cap AND x >= 1", "MINIMIZE MAX(x + 0.5) + SUM(x)"),
+        _x_domains(),
+        lambda a: min(_xs(a)) >= 1,
+        lambda a: _group_max(a, lambda x: x + 0.5) + sum(_xs(a)),
+        maximize=False,
+    )
+
+
+@BOTH_SOLVERS
+@pytest.mark.error
+def test_a_column_addend_keeps_a_min_or_max_fractional(request, cli_fixture):
+    """`MAX(x + w)` is not `MAX(x)` plus one number: `w` varies by row, so it stays inside and
+    a strict bound cannot step."""
+    cli = request.getfixturevalue(cli_fixture)
+    result = cli.execute_raw(_query("x(INT)", "x <= cap AND MAX(x + w) > 3", "MINIMIZE SUM(x)"))
+    assert (
+        "Comparison '>' is not supported here: 'max(x + w)' has type DECIMAL(21,1) and can take fractional values"
+    ) in result.stderr, result.stderr
+
+
 # ---------------------------------------------------------------------------
 # A row-varying factor on a reducer, and a data reducer beside a per-row decision
 # ---------------------------------------------------------------------------
@@ -447,25 +576,6 @@ def _x_domains(**extra):
 
 def _xs(a):
     return [a[f"x{i}"] for i in range(len(CAPS))]
-
-
-@pytest.mark.parametrize(
-    "decisions, clause, operand, op",
-    [
-        ("x(INT)", "MAX(x + 0.5) > 3", "max(x + 0.5)", ">"),
-        ("x(INT)", "MIN(x - 0.5) < 2", "min(x - 0.5)", "<"),
-        ("x(INT)", "2 * MAX(x + 0.25) > 6", "max(x + 0.25)", ">"),
-        ("x(INT)", "per g: max(x + 0.5) by (g) > 2", "max(x + 0.5) by (g)", ">"),
-        ("x(INT), y(INT)", "y <= 2 AND per row: y + max(x + 0.5) > 8", "max(x + 0.5)", ">"),
-        ("x(INT), y(INT)", "y <= 2 AND per row: max(x + 0.5) + y <> 3", "max(x + 0.5)", "<>"),
-    ],
-)
-def test_constant_inside_min_or_max_under_a_step_is_refused(decidb_cli, decisions, clause, operand, op):
-    """A strict bound or `<>` on a MIN or MAX steps the extremum itself, where a constant
-    inside stays in every member: `MAX(x + 0.5)` is never whole, so the clause is refused
-    with the non-strict remedy."""
-    stderr = decidb_cli.execute_raw(_query(decisions, f"x <= cap AND {clause}", "MAXIMIZE SUM(x)")).stderr
-    assert f"Comparison '{op}' is not supported here: '{operand}' has type DECIMAL" in stderr, stderr
 
 
 @BOTH_SOLVERS

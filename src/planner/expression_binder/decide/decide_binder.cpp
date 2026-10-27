@@ -30,6 +30,7 @@
 #include <cmath>
 
 #include "duckdb/main/client_context.hpp"
+#include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 
 namespace duckdb {
@@ -243,19 +244,6 @@ static void ValidateScopePlacement(const ParsedExpression &expr, ScopePlacement 
 	if (IsDecideScopeMarker(expr)) {
 		// Only in front of a clause or of a reducer's argument, both peeled before here.
 		ValidateNoScopeSpelling(expr);
-	}
-	// The colon form takes SUM, AVG, MIN or MAX only.
-	if (IsDecideMarker(expr, QUALIFIED_REDUCER_TAG) && func.children.size() > 1 &&
-	    func.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION &&
-	    StringUtil::CIEquals(func.children[0]->Cast<const FunctionExpression>().function_name, "norm")) {
-		vector<string> relations;
-		for (idx_t i = 1; i < func.children.size(); i++) {
-			relations.push_back(func.children[i]->ToString());
-		}
-		throw BinderException(expr,
-		                      "DECIDE: norm(%s: ...) is not supported yet; a relation qualifier takes SUM, AVG, "
-		                      "MIN or MAX",
-		                      StringUtil::Join(relations, ", "));
 	}
 	bool scoped_argument = !func.is_operator && !func.children.empty() && IsDecideScopeMarker(*func.children[0]);
 	if (scoped_argument && !IsDecideAggregateName(func.function_name)) {
@@ -998,6 +986,20 @@ static bool IsBoundAvgAggregate(const Expression &expr) {
 	return StringUtil::CIEquals(agg.function.name, "avg");
 }
 
+static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoist, idx_t decide_index,
+                                      bool addends_count = false);
+
+//! Is a MIN or MAX of `body`, standing on the side's additive spine, whole-numbered? Its constant addends move onto
+//! the bound in stage 04 (SplitExtremumBody), so only the terms that stay count.
+static bool DecideExtremumBodyIsWholeNumbered(const Expression &body, idx_t decide_index) {
+	for (auto &term : SplitExtremumBody(body, decide_index).kept) {
+		if (!DecideSideIsWholeNumbered(*term.second, false, decide_index, /*addends_count=*/true)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 //! Is `expr` provably whole-numbered from declared types alone?
 //!
 //! `allow_avg_hoist` is set only for `<>`, whose rewrite multiplies both sides by the
@@ -1006,11 +1008,11 @@ static bool IsBoundAvgAggregate(const Expression &expr) {
 //!
 //! `addends_count` is set where a decision-free addend is part of the value rather than
 //! of the bound: inside a MIN or MAX, whose strict bound is stepped on the extremum itself
-//! (stage 06), and under anything that is not linear in it -- a power, a product of
-//! decisions, a norm of order 1, 2 or 'inf' (`|x + 0.5|`, `(x + 0.25)^2`, `(x + 0.5) * y`
-//! are not whole).
+//! (stage 06) once its constant addends are moved out (DecideExtremumBodyIsWholeNumbered), and
+//! under anything that is not linear in it -- a power, a product of decisions, a norm of order
+//! 1, 2 or 'inf' (`|x + 0.5|`, `(x + 0.25)^2`, `(x + 0.5) * y` are not whole).
 static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoist, idx_t decide_index,
-                                      bool addends_count = false) {
+                                      bool addends_count) {
 	if (IsBoundL0NormMarker(expr)) {
 		return true;
 	}
@@ -1037,8 +1039,14 @@ static bool DecideSideIsWholeNumbered(const Expression &expr, bool allow_avg_hoi
 		const auto &name = agg.function.name;
 		bool extremum = StringUtil::CIEquals(name, "min") || StringUtil::CIEquals(name, "max");
 		bool norm = HasDecideTag(agg.alias, NORM_MARKER_TAG_PREFIX);
-		if ((StringUtil::CIEquals(name, "sum") || extremum) && agg.children.size() == 1) {
-			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, addends_count || norm || extremum);
+		if (extremum && agg.children.size() == 1) {
+			// On the side's additive spine its constant addends move to the bound (stage 04); under a power or a
+			// product of decisions they stay inside, and the whole body counts.
+			return addends_count ? DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, true)
+			                     : DecideExtremumBodyIsWholeNumbered(*agg.children[0], decide_index);
+		}
+		if (StringUtil::CIEquals(name, "sum") && agg.children.size() == 1) {
+			return DecideSideIsWholeNumbered(*agg.children[0], false, decide_index, addends_count || norm);
 		}
 		return DecideTypeIsWholeNumbered(expr.return_type);
 	}

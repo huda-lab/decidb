@@ -37,7 +37,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A data-only reducer scaling a decision (`x * avg(cap)`, `sum(x) / sum(cap)`) | bind | `An aggregate over table columns ... cannot multiply / divide / be divided together with a decision variable` |
 | `<`, `>` or `<>` on a side that is not whole-numbered | bind | names the offender and the cast that fixes it |
 | `<`, `>` or `<>` on a helper decision whose value can be fractional | bind | `Comparison '>' is not supported here: 'sum(ship + 0.5) by (D.region)' can take fractional values in this constraint, and stepping the bound is exact only on whole numbers. Compare with '>=' instead.` |
-| A strict bound on a `MIN`/`MAX` whose value can be fractional | bind | `Comparison '>' is not supported here: 'max(x + 0.5)' has type DECIMAL(21,1) ... Compare with '>=' instead.` |
+| A strict bound on a `MIN`/`MAX` whose body can be fractional once its constant addends move to the bound | bind | `Comparison '>' is not supported here: 'max(x + w)' has type DECIMAL(21,1) ... Compare with '>=' instead.` |
 | A NULL beside a decision | bind | `DECIDE: '(x + NULL)' is NULL whatever the decisions are; replace the NULL with a value, as in COALESCE(column, 0)` |
 | A NULL in a value the solver reads | run | `DECIDE: column "weight" is NULL. Impute it with COALESCE(weight, 0) or filter those rows out with a WHERE clause.` |
 | A cast over a decision | bind | refused in `SUCH THAT` and the objective ([guide.md §3.2](guide.md#32-numeric-precision-and-casts)) |
@@ -63,7 +63,6 @@ what DeciDB formulates; their open work is in the owning stage's `todo.md`.
 | **roadmap** A `when` inside either reducer of the two-level objective | `DECIDE: when inside the outer reducer of min(per g: ...) is not supported yet; write it in front of the objective` (inner reducer likewise) |
 | **roadmap** A two-level `by` key other than its `per` key | `DECIDE: in min(per g: sum(...) by (id)) the by key must be the per key; any other is not supported yet` |
 | **roadmap** An outer `AVG` in the two-level objective | `DECIDE: avg over the classes of avg(per g: sum(...) by (g)) is not supported yet; write sum, min or max over them` |
-| `norm(D: e, p)` | `DECIDE: norm(D: ...) is not supported yet; a relation qualifier takes SUM, AVG, MIN or MAX` |
 | A product or square of decisions inside a reducer that a helper decision replaces | `DECIDE: 'sum(ship * ship)' is not supported yet in this constraint: a product or square of decisions inside a reducer is accepted only where the constraint's reducers share one by key, under a whole-query factor, with nothing beside them but data and query-wide decisions, each on its own` |
 | `AVG` under `<>` beside another term, or with its own `when`/`per` | `DECIDE: AVG in a <> constraint is not supported yet ...` |
 | `<>` over a square or product of decisions not linearized first (a product with a `BOOL` is) | `DECIDE: <> over a product or a power of decisions is not supported yet: power(x, 2) <> 9` |

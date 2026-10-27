@@ -48,7 +48,9 @@ The pass **never opens a term algebraically**. It decomposes each side additivel
 and asks one question of each resulting term — "does it reference a decision
 variable?" — then moves terms across the relation. A quadratic `POWER(x-t,2)`, a
 composed `MAX(x*v)` and a filtered `sum(when c: x)` are all just decision-bearing
-terms here, indistinguishable from `x`.
+terms here, indistinguishable from `x`. The one look inside a term, a `MIN` or `MAX` handing
+its constant addends to the side (§3.3), is an identity that holds for every body, so it
+cannot decline either.
 
 That restriction is the whole design. A pass that may decline can never be the
 single home for anything: every consumer downstream then has to handle both "it
@@ -118,7 +120,7 @@ a rendering job rather than a re-plumbing job.
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
 | **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
-| **C4** | Both additive spines contain only `+`, binary `-`, unary `-`, and binder-generated casts over decision algebra. Data casts are atoms. A factor known before the query runs distributes over an additive child (`2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`), as a negation does; a row-varying factor or a subquery over a sum stays one atom. Like decision terms under such factors merge into one (`x + x` is `2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`); a group whose factors cancel is left as written. The pass never opens an atom or distributes a cast. |
+| **C4** | Both additive spines contain only `+`, binary `-`, unary `-`, and binder-generated casts over decision algebra. Data casts are atoms. A factor known before the query runs distributes over an additive child (`2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`), as a negation does; a row-varying factor or a subquery over a sum stays one atom. Like decision terms under such factors merge into one (`x + x` is `2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`); a group whose factors cancel is left as written. A `MIN` or `MAX` term hands its constant addends to the side (§3.3); otherwise the pass never opens an atom or distributes a cast. |
 | **C5** | Every comparison takes one shape of §3.10: per-row (no decision reducer), aggregate (decision reducers sharing one `by` key, beside query-wide terms only) or value (any other side with a decision reducer, which the value rewrite turns per-row). A shape §3.10 refuses is rejected here. |
 | **C6** | A factor attached to a decision-bearing reducer has one canonical representation, outside the reducer. In the objective it is one value for the whole query; in a constraint it may vary by row, which makes the comparison VALUE. A decision is never a factor. |
 | **C7** | Structural tags and source provenance survive rebuilding. The result is a fixed point: `Canon(Canon(c)) == Canon(c)`. |
@@ -139,6 +141,15 @@ anything else -> one atomic term
 
 Indivisible atoms include `x`, `price * x`, `POWER(x - target, 2)`,
 `SUM(x * price)`, `MAX(x * value)`, `sum(when condition: x)`.
+
+One atom gives up part of itself. A `MIN` or `MAX` term hands each constant addend of its
+body to the side, under the reducer's factor: `2 * max(x + 0.75) > 7` is `2 * max(x) + 2 *
+0.75 > 7`. Adding one number to every row does not change which row is extreme, so this is
+exact; a column addend (`max(x + w)`) varies by row and stays. The constant then reaches the
+bound and a strict bound steps on `max(x)`, whole whenever `x` is. `SplitExtremumBody` is the
+split, and the binder's whole-number test reads the same split (`../02_binder/done.md`), so
+the two cannot disagree on what moves. A `MIN` or `MAX` that is not a term of the side (under
+a power) is not split, and the binder counts its whole body.
 
 `ReadCanonicalAtoms` reads these atoms back from a canonical side, with each sign
 and any reducer factor, by the same spine walk `Decompose` uses. Readers of

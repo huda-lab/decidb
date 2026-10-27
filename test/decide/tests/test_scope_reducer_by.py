@@ -854,19 +854,9 @@ def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
             id="strict-avg-with-an-inner-per",
         ),
         pytest.param(
-            "per D.region: max(ship + 0.5) by (D.region) > 3",
-            "Comparison '>' is not supported here: 'max(ship + 0.5) by (D.region)' has type DECIMAL",
-            id="strict-max-of-a-fraction",
-        ),
-        pytest.param(
             "per (): min(ship - D.networkReserveShare) < 3",
             "Comparison '<' is not supported here: 'min(ship - D.networkReserveShare)' has type DECIMAL",
             id="strict-min-of-a-fractional-column",
-        ),
-        pytest.param(
-            "when S.priority: sum(ship) + max(ship + 0.5) > 30",
-            "Comparison '>' is not supported here: 'max(ship + 0.5)' has type DECIMAL",
-            id="strict-composed-max-of-a-fraction",
         ),
     ],
 )

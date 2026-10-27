@@ -41,7 +41,7 @@ until the deck's behavior is built; the move replaces it.
 - **Deck:** a reducer over no rows is NULL, a reducer skips NULL inputs as SQL does, and a NULL that reaches the
   comparison unreduced skips that constraint instance. The deck states this with frame selectors, as the general NULL
   rule. The owner's audit of SQL NULL behavior is
-  [../pipeline/02_binder/todo.md §2](../pipeline/02_binder/todo.md#2-functions-that-behave-unlike-sql).
+  [../pipeline/02_binder/todo.md §1](../pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql).
 
 ## Nested reducers (ANR, pp. 25, 28–32)
 

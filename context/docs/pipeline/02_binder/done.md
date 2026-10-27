@@ -243,9 +243,10 @@ determines it — every column, per-row and keyed decision in it — is the DETE
 check of stage 04, on the data, as for `per` (*"DECIDE: per D does not determine the
 decision y (in sum(D: ...))"*). Refused at bind time: a qualifier that is not a relation
 name, a relation not in the FROM clause, a qualifier on anything but `SUM`, `AVG`,
-`MIN` or `MAX` (on `norm` by the scope validator: *"DECIDE: norm(D: ...) is not
-supported yet; ..."*), and on the decision side a body of query-wide decisions alone
-(`ClassifyReducerCall`, as for any reducer).
+`MIN`, `MAX` or `norm`, and on the decision side a body of query-wide decisions alone
+(`ClassifyReducerCall`, as for any reducer). `norm` binds as a `SUM` marker, so `norm(D: e, p)`
+carries the tag like `SUM(D: e)`; stage 04's definition of orders 1, 2 and `'inf'` and stage
+05's L0 lowering keep the alias, so every order reads each row of `D` once.
 
 A reducer may name more than one relation, `SUM(D, T: expr)`. The key is every named
 relation's stored columns, so a row is a duplicate only when it repeats on **every**
@@ -498,8 +499,6 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   supported in when, per or by"*. Each reads rows the scope has not chosen yet, so
   `ValidateScopeData` refuses them with a caret, in that order, before execution sees the
   query. A `per` key cannot hold one: the grammar takes only columns and relations there;
-- `norm(D: e, p)`: *"DECIDE: norm(D: ...) is not supported yet; a relation qualifier
-  takes SUM, AVG, MIN or MAX"* (bound, it would read `SUM(D: e)`);
 - a reducer inside a reducer: *"DECIDE: an aggregate inside an aggregate is not supported
   yet"*, except the objective's two-level form (`IsTwoLevelObjective`), and except a
   reducer over data alone under a `*` or `/` that holds a decision (`sum(avg(cap) * x)`):
@@ -541,11 +540,13 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
   fragment-tagged like a constraint's.
 - A strict comparison over a fractional operand names a reducer as written, scopes and
   `by` included (*"'avg(ship) by (D.region)' has type DOUBLE ..."*). A decision-free
-  addend belongs to the bound where the side is linear in it; `DecideSideIsWholeNumbered`'s
-  `addends_count` makes it part of the value inside a `MIN` or `MAX` (stage 06 steps
-  the bound on the extremum, so `max(x + 0.5) > 3` is refused), under a power, in a
-  product of decisions and in a norm of order 1, 2 or `'inf'`
-  (`POWER(x + 0.25, 2) < 11`, `(x + 0.5) * y < 5`, `norm(x + 0.5, 'inf') > 3`).
+  addend belongs to the bound where the side is linear in it. A `MIN` or `MAX` that is a term
+  of the side hands its constant addends to the bound in stage 04 (`max(x + 0.5) > 3` is
+  `max(x) > 2.5`), so only the terms that stay count; `SplitExtremumBody` is the one split both
+  stages read. A column addend stays (`max(x + w) > 3` is refused). `DecideSideIsWholeNumbered`'s
+  `addends_count` makes an addend part of the value under a power, in a product of decisions
+  and in a norm of order 1, 2 or `'inf'` (`POWER(x + 0.25, 2) < 11`, `POWER(max(x + 0.5), 2) > 6`,
+  `(x + 0.5) * y < 5`, `norm(x + 0.5, 'inf') > 3`).
   `DecideValueIsWholeNumbered` exports the same test with every addend counted, for the
   value rewrite's helper decisions (stage 05).
 - A scalar function over a decision that binds to a NULL constant (`x + NULL`: DuckDB

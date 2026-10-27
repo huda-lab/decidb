@@ -71,7 +71,7 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   NULL inside `x * (weight / capacity)` names `weight`. No row number is given: the fix is to the column, and a scan
   ordinal is not something a user can look up. `COALESCE`/`IFNULL` work inline when decision-free. SQL's `SUM` skips
   NULLs, but DECIDE errors: matching SQL would not even be one rule (`AVG` would need its count adjusted per group),
-  and a silent zero changes the problem. Whether to keep this is open ([binder todo §2](../pipeline/02_binder/todo.md#2-functions-that-behave-unlike-sql)).
+  and a silent zero changes the problem. Whether to keep this is open ([binder todo §1](../pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)).
   Tests: `test_null_coalesce_reducer.py`.
 
 ## Objectives

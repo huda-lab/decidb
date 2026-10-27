@@ -144,6 +144,15 @@ struct CanonicalAtom {
 //! reader of canonical trees cannot disagree with the pass that built them.
 vector<CanonicalAtom> ReadCanonicalAtoms(const Expression &side, idx_t decide_index);
 
+//! The additive terms of a MIN or MAX body as canonicalization splits it: a constant addend moves beside the reducer
+//! (`max(x + 0.5)` is `max(x) + 0.5`), every other term stays inside. The binder judges a strict bound on the terms
+//! that stay, so the two cannot disagree on what moves.
+struct ExtremumBody {
+	vector<pair<int, const Expression *>> kept;
+	vector<pair<int, const Expression *>> moved;
+};
+ExtremumBody SplitExtremumBody(const Expression &body, idx_t decide_index);
+
 //! The semantic row shape of a canonical DECIDE comparison. VALUE is a comparison whose
 //! decision side mixes a decision reducer with something the aggregate shape cannot hold
 //! -- a per-row or keyed decision, a factor that varies by row, a second `by` key, a
@@ -319,6 +328,9 @@ private:
 		unique_ptr<Expression> scale;
 		//! false: the term rebuilds as `scale * expr`. true: as `expr / scale`.
 		bool scale_divides = false;
+		//! The term when Decompose built it rather than borrowed it (a MIN or MAX whose constant addends moved
+		//! beside it); `expr` points into it.
+		unique_ptr<Expression> owned;
 	};
 
 	//! Split an expression into signed additive terms. Descends through `+`,
@@ -334,6 +346,11 @@ private:
 	//! `2 * x`, `x - 3 * x` is `-2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`. A group
 	//! whose factors cancel is left as written. Returns whether anything merged.
 	bool MergeLikeAtoms(vector<Atom> &atoms) const;
+
+	//! A MIN or MAX term with a constant addend in its body (SplitExtremumBody), pushed as the reducer over the rest
+	//! and each constant beside it under the reducer's factor. False, pushing nothing, for any other term.
+	bool DecomposeExtremumAddends(int sign, const Expression &term, const Expression &whole,
+	                              unique_ptr<Expression> &scale, bool divides, vector<Atom> &out) const;
 
 	//! The one factor `outer` stands for when applied outside a term already scaled by
 	//! `inner`: `M`, `D` or `M / D`, in the spelling PeelScale emits. Either may be null.
@@ -395,6 +412,9 @@ private:
 	unique_ptr<Expression> DesugarNorms(const Expression &expr) const;
 	void DesugarNormsInPlace(unique_ptr<Expression> &expr) const;
 	unique_ptr<Expression> BindAggregate(const string &name, unique_ptr<Expression> child) const;
+	//! `name(child)` carrying `from`'s alias and `when`: a reducer spelled anew keeps its tags and scope.
+	unique_ptr<Expression> RebindReducer(const BoundAggregateExpression &from, const string &name,
+	                                     unique_ptr<Expression> child) const;
 	unique_ptr<Expression> CanonicalizeComparisonInternal(const Expression &comparison) const;
 	unique_ptr<Expression> CanonicalizeObjectiveInternal(const Expression &objective,
 	                                                     double &out_constant_offset) const;

@@ -14,6 +14,7 @@ DECIDB_DUMP_MODEL.
 
 import pytest
 
+from ._brute_force import judge, optimum
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import DEPOTS, SHIPMENTS, aligned, answer, from_clause, joined, scope_solver  # noqa: F401
 from ._scope_oracle import CONSTANT, GLOBAL, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
@@ -263,29 +264,89 @@ def test_a_reducer_with_no_row_for_a_group_is_an_error(decidb_cli, scope_solver)
     assert [ship for _, ship, _ in rows] == [10, 20, 30, 3, 25]
 
 
-@pytest.mark.error
-@pytest.mark.error_binder
+def _per_depot(result) -> dict:
+    """The one value `open` shows on every row of each depot."""
+    values = {}
+    for row in result:
+        assert values.setdefault(row["depotID"], row["open"]) == row["open"], f"one depot, two values: {result}"
+    return values
+
+
+_DEPOT_DOMAINS = {depot[0]: range(6) for depot in DEPOTS}
+_ROWS_PER_DEPOT = {depot[0]: sum(1 for s in SHIPMENTS if s[1] == depot[0]) for depot in DEPOTS}
+
+
+@pytest.mark.correctness
 @pytest.mark.parametrize(
-    "clause, objective",
+    "cli_fixture, clause, objective, feasible, value, maximize",
     [
-        pytest.param("per (): norm(D: open, 'inf') <= 1", "MAXIMIZE SUM(D: open)", id="constraint"),
-        pytest.param("when S.priority: norm(D: open, 2) <= 4", "MAXIMIZE SUM(D: open)", id="under-a-when"),
-        pytest.param("open <= 5", "MAXIMIZE per (): SUM(D: open) - norm(D: open, 1)", id="objective"),
+        pytest.param(
+            cli,
+            "per (): norm(D: open, 'inf') <= 1",
+            "MAXIMIZE SUM(D: open)",
+            lambda a: max(a.values()) <= 1,
+            lambda a: sum(a.values()),
+            True,
+            id=f"inf-{cli}",
+        )
+        for cli in ("decidb_cli_gurobi", "decidb_cli_highs")
+    ]
+    + [
+        pytest.param(
+            cli,
+            "norm(D: open, 0) <= 2",
+            "MAXIMIZE SUM(D: open)",
+            lambda a: sum(1 for v in a.values() if v) <= 2,
+            lambda a: sum(a.values()),
+            True,
+            id=f"zero-{cli}",
+        )
+        for cli in ("decidb_cli_gurobi", "decidb_cli_highs")
+    ]
+    + [
+        pytest.param(
+            cli,
+            "open <= 5",
+            "MAXIMIZE SUM(D: 4 * open) - norm(D: 3 * open - 6, 1)",
+            lambda a: True,
+            lambda a: sum(4 * v - abs(3 * v - 6) for v in a.values()),
+            True,
+            id=f"objective-{cli}",
+        )
+        for cli in ("decidb_cli_gurobi", "decidb_cli_highs")
+    ]
+    + [
+        # A square of a decision in a constraint needs Gurobi.
+        pytest.param(
+            "decidb_cli_gurobi",
+            "when NOT S.priority: norm(D: open, 2) <= 2",
+            "MAXIMIZE SUM(D: open)",
+            lambda a: a["D1"] ** 2 + a["D2"] ** 2 <= 2,
+            lambda a: sum(a.values()),
+            True,
+            id="under-a-when",
+        )
     ],
 )
-def test_norm_takes_no_relation_qualifier(decidb_cli, clause, objective):
-    """Bound with a qualifier, `norm(D: e, p)` would read `SUM(D: e)`, so it is refused."""
-    result = decidb_cli.execute_raw(
+def test_norm_with_a_relation_qualifier_reads_each_depot_once(
+    request, cli_fixture, clause, objective, feasible, value, maximize
+):
+    """`norm(D: e, p)` is the norm over D's rows, each depot once, as `SUM(D: e)` is. D1 and
+    D2 have two shipments each: counting their rows would change the optimum of orders 0, 1 and
+    2; 'inf' reads a largest value, which a repeated row leaves alone. The `when` keeps D1 and
+    D2 only, so D3 is free."""
+    assert _ROWS_PER_DEPOT == {"D1": 2, "D2": 2, "D3": 1}
+    cli = request.getfixturevalue(cli_fixture)
+    result = answer(
+        cli,
         f"""
-        SELECT shipmentID, open {from_clause()}
+        SELECT shipmentID, depotID, open {from_clause()}
         DECIDE per D: open(INT)
         SUCH THAT open <= 5 AND {clause}
-        {objective}"""
+        {objective}
+        ORDER BY shipmentID""",
     )
-    assert (
-        "DECIDE: norm(D: ...) is not supported yet; a relation qualifier takes SUM, AVG, MIN or MAX" in result.stderr
-    ), result.stderr
-    assert_no_internal_leak(result, "norm with a relation qualifier")
+    assert judge(_per_depot(result), feasible, value) == optimum(_DEPOT_DOMAINS, feasible, value, maximize)
 
 
 @pytest.mark.error
