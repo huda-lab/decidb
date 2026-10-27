@@ -1438,6 +1438,43 @@ def test_composed_minmax_scalar_mult_hard_max(decidb_cli):
 
 
 @pytest.mark.min_max
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "sense, objective",
+    [("<=", ObjSense.MAXIMIZE), (">=", ObjSense.MINIMIZE)],
+    ids=["easy", "hard"],
+)
+def test_max_against_a_reducer_bound(decidb_cli, scope_solver, sense, objective):
+    """`MAX(x) <sense> MAX(v)`: the bound is a reducer over data. `<=` bounds every member on its own row (the easy
+    encoding); `>=` needs one member to reach it (the hard one, with indicators). The objective pushes against the bound
+    in both, so it binds."""
+    rows = [{"id": 1, "v": 3, "w": 3.0}, {"id": 2, "v": 7, "w": 1.0}, {"id": 3, "v": 5, "w": 2.0}]
+    model = ScopedModel(rows, [Decision("x", ub=10)])
+    clauses = [
+        Scoped(
+            (Reduce("max", lambda r: {"x": 1.0}),),
+            sense,
+            (lambda r: {CONSTANT: max(row["v"] for row in rows)},),
+        )
+    ]
+    objective_terms = ScopedObjective(objective, (Reduce("sum", lambda r: {"x": r["w"]}),))
+    result = answer(
+        decidb_cli,
+        f"""
+        SELECT id, x FROM (VALUES (1, 3, 3.0), (2, 7, 1.0), (3, 5, 2.0)) t(id, v, w)
+        DECIDE x(INT)
+        SUCH THAT x <= 10 AND MAX(x) {sense} MAX(v)
+        {objective.name} SUM(x * w)
+        ORDER BY id
+    """,
+    )
+    assert model.judge_scoped(result, clauses, objective_terms) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective_terms), abs=1e-4
+    )
+
+
+@pytest.mark.min_max
 @pytest.mark.correctness
 def test_composed_minmax_per_scope_answers(decidb_cli, scope_solver):
     """A composed MIN/MAX under `per g:` is generated once per class, both reducers

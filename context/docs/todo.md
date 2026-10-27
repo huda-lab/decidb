@@ -46,15 +46,8 @@ Each is ruled; the nested section says which shapes lift and which stay refused.
 
 - [ ] Functions that behave unlike SQL: a data-only reducer skips NULL; audit the rest and bring each divergence to the owner — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
 
-## A6. Smaller models
-
-- [ ] One helper for a reducer several clauses hold — [optimizer § 1](pipeline/05_optimizer/todo.md#1-one-helper-for-a-reducer-that-several-clauses-hold)
-- [ ] A keyed decision beside a reducer without a helper (plan-time key comparison) — [canonicalizer § 2](pipeline/04_canonicalizer/todo.md#2-a-keyed-decision-beside-a-reducer-without-a-helper)
-- [ ] `IN` under `per K:` once per class — [optimizer § 3](pipeline/05_optimizer/todo.md#3-in-under-per-k-once-per-class)
-
 ## A7. Messages and diagnosis text
 
-- [ ] `=` on MIN/MAX echoed as one half (quote as written) — [infeasible § 1](diagnostics/infeasible/todo.md#1-an--on-a-minmax-is-echoed-as-the-half-its-finding-loosens)
 - [ ] EXPLAIN columns print by bare name over a join (qualify over a join) — [logical plan § 2](pipeline/03_logical_plan/todo.md#2-columns-print-by-their-bare-name-over-a-join)
 - [ ] Two keys over the same columns share one key text — [bugs § operands](issues/bugs.md#messages-operands-coefficients-and-keys)
 - [ ] A column reference is named in two forms (key SQL spelling vs bare name) — [bugs § operands](issues/bugs.md#messages-operands-coefficients-and-keys)
@@ -62,7 +55,6 @@ Each is ruled; the nested section says which shapes lift and which stay refused.
 
 ## A8. Testing gaps
 
-- [ ] `MAX(x) <= MAX(v)` has no test — [testing § MAX bound](testing/todo.md#maxx--maxv-has-no-test)
 - [ ] DIAGNOSE of a hard `MIN`/`MAX` over a keyed decision has no test — [testing § DIAGNOSE MIN/MAX](testing/todo.md#diagnose-of-a-hard-minmax-over-a-keyed-decision-has-no-test)
 
 ## A9. Code quality and naming
@@ -206,6 +198,57 @@ The agent finds the cause alone and stops with a proposed fix.
   linear models change from `=` to `>=`/`<=` rows on one side (same answers, golden dumps that print them change).
   (2) Apply (b) to linear helpers too, or only to quadratic ones? Recommended: all, one rule.
   — [bugs § Limitations](issues/bugs.md#limitations-not-bugs)
+
+## B10. One helper for a reducer several clauses hold: the definition's provenance
+
+- [ ] Sharing a helper between clauses (`x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`) needs one rule for its definition
+  row, which today carries one clause's `source_clause_id` and `removal_group_id`. (a) The definition belongs to no
+  clause: a DROP of either clause leaves it, which is harmless (an equality on a free helper always holds), and
+  DIAGNOSE reads it as part of the fixed model, like every untagged structural row
+  (`decide_diagnostic_engines.cpp`). (b) The definition carries every reader's removal group and is omitted when the
+  last one is dropped: a set of ids on a row, where every other row has one. Recommended: (a), the standard reading of
+  a defined auxiliary (it is not a constraint of any clause), with no new field.
+  — [optimizer § 1](pipeline/05_optimizer/todo.md#1-one-helper-for-a-reducer-that-several-clauses-hold)
+
+## B12. A keyed decision beside a reducer: four design choices (architect review done)
+
+- [ ] The shape is the aggregate shape with a tuple term of one value per group; it does not wait for B6. Choices:
+  (1) The classifier needs the clause's `per` wrapper and the key lists, but the shape is recomputed from the bare
+  comparison at five sites (`decide_linear_form.cpp`, `direct_ir.cpp`, `decide_rewrite_rhs_window.cpp`, twice in
+  the canonicalizer). Decide once in `CanonicalizeTreeInternal` with the enclosing scope and stamp a tag (as
+  `VALUE_REWRITE_TAG` is), or pass the wrapper to every site? Recommended: the tag.
+  (2) What makes the coefficient (`cap` in `cap * open`) one value per group. A wrapper's DETERMINES check gives one
+  per class, not per group (`per S.shipmentID: sum(ship) by (D) <= S.cap * open` passes it while `cap` varies in a
+  depot). Admit when the wrapper key, the `by` key and the decision's `per` key are equal; also admit a query-wide
+  coefficient with no wrapper? Without a wrapper a data coefficient stays VALUE (one constraint per row).
+  Recommended: both cases.
+  (3) One `CountsOnce(term)` test replaces the five copies in the model builder and `linearization_not_equal.cpp`:
+  keep the "not row-scoped" guard, or throw on reduction arrays shorter than the terms? Recommended: keep the guard.
+  (4) Extract `CountsOnce` first as its own change, or inside this item? Recommended: first.
+  — [canonicalizer § 2](pipeline/04_canonicalizer/todo.md#2-a-keyed-decision-beside-a-reducer-without-a-helper)
+
+## B13. `IN` under `per K:`: which scope keys the indicators
+
+- [ ] Per class, the indicators need a decision scope keyed by the wrapper's `K`. Today a scope is made only by the
+  binder (declarations, reducer keys) and by the value rewrite (helpers); the one key table
+  (`pipeline/03_logical_plan/todo.md` §1, batch B1) is the planned single way to make one from any key. (a) Wait for
+  B1 and key the indicators by `K`'s entry. (b) Now, for the case where `K` is the decision's own declared key: the
+  indicators take the decision's scope and the rows keep the wrapper (as the MIN/MAX easy half keeps it); any other
+  `K` keeps one set per row. Recommended: (a); (b) adds a special case that B1 removes.
+  — [optimizer § 3](pipeline/05_optimizer/todo.md#3-in-under-per-k-once-per-class)
+
+## B14. `=` on MIN/MAX: which check proves the moved equality holds
+
+- [ ] The ruling quotes `max(e) = K` as written and suggests `max(e) = K'` when the other half still holds at `K'`.
+  The clause's written comparison is in reach (`ConstraintSourceInfo::canonical_cmp`). The check is open. (a) Read
+  the repair's own solution (`ReadElasticEdits` holds it): the equality holds when every instance's extremum over its
+  members equals `K'`. The members are the easy half's rows (`2 * x_i <= 20`), which carry no instance identity under
+  `by (g)` or `per g:` (the hard half is an extremum column per group), so the rows need a new instance id, and the
+  check is conservative: it falls back whenever the solution does not happen to sit at `K'`. (b) Verify by one more
+  solve, the original model with both halves (and the other findings' edits) moved, feasible or not: exact, the same
+  for the lowered rows and Gurobi's native MAX, one solve per diagnosis that reports an `=` MIN/MAX. Recommended:
+  (b). The fallback is today's output, which names the half (`max(2 * x) >= 20` → `max(2 * x) >= 6`).
+  — [infeasible § 1](diagnostics/infeasible/todo.md#1-an--on-a-minmax-is-echoed-as-the-half-its-finding-loosens)
 
 ## C1. Long or memory-heavy runs (owner starts them)
 
