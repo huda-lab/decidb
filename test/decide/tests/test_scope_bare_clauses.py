@@ -225,6 +225,37 @@ def test_reducer_inside_a_reducer_is_refused(decidb_cli):
     assert "an aggregate inside an aggregate is not supported yet" in result.stderr, result.stderr
 
 
+@pytest.mark.parametrize(
+    "clause, reducer",
+    [
+        pytest.param("when sum(cap) > 1: x <= 3", "sum(cap)", id="when-condition"),
+        pytest.param("per g: sum(x) by (max(cap)) <= 3", "max(cap)", id="by-key"),
+    ],
+)
+def test_reducer_in_a_when_or_a_by_key_is_refused_at_bind_time(decidb_cli, clause, reducer):
+    """A `when` condition and a `by` key take data per row: a reducer there is refused
+    while binding, naming it, not from the executor. (A `per` key lists columns, so the
+    parser refuses an expression there.)"""
+    stderr = decidb_cli.execute_raw(_query("x(INT)", f"x <= cap AND {clause}", "MAXIMIZE SUM(x)")).stderr
+    assert f"a reducer such as '{reducer}' is not supported in when, per or by" in stderr, stderr
+    assert "Binder Error" in stderr and "^" in stderr, stderr
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_data_reducer_on_a_bound_side_still_answers(request, scope_solver, cli_fixture):
+    """A reducer over data on a bound side is not a reducer in a `when` or a `by` key."""
+    cli = request.getfixturevalue(cli_fixture)
+    avg_cap = Reduce("avg", lambda r: {CONSTANT: r["cap"]})
+    _judged(
+        cli,
+        scope_solver,
+        _query("x(INT)", "x <= cap AND SUM(x) <= AVG(cap)", "MAXIMIZE SUM(x)"),
+        [CAP_BOUND, Scoped((Reduce("sum", X),), "<=", (avg_cap,))],
+        MAXIMIZE_X,
+    )
+
+
 # ---------------------------------------------------------------------------
 # D41: an easy MIN/MAX bound is a bound on every row it reads
 # ---------------------------------------------------------------------------

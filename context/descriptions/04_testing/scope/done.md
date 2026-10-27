@@ -150,7 +150,8 @@ one group at a time. No test asserts an answer its docstring derives.
 - **`test_scope_bare_clauses.py`** — a clause with no `when`, `per` or `by` means its
   explicit form (`per row:` in front, `by ()` on each reducer, the objective once).
   Strict bounds step onto whole numbers; a negative factor on a hard MAX; an objective
-  term must be one value; a reducer inside a reducer is refused; an easy `min(x) >= K`
+  term must be one value; a reducer inside a reducer, and one in a `when` or a `by` key,
+  is refused at bind time; an easy `min(x) >= K`
   or `max(x) <= K` is absorbed into the decision's box (D41), so a negative K makes `x`
   signed and the model is the one the column bound builds; a constant inside MIN/MAX
   under a strict step is refused; query-wide decisions beside reducers under `<>`,

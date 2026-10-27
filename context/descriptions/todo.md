@@ -62,7 +62,6 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 - [ ] NULL class reads like the string `'NULL'` (decision) — [infeasible § 2](07_query_diagnostics/infeasible/todo.md#2-a-null-class-reads-like-the-string-null)
 - [ ] `=` on MIN/MAX echoed as one half (decision) — [infeasible § 1](07_query_diagnostics/infeasible/todo.md#1-an--on-a-minmax-is-echoed-as-the-half-its-finding-loosens)
 - [ ] EXPLAIN columns print by bare name over a join (decision) — [explain](03_expressivity/explain/todo.md#columns-print-by-their-bare-name-over-a-join)
-- [ ] Reducer in a `when`, key or `by` refused at execution — [binder § 3](01_pipeline/02_binder/todo.md#3-a-reducer-in-a-when-a-key-or-a-by-is-refused-at-execution)
 
 ## 6. Bugs: benchmark and test tooling
 

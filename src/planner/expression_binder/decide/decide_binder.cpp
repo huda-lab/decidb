@@ -145,31 +145,38 @@ static string FindDecisionName(const ParsedExpression &expr, const case_insensit
 	return found;
 }
 
-//! The first window function `expr` holds outside its subqueries, or null.
-static optional_ptr<const ParsedExpression> FindWindowFunction(const ParsedExpression &expr) {
-	if (expr.GetExpressionClass() == ExpressionClass::WINDOW) {
+//! The first node of `expr`, outside its subqueries, that `matches`, or null.
+static optional_ptr<const ParsedExpression> FindNode(const ParsedExpression &expr,
+                                                     const std::function<bool(const ParsedExpression &)> &matches) {
+	if (matches(expr)) {
 		return &expr;
 	}
 	optional_ptr<const ParsedExpression> found;
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
 		if (!found) {
-			found = FindWindowFunction(child);
+			found = FindNode(child, matches);
 		}
 	});
 	return found;
 }
 
 //! A `when` condition, a key element or a `by` key: data only, no `when`/`per`/`by`, and
-//! no window function, which reads rows the scope has not chosen yet.
+//! no window function or reducer, which read rows the scope has not chosen yet.
 static void ValidateScopeData(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables) {
 	auto decision = FindDecisionName(expr, variables);
 	if (!decision.empty()) {
 		throw BinderException(expr, "DECIDE: %s is a decision; when, per and by may only use data", decision);
 	}
-	auto window = FindWindowFunction(expr);
+	auto window = FindNode(
+	    expr, [](const ParsedExpression &node) { return node.GetExpressionClass() == ExpressionClass::WINDOW; });
 	if (window) {
 		throw BinderException(*window, "DECIDE: a window function such as '%s' is not supported in when, per or by",
 		                      window->ToString());
+	}
+	auto reducer = FindNode(expr, [](const ParsedExpression &node) { return TakesReducerBy(node); });
+	if (reducer) {
+		throw BinderException(*reducer, "DECIDE: a reducer such as '%s' is not supported in when, per or by",
+		                      reducer->ToString());
 	}
 	ValidateNoScopeSpelling(expr);
 }

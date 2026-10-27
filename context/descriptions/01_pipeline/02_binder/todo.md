@@ -56,23 +56,3 @@ is a wrong answer; each is a shape the later layers do not formulate.
 becomes its answer test.
 
 **Update.** `done.md` §4a, `../../00_project_overview/syntax_reference.md` §10.2.
-
----
-
-## 3. A reducer in a `when`, a key or a `by` is refused at execution
-
-**Today.** `ValidateScopeData` refuses a decision and a window function in a `when`
-condition, a `per` key or a `by` key, but not a reducer. `when sum(cap) > 1: x <= 3` and
-`per g: sum(x) by (sum(cap)) <= 3` bind, and execution refuses them from
-`TransformToChunkExpression` with *"DECIDE: an aggregate cannot be used here. Reducers
-are allowed on either side of a constraint and in the objective, not inside a WHEN
-condition or a coefficient."*: no caret, an upper-case `WHEN`, and a layer-8 refusal of a
-question the query text answers.
-
-**Work.** Refuse a reducer in `ValidateScopeData`, at bind time, with a caret on the
-reducer and the scope words in lower case.
-
-**Test.** Both queries above refused at bind time, and a data-only reducer on a bound
-side still accepted (`test_scope_bare_clauses.py`).
-
-**Update.** `done.md` §4a (the `when`, `per` and `by` data rule).

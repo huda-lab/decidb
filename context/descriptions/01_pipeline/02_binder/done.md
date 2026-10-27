@@ -449,9 +449,11 @@ a reducer with no `by` is `by ()` (syntax_reference.md §1.1).
   call;
 - a decision in a `when`, a key or a `by`: *"DECIDE: x is a decision; when, per and by
   may only use data"*; a window function there: *"DECIDE: a window function such as
-  'row_number() OVER ()' is not supported in when, per or by"*. A reducer there is not
-  refused here: execution refuses it (*"DECIDE: an aggregate cannot be used here.
-  ..."*, `todo.md`);
+  'row_number() OVER ()' is not supported in when, per or by"*; a reducer there (`when
+  sum(cap) > 1:`, `by (max(cap))`): *"DECIDE: a reducer such as 'sum(cap)' is not
+  supported in when, per or by"*. Each reads rows the scope has not chosen yet, so
+  `ValidateScopeData` refuses them with a caret, in that order, before execution sees the
+  query. A `per` key cannot hold one: the grammar takes only columns and relations there;
 - `norm(D: e, p)`: *"DECIDE: norm(D: ...) is not supported yet; a relation qualifier
   takes SUM, AVG, MIN or MAX"* (bound, it would read `SUM(D: e)`);
 - a reducer inside a reducer: *"DECIDE: an aggregate inside an aggregate is not supported

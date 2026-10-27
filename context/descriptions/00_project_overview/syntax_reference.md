@@ -744,8 +744,7 @@ SUCH THAT
 
 - **Condition.** Any boolean expression over data, ended by `per` or `:`; parentheses
   are not needed, and an `and` before that end belongs to the condition. It may not
-  mention a decision, a reducer (*"DECIDE: an aggregate cannot be used here. ..."*) or
-  a window function (§10.1).
+  mention a decision, a reducer or a window function (§10.1).
 - **NULL** counts as false: the row is dropped.
 - **Filtering comes first.** Classes form from kept rows only, so a key value with no
   kept row has no constraint, and every reducer in the body reads kept rows only.
@@ -1078,6 +1077,7 @@ Tests: `test/decide/tests/test_scope_explain_diagnose.py`.
 | `when` or `per` inside a call that is not `SUM`, `AVG`, `MIN` or `MAX` (`norm` and `count` included) | bind | `DECIDE: when and per inside a call need SUM, AVG, MIN or MAX; write the scope in front of the constraint or inside a reducer` |
 | A decision in a `when`, a key or a `by` | bind | `DECIDE: x is a decision; when, per and by may only use data` |
 | A window function in a `when`, a key or a `by` | bind | `DECIDE: a window function such as 'row_number() OVER ()' is not supported in when, per or by` |
+| A reducer in a `when` or a `by` key | bind | `DECIDE: a reducer such as 'sum(cap)' is not supported in when, per or by` |
 | A volatile function (`random()`) anywhere in a constraint, the objective or a `by` key; compute it once per row in a subquery or CTE instead | bind | `DECIDE: random() is not supported in a constraint` (`the objective`, `a by key`) |
 | An unknown key element (a key resolves in its own query's `FROM` only) | bind | `DECIDE: depot is neither a column nor a relation of the FROM clause` |
 | `rowid` or a generated column in a key | bind | `DECIDE: g.b is not a stored column; a per key lists columns or relations of the FROM clause` |
