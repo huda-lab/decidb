@@ -1,10 +1,11 @@
 # A1 (separable box-constrained problem) — what works today
 
-Verified on 2026-10-21 on top of `82d1c7d2db`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`
-and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,090 passed (no failures, no expected failures);
-`DECIDB_FORCE_SOLVER=highs make decide-test` 3,089 passed and one failure that needs Gurobi
-(`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 1,324 assertions in 47 cases.
-`test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
+Verified on 2026-10-27 on the Sami-Active merge (`577ac88efa` with `38275dde6f`): `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 4,838 passed
+and 17 strict expected failures (direct-solve follow-ups and the deferred bound reader); `DECIDB_FORCE_SOLVER=highs
+make decide-test` 4,836 passed and two failures, `test_norm_combined_l1_l2_objective`, which needs Gurobi, and
+`test_entity_scoped_mixed_when_per`, which HiGHS cannot close at a gap of 0 in time (`../../../06_issues/bugs/todo.md`); C++
+`build/release/test/unittest "[decidb]"` 2,714 assertions in 65 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_separable_box_rule.cpp`; its per-row bounds come from the shared reader in
 `direct_bound_reader.cpp`. Class definition: [definition.md](definition.md).
 
@@ -16,25 +17,28 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   a numeric or Boolean source column (a Boolean is read as 0 or 1, for `BOOL` and `INT`), or a deterministic expression
   over source columns. The decision may carry a coefficient and an offset (`2*x + 1 <= cap`, `-x >= -cap`, `w*x <= cap`);
   a row-valued coefficient picks the side by its sign, and a zero coefficient leaves the row alone or infeasible. Each
-  clause may carry its own `WHEN`. The value expressions may raise at run time (an overflowing cast, a division by
-  zero): the plan evaluates them on every row, as the solver does. An equality is an at-least clause and an at-most
+  clause may carry its own `when`. The value expressions may raise at run time (an overflowing cast, a division by
+  zero): the plan evaluates them on every row the clause's `when` keeps, as the solver does, and computes nothing on a
+  row the `when` drops (syntax reference §6.3). An equality is an at-least clause and an at-most
   clause; the second is `A1Clause::Copy()` of the first with its comparison changed, so no field can differ.
 - **Default box.** `BOOL` is [0, 1]; `INT` and `REAL` are [0, ∞). A bare unconditional constant lower bound (`x >= -3`)
-  replaces the default 0 on the solver, so it does here. Every other lower bound (a column, a `WHEN`, a coefficient or
-  offset on `x`, an arithmetic constant such as `0 - 3`) only intersects with it. The solver and direct solve ask one
+  replaces the default 0 on the solver, so it does here. The solver also folds an affine constant bound (`2*x >= -6`,
+  `x + 1 >= -3`, `x >= 0 - 3`, D41), which replaces the default 0 too; A1 declines such a bound until it reads the
+  folded box (`todo.md`). A lower bound from a column or under a `when` only intersects with the default. The solver and direct solve ask one
   shared predicate which clauses are folded into the variable (`DecideIsSingletonRowBound`, surfaced as
   `DirectIRConstraint::variable_bound`), and combine the folded values with one function (`DecideFoldSingletonRow`),
   so they cannot disagree. A bound of magnitude 1e20 or more is no bound, as on the solver, including a written -1e30;
   an infinite data value is no bound on that side.
 - **Whole-number rounding.** `INT` and `BOOL` bounds round inward, strict bounds included, and the rounding is tested
   in `DOUBLE` arithmetic against the clause as written, so `0.1*x <= 0.3` does not lose an integer to a quotient that
-  rounds the wrong way. A strict bound against a fraction (`x > 0.5`, `x < 2.5`, no `WHEN`) rounds to the first whole
+  rounds the wrong way. A strict bound against a fraction (`x > 0.5`, `x < 2.5`, no `when`) rounds to the first whole
   value inside it (1 and 2). The solver and A1 take that shift from one function (`DecideStrictBound`), so they agree;
   on a `BOOL`, A1 and the solver both answer `BOOL x > 0.5` with `x = 1`. The six cases are in `SOLVER_OFF_BY_ONE`
   (`test_direct_a1_separable_box.py`), checked against the oracle on both paths. S1 admits the same bounds on a `BOOL`
   (`x > 0.5`, `x < 1.5`) with the same shift.
 - **Objective.** `MINIMIZE`, `MAXIMIZE`, or none (the lowest allowed value). Signed `SUM` parts, each with an optional
-  constant factor or divisor and an optional `WHEN`, plus an optional objective-level `WHEN`. Terms: a row-valued
+  constant factor or divisor and an optional `when`, plus an optional objective-level `when`. A part's values are
+  computed only on the rows its `when` and the objective's keep. Terms: a row-valued
   coefficient times a decision, a per-row constant, and at most one square `k*(w*x + t)^2`, where `k` is a nonzero
   constant and `w` and `t` are row-valued (`w` may be zero or negative). `POWER(x - t, 2)`, `(x - t)*(x - t)`,
   `x*x - 2*t*x`, `norm(e, 2)` and a constant factor inside or outside the `SUM` are all this shape.
@@ -42,11 +46,11 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   by the first integer whose next step no longer improves, so a tie goes to the smaller value (as on the solver).
   Maximizing a convex square and minimizing a concave one compare the two endpoints.
 
-It raises an error wherever the solver does: NULL, NaN or infinite coefficients and NULL or NaN bounds (including on
-rows a `WHEN` excludes), an empty box on any row (infeasible), an improving direction with no finite limit on any row
-(unbounded), an `INT` answer beyond 2^53 after rounding (with the solver's message word for word, naming the variable
-and its rounded value), an objective `WHEN` that matches no row of a non-empty source, and any
-expression that raises. Every input row is read before one is released, so a late bad row raises under `LIMIT 1`,
+It raises an error wherever the solver does: NULL, NaN or infinite coefficients and NULL or NaN bounds on a row that
+reads them, an empty box on any row (infeasible), an improving direction with no finite limit on any row (unbounded), an
+`INT` answer beyond 2^53 after rounding (with the solver's message word for word, naming the variable and its rounded
+value), a `when` that keeps no row of a non-empty source (D4, raised by the plan's row checks), and any expression that
+raises on a row that computes it. Every input row is read before one is released, so a late bad row raises under `LIMIT 1`,
 `COUNT(*)` or a filter; only `LIMIT 0` skips it. An empty source returns no rows.
 
 ## What it does not admit (falls back to the solver)
@@ -58,9 +62,9 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 | An aggregate constraint (`SUM(x) <= 5`, `norm(x, 1) <= 5`) | Rows are coupled. Count bounds on one `BOOL` are S1. |
 | `x <> k`, `x IN (...)` | Not an interval. The solver reads them as a split or discrete domain. |
 | Two decisions in one constraint or one objective term (`x + y <= 3`, `x*y`), `ABS`, a squared constraint | Decisions are coupled. |
-| Objective `PER`; `AVG`, `MIN`, `MAX`, `norm` of order 1 or ∞ | Not a sum of one term per row. |
+| An objective with a `per` or a two-level reducer; `AVG`, `MIN`, `MAX`, `norm` of order 1 or ∞ | Not a sum of one term per row. |
 | Entity-scoped (`T.x`) or scalar decisions | Not one decision per row. |
-| `random()`, a correlated subquery, a parameter, in a bound, a coefficient or a `WHEN` | Not a deterministic source value. A scalar subquery that does not depend on the row is read as a source column and is admitted. |
+| `random()`, a correlated subquery, a parameter, in a bound, a coefficient or a `when` | Not a deterministic source value. A scalar subquery that does not depend on the row is read as a source column and is admitted. |
 | A second squared term, a data weight outside a square (`w*POWER(...)`), `w*x*x` | The solver rejects these itself, with the same message, on both paths. |
 | Strict bounds on a `REAL` | The binder rejects them before any rule runs. |
 | A bound that contradicts the variable's built-in domain (`x <= -1` on a non-negative decision, `BOOL x >= 2`) | The solver rejects it before it reads a row, even on an empty source, so the solver reports it. |
@@ -73,7 +77,7 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 - **Error wording.** An empty box on a row reads `DECIDE optimization is infeasible. Prefix the query with DIAGNOSE
   ...` here. A bound that contradicts the built-in domain is left to the solver (see above), so its own message appears:
   for a non-negative decision it quotes the clause as typed (`x < 0 cannot hold because x is non-negative`), and for a
-  `BOOL` it is the usual infeasible error. A NULL coefficient, target, weight or bound names the columns that are NULL
+  `BOOL` too (`x >= 2 cannot hold for a BOOL variable.`). A NULL coefficient, target, weight or bound names the columns that are NULL
   on the failing row, in the solver's text, and a NaN value reads as the solver's message; both are built by the
   functions the solver calls (`decide_value_messages.hpp`). The "at row N" suffix is left out.
 - **Ties.** The smaller value, which matches the solver in every case checked, but nothing promises it.
@@ -83,7 +87,8 @@ A query A1 does not apply to keeps its answer: it runs on the solver, and `requi
 
 One projection per stage, with no sort, no window and no join:
 
-1. raw values (every coefficient, bound, mask), evaluated unconditionally on every row;
+1. raw values (every coefficient, bound, mask), each evaluated on the rows its `when` keeps and NULL on the others
+   (`DirectOnKeptRows`), with its checks masked the same way (`DirectCheckOnKeptRows`);
 2. each clause's lower and upper bound on its decision, each decision's objective coefficients `(a, b)`, and the check on
    every raw value;
 3. each decision's box;
@@ -91,7 +96,7 @@ One projection per stage, with no sort, no window and no join:
 5. the rows are held until the check has run on all of them (`DirectValidationBreaker`), then the typed answers are
    projected: `INTEGER` for `BOOL`, `BIGINT` for `INT`, `DOUBLE` for `REAL`.
 
-A problem made only of constants, with no `WHEN`, fails the same way on every row, so it needs no breaker: the check is
+A problem made only of constants, with no `when`, fails the same way on every row, so it needs no breaker: the check is
 a projected validation column and the plan is pipelined. Unreferenced source columns never reach the breaker; a column
 the parent reads does, so reading a wide column back costs memory in proportion to the input.
 
@@ -99,7 +104,7 @@ the parent reads does, so reading a wide column back costs memory in proportion 
 
 | Check | What it covers |
 |---|---|
-| `test_direct_a1_separable_box.py` (231 tests) | The answers. 123 cases run on the independent oracle (`oracle_solver`, built from the raw rows and the per-row bounds each case states in Python), on the solver path (`off`) and on the direct path (`require`): constant boxes, the default-lower rule in every spelling that does and does not replace it, row-valued bounds with and without `WHEN`, coefficient forms (positive, negative, zero), `INT` rounding and strict bounds, `BOOL` pins and Boolean-column bounds, every objective spelling, objective `WHEN`, infeasible and unbounded problems, ties, and three decisions of different types. 28 parent-query contexts. 13 error cases that must fail on both paths. 21 boundary cases against the solver path only (infinities, the 1e20 and 2^53 limits, every numeric source type). 12 cases on how bounds combine, on both paths: a written lower bound of -1e30 or -1e31 is no bound for `INT` and `REAL`, a second lower bound beside it still applies, and no written lower bound leaves the floor at 0. 6 random-row tests against exact `Fraction` arithmetic. The constant-problem tests (streaming plan, errors under `LIMIT 1`, `COUNT(*)` and a filter, empty source), a nested `DECIDE`, and duplicate rows |
+| `test_direct_a1_separable_box.py` (231 tests) | The answers. 123 cases run on the independent oracle (`oracle_solver`, built from the raw rows and the per-row bounds each case states in Python), on the solver path (`off`) and on the direct path (`require`): constant boxes, the default-lower rule in every spelling that does and does not replace it, row-valued bounds with and without `when`, coefficient forms (positive, negative, zero), `INT` rounding and strict bounds, `BOOL` pins and Boolean-column bounds, every objective spelling, objective `when`, infeasible and unbounded problems, ties, and three decisions of different types. 28 parent-query contexts. 13 error cases that must fail on both paths. 21 boundary cases against the solver path only (infinities, the 1e20 and 2^53 limits, every numeric source type). 12 cases on how bounds combine, on both paths: a written lower bound of -1e30 or -1e31 is no bound for `INT` and `REAL`, a second lower bound beside it still applies, and no written lower bound leaves the floor at 0. 6 random-row tests against exact `Fraction` arithmetic. The constant-problem tests (streaming plan, errors under `LIMIT 1`, `COUNT(*)` and a filter, empty source), a nested `DECIDE`, and duplicate rows Since the Sami-Active merge the affine-fold cases (`FOLDED_AFFINE_PENDING`) run on the solver path alone and one boundary case is `xfail(strict=True)`, until A1 reads the folded box (`todo.md`). |
 | `test_direct_rule_conformance.py` | The checks every rule owes, with A1's fixture: schema and rows, all-rows read for 10 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced HiGHS, `DIAGNOSE`, and 17 near misses that must decline under `require` and answer under `auto` as under `off`, and a plain form that applies |
 | `test_direct_user_facing.py` | A 200-byte unused payload column stays out of the scan and the breaker; a computed column that can raise is not pruned; a NaN in a constraint coefficient says "constraint coefficient" and in the objective "objective coefficient"; every NULL and NaN error reads as the solver's, compared in full |
 | `test_error_infeasible.py` | The solver's rejection of a bound against the built-in domain quotes the clause as typed for a non-negative decision (`x <= -1 cannot hold ... non-negative`, strict `x < 0`); for a `BOOL` (`x >= 2`, `x > 1`, `x > 1.5`) it is the usual infeasible error |

@@ -92,8 +92,10 @@ def _cases():
         f"MAXIMIZE SUM(x + y)", {})
     out["per-group"] = (
         "SELECT g, x AS contrib FROM (VALUES (1,'a'),(2,'a'),(3,'b')) t(id,g) "
-        "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 20 PER g "
-        "MAXIMIZE SUM(x)", {})
+        "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 AND per g: sum(x) by (g) >= 20 "
+        "MAXIMIZE SUM(x)",
+        {},
+    )
     out["int-box"] = (
         f"SELECT id, x AS contrib FROM {rows3} DECIDE x(INT) "
         f"SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 31 MAXIMIZE SUM(x)", {})
@@ -111,11 +113,15 @@ def _cases():
         f"SUCH THAT x >= -5 AND x <= 5 AND SUM(ABS(x)) >= 40 MAXIMIZE SUM(x)", {})
     out["when-filtered"] = (
         "SELECT id, x AS contrib FROM (VALUES (1,1),(2,0),(3,1)) t(id,k) "
-        "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 AND SUM(x) >= 20 WHEN k = 1 "
-        "MAXIMIZE SUM(x)", {})
+        "DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 5 AND when k = 1: sum(x) >= 20 "
+        "MAXIMIZE SUM(x)",
+        {},
+    )
     out["scalar-scope"] = (
-        f"SELECT id, y AS contrib FROM {rows3} DECIDE y(REAL), scalar cap(REAL) "
-        f"SUCH THAT y >= 0 AND y <= cap AND cap <= 2 AND SUM(y) >= 30 MAXIMIZE SUM(y)", {})
+        f"SELECT id, y AS contrib FROM {rows3} DECIDE y(REAL), per (): cap(REAL) "
+        f"SUCH THAT y >= 0 AND y <= cap AND cap <= 2 AND SUM(y) >= 30 MAXIMIZE SUM(y)",
+        {},
+    )
     return out
 
 

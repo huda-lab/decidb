@@ -73,14 +73,16 @@ public:
     idx_t num_auxiliary_vars = 0;
     //! Per-variable boolean flag (true if declared IS BOOLEAN)
     vector<bool> is_boolean_var;
-    //! Table-scoped variable metadata (populated during binding, transferred to LogicalDecide)
+    //! Key scopes and each decision's scope (populated during binding, transferred to LogicalDecide)
     vector<EntityScopeInfo> entity_scopes;
     vector<DecideVarScopeInfo> variable_scopes;
     //! BoundColumnRefExpressions for entity_key columns (one per key per scope, flattened in scope order).
     //! Transferred to LogicalDecide; see logical_decide.hpp for details on why these exist.
     vector<unique_ptr<Expression>> entity_key_expressions;
-    //! MIN/MAX indicator links, objective type, and PER types are now populated by
-    //! DecideOptimizer::RewriteMinMax directly on LogicalDecide (post-binding)
+	//! Every `by (key)` of the clause; transferred to LogicalDecide::group_keys.
+	vector<DecideGroupKey> decide_group_keys;
+	//! MIN/MAX indicator links, objective type, and the two-level objective's types are populated by
+	//! DecideOptimizer::RewriteMinMax directly on LogicalDecide (post-binding)
 	//! list of groups
 	BoundGroupByNode groups;
 	//! HAVING clause

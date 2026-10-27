@@ -1,13 +1,15 @@
 """Aggregates on the right of a reduced constraint are window columns of the DECIDE source (H-19).
 
 `SUM(x*w) <= SUM(cap)`: the right side is a reducer over data. The DECIDE optimizer replaces it with the same DuckDB
-aggregate as a window over the clause's group (its PER keys and WHEN), so the solver reads the exact value DuckDB
-computes. The left side here has a coefficient column, so no direct-solve rule applies and the solver path (`off`) is the
-one under test; the S1 suite (`test_direct_s1_uniform_matroid.py`) covers the same right sides under `require`.
+aggregate as a window over the reducer's own `by` groups of the rows the clause's `when` keeps, so the solver reads the
+exact value DuckDB computes. The left side here has a coefficient column, so no direct-solve rule applies and the solver
+path (`off`) is the one under test; the S1 suite (`test_direct_s1_uniform_matroid.py`) covers the same right sides under
+`require`.
 
-Each case builds the oracle model from the raw rows: one constraint per group, whose limit is the aggregate evaluated in
-Python over the rows the clause covers, in exact arithmetic. Rows the clause does not cover (WHEN false, or a NULL PER
-key) carry an extreme `cap`, so a window that read them would change the limit.
+Each case builds the oracle model from the raw rows, as the language reads a clause: every kept row bounds its left
+side's `by` group by the right side's value over its own `by` group of the kept rows, NULL a group of its own; equal
+rows collapse to one. The limit is evaluated in Python, in exact arithmetic. Rows the `when` drops carry an extreme
+`cap`, so a window that read them would change the limit.
 """
 
 import math
@@ -24,7 +26,7 @@ from ._direct_oracle_common import agree_with_oracle, outcome, run
 BIG = 10**12
 
 # id, g, flag, w, cap, p. Group a: rows 0-3, b: 4-7, c: 8-9 (no flagged row), NULL key: 10-11 (flagged).
-# A row the clause does not cover under every scope below has cap BIG or -BIG.
+# A row `when flag` drops has cap BIG or -BIG.
 ROWS = [
     (0, "a", True, 3, 4, 9.0),
     (1, "a", True, 5, 2, 8.0),
@@ -36,8 +38,8 @@ ROWS = [
     (7, "b", True, 5, 1, 4.0),
     (8, "c", False, 4, BIG, 8.5),
     (9, "c", False, 3, BIG, 3.0),
-    (10, None, True, 4, BIG, 6.0),
-    (11, None, True, 5, -BIG, 2.0),
+    (10, None, True, 4, 7, 6.0),
+    (11, None, True, 5, 3, 2.0),
 ]
 COLUMNS = "id, g, flag, w, cap, p"
 
@@ -49,12 +51,18 @@ AGGREGATES = {
     "SUM(cap)": lambda caps: sum(caps),
     "AVG(cap)": lambda caps: Fraction(sum(caps), len(caps)),
 }
-# scope -> (suffix, covers a row, groups by key)
+# scope -> (the constraint around `{bound}`, the right side's `by` written after it, the clause's keyword arguments to
+# _clause_limits)
 SCOPES = {
-    "global": ("", lambda row: True, False),
-    "per": (" PER g", lambda row: row[1] is not None, True),
-    "when": (" WHEN flag", lambda row: row[2], False),
-    "when_per": (" WHEN flag PER g", lambda row: row[2] and row[1] is not None, True),
+    "global": ("SUM(x * w) <= {bound}", "", {}),
+    "by": ("SUM(x * w) by (g) <= {bound}", " by (g)", {"left_key": 1, "right_key": 1}),
+    "by_left_only": ("SUM(x * w) by (g) <= {bound}", "", {"left_key": 1}),
+    "when": ("when flag: SUM(x * w) <= {bound}", "", {"keeps": lambda row: row[2]}),
+    "when_by": (
+        "when flag: SUM(x * w) by (g) <= {bound}",
+        " by (g)",
+        {"keeps": lambda row: row[2], "left_key": 1, "right_key": 1},
+    ),
 }
 
 
@@ -83,19 +91,29 @@ def _sql(rows, constraint):
     )
 
 
-def _limits_by(rows, scope, value):
-    """(member ids, `value` of the member rows) per group the clause covers."""
-    _, covers, grouped = SCOPES[scope]
-    covered = [row for row in rows if covers(row)]
-    groups = {}
-    for row in covered:
-        groups.setdefault(row[1] if grouped else None, []).append(row)
-    return [([row[0] for row in members], value(members)) for members in groups.values()]
+def _clause_limits(
+    rows, value, keeps=lambda row: True, left_key=None, right_key=None, left=lambda row: True, right=lambda row: True
+):
+    """(member ids, limit) per distinct constraint of a clause `[when keeps:] SUM([when left:] x * w) [by left_key] <=
+    value([when right:] ...) [by right_key]`, over the rows `keeps` keeps. A key is a column index; None is `by ()`."""
+    kept = [row for row in rows if keeps(row)]
+    limits = []
+    for row in kept:
+        members = [k[0] for k in kept if (left_key is None or k[left_key] == row[left_key]) and left(k)]
+        reads = [k for k in kept if (right_key is None or k[right_key] == row[right_key]) and right(k)]
+        limit = (members, value(reads))
+        if limit not in limits:
+            limits.append(limit)
+    return limits
 
 
-def _limits(rows, aggregate, scope):
-    """(member ids, limit) per group the clause covers."""
-    return _limits_by(rows, scope, lambda members: AGGREGATES[aggregate]([row[4] for row in members]))
+def _caps(aggregate):
+    return lambda members: AGGREGATES[aggregate]([row[4] for row in members])
+
+
+def _scoped(scope, bound):
+    constraint, right_by, clause = SCOPES[scope]
+    return constraint.format(bound=bound + right_by), clause
 
 
 def _agree(cli, oracle_solver, rows, constraint, limits):
@@ -131,12 +149,32 @@ def _agree(cli, oracle_solver, rows, constraint, limits):
 @pytest.mark.parametrize("scope", sorted(SCOPES))
 @pytest.mark.parametrize("aggregate", sorted(AGGREGATES))
 def test_rhs_aggregate_window_matches_the_oracle(decidb_cli, oracle_solver, aggregate, scope):
-    suffix = SCOPES[scope][0]
-    # A top WHEN placed after a bare aggregate would be read as the aggregate's own WHEN.
-    bound = f"{aggregate} + 0" if "WHEN" in suffix else aggregate
-    constraint = f"SUM(x * w) <= {bound}{suffix}"
-    limits = _limits(ROWS, aggregate, scope)
-    _agree(decidb_cli, oracle_solver, ROWS, constraint, limits)
+    constraint, clause = _scoped(scope, aggregate)
+    _agree(decidb_cli, oracle_solver, ROWS, constraint, _clause_limits(ROWS, _caps(aggregate), **clause))
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("scope", ["global", "by"])
+def test_rhs_count_of_a_text_column_counts_its_values(decidb_cli, oracle_solver, scope):
+    """`COUNT(g)` over the VARCHAR key counts its rows, as it counts a number column's; the solver once cast the
+    argument to DOUBLE. The rows hold no NULL key: a NULL argument raises (bugs todo, `COUNT` of a column that holds
+    NULL)."""
+    rows = [row for row in ROWS if row[1] is not None]
+    constraint, clause = _scoped(scope, "COUNT(g)")
+    _agree(decidb_cli, oracle_solver, rows, constraint, _clause_limits(rows, len, **clause))
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.per_clause
+@pytest.mark.correctness
+@pytest.mark.parametrize("scope", ["when", "when_by"])
+def test_rhs_keyed_reducer_reads_each_class_once(decidb_cli, oracle_solver, scope):
+    """`sum(per cap: cap)` adds each distinct cap of the kept rows once (the class's first row stands for it), within
+    the `by` group when there is one. The flagged caps repeat 3, so a plain SUM would differ."""
+    constraint, clause = _scoped(scope, "SUM(per cap: cap)")
+    distinct = lambda reads: sum({row[4] for row in reads})  # noqa: E731
+    _agree(decidb_cli, oracle_solver, ROWS, constraint, _clause_limits(ROWS, distinct, **clause))
 
 
 @pytest.mark.cons_aggregate
@@ -161,22 +199,27 @@ def test_rhs_sum_with_arithmetic_keeps_the_aggregate_type(decidb_cli, oracle_sol
     """`COUNT(*) * k` is evaluated in DuckDB's types: a group of 3 rows against 3 * 2^61 overflows INT64 on both paths."""
     sql = _sql(ROWS, "SUM(x * w) <= COUNT(*) * 4611686018427387904")
     assert outcome(decidb_cli, sql, "off")[0] == "error"
-    covered = "SUM(x * w) <= COUNT(*) * 4611686018427387904 + 0 WHEN (id > 100)"
-    # No row is covered: the clause has nothing to evaluate, and the left side's own empty-aggregate error is raised.
-    with pytest.raises(DecidBCliError, match="empty row set"):
+    covered = "when id > 100: SUM(x * w) <= COUNT(*) * 4611686018427387904"
+    # No row is kept: the clause has nothing to evaluate, and its `when` keeping no row is the error (D4).
+    with pytest.raises(DecidBCliError, match=r"when id > 100 matches no rows\."):
         run(decidb_cli, _sql(ROWS, covered), "off")
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("scope", ["global", "when_per"])
-def test_rhs_aggregate_argument_that_is_null_raises_on_every_row(decidb_cli, scope):
-    """The solver reads the argument on every row: a NULL in a row the clause leaves out still raises, naming it."""
-    suffix = SCOPES[scope][0]
+def test_rhs_aggregate_argument_that_is_null_raises_on_a_row_the_clause_keeps(decidb_cli):
+    """A NULL argument on a kept row raises, naming the column."""
     rows = [row[:4] + (None if row[0] == 8 else row[4], row[5]) for row in ROWS]
-    bound = "MAX(cap) + 0" if "WHEN" in suffix else "MAX(cap)"
-    sql = _sql(rows, f"SUM(x * w) <= {bound}{suffix}")
     with pytest.raises(DecidBCliError, match=r'column "cap" is NULL'):
-        run(decidb_cli, sql, "off")
+        run(decidb_cli, _sql(rows, "SUM(x * w) by (g) <= MAX(cap) by (g)"), "off")
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_rhs_aggregate_argument_that_is_null_on_a_dropped_row_is_never_read(decidb_cli, oracle_solver):
+    """Row 8 is not flagged, so `when flag` drops it and its NULL is never read."""
+    rows = [row[:4] + (None if row[0] == 8 else row[4], row[5]) for row in ROWS]
+    constraint, clause = _scoped("when_by", "MAX(cap)")
+    _agree(decidb_cli, oracle_solver, rows, constraint, _clause_limits(rows, _caps("MAX(cap)"), **clause))
 
 
 @pytest.mark.error
@@ -189,31 +232,69 @@ def test_rhs_aggregate_argument_that_is_nan_raises_without_a_row_position(decidb
         run(decidb_cli, sql, "off")
 
 
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "require"])
+def test_rhs_l0_norm_reads_a_nan_or_null_body_as_invalid(decidb_cli, mode):
+    """`SIGN(NaN)` is 0, so a NaN row would count as a zero; the value check reads the body the user wrote instead."""
+    sql = (
+        "SELECT id, x FROM (FROM (VALUES (0, 3, 1.0, 5.0), (1, 4, {cap}, 4.0)) t(id, w, cap, p) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= norm(cap, 0) MAXIMIZE SUM(p*x)) q"
+    )
+    with pytest.raises(DecidBCliError, match=r"right-hand side aggregate contains invalid value \(NaN\)"):
+        run(decidb_cli, sql.format(cap="'NaN'::DOUBLE"), mode)
+    with pytest.raises(DecidBCliError, match=r'column "cap" is NULL'):
+        run(decidb_cli, sql.format(cap="NULL::DOUBLE"), mode)
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "require"])
+def test_rhs_value_is_checked_after_the_scope_checks(decidb_cli, mode):
+    """`cap` is NULL on a kept row and the reducer keeps no row: the scope check (D8) is reported, not the NULL."""
+    sql = (
+        "SELECT id, x FROM (FROM (VALUES (0, 3, NULL::DOUBLE, 5.0), (1, 4, 4.0, 4.0)) t(id, w, cap, p) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= cap + sum(when id > 5: w) MAXIMIZE SUM(p*x)) q"
+    )
+    with pytest.raises(DecidBCliError, match=r"DECIDE: sum\(when id > 5: w\) has no rows\."):
+        run(decidb_cli, sql, mode)
+
+
+@pytest.mark.error
+def test_rhs_subquery_that_is_null_is_named_alike_on_both_paths(decidb_cli):
+    """A query-wide bound is checked with the other bounds, and a NULL subquery is named as the user wrote it."""
+    sql = (
+        "SELECT id, x FROM (FROM (VALUES (0, 3, 5.0), (1, 4, 4.0)) t(id, w, p) "
+        "DECIDE x(BOOL) SUCH THAT SUM(x) <= (SELECT NULL::INTEGER) MAXIMIZE SUM(p*x)) q"
+    )
+    messages = []
+    for mode in ("off", "require"):
+        with pytest.raises(DecidBCliError, match=r"the subquery \(SELECT CAST\(NULL AS INTEGER\)\) is NULL") as error:
+            run(decidb_cli, sql, mode)
+        messages.append(str(error.value))
+    assert messages[0] == messages[1]
+
+
 @pytest.mark.query_diagnostics
 @pytest.mark.correctness
 def test_diagnose_names_the_clause_with_a_right_hand_aggregate(decidb_cli):
     """The right side is a window column inside the plan, but the clause reads as the user wrote it."""
     sql = f"""DIAGNOSE SELECT id, x FROM (VALUES {_values(ROWS)}) t({COLUMNS})
-        DECIDE x(BOOL) SUCH THAT SUM(x * w) >= SUM(cap) + 100 PER g MAXIMIZE SUM(p*x)"""
+        DECIDE x(BOOL) SUCH THAT SUM(x * w) by (g) >= SUM(cap) by (g) + 100 MAXIMIZE SUM(p*x)"""
     rows, columns = decidb_cli.execute(sql)
     clauses = {row[columns.index("clause")] for row in rows if row[columns.index("clause")]}
-    assert "SUM(x * w) >= SUM(cap) + 100 PER g" in clauses, rows
+    assert "sum(x * w) by (g) >= sum(cap) by (g) + 100" in clauses, rows
 
 
-# Right sides the window must read as the solver does, one case per branch of the rewrite that picks a reader.
-# id -> (aggregate text, its value over the rows a group covers, scope). Scope "when_per" leaves rows with an extreme
-# `cap` out; "per" writes the aggregate alone as the bound.
+# Right sides whose reducer the window reads in a way no other case does. id -> (aggregate text, its value over the rows
+# a group reads, scope).
 READER_CASES = {
-    # The bound is tagged query-wide when it is the aggregate itself, so its window column keeps that tag.
-    "constant_argument": ("SUM(2)", lambda members: 2 * len(members), "per"),
-    # `norm(cap, 1)` arrives as `SUM(ABS(cap))` with the written-norm tag, which the solver's fold reads.
-    "written_norm": ("norm(cap, 1)", lambda members: sum(abs(row[4]) for row in members), "when_per"),
-    # A Boolean is not a numeric argument, so the solver's fold reads it.
-    "boolean_argument": ("COUNT(flag)", lambda members: len(members), "when_per"),
-    # A volatile argument cannot be read over the source; `0 * random()` adds nothing to the value.
-    "volatile_argument": ("SUM(cap + 0 * random())", lambda members: sum(row[4] for row in members), "when_per"),
-    # DuckDB drops the ORDER BY of an order-insensitive aggregate at bind time, so the window never sees one.
-    "order_by_dropped": ("MIN(cap ORDER BY id)", lambda members: min(row[4] for row in members), "when_per"),
+    # `norm(cap, 1)` arrives as `SUM(ABS(cap))` with the written-norm tag: the value check reads the written body.
+    "written_norm": ("norm(cap, 1)", lambda members: sum(abs(row[4]) for row in members), "when_by"),
+    # A norm of order 0 over data is the count of its non-zero rows, `SUM(ABS(SIGN(e)))`: its body is two calls deep.
+    "written_l0_norm": ("norm(cap - 3, 0)", lambda members: sum(1 for row in members if row[4] != 3), "when_by"),
+    # A Boolean argument: the value check tests it for NULL only, never casting it to DOUBLE for a NaN test.
+    "boolean_argument": ("COUNT(flag)", lambda members: len(members), "when_by"),
+    # DuckDB drops the ORDER BY of an order-insensitive aggregate at bind time, which the window asserts.
+    "order_by_dropped": ("MIN(cap ORDER BY id)", lambda members: min(row[4] for row in members), "when_by"),
 }
 
 
@@ -223,9 +304,8 @@ READER_CASES = {
 @pytest.mark.parametrize("case", sorted(READER_CASES))
 def test_rhs_aggregate_readers_match_the_oracle(decidb_cli, oracle_solver, case):
     aggregate, value, scope = READER_CASES[case]
-    # A top WHEN placed after a bare aggregate would be read as the aggregate's own WHEN.
-    bound = f"{aggregate} + 0" if "WHEN" in SCOPES[scope][0] else aggregate
-    _agree(decidb_cli, oracle_solver, ROWS, f"SUM(x * w) <= {bound}{SCOPES[scope][0]}", _limits_by(ROWS, scope, value))
+    constraint, clause = _scoped(scope, aggregate)
+    _agree(decidb_cli, oracle_solver, ROWS, constraint, _clause_limits(ROWS, value, **clause))
 
 
 # Rows where every cap is small, so a limit read from the wrong group binds and changes the answer.
@@ -239,49 +319,24 @@ PLAIN = [
 ]
 
 
-def _clause_limits(rows, when=lambda row: True, per=None, left=lambda row: True):
-    """(member ids, limit) per group of a clause `SUM(x * w) [WHEN left] <= SUM(cap) [WHEN when] [PER key]`.
-
-    A group is the rows the clause covers with the same `per` column. Its left side sums the rows `left` keeps and
-    exists only when there is one; its limit is `SUM(cap)` over every covered row of the group.
-    """
-    groups = {}
-    for row in rows:
-        if when(row) and (per is None or row[per] is not None):
-            groups.setdefault(None if per is None else row[per], []).append(row)
-    return [
-        ([row[0] for row in members if left(row)], sum(row[4] for row in members))
-        for members in groups.values()
-        if any(left(row) for row in members)
-    ]
-
-
 # id -> (constraint, the clauses it holds). Each pair writes the same `SUM(cap)` twice over different groups, so the two
 # window columns must stay apart; the case names the difference the rewrite tells them apart by.
 SHARED_AGGREGATE_CASES = {
     "key_count": (
-        "SUM(x * w) <= SUM(cap) AND SUM(x * w) <= SUM(cap) PER g",
-        [{}, {"per": 1}],
+        "SUM(x * w) <= SUM(cap) AND SUM(x * w) by (g) <= SUM(cap) by (g)",
+        [{}, {"left_key": 1, "right_key": 1}],
     ),
     "clause_when_present": (
-        "SUM(x * w) <= SUM(cap) + 0 WHEN (flag) AND SUM(x * w) <= SUM(cap)",
-        [{"when": lambda row: row[2]}, {}],
+        "when flag: SUM(x * w) <= SUM(cap) AND SUM(x * w) <= SUM(cap)",
+        [{"keeps": lambda row: row[2]}, {}],
     ),
     "key_column": (
-        "SUM(x * w) <= SUM(cap) PER g AND SUM(x * w) <= SUM(cap) PER flag",
-        [{"per": 1}, {"per": 2}],
-    ),
-    "left_when_present": (
-        "SUM(x * w) WHEN (g = 'a') <= SUM(cap) PER g AND SUM(x * w) <= SUM(cap) PER g",
-        [{"per": 1, "left": lambda row: row[1] == "a"}, {"per": 1}],
-    ),
-    "left_when_value": (
-        "SUM(x * w) WHEN (g = 'a') <= SUM(cap) PER g AND SUM(x * w) WHEN (flag) <= SUM(cap) PER g",
-        [{"per": 1, "left": lambda row: row[1] == "a"}, {"per": 1, "left": lambda row: row[2]}],
+        "SUM(x * w) by (g) <= SUM(cap) by (g) AND SUM(x * w) by (flag) <= SUM(cap) by (flag)",
+        [{"left_key": 1, "right_key": 1}, {"left_key": 2, "right_key": 2}],
     ),
     "clause_when_value": (
-        "SUM(x * w) <= SUM(cap) + 0 WHEN (flag) AND SUM(x * w) <= SUM(cap) + 0 WHEN (id < 4)",
-        [{"when": lambda row: row[2]}, {"when": lambda row: row[0] < 4}],
+        "when flag: SUM(x * w) <= SUM(cap) AND when id < 4: SUM(x * w) <= SUM(cap)",
+        [{"keeps": lambda row: row[2]}, {"keeps": lambda row: row[0] < 4}],
     ),
 }
 
@@ -292,46 +347,36 @@ SHARED_AGGREGATE_CASES = {
 @pytest.mark.parametrize("case", sorted(SHARED_AGGREGATE_CASES))
 def test_rhs_same_aggregate_in_two_clauses_reads_each_clauses_group(decidb_cli, oracle_solver, case):
     constraint, clauses = SHARED_AGGREGATE_CASES[case]
-    limits = [limit for clause in clauses for limit in _clause_limits(PLAIN, **clause)]
+    limits = [limit for clause in clauses for limit in _clause_limits(PLAIN, _caps("SUM(cap)"), **clause)]
     _agree(decidb_cli, oracle_solver, PLAIN, constraint, limits)
 
 
-# id -> (constraint, its clause). The window cannot read a volatile condition, so the clause keeps the solver's fold.
-VOLATILE_CONDITION_CASES = {
-    "left_when": (
-        "SUM(x * w) WHEN (random() < 2) <= SUM(cap) PER g",
-        {"per": 1},
-    ),
-    "clause_when": (
-        "SUM(x * w) <= SUM(cap) + 0 WHEN (flag AND random() < 2) PER g",
-        {"per": 1, "when": lambda row: row[2]},
-    ),
-}
-
-
 @pytest.mark.cons_aggregate
-@pytest.mark.per_clause
 @pytest.mark.correctness
-@pytest.mark.parametrize("case", sorted(VOLATILE_CONDITION_CASES))
-def test_rhs_aggregate_under_a_volatile_condition_matches_the_oracle(decidb_cli, oracle_solver, case):
-    constraint, clause = VOLATILE_CONDITION_CASES[case]
-    _agree(decidb_cli, oracle_solver, PLAIN, constraint, _clause_limits(PLAIN, **clause))
+@pytest.mark.parametrize("aggregate", ["SUM", "MIN", "AVG"])
+def test_rhs_aggregate_with_its_own_when_under_a_clause_when_matches_the_oracle(decidb_cli, oracle_solver, aggregate):
+    """A reducer's own `when` narrows the rows the clause keeps; its argument is read only where both hold."""
+    constraint = f"when id < 5: SUM(x * w) by (g) <= {aggregate}(when flag: cap) by (g)"
+    limits = _clause_limits(
+        PLAIN,
+        _caps(f"{aggregate}(cap)"),
+        keeps=lambda row: row[0] < 5,
+        left_key=1,
+        right_key=1,
+        right=lambda row: row[2],
+    )
+    _agree(decidb_cli, oracle_solver, PLAIN, constraint, limits)
 
 
 @pytest.mark.error
-@pytest.mark.parametrize(
-    "constraint, message",
-    [
-        # The binder admits no DISTINCT reducer, so a window never has to copy one.
-        ("SUM(x * w) <= SUM(DISTINCT cap)", r"does not support 'sum\(DISTINCT cap\)'"),
-        # A clause WHEN and a reducer's own WHEN together are rejected, so a window never sees both.
-        (
-            "SUM(x * w) <= SUM(cap) WHEN (id < 4) WHEN (flag)",
-            r"Cannot combine expression-level WHEN with aggregate-local WHEN",
-        ),
-    ],
-    ids=["distinct", "clause_when_with_own_when"],
-)
-def test_rhs_aggregate_shapes_the_binder_rejects(decidb_cli, constraint, message):
-    with pytest.raises(DecidBCliError, match=message):
-        run(decidb_cli, _sql(PLAIN, constraint), "off")
+def test_rhs_aggregate_whose_own_when_empties_a_group_raises_d8(decidb_cli):
+    """Group c has no flagged row, so the right side has no rows to read there (D8)."""
+    with pytest.raises(DecidBCliError, match=r"sum\(when flag: cap\) has no rows for g = 'c'\."):
+        run(decidb_cli, _sql(ROWS, "SUM(x * w) by (g) <= SUM(when flag: cap) by (g)"), "off")
+
+
+@pytest.mark.error
+def test_rhs_aggregate_shapes_the_binder_rejects(decidb_cli):
+    # The binder admits no DISTINCT reducer, so a window never has to copy one.
+    with pytest.raises(DecidBCliError, match=r"does not support 'sum\(DISTINCT cap\)'"):
+        run(decidb_cli, _sql(PLAIN, "SUM(x * w) <= SUM(DISTINCT cap)"), "off")

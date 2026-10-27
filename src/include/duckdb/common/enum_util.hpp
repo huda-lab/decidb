@@ -132,6 +132,8 @@ enum class DebugInitialize : uint8_t;
 
 enum class DecideExpression : uint8_t;
 
+enum class DecideScopeCheckKind : uint8_t;
+
 enum class DecideSense : uint8_t;
 
 enum class DecideVarScope : uint8_t;
@@ -566,6 +568,9 @@ const char* EnumUtil::ToChars<DebugInitialize>(DebugInitialize value);
 
 template<>
 const char* EnumUtil::ToChars<DecideExpression>(DecideExpression value);
+
+template <>
+const char *EnumUtil::ToChars<DecideScopeCheckKind>(DecideScopeCheckKind value);
 
 template<>
 const char* EnumUtil::ToChars<DecideSense>(DecideSense value);
@@ -1143,6 +1148,9 @@ DebugInitialize EnumUtil::FromString<DebugInitialize>(const char *value);
 
 template<>
 DecideExpression EnumUtil::FromString<DecideExpression>(const char *value);
+
+template <>
+DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *value);
 
 template<>
 DecideSense EnumUtil::FromString<DecideSense>(const char *value);

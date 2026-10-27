@@ -9,7 +9,6 @@
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/optimizer/decide/decide_linear_form.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
-#include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
@@ -17,27 +16,37 @@
 
 namespace duckdb {
 
+//! The operator in `plan` whose own output carries `table_index`, or null.
+static LogicalOperator *FindBindingProducer(LogicalOperator &plan, idx_t table_index) {
+	for (auto index : plan.GetTableIndex()) {
+		if (index == table_index) {
+			return &plan;
+		}
+	}
+	for (auto &child : plan.children) {
+		if (auto *producer = FindBindingProducer(*child, table_index)) {
+			return producer;
+		}
+	}
+	return nullptr;
+}
+
 unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op) {
 	DecideProfileScope profile("frontend.physical_decide");
-    if (GetDirectSolveMode(context) == DirectSolveMode::REQUIRE) {
-        throw InvalidInputException(
-            "decide_direct_solve=require: DECIDE optimizer did not run; direct solve was not attempted");
-    }
-    D_ASSERT(op.children.size() == 1);
-    // The backend — and with it stage 05's decision about which constructs stay native —
-    // was settled before any rewrite ran, so the rewrites and the solve agree on what is
-    // lowered. If the DECIDE optimizer never ran (`SET
-    // disabled_optimizers='decide_optimizer'`), nothing settled it; trigger the
-    // stage-05-owned pass here so the operator still runs against exactly one backend
-    // and one formulation for the whole query. It is a no-op when a choice is already on
-    // the plan, so it can never overwrite one the rewrites were selected against.
-    ChooseDecideSolver(op);
-    // Both clauses are verified after ALL optimizer rewriting and before any logical
-    // expression is moved into the physical operator. The objective is checked here
-    // for the same reason the constraints are: every rewrite that touches it now
-    // re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
-    // canonical form should fail loudly rather than reach the extractor.
-    if (op.decide_constraints || op.decide_objective) {
+	// Stage 05 carries meaning, not just speed: it chooses the backend, reduces each data bound to its group's tightest
+	// value with its value checks, and folds bounds into column boxes. A plan it never saw (the optimizer switched off,
+	// or PRAGMA enable_verification's unoptimized run) cannot be answered, so it is refused in SQL terms.
+	if (!op.optimized) {
+		throw InvalidInputException("DECIDE needs the DECIDE optimizer. Remove 'decide_optimizer' from "
+		                            "disabled_optimizers, and run PRAGMA enable_optimizer if it is disabled.");
+	}
+	D_ASSERT(op.children.size() == 1);
+	// Both clauses are verified after ALL optimizer rewriting and before any logical
+	// expression is moved into the physical operator. The objective is checked here
+	// for the same reason the constraints are: every rewrite that touches it now
+	// re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
+	// canonical form should fail loudly rather than reach the extractor.
+	if (op.decide_constraints || op.decide_objective) {
         DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes);
         if (op.decide_constraints) {
             canonicalizer.VerifyCanonical(*op.decide_constraints);
@@ -92,34 +101,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // surviving columns must be mapped back to their table ordinals first, exactly as
     // LogicalGet::ResolveTypes walks them. Getting this wrong silently mislabels one
     // column as another rather than failing.
+    //
+    // Each binding is read off the operator that produced it, found by its table index (`GetTableIndex`), whatever
+    // operators an optimizer pass has put above it.
     vector<idx_t> binding_column_index(child_bindings.size(), DConstants::INVALID_INDEX);
-    for (idx_t i = 0; i < child_bindings.size(); i++) {
-        binding_column_index[i] = child_bindings[i].column_index;
-    }
-    // The DECIDE optimizer's right-hand-side rewrite puts a window directly above the source. A window keeps its
-    // child's bindings in front of its own, so the names of those columns are read from what the window sits on.
-    auto *name_base = op.children[0].get();
-    while (name_base->type == LogicalOperatorType::LOGICAL_WINDOW && name_base->children.size() == 1) {
-        name_base = name_base->children[0].get();
-    }
-    if (name_base->type == LogicalOperatorType::LOGICAL_GET) {
-        auto &child_get = name_base->Cast<LogicalGet>();
-        auto &column_ids = child_get.GetColumnIds();
-        for (idx_t i = 0; i < binding_column_index.size(); i++) {
-            idx_t slot = i;
-            if (!child_get.projection_ids.empty()) {
-                if (i >= child_get.projection_ids.size()) {
-                    break; // projected_input columns from a table-in-out child
-                }
-                slot = child_get.projection_ids[i];
-            }
-            if (slot >= column_ids.size() || column_ids[slot].IsRowIdColumn()) {
-                binding_column_index[i] = DConstants::INVALID_INDEX; // synthetic, unnamed
-                continue;
-            }
-            binding_column_index[i] = column_ids[slot].GetPrimaryIndex();
-        }
-    }
     // Which columns may be named at all. The binder's map answers "what is this column
     // called", not "did the user write that name": a projection expression with no alias
     // is recorded under its own `ToString`, so an unaliased computed column would be
@@ -128,15 +113,30 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // here while the spelling comes from the binder. A column under any other operator
     // (a scan, most of all) has no such expression and is always eligible.
     vector<bool> nameable(child_bindings.size(), true);
-    if (name_base->type == LogicalOperatorType::LOGICAL_PROJECTION) {
-        auto &child_proj = name_base->Cast<LogicalProjection>();
-        for (idx_t i = 0; i < nameable.size(); i++) {
-            if (i >= child_proj.expressions.size()) {
-                break;
+    for (idx_t i = 0; i < child_bindings.size(); i++) {
+        binding_column_index[i] = child_bindings[i].column_index;
+        auto *producer = FindBindingProducer(*op.children[0], child_bindings[i].table_index);
+        if (!producer) {
+            continue;
+        }
+        if (producer->type == LogicalOperatorType::LOGICAL_GET) {
+            auto &get = producer->Cast<LogicalGet>();
+            auto &column_ids = get.GetColumnIds();
+            idx_t slot = binding_column_index[i];
+            if (!get.projection_ids.empty()) {
+                // A column past the projection is a projected input of a table-in-out function.
+                slot = slot < get.projection_ids.size() ? get.projection_ids[slot] : column_ids.size();
             }
-            auto &expr = *child_proj.expressions[i];
-            nameable[i] = expr.HasAlias() ||
-                          expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
+            // A row id is synthetic and unnamed.
+            binding_column_index[i] = slot >= column_ids.size() || column_ids[slot].IsRowIdColumn()
+                                          ? DConstants::INVALID_INDEX
+                                          : column_ids[slot].GetPrimaryIndex();
+        } else if (producer->type == LogicalOperatorType::LOGICAL_PROJECTION) {
+            auto &projection = producer->Cast<LogicalProjection>();
+            if (binding_column_index[i] < projection.expressions.size()) {
+                auto &expr = *projection.expressions[binding_column_index[i]];
+                nameable[i] = expr.HasAlias() || expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
+            }
         }
     }
     vector<string> child_userwritten_names(child_bindings.size(), string());
@@ -175,6 +175,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->source_fragments = std::move(op.source_fragments);
     decide_op->composed_minmax_constraints = std::move(op.composed_minmax_constraints);
     decide_op->composed_minmax_objective_terms = std::move(op.composed_minmax_objective_terms);
+    decide_op->reducer_value_links = std::move(op.reducer_value_links);
+    decide_op->rewrite_accounts = std::move(op.rewrite_accounts);
     decide_op->singleton_row_boxes = std::move(op.singleton_row_boxes);
     decide_op->user_singleton_row_bounds = std::move(op.user_singleton_row_bounds);
     decide_op->flat_objective_agg = op.flat_objective_agg;
@@ -207,13 +209,16 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     }
     decide_op->entity_scopes = std::move(op.entity_scopes);
     decide_op->variable_scopes = std::move(op.variable_scopes);
+    // Resolved like every other expression the operator owns (EnumerateExpressions).
+    decide_op->group_keys = std::move(op.group_keys);
+    decide_op->scope_checks = std::move(op.scope_checks);
 
     // Resolve source column names for the surviving (post-pruning) child columns,
     // positionally aligned with the materialized data chunk. Used by the unbounded
     // diagnosis to label escaping categorical groups (affected_rows).
     //
     // Harvest names from the DECIDE clause's own bound references to source columns
-    // (WHEN / PER / objective / constraint / entity-key columns). By physical-plan
+    // (`when` / `per` / `by` / objective / constraint / entity-key columns). By physical-plan
     // time the column-binding resolver has rewritten table-column references to
     // BoundReferenceExpressions whose `index` is the position in the child data chunk
     // — exactly the indexing of gstate.data — so this aligns directly and survives
@@ -245,6 +250,56 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     if (decide_op->decide_objective) {
         harvest(*decide_op->decide_objective);
     }
+    // A `by` key and a scope check read the clause's data too; an aggregate-shape clause
+    // keeps its `per` key only in its checks.
+    for (auto &group_key : decide_op->group_keys) {
+        for (auto &expr : group_key.expressions) {
+            harvest(*expr);
+        }
+    }
+    for (auto &check : decide_op->scope_checks) {
+        for (auto *expr : {check.rows.get(), check.value.get(), check.filter.get()}) {
+            if (expr) {
+                harvest(*expr);
+            }
+        }
+        for (auto &column : check.key) {
+            harvest(*column);
+        }
+    }
+    // A lifted reducer's expressions live beside the tree: a composed term's and a helper
+    // decision's (reducer_value_links). The columns they read explain the answer too.
+    auto harvest_composed_term = [&](const LogicalDecide::ComposedMinMaxTerm &term) {
+        for (auto *expr : {term.inner_expr.get(), term.filter.get(), term.scale.get()}) {
+            if (expr) {
+                harvest(*expr);
+            }
+        }
+    };
+    for (auto &spec : decide_op->composed_minmax_constraints) {
+        for (auto &term : spec.terms) {
+            harvest_composed_term(term);
+        }
+        if (spec.rhs_expr) {
+            harvest(*spec.rhs_expr);
+        }
+        if (spec.when) {
+            harvest(*spec.when);
+        }
+        for (auto &column : spec.class_key) {
+            harvest(*column);
+        }
+    }
+    for (auto &term : decide_op->composed_minmax_objective_terms) {
+        harvest_composed_term(term);
+    }
+    for (auto &link : decide_op->reducer_value_links) {
+        for (auto *expr : {link.inner_expr.get(), link.filter.get(), link.when.get()}) {
+            if (expr) {
+                harvest(*expr);
+            }
+        }
+    }
     // entity_key_expressions are deliberately NOT harvested for names: every entry
     // carries the synthetic "entity_key_<alias>" placeholder (see
     // LogicalDecide::entity_key_expressions / bind_select_node.cpp), needed only to
@@ -256,8 +311,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // Back-fill SELECT-only columns from the child projection's user-written names.
     // Only slots the DECIDE-clause harvest left empty are touched, so a name the user
     // referenced in the clause always wins over the raw projection alias.
-    for (idx_t i = 0; i < decide_op->input_column_names.size() && i < child_userwritten_names.size();
-         i++) {
+    for (idx_t i = 0; i < decide_op->input_column_names.size() && i < child_userwritten_names.size(); i++) {
         if (decide_op->input_column_names[i].empty()) {
             decide_op->input_column_names[i] = child_userwritten_names[i];
         }

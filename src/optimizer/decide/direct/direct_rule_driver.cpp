@@ -10,7 +10,10 @@
 #include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
+#include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -20,6 +23,7 @@
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
+#include "duckdb/planner/operator/logical_window.hpp"
 
 namespace duckdb {
 
@@ -122,9 +126,64 @@ bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
 	}
 }
 
+//! Puts the IR's row checks under the rule's plan, where the solver makes them: before it reads a value. A window
+//! counts, over the whole source, the rows each check looks at and the rows it reads (for a value check, takes the
+//! least message a row raises, so that every row reads the same one), and a filter above it raises the first check
+//! that fails. The filter passes on exactly the source's columns, so the source keeps its bindings. Filter
+//! pullup leaves a filter with a projection map in place, and pushdown moves nothing below an unpartitioned window.
+void AddRowChecks(Optimizer &optimizer, const DirectIR &ir, unique_ptr<LogicalOperator> &source) {
+	if (ir.row_checks.empty()) {
+		return;
+	}
+	ExpressionBuilder calc(optimizer.context);
+	auto source_columns = source->GetColumnBindings().size();
+	auto window_index = optimizer.binder.GenerateTableIndex();
+	auto window = make_uniq<LogicalWindow>(window_index);
+	vector<idx_t> first_slots;
+	for (auto &check : ir.row_checks) {
+		first_slots.push_back(window->expressions.size());
+		if (check.invalid) {
+			window->expressions.push_back(DirectWindowExtremum(optimizer, "min", check.invalid->Copy()));
+			continue;
+		}
+		auto looked_at = check.rows ? check.rows->Copy() : calc.Out(calc.Bool(true));
+		auto read = calc.Out(calc.If(calc.Of(*looked_at), calc.Of(*check.filter), calc.Bool(false)));
+		window->expressions.push_back(DirectWindowMatchingCount(calc, std::move(looked_at)));
+		window->expressions.push_back(DirectWindowMatchingCount(calc, std::move(read)));
+	}
+	window->children.push_back(std::move(source));
+	vector<unique_ptr<Expression>> checks;
+	for (idx_t i = 0; i < ir.row_checks.size(); i++) {
+		auto slot = first_slots[i];
+		if (ir.row_checks[i].invalid) {
+			auto message = calc.Col(LogicalType::VARCHAR, ColumnBinding(window_index, slot));
+			checks.push_back(DirectRaiseIf(calc,
+			                               calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
+			                               DirectErrorPredicate(optimizer, calc.Out(message))));
+			continue;
+		}
+		auto looked_at = calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, slot));
+		auto read = calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, slot + 1));
+		auto zero = calc.Constant(Value::BIGINT(0));
+		auto bad = calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, looked_at, zero),
+		                   calc.Cmp(ExpressionType::COMPARE_EQUAL, read, zero), calc.Bool(false));
+		checks.push_back(DirectRaiseIf(calc, calc.Out(bad), DirectErrorPredicate(optimizer, ir.row_checks[i].message)));
+	}
+	auto filter = make_uniq<LogicalFilter>(DirectAllHold(calc, std::move(checks)));
+	for (idx_t i = 0; i < source_columns; i++) {
+		filter->projection_map.push_back(i);
+	}
+	filter->children.push_back(std::move(window));
+	filter->ResolveOperatorTypes();
+	source = std::move(filter);
+}
+
 } // namespace
 
 bool DirectIRIsReadable(const DirectIR &ir) {
+	if (ir.status != DirectAnalysisStatus::PROVED) {
+		return false;
+	}
 	if (ir.objective.status != DirectAnalysisStatus::PROVED || !std::isfinite(ir.objective.offset)) {
 		return false;
 	}
@@ -229,7 +288,9 @@ void ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	if (carries_rowid) {
 		source.ResolveOperatorTypes();
 	}
-	auto substitute = selected.rule->Apply(std::move(decide.children[0]), optimizer, *selected.condition);
+	AddRowChecks(optimizer, ir, decide.children[0]);
+	auto substitute =
+	    selected.rule->Apply(std::move(decide.children[0]), optimizer, *selected.condition, decide.source_fragments);
 	if (carries_rowid) {
 		if (substitute.slot_map.size() != output_bindings.size() + 1) {
 			throw InternalException("Direct solve rule did not pass the source row id through");

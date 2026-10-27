@@ -42,7 +42,7 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    disjoint from every registered rule: it requires an IR property that rules proving a nearby shape forbid.
 4. Use the shared predicates in `direct_expression.cpp` to decide whether a coefficient or bound is admissible
    (`DirectProveValue`). Take the empty-aggregate guard, the all-rows breaker, the scope projection
-   (`DirectProjectScope`), the per-group validation of a data-valued bound (`DirectValidateBounds`) and
+   (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`) and
    `DirectWindowExtremum` from `direct_plan_fragments.cpp`, the
    number checks and error predicates from `direct_runtime_checks.cpp`, and the per-row bounds on a decision
    (`DirectReadsOneDecision`, `DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`, `DirectBoxIsEmpty`) and the
@@ -62,9 +62,11 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 - **Every input row is read.** A bad value on the last of 5,000 rows must raise even under `LIMIT 1` or
   `COUNT(*)`. A plan that could stream wraps its checks in `DirectValidationBreaker`; a rank window already reads
   everything. Only `LIMIT 0` may skip the read.
-- **An error on the same inputs.** Where the solver raises, direct solve raises: empty scoped aggregate; invalid
-  data-valued bounds and fixed values (including rows a `WHEN` or NULL `PER` key excludes); invalid objective
-  coefficients (NULL, NaN, infinity); infeasibility. Silently answering where the solver refuses is a wrong answer. What
+- **An error on the same inputs.** Where the solver raises, direct solve raises: a `when` that keeps no row (D4) and a
+  reducer whose own `when` keeps no row (D8), which the driver's row checks raise; invalid data-valued bounds and fixed
+  values on the rows that read them; invalid objective coefficients (NULL, NaN, infinity); infeasibility. Nothing is
+  computed on a row a `when` drops (syntax reference §6.3): a value there must not raise, on either path
+  (`DirectOnKeptRows`, `DirectCheckOnKeptRows`; `test_direct_source_values.py` checks each place a rule masks). Silently answering where the solver refuses is a wrong answer. What
   the rule does **not** owe: the solver's choice among several errors in one query (any one of the applicable errors is
   enough), or the ` at row N` the solver adds to a NaN or infinite value, because N is a scan position a plan cannot
   name. Every other message the solver words for the user is the solver's text (see User-facing wording).

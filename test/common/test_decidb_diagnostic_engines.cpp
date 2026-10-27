@@ -233,7 +233,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(diag.findings[0].edit_source == "runaway_+inf");
 		// The one rule accounts for every escaping instance and its whole group escapes,
 		// so the cap is scoped to those rows rather than capping the domestic row too.
-		CHECK(diag.findings[0].suggested_change == "x <= <cap> WHEN channel = 'export'");
+		CHECK(diag.findings[0].suggested_change == "when channel = 'export': x <= <cap>");
 		CHECK(diag.findings[0].group == "channel = 'export'");
 		REQUIRE(diag.findings[0].has_amount);
 		CHECK(diag.findings[0].amount == 2.0);
@@ -312,7 +312,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1.0, '<', 5.0, ConstraintKind::USER_PARAMETER},
 		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -331,7 +331,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1.0, '=', 5.0, ConstraintKind::USER_PARAMETER},
 		    {1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -348,27 +348,13 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1.0, '<', 5.0, ConstraintKind::STRUCTURAL},
 		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
 		REQUIRE(diag.findings.size() == 1);
 		CHECK(diag.findings[0].edit_source == "rigid_conflict");
 		CHECK(diag.findings[0].clause.empty());
-	}
-
-	SECTION("punted multi-instance bound suppresses the elastic-infeasible claim") {
-		// Same rigid conflict, but the operator flagged a singleton-row bound it could
-		// not re-emit (I2 scope). The engine must NOT declare it unfixable — it falls
-		// through to the static error (invalid diagnosis) instead.
-		SolverModel model = MakeSingleVarModel({
-		    {1.0, '<', 100.0, ConstraintKind::USER_PARAMETER},
-		    {1.0, '<', 5.0, ConstraintKind::STRUCTURAL},
-		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
-		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params,
-		                                     /*has_unhandled_user_bounds=*/true, solve_highs};
-		CHECK(!DiagnoseInfeasible(diag_input).valid);
 	}
 
 	SECTION("no relaxable rows falls through to the static error") {
@@ -378,7 +364,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {1.0, '<', 5.0, ConstraintKind::STRUCTURAL},
 		    {1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, solve_highs};
 		CHECK(!DiagnoseInfeasible(diag_input).valid);
 	}
 
@@ -498,9 +484,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
 		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model,  row_indexer, row_labels,
-		                                     row_aux, kNoGlobalLabels, params, false,
-		                                     solve_highs};
+		InfeasibleDiagnosisInput diag_input {model,           row_indexer, row_labels, row_aux,
+		                                     kNoGlobalLabels, params,      solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -512,7 +497,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 	}
 
 	SECTION("PER SHARED_SCALAR folds by mode: one edit in query, per-group in expanded") {
-		// T3: a PER clause fans into N_g rows per group, all SHARED_SCALAR with the same
+		// T3: a grouped clause fans into N_g rows per group, all SHARED_SCALAR with the same
 		// repair_group_id but distinct group_key. query mode is the single SQL literal the user
 		// edits → ONE slack across every group; expanded mode breaks it out per group.
 		SolverModel model = MakeModel(4, {
@@ -582,7 +567,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {0, 1.0, '>', 3.0, ConstraintKind::USER_PARAMETER, 1, ElasticShape::PER_ROW_DATA},
 		    {0, 1.0, '>', 10.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -607,9 +592,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		    {0, 1.0, '>', 8.0, ConstraintKind::STRUCTURAL},
 		    {1, 1.0, '>', 12.0, ConstraintKind::STRUCTURAL},
 		});
-		InfeasibleDiagnosisInput diag_input {model,   row_indexer, row_labels,
-		                                     row_aux, kNoGlobalLabels, params, false,
-		                                     solve_highs};
+		InfeasibleDiagnosisInput diag_input {model,           row_indexer, row_labels, row_aux,
+		                                     kNoGlobalLabels, params,      solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -637,9 +621,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		});
 		DecideDiagParams expanded_params = params;
 		expanded_params.slack_scope = "expanded";
-		InfeasibleDiagnosisInput diag_input {model,   row_indexer,     row_labels,
-		                                     row_aux, kNoGlobalLabels, expanded_params,
-		                                     false,   solve_highs};
+		InfeasibleDiagnosisInput diag_input {model,           row_indexer,     row_labels, row_aux,
+		                                     kNoGlobalLabels, expanded_params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -665,7 +648,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		});
 		model.constraints[0].provenance.strict = true;
 		model.constraints[0].provenance.typed_k = 5.0;
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -683,16 +666,15 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		ConstraintSourceInfo source;
 		source.canonical_lhs = "CAST(real_x AS DOUBLE)";
 		source.canonical_rhs = "capacity";
-		source.qualifier = "WHEN enabled PER region";
+		source.qualifier = "when enabled per region:";
 		source.rhs_kind = ConstraintSourceRhsKind::DATA_EXPRESSION;
 		model.constraint_sources[0] = std::move(source);
-		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer, labels, is_aux, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
-		string clause = "CAST(real_x AS DOUBLE) <= capacity WHEN enabled PER region";
-		CHECK(Find(diag, clause).suggested_change ==
-		      "CAST(real_x AS DOUBLE) <= capacity + 3 WHEN enabled PER region");
+		string clause = "when enabled per region: CAST(real_x AS DOUBLE) <= capacity";
+		CHECK(Find(diag, clause).suggested_change == "when enabled per region: CAST(real_x AS DOUBLE) <= capacity + 3");
 	}
 
 	SECTION("AVG row renders an AVG(...) label and reports the raw slack") {
@@ -731,9 +713,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 			floor.provenance.kind = ConstraintKind::STRUCTURAL;
 			m.constraints.push_back(std::move(floor));
 		}
-		InfeasibleDiagnosisInput diag_input {m,       row_indexer, row_labels,
-		                                     row_aux, kNoGlobalLabels, params, false,
-		                                     solve_highs};
+		InfeasibleDiagnosisInput diag_input {m, row_indexer, row_labels, row_aux, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -810,8 +790,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		model.obj_coeffs = {1.0, 0.0}; // MAXIMIZE x
 		model.maximize = true;
 
-		InfeasibleDiagnosisInput diag_input {model,    indexer2, labels2, is_aux2, kNoGlobalLabels,
-		                                     params,   false,    solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer2, labels2, is_aux2, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -836,8 +815,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		model.obj_coeffs = {0.0, 1.0}; // MAXIMIZE y (unbounded)
 		model.maximize = true;
 
-		InfeasibleDiagnosisInput diag_input {model,    indexer2, labels2, is_aux2, kNoGlobalLabels,
-		                                     params,   false,    solve_highs};
+		InfeasibleDiagnosisInput diag_input {model, indexer2, labels2, is_aux2, kNoGlobalLabels, params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -1036,8 +1014,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 			pin.provenance.kind = ConstraintKind::STRUCTURAL;
 			model.constraints.push_back(std::move(pin));
 		}
-		InfeasibleDiagnosisInput diag_input {model,  ne_indexer, ne_labels, ne_aux, kNoGlobalLabels,
-		                                     params, false,      solve_highs};
+		InfeasibleDiagnosisInput diag_input {model,           ne_indexer, ne_labels,  ne_aux,
+		                                     kNoGlobalLabels, params,     solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -1068,8 +1046,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		floor.provenance.kind = ConstraintKind::STRUCTURAL;
 		model.constraints.push_back(std::move(floor));
 
-		InfeasibleDiagnosisInput diag_input {model,  ne_indexer, ne_labels, ne_aux, kNoGlobalLabels,
-		                                     params, false,      solve_highs};
+		InfeasibleDiagnosisInput diag_input {model,           ne_indexer, ne_labels,  ne_aux,
+		                                     kNoGlobalLabels, params,     solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);
@@ -1109,8 +1087,8 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 			pin.provenance.kind = ConstraintKind::STRUCTURAL;
 			model.constraints.push_back(std::move(pin));
 		}
-		InfeasibleDiagnosisInput diag_input {model,      agg_indexer, agg_labels, agg_aux,
-		                                     agg_input.global_variable_labels, params, false, solve_highs};
+		InfeasibleDiagnosisInput diag_input {model,  agg_indexer, agg_labels, agg_aux, agg_input.global_variable_labels,
+		                                     params, solve_highs};
 		DecideDiagnostic diag = DiagnoseInfeasible(diag_input);
 
 		REQUIRE(diag.valid);

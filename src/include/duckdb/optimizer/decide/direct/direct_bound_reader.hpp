@@ -31,8 +31,8 @@ struct DirectSignedValue {
 	unique_ptr<Expression> expr;
 };
 
-//! One bound the plan evaluates per row: `coefficient * x  comparison  rhs`, under an optional WHEN. A bound the solver
-//! folds into the variable's box is not a clause, it is part of the decision's static box.
+//! One bound the plan evaluates per row: `coefficient * x  comparison  rhs`, under an optional `when`. A bound the
+//! solver folds into the variable's box is not a clause, it is part of the decision's static box.
 struct DirectBoundClause {
 	idx_t decision = 0;
 	ExpressionType comparison = ExpressionType::INVALID;

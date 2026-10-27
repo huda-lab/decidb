@@ -30,6 +30,18 @@ def _allow_direct_path(monkeypatch):
     monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
 
 
+# Direct solve declines a reducer's `by` key until S1 and R1 read it (context/descriptions/todo.md, task 1). Until then
+# a query with one runs on the solver path alone, and a test of the direct plan's per-group shape is expected to fail,
+# strictly, so that task 1 removes the mark.
+BY_KEY_PENDING = "direct solve reads no by key yet (todo task 1)"
+READ_THROUGH_PENDING = "a data bound costs two windows before the rule (framework todo H-03)"
+
+
+def direct_modes(sql):
+    """The paths a query runs on: the solver alone while direct solve declines its `by` key."""
+    return ("off",) if " by (" in sql else ("off", "require")
+
+
 def run(cli, sql, mode):
     """Runs `sql` with `decide_direct_solve` set to `mode`; returns `(rows, columns)`."""
     return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")

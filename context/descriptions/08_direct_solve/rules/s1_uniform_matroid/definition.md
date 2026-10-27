@@ -26,8 +26,8 @@ Suppose each department must select between one and two candidates:
 SELECT id, department, selected
 FROM candidates
 DECIDE selected(BOOL)
-SUCH THAT SUM(selected) >= 1 PER department
-AND SUM(selected) <= 2 PER department
+SUCH THAT per department: sum(selected) by (department) >= 1
+AND per department: sum(selected) by (department) <= 2
 MAXIMIZE SUM(score*selected);
 ```
 
@@ -140,7 +140,7 @@ equally optimal.
 >
 > • The only coupling is one cardinality interval per global or proved-disjoint group.
 >
-> • Paired lower and upper bounds use the same group membership and WHEN condition.
+> • Paired lower and upper bounds use the same group membership and `when` condition.
 >
 > • Count bounds are finite, decision-independent, and converted to inclusive integers.
 >
@@ -148,6 +148,6 @@ equally optimal.
 >
 > • A group with L > U produces DECIDE's infeasible result.
 >
-> • NULL PER keys and WHEN-excluded rows follow DECIDE's bypass semantics.
+> • Rows a `when` drops are in no group and still obey their fixed values; a NULL `by` key is a group of its own (D5).
 >
 > • Empty input, ties, Boolean types, decision identity, and output mapping preserve DECIDE semantics.

@@ -3,9 +3,9 @@
 ``AVG(expr) op K`` rewrites to ``SUM(expr) op K*N`` at bind time, where the
 divisor N is:
   - total rows for a vanilla AVG
-  - the count of WHEN-qualifying rows for AVG(..) WHEN cond
-  - the per-group size for AVG(..) PER col
-  - the intersection for AVG(..) WHEN cond PER col
+  - the count of kept rows for when cond: avg(..)
+  - the per-group size for per col: avg(..) by (col)
+  - the intersection for when cond per col: avg(..) by (col)
 
 Objectives share argmax/argmin with SUM (N is a positive constant) so an
 AVG objective is compared against an ordinary linear objective.
@@ -138,7 +138,7 @@ def test_avg_constraint(
 def test_avg_with_when(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """AVG(x*value) <= 6 WHEN tier='high' uses N_when (number of high rows)."""
+    """when tier='high': avg(x*value) <= 6 uses N_when (number of high rows)."""
     values = (
         "VALUES ('a', 10, 'high'), ('b', 5, 'low'), "
         "('c', 8, 'high'), ('d', 3, 'low')"
@@ -147,7 +147,7 @@ def test_avg_with_when(
     sql = f"""
         SELECT name, value, tier, x FROM ({data_sql})
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * value) <= 6 WHEN tier = 'high'
+        SUCH THAT when tier = 'high': avg(x * value) <= 6
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
@@ -191,7 +191,7 @@ def test_avg_with_when(
 def test_avg_with_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """AVG(x*value) <= 4 PER grp uses N_g per group."""
+    """per grp: avg(x*value) by (grp) <= 4 uses N_g per group."""
     values = (
         "VALUES ('a', 10, 'A'), ('b', 5, 'B'), ('c', 8, 'A'), ('d', 3, 'B')"
     )
@@ -199,7 +199,7 @@ def test_avg_with_per(
     sql = f"""
         SELECT name, value, grp, x FROM ({data_sql})
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * value) <= 4 PER grp
+        SUCH THAT per grp: avg(x * value) by (grp) <= 4
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
@@ -243,7 +243,7 @@ def test_avg_with_per(
 def test_avg_with_when_per(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """AVG with both WHEN and PER: filter WHEN first, then group by PER."""
+    """AVG with both when and per: the when filters first, then per/by groups."""
     values = (
         "VALUES ('a', 10, 'A', 'high'), ('b', 5, 'B', 'high'),"
         " ('c', 8, 'A', 'low'),  ('d', 3, 'B', 'low'),"
@@ -253,7 +253,7 @@ def test_avg_with_when_per(
     sql = f"""
         SELECT name, value, grp, tier, x FROM ({data_sql})
         DECIDE x(BOOL)
-        SUCH THAT AVG(x * value) <= 5 WHEN tier = 'high' PER grp
+        SUCH THAT when tier = 'high' per grp: avg(x * value) by (grp) <= 5
         MAXIMIZE SUM(x * value)
     """
     t0 = time.perf_counter()
@@ -510,7 +510,7 @@ def test_avg_not_equal_boolean(
 def test_avg_not_equal_with_when(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """AVG(x) <> 0.5 WHEN tier='high' — N scales with WHEN-qualifying rows.
+    """when tier='high': avg(x) <> 0.5 — N scales with the rows the when keeps.
 
     6 rows, 4 tagged 'high'; the AVG denominator becomes 4, so the
     constraint is SUM(x_i for high i) <> 2. Dataset is tuned so the
@@ -528,7 +528,7 @@ def test_avg_not_equal_with_when(
         SELECT name, profit, weight, tier, x FROM ({data_sql})
         DECIDE x(BOOL)
         SUCH THAT SUM(x * weight) <= 20
-              AND AVG(x) <> 0.5 WHEN tier = 'high'
+              AND when tier = 'high': avg(x) <> 0.5
         MAXIMIZE SUM(x * profit)
     """
     t0 = time.perf_counter()
@@ -551,7 +551,7 @@ def test_avg_not_equal_with_when(
         {f"x_{i}": data[i][2] for i in range(n)},
         "<=", 20.0, name="budget",
     )
-    # AVG(x) <> 0.5 WHEN high ⇒ SUM(x_i for high) <> 0.5 * |high| = 2.
+    # when high: avg(x) <> 0.5 ⇒ SUM(x_i for high) <> 0.5 * |high| = 2.
     add_ne_indicator(
         oracle_solver, {f"x_{i}": 1.0 for i in high_idx},
         rhs=0.5 * len(high_idx), name="avg_when_ne_05",

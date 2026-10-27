@@ -4,6 +4,7 @@
 #include "duckdb/parser/expression/comparison_expression.hpp"
 #include "duckdb/parser/expression/conjunction_expression.hpp"
 #include "duckdb/parser/expression/constant_expression.hpp"
+#include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/serializer/serializer.hpp"
@@ -22,13 +23,19 @@ bool SelectNode::HasDecideClause() const {
 //! Reverse the parser-only comparison marker used for a typed DECIDE declaration.
 //! The generic expression renderer would expose the marker as
 //! `(x = 'integer_variable')`, which is neither public nor parseable DECIDE syntax.
+//! The name on its left is a column reference, under a `PER key:` or `PER ROW:` scope
+//! marker when the declaration has one; that marker renders itself.
 static string DecideVariableToString(const ParsedExpression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::COMPARISON) {
 		throw InternalException("DECIDE variable declaration is not a typed comparison marker");
 	}
 	auto &comparison = expr.Cast<ComparisonExpression>();
+	auto &name = *comparison.left;
+	bool scoped = name.GetExpressionClass() == ExpressionClass::FUNCTION &&
+	              (name.Cast<FunctionExpression>().function_name == SCOPE_PER_TAG ||
+	               name.Cast<FunctionExpression>().function_name == SCOPE_PER_ROW_TAG);
 	if (comparison.type != ExpressionType::COMPARE_EQUAL ||
-	    comparison.left->GetExpressionClass() != ExpressionClass::COLUMN_REF ||
+	    (!scoped && name.GetExpressionClass() != ExpressionClass::COLUMN_REF) ||
 	    comparison.right->GetExpressionClass() != ExpressionClass::CONSTANT) {
 		throw InternalException("DECIDE variable declaration has an invalid parsed shape");
 	}
@@ -38,6 +45,8 @@ static string DecideVariableToString(const ParsedExpression &expr) {
 	}
 
 	auto marker = constant.value.GetValue<string>();
+	// A `scalar_` marker or a qualified name comes only from a parse tree stored before
+	// those spellings were removed; it prints as written and is refused when bound.
 	bool scalar = StringUtil::StartsWith(marker, "scalar_");
 	if (scalar) {
 		marker = marker.substr(7);
@@ -59,8 +68,8 @@ static string DecideVariableToString(const ParsedExpression &expr) {
 //! conjunction. Keeping DuckDB's generic outer parentheses makes a following WHEN or
 //! PER unparseable, so emit the list in the grammar's own form.
 //!
-//! Each clause renders through the ordinary `ParsedExpression::ToString()`, which is
-//! where the WHEN and PER postfix wrappers are spelled back out --
+//! Each clause renders through the ordinary `ParsedExpression::ToString()`, which also
+//! spells a stored tree's removed postfix WHEN and PER back out as written --
 //! `FunctionExpression::ToString()` recognizes their operator tags itself.
 static string DecideConstraintsToString(const ParsedExpression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::CONJUNCTION ||

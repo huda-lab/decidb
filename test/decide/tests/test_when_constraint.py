@@ -5,11 +5,12 @@ Covers:
   - Multiple WHEN constraints with different categories
   - Numeric comparison in WHEN condition
   - Boundary: all rows match (equivalent to no WHEN)
-  - Boundary: no rows match (constraint is trivially satisfied)
+  - Boundary: no rows match (an error: the when matches no rows)
   - Mixed conditional + unconditional constraints
   - Constant coefficient in SUM with WHEN
 """
 
+import re
 import time
 
 import pytest
@@ -24,14 +25,14 @@ from comparison.compare import compare_solutions
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_aggregate_string_equality(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Capacity limit on returned items only: SUM(x*qty) <= 100 WHEN returnflag='R'."""
+    """Capacity limit on returned items only: when returnflag='R': sum(x*qty) <= 100."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'R'
+        SUCH THAT when l_returnflag = 'R': sum(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -93,8 +94,8 @@ def test_when_multiple_categories(decidb_cli, duckdb_conn, oracle_solver, perf_t
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
-            AND SUM(x * l_quantity) <= 80 WHEN l_returnflag = 'A'
+        SUCH THAT when l_returnflag = 'R': sum(x * l_quantity) <= 50
+            AND when l_returnflag = 'A': sum(x * l_quantity) <= 80
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -152,14 +153,14 @@ def test_when_multiple_categories(decidb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_aggregate_numeric_comparison(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Capacity limit on discounted items: SUM(x*price) <= 5000 WHEN discount >= 0.06."""
+    """Capacity limit on discounted items: when discount >= 0.06: sum(x*price) <= 5000."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_discount, x
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_extendedprice) <= 5000 WHEN l_discount >= 0.06
+        SUCH THAT when l_discount >= 0.06: sum(x * l_extendedprice) <= 5000
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -219,7 +220,7 @@ def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_quantity > 0
+        SUCH THAT when l_quantity > 0: sum(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -272,18 +273,19 @@ def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 @pytest.mark.obj_maximize
 @pytest.mark.error_infeasible
 def test_when_no_rows_match(decidb_cli):
-    """Aggregate constraint with WHEN matching no rows — now rejected pre-solver
-    per the "reject all empty aggregate sets" rule."""
+    """Aggregate constraint whose `when` matches no rows — rejected pre-solver
+    per the "reject all empty aggregate sets" rule: a front ``when`` that keeps
+    no row is refused as "when l_returnflag = 'Z' matches no rows." (D4)."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 100 WHEN l_returnflag = 'Z'
+        SUCH THAT when l_returnflag = 'Z': SUM(x * l_quantity) <= 100
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    decidb_cli.assert_error(sql, match=r"empty|WHEN")
+    decidb_cli.assert_error(sql, match=re.escape("DECIDE: when l_returnflag = 'Z' matches no rows."))
 
 
 @pytest.mark.when_constraint
@@ -300,7 +302,7 @@ def test_when_mixed_conditional_and_unconditional(decidb_cli, duckdb_conn, oracl
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
+        SUCH THAT when l_returnflag = 'R': sum(x * l_quantity) <= 50
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -360,13 +362,13 @@ def test_when_mixed_conditional_and_unconditional(decidb_cli, duckdb_conn, oracl
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_aggregate_constant_coeff(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """Constant coefficient in SUM with WHEN: SUM(x*10) <= 200 WHEN mktsegment='AUTOMOBILE'."""
+    """Constant coefficient in SUM with when: when mktsegment='AUTOMOBILE': sum(x*10) <= 200."""
     sql = """
         SELECT c_custkey, c_acctbal, c_mktsegment, x
         FROM customer
         WHERE c_nationkey = 1
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * 10) <= 200 WHEN c_mktsegment = 'AUTOMOBILE'
+        SUCH THAT when c_mktsegment = 'AUTOMOBILE': sum(x * 10) <= 200
         MAXIMIZE SUM(x * c_acctbal)
     """
     t0 = time.perf_counter()
@@ -418,14 +420,14 @@ def test_when_aggregate_constant_coeff(decidb_cli, duckdb_conn, oracle_solver, p
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_not_equal(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """WHEN with not-equal operator: SUM(x*qty) <= 80 WHEN returnflag <> 'N'."""
+    """when with not-equal operator: when returnflag <> 'N': sum(x*qty) <= 80."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
                l_returnflag, x
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 80 WHEN l_returnflag <> 'N'
+        SUCH THAT when l_returnflag <> 'N': sum(x * l_quantity) <= 80
         MAXIMIZE SUM(x * l_extendedprice)
     """
     t0 = time.perf_counter()
@@ -479,8 +481,8 @@ def test_when_not_equal(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 def test_when_constraint_ordering_invariance(decidb_cli):
     """WHEN must apply only to its constraint regardless of AND ordering.
 
-    Regression test: `DECIDE_ITEM` precedence must keep "A AND B WHEN C" as
-    "A AND (B WHEN C)" so constraint ordering cannot change semantics.
+    Regression test: a scope covers exactly one constraint, so "A AND when C: B"
+    is "A AND (when C: B)" and constraint ordering cannot change semantics.
     """
     # Order 1: unconditional BEFORE WHEN
     sql_before = """
@@ -490,7 +492,7 @@ def test_when_constraint_ordering_invariance(decidb_cli):
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
         SUCH THAT SUM(x) <= 20
-            AND SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
+            AND when l_returnflag = 'R': sum(x * l_quantity) <= 50
         MAXIMIZE SUM(x * l_extendedprice)
     """
     # Order 2: unconditional AFTER WHEN
@@ -500,7 +502,7 @@ def test_when_constraint_ordering_invariance(decidb_cli):
         FROM lineitem
         WHERE l_orderkey < 100
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_quantity) <= 50 WHEN l_returnflag = 'R'
+        SUCH THAT when l_returnflag = 'R': sum(x * l_quantity) <= 50
             AND SUM(x) <= 20
         MAXIMIZE SUM(x * l_extendedprice)
     """
@@ -548,7 +550,7 @@ def test_when_null_condition_column(decidb_cli, duckdb_conn, oracle_solver, perf
         SELECT id, val, flag, x
         FROM data
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 20 WHEN flag = 'R'
+        SUCH THAT when flag = 'R': sum(x * val) <= 20
         MAXIMIZE SUM(x * val)
     """
     result, cols = decidb_cli.execute(sql)
@@ -566,8 +568,7 @@ def test_when_null_condition_column(decidb_cli, duckdb_conn, oracle_solver, perf
         if flag == 'R':
             when_sum += int(row[x_idx]) * float(row[val_idx])
 
-    assert when_sum <= 20 + 1e-4, \
-        f"WHEN constraint violated: SUM(x*val) WHEN flag='R' = {when_sum} > 20"
+    assert when_sum <= 20 + 1e-4, f"when constraint violated: when flag='R': sum(x*val) = {when_sum} > 20"
 
     # Verify NULL rows still appear in result (not dropped entirely)
     null_rows = [row for row in result if row[flag_idx] is None]
@@ -581,13 +582,12 @@ def test_when_null_condition_column(decidb_cli, duckdb_conn, oracle_solver, perf
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
-    """WHEN (col IS NOT NULL) — explicit IS NOT NULL predicate in WHEN.
+    """when (col IS NOT NULL): — explicit IS NOT NULL predicate in a `when`.
 
     Companion to ``test_when_null_condition_column`` (which exercises NULL
-    *values* in an equality predicate). Here the WHEN condition itself is
-    the IS NOT NULL predicate. The parentheses around the predicate are
-    required: ``WHEN col IS NOT NULL AND ...`` produces a parser error
-    because ``NULL`` + ``AND`` is ambiguous in the DECIDE SUCH THAT grammar.
+    *values* in an equality predicate). Here the `when` condition itself is
+    the IS NOT NULL predicate. A scope in front ends at its colon, so the
+    parentheses around the predicate are optional.
     """
     sql = """
         SELECT id, val, note, x FROM (
@@ -595,7 +595,7 @@ def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
                    (3, 8.0, 'c'), (4, 15.0, NULL)
         ) t(id, val, note)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * val) <= 15 WHEN (note IS NOT NULL)
+        SUCH THAT when (note IS NOT NULL): sum(x * val) <= 15
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * val)
     """
@@ -617,7 +617,7 @@ def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
     for vn in vnames:
         oracle_solver.add_variable(vn, VarType.BINARY)
 
-    # WHEN (note IS NOT NULL): rows 1, 3 contribute to the aggregate.
+    # when note IS NOT NULL: rows 1, 3 contribute to the aggregate.
     not_null_coeffs = {
         vnames[i]: data[i][1] for i in range(n) if data[i][2] is not None
     }

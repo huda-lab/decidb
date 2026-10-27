@@ -359,7 +359,8 @@ def test_sum_body_data_only_offset_bilinear_constraint(decidb_cli):
 @pytest.mark.correctness
 def test_sum_body_data_only_offset_outer_when(decidb_cli):
     """Outer WHEN filters both decision and data-only aggregate contributions."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, cost, w, value, x
         FROM (
             VALUES (1, 4.0, true, 10.0),
@@ -367,9 +368,10 @@ def test_sum_body_data_only_offset_outer_when(decidb_cli):
                    (3, 100.0, false, 30.0)
         ) t(id, cost, w, value)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x + cost) <= 9 WHEN w
+        SUCH THAT when w: sum(x + cost) <= 9
         MAXIMIZE SUM(x * value)
-    """)
+    """
+    )
     assert _picked_ids(rows, cols) == {2, 3}
 
 
@@ -379,8 +381,9 @@ def test_sum_body_data_only_offset_outer_when(decidb_cli):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_sum_body_data_only_offset_per_group(decidb_cli):
-    """PER subtracts the data-only aggregate offset separately for each group."""
-    rows, cols = decidb_cli.execute("""
+    """`per` subtracts the data-only aggregate offset separately for each group."""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, grp, cost, value, x
         FROM (
             VALUES (1, 'A', 2.0, 10.0),
@@ -389,9 +392,10 @@ def test_sum_body_data_only_offset_per_group(decidb_cli):
                    (4, 'B', 1.0, 6.0)
         ) t(id, grp, cost, value)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x + cost) <= 6 PER grp
+        SUCH THAT per grp: sum(x + cost) by (grp) <= 6
         MAXIMIZE SUM(x * value)
-    """)
+    """
+    )
     assert _picked_ids(rows, cols) == {2, 3, 4}
 
 

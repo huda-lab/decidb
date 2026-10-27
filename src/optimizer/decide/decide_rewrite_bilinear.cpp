@@ -44,7 +44,7 @@ void DecideOptimizer::RewriteBilinear(LogicalDecide &decide) {
 	vector<LogicalDecide::BilinearLink> links;
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceBilinear(objective, decide, links, string());
+		FindAndReplaceBilinear(objective, decide, links, OBJECTIVE_ROW_TAG);
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 	if (decide.decide_constraints) {
@@ -210,9 +210,8 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 					}
 				}
 
-				// Create auxiliary variable
-				idx_t aux_idx = decide.decide_variables.size();
-				string aux_name = "__bilinear_aux_" + to_string(aux_idx) + "__";
+				// The auxiliary, named by the column it will take.
+				string aux_name = "__bilinear_aux_" + to_string(decide.decide_variables.size()) + "__";
 				// Bool×Bool auxiliary is semantically boolean but uses INTEGER type to match
 				// how user BOOLEAN variables are represented (INTEGER with 0/1 bounds).
 				// Using BOOLEAN would cause type-mismatch errors when binding arithmetic.
@@ -231,17 +230,15 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				LogicalType aux_type = (both_bool || other_is_integer_typed)
 				                           ? LogicalType::INTEGER
 				                           : LogicalType::DOUBLE;
-				auto aux_var = make_uniq<BoundColumnRefExpression>(
-				    aux_name, aux_type, ColumnBinding(decide.decide_index, aux_idx));
-				decide.decide_variables.push_back(std::move(aux_var));
-				decide.num_auxiliary_vars++;
-				decide.is_boolean_var.push_back(both_bool);
-				if (!decide.variable_scopes.empty()) {
-					decide.variable_scopes.push_back(DecideVarScopeInfo::Row()); // row-scoped
-				}
-				// F6: record the user's original product (b * x) for diagnosis naming
-				decide.aux_var_expressions.emplace_back(
-				    aux_idx, "(" + func.children[0]->ToString() + " * " + func.children[1]->ToString() + ")");
+				// F6: a diagnosis, and a plan, name the auxiliary by the user's product (b * x).
+				string label = "(" + RenderForPlan(*func.children[0], decide) + " * " +
+				               RenderForPlan(*func.children[1], decide) + ")";
+				idx_t aux_idx =
+				    AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, DecideVarScopeInfo::Row(), label);
+				AddRewriteAccount(decide, clause_alias,
+				                  both_bool ? LogicalDecide::RewriteAccount::Kind::PRODUCT_AND
+				                            : LogicalDecide::RewriteAccount::Kind::PRODUCT_MCCORMICK,
+				                  label);
 
 				if (both_bool) {
 					// AND-linearization: w <= b1, w <= b2, w >= b1 + b2 - 1

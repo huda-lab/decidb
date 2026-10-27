@@ -7,11 +7,12 @@
 //===----------------------------------------------------------------------===//
 //
 // A bound DECIDE constraint tree is AND-conjunctions plus WRAPPERS. A wrapper is a
-// conjunction carrying a tag: `WHEN` holds the constraint in child 0 and its
-// condition in child 1; `PER` holds the constraint in child 0 and its grouping
-// columns in children 1..N. The condition and the grouping columns are METADATA --
-// walking into them treats `WHEN c` as though the user had written another
-// constraint, which is silently wrong rather than loudly wrong.
+// conjunction carrying a tag: `when c:` holds the constraint in child 0 and its
+// condition in child 1; `per K:` holds the constraint in child 0 and its key columns in
+// children 1..N; the two-level objective's PER wrapper holds the objective body in child
+// 0 and its key in children 1..N. The condition and the key columns are METADATA --
+// walking into them treats `when c` as though the user had written another constraint,
+// which is silently wrong rather than loudly wrong.
 //
 // So every pass over the tree has to know the same rule: at a wrapper, descend only
 // into child 0. That rule used to be retyped as
@@ -21,10 +22,9 @@
 //
 // It is stated once here instead. Every site asks the predicate, INCLUDING the
 // handful that deliberately act differently on the answer: singleton-row folding refuses
-// to descend into a WHEN at all (a conditional bound must not become a global one),
-// and the MIN/MAX rewrite strips a PER wrapper as it goes. Those pass their own
-// descent but not their own definition of what a wrapper is, which is where the
-// safety actually comes from.
+// to descend into a `when` at all (a conditional bound must not become a global one).
+// Those pass their own descent but not their own definition of what a wrapper is,
+// which is where the safety actually comes from.
 //
 // OWNERSHIP. The rule is a property of the bound tree's tagging convention, which is
 // established when the binder builds the wrappers and enforced by canonicalization
@@ -43,21 +43,28 @@
 
 namespace duckdb {
 
-//! `<constraint> WHEN <condition>`: child 0 is the constraint, child 1 the condition.
+//! `when <condition>: <constraint>`: child 0 is the constraint, child 1 the condition.
 inline bool IsWhenConstraintWrapper(const BoundConjunctionExpression &conjunction) {
 	return HasDecideTag(conjunction.GetAlias(), WHEN_CONSTRAINT_TAG);
 }
 
-//! `<constraint> PER <col>, ...`: child 0 is the constraint, children 1..N the
-//! grouping columns.
+//! The two-level objective `outer(per k: inner(e) by (k))`: child 0 is the objective
+//! body, children 1..N the key columns. Only the objective carries it.
 inline bool IsPerConstraintWrapper(const BoundConjunctionExpression &conjunction) {
 	return IsPerConstraintTag(conjunction.GetAlias());
 }
 
-//! True for either wrapper. An untagged conjunction is a plain AND, every child of
-//! which is a constraint in its own right.
+//! `per K: <constraint>`: child 0 is the constraint, children 1..N the key columns, none
+//! for `per ()`. One constraint per class of the key; it groups no reducer.
+inline bool IsPerClassWrapper(const BoundConjunctionExpression &conjunction) {
+	return HasDecideTag(conjunction.GetAlias(), PER_CLASS_TAG);
+}
+
+//! True for any wrapper. An untagged conjunction is a plain AND, every child of which
+//! is a constraint in its own right.
 inline bool IsConstraintWrapper(const BoundConjunctionExpression &conjunction) {
-	return IsPerConstraintWrapper(conjunction) || IsWhenConstraintWrapper(conjunction);
+	return IsPerConstraintWrapper(conjunction) || IsWhenConstraintWrapper(conjunction) ||
+	       IsPerClassWrapper(conjunction);
 }
 
 //! Whether child `child_index` is a constraint rather than wrapper metadata.

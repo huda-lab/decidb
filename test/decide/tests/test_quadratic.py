@@ -342,7 +342,7 @@ class TestQuadraticBasic:
     def test_qp_with_when(
         self, decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     ):
-        """QP with WHEN — only grp='A' rows contribute to the objective."""
+        """QP with a when scope — only grp='A' rows contribute to the objective."""
         data_sql = """
             SELECT 1 AS id, 10.0 AS target, 'A' AS grp UNION ALL
             SELECT 2, 20.0, 'B' UNION ALL
@@ -354,7 +354,7 @@ class TestQuadraticBasic:
             SELECT id, target, grp, ROUND(x, 4) AS x FROM data
             DECIDE x(REAL)
             SUCH THAT x >= 0 AND x <= 100
-            MINIMIZE SUM(POWER(x - target, 2)) WHEN grp = 'A'
+            MINIMIZE when grp = 'A': sum(power(x - target, 2))
         """
         t0 = time.perf_counter()
         rows, cols = decidb_cli.execute(sql)
@@ -1464,17 +1464,17 @@ def test_qp_mixed_negated_quadratic(
 
 
 # ===========================================================================
-# Nested outer-SUM of aggregate-of-quadratic (PER on QP objective)
+# Nested outer-SUM of aggregate-of-quadratic (two-level QP objective)
 # ===========================================================================
 # These tests exercise the nested-aggregate quadratic shape. Before the fix,
-# MINIMIZE SUM(SUM(POWER(x - const, 2)))
-# PER grp was rejected by the binder because POWER expansion produced a
+# MINIMIZE sum(per grp: sum(POWER(x - const, 2)) by (grp))
+# was rejected by the binder because POWER expansion produced a
 # __SUM__ placeholder that leaked through the nested-SUM validator. After the
 # fix, normalization preserves the raw AST and the post-bind optimizer's
 # nested-aggregate strip flattens the form.
 #
-# Semantically SUM(SUM(expr)) PER grp ≡ SUM(expr), and SUM(AVG(expr)) PER grp
-# weights each row by 1/n_g (group size). SUM(MIN/MAX(expr)) PER grp needs
+# Semantically sum(per grp: sum(expr) by (grp)) ≡ SUM(expr), and the same with an
+# inner avg weights each row by 1/n_g (group size). An inner min/max needs
 # quadratic per-row auxiliary constraints downstream; those shapes now bind
 # successfully but their physical-layer correctness is tracked separately.
 
@@ -1486,8 +1486,8 @@ def test_qp_mixed_negated_quadratic(
 def test_qp_nested_sum_sum_per_binding(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp with a binding PER upper
-    bound that forces x below each row's target.
+    """MINIMIZE sum(per grp: sum(power(x - target, 2)) by (grp)) with a binding
+    per-group upper bound that forces x below each row's target.
 
     The nested form is algebraically equivalent to flat SUM(POWER(x - t, 2)),
     so the oracle is formulated as the flat QP with the same per-group SUM(x)
@@ -1506,9 +1506,9 @@ def test_qp_nested_sum_sum_per_binding(
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
-            AND SUM(x) <= 10 WHEN grp = 'A'
-            AND SUM(x) <= 40 WHEN grp = 'B'
-        MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp
+            AND when grp = 'A': sum(x) <= 10
+            AND when grp = 'B': sum(x) <= 40
+        MINIMIZE sum(per grp: sum(power(x - target, 2)) by (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1554,7 +1554,7 @@ def test_qp_nested_sum_sum_per_binding(
 def test_qp_nested_sum_sum_per_unconstrained(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Unconstrained nested-PER QP: each x_i = target_i, objective = -Σ t²
+    """Unconstrained nested-`per` QP: each x_i = target_i, objective = -Σ t²
     (after DecidB's constant-stripping convention). Sanity test confirming
     the nested form degenerates to flat SUM(POWER(x-t,2)) semantically.
     """
@@ -1569,7 +1569,7 @@ def test_qp_nested_sum_sum_per_unconstrained(
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
-        MINIMIZE SUM(SUM(POWER(x - target, 2))) PER grp
+        MINIMIZE sum(per grp: sum(power(x - target, 2)) by (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1608,7 +1608,7 @@ def test_qp_nested_sum_sum_per_unconstrained(
 def test_qp_nested_sum_avg_per_binding(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MINIMIZE SUM(AVG(POWER(x - target, 2))) PER grp with unequal group
+    """MINIMIZE sum(per grp: avg(power(x - target, 2)) by (grp)) with unequal group
     sizes (A: 2 rows, B: 3 rows). Inner AVG scales each row's contribution
     by 1/n_g. Verifies the per_inner_was_avg path in decide_optimizer.cpp
     together with the nested-aggregate-of-quadratic binding fix.
@@ -1627,9 +1627,9 @@ def test_qp_nested_sum_avg_per_binding(
         SELECT id, grp, target, ROUND(x, 4) AS x FROM data
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
-            AND SUM(x) <= 20 WHEN grp = 'A'
-            AND SUM(x) <= 60 WHEN grp = 'B'
-        MINIMIZE SUM(AVG(POWER(x - target, 2))) PER grp
+            AND when grp = 'A': sum(x) <= 20
+            AND when grp = 'B': sum(x) <= 60
+        MINIMIZE sum(per grp: avg(power(x - target, 2)) by (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1691,7 +1691,7 @@ def test_qp_nested_sum_avg_per_binding(
 def test_qp_nested_sum_sum_per_constant_free_regression(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Regression: MINIMIZE SUM(SUM(POWER(x, 2))) PER grp — no constant term
+    """Regression: MINIMIZE sum(per grp: sum(power(x, 2)) by (grp)) — no constant term
     in POWER. This form accidentally passed validation pre-fix (the factoring
     didn't leak a __SUM__ placeholder because there was no data-only sum to
     fold). Post-fix it takes the nested quadratic path instead;
@@ -1708,9 +1708,9 @@ def test_qp_nested_sum_sum_per_constant_free_regression(
         SELECT id, grp, ROUND(x, 4) AS x FROM data
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 100
-            AND SUM(x) >= 4 WHEN grp = 'A'
-            AND SUM(x) >= 6 WHEN grp = 'B'
-        MINIMIZE SUM(SUM(POWER(x, 2))) PER grp
+            AND when grp = 'A': sum(x) >= 4
+            AND when grp = 'B': sum(x) >= 6
+        MINIMIZE sum(per grp: sum(power(x, 2)) by (grp))
     """
     t0 = time.perf_counter()
     rows, cols = decidb_cli.execute(sql)
@@ -1756,7 +1756,7 @@ def test_qp_nested_sum_sum_per_constant_free_regression(
 def test_qp_entity_scoped_objective(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """MINIMIZE SUM(POWER(x - target, 2)) with entity-scoped ``items.x``
+    """MINIMIZE SUM(POWER(x - target, 2)) with ``x`` declared ``per items.item``
     and a cross-entity resource cap.
 
     Convex minimize QP, so runs on both Gurobi and HiGHS (placed in
@@ -1780,7 +1780,7 @@ def test_qp_entity_scoped_objective(
     sql = f"""
         WITH items AS ({data_sql})
         SELECT item, target, ROUND(x, 4) AS x FROM items
-        DECIDE items.x(REAL)
+        DECIDE per items.item: x(REAL)
         SUCH THAT x >= 0 AND x <= 100
             AND SUM(x) <= 50
         MINIMIZE SUM(POWER(x - target, 2))

@@ -84,17 +84,17 @@ def test_q04_subquery_rhs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 def test_per_constraint_with_subquery_rhs(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Uncorrelated scalar subquery as the RHS of a PER constraint.
+    """Uncorrelated scalar subquery as the RHS of a `per` constraint.
 
-    ``(SELECT 30000)`` must be evaluated once and shared across every PER
+    ``(SELECT 30000)`` must be evaluated once and shared across every `per`
     group. A bug that re-evaluates per group, or drops the RHS inside the
-    PER partition loop, would either crash or produce inconsistent limits.
+    `per` partition loop, would either crash or produce inconsistent limits.
     """
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, x
         FROM lineitem WHERE l_orderkey <= 5
         DECIDE x(BOOL)
-        SUCH THAT SUM(x * l_extendedprice) <= (SELECT 30000) PER l_orderkey
+        SUCH THAT per l_orderkey: sum(x * l_extendedprice) by (l_orderkey) <= (SELECT 30000)
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()

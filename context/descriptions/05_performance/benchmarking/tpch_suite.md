@@ -67,10 +67,11 @@ DECIDB_BENCH: num_rows=9965
 ```
 
 The two constraint counts are different units; never add them. A spec is one DECIDE clause as the operator hands it to
-the builder. A per-row spec expands to one matrix row per data row and a PER spec to one row per group, so the row
-count can be far larger. Read `total_constraint_rows` for matrix pressure and to compare queries; read
+the builder. A per-row spec expands to one matrix row per data row, and a `per K:` or `by` spec to one row per class
+or group, so the row count can be far larger. Read `total_constraint_rows` for matrix pressure and to compare queries; read
 `total_constraint_specs` to trace that pressure to a clause. Q4 on `decidb.db` reports 60,182 specs against 120,360
-rows: the `MAX(keep * l_quantity) <= 45` easy-direction rewrite adds a row per data row while counting as one spec.
+rows: the `per (): max(keep * l_quantity) <= 45` easy-direction rewrite adds a row per data row while counting as one
+spec.
 
 Older result files carry a single `total_constraints` that summed the two units. `view_results.py` shows it flagged
 `pre-split, mixed unit`; do not compare it with a `total_constraint_rows` figure.
@@ -87,10 +88,10 @@ breakdown use the [pipeline profiler](pipeline_profiler.md).
 
 ## Query set
 
-The runner discovers `queries/q*.sql`: eleven queries, Q1 to Q11, each run at both sizes. (`queries/p*.sql` are run
-only by the pipeline profiler.) The set covers the DECIDE expressivity surface (problem classes, variable types,
-constraint and objective forms, SQL functions, WHEN and PER) with as few queries as possible. Each query bundles several
-features and lists them in a `-- TAGS:` header comment.
+The runner discovers `queries/q*.sql`: eleven queries, Q1 to Q11, each run at both sizes. (`queries/p*.sql` are run only
+by the pipeline profiler.) The set covers the DECIDE expressivity surface (problem classes, variable types, constraint
+and objective forms, SQL functions, the `when` / `per` / `by` scope words) with as few queries as possible. Each query
+bundles several features and lists them in a `-- TAGS:` header comment.
 
 Query files use `${NAME}` placeholders for size-specific coefficients. The runner fills them from the `COEFFICIENTS`
 table in `run_benchmarks.py`, stops on any placeholder left unresolved, and stores the resolved SQL and the
@@ -131,14 +132,14 @@ in each query file record its measured curve.
 
 | Query | File | Features Exercised |
 |-------|------|--------------------|
-| Q1 | `q1_ilp_selection.sql` | Boolean ILP selection; MAXIMIZE SUM + WHEN-on-objective; AVG constraint; WHEN + aggregate-local WHEN; multi-column PER |
+| Q1 | `q1_ilp_selection.sql` | Boolean ILP selection; MAXIMIZE SUM with a `when` in front; AVG constraint; `when` in front of a constraint and inside a reducer; `per ()`; multi-column `per` key with its `by` |
 | Q2 | `q2_integer_domains.sql` | `INT` vars; BETWEEN, IN(var), `<>` per-row + aggregate, division, unary-minus, strict `>`; uncorrelated + correlated subqueries; data-only aggregate RHS; `%` fold |
 | Q3 | `q3_abs_norms.sql` | REAL signed domain; MINIMIZE; ABS lower-envelope; norm L1 / L∞ / L0 (row-limited: L0 is one binary per row) |
-| Q4 | `q4_minmax_nested.sql` | MINIMIZE MAX (easy) + nested-PER objective; composed MIN/MAX-in-LHS; easy MAX constraint (full scale) |
+| Q4 | `q4_minmax_nested.sql` | MINIMIZE MAX (easy) as the two-level objective `max(per l_returnflag: sum(...) by (l_returnflag))`; composed MIN/MAX-in-LHS; easy MAX constraint (full scale) |
 | Q5 | `q5_qp_qcqp.sql` | Convex QP + QCQP; quadratic + mixed linear/quadratic objective; norm L2; aggregate quadratic constraint (row-limited, Gurobi) |
-| Q6 | `q6_bilinear_mccormick.sql` | MILP; BOOL×REAL bilinear objective + constraint (McCormick); WHEN+PER (full `orders` scale) |
+| Q6 | `q6_bilinear_mccormick.sql` | MILP; BOOL×REAL bilinear objective + constraint (McCormick); `when` + `per` + `by` on one constraint (full `orders` scale) |
 | Q7 | `q7_nonconvex.sql` | MIQP + non-convex QP + non-convex bilinear; per-row quadratic constraint (full `orders` scale, Gurobi `NonConvex=2`) |
-| Q8 | `q8_feasibility_join.sql` | Feasibility (no objective); entity-scoped variable over a join; multi-column PER; WHEN+PER; IS NOT NULL |
+| Q8 | `q8_feasibility_join.sql` | Feasibility (no objective); keyed decision `per o: assign(BOOL)` over a join; multi-column `per` key; `when` + `per`; IS NOT NULL in a `when` |
 | Q9 | `q9_maximize_max.sql` | MAXIMIZE MAX (hard, Big-M); equality constraint (row-limited; the tier is not yet re-chosen) |
 | Q10 | `q10_maximize_abs.sql` | MAXIMIZE SUM(ABS) + ABS Path-B `>=` constraint (Big-M; full scale; sign binaries independent per row, 5M vars at 1M rows; heaviest query in the suite) |
 | Q11 | `q11_lp_allocation.sql` | Pure LP continuous allocation; MAXIMIZE AVG |
@@ -189,7 +190,7 @@ Cells mark which query exercises each feature. Queries pack multiple features, s
 | INT (explicit) | | x | | | | | | | | | |
 | REAL | | | x | | x | x | x | | | x | x |
 | Multiple variables | | x | | | | x | x | | | | |
-| Entity/table-scoped | | | | | | | | x | | | |
+| Keyed (`per K: x`) | | | | | | | | x | | | |
 | Signed / negative domain | | | x | | | | | | | | |
 
 **Problem classes**
@@ -236,11 +237,11 @@ Cells mark which query exercises each feature. Queries pack multiple features, s
 | MINIMIZE MAX (easy) | | | | x | | | | | | | |
 | MAXIMIZE MAX (hard, Big-M) | | | | | | | | | x | | |
 | MAXIMIZE SUM(ABS) | | | | | | | | | | x | |
-| Nested-PER objective | | | | x | | | | | | | |
+| Two-level objective | | | | x | | | | | | | |
 | Quadratic objective | | | | | x | | x | | | | |
 | Bilinear objective | | | | | | x | | | | | |
 | Mixed linear + quadratic | | | | | x | | | | | | |
-| WHEN on objective | x | | | | | | | | | | |
+| `when` on objective | x | | | | | | | | | | |
 | AVG objective | | | | | | | | | | | x |
 
 **SQL functions**
@@ -259,18 +260,20 @@ Cells mark which query exercises each feature. Queries pack multiple features, s
 | Bilinear (var × var) | | | | | | x | x | | | | |
 | Division | | x | | | | | | | | | |
 
-**WHEN / PER**
+**when / per / by**
 
 | Feature | Q1 | Q2 | Q3 | Q4 | Q5 | Q6 | Q7 | Q8 | Q9 | Q10 | Q11 |
 |---|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:--:|:---:|:---:|
-| WHEN on constraint | x | | | | | x | | x | | | |
-| WHEN on objective | x | | | | | | | | | | |
-| Aggregate-local WHEN | x | | | | | | | | | | |
-| WHEN + PER composition | | | | | | x | | x | | | |
-| PER single-column | | | | x | | x | | x | | | |
-| PER multi-column | x | | | | | | | x | | | |
-| PER on objective (nested) | | | | x | | | | | | | |
-| IS NULL / IS NOT NULL | | | | | | | | x | | | |
+| `when` on constraint | x | | | | | x | | x | | | |
+| `when` on objective | x | | | | | | | | | | |
+| `when` inside a reducer | x | | | | | | | | | | |
+| `when` + `per` on one constraint | x | | | | | x | | x | | | |
+| `per ()` on constraint | x | | | x | | x | | | | | |
+| `per` single-column | | | | x | | x | | x | | | |
+| `per` multi-column | x | | | | | | | x | | | |
+| `by (G)` after a reducer | x | | | x | | x | | x | | | |
+| Two-level objective `outer(per k: inner(e) by (k))` | | | | x | | | | | | | |
+| IS NULL / IS NOT NULL in a `when` | | | | | | | | x | | | |
 
 **Deliberate omissions.** Two objective forms are left uncovered to keep the count at 11: `MAXIMIZE MIN` (easy), which is mechanically identical to Q4's `MINIMIZE MAX`, and `MINIMIZE MIN` (hard), the symmetric twin of Q9's `MAXIMIZE MAX`. Adding either costs a whole query (one objective per query) for a construct whose linearization is already exercised.
 
@@ -293,7 +296,7 @@ changes, or `manual.json` in manual mode. A second run on the same commit overwr
       "query": "Q1",
       "description": "ilp_selection",
       "size": "medium",
-      "sql": "SELECT l_orderkey ... SUCH THAT SUM(keep * l_quantity) <= 3829286 ...",
+      "sql": "SELECT l_orderkey ... SUCH THAT per (): sum(keep * l_quantity) <= 3829286 ...",
       "coefficients": {"Q1_QTY_CAP": 3829286, "Q1_GRP_CAP": 62500},
       "runs": [...],
       "stats": {

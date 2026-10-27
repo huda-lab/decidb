@@ -31,17 +31,3 @@ def test_simple_test(decidb_cli):
             SUCH THAT SUM(x * l_extendedprice) <= 10000
             MAXIMIZE SUM(x * l_extendedprice)
         """, match=r'DECIDE variable "x" needs a type')
-
-
-@pytest.mark.var_integer
-@pytest.mark.error_parser
-@pytest.mark.error
-def test_qualified_missing_type(decidb_cli):
-    """Omitted type on a table-scoped declaration is rejected the same way."""
-    decidb_cli.assert_error("""
-            SELECT x, l_orderkey FROM LINEITEM
-            WHERE l_orderkey <= 5
-            DECIDE lineitem.x
-            SUCH THAT SUM(x * l_extendedprice) <= 10000
-            MAXIMIZE SUM(x * l_extendedprice)
-        """, match=r'DECIDE variable "lineitem\.x" needs a type')

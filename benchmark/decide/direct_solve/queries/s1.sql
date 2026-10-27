@@ -5,5 +5,5 @@
 SELECT ps_partkey, ps_suppkey, ps_availqty, pick
 DECIDE pick(BOOL)
 FROM partsupp
-SUCH THAT SUM(pick) <= 2 PER ps_suppkey
+SUCH THAT SUM(pick) by (ps_suppkey) <= 2
 MAXIMIZE SUM(ps_availqty * pick)

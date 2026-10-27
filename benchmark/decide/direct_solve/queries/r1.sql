@@ -5,5 +5,5 @@
 SELECT ps_partkey, ps_suppkey, ps_supplycost, ship
 DECIDE ship(REAL)
 FROM partsupp
-SUCH THAT ship BETWEEN 0 AND ps_availqty AND SUM(ship) <= 5000 PER ps_partkey
+SUCH THAT ship BETWEEN 0 AND ps_availqty AND SUM(ship) by (ps_partkey) <= 5000
 MAXIMIZE SUM(ps_supplycost * ship)

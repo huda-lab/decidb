@@ -7,10 +7,13 @@ choose a solver formulation.
 
 **Key source files**
 
-- `src/planner/binder/query_node/bind_select_node.cpp` — declaration handling and
-  the DECIDE section of `BindSelectNode`
+- `src/planner/expression_binder/decide/decide_declarations_binder.cpp` —
+  declarations, their scopes and types, the parsed-tree validators, then the two
+  clause binders (`BindDeclarations`; the DECIDE section of `BindSelectNode` in
+  `bind_select_node.cpp` only calls it)
 - `src/planner/expression_binder/decide/decide_binder.cpp` — shared DECIDE expression
-  rules (reducers, degree, qualified reducers, aggregate-local `WHEN`)
+  rules: reducers, the colon form, a reducer's own scope and `by`, key scopes, and where
+  `when`, `per` and `by` may stand
 - `src/planner/expression_binder/decide/decide_constraints_binder.cpp` — `SUCH THAT`
 - `src/planner/expression_binder/decide/decide_objective_binder.cpp` — `MAXIMIZE` / `MINIMIZE`
 
@@ -19,39 +22,74 @@ choose a solver formulation.
 ## 1. Variable declarations
 
 Each entry of `statement.decide_variables` arrives as a `PG_AEXPR_OF` comparison
-pairing a `ColumnRefExpression` with a type marker string. The binder reads name,
-optional table qualifier, and type, then:
+pairing a `ColumnRefExpression` with a type marker string; with a `per`, the name is
+wrapped in the parser's `SCOPE_PER_TAG` marker (children: the name, then the key), or
+in `SCOPE_PER_ROW_TAG` for `per row`. `SplitDeclaration` reads the name, the `per`
+marker and the type. Every declaration's name is checked and collected before any key
+resolves, so a key can be told from a decision declared before or after it. The checks:
 
 | Check | Message |
 |---|---|
 | Name collides with a real column | `DECIDE variable '%s' conflicts with an existing column name.` |
 | Name declared twice | `Duplicate DECIDE variable name '%s'.` |
-| Qualifier names no table in `FROM` | `DECIDE variable '%s.%s': table '%s' not found in FROM clause.` |
 
-Every variable is registered under its **unqualified** name; a table-scoped one is
-additionally registered under `T.x` so constraints may use either spelling.
+A decision is registered under its bare name, and only that name references it.
+`RefuseQualifiedDecisionReferences` refuses `D.x`, where `D` is a relation of the FROM
+clause with no column `x` and `x` is a decision, over the constraints, the objective,
+the select list and `ORDER BY`, before anything else reads them: *"DECIDE: write x, not
+D.x; a decision is referenced by its bare name"*, or, in a `when` condition, a `per` key
+or a `by` key, *"DECIDE: D.x is a decision; when, per and by may only use data"* (D43).
+A qualified name that binds to a column, a struct field or a `USING` column is left to
+the SQL binder.
 
 ### Scope
 
-Three scopes, recorded per variable in `variable_scopes` as a `DecideVarScopeInfo`:
+Three scopes, recorded per variable in `variable_scopes` as a `DecideVarScopeInfo`
+(`common/enums/decide.hpp`; the enum `DecideVarScope` is `ROW`, `ENTITY`, `SCALAR`):
 
 | Declaration | Scope | Meaning |
 |---|---|---|
-| `x(TYPE)` | `Row()` | one decision per result row |
-| `T.x(TYPE)` | `Entity(scope_idx)` | one decision per distinct entity in `T` |
-| `scalar x(TYPE)` | `Scalar()` | one decision for the whole query |
+| `x(TYPE)`, `per row: x(TYPE)` | `Row()` | one decision per result row |
+| `per K: x(TYPE)` | `Keyed(scope_idx, K as written)` | one decision per class of `K` |
+| `per (): x(TYPE)` | `Scalar()` | one decision for the whole query |
 
-The grammar flags the query-wide form by prefixing the type marker with
-`scalar_`, which the binder strips so the type comparison stays scope-agnostic.
+`Keyed` is an `ENTITY` scope that also records `declared_key`, so a message can name
+the decision as it was declared; everything past the binder treats it as `ENTITY`.
+`per ()` creates no key scope. The names of the query-wide decisions travel to the two
+clause binders (`scalar_variables`), which treat such a decision as one value.
 
-For a table-scoped variable, `FindOrCreateEntityScope` resolves the alias in the
-bind context and either reuses or creates an `EntityScopeInfo`. The scope is keyed
-by table, so several variables — and a relation-qualified reducer `SUM(T: ...)` —
-share one scope, since the tuple-identity key is the same either way.
-`EntityScopeInfo` carries `table_alias`, `source_table_index`,
-`entity_key_bindings`, `scoped_variable_indices` and
-`entity_key_column_types`; `entity_key_physical_indices` is filled in later, at
-physical-plan creation.
+A keyed decision points at an `EntityScopeInfo` (`logical_decide.hpp`): `table_alias`
+(the key as written: `D.depotID, S.customerID`, `D`, `()`), `source_table_indices`,
+`entity_key_bindings`, `entity_key_column_types`, `scoped_variable_indices`,
+`key_names` (each key column as a message names it) and `value_link`, which only stage
+05 sets, on a helper decision's scope. `entity_key_physical_indices` is filled in later,
+at physical-plan creation. One scope exists per set of key columns, whichever spelling
+names it: a declaration's `per K`, a reducer's own `per K` and the colon form
+`SUM(D: e)` (§3) all go through `FindOrCreateExactScope`.
+
+### Keyed declarations
+
+`FindOrCreateKeyScope` (`decide_binder.cpp`) builds the scope of `per K:` from the
+parser's marker. Each key element resolves against the query's own bind context —
+never an outer query, whose column would be one constant per run of this one:
+
+1. A declared decision, by its name: *"DECIDE: x is a decision; when, per and by may
+   only use data"*. A decision named like a column was already refused by the
+   conflict check (a `USING` column escapes it, a logged bug), so a name never means
+   both.
+2. A column, resolved as SQL resolves it (`BindContext::GetBinding(alias, column)`):
+   `R.c`, `S.R.c`, `C.S.R.c`, or an unqualified `c` — the `USING` primary relation's
+   for a `USING` column (a `FULL OUTER JOIN USING` column has none: *"... write
+   S.depotID or D.depotID in the per key"*), else the one relation that has it
+   (DuckDB's ambiguity error otherwise).
+3. A relation (`R`, `S.R`, `C.S.R`), standing for its stored columns.
+4. Otherwise *"DECIDE: depot is neither a column nor a relation of the FROM clause"*.
+
+`rowid` and a generated column are not stored columns: named, they are an error;
+inside a relation, they are skipped. Columns are registered through
+`TableBinding::GetColumnBinding` for a base table, so the scan keeps them, then sorted
+and de-duplicated by binding (`SortedKey`). A scope with the same bindings is reused,
+so equal keys share one grouping however they were written.
 
 ### Types and domains
 
@@ -123,10 +161,20 @@ degree came from squaring (`x*x`, `POWER(x, 2)`, `POWER(x+y, 2)`), which feeds a
 Q matrix, and false when two *different* decisions were multiplied (`x*y`),
 which feeds McCormick envelopes.
 
+**Volatile functions are refused** (`RefuseVolatile`, `decide_declarations_binder.cpp`),
+over the whole bound constraint tree, the objective and every `by` key: *"DECIDE:
+random() is not supported in a constraint"*. The check reads each function's own
+stability, since `IsVolatile()` is also true for every expression above a volatile one.
+Every later stage reads a clause more than once (the scope checks, the rows, the
+bound-side window, direct solve's plan), so one volatile value would select different
+rows each time; refusing it here is what lets those stages evaluate a clause freely.
+A value computed once per row in a subquery or CTE before DECIDE is data and stays
+legal. Functions constant within one query (`now()`, `txid_current()`) are allowed.
+
 `ValidateDecideConstraintDegree` and `ValidateDecideObjectiveDegree` run in
-`bind_select_node.cpp` immediately after the constraint and objective binders,
-and they are **total**: the constraint validator descends conjunctions and
-`WHEN` / `PER` wrappers to every comparison that becomes a model row, and checks
+`decide_declarations_binder.cpp` immediately after the constraint and objective binders,
+and they are **total**: the constraint validator descends conjunctions and the
+`when` and `per` wrappers to every comparison that becomes a model row, and checks
 both sides. That totality is the point. The rule previously lived inside
 `ValidateSumArgumentInternal`, whose name scoped it to reducer arguments, so
 nothing ever applied it to a bare per-row constraint — `SUM(POWER(x*y,2)) <= 10`
@@ -135,7 +183,7 @@ was refused at plan time by term extraction, in extractor vocabulary and with no
 source location. Which layer refused depended on how the user spelled it.
 
 **Why the judgement stays here rather than moving to stage 05**, which is the
-only stage that can see the tree after the nine rewrites have run: validity must
+only stage that can see the tree after its rewrites have run: validity must
 follow from the query and the schema, exactly as the integrality gate does
 (§4) — whether `POWER(x*y,2) <= 5` is a legal DECIDE query cannot depend on what
 `RewriteInDomain` did to it. And only a bind-time refusal can point at the term:
@@ -164,38 +212,42 @@ useful to pass.
 
 `IsDecideAggregateName` recognizes `SUM`, `AVG`, `MIN`, `MAX` as DECIDE reducers.
 `DecideBinder::BindAggregate` binds them; the optimizer, not the binder, decides
-their formulation.
+their formulation. `norm(e, p)` binds as an inert `SUM` marker tagged with its order
+(`NORM_MARKER_TAG_PREFIX`), which stage 05 lowers. `COUNT` binds as data only:
+`COUNT(x)` over a decision is refused as degenerate.
 
-### Aggregate-local `WHEN`
+### A reducer's own `when` and `per`
 
-`DecideBinder::BindLocalWhenAggregate` binds child 0 as a DECIDE aggregate,
-validates that child 1 references no decision variable, binds it as `BOOLEAN`, and
-stores it on `BoundAggregateExpression::filter`. Physical extraction copies that
-filter onto each term the aggregate produces.
-
-Dispatch: a top-level `WHEN_CONSTRAINT_TAG` is expression-level; a nested one is
-aggregate-local. An expression-level `WHEN` whose child already contains an
-aggregate-local `WHEN` is rejected — the double-filter semantics are ambiguous.
+`DecideBinder::BindScopedReducer` peels `[when c] [per K]:` off a reducer's argument
+and binds the reducer over the body. The condition binds as data, cast to `BOOLEAN`,
+onto `BoundAggregateExpression::filter`, which physical extraction copies onto each
+term the reducer produces. A `per K` becomes a `__qualified_by_<i>__` tag on the exact
+key scope of `K` (`FindOrCreateKeyScope`; an empty key for `per ()`), whose classes the
+reducer counts once. `per row` adds nothing. A `by` after the reducer is
+`BindReducerBy` (§4a).
 
 ### Relation-qualified reducers
 
-`DecideBinder::BindQualifiedReducer` handles `SUM(D: expr)`, which reduces over
-one contribution per tuple identity of relation `D` rather than per join-output
-row. `CheckQualifiedReducerBody` validates the body against that relation. The
-scope is looked up through the same `FindOrCreateEntityScope` used by
-table-scoped variables.
+`DecideBinder::BindQualifiedReducer` binds the colon form `SUM(D: expr)` as
+`sum(per D: expr)` (syntax_reference.md §5.1): each listed relation must be a relation
+of the FROM clause, its stored columns form the key (`AddRelationColumns`,
+`SortedKey`), and `FindOrCreateExactScope` — shared with `FindOrCreateKeyScope` —
+finds or creates the exact key scope, so `SUM(D: e)` and `sum(per D: e)` share one
+scope and one tag (`__qualified_by_<i>__`, appended to the aggregate's alias). `COLON_FORM_TAG` keeps the
+spelling for the echo (D38). Nothing is checked against the body at bind time: that `D`
+determines it — every column, per-row and keyed decision in it — is the DETERMINES
+check of stage 04, on the data, as for `per` (*"DECIDE: per D does not determine the
+decision y (in sum(D: ...))"*). Refused at bind time: a qualifier that is not a relation
+name, a relation not in the FROM clause, a qualifier on anything but `SUM`, `AVG`,
+`MIN` or `MAX` (on `norm` by the scope validator: *"DECIDE: norm(D: ...) is not
+supported yet; ..."*), and on the decision side a body of query-wide decisions alone
+(`ClassifyReducerCall`, as for any reducer).
 
-A reducer may name more than one relation, `SUM(D, T: expr)` (batch E). The
-composite scope's tuple identity is the concatenation of every named relation's
-own key — the same "all columns of the table" key a single-relation scope
-already uses, just for each relation in the list — so a row is a duplicate only
-when it repeats on **every** named relation's key at once. Concretely: naming a
-relation removes the fan-out it would otherwise contribute; a relation left
-unnamed still contributes its fan-out, uncollapsed. `CheckQualifiedReducerBody`'s
-"must come from the qualifier" rule generalizes the same way — a column must
-come from *one of* the named relations, not from a single fixed one, and a
-decision variable must be scoped to a relation in that set (or be a query-wide
-scalar, as before).
+A reducer may name more than one relation, `SUM(D, T: expr)`. The key is every named
+relation's stored columns, so a row is a duplicate only when it repeats on **every**
+named relation's key at once. Concretely: naming a relation removes the fan-out it
+would otherwise contribute; a relation left unnamed still contributes its fan-out,
+uncollapsed.
 
 This has one consequence worth stating plainly: naming every relation a query
 joins is a no-op. With exactly two relations in the query, `SUM(D, T: expr)`
@@ -204,10 +256,8 @@ already *is* the join-result row — there is no third, unnamed relation left to
 contribute fan-out for the qualifier to collapse. The two forms only diverge
 once a relation is left out of the list while still appearing in the join.
 
-The relation list is order-independent — `FindOrCreateEntityScope` canonicalizes
-it (sorted, case-insensitively) before using it as the scope cache key, so
-`SUM(D, T: ...)` and `SUM(T, D: ...)` share one scope and one `EntityMapping`
-rather than building the identity twice.
+The key is a set of columns, sorted by binding, so `SUM(D, T: ...)`, `SUM(T, D: ...)`
+and `sum(per D, T: ...)` share one scope and one `EntityMapping`.
 
 ---
 
@@ -223,7 +273,13 @@ The binder asks only whether *either* side bears a decision. It does not flip
 `5 >= x` into `x <= 5` — the canonicalizer does that on the bound tree.
 
 Dedicated binding methods: `BindComparison`, `BindOperator`, `BindBetween`,
-`BindConjunction`, `BindWhenConstraint`, `BindPerConstraint`.
+`BindConjunction`, `BindScopedConstraint` (§4a).
+
+Constraints are joined with `AND`. `BindConjunction` refuses any other conjunction in a
+constraint position (`x <= cap OR x <= 1`, also under a scope): every later walk reads a
+conjunction as `AND`, and no layer builds the indicator an `OR` needs. A conjunction's
+children keep its position, so one inside an operand (`CAST((a AND (b OR c)) AS INT)`) is
+data, as is an `OR` in a `when` condition, a reducer's `when` or a subquery.
 
 `GetExpressionType`'s `norm`/`SUM`/`AVG`/`MIN`/`MAX` classification is shared with
 `DecideObjectiveBinder` through `DecideBinder::ClassifyReducerCall` — the base class
@@ -236,17 +292,22 @@ constraint's left-hand side and an objective body accept past that point diverge
 
 ### What may be a bound
 
-When one side reduces (`SUM`, `AVG`, `MIN`, `MAX`), the other side must reduce to a
-single value too, and `IsAllowedDecisionFreeBoundExpression` decides which shapes
-qualify: constants, operators and functions over allowed operands, casts, scalar
-subqueries, and data-only reducers with their own `WHEN`. A bare column does not
-qualify — it has one value per row, not one per group. Arithmetic composes freely,
-`-` included: a bound is evaluated as an expression over the row, so subtraction is
-no different from addition. (`-` alone was refused for a while, a leftover from the
+When one side reduces (`SUM`, `AVG`, `MIN`, `MAX`), the side that carries no decision
+is the bound, and `IsAllowedDecisionFreeBoundExpression` decides which shapes it may
+take: constants, data columns, operators and functions over allowed operands, casts,
+scalar subqueries, and data-only reducers with their own `when`, `per` and `by`. A data
+column is a bound like any other: a clause with no `per` is generated once per kept
+row, so the tightest row's value binds; under `per K:` the key must determine it, which
+is a run-time check (stage 04, "Scope checks"). Arithmetic composes freely, `-`
+included: a bound is evaluated as an expression over the row, so subtraction is no
+different from addition. (`-` alone was refused for a while, a leftover from the
 parsed-level symbolic layer that used to move terms across the comparison. It also
 rejected `-5.0::DOUBLE`, where the minus is the literal's own sign, so a negative
-bound could not be written with a cast at all.) Wrapper tags recurse into child 0
-only: a `WHEN` predicate or a `PER` key is not a value on that side.
+bound could not be written with a cast at all.) A colon-form or `by` marker recurses
+into child 0 only: its relations or key are not values on that side. A data-only
+reducer never shares a scaled term with a decision (S10): `ValidateDecideNoNonLinearScalar`
+refuses `x * avg(cap)`, `sum(x) / sum(cap)` and `(sum(x) + sum(cap)) / 2` on the parsed
+tree.
 
 ### Subqueries
 
@@ -273,10 +334,9 @@ The declared type settles that without reading a row, so
 `ValidateDecideNoIntegerStepComparisonOnReal` rejects all three here, naming the
 variable and quoting the clause. It runs on the parsed tree beside the other DECIDE
 validators, and it checks **comparisons in constraint position only** — descending
-through conjunctions and through the constraint child of a `WHEN` / `PER` wrapper, the
-same way `DecideConstraintsBinder` dispatches. A comparison nested inside an operand is a
-boolean value, not a model row: in the misparse `(SUM(x) WHEN w > 1) + 3 <= 10` the
-`> 1` is added to `3`, and the resulting type error is the better diagnosis.
+through conjunctions and through the constraint child of a `when` / `per` scope, the
+same way `DecideConstraintsBinder` dispatches. A comparison nested inside an operand is
+a boolean value, not a model row, and is left to the type checks.
 
 Both sides are read, because canonicalization has not run yet and `5 > SUM(x)` is as
 likely a spelling as `SUM(x) < 5`. Reading a side is not moving one.
@@ -336,7 +396,8 @@ Four things are deliberately **not** refused:
 - **A decision-free addend.** `x + 1000003.50 < K` is exactly `x < K - 1000003.50`; a
   fractional offset moves the bound, it does not move the lattice. A *multiplier* is
   different — `0.5 * x` rescales the decision off the lattice — so every factor of a
-  product is checked whether or not it carries a decision.
+  product is checked whether or not it carries a decision. Where the side is not linear
+  in the addend it counts toward the value (§4a).
 - **`POWER(e, n)` with a whole, non-negative constant `n`**, which returns `DOUBLE` but
   stays on the lattice when `e` does. Its exponent is read through the binder's inserted
   casts.
@@ -349,20 +410,87 @@ Four things are deliberately **not** refused:
 > one layer, before any data is read, and the model builder's remaining checks are
 > `InternalException` invariants.
 
-### `PER`
+---
 
-`BindPerConstraint` requires the `PER` expression to reference a table column —
-not a decision variable, not a constant. Whether `PER` is *eligible* on this
-constraint is decided after canonicalization, using the canonical aggregate /
-per-row classification, not by a parsed aggregate-shape guess. Combined
-expression-level `WHEN` + `PER` filters first, then groups.
+## 4a. Scopes — `when`, `per`, `by`
 
-Once that validation passes, both `BindPerConstraint` and the objective's `PER`
-handling assemble their tagged `BoundConjunctionExpression` through the same
-`DecideBinder::BindPerWrapper`: bind child 0 (the wrapped constraint or objective)
-through the subclass's own dispatch, bind the PER columns through the base
-`ExpressionBinder`, tag the result with `func.function_name` for the canonicalizer
-to read back as the PER key.
+Every clause follows the scope rules: a clause with no scope written is `per row:`, and
+a reducer with no `by` is `by ()` (syntax_reference.md §1.1).
+`ValidateDecideScopeSpellings` (`decide_binder.cpp`) runs on the parsed constraints
+(one `AND` operand at a time) and on the objective, before either binds:
+
+- a scope or `by` inside an ordinary SQL subquery written in the clause, a `when`
+  condition or a key: *"DECIDE: 'PER key:' is not supported yet"* (or `'PER ():'`,
+  `'PER ROW:'`, `'WHEN condition:'`, `'BY (key)'`, whichever was written);
+- a scope inside a call other than `SUM`/`AVG`/`MIN`/`MAX`: *"DECIDE: when and per
+  inside a call need SUM, AVG, MIN or MAX; write the scope in front of the constraint
+  or inside a reducer"* (D15); a `by` after anything but those four, `norm` or `count`:
+  *"DECIDE: by (...) must directly follow SUM, AVG, MIN, MAX, norm or count"* (D34,
+  D35). After a special form (`COALESCE`, `NULLIF`, `CAST`) or a parenthesized
+  expression a `by` is a syntax error, as the grammar admits it only after a function
+  call;
+- a decision in a `when`, a key or a `by`: *"DECIDE: x is a decision; when, per and by
+  may only use data"*; a window function there: *"DECIDE: a window function such as
+  'row_number() OVER ()' is not supported in when, per or by"*. A reducer there is not
+  refused here: execution refuses it (*"DECIDE: an aggregate cannot be used here.
+  ..."*, `todo.md`);
+- `norm(D: e, p)`: *"DECIDE: norm(D: ...) is not supported yet; a relation qualifier
+  takes SUM, AVG, MIN or MAX"* (bound, it would read `SUM(D: e)`);
+- a reducer inside a reducer: *"DECIDE: an aggregate inside an aggregate is not supported
+  yet"*, except the objective's two-level form (`IsTwoLevelObjective`), and except a
+  reducer over data alone under a `*` or `/` that holds a decision (`sum(avg(cap) * x)`):
+  that is a coefficient, refused by `ValidateDecideNoNonLinearScalar` with its remedy.
+
+| Written | Bound |
+|---|---|
+| `when c: C` | a WHEN wrapper (`WHEN_CONSTRAINT_TAG`) `[C, c]` |
+| `per K: C` | a `PER_CLASS_TAG` wrapper `[C, key columns...]`, none for `per ()`, its key as written a source fragment on the alias |
+| `when c per K: C` | `PER_CLASS{WHEN{C, c}, K}` |
+| `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`SCOPE_PER_ROW_TAG`, peeled) |
+| `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide_group_keys[i]`; `by ()` adds nothing |
+| `agg(when c: e)` | the aggregate's `filter` (§3) |
+| `agg(per K': e)`, `SUM(D: e)` | a `__qualified_by_<i>__` tag on an exact key scope; the colon form adds `COLON_FORM_TAG` (§3) |
+| `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
+| `outer(per k: inner(e) by (k))` | `PER{outer(inner(e)), k}` (`PER_CONSTRAINT_TAG`), its key as written a source fragment; a `when` in front sits inside it, `PER{WHEN{outer(inner(e)), c}, k}` |
+
+- `BindScopedConstraint` binds the body, the condition as data, the key through
+  `BindKeyColumns` (a declaration key's resolution; a column element keeps its written
+  name for messages). A `BETWEEN` binds to two comparisons, each under the whole scope;
+  the second binds the condition again from its parsed text, since a bound subquery
+  cannot be copied.
+- The key's text becomes a source fragment while binding, not on the parsed marker:
+  `ExpressionBinder::Bind` copies a parsed node's alias onto the node it binds to, which
+  would replace the wrapper's tag.
+- `BindReducerBy`: a relation element stands for its stored columns (a column of that
+  name wins); any other element binds as data. Equal key sets share one
+  `DecideGroupKey` (expressions, text as written, each element's name): equal as bound
+  expressions, or written alike — a bound subquery equals nothing, not even itself.
+- `BindScopedReducer` peels the inner `per`/`when` (§3); `SUM(D: e)` is `sum(per D: e)`
+  (`BindQualifiedReducer`, §3) and may take a `by`.
+- `BindScopedObjective`: `per ()` adds nothing; a `when` wraps the body, inside the
+  two-level form's `PER_CONSTRAINT_TAG` wrapper. `BindTwoLevelObjective` refuses a `when` inside either
+  reducer, a `per` inside the inner one, a `by` key that is not the `per` key, and an
+  outer `avg` (*"DECIDE: avg over the classes of avg(per g: sum(...) by (g)) is not
+  supported yet; write sum, min or max over them"*). A decision outside the objective's
+  reducers binds: a query-wide one is one column, and any other must have one instance
+  over the kept rows, a run-time check. The objective's casts and subqueries are
+  fragment-tagged like a constraint's.
+- A strict comparison over a fractional operand names a reducer as written, scopes and
+  `by` included (*"'avg(ship) by (D.region)' has type DOUBLE ..."*). A decision-free
+  addend belongs to the bound where the side is linear in it; `DecideSideIsWholeNumbered`'s
+  `addends_count` makes it part of the value inside a `MIN` or `MAX` (stage 06 steps
+  the bound on the extremum, so `max(x + 0.5) > 3` is refused), under a power, in a
+  product of decisions and in a norm of order 1, 2 or `'inf'`
+  (`POWER(x + 0.25, 2) < 11`, `(x + 0.5) * y < 5`, `norm(x + 0.5, 'inf') > 3`).
+  `DecideValueIsWholeNumbered` exports the same test with every addend counted, for the
+  value rewrite's helper decisions (stage 05).
+- A scalar function over a decision that binds to a NULL constant (`x + NULL`: DuckDB
+  folds it) is refused in `DecideBinder::BindFunction`, where the SQL is still at hand:
+  *"DECIDE: '(x + NULL)' is NULL whatever the decisions are; replace the NULL with a
+  value, as in COALESCE(column, 0)"*. The decision would be gone from the bound tree.
+- A `SUM`, `AVG`, `MIN`, `MAX` or `norm` with no argument is refused: *"SUM needs one
+  argument, found 'sum()'"*, *"NORM needs an expression and an order, as in norm(e, 1),
+  found 'norm()'"*.
 
 ---
 
@@ -370,10 +498,11 @@ to read back as the PER key.
 
 `DecideObjectiveBinder` binds `MAXIMIZE` / `MINIMIZE` bodies through the same
 `DecideBinder` rules. It knows the sense (`decide_sense`) because a few checks
-depend on it. It performs no algebraic rewriting: the objective's shape — its
-additive spine, its reducer scales, its constant offset — is decided once by
-`DecideCanonicalizer::CanonicalizeObjective` on the bound tree, alongside
-constraints.
+depend on it. A scope in front (`BindScopedObjective`) and the two-level form
+(`BindTwoLevelObjective`) are bound as §4a describes. It performs no algebraic
+rewriting: the objective's shape — its additive spine, its reducer scales, its
+constant offset — is decided once by `DecideCanonicalizer::CanonicalizeObjective` on
+the bound tree, alongside constraints.
 
 ---
 
@@ -402,10 +531,10 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 
 | Concern | Location |
 |---|---|
-| Declarations, scopes, types, aux pruning | `src/planner/binder/query_node/bind_select_node.cpp` |
-| Shared DECIDE expression rules, reducers | `src/planner/expression_binder/decide/decide_binder.cpp` |
+| Declarations, scopes, types, the parsed-tree validators (`BindDeclarations`, `RefuseQualifiedDecisionReferences`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
+| Shared DECIDE expression rules, reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateExactScope`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
-| `SUCH THAT` binding and `PER` gate | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
-| Objective binding | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
-| Entity scope struct | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
+| `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
+| Objective binding, its scope and the two-level form | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
+| Key scope struct | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
 | Scope enum and DECIDE tags | `src/include/duckdb/common/enums/decide.hpp` |

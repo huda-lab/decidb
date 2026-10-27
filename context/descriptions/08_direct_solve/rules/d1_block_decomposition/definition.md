@@ -22,7 +22,7 @@ Each department must select exactly one candidate:
 SELECT id, department, selected
 FROM candidates
 DECIDE selected(BOOL)
-SUCH THAT SUM(selected) = 1 PER department
+SUCH THAT per department: sum(selected) by (department) = 1
 MAXIMIZE SUM(score*selected);
 ```
 
@@ -84,7 +84,7 @@ A query does not belong to D1 when a shared decision, resource constraint, scala
 | Outer MIN or MAX | Compose only when improving every component in one proved direction cannot worsen the outer objective. |
 | Infeasible component | The complete DECIDE problem is infeasible. |
 | Favorably unbounded component | An additive objective is unbounded in that direction. |
-| NULL PER key | The row bypasses that grouped factor and is handled by its actual remaining component. |
+| NULL `by` key | NULL-keyed rows form a group of their own (D5), a factor like any other. |
 
 D1 inherits the status of every leaf it uses. Decomposition cannot make an unsupported or prototype leaf eligible by itself.
 
@@ -92,7 +92,7 @@ D1 inherits the status of every leaf it uses. Decomposition cannot make an unsup
 
 D1 performs the following semantic steps:
 
-> 1\. normalizes decision identity, coefficients, PER, and WHEN behavior;
+> 1\. normalizes decision identity, coefficients, and `per`, `by` and `when` behavior;
 >
 > 2\. substitutes decisions whose values are already proved;
 >
@@ -127,9 +127,9 @@ monotone. > > • Every component optimum needed by an outer MIN/MAX is finite a
 objective, an infeasible component makes the global problem infeasible, while a component unbounded in the favorable
 direction makes it unbounded. > > • Exact row, entity, and scalar decision identities are known, and no decision
 identity occurs in more than one component. > > • Component membership follows the complete entity key and proved
-functional dependencies rather than coincidental equality of data values. > > • PER keys, WHEN masks, qualified
-reducers, join multiplicities, and data-valued right-hand sides are normalized before decomposition. > > • NULL PER
-keys bypass their grouped factor. Shared scalars or any factor that spans groups reconnect the affected decisions. > > •
+functional dependencies rather than coincidental equality of data values. > > • `per` and `by` keys, `when` masks, qualified
+reducers, join multiplicities, and data-valued right-hand sides are normalized before decomposition. > > • A NULL
+`by` key is a group of its own (D5). Shared scalars or any factor that spans groups reconnect the affected decisions. > > •
 Every component matches one complete leaf rule and satisfies that rule's full **Valid when** checklist. A proof failure
 in any component rejects the complete D1 rewrite and keeps the original DECIDE query on the solver path. > > • Component
 keys and solver-read coefficients are non-NULL and finite wherever DECIDE requires them. Empty, infeasible, and

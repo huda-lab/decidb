@@ -24,14 +24,16 @@ class Optimizer;
 //! Current passes, in the order OptimizeDecide runs them:
 //!   - RewriteNorm: lowers the bound NORM marker, including L0 indicators/links
 //!   - RewriteInDomain: lowers DECIDE variable IN lists to indicator formulations
-//!   - TagAbsConstraintsForBigM: marks the ABS nodes needing a Big-M envelope.
+//!   - TagAbsForBigM: marks the ABS nodes needing a Big-M envelope, in the constraints and the objective.
 //!     Must precede RewriteAbs, which replaces the nodes it marks
 //!   - RewriteAbs: detects ABS(expr) over decide vars, creates auxiliary REAL vars,
 //!     replaces ABS nodes with aux var refs, generates linearization constraints
 //!   - RewriteBilinear: McCormick linearization for Boolean × anything products
+//!   - RewriteScopedReducers: the value rewrite of a scoped comparison -- each decision
+//!     reducer of a VALUE-shape comparison becomes a helper decision defined per group
 //!   - RewriteComposedMinMax: detects composed MIN/MAX before the single-term pass
 //!   - RewriteMinMax: classifies MIN/MAX constraints as easy/hard, rewrites to per-row
-//!     or SUM+indicator, handles objectives (flat and nested PER)
+//!     or SUM+indicator, handles objectives (flat and two-level)
 //!   - RewriteNotEqual: creates indicator variables for <> constraints
 //!   - RewriteAvgToSum: rewrites AVG(expr) → SUM(expr) with alias tag for RHS scaling
 //!   - FoldSingletonRows: folds simple `x OP const` bounds into the column box.
@@ -49,9 +51,11 @@ private:
 	//! a DECIDE node rewrites the references above it from `root`.
 	void OptimizeSubtree(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root);
 
-	//! Replace each COUNT/MIN/MAX/SUM/AVG on the right of a reduced constraint by a window column of the DECIDE
-	//! source (the same aggregate over the clause's group), so the solver and the direct-solve rules read one number
-	//! that DuckDB computed. Runs before the direct-solve rules, in every mode, because both paths must see it.
+	//! The bound-side evaluator: replaces each reducer on a bound by a window column of the DECIDE source (the same
+	//! aggregate over its groups), reduces the bound of an aggregate-shape clause to its group's tightest value, and
+	//! appends the VALUE_IS_VALID checks of what those windows read. The solver and the direct-solve rules then read
+	//! one number that DuckDB computed. Runs before the direct-solve rules, in every mode, because both paths must see
+	//! it.
 	void RewriteRhsAggregates(LogicalDecide &decide);
 
 	//! Apply all DECIDE optimization passes to a LogicalDecide node
@@ -74,12 +78,12 @@ private:
 	//! Helper: recursively find COMPARE_NOTEQUAL in bound expression tree
 	void FindNotEqualConstraints(Expression &expr, LogicalDecide &decide);
 
-	//! Fold every simple `x OP const` / `x BETWEEN a AND b` constraint into the decision
-	//! column's box (`singleton_row_boxes`, combined by `DecideFoldSingletonRow`) rather than leaving
-	//! it to become a model row: a box is smaller and tighter for the solver than one row
-	//! per data row. Folded comparisons are tagged SINGLETON_ROW_BOUND_TAG so physical term
-	//! extraction skips them, and recorded in `user_singleton_row_bounds` so the infeasible
-	//! diagnosis can re-emit them as slackable rows.
+	//! Fold every simple `x OP const` constraint (a BETWEEN is two of them by now) into the
+	//! decision column's box (`singleton_row_boxes`, combined by `DecideFoldSingletonRow`) rather
+	//! than leaving it to become a model row: a box is smaller and tighter for the solver than
+	//! one row per data row. Folded comparisons are tagged SINGLETON_ROW_BOUND_TAG so physical
+	//! term extraction skips them; a recorded one (`user_singleton_row_bounds`) is also tagged
+	//! SINGLETON_ROW_CLAUSE_ROWS_TAG, so its clause is flattened for the repair model.
 	//!
 	//! MUST RUN LAST, after every other pass. RewriteInDomain emits a floor-lowering
 	//! `x >= min_value` for a negative all-constant IN domain, which is itself a singleton-row bound;
@@ -104,7 +108,17 @@ private:
 	//! The replacement is tagged with AVG_REWRITE_TAG so coefficient evaluation can scale terms.
 	//! A decision-free AVG is skipped: there is nothing to linearize, and rebinding it as SUM
 	//! would redeclare it with SUM's integral type while its value stays fractional.
-	void RewriteAvgInExpression(unique_ptr<Expression> &expr, idx_t decide_index);
+	//! `clause_alias` is the clause the walk stands in (OBJECTIVE_ROW_TAG for the
+	//! objective), under which each rewritten AVG's account is recorded.
+	void RewriteAvgInExpression(unique_ptr<Expression> &expr, LogicalDecide &decide, const string &clause_alias);
+
+	//! The value rewrite (syntax_reference.md §6.4): every decision reducer of a
+	//! comparison in the VALUE shape (VALUE_REWRITE_TAG) becomes a helper decision defined
+	//! once per `by` group (LogicalDecide::reducer_value_links), and the comparison is then
+	//! one row per class. Runs after ABS and bilinear, whose auxiliaries may stand inside a
+	//! reducer's body, and before the MIN/MAX passes, which never see these reducers. A
+	//! product of decisions left inside such a reducer is refused (syntax_reference.md §10.2).
+	void RewriteScopedReducers(LogicalDecide &decide);
 
 	//! Detect composed MIN/MAX constraints — additive LHS mixing SUM/AVG/MIN/MAX terms.
 	//! Extracts each term's metadata into decide.composed_minmax_constraints and replaces
@@ -113,7 +127,12 @@ private:
 	void RewriteComposedMinMax(LogicalDecide &decide);
 
 	//! Helper: walk the constraint tree looking for composed MIN/MAX comparisons.
-	void RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide);
+	//! `scoped_when` is the `when` enclosing `expr`, folded into a composed clause's terms.
+	//! `per_class` is the `per K:` wrapper enclosing it, whose classes a composed clause's
+	//! one row stands for (D28).
+	void RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
+	                                       const Expression *scoped_when = nullptr,
+	                                       const BoundConjunctionExpression *per_class = nullptr);
 
 	//! Detect a composed MIN/MAX objective (additive sum of SUM/AVG/MIN/MAX terms).
 	//! Extracts term metadata into decide.composed_minmax_objective_terms and replaces
@@ -122,26 +141,29 @@ private:
 	void RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide);
 
 	//! Rewrite MIN/MAX aggregates in constraints and objectives.
-	//! Constraints: easy cases (MAX<=K, MIN>=K) strip aggregate; hard cases create indicators.
-	//! Objectives: detect flat and nested PER patterns, set metadata, rewrite to SUM.
+	//! Constraints: easy cases (MAX<=K, MIN>=K) keep the reducer, tagged, and bound each
+	//! member; hard cases create an extremum column. Objectives: detect the flat and the
+	//! two-level form, set metadata, rewrite to SUM.
 	void RewriteMinMax(LogicalDecide &decide);
 
 	//! Top-level constraint-side MIN/MAX rewrite
 	void RewriteMinMaxConstraints(LogicalDecide &decide);
 
 	//! Helper: recursively walk bound constraint tree, classifying and rewriting MIN/MAX.
-	//! out_was_easy is set when the rewrite produced a per-row constraint (used for PER stripping).
+	//! `scoped_when` and `per_class` are the `when` and `per K:` around `expr`, which a row
+	//! this rewrite adds for the clause (an equality's easy half) keeps.
 	void RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                               vector<unique_ptr<Expression>> &new_constraints,
-	                               bool &out_was_easy);
+	                               optional_ptr<const Expression> scoped_when = nullptr,
+	                               optional_ptr<const BoundConjunctionExpression> per_class = nullptr);
 
 	//! Objective-side MIN/MAX detection and rewriting.
-	//! Handles flat (non-PER) and nested PER objectives.
+	//! Handles the flat and the two-level objective.
 	void RewriteMinMaxObjective(LogicalDecide &decide);
 	//! The tree half of RewriteMinMaxObjective, split out so the objective can be
 	//! detached, rewritten, and reinstalled through LogicalDecide::SetObjective. It
 	//! cannot detach at the end instead: the rewrite writes through a pointer that
-	//! walks INTO the tree past PER/WHEN wrappers and casts, and it has early returns.
+	//! walks INTO the tree past `per`/`when` wrappers and casts, and it has early returns.
 	void RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_ptr<Expression> &objective);
 
 	//! Detect ABS(expr) over decide variables, create auxiliary REAL variables,
@@ -175,22 +197,28 @@ private:
 	struct AbsPairInfo {
 		idx_t aux_idx;
 		unique_ptr<Expression> inner_expr;
-		bool in_objective;   // true = ABS came from the objective, false = from a constraint
 		//! Alias of the user comparison this ABS was written in, so the envelope rows
-		//! it generates carry the clause id back to EXPLAIN and diagnostics. Empty for
-		//! an ABS in the objective, which is not inside a comparison.
+		//! it generates carry the clause id back to EXPLAIN and diagnostics; the
+		//! objective's tag for an ABS in the objective.
 		string source_alias;
-		bool needs_bigm;     // true = aux needs Big-M upper envelope (constraint
-		                     //        hard-direction or MAXIMIZE+objective). When
-		                     //        false aux pins to |inner| naturally via
-		                     //        solver pressure (MINIMIZE objective, or
-		                     //        constraint shape that upper-bounds aux).
+		bool needs_bigm; // true = aux needs Big-M upper envelope (a constraint
+		                 //        hard direction, an objective term the sense
+		                 //        pushes up or of unknown sign, or an ABS nested
+		                 //        inside another ABS). When false aux pins to
+		                 //        |inner| naturally via solver pressure or a
+		                 //        constraint shape that upper-bounds it.
+		//! The envelope rows read only the rows the clause's `when` (a copy, or null) keeps.
+		unique_ptr<Expression> when;
+		//! The ABS as a plan prints it: the auxiliary's name there, and its account's.
+		string label;
 	};
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
-	//! replace with auxiliary variable references, and collect AbsPairInfo entries.
-	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                       vector<AbsPairInfo> &abs_pairs, bool in_objective, const string &source_alias);
+	//! replace with auxiliary variable references, and collect AbsPairInfo entries,
+	//! innermost first. Whether an auxiliary is pinned exactly is read off the tag
+	//! TagAbsForBigM left on the node; this pass decides nothing about it.
+	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide, vector<AbsPairInfo> &abs_pairs,
+	                       const string &source_alias, const Expression *when);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis

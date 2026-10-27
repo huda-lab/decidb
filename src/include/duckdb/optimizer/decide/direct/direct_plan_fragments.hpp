@@ -58,20 +58,12 @@ DirectPipelineBreaker DirectValidationBreaker(Binder &binder, unique_ptr<Logical
 // DECIDE semantics every aggregate rule shares
 //===--------------------------------------------------------------------===//
 
-//! Whether a clause's WHEN holds on a row: true without a WHEN, and false when the WHEN is false or NULL.
+//! Whether a clause's `when` holds on a row: true without one, and false when it is false or NULL.
 unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Expression *when);
 
-//! The check DirectGuardEmptyAggregate makes, over a BIGINT column that counts the eligible rows: true when the count
-//! is positive, and the empty-aggregate error otherwise. For a plan that has the count already (from a window or an
-//! aggregate of its own) and checks it where it likes.
-unique_ptr<Expression> DirectActiveRowsCheck(Optimizer &optimizer, ColumnBinding active_count,
-                                             const string &clause = "constraint");
-
-//! DECIDE's empty-aggregate error: a scoped aggregate over a nonempty input with no eligible row has no value.
-//! `clause` names where the aggregate sits in the message (`constraint` or `objective`). Which error is reported
-//! when the query has several is not specified.
-unique_ptr<LogicalOperator> DirectGuardEmptyAggregate(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
-                                                      ColumnBinding eligible, const string &clause = "constraint");
+//! `value` on a row where `kept` is true, and NULL on any other. Nothing is computed on a row a `when` drops, so a
+//! value that raises (a logarithm of 0, an overflow) raises only on a kept row, as on the solver path.
+ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &value);
 
 //===--------------------------------------------------------------------===//
 // Scope projection and data-valued bounds
@@ -82,7 +74,7 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
                                                        unique_ptr<Expression> value);
 
 //! The per-row state of a scoped aggregate, projected once over the input: every input column, then whether the
-//! row is eligible (its WHEN holds and no PER key is NULL), then any per-row columns the rule adds. With no scope
+//! row is eligible (its `when` holds and no group key is NULL), then any per-row columns the rule adds. With no scope
 //! and no extra columns the input passes through unchanged.
 struct DirectScopeState {
 	unique_ptr<LogicalOperator> plan;
@@ -96,59 +88,25 @@ struct DirectScopeState {
 	vector<ColumnBinding> extra;
 };
 
-//! A WHEN false or NULL row does not join the clause, and neither does a row with a NULL PER key. `key_slots` index
+//! A row whose `when` is false or NULL does not join the clause, and neither does a row with a NULL group key (the
+//! removed PER; a `by` key makes NULL a group of its own, D5, when direct solve reads one). `key_slots` index
 //! the input's columns; `extra` are expressions over the input.
 DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
                                     const Expression *when, const vector<idx_t> &key_slots,
                                     vector<unique_ptr<Expression>> extra);
 
-//! One clause's data-valued bound, reduced per group: an upper bound takes the group MIN, a lower bound the group
-//! MAX, and an equality both, which must agree.
-struct DirectBoundSpec {
-	ExpressionType comparison;
-	//! The bound over the plan's columns, in its own SQL type.
+//! A per-row bound read from the data: it must not be NULL on a row its clause keeps, nor NaN when `reject_nan`.
+struct DirectRowBound {
 	unique_ptr<Expression> value;
-	//! Set when the bound is exactly one source column: its binding in the plan and its type.
-	bool is_column = false;
-	ColumnBinding column;
-	LogicalType column_type;
-	//! Reduce over every group row rather than only the eligible ones (a source-valued bound under an
-	//! aggregate-local WHEN, as the solver reduces it).
-	bool all_group_rows = false;
-	//! The error a NULL or NaN value raises, for a bound that is not exactly one source column.
-	string invalid_message;
-	//! For a bound that is exactly one source column: the error a NULL raises, and the error a NaN raises (empty when
-	//! the column cannot hold NaN). The column is the same on every row, so each message is fixed.
-	string null_message;
-	string nan_message;
-};
-
-//! One clause's data-valued expression that must not be NULL on any row, nor NaN when `reject_nan` is set.
-struct DirectNotNullSpec {
-	unique_ptr<Expression> value;
-	//! The error a NULL raises, and a NaN too when `nan_message` is empty.
-	string message;
-	//! The error a NaN raises, when it differs from the NULL error.
-	string nan_message;
+	//! The rows the clause keeps, as a BOOLEAN over the plan's columns; null for every row.
+	unique_ptr<Expression> kept;
 	bool reject_nan = false;
 };
 
-//! Where the validated group extrema live.
-struct DirectBoundValidation {
-	unique_ptr<LogicalOperator> plan;
-	idx_t window_index = DConstants::INVALID_INDEX;
-	//! Per bound, the window slot of its group MIN or MAX, or INVALID_INDEX when its comparison needs none.
-	vector<idx_t> min_slots;
-	vector<idx_t> max_slots;
-};
-
-//! Validates data-valued bounds the way the solver reads them: every bound is checked for NULL and NaN on every input
-//! row, including rows the clause does not apply to; and equality bounds must not vary within a group. Which failing
-//! check is reported is not specified. `eligible` is set for a scoped clause, and the extrema are partitioned by it
-//! and by `keys`. Nothing is added when there is nothing to validate.
-DirectBoundValidation DirectValidateBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
-                                           vector<DirectBoundSpec> &bounds, vector<DirectNotNullSpec> &not_null,
-                                           const ColumnBinding *eligible, const vector<ColumnBinding> &keys,
-                                           const vector<LogicalType> &key_types);
+//! Raises the solver's error when a per-row bound is NULL (DirectNullMessageOf, over `fragments`) or NaN on a row its
+//! clause keeps; nothing is read on a row a `when` drops. Which failing row is reported is not specified. Nothing is
+//! added when there is nothing to check.
+unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
+                                                 const vector<DirectRowBound> &bounds, const vector<string> &fragments);
 
 } // namespace duckdb

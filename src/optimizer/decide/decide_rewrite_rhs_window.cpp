@@ -3,13 +3,20 @@
 //
 // src/optimizer/decide/decide_rewrite_rhs_window.cpp
 //
-// Right-hand-side aggregates become window columns. See decide_optimizer.cpp.
+// The bound-side evaluator. See decide_optimizer.cpp.
 //
-// `SUM(x) <= SUM(cap)`: the right side is a reducer over data. The solver used to fold it row by row in DOUBLE
-// (PhysicalDecide::EvaluateRhsReducerPerGroup), which loses digits DuckDB keeps. This pass replaces each such
-// aggregate with a column of the DECIDE source: the same DuckDB aggregate, as a window over the clause's group. The
-// solver and the direct-solve rules then both read one number, and the surrounding arithmetic (`COUNT(*) * k`) is
-// evaluated in DuckDB's own types.
+// A bound is data: `SUM(x) <= SUM(cap)`, `SUM(x) BY (g) <= cap`. Every value a bound needs that is not one row's
+// value is computed here, once, as a column of the DECIDE source:
+//   - each reducer on a bound (`sum(cap)`, `sum(per D: cap) by (g)`), as the same DuckDB aggregate over a window of
+//     its groups, so the surrounding arithmetic (`COUNT(*) * k`) is evaluated in DuckDB's own types;
+//   - the tightest bound of a clause in the aggregate shape: such a clause is one constraint per group, and the
+//     constraint on each kept row of the group holds when the tightest one does (paper §3.2.1), so `<=` takes the
+//     group's MIN and `>=` its MAX; `=` must have one value per group.
+// The solver (PhysicalDecide) and the direct-solve rules then read plain columns, and neither reduces a bound.
+//
+// The values the windows read are checked by VALUE_IS_VALID checks appended to the DECIDE node's scope checks, so a
+// NULL, a NaN, or an `=` bound with two values in a group is reported after the scope checks, as the bound's reader
+// would report it. A window itself raises nothing.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
@@ -18,41 +25,40 @@
 
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
-#include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
-#include "duckdb/planner/expression/bound_case_expression.hpp"
-#include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
-#include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_window.hpp"
-#include "duckdb/planner/decide/decide_cast_policy.hpp"
 
 namespace duckdb {
 
 namespace {
 
-//! The windows one DECIDE node needs, collected while the constraint tree is walked and installed as one
-//! LogicalWindow directly above DECIDE's child. A window keeps its child's bindings and appends its own, so no
-//! binding the DECIDE node (its entity scopes, source column names, clauses) holds changes.
+//! The windows one DECIDE node's bounds need, collected while the constraint tree is walked and installed as a stack
+//! of LogicalWindows directly above DECIDE's child: a window that reads another window's column stands on the level
+//! above it. A window keeps its child's bindings and appends its own, so no binding the DECIDE node holds changes.
+//!
+//! Every window is partitioned by whether the clause's `when` keeps the row (when it has one): the rows the clause
+//! drops form partitions no constraint reads, and nothing a window computes is evaluated on them. A group a reducer's
+//! own `when` leaves empty is D8, which a scope check raises before any value is read, so its NULL is never read.
 class RhsWindowRewriter {
 public:
 	RhsWindowRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)
-	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context) {
-		decide.children[0]->ResolveOperatorTypes();
-		child_bindings = decide.children[0]->GetColumnBindings();
+	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context),
+	      canonicalizer(optimizer_p.context, decide_p.decide_index, decide_p.variable_scopes) {
 	}
 
 	void Run() {
@@ -63,402 +69,326 @@ public:
 	}
 
 private:
-	//! A reducer replaced by a window column, remembered so an aggregate written twice shares one window.
-	struct Placed {
-		unique_ptr<Expression> aggregate;
-		vector<unique_ptr<Expression>> keys;
-		unique_ptr<Expression> when;
-		unique_ptr<Expression> lhs_active;
-		idx_t slot;
+	//! One LogicalWindow of the stack: level 0 reads the source, level k also the columns of the levels below it.
+	struct Level {
+		idx_t table_index;
+		vector<unique_ptr<Expression>> windows;
+	};
+	//! A reducer's column and the `by` key it has one value per group of.
+	struct ReducerColumn {
+		ColumnBinding binding;
+		vector<const Expression *> keys;
 	};
 
 	void Walk(Expression &expr) {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conjunction = expr.Cast<BoundConjunctionExpression>();
-			bool wrapper = IsConstraintWrapper(conjunction);
-			auto saved_per = per_keys;
 			auto saved_when = when;
-			if (IsPerConstraintWrapper(conjunction)) {
-				for (idx_t i = 1; i < conjunction.children.size(); i++) {
-					// PER names table columns, which the window can always read.
-					D_ASSERT(ReadableOverSource(*conjunction.children[i]));
-					per_keys.push_back(conjunction.children[i].get());
-				}
-			} else if (IsWhenConstraintWrapper(conjunction)) {
+			if (IsWhenConstraintWrapper(conjunction)) {
 				D_ASSERT(conjunction.children.size() == 2);
 				when = conjunction.children[1].get();
 			}
+			// A `per K:` wrapper groups no reducer: its child is read like any other clause.
 			for (idx_t i = 0; i < conjunction.children.size(); i++) {
-				if (!wrapper || i == 0) {
+				if (IsConstraintChild(conjunction, i)) {
 					Walk(*conjunction.children[i]);
 				}
 			}
-			per_keys = std::move(saved_per);
 			when = saved_when;
 			return;
 		}
-		if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
-			return;
-		}
-		auto &comparison = expr.Cast<BoundComparisonExpression>();
-		// Only a clause whose left side holds a decision reducer is rewritten. A scalar decision on the left
-		// (`s <= SUM(cap)`) is classified as a reduced clause because of the right-hand reducer; without it the clause
-		// would read as one constraint per row, so it keeps the reducer.
-		if (!HoldsDecisionReducer(*comparison.left)) {
-			return;
-		}
-		ReadLeftActivity(*comparison.left);
-		if (lhs_readable) {
-			ReplaceReducers(comparison.right);
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+			RewriteBound(expr.Cast<BoundComparisonExpression>());
 		}
 	}
 
-	//! The solver evaluates the right side only for groups with a row the left side covers: a row of the clause on
-	//! which at least one left-hand reducer's own WHEN holds. A reducer with no WHEN of its own covers every row.
-	void ReadLeftActivity(const Expression &left) {
-		lhs_active.reset();
-		lhs_readable = true;
-		vector<const Expression *> filters;
-		bool unfiltered = false;
-		CollectLeftFilters(left, filters, unfiltered);
-		if (unfiltered) {
+	//! A clause in the aggregate shape is one constraint per group. Its data bound is checked on every kept row, before
+	//! any value is read, and a bound that may differ between the kept rows of a group is reduced to the tightest one.
+	//! `<>` keeps every value: each one is excluded. A query-wide value has one value already. A row-wise bound is
+	//! checked by the solver as it reads it.
+	void RewriteBound(BoundComparisonExpression &comparison) {
+		// Canonicalization put every decision on the left, so the right is data.
+		bool aggregate_data_bound =
+		    !comparison.right->IsFoldable() &&
+		    canonicalizer.ClassifyCanonicalComparison(comparison) == CanonicalConstraintClass::AGGREGATE;
+		bool query_wide = IsQueryWideBoundTag(comparison.right->GetAlias());
+		auto text = Written(*comparison.right);
+		ReplaceReducers(comparison.right);
+		if (!aggregate_data_bound) {
 			return;
 		}
-		// The caller found a decision reducer on the left, and it is filtered or `unfiltered` is set.
-		D_ASSERT(!filters.empty());
-		vector<ExprPtr> conditions;
-		for (auto filter : filters) {
-			if (!ReadableOverSource(*filter)) {
-				lhs_readable = false;
-				return;
-			}
-			conditions.push_back(calc.Of(*filter));
+		AddValueCheck(InvalidValueMessage(*comparison.right, "constraint right-hand side", Kept()));
+		if (comparison.type != ExpressionType::COMPARE_NOTEQUAL && !query_wide) {
+			ReduceToTightest(comparison, text);
 		}
-		// `Any` tests its first condition first; this clause tests the last first.
-		std::reverse(conditions.begin(), conditions.end());
-		lhs_active = calc.Out(calc.Any(conditions));
-	}
-
-	void CollectLeftFilters(const Expression &expr, vector<const Expression *> &filters, bool &unfiltered) const {
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			// Canonicalization moved every decision-free term to the right side.
-			D_ASSERT(BoundExpressionReferencesDecide(expr, decide.decide_index));
-			auto &aggregate = expr.Cast<BoundAggregateExpression>();
-			if (aggregate.filter) {
-				filters.push_back(aggregate.filter.get());
-			} else {
-				unfiltered = true;
-			}
-			return;
-		}
-		ExpressionIterator::EnumerateChildren(
-		    expr, [&](const Expression &child) { CollectLeftFilters(child, filters, unfiltered); });
-	}
-
-	bool HoldsDecisionReducer(const Expression &expr) const {
-		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			return BoundExpressionReferencesDecide(expr, decide.decide_index);
-		}
-		bool found = false;
-		ExpressionIterator::EnumerateChildren(
-		    expr, [&](const Expression &child) { found = found || HoldsDecisionReducer(child); });
-		return found;
 	}
 
 	void ReplaceReducers(unique_ptr<Expression> &expr) {
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			if (IsRewritable(expr->Cast<BoundAggregateExpression>())) {
-				expr = MakeWindowColumn(std::move(expr));
-			}
+			expr = MakeReducerColumn(expr->Cast<BoundAggregateExpression>());
 			return;
 		}
 		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { ReplaceReducers(child); });
 	}
 
-	bool ReadableOverSource(const Expression &expr) const {
-		if (!DirectIsDecisionFreeDeterministic(expr, decide.decide_index)) {
-			return false;
-		}
-		// The DECIDE node's expressions are bound over its child, so a decision-free column is a source column.
-		D_ASSERT(DirectReferencesOnlySource(expr, child_bindings));
-		return true;
-	}
-
-	//! Whether the clause covers a row: its WHEN holds (a NULL WHEN does not) and no PER key is NULL. Null when the
-	//! clause has neither, because every row is then covered.
-	unique_ptr<Expression> ClauseCovers() const {
-		if (per_keys.empty() && !when) {
-			return nullptr;
-		}
-		auto eligible = calc.Wrap(DirectActiveWhen(calc, when));
-		for (auto key : per_keys) {
-			eligible = calc.If(calc.IsNull(calc.Of(*key)), calc.Bool(false), eligible);
-		}
-		return calc.Out(eligible);
-	}
-
-	//! Whether the group a row sits in is evaluated at all: the clause covers the row's group and the left side is
-	//! active on some row of it. Null when every row qualifies. `covers` is the clause's own coverage.
-	unique_ptr<Expression> Eligible(idx_t &coverage_slot) {
-		auto covers = ClauseCovers();
-		if (!lhs_active) {
-			return covers;
-		}
-		auto active = DirectWindowMatchingCount(
-		    calc, calc.Out(covers ? calc.If(calc.Of(*covers), calc.Of(*lhs_active), calc.Bool(false))
-		                          : calc.Of(*lhs_active)));
-		if (covers) {
-			active->partitions.push_back(covers->Copy());
-		}
-		for (auto key : per_keys) {
-			active->partitions.push_back(key->Copy());
-		}
-		auto positive = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, PlaceCoverageCount(std::move(active)),
-		                         calc.Constant(Value::BIGINT(0)));
-		return calc.Out(calc.If(positive, covers ? calc.Of(*covers) : calc.Bool(true), calc.Bool(false)));
-	}
-
-	//! Adds a per-group count to the stage above DECIDE's child that the aggregate windows read, and returns the
-	//! column that carries it.
-	ExprPtr PlaceCoverageCount(unique_ptr<BoundWindowExpression> count) {
-		if (coverage_index == DConstants::INVALID_INDEX) {
-			coverage_index = optimizer.binder.GenerateTableIndex();
-		}
-		auto slot = coverage_windows.size();
-		coverage_windows.push_back(std::move(count));
-		return calc.Col(LogicalType::BIGINT, ColumnBinding(coverage_index, slot));
-	}
-
-	//! Whether the group a row sits in is evaluated and the reducer's own WHEN keeps none of its rows. The solver
-	//! raises its empty-aggregate error for such a group and for no other, so a group nobody evaluates stays silent.
-	//! The count is over the rows of the row's PER key that the clause covers and the WHEN keeps, so a row `eligible`
-	//! accepts reads the count of its own group.
-	unique_ptr<Expression> EmptyOwnWhen(const Expression &own, const Expression *eligible) {
-		auto covers = ClauseCovers();
-		auto kept = DirectWindowMatchingCount(
-		    calc, calc.Out(covers ? calc.If(calc.Of(*covers), calc.Of(own), calc.Bool(false)) : calc.Of(own)));
-		for (auto key : per_keys) {
-			kept->partitions.push_back(key->Copy());
-		}
-		auto none = calc.Cmp(ExpressionType::COMPARE_EQUAL, PlaceCoverageCount(std::move(kept)),
-		                     calc.Constant(Value::BIGINT(0)));
-		if (eligible) {
-			none = calc.If(calc.Of(*eligible), none, calc.Bool(false));
-		}
-		return calc.Out(none);
-	}
-
-	//! The FILTER of a reducer's window. A COUNT counts only the rows the group covers, because it reads 0 where
-	//! nothing is covered. The reducer's own WHEN narrows the rows every kind reads; the rows the group does not
-	//! cover keep passing for the other kinds, so their partitions read the 0 argument rather than an empty aggregate.
-	unique_ptr<Expression> ReducerFilter(const BoundAggregateExpression &aggregate, const Expression *eligible,
-	                                     const Expression *own) const {
-		bool counts = aggregate.function.name == "count" || aggregate.function.name == "count_star";
-		if (!own) {
-			return eligible && counts ? eligible->Copy() : nullptr;
-		}
-		if (!eligible) {
-			return own->Copy();
-		}
-		return calc.Out(calc.If(calc.Of(*eligible), calc.Of(*own), calc.Bool(!counts)));
-	}
-
-	//! The reducers whose window equals the solver's reading: COUNT, MIN, MAX, SUM and AVG of one numeric expression
-	//! over the source, with a WHEN (readable over the source) or without one, and with no relation qualifier or norm
-	//! of its own. The binder admits no other function, rejects DISTINCT and drops an ORDER BY these functions ignore.
-	//! The rest stay on the solver's fold.
-	bool IsRewritable(const BoundAggregateExpression &aggregate) const {
-		// The clause's own WHEN defines the group, so it must be a value the window can read. PER keys always are.
-		if (when && !ReadableOverSource(*when)) {
-			return false;
-		}
-		auto name = StringUtil::Lower(aggregate.function.name);
+	//! The reducer's value on each row: the aggregate over the rows of the row's group that it reads (the clause's
+	//! kept rows of its `by` group that pass its own `when`), counting each class of its `per` key once.
+	unique_ptr<Expression> MakeReducerColumn(const BoundAggregateExpression &reducer) {
+		auto name = StringUtil::Lower(reducer.function.name);
 		D_ASSERT(name == "count" || name == "count_star" || name == "min" || name == "max" || name == "sum" ||
 		         name == "avg");
-		// The AVG rewrite of `<>` runs after this pass, so no aggregate carries its tag yet.
-		D_ASSERT(!aggregate.IsDistinct() && !aggregate.order_bys &&
-		         !HasDecideTag(aggregate.GetAlias(), AVG_REWRITE_TAG));
+		// The binder rejects DISTINCT and drops an ORDER BY these functions ignore, canonicalization gave every norm of
+		// data its definition, and the AVG rewrite of `<>` runs after this pass.
 		string payload;
-		idx_t scope;
-		if ((aggregate.filter && !ReadableOverSource(*aggregate.filter)) ||
-		    TryParseQualifiedReducerTag(aggregate.GetAlias(), scope) ||
-		    ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, payload) ||
-		    ExtractDecideTagPayload(aggregate.GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload)) {
-			return false;
+		D_ASSERT(!reducer.IsDistinct() && !reducer.order_bys && !HasDecideTag(reducer.GetAlias(), AVG_REWRITE_TAG) &&
+		         !ExtractDecideTagPayload(reducer.GetAlias(), NORM_MARKER_TAG_PREFIX, payload));
+		auto reads = Reads(reducer);
+		if (!reducer.children.empty()) {
+			// A norm's definition can hide a NaN (an L0 count's SIGN reads it as 0), so the value checked is the body.
+			auto body = DecideWrittenNormBody(reducer);
+			AddValueCheck(InvalidValueMessage(body ? *body : *reducer.children[0],
+			                                  "constraint right-hand side aggregate", reads));
 		}
-		if (name == "count_star") {
-			return aggregate.children.empty();
-		}
-		// `COUNT()` is `count_star`, and the binder rejects the two-argument MIN and MAX.
-		D_ASSERT(aggregate.children.size() == 1);
-		auto &argument = *aggregate.children[0];
-		return argument.return_type.IsNumeric() && ReadableOverSource(argument);
-	}
-
-	//! The aggregate's argument, checked on every row as the solver checks it (a NULL or NaN raises even where the
-	//! clause covers no row), and read as 0 where the group does not cover the row. The NULL message names the columns
-	//! that are NULL on the row; the NaN message is the solver's without its row position. `empty`, when given, raises
-	//! the solver's empty-aggregate error on a row of a group the reducer's own WHEN leaves with no row.
-	unique_ptr<Expression> GuardedArgument(const Expression &argument, unique_ptr<Expression> eligible,
-	                                       unique_ptr<Expression> empty) {
-		auto type = argument.return_type;
-		auto raise = [&](const ExprPtr &message) {
-			return calc.Cast(calc.Fn("error", message), type);
-		};
-		auto guarded = calc.Of(argument);
-		if (eligible) {
-			auto zero = calc.Cast(calc.Constant(Value::INTEGER(0)), type);
-			guarded = calc.If(calc.Wrap(std::move(eligible)), guarded, zero);
-		}
-		if (type == LogicalType::FLOAT || type == LogicalType::DOUBLE) {
-			auto as_double = calc.Cast(calc.Of(argument), LogicalType::DOUBLE);
-			auto nan_message = calc.Constant(
-			    Value(DecideInvalidValueMessage("constraint right-hand side aggregate", "NaN", string())));
-			guarded = calc.If(calc.Fn("isnan", as_double), raise(nan_message), guarded);
-		}
-		guarded = calc.If(calc.IsNull(calc.Of(argument)), raise(calc.Wrap(DirectNullMessageOf(optimizer, argument))),
-		                  guarded);
-		return empty ? EmptyGroupGuard(std::move(empty), calc.Out(guarded), type) : calc.Out(guarded);
-	}
-
-	//! `value`, except on a row of a group the reducer's own WHEN empties, where the solver's error is raised.
-	unique_ptr<Expression> EmptyGroupGuard(unique_ptr<Expression> empty, unique_ptr<Expression> value,
-	                                       const LogicalType &type) {
-		auto message = calc.Constant(Value(DecideEmptyRowSetMessage("aggregate", "constraint right-hand side")));
-		auto raise = calc.Cast(calc.Fn("error", message), type);
-		return calc.Out(calc.If(calc.Wrap(std::move(empty)), raise, calc.Wrap(std::move(value))));
-	}
-
-	bool SameScope(const Placed &placed) const {
-		if (placed.keys.size() != per_keys.size() || static_cast<bool>(placed.when) != (when != nullptr)) {
-			return false;
-		}
-		for (idx_t i = 0; i < per_keys.size(); i++) {
-			if (!placed.keys[i]->Equals(*per_keys[i])) {
-				return false;
-			}
-		}
-		if (static_cast<bool>(placed.lhs_active) != static_cast<bool>(lhs_active) ||
-		    (lhs_active && !placed.lhs_active->Equals(*lhs_active))) {
-			return false;
-		}
-		return !when || placed.when->Equals(*when);
-	}
-
-	//! The window that reads `aggregate` over the clause's group. The group is the clause's covered rows by PER key.
-	//! Rows it does not cover form partitions of their own whose argument is 0, so they read 0; a count reads 0 there
-	//! because its FILTER keeps no row. The reducer's own WHEN is the window's FILTER.
-	unique_ptr<BoundWindowExpression> MakeWindow(const BoundAggregateExpression &aggregate) {
-		idx_t coverage_slot = DConstants::INVALID_INDEX;
-		auto eligible = Eligible(coverage_slot);
-		unique_ptr<Expression> own;
-		unique_ptr<Expression> empty;
-		if (aggregate.filter) {
-			own = DirectActiveWhen(calc, aggregate.filter.get());
-			empty = EmptyOwnWhen(*own, eligible.get());
-		}
-		// COUNT(*) has no argument to carry the empty-group error, so it counts a constant that carries it.
-		bool carries_in_constant = aggregate.children.empty() && empty;
-		auto function = carries_in_constant ? CountFun::GetFunctions().GetFunctionByOffset(0) : aggregate.function;
+		auto keys = GroupKeyOf(reducer);
 		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
 		// for.
-		auto window = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, aggregate.return_type,
-		                                               make_uniq<AggregateFunction>(function),
-		                                               aggregate.bind_info ? aggregate.bind_info->Copy() : nullptr);
+		auto window = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, reducer.return_type,
+		                                               make_uniq<AggregateFunction>(reducer.function),
+		                                               reducer.bind_info ? reducer.bind_info->Copy() : nullptr);
 		window->start = WindowBoundary::UNBOUNDED_PRECEDING;
 		window->end = WindowBoundary::UNBOUNDED_FOLLOWING;
-		if (eligible) {
-			window->partitions.push_back(eligible->Copy());
-			for (auto key : per_keys) {
-				window->partitions.push_back(key->Copy());
-			}
+		AddGroupPartitions(*window, keys);
+		auto counted = reads;
+		idx_t scope_idx;
+		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
+			auto first = calc.Cmp(ExpressionType::COMPARE_EQUAL, FirstOfClass(scope_idx, keys, reads),
+			                      calc.Constant(Value::BIGINT(1)));
+			counted = reads ? calc.If(reads, first, calc.Bool(false)) : first;
 		}
-		window->filter_expr = ReducerFilter(aggregate, eligible.get(), own.get());
-		if (!aggregate.children.empty()) {
-			window->children.push_back(
-			    GuardedArgument(*aggregate.children[0], eligible ? eligible->Copy() : nullptr, std::move(empty)));
-		} else if (carries_in_constant) {
-			auto one = calc.Out(calc.Constant(Value::INTEGER(1)));
-			window->children.push_back(EmptyGroupGuard(std::move(empty), std::move(one), LogicalType::INTEGER));
+		if (counted) {
+			window->filter_expr = calc.Out(counted);
 		}
-		return window;
+		if (!reducer.children.empty()) {
+			// Computed only on the rows the reducer reads.
+			auto argument = calc.Of(*reducer.children[0]);
+			window->children.push_back(calc.Out(OnRows(reads, argument)));
+		}
+		auto column = Place(std::move(window));
+		reducer_columns.push_back({column->Cast<BoundColumnRefExpression>().binding, std::move(keys)});
+		// The column carries the reducer's written text as its name, so every place that quotes a bound still reads
+		// `sum(cap) by (g)`.
+		auto result = calc.Out(column);
+		result->SetAlias(Written(reducer));
+		return result;
 	}
 
-	unique_ptr<Expression> MakeWindowColumn(unique_ptr<Expression> aggregate_p) {
-		auto &aggregate = aggregate_p->Cast<BoundAggregateExpression>();
-		if (window_index == DConstants::INVALID_INDEX) {
-			window_index = optimizer.binder.GenerateTableIndex();
+	//! 1 on the first row of each class of the reducer's `per` key (or relation, in the colon form) in its group, among
+	//! the rows it reads. That row stands for the class: the key determines the reducer's body (a scope check).
+	ExprPtr FirstOfClass(idx_t scope_idx, const vector<const Expression *> &keys, const ExprPtr &reads) {
+		D_ASSERT(scope_idx < decide.entity_scopes.size());
+		auto &scope = decide.entity_scopes[scope_idx];
+		// Only the optimizer's helper decisions have scopes over a link, and they are made after this pass.
+		D_ASSERT(scope.value_link == DConstants::INVALID_INDEX);
+		auto rank =
+		    make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_ROW_NUMBER, LogicalType::BIGINT, nullptr, nullptr);
+		rank->start = WindowBoundary::UNBOUNDED_PRECEDING;
+		rank->end = WindowBoundary::UNBOUNDED_FOLLOWING;
+		if (reads) {
+			rank->partitions.push_back(calc.Out(reads));
 		}
-		idx_t slot = DConstants::INVALID_INDEX;
-		for (auto &placed : placements) {
-			if (placed.aggregate->Equals(aggregate) && SameScope(placed)) {
-				slot = placed.slot;
-				break;
+		for (auto key : keys) {
+			rank->partitions.push_back(key->Copy());
+		}
+		// `per ()` has no key column: one class per group.
+		for (idx_t i = 0; i < scope.entity_key_bindings.size(); i++) {
+			rank->partitions.push_back(
+			    calc.Out(calc.Col(scope.entity_key_column_types[i], scope.entity_key_bindings[i])));
+		}
+		return Place(std::move(rank));
+	}
+
+	//! The tightest bound of each group: the MIN of an upper bound, the MAX of a lower one. An `=` bound must have one
+	//! value per group.
+	void ReduceToTightest(BoundComparisonExpression &comparison, const string &text) {
+		D_ASSERT(DirectIsUpperBound(comparison.type) || DirectIsLowerBound(comparison.type));
+		auto kept = Kept();
+		auto keys = GroupKeyOf(comparison);
+		if (OneValuePerGroup(*comparison.right, keys)) {
+			return;
+		}
+		auto value = OnRows(kept, calc.Of(*comparison.right));
+		auto extremum = [&](const char *name) {
+			auto window = DirectWindowExtremum(optimizer, name, calc.Out(value));
+			AddGroupPartitions(*window, keys);
+			return Place(std::move(window));
+		};
+		auto tightest = extremum(DirectIsUpperBound(comparison.type) ? "min" : "max");
+		if (comparison.type == ExpressionType::COMPARE_EQUAL) {
+			AddValueCheck(DisagreementMessage(text, tightest, extremum("max"), kept));
+		}
+		comparison.right = calc.Out(tightest);
+		comparison.right->SetAlias(text);
+	}
+
+	//! Whether `bound` has one value in each group of `keys` among the kept rows: it reads data only through reducers
+	//! whose `by` key is part of `keys`.
+	bool OneValuePerGroup(const Expression &bound, const vector<const Expression *> &keys) const {
+		if (bound.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			auto &binding = bound.Cast<BoundColumnRefExpression>().binding;
+			for (auto &reducer : reducer_columns) {
+				if (reducer.binding == binding) {
+					return std::all_of(reducer.keys.begin(), reducer.keys.end(), [&](const Expression *key) {
+						return std::any_of(keys.begin(), keys.end(),
+						                   [&](const Expression *group) { return group->Equals(*key); });
+					});
+				}
+			}
+			return false;
+		}
+		bool one = true;
+		ExpressionIterator::EnumerateChildren(
+		    bound, [&](const Expression &child) { one = one && OneValuePerGroup(child, keys); });
+		return one;
+	}
+
+	//! The `=` bound's error on a kept row of a group whose bound takes two values (its smallest and largest).
+	unique_ptr<Expression> DisagreementMessage(const string &text, const ExprPtr &low, const ExprPtr &high,
+	                                           const ExprPtr &kept) const {
+		// `text` is the bound as written (RenderDecideSource quotes a subquery from its source fragment).
+		auto format = StringUtil::Replace("`" + text + "`", "%", "%%") +
+		              " takes more than one value here (%g and %g) — an `=` bound cannot hold two different values "
+		              "at once, so this DECIDE query is infeasible.";
+		auto message = calc.Fn("printf", {calc.Constant(Value(format)), calc.Cast(low, LogicalType::DOUBLE),
+		                                  calc.Cast(high, LogicalType::DOUBLE)});
+		auto differs = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, low, high);
+		return calc.Out(OnRows(kept, calc.If(differs, message, calc.Constant(Value(LogicalType::VARCHAR)))));
+	}
+
+	//! The message a row raises for a NULL or NaN `value` among `rows` (every row when null), and NULL elsewhere: the
+	//! solver's text, the NULL one naming the columns that are NULL on the row. Infinity is a value.
+	unique_ptr<Expression> InvalidValueMessage(const Expression &value, const string &context,
+	                                           const ExprPtr &rows) const {
+		auto none = calc.Constant(Value(LogicalType::VARCHAR));
+		auto message = none;
+		if (value.return_type == LogicalType::FLOAT || value.return_type == LogicalType::DOUBLE) {
+			auto nan = calc.Constant(Value(DecideInvalidValueMessage(context, "NaN", string())));
+			message = calc.If(calc.Fn("isnan", calc.Cast(calc.Of(value), LogicalType::DOUBLE)), nan, none);
+		}
+		message = calc.If(calc.IsNull(calc.Of(value)),
+		                  calc.Wrap(DirectNullMessageOf(optimizer, value, decide.source_fragments)), message);
+		return calc.Out(OnRows(rows, message));
+	}
+
+	void AddValueCheck(unique_ptr<Expression> message) {
+		for (auto &check : decide.scope_checks) {
+			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && check.value->Equals(*message)) {
+				return;
 			}
 		}
-		if (slot == DConstants::INVALID_INDEX) {
-			auto window = MakeWindow(aggregate);
-			slot = windows.size();
-			windows.push_back(std::move(window));
-			Placed placed;
-			placed.aggregate = aggregate.Copy();
-			for (auto key : per_keys) {
-				placed.keys.push_back(key->Copy());
-			}
-			if (when) {
-				placed.when = when->Copy();
-			}
-			if (lhs_active) {
-				placed.lhs_active = lhs_active->Copy();
-			}
-			placed.slot = slot;
-			placements.push_back(std::move(placed));
+		DecideScopeCheck check;
+		check.kind = DecideScopeCheckKind::VALUE_IS_VALID;
+		check.value = std::move(message);
+		decide.scope_checks.push_back(std::move(check));
+	}
+
+	//! A column reading `window`, placed on the lowest level that can read its inputs and shared with an equal window
+	//! placed before.
+	ExprPtr Place(unique_ptr<BoundWindowExpression> window) {
+		auto level = LevelAbove(*window);
+		if (level == levels.size()) {
+			levels.push_back({optimizer.binder.GenerateTableIndex(), {}});
 		}
-		// The column carries the written text of the aggregate as its name, so every place that quotes a bound
-		// (the canonical EXPLAIN layer, the infeasible diagnosis) still reads `SUM(cap)`.
-		auto text = RenderDecideSource(aggregate, decide.source_fragments, decide.entity_scopes);
-		// IsRewritable declined every aggregate that carries a tag, and no other tag lands on a data reducer.
-		D_ASSERT(aggregate.GetAlias().empty());
-		auto column = calc.Out(calc.Col(aggregate.return_type, ColumnBinding(window_index, slot)));
-		column->SetAlias(text);
-		return column;
+		auto &placed = levels[level].windows;
+		idx_t slot = 0;
+		while (slot < placed.size() && !placed[slot]->Equals(*window)) {
+			slot++;
+		}
+		auto type = window->return_type;
+		if (slot == placed.size()) {
+			placed.push_back(std::move(window));
+		}
+		return calc.Col(type, ColumnBinding(levels[level].table_index, slot));
+	}
+
+	//! The level a window over `expr` stands on: 0 over the source alone, else one above the highest window it reads.
+	idx_t LevelAbove(const Expression &expr) const {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			auto table_index = expr.Cast<BoundColumnRefExpression>().binding.table_index;
+			for (idx_t i = 0; i < levels.size(); i++) {
+				if (levels[i].table_index == table_index) {
+					return i + 1;
+				}
+			}
+			return 0;
+		}
+		idx_t level = 0;
+		ExpressionIterator::EnumerateChildren(
+		    expr, [&](const Expression &child) { level = MaxValue(level, LevelAbove(child)); });
+		return level;
 	}
 
 	void Install() {
-		if (windows.empty()) {
-			return;
+		for (auto &level : levels) {
+			auto window = make_uniq<LogicalWindow>(level.table_index);
+			window->expressions = std::move(level.windows);
+			window->estimated_cardinality = decide.children[0]->estimated_cardinality;
+			window->children.push_back(std::move(decide.children[0]));
+			decide.children[0] = std::move(window);
 		}
-		if (!coverage_windows.empty()) {
-			auto coverage = make_uniq<LogicalWindow>(coverage_index);
-			coverage->expressions = std::move(coverage_windows);
-			coverage->estimated_cardinality = decide.children[0]->estimated_cardinality;
-			coverage->children.push_back(std::move(decide.children[0]));
-			decide.children[0] = std::move(coverage);
+	}
+
+	//! A group of the clause: its kept rows (when it has a `when`), by the value of `keys`, NULL a value of its own.
+	void AddGroupPartitions(BoundWindowExpression &window, const vector<const Expression *> &keys) const {
+		if (when) {
+			window.partitions.push_back(calc.Out(Kept()));
 		}
-		auto window = make_uniq<LogicalWindow>(window_index);
-		window->expressions = std::move(windows);
-		window->estimated_cardinality = decide.children[0]->estimated_cardinality;
-		window->children.push_back(std::move(decide.children[0]));
-		decide.children[0] = std::move(window);
+		for (auto key : keys) {
+			window.partitions.push_back(key->Copy());
+		}
+	}
+
+	vector<const Expression *> GroupKeyOf(const Expression &tagged) const {
+		vector<const Expression *> keys;
+		idx_t index;
+		if (TryParseGroupKeyTag(tagged.GetAlias(), index)) {
+			D_ASSERT(index < decide.group_keys.size());
+			for (auto &key : decide.group_keys[index].expressions) {
+				keys.push_back(key.get());
+			}
+		}
+		return keys;
+	}
+
+	//! Whether the clause's `when` keeps the row (NULL keeps none); null when it has none.
+	ExprPtr Kept() const {
+		return when ? calc.Wrap(DirectActiveWhen(calc, when)) : nullptr;
+	}
+
+	//! The rows a reducer reads: the clause's kept rows that pass its own `when`; null for every row.
+	ExprPtr Reads(const BoundAggregateExpression &reducer) const {
+		if (!reducer.filter) {
+			return Kept();
+		}
+		auto own = calc.Wrap(DirectActiveWhen(calc, reducer.filter.get()));
+		return when ? calc.If(Kept(), own, calc.Bool(false)) : own;
+	}
+
+	//! `value` on `rows` (every row when null), and NULL elsewhere, where it is not computed.
+	ExprPtr OnRows(const ExprPtr &rows, const ExprPtr &value) const {
+		return rows ? calc.If(rows, value, calc.Constant(Value(value->return_type))) : value;
+	}
+
+	string Written(const Expression &expr) const {
+		return RenderDecideSource(expr, decide.source_fragments, decide.entity_scopes, &decide.group_keys);
 	}
 
 	Optimizer &optimizer;
 	LogicalDecide &decide;
 	ExpressionBuilder calc;
-	vector<ColumnBinding> child_bindings;
-	vector<const Expression *> per_keys;
+	DecideCanonicalizer canonicalizer;
 	const Expression *when = nullptr;
-	//! Rows on which the clause's left side has something to reduce: the union of its aggregate-local WHENs, or null
-	//! when some left-hand reducer has none (every row). A group where no row is active is never evaluated.
-	unique_ptr<Expression> lhs_active;
-	//! False when a left-hand filter cannot be read over the source, so the clause keeps the solver's fold.
-	bool lhs_readable = true;
-	idx_t window_index = DConstants::INVALID_INDEX;
-	vector<unique_ptr<Expression>> windows;
-	//! The windows that count, per group, the rows the left side is active on. The aggregate windows read them.
-	idx_t coverage_index = DConstants::INVALID_INDEX;
-	vector<unique_ptr<Expression>> coverage_windows;
-	vector<Placed> placements;
+	vector<Level> levels;
+	vector<ReducerColumn> reducer_columns;
 };
 
 } // namespace

@@ -1,21 +1,20 @@
 """A bound on a BOOL decision that lies outside 0 and 1 is Boolean arithmetic.
 
-A BOOL decision only ever takes 0 or 1. A per-row bound with no WHEN that lies outside that range does not widen
+A BOOL decision only ever takes 0 or 1. A per-row bound with no `when` that lies outside that range does not widen
 the variable: one that always holds (`x >= -3`, `x > -3`, `x <= 5`) changes nothing, and one that cannot hold
-(`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`) makes the problem infeasible, with DECIDE's usual error. Each
+(`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`) makes the problem infeasible, with an error that quotes it. Each
 case runs alone and next to an aggregate that would exploit a widened box (`SUM(x) <= -2` is satisfiable by a signed
 x, `SUM(x) >= 4` over three rows is satisfiable by x above 1). The independent oracle reads each bound as plain
 arithmetic on a binary variable.
 
 Covers:
   - test_bool_bound_outside_domain_matches_oracle: every bound, alone and with each aggregate
-  - test_bool_bound_outside_domain_with_when_matches_oracle: the WHEN form of the same bounds, as a control
-  - test_bool_bound_outside_domain_diagnose_names_the_clause: DIAGNOSE names `x >= 2` and suggests an edit
+  - test_bool_bound_outside_domain_with_when_matches_oracle: the `when` form of the same bounds, as a control
+  - test_bool_bound_outside_domain_diagnose_raises_the_same_error: DIAGNOSE raises the same error
   - test_bool_bound_outside_domain_over_empty_source_raises: an empty source raises the same error
 """
 
-import csv
-import io
+import re
 
 import pytest
 from decidb_cli import DecidBCliError
@@ -47,6 +46,12 @@ _AGGREGATES = [
 ]
 
 _INFEASIBLE = r"DECIDE optimization is infeasible\. Prefix the query with DIAGNOSE to see which clause to change\."
+#: The bounds that cannot hold on their own: the error quotes the bound rather than the generic infeasible text.
+_CANNOT_HOLD = {"x >= 2", "x <= -1", "x < 0", "x > 1.5", "x = -1"}
+
+
+def _cannot_hold(bound):
+    return re.escape(f"DECIDE optimization is infeasible: {bound} cannot hold for a BOOL variable.")
 
 
 def _solve_oracle(oracle_solver, model_name, bound, aggregate, *, rows=_ROWS):
@@ -83,7 +88,7 @@ def test_bool_bound_outside_domain_matches_oracle(decidb_cli, oracle_solver, bou
     """
     result, names = _solve_oracle(oracle_solver, "bool_bound_outside_domain", bound, aggregate)
     if result.status == SolverStatus.INFEASIBLE:
-        decidb_cli.assert_error(sql, match=_INFEASIBLE)
+        decidb_cli.assert_error(sql, match=_cannot_hold(bound[0]) if bound[0] in _CANNOT_HOLD else _INFEASIBLE)
         return
     assert result.status == SolverStatus.OPTIMAL
     rows, _ = decidb_cli.execute(sql)
@@ -100,12 +105,12 @@ def test_bool_bound_outside_domain_matches_oracle(decidb_cli, oracle_solver, bou
 @pytest.mark.correctness
 @pytest.mark.parametrize("bound", _BOUNDS, ids=[b[0] for b in _BOUNDS])
 def test_bool_bound_outside_domain_with_when_matches_oracle(decidb_cli, oracle_solver, bound):
-    # The same bound with a WHEN that holds on every row is plain arithmetic, the control for the unconditional form.
+    # The same bound under a `when` that holds on every row is plain arithmetic, the control for the unconditional form.
     sql = f"""
         SELECT id, x FROM (
             SELECT * FROM {_SOURCE}
             DECIDE x(BOOL)
-            SUCH THAT SUM(x) >= 1 AND {bound[0]} WHEN id >= 0
+            SUCH THAT SUM(x) >= 1 AND when id >= 0: {bound[0]}
             MINIMIZE SUM(v * x)
         ) q ORDER BY id
     """
@@ -122,20 +127,17 @@ def test_bool_bound_outside_domain_with_when_matches_oracle(decidb_cli, oracle_s
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.error
-def test_bool_bound_outside_domain_diagnose_names_the_clause(decidb_cli):
+def test_bool_bound_outside_domain_diagnose_raises_the_same_error(decidb_cli):
+    # A bound against the type's own range is not a clause to loosen: DIAGNOSE raises it as the plain query does.
     sql = f"DIAGNOSE SELECT id, x FROM {_SOURCE} DECIDE x(BOOL) SUCH THAT x >= 2 MINIMIZE SUM(v * x)"
-    result = decidb_cli.execute_script(".mode csv\n" + sql + ";\n")
-    rows = list(csv.DictReader(io.StringIO(result.stdout)))
-    clauses = {row["clause"]: row for row in rows}
-    assert "x >= 2" in clauses, (result.stdout, result.stderr)
-    assert clauses["x >= 2"]["state"] == "infeasible"
-    assert clauses["x >= 2"]["suggested_change"], clauses["x >= 2"]
+    with pytest.raises(DecidBCliError, match=_cannot_hold("x >= 2")):
+        decidb_cli.execute(sql)
 
 
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.error
-@pytest.mark.parametrize("bound", ["x >= 2", "x <= -1", "x < 0", "x > 1.5", "x = -1"])
+@pytest.mark.parametrize("bound", sorted(_CANNOT_HOLD))
 def test_bool_bound_outside_domain_over_empty_source_raises(decidb_cli, bound):
     # The solver rejects the bound before it reads a row, so an empty source raises too, with the same text in
     # both modes.
@@ -147,7 +149,7 @@ def test_bool_bound_outside_domain_over_empty_source_raises(decidb_cli, bound):
     """
     messages = {}
     for mode in ("off", "auto"):
-        with pytest.raises(DecidBCliError, match=_INFEASIBLE) as error:
+        with pytest.raises(DecidBCliError, match=_cannot_hold(bound)) as error:
             decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
         messages[mode] = str(error.value)
     assert messages["off"] == messages["auto"]
@@ -156,10 +158,11 @@ def test_bool_bound_outside_domain_over_empty_source_raises(decidb_cli, bound):
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.error
-@pytest.mark.parametrize("bound", ["1*x >= 2", "x >= 1+1"])
+@pytest.mark.parametrize("bound", ["x >= (SELECT 2)"])
 def test_bool_bound_outside_domain_unfolded_spelling_is_read_per_row(decidb_cli, monkeypatch, bound):
-    # Arithmetic on either side keeps the solver from folding the bound into the variable's box, so S1's direct solve
-    # reads it per row, finds no value of x allowed, and raises the infeasible error the solver raises. `require`
+    # A bound is folded into the variable's box by value (D41), so arithmetic no longer keeps it out; a scalar subquery
+    # does, being no constant at plan time. S1's direct solve then reads it per row, finds no value of x allowed, and
+    # raises the infeasible error the solver raises. `require`
     # proves direct solve applied, because a declined query would raise the "did not apply" error instead. A forced
     # solver backend rejects `require`, so the run that forces one leaves it unset here.
     monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)

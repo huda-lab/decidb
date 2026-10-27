@@ -53,102 +53,87 @@ namespace {
 //! group is left to encode.
 bool ClassifyMinMaxGroups(EvaluatedConstraint &ec, idx_t num_rows, bool is_max_agg,
                           vector<EvaluatedConstraint> &new_constraints) {
-        // Classify each group's bound before asking for a Big-M over it. The RHS
-        // reaching here already holds one value per group: ReduceAggregateRhsPerGroup
-        // collapsed a row-varying bound to the tightest one (MAX for `>=`, MIN for
-        // `<=`), which is also what settles a group that mixed finite and infinite
-        // bounds — the infinity either dominates the reduction or is dominated by a
-        // finite value. So a group's verdict is any of its rows' verdicts, and only
-        // a linearizable group reaches DecideTightPerRowBigM.
-        {
-            bool has_groups = !ec.row_group_ids.empty();
-            idx_t group_count = has_groups ? MaxValue<idx_t>(ec.num_groups, 1) : 1;
-            vector<MinMaxBoundKind> group_kind(group_count, MinMaxBoundKind::LINEARIZE);
-            vector<bool> group_active(group_count, false);
-            for (idx_t r = 0; r < num_rows; r++) {
-                idx_t g = has_groups ? ec.row_group_ids[r] : 0;
-                if (g == DConstants::INVALID_INDEX || g >= group_count) {
-                    continue;
-                }
-                group_kind[g] = ClassifyMinMaxBound(DecideRowEffectiveBound(ec, r), is_max_agg);
-                group_active[g] = true;
+    // Classify each group's bound before asking for a Big-M over it. The RHS
+    // reaching here already holds one value per group: the optimizer's bound-side
+    // window rewrite (RewriteRhsAggregates) reduced a row-varying bound to the
+    // tightest one (MAX for `>=`, MIN for `<=`), which is also what settles a group
+    // that mixed finite and infinite bounds — the infinity either dominates the
+    // reduction or is dominated by a finite value. So a group's verdict is any of its rows' verdicts, and only
+    // a linearizable group reaches DecideTightPerRowBigM.
+    {
+        bool has_groups = !ec.row_group_ids.empty();
+        idx_t group_count = has_groups ? MaxValue<idx_t>(ec.num_groups, 1) : 1;
+        vector<MinMaxBoundKind> group_kind(group_count, MinMaxBoundKind::LINEARIZE);
+        vector<bool> group_active(group_count, false);
+        for (idx_t r = 0; r < num_rows; r++) {
+            idx_t g = has_groups ? ec.row_group_ids[r] : 0;
+            if (g == DConstants::INVALID_INDEX || g >= group_count) {
+                continue;
             }
-            bool any_vacuous = false, any_no_solution = false, any_linearize = false;
-            for (idx_t g = 0; g < group_count; g++) {
-                if (!group_active[g]) {
-                    continue;
-                }
-                any_vacuous |= group_kind[g] == MinMaxBoundKind::VACUOUS;
-                any_no_solution |= group_kind[g] == MinMaxBoundKind::NO_SOLUTION;
-                any_linearize |= group_kind[g] == MinMaxBoundKind::LINEARIZE;
+            group_kind[g] = ClassifyMinMaxBound(DecideRowEffectiveBound(ec, r), is_max_agg);
+            group_active[g] = true;
+        }
+        bool any_vacuous = false, any_no_solution = false, any_linearize = false;
+        for (idx_t g = 0; g < group_count; g++) {
+            if (!group_active[g]) {
+                continue;
             }
-            if (any_vacuous || any_no_solution) {
-                // Row-level masking is how a group is excluded, so an ungrouped
-                // constraint needs its (implicit) single group materialized first.
-                if (!has_groups) {
-                    ec.row_group_ids.assign(num_rows, 0);
-                    ec.num_groups = 1;
-                }
-                if (any_no_solution) {
-                    // With the bound out of every row's reach there is no disjunction
-                    // left to encode — each row fails it on its own — so the group is
-                    // emitted as a plain per-row constraint carrying that bound. That
-                    // is what every constraint with an unreachable bound already does,
-                    // and the solver reports it as an infeasibility naming this clause
-                    // rather than a rewrite refusing the query.
-                    EvaluatedConstraint ec_no_solution = ec;
-                    // Drop the MIN/MAX marking: what is emitted is an ordinary per-row
-                    // constraint, and nothing downstream should read its LHS as an
-                    // extremum again.
-                    ec_no_solution.minmax_clause_idx = DConstants::INVALID_INDEX;
-                    ec_no_solution.minmax_agg_type.clear();
-                    ec_no_solution.lhs_is_aggregate = false;
-                    for (idx_t r = 0; r < num_rows; r++) {
-                        idx_t g = ec_no_solution.row_group_ids[r];
-                        if (g != DConstants::INVALID_INDEX &&
-                            group_kind[g] != MinMaxBoundKind::NO_SOLUTION) {
-                            ec_no_solution.row_group_ids[r] = DConstants::INVALID_INDEX;
-                        }
-                    }
-                    new_constraints.push_back(std::move(ec_no_solution));
-                }
-                // Drop every group the rewrite has no work for: a vacuous one
-                // constrains nothing, and an unsatisfiable one was just emitted.
+            any_vacuous |= group_kind[g] == MinMaxBoundKind::VACUOUS;
+            any_no_solution |= group_kind[g] == MinMaxBoundKind::NO_SOLUTION;
+            any_linearize |= group_kind[g] == MinMaxBoundKind::LINEARIZE;
+        }
+        if (any_vacuous || any_no_solution) {
+            // Row-level masking is how a group is excluded, so an ungrouped
+            // constraint needs its (implicit) single group materialized first.
+            if (!has_groups) {
+                ec.row_group_ids.assign(num_rows, 0);
+                ec.num_groups = 1;
+            }
+            if (any_no_solution) {
+                // With the bound out of every row's reach there is no disjunction
+                // left to encode — each row fails it on its own — so the group is
+                // emitted as a plain per-row constraint carrying that bound. That
+                // is what every constraint with an unreachable bound already does,
+                // and the solver reports it as an infeasibility naming this clause
+                // rather than a rewrite refusing the query.
+                EvaluatedConstraint ec_no_solution = ec;
+                // Drop the MIN/MAX marking: what is emitted is an ordinary per-row
+                // constraint, and nothing downstream should read its LHS as an
+                // extremum again.
+                ec_no_solution.minmax_clause_idx = DConstants::INVALID_INDEX;
+                ec_no_solution.minmax_agg_type.clear();
+                ec_no_solution.lhs_is_aggregate = false;
                 for (idx_t r = 0; r < num_rows; r++) {
-                    idx_t g = ec.row_group_ids[r];
-                    if (g != DConstants::INVALID_INDEX &&
-                        group_kind[g] != MinMaxBoundKind::LINEARIZE) {
-                        ec.row_group_ids[r] = DConstants::INVALID_INDEX;
+                    idx_t g = ec_no_solution.row_group_ids[r];
+                    if (g != DConstants::INVALID_INDEX && group_kind[g] != MinMaxBoundKind::NO_SOLUTION) {
+                        ec_no_solution.row_group_ids[r] = DConstants::INVALID_INDEX;
                     }
                 }
-                if (!any_linearize) {
-                    return false; // no group left to encode
+                new_constraints.push_back(std::move(ec_no_solution));
+            }
+            // Drop every group the rewrite has no work for: a vacuous one
+            // constrains nothing, and an unsatisfiable one was just emitted.
+            for (idx_t r = 0; r < num_rows; r++) {
+                idx_t g = ec.row_group_ids[r];
+                if (g != DConstants::INVALID_INDEX && group_kind[g] != MinMaxBoundKind::LINEARIZE) {
+                    ec.row_group_ids[r] = DConstants::INVALID_INDEX;
                 }
+            }
+            if (!any_linearize) {
+                return false; // no group left to encode
             }
         }
+    }
     return true;
 }
 
-//! The family one group of a MIN/MAX constraint reduces over, in flat columns: one
-//! member per active row, each holding that row's inner expression negated (the shape
-//! `MinMaxLinkRow` and `EmitExtremumLink` take) with its constant part separate.
-//!
-//! `family` accumulates the reach of the whole group, which boxes the extremum column
-//! and sizes the Big-M; each member also keeps its OWN reach, which is the box a native
-//! arm gives a column pinned to it. Each end is kept independently — a row open above
-//! still contributes the floor it does have.
-struct MinMaxGroup {
-    vector<ExtremumMember> members;
-    AuxRange family;
-    //! The row this group reads its bound off. Group-constant by construction:
-    //! `ReduceAggregateRhsPerGroup` has already collapsed a row-varying bound.
-    idx_t first_row = DConstants::INVALID_INDEX;
-};
+} // namespace
 
-//! Split one tagged constraint into its groups' families. An ungrouped clause is the
-//! single group 0.
-static vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const VarIndexer &indexer,
-                                             const EvaluatedConstraint &ec) {
+// `MinMaxGroup` and this builder are declared in ilp_linearization_internal.hpp: the
+// value rewrite's MIN/MAX helpers (linearization_reducer_value.cpp) reduce over the same
+// families.
+vector<MinMaxGroup> decide_linearize::BuildMinMaxGroups(const SolverInput &input, const VarIndexer &indexer,
+                                                        const EvaluatedConstraint &ec) {
     const idx_t num_rows = input.num_rows;
     bool has_groups = !ec.row_group_ids.empty();
     idx_t group_count = has_groups ? MaxValue<idx_t>(ec.num_groups, 1) : 1;
@@ -190,8 +175,6 @@ static vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const Var
     }
     return groups;
 }
-
-} // namespace
 
 void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
                                 const vector<string> &var_names, NativeConstructPolicy policy) {
@@ -321,24 +304,34 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             outer.coefficients.push_back(1.0);
             outer.sense = is_max_agg ? '>' : '<';
             outer.rhs = clause_bound;
+            // A strict relation over whole-numbered members -- the bind-time gate's
+            // guarantee, a constant inside the extremum included -- is the next value on
+            // the lattice, as `ApplyComparisonSense` states it for every other row.
+            bool greater = ec.comparison_type == ExpressionType::COMPARE_GREATERTHAN;
+            if (greater || ec.comparison_type == ExpressionType::COMPARE_LESSTHAN) {
+                outer.rhs = greater ? std::floor(clause_bound) + 1.0 : std::ceil(clause_bound) - 1.0;
+                outer.strict = true;
+                outer.typed_k = clause_bound;
+            }
             outer.kind = ConstraintKind::USER_PARAMETER;
-            // The elastic shape, without which this row does not fold. One `PER` clause
+            // The elastic shape, without which this row does not fold. One grouped clause
             // emits one of these per group, and they are all the same line of SQL: the
             // user edits a single literal and every group moves with it. Left UNSET they
-            // never fold, so an infeasible `MAX(e) >= K PER g` reported one edit per group
+            // never fold, so an infeasible `per g: max(e) by (g) >= K` reported one edit per group
             // — and only the loosest of them repaired anything. A genuinely per-group
             // bound stays PER_ROW_DATA and reports a virtual offset, as it does elsewhere.
-            outer.shape = ec.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR
-                                                  : ElasticShape::PER_ROW_DATA;
+            outer.shape = ec.rhs_is_shared_scalar ? ElasticShape::SHARED_SCALAR : ElasticShape::PER_ROW_DATA;
             outer.rhs_label = ec.rhs_is_shared_scalar ? string() : ec.rhs_label;
             outer.source_clause_id = ec.source_clause_id;
             outer.repair_group_id = ec.repair_group_id;
             outer.removal_group_id = ec.removal_group_id;
             outer.group_key = ec.row_group_ids.empty() ? DConstants::INVALID_INDEX : g;
-            outer.qualifier = ec.qualifier;
             outer.is_aggregate = true;
             if (g < ec.group_labels.size()) {
                 outer.group_label = ec.group_labels[g];
+            }
+            if (g < ec.group_class_set.size()) {
+                outer.class_set = ec.group_class_set[g];
             }
             input.global_constraints.push_back(std::move(outer));
         }
@@ -492,15 +485,14 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                               NativeConstructPolicy native_min_max) {
     idx_t num_rows = input.num_rows;
 
-    // Save objective data (needed for constraint generation in the PER MIN/MAX
+    // Save objective data (needed for constraint generation in the two-level MIN/MAX
     // and flat aggregate paths). Defer the deep copy of objective_coefficients
     // — which is a vector<vector<double>> sized num_terms * num_rows — until
     // we know we'll take one of those paths.
     auto saved_obj_var_indices = input.objective_variable_indices;
-    bool need_saved_obj =
-        !saved_obj_var_indices.empty() &&
-        ((spec.per_inner_agg != ObjectiveAggregateType::NONE && input.objective_num_groups > 0) ||
-         spec.flat_agg != ObjectiveAggregateType::NONE);
+    bool need_saved_obj = !saved_obj_var_indices.empty() &&
+                          ((spec.per_inner_agg != ObjectiveAggregateType::NONE && input.objective_num_groups > 0) ||
+                           spec.flat_agg != ObjectiveAggregateType::NONE);
     vector<CoefficientColumn> saved_obj_coefficients;
     if (need_saved_obj) {
         saved_obj_coefficients = input.objective_coefficients;
@@ -601,11 +593,10 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     //! at a composed site where the clause sits in a constraint and neither is supplied.
     //!
     //! `family` is the range the MEMBERS of this link reduce over, and it is a parameter
-    //! rather than `row_family()` because the outer PER link reduces over group SUMS, not
+    //! rather than `row_family()` because the two-level form's outer link reduces over group SUMS, not
     //! over rows. Both the Big-M and the blame column come from it, so a link can never
     //! be scaled off one family while its members live in another.
-    auto objective_link = [&](idx_t result_column, bool is_max, bool is_easy,
-                              const AuxRange &family) {
+    auto objective_link = [&](idx_t result_column, bool is_max, bool is_easy, const AuxRange &family) {
         ExtremumLinkSpec link_spec;
         link_spec.result_column = result_column;
         link_spec.is_max = is_max;
@@ -620,7 +611,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     // Accumulate one row of the saved objective expression into `link`, negated:
     // the linking row is `z - expr op bound`, so the expression's coefficients
     // enter with the opposite sign and its constant part lands on the bound.
-    // `scale` carries the inner-AVG 1/n_g factor at the PER sites; 1.0 elsewhere.
+    // `scale` carries the inner-AVG 1/n_g factor at the two-level sites; 1.0 elsewhere.
     auto AddObjectiveRowTerms = [&](MinMaxLinkRow &link, idx_t row, double scale) {
         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
             double coeff = saved_obj_coefficients[t].Get(row) * scale;
@@ -639,7 +630,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     if (spec.per_inner_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty() &&
         input.objective_num_groups > 0) {
         // ================================================================
-        // PATH B: PER objective with nested OUTER(INNER(expr)) aggregate
+        // PATH B: two-level objective outer(per k: inner(e) by (k))
         // ================================================================
         idx_t K = input.objective_num_groups;
         auto &row_groups = input.objective_row_group_ids;
@@ -679,11 +670,8 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                     AddGlobalContinuousAux(input, indexer, row_family(), 0.0); // obj set by outer phase
             }
 
-            // Build a per-group active-rows CSR: drop rows whose every term coefficient
-            // is zero. Mirrors PATH A's active_rows pre-filter (lines below). Without it
-            // the easy path emits vacuous z_g op 0 rows and the hard path allocates an
-            // indicator binary plus a Big-M row for each, then references them in the
-            // sum_y >= 1 constraint — all wasted on rows that contribute nothing.
+            // Build a per-group CSR of the member rows: the rows the inner reducer reads,
+            // whatever their coefficients. Mirrors PATH A's active_rows.
             vector<idx_t> active_offsets(K + 1, 0);
             vector<idx_t> active_flat_rows;
             active_flat_rows.reserve(obj_flat_rows.size());
@@ -691,14 +679,9 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 active_offsets[g] = active_flat_rows.size();
                 for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
                     idx_t row = obj_flat_rows[k];
-                    bool has_nonzero = false;
-                    for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                        if (std::abs(saved_obj_coefficients[t][row]) >= 1e-15) {
-                            has_nonzero = true;
-                            break;
-                        }
+                    if (spec.member_rows[row]) {
+                        active_flat_rows.push_back(row);
                     }
-                    if (has_nonzero) active_flat_rows.push_back(row);
                 }
             }
             active_offsets[K] = active_flat_rows.size();
@@ -824,69 +807,38 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                 for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
                     AddObjectiveRowTerms(member.link, obj_flat_rows[k], scale);
                 }
-                // On the envelope side a group that is identically zero contributes a
-                // vacuous `w op 0` row, which the outer optimization direction settles on
-                // its own. The closing side cannot drop it: there every group is a real
-                // member of the extremum, and an all-zero one participates as the
-                // constant 0 it is. A group left holding only a constant still bounds w
-                // either way, so it stays.
-                if (outer_easy && member.link.HasNoColumns() && std::abs(member.link.constant) < 1e-15) {
-                    continue;
-                }
                 // Boxed by the family over group sums — looser than a per-group bracket,
                 // but sound (it covers every group) and finite whenever any of them is.
                 // The same range `w` itself was boxed by, so the two cannot drift.
                 member.range = group_sum_family;
                 members.push_back(std::move(member));
             }
-            if (members.empty()) {
-                // Every group is identically zero — pin w to 0 so outer optimization
-                // doesn't push the otherwise-unconstrained w to ±∞.
-                PinGlobalAux(input, indexer, w_idx, 0.0);
-            } else {
-                // The members ARE the group sums, so the Big-M comes from the family
-                // over group sums — the same range `w` and every member is boxed by. It
-                // used to be the per-row span multiplied by the row count, which is a
-                // different family and a bound on it rather than a measurement of it.
-                EmitExtremumLink(input, indexer,
-                                 objective_link(w_idx, !outer_is_min, outer_easy,
-                                                group_sum_family),
-                                 members, var_names, native_min_max);
-            }
+            // Every group is a member, whatever its coefficients. The members ARE the
+            // group sums, so the Big-M comes from the family over group sums — the same
+            // range `w` and every member is boxed by.
+            EmitExtremumLink(input, indexer, objective_link(w_idx, !outer_is_min, outer_easy, group_sum_family),
+                             members, var_names, native_min_max);
         }
     } else if (spec.flat_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty()) {
         // ================================================================
-        // PATH A: Non-PER flat MIN/MAX objective (existing behavior)
+        // PATH A: flat MIN/MAX objective
         // ================================================================
         bool is_min_agg = (spec.flat_agg == ObjectiveAggregateType::MIN_AGG);
         bool is_easy = spec.flat_is_easy;
 
-        // Compute active rows: pass WHEN, and have at least one nonzero coefficient.
-        // - Easy path: skipping inactive rows just avoids vacuous linking constraints
-        //   (the existing code already skipped zero coefficients individually, but still
-        //   emitted an empty linking row).
-        // - Hard path: this also reduces the number of indicator binaries and the size
-        //   of the SUM(y) >= 1 constraint sent to the solver.
+        // The active rows are the reducer's members: the rows it reads, whatever their
+        // coefficients. The easy path pins z against each; the hard path also gives each
+        // an indicator binary and a place in the SUM(y) >= 1 row.
         vector<idx_t> active_rows;
         active_rows.reserve(num_rows);
         for (idx_t row = 0; row < num_rows; row++) {
-            if (spec.has_when && !spec.when_mask[row]) continue;
-            bool has_nonzero = false;
-            for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                if (std::abs(saved_obj_coefficients[t].Get(row)) >= 1e-15) {
-                    has_nonzero = true;
-                    break;
-                }
-            }
-            if (has_nonzero) {
+            if (spec.member_rows[row]) {
                 active_rows.push_back(row);
             }
         }
         if (active_rows.empty()) {
-            throw InvalidInputException(
-                "MIN/MAX objective has no active rows after WHEN filtering and zero-coefficient "
-                "elimination. The auxiliary variable would have no pinning constraints, "
-                "making the optimization unbounded or vacuous.");
+            // The scope checks refuse an objective reducer that reads no row (D4, D8).
+            throw InternalException("DECIDE: a MIN/MAX objective reached formulation with no member row");
         }
 
         // z is the extremum over the objective's rows, so the per-row family boxes it.
@@ -939,7 +891,7 @@ static void AddComposedRowTerms(const VarIndexer &indexer, MinMaxLinkRow &link,
 //! so the two can never disagree about the term's reach.
 //!
 //! A term admitting no rows yields the seeded [0,0], which pins its auxiliary at 0 —
-//! the same settlement the PER sites give a group with no active rows, and better than
+//! the same settlement the two-level sites give a group with no active rows, and better than
 //! letting an auxiliary with no pinning rows float on the outer pressure.
 static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideTerm> &inner_terms,
                                   const vector<vector<double>> &per_term_coefs,
@@ -1070,13 +1022,12 @@ static idx_t ComposedAvgDivisor(const ComposedMinMaxTermData &ta, idx_t num_rows
 }
 
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
-                                       vector<ComposedMinMaxTermData> &terms, double rhs_val,
-                                       ExpressionType outer_cmp, idx_t source_clause_id,
-                                       idx_t removal_group_id,
-                                       const vector<string> &var_names, NativeConstructPolicy native_min_max) {
+                                       vector<ComposedMinMaxTermData> &terms, double rhs_val, ExpressionType outer_cmp,
+                                       idx_t source_clause_id, idx_t removal_group_id, idx_t repair_group_id,
+                                       idx_t class_set, const vector<string> &var_names,
+                                       NativeConstructPolicy native_min_max) {
     idx_t num_rows = input.num_rows;
-    EmitComposedMinMaxAuxiliaries(input, indexer, terms, source_clause_id, removal_group_id,
-                                  var_names, native_min_max);
+    EmitComposedMinMaxAuxiliaries(input, indexer, terms, source_clause_id, removal_group_id, var_names, native_min_max);
 
     // Build the outer composed RawConstraint
     std::unordered_map<int, double> outer_accum;
@@ -1118,16 +1069,28 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
             outer.coefficients.push_back(p.second);
         }
     }
+    // A strict relation over whole-numbered terms (the bind-time gate's guarantee) is the
+    // next value on the lattice, as `ApplyComparisonSense` states it for every other row.
     switch (outer_cmp) {
     case ExpressionType::COMPARE_LESSTHANOREQUALTO:
     case ExpressionType::COMPARE_LESSTHAN:
         outer.sense = '<';
         outer.rhs = outer_rhs;
+        if (outer_cmp == ExpressionType::COMPARE_LESSTHAN) {
+            outer.rhs = std::ceil(outer_rhs) - 1.0;
+            outer.strict = true;
+            outer.typed_k = outer_rhs;
+        }
         break;
     case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
     case ExpressionType::COMPARE_GREATERTHAN:
         outer.sense = '>';
         outer.rhs = outer_rhs;
+        if (outer_cmp == ExpressionType::COMPARE_GREATERTHAN) {
+            outer.rhs = std::floor(outer_rhs) + 1.0;
+            outer.strict = true;
+            outer.typed_k = outer_rhs;
+        }
         break;
     case ExpressionType::COMPARE_EQUAL:
         // One native equality row, not a pair of opposing inequalities: the backends take
@@ -1145,7 +1108,8 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
     outer.shape = ElasticShape::SHARED_SCALAR;
     outer.source_clause_id = source_clause_id;
     outer.removal_group_id = removal_group_id;
-    outer.repair_group_id = input.constraints.size() + input.global_constraints.size();
+    outer.class_set = class_set;
+    outer.repair_group_id = repair_group_id;
     input.global_constraints.push_back(std::move(outer));
 }
 

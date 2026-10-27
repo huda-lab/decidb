@@ -551,9 +551,13 @@
      WITH_LA = 767,
      WHEN_DECIDE = 768,
      WHEN_DECIDE_OBJECTIVE = 769,
-     DECIDE_ITEM = 770,
-     POSTFIXOP = 771,
-     UMINUS = 772
+     PER_DECIDE = 770,
+     PER_DECIDE_PAREN = 771,
+     PER_DECIDE_ROW = 772,
+     BY_DECIDE = 773,
+     DECIDE_ITEM = 774,
+     POSTFIXOP = 775,
+     UMINUS = 776
    };
 #endif
 /* Tokens.  */
@@ -1069,16 +1073,20 @@
 #define WITH_LA 767
 #define WHEN_DECIDE 768
 #define WHEN_DECIDE_OBJECTIVE 769
-#define DECIDE_ITEM 770
-#define POSTFIXOP 771
-#define UMINUS 772
+#define PER_DECIDE 770
+#define PER_DECIDE_PAREN 771
+#define PER_DECIDE_ROW 772
+#define BY_DECIDE 773
+#define DECIDE_ITEM 774
+#define POSTFIXOP 775
+#define UMINUS 776
 
 
 
 
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 typedef union YYSTYPE
-#line 30 "third_party/libpg_query/grammar/grammar.y"
+#line 32 "third_party/libpg_query/grammar/grammar.y"
 {
 	core_YYSTYPE		core_yystype;
 	/* these fields must match core_YYSTYPE: */
@@ -1130,7 +1138,7 @@ typedef union YYSTYPE
 	PGTransactionStmtType transactiontype;
 }
 /* Line 1529 of yacc.c.  */
-#line 1134 "third_party/libpg_query/grammar/grammar_out.hpp"
+#line 1142 "third_party/libpg_query/grammar/grammar_out.hpp"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1

@@ -24,8 +24,9 @@ def group_indices(
 ) -> dict[Hashable, list[int]]:
     """Return {group_value: [row_index, ...]} in order of first appearance.
 
-    Rows where ``key_fn`` returns ``None`` are dropped — matching DECIDE's
-    PER semantics, which excludes NULL-keyed rows from every group.
+    Rows where ``key_fn`` returns ``None`` are dropped, as
+    ``when k is not null per k:`` drops them; a bare ``per k:`` keeps NULL as
+    a group of its own (D5).
     """
     groups: dict = defaultdict(list)
     for i, row in enumerate(data):
@@ -109,7 +110,7 @@ def emit_inner_max(
     set to ``row_ub`` (a loose upper bound on any row's expression value) so
     the MIP stays well-posed. Returns ``z``'s variable name.
 
-    Use for the *easy* inner-MAX case inside ``MINIMIZE SUM(MAX(expr)) PER col``
+    Use for the *easy* inner-MAX case inside ``MINIMIZE sum(per col: max(expr) by (col))``
     — minimizing over SUM(z) naturally drives each z down to the tight bound.
     """
     z_name = f"{name_prefix}_zmax"
@@ -130,7 +131,7 @@ def emit_inner_min(
     """Introduce an auxiliary ``z = MIN(<per-row linear expr>)`` variable.
 
     Adds ``z`` with per-row constraints ``z <= expr_i``. Use for the *easy*
-    inner-MIN case inside ``MAXIMIZE SUM(MIN(expr)) PER col``.
+    inner-MIN case inside ``MAXIMIZE sum(per col: min(expr) by (col))``.
     """
     z_name = f"{name_prefix}_zmin"
     oracle.add_variable(z_name, VarType.CONTINUOUS, lb=0.0, ub=row_ub)
@@ -305,5 +306,3 @@ def add_bool_and(
     oracle.add_constraint(
         {z_name: 1.0, x_name: -1.0, y_name: -1.0}, ">=", -1.0, name=f"{z_name}_ge_xy",
     )
-
-

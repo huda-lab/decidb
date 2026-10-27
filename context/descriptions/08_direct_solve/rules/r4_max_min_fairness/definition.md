@@ -116,4 +116,4 @@ The SQL formula chooses the smaller upper bound and assigns every recipient exac
 >
 > • Negative budgets or inconsistent boxes produce DECIDE infeasibility, while zero budgets and zero capacities produce level zero.
 >
-> • Empty input, WHEN, PER, NULL, numeric, decision-identity, and output-mapping semantics are preserved.
+> • Empty input, `when`, `per`, `by`, NULL, numeric, decision-identity, and output-mapping semantics are preserved.

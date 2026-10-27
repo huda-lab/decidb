@@ -92,7 +92,7 @@ public:
 		return "stub";
 	}
 	DirectSubstitute Apply(duckdb::unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &) const override {
+	                       const DirectApplicabilityCondition &, const duckdb::vector<string> &) const override {
 		ExpressionBuilder build(optimizer.context);
 		auto bindings = source->GetColumnBindings();
 		auto types = source->types;

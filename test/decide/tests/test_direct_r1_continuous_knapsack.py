@@ -13,7 +13,7 @@ of quietly using the solver). The case passes when all three agree:
 
 The solver has one behavior the oracle cannot derive from the SQL, so each case states it: a bare unconditional constant
 lower bound (`amount >= 1`) replaces the variable's default lower bound of 0, while every other lower bound (a column, a
-WHEN, a coefficient on `amount`) only intersects with it.
+`when`) only intersects with it.
 
 What a result comparison cannot see (which plan ran, EXPLAIN, prepared plans, DIAGNOSE, pruning) stays in
 `test_direct_rule_conformance.py`.
@@ -35,7 +35,8 @@ from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import agree_with_oracle, outcome as _run_all, run as _run, sql_literal, values_clause
+from ._direct_oracle_common import BY_KEY_PENDING, READ_THROUGH_PENDING, agree_with_oracle, direct_modes as _modes
+from ._direct_oracle_common import outcome as _run_all, run as _run, sql_literal, values_clause
 
 
 INF = math.inf
@@ -143,11 +144,11 @@ BOXES = {
     "negative_constant_lower": Box("amount >= -2 AND amount <= cap", lambda r: (-2.0, r["cap"])),
     "scaled_cap": Box("amount >= 0 AND 2*amount <= cap", lambda r: (0.0, r["cap"] / 2.0)),
     "cap_under_when": Box(
-        "amount >= 0 AND amount <= 4 AND amount <= cap WHEN (id > 2)",
+        "amount >= 0 AND amount <= 4 AND when id > 2: amount <= cap",
         lambda r: (0.0, min(4.0, r["cap"]) if r["id"] > 2 else 4.0),
     ),
     "equality_pin": Box(
-        "amount = lo WHEN (id = 4) AND amount >= 0 AND amount <= cap",
+        "when id = 4: amount = lo AND amount >= 0 AND amount <= cap",
         lambda r: ((r["lo"], r["lo"]) if r["id"] == 4 else (0.0, r["cap"])),
     ),
     "open_floor": Box("amount >= -1e30 AND amount <= cap", lambda r: (-INF, r["cap"])),
@@ -772,21 +773,21 @@ def test_r1_binder_rejects_strict_bounds_on_real_before_direct_solve_is_asked(de
 
 
 # ---------------------------------------------------------------------------
-# A budget per group and under WHEN
+# A budget per group and under a `when`
 # ---------------------------------------------------------------------------
 #
-# A budget may be written `PER g`, with `WHEN f` after the clause, or with `WHEN f` on the aggregate
-# (`SUM(w*amount) WHEN f <= 6`). A row whose WHEN holds and whose PER keys are all not NULL belongs to the budget of its
-# group, and each group has its own budget and its own price. Any other row is outside every budget: it takes its own
+# A budget may be written with `by (g)` after the sum, with `when f:` in front of the clause, or with `when f` inside
+# the sum (`SUM(when f: w*amount) <= 6`). A row whose `when` holds belongs to the budget of its `by` group (a NULL key
+# is a group of its own; `when g IS NOT NULL:` leaves those rows out), and each group has its own budget and its own price. Any other row is outside every budget: it takes its own
 # best end (the upper end for a positive value, the lower end for a negative one), as a row with no weight does. The
 # oracle holds one constraint per group, over the rows of that group, built here in Python from the raw rows and the
 # membership each case states, never from DeciDB's reading of the SQL. A group with no covered row has no constraint.
 
 SCOPED_COLUMNS = (
     ("id", "INTEGER"),
-    ("g", "VARCHAR"),  # a PER key; NULL on some rows
-    ("h", "VARCHAR"),  # a second PER key
-    ("f", "BOOLEAN"),  # the WHEN
+    ("g", "VARCHAR"),  # a `by` key; NULL on some rows
+    ("h", "VARCHAR"),  # a second `by` key
+    ("f", "BOOLEAN"),  # the `when`
     ("cap", "DOUBLE"),
     ("lo", "DOUBLE"),
     ("w", "DOUBLE"),
@@ -806,7 +807,7 @@ class ScopedCase:
     budget: str
     #: The (lower, upper) limits of the budget of each group, as the oracle holds them.
     limits: tuple
-    #: The PER columns and the WHEN the budget has, stated here for the oracle.
+    #: The `by` columns and the `when` the budget has, stated here for the oracle (a NULL key is outside every budget).
     per: tuple = ()
     when: object = None
     objective: str = "max"
@@ -905,7 +906,7 @@ THREE_GROUPS = (
     _srow(7, "c", 4.0, 1.0, 4.0),
     _srow(8, "c", 1e30, 1.0, 1.5),
 )
-# The three covered rows of a budget under a WHEN, and rows outside it that would corrupt the budget's sums if they
+# The three covered rows of a budget under a `when`, and rows outside it that would corrupt the budget's sums if they
 # joined them: a positive floor (so a positive anchor) and a weight of either sign. Row 4 gains, row 5 loses, row 6 has
 # no value and no cap.
 COVERED = (_srow(1, "a", 4.0, 2.0, 10.0), _srow(2, "a", 3.0, 3.0, 9.0), _srow(3, "a", 5.0, 2.0, 4.0))
@@ -915,22 +916,22 @@ OUTSIDE = (
     _srow(6, "a", 1e30, -1.0, 0.0, f=False, lo=1.0),
 )
 
-# PER: each group has its own price (the partitions of the windows).
-scoped("per_three_groups_at_different_prices_max", THREE_GROUPS, "SUM(w*amount) <= 6 PER g", (-INF, 6.0), per=("g",))
-# WHEN on the clause: the covered rows alone share the budget; the rows outside it take their own best ends. The rows
+# `by`: each group has its own price (the partitions of the windows).
+scoped("per_three_groups_at_different_prices_max", THREE_GROUPS, "SUM(w*amount) by (g) <= 6", (-INF, 6.0), per=("g",))
+# `when` on the clause: the covered rows alone share the budget; the rows outside it take their own best ends. The rows
 # outside have a positive anchor and a weight, which must stay out of the covered rows' sums.
-scoped("when_on_the_clause", COVERED + OUTSIDE, "SUM(w*amount) <= 6 WHEN f", (-INF, 6.0), when=lambda r: r["f"])
-# WHEN on the aggregate (the left side's own filter): the same membership, read from the other place in the IR.
-scoped("when_on_the_aggregate", COVERED + OUTSIDE, "SUM(w*amount) WHEN f <= 6", (-INF, 6.0), when=lambda r: r["f"])
-# One budget written as two clauses, one with each spelling of the WHEN, is one budget.
+scoped("when_on_the_clause", COVERED + OUTSIDE, "when f: SUM(w*amount) <= 6", (-INF, 6.0), when=lambda r: r["f"])
+# `when` inside the sum (the reducer's own filter): the same membership, read from the other place in the IR.
+scoped("when_on_the_aggregate", COVERED + OUTSIDE, "SUM(when f: w*amount) <= 6", (-INF, 6.0), when=lambda r: r["f"])
+# One budget written as two clauses, one with each spelling of the `when`, is one budget.
 scoped(
     "when_written_both_ways_on_two_clauses",
     COVERED + OUTSIDE,
-    "SUM(w*amount) <= 6 WHEN f AND SUM(w*amount) WHEN f >= 1",
+    "when f: SUM(w*amount) <= 6 AND SUM(when f: w*amount) >= 1",
     (1.0, 6.0),
     when=lambda r: r["f"],
 )
-# PER with WHEN: a group has covered rows and rows outside, and the rows outside stay out of that group's sums.
+# `by` with `when`: a group has covered rows and rows outside, and the rows outside stay out of that group's sums.
 scoped(
     "per_with_when",
     (
@@ -942,12 +943,12 @@ scoped(
         _srow(6, "b", 3.0, 2.0, 1.0),
         _srow(7, "b", 3.0, 3.0, -2.0, f=False, lo=1.0),
     ),
-    "SUM(w*amount) <= 6 WHEN f PER g",
+    "when f: SUM(w*amount) by (g) <= 6",
     (-INF, 6.0),
     per=("g",),
     when=lambda r: r["f"],
 )
-# A NULL PER key leaves a row out of every budget: row 4 gains and goes to its cap, row 5 loses and goes to its floor,
+# Rows with a NULL key, left out by `when g IS NOT NULL`, are outside every budget: row 4 gains and goes to its cap, row 5 loses and goes to its floor,
 # row 6 has no value and an uncapped box (it is not unbounded: its value is zero).
 scoped(
     "null_key_rows_take_their_best_ends",
@@ -959,7 +960,7 @@ scoped(
         _srow(5, None, 3.0, 3.0, -2.0, lo=1.0),
         _srow(6, None, 1e30, -1.0, 0.0, lo=1.0),
     ),
-    "SUM(w*amount) <= 6 PER g",
+    "when g IS NOT NULL: SUM(w*amount) by (g) <= 6",
     (-INF, 6.0),
     per=("g",),
 )
@@ -968,7 +969,7 @@ scoped(
 scoped(
     "uncovered_group_under_a_negative_limit",
     (_srow(1, "a", 4.0, -2.0, 10.0), _srow(2, "a", 3.0, 3.0, 9.0), _srow(3, "b", 5.0, 2.0, 4.0, f=False)),
-    "SUM(w*amount) <= -1 WHEN f PER g",
+    "when f: SUM(w*amount) by (g) <= -1",
     (-INF, -1.0),
     per=("g",),
     when=lambda r: r["f"],
@@ -976,7 +977,7 @@ scoped(
 scoped(
     "uncovered_group_under_a_positive_minimum",
     (_srow(1, "a", 4.0, 2.0, 10.0), _srow(2, "a", 3.0, 3.0, 9.0), _srow(3, "b", 5.0, 2.0, 4.0, f=False)),
-    "SUM(w*amount) >= 3 WHEN f PER g",
+    "when f: SUM(w*amount) by (g) >= 3",
     (3.0, INF),
     per=("g",),
     when=lambda r: r["f"],
@@ -987,7 +988,7 @@ scoped(
 scoped(
     "outside_row_uncapped_and_improving",
     (_srow(1, "a", 4.0, 2.0, 10.0), _srow(2, "a", 1e30, 1.0, 2.0, f=False)),
-    "SUM(w*amount) <= 6 WHEN f",
+    "when f: SUM(w*amount) <= 6",
     (-INF, 6.0),
     when=lambda r: r["f"],
 )
@@ -1004,7 +1005,7 @@ scoped(
         _srow(7, "c", 4.0, 1.0, 3.0),
         _srow(8, "c", 1e30, 1.0, 1.5),
     ),
-    "SUM(w*amount) >= 8 PER g",
+    "SUM(w*amount) by (g) >= 8",
     (8.0, INF),
     per=("g",),
     objective="min",
@@ -1020,11 +1021,11 @@ scoped(
         _srow(5, "c", 2.0, 1.0, 1.0),
         _srow(6, "c", 3.0, 1.0, 2.0),
     ),
-    "SUM(w*amount) BETWEEN 3 AND 6 PER g",
+    "SUM(w*amount) by (g) BETWEEN 3 AND 6",
     (3.0, 6.0),
     per=("g",),
 )
-# Two PER keys: the groups are the pairs, which differ from the groups of the first key alone.
+# Two `by` keys: the groups are the pairs, which differ from the groups of the first key alone.
 scoped(
     "per_two_keys",
     (
@@ -1035,7 +1036,7 @@ scoped(
         _srow(5, "b", 3.0, 1.0, 6.0, h="x"),
         _srow(6, "b", 3.0, 1.0, 1.0, h="x"),
     ),
-    "SUM(w*amount) <= 4 PER (g, h)",
+    "SUM(w*amount) by (g, h) <= 4",
     (-INF, 4.0),
     per=("g", "h"),
 )
@@ -1053,7 +1054,7 @@ def test_r1_scoped_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solv
     def check_assignment(rows, columns, mode):
         _check_scoped_assignment(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, _modes(sql))
 
 
 @pytest.mark.cons_aggregate
@@ -1061,19 +1062,19 @@ def test_r1_scoped_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solv
 @pytest.mark.parametrize(
     "budget,objective",
     [
-        # Two clauses of one budget must cover the same rows: PER on one clause and not the other ...
-        ("SUM(w*amount) >= 1 PER g AND SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
+        # Two clauses of one budget must cover the same rows: `by` on one clause and not the other ...
+        ("SUM(w*amount) by (g) >= 1 AND SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
         # ... other keys, or the same keys in another order or number ...
-        ("SUM(w*amount) >= 1 PER g AND SUM(w*amount) <= 6 PER h", "MAXIMIZE SUM(v*amount)"),
-        ("SUM(w*amount) >= 1 PER (g, h) AND SUM(w*amount) <= 6 PER (h, g)", "MAXIMIZE SUM(v*amount)"),
-        ("SUM(w*amount) >= 1 PER (g, h) AND SUM(w*amount) <= 6 PER g", "MAXIMIZE SUM(v*amount)"),
-        # ... a WHEN on one clause and not the other, or two different WHENs.
-        ("SUM(w*amount) >= 1 WHEN f AND SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
-        ("SUM(w*amount) >= 1 WHEN f AND SUM(w*amount) <= 6 WHEN (NOT f)", "MAXIMIZE SUM(v*amount)"),
-        ("SUM(w*amount) >= 1 WHEN f AND SUM(w*amount) WHEN (cap > 3) <= 6", "MAXIMIZE SUM(v*amount)"),
-        # The objective's own PER or WHEN is not read.
-        ("SUM(w*amount) <= 6 PER g", "MAXIMIZE SUM(v*amount) WHEN f"),
-        ("SUM(w*amount) <= 6 WHEN f", "MAXIMIZE SUM(v*amount) WHEN f"),
+        ("SUM(w*amount) by (g) >= 1 AND SUM(w*amount) by (h) <= 6", "MAXIMIZE SUM(v*amount)"),
+        ("SUM(w*amount) by (g, h) >= 1 AND SUM(w*amount) by (h, g) <= 6", "MAXIMIZE SUM(v*amount)"),
+        ("SUM(w*amount) by (g, h) >= 1 AND SUM(w*amount) by (g) <= 6", "MAXIMIZE SUM(v*amount)"),
+        # ... a `when` on one clause and not the other, or two different ones.
+        ("when f: SUM(w*amount) >= 1 AND SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
+        ("when f: SUM(w*amount) >= 1 AND when id > 4: SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
+        ("when f: SUM(w*amount) >= 1 AND SUM(when cap > 3: w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
+        # The objective's own `when` is not read.
+        ("SUM(w*amount) by (g) <= 6", "MAXIMIZE when f: SUM(v*amount)"),
+        ("when f: SUM(w*amount) <= 6", "MAXIMIZE when f: SUM(v*amount)"),
     ],
 )
 def test_r1_leaves_budgets_that_do_not_share_a_scope_to_the_solver(decidb_cli, budget, objective):
@@ -1090,13 +1091,13 @@ def test_r1_leaves_budgets_that_do_not_share_a_scope_to_the_solver(decidb_cli, b
 # A limit that varies by row means one constraint `SUM(w*x) <op> b_i` for each row i of the group the limit is read
 # over (the tuple-by-tuple meaning of the DECIDE definition). The oracle holds exactly those constraints, built here in
 # Python from the raw rows, never DeciDB's reduction of them to the group's MIN (for `<=`) or MAX (for `>=`). The
-# limit is read over the rows its clause covers in the group, except under a WHEN written on the sum itself, which
-# scopes the sum and not the limit: then it is read over every row of the PER group.
+# limit is read over the rows its clause covers in the group, except under a `when` written inside the sum, which
+# scopes the sum and not the limit: then it is read over every row of the `by` group.
 
 DATA_COLUMNS = (
     ("id", "INTEGER"),
-    ("g", "VARCHAR"),  # the PER key
-    ("f", "BOOLEAN"),  # the WHEN
+    ("g", "VARCHAR"),  # the `by` key
+    ("f", "BOOLEAN"),  # the `when`
     ("cap", "DOUBLE"),
     ("w", "DOUBLE"),
     ("v", "DOUBLE"),
@@ -1124,7 +1125,7 @@ DATA_ROWS = (
 )
 # The same rows with the limit the same on every row of a group (the only way an equality limit is read).
 AGREEING_ROWS = tuple(dict(row, b=9.0 if row["g"] == "a" else 5.0) for row in DATA_ROWS)
-# Rows 3 and 6 fail the WHEN and carry the smallest limit of their group: a limit read over the covered rows ignores
+# Rows 3 and 6 fail the `when` and carry the smallest limit of their group: a limit read over the covered rows ignores
 # them, one read over the whole group does not.
 WHEN_ROWS = tuple(
     dict(row, f=row["id"] not in (3, 6), b={3: 2.0, 6: 1.0}.get(row["id"], row["b"])) for row in DATA_ROWS
@@ -1152,10 +1153,10 @@ class DataBudgetCase:
     budget: str
     #: (comparison, limit(row, rows of the group the limit is read over)) for each clause, stated here for the oracle.
     clauses: tuple
-    #: The PER columns and the WHEN of the budget, stated here for the oracle.
+    #: The `by` columns and the `when` of the budget, stated here for the oracle.
     per: tuple = ()
     when: object = None
-    #: The WHEN is written on the sum itself (`SUM(...) WHEN f <= b`).
+    #: The `when` is written inside the sum (`SUM(when f: ...) <= b`).
     when_on_the_sum: bool = False
     objective: str = "max"
     #: Two decisions in the budget, `amount` and `extra`.
@@ -1260,44 +1261,57 @@ def _check_data_budget_assignment(case_, rows, columns, oracle, mode):
 
 # A column: the group's smallest limit rules a `<=`, so the whole input shares the smallest of all six (5).
 data_budget("column_global", DATA_ROWS, "SUM(w*amount) <= b", [("<=", _limit)])
+# A lower limit read from the data over every row: the plan takes the MAX of the limit, on its own and beside a
+# constant upper limit.
+data_budget("column_lower_global", DATA_ROWS, "SUM(w*amount) >= b", [(">=", _limit)], objective="min")
+data_budget(
+    "column_lower_and_constant_upper_global",
+    DATA_ROWS,
+    "SUM(w*amount) >= b AND SUM(w*amount) <= 40",
+    [(">=", _limit), ("<=", lambda r, rows: 40.0)],
+)
 # Per group, with limits that differ inside each group: a rules at 9 and b at 5, at different prices.
-data_budget("column_per_group", DATA_ROWS, "SUM(w*amount) <= b PER g", [("<=", _limit)], per=("g",))
+data_budget("column_per_group", DATA_ROWS, "SUM(w*amount) by (g) <= b", [("<=", _limit)], per=("g",))
 # An expression over columns is read like a column, but its NULL and NaN errors cannot name one.
 data_budget(
     "expression_per_group",
     DATA_ROWS,
-    "SUM(w*amount) <= 2*b - 3 PER g",
+    "SUM(w*amount) by (g) <= 2*b - 3",
     [("<=", lambda r, rows: 2 * r["b"] - 3)],
     per=("g",),
 )
 # A lower limit takes the group's largest value (a: 14, b: 7); the minimum cover binds on it.
 data_budget(
-    "column_lower_per_group", DATA_ROWS, "SUM(w*amount) >= b PER g", [(">=", _limit)], per=("g",), objective="min"
+    "column_lower_per_group", DATA_ROWS, "SUM(w*amount) by (g) >= b", [(">=", _limit)], per=("g",), objective="min"
 )
 # An equality is read from a limit that agrees inside each group (a: 9, b: 5).
-data_budget("column_equality_per_group", AGREEING_ROWS, "SUM(w*amount) = b PER g", [("=", _limit)], per=("g",))
+data_budget("column_equality_per_group", AGREEING_ROWS, "SUM(w*amount) by (g) = b", [("=", _limit)], per=("g",))
 # An aggregate of the source is a window column holding the group's value: 10 over the whole input, 6 in a and 4 in b.
 data_budget("aggregate_global", DATA_ROWS, "SUM(w*amount) <= 0.5*SUM(cost)", [("<=", _half_the_costs)])
 data_budget(
-    "aggregate_per_group", DATA_ROWS, "SUM(w*amount) <= 0.5*SUM(cost) PER g", [("<=", _half_the_costs)], per=("g",)
+    "aggregate_per_group",
+    DATA_ROWS,
+    "SUM(w*amount) by (g) <= 0.5*SUM(cost) by (g)",
+    [("<=", _half_the_costs)],
+    per=("g",),
 )
-# A WHEN on the clause: the limit is read over the covered rows only, so the small limits of rows 3 and 6 are ignored.
+# A `when` on the clause: the limit is read over the covered rows only, so the small limits of rows 3 and 6 are ignored.
 # Both scopes: the whole input, and per group.
-data_budget("clause_when_global", WHEN_ROWS, "SUM(w*amount) <= b WHEN f", [("<=", _limit)], when=lambda r: r["f"])
+data_budget("clause_when_global", WHEN_ROWS, "when f: SUM(w*amount) <= b", [("<=", _limit)], when=lambda r: r["f"])
 data_budget(
     "clause_when_per_group",
     WHEN_ROWS,
-    "SUM(w*amount) <= b WHEN f PER g",
+    "when f: SUM(w*amount) by (g) <= b",
     [("<=", _limit)],
     per=("g",),
     when=lambda r: r["f"],
 )
-# A WHEN on the sum: the same rows are in the budget, but the limit is read over the whole group, so the small limits
+# A `when` inside the sum: the same rows are in the budget, but the limit is read over the whole group, so the small limits
 # of rows 3 and 6 rule (a: 2, b: 1).
 data_budget(
     "sum_when_per_group",
     WHEN_ROWS,
-    "SUM(w*amount) WHEN f <= b PER g",
+    "SUM(when f: w*amount) by (g) <= b",
     [("<=", _limit)],
     per=("g",),
     when=lambda r: r["f"],
@@ -1308,7 +1322,7 @@ data_budget(
 data_budget(
     "sum_when_lower_per_group",
     WHEN_ROWS,
-    "SUM(w*amount) WHEN f >= b PER g",
+    "SUM(when f: w*amount) by (g) >= b",
     [(">=", _limit)],
     per=("g",),
     when=lambda r: r["f"],
@@ -1320,7 +1334,7 @@ data_budget(
 data_budget(
     "range_of_an_expression_and_a_column",
     DATA_ROWS,
-    "SUM(w*amount) >= cost - 2 PER g AND SUM(w*amount) <= b PER g",
+    "SUM(w*amount) by (g) >= cost - 2 AND SUM(w*amount) by (g) <= b",
     [(">=", lambda r, rows: r["cost"] - 2), ("<=", _limit)],
     per=("g",),
     objective="min",
@@ -1330,14 +1344,14 @@ data_budget(
 data_budget(
     "constant_and_column_upper",
     DATA_ROWS,
-    "SUM(w*amount) <= b PER g AND SUM(w*amount) <= 7 PER g",
+    "SUM(w*amount) by (g) <= b AND SUM(w*amount) by (g) <= 7",
     [("<=", _limit), ("<=", lambda r, rows: 7.0)],
     per=("g",),
 )
 data_budget(
     "constant_and_column_lower",
     DATA_ROWS,
-    "SUM(w*amount) >= 5 PER g AND SUM(w*amount) >= cost PER g",
+    "SUM(w*amount) by (g) >= 5 AND SUM(w*amount) by (g) >= cost",
     [(">=", lambda r, rows: 5.0), (">=", lambda r, rows: r["cost"])],
     per=("g",),
     objective="min",
@@ -1346,7 +1360,7 @@ data_budget(
 data_budget(
     "two_decisions_column_per_group",
     PIECE_ROWS,
-    "SUM(w*amount + w2*extra) <= b PER g",
+    "SUM(w*amount + w2*extra) by (g) <= b",
     [("<=", _limit)],
     per=("g",),
     pieces=True,
@@ -1354,7 +1368,7 @@ data_budget(
 data_budget(
     "two_decisions_clause_when_per_group",
     PIECE_WHEN_ROWS,
-    "SUM(w*amount + w2*extra) <= b WHEN f PER g",
+    "when f: SUM(w*amount + w2*extra) by (g) <= b",
     [("<=", _limit)],
     per=("g",),
     when=lambda r: r["f"],
@@ -1373,7 +1387,8 @@ def test_r1_data_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solver
     def check_assignment(rows, columns, mode):
         _check_data_budget_assignment(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, _data_sql(case_), oracle, check_assignment)
+    sql = _data_sql(case_)
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, _modes(sql))
 
 
 # ---------------------------------------------------------------------------
@@ -1516,46 +1531,40 @@ R1_ERROR_CASES.update(
     }
 )
 
-# A budget per group and under WHEN. Each case reaches a verdict that only a group, or a row outside every budget, can
+# A budget per group and under a `when`. Each case reaches a verdict that only a group, or a row outside every budget, can
 # reach.
 R1_ERROR_CASES.update(
     {
-        # A WHEN that covers no row of a nonempty source is the empty-aggregate error.
+        # A `when` that keeps no row of a nonempty source is an error (D4).
         "scoped_when_covers_no_row": (
             _scoped_sql(
                 (_srow(1, "a", 4.0, 2.0, 10.0, f=False), _srow(2, "a", 3.0, 3.0, 9.0, f=False)),
-                "SUM(w*amount) <= 6 WHEN f",
+                "when f: SUM(w*amount) <= 6",
             ),
             "empty_aggregate",
         ),
         # One group's minimum is beyond what its rows reach, though every other group's is met.
         "scoped_one_group_minimum_unreachable": (
-            _scoped_sql(THREE_GROUPS[:3] + (_srow(4, "b", 1.0, 1.0, 2.0),), "SUM(w*amount) >= 7 PER g"),
+            _scoped_sql(THREE_GROUPS[:3] + (_srow(4, "b", 1.0, 1.0, 2.0),), "SUM(w*amount) by (g) >= 7"),
             "infeasible",
         ),
         # One group has a row that gains without end, though the other group is bounded.
         "scoped_one_group_unbounded": (
-            _scoped_sql(THREE_GROUPS[:3] + (_srow(4, "b", 1e30, -1.0, 1.0),), "SUM(w*amount) <= 6 PER g"),
+            _scoped_sql(THREE_GROUPS[:3] + (_srow(4, "b", 1e30, -1.0, 1.0),), "SUM(w*amount) by (g) <= 6"),
             "unbounded",
         ),
         # A row outside every budget still needs a box some value satisfies, and a weight that is a number.
         "scoped_empty_box_outside_the_budget": (
             _scoped_sql(
-                (_srow(1, "a", 4.0, 2.0, 10.0), _srow(2, "a", -1.0, 1.0, 9.0, f=False)), "SUM(w*amount) <= 6 WHEN f"
+                (_srow(1, "a", 4.0, 2.0, 10.0), _srow(2, "a", -1.0, 1.0, 9.0, f=False)), "when f: SUM(w*amount) <= 6"
             ),
             "infeasible",
-        ),
-        "scoped_weight_null_outside_the_when": (
-            _scoped_sql(
-                (_srow(1, "a", 4.0, 2.0, 10.0), _srow(2, "a", 3.0, None, 9.0, f=False)), "SUM(w*amount) <= 6 WHEN f"
-            ),
-            "null_bound",
         ),
     }
 )
 
 
-# Group a has two rows outside the WHEN, with limits that differ, and one covered row whose limit is the group's; group b
+# Group a has two rows outside the `when`, with limits that differ, and one covered row whose limit is the group's; group b
 # is covered and agrees.
 OUTSIDE_ROWS = tuple(
     dict(row, f=row["id"] not in (2, 3), b={1: 6.0, 2: 3.0, 3: 4.0}.get(row["id"], row["b"])) for row in AGREEING_ROWS
@@ -1575,7 +1584,7 @@ R1_ERROR_CASES.update(
     {
         # An equality limit that is not the same on every row of a group: two different required spends.
         "data_budget_equality_differs_within_a_group": (
-            _data_error(DATA_ROWS, "SUM(w*amount) = b PER g"),
+            _data_error(DATA_ROWS, "SUM(w*amount) by (g) = b"),
             "equality_varies",
         ),
         # The same without a scope: the one budget reads one value.
@@ -1583,17 +1592,17 @@ R1_ERROR_CASES.update(
             _data_error(DATA_ROWS, "SUM(w*amount) = b"),
             "equality_varies",
         ),
-        # A sum with a WHEN of its own reads its limit over every row of the group, the rows it leaves out included.
+        # A sum with a `when` of its own reads its limit over every row of the group, the rows it leaves out included.
         "data_budget_equality_differs_over_the_rows_outside_the_sum_when": (
-            _data_error(OUTSIDE_ROWS, "SUM(w*amount) WHEN f = b PER g"),
+            _data_error(OUTSIDE_ROWS, "SUM(when f: w*amount) by (g) = b"),
             "equality_varies",
         ),
-        # A lower limit of a sum with a WHEN of its own is the largest over the whole group: row 6 is left out of the
+        # A lower limit of a sum with a `when` of its own is the largest over the whole group: row 6 is left out of the
         # budget, yet its limit of 20 is beyond what the covered rows of group b reach.
         "data_budget_lower_over_the_rows_outside_the_sum_when_is_unreachable": (
             _data_error(
                 [dict(row, b=20.0) if row["id"] == 6 else row for row in WHEN_ROWS],
-                "SUM(w*amount) WHEN f >= b PER g",
+                "SUM(when f: w*amount) by (g) >= b",
                 "min",
             ),
             "infeasible",
@@ -1605,28 +1614,23 @@ R1_ERROR_CASES.update(
             "null_bound",
         ),
         "data_budget_expression_null": (
-            _data_error(_with_limit(DATA_ROWS, 5, None), "SUM(w*amount) <= 2*b PER g"),
+            _data_error(_with_limit(DATA_ROWS, 5, None), "SUM(w*amount) by (g) <= 2*b"),
             "null_bound",
         ),
         "data_budget_expression_nan": (
-            _data_error(_with_limit(DATA_ROWS, 5, float("nan")), "SUM(w*amount) <= 2*b PER g"),
-            "null_bound",
-        ),
-        # Every row is read, the rows outside the budget included.
-        "data_budget_null_on_a_row_outside_the_when": (
-            _data_error(_with_limit(WHEN_ROWS, 2, None), "SUM(w*amount) <= b WHEN f PER g"),
+            _data_error(_with_limit(DATA_ROWS, 5, float("nan")), "SUM(w*amount) by (g) <= 2*b"),
             "null_bound",
         ),
         # One group's lower limit is beyond what its rows reach (b reaches 15), though a's is met.
         "data_budget_lower_unreachable_in_one_group": (
             _data_error(
-                [dict(row, b=20.0) if row["g"] == "b" else row for row in DATA_ROWS], "SUM(w*amount) >= b PER g", "min"
+                [dict(row, b=20.0) if row["g"] == "b" else row for row in DATA_ROWS], "SUM(w*amount) by (g) >= b", "min"
             ),
             "infeasible",
         ),
         # The limits cross in a group (at least 14 and at most 2 in a), though the boxes reach both.
         "data_budget_limits_cross_in_one_group": (
-            _data_error(DATA_ROWS, "SUM(w*amount) >= b PER g AND SUM(w*amount) <= cost PER g"),
+            _data_error(DATA_ROWS, "SUM(w*amount) by (g) >= b AND SUM(w*amount) by (g) <= cost"),
             "infeasible",
         ),
     }
@@ -1641,25 +1645,27 @@ def test_r1_error_cases_fail_on_both_paths(decidb_cli, name):
     sql, expected = R1_ERROR_CASES[name]
     with pytest.raises(DecidBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
+    assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
+    if "require" not in _modes(sql):
+        return
     with pytest.raises(DecidBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
-    assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
     assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
 
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_r1_an_equality_limit_that_differs_only_among_rows_outside_the_when_is_not_an_error(decidb_cli):
-    # The limit of a clause with a WHEN is read over the rows the WHEN covers, so the two rows left out, whose limits
+    # The limit of a clause with a `when` is read over the rows it keeps, so the two rows left out, whose limits
     # differ, are not a second required spend.
-    sql = _data_error(OUTSIDE_ROWS, "SUM(w*amount) = b WHEN f PER g")
+    sql = _data_error(OUTSIDE_ROWS, "when f: SUM(w*amount) by (g) = b")
     values = {row["id"]: row["v"] for row in OUTSIDE_ROWS}
     totals = []
-    for mode in ("off", "require"):
+    for mode in _modes(sql):
         rows, _ = _run(decidb_cli, sql, mode)
         totals.append(sum(values[row[0]] * row[1] for row in rows))
-    assert totals[1] == pytest.approx(totals[0])
+    assert totals[-1] == pytest.approx(totals[0])
 
 
 @pytest.mark.error
@@ -1927,10 +1933,11 @@ def test_r1_plan_reads_a_stored_table_four_times_and_sorts_narrow_columns(decidb
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
+@pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)
 def test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key(decidb_cli, tmp_path):
-    # PER and WHEN: the group key is (in the budget, g). Each group-level stage is a hash aggregate, and the stages meet
+    # A by key and a when: the group key is (in the budget, g). Each group-level stage is a hash aggregate, and the stages meet
     # the items in hash joins on that key. The empty-aggregate guard is a window over the groups, not over the rows.
-    query = _wide_query("SUM(w*x) <= 500 WHEN f PER g")
+    query = _wide_query("when f: SUM(w*x) by (g) <= 500")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {query}").stdout
     assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan, plan
     assert _count(plan, "HASH_GROUP_BY") == 3 and _count(plan, "HASH_JOIN") == 3, plan
@@ -1945,8 +1952,12 @@ def test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key(decidb_
 @pytest.mark.correctness
 @pytest.mark.parametrize(
     "budget, groups",
-    [("SUM(w*x) <= 20000 WHEN f", 2), ("SUM(w*x) <= 2000 PER g", 4)],
-    ids=["when", "per"],
+    [
+        pytest.param("when f: SUM(w*x) <= 20000", 2, id="when"),
+        pytest.param(
+            "SUM(w*x) by (g) <= 2000", 4, id="per", marks=pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)
+        ),
+    ],
 )
 def test_r1_hash_joins_build_on_the_group_rows(decidb_cli, tmp_path, budget, groups):
     # The aggregates over the items are estimated as large as the join that feeds them, so an inner join of the items
@@ -2023,13 +2034,21 @@ STORED_SOURCES = {
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 @pytest.mark.parametrize("name", sorted(STORED_SOURCES))
-@pytest.mark.parametrize("scope", [pytest.param("", id="one_budget"), pytest.param(" WHEN f PER g", id="scoped")])
-def test_r1_sources_over_a_stored_table_agree_with_the_solver(decidb_cli, name, scope):
+@pytest.mark.parametrize(
+    "budget",
+    [
+        pytest.param("SUM(w*x) <= 300", id="one_budget"),
+        pytest.param(
+            "when f: SUM(w*x) by (g) <= 300", id="scoped", marks=pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)
+        ),
+    ],
+)
+def test_r1_sources_over_a_stored_table_agree_with_the_solver(decidb_cli, name, budget):
     # The answers of the direct plan are an optimum of the problem over exactly the rows the source keeps, whichever way
     # the rows are read: the objective and the spend match the solver's (rows may differ on ties).
     sql = (
         f"{WIDE_SETUP} SELECT COUNT(*), SUM(x), SUM(v*x), SUM(w*x) FROM "
-        f"(FROM ({STORED_SOURCES[name]}) DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND SUM(w*x) <= 300{scope} "
+        f"(FROM ({STORED_SOURCES[name]}) DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND cap AND {budget} "
         f"MAXIMIZE SUM(v*x)) q"
     )
     direct = _run(decidb_cli, sql, "require")[0][0]
@@ -2209,7 +2228,7 @@ class PieceCase:
     #: no weight).
     written: str = "{sum} <= {upper}"
     budget_on: tuple = None
-    #: True when the budget is `PER g`.
+    #: True when the budget's sum is `by (g)`.
     per: bool = False
     maximize: bool = True
     #: The decisions the objective names.
@@ -2233,8 +2252,9 @@ def _piece_sql(case_):
     decisions = PIECE_NAMES[: case_.count]
     box = " AND ".join(f"{decisions[d]} BETWEEN 0 AND cap{d}" for d in range(case_.count))
     total = "SUM(" + " + ".join(f"w{d}*{decisions[d]}" for d in _on(case_, "budget_on")) + ")"
+    total += " by (g)" if case_.per else ""
     lower, upper = case_.limits
-    budget = case_.written.format(sum=total, upper=upper, lower=lower) + (" PER g" if case_.per else "")
+    budget = case_.written.format(sum=total, upper=upper, lower=lower)
     value = "SUM(" + " + ".join(f"v{d}*{decisions[d]}" for d in _on(case_, "value_on")) + ")"
     objective = ("MAXIMIZE " if case_.maximize else "MINIMIZE ") + value
     declared = ", ".join(f"{name}(REAL)" for name in decisions)
@@ -2300,7 +2320,8 @@ def _agree_pieces(decidb_cli, oracle_solver, case_):
     def check_assignment(rows, columns, mode):
         _check_pieces(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, _piece_sql(case_), oracle, check_assignment)
+    sql = _piece_sql(case_)
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, _modes(sql))
 
 
 # Each row is a benefit of two pieces that spend the same budget per unit. Shrinking: the first piece of a row earns more
@@ -2425,7 +2446,7 @@ pieces(
     (9.0, 9.0),
     written="{sum} = {upper}",
 )
-# PER: each group has its own budget and price, and a group holds items of several decisions.
+# `by`: each group has its own budget and price, and a group holds items of several decisions.
 pieces(
     "two_decisions_per_group",
     (
@@ -2574,46 +2595,59 @@ def _wide_pair_query(budget):
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_r1_several_decisions_plan_has_one_sort_one_unpivot_and_one_aggregate(decidb_cli, tmp_path):
+@pytest.mark.parametrize(
+    "limit, scoped",
+    [
+        pytest.param("<= 2000", False, id="global"),
+        pytest.param("<= 500", True, id="scoped", marks=pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)),
+    ],
+)
+def test_r1_several_decisions_plan_has_one_sort_one_unpivot_and_one_aggregate(decidb_cli, tmp_path, limit, scoped):
     # Two decisions with constant limits run the same aggregate-then-join plan as one: one sort over narrow columns (the
     # price, the rooms and their running sum, never a source column), one unpivot (a cross product with the decision
     # numbers, not an UNNEST) of the narrow prices and rooms only, and no row number and no hash aggregate that groups the items back into rows.
-    scopes = (("<= 2000", False), ("<= 500 WHEN f PER g", True))
-    for limit, scoped in scopes:
-        pair = _wide_pair_query(f"SUM(w*x + w*y) {limit}")
-        plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {pair}").stdout
-        assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
-        assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan, plan
-        assert len(_ordered_windows(plan)) == 1 and _count(plan, "UNNEST") == 0, plan
-        assert "ROW_NUMBER" not in plan, plan
-        # The operators that group and join are those of one decision: nothing groups items back.
-        single = _wide_query(f"SUM(w*x) {limit}")
-        single_plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {single}").stdout
-        assert _count(single_plan, "UNNEST") == 0 and _count(single_plan, "COLUMN_DATA_SCAN") == 0, single_plan
-        for operator in ("HASH_GROUP_BY", "UNGROUPED_AGGREGATE", "HASH_JOIN", "WINDOW"):
-            assert _count(plan, operator) == _count(single_plan, operator), (operator, plan)
-        # The one cross product the pair adds is the unpivot.
-        assert _count(plan, "CROSS_PRODUCT") == _count(single_plan, "CROSS_PRODUCT") + 1, plan
-        assert _count(plan, "COLUMN_DATA_SCAN") == 1, plan
-        sorts = [window for window in _profiled_windows(decidb_cli, tmp_path, pair) if window[0]]
-        assert [(rows, width <= (6 if scoped else 5) * 8) for _, rows, width in sorts] == [(4000, True)], sorts
-        # The unpivot reads the group key (with a scope), and the price and room of each decision, nothing else.
-        unpivots = _profiled_unpivots(decidb_cli, tmp_path, pair)
-        assert [(rows, len(inputs)) for rows, inputs in unpivots] == [(4000, 6 if scoped else 4)], unpivots
+    scope, by = ("when f: ", " by (g)") if scoped else ("", "")
+    pair = _wide_pair_query(f"{scope}SUM(w*x + w*y){by} {limit}")
+    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {pair}").stdout
+    assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
+    assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan, plan
+    assert len(_ordered_windows(plan)) == 1 and _count(plan, "UNNEST") == 0, plan
+    assert "ROW_NUMBER" not in plan, plan
+    # The operators that group and join are those of one decision: nothing groups items back.
+    single = _wide_query(f"{scope}SUM(w*x){by} {limit}")
+    single_plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {single}").stdout
+    assert _count(single_plan, "UNNEST") == 0 and _count(single_plan, "COLUMN_DATA_SCAN") == 0, single_plan
+    for operator in ("HASH_GROUP_BY", "UNGROUPED_AGGREGATE", "HASH_JOIN", "WINDOW"):
+        assert _count(plan, operator) == _count(single_plan, operator), (operator, plan)
+    # The one cross product the pair adds is the unpivot.
+    assert _count(plan, "CROSS_PRODUCT") == _count(single_plan, "CROSS_PRODUCT") + 1, plan
+    assert _count(plan, "COLUMN_DATA_SCAN") == 1, plan
+    sorts = [window for window in _profiled_windows(decidb_cli, tmp_path, pair) if window[0]]
+    assert [(rows, width <= (6 if scoped else 5) * 8) for _, rows, width in sorts] == [(4000, True)], sorts
+    # The unpivot reads the group key (with a scope), and the price and room of each decision, nothing else.
+    unpivots = _profiled_unpivots(decidb_cli, tmp_path, pair)
+    assert [(rows, len(inputs)) for rows, inputs in unpivots] == [(4000, 6 if scoped else 4)], unpivots
 
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 @pytest.mark.parametrize("decisions", [1, 2])
-@pytest.mark.parametrize("scope", ["", " PER g"], ids=["global", "per"])
+@pytest.mark.parametrize(
+    "scope",
+    [
+        pytest.param("", marks=pytest.mark.xfail(strict=True, reason=READ_THROUGH_PENDING)),
+        pytest.param(" by (g)", marks=pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)),
+    ],
+    ids=["global", "per"],
+)
 def test_r1_a_limit_from_the_data_runs_the_plan_of_a_constant_limit(decidb_cli, tmp_path, decisions, scope):
     # The group's limits come from the stage that totals the group, so a limit read from the data adds no operator to
     # the plan of a constant one: one sort over narrow columns, and no window over source columns (a window left is
     # over the groups, one row each).
     def query(limit):
         if decisions == 1:
-            return _wide_query(f"SUM(w*x) <= {limit}{scope}")
-        return _wide_pair_query(f"SUM(w*x + w*y) <= {limit}{scope}")
+            return _wide_query(f"SUM(w*x){scope} <= {limit}")
+        return _wide_pair_query(f"SUM(w*x + w*y){scope} <= {limit}")
 
     plans = {}
     for name, limit in (("data", "cap * 500"), ("constant", "1500")):

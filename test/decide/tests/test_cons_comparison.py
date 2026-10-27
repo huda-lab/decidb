@@ -435,15 +435,17 @@ def test_sum_not_equal_zero(decidb_cli):
 @pytest.mark.when
 @pytest.mark.obj_maximize
 def test_sum_not_equal_with_when(decidb_cli):
-    """SUM(x) <> 5 WHEN condition — NE with conditional application."""
-    result, _ = decidb_cli.execute("""
+    """when condition: sum(x) <> 5 — NE with conditional application."""
+    result, _ = decidb_cli.execute(
+        """
         SELECT l_orderkey, l_linenumber, l_quantity, x
         FROM lineitem WHERE l_orderkey < 50
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 5 WHEN l_quantity > 20
+        SUCH THAT when l_quantity > 20: sum(x) <> 5
             AND SUM(x * l_quantity) <= 200
         MAXIMIZE SUM(x * l_extendedprice)
-    """)
+    """
+    )
     assert len(result) > 0
     conditional_total = sum(row[3] for row in result if row[2] > 20)
     assert conditional_total != 5, \
@@ -457,9 +459,10 @@ def test_sum_not_equal_with_when(decidb_cli):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_sum_not_equal_with_when_binding(decidb_cli, oracle_solver):
-    """SUM(x) <> K WHEN cond — expression-level WHEN where NE is binding.
+    """when cond: sum(x) <> K — a WHEN-scoped constraint where NE is binding.
     Oracle emits an NE indicator over the active-row sum only."""
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT name, value, active, x FROM (
             VALUES ('a', 10, true),
                    ('b', 5, true),
@@ -467,10 +470,11 @@ def test_sum_not_equal_with_when_binding(decidb_cli, oracle_solver):
                    ('d', 3, true)
         ) t(name, value, active)
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) <> 2 WHEN active
+        SUCH THAT when active: sum(x) <> 2
             AND SUM(x) <= 3
         MAXIMIZE SUM(x * value)
-    """)
+    """
+    )
 
     data = [("a", 10, True), ("b", 5, True), ("c", 8, False), ("d", 3, True)]
     n = len(data)
@@ -724,6 +728,53 @@ def test_integer_fractional_coeff_strict_rejected(decidb_cli):
     assert _STRICT_LT_COEFF_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
     )
+
+
+_SMALL = "SELECT id, x, y FROM (VALUES (1), (2), (3)) t(id) DECIDE x(INT), y(INT) SUCH THAT x <= 3 AND y <= 3 AND {}"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_integer
+@pytest.mark.parametrize(
+    "clause, operand, op",
+    [
+        ("POWER(x + 0.25, 2) < 11", "power(x + 0.25, 2)", "<"),
+        ("(x + 0.5) * y < 5", "(x + 0.5) * y", "<"),
+        ("SUM(POWER(x + 0.25, 2)) < 11", "power(x + 0.25, 2)", "<"),
+        ("norm(x + 0.5, 1) > 3", "norm(x + 0.5, 1)", ">"),
+        ("norm(x + 0.5, 2) > 3", "norm(x + 0.5, 2)", ">"),
+        ("norm(x + 0.5, 'inf') > 3", "norm(x + 0.5, 'inf')", ">"),
+    ],
+)
+def test_offset_under_a_nonlinear_term_is_refused(decidb_cli, clause, operand, op):
+    """A constant moves to the bound only where the side is linear in it: `(x + 0.25)^2`
+    is `x^2 + 0.5*x + 1/16`, `|x + 0.5|` is no whole number, so stepping either is not
+    exact (`POWER(x + 0.25, 2) < 11` holds at x = 3, which a step to `<= 10` drops)."""
+    stderr = decidb_cli.execute_raw(_SMALL.format(clause) + " MAXIMIZE SUM(x)").stderr
+    assert f"Comparison '{op}' is not supported here: '{operand}'" in stderr, stderr
+    assert "can take fractional values" in stderr, stderr
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.var_integer
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "clause, holds",
+    [
+        ("POWER(x, 2) + 0.5 < 11", lambda x, y: x * x + 0.5 < 11),
+        ("2 * (x + 0.25) < 7", lambda x, y: 2 * (x + 0.25) < 7),
+        ("x * y + 0.5 < 5", lambda x, y: x * y + 0.5 < 5),
+    ],
+)
+def test_offset_beside_a_nonlinear_term_still_steps(decidb_cli_gurobi, clause, holds):
+    """The linear forms around the same terms keep stepping: the constant sits beside the
+    power or product, or under a constant factor, and moves to the bound. A square or a
+    product of decisions in a constraint needs Gurobi."""
+    rows, cols = decidb_cli_gurobi.execute(_SMALL.format(clause) + " MAXIMIZE SUM(x) + SUM(y) ORDER BY id")
+    xi, yi = cols.index("x"), cols.index("y")
+    best = max(x + y for x in range(4) for y in range(4) if holds(x, y))
+    assert all(holds(r[xi], r[yi]) for r in rows), rows
+    assert sum(r[xi] + r[yi] for r in rows) == 3 * best, rows
 
 
 @pytest.mark.cons_comparison

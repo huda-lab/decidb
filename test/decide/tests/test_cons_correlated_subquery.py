@@ -228,7 +228,7 @@ def test_correlated_subquery_objective(decidb_cli, duckdb_conn, oracle_solver, p
 def test_correlated_subquery_when_composition(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN filter combined with correlated subquery on per-row bound.
 
-    x <= COALESCE((SELECT 1 FROM supplier ...), 0) WHEN ps_supplycost < 500
+    when ps_supplycost < 500: x <= COALESCE((SELECT 1 FROM supplier ...), 0)
     Only rows with supplycost < 500 get the correlated eligibility check;
     rows with supplycost >= 500 are unconstrained (BOOLEAN caps at 1).
     """
@@ -237,10 +237,9 @@ def test_correlated_subquery_when_composition(decidb_cli, duckdb_conn, oracle_so
         FROM partsupp
         WHERE ps_partkey < 10
         DECIDE x(BOOL)
-        SUCH THAT x <= COALESCE(
+        SUCH THAT when ps_supplycost < 500: x <= COALESCE(
                     (SELECT 1 FROM supplier
                      WHERE s_suppkey = ps_suppkey AND s_acctbal > 0), 0)
-                  WHEN ps_supplycost < 500
             AND SUM(x * ps_supplycost) <= 2000
         MAXIMIZE SUM(x)
     """
@@ -523,19 +522,20 @@ def test_correlated_subquery_aggregate_rhs_tightest_bound(
 def test_correlated_subquery_aggregate_per_rhs_tightest_per_group(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """Under PER, the tightest bound is taken within each partition, not globally.
+    """Under `per ps_suppkey:`, the bound is read within each class, not globally.
 
     This is what discriminates group-aware reduction from a single global MIN: each
-    supplier's cap is the smallest p_size among that supplier's own rows.
+    supplier's cap is the p_size of that supplier's own rows. (Every supplier has one
+    row here, so the bound never varies within a class.)
     """
     sql = """
         SELECT ps_partkey, ps_suppkey, x
         FROM partsupp
         WHERE ps_partkey < 20
         DECIDE x(INT)
-        SUCH THAT SUM(x) <= (SELECT CAST(p_size AS INTEGER) FROM part
-                             WHERE p_partkey = ps_partkey)
-                  PER ps_suppkey
+        SUCH THAT per ps_suppkey: sum(x) by (ps_suppkey)
+                  <= (SELECT CAST(p_size AS INTEGER) FROM part
+                      WHERE p_partkey = ps_partkey)
         MAXIMIZE SUM(x)
     """
     t0 = time.perf_counter()
@@ -589,9 +589,9 @@ def test_correlated_subquery_aggregate_per_rhs_tightest_per_group(
 def test_correlated_subquery_rhs_ignores_aggregate_local_when(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
-    """An aggregate-local WHEN scopes its own reducer, never the bound's row set.
+    """A reducer's own `when` scopes that reducer, never the bound's row set.
 
-    ``(SUM(x) WHEN (ps_partkey <> 2)) <= (correlated p_size)`` sums only the
+    ``sum(when ps_partkey <> 2: x) <= (correlated p_size)`` sums only the
     non-partkey-2 rows on the left, but paper §3.2.1 fans the clause out over every
     *selected* tuple, so the binding bound is ``min(p_size)`` over all 36 rows, not
     over the 32 the local WHEN keeps.
@@ -608,7 +608,7 @@ def test_correlated_subquery_rhs_ignores_aggregate_local_when(
         WHERE ps_partkey < 10
         DECIDE x(INT)
         SUCH THAT x <= 5
-          AND (SUM(x) WHEN (ps_partkey <> 2))
+          AND sum(when ps_partkey <> 2: x)
               <= (SELECT CAST(p_size AS INTEGER) FROM part
                   WHERE p_partkey = ps_partkey)
         MAXIMIZE SUM(x)

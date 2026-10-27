@@ -17,7 +17,7 @@ SUCH THAT SUM(x + cost) <= budget
 SUCH THAT SUM(q * (price + x)) <= budget
 ```
 
-In constraints, data-only additive terms inside the aggregate body are supported. They are evaluated over the same active rows as the decision terms, including expression-level `WHEN`, aggregate-local `WHEN`, `PER`, and `AVG` scaling, then subtracted from the scalar RHS before the solver row is built.
+In constraints, data-only additive terms inside the aggregate body are supported. They are evaluated over the same rows as the decision terms — the clause's kept rows, the reducer's `by` group, its own `when` and its own `per` — with `AVG` scaling, then subtracted from the bound before the solver row is built.
 
 **Code**: Validated in `decide_objective_binder.cpp` and `decide_constraints_binder.cpp` — aggregates other than SUM, AVG, MIN, and MAX are rejected with an error.
 
@@ -26,113 +26,85 @@ In constraints, data-only additive terms inside the aggregate body are supported
 An aggregate constraint may bound the decision aggregate by a **data-only** aggregate on the other side — a `SUM`/`AVG` whose argument references no DECIDE variable:
 
 ```sql
-SUCH THAT SUM(x * val) <= SUM(val)          -- pick a subset whose value ≤ the total
-SUCH THAT AVG(x + cost) <= AVG(cost) + 1    -- average stays within 1 of the data mean
-SUCH THAT SUM(x * val) <= SUM(val) PER grp  -- per-group bound (each group its own RHS)
-SUCH THAT SUM(x * weight) <= SUM(b) + 10    -- aggregate plus a scalar offset
-SUCH THAT SUM(x * weight) <= SUM(b) WHEN w  -- RHS aggregate-local WHEN: bound over w-rows
+SUCH THAT sum(x * val) <= sum(val)                    -- pick a subset whose value ≤ the total
+SUCH THAT avg(x + cost) <= avg(cost) + 1              -- average stays within 1 of the data mean
+SUCH THAT sum(x * val) by (grp) <= sum(val) by (grp)  -- per-group bound (each group its own)
+SUCH THAT sum(x * cost) <= sum(cost) + 10             -- aggregate plus a scalar offset
+SUCH THAT sum(x * cost) <= sum(when w: cost)          -- the bound's own when: over the w-rows
 ```
 
-These are evaluated **in place, on the right**, by the RHS reducer evaluator described under "Reducers as a Bound"
-below: each data-only reducer collapses to one value per group, honouring the constraint's `WHEN`/`PER`, the
-reducer's own `WHEN`, and relation-qualifier de-duplication. `PER` constraints therefore carry a **per-group RHS**
-(each group's `SUM(val)` is its own bound), not one uniform scalar.
+These are evaluated **in place, on the right**, by the bound-side evaluators described under "Reducers as a Bound" below: each data-only reducer collapses to one value per group, honouring the clause's `when`, its own `by` group, its own `when`, and the de-duplication of its own key. A bound-side reducer with a `by` therefore carries a **per-group bound** (each group's `sum(val)` is its own bound), not one uniform scalar. A reducer's own `when` scopes only that reducer: in `sum(x * cost) <= sum(when w: cost)` the bound sums the w-rows while the left side still sums every row.
 
-A trailing `WHEN` on a bare RHS aggregate (`... <= SUM(b) WHEN w`) is **aggregate-local**: it scopes only that aggregate, so the bound is `SUM(b)` over the w-rows while the left side still sums every row.
+A reducer on **both** sides is accepted (`sum(x) <= sum(x * val)`): the canonicalizer moves every decision-bearing term to the left. `count(*)` on the bound side counts the rows its group reads (`sum(x) by (grp) <= count(*) by (grp)`).
 
-**Superseded implementation.** Until 2026-08-10 these shapes were instead handled by a *pre-binding hoist* that moved each data-only RHS aggregate into the LHS, negated (`SUM(x*val) <= SUM(val)` → `SUM(x*val) - SUM(val) <= 0`), where the execution path summed it over the active row set. That covered only `SUM`/`AVG`, because the left side reduces by **summing a column** — SUM by luck, and unable to express MIN. `HoistAggregateComparisonRHS` and its helpers are deleted; see `the canonicalization refactor and §7 C.1.
+**Tests**: `test/decide/tests/test_cons_rhs_aggregate.py` — parity with the explicitly-subtracted form and the scalar-bound equivalent, scalar-plus-aggregate bound, per-group bounds, AVG mixed with other terms, a bound's own `when`, MIN/MAX bounds, and group-aware `count(*)`.
 
-**Scope / rejections.**
-- An RHS aggregate referencing a DECIDE variable (`SUM(x) <= SUM(x*val)`) → still the existing "variables on both sides" binder rejection.
-- The `count_star()` RHS special case in `TransformToChunkExpression` is **deleted** — it folded to the operator's total input cardinality, which was a wrong answer under `WHEN`/`PER`. `COUNT(*)` now counts the constraint's own rows.
+#### Reducers as a Bound
 
-**Tests**: `test/decide/tests/test_cons_rhs_aggregate.py` — parity with the explicitly-subtracted form and the scalar-bound equivalent, scalar-plus-aggregate RHS, per-group PER bounds, AVG mixed with other terms, aggregate-local WHEN, MIN/MAX bounds, and group-aware `COUNT(*)`.
-
-#### Reducers as a Bound (B.5)
-
-Any reducer may stand on the right of a reduced constraint, evaluated to **one value per group**:
+Any reducer may stand on the bound side of a reduced constraint, evaluated to **one value per group**:
 
 ```sql
-SUCH THAT SUM(x * price) <= MIN(price) * 4      -- MIN/MAX, not just SUM/AVG
-SUCH THAT SUM(x) <= COUNT(*) PER grp            -- counts the group's rows
-SUCH THAT SUM(x * price) <= MIN(price) + 90     -- mixed with an ordinary term
-SUCH THAT SUM(x) <= (SELECT b FROM g WHERE ...) -- row-varying: tightest bound
-SUCH THAT SUM(ship) <= stock PER depotID        -- a plain column, the same way (C1)
+SUCH THAT sum(x * price) <= min(price) * 4          -- MIN/MAX, not just SUM/AVG
+SUCH THAT sum(x) by (grp) <= count(*) by (grp)      -- counts the group's rows
+SUCH THAT sum(x * price) <= min(price) + 90         -- mixed with an ordinary term
+SUCH THAT sum(x) <= (SELECT b FROM g WHERE ...)     -- row-varying: tightest bound
+SUCH THAT sum(ship) by (depotID) <= stock           -- a plain column, the same way (C1)
 ```
 
-This removes an asymmetry that could not be explained without describing internals: `<= AVG(col)` worked and `<= MIN(col)` did not, because the old hoist moved a data term to the left where it is reduced by **summing a column** — which is SUM by luck, and cannot express MIN.
+The bound side is reduced by its own evaluator rather than folded into the decision side, where a data term could only be summed, so `MIN` and `MAX` work there as well as `SUM` and `AVG`.
 
-**Semantics.** The evaluator implements the construction order paper §3.2.2 fixes for every reducer — `when` selection
-→ `per` partitioning → qualifier-key grouping and de-duplication → aggregation. A reducer's own `WHEN` scopes only
-that reducer, so the right side is *not* narrowed by the left side's aggregate-local `WHEN`: in `(SUM(x) WHEN a) <=
-MIN(b)`, `MIN(b)` still ranges over every row.
+**Semantics.** The evaluator follows the construction order every reducer takes (paper §3.2.2): the rows its `by` selects among the clause's kept rows → its own `when` → one value per class of its own key, de-duplicated → aggregation. A reducer's own `when` scopes only that reducer, so the bound is *not* narrowed by a filter on the left side: in `sum(when a: x) <= min(b)`, `min(b)` still ranges over every kept row.
 
-**A row-varying bound** — a plain data column (C1) or a correlated subquery — collapses to the single bound the per-tuple conjunction implies for `<=`/`<`/`>=`/`>`: MIN for `<=`/`<`, MAX for `>=`/`>`, per paper §3.2.1. `=` has no such collapse and is refused as a contradiction when the values genuinely differ (two different single numbers can't both be *the* sum). `<>` also has no collapse, but for the opposite reason: nothing contradicts, so every excluded value is kept rather than reduced to one (C3) — `SUM(x) <> 500 AND SUM(x) <> 350` within one group, not just the tighter of the two. Both are Standing Decision 3.
+**A row-varying bound** — a plain data column (C1) or a correlated subquery — with no `per` collapses to the single bound the per-tuple conjunction implies for `<=`/`<`/`>=`/`>`: MIN for `<=`/`<`, MAX for `>=`/`>`, per paper §3.2.1. Under an explicit `per K:` the bound must instead be determined by `K` (`../scope/done.md` §5). `=` has no such collapse and is refused as a contradiction when the values genuinely differ (two different single numbers can't both be *the* sum). `<>` also has no collapse, but for the opposite reason: nothing contradicts, so every excluded value is kept rather than reduced to one (C3) — `SUM(x) <> 500 AND SUM(x) <> 350` within one group, not just the tighter of the two. Both are Standing Decision 3.
 
-**AVG on the right** keeps its fractional value, including when mixed with other terms (`<= 2 * AVG(col)`). This briefly
-did not work: the optimizer's AVG→SUM rewrite redeclares the node with SUM's integral type while its value stays
-fractional, and this is the one place a reducer's value is handed back to a surrounding expression bound against that
-type, so the fraction was cast away. `RewriteAvgInExpression` now **skips any AVG with no decision variable** — there is
-nothing to linearize in one, and DuckDB's `AVG` already returns `DOUBLE`.
+**AVG on the right** keeps its fractional value, including when mixed with other terms (`<= 2 * avg(col)`). The optimizer's AVG→SUM rewrite would redeclare the node with SUM's integral type while its value stays fractional, so `RewriteAvgInExpression` **skips any AVG with no decision variable** — there is nothing to linearize in one, and DuckDB's `AVG` already returns `DOUBLE`.
 
-**Qualified and WHEN-scoped reducers as bounds** (`<= SUM(D: cost)`, `<= SUM(b) WHEN w`) run the same de-duplication
-and filtering the left side does. These were built with B.5 but unreachable until the binder's RHS validator stopped
-treating a wrapper's predicate / PER key / relation alias as if it were a value on the bound side.
+**Keyed and filtered reducers as bounds** (`<= sum(per D: cost)`, `<= sum(when w: b)`) run the same de-duplication and filtering the left side does.
 
-**Code**: `EvaluateRhsReducerPerGroup` and `ReduceAggregateRhsPerGroup` in
-`src/execution/operator/decide/physical_decide.cpp`; reducer substitution via `TransformToChunkExpression`'s
-`agg_substitutions`. Design and the findings behind it: `the canonicalization refactor, B.5.
+**Code**: one evaluator. `RewriteRhsAggregates` (`src/optimizer/decide/decide_rewrite_rhs_window.cpp`, stage 05) replaces every reducer on a bound (`COUNT`, `MIN`, `MAX`, `SUM`, `AVG`, a written norm; with or without its own `when`, a `by`, a `per` inside it or the colon form) by a window column over the source: the same DuckDB aggregate, partitioned by the `by` key (NULL a group of its own, D5) over the rows the clause's `when` keeps. A keyed or colon reducer counts the first row of each class of its key (a `ROW_NUMBER` window). The bound of an aggregate clause is then reduced to its group's tightest value in the same rewrite. So the solver and direct solve read one number computed in DuckDB's own types, nothing is computed on a row a `when` drops (syntax reference §6.3), and every value the window reads is checked by VALUE_IS_VALID scope checks before any is used. A norm of order 0 over data counts the rows where its body is not 0.
 
-#### A Query-Wide Decision Multiplied by a Vector, Inside a Reducer (Batch D)
+#### A Query-Wide Decision Multiplied by a Vector, Inside a Reducer
 
 A reducer is rejected iff its **body is row-invariant** — holds the same value on every
-row, with no data column and no row- or entity-scoped decision anywhere inside it — not
-merely because it *contains* a query-wide (`scalar`) decision:
+row, with no data column and no per-row or keyed decision anywhere inside it — not
+merely because it *contains* a query-wide (`per ()`) decision:
 
 ```sql
 SUM(cap)                    -- rejected: row-invariant, nothing to reduce over
 SUM(cap1 + cap2)            -- rejected: still row-invariant (two scalars, no data)
 SUM(opening_cost * cap)     -- valid: opening_cost varies per row, means (Σcost)·cap
 SUM(D: opening_cost * cap)  -- valid: means (Σ over D's distinct tuples of cost)·cap
-SUM(x + cap)                -- valid: x is row-scoped, means SUM(x) + n·cap
+SUM(x + cap)                -- valid: x is per row, means SUM(x) + n·cap
 ```
 
-Before this, the test was "does a scalar appear anywhere in the body", which rejected
-`SUM(opening_cost * cap)` even though the body plainly varies per row and the reduction
-is unambiguous — a standard scalar-times-vector product. The relation-qualified form
-follows the same rule: a scalar is exempt from "everything must come from the qualified
-relation" (§5.1) because it is row-invariant and contributes uniformly to every tuple,
-but a qualified reducer whose entire body is scalars/constants is still rejected for the
-same "nothing to reduce over" reason.
+`SUM(opening_cost * cap)` varies per row and its reduction is unambiguous — a standard
+scalar-times-vector product. The colon form follows the same rule: a query-wide decision
+is row-invariant, so the key determines it and it contributes uniformly to every tuple,
+but a keyed reducer whose entire body is query-wide decisions and constants is rejected
+for the same "nothing to reduce over" reason.
 
-**Formulation (stage 05/06).** Term extraction (`decide_linear_form.cpp`) was already
+**Formulation (stage 05/06).** Term extraction (`decide_linear_form.cpp`) is
 scope-agnostic — `FindDecideVariable`/`SplitLinear` don't special-case a variable's
-scope, so `opening_cost * cap` correctly extracts to `DecideTerm{var=cap,
-coefficient=opening_cost}` regardless of `cap`'s scope. The bug was one layer down, in
-the **accumulator** that folds per-row-evaluated coefficients into the flat solver
-column a variable resolves to (`ilp_model_builder.cpp`): it took a shortcut for any
-`SCALAR`-scoped term — add the coefficient **once**, from row 0 or the group's first
-row — because the only shape that shortcut had ever needed to handle was a scalar
-standing **beside** a reducer as a bare additive term (`SUM(x) - max_shortfall <= cap`),
-which is genuinely row-invariant and must not be multiplied by the row count. Now that a
-scalar can also sit **inside** a reducer body, that same shortcut would silently drop
-every row's contribution but one. The fix distinguishes the two shapes using
-`DecideTerm::reduction`: `LinearTermReduction::SUM` marks a term that came from inside a
-real reducer (stamped by `ApplyAggregateMetadata` on the constraint side, and now the
-same way in `ExtractAggregateObjectiveTerms`/`AnalyzeObjective`'s aggregate branch on the
-objective side); `NONE` marks a bare sibling term. The accumulator's scalar shortcut now
-fires only when `var_scope == SCALAR && reduction != SUM` — a `SUM`-reduced scalar term
-falls through to the same per-row accumulation loop entity-scoped variables already use,
-so its coefficient becomes the sum of every counted row's data. `SolverInput` grew a
-parallel `objective_term_reductions` array (the constraint side already had
+scope, so `opening_cost * cap` extracts to `DecideTerm{var=cap,
+coefficient=opening_cost}` whatever `cap`'s scope. The **accumulator** that folds
+per-row-evaluated coefficients into the flat solver column a variable resolves to
+(`ilp_model_builder.cpp`) tells the two shapes of a `SCALAR`-scoped term apart by
+`DecideTerm::reduction`. `NONE` marks a query-wide decision standing **beside** a reducer
+as a bare additive term (`sum(x) - max_shortfall <= cap`), which is row-invariant: its
+coefficient is added **once**, from the group's first row. `LinearTermReduction::SUM`
+marks a term from **inside** a reducer (stamped by `ApplyAggregateMetadata` on the
+constraint side, and in `ExtractAggregateObjectiveTerms`/`AnalyzeObjective`'s aggregate
+branch on the objective side): it takes the per-row accumulation loop keyed variables
+use, so its coefficient is the sum of every counted row's data. `SolverInput` carries
+`objective_term_reductions` (the constraint side has
 `EvaluatedConstraint::linear_term_reductions`) so the objective-side accumulator
-(`BuildIlpModel`'s linear-objective loop) can make the same distinction.
+(`BuildIlpModel`'s linear-objective loop) makes the same distinction.
 
-**De-duplication.** A relation-qualified `SUM(D: cost * cap)` still charges each of `D`'s
-distinct tuples once, even when two tuples share the same `cost` — identity is the tuple,
-not the value, same as every other qualified reducer (§5.1). The qualifier's existing
-row-masking (`ApplyQualifierToFilter`/`BuildQualifierKeepMask`) runs before the
-accumulator sees the row data, so the accumulator itself needs no qualifier-specific case.
+**De-duplication.** `SUM(D: cost * cap)` charges each of `D`'s distinct tuples once,
+even when two tuples share the same `cost` — identity is the tuple, not the value, as for
+every keyed reducer (`syntax_reference.md` §5.1). The key's row mask
+(`ApplyQualifierToFilter`/`BuildQualifierKeepMask`) runs before the accumulator sees the
+row data, so the accumulator needs no key-specific case.
 
 **Tests**: `test/decide/tests/test_scalar_scope.py` —
 `test_scalar_times_data_inside_reducer_is_weighted_by_row_data` (unqualified, oracle
@@ -144,18 +116,17 @@ discriminates coefficient `Σcost` from both the bare-scalar and row-count misre
 weighted by distinct-entity data, equal-cost entities still counted twice),
 `test_query_wide_decision_alone_inside_qualified_reducer_rejected` (still-rejected).
 
-**Code**: `DecideBinder::IsRowInvariantExpression` and `ClassifyReducerCall`
-(unqualified/parsed-tree gate), `IsBoundReducerBodyRowInvariant` and
-`BindQualifiedReducer` (qualified/bound-tree gate) in `decide_binder.cpp`;
+**Code**: `DecideBinder::IsRowInvariantExpression` and `ClassifyReducerCall` (the
+parsed-tree gate, every reducer) in `decide_binder.cpp`;
 `ExtractAggregateConstraintTerms`/`ExtractAggregateObjectiveTerms` in
 `decide_linear_form.cpp` (the `BOUND_AGGREGATE` exclusion on the bare-scalar shortcut);
 the three `var_scope == SCALAR` sites in `ilp_model_builder.cpp` (two constraint paths,
 one objective path).
 
-### Several Relations at Once — A Composite Qualifier (Batch E)
+### Several Relations at Once — A Composite Qualifier
 
-`SUM(D: expr)` (§5.1) named exactly one relation; `SUM(D, T: expr)` names several.
-Paper §3.2.2 claims this shape but the grammar rejected it outright until now.
+`SUM(D, T: expr)` (`syntax_reference.md` §5.1) names several relations; it means
+`sum(per D, T: expr)` (paper §3.2.2).
 
 **Semantics.** A composite qualifier's tuple identity is the concatenation of every
 named relation's own key — the same "all columns of the table" key a single-relation
@@ -163,9 +134,8 @@ scope already used, just for each relation in the list. A row is a duplicate onl
 it repeats on *every* named relation's key at once, so naming a relation removes the
 fan-out it would otherwise contribute, and a relation left unnamed still contributes
 its fan-out uncollapsed. `expr` may draw columns and decisions from any of the named
-relations (`CheckQualifiedReducerBody`'s "must come from the qualifier" rule now checks
-set membership instead of equality), and the relation list is order-independent — `D,
-T` and `T, D` resolve to the same scope.
+relations — whatever their key determines (the DETERMINES check of `sum(per D, T: e)`) —
+and the relation list is order-independent — `D, T` and `T, D` resolve to the same scope.
 
 One consequence of that identity rule is worth stating: with exactly two relations in
 the whole query, `SUM(D, T: expr)` and the unqualified `SUM(expr)` are the same
@@ -176,18 +146,15 @@ which needs three relations to demonstrate, since the two-relation case can't pr
 an unqualified relation to fan out from.
 
 **Implementation.** `EntityScopeInfo` (`logical_decide.hpp`) carries
-`source_table_indices` (plural) instead of a single index; `FindOrCreateEntityScope`
-gained a `vector<string>` overload that canonicalizes (sorts, case-insensitively) the
-relation list before using it as the scope cache key, so the composite scope is built
-once regardless of the order the query names its relations in. Everything below the
-binder — the optimizer's `qualifier_scope_idx` stamping, the prepared model's
-`DecideTerm`/`BilinearConstraintTerm`/objective terms, and physical execution's
-`BuildQualifierKeepMask`/`BuildEntityMappings` — already treated a scope as an opaque
-index into `entity_scopes`, so none of it changed: the composite-ness lives entirely
-inside the `EntityScopeInfo` the binder builds. The grammar change is a single
-`func_arg_list` passed through as one `PGList` (the same idiom multi-column `PER`
-already used) instead of being restricted to length 1 and unpacked into a lone
-`PGColumnRef`.
+`source_table_indices`, every relation the key reads; the key is every named
+relation's stored columns sorted by binding (`FindOrCreateExactScope`), so the
+composite scope is built once regardless of the order the query names its relations in.
+Everything below the binder — the optimizer's `qualifier_scope_idx` stamping, the
+prepared model's `DecideTerm`/`BilinearConstraintTerm`/objective terms, and physical
+execution's `BuildQualifierKeepMask`/`BuildEntityMappings` — treats a scope as an
+opaque index into `entity_scopes`, so the composite-ness lives entirely inside the
+`EntityScopeInfo` the binder builds. The grammar passes the relation list
+through as one `PGList`.
 
 **Tests**: `test/decide/tests/test_qualified_reducer.py` —
 `test_three_relation_composite_qualifier_differs_from_single_and_unqualified` (oracle,
@@ -199,12 +166,10 @@ and are checked against three independent oracle models),
 
 **Code**: grammar actions for `PG_AEXPR_QUALIFIED_REDUCER` in
 `third_party/libpg_query/grammar/statements/select.y`; the matching transform case in
-`transform_operator.cpp`; `FindOrCreateEntityScope`, `BindQualifiedReducer`,
-`CheckQualifiedReducerBody`, `ScopeContainsTable`/`ScopeTablesIntersect` in
-`decide_binder.cpp`; the `EntityScopeInfo` struct in `logical_decide.hpp`; the
-entity-key data-column refinement in `bind_select_node.cpp`; `Serialize`/`Deserialize`
-in `logical_decide.cpp` (field 239 carries the per-scope table-index count; old plans
-without it default to one table per scope).
+`transform_operator.cpp`; `FindOrCreateExactScope`, `BindQualifiedReducer` in
+`decide_binder.cpp`; the `EntityScopeInfo` struct in `logical_decide.hpp`, serialized from
+`src/include/duckdb/storage/serialization/nodes.json` (`source_table_indices` is
+field 101).
 
 ### AVG() — Coefficient Scaling at Execution Time
 
@@ -212,32 +177,27 @@ without it default to one table per scope).
 
 **Semantics**: Standard SQL AVG — divide by count of all rows (decision variables are never NULL). This is always linear since N is a data-determined constant.
 
-**Constraints**: Semantically, `AVG(expr) op K` is equivalent to `SUM(expr) op K*N` where N depends on context:
-- No WHEN/PER: N = total row count
-- WHEN: N = count of WHEN-matching rows
-- PER: N = count of rows in each group
-- WHEN+PER: N = count of WHEN-matching rows per group
-- Aggregate-local WHEN: N = count of rows matching that aggregate-local filter, within each PER group if PER is present
+**Constraints**: Semantically, `AVG(expr) op K` is equivalent to `SUM(expr) op K*N` where N is the number of values the reducer receives: the rows of its `by` group among the clause's kept rows that pass its own `when`, or the number of classes of its own `per`. With no scope at all, N is the total row count.
 
 **Objectives (flat)**: `MAXIMIZE/MINIMIZE AVG(expr)` uses the same optimal assignment as `SUM(expr)` when there is one global denominator. In mixed additive aggregate expressions, DeciDB preserves AVG scaling per term so `AVG(a) + SUM(b)` is not treated as `SUM(a) + SUM(b)`.
 
-**Objectives (nested PER)**: `OUTER(AVG(expr)) PER col` is fully supported. Inner AVG scales each row's coefficient by `1/n_g` (group size), producing true per-group averages. Outer AVG maps to SUM (dividing by constant G). See [maximize_minimize/done.md](../maximize_minimize/done.md).
+**Objectives (two-level form)**: in `outer(per k: avg(e) by (k))` the inner AVG scales each row's coefficient by `1/n_g` (group size), producing true per-group averages. An outer `avg` over the classes is refused; `sum` over them ranks the solutions the same way. See [`../scope/done.md`](../scope/done.md) §6.
 
 ```sql
-SUCH THAT AVG(x * weight) <= 10         -- SUM(x*weight) <= 10*N
-SUCH THAT AVG(x + cost) <= 5            -- fixed AVG(cost) is moved to RHS
-SUCH THAT AVG(x) <= 0.5                 -- at most half the rows selected (BOOL)
-SUCH THAT AVG(x * cost) <= 5 WHEN active -- only among active rows
-SUCH THAT AVG(x * cost) WHEN active + SUM(x * fee) WHEN priority <= 100
-SUCH THAT AVG(x * hours) <= 8 PER emp   -- per-group average
-MAXIMIZE AVG(x * profit)                -- same as MAXIMIZE SUM(x * profit)
+SUCH THAT avg(x * weight) <= 10                       -- sum(x * weight) <= 10*N
+SUCH THAT avg(x + cost) <= 5                          -- fixed avg(cost) is moved to the bound
+SUCH THAT avg(x) <= 0.5                               -- at most half the rows selected (BOOL)
+SUCH THAT when active: avg(x * cost) <= 5             -- only among active rows
+SUCH THAT avg(when active: x * cost) + sum(when priority: x * fee) <= 100
+SUCH THAT per emp: avg(x * hours) by (emp) <= 8       -- per-group average
+MAXIMIZE avg(x * profit)                              -- same as MAXIMIZE sum(x * profit)
 ```
 
 **Code**: AVG flows through binding natively (no parse-time rewrite), preserving its DOUBLE return type so fractional RHS values survive type coercion. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) accept `"avg"` alongside `"sum"`. The `DecideOptimizer` rewrites AVG to SUM while tagging the aggregate with `AVG_REWRITE_TAG`. At execution time (`physical_decide.cpp`), expression analysis marks extracted terms with `avg_scale`; coefficient evaluation scales linear and bilinear terms by `1/N`, and quadratic inner terms by `1/sqrt(N)`. Exception: for `AVG(expr) <> K` the LHS scaling would produce fractional coefficients and trip the NE integer-step guard, so DeciDB sets `EvaluatedConstraint::ne_avg_rhs_scale` and leaves the LHS as SUM; the deferred NE expansion multiplies the RHS by the per-group size instead.
 
-**Tests**: `test/decide/tests/test_avg.py` covers objectives, constraints, WHEN, PER,
-WHEN+PER, BOOL, INT, non-linear rejection, `<>` with and without WHEN, and
-no-decision-variable passthrough.
+**Tests**: `test/decide/tests/test_avg.py` covers objectives, constraints, a `when` in
+front and inside, `per` with `by`, BOOL, INT, non-linear rejection, `<>` with and without
+a `when`, and no-decision-variable passthrough.
 
 ---
 
@@ -252,7 +212,7 @@ When the comparison direction already bounds each row individually, no auxiliary
 - `MAX(expr) <= K` → per-row constraint: `expr <= K` for every row
 - `MIN(expr) >= K` → per-row constraint: `expr >= K` for every row
 
-These are trivially correct: bounding every row satisfies the aggregate bound. PER on easy cases is stripped (redundant, since constraints are already per-row).
+These are trivially correct: bounding every row satisfies the aggregate bound. With a `by`, each member is bounded by its group's bound. With no `when` and no filter on the reducer, a bound on a lone decision (`max(x) <= K`, `min(x) >= K`) is absorbed into the decision's box, so a negative `K` makes `x` signed (`../scope/done.md` §3). The reducer stays in the tree (`MINMAX_EASY_REWRITE_TAG`), so EXPLAIN and DIAGNOSE quote the clause as written.
 
 #### Hard Constraint Cases (Big-M Indicators)
 
@@ -266,7 +226,7 @@ When the aggregate must be tight (equality or the "wrong" direction), a global a
 all.** Gurobi states `z = MAX(t..)` as a general constraint, so there is no Big-M, no
 indicator binaries, and no requirement that any contributing variable be bounded —
 `SUCH THAT MAX(x) >= 5` answers there with an unbounded `x`. All four hard forms
-(constraint, flat objective, PER-nested objective, composed term) take that path. The
+(constraint, flat objective, two-level objective, composed term) take that path. The
 choice is made once, at execution, from the backend's capability table, and both paths
 reach the same optimum wherever both can run.
 
@@ -289,50 +249,41 @@ derived from `x`'s. Easy cases never ask for a Big-M and are unaffected.
 
 #### Row Expression Shape
 
-The inner expression is any linear combination of decision variables plus a constant — it is not restricted to a single product term. `MIN((cost + 1) * x)`, `MIN(cost * x + x)`, and `MIN(cost * x + 5)` are all accepted, in constraints and objectives, flat / PER / composed alike — including the nested-aggregate `SUM(MIN(expr)) PER col` / `SUM(MAX(expr)) PER col` shape (a multi-term inner used to be rejected at bind time in exactly that shape, because a parsed-level normalizer encoded MIN/MAX as a distributable marker product; nothing distributes at that level now).
+The inner expression is any linear combination of decision variables plus a constant — it is not restricted to a single product term. `MIN((cost + 1) * x)`, `MIN(cost * x + x)`, and `MIN(cost * x + 5)` are all accepted, in constraints and objectives, flat, two-level and composed alike — including `sum(per k: min(e) by (k))`.
 
-Each linking row is accumulated **per solver column** before emission (`MinMaxLinkRow` in `physical_decide.cpp`). This matters because the term arrays are indexed by term, not by variable, so one column can reach a row more than once: `(cost + 1) * x` distributes into `cost*x + 1*x`, and an entity-scoped or `SCALAR` variable resolves to a single column across every row of a PER group. A repeated column index is rejected outright by both Gurobi and HiGHS, so coefficients are summed and columns whose terms cancel are dropped. Constant terms carry no column and fold into the row's bound: `z <= expr + k` is emitted as `z - expr <= k`.
+Each linking row is accumulated **per solver column** before emission (`MinMaxLinkRow` in `physical_decide.cpp`). This matters because the term arrays are indexed by term, not by variable, so one column can reach a row more than once: `(cost + 1) * x` distributes into `cost*x + 1*x`, and a keyed or query-wide variable resolves to a single column across every row of a group. A repeated column index is rejected outright by both Gurobi and HiGHS, so coefficients are summed and columns whose terms cancel are dropped. Constant terms carry no column and fold into the row's bound: `z <= expr + k` is emitted as `z - expr <= k`.
 
 #### Composition
 
-- **WHEN**: Composes naturally. WHEN masks filter which rows participate in the MIN/MAX aggregate, and constraint/indicator generation skips non-matching rows.
-- **PER (easy cases)**: Stripped as redundant — easy cases already produce per-row constraints.
+- **`when`**: a `when` in front of the clause or the reducer's own `when` selects which rows participate in the MIN/MAX aggregate, and constraint/indicator generation skips the others.
+- **`by`**: a hard MIN/MAX gets one extremum column per `by` group; an easy one bounds each member by its group's bound.
 
 ```sql
 -- Easy constraint cases (no Big-M)
-SUCH THAT MAX(x * cost) <= 100         -- per-row: x*cost <= 100
-SUCH THAT MIN(x * hours) >= 2          -- per-row: x*hours >= 2
+SUCH THAT max(x * cost) <= 100         -- per-row: x*cost <= 100
+SUCH THAT min(x * hours) >= 2          -- per-row: x*hours >= 2
 
 -- Hard constraint cases (Big-M indicators)
-SUCH THAT MAX(x * cost) >= 50          -- global z, binary indicators
-SUCH THAT MIN(x * hours) = 4           -- equality: both directions
+SUCH THAT max(x * cost) >= 50          -- global z, binary indicators
+SUCH THAT min(x * hours) = 4           -- equality: both directions
 
 -- Objectives
-MINIMIZE MAX(x * cost)                 -- easy: global z, minimize
-MAXIMIZE MIN(x * profit)               -- easy: global z, maximize
-MAXIMIZE MAX(x * profit)               -- hard: z + binary indicators
-MINIMIZE MIN(x * cost)                 -- hard: z + binary indicators
+MINIMIZE max(x * cost)                 -- easy: global z, minimize
+MAXIMIZE min(x * profit)               -- easy: global z, maximize
+MAXIMIZE max(x * profit)               -- hard: z + binary indicators
+MINIMIZE min(x * cost)                 -- hard: z + binary indicators
 
 -- Multi-term and constant row expressions
-MINIMIZE MAX((cost + 1) * x)           -- distributes to cost*x + 1*x, one column
-MINIMIZE MAX(cost * x + x)             -- same shape written out
-MINIMIZE MAX(cost * x + 5)             -- constant folds into the row's bound
+MINIMIZE max((cost + 1) * x)           -- distributes to cost*x + 1*x, one column
+MINIMIZE max(cost * x + x)             -- same shape written out
+MINIMIZE max(cost * x + 5)             -- constant folds into the row's bound
 
--- With WHEN
-SUCH THAT MAX(x * cost) <= 50 WHEN category = 'electronics'
-MINIMIZE MAX(x * deviation) WHEN active = 1
+-- With a when
+SUCH THAT when category = 'electronics': max(x * cost) <= 50
+MINIMIZE when active = 1: max(x * deviation)
 ```
 
-**Code**: nothing rewrites a MIN/MAX before binding — a reducer is one atomic term to the canonicalizer, which never
-opens it, so a multi-term `inner` is safe by construction. (An earlier parsed-level representation encoded `MIN`/`MAX`
-as a `MARKER * inner` product, which algebraic expansion then distributed across a multi-term inner and scrambled; that
-is why a multi-term inner under a nested `SUM(...) PER` used to be rejected at bind time. Nothing distributes anything
-at that level now.) Post-bind, `DecideOptimizer::RewriteMinMaxConstraints`/`RewriteMinMaxInConstraint`
-(`decide_rewrite_minmax.cpp`) walk the bound expression tree to classify each MIN/MAX as easy/hard and emit the Big-M
-indicator scaffolding. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) whitelist MIN/MAX
-alongside SUM and AVG. At execution time, `physical_decide.cpp` generates the appropriate per-row constraints, Big-M
-indicator constraints, and global auxiliary variables. Global variable and constraint support is provided by
-`solver_input.hpp` and `ilp_model_builder.cpp`.
+**Code**: nothing rewrites a MIN/MAX before binding — a reducer is one atomic term to the canonicalizer, which never opens it, so a multi-term `inner` is safe by construction. Post-bind, `DecideOptimizer::RewriteMinMaxConstraints`/`RewriteMinMaxInConstraint` (`decide_rewrite_minmax.cpp`) walk the bound expression tree to classify each MIN/MAX as easy/hard and emit the Big-M indicator scaffolding. The binders (`decide_constraints_binder.cpp`, `decide_objective_binder.cpp`) whitelist MIN/MAX alongside SUM and AVG. At execution time, `physical_decide.cpp` generates the appropriate per-row constraints, Big-M indicator constraints, and global auxiliary variables. Global variable and constraint support is provided by `solver_input.hpp` and `ilp_model_builder.cpp`.
 
 ---
 
@@ -352,19 +303,19 @@ This covers (non-exhaustive) `SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND
 
 **Aggregate mis-uses** (e.g., `BIT_AND(x)`, `STDDEV(x)`) are routed to the existing aggregate-specific rejection in `BindAggregate` with the more informative "only SUM, AVG, MIN, MAX, or COUNT is allowed" message. A catalog lookup distinguishes scalar from aggregate so the two rejection paths don't collide.
 
-**Why this guard exists**: before it, per-row non-linear scalars were silently stripped (`SUCH THAT sqrt(x) <= 2` returned `x = 2` instead of `x = 4`), aggregate non-linear scalars crashed the parsed-level normalizer of the day with `InternalException`, and `ABS(sqrt(x))` FATAL-ed the session at physical execution. The validator catches all three classes at bind time.
+**Why this guard exists**: no later stage models a non-linear scalar over a decision, so without it such a function would be dropped or reach execution unmodelled. The validator catches every position — per row, inside a reducer, and nested in `ABS()` — at bind time.
 
-**Code**: `ValidateDecideNoNonLinearScalar` in `src/planner/expression_binder/decide/decide_binder.cpp`, called from `src/planner/binder/query_node/bind_select_node.cpp` on the parsed tree, before binding.
+**Code**: `ValidateDecideNoNonLinearScalar` in `src/planner/expression_binder/decide/decide_binder.cpp`, called from `BindDeclarations` (`src/planner/expression_binder/decide/decide_declarations_binder.cpp`) on the parsed tree, before binding.
 
 **Tests**: `test/decide/tests/test_error_binder.py` — `test_nonlinear_scalar_per_row_lhs`, `test_nonlinear_scalar_inside_sum`, `test_nonlinear_scalar_inside_abs` (parametrized over SQRT, EXP, LN, LOG, FLOOR, CEIL, ROUND, SIN, COS).
 
-**POWER exponent check**: The same pre-pass rejects `POWER(base, exp)` / `POW(base, exp)` / `base ** exp` when `base` contains a DECIDE variable and `exp` is not a constant numeric equal to `2`. That covers fractional exponents (`POWER(x, 0.5)`), negative exponents (`POWER(x, -1)`), higher-integer exponents (`POWER(x, 3)`), degenerate exponents (`POWER(x, 0)`, `POWER(x, 1)`), and non-constant exponents (`POWER(x, x)`, `POWER(x, col)`). Previously these tripped an `InternalException` in the parsed-level normalizer, exposing a C++ stack trace. The pre-pass now catches all non-2 cases with the same error messages used by the existing `ValidateQuadraticPower` whitelist inside SUM, so error-text tests stay consistent across SUM and non-SUM contexts.
+**POWER exponent check**: The same pre-pass rejects `POWER(base, exp)` / `POW(base, exp)` / `base ** exp` when `base` contains a DECIDE variable and `exp` is not a constant numeric equal to `2`. That covers fractional exponents (`POWER(x, 0.5)`), negative exponents (`POWER(x, -1)`), higher-integer exponents (`POWER(x, 3)`), degenerate exponents (`POWER(x, 0)`, `POWER(x, 1)`), and non-constant exponents (`POWER(x, x)`, `POWER(x, col)`). The pre-pass catches all non-2 cases with the same error messages the `ValidateQuadraticPower` whitelist uses inside SUM, so the wording is the same in SUM and non-SUM contexts.
 
-**Data-only named scalar functions now fold too**: `SUM(f(col) * x)` where `f` is an arbitrary named scalar *function* on data columns (`mod()`, `floor()`, …) folds to a per-row coefficient, exactly like data-only operators — see "Data-only operators the algebra doesn't model" under Arithmetic Operators. Only the variable-bearing case (`f(x)`) is rejected. Ordinary arithmetic data-only subterms such as `SUM(x + cost)` and `SUM(q * (price + x))` are supported in aggregate constraints.
+**Data-only named scalar functions fold too**: `SUM(f(col) * x)` where `f` is an arbitrary named scalar *function* on data columns (`mod()`, `floor()`, …) folds to a per-row coefficient, exactly like data-only operators — see "Data-only operators the algebra doesn't model" under Arithmetic Operators. Only the variable-bearing case (`f(x)`) is rejected. Ordinary arithmetic data-only subterms such as `SUM(x + cost)` and `SUM(q * (price + x))` are supported in aggregate constraints.
 
 **`POWER` over data is one of them, and the exponent is unrestricted there**: `SUM(x * POWER(qty, 2))` is linear in `x` — the base references no decision variable, so the whole call is a per-row coefficient — and `POWER(qty, 3)` is equally fine. The quadratic rules above (`exp == 2`, base must be linear, constraints vs objectives) govern a POWER whose base *is* decision-bearing, and only that.
 
-This was rejected until 2026-08-12, with *"POWER(..., 2) in DECIDE expression must reference at least one DECIDE variable"* — `ValidateQuadraticPower` ran on every POWER node regardless of what it wrapped. The gate had never fired on a real query: a parsed-level normalizer lowered `POWER(qty, 2)` to `qty * qty` before binding, so no POWER node survived to be checked. Deleting that layer exposed it. Tests: `test/decide/tests/test_power_over_data.py` (oracle-verified, and one case pins that `POWER(x-2, 2)` still takes the quadratic path).
+Tests: `test/decide/tests/test_power_over_data.py` (oracle-verified, and one case pins that `POWER(x-2, 2)` takes the quadratic path).
 
 ---
 
@@ -384,6 +335,8 @@ The lower-envelope alone forces `d >= |expr|`. To pin `d` to exactly `|expr|`, o
 
 Classification is **per ABS occurrence and by sign**, not by which side of the comparison the ABS was written on. The constraint is read as `E <op> 0` with `E = LHS - RHS`; each ABS then carries an effective sign, and the question "does this comparison push `d` down?" has a single answer per occurrence. Sign is tracked through `+`, binary and unary `-`, casts, aggregate bodies, and numeric literal factors. A factor whose sign is known only at execution — a data column, as in `SUM(w * ABS(x - t))` — is classified as unknown and conservatively takes the Big-M path.
 
+**An ABS inside an ABS** — `ABS(ABS(e) - k)`, or `ABS(ABS(SUM(x) BY (g)) - k)` over a reducer — is supported: each ABS gets its own auxiliary, innermost first, and an ABS nested under another takes Path B, whatever the outer clause's direction or the objective's sense; under a factor of exactly zero neither the outer nor the inner needs anything, since the term is dead. The outer ABS is not monotone in its argument, so nothing else pins the inner auxiliary: held by its lower envelope alone it could float to wherever the outer clause is easiest to satisfy (over `x` in `[-1, 1]`, `abs(abs(x) - 2) <= 0` would hold at an inner value of 2 with no `x` reaching it). Over `x` in `[-2, 3]`, `abs(abs(sum(x) by (g)) - 2) <= 0` keeps every group's total at magnitude 2, so `MINIMIZE sum(x)` reaches -4. Tests: `test_nested_abs_*` in `test/decide/tests/test_abs_linearization.py`.
+
 **Path A (lower-envelope only) — when the constraint pushes `d` down.** The effective sign is positive under `<` / `<=`, or negative under `>` / `>=`. Covers `ABS(...) <= K` (LHS), `K >= ABS(...)` (RHS), the aggregate forms `SUM(ABS) <= K`, `MAX(ABS) <= K`, `MIN(ABS) <= K`, `AVG(ABS) <= K`, and the *positively-signed* ABS of a shape like `ABS(a - k) - ABS(b - k) <= 0`. The constraint itself caps `d` from above; the solver picks `d_i = |e_i|` to minimize slack. No extra variables.
 
 **On a backend that expresses ABS natively, Path B is not taken.** Gurobi states
@@ -401,15 +354,11 @@ backend still gets, and the two reach the same optimum wherever both can run. Se
 
 Combined with the lower envelope, these force `d = |expr|` exactly regardless of constraint direction. `M` is computed at execution time from the bounds of variables in `expr` — when Path B is used, **every DECIDE variable referenced inside `ABS(expr)` must have a finite bound, either declared or inferred** by implied-bound propagation (e.g. `SUM(x) = K` implies `x <= K`; see `../../01_pipeline/05_optimizer/done.md`). Only when no bound can be derived is the query rejected. (Path A queries don't need bounds because the constraint itself bounds `d`.)
 
-The classifier (`TagAbsConstraintsForBigM` in `decide_rewrite_abs.cpp`, via `CollectAbsWithSign`) walks the constraint tree once and tags each ABS occurrence with `ABS_NEEDS_BIGM_TAG` if it falls into Path B. WHEN/PER wrappers don't change classification — the per-row Big-M envelope is unconditional, and the WHEN/PER filter only affects which rows participate in the outer aggregate or constraint.
+The classifier (`TagAbsForBigM` in `decide_rewrite_abs.cpp`, via `CollectAbsWithSign`) walks the constraint tree and the objective once and tags each ABS occurrence with `ABS_NEEDS_BIGM_TAG` if it falls into Path B. A scope doesn't change classification — the per-row Big-M envelope is unconditional, and the scope only affects which rows participate in the outer aggregate or constraint.
 
-### ABS in MINIMIZE objectives (lower-envelope)
+### ABS in objectives (by sign under the sense)
 
-Same lower-envelope rewrite applies. When minimizing `d`, the solver naturally pushes `d` down to `|expr|` — the lower bounds suffice.
-
-### ABS in MAXIMIZE objectives (Big-M upper-bound)
-
-For `MAXIMIZE SUM(ABS(expr))`, the lower-envelope alone is unsound: `d` has no ceiling and the solver pushes it to +∞, producing a spurious "unbounded" error. The fix introduces a binary sign indicator `y ∈ {0,1}` and two Big-M upper-bound constraints that pin `d = |expr|` exactly:
+The objective reads like a constraint, with the sense standing in for the relation: `MINIMIZE E` pins what `E <= K` pins and `MAXIMIZE E` what `E >= K` pins. A positive ABS under MINIMIZE (`MINIMIZE SUM(ABS(expr))`) and a negative one under MAXIMIZE (`MAXIMIZE -ABS(expr)`) are pushed down by the solver, so the lower envelope suffices. The other sign — `MAXIMIZE SUM(ABS(expr))`, `MINIMIZE 0 * SUM(x) - ABS(SUM(x) - 9)` — leaves `d` with no ceiling and the solver pushes it to +∞, a spurious "unbounded"; so does a data weight whose sign is unknown before the query runs (`MINIMIZE SUM(w * ABS(x - t))` with a negative `w` on some row). These take Path B, and so does an ABS under a MIN or MAX pushed its hard way (`MINIMIZE MIN(ABS(expr))`, `MAXIMIZE -MIN(ABS(expr))`, `MAXIMIZE MAX(ABS(expr))`): the extremum's own Big-M needs every member's box, which only the exact envelope gives an auxiliary. A factor that is exactly zero (`0 * SUM(ABS(expr))`) makes the term vanish and needs neither. Path B is a binary sign indicator `y ∈ {0,1}` and two Big-M upper-bound constraints that pin `d = |expr|` exactly:
 
 - `d <= expr  + 2M·(1−y)`  (upper-bound when `y=1` selects the positive branch)
 - `d <= −expr + 2M·y`      (upper-bound when `y=0` selects the negative branch)
@@ -417,12 +366,17 @@ For `MAXIMIZE SUM(ABS(expr))`, the lower-envelope alone is unsound: `d` has no c
 `M` is computed at execution time from the variable bounds involved in `expr`: `M = max_r(|rhs[r]| + Σ |coeff[t][r]| · max(|lb_t|, |ub_t|))` over all non-aux terms (this shares `DecideRowTermRange` with the other Big-M sites). **All DECIDE variables referenced inside `ABS(expr)` must have finite bounds** — declared or inferred by implied-bound propagation. Only if a variable still lacks a bound (lb ≤ −1e20 or ub ≥ 1e20) is an `InvalidInputException` raised naming the unbounded variable.
 
 ```sql
--- MINIMIZE: lower-envelope, no extra variables needed
+-- Pushed down by the sense: lower-envelope, no extra variables needed
 MINIMIZE SUM(ABS(new_hours - hours))
+MAXIMIZE SUM(x) - ABS(SUM(x) - 9)
 
--- MAXIMIZE: Big-M upper-bound, binary indicator y allocated per ABS term
+-- Pushed up by the sense: Big-M upper-bound, binary indicator y allocated per ABS term
 MAXIMIZE SUM(ABS(x - target))
+MINIMIZE 0 * SUM(x) - ABS(SUM(x) - 9)
 -- requires: x <= <upper_bound> (and optionally x >= <lower_bound>)
+
+-- A data weight: its sign is unknown before the query runs, so Big-M as well
+MINIMIZE SUM(w * ABS(x - target))
 
 -- In per-row constraints: bound deviation per row (lower-envelope, always correct)
 SUCH THAT ABS(new_qty - l_quantity) <= 5
@@ -434,15 +388,15 @@ SUCH THAT SUM(ABS(new_qty - l_quantity)) <= 50
 `ABS()` without decision variables (e.g., `ABS(col1 - col2)`) is left as regular SQL — no rewrite occurs.
 
 **Code**:
-- Constraint classifier: `TagAbsConstraintsForBigM` in `decide_rewrite_abs.cpp` runs before `RewriteAbs`. Walks the constraint tree; for each comparison, `CollectAbsWithSign` gathers every ABS occurrence with the sign it carries in `LHS - RHS`, classifies each as Path A (sign pushes `d` down) or Path B (it does not), and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG`. BETWEEN/IN/equality/<> subtrees are conservatively tagged.
-- Optimizer rewrite: `DecideOptimizer::RewriteAbs` in `decide_rewrite_abs.cpp`. Phase 1 (`FindAndReplaceAbs`) reads the tag and propagates `needs_bigm` to `AbsPairInfo`. Phase 2 emits the lower envelope unconditionally. For each pair where `needs_bigm || (in_objective && MAXIMIZE)`, tags the lower-bound constraints with `ABS_UB_POS_TAG_PREFIX` / `ABS_UB_NEG_TAG_PREFIX` (payload: the **auxiliary's** index) and pushes an `AbsMaximizeLink{aux_idx, y_idx}` to `LogicalDecide::abs_maximize_links`. The `y` binary is allocated **only when the query is being lowered** (`!decide.use_native_constructs.abs`); a backend that states `aux = |t|` natively emits no Big-M, so there is nothing for a sign indicator to switch and `y_idx` stays `INVALID_INDEX`. `y` is row-scoped, so allocating it on the native arm cost one dead binary per data row. The link vector is named `abs_maximize_links` for historical reasons but covers both Big-M users (objective MAXIMIZE and constraint hard-direction).
+- Classifier: `TagAbsForBigM` in `decide_rewrite_abs.cpp` runs before `RewriteAbs`. Walks the constraint tree and the objective; for each comparison, and for the objective body under its sense, `CollectAbsWithSign` gathers every ABS occurrence with the sign it carries in `LHS - RHS`, classifies each as Path A (sign pushes `d` down) or Path B (it does not), and tags Path-B ABS function expressions with `ABS_NEEDS_BIGM_TAG`. BETWEEN/IN/equality/<> subtrees are conservatively tagged.
+- Optimizer rewrite: `DecideOptimizer::RewriteAbs` in `decide_rewrite_abs.cpp`. Phase 1 (`FindAndReplaceAbs`) reads the tag and propagates `needs_bigm` to `AbsPairInfo` (an ABS nested inside another ABS is pinned regardless). Phase 2 emits the lower envelope unconditionally. For each pair where `needs_bigm`, tags the lower-bound constraints with `ABS_UB_POS_TAG_PREFIX` / `ABS_UB_NEG_TAG_PREFIX` (payload: the **auxiliary's** index) and pushes an `AbsMaximizeLink{aux_idx, y_idx}` to `LogicalDecide::abs_maximize_links`. The `y` binary is allocated **only when the query is being lowered** (`!decide.use_native_constructs.abs`); a backend that states `aux = |t|` natively emits no Big-M, so there is nothing for a sign indicator to switch and `y_idx` stays `INVALID_INDEX`. `y` is one per row, so allocating it on the native arm would cost one dead binary per data row. The link vector is named `abs_maximize_links` for historical reasons but covers both Big-M users (objective MAXIMIZE and constraint hard-direction).
 - Tag constants: `ABS_UB_POS_TAG_PREFIX`, `ABS_UB_NEG_TAG_PREFIX`, `ABS_NEEDS_BIGM_TAG` in `decide.hpp`.
 - Tag parsing in `AnalyzeConstraint` (`decide_linear_form.cpp`) sets `DecideConstraint::abs_aux_idx`/`abs_is_pos_bound` (the field keys on the auxiliary because only the lowering arm has a `y`); execution copies them onward: these are copied to `EvaluatedConstraint`; the Big-M finalization block (after the bilinear block) iterates `abs_maximize_links`, computes M from variable bounds, and emits two derived `EvaluatedConstraint`s (C_ub1 and C_ub2) per ABS term. The error message at finite-bound check is generic (covers both objective-MAXIMIZE and constraint hard-direction triggers).
 - Transfer: `plan_decide.cpp` moves `abs_maximize_links` from logical to physical operator.
 - Serialization: `logical_decide.cpp` (`LogicalDecide::Serialize`/`Deserialize`, hand-maintained) fields 230/231 (`abs_maximize_link_aux`, `abs_maximize_link_y`).
 
 **Tests**: `test/decide/tests/test_abs_linearization.py` covers MINIMIZE objectives,
-MAXIMIZE objectives (including the missing-bound error), constraints, WHEN, PER,
+MAXIMIZE objectives (including the missing-bound error), constraints, scopes,
 multiple ABS terms, no-decision-variable passthrough, and mixed variable types.
 
 ---
@@ -457,7 +411,7 @@ x * weight         -- OK: variable * column (constant per row)
 SUM(x * weight)    -- OK: aggregate of linear product
 ```
 
-`x * y` (variable times variable) **is supported** as a bilinear term via `DecideOptimizer::RewriteBilinear` (McCormick envelopes when one factor is Boolean; non-convex Gurobi QCQP otherwise). `x * x` / `POWER(x, 2)` is supported as a quadratic (QP) term. See `03_expressivity/bilinear/done.md` and the Quadratic Objectives section of `syntax_reference.md` for solver eligibility.
+`x * y` (variable times variable) **is supported** as a bilinear term via `DecideOptimizer::RewriteBilinear` (McCormick envelopes when one factor is Boolean; non-convex Gurobi QCQP otherwise). `x * x` / `POWER(x, 2)` is supported as a quadratic (QP) term. See `03_expressivity/bilinear/done.md` and `syntax_reference.md` §4 for solver eligibility.
 
 ### Addition / Subtraction (`+`, `-`)
 
@@ -469,7 +423,7 @@ SUM(x + cost)      -- OK in constraints: data-only offset is subtracted from RHS
 
 ### Division (`/`) by a constant or data column
 
-`x / divisor` is supported in per-row constraints, aggregate constraints, and quadratic objectives (inside `POWER(..., 2)`) as long as the divisor doesn't contain a DECIDE variable. `x / y` between two decision variables is non-linear and rejected at bind time with a clear `Division by a DECIDE variable is not supported` error (previously silently accepted in the per-row path with nonsensical solutions). The divisor folds into the extracted coefficient — for `x / 2`, the solver sees `0.5 * x`; for `x / col`, the per-row coefficient is `1/col[row]`.
+`x / divisor` is supported in per-row constraints, aggregate constraints, and quadratic objectives (inside `POWER(..., 2)`) as long as the divisor doesn't contain a DECIDE variable. `x / y` between two decision variables is non-linear and rejected at bind time with a clear `Division by a DECIDE variable is not supported` error. The divisor folds into the extracted coefficient — for `x / 2`, the solver sees `0.5 * x`; for `x / col`, the per-row coefficient is `1/col[row]`. A data-only aggregate as the divisor of a decision term (`sum(x) / sum(cap)`, `x / avg(cap)`), or divided together with one (`(sum(x) + sum(cap)) / 2`), is refused like the multiplier below.
 
 ```sql
 SUCH THAT x / 2 <= 1                       -- OK: equivalent to x <= 2
@@ -504,7 +458,7 @@ SUCH THAT SUM(COALESCE(x, 0)) <= 3        -- rejected: operator wraps a decision
 
 This is the same "fold data-only subterms" idea already applied to `x + cost` and `x / col`, generalized to operators *and* named scalar functions outside the modelled set.
 
-**Rejected — data-only aggregates as coefficients**: `SUM(avg(col) * x)` is a different beast — the inner aggregate needs the whole row set, not a per-row fold — so it is rejected (not folded here). A data-only aggregate (`avg`/`min`/`max`/`sum` over columns only) multiplied by a decision variable is caught in `ValidateDecideNoNonLinearScalar` on the parsed tree, before binding. All four aggregates reject uniformly with a friendly "pre-compute it as a scalar or move it to the RHS" message. A data-only aggregate as a constraint *RHS* (`SUM(x) <= AVG(col)`) stays supported.
+**Rejected — data-only aggregates as coefficients**: `SUM(avg(col) * x)` is a different beast — the inner aggregate needs the whole row set, not a per-row fold — so it is rejected (not folded here). A data-only aggregate (`avg`/`min`/`max`/`sum`/`count` over columns only) that shares a scaled term with a decision — a factor (`avg(col) * x`), a divisor (`sum(x) / sum(col)`), or inside a divided term (`(sum(x) + sum(col)) / 2`) — is caught in `ValidateDecideNoNonLinearScalar` on the parsed tree, before binding. The message says to pre-compute it as a scalar in a subquery or CTE. A data-only aggregate as a constraint *RHS* (`SUM(x) <= AVG(col)`) stays supported.
 
 **Code** (operators and functions share the mechanism):
 - Bind-time: `ValidateSumArgumentInternal` in `src/planner/expression_binder/decide/decide_binder.cpp` returns success (instead of an error) when `ExpressionContainsDecideVariable` is false — both in the unsupported-operator arm and in the unsupported-named-function arm.
@@ -593,12 +547,14 @@ SUCH THAT x IN (0, 1, 3)                -- decision variable domain restriction
 
 ### IS NULL / IS NOT NULL
 
-Supported in WHEN conditions and WHERE clause (not over decision variables).
+Supported in `when` conditions and the `WHERE` clause (not over decision variables).
 
 ```sql
-imputed_distance = distance WHEN distance IS NOT NULL AND
-imputed_distance <= 10 WHEN (distance IS NULL AND mode = 'walk-bike')
+when distance is not null: imputed_distance = distance AND
+when distance is null and mode = 'walk-bike': imputed_distance <= 10
 ```
+
+Each `when` must keep a row; one that keeps none is an error (`../scope/done.md` §3).
 
 ---
 
@@ -607,11 +563,11 @@ imputed_distance <= 10 WHEN (distance IS NULL AND mode = 'walk-bike')
 ### AND — Two Roles
 
 1. **Constraint separator** at the top level of `SUCH THAT`
-2. **Logical AND** inside a `WHEN` condition (requires parentheses)
+2. **Logical `and`** inside a `when` condition: everything before the `per` or the `:` belongs to the condition, so it needs no parentheses
 
 ### OR
 
-Valid in `WHEN` conditions and `WHERE` only. Not supported as a constraint combiner over decision variables (would create non-linear disjunctions).
+Valid inside a `when` condition, a data value or a subquery. Between constraints it is refused (*"SUCH THAT: OR is not supported."*).
 
 ---
 
@@ -624,7 +580,7 @@ keeps it as an aggregate-shaped marker. Canonicalization replaces p = 1 / 2 /
 'inf' with the definitions in the table below, keeping a display-only tag so
 canonical text and diagnostics still read `NORM(...)`; `DecideOptimizer::RewriteNorm`
 lowers p = 0 to its indicator links. So norm inherits all downstream handling
-(ABS / MAX / POWER linearization, WHEN, PER) and works in both objectives and
+(ABS / MAX / POWER linearization, `when`, `per`, `by`) and works in both objectives and
 constraints, and no later reader sees an aggregate whose meaning differs from what
 it says. Desugaring after binding means types, scopes and casts are already
 resolved.
@@ -671,19 +627,17 @@ resolved.
 - **Composes with arithmetic anywhere.** A norm is a scalar, so it may sit under
   `+`, `*` or a cast at any depth on either side — `MINIMIZE SUM(cost*x) + 0.5 *
   norm(x - base, 1)`, `MINIMIZE norm(e, 1) + 0.25 * norm(e, 2)` (elastic-net
-  shaped), `SUCH THAT 2 * norm(e, 1) <= K`. Canonicalization and `RewriteNorm`
-  descend every container to reach it. Until 2026-09-08 it descended only comparisons and conjunctions, so
-  a marker under arithmetic was left in place and read downstream as the plain
-  `SUM(e)` the marker is built on: no error, and the norm silently absent from the
-  model. `VerifyNormMarkersLowered` now fails the query rather than let a marker
-  leave the optimizer. The one place a norm may not go is inside another aggregate
+  shaped), `SUCH THAT 2 * norm(e, 1) <= K`. `RewriteNorm` descends every container
+  to reach it, and `VerifyNormMarkersLowered` fails the query rather than let a
+  marker leave the optimizer, where it would read as the plain `SUM(e)` it is built
+  on and the norm would be silently absent from the model. The one place a norm may not go is inside another aggregate
   (`SUM(norm(...))`), which the binder rejects.
 - Unsupported orders (e.g. `p = 3`) and `norm(e, 0)` without `M` raise a clear
   binder error.
 - The user supplies the weight λ directly; scale-free `α`/`λ_max` auto-selection
   is intentionally not built (see project memory).
 - Tests: `test/decide/tests/test_norm.py` — per-order desugaring equivalence,
-  WHEN/PER composition, HiGHS backend (QP + MILP), error paths, and L0 exactness
+  composition with scopes and `by`, HiGHS backend (QP + MILP), error paths, and L0 exactness
   (`test_norm_l0_*`: lower-bound/equality/maximize infeasibility on both backends,
   feasible-is-honest, and the `decide_l0_tolerance` pragma). Composition with
   arithmetic is pinned separately (`test_norm_*_in_arithmetic_*`,
@@ -693,7 +647,7 @@ resolved.
 
 ## Summary Table (Implemented Only)
 
-| Function / Operator | In Constraints | In Objective | In WHEN / WHERE |
+| Function / Operator | In Constraints | In Objective | In `when` / WHERE |
 |---|---|---|---|
 | `SUM()` over dec. vars | Yes | Yes | N/A |
 | `AVG()` over dec. vars | Yes (RHS scaled) | Yes (→SUM) | N/A |
@@ -711,5 +665,5 @@ resolved.
 | `IN (...)` | Yes (dec. vars + columns) | N/A | Yes |
 | `IS NULL` / `IS NOT NULL` | N/A | N/A | Yes |
 | `AND` (constraint sep.) | Yes | N/A | N/A |
-| `AND` / `OR` (logical) | N/A | N/A | Yes |
+| `AND` / `OR` (logical) | Over data inside a value or subquery; `OR` between constraints **rejected** | N/A | Yes |
 | Any other scalar (`SQRT`, `EXP`, `LN`, `LOG`, `FLOOR`, `CEIL`, `ROUND`, trig, ...) over a DECIDE variable | **Rejected** (non-linear) | **Rejected** (non-linear) | Yes (over data columns) |

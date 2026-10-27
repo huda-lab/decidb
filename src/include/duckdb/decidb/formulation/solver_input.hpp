@@ -307,30 +307,34 @@ struct EvaluatedConstraint {
     //! already in the user's AVG units — report it raw). I2.d.
     bool avg_scaled = false;
 
-    //! Unified WHEN+PER row→group mapping
-    //! Empty = all rows in one implicit group (fast path: no WHEN, no PER)
-    //! DConstants::INVALID_INDEX = row excluded (WHEN filter or NULL PER value)
+    //! Row→group mapping: the clause's `by` groups, classes or kept rows.
+    //! Empty = all rows in one implicit group (fast path: no `when`, no key)
+    //! DConstants::INVALID_INDEX = row excluded (dropped by the `when`, or outside its group)
     //! 0..K-1 = group assignment
     vector<idx_t> row_group_ids;
-    idx_t num_groups = 0;                     // 0 = ungrouped, >0 = number of distinct groups
-
-    //! Printable PER key per group (size num_groups when PER-grouped; empty otherwise).
+    idx_t num_groups = 0; // 0 = ungrouped, >0 = number of distinct groups
+    //! A `per K:` clause over every row: a row INVALID above is
+    //! not excluded but stands with its class's first row, which carries the same
+    //! decisions and data (a scope check). So every row is still constrained.
+    bool rows_stand_with_their_class = false;
+    //! Printable `per` key per group (size num_groups when grouped; empty otherwise).
     //! Surfaces each group's key value (`'a'`, or `EU, 2024` for a composite key) so
     //! infeasible diagnosis can identify which group an edit belongs to. Stamped onto
-    //! ConstraintProvenance::group_label at the aggregate-PER emission sites.
+    //! ConstraintProvenance::group_label at the grouped-aggregate emission sites.
     vector<string> group_labels;
-
-    //! WHEN/PER qualifier text for this clause (`PER grp`, `WHEN g='a' PER (region, year)`),
-    //! same for every group. Stamped onto ConstraintProvenance::qualifier so infeasible
-    //! diagnosis can append it to the reconstructed clause label. Empty when unqualified.
-    string qualifier;
+    //! The classes each group's rows stand for (SolverInput::class_sets, by group;
+    //! INVALID_INDEX for none), under DIAGNOSE: a `by` group's of a scoped clause of the
+    //! aggregate shape or easy MIN/MAX, or each class's of a `per K:` / `per ()` per-row
+    //! clause, whose one row stands for its class. An expanded diagnosis reports the row
+    //! once per class. Empty otherwise.
+    vector<idx_t> group_class_set;
 
     //! CSR-style group→rows index, computed lazily by EnsureGroupCSR().
     //! group_offsets has size num_groups + 1 when populated; empty otherwise.
     //! Group g's active rows occupy [group_offsets[g], group_offsets[g+1]) in group_row_ids.
-    //! Empty groups (filtered out by WHEN) have group_offsets[g] == group_offsets[g+1].
+    //! Empty groups have group_offsets[g] == group_offsets[g+1].
     //! Built once and reused across the model builder, deferred-NE expansion, and
-    //! PER objective MIN/MAX paths to avoid repeated O(num_rows) reconstructions.
+    //! two-level objective MIN/MAX paths to avoid repeated O(num_rows) reconstructions.
     mutable vector<idx_t> group_offsets;
     mutable vector<idx_t> group_row_ids;
 };
@@ -341,9 +345,8 @@ double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
                                   const vector<idx_t> *rows, idx_t begin, idx_t end,
                                   const char *error_context);
 
-//! Maps result rows to unique entities in a source table.
-//! Used for table-scoped decision variables where one variable value
-//! is shared across all result rows from the same base table entity.
+//! Maps result rows to the classes of a key scope: a `per K:` decision's or a helper's
+//! value is shared by every result row of its class.
 struct EntityMapping {
     idx_t num_entities = 0;          //! Number of distinct entities in this table
     vector<idx_t> row_to_entity;     //! [row_idx] -> entity_id (0..num_entities-1)
@@ -377,6 +380,22 @@ struct AbsMaximizeLinkSpec {
     //! unbounded. The lowering path cannot proceed (it is refused up front); the
     //! native path does not care, because a general constraint needs no Big-M.
     bool range_unbounded = false;
+};
+
+//! A helper decision of the value rewrite (LogicalDecide::ReducerValueLink), evaluated.
+//! `rows` holds the reducer's members: the inner terms' coefficients on the rows the
+//! clause and the reducer keep (every other row 0), grouped by the `by` key over the kept
+//! rows. For SUM and AVG it also carries the helper's own term, -1 on each group's first
+//! row, so the row is the equality `members - value = 0` per group; a MIN/MAX helper is
+//! pinned by an extremum link per group instead (ExtremumLinkSpec).
+struct ReducerValueLinkSpec {
+    idx_t value_var = DConstants::INVALID_INDEX;
+    string agg_name;
+    bool need_envelope = false;
+    bool need_closing = false;
+    //! The reducer as written, for the rows and columns a diagnosis names.
+    string label;
+    EvaluatedConstraint rows;
 };
 
 //! A construct handed to the backend whole, instead of being lowered into rows.
@@ -462,7 +481,7 @@ struct SolverInput {
     //! intrinsic domain, user bounds folded into the box by stage 05, and implied
     //! tightenings derived by `DecidePropagateImpliedBounds`. The last two are backed by
     //! rows the elastic engine may loosen, and it reverts them for exactly that reason
-    //! (see the `user_singleton_row_bounds` re-emission in `PhysicalDecide::Finalize`), so a
+    //! (a folded bound's clause reaches the repair model as rows, `singleton_row_constraints`), so a
     //! rewrite that bakes one into a constraint's *structure* cannot be reverted with it
     //! and would misstate the query under repair.
     //!
@@ -494,9 +513,12 @@ struct SolverInput {
     // them need evaluated bounds, so they are derived at stage 06.
     vector<BilinearLinkSpec> bilinear_links;
     vector<AbsMaximizeLinkSpec> abs_maximize_links;
+    //! The value rewrite's helper decisions, each with its evaluated definition. Consumed
+    //! (moved into `constraints` or emitted as extremum links) by the formulation pass.
+    vector<ReducerValueLinkSpec> reducer_value_links;
 
     // Linear objective
-    vector<CoefficientColumn> objective_coefficients; // [term_idx] = column of length num_rows
+    vector<CoefficientColumn> objective_coefficients;  // [term_idx] = column of length num_rows
     vector<idx_t> objective_variable_indices;          // [term_idx]
     //! [term_idx] SUM when the term came from inside a reducer (its coefficient is a sum
     //! over the counted rows); NONE for a query-wide decision standing beside a reducer,
@@ -526,9 +548,9 @@ struct SolverInput {
     };
     vector<BilinearObjectiveTerm> bilinear_objective_terms;
 
-    // Objective PER grouping (mirrors constraint row_group_ids pattern)
-    vector<idx_t> objective_row_group_ids;  // per-row group assignment
-    idx_t objective_num_groups = 0;          // 0 = ungrouped
+    // The two-level objective's grouping (mirrors constraint row_group_ids pattern)
+    vector<idx_t> objective_row_group_ids; // per-row group assignment
+    idx_t objective_num_groups = 0;        // 0 = ungrouped
     //! CSR-style group→rows index for objectives (mirrors EvaluatedConstraint).
     vector<idx_t> objective_group_offsets;
     vector<idx_t> objective_group_row_ids;
@@ -568,15 +590,17 @@ struct SolverInput {
         //! ConstraintProvenance::indicator_col). This describes the disjunction;
         //! `removal_group_id` independently groups all descendants for DROP.
         idx_t indicator_col = DConstants::INVALID_INDEX;
-        //! PER/WHEN group id, its printable key, the reducer qualifier text, and whether
-        //! the clause's LHS was an aggregate — the display half of the provenance every
-        //! row carries. A per-row clause emitted through `EvaluatedConstraint` gets these
-        //! from its `row_group_ids` / `group_labels` / `qualifier`; a clause emitted in
-        //! flat columns has to state them, and does, so that changing a row's SHAPE never
-        //! changes what diagnosis calls it.
+        //! The classes this row's group stands for (SolverInput::class_sets), or
+        //! INVALID_INDEX: an expanded diagnosis reports the row once per class.
+        idx_t class_set = DConstants::INVALID_INDEX;
+        //! The group id, its printable key, and whether the clause's LHS was an aggregate
+        //! — the display half of the provenance every row carries. A per-row clause
+        //! emitted through `EvaluatedConstraint` gets these from its `row_group_ids` /
+        //! `group_labels`; a clause emitted in flat columns has to state them, and does,
+        //! so that changing a row's SHAPE never changes what diagnosis calls it. The
+        //! clause's `when c per K:` qualifier is the source registry's.
         idx_t group_key = DConstants::INVALID_INDEX;
         string group_label;
-        string qualifier;
         bool is_aggregate = false;
         //! What a lowering (or a folded LHS constant) added to the user's literal to
         //! build this row's `rhs`; the reported clause quotes `rhs` minus this.
@@ -584,8 +608,27 @@ struct SolverInput {
         //! Symbolic name of a data-backed RHS column, for a PER_ROW_DATA row. Empty for a
         //! literal/shared bound.
         string rhs_label;
+        //! A strict `<` / `>` stepped onto this row, and the user's literal: a diagnosis
+        //! quotes `> K` rather than the stepped `>= floor(K)+1` (ConstraintProvenance).
+        bool strict = false;
+        double typed_k = 0.0;
     };
     vector<RawConstraint> global_constraints;
+
+    //! The classes a scoped clause's group stands for (syntax_reference.md §8.1, D28),
+    //! referenced by `EvaluatedConstraint::group_class_set` and `RawConstraint::class_set`.
+    //! Filled by execution under DIAGNOSE only; the model carries it on to the diagnosis.
+    struct ClassSet {
+        enum class Kind : uint8_t {
+            KEY_VALUES,  //!< `per K:`: K's values among the group's kept rows, in `labels`
+            KEPT_ROWS,   //!< no `per` key: every kept row is a class, in `rows`
+            WHOLE_CLAUSE //!< `per ()`: one class, which has no key value
+        };
+        Kind kind;
+        vector<string> labels;
+        vector<idx_t> rows;
+    };
+    vector<ClassSet> class_sets;
 
     //! A ROW, conditioned: it holds whenever `binary_column == binary_value`, and says
     //! nothing otherwise. This is the semantic form of a disjunctive clause, and it is
@@ -623,13 +666,14 @@ struct SolverInput {
     //! case the lowering path filled `constraints` instead.
     vector<GeneralConstraintSpec> general_constraints;
 
-    // --- Table-scoped variable support ---
+    // --- Key scopes ---
 
-    //! Entity mappings: one per EntityScopeInfo (source table with scoped vars)
+    //! Entity mappings: one per EntityScopeInfo (a `per K:` decision's key, a reducer's
+    //! `per K:` or colon-form qualifier, a helper decision's `by` key)
     vector<EntityMapping> entity_mappings;
 
-    //! Per-variable scope (row / entity / query-wide scalar).
-    //! For entity-scoped variables, entity_scope_idx indexes entity_mappings.
+    //! Per-variable scope (row / keyed / query-wide).
+    //! For a keyed variable, entity_scope_idx indexes entity_mappings.
     vector<DecideVarScopeInfo> variable_scopes;
 
     //! When set (infeasible diagnosis armed), SolverModel::Build does NOT throw on an

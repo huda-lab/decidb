@@ -52,9 +52,12 @@ or subqueries. The time then measures the optimization and not other operators.
 
 | Query | Rule | DECIDE part | What it asks |
 |---|---|---|---|
-| `s1.sql` | S1, uniform matroid | `pick(BOOL)`, `SUM(pick) <= 2 PER ps_suppkey`, `MAXIMIZE SUM(ps_availqty * pick)` | each supplier keeps its two offers with the most stock |
+| `s1.sql` | S1, uniform matroid | `pick(BOOL)`, `SUM(pick) by (ps_suppkey) <= 2`, `MAXIMIZE SUM(ps_availqty * pick)` | each supplier keeps its two offers with the most stock |
 | `a1.sql` | A1, separable box | `ship(REAL)`, `ship BETWEEN 0 AND ps_availqty`, `MINIMIZE SUM(POWER(ship - 5000, 2))` | ship each offer as close to 5,000 units as its stock allows |
-| `r1.sql` | R1, continuous knapsack | `ship(REAL)`, `ship BETWEEN 0 AND ps_availqty AND SUM(ship) <= 5000 PER ps_partkey`, `MAXIMIZE SUM(ps_supplycost * ship)` | each part ships at most 5,000 units across its suppliers, at the highest total cost |
+| `r1.sql` | R1, continuous knapsack | `ship(REAL)`, `ship BETWEEN 0 AND ps_availqty AND SUM(ship) by (ps_partkey) <= 5000`, `MAXIMIZE SUM(ps_supplycost * ship)` | each part ships at most 5,000 units across its suppliers, at the highest total cost |
+
+Direct solve does not read a reducer's `by` key yet, so `s1.sql` and `r1.sql` fail in `direct` mode and run on the
+solver path alone until it does.
 
 A1 minimizes a square so that each row has an optimum inside its range and the solver faces a QP, not a problem
 whose answer sits at a bound.

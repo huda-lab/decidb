@@ -467,13 +467,13 @@ def test_perrow_integer_with_fractional_coef(decidb_cli, duckdb_conn, oracle_sol
 @pytest.mark.when_perrow
 @pytest.mark.correctness
 def test_perrow_when_plus_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """WHEN + linear LHS: `x + 3 <= 10 WHEN flag` constrains only matching rows.
+    """WHEN + linear LHS: `when flag: x + 3 <= 10` constrains only matching rows.
     Non-matching rows fall back to the explicit `x <= 20` bound."""
     sql = """
         SELECT ps_partkey, ps_availqty, x
         FROM partsupp WHERE ps_partkey < 10
         DECIDE x(INT)
-        SUCH THAT x + 3 <= 10 WHEN (ps_partkey % 2 = 0)
+        SUCH THAT when (ps_partkey % 2 = 0): x + 3 <= 10
             AND x <= 20
         MAXIMIZE SUM(x * ps_availqty)
     """

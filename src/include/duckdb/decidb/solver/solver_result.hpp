@@ -92,7 +92,7 @@ struct SolverResult {
 	bool user_interrupted = false;
 	//! Benchmark instrumentation: the number of constraint rows `SolverModel::Build`
 	//! actually handed the backend, linear + quadratic. This is the post-expansion
-	//! count — a per-row clause spec becomes one row per data row and a PER spec one row
+	//! count — a per-row clause spec becomes one row per data row and a grouped spec one row
 	//! per group — so it is the only figure comparable across queries. Set even when the
 	//! solve fails; 0 when Build proved infeasibility and no model was ever produced.
 	idx_t model_constraint_rows = 0;

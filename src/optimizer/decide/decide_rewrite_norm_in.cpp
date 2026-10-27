@@ -37,17 +37,6 @@ namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
-static unique_ptr<Expression> WrapWithWhen(unique_ptr<Expression> constraint, const Expression *when) {
-	if (!when) {
-		return constraint;
-	}
-	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	wrapper->children.push_back(std::move(constraint));
-	wrapper->children.push_back(when->Copy());
-	wrapper->alias = WHEN_CONSTRAINT_TAG;
-	return std::move(wrapper);
-}
-
 static bool IsWhenWrapper(const Expression &expr) {
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
 		return false;
@@ -60,15 +49,29 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> links;
 	idx_t l0_counter = 0;
 
-	std::function<void(unique_ptr<Expression> &, const string &)> rewrite =
-	    [&](unique_ptr<Expression> &expr, const string &source_alias) {
-		if (!expr) return;
+	std::function<void(unique_ptr<Expression> &, const string &, ClauseScope)> rewrite = [&](unique_ptr<Expression>
+	                                                                                             &expr,
+	                                                                                         const string &source_alias,
+	                                                                                         ClauseScope scope) {
+		if (!expr)
+			return;
 		auto clause_alias = DescendSourceAlias(*expr, source_alias);
+		scope = EnterClauseScope(*expr, scope);
 		string payload;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
 		    ExtractDecideTagPayload(expr->GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload)) {
 			// The canonical text has been rendered; from here the clause is formulated, and every layer after this
-			// one shows the definition the solver receives rather than the norm it came from.
+			// one shows the definition the solver receives rather than the norm it came from. Canonicalization
+			// replaced the norm by that definition, so its EXPLAIN account (D27) is recorded here, while the tag
+			// still renders the clause as written.
+			using Kind = LogicalDecide::RewriteAccount::Kind;
+			// A norm of data reads no decision, so it stands on a bound, which the right-hand-side window rewrite
+			// made a column before this pass; an L0 norm is desugared only there.
+			D_ASSERT(payload == "1" || payload == "2" || payload == "inf");
+			AddRewriteAccount(decide, clause_alias,
+			                  payload == "1" ? Kind::NORM_SUM_ABS
+			                                 : (payload == "2" ? Kind::NORM_SUM_SQUARES : Kind::NORM_MAX_ABS),
+			                  RenderForPlan(*expr, decide));
 			auto alias = expr->GetAlias();
 			RemoveDecideTag(alias, string(WRITTEN_NORM_TAG_PREFIX) + payload + "__");
 			expr->SetAlias(std::move(alias));
@@ -83,7 +86,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			// drop the norm. A marker beneath another aggregate cannot occur: the binder
 			// rejects `SUM(norm(...))` before this pass runs.
 			ExpressionIterator::EnumerateChildren(
-			    *expr, [&](unique_ptr<Expression> &child) { rewrite(child, clause_alias); });
+			    *expr, [&](unique_ptr<Expression> &child) { rewrite(child, clause_alias, scope); });
 			return;
 		}
 		auto &aggregate = expr->Cast<BoundAggregateExpression>();
@@ -111,25 +114,30 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		}
 		double m = 1.0;
 		if (!auto_m) {
-			try { m = std::stod(payload.substr(2)); } catch (...) {
+			try {
+				m = std::stod(payload.substr(2));
+			} catch (...) {
 				throw InternalException("DECIDE NORM marker has invalid L0 bound '%s'", payload);
 			}
 		}
-		idx_t z_idx = decide.decide_variables.size();
 		string z_name = (auto_m ? "__l0auto_ind_" : "__l0_ind_") + to_string(l0_counter++) + "__";
-		auto z = make_uniq<BoundColumnRefExpression>(z_name, LogicalType::INTEGER,
-		                                             ColumnBinding(decide.decide_index, z_idx));
-		decide.decide_variables.push_back(z->Copy());
-		decide.num_auxiliary_vars++;
-		decide.is_boolean_var.push_back(true);
-		if (!decide.variable_scopes.empty()) decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
-		auto make_mz = [&]() { return optimizer.BindScalarFunction("*",
-		    make_uniq<BoundConstantExpression>(Value::DOUBLE(m)), z->Copy()); };
+		auto z = MakeDecisionRef(
+		    decide, AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, DecideVarScopeInfo::Row(),
+		                                 "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)"));
+		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::L0_INDICATORS,
+		                  RenderForPlan(aggregate, decide));
+		auto make_mz = [&]() {
+			auto bound = make_uniq<BoundConstantExpression>(Value::DOUBLE(m));
+			if (auto_m) {
+				bound->alias = L0_AUTO_BOUND_TAG; // a placeholder stage 06 fills from the box
+			}
+			return optimizer.BindScalarFunction("*", std::move(bound), z->Copy());
+		};
 		auto add_link = [&](unique_ptr<Expression> lhs, unique_ptr<Expression> rhs) {
 			auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                                  std::move(lhs), std::move(rhs));
 			MarkFormulationConstraint(*link, clause_alias);
-			links.push_back(std::move(link));
+			links.push_back(ScopeHelperRow(std::move(link), scope));
 		};
 		add_link(make_mz(), aggregate.children[0]->Copy());
 		add_link(make_mz(), optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)),
@@ -139,17 +147,18 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		expr = make_aggregate("sum", std::move(z));
 	};
 
-	rewrite(decide.decide_objective, string());
-	rewrite(decide.decide_constraints, string());
+	rewrite(decide.decide_objective, OBJECTIVE_ROW_TAG, ClauseScope());
+	rewrite(decide.decide_constraints, string(), ClauseScope());
 	for (auto &link : links) AppendConstraint(decide, std::move(link));
 }
 
 void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> generated;
 	idx_t in_counter = 0;
+	// Every row an IN generates keeps its clause's `when`.
 	auto emit = [&](unique_ptr<Expression> constraint, const Expression *when, const string &source_alias) {
 		MarkFormulationConstraint(*constraint, source_alias);
-		generated.push_back(WrapWithWhen(std::move(constraint), when));
+		generated.push_back(ScopeHelperRow(std::move(constraint), ClauseScope {when}));
 	};
 	std::function<void(unique_ptr<Expression> &, const Expression *, const string &)> rewrite =
 	    [&](unique_ptr<Expression> &expr, const Expression *when, const string &source_alias) {
@@ -190,16 +199,15 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			return;
 		}
 		vector<unique_ptr<Expression>> indicators;
+		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::IN_INDICATORS,
+		                  RenderForPlan(in, decide));
 		for (idx_t i = 0; i < k; i++) {
-			idx_t ind_idx = decide.decide_variables.size();
 			string name = "__in_ind_" + target->GetName() + "_" + to_string(in_counter) + "_" + to_string(i) + "__";
-			auto indicator = make_uniq<BoundColumnRefExpression>(name, LogicalType::INTEGER,
-			                                                    ColumnBinding(decide.decide_index, ind_idx));
-			decide.decide_variables.push_back(indicator->Copy());
-			decide.num_auxiliary_vars++;
-			decide.is_boolean_var.push_back(true);
-			if (!decide.variable_scopes.empty()) decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
-			indicators.push_back(std::move(indicator));
+			// A plan names an indicator by the value it stands for.
+			string label =
+			    "(" + RenderForPlan(*in.children[0], decide) + " = " + RenderForPlan(*in.children[1 + i], decide) + ")";
+			indicators.push_back(MakeDecisionRef(decide, AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true,
+			                                                                  DecideVarScopeInfo::Row(), label)));
 		}
 		in_counter++;
 		auto cardinality = indicators[0]->Copy();

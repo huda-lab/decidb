@@ -79,6 +79,10 @@ test/decide/
     ├── _oracle_helpers.py     # Shared primitives (group_indices, add_ne_indicator,
     │                          # add_in_domain, add_bool_and,
     │                          # emit_inner_max/min, emit_hard_inner_max/min)
+    ├── _scope_oracle.py       # Reference evaluator of the per / when / by language (§3.10)
+    ├── _scope_cases.py        # The deck's relations and shared helpers of the scope suites
+    ├── _brute_force.py        # Enumeration reference for tiny models (§3.10)
+    ├── _old_spellings.py      # Scanner behind test_no_old_spellings_remain.py
     ├── test_oracle_api_quadratic.py  # Smoke tests for the quadratic oracle API
     └── test_*.py              # Feature test files
 ```
@@ -171,7 +175,7 @@ gurobipy check (see §3.6) to cross-verify on the oracle side.
 |---------|-------|---------|
 | `decidb_db_path` | session | Path to `decidb.db` (TPC-H SF-0.01); skip if missing |
 | `decidb_exe_path` | session | Path to `build/release/decidb`; skip if missing |
-| `decidb_cli` | session | `DecidBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)`. DeciDB picks its own backend (Gurobi when available) |
+| `decidb_cli` | session | `DecidBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)`. DeciDB picks its own backend (Gurobi when available). Every run fails its test on an internal error or an internal name in the output, and on an error that carries "is removed" (a removed DECIDE spelling) unless the call passes `removed_spelling=True`, as only `test_scope_removed_syntax.py` does |
 | `decidb_cli_gurobi` | session | Same wrapper with `DECIDB_FORCE_SOLVER=gurobi`; skips up front if Gurobi is unavailable on the host |
 | `decidb_cli_highs` | session | Same wrapper with `DECIDB_FORCE_SOLVER=highs`, for verifying HiGHS-specific error paths on a host where Gurobi is also linked |
 | `_oracle_db_path` | session | Path to `_tpch_oracle.duckdb`; auto-generated on first run via `CALL dbgen(sf=0.01)` against a vanilla duckdb connection |
@@ -213,15 +217,16 @@ Changing either the test body or the underlying database invalidates only the af
 Tests that encode common DECIDE constructs import helpers from
 `tests/_oracle_helpers.py` rather than re-rolling the same Big-M or
 indicator patterns in every file. Prefer these over hand-written Big-M
-mirrors — see §3.7 on independent semantics.
+mirrors — see §3.7 on independent semantics. A clause with a `when`, a
+`per` key or a `by` key is stated to the scope oracle instead (§3.10).
 
 | Helper | Purpose |
 |---|---|
-| `group_indices(data, key_fn)` | Group row indices by a PER key. Rows where `key_fn` returns `None` are dropped (matches DECIDE's exclusion of NULL-keyed rows from every group). |
+| `group_indices(data, key_fn)` | Group row indices by a key. Rows where `key_fn` returns `None` are dropped, which matches `when k is not null per k:`, not a bare `per k:`: DECIDE keeps a NULL key as its own class (D5). Use it only where the key is never NULL (open: [04_testing/scope/todo.md](../04_testing/scope/todo.md)). |
 | `add_ne_indicator(oracle, coeffs, rhs, name)` | Encode `sum(coeffs) != rhs` over integer-valued terms via a native Gurobi indicator constraint (no Big-M). |
 | `add_in_domain(oracle, var_name, domain)` | Restrict `var_name` to a discrete set via SOS1-style indicator encoding (`SUM(z_k) = 1`, `var = SUM(v_k·z_k)`). |
 | `add_bool_and(oracle, x, y, z)` | Link binary `z = x ∧ y` with `z ≤ x`, `z ≤ y`, `z ≥ x + y − 1`. Used for Bool × Bool products before summation. |
-| `emit_inner_max` / `emit_inner_min` | Per-group auxiliary variable for the *easy* inner-MAX / inner-MIN case of `SUM(MAX(expr)) PER col` / `SUM(MIN(expr)) PER col` inside objectives. |
+| `emit_inner_max` / `emit_inner_min` | Per-group auxiliary variable for the *easy* inner-MAX / inner-MIN case of the two-level objective `sum(per col: max(expr) by (col))` / `sum(per col: min(expr) by (col))`. |
 | `emit_hard_inner_max` / `emit_hard_inner_min` | Same for the *hard* case — uses per-row Gurobi indicators to tightly pin the auxiliary to one row's value. |
 
 ### 3.6 Cross-verifying infeasibility
@@ -302,6 +307,36 @@ regression hiding as a skip. A test whose shape needs a particular backend pins
 that backend with `decidb_cli_gurobi` / `decidb_cli_highs` instead, so the skip
 decision is made up front, from the environment.
 
+### 3.10 The scope oracle and the brute-force reference
+
+`tests/_scope_oracle.py` judges the `per` / `when` / `by` language
+(`syntax_reference.md` §1.1, §2, §4–§7). Like the gurobipy oracles above it reads
+no SQL: a test states the result rows, the decisions with their keys and the clauses
+as Python data, and the oracle builds the model the language defines through the
+same `OracleSolver` interface.
+
+- `ScopeModel` covers keyed declarations: one solver column per class of each
+  decision's key (`PER_ROW`, a tuple of row columns, or `GLOBAL` for `per ()`).
+- `ScopedModel` adds the clause scopes: `[when c] [per K]: C`, a reducer's own
+  `when` / `per`, its `by (G)`, the objective's `when` and the two-level objective. It
+  filters the rows, splits the kept rows into classes, generates the body once per
+  class and evaluates each reducer on the kept rows sharing the class's `by` value.
+  NULL is a value like any other (`class_ids`). `check` raises `ScopeError` for the
+  three run-time errors (a `when` that keeps no row, a key that does not determine a
+  term, a reducer left with no rows) before any model is built.
+- `solve_scoped` returns the oracle's optimum; `judge_scoped` checks DeciDB's answer
+  against the same generated clauses and returns the objective it reaches. A test
+  asserts the two agree.
+
+`tests/_brute_force.py` covers the tiny models the scope oracle cannot state (a
+product of decisions, `POWER`, an L0 count, `<>` over an `AVG`): `optimum`
+enumerates every assignment of small whole-number domains, and `judge` checks
+DeciDB's answer against the same Python statement.
+
+`tests/_scope_cases.py` holds the deck's relations and the helpers the scope suites
+share. The suites and what each covers are in
+[04_testing/scope/done.md](../04_testing/scope/done.md).
+
 ---
 
 ## 4. Running Tests
@@ -345,7 +380,8 @@ an in-process binding.
 | `error_parser` | Parser-level syntax errors |
 | `error_binder` | Binder-level semantic errors |
 | `error_infeasible` | Infeasible models |
-| `per_clause` | PER keyword |
+| `when`, `when_constraint`, `when_perrow`, `when_objective`, `when_compound` | `when` in front of a clause (`test_when_*.py`) |
+| `per_clause` | `per` in front of a constraint (`test_per_*.py`) |
 | `large_scale` | Performance / scale tests (only in `benchmark/decide/test_large_scale.py`, which is not collected) |
 | `correctness` | Meta: all oracle comparison tests |
 | `error` | Meta: all error tests |
@@ -364,6 +400,7 @@ map of the categories. Run `bash run_tests.sh -m <marker>` to select a category
 - **Constraints** (`test_cons_aggregate.py`, `test_cons_perrow.py`, `test_cons_mixed.py`, `test_cons_between.py`, `test_cons_subquery.py`, `test_cons_multi.py`) — aggregate budgets, per-row bounds (constant and column-valued), BETWEEN, scalar-subquery RHS (resolved via plain SQL first), multi-constraint with joins.
 - **Objectives** (`test_obj_minimize.py`, `test_obj_complex_coeffs.py`) — MINIMIZE with `>=` covering constraints; multi-column coefficient arithmetic like `x * price * (1 - discount) * (1 + tax)` (oracle pre-computes the coefficient per row).
 - **SQL features** (`test_sql_joins.py`) — JOIN in FROM; oracle builds the model on the joined rows.
+- **Scopes** (`test_scope_*.py`) — the `per` / `when` / `by` language, judged by the scope oracle or the brute-force reference (§3.10); see [04_testing/scope/done.md](../04_testing/scope/done.md).
 - **Scale** (`benchmark/decide/test_large_scale.py`): ~500- and ~2200-row instances that compare objective values and record timing. The file sits outside `tests/`, so `run_tests.sh` does not collect it, and it fails at import when run directly (`No module named 'solver'`). It does not run today; see `05_performance/benchmarking/scale_tests.md`.
 
 **Error tests** (no oracle; assert exception type + message):
@@ -449,9 +486,11 @@ def test_my_new_query(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     )
 ```
 
-For aggregate operators with non-trivial semantics (PER, `<>`,
-bilinear, MIN/MAX hard cases, nested aggregates), import helpers from
-`tests/_oracle_helpers.py` rather than re-rolling the logic. See §3.5.
+For aggregate operators with non-trivial semantics (`per` / `by` groups, `<>`,
+bilinear, MIN/MAX hard cases, the two-level objective), import helpers from
+`tests/_oracle_helpers.py` rather than re-rolling the logic. See §3.5. A
+clause with a `when`, a `per` key or a `by` key is easier to state to
+`_scope_oracle.ScopedModel` (§3.10).
 
 For quadratic objectives / constraints, use
 `oracle_solver.set_quadratic_objective(linear, quadratic, sense)` and

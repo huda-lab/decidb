@@ -33,7 +33,7 @@ FROM part
 WHERE p_size <= 5
 DECIDE buy(REAL)
 SUCH THAT buy >= 0
-     AND SUM(buy * p_retailprice) <= 100000 WHEN p_mfgr <> 'Manufacturer#1'
+     AND when p_mfgr <> 'Manufacturer#1': sum(buy * p_retailprice) <= 100000
 MAXIMIZE SUM(buy * p_retailprice * 0.10);
 EOF
 

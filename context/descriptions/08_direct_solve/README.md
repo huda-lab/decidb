@@ -3,12 +3,15 @@
 Direct solve answers some DECIDE problems without a solver. When a problem matches a class it can prove, the optimizer
 replaces the DECIDE node with ordinary DuckDB operators (sort, rank, filter) that compute the optimal assignment. Any other
 problem takes the existing solver path, unchanged. It is **on by default** (`decide_direct_solve = 'auto'`); `off` forces
-the solver and `require` raises an error saying why a query was not proved.
+the solver and `require` raises an error when no rule applies.
 
-Two problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable, optionally per
-group), and **A1**, "each row gets its best value in its own range" (per-row bounds on `BOOL`, `INT` or `REAL` decisions
-with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 times faster than Gurobi and A1 about 4 to
-30 times, on those shapes. The other 17 classes in the catalogue are not started.
+Three problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable), **A1**, "each row
+gets its best value in its own range" (per-row bounds on `BOOL`, `INT` or `REAL` decisions with a linear or one-square
+objective), and **R1**, "fill one budget by value per unit" (one budget over `REAL` decisions). On 5M-row sources S1 is
+about 16 to 19 times faster than Gurobi, A1 about 4 to 30 times and R1 about 7 to 13 times, on those shapes. Direct
+solve reads no `by` key yet, so S1 and R1 per group, which ran 50 to 98 and 15 to 16 times faster before the
+Sami-Active merge, take the solver path until it does (`rules/s1_uniform_matroid/todo.md`,
+`rules/r1_continuous_knapsack/todo.md`). The other 16 classes in the catalogue are not started.
 
 ## Where to look
 
@@ -19,7 +22,8 @@ with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 
 | Add a new problem class | [architecture/rules.md](architecture/rules.md), then a new folder under `rules/` |
 | See what S1 covers, how it is tested, how fast it is | [rules/s1_uniform_matroid/done.md](rules/s1_uniform_matroid/done.md) |
 | See what A1 covers, where it differs from the solver, how fast it is | [rules/a1_separable_box/done.md](rules/a1_separable_box/done.md) |
-| See what is open for S1 or A1 | [rules/s1_uniform_matroid/todo.md](rules/s1_uniform_matroid/todo.md), [rules/a1_separable_box/todo.md](rules/a1_separable_box/todo.md) |
+| See what R1 covers, where it differs from the solver, how fast it is | [rules/r1_continuous_knapsack/done.md](rules/r1_continuous_knapsack/done.md) |
+| See what is open for S1, A1 or R1 | [rules/s1_uniform_matroid/todo.md](rules/s1_uniform_matroid/todo.md), [rules/a1_separable_box/todo.md](rules/a1_separable_box/todo.md), [rules/r1_continuous_knapsack/todo.md](rules/r1_continuous_knapsack/todo.md) |
 | Work on the shared engine, a third rule, error wording | [framework/](framework/) |
 | See a class that is not built yet | `rules/<id>_<slug>/todo.md` (table below) |
 | Time direct solve against Gurobi and HiGHS on TPC-H | [05_performance/benchmarking/direct_solve.md](../05_performance/benchmarking/direct_solve.md) |
@@ -40,11 +44,11 @@ with a linear or one-square objective). On 5M-row sources S1 is about 15 to 100 
 | [A6](rules/a6_rank_one_least_squares/) | Rank-one bounded least squares | Exact | Not started |
 | [N1](rules/n1_euclidean_ball/) | Euclidean-ball projection and support function | Exact | Not started |
 | [N2](rules/n2_ellipsoid_support/) | Ellipsoid support function | Exact | Not started |
-| [S1](rules/s1_uniform_matroid/) | Uniform-matroid optimization | Exact | **Works**, on by default |
+| [S1](rules/s1_uniform_matroid/) | Uniform-matroid optimization | Exact | **Works**, on by default; per `by` group is open |
 | [S2](rules/s2_laminar_matroid/) | Laminar-matroid optimization | Exact | Not started |
 | [S3](rules/s3_max_cardinality_knapsack/) | Maximum-cardinality knapsack | Exact | Not started |
 | [S4](rules/s4_bottleneck_knapsack/) | Cardinality-constrained bottleneck knapsack | Exact | Not started |
-| [R1](rules/r1_continuous_knapsack/) | Continuous (fractional) knapsack | Exact | **Works**, on by default |
+| [R1](rules/r1_continuous_knapsack/) | Continuous (fractional) knapsack | Exact | **Works**, on by default; per `by` group is open |
 | [R2](rules/r2_discrete_resource_allocation/) | Discrete separable convex resource allocation | Exact | Not started |
 | [R3](rules/r3_quadratic_knapsack/) | Continuous quadratic knapsack | Prototype | Not started |
 | [R4](rules/r4_max_min_fairness/) | Weighted max-min fair allocation | Exact | Not started |

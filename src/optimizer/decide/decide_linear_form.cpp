@@ -18,6 +18,7 @@
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 #include <functional>
@@ -99,6 +100,10 @@ public:
 		for (auto &term : op.composed_minmax_objective_terms) {
 			ExtractLinearTerms(*term.inner_expr, term.inner_terms);
 		}
+		// The reducers the value rewrite lifted into helper decisions, the same way.
+		for (auto &link : op.reducer_value_links) {
+			ExtractLinearTerms(*link.inner_expr, link.inner_terms);
+		}
 
 		// Group like terms, once, over every list that becomes a linear solver row.
 		for (auto &constraint : op.prepared.constraints) {
@@ -114,6 +119,17 @@ public:
 		}
 		for (auto &term : op.composed_minmax_objective_terms) {
 			CollectLikeTerms(term.inner_terms);
+		}
+		for (auto &link : op.reducer_value_links) {
+			CollectLikeTerms(link.inner_terms);
+		}
+
+		// A recorded bound's repair rows come from its clause, so the repair model would
+		// open its column with nothing enforcing it were its clause not flattened above.
+		if (op.user_singleton_row_bounds.size() != op.prepared.singleton_row_constraints.size()) {
+			throw InternalException("DECIDE: %llu singleton-row bounds take their repair rows from their clause, but "
+			                        "%llu such clauses were flattened",
+			                        op.user_singleton_row_bounds.size(), op.prepared.singleton_row_constraints.size());
 		}
 	}
 
@@ -198,7 +214,7 @@ private:
 	//!
 	//! - `reduction` separates a reducer term from a row-invariant one. `SUM(x)` and
 	//!   a query-wide `x` in the same clause are summed differently downstream.
-	//! - `filter` is the aggregate-local `WHEN`. `SUM(x) WHEN a` and `SUM(x) WHEN b`
+	//! - `filter` is the reducer's own `when`. `sum(when a: x)` and `sum(when b: x)`
 	//!   name one column over two row sets; merging them would apply one mask to both.
 	//! - `avg_scale` divides by the group's row count, so an AVG term and a SUM term
 	//!   are not summable before that scaling happens.
@@ -281,12 +297,31 @@ private:
 		bool is_avg = HasDecideTag(agg.alias, AVG_REWRITE_TAG);
 		idx_t qualifier_scope = QualifierScopeOf(agg);
 		for (idx_t i = begin; i < terms.size(); i++) {
-			if (agg.filter) {
-				terms[i].filter = agg.filter->Copy();
-			}
 			terms[i].avg_scale = is_avg;
 			terms[i].qualifier_scope_idx = qualifier_scope;
 			terms[i].reduction = LinearTermReduction::SUM;
+		}
+	}
+
+	//! Attach a reducer's own `when` to every term extracted from its body since the given
+	//! marks: linear terms, bilinear terms and quadratic groups alike. It is done here, once,
+	//! after extraction, rather than threaded through every extraction branch: a branch that
+	//! forgot it -- the decision-free cast arm once did -- left one term unfiltered, and the
+	//! executor then read every kept row as a member of an easy MIN/MAX, so the rows the
+	//! reducer dropped reached the model with the body's constant as their whole left side.
+	static void AttachReducerFilter(DecideConstraint &constraint, idx_t linear_before, idx_t bilinear_before,
+	                                idx_t quadratic_before, const Expression *filter) {
+		if (!filter) {
+			return;
+		}
+		for (idx_t i = linear_before; i < constraint.lhs_terms.size(); i++) {
+			constraint.lhs_terms[i].filter = filter->Copy();
+		}
+		for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
+			constraint.bilinear_terms[i].filter = filter->Copy();
+		}
+		for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
+			constraint.quadratic_groups[i].filter = filter->Copy();
 		}
 	}
 
@@ -397,13 +432,26 @@ private:
 		obj.quadratic_sign *= divides ? 1.0 / factor : factor;
 	}
 
-	//! True when the decision referenced by `expr` is query-wide (`scalar`).
+	//! True when the decision referenced by `expr` is query-wide (`per ()`).
 	//! Such a term is a complete objective contribution on its own: it maps to a
 	//! single solver column, so there is no reducer to collapse it.
 	bool IsScalarDecideTerm(const Expression &expr) const {
 		idx_t var_idx = FindDecideVariable(expr);
 		return var_idx != DConstants::INVALID_INDEX && var_idx < op.variable_scopes.size() &&
 		       op.variable_scopes[var_idx].IsScalar();
+	}
+
+	//! Every decision `expr` reads is query-wide: one column each, whichever row reads it.
+	bool ReadsOnlyQueryWideDecisions(const Expression &expr) const {
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+			idx_t var_idx = FindDecideVariable(expr);
+			return var_idx == DConstants::INVALID_INDEX ||
+			       (var_idx < op.variable_scopes.size() && op.variable_scopes[var_idx].IsScalar());
+		}
+		bool all = true;
+		EnumerateChildrenConst(
+		    expr, [&](unique_ptr<Expression> &child) { all = all && (!child || ReadsOnlyQueryWideDecisions(*child)); });
+		return all;
 	}
 
 	//===------------------------------------------------------------------===//
@@ -422,11 +470,9 @@ private:
 				// in-place optimizer mutation cannot turn a decision into a coefficient
 				// and crash during evaluation.
 				if (FindDecideVariable(*scale) != DConstants::INVALID_INDEX) {
-					throw InternalException(
-					    "DECIDE constraint: '%s' is a decision, so it cannot multiply an "
-					    "aggregate. Only constants and query-wide values can scale "
-					    "SUM/AVG/MIN/MAX.",
-					    ScaleUserName(*scale));
+					throw InternalException("DECIDE constraint: '%s' is a decision, so it cannot multiply an "
+					                        "aggregate. Only data can scale SUM/AVG/MIN/MAX.",
+					                        ScaleUserName(*scale));
 				}
 				idx_t linear_before = constraint.lhs_terms.size();
 				idx_t bilinear_before = constraint.bilinear_terms.size();
@@ -441,7 +487,7 @@ private:
 				ExtractConstraintTerms(expr, constraint, atom.sign);
 				continue;
 			}
-			// A query-wide (`scalar`) decision standing alone (not inside a reducer) is
+			// A query-wide (`per ()`) decision standing alone (not inside a reducer) is
 			// row-invariant, so it is a complete term of an aggregate constraint on its own --
 			// there is nothing for a reducer to collapse. This is K3's "reducer or
 			// row-invariant" rule. The BOUND_AGGREGATE exclusion matters: a scalar may also
@@ -474,18 +520,13 @@ private:
 		idx_t bilinear_before = constraint.bilinear_terms.size();
 		idx_t quadratic_before = constraint.quadratic_groups.size();
 		ExtractConstraintTerms(*agg.children[0], constraint, sign);
+		AttachReducerFilter(constraint, linear_before, bilinear_before, quadratic_before, agg.filter.get());
 		ApplyAggregateMetadata(constraint.lhs_terms, linear_before, agg);
 		for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
-			if (agg.filter) {
-				constraint.bilinear_terms[i].filter = agg.filter->Copy();
-			}
 			constraint.bilinear_terms[i].avg_scale = is_avg;
 			constraint.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
 		}
 		for (idx_t i = quadratic_before; i < constraint.quadratic_groups.size(); i++) {
-			if (agg.filter) {
-				constraint.quadratic_groups[i].filter = agg.filter->Copy();
-			}
 			constraint.quadratic_groups[i].avg_scale = is_avg;
 			constraint.quadratic_groups[i].qualifier_scope_idx = qualifier_scope;
 		}
@@ -501,6 +542,29 @@ private:
 			constraint.minmax_clause_idx = std::stoull(minmax_payload.substr(0, sep));
 			constraint.minmax_agg_type = minmax_payload.substr(sep + 1);
 			constraint.kind = ConstraintKind::USER_MECHANISM;
+		}
+	}
+
+	//! The per-row terms of a scoped easy MIN/MAX, `[s *] max(when c: e)`: the terms of `e`,
+	//! each filtered by `c` and scaled by `s`.
+	void ExtractEasyExtremumTerms(const Expression &lhs, DecideConstraint &constraint) {
+		ScaledAggregateMatch scale_match;
+		const BoundAggregateExpression *agg = nullptr;
+		if (TryMatchScaledAggregate(lhs, decide_index, scale_match)) {
+			agg = scale_match.aggregate;
+		} else if (lhs.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+			agg = &lhs.Cast<BoundAggregateExpression>();
+		}
+		if (!agg || agg->children.size() != 1) {
+			throw InternalException("DECIDE scoped MIN/MAX reached term extraction without its reducer: %s",
+			                        lhs.ToString());
+		}
+		D_ASSERT(constraint.lhs_terms.empty() && constraint.bilinear_terms.empty() &&
+		         constraint.quadratic_groups.empty());
+		ExtractConstraintTerms(*agg->children[0], constraint, 1);
+		AttachReducerFilter(constraint, 0, 0, 0, agg->filter.get());
+		if (scale_match.aggregate) {
+			ApplyScaleToExtracted(*scale_match.function, *scale_match.scale, scale_match.divides, constraint, 0, 0, 0);
 		}
 	}
 
@@ -542,26 +606,20 @@ private:
 	}
 
 	void AnalyzeConstraint(const unique_ptr<Expression> &expr_ptr, unique_ptr<Expression> when_condition = nullptr,
-	                       vector<unique_ptr<Expression>> per_columns = {}) {
+	                       optional_ptr<const BoundConjunctionExpression> per_class = nullptr) {
 		auto &expr = *expr_ptr;
 		switch (expr.GetExpressionClass()) {
 		case ExpressionClass::BOUND_CONJUNCTION: {
 			auto &conj = expr.Cast<BoundConjunctionExpression>();
-			// DecidB: PER wrapper — outermost layer
-			if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
-				// child[0] = the constraint (possibly WHEN-wrapped)
-				// children[1..N] = the PER column expressions
-				vector<unique_ptr<Expression>> per_cols;
-				for (idx_t i = 1; i < conj.children.size(); i++) {
-					per_cols.push_back(conj.children[i]->Copy());
-				}
-				AnalyzeConstraint(conj.children[0], std::move(when_condition), std::move(per_cols));
+			// `per K:`; canonicalization kept it only over a per-row clause, which it makes
+			// one row per class.
+			if (IsPerClassWrapper(conj) && !conj.children.empty()) {
+				AnalyzeConstraint(conj.children[0], std::move(when_condition), &conj);
 				break;
 			}
-			// DecidB: Check if this is a WHEN constraint wrapper
+			// `when c:`: child[0] = the constraint, child[1] = the condition
 			if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-				// child[0] = the actual constraint, child[1] = the WHEN condition
-				AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(), std::move(per_columns));
+				AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(), per_class);
 				break;
 			}
 			// Regular conjunction: recursively analyze each child
@@ -577,8 +635,11 @@ private:
 			// Skip comparisons the optimizer already folded into the column box.
 			// Emitting a DecideConstraint here would add num_rows redundant model
 			// rows. The comparison is still in the tree so EXPLAIN renders it; the
-			// tag is the decision, and it was made by FoldSingletonRows.
-			if (HasDecideTag(comp.alias, SINGLETON_ROW_BOUND_TAG)) {
+			// tag is the decision, and it was made by FoldSingletonRows. One whose
+			// repair rows come from its clause is flattened aside, for the repair model
+			// alone (singleton_row_constraints).
+			const bool folded = HasDecideTag(comp.alias, SINGLETON_ROW_BOUND_TAG);
+			if (folded && !HasDecideTag(comp.alias, SINGLETON_ROW_CLAUSE_ROWS_TAG)) {
 				break;
 			}
 
@@ -615,12 +676,15 @@ private:
 				constraint->was_minmax_easy = true;
 			}
 
-			// DecidB: Store WHEN condition and PER columns if present
 			if (when_condition) {
 				constraint->when_condition = std::move(when_condition);
 			}
-			if (!per_columns.empty()) {
-				constraint->per_columns = std::move(per_columns);
+			TryParseGroupKeyTag(comp.alias, constraint->group_key);
+			if (per_class) {
+				constraint->per_key = DecideConstraint::PerKeyRole::NAMES_CLASSES;
+				for (idx_t i = 1; i < per_class->children.size(); i++) {
+					constraint->class_key.push_back(per_class->children[i]->Copy());
+				}
 			}
 
 			// Extract terms from LHS
@@ -635,10 +699,30 @@ private:
 				    "homogeneity: '%s'. Canonical validation must reject this during planning.",
 				    comp.ToString());
 			}
+			if (constraint_class == CanonicalConstraintClass::VALUE) {
+				throw InternalException("DECIDE constraint in the VALUE shape reached term extraction: the value "
+				                        "rewrite did not replace its reducers in '%s'.",
+				                        comp.ToString());
+			}
+			// `per K:` makes a per-row clause one row per class. Over the aggregate shape, and
+			// over the easy MIN/MAX whose rows are its members, the key only names the
+			// classes a group's row stands for.
+			if (constraint->per_key != DecideConstraint::PerKeyRole::NONE && !constraint->was_minmax_easy &&
+			    constraint_class != CanonicalConstraintClass::AGGREGATE) {
+				constraint->per_key = DecideConstraint::PerKeyRole::ONE_ROW_PER_CLASS;
+			}
 
-			if (constraint_class == CanonicalConstraintClass::AGGREGATE) {
+			if (constraint->was_minmax_easy) {
+				// The easy direction of a MIN/MAX (`max(when c: e) by (g) <= cap`)
+				// holds when every member of its reducer does: one row per member, the
+				// reducer's `when` choosing the members, while the bound is reduced over
+				// each `by` group of every kept row. RewriteMinMax kept the reducer so its
+				// `when` and `by` reach this point; a factor on it distributes over the rows.
+				constraint->lhs_is_aggregate = false;
+				ExtractEasyExtremumTerms(*lhs, *constraint);
+			} else if (constraint_class == CanonicalConstraintClass::AGGREGATE) {
 				// Aggregate constraint. Handles both legacy single aggregates and
-				// additive aggregate expressions with aggregate-local WHEN filters. The
+				// additive aggregate expressions whose reducers carry their own `when`. The
 				// classification comes from the canonical boundary rather than aggregate
 				// presence alone, so a data-only RHS reducer cannot change row semantics.
 				constraint->lhs_is_aggregate = true;
@@ -681,7 +765,7 @@ private:
 				}
 			}
 
-			op.prepared.constraints.push_back(std::move(constraint));
+			(folded ? op.prepared.singleton_row_constraints : op.prepared.constraints).push_back(std::move(constraint));
 			break;
 		}
 
@@ -780,10 +864,22 @@ private:
 				ExtractLinearAndBilinearTerms(expr, obj, atom.sign);
 				continue;
 			}
-			// A query-wide decision standing alone (not inside a reducer) contributes without
-			// one. Excludes BOUND_AGGREGATE for the same reason as the constraint side.
-			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE && IsScalarDecideTerm(expr)) {
+			// The objective reads a decision outside its reducers once, on the first kept row
+			// (a scope check made sure it has one instance there), a query-wide one included.
+			// A product of decisions has no once-only reading in the model -- except a product
+			// of two query-wide decisions (`s * u`), one `NONE` term execution counts once
+			// (CountOnce in physical_decide.cpp).
+			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE &&
+			    !BoundExpressionContainsAggregate(expr) && FindDecideVariable(expr) != DConstants::INVALID_INDEX) {
+				idx_t bilinear_before = obj.bilinear_terms.size();
+				idx_t squared_before = obj.squared_terms.size();
 				ExtractLinearAndBilinearTerms(expr, obj, atom.sign, nullptr);
+				if (obj.squared_terms.size() != squared_before ||
+				    (obj.bilinear_terms.size() != bilinear_before && !ReadsOnlyQueryWideDecisions(expr))) {
+					throw InvalidInputException(
+					    "DECIDE objective: '%s' multiplies decisions outside a reducer, which is not supported yet",
+					    RenderDecideSource(expr, op.source_fragments, op.entity_scopes, &op.group_keys));
+				}
 				continue;
 			}
 			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
@@ -820,6 +916,7 @@ private:
 		for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
 			obj.bilinear_terms[i].avg_scale = is_avg;
 			obj.bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
+			obj.bilinear_terms[i].reduction = LinearTermReduction::SUM;
 		}
 		for (idx_t i = squared_before; i < obj.squared_terms.size(); i++) {
 			obj.squared_terms[i].avg_scale = is_avg;
@@ -878,6 +975,7 @@ private:
 			for (idx_t i = bilinear_before; i < objective->bilinear_terms.size(); i++) {
 				objective->bilinear_terms[i].avg_scale = is_avg;
 				objective->bilinear_terms[i].qualifier_scope_idx = qualifier_scope;
+				objective->bilinear_terms[i].reduction = LinearTermReduction::SUM;
 			}
 			for (idx_t i = squared_before; i < objective->squared_terms.size(); i++) {
 				objective->squared_terms[i].avg_scale = is_avg;
@@ -886,9 +984,9 @@ private:
 
 			objective->when_condition = std::move(when_cond);
 			objective->per_columns = std::move(per_cols);
-		} else if (BoundExpressionContainsAggregate(*expr) || IsScalarDecideTerm(*expr)) {
-			// The second arm covers an objective made only of query-wide decisions
-			// (e.g. `minimize max_shortfall`), which carries no aggregate at all.
+		} else if (BoundExpressionContainsAggregate(*expr) || FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
+			// The second arm covers an objective with no aggregate at all: decisions
+			// outside every reducer (e.g. `minimize max_shortfall`), read once.
 			objective = make_uniq<DecideObjective>();
 			ExtractAggregateObjectiveTerms(*expr, *objective);
 			objective->when_condition = std::move(when_cond);

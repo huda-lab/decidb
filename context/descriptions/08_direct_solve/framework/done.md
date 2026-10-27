@@ -1,11 +1,11 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-23 on top of `d808c5f9f2` with the trimmed R1 tests, with the right-hand-side rewrite and S1, A1 and
-R1 registered: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make
-decide-test` each 2,987 passed (no failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 2,986
-passed and one failure,
-`test_norm_combined_l1_l2_objective`, which needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,302 assertions in
-59 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+Verified on 2026-10-27 on the Sami-Active merge (`577ac88efa` with `38275dde6f`): `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 4,838 passed
+and 17 strict expected failures (direct-solve follow-ups and the deferred bound reader); `DECIDB_FORCE_SOLVER=highs
+make decide-test` 4,836 passed and two failures, `test_norm_combined_l1_l2_objective`, which needs Gurobi, and
+`test_entity_scoped_mixed_when_per`, which HiGHS cannot close at a gap of 0 in time (`../../06_issues/bugs/todo.md`); C++
+`build/release/test/unittest "[decidb]"` 2,714 assertions in 65 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
 ## What it does
@@ -13,11 +13,14 @@ check). Design: `../architecture/`.
 - **Setting and fallback.** `decide_direct_solve` is `auto` (default), `off` or `require`. When a rule applies, its
   substitute replaces the DECIDE node before solver selection; otherwise the node is left for the solver. `DIAGNOSE` and
   a forced backend use the solver and conflict with `require`. A prepared plan keeps its selection until rebound.
-  `require` also fails when the DECIDE optimizer is off.
+  With the DECIDE optimizer off, every mode refuses the query (`01_pipeline/05_optimizer/done.md`).
 - **IR.** One read-only front end turns the bound tree into the IR: decision domains and scopes, each constraint with
-  aggregate, filter, qualifier, factor, `PER`/`WHEN`, right side, and the objective. Parts the binder admits and no rule
-  models are *not proved*, and building the IR never throws: `norm(e, 0)` (it needs indicator variables) and any norm
-  tag the front end does not expect are not-proved parts. Shapes the binder never produces are `D_ASSERT`s
+  its reducer, the reducer's own `when`, qualifier, factor, the clause's `when`, right side, and the objective, and the
+  run-time scope checks the plan must run (`row_checks`: D4, and D8 without a key). Parts the binder admits and no rule
+  models are *not proved*, and building the IR never throws: `norm(e, 0)` (it needs indicator variables), any norm tag
+  the front end does not expect, a reducer's `by` key, a `per K:` in front of a clause, a clause whose reducer value
+  became a helper decision, the two-level objective, and a folded bound that is not plain (D41) are not-proved parts; a
+  scope check with a key makes the whole IR not proved (`DirectIR::status`). Shapes the binder never produces are `D_ASSERT`s
   (`../architecture/ir.md`). No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
@@ -72,9 +75,9 @@ check). Design: `../architecture/`.
   filter reverse their lists to test the last first.
 - **Rule-local helpers.** A helper only one rule uses stays in that rule's files, in its namespace, and moves to the
   shared files when a second rule needs it. Inside a rule's namespace, names drop the `Direct` and class prefixes. The
-  scope projection (`DirectProjectScope`), the per-group validation of a data-valued bound (`DirectValidateBounds`) and
-  `DirectWindowExtremum` are shared in `direct_plan_fragments.{hpp,cpp}`: any rule whose aggregate takes `WHEN` or `PER`,
-  or whose bound comes from the data, needs them.
+  scope projection (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`) and
+  `DirectWindowExtremum` are shared in `direct_plan_fragments.{hpp,cpp}`: any rule whose aggregate takes a `when` or a
+  group key, or whose bound comes from the data, needs them.
 - **Numeric policy.** `src/include/duckdb/common/decide_numeric_policy.hpp` is the one home of the numeric facts that
   DuckDB's own evaluation cannot supply. It includes only `<cmath>`, so the planner, the optimizer and direct-solve
   rules, the model builder and the solver backends all read it without including each other. It holds:
@@ -98,11 +101,11 @@ check). Design: `../architecture/`.
   `DirectCastMayThrow` and `DirectMayThrow` copy DuckDB's `CanThrow` on purpose: DuckDB's counts `TRY_CAST` as throwing,
   and fixing that would change DuckDB itself. Test: `test/common/test_decidb_numeric_policy.cpp` (`[numeric_policy]`, 5
   cases).
-- **Shared admission predicates.** `DirectIsDecisionFreeDeterministic`, `DirectSourceNumericColumn`,
-  `DirectIsSourceOnlyNumeric`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
+- **Shared admission predicates.** `DirectIsDecisionFreeDeterministic`, `DirectIsSourceOnlyNumeric`,
+  `DirectIsSourceOnlyNumericMayRaise`, `DirectIsSourceOnlyValue` (which admits a value that can raise), `DirectPartScale`,
   `DIRECT_CONSTANT`, `DIRECT_FINITE_CONSTANT` and `DirectIRConstraint::PlainSum` answer "may a rule use this value"
-  once for all rules. `DirectIRConstraint::Membership` gives the rows an aggregate constraint covers: its
-  aggregate-local `WHEN` or its clause-level `WHEN`, never both.
+  once for all rules. `DirectIRConstraint::Membership` gives the rows an aggregate constraint covers: its sum's own
+  `when` or the clause's `when`; with both, the rules decline (the solver reads both).
 - **One evaluate-to-DOUBLE function.** `TryEvaluateFoldableDouble(context, expr, out, flags)` (`decide_cast_policy.hpp`)
   is the only code that folds a constant expression to a `DOUBLE`, for the planner, the rewrites and the direct rules.
   Callers differ only in the flags they pass: `FOLD_STABLE` (no row, parameter or subquery can change it),
@@ -110,40 +113,48 @@ check). Design: `../architecture/`.
   `FOLD_CATCH_ALL`. The planner passes `FOLD_PLAIN` and lets a conversion error reach its own error policy; the sign test
   for a scale factor and the `IN` rewrite catch everything; direct rules pass `DIRECT_CONSTANT` or
   `DIRECT_FINITE_CONSTANT`.
-- **Right-hand-side aggregates are window columns** (`decide_rewrite_rhs_window.cpp`, called by
-  `DecideOptimizer::Optimize` before the direct rules, in every mode). In a reduced constraint, a `COUNT`, `MIN`, `MAX`,
-  `SUM` or `AVG` of one numeric source expression on the right side, with no relation qualifier of its own, becomes a
-  column of the DECIDE source: the same DuckDB aggregate as a window over the clause's `PER` keys and covered rows. A
-  reducer's own `WHEN` (`SUM(x) <= SUM(cap) WHEN active`) becomes the window's `FILTER`, so it scopes the reducer apart
-  from the clause; a group the `WHEN` empties raises the solver's empty-row-set error (`DecideEmptyRowSetMessage` in
-  `common/enums/decide.hpp`, the one text the fold and the direct-solve plans raise), `COUNT` included, and only on a
-  group the solver evaluates. A `COUNT(*)` with its own `WHEN` counts a constant that carries that error. A `WHEN` on
-  both the clause and the reducer cannot be written: the binder rejects it. The binder rejects `DISTINCT` and drops an
-  `ORDER BY` inside these reducers, so neither reaches the rewrite. The solver and the direct rules read DuckDB's value,
-  so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1, -2^60 reads the limit 1 on `off` and `require`; the solver's
-  row-by-row `DOUBLE` fold reads 0. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's types. A row the
-  clause does not cover reads 0, so no overflow raises there, and a group where no row has a left-hand reducer active
-  reads 0 because the solver never evaluates it. A NULL or NaN argument raises on every row, as the solver does: the
-  NULL text is built by `DirectNullMessageOf` and names the argument's NULL columns; the NaN text lacks the solver's `
-  at row N`. The solver's C++ fold (`EvaluateRhsReducerPerGroup`) still reads relation-qualified reducers, a reducer
-  whose own `WHEN` the window cannot read over the source (a volatile one such as `random() < 2`), a written norm, a
-  non-numeric argument and a clause whose left side holds no decision reducer. The window sits directly above the DECIDE
-  source, so it appends columns and renumbers none (the physical plan's column naming reads through it). It ends late
-  materialization for an S1 source with an aggregate limit, and a window over `PER` keys or a `WHEN` regroups rows, so
-  output row order and the choice among equal optima are not guaranteed. Test: `test_rhs_aggregate_window.py`.
+- **The bound-side window rewrite is the one evaluator of a data bound** (`decide_rewrite_rhs_window.cpp`,
+  `RewriteRhsAggregates`, called by `DecideOptimizer::Optimize` before the direct rules, in every mode). Every reducer
+  over data on the right side of a clause (`COUNT`, `MIN`, `MAX`, `SUM`, `AVG`, a written norm, a keyed or colon
+  reducer) becomes a column of the DECIDE source: the same DuckDB aggregate, as a window partitioned by the rows the
+  clause's `when` keeps and by the reducer's `by` key, with the reducer's own `when` as its `FILTER`. A keyed or colon
+  reducer counts each class of its key once: the filter also asks for the first row of the class (a `ROW_NUMBER`
+  window over the same partitions and the key). A NULL key is a group of its own (D5). A `per K:` in front of the
+  clause groups no reducer (D6). A window that reads another window's column is placed one level above it; equal windows
+  are shared. The binder rejects `DISTINCT` and drops an `ORDER BY` inside these reducers, so neither reaches the
+  rewrite. A data norm of order 0 is the count of its non-zero rows, `SUM(ABS(SIGN(e)))`.
+  - The bound of a clause in the aggregate shape is then reduced to its group's tightest value: the MIN of an upper
+    bound, the MAX of a lower one, over the kept rows of the comparison's group. An `=` bound must take one value per
+    group. A bound with one value per group already (a constant, a query-wide value, or reducers whose `by` keys are in
+    the group's) is left alone, and so is a `<>` bound, which excludes each value it takes.
+  - Every value the window reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a
+    reducer's argument (or a norm's written body: `SIGN(NaN)` is 0) on the rows the reducer reads, the bound on the
+    kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row.
+    `PhysicalDecide::RunScopeChecks` raises the first on the solver path, `AddRowChecks` turns them into row checks in a
+    direct plan, so a scope error (D4, D8, a `per K:` that does not determine a value) is always reported before a bad
+    value, and both paths raise the same text.
+  - A rule reads the reduced bound as a column, so it never reduces or checks a data bound itself. The cost is two
+    windows under the rule for a data limit (framework todo H-03).
+  - The solver and the direct rules read DuckDB's value, so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1,
+    -2^60 reads the limit 1 on `off` and `require`. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's
+    types. On a row a reducer does not read, its argument is not computed (syntax reference §6.3). The windows sit
+    directly above the DECIDE source, so they append columns and renumber none. They end late materialization for an
+    S1 source with an aggregate limit, and a window over a `by` key or a `when` regroups rows, so output row order and
+    the choice among equal optima are not guaranteed. Test: `test_rhs_aggregate_window.py`.
 - **Number messages.** The NULL and NaN texts have one author for both paths, `decide_value_messages.hpp`
-  (`DecideNullValueMessage`, `DecideInvalidValueMessage`, and `DecideCollectNamedColumns`, which decides which columns
-  of a value are named).
-  - A NULL number names the NULL source columns on the failing row: one column (`column "a" is NULL. Impute it with
-    COALESCE(a, 0)...`), several (`columns "a", "b" and "c" are NULL`), or, when no column is NULL, the value's own text
-    (`TRY_CAST(s AS DOUBLE) is NULL`). The value is the coefficient as the solver evaluates it: terms of one decision are
-    merged by `DecideMergeLikeCoefficients`, which the solver's like-term collection also calls, so `SUM(a*x + b*x)`
-    names `a` and `b` together.
-  - In direct solve the message is a per-row expression (`DirectNullMessageOf`, used by `DirectValidNumberPredicate` and
-    `DirectValidBoundPredicate`) that `error()` evaluates only on the failing row. A value's source columns are read from
-    the stage above the one that carries the source (`DirectOverProjection`).
-  - An S1 count bound or fixed value that is exactly one column raises the same fixed NULL and NaN messages; a computed
-    one keeps `DirectInvalidBoundMessage`.
+  (`DecideNullValueMessage`, `DecideNullSubqueryMessage`, `DecideInvalidValueMessage`, and the two collectors
+  `DecideCollectSubqueries` and `DecideCollectNamedColumns`, which decide what a NULL message names).
+  - A NULL value is explained in one order on both paths: the first flattened subquery that is NULL (`the subquery
+    (SELECT ...) is NULL`), else the NULL source columns on the failing row (`column "a" is NULL. Impute it with
+    COALESCE(a, 0)...`, or `columns "a", "b" and "c" are NULL`), else the value as written, through `RenderDecideSource`
+    (`TRY_CAST(s AS DOUBLE) is NULL`: no internal tag, no cast the binder added). The value is the coefficient as the
+    solver evaluates it: terms of one decision are merged by `DecideMergeLikeCoefficients`, which the solver's like-term
+    collection also calls, so `SUM(a*x + b*x)` names `a` and `b` together.
+  - The solver builds the text in C++ (`DescribeNullSource`). A direct plan and the bound-side window rewrite build it
+    as a per-row expression (`DirectNullMessageOf`, used by `DirectValidNumberPredicate`, `DirectValidBoundPredicate`
+    and `DirectCheckRowBounds`) that `error()` evaluates only on the failing row. Both read the source-fragment registry,
+    which the rule driver hands every rule's `Apply`. A value's source columns are read from the stage above the one
+    that carries the source (`DirectOverProjection`).
   - A NaN or infinite number raises the solver's message, whose first words name the clause: `objective coefficient`,
     `constraint coefficient` or `constraint right-hand side`, without the solver's ` at row N`. The rule passes the
     `DirectNumberKind` (S1 and A1's objective values: objective; A1's coefficient on the left of a bound: constraint).
@@ -185,7 +196,7 @@ check). Design: `../architecture/`.
   suite imports the autouse fixture by name from the scaffold (pytest applies an autouse fixture only in a file that can
   see it). A new rule's suite imports the scaffold (`architecture/rules.md`, item 2).
 - **Matrix script.** `test/decide/run_direct_matrix.sh` runs the five checks and prints one summary line each, for
-  example `auto: 3089 passed, 0 xfailed, 0 failed`. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `PER` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
+  example `auto: 3089 passed, 0 xfailed, 0 failed`. The golden capture (`test/decide/golden/capture.sh`, also run by `check.sh`) is single-threaded: a window over a `by` key emits rows in a thread-dependent order, and the model dump follows the order the DECIDE operator reads.
 
 ## Registering a rule
 
@@ -229,13 +240,15 @@ default box.
   arms only that test reaches (`--unreached` also lists every arm no test reaches), and writes `report.json` with each
   arm's condition text and function. `coverage_report.py compare OLD NEW` lists the arms OLD reaches and NEW does not
   (exit 1 when there are any) and the reverse, matching an arm by file, function, condition text and its occurrence in
-  the function, so lines that move are not read as lost. 1,629 of 1,634 arms are reached. Of the five no test reaches,
-  four are kept on purpose: `ref.depth == 0` in `DirectReferencesOnlySource`, which every caller's earlier determinism
-  check rules out but which the function's contract promises on its own; the `default` arms of the `ExpressionType`
-  switches in S1's `NormalizeCapacity` and `SatisfiesComparison`; and the extension-name check in late materialization's
-  `VisitForAdapters`, which keeps an operator of another extension from being cast to the adapter. The fifth, the
-  right-hand-side rewrite's decline of an order-0 norm, is reachable, but that query raises an internal error on both
-  paths (`../../06_issues/bugs/todo.md`). Every other check follows one policy: a query reaches it and a test runs it; a
+  the function, so lines that move are not read as lost. After the Sami-Active merge, 1,857 of 1,864 arms are
+  reached. Of the seven no test reaches, four are kept on purpose: `ref.depth == 0` in `DirectReferencesOnlySource`,
+  which every caller's earlier determinism check rules out but which the function's contract promises on its own; the
+  `default` arms of the `ExpressionType` switches in S1's `NormalizeCapacity` and `SatisfiesComparison`; and the
+  extension-name check in late materialization's `VisitForAdapters`, which keeps an operator of another extension from
+  being cast to the adapter. The other three are the nested-reducer reading in `ReadReducer` (`DirectPart::inner`),
+  which no query reaches until the two-level objective is read (`todo.md` H-06). The keyed S1 and R1 plans, which no
+  query reaches while the front end declines a `by` key, run from an edited IR against the solver (`test/common/
+  test_decidb_direct_decline.cpp`, "keyed plans"). Every other check follows one policy: a query reaches it and a test runs it; a
   check on what a rule hands the engine raises in release builds and a stub-rule C++ test reaches it; a check on a plan,
   IR or setting the engine builds itself is a `D_ASSERT`, which debug builds run; code no query reaches is deleted.
   Branch coverage shows which branches a test runs, not whether its assertion would catch a wrong value there, so 45
@@ -248,4 +261,4 @@ default box.
   the zero-coefficient branch). A subset
   run by hand needs `-m` (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
-  clauses 0.13 s, 8 clauses with `WHEN` 0.26 s, 3 decisions and 8 clauses 0.29 s.
+  clauses 0.13 s, 8 clauses with `when` 0.26 s, 3 decisions and 8 clauses 0.29 s.

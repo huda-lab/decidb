@@ -44,7 +44,7 @@ routes to exactly one terminal. The states below are its leaves.
   relaxation (**loosen** a too-small region). The flagship engine — fully shipped
   (I1–I5, aggregate `<>` removal, and the T3 two-mode slack-scope policy: `query`
   folds each knob to one SQL edit / turns data conflicts into virtual offsets,
-  `expanded` exposes the per-row / per-group profile).
+  `expanded` exposes the profile per kept row or per `per` class).
 - **A slow solve is not a diagnosis.** A solve that hits the wall-clock limit — or that
   a user stops with Ctrl-C — is ordinary execution behaviour: it happens with or without
   the prefix, no engine runs, and nothing is diagnosed. It lives in
@@ -80,9 +80,11 @@ too-open one.
   it: a clause demanding more of an auxiliary than the box can supply sizes that
   auxiliary itself. It fires only when the demand exceeds the box — only when the clause
   cannot be met as written — so no query that solves has its Big-M loosened, which the
-  golden corpus checks. Applied to ABS and MIN/MAX; `<>`, McCormick and `norm` have
-  encodings of the same shape and are **not** covered, see
-  [`infeasible/todo.md`](infeasible/todo.md).
+  golden corpus checks. Applied to ABS and MIN/MAX. `<>`, McCormick and `norm` have
+  encodings of the same shape; they are covered because the repair model is formulated
+  afresh against the widened box, every constant re-derived, rather than patched onto
+  the solved one — see "The elastic model is a formulation, not a matrix patch" in
+  [`infeasible/done.md`](infeasible/done.md).
 - **Diagnosed on the solver that failed** — every re-solve (the elastic model, the
   `INF_OR_UNBD` probe, the unbounded-ray fallback) runs on the backend the *primary*
   solve ran on, resolved from `PhysicalDecide::solver_backend_name` through
@@ -90,10 +92,13 @@ too-open one.
   at plan time, before any rewrite. Diagnosis never re-selects: a second, independently
   answered selection would diagnose a failure on a solver that did not produce it, and
   once selection depends on the model the two answers can genuinely differ.
-- **A clause is quoted as the user wrote it** — never as canonicalization built it.
-  Stage 04 puts decisions left and the bound right, which for most constraints is
-  invisible: `SUM(x) >= 100` is already canonical, so re-rendering the canonical tree
-  reproduces what was typed. One shape does not survive it. When **both sides carry
+- **A clause is quoted as the user wrote it** — never as canonicalization built it —
+  in the echo style `EXPLAIN` uses (`00_project_overview/syntax_reference.md` §9):
+  lower-case reducers and keywords, the `when c per K:` scope in front, a reducer's
+  `by (G)` after it, and the defaults `per row:` and `by ()` left out. Stage 04 puts
+  decisions left and the bound right, which for most constraints is invisible:
+  `sum(x) >= 100` is already canonical, so re-rendering the canonical tree reproduces
+  what was typed. One shape does not survive it. When **both sides carry
   decisions** the canonicalizer must merge them, and the paper's own Figure 1 line 7 —
   `ship BETWEEN 0 AND capacity * open` — becomes `ship - capacity * open <= 0`: a clause
   the query does not contain, against a literal bound that is not in it either. The
@@ -128,7 +133,7 @@ them is armed.
 The engine's *tuning* knobs remain sticky session settings — they configure how it works
 once it is running, never whether it runs. The one that changes what you see most is
 `diagnose_decide_infeasible_slack_scope` (`query` default / `expanded`): one folded
-SQL-level edit per knob, vs. the per-row / per-group profile. See `infeasible/done.md`.
+SQL-level edit per knob, vs. one per kept row or per `per` class. See `infeasible/done.md`.
 
 ---
 
@@ -208,14 +213,15 @@ MAXIMIZE SUM(buy * p_retailprice);
 └───────────┴────────┴──────────────────┴────────┴───────┴───────┴──────────────┴───────┴──────┘
 ```
 
-When several variables escape, each gets its own rows in the relation and the
-headline lists them all. An INTEGER variable reports identically.
+When several variables escape, each gets its own rows in the relation. An INTEGER
+variable reports identically.
 
 ### U2 — a cap that skipped a slice of the data
 
-Here a budget cap exists — but its `WHEN` exempts one manufacturer, and exactly that
+Here a budget cap exists — but its `when` exempts one manufacturer, and exactly that
 slice escapes. The relation pinpoints it, turning "something is unbounded" into
-"your cap misses Manufacturer#1".
+"your cap misses Manufacturer#1". Because the slice accounts for every escaping row,
+the suggested cap is scoped to it, ready to paste into `SUCH THAT`.
 
 ```sql
 SELECT p_partkey, p_mfgr, buy
@@ -223,22 +229,24 @@ FROM part
 WHERE p_size <= 5
 DECIDE buy(REAL)
 SUCH THAT buy >= 0
-     AND SUM(buy * p_retailprice) <= 100000 WHEN p_mfgr <> 'Manufacturer#1'
+     AND when p_mfgr <> 'Manufacturer#1': SUM(buy * p_retailprice) <= 100000
 MAXIMIZE SUM(buy * p_retailprice * 0.10);
 ```
 
 ```
-┌───────────┬────────┬──────────────────┬────────┬───────┬───────┬──────────────┬───────────────────────────┬──────┐
-│   state   │ clause │ suggested_change │ amount │ total │ scope │ edit_source  │           group           │ row  │
-├───────────┼────────┼──────────────────┼────────┼───────┼───────┼──────────────┼───────────────────────────┼──────┤
-│ unbounded │ buy    │ buy <= <cap>     │ 29.0   │ 29    │ row   │ runaway_+inf │ p_mfgr = 'Manufacturer#1' │ NULL │
-└───────────┴────────┴──────────────────┴────────┴───────┴───────┴──────────────┴───────────────────────────┴──────┘
+┌───────────┬────────┬──────────────────────────────────────────────┬────────┬───────┬───────┬──────────────┬───────────────────────────┬──────┐
+│   state   │ clause │               suggested_change               │ amount │ total │ scope │ edit_source  │           group           │ row  │
+├───────────┼────────┼──────────────────────────────────────────────┼────────┼───────┼───────┼──────────────┼───────────────────────────┼──────┤
+│ unbounded │ buy    │ when p_mfgr = 'Manufacturer#1': buy <= <cap> │ 29.0   │ 29    │ row   │ runaway_+inf │ p_mfgr = 'Manufacturer#1' │ NULL │
+└───────────┴────────┴──────────────────────────────────────────────┴────────┴───────┴───────┴──────────────┴───────────────────────────┴──────┘
 ```
 
-### U3 — an entity-level variable, characterized by a joined column
+### U3 — a keyed decision, characterized by a joined column
 
-A per-supplier variable (`s.capacity`) escapes only for European suppliers — the
-exempted region. The description works even though `r_name` arrives through two joins.
+A per-supplier decision (`per s: capacity`, one `capacity` per supplier) escapes only
+for European suppliers — the exempted region. The description works even though
+`r_name` arrives through two joins. `scope` names the counted unit: `entity` for a keyed
+decision's classes (here, suppliers), `row` for a decision per result row.
 
 ```sql
 SELECT s.s_suppkey, r_name, capacity
@@ -246,17 +254,17 @@ FROM partsupp ps
 JOIN supplier s ON ps.ps_suppkey = s.s_suppkey
 JOIN nation n ON s.s_nationkey = n.n_nationkey
 JOIN region r ON n.n_regionkey = r.r_regionkey
-DECIDE s.capacity(REAL)
-SUCH THAT capacity <= 1000 WHEN r_name <> 'EUROPE'
+DECIDE per s: capacity(REAL)
+SUCH THAT when r_name <> 'EUROPE': capacity <= 1000
 MAXIMIZE SUM(capacity * ps_supplycost);
 ```
 
 ```
-┌───────────┬──────────┬───────────────────┬────────┬───────┬────────┬──────────────┬───────────────────┬──────┐
-│   state   │  clause  │ suggested_change  │ amount │ total │ scope  │ edit_source  │       group       │ row  │
-├───────────┼──────────┼───────────────────┼────────┼───────┼────────┼──────────────┼───────────────────┼──────┤
-│ unbounded │ capacity │ capacity <= <cap> │ 20.0   │ 20    │ entity │ runaway_+inf │ r_name = 'EUROPE' │ NULL │
-└───────────┴──────────┴───────────────────┴────────┴───────┴────────┴──────────────┴───────────────────┴──────┘
+┌───────────┬──────────┬───────────────────────────────────────────┬────────┬───────┬────────┬──────────────┬───────────────────┬──────┐
+│   state   │  clause  │             suggested_change              │ amount │ total │ scope  │ edit_source  │       group       │ row  │
+├───────────┼──────────┼───────────────────────────────────────────┼────────┼───────┼────────┼──────────────┼───────────────────┼──────┤
+│ unbounded │ capacity │ when r_name = 'EUROPE': capacity <= <cap> │ 20.0   │ 20    │ entity │ runaway_+inf │ r_name = 'EUROPE' │ NULL │
+└───────────┴──────────┴───────────────────────────────────────────┴────────┴───────┴────────┴──────────────┴───────────────────┴──────┘
 ```
 
 ### U4 — when the variable can't be named
@@ -318,7 +326,7 @@ MAXIMIZE SUM(make);
 ### I2 — an impossible average target, suggested in your own units
 
 Even buying every part, the average spend tops out at 904.5 — the target 5000 is out
-of reach. The suggestion is quoted as an `AVG` bound, in the same units you wrote.
+of reach. The suggestion is quoted as an `avg` bound, in the same units you wrote.
 
 ```sql
 SELECT p_partkey, buy
@@ -333,7 +341,7 @@ MAXIMIZE SUM(buy);
 ┌────────────┬──────────────────────────────────┬───────────────────────────────────┬────────┬──────────────────────┬───────┬──────┐
 │   state    │              clause              │         suggested_change          │ amount │     edit_source      │ group │ row  │
 ├────────────┼──────────────────────────────────┼───────────────────────────────────┼────────┼──────────────────────┼───────┼──────┤
-│ infeasible │ AVG(buy * p_retailprice) >= 5000 │ AVG(buy * p_retailprice) >= 904.5 │ 4095.5 │ source_literal       │ NULL  │ NULL │
+│ infeasible │ avg(buy * p_retailprice) >= 5000 │ avg(buy * p_retailprice) >= 904.5 │ 4095.5 │ source_literal       │ NULL  │ NULL │
 │ infeasible │ NULL                             │ NULL                              │ 8.0    │ achievable_objective │ NULL  │ NULL │
 └────────────┴──────────────────────────────────┴───────────────────────────────────┴────────┴──────────────────────┴───────┴──────┘
 ```
@@ -356,8 +364,8 @@ MAXIMIZE SUM(buy);
 ┌────────────┬─────────────────────────────────┬──────────────────────────────────┬────────┬──────────────────────┬───────┬──────┐
 │   state    │             clause              │         suggested_change         │ amount │     edit_source      │ group │ row  │
 ├────────────┼─────────────────────────────────┼──────────────────────────────────┼────────┼──────────────────────┼───────┼──────┤
-│ infeasible │ SUM(buy) >= 20                  │ SUM(buy) >= 4                    │ 16.0   │ source_literal       │ NULL  │ NULL │
-│ infeasible │ SUM(buy * p_retailprice) <= 900 │ SUM(buy * p_retailprice) <= 3610 │ 2710.0 │ source_literal       │ NULL  │ NULL │
+│ infeasible │ sum(buy) >= 20                  │ sum(buy) >= 4                    │ 16.0   │ source_literal       │ NULL  │ NULL │
+│ infeasible │ sum(buy * p_retailprice) <= 900 │ sum(buy * p_retailprice) <= 3610 │ 2710.0 │ source_literal       │ NULL  │ NULL │
 │ infeasible │ NULL                            │ NULL                             │ 4.0    │ achievable_objective │ NULL  │ NULL │
 └────────────┴─────────────────────────────────┴──────────────────────────────────┴────────┴──────────────────────┴───────┴──────┘
 ```
@@ -411,54 +419,61 @@ MAXIMIZE SUM(ship);
 
 To see exactly which rows conflict instead, set
 `PRAGMA diagnose_decide_infeasible_slack_scope='expanded'` — one edit per conflicting
-row, at its own row's values:
+row, at its own row's values, with the row's position in the query's rows (counting
+from 0) in `row`:
 
 ```
 ┌────────────┬────────────┬──────────────────┬─────────┬──────────────────────┬───────┬──────┐
 │   state    │   clause   │ suggested_change │ amount  │     edit_source      │ group │ row  │
 ├────────────┼────────────┼──────────────────┼─────────┼──────────────────────┼───────┼──────┤
-│ infeasible │ ship <= 27 │ ship <= 32       │ 5.0     │ expanded_row         │ NULL  │ NULL │
-│ infeasible │ ship <= 11 │ ship <= 29       │ 18.0    │ expanded_row         │ NULL  │ NULL │
+│ infeasible │ ship <= 27 │ ship <= 32       │ 5.0     │ expanded_row         │ NULL  │ 1    │
+│ infeasible │ ship <= 11 │ ship <= 29       │ 18.0    │ expanded_row         │ NULL  │ 4    │
 │ infeasible │ NULL       │ NULL             │ 34943.0 │ achievable_objective │ NULL  │ NULL │
 └────────────┴────────────┴──────────────────┴─────────┴──────────────────────┴───────┴──────┘
 ```
 
-### I6 — a PER group that can't keep up
+### I6 — a `per` class that can't keep up
 
 "Pick at least 3 parts per manufacturer" — but in this subset Manufacturer#2 has only
-2 parts and Manufacturer#5 only 1. The clause is one SQL literal, so the default
-(`query`) mode folds all groups into the one edit that fixes the worst of them:
+2 parts and Manufacturer#5 only 1. `per p_mfgr:` makes one constraint per manufacturer,
+and `by (p_mfgr)` makes each one's `SUM` read only that manufacturer's rows. The clause
+is one SQL literal, so the default (`query`) mode folds all classes into the one edit
+that fixes the worst of them:
 
 ```sql
 SELECT p_partkey, p_mfgr, buy
 FROM part
 WHERE p_partkey <= 12
 DECIDE buy(BOOL)
-SUCH THAT SUM(buy) >= 3 PER p_mfgr
+SUCH THAT per p_mfgr: SUM(buy) by (p_mfgr) >= 3
 MAXIMIZE SUM(buy);
 ```
 
 ```
-┌────────────┬──────────────────────────┬──────────────────────────┬────────┬──────────────────────┬───────┬──────┐
-│   state    │          clause          │     suggested_change     │ amount │     edit_source      │ group │ row  │
-├────────────┼──────────────────────────┼──────────────────────────┼────────┼──────────────────────┼───────┼──────┤
-│ infeasible │ SUM(buy) >= 3 PER p_mfgr │ SUM(buy) >= 1 PER p_mfgr │ 2.0    │ source_literal       │ NULL  │ NULL │
-│ infeasible │ NULL                     │ NULL                     │ 12.0   │ achievable_objective │ NULL  │ NULL │
-└────────────┴──────────────────────────┴──────────────────────────┴────────┴──────────────────────┴───────┴──────┘
+┌────────────┬───────────────────────────────────────┬───────────────────────────────────────┬────────┬──────────────────────┬───────┬──────┐
+│   state    │                clause                 │           suggested_change            │ amount │     edit_source      │ group │ row  │
+├────────────┼───────────────────────────────────────┼───────────────────────────────────────┼────────┼──────────────────────┼───────┼──────┤
+│ infeasible │ per p_mfgr: sum(buy) by (p_mfgr) >= 3 │ per p_mfgr: sum(buy) by (p_mfgr) >= 1 │ 2.0    │ source_literal       │ NULL  │ NULL │
+│ infeasible │ NULL                                  │ NULL                                  │ 12.0   │ achievable_objective │ NULL  │ NULL │
+└────────────┴───────────────────────────────────────┴───────────────────────────────────────┴────────┴──────────────────────┴───────┴──────┘
 ```
 
-In `expanded` mode the headline names the failing groups and each gets its own edit,
-sized to its own shortfall:
+In `expanded` mode each failing class gets its own edit, sized to its own shortfall,
+with its `per` key value in `group`:
 
 ```
-┌────────────┬──────────────────────────┬──────────────────────────┬────────┬──────────────────────┬────────────────┬──────┐
-│   state    │          clause          │     suggested_change     │ amount │     edit_source      │     group      │ row  │
-├────────────┼──────────────────────────┼──────────────────────────┼────────┼──────────────────────┼────────────────┼──────┤
-│ infeasible │ SUM(buy) >= 3 PER p_mfgr │ SUM(buy) >= 2 PER p_mfgr │ 1.0    │ expanded_group       │ Manufacturer#2 │ NULL │
-│ infeasible │ SUM(buy) >= 3 PER p_mfgr │ SUM(buy) >= 1 PER p_mfgr │ 2.0    │ expanded_group       │ Manufacturer#5 │ NULL │
-│ infeasible │ NULL                     │ NULL                     │ 12.0   │ achievable_objective │ NULL           │ NULL │
-└────────────┴──────────────────────────┴──────────────────────────┴────────┴──────────────────────┴────────────────┴──────┘
+┌────────────┬───────────────────────────────────────┬───────────────────────────────────────┬────────┬──────────────────────┬────────────────┬──────┐
+│   state    │                clause                 │           suggested_change            │ amount │     edit_source      │     group      │ row  │
+├────────────┼───────────────────────────────────────┼───────────────────────────────────────┼────────┼──────────────────────┼────────────────┼──────┤
+│ infeasible │ per p_mfgr: sum(buy) by (p_mfgr) >= 3 │ per p_mfgr: sum(buy) by (p_mfgr) >= 2 │ 1.0    │ expanded_group       │ Manufacturer#2 │ NULL │
+│ infeasible │ per p_mfgr: sum(buy) by (p_mfgr) >= 3 │ per p_mfgr: sum(buy) by (p_mfgr) >= 1 │ 2.0    │ expanded_group       │ Manufacturer#5 │ NULL │
+│ infeasible │ NULL                                  │ NULL                                  │ 12.0   │ achievable_objective │ NULL           │ NULL │
+└────────────┴───────────────────────────────────────┴───────────────────────────────────────┴────────┴──────────────────────┴────────────────┴──────┘
 ```
+
+Each kept row of a clause with no `per` key is a class of its own, so in `expanded` mode
+such a clause reports once per kept row, with the row in `row`, as I5 does. A NULL key
+value is a class of its own too and prints as the text `NULL` in `group`.
 
 Two edge behaviors worth knowing: if the proposed repair would leave the objective
 able to grow forever, a separate `unbounded_after_fix` finding says so instead of
@@ -484,7 +499,7 @@ MAXIMIZE SUM(x);
 ┌────────────┬───────────────┬───────────────────────────────────────────────┬────────┬───────────────────┬───────┬──────┐
 │   state    │    clause     │               suggested_change                │ amount │    edit_source    │ group │ row  │
 ├────────────┼───────────────┼───────────────────────────────────────────────┼────────┼───────────────────┼───────┼──────┤
-│ infeasible │ SUM(x) >= inf │ lower this bound — no assignment can reach it │ NULL   │ unreachable_bound │ NULL  │ NULL │
+│ infeasible │ sum(x) >= inf │ lower this bound — no assignment can reach it │ NULL   │ unreachable_bound │ NULL  │ NULL │
 └────────────┴───────────────┴───────────────────────────────────────────────┴────────┴───────────────────┴───────┴──────┘
 ```
 

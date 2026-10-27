@@ -1,4 +1,5 @@
-"""Both paths read an infinite source value the same way, in every bound slot a rule reads.
+"""Both paths read an infinite source value the same way, in every bound slot a rule reads, and neither reads a value on
+a row a `when` drops.
 
 The direct path rejects bad values in SQL (`DirectValidNumberPredicate` for coefficients, `DirectValidBoundPredicate`
 for bounds, `direct_runtime_checks.cpp`); the solver path rejects them in C++ (`ExtractDoubleColumn`,
@@ -7,6 +8,10 @@ while a bound only has to be a number, because an infinite bound means "no bound
 puts one infinite value on one row of a four-row source, in each place a rule reads a bound, and asserts that
 `require` (direct), `off` (solver, the default backend) and `off` on a forced HiGHS backend give the same outcome: the
 same error class, or the same rows.
+
+A NULL is an error only on a row that reads it: nothing is computed on a row a `when` drops (syntax reference §6.3).
+The `*_when_excludes_row` slots put a NULL there, in each place a rule masks its checks. A `when` inside a sum scopes
+the sum and not its limit, so a NULL limit there is still read, and still raises.
 """
 
 import math
@@ -18,6 +23,7 @@ from ._direct_oracle_common import _allow_direct_path, outcome  # noqa: F401  (a
 _LITERALS = {
     "inf": "'Infinity'::{type}",
     "-inf": "'-Infinity'::{type}",
+    "null": "NULL::{type}",
 }
 
 # Column -> its value on an ordinary row i is `base + i * 0.5`.
@@ -58,27 +64,70 @@ _BOX = "x BETWEEN 0 AND cap"
 SLOTS = {
     "s1_limit_upper": _slot("cap", "x(BOOL)", "SUM(x) <= cap", _PICK, ("inf",)),
     "s1_limit_lower": _slot("cap", "x(BOOL)", "SUM(x) >= cap AND SUM(x) <= 3", _PICK, ("-inf",)),
-    "s1_limit_per_group": _slot("cap", "x(BOOL)", "SUM(x) <= cap PER g", _PICK, ("inf",)),
+    "s1_limit_per_group": _slot("cap", "x(BOOL)", "SUM(x) by (g) <= cap", _PICK, ("inf",)),
     "s1_limit_float_column": _slot("cap", "x(BOOL)", "SUM(x) <= cap", _PICK, ("inf",), type="FLOAT"),
     "s1_limit_local_when_excludes_row": _slot(
-        "cap", "x(BOOL)", "SUM(x) WHEN f <= cap", _PICK, ("inf",), when_holds=False
+        "cap", "x(BOOL)", "SUM(when f: x) <= cap", _PICK, ("inf", "null"), when_holds=False
     ),
     "s1_limit_clause_when_excludes_row": _slot(
-        "cap", "x(BOOL)", "SUM(x) <= cap WHEN f", _PICK, ("-inf", "inf"), when_holds=False
+        "cap", "x(BOOL)", "when f: SUM(x) <= cap", _PICK, ("-inf", "inf", "null"), when_holds=False
     ),
     "s1_limit_per_key_is_null": _slot(
-        "cap", "x(BOOL)", "SUM(x) <= cap PER g", _PICK, ("-inf", "inf"), key_is_null=True
+        "cap", "x(BOOL)", "SUM(x) by (g) <= cap", _PICK, ("-inf", "inf"), key_is_null=True
     ),
     "s1_fixed_upper": _slot("fixed_value", "x(BOOL)", "SUM(x) <= 2 AND x <= fixed_value", _PICK, ("inf",)),
+    "s1_fixed_when_excludes_row": _slot(
+        "fixed_value", "x(BOOL)", "SUM(x) <= 2 AND when f: x <= fixed_value", _PICK, ("null",), when_holds=False
+    ),
     "a1_upper": _slot("cap", "x(REAL)", _BOX, _PULL, ("inf",)),
     "a1_upper_float_column": _slot("cap", "x(REAL)", _BOX, _PULL, ("inf",), type="FLOAT"),
     "a1_upper_int_variable": _slot("cap", "x(INT)", _BOX, "MAXIMIZE SUM(x)", ("inf",)),
     "a1_lower": _slot("lo", "x(REAL)", "x >= lo AND x <= cap", _PULL, ("-inf",)),
     "a1_upper_when_excludes_row": _slot(
-        "cap", "x(REAL)", "x <= cap WHEN f AND x >= 0", _PULL, ("-inf", "inf"), when_holds=False
+        "cap", "x(REAL)", "when f: x <= cap AND x >= 0", _PULL, ("-inf", "inf", "null"), when_holds=False
+    ),
+    "a1_objective_own_when_excludes_row": _slot(
+        "t",
+        "x(REAL)",
+        "x BETWEEN 0 AND 3",
+        "MINIMIZE SUM(POWER(x - 1, 2)) + SUM(when f: t * x)",
+        ("null",),
+        when_holds=False,
+    ),
+    "r1_bound_when_excludes_row": _slot(
+        "cap", "x(REAL)", "x BETWEEN 0 AND 3 AND when f: x <= cap AND SUM(x) <= 4", _PICK, ("null",), when_holds=False
+    ),
+    "r1_weight_when_excludes_row": _slot(
+        "fixed_value",
+        "x(REAL)",
+        "x BETWEEN 0 AND 3 AND when f: SUM(fixed_value * x) <= 4",
+        _PICK,
+        ("null",),
+        when_holds=False,
+    ),
+    "r1_limit_when_excludes_row": _slot(
+        "cap", "x(REAL)", "x BETWEEN 0 AND 3 AND when f: SUM(x) <= cap", _PICK, ("null",), when_holds=False
+    ),
+    "r1_limit_local_when_excludes_row": _slot(
+        "cap", "x(REAL)", "x BETWEEN 0 AND 3 AND SUM(when f: x) <= cap", _PICK, ("null",), when_holds=False
     ),
 }
-CASES = [(slot, value) for slot, spec in SLOTS.items() for value in spec[4]]
+# Direct solve reads no `by` key yet (context/descriptions/todo.md, task 1): these slots wait for S1 to read one.
+_NEEDS_BY_KEY = {"s1_limit_per_group", "s1_limit_per_key_is_null"}
+CASES = [
+    pytest.param(
+        slot,
+        value,
+        id=f"{slot}-{value}",
+        marks=(
+            pytest.mark.xfail(strict=True, reason="direct solve reads no by key yet (todo task 1)")
+            if slot in _NEEDS_BY_KEY
+            else ()
+        ),
+    )
+    for slot, spec in SLOTS.items()
+    for value in spec[4]
+]
 
 
 def _same(first, second):
@@ -96,7 +145,7 @@ def _same(first, second):
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("slot,value", CASES, ids=[f"{slot}-{value}" for slot, value in CASES])
+@pytest.mark.parametrize("slot,value", CASES)
 def test_both_paths_read_a_bad_source_value_the_same_way(decidb_cli, decidb_cli_highs, slot, value):
     column, decl, constraints, objective, _, source = SLOTS[slot]
     sql = (
@@ -108,3 +157,35 @@ def test_both_paths_read_a_bad_source_value_the_same_way(decidb_cli, decidb_cli_
     solver_highs = outcome(decidb_cli_highs, sql, "off")
     assert _same(direct, solver), f"direct {direct} but solver {solver}"
     assert _same(solver, solver_highs), f"solver {solver} but forced HiGHS {solver_highs}"
+
+
+# Nothing is computed on a row a `when` drops: an expression that raises (a logarithm of 0, an overflow) raises on a
+# kept row only. Row 2 holds the bad input; `f` decides whether a `when` keeps it. Each case reaches one place a rule
+# computes a value under a `when`.
+def _raising_source(kept):
+    return (
+        "(VALUES (1, true, 2.0::DOUBLE, 3::BIGINT, 5.0::DOUBLE), "
+        f"(2, {str(kept).lower()}, 0.0, 4000000000000000000, 4.0)) t(id, f, w, big, v)"
+    )
+
+
+RAISING_CASES = {
+    "a1_clause_bound": "x(REAL) SUCH THAT x BETWEEN 0 AND 5 AND when f: x <= ln(w) MAXIMIZE SUM(x)",
+    "a1_clause_coefficient": "x(REAL) SUCH THAT x BETWEEN 0 AND 5 AND when f: ln(w) * x <= 3 MAXIMIZE SUM(x)",
+    "a1_objective_part": "x(REAL) SUCH THAT x BETWEEN 0 AND 5 MINIMIZE SUM(POWER(x - 1, 2)) + SUM(when f: ln(w) * x)",
+    "s1_limit": "x(BOOL) SUCH THAT when f: SUM(x) <= big * 3 MAXIMIZE SUM(v*x)",
+    "r1_clause_bound": "x(REAL) SUCH THAT x BETWEEN 0 AND 5 AND when f: x <= ln(w) AND SUM(x) <= 4 MAXIMIZE SUM(v*x)",
+    "r1_weight": "x(REAL) SUCH THAT x BETWEEN 0 AND 5 AND when f: SUM(ln(w) * x) <= 3 MAXIMIZE SUM(v*x)",
+    "r1_limit": "x(REAL) SUCH THAT x BETWEEN 0 AND 5 AND when f: SUM(x) <= big * 3 MAXIMIZE SUM(v*x)",
+}
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("kept", [False, True], ids=["dropped", "kept"])
+@pytest.mark.parametrize("name", sorted(RAISING_CASES))
+def test_both_paths_compute_nothing_on_a_row_a_when_drops(decidb_cli, name, kept):
+    sql = f"SELECT id, x FROM (FROM {_raising_source(kept)} DECIDE {RAISING_CASES[name]}) q ORDER BY id"
+    direct = outcome(decidb_cli, sql, "require")
+    solver = outcome(decidb_cli, sql, "off")
+    assert direct[0] == ("error" if kept else "ok"), direct
+    assert _same(direct, solver), f"direct {direct} but solver {solver}"

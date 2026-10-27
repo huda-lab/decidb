@@ -155,7 +155,7 @@ def test_propagation_skips_negative_coefficient(decidb_cli):
 
 @pytest.mark.correctness
 def test_propagation_skips_when_excluded_constraint(decidb_cli):
-    """A WHEN-conditional aggregate `SUM(x) <= 5 WHEN g='A'` only constrains the
+    """A when-scoped aggregate `when g = 'A': sum(x) <= 5` only constrains the
     group-A rows; group-B rows carry no such bound. Since the derived bound is
     shared across all of x's rows, propagation must skip this constraint. The
     group-B row's x must still reach its declared bound (100): x_A=5, x_B=100,
@@ -165,7 +165,7 @@ def test_propagation_skips_when_excluded_constraint(decidb_cli):
         WITH data AS (SELECT 'A' AS g UNION ALL SELECT 'B' AS g)
         SELECT g, x FROM data
         DECIDE x(INT)
-        SUCH THAT x <= 100 AND SUM(x) <= 5 WHEN g = 'A'
+        SUCH THAT x <= 100 AND when g = 'A': sum(x) <= 5
         MAXIMIZE SUM(x)
     """
     rows, cols = decidb_cli.execute(sql)

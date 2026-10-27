@@ -2,7 +2,9 @@
 
 #include <algorithm>
 
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/string_util.hpp"
+#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
@@ -19,9 +21,8 @@ namespace duckdb {
 
 namespace {
 
-//! The WHEN and PER wrappers above a constraint, collected on the way down.
+//! The `when` wrapper above a constraint, collected on the way down.
 struct WrapperScope {
-	vector<const Expression *> per_keys;
 	const Expression *when = nullptr;
 };
 
@@ -64,6 +65,7 @@ public:
 		ReadEntityScopes(ir);
 		ReadConstraints(ir);
 		ReadObjective(ir.objective);
+		ReadRowChecks(ir);
 		return ir;
 	}
 
@@ -81,10 +83,43 @@ private:
 		}
 		auto &ref = expr.Cast<BoundColumnRefExpression>();
 		auto found = std::find(source_bindings.begin(), source_bindings.end(), ref.binding);
-		// A resolved PER key is a column of the source, never of an outer query.
+		// A resolved group key is a column of the source, never of an outer query.
 		D_ASSERT(ref.depth == 0 && found != source_bindings.end());
 		slot = NumericCast<idx_t>(found - source_bindings.begin());
 		return true;
+	}
+
+	//! A predicate a row check can evaluate under the rule's plan: it reads only source columns. One that raises does
+	//! so there, before any value is read, as in the solver's scope check.
+	bool CheckablePredicate(const Expression *predicate) const {
+		return !predicate || DirectReferencesOnlySource(*predicate, source_bindings);
+	}
+
+	void ReadRowChecks(DirectIR &ir) const {
+		for (auto &check : decide.scope_checks) {
+			DirectRowCheck row_check;
+			if (check.kind == DecideScopeCheckKind::KEEPS_A_ROW) {
+				row_check.filter = check.rows->Copy();
+				row_check.message = DecideWhenMatchesNoRowsMessage(check.subject);
+			} else if (check.kind == DecideScopeCheckKind::READS_A_ROW && check.key.empty()) {
+				row_check.rows = check.rows ? check.rows->Copy() : nullptr;
+				row_check.filter = check.filter->Copy();
+				row_check.message = DecideReducerHasNoRowsMessage(check.subject);
+			} else if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
+				// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
+				D_ASSERT(!check.rows && CheckablePredicate(check.value.get()));
+				row_check.invalid = check.value->Copy();
+				ir.row_checks.push_back(std::move(row_check));
+				continue;
+			} else {
+				// No rule groups rows by a `by` key or a `per K:` class yet.
+				MarkNotProved(ir.status);
+				continue;
+			}
+			// A `when` names no decision and is planned over the DECIDE input, so it reads source columns only.
+			D_ASSERT(CheckablePredicate(row_check.rows.get()) && CheckablePredicate(row_check.filter.get()));
+			ir.row_checks.push_back(std::move(row_check));
+		}
 	}
 
 	void ReadDecisions(DirectIR &ir) const {
@@ -149,6 +184,12 @@ private:
 			D_ASSERT(name == "max");
 			part.reducer = DirectReducer::MAX;
 		}
+		idx_t group_key;
+		if (TryParseGroupKeyTag(aggregate.GetAlias(), group_key)) {
+			// No rule groups a reducer by its own `by` key yet.
+			MarkNotProved(part.status);
+			return;
+		}
 		if (aggregate.filter) {
 			part.filter = aggregate.filter->Copy();
 		}
@@ -202,16 +243,7 @@ private:
 		return part;
 	}
 
-	void ReadScope(const vector<const Expression *> &per_keys, const Expression *when, DirectIRScope &scope,
-	               DirectAnalysisStatus &status) const {
-		for (auto key : per_keys) {
-			idx_t slot;
-			if (!SourceSlot(*key, slot)) {
-				MarkNotProved(status);
-				continue;
-			}
-			scope.per_key_slots.push_back(slot);
-		}
+	void ReadScope(const Expression *when, DirectIRScope &scope) const {
 		if (when) {
 			scope.when = when->Copy();
 		}
@@ -230,7 +262,11 @@ private:
 		} else {
 			MarkNotProved(ir_node.status);
 		}
-		ReadScope(wrappers.per_keys, wrappers.when, ir_node.scope, ir_node.status);
+		ReadScope(wrappers.when, ir_node.scope);
+		if (HasDecideTag(leaf.GetAlias(), VALUE_REWRITE_TAG)) {
+			// No rule models the helper decision a reducer's value becomes.
+			MarkNotProved(ir_node.status);
+		}
 
 		// The binder admits only comparisons and IN as a constraint leaf.
 		if (leaf.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
@@ -254,8 +290,13 @@ private:
 			}
 			ir_node.rhs = comparison.right->Copy();
 			ir_node.degree = DecideExpressionDegree(*comparison.left, decide.decide_index).degree;
-			// Folding never reads a clause under a WHEN: `x <= 0 WHEN c` does not bound `x` everywhere.
-			ir_node.variable_bound = !wrappers.when && DecideIsSingletonRowBound(context, decide, comparison);
+			// Folding never reads a clause under a `when`: `when c: x <= 0` does not bound `x` everywhere. A folded
+			// bound that is not plain (an affine spelling or an extremum) is one the rules do not model yet.
+			bool plain = false;
+			ir_node.variable_bound = !wrappers.when && DecideIsSingletonRowBound(context, decide, comparison, plain);
+			if (ir_node.variable_bound && !plain) {
+				MarkNotProved(ir_node.status);
+			}
 		}
 		for (auto &part : ir_node.lhs) {
 			if (part.status == DirectAnalysisStatus::NOT_PROVED) {
@@ -275,20 +316,18 @@ private:
 		// The binder rejects a user-written OR between constraints; nothing else builds one before the IR.
 		D_ASSERT(conjunction.type == ExpressionType::CONJUNCTION_AND);
 		D_ASSERT(!conjunction.children.empty());
-		if (IsPerConstraintWrapper(conjunction)) {
-			D_ASSERT(wrappers.per_keys.empty() && conjunction.children.size() >= 2);
-			WrapperScope nested = wrappers;
-			for (idx_t i = 1; i < conjunction.children.size(); i++) {
-				nested.per_keys.push_back(conjunction.children[i].get());
-			}
-			CollectConstraints(*conjunction.children[0], nested, out);
-			return;
-		}
 		if (IsWhenConstraintWrapper(conjunction)) {
 			D_ASSERT(!wrappers.when && conjunction.children.size() == 2);
 			WrapperScope nested = wrappers;
 			nested.when = conjunction.children[1].get();
 			CollectConstraints(*conjunction.children[0], nested, out);
+			return;
+		}
+		if (IsPerClassWrapper(conjunction)) {
+			// No rule writes one constraint per class of a `per K:` key yet.
+			DirectIRConstraint ir_node;
+			MarkNotProved(ir_node.status);
+			out.push_back(std::move(ir_node));
 			return;
 		}
 		for (auto &child : conjunction.children) {
@@ -314,24 +353,20 @@ private:
 		}
 		auto index = decide.decide_index;
 		const Expression *body = UnwrapDecideCasts(*decide.decide_objective, index);
-		// PER is the outer wrapper and WHEN sits inside it, as the binder builds them.
-		vector<const Expression *> per_keys;
-		const Expression *when = nullptr;
 		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
 		    IsPerConstraintWrapper(body->Cast<BoundConjunctionExpression>())) {
-			auto &per = body->Cast<BoundConjunctionExpression>();
-			for (idx_t i = 1; i < per.children.size(); i++) {
-				per_keys.push_back(per.children[i].get());
-			}
-			body = UnwrapDecideCasts(*per.children[0], index);
+			// No rule models the two-level objective `outer(per k: inner(e) by (k))` yet.
+			MarkNotProved(objective.status);
+			return;
 		}
+		const Expression *when = nullptr;
 		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &wrapper = body->Cast<BoundConjunctionExpression>();
 			D_ASSERT(IsWhenConstraintWrapper(wrapper) && wrapper.children.size() == 2);
 			when = wrapper.children[1].get();
 			body = UnwrapDecideCasts(*wrapper.children[0], index);
 		}
-		ReadScope(per_keys, when, objective.scope, objective.status);
+		ReadScope(when, objective.scope);
 		D_ASSERT(body->GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION);
 		ReadParts(*body, objective.parts);
 		for (auto &part : objective.parts) {

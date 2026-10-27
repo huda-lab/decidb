@@ -1,12 +1,12 @@
 -- Q1  ILP selection kitchen-sink (large scale)
--- TAGS: type=BOOLEAN; class=ILP; obj=MAXIMIZE-SUM,WHEN-on-objective;
---       func=SUM,AVG; when=WHEN-constraint,aggregate-local-WHEN; per=PER-multi-column
+-- TAGS: type=BOOLEAN; class=ILP; obj=MAXIMIZE-SUM,when-on-objective;
+--       func=SUM,AVG; when=when-constraint,when-in-reducer; per=per-(),per-multi-column,by-multi-column
 SELECT l_orderkey, l_linenumber, l_quantity, l_extendedprice, l_discount, l_returnflag, l_linestatus, keep
 FROM lineitem
 DECIDE keep(BOOL)
-SUCH THAT SUM(keep * l_quantity) <= ${Q1_QTY_CAP}
-    AND AVG(keep * l_discount) <= 0.06
-    AND SUM(keep * l_quantity) <= ${Q1_R_QTY_CAP} WHEN l_returnflag = 'R'
-    AND SUM(keep) <= ${Q1_GRP_CAP} PER (l_returnflag, l_linestatus)
-    AND SUM(keep * l_extendedprice) WHEN (l_returnflag = 'A') + SUM(keep * l_extendedprice) WHEN (l_returnflag = 'N') <= ${Q1_LOCAL_CAP}
-MAXIMIZE SUM(keep * l_extendedprice) WHEN l_linestatus = 'F';
+SUCH THAT per (): sum(keep * l_quantity) <= ${Q1_QTY_CAP}
+    AND per (): avg(keep * l_discount) <= 0.06
+    AND when l_returnflag = 'R' per (): sum(keep * l_quantity) <= ${Q1_R_QTY_CAP}
+    AND per l_returnflag, l_linestatus: sum(keep) by (l_returnflag, l_linestatus) <= ${Q1_GRP_CAP}
+    AND per (): sum(when l_returnflag = 'A': keep * l_extendedprice) + sum(when l_returnflag = 'N': keep * l_extendedprice) <= ${Q1_LOCAL_CAP}
+MAXIMIZE when l_linestatus = 'F': sum(keep * l_extendedprice);

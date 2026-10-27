@@ -20,7 +20,7 @@ model" from a claim into a check.
 
 | File | What it is |
 |---|---|
-| `corpus.sql` | 91 queries, each present for its constraint *shape*, not its answer |
+| `corpus.sql` | 103 queries under entries 01–101 (with 21b and 32b), each present for its constraint *shape*, not its answer |
 | `capture.sh --solver <gurobi\|highs>` | Writes `baseline.<solver>.dump` and `.results` |
 | `check.sh` | Diffs today's model against both baselines; the read-only half |
 | `baseline.<solver>.dump` | The committed reference, one per backend |
@@ -32,9 +32,10 @@ The fixture is four rows on purpose: shapes carrying a Big-M encoding stay insta
 
 The backend is part of the answer, not an ambient fact about the host. Gurobi states
 ABS, MIN/MAX and `<>` natively while HiGHS lowers all three, so the two build genuinely
-different models from identical SQL — 90 against 87, since the three queries over an
-open-ended range reach a model only where a construct is stated natively; on HiGHS they
-are the refusals recorded in `baseline.highs.dump.results`.
+different models from identical SQL — 103 models against 100. Entries 86 and 87 (MIN/MAX
+over a range open on one side) reach a model only where MIN/MAX is stated natively, and
+entry 33 (a quadratic constraint) needs Gurobi; on HiGHS those three are the refusals
+recorded in `baseline.highs.dump.results`.
 
 An unqualified `baseline.dump` therefore meant "whatever backend the capturing host
 happened to have", which is why the previous one drifted 310 lines out of date without
@@ -59,7 +60,7 @@ identical throughout, because it declares no native MIN/MAX and the switch is a 
 there.
 
 The three queries whose *results* also differed are tied optima: `MAX(x) >= 3 ...
-MINIMIZE SUM(x)` has four equally good answers and `MAX(SUM(x)) PER grp` has two, so
+MINIMIZE SUM(x)` has four equally good answers and `max(per grp: sum(x) by (grp))` has two, so
 the two encodings break the tie differently while the objective is unchanged. Pinning
 the switch keeps those ties out of the baseline, where they would have frozen an
 arbitrary choice.
@@ -85,9 +86,14 @@ silently on a missing reference is how the last one went stale.
 ## What the corpus covers
 
 Per-row and aggregate constraint shapes, canonicalization spellings (side-swapped,
-leading-negative, scaled reducers), `WHEN` and `PER`, subquery right-hand sides, ABS,
-MIN/MAX in all four hard forms, `<>` including both range collapses, and — queries 86-88
-— auxiliary boxes over a range open on one side, on both the constraint and the
-objective path. That last group was added with the half-open box: before it, every
-MIN/MAX query in the corpus carried a finite bound, so a model that discarded a
-derivable bound diffed clean.
+leading-negative, scaled reducers), `when` and `per` in front of a constraint, a
+reducer's own `when` and `per` (including a relation key, `sum(per i: keep)`), `by`
+keys (including `count(*) by (grp)`, entry 62), keyed and query-wide decisions, the
+two-level objective, subquery
+right-hand sides, ABS, MIN/MAX in all four hard forms, `<>` including both range
+collapses and a bound that varies within a `by` group (entry 94), and the value
+rewrite (entries 95–101: deck examples 1, 5 and 8, two helpers with different `by`
+keys, a MAX helper pinned on one or both sides, a keyed decision beside a reducer).
+Entries 86–88 box auxiliaries over a range open on one side, on both the constraint
+and the objective path; without them every MIN/MAX query in the corpus carries a
+finite bound, so a model that discarded a derivable bound would diff clean.

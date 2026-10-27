@@ -32,8 +32,8 @@ Suppose we may select:
 SELECT id, division, department, selected
 FROM candidates
 DECIDE selected(BOOL)
-SUCH THAT SUM(selected) <= 1 PER (division, department)
-AND SUM(selected) <= 1 PER division
+SUCH THAT per division, department: sum(selected) by (division, department) <= 1
+AND per division: sum(selected) by (division) <= 1
 AND SUM(selected) <= 2
 MAXIMIZE SUM(score*selected);
 ```
@@ -109,7 +109,7 @@ Region quotas and product quotas usually do not. Their memberships can overlap w
 | MINIMIZE | Negate the scores, then use the same procedure. |
 | Negative scores | Do not select them because every quota is an upper bound. |
 | Tied scores | Use stable decision identity to choose one optimal result. |
-| WHEN or NULL PER bypass | Pass nonmembers through to any applicable ancestor quota. |
+| Rows a `when` drops | Pass them through to any applicable ancestor quota. A NULL `by` key is a group of its own, with its own quota (D5). |
 
 Lower count requirements are not part of S2. They can force selections that the bottom-up upper-quota procedure would otherwise remove.
 
@@ -159,6 +159,6 @@ Each stage only removes rows, so quotas satisfied at lower levels remain satisfi
 >
 > • A negative remaining cap produces DECIDE's infeasible result.
 >
-> • WHEN and NULL PER membership follows DECIDE's bypass semantics.
+> • Rows a `when` drops are in no quota of that clause; a NULL `by` key is a group of its own (D5).
 >
 > • Empty input, zero caps, ties, Boolean types, decision identity, and output mapping preserve DECIDE semantics.

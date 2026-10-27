@@ -33,16 +33,17 @@ set `require`.
 
 - **Ties.** A tied query can return a different, equally optimal assignment than the solver. Tests compare row count
   and primary objective, never the tied vector.
-- **Strict bounds against a fraction.** A bare `x > 0.5` or `x < 2.5` on an `INT` or `BOOL` (no `WHEN`) gives `x >= 1`
+- **Strict bounds against a fraction.** A bare `x > 0.5` or `x < 2.5` on an `INT` or `BOOL` (no `when`) gives `x >= 1`
   and `x <= 2` on the solver, in A1 and in S1, which take the shift from one function (`DecideStrictBound`), so `auto` and
   `off` agree on this shape.
 - **Error wording and error choice.** Direct solve owes an error on the same inputs, and the solver's text for it (see
   `rules.md`), not the solver's pick among several errors. The NULL and NaN messages come from the functions the solver
   calls (`decide_value_messages.hpp`), so a NULL score, target, coefficient or bound names the NULL columns on the
   failing row as the solver does. Direct omits the solver's "at row N" on purpose: N is a position in scan order, not a
-  key. Two messages stay direct solve's own: an S1 bound or fixed value that is a computed expression rather than one
-  column (the plan counts bad rows over the whole input and has no failing row to name columns from), and an `=` bound
-  that varies within a group (the solver names the first two values it meets in scan order).
+  key. A computed value with no NULL column is quoted as written on both paths (`RenderDecideSource`), and a NULL
+  flattened subquery is named as the subquery. The bound of an aggregate clause is checked before any rule runs, by
+  the VALUE_IS_VALID scope checks the bound-side window rewrite adds, so its NULL, NaN and `=`-disagreement messages are
+  the solver's on both paths. Which bad row a message names is not specified when several are bad.
 - **Numeric edge cases.** Scores are compared to zero in the finite DOUBLE domain with no epsilon. Both solvers
   disagreed with each other near 1e-9, so the oracle and exact enumeration are the reference, and backend comparisons
   allow a measured gap.

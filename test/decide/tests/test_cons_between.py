@@ -3,10 +3,10 @@
 Covers:
   - q10_logic_dependency: per-row x BETWEEN 0 AND 5, with aggregate constraint
   - test_aggregate_between_standalone: SUM(x*w) BETWEEN lo AND hi — desugar
-    path without aggregate-local WHEN (distinct from test_aggregate_local_when.py)
-  - test_between_when_*, test_between_per_*: a WHEN (and a PER) on a BETWEEN, or
-    on the AND of two bounds written out (parenthesised, nested), applies to
-    every bound, on the solver path and under auto
+    path without a reducer's own `when` (distinct from test_aggregate_local_when.py)
+  - test_between_when_*, test_between_by_*: a `when` in front of a BETWEEN, or of
+    the AND of two bounds written out (parenthesised, nested), applies to every
+    bound, and a `by` groups each; on the solver path and under auto
 """
 
 import time
@@ -89,7 +89,7 @@ def test_aggregate_between_standalone(
     """Standalone aggregate BETWEEN: ``SUM(x * weight) BETWEEN lo AND hi``.
 
     The only existing aggregate BETWEEN coverage lives nested inside
-    aggregate-local WHEN (test_aggregate_local_when.py). Here we exercise
+    a reducer's own `when` (test_aggregate_local_when.py). Here we exercise
     the plain desugaring path, where the binder must emit two aggregate
     constraints — ``SUM(x * weight) >= lo`` and ``SUM(x * weight) <= hi``
     — from a single BETWEEN expression. A dropped sign or swapped bound
@@ -213,7 +213,7 @@ def test_real_between_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 
 
 # ---------------------------------------------------------------------------
-# WHEN / PER on a BETWEEN: the wrapper reaches both bounds
+# `when` and `by` on a BETWEEN: the scope reaches both bounds
 # ---------------------------------------------------------------------------
 
 _WRAPPED_BETWEEN_ROWS = (
@@ -287,20 +287,15 @@ def _check_wrapped_between(decidb_cli, oracle_solver, data, sense, query_tail, b
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 @_TWO_SIDED_FORMS
-def test_between_when_perrow_matches_no_row(decidb_cli, duckdb_conn, oracle_solver, form):
-    """`x BETWEEN 0 AND cap WHEN id > 5` where no row has id > 5 bounds nothing, so the problem is unbounded.
-
-    The solver path used to apply `x <= cap` on every row and answer; `x <= cap WHEN id > 5` was already unbounded.
-    """
-    data = _wrapped_between_data(duckdb_conn)
-
-    def build(oracle, names):
-        for name in names:
-            oracle.add_variable(name, VarType.CONTINUOUS, lb=0.0)
-
-    _check_wrapped_between(
-        decidb_cli, oracle_solver, data, "MAXIMIZE", _two_sided(form, "x", 0, "cap") + " WHEN id > 5", build
+def test_between_when_perrow_matches_no_row(decidb_cli, form):
+    """`when id > 5: x BETWEEN 0 AND cap` where no row has id > 5 is an error (D4), for the whole two-sided clause."""
+    sql = (
+        f"SELECT id, x FROM {_WRAPPED_BETWEEN_ROWS} "
+        f"DECIDE x(REAL) SUCH THAT when id > 5: {_two_sided(form, 'x', 0, 'cap')} MAXIMIZE SUM(s * x)"
     )
+    for mode in _WRAPPED_BETWEEN_MODES:
+        with pytest.raises(DecidBCliError, match=r"when id > 5 matches no rows\."):
+            _run_mode(decidb_cli, mode, sql)
 
 
 @pytest.mark.var_real
@@ -310,7 +305,7 @@ def test_between_when_perrow_matches_no_row(decidb_cli, duckdb_conn, oracle_solv
 @pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
 @_TWO_SIDED_FORMS
 def test_between_when_perrow_matches_some_rows(decidb_cli, duckdb_conn, oracle_solver, sense, form):
-    """The bounds hold on the rows where the WHEN holds and nowhere else.
+    """The bounds hold on the rows where the `when` holds and nowhere else.
 
     MAXIMIZE sees the upper bound (the unflagged row with the best payoff is not capped at `cap`), MINIMIZE sees the
     lower bound (flagged rows are raised to 1, unflagged rows stay at 0). `SUM(x) <= 10` keeps the problem bounded.
@@ -323,7 +318,12 @@ def test_between_when_perrow_matches_some_rows(decidb_cli, duckdb_conn, oracle_s
         oracle.add_constraint({name: 1.0 for name in names}, "<=", 10.0, name="total")
 
     _check_wrapped_between(
-        decidb_cli, oracle_solver, data, sense, _two_sided(form, "x", 1, "cap") + " WHEN flag AND SUM(x) <= 10", build
+        decidb_cli,
+        oracle_solver,
+        data,
+        sense,
+        "when flag: " + _two_sided(form, "x", 1, "cap") + " AND SUM(x) <= 10",
+        build,
     )
 
 
@@ -335,7 +335,7 @@ def test_between_when_perrow_matches_some_rows(decidb_cli, duckdb_conn, oracle_s
 @pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
 @_TWO_SIDED_FORMS
 def test_between_when_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, form):
-    """`SUM(x) BETWEEN 2 AND 4 WHEN flag` sums the flagged rows only, for both its bounds."""
+    """`when flag: SUM(x) BETWEEN 2 AND 4` sums the flagged rows only, for both its bounds."""
     data = _wrapped_between_data(duckdb_conn)
 
     def build(oracle, names):
@@ -346,7 +346,7 @@ def test_between_when_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, f
         oracle.add_constraint(dict(flagged), "<=", 4.0, name="flagged_hi")
 
     _check_wrapped_between(
-        decidb_cli, oracle_solver, data, sense, "x <= 3 AND " + _two_sided(form, "SUM(x)", 2, 4) + " WHEN flag", build
+        decidb_cli, oracle_solver, data, sense, "x <= 3 AND when flag: " + _two_sided(form, "SUM(x)", 2, 4), build
     )
 
 
@@ -359,8 +359,8 @@ def test_between_when_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, f
 @pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
 @pytest.mark.parametrize("when", [False, True])
 @_TWO_SIDED_FORMS
-def test_between_per_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, when, form):
-    """`SUM(x) BETWEEN 1 AND 2 [WHEN flag] PER g` bounds each group's sum, over the flagged rows when there is a WHEN."""
+def test_between_by_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, when, form):
+    """`[when flag:] SUM(x) by (g) BETWEEN 1 AND 2` bounds each group's sum, over the flagged rows under a `when`."""
     data = _wrapped_between_data(duckdb_conn)
 
     def build(oracle, names):
@@ -371,5 +371,5 @@ def test_between_per_aggregate(decidb_cli, duckdb_conn, oracle_solver, sense, wh
             oracle.add_constraint(dict(members), ">=", 1.0, name=f"{group}_lo")
             oracle.add_constraint(dict(members), "<=", 2.0, name=f"{group}_hi")
 
-    clause = _two_sided(form, "SUM(x)", 1, 2) + (" WHEN flag" if when else "") + " PER g"
+    clause = ("when flag: " if when else "") + _two_sided(form, "SUM(x) by (g)", 1, 2)
     _check_wrapped_between(decidb_cli, oracle_solver, data, sense, f"x <= 3 AND {clause}", build)

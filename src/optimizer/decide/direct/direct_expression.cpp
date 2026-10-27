@@ -6,6 +6,7 @@
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/exception.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/catalog/catalog.hpp"
@@ -24,7 +25,9 @@
 namespace duckdb {
 
 bool DirectIsDecisionFreeDeterministic(const Expression &expr, idx_t decide_index) {
-	// A volatile expression is not consistent, so the consistency test covers both.
+	// The binder refuses a volatile function in a clause (RefuseVolatile). The consistency test still declines one that
+	// is constant only within a query (`now()`, `txid_current()`), which a rule does not prove safe to evaluate in its
+	// plan.
 	if (BoundExpressionReferencesDecide(expr, decide_index) || !expr.IsConsistent() || expr.HasSubquery() ||
 	    expr.HasParameter() || expr.IsAggregate() || expr.IsWindow()) {
 		return false;
@@ -113,37 +116,6 @@ bool DirectPartScale(ClientContext &context, const DirectPart &part, double &sca
 	                       !(part.scale_divides && scale == 0.0));
 }
 
-const BoundColumnRefExpression *DirectBareNumericColumn(const Expression &expr) {
-	const Expression *current = &expr;
-	while (current->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		if (!current->return_type.IsNumeric() || current->CanThrow()) {
-			return nullptr;
-		}
-		current = current->Cast<BoundCastExpression>().child.get();
-	}
-	if (current->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
-		return nullptr;
-	}
-	auto &ref = current->Cast<BoundColumnRefExpression>();
-	return ref.depth == 0 && ref.return_type.IsNumeric() ? &ref : nullptr;
-}
-
-bool DirectSourceNumericColumn(const Expression &expr, const vector<ColumnBinding> &source_bindings, idx_t &slot,
-                               LogicalType &type, string &name) {
-	auto ref = DirectBareNumericColumn(expr);
-	if (!ref) {
-		return false;
-	}
-	auto found = std::find(source_bindings.begin(), source_bindings.end(), ref->binding);
-	if (found == source_bindings.end()) {
-		return false;
-	}
-	slot = found - source_bindings.begin();
-	type = ref->return_type;
-	name = ref->GetAlias();
-	return true;
-}
-
 bool DirectIsSourceOnlyNumeric(const Expression &expr, idx_t decide_index,
                                const vector<ColumnBinding> &source_bindings) {
 	return !DirectMayThrow(expr) && DirectIsSourceOnlyNumericMayRaise(expr, decide_index, source_bindings);
@@ -179,8 +151,17 @@ ExprPtr ExpressionBuilder::Wrap(unique_ptr<Expression> expr) const {
 unique_ptr<Expression> ExpressionBuilder::Out(const ExprPtr &expr) const {
 	return expr->Copy();
 }
+//! Strips the DECIDE tags from every alias in `expr`: a plan prints an expression by its alias, so a tag would reach
+//! EXPLAIN. A user's own name (a column's) stays.
+static void StripTags(Expression &expr) {
+	expr.SetAlias(StripDecideTags(expr.GetAlias()));
+	ExpressionIterator::EnumerateChildren(expr, [](Expression &child) { StripTags(child); });
+}
+
 ExprPtr ExpressionBuilder::Of(const Expression &expr) const {
-	return Wrap(expr.Copy());
+	auto copy = expr.Copy();
+	StripTags(*copy);
+	return Wrap(std::move(copy));
 }
 ExprPtr ExpressionBuilder::Num(double value) const {
 	return Wrap(make_uniq<BoundConstantExpression>(Value::DOUBLE(value)));
@@ -264,11 +245,6 @@ ExprPtr ExpressionBuilder::Any(const vector<ExprPtr> &conditions) const {
 
 ExprPtr ExpressionBuilder::Extremum(const char *name, const vector<ExprPtr> &values) const {
 	return values.size() == 1 ? values[0] : Fn(name, values);
-}
-
-string DirectTextOf(const Expression &expr) {
-	auto column = DirectBareNumericColumn(expr);
-	return column ? column->GetAlias() : expr.ToString();
 }
 
 bool DirectIsWholeNumbered(DirectDomain domain) {

@@ -10,9 +10,9 @@ exact variables escaping to infinity** and **prescribes the forced remedy** (add
 an upper bound) without inventing the cap value. Opt-in: `DIAGNOSE <query>` starts it,
 and a query without the prefix gets the plain state-only error instead.
 
-This doc describes the shipped behavior, topic by topic. Remaining enrichments are
-in `todo.md`. Shared plumbing it builds on (the trigger, provenance, the
-reporting relation) is in `foundations/done.md`.
+This doc describes the shipped behavior, topic by topic; open items are in `todo.md`.
+Shared plumbing it builds on (the trigger, provenance, the reporting relation) is in
+`foundations/done.md`.
 
 ## Status: reaching the unbounded engine
 
@@ -70,12 +70,13 @@ the user-facing variable through the `ColumnProvenance` map (variable provenance
 columns to the source expression they were generated from. The `DiagnoseUnbounded`
 engine collects columns with `|ray[i]| > DIAGNOSTIC_RAY_EPSILON`, groups them by `decide_var_idx`,
 and collects each variable's escaping **scope-instances** (the
-`ColumnProvenance.instance`: the row for row-scoped, the entity id for
-entity-scoped). `BuildUnboundedDiagnostic` turns that summary into one typed finding
+`ColumnProvenance.instance`: the row for a decision per row, the class id for a keyed
+decision). `BuildUnboundedDiagnostic` turns that summary into one typed finding
 per escaping variable, or one per reported categorical slice: `clause` names the
 variable, `suggested_change` prescribes its cap, `edit_source` carries the direction,
 `group` names the slice, `amount` counts escaping instances, `total` retains the
-applicable denominator, and `scope` says whether the instances are rows or entities.
+applicable denominator, and `scope` says whether the instances are rows (`row`) or a
+keyed decision's classes (`entity`).
 
 **Only user variables escape in practice (verified, both backends).** Auxiliary
 variables are structurally bounded — ABS Big-M and bilinear McCormick require
@@ -95,7 +96,8 @@ For an unbounded finding, `state='unbounded'`; `clause` is the escaping variable
 scoped to the escaping rows when that is sound (below);
 `edit_source` is `runaway_+inf` or `runaway_-inf`; `amount` is the number of escaping
 scope-instances; `total` is the applicable whole-variable or categorical-slice count;
-`scope` is `row` or `entity`; and `group` is the categorical slice when one is reported.
+`scope` is `row`, or `entity` for a keyed decision; and `group` is the categorical slice
+when one is reported.
 Thus `amount / total` reconstructs the escape rate that admitted a slice. `row` is NULL
 for unbounded findings. A single-instance or auxiliary/name-only finding omits the
 count, denominator, and scope when they would add no information.
@@ -105,13 +107,12 @@ count, denominator, and scope when they would add no information.
 A global `ship <= <cap>` also restricts rows that were never running away, and it leaves
 the user to turn a scoped characterization back into a conditional edit by hand. When the
 reported rules **account for every escaping instance**, the remedy is instead rendered as
-a `SUCH THAT` conjunct the user can paste as written:
+a `SUCH THAT` conjunct the user can paste as written, its condition in front:
 
-    ship <= <cap> WHEN region = 'B'
-    ship <= <cap> WHEN (region = 'B' OR region = 'C')
+    when region = 'B': ship <= <cap>
+    when (region = 'B' OR region = 'C'): ship <= <cap>
 
-The brackets are load-bearing: DeciQL's `WHEN` takes a bare comparison or a parenthesized
-condition, and an unbracketed `OR` is a parse error.
+The disjunction keeps its brackets, so the condition reads as one unit before the colon.
 
 Two conditions gate it, both decided in `CharacterizeEscape` and carried to the formatter
 on `EscapeRule::covers_scope` (the flattened finding fields cannot recover them):
@@ -128,7 +129,7 @@ covering three rows rather than three `id = …` equalities covering one each. T
 order cannot serve here, because it ranks by rate and every eligible rule ties at 1.0.
 
 This stays inside the load-bearing limit ("names a variable, not a guilty clause",
-below): it is a scoped *addition*, never a claim that some clause's `WHEN` was too narrow.
+below): it is a scoped *addition*, never a claim that some clause's `when` was too narrow.
 
 Before Batch H the escape was one prose EAV cell (`a of b rows where c = 'v'`) and
 the remedy lived in an stderr summary. The flat relation carries each component in its
@@ -172,7 +173,7 @@ lives in the opt-in relation, not the error.
 ## Escape characterization — which scope-instances escape
 
 A variable name fans out into many scope-instances: one solver column per result row
-for a row-scoped variable, or one per entity for an entity-scoped variable. The
+for a decision per row, or one per class for a keyed decision (`per K: x`). The
 characterizer distinguishes three cases:
 
 - **Total escape** (`escaping == total`): one finding with `amount = total` and
@@ -195,17 +196,20 @@ characterizer distinguishes three cases:
 **Mechanism.** Categorical grouping reuses `BuildGroupIds` (one scan per candidate
 column; it returns per-group representative values). A column is a candidate when
 `2 ≤ distinct ≤ max(min_categories, ratio × N)` — relative cardinality excludes
-continuous / id-like columns (out of scope by design). **Row-scoped** variables
-scan all named input columns. **Entity-scoped** variables also scan named input
-columns, then lift the row grouping to entity granularity via the live entity
-mapping on the `VarIndexer`; the lift is accepted only when every joined row for
-an entity has the same candidate value. This covers dimension-table labels such
+continuous / id-like columns (out of scope by design). A **decision per row** scans
+all named input columns. A **keyed decision** also scans named input columns, then
+lifts the row grouping to class granularity via the live key mapping on the
+`VarIndexer` (`EntityMapping`); the lift is accepted only when every joined row of a
+class has the same candidate value. This covers dimension-table labels such
 as supplier→nation while skipping genuinely one-to-many joined columns. The pure
 rule computation is `CharacterizeEscape` (no DuckDB execution types — unit
 tested). Column names are resolved at physical-plan time (`plan_decide.cpp`) in two
 passes, both keyed to chunk indices that survive column pruning. First, names are
-harvested from the DECIDE clause's own `BoundReferenceExpression`s (WHEN / PER /
-objective / constraint / entity-key columns). Second, any still-unnamed slot is
+harvested from the DECIDE clause's own `BoundReferenceExpression`s: the constraints and
+the objective (their `when` conditions and `per` keys included), every `by` key, the
+scope checks, composed MIN/MAX terms and helper-decision links. A declaration's key
+columns are not harvested — they carry a synthetic placeholder name — and get a name
+only from a clause that reads them or from the back-fill. Second, any still-unnamed slot is
 **back-filled from the names the binder resolved**. Those live on `LogicalDecide`
 as `source_columns`, a vector whose `DecideSourceColumnName` records keep each
 `ColumnBinding` and user-written name together. It is captured in
@@ -252,13 +256,14 @@ over a coincidental one.
 (default 0.1), `diagnose_decide_min_categories` (default 20 — an absolute floor so
 small tables still qualify).
 
-`PER` is covered only indirectly: we never map escaping instances onto PER groups,
-but if escape aligns with a column a `PER`/`WHEN` clause uses, the categorical scan
-surfaces it on its own. This is the whole of the group story by design — escape
-localized to a PER/WHEN group is reported by the generic categorical scan when the
-group key is a low-cardinality column; the engine does not otherwise map escapes onto
-group structure, and it never phrases the result as blame on the group's clause (the
-ray cannot finger a guilty clause — see the load-bearing limit above).
+Scopes are covered only indirectly: escaping instances are never mapped onto a
+clause's `per` classes, `by` groups or `when` rows, but if the escape aligns with a
+column a `when`, `per` or `by` reads, the categorical scan surfaces it on its own (that
+column is clause-referenced, so it also wins a tie between rules). This is the whole of
+the group story by design — escape localized to one class or group is reported by the
+generic categorical scan when its key is a low-cardinality column; the engine does not
+otherwise map escapes onto group structure, and it never phrases the result as blame on
+that clause (the ray cannot finger a guilty clause — see the load-bearing limit below).
 
 ## Load-bearing limit — names a variable, not a guilty clause
 
@@ -268,7 +273,7 @@ mathematically indistinguishable from an absent one. So any clause-level output
 can only ever be *context* ("`x` appears in clauses 2, 5; none cap it"), never
 blame. This limit is **not** surfaced in the user error (it was removed for
 concision — a SQL user needs the fix, not the caveat); it is recorded here because
-it shapes every clause-aware enrichment in `todo.md`.
+it bounds any clause-aware enrichment of this engine.
 
 ## Tests
 
@@ -276,9 +281,9 @@ Differential vs `oracle_solver` / pinned scenarios:
 `test/decide/tests/test_query_diagnostics_unbounded_variables.py` (REAL var,
 INTEGER/MILP via the HiGHS `INF_OR_UNBD` path, MINIMIZE improving direction,
 multi-var dedup, prefix-triggered naming, and state-only unprefixed failures) ·
-`test/decide/tests/test_query_diagnostics_escaping_instances.py` (row-scoped
-partial → categorical rule, total escape, scattered → count fallback,
-entity-scoped → entity-key and constant join-column rules, all three
+`test/decide/tests/test_query_diagnostics_escaping_instances.py` (a decision per
+row: partial → categorical rule, total escape, scattered → count fallback; a keyed
+decision: key-column and constant join-column rules; all three
 characterization pragmas `escape_rate` / `categorical_ratio` / `min_categories`
 changing what is reported plus validating their bounds; a SELECT-only column named
 from its user-written projection alias vs. an unaliased computed column that stays
@@ -298,4 +303,4 @@ confirm only the UNBOUNDED status). Demoed end-to-end on the TPC-H DB via `run.s
 (a 1-variable `part` model where `buy` is uncapped for `Manufacturer#1` rows, so
 the diagnosis reports one `runaway_+inf` finding for `buy` with
 `group = "p_mfgr = 'Manufacturer#1'"`, `amount = 29`, and
-`suggested_change = 'buy <= <cap>'`).
+`suggested_change = "when p_mfgr = 'Manufacturer#1': buy <= <cap>"`).

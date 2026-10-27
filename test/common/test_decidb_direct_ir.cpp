@@ -197,10 +197,10 @@ TEST_CASE("S1 condition rejects an unrepresentable bound and volatile coefficien
 	// The plain form of each case applies, so the case declines for the one thing it changes.
 	REQUIRE(applies("SUM(x)<=1", "SUM(score*x)"));
 	REQUIRE(!applies("SUM(x)<=9007199254740993", "SUM(score*x)"));
-	REQUIRE(!applies("SUM(x)<=1", "SUM((score+random())*x)"));
+	REQUIRE(!applies("SUM(x)<=1", "SUM((score+txid_current())*x)"));
 }
 
-TEST_CASE("Direct-solve IR retains WHEN and declines unresolved PER keys", "[decidb]") {
+TEST_CASE("Direct-solve IR retains a when and declines a reducer's by key", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
@@ -208,7 +208,7 @@ TEST_CASE("Direct-solve IR retains WHEN and declines unresolved PER keys", "[dec
 
 	auto constraint_plan = con.ExtractPlan("SELECT id, x FROM ("
 	                                       " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
-	                                       " DECIDE x(BOOL) SUCH THAT SUM(x)<=1 WHEN active"
+	                                       " DECIDE x(BOOL) SUCH THAT when active: SUM(x)<=1"
 	                                       " MAXIMIZE SUM(score*x)"
 	                                       ") q");
 	auto *constraint_decide = FindDirectIRInput(*constraint_plan);
@@ -221,23 +221,21 @@ TEST_CASE("Direct-solve IR retains WHEN and declines unresolved PER keys", "[dec
 	auto per_plan = con.ExtractPlan("SELECT id, x FROM ("
 	                                " FROM (VALUES (1, 9.0::DOUBLE, 'A'::VARCHAR),"
 	                                " (2, -1.0::DOUBLE, 'B'::VARCHAR)) s(id,score,dept)"
-	                                " DECIDE x(BOOL) SUCH THAT SUM(x)<=1 PER dept"
+	                                " DECIDE x(BOOL) SUCH THAT SUM(x) by (dept)<=1"
 	                                " MAXIMIZE SUM(score*x)"
 	                                ") q");
 	auto *per_decide = FindDirectIRInput(*per_plan);
 	REQUIRE(per_decide != nullptr);
 	auto per_ir = DirectIR::Read(*con.context, *per_decide);
-	// ExtractPlan precedes the optimizer's reference resolution. Its PER key is
-	// still a positional BoundReferenceExpression; do not invent a binding. The
-	// clause is not proved; the rest of the problem is still read.
-	// End-to-end direct tests exercise the resolved key at the DECIDE operator.
+	// No rule groups a reducer by its own `by` key yet: the clause is not proved; the rest of the problem is still
+	// read.
 	REQUIRE(per_ir.constraints.size() == 1);
 	REQUIRE(per_ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
 
 	auto objective_plan = con.ExtractPlan("SELECT id, x FROM ("
 	                                      " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
 	                                      " DECIDE x(BOOL) SUCH THAT SUM(x)<=1"
-	                                      " MAXIMIZE SUM(score*x) WHEN active"
+	                                      " MAXIMIZE when active: SUM(score*x)"
 	                                      ") q");
 	auto *objective_decide = FindDirectIRInput(*objective_plan);
 	REQUIRE(objective_decide != nullptr);
@@ -251,7 +249,7 @@ TEST_CASE("Direct-solve IR retains WHEN and declines unresolved PER keys", "[dec
 TEST_CASE("Direct-solve IR models every decision domain and scope", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	QueryIR query(con, IRQuery("x(BOOL), n(INT), r(REAL), scalar s(INT), t.e(BOOL)",
+	QueryIR query(con, IRQuery("x(BOOL), n(INT), r(REAL), per (): s(INT), per t: e(BOOL)",
 	                           "x <= 1 AND n <= 3 AND r <= 2 AND s <= 4 AND e <= 1",
 	                           "MAXIMIZE SUM(w*x) + SUM(n) + SUM(r) + s + SUM(e)"));
 	auto &ir = query.ir;
@@ -299,8 +297,8 @@ TEST_CASE("Direct-solve IR models comparisons, membership, and right-hand sides"
 TEST_CASE("Direct-solve IR models reducers, filters, qualifiers, scales and norms", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	QueryIR query(con, IRQuery("t.x(INT), y(INT)",
-	                           "AVG(y) <= 2 AND MIN(y) >= 0 AND MAX(y) <= 3 AND SUM(y) WHEN flag <= 2 AND "
+	QueryIR query(con, IRQuery("per t: x(INT), y(INT)",
+	                           "AVG(y) <= 2 AND MIN(y) >= 0 AND MAX(y) <= 3 AND SUM(when flag: y) <= 2 AND "
 	                           "SUM(t: x) <= 4 AND 2 * SUM(y) <= 9 AND norm(y, 0) <= 2 AND "
 	                           "norm(y - cap, 1) <= 5",
 	                           "MINIMIZE SUM(w*y)"));
@@ -341,7 +339,7 @@ TEST_CASE("Direct-solve IR reads an unexpected norm tag as a not-proved part, ne
 	}
 }
 
-TEST_CASE("Direct-solve IR models products, squares, and nested objective reducers", "[decidb]") {
+TEST_CASE("Direct-solve IR models products and squares, and declines a two-level objective", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	QueryIR products(con,
@@ -352,13 +350,10 @@ TEST_CASE("Direct-solve IR models products, squares, and nested objective reduce
 	REQUIRE(constraints[0].degree == 2);
 	REQUIRE(constraints[1].lhs[0].terms[0].kind == DecideTermKind::SQUARE);
 
-	QueryIR nested(con, IRQuery("x(INT)", "x <= 3", "MINIMIZE SUM(MAX(w*x)) PER id"));
-	auto &parts = nested.ir.objective.parts;
-	REQUIRE(parts.size() == 1);
-	REQUIRE(parts[0].reducer == DirectReducer::SUM);
-	REQUIRE(parts[0].inner != nullptr);
-	REQUIRE(parts[0].inner->reducer == DirectReducer::MAX);
-	REQUIRE(parts[0].terms.empty());
+	// No rule models `outer(per k: inner(e) by (k))` yet.
+	QueryIR nested(con, IRQuery("x(INT)", "x <= 3", "MINIMIZE SUM(per id: MAX(w*x) by (id))"));
+	REQUIRE(nested.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
+	REQUIRE(nested.ir.objective.parts.empty());
 }
 
 TEST_CASE("Direct-solve IR reports what it cannot model as not proved", "[decidb]") {
@@ -399,20 +394,23 @@ TEST_CASE("Direct-solve IR says which bounds the solver folds into a variable's 
 	check("x(INT)", "x < 3 AND x > -2", {true, true});
 	check("x(BOOL)", "x <= 1", {true});
 
-	// Anything else only intersects with the default box: a column, a WHEN, a coefficient or offset on the decision, an
-	// arithmetic right side, and a comparison that is not a bound.
+	// A bound is read by value (D41): a coefficient or offset on the decision and an arithmetic right side fold too. No
+	// rule models such a box yet, so the clause is not proved.
+	for (auto affine : {"2*x >= -6", "x + 1 >= -3", "-x <= 3", "x >= 0 - 3"}) {
+		check("x(REAL)", affine, {true});
+		QueryIR query(con, IRQuery("x(REAL)", affine, "MINIMIZE SUM(x)"));
+		REQUIRE(query.ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
+	}
+
+	// Anything else only intersects with the default box: a column, a `when`, and a comparison that is not a bound.
 	check("x(REAL)", "x >= cap", {false});
 	check("x(REAL)", "x >= w", {false});
-	check("x(REAL)", "x >= -3 WHEN flag", {false});
-	check("x(REAL)", "2*x >= -6", {false});
-	check("x(REAL)", "x + 1 >= -3", {false});
-	check("x(REAL)", "-x <= 3", {false});
-	check("x(REAL)", "x >= 0 - 3", {false});
+	check("x(REAL)", "when flag: x >= -3", {false});
 	check("x(INT)", "x <> 3", {false});
 	check("x(INT)", "x < cap", {false});
 
 	// A bound mixed with ones that are not folded keeps each clause's own answer.
-	check("x(REAL)", "x >= -3 AND x <= cap AND x >= -1 WHEN flag", {true, false, false});
+	check("x(REAL)", "x >= -3 AND x <= cap AND when flag: x >= -1", {true, false, false});
 }
 
 TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") {
@@ -462,7 +460,7 @@ TEST_CASE("A1 IR reads each objective spelling the solver accepts", "[decidb]") 
 	REQUIRE(cubic.ir.objective.status == DirectAnalysisStatus::NOT_PROVED);
 
 	// An objective-level WHEN is a scope on the objective; no objective is no part at all.
-	QueryIR when(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(x - w, 2)) WHEN flag"));
+	QueryIR when(con, IRQuery("x(REAL)", "x <= cap", "MINIMIZE when flag: SUM(POWER(x - w, 2))"));
 	REQUIRE(when.ir.objective.scope.when != nullptr);
 	QueryIR none(con, IRQuery("x(REAL)", "x <= cap", ""));
 	REQUIRE(none.ir.objective.sense == DecideSense::FEASIBILITY);
@@ -496,9 +494,8 @@ TEST_CASE("A1 accepts a separable box-constrained problem and declines anything 
 	REQUIRE(RuleApplies(*a1, con, "x(BOOL)", "x <= flag", "MAXIMIZE SUM(w*x)"));
 	REQUIRE(RuleApplies(*a1, con, "x(REAL), y(INT)", "x <= cap AND y <= 5", "MINIMIZE SUM(x) + SUM(w*y)"));
 	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= cap", ""));
-	REQUIRE(
-	    RuleApplies(*a1, con, "x(REAL)", "2*x <= cap AND w*x >= -1 AND x >= -3 WHEN flag", "MAXIMIZE SUM(x)"));
-	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 3, 2)) WHEN flag"));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "2*x <= cap AND w*x >= -1 AND when flag: x >= -3", "MAXIMIZE SUM(x)"));
+	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= cap", "MINIMIZE when flag: SUM(POWER(w*x - 3, 2))"));
 	// A cast that can throw is read per row and raises as the solver does, so it is admitted.
 	REQUIRE(RuleApplies(*a1, con, "x(REAL)", "x <= CAST(cap AS TINYINT)", "MAXIMIZE SUM(x)"));
 
@@ -512,12 +509,12 @@ TEST_CASE("A1 accepts a separable box-constrained problem and declines anything 
 	declines("x(REAL), y(REAL)", "x <= cap AND y <= cap", "MAXIMIZE SUM(x*y)");
 	declines("x(INT)", "x <= cap AND x <> 2", "MAXIMIZE SUM(w*x)");
 	declines("x(INT)", "x IN (1, 2, 3)", "MAXIMIZE SUM(w*x)");
-	declines("x(REAL)", "x <= cap", "MAXIMIZE SUM(w*x) PER id");
+	declines("x(REAL)", "x <= cap", "MAXIMIZE SUM(per id: SUM(w*x) by (id))");
 	declines("x(REAL)", "x <= cap", "MAXIMIZE AVG(w*x)");
 	declines("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(x - w, 2)) + SUM(POWER(x - cap, 2))");
 	declines("x(REAL)", "x <= cap", "MINIMIZE SUM(w*POWER(x - 1, 2))");
-	declines("x(REAL)", "x <= cap", "MAXIMIZE SUM(random()*x)");
-	declines("x(REAL)", "x <= cap WHEN (random() < 2)", "MAXIMIZE SUM(x)");
+	declines("x(REAL)", "x <= cap", "MAXIMIZE SUM(txid_current()*x)");
+	declines("x(REAL)", "when txid_current() >= 0: x <= cap", "MAXIMIZE SUM(x)");
 	declines("x(REAL)", "POWER(x, 2) <= 9", "MAXIMIZE SUM(x)");
 	declines("x(REAL)", "ABS(x) <= 3", "MAXIMIZE SUM(x)");
 	declines("x(REAL)", "x <= cap", "MINIMIZE SUM(POWER(w*x - 1, 2)) + SUM(POWER(x - 1, 2))");
@@ -611,12 +608,4 @@ TEST_CASE("Direct-solve IR marks a clause the front end cannot read as not prove
 	REQUIRE(unknown_row.ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
 	QueryIR known_row(con, IRQuery("x(INT)", "ABS(x - cap) <= 9", "MAXIMIZE SUM(w*x)"));
 	REQUIRE(known_row.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
-
-	// An order-0 norm needs indicator variables: nested in a reducer it leaves the outer reducer not proved too.
-	QueryIR nested_norm(con, IRQuery("x(INT)", "SUM(MAX(norm(x, 0))) <= 2", "MAXIMIZE SUM(w*x)"));
-	REQUIRE(nested_norm.ir.constraints.size() == 1);
-	auto &outer = nested_norm.ir.constraints[0].lhs[0];
-	REQUIRE(outer.status == DirectAnalysisStatus::NOT_PROVED);
-	REQUIRE(outer.inner != nullptr);
-	REQUIRE(outer.inner->status == DirectAnalysisStatus::NOT_PROVED);
 }

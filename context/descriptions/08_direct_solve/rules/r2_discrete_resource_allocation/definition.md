@@ -138,4 +138,4 @@ An equality fixes the number of selected increments. An upper bound selects only
 >
 > • Empty domains or unreachable exact totals produce DECIDE infeasibility.
 >
-> • BIGINT, overflow, WHEN, PER, NULL, numeric, decision-identity, and output-mapping semantics are preserved.
+> • BIGINT, overflow, `when`, `per`, `by`, NULL, numeric, decision-identity, and output-mapping semantics are preserved.

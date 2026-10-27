@@ -36,24 +36,19 @@ constexpr const char *RULE_NAME = "R1_CONTINUOUS_KNAPSACK";
 //! <= SUM(w0*x0 + w1*x1 + ...) <= upper` over the rows the budget covers, and a linear objective. Nothing links two
 //! decisions of a row: every per-row bound reads one decision, and no objective term multiplies two.
 struct Condition final : DirectApplicabilityCondition {
-	//! A limit of the budget read from the data: a source column or an expression over source columns (an aggregate of
-	//! the source is a column by the time the rule reads it). Each group's limit is the group's MIN for `<=`, its MAX
-	//! for `>=` and both for `=`, which must agree (AggregatePlanBuilder::GroupTotals).
+	//! A limit of the budget read from the data: a source column or an expression over source columns. The bound-side
+	//! window rewrite (RewriteRhsAggregates) made it one value on every kept row of a group (its tightest, with `=`
+	//! values that agree) and checked it for NULL and NaN under the plan, so the rule only reads it.
 	struct DataLimit {
 		ExpressionType comparison = ExpressionType::INVALID;
 		unique_ptr<Expression> value;
-		//! The source column the limit is exactly, and the name the user wrote; INVALID_INDEX and an empty name for a
-		//! computed limit.
-		idx_t source_slot = DConstants::INVALID_INDEX;
-		string column_name;
-		//! The limit is reduced over every row of the group, not only the rows of the budget: the sum has a `WHEN` of
-		//! its own, which scopes the sum and not the right side, as the solver reduces it.
-		bool all_group_rows = false;
 	};
 	DecideSense sense = DecideSense::FEASIBILITY;
-	//! Which rows the budget covers, and in which groups: a row whose `WHEN` holds and whose `PER` keys are all not
+	//! Which rows the budget covers, and in which groups: a row whose `when` holds and whose group keys are all not
 	//! NULL belongs to the budget of its group; any other row is outside every budget. Every clause of the budget has
-	//! this scope. `group_key_slots` index the source's columns.
+	//! this scope. `group_key_slots` index the source's columns. The front end fills no group key today (it declines a
+	//! `by` key); reading one must make a NULL key a group of its own (D5), where this leaves it out as the removed PER
+	//! did.
 	vector<idx_t> group_key_slots;
 	unique_ptr<Expression> when;
 	bool scoped = false;
@@ -112,7 +107,8 @@ public:
 	}
 
 	DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate) const override;
+	                       const DirectApplicabilityCondition &candidate,
+	                       const vector<string> &source_fragments) const override;
 
 private:
 	bool ProveDecision(const DirectIR &ir) const;
@@ -178,8 +174,8 @@ bool SameBudgetTerms(const DirectLinearPart &a, const DirectLinearPart &b) {
 	return true;
 }
 
-//! Every clause of the budget covers the same rows: the same `PER` keys in the same order, and the same `WHEN` (written
-//! on the clause or on the aggregate: both read as a membership of the budget). Records the scope the plan applies.
+//! Every clause of the budget covers the same rows: the same group keys in the same order, and the same `when` (written
+//! on the clause or on the sum: both read as a membership of the budget). Records the scope the plan applies.
 bool Rule::ProveBudgetScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &budgets,
                             Condition &condition) const {
 	bool ok;
@@ -255,8 +251,9 @@ bool Rule::ProveLimit(const DirectIR &ir, ClientContext &context, const DirectIR
 }
 
 //! A limit read from the data: a numeric, deterministic expression over source columns that mentions at least one, and
-//! may raise (the plan evaluates it on every row, as the solver does, so both raise on the same inputs). The
-//! right-hand-side rewrite has made an aggregate on the right a source column; one it left is not a value of the row.
+//! may raise (the plan evaluates it on the rows that read it, as the solver does, so both raise on the same inputs).
+//! The bound-side window rewrite has made an aggregate on the right a source column; one it left is not a value of
+//! the row.
 bool Rule::ProveDataLimit(const DirectIR &ir, const DirectIRConstraint &ir_node, Condition &condition) const {
 	auto &rhs = *ir_node.rhs;
 	if (!DirectIsSourceOnlyNumericMayRaise(rhs, ir.decide_index, ir.source_bindings)) {
@@ -265,9 +262,6 @@ bool Rule::ProveDataLimit(const DirectIR &ir, const DirectIRConstraint &ir_node,
 	Condition::DataLimit limit;
 	limit.comparison = ir_node.comparison;
 	limit.value = rhs.Copy();
-	LogicalType column_type;
-	DirectSourceNumericColumn(rhs, ir.source_bindings, limit.source_slot, column_type, limit.column_name);
-	limit.all_group_rows = ir_node.PlainSum()->filter != nullptr;
 	condition.data_limits.push_back(std::move(limit));
 	return true;
 }
@@ -624,7 +618,7 @@ struct DecisionColumns {
 struct ItemColumns {
 	//! The source columns, in source order.
 	vector<ColumnBinding> sources;
-	//! The group key: whether the row belongs to a budget (BOOLEAN), then the `PER` keys. Empty without a scope.
+	//! The group key: whether the row belongs to a budget (BOOLEAN), then the group keys. Empty without a scope.
 	vector<ColumnBinding> keys;
 	//! The check of every raw value and of every limit read from the data (BOOLEAN: true, or the row raises).
 	ColumnBinding valid_data;
@@ -660,9 +654,9 @@ public:
 	//! `proved_bindings` are the bindings the proved expressions of the condition refer to, and `source_types` the
 	//! types of the source columns in the same order. The plan reads the source through a fresh set of bindings each
 	//! time, and the expressions are re-pointed at it (Build).
-	ItemStages(const Condition &condition_p, Optimizer &optimizer_p, vector<ColumnBinding> proved_bindings_p,
-	           vector<LogicalType> source_types_p)
-	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder),
+	ItemStages(const Condition &condition_p, Optimizer &optimizer_p, const vector<string> &fragments_p,
+	           vector<ColumnBinding> proved_bindings_p, vector<LogicalType> source_types_p)
+	    : ItemAlgebra(optimizer_p), condition(condition_p), fragments(fragments_p), binder(optimizer_p.binder),
 	      proved_bindings(std::move(proved_bindings_p)), source_types(std::move(source_types_p)) {
 		// The source reader hands the input over with its types resolved.
 		D_ASSERT(proved_bindings.size() == source_types.size());
@@ -743,6 +737,8 @@ private:
 	using Named = vector<std::pair<string, ExprPtr>>;
 
 	const Condition &condition;
+	//! The DECIDE node's source-fragment registry, which a NULL message quotes the written subquery or cast from.
+	const vector<string> &fragments;
 	Binder &binder;
 	//! The bindings the proved expressions refer to, and the types of the source columns.
 	vector<ColumnBinding> proved_bindings;
@@ -848,54 +844,45 @@ private:
 	// P1 and P2: raw values, limits from the data, per-clause bounds, the objective value
 	//===------------------------------------------------------------------===//
 
-	//! The check of a limit read from the data on one row, over its DOUBLE value: true, or the solver's error. A limit
-	//! that is exactly one source column raises the solver's NULL and NaN messages, which name it; any other raises one
-	//! message for both, because which column is NULL depends on the row.
-	unique_ptr<Expression> DataLimitCheck(const Condition::DataLimit &limit, ColumnBinding value) const {
-		auto number = calc.Col(LogicalType::DOUBLE, value);
-		vector<unique_ptr<Expression>> checks;
-		if (limit.source_slot == DConstants::INVALID_INDEX) {
-			checks.push_back(
-			    DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(number), calc.Bool(true), calc.Fn("isnan", number))),
-			                  DirectErrorPredicate(optimizer, DirectInvalidBoundMessage())));
-		} else {
-			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.IsNull(number)),
-			                               DirectErrorPredicate(optimizer, DirectBoundNullMessage(limit.column_name))));
-			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.Fn("isnan", number)),
-			                               DirectErrorPredicate(optimizer, DirectBoundNaNMessage())));
-		}
-		return DirectAllHold(calc, std::move(checks));
-	}
-
-	//! The value of each limit read from the data, as DOUBLE, on every row.
+	//! The value of each limit read from the data, as DOUBLE, on the rows of the budget (NULL on the others). It is one
+	//! value on the budget's rows of a group, so stage 2's group MIN or MAX is that value.
 	void AddLimitValues(Named &added) const {
 		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
-			added.emplace_back(LimitName(j),
-			                   calc.Cast(calc.Of(*OverState(*condition.data_limits[j].value)), LogicalType::DOUBLE));
+			auto &limit = condition.data_limits[j];
+			auto value = calc.Cast(calc.Of(*OverState(*limit.value)), LogicalType::DOUBLE);
+			if (condition.scoped) {
+				value = DirectOnKeptRows(calc, C(ELIGIBLE), value);
+			}
+			added.emplace_back(LimitName(j), value);
 		}
 	}
 
-	//! The check of each limit read from the data, over the values AddLimitValues added.
-	vector<unique_ptr<Expression>> LimitChecks() const {
-		vector<unique_ptr<Expression>> checks;
-		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
-			checks.push_back(DataLimitCheck(condition.data_limits[j], columns.at(LimitName(j)).binding));
+	//! The check, read only on the rows of the budget when the budget has a scope.
+	unique_ptr<Expression> ReadOnBudgetRows(unique_ptr<Expression> check) const {
+		if (!condition.scoped) {
+			return check;
 		}
-		return checks;
+		return DirectCheckOnKeptRows(calc, calc.Out(C(ELIGIBLE)), std::move(check));
 	}
 
-	//! P1: every raw value, evaluated unconditionally on every row. Returns the check on each, built over P1. A
-	//! decision the budget does not name has the weight 0, which needs no check; an objective part has a raw value for
-	//! each decision it names. A limit read from the data is checked on every row, the rows outside the budget
-	//! included, as the solver checks it; its group MIN and MAX are stage 2's.
+	//! P1: every raw value, computed on the rows that read it: a row a `when` drops reads nothing, as on the solver
+	//! path. A clause's values are NULL on the rows its `when` drops, where its bounds are not read; a row outside the
+	//! budget has the weight 0, as an item outside every budget. Returns the check on each, built over P1, which raises
+	//! only where the value is read. A decision the budget does not name has the weight 0, which needs no check; an
+	//! objective part has a raw value for each decision it names. A limit's group MIN and MAX are stage 2's.
 	vector<unique_ptr<Expression>> LayoutRawValues() {
 		Named added;
 		AddLimitValues(added);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
-			added.emplace_back("c" + std::to_string(j), calc.Wrap(SumOf(clause.coefficient)));
+			auto on_kept = [&](ExprPtr value) {
+				return clause.when ? DirectOnKeptRows(
+				                         calc, calc.Wrap(DirectActiveWhen(calc, OverState(*clause.when).get())), value)
+				                   : value;
+			};
+			added.emplace_back("c" + std::to_string(j), on_kept(calc.Wrap(SumOf(clause.coefficient))));
 			added.emplace_back("r" + std::to_string(j),
-			                   calc.Cast(calc.Of(*OverState(*clause.rhs)), LogicalType::DOUBLE));
+			                   on_kept(calc.Cast(calc.Of(*OverState(*clause.rhs)), LogicalType::DOUBLE)));
 			if (clause.when) {
 				added.emplace_back("wh" + std::to_string(j),
 				                   calc.Wrap(DirectActiveWhen(calc, OverState(*clause.when).get())));
@@ -903,7 +890,9 @@ private:
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = SignedValues(condition.budget, k);
-			added.emplace_back(Dec("w", k), weights.empty() ? Zero() : calc.Wrap(SumOf(weights)));
+			auto weight = weights.empty() ? Zero() : calc.Wrap(SumOf(weights));
+			added.emplace_back(Dec("w", k),
+			                   condition.scoped && !weights.empty() ? calc.If(C(ELIGIBLE), weight, Zero()) : weight);
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
 				if (!values.empty()) {
@@ -914,27 +903,33 @@ private:
 		auto p1 = Project(added);
 
 		// The checks name the source columns a NULL comes from, so they read the source through P1.
-		auto checks = LimitChecks();
+		vector<unique_ptr<Expression>> checks;
 		auto number = [&](const string &name, const vector<DirectSignedValue> &values, DirectNumberKind kind) {
 			auto source = DirectMergedOverProjection(optimizer.context, values, proved_bindings, p1);
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, columns.at(name).binding,
-			                                            source.get(), kind));
+			return DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, columns.at(name).binding, source.get(),
+			                                  kind, fragments);
 		};
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
-			number("c" + std::to_string(j), clause.coefficient, DirectNumberKind::CONSTRAINT);
-			checks.push_back(DirectValidBoundPredicate(optimizer, columns.at("r" + std::to_string(j)).binding,
-			                                           *DirectOverProjection(*clause.rhs, proved_bindings, p1)));
+			auto suffix = std::to_string(j);
+			auto read_on = [&](unique_ptr<Expression> check) {
+				return clause.when ? DirectCheckOnKeptRows(calc, calc.Out(C("wh" + suffix)), std::move(check))
+				                   : std::move(check);
+			};
+			checks.push_back(read_on(number("c" + suffix, clause.coefficient, DirectNumberKind::CONSTRAINT)));
+			checks.push_back(
+			    read_on(DirectValidBoundPredicate(optimizer, columns.at("r" + suffix).binding,
+			                                      *DirectOverProjection(*clause.rhs, proved_bindings, p1), fragments)));
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = SignedValues(condition.budget, k);
 			if (!weights.empty()) {
-				number(Dec("w", k), weights, DirectNumberKind::CONSTRAINT);
+				checks.push_back(ReadOnBudgetRows(number(Dec("w", k), weights, DirectNumberKind::CONSTRAINT)));
 			}
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
 				if (!values.empty()) {
-					number(Dec("o" + std::to_string(p), k), values, DirectNumberKind::OBJECTIVE);
+					checks.push_back(number(Dec("o" + std::to_string(p), k), values, DirectNumberKind::OBJECTIVE));
 				}
 			}
 		}
@@ -1116,7 +1111,7 @@ private:
 //! Builds the plan of definition.md § The plan for one or several decisions, with limits that are constants or read
 //! from the data: aggregate-then-join. Each group is reduced to one row of numbers (its totals, its price, its sums at
 //! the price) and every source row joins its group's row and computes its answer in one projection. A group key is
-//! whether the row belongs to a budget, then its `PER` keys; keys are compared with IS NOT DISTINCT FROM, so a NULL key
+//! whether the row belongs to a budget, then its group keys; keys are compared with IS NOT DISTINCT FROM, so a NULL key
 //! matches. Without a scope there is one group: the aggregates have no GROUP BY and the join is a cross product with
 //! that one row.
 //!
@@ -1144,8 +1139,10 @@ private:
 //! no answer still raises.
 class AggregatePlanBuilder : public ItemAlgebra {
 public:
-	AggregatePlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, DirectSourceReader &reader_p)
-	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder), reader(reader_p) {
+	AggregatePlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, DirectSourceReader &reader_p,
+	                     const vector<string> &fragments_p)
+	    : ItemAlgebra(optimizer_p), condition(condition_p), fragments(fragments_p), binder(optimizer_p.binder),
+	      reader(reader_p) {
 		if (condition.scoped) {
 			key_types.push_back(LogicalType::BOOLEAN);
 			for (auto slot : condition.group_key_slots) {
@@ -1183,7 +1180,8 @@ private:
 		vector<ColumnBinding> limits;
 	};
 	//! The group MIN of a limit read from the data that bounds the budget from above (an upper limit or an equality)
-	//! and the group MAX of one that bounds it from below (a lower limit or an equality).
+	//! and the group MAX of one that bounds it from below (a lower limit or an equality). The limit is one value on the
+	//! group's rows, so the aggregate only carries it to the group.
 	struct LimitExtremes {
 		ColumnBinding minimum, maximum;
 	};
@@ -1200,9 +1198,11 @@ private:
 	};
 
 	const Condition &condition;
+	//! The DECIDE node's source-fragment registry, which a NULL message quotes the written subquery or cast from.
+	const vector<string> &fragments;
 	Binder &binder;
 	DirectSourceReader &reader;
-	//! The types of the group key: BOOLEAN, then the `PER` keys. Empty without a scope.
+	//! The types of the group key: BOOLEAN, then the group keys. Empty without a scope.
 	vector<LogicalType> key_types;
 
 	ExprPtr DoubleColumn(ColumnBinding binding) const {
@@ -1226,13 +1226,10 @@ private:
 		return limits.empty() ? calc.Num(condition.upper) : DoubleColumn(limits[1]);
 	}
 
-	//! The text DirectValidateBounds raises for the same input on S1's data-valued bound.
-	static constexpr const char *EQUALITY_VARIES_MESSAGE = "DECIDE source-valued equality bound varies within a group";
-
 	//! A new read of the source, as stage 1 computes it.
 	Items ReadItems() {
 		auto read = reader.ReadSource();
-		ItemStages stages(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
+		ItemStages stages(condition, optimizer, fragments, reader.SourceBindings(), reader.SourceTypes());
 		Items items;
 		items.plan = stages.Build(std::move(read.plan), read.table_index);
 		items.columns = stages.Columns();
@@ -1316,21 +1313,6 @@ private:
 		return extremes;
 	}
 
-	//! An equality limit is one value in a group that has a budget, so its MIN and MAX agree; a group outside every
-	//! budget has no required spend.
-	void AddEqualityChecks(vector<unique_ptr<Expression>> &checks, const vector<LimitExtremes> &extremes,
-	                       const vector<ColumnBinding> &key) const {
-		for (idx_t j = 0; j < extremes.size(); j++) {
-			if (condition.data_limits[j].comparison != ExpressionType::COMPARE_EQUAL) {
-				continue;
-			}
-			auto varies = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, DoubleColumn(extremes[j].minimum),
-			                       DoubleColumn(extremes[j].maximum));
-			checks.push_back(DirectRaiseIf(calc, calc.Out(condition.scoped ? And(BoolColumn(key[0]), varies) : varies),
-			                               DirectErrorPredicate(optimizer, EQUALITY_VARIES_MESSAGE)));
-		}
-	}
-
 	//! One side of the budget in a group: the constant limit and the group extremum of each limit read from the data on
 	//! that side. An upper limit takes the group's MIN, a lower one its MAX (an equality both). A value is the number
 	//! it is, however large (the solver loads a right side of 1e25 as that number), and an infinite one is infinite: an
@@ -1350,43 +1332,11 @@ private:
 		return upper ? calc.Min(sides) : calc.Max(sides);
 	}
 
-	//! A limit read over every row of its group, the rows outside the budget included (the sum has a `WHEN` of its own,
-	//! which scopes the sum and not the limit, as the solver reduces it), spans two groups of the plan: the budget's
-	//! rows and the others with the same `PER` keys. The extremum of such a limit is taken across them, in a window
-	//! over the group rows (one per group) partitioned by the `PER` keys alone.
-	unique_ptr<LogicalOperator> ReadAcrossBudgets(unique_ptr<LogicalOperator> plan, const vector<ColumnBinding> &key,
-	                                              vector<LimitExtremes> &extremes) {
-		auto window_index = binder.GenerateTableIndex();
-		auto window = make_uniq<LogicalWindow>(window_index);
-		auto across = [&](const char *function, ColumnBinding &extreme) {
-			auto extremum = DirectWindowExtremum(optimizer, function, calc.Out(DoubleColumn(extreme)));
-			for (idx_t i = 1; i < key_types.size(); i++) {
-				extremum->partitions.push_back(calc.Out(KeyColumn(i, key)));
-			}
-			extreme = ColumnBinding(window_index, window->expressions.size());
-			window->expressions.push_back(std::move(extremum));
-		};
-		for (idx_t j = 0; j < extremes.size(); j++) {
-			auto &limit = condition.data_limits[j];
-			if (limit.all_group_rows && DirectIsUpperBound(limit.comparison)) {
-				across("min", extremes[j].minimum);
-			}
-			if (limit.all_group_rows && DirectIsLowerBound(limit.comparison)) {
-				across("max", extremes[j].maximum);
-			}
-		}
-		if (window->expressions.empty()) {
-			return plan;
-		}
-		window->children.push_back(std::move(plan));
-		return std::move(window);
-	}
-
 	//! Stage 2. The aggregate sums stage 1's values over the group (the sums of TotalInputs, the number of rows, the
-	//! MIN and MAX of the limits read from the data, and the check of every row's raw values, limits and v: a NULL or
-	//! NaN raises here). The projection after it gives the group's limits L and U, and tests the verdicts: the
-	//! empty-aggregate error for a scope that covers no row, then the data checks (an equality limit must be one value
-	//! in the group), then infeasible, then unbounded; a source with no row has no verdict.
+	//! MIN and MAX of the limits read from the data, and the check of every row's raw values and v: a NULL or NaN
+	//! raises here). The projection after it gives the group's limits L and U, and tests the verdicts: the data
+	//! checks, then infeasible, then unbounded; a source with no row
+	//! has no verdict. A `when` that keeps no row was raised before, by the row checks under the plan (D4).
 	Stage<TotalColumns> GroupTotals() {
 		auto items = ReadItems();
 		auto inputs = TotalInputsOfRow(ItemsOf(items.columns));
@@ -1400,7 +1350,7 @@ private:
 		data_checks.push_back(calc.Out(BoolColumn(items.columns.valid_data)));
 		for (auto &decision : items.columns.decisions) {
 			data_checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, decision.v, nullptr,
-			                                                 DirectNumberKind::OBJECTIVE));
+			                                                 DirectNumberKind::OBJECTIVE, fragments));
 		}
 		auto data_valid = aggregate.Add(Aggregate("bool_and", calc.Wrap(DirectAllHold(calc, std::move(data_checks)))));
 		vector<ColumnBinding> sums;
@@ -1409,18 +1359,6 @@ private:
 		}
 		auto extremes = AddLimitExtremes(aggregate, items.columns.limits);
 		auto plan = aggregate.Finish(std::move(items.plan));
-
-		// With a scope the rows outside every budget are groups of their own, and the budget must cover some row.
-		ColumnBinding active;
-		if (condition.scoped) {
-			auto window_index = binder.GenerateTableIndex();
-			auto window = make_uniq<LogicalWindow>(window_index);
-			window->expressions.push_back(DirectWindowMatchingCount(calc, calc.Out(BoolColumn(key[0]))));
-			window->children.push_back(std::move(plan));
-			plan = std::move(window);
-			active = ColumnBinding(window_index, 0);
-		}
-		plan = ReadAcrossBudgets(std::move(plan), key, extremes);
 
 		vector<ExprPtr> totals;
 		for (auto &sum : sums) {
@@ -1431,11 +1369,7 @@ private:
 		auto has_rows = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Col(LogicalType::BIGINT, rows),
 		                         calc.Constant(Value::BIGINT(0)));
 		vector<unique_ptr<Expression>> checks;
-		if (condition.scoped) {
-			checks.push_back(DirectActiveRowsCheck(optimizer, active));
-		}
 		checks.push_back(calc.Out(BoolColumn(data_valid)));
-		AddEqualityChecks(checks, extremes, key);
 		checks.push_back(DirectRaiseIf(calc, calc.Out(And(has_rows, verdict.infeasible)),
 		                               DirectInfeasibleErrorPredicate(optimizer)));
 		checks.push_back(
@@ -1720,10 +1654,11 @@ private:
 };
 
 DirectSubstitute Rule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate) const {
+                             const DirectApplicabilityCondition &candidate,
+                             const vector<string> &source_fragments) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	DirectSourceReader reader(optimizer, std::move(source));
-	AggregatePlanBuilder builder(condition, optimizer, reader);
+	AggregatePlanBuilder builder(condition, optimizer, reader, source_fragments);
 	return builder.Build();
 }
 

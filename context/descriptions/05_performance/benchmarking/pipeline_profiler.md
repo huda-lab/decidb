@@ -37,7 +37,7 @@ effect each:
 | P1 | bounded LP: each row pushed to its own upper bound |
 | P2 | separable convex QP: no constraint couples the rows |
 | P3 | P2 plus one aggregate budget that couples every decision |
-| P4 | Boolean ILP with exactly one row per `l_orderkey` (a high-cardinality PER) |
+| P4 | Boolean ILP with exactly one row per `l_orderkey` (a high-cardinality `per`: `per l_orderkey: sum(keep) by (l_orderkey) = 1`) |
 
 P4 has the shape direct solve answers, but a forced backend keeps every query on the solver path, so the profiler
 measures the solver on it.

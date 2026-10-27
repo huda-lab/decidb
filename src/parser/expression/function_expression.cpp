@@ -35,6 +35,14 @@ FunctionExpression::FunctionExpression(const string &function_name, vector<uniqu
                          std::move(order_bys), distinct, is_operator, export_state_p) {
 }
 
+string DecideKeyToString(const FunctionExpression &marker) {
+	string result;
+	for (idx_t i = 1; i < marker.children.size(); i++) {
+		result += (i > 1 ? ", " : "") + marker.children[i]->ToString();
+	}
+	return result;
+}
+
 //! A relation-qualified reducer is represented by a parser-only operator whose first
 //! child is the real aggregate and whose remaining children are relation names. Render
 //! the aggregate's complete DuckDB function surface, inserting the qualifier before
@@ -52,13 +60,7 @@ static string QualifiedReducerToString(const FunctionExpression &wrapper) {
 		result += KeywordHelper::WriteOptionallyQuoted(aggregate.schema) + ".";
 	}
 	result += KeywordHelper::WriteOptionallyQuoted(aggregate.function_name) + "(";
-	for (idx_t i = 1; i < wrapper.children.size(); i++) {
-		if (i > 1) {
-			result += ", ";
-		}
-		result += wrapper.children[i]->ToString();
-	}
-	result += ": ";
+	result += DecideKeyToString(wrapper) + ": ";
 	if (aggregate.distinct) {
 		result += "DISTINCT ";
 	}
@@ -93,7 +95,50 @@ static string QualifiedReducerToString(const FunctionExpression &wrapper) {
 	return result;
 }
 
+//! `[WHEN condition] [PER key]: body`. PER is the outer marker and WHEN the inner one,
+//! the order they apply in, so the pair is printed together -- WHEN first, as written.
+static string DecideScopeToString(const FunctionExpression &scope) {
+	const ParsedExpression *body = &scope;
+	string per;
+	if (scope.function_name == SCOPE_PER_TAG || scope.function_name == SCOPE_PER_ROW_TAG) {
+		if (scope.children.empty()) {
+			throw InternalException("DECIDE PER scope marker has no body");
+		}
+		if (scope.function_name == SCOPE_PER_ROW_TAG) {
+			per = "PER ROW";
+		} else {
+			auto key = DecideKeyToString(scope);
+			per = key.empty() ? "PER ()" : "PER " + key;
+		}
+		body = scope.children[0].get();
+	}
+	string when;
+	if (body->GetExpressionClass() == ExpressionClass::FUNCTION) {
+		auto &filter = body->Cast<FunctionExpression>();
+		if (filter.is_operator && filter.function_name == SCOPE_WHEN_TAG) {
+			if (filter.children.size() != 2) {
+				throw InternalException("DECIDE WHEN scope marker has %s children, expected 2", filter.children.size());
+			}
+			when = "WHEN " + filter.children[1]->ToString();
+			body = filter.children[0].get();
+		}
+	}
+	return when + (when.empty() || per.empty() ? "" : " ") + per + ": " + body->ToString();
+}
+
 string FunctionExpression::ToString() const {
+	if (is_operator &&
+	    (function_name == SCOPE_WHEN_TAG || function_name == SCOPE_PER_TAG || function_name == SCOPE_PER_ROW_TAG)) {
+		return DecideScopeToString(*this);
+	}
+	if (is_operator && function_name == REDUCER_BY_TAG) {
+		if (children.empty()) {
+			throw InternalException("DECIDE BY marker has no reducer");
+		}
+		return children[0]->ToString() + " BY (" + DecideKeyToString(*this) + ")";
+	}
+	// The removed postfix WHEN and PER print as written: a parse tree stored before they
+	// were removed (a view) still shows its own SQL, and is refused when bound.
 	if (is_operator && function_name == WHEN_CONSTRAINT_TAG) {
 		if (children.size() != 2) {
 			throw InternalException("DECIDE WHEN marker has %s children, expected 2", children.size());
@@ -104,18 +149,8 @@ string FunctionExpression::ToString() const {
 		if (children.size() < 2) {
 			throw InternalException("DECIDE PER marker has %s children, expected at least 2", children.size());
 		}
-		string result = children[0]->ToString() + " PER ";
-		bool parenthesize = children.size() > 2;
-		if (parenthesize) {
-			result += "(";
-		}
-		for (idx_t i = 1; i < children.size(); i++) {
-			if (i > 1) {
-				result += ", ";
-			}
-			result += children[i]->ToString();
-		}
-		return result + (parenthesize ? ")" : "");
+		auto key = DecideKeyToString(*this);
+		return children[0]->ToString() + " PER " + (children.size() > 2 ? "(" + key + ")" : key);
 	}
 	if (is_operator && function_name == QUALIFIED_REDUCER_TAG) {
 		return QualifiedReducerToString(*this);

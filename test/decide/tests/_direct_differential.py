@@ -17,11 +17,11 @@ from decidb_cli import DecidBCliError
 ERROR_CLASSES = [
     (r"(?i)parser error|syntax error", "parser"),
     (r"decide_direct_solve=require", "direct_not_applied"),
-    # Before "infeasible": the solver's wording for this error ends "so this DECIDE query is infeasible".
-    # The direct path says "varies"; the solver path says "more than one value".
-    (r"(?i)varies|more than one value", "equality_varies"),
+    # Before "infeasible": an `=` bound that disagrees within a group ends "so this DECIDE query is infeasible".
+    (r"takes more than one value here", "equality_varies"),
     (r"(?i)infeasible", "infeasible"),
-    (r"(?i)empty row set|empty aggregate", "empty_aggregate"),
+    # A `when` that keeps no row (D4), or a reducer with no rows for a group (D8).
+    (r"matches no rows\.|has no rows( for |\.)", "empty_aggregate"),
     # A NaN bound reads "contains invalid value (NaN)" on the solver path.
     (r"(?i)is NULL|NULL or NaN|contains NULL|invalid value \(NaN\)", "null_bound"),
     # A coefficient that is NaN or infinite. The solver adds "at row N", which names a scan position, not a key.

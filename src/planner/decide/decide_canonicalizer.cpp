@@ -8,6 +8,8 @@
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/function/function_binder.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/execution/expression_executor.hpp"
@@ -20,6 +22,8 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+
+#include <cmath>
 
 namespace duckdb {
 
@@ -177,8 +181,8 @@ DecideCanonicalizer::Placement DecideCanonicalizer::Classify(const Expression &e
 	// Everything decision-free is a bound, including a data-only reducer. The left
 	// side has no aggregate evaluator -- SumFixedAggregateLhsOffset merely SUMS a term's
 	// column over the group, which is why only SUM and AVG could ever be hoisted
-	// there and MIN/MAX/COUNT were refused. The right side reduces per group by
-	// kind (EvaluateRhsReducerPerGroup), so that is where a reducer belongs.
+	// there and MIN/MAX/COUNT were refused. A reducer on the right is any DuckDB
+	// aggregate over its groups (RewriteRhsAggregates), so that is where it belongs.
 	return Placement::RIGHT;
 }
 
@@ -212,6 +216,11 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 		return subq.subquery_type == SubqueryType::SCALAR && !subq.IsCorrelated();
 	}
 	if (expr.IsFoldable()) {
+		return true;
+	}
+	// A factor that is identically zero before the query runs is one value for the
+	// whole query -- 0 -- whatever its data factors hold: `0 * w` does not vary by row.
+	if (PlanTimeSignOf(context, expr) == PlanTimeSign::ZERO) {
 		return true;
 	}
 	// Arithmetic over query-wide values is itself query-wide, which is what makes
@@ -293,24 +302,21 @@ static const Expression *WrittenNormBody(const BoundAggregateExpression &aggrega
 	if (aggregate.children.size() != 1) {
 		return nullptr;
 	}
+	const Expression *body;
 	if (ExtractDecideTagPayload(aggregate.GetAlias(), NORM_MARKER_TAG_PREFIX, order)) {
-		order = order == "0_auto" ? "0" : order.rfind("0_", 0) == 0 ? "0, " + order.substr(2) : order;
-		return aggregate.children[0].get();
-	}
-	if (!ExtractDecideTagPayload(aggregate.GetAlias(), WRITTEN_NORM_TAG_PREFIX, order)) {
+		body = aggregate.children[0].get();
+	} else if (ExtractDecideTagPayload(aggregate.GetAlias(), WRITTEN_NORM_TAG_PREFIX, order)) {
+		body = DecideWrittenNormBody(aggregate);
+	} else {
 		return nullptr;
 	}
-	auto &definition = *aggregate.children[0];
-	if (definition.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION ||
-	    definition.Cast<BoundFunctionExpression>().children.empty()) {
-		return nullptr;
-	}
-	return definition.Cast<BoundFunctionExpression>().children[0].get();
+	order = order == "0_auto" ? "0" : order.rfind("0_", 0) == 0 ? "0, " + order.substr(2) : order;
+	return body;
 }
 
 //! Name an expression the way the user wrote it, for an error message. Everything the
 //! binder added is noise here: `CAST(weight AS DECIMAL(12,1))` is not what anyone
-//! typed, and neither is the `FILTER (WHERE w)` that an aggregate-local WHEN becomes.
+//! typed, and neither is the `FILTER (WHERE w)` that a reducer's own `when` becomes.
 static string UserFacingName(const Expression &expr) {
 	const Expression *cur = StripCastsForIdentity(expr);
 	if (cur->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
@@ -335,28 +341,6 @@ bool DecideCanonicalizer::IsCorrelatedSubqueryRef(const Expression &expr) const 
 	}
 	auto idx = cur->Cast<BoundColumnRefExpression>().binding.table_index;
 	return correlated_subquery_table_indexes.find(idx) != correlated_subquery_table_indexes.end();
-}
-
-bool DecideCanonicalizer::FindNonScalarDecideVar(
-    const Expression &expr, idx_t &out_var_idx, const BoundColumnRefExpression *&out_ref) const {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		auto &colref = expr.Cast<BoundColumnRefExpression>();
-		if (colref.binding.table_index == decide_index) {
-			auto var_idx = colref.binding.column_index;
-			if (var_idx >= variable_scopes.size() || !variable_scopes[var_idx].IsScalar()) {
-				out_var_idx = var_idx;
-				out_ref = &colref;
-				return true;
-			}
-		}
-	}
-	bool found = false;
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		if (!found) {
-			found = FindNonScalarDecideVar(child, out_var_idx, out_ref);
-		}
-	});
-	return found;
 }
 
 const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale,
@@ -418,12 +402,20 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 		// separately, so the message names the factor the user actually has to fix.
 		const char *verb = factor_divides ? "divide" : "multiply";
 		if (ReferencesDecideVar(*factor)) {
-			throw BinderException(
-			    "%s: '%s' is a decision, so it cannot %s %s. "
-			    "Only constants and query-wide values can scale SUM/AVG/MIN/MAX.",
-			    clause_name, UserFacingName(*factor), verb, UserFacingName(*term));
+			// A constraint takes any data factor (a row-varying one is a tuple term, below);
+			// the objective, produced once, only one value.
+			throw BinderException("%s: '%s' is a decision, so it cannot %s %s. %s", clause_name,
+			                      UserFacingName(*factor), verb, UserFacingName(*term),
+			                      clause == Clause::CONSTRAINT
+			                          ? "Only data can scale SUM/AVG/MIN/MAX."
+			                          : "Only constants and query-wide values can scale SUM/AVG/MIN/MAX.");
 		}
-		if (!IsQueryWideConstant(*factor)) {
+		// A row-varying factor on a reducer of a constraint is a tuple term of the row's
+		// constraint: the comparison takes the VALUE shape (ClassifyScoped), which
+		// multiplies the reducer's helper decision by the factor's value on each row. The
+		// objective, produced once, refuses it.
+		bool row_varying_tuple_term = clause == Clause::CONSTRAINT;
+		if (!IsQueryWideConstant(*factor) && !row_varying_tuple_term) {
 			// A correlated subquery has no SQL identifier to quote -- flattening left it a
 			// column ref named "SUBQUERY" -- so name it for what the user wrote instead of
 			// echoing an internal name and suggesting `SUM(x * SUBQUERY)`, which is not
@@ -476,16 +468,80 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 	return *cur;
 }
 
-void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause) const {
+//! An additive spine over decisions: `+`, binary or unary `-` under the binder's casts.
+static bool IsAdditiveSpine(const Expression &expr, idx_t decide_index) {
+	auto *cur = UnwrapDecideCasts(expr, decide_index);
+	if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = cur->Cast<BoundFunctionExpression>();
+	return (func.function.name == "+" && func.children.size() == 2) ||
+	       (func.function.name == "-" && (func.children.size() == 1 || func.children.size() == 2));
+}
+
+unique_ptr<Expression> DecideCanonicalizer::ComposeScale(const Expression *outer, bool outer_divides,
+                                                         unique_ptr<Expression> inner, bool inner_divides,
+                                                         bool &out_divides) const {
+	if (!outer) {
+		out_divides = inner_divides;
+		return inner;
+	}
+	if (!inner) {
+		out_divides = outer_divides;
+		return outer->Copy();
+	}
+	// The same three results PeelScale composes to: `M`, `D` or `M / D`.
+	if (!outer_divides && !inner_divides) {
+		out_divides = false;
+		return BindOp("*", outer->Copy(), std::move(inner)); // c * (d * e) = (c * d) * e
+	}
+	if (outer_divides && inner_divides) {
+		out_divides = true;
+		return BindOp("*", std::move(inner), outer->Copy()); // (e / d) / c = e / (d * c)
+	}
+	out_divides = false;
+	return outer_divides ? BindOp("/", std::move(inner), outer->Copy())  // (d * e) / c = (d / c) * e
+	                     : BindOp("/", outer->Copy(), std::move(inner)); // c * (e / d) = (c / d) * e
+}
+
+void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause,
+                                    const Expression *factor, bool factor_divides) const {
 	WalkAdditiveSpine(
 	    expr, sign, [&](const Expression &node) { return ReferencesDecideVar(node); },
 	    [&](int term_sign, const Expression &whole) {
+		    // A factor known before the query runs distributes over an additive spine, as a
+		    // negation does: `2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`, the one spelling
+		    // a scaled reducer beside a constant has, so the MIN/MAX rewrite and singleton-row
+		    // folding read it as they read `2 * min(x) - 2`. A factor that varies by row,
+		    // or a subquery, stays on the spine as one atom: its value is the VALUE shape's.
+		    if (whole.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+			    auto &func = whole.Cast<BoundFunctionExpression>();
+			    if ((func.function.name == "*" || func.function.name == "/") && func.children.size() == 2) {
+				    const bool divides = func.function.name == "/";
+				    for (idx_t side = divides ? 1 : 0; side < 2; side++) {
+					    auto &candidate = *func.children[side];
+					    auto &spine = *func.children[1 - side];
+					    if (candidate.IsFoldable() && !ReferencesDecideVar(candidate) &&
+					        IsAdditiveSpine(spine, decide_index) && ReferencesDecideVar(spine)) {
+						    bool composed_divides;
+						    auto composed =
+						        ComposeScale(factor, factor_divides, candidate.Copy(), divides, composed_divides);
+						    Decompose(spine, term_sign, out, clause, composed.get(), composed_divides);
+						    return;
+					    }
+				    }
+			    }
+		    }
 		    // Every other node is a term boundary -- but a factor sitting on a reducer is
 		    // peeled off it first, so the term the rest of the pipeline sees is the bare
-		    // reducer and the factor travels beside it.
+		    // reducer and the factor travels beside it; a factor distributed from above
+		    // composes with it.
 		    unique_ptr<Expression> scale;
 		    bool divides = false;
 		    auto &term = PeelScale(whole, scale, divides, clause);
+		    if (factor) {
+			    scale = ComposeScale(factor, factor_divides, std::move(scale), divides, divides);
+		    }
 		    // Classify on the whole original term. The factors are decision-free and
 		    // reducer-free by construction, so this agrees with classifying `term` -- stated
 		    // rather than assumed, because Classify is the part that was wrong twice before.
@@ -493,28 +549,30 @@ void DecideCanonicalizer::Decompose(const Expression &expr, int sign, vector<Ato
 	    });
 }
 
-//! Whether `expr` is a norm marker whose order has an expression for a definition (1, 2 or 'inf'). L0 does not:
-//! its count needs indicator variables, which only the optimizer can add.
-static bool IsDesugarableNorm(const Expression &expr, string &order) {
-	return expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
-	       ExtractDecideTagPayload(expr.GetAlias(), NORM_MARKER_TAG_PREFIX, order) &&
-	       (order == "1" || order == "2" || order == "inf");
+//! Whether `expr` is a norm marker whose order has an expression for a definition: 1, 2, 'inf', and an L0 norm of
+//! data. An L0 norm of a decision does not: its count needs indicator variables, which only the optimizer can add
+//! (DecideOptimizer::RewriteNorm).
+static bool IsDesugarableNorm(const Expression &expr, idx_t decide_index, string &order) {
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
+	    !ExtractDecideTagPayload(expr.GetAlias(), NORM_MARKER_TAG_PREFIX, order)) {
+		return false;
+	}
+	return order == "1" || order == "2" || order == "inf" || !BoundExpressionReferencesDecide(expr, decide_index);
 }
 
-static bool ContainsDesugarableNorm(const Expression &expr) {
+static bool ContainsDesugarableNorm(const Expression &expr, idx_t decide_index) {
 	string order;
-	if (IsDesugarableNorm(expr, order)) {
+	if (IsDesugarableNorm(expr, decide_index, order)) {
 		return true;
 	}
 	bool found = false;
-	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
-		found = found || ContainsDesugarableNorm(child);
-	});
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { found = found || ContainsDesugarableNorm(child, decide_index); });
 	return found;
 }
 
 unique_ptr<Expression> DecideCanonicalizer::DesugarNorms(const Expression &expr) const {
-	if (!ContainsDesugarableNorm(expr)) {
+	if (!ContainsDesugarableNorm(expr, decide_index)) {
 		return nullptr;
 	}
 	auto result = expr.Copy();
@@ -524,7 +582,7 @@ unique_ptr<Expression> DecideCanonicalizer::DesugarNorms(const Expression &expr)
 
 void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) const {
 	string order;
-	if (!IsDesugarableNorm(*expr, order)) {
+	if (!IsDesugarableNorm(*expr, decide_index, order)) {
 		// A marker stands wherever a scalar may: under a comparison, `+`, `*` or a cast.
 		ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) { DesugarNormsInPlace(child); });
 		return;
@@ -538,8 +596,12 @@ void DecideCanonicalizer::DesugarNormsInPlace(unique_ptr<Expression> &expr) cons
 	if (order == "2") {
 		definition = BindAggregate("sum", BindOp("power", body.Copy(),
 		                                         make_uniq<BoundConstantExpression>(Value::INTEGER(2))));
-	} else {
+	} else if (order == "1" || order == "inf") {
 		definition = BindAggregate(order == "1" ? "sum" : "max", BindOp("abs", body.Copy()));
+	} else {
+		// An L0 norm of data counts the rows whose value is not 0; its `M` bounds a decision and means nothing here.
+		// SIGN reads a NaN as 0, so a value check reads the body (DecideWrittenNormBody), not this definition.
+		definition = BindAggregate("sum", BindOp("abs", BindOp("sign", body.Copy())));
 	}
 	auto alias = marker.GetAlias();
 	RemoveDecideTag(alias, string(NORM_MARKER_TAG_PREFIX) + order + "__");
@@ -566,6 +628,102 @@ unique_ptr<Expression> DecideCanonicalizer::BindAggregate(const string &name, un
 	children.push_back(std::move(child));
 	return function_binder.BindAggregateFunction(entry.functions.GetFunctionByOffset(best.GetIndex()),
 	                                             std::move(children));
+}
+
+//! The bare decision `expr` is a constant multiple of, with that multiple folded into
+//! `value` -- `2 * x`, `x * 2`, `-x`, `x / 2` -- or `expr` itself with `value` untouched
+//! when it is not one. PeelScale peels factors off reducers only, so a plain decision
+//! carries its factor inside the atom; the like-term merge needs it outside.
+static const Expression *PeelBareDecisionFactors(ClientContext &context, const Expression &expr, idx_t decide_index,
+                                                 double &value) {
+	auto *cur = UnwrapDecideCasts(expr, decide_index);
+	if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return cur;
+	}
+	auto &func = cur->Cast<BoundFunctionExpression>();
+	const auto &name = func.function.name;
+	auto constant = [&](const Expression &candidate, double &c) {
+		return TryEvaluateFoldableDouble(context, candidate, c, FOLD_CATCH_ALL) && std::isfinite(c) && c != 0.0;
+	};
+	double c;
+	double inner = 1.0;
+	const Expression *term = nullptr;
+	if (name == "-" && func.children.size() == 1) {
+		term = PeelBareDecisionFactors(context, *func.children[0], decide_index, inner);
+		inner = -inner;
+	} else if (name == "*" && func.children.size() == 2) {
+		for (idx_t side = 0; side < 2 && !term; side++) {
+			if (constant(*func.children[side], c)) {
+				term = PeelBareDecisionFactors(context, *func.children[1 - side], decide_index, inner);
+				inner *= c;
+			}
+		}
+	} else if (name == "/" && func.children.size() == 2 && constant(*func.children[1], c)) {
+		term = PeelBareDecisionFactors(context, *func.children[0], decide_index, inner);
+		inner /= c;
+	}
+	if (!term || term->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
+		return cur;
+	}
+	value *= inner;
+	return term;
+}
+
+bool DecideCanonicalizer::MergeLikeAtoms(vector<Atom> &atoms) const {
+	// The term an atom is a multiple of, and that multiple as a number known before the
+	// query runs: the factor PeelScale peeled off a reducer (none is 1, a divisor its
+	// reciprocal), with the constant factors a bare decision stands under folded in.
+	// False when the factor is data or a subquery, which is not summable here.
+	auto key_of = [&](const Atom &atom, const Expression *&term, double &value) {
+		value = 1.0;
+		if (atom.scale) {
+			double scale;
+			if (!TryEvaluateFoldableDouble(context, *atom.scale, scale, FOLD_PLAIN) || !std::isfinite(scale) ||
+			    (atom.scale_divides && scale == 0.0)) {
+				return false;
+			}
+			value = atom.scale_divides ? 1.0 / scale : scale;
+			term = atom.expr;
+			return true;
+		}
+		term = PeelBareDecisionFactors(context, *atom.expr, decide_index, value);
+		return true;
+	};
+	bool merged = false;
+	for (idx_t i = 0; i < atoms.size(); i++) {
+		const Expression *term;
+		double total;
+		if (atoms[i].placement != Placement::LEFT || !key_of(atoms[i], term, total)) {
+			continue;
+		}
+		total *= atoms[i].sign;
+		vector<idx_t> like;
+		for (idx_t j = i + 1; j < atoms.size(); j++) {
+			const Expression *other;
+			double value;
+			if (atoms[j].placement == Placement::LEFT && key_of(atoms[j], other, value) &&
+			    CanonicalTreesEqual(*term, *other)) {
+				total += atoms[j].sign * value;
+				like.push_back(j);
+			}
+		}
+		// A group whose factors cancel is left as written: dropping it could empty the
+		// side, and `x - x` is the user's to resolve.
+		if (like.empty() || total == 0.0) {
+			continue;
+		}
+		const bool whole = total == std::floor(total) && std::fabs(total) < 2147483647.0;
+		atoms[i].sign = 1;
+		atoms[i].expr = term;
+		atoms[i].scale = make_uniq_base<Expression, BoundConstantExpression>(
+		    whole ? Value::INTEGER(static_cast<int32_t>(total)) : Value::DOUBLE(total));
+		atoms[i].scale_divides = false;
+		for (auto it = like.rbegin(); it != like.rend(); ++it) {
+			atoms.erase(atoms.begin() + static_cast<int64_t>(*it));
+		}
+		merged = true;
+	}
+	return merged;
 }
 
 unique_ptr<Expression> DecideCanonicalizer::BindOp(const string &name, unique_ptr<Expression> left,
@@ -627,6 +785,26 @@ unique_ptr<Expression> DecideCanonicalizer::BuildAdditive(const vector<Atom> &at
 	return acc;
 }
 
+bool DecideCanonicalizer::IsLoneNegatedReducer(const vector<Atom> &atoms) const {
+	return atoms.size() == 1 && atoms[0].sign < 0 &&
+	       UnwrapDecideCasts(*atoms[0].expr, decide_index)->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE;
+}
+
+bool DecideCanonicalizer::IsSignedSpine(const Expression &side, const vector<Atom> &atoms) const {
+	auto root = UnwrapDecideCasts(side, decide_index);
+	if (atoms.size() != 1 || root->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &name = root->Cast<BoundFunctionExpression>().function.name;
+	return name == "+" || name == "-";
+}
+
+void DecideCanonicalizer::FoldNegationIntoFactor(Atom &atom) const {
+	atom.scale = atom.scale ? BindOp("-", std::move(atom.scale))
+	                        : make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(-1));
+	atom.sign = -atom.sign;
+}
+
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Expression &expr) const {
 	auto desugared = DesugarNorms(expr);
 	return CanonicalizeComparisonInternal(desugared ? *desugared : expr);
@@ -635,11 +813,24 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const Expression &expr) const {
 	DecideProfileScope profile("canonicalize.comparison");
 	auto &cmp = expr.Cast<BoundComparisonExpression>();
-
+	// Two spellings are fixed here. A lone negated reducer carries its sign in its factor,
+	// the one spelling a factor on a reducer has, so `-max(e) by (g)` reads as
+	// `-2 * max(e) by (g)` does: one MIN/MAX under a factor whose sign is known; and
+	// `-(-max(e))` as `max(e)`. The MIN/MAX rewrite routes on the tree it is given, so the
+	// tree must be the one its atoms rebuild. And a tuple term may stand under a
+	// row-varying factor beside a reducer (PeelScale): the VALUE shape takes it.
 	vector<Atom> left_atoms;
 	vector<Atom> right_atoms;
-	Decompose(*cmp.left, 1, left_atoms);
-	Decompose(*cmp.right, 1, right_atoms);
+	Decompose(*cmp.left, 1, left_atoms, Clause::CONSTRAINT);
+	Decompose(*cmp.right, 1, right_atoms, Clause::CONSTRAINT);
+	// Like terms under factors known before the query runs are one term: `x + x` is
+	// `2 * x`, `min(x) + min(x)` is `2 * min(x)`, so a bound written as a repeated term
+	// is read as the bound it is. Merged here so a side that is otherwise canonical does
+	// not take the early return below with its twins intact (a merged atom carries a
+	// scale, which forces the rebuild), and again on the partitioned decision side,
+	// where a term that crossed the relation meets its twin (`3 * x >= x - 4`).
+	MergeLikeAtoms(left_atoms);
+	MergeLikeAtoms(right_atoms);
 
 	auto Has = [](const vector<Atom> &atoms, Placement placement) {
 		for (auto &atom : atoms) {
@@ -667,8 +858,8 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 	// side may be correctly partitioned and yet spell the factor on the wrong side
 	// (`SUM(x) * 2`), and the whole point of peeling is that consumers see one
 	// spelling. Rebuilding an already-canonical `2 * SUM(x)` reproduces it.
-	if (left_has_decision && !right_has_decision && !Has(left_atoms, Placement::RIGHT) &&
-	    !HasScale(left_atoms)) {
+	if (left_has_decision && !right_has_decision && !Has(left_atoms, Placement::RIGHT) && !HasScale(left_atoms) &&
+	    !(IsLoneNegatedReducer(left_atoms) || IsSignedSpine(*cmp.left, left_atoms))) {
 		auto copy = cmp.Copy();
 		return FinalizeBoundProvenance(unique_ptr_cast<Expression, BoundComparisonExpression>(std::move(copy)));
 	}
@@ -724,6 +915,10 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparisonInternal(const
 		}
 	}
 
+	MergeLikeAtoms(new_left);
+	if (IsLoneNegatedReducer(new_left)) {
+		FoldNegationIntoFactor(new_left[0]);
+	}
 	auto new_lhs = BuildAdditive(new_left, false);
 	auto new_rhs = BuildAdditive(new_right, false);
 	if (!new_rhs) {
@@ -747,7 +942,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expressi
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const Expression &objective,
                                                                           double &out_constant_offset) const {
 	DecideProfileScope profile("canonicalize.objective");
-	// A WHEN/PER wrapper carries no algebra: recurse into the objective child and copy
+	// A `when` or `per` wrapper carries no algebra: recurse into the objective child and copy
 	// the condition or grouping columns unchanged. Identical rule to C0, and the same
 	// wrapper predicate, so the two clauses cannot drift apart on what a wrapper is.
 	if (objective.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
@@ -773,6 +968,7 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 
 	vector<Atom> atoms;
 	Decompose(objective, 1, atoms, Clause::OBJECTIVE);
+	MergeLikeAtoms(atoms);
 
 	vector<Atom> decision_atoms;
 	for (auto &atom : atoms) {
@@ -784,13 +980,18 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 		// argmax/argmin, so it is peeled here and the body downstream is pure decision
 		// algebra. Peeling it requires knowing its value, which is exactly the
 		// foldable case; a row-varying or query-executed term has no single value to
-		// fold and does not belong in an objective at all.
+		// fold and does not belong in an objective at all. A factor distributed onto
+		// it (`2 * (sum(x) - 1)`) is part of its value.
 		double value = 0;
-		if (!TryEvaluateFoldableDouble(context, *atom.expr, value, FOLD_PLAIN)) {
-			throw BinderException(
-			    "MAXIMIZE/MINIMIZE: '%s' does not reference a decision, so it cannot be part of "
-			    "the objective. Remove it, or move it to the SELECT list.",
-			    UserFacingName(*atom.expr));
+		unique_ptr<Expression> scaled;
+		if (atom.scale) {
+			scaled = atom.scale_divides ? BindOp("/", atom.expr->Copy(), atom.scale->Copy())
+			                            : BindOp("*", atom.scale->Copy(), atom.expr->Copy());
+		}
+		if (!TryEvaluateFoldableDouble(context, scaled ? *scaled : *atom.expr, value, FOLD_PLAIN)) {
+			throw BinderException("MAXIMIZE/MINIMIZE: '%s' does not reference a decision, so it cannot be part of "
+			                      "the objective. Remove it, or move it to the SELECT list.",
+			                      QuoteAsWritten(*atom.expr));
 		}
 		out_constant_offset += atom.sign * value;
 	}
@@ -806,95 +1007,151 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 	return BuildAdditive(decision_atoms, false);
 }
 
+string DecideCanonicalizer::Quote(const Expression &expr) const {
+	return message_names ? RenderDecideSource(expr, *message_names) : UserFacingName(expr);
+}
+
+string DecideCanonicalizer::QuoteAsWritten(const Expression &expr) const {
+	// A node whose written text was recorded (a subquery or a cast) carries it in a tag,
+	// and only that text names it in SQL; a reducer is spelled as the plan prints it,
+	// with its `when` and `by`.
+	idx_t fragment_id;
+	auto *node = StripCastsForIdentity(expr);
+	return TryParseSourceFragmentTag(node->GetAlias(), fragment_id) ||
+	               node->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE
+	           ? Quote(expr)
+	           : UserFacingName(expr);
+}
+
+DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const BoundComparisonExpression &cmp,
+                                                                     idx_t &group_key, string &refusal) const {
+	group_key = DConstants::INVALID_INDEX;
+	vector<Atom> lhs_atoms;
+	Decompose(*cmp.left, 1, lhs_atoms, Clause::CONSTRAINT);
+	bool has_reducer = false;
+	for (auto &atom : lhs_atoms) {
+		has_reducer = has_reducer || ContainsReducer(*atom.expr);
+	}
+	if (!has_reducer) {
+		// A data-only reducer sits on the right, as a bound.
+		return ScopedShape::ROWS;
+	}
+	// The aggregate shape is today's grouped row: decision reducers sharing one `by` key,
+	// under whole-query factors, with only query-wide terms beside them. Anything else on
+	// the decision side takes the value rewrite (VALUE): a per-row or keyed decision, a
+	// factor that varies by row, a second `by` key, a reducer inside another expression,
+	// a product of decisions beside a reducer.
+	bool value = false;
+	bool first_reducer = true;
+	// A query-wide decision beside the reducers counts once per group, in a linear,
+	// bilinear or quadratic row alike.
+	const Expression *query_wide_decision = nullptr;
+	bool nonlinear_beside = false;
+	// `<>` excludes an AVG's value by scaling the bound with the number of rows in the
+	// group, which is exact only when every term is an AVG reading all of them.
+	bool has_avg = false;
+	bool only_plain_avgs = true;
+	for (auto &atom : lhs_atoms) {
+		if (!ContainsReducer(*atom.expr)) {
+			only_plain_avgs = false;
+			nonlinear_beside = nonlinear_beside || !DecideExpressionDegree(*atom.expr, decide_index).IsLinear();
+			if (IsQueryWideExpression(*atom.expr)) {
+				if (ReferencesDecideVar(*atom.expr)) {
+					query_wide_decision = atom.expr;
+				}
+				continue;
+			}
+			value = true; // a per-row or keyed decision, or row data, beside a reducer
+			continue;
+		}
+		auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
+		if (root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE || !ReferencesDecideVar(*root)) {
+			only_plain_avgs = false;
+			value = true; // a reducer inside another expression: `abs(sum(e) by (g) - 40)`
+			continue;
+		}
+		auto &reducer = root->Cast<BoundAggregateExpression>();
+		idx_t qualifier;
+		bool is_avg =
+		    StringUtil::CIEquals(reducer.function.name, "avg") || HasDecideTag(reducer.GetAlias(), AVG_REWRITE_TAG);
+		has_avg = has_avg || is_avg;
+		only_plain_avgs =
+		    only_plain_avgs && is_avg && !reducer.filter && !TryParseQualifiedReducerTag(reducer.GetAlias(), qualifier);
+		if (atom.scale && !IsQueryWideConstant(*atom.scale)) {
+			value = true; // a factor that varies by row: a tuple term of the row's constraint
+		}
+		idx_t key = DConstants::INVALID_INDEX;
+		TryParseGroupKeyTag(root->GetAlias(), key);
+		if (first_reducer) {
+			group_key = key;
+			first_reducer = false;
+		} else if (key != group_key) {
+			value = true; // reducers with different `by` keys
+		}
+	}
+	if (query_wide_decision && nonlinear_beside) {
+		value = true; // `sum(x) + b * s`: the product beside the reducer is a term of each row
+	}
+	if (cmp.type == ExpressionType::COMPARE_NOTEQUAL && has_avg && (!only_plain_avgs || nonlinear_beside)) {
+		refusal = "DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when "
+		          "or per";
+		return ScopedShape::UNSUPPORTED;
+	}
+	// A MIN or MAX beside another term, or under a factor of unknown sign, takes the
+	// composed formulation where that applies: one row over all of the clause's kept rows,
+	// under one bound, with nothing but reducers in it. With a `by`, a bound that is not
+	// a constant, or a decision beside it, the value rewrite pins the extremum per group.
+	if (!value && TakesComposedMinMax(lhs_atoms) &&
+	    (group_key != DConstants::INVALID_INDEX || !cmp.right->IsFoldable() || query_wide_decision)) {
+		value = true;
+	}
+	return value ? ScopedShape::VALUE : ScopedShape::AGGREGATE;
+}
+
+bool DecideCanonicalizer::TakesComposedMinMax(const vector<Atom> &atoms) const {
+	bool has_minmax = false;
+	for (auto &atom : atoms) {
+		auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
+		if (root->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE && ReferencesDecideVar(*root)) {
+			auto name = StringUtil::Lower(root->Cast<BoundAggregateExpression>().function.name);
+			has_minmax = has_minmax || name == "min" || name == "max";
+		}
+	}
+	return has_minmax &&
+	       (atoms.size() > 1 || ScaleSignAtPlanTime(context, atoms[0].scale.get(), atoms[0].scale_divides) == 0);
+}
+
 CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const Expression &expr) const {
 	auto &cmp = expr.Cast<BoundComparisonExpression>();
 	if (ReferencesDecideVar(*cmp.right)) {
 		return CanonicalConstraintClass::INVALID;
 	}
-
-	bool has_reducer = ContainsReducer(*cmp.left) || ContainsReducer(*cmp.right);
-	if (!has_reducer) {
+	idx_t group_key;
+	string refusal;
+	switch (ClassifyScoped(cmp, group_key, refusal)) {
+	case ScopedShape::ROWS:
 		return CanonicalConstraintClass::PER_ROW;
+	case ScopedShape::AGGREGATE:
+		return CanonicalConstraintClass::AGGREGATE;
+	case ScopedShape::VALUE:
+		return CanonicalConstraintClass::VALUE;
+	default:
+		return CanonicalConstraintClass::INVALID;
 	}
-
-	vector<Atom> lhs_atoms;
-	Decompose(*cmp.left, 1, lhs_atoms);
-	for (auto &atom : lhs_atoms) {
-		if (atom.placement != Placement::LEFT) {
-			return CanonicalConstraintClass::INVALID;
-		}
-		if (ContainsReducer(*atom.expr)) {
-			// A legal reduced term is a reducer at the atom root. PeelScale already
-			// removed the one supported outer factor representation before the atom
-			// was recorded; any reducer still nested beneath another function is a
-			// shape the physical aggregate extractor cannot consume.
-			auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
-			if (root->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE ||
-			    !ReferencesDecideVar(*root)) {
-				return CanonicalConstraintClass::INVALID;
-			}
-			continue;
-		}
-		if (!IsQueryWideExpression(*atom.expr)) {
-			return CanonicalConstraintClass::INVALID;
-		}
-	}
-	return CanonicalConstraintClass::AGGREGATE;
-}
-
-CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalTree(const Expression &constraints) const {
-	CanonicalConstraintClass result = CanonicalConstraintClass::INVALID;
-	bool first = true;
-	auto classify = [&](const Expression &expression) {
-		if (expression.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conjunction = expression.Cast<BoundConjunctionExpression>();
-			return !IsConstraintWrapper(conjunction) || !conjunction.children.empty();
-		}
-		if (expression.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
-			return false;
-		}
-		auto child_class = ClassifyCanonicalComparison(expression);
-		if (child_class == CanonicalConstraintClass::INVALID || (!first && result != child_class)) {
-			return false;
-		}
-		result = child_class;
-		first = false;
-		return true;
-	};
-	return VisitConstraintTree(constraints, classify) && !first ? result : CanonicalConstraintClass::INVALID;
 }
 
 void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const {
 	auto classification = ClassifyCanonicalComparison(comparison);
 	if (classification == CanonicalConstraintClass::INVALID) {
-		vector<Atom> lhs_atoms;
-		Decompose(*comparison.left, 1, lhs_atoms);
-		for (auto &atom : lhs_atoms) {
-			if (ContainsReducer(*atom.expr) || IsQueryWideExpression(*atom.expr)) {
-				continue;
-			}
-			idx_t var_idx = DConstants::INVALID_INDEX;
-			const BoundColumnRefExpression *var_ref = nullptr;
-			if (FindNonScalarDecideVar(*atom.expr, var_idx, var_ref)) {
-				bool is_entity = var_idx < variable_scopes.size() && variable_scopes[var_idx].IsEntity();
-				throw BinderException(
-				    "DECIDE constraint: %s decision '%s' cannot appear outside a reducer in an "
-				    "aggregate constraint. Put it inside SUM/AVG/MIN/MAX, or use a scalar "
-				    "decision when one query-wide value is intended.",
-				    is_entity ? "entity-scoped" : "row-scoped", UserFacingName(*var_ref));
-			}
-			throw BinderException(
-			    "DECIDE constraint: '%s' varies per row and cannot appear outside a reducer "
-			    "in an aggregate constraint. Move the row-varying expression inside "
-			    "SUM/AVG/MIN/MAX.",
-			    UserFacingName(*atom.expr));
+		if (ReferencesDecideVar(*comparison.right)) {
+			throw InternalException("DECIDE canonicalizer: a decision survived on the bound side of '%s'",
+			                        comparison.ToString());
 		}
-		throw BinderException(
-		    "DECIDE constraint mixes aggregate and per-row decision expressions. "
-		    "Every row-varying decision term in an aggregate constraint must be inside "
-		    "SUM/AVG/MIN/MAX.");
+		idx_t group_key;
+		string refusal;
+		ClassifyScoped(comparison, group_key, refusal);
+		throw BinderException(refusal);
 	}
-
 	// A foldable bound is the one case whose NULL result is knowable at planning
 	// time. Do not execute subqueries or speculate about nullable data columns here;
 	// those retain the runtime COALESCE guidance.
@@ -912,16 +1169,6 @@ void DecideCanonicalizer::ValidateCanonicalTree(const Expression &constraints) c
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			ValidateCanonicalComparison(expression.Cast<BoundComparisonExpression>());
 			return true;
-		}
-		if (expression.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			auto &conjunction = expression.Cast<BoundConjunctionExpression>();
-			if (IsPerConstraintWrapper(conjunction) &&
-			    (conjunction.children.empty() ||
-			     ClassifyCanonicalTree(*conjunction.children[0]) != CanonicalConstraintClass::AGGREGATE)) {
-				throw BinderException(
-				    "PER can only be applied to aggregate (SUM) constraints. Per-row constraints "
-				    "already have one constraint per row.");
-			}
 		}
 		return true;
 	};
@@ -941,8 +1188,8 @@ void DecideCanonicalizer::VerifyCanonicalComparison(const BoundComparisonExpress
 
 	vector<Atom> lhs_atoms;
 	vector<Atom> rhs_atoms;
-	Decompose(*comparison.left, 1, lhs_atoms);
-	Decompose(*comparison.right, 1, rhs_atoms);
+	Decompose(*comparison.left, 1, lhs_atoms, Clause::CONSTRAINT);
+	Decompose(*comparison.right, 1, rhs_atoms, Clause::CONSTRAINT);
 	for (auto &atom : lhs_atoms) {
 		if (atom.placement != Placement::LEFT) {
 			CanonicalInvariantFailure("C3", "decision-free additive term remains on the left", comparison);
@@ -979,15 +1226,8 @@ void DecideCanonicalizer::VerifyCanonicalTree(const Expression &constraints) con
 			CanonicalInvariantFailure("C0", "WHEN wrapper must contain one constraint and one condition",
 			                          expression);
 		}
-		if (IsPerConstraintWrapper(conjunction)) {
-			if (conjunction.children.size() < 2) {
-				CanonicalInvariantFailure("C0", "PER wrapper must contain a constraint and grouping column",
-				                          expression);
-			}
-			if (ClassifyCanonicalTree(*conjunction.children[0]) != CanonicalConstraintClass::AGGREGATE) {
-				CanonicalInvariantFailure("C5", "PER wrapper does not contain an aggregate constraint",
-				                          expression);
-			}
+		if (IsPerClassWrapper(conjunction) && conjunction.children.empty()) {
+			CanonicalInvariantFailure("C0", "per-class wrapper must contain a constraint", expression);
 		}
 		return true;
 	};
@@ -1023,8 +1263,8 @@ void DecideCanonicalizer::VerifyCanonicalObjectiveBody(const Expression &objecti
 void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) const {
 #ifdef DEBUG
 	try {
-		if (ContainsDesugarableNorm(objective)) {
-			CanonicalInvariantFailure("C8", "a norm of order 1, 2 or 'inf' was not replaced by its definition",
+		if (ContainsDesugarableNorm(objective, decide_index)) {
+			CanonicalInvariantFailure("C8", "a norm with an expression for a definition was not replaced by it",
 			                          objective);
 		}
 		VerifyCanonicalObjectiveBody(objective);
@@ -1056,8 +1296,8 @@ void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) 
 void DecideCanonicalizer::VerifyCanonical(const Expression &constraints) const {
 #ifdef DEBUG
 	try {
-		if (ContainsDesugarableNorm(constraints)) {
-			CanonicalInvariantFailure("C8", "a norm of order 1, 2 or 'inf' was not replaced by its definition",
+		if (ContainsDesugarableNorm(constraints, decide_index)) {
+			CanonicalInvariantFailure("C8", "a norm with an expression for a definition was not replaced by it",
 			                          constraints);
 		}
 		VerifyCanonicalTree(constraints);
@@ -1084,15 +1324,42 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 		auto result = make_uniq<BoundConjunctionExpression>(conj.type);
 		result->SetAlias(conj.GetAlias());
 		for (idx_t i = 0; i < conj.children.size(); i++) {
-			// A WHEN/PER wrapper holds the constraint in child 0; the remaining
-			// children are its condition / PER columns and are not constraints.
+			// A `when` or `per` wrapper holds the constraint in child 0; the remaining
+			// children are its condition / key columns and are not constraints.
 			result->children.push_back(IsConstraintChild(conj, i) ? CanonicalizeTreeInternal(*conj.children[i])
-			                                                 : conj.children[i]->Copy());
+			                                                      : conj.children[i]->Copy());
 		}
+		// `per K:` over a clause in the aggregate shape adds no row to the model: its rows
+		// are one per `by` group of the kept rows, and every per-K constraint in a group
+		// differs only in its bound, which the group's tightest bound covers once K
+		// determines it (a scope check). The wrapper stays all the same: it names the
+		// classes each group's row stands for, which a diagnosis reports one by one
+		// (syntax_reference.md §8.1, D28); the linear form reads it as the clause's class key.
 		return std::move(result);
 	}
 	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		return CanonicalizeComparisonInternal(constraints);
+		auto result = CanonicalizeComparisonInternal(constraints);
+		// A clause in the aggregate shape is grouped by the `by` key its decision reducers
+		// share; the comparison carries it, as later rewrites rebuild the reducers.
+		if (!ReferencesDecideVar(*result->Cast<BoundComparisonExpression>().right)) {
+			idx_t group_key;
+			string refusal;
+			auto shape = ClassifyScoped(result->Cast<BoundComparisonExpression>(), group_key, refusal);
+			idx_t stamped;
+			if (shape == ScopedShape::AGGREGATE && group_key != DConstants::INVALID_INDEX &&
+			    !TryParseGroupKeyTag(result->GetAlias(), stamped)) {
+				auto alias = result->GetAlias();
+				AddDecideTag(alias, MakeGroupKeyTag(group_key));
+				result->SetAlias(std::move(alias));
+			}
+			// The VALUE shape is decided here, once: the value rewrite reads the tag.
+			if (shape == ScopedShape::VALUE && !HasDecideTag(result->GetAlias(), VALUE_REWRITE_TAG)) {
+				auto alias = result->GetAlias();
+				AddDecideTag(alias, VALUE_REWRITE_TAG);
+				result->SetAlias(std::move(alias));
+			}
+		}
+		return result;
 	}
 	return constraints.Copy();
 }
@@ -1102,6 +1369,315 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &c
 	auto result = CanonicalizeTreeInternal(desugared ? *desugared : constraints);
 	ValidateCanonicalTree(*result);
 	return result;
+}
+
+void DecideCanonicalizer::BuildConstraintScopeChecks(const Expression &constraints, DecideScopeChecks &scope) const {
+	BuildConstraintScopeChecks(constraints, DecideEnclosingScope(), scope);
+}
+
+void DecideCanonicalizer::BuildConstraintScopeChecks(const Expression &constraints, DecideEnclosingScope enclosing,
+                                                     DecideScopeChecks &scope) const {
+	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = constraints.Cast<BoundConjunctionExpression>();
+		auto inner = enclosing;
+		if (IsPerClassWrapper(conj)) {
+			inner.per = &conj;
+		} else if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+			inner.when = conj.children[1].get();
+		} else if (!IsConstraintWrapper(conj)) {
+			inner = DecideEnclosingScope(); // a plain AND: each child is its own clause
+		}
+		for (idx_t i = 0; i < conj.children.size(); i++) {
+			if (IsConstraintChild(conj, i)) {
+				BuildConstraintScopeChecks(*conj.children[i], inner, scope);
+			}
+		}
+		return;
+	}
+	BuildClauseScopeChecks(constraints, enclosing, scope);
+}
+
+//===--------------------------------------------------------------------===//
+// Scope checks (syntax_reference.md §7)
+//===--------------------------------------------------------------------===//
+
+namespace {
+//! What a clause reads once per class: its tuple terms -- data values and decisions
+//! outside reducers -- and its reducers, whose bodies are read per group instead.
+struct ClauseParts {
+	vector<const Expression *> values;
+	vector<const BoundColumnRefExpression *> decisions;
+	vector<const BoundAggregateExpression *> reducers;
+};
+} // namespace
+
+static bool HoldsReducer(const Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { found = found || HoldsReducer(child); });
+	return found;
+}
+
+//! Fills `parts` from `expr`. A value is a maximal subtree with neither a decision nor a
+//! reducer; a literal or a query-wide value has one value everywhere and is left out.
+static void CollectClauseParts(const Expression &expr, idx_t decide_index,
+                               const std::function<bool(const Expression &)> &query_wide, ClauseParts &parts) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		parts.reducers.push_back(&expr.Cast<BoundAggregateExpression>());
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+	    expr.Cast<BoundColumnRefExpression>().binding.table_index == decide_index) {
+		parts.decisions.push_back(&expr.Cast<BoundColumnRefExpression>());
+		return;
+	}
+	if (!BoundExpressionReferencesDecide(expr, decide_index) && !HoldsReducer(expr)) {
+		if (!expr.IsFoldable() && !query_wide(expr)) {
+			parts.values.push_back(&expr);
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { CollectClauseParts(child, decide_index, query_wide, parts); });
+}
+
+//! A key column as a message names it: the name binding gave it (as written, or
+//! relation-qualified for a relation element), else the expression rendered.
+static string KeyColumnName(const Expression &column, const DecideSourceNames &names) {
+	if (column.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		return column.Cast<BoundColumnRefExpression>().GetName();
+	}
+	return RenderDecideSource(column, names);
+}
+
+//! How a message describes a decision's own key: `declared per row`, `declared per
+//! D.depotID`.
+static string DeclaredScope(const DecideVarScopeInfo &scope) {
+	if (scope.IsKeyed()) {
+		return "declared per " + scope.declared_key;
+	}
+	return "declared per row";
+}
+
+void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
+                                                  DecideScopeChecks &scope) const {
+	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.group_keys, scope.relations};
+	auto reducer_text = RenderDecideReducer(reducer, names);
+	idx_t group_key;
+	const DecideGroupKey *by = TryParseGroupKeyTag(reducer.GetAlias(), group_key) && group_key < scope.group_keys.size()
+	                               ? &scope.group_keys[group_key]
+	                               : nullptr;
+	auto by_key = [&](vector<unique_ptr<Expression>> &key, vector<string> &key_names) {
+		if (!by) {
+			return;
+		}
+		for (idx_t i = 0; i < by->expressions.size(); i++) {
+			key.push_back(by->expressions[i]->Copy());
+			key_names.push_back(i < by->names.size() ? by->names[i] : by->expressions[i]->ToString());
+		}
+	};
+	// D8: every `by` group of the kept rows has a row the reducer's own `when` keeps.
+	if (reducer.filter) {
+		DecideScopeCheck check;
+		check.kind = DecideScopeCheckKind::READS_A_ROW;
+		check.rows = rows ? rows->Copy() : nullptr;
+		by_key(check.key, check.key_names);
+		check.filter = reducer.filter->Copy();
+		check.subject = reducer_text;
+		scope.checks.push_back(std::move(check));
+	}
+	// The reducer's own `per K'` -- or `D` of the colon form `SUM(D: e)` -- determines its
+	// body within each `by` group, over the rows its `when` keeps.
+	idx_t scope_idx;
+	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= scope.entity_scopes.size() ||
+	    reducer.children.empty()) {
+		return;
+	}
+	auto &key_scope = scope.entity_scopes[scope_idx];
+	ClauseParts body;
+	CollectClauseParts(
+	    *reducer.children[0], decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, body);
+	auto make_check = [&]() {
+		DecideScopeCheck check;
+		check.kind = DecideScopeCheckKind::DETERMINES;
+		check.rows = rows ? rows->Copy() : nullptr;
+		for (idx_t i = 0; i < key_scope.entity_key_bindings.size(); i++) {
+			check.key.push_back(make_uniq<BoundColumnRefExpression>(
+			    i < key_scope.key_names.size() ? key_scope.key_names[i] : string(),
+			    key_scope.entity_key_column_types[i], key_scope.entity_key_bindings[i]));
+			check.key_names.push_back(i < key_scope.key_names.size() ? key_scope.key_names[i] : string());
+		}
+		by_key(check.key, check.key_names);
+		check.filter = reducer.filter ? reducer.filter->Copy() : nullptr;
+		check.subject = key_scope.table_alias;
+		check.context = "in " + reducer_text;
+		return check;
+	};
+	for (auto *value : body.values) {
+		auto check = make_check();
+		check.value = value->Copy();
+		check.object = RenderDecideSource(*value, names);
+		scope.checks.push_back(std::move(check));
+	}
+	for (auto *decision : body.decisions) {
+		auto var_idx = decision->binding.column_index;
+		if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsScalar()) {
+			continue;
+		}
+		auto check = make_check();
+		check.decision = var_idx;
+		check.object = decision->GetName();
+		scope.checks.push_back(std::move(check));
+	}
+}
+
+void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing,
+                                                 DecideScopeChecks &scope) const {
+	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.group_keys, scope.relations};
+	// D4: the `when` keeps a row of a non-empty input.
+	if (enclosing.when) {
+		DecideScopeCheck check;
+		check.kind = DecideScopeCheckKind::KEEPS_A_ROW;
+		check.rows = enclosing.when->Copy();
+		check.subject = RenderDecideSource(*enclosing.when, names);
+		scope.checks.push_back(std::move(check));
+	}
+	ClauseParts parts;
+	CollectClauseParts(
+	    leaf, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
+	// The `per` key determines every tuple term, decision and `by` key of the clause.
+	if (enclosing.per) {
+		auto &per = *enclosing.per;
+		vector<string> key_names;
+		for (idx_t i = 1; i < per.children.size(); i++) {
+			key_names.push_back(KeyColumnName(*per.children[i], names));
+		}
+		idx_t fragment;
+		auto key_text = TryParseSourceFragmentTag(per.GetAlias(), fragment) && fragment < scope.source_fragments.size()
+		                    ? scope.source_fragments[fragment]
+		                    : (key_names.empty() ? string("()") : StringUtil::Join(key_names, ", "));
+		auto make_check = [&]() {
+			DecideScopeCheck check;
+			check.kind = DecideScopeCheckKind::DETERMINES;
+			check.rows = enclosing.when ? enclosing.when->Copy() : nullptr;
+			for (idx_t i = 1; i < per.children.size(); i++) {
+				check.key.push_back(per.children[i]->Copy());
+			}
+			check.key_names = key_names;
+			check.subject = key_text;
+			return check;
+		};
+		for (auto *value : parts.values) {
+			auto check = make_check();
+			check.value = value->Copy();
+			check.object = RenderDecideSource(*value, names);
+			scope.checks.push_back(std::move(check));
+		}
+		for (auto *decision : parts.decisions) {
+			auto var_idx = decision->binding.column_index;
+			if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsScalar()) {
+				continue;
+			}
+			auto check = make_check();
+			check.decision = var_idx;
+			check.object = decision->GetName();
+			check.context =
+			    var_idx < variable_scopes.size() ? DeclaredScope(variable_scopes[var_idx]) : string("declared per row");
+			scope.checks.push_back(std::move(check));
+		}
+		for (auto *reducer : parts.reducers) {
+			idx_t group_key;
+			if (!TryParseGroupKeyTag(reducer->GetAlias(), group_key) || group_key >= scope.group_keys.size()) {
+				continue;
+			}
+			auto &by = scope.group_keys[group_key];
+			for (idx_t i = 0; i < by.expressions.size(); i++) {
+				auto check = make_check();
+				check.value = by.expressions[i]->Copy();
+				check.object = i < by.names.size() ? by.names[i] : by.expressions[i]->ToString();
+				check.context = "in by (" + by.text + ")";
+				scope.checks.push_back(std::move(check));
+			}
+		}
+	}
+	for (auto *reducer : parts.reducers) {
+		BuildReducerScopeChecks(*reducer, enclosing.when, scope);
+	}
+}
+
+void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective, DecideScopeChecks &scope) const {
+	// The two-level form's PER wrapper and a `when` in front; the body is produced once.
+	const Expression *body = &objective;
+	DecideEnclosingScope enclosing;
+	bool two_level = false;
+	while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = body->Cast<BoundConjunctionExpression>();
+		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
+			two_level = true;
+		} else if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+			enclosing.when = conj.children[1].get();
+		} else {
+			break;
+		}
+		body = conj.children[0].get();
+	}
+	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.group_keys, scope.relations};
+	if (enclosing.when) {
+		DecideScopeCheck check;
+		check.kind = DecideScopeCheckKind::KEEPS_A_ROW;
+		check.rows = enclosing.when->Copy();
+		check.subject = RenderDecideSource(*enclosing.when, names);
+		scope.checks.push_back(std::move(check));
+	}
+	if (two_level) {
+		return; // its classes are the inner reducer's own `by` groups, its key's
+	}
+	ClauseParts parts;
+	CollectClauseParts(
+	    *body, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
+	auto make_check = [&]() {
+		DecideScopeCheck check;
+		check.kind = DecideScopeCheckKind::DETERMINES;
+		check.rows = enclosing.when ? enclosing.when->Copy() : nullptr;
+		check.subject = "()";
+		return check;
+	};
+	// Produced once (`per ()`): every value and decision outside a reducer has one value or
+	// instance, and every top-level reducer one `by` group, over the kept rows.
+	for (auto *value : parts.values) {
+		auto check = make_check();
+		check.value = value->Copy();
+		check.object = RenderDecideSource(*value, names);
+		scope.checks.push_back(std::move(check));
+	}
+	for (auto *decision : parts.decisions) {
+		auto var_idx = decision->binding.column_index;
+		if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsScalar()) {
+			continue;
+		}
+		auto check = make_check();
+		check.decision = var_idx;
+		check.object = decision->GetName();
+		check.context =
+		    var_idx < variable_scopes.size() ? DeclaredScope(variable_scopes[var_idx]) : string("declared per row");
+		scope.checks.push_back(std::move(check));
+	}
+	for (auto *reducer : parts.reducers) {
+		idx_t group_key;
+		if (TryParseGroupKeyTag(reducer->GetAlias(), group_key) && group_key < scope.group_keys.size()) {
+			auto &by = scope.group_keys[group_key];
+			for (idx_t i = 0; i < by.expressions.size(); i++) {
+				auto check = make_check();
+				check.value = by.expressions[i]->Copy();
+				check.object = i < by.names.size() ? by.names[i] : by.expressions[i]->ToString();
+				check.context = "in by (" + by.text + ")";
+				scope.checks.push_back(std::move(check));
+			}
+		}
+		BuildReducerScopeChecks(*reducer, enclosing.when, scope);
+	}
 }
 
 } // namespace duckdb

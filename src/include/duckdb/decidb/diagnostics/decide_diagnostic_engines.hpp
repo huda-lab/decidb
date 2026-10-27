@@ -47,15 +47,6 @@ struct InfeasibleDiagnosisInput {
 	const vector<string> &global_variable_labels;
 	const DecideDiagParams &params;
 
-	//! True when the operator folded a singleton-row bound it could not re-emit as a
-	//! slackable row for this engine (the variable's column is missing from the
-	//! retained model). The bound stays rigid in `model`, so if the elastic program
-	//! is infeasible the engine must NOT claim a structural conflict ("can't be
-	//! fixed by loosening"); it falls through to the static error instead. Set by
-	//! the re-emission loop in PhysicalDecide's INFEASIBLE arm; expected to stay
-	//! false in practice (every singleton-row bound, BOOLEAN pins included, is re-emitted).
-	bool has_unhandled_user_bounds = false;
-
 	//! Solve a (transformed) model with the same backend as the primary solve.
 	//! Injected by the caller so the engine runs the elastic re-solve without
 	//! depending on the operator or the solver facade — same boundary, and the

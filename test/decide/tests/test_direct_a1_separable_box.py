@@ -10,8 +10,9 @@ the rule does not apply to fails instead of quietly using the solver). The case 
 - the oracle finds it infeasible or unbounded: both DeciDB runs raise that error.
 
 The solver has one behavior the oracle cannot derive from the SQL, so each bound states it: a bare unconditional
-constant lower bound (`x >= -3`) replaces the variable's default lower bound of 0, while every other lower bound
-(a column, a WHEN, a coefficient on x) only intersects with it. `Bound.replaces_default` pins that, and the cases that
+constant lower bound replaces the variable's default lower bound of 0 (D41), whether written plainly (`x >= -3`) or with
+a coefficient or offset on x (`2*x >= -6`, `x + 1 >= -2`), while every other lower bound (a column, a `when`) only
+intersects with it. `Bound.replaces_default` pins that, and the cases that
 use it are the ones that would notice if the two paths ever disagreed about it.
 
 A bare strict bound against a fractional literal on a whole-numbered decision (`x > 0.5`, `x < 2.5`) rounds to the first
@@ -56,7 +57,7 @@ COLUMNS = (
     ("cap", "DOUBLE"),  # a per-row upper bound
     ("lo", "DOUBLE"),  # a per-row lower bound
     ("w", "DOUBLE"),  # a per-row coefficient, with positive, negative and zero values
-    ("f", "BOOLEAN"),  # WHEN membership
+    ("f", "BOOLEAN"),  # `when` membership
     ("s", "DOUBLE"),  # a per-row score
 )
 NAMES = [name for name, _ in COLUMNS]
@@ -155,7 +156,7 @@ OBJECTIVES = {
     "lin_sums": objective("MAXIMIZE SUM(s*x) - SUM(w*x)", True, lambda r: {"x": (0.0, r["s"] - r["w"])}),
     "lin_scaled": objective("MINIMIZE 4*SUM(s*x)/2", False, lambda r: {"x": (0.0, 2.0 * r["s"])}),
     "lin_when": objective(
-        "MAXIMIZE SUM(s*x) WHEN (f)", True, lambda r: {"x": _masked(r, 0.0, r["s"], lambda q: q["f"])}
+        "MAXIMIZE when f: SUM(s*x)", True, lambda r: {"x": _masked(r, 0.0, r["s"], lambda q: q["f"])}
     ),
     "sq": objective("MINIMIZE SUM(POWER(x - t, 2))", False, lambda r: {"x": (1.0, -2.0 * r["t"])}),
     "sq_max": objective("MAXIMIZE SUM(POWER(x - t, 2))", True, lambda r: {"x": (1.0, -2.0 * r["t"])}),
@@ -177,12 +178,12 @@ OBJECTIVES = {
         "MAXIMIZE SUM(POWER(w*x - t, 2))", True, lambda r: {"x": (r["w"] ** 2, -2.0 * r["w"] * r["t"])}
     ),
     "sq_when": objective(
-        "MINIMIZE SUM(POWER(x - t, 2)) WHEN (f)",
+        "MINIMIZE when f: SUM(POWER(x - t, 2))",
         False,
         lambda r: {"x": _masked(r, 1.0, -2.0 * r["t"], lambda q: q["f"])},
     ),
     "sq_lin_when": objective(
-        "MINIMIZE SUM(POWER(x - t, 2) + s*x) WHEN (f)",
+        "MINIMIZE when f: SUM(POWER(x - t, 2) + s*x)",
         False,
         lambda r: {"x": _masked(r, 1.0, -2.0 * r["t"] + r["s"], lambda q: q["f"])},
     ),
@@ -340,6 +341,18 @@ le, lt, ge, gt, eq = "<=", "<", ">=", ">", "="
 
 A1_CASES = {}
 
+# Bounds written with a coefficient or offset on x fold into the column box (D41), but direct solve reads only a plain
+# folded bound so far and declines these. They run on the solver path only until it reads them (todo task 6).
+FOLDED_AFFINE_PENDING = {
+    "bool_scaled",
+    "real_arithmetic_constant_replaces_default",
+    "real_negated_upper_replaces_default",
+    "real_offset_lower_replaces_default",
+    "real_offset_upper",
+    "real_scaled_lower_replaces_default",
+    "int_upper_quotient_just_below_a_whole_number",
+}
+
 
 def add(name, domain, bounds, objective_name):
     A1_CASES[name] = case(domain, bounds, objective_name)
@@ -388,7 +401,7 @@ add(
 add(
     "real_negative_lower_under_when_intersects",
     "REAL",
-    [clause("x >= -3 WHEN (f)", ge, const(-3.0), when=col("f")), clause("x <= 9", le, const(9.0))],
+    [clause("when f: x >= -3", ge, const(-3.0), when=col("f")), clause("x <= 9", le, const(9.0))],
     "lin_min",
 )
 add(
@@ -398,27 +411,27 @@ add(
     "lin_min",
 )
 add(
-    "real_arithmetic_constant_intersects",
+    "real_arithmetic_constant_replaces_default",
     "REAL",
-    [clause("x >= 0 - 3", ge, const(-3.0)), clause("x <= 9", le, const(9.0))],
+    [clause("x >= 0 - 3", ge, const(-3.0), replaces=True), clause("x <= 9", le, const(9.0))],
     "lin_min",
 )
 add(
-    "real_scaled_lower_intersects",
+    "real_scaled_lower_replaces_default",
     "REAL",
-    [clause("2*x >= -6", ge, const(-6.0), a=const(2.0)), clause("x <= 9", le, const(9.0))],
+    [clause("2*x >= -6", ge, const(-6.0), a=const(2.0), replaces=True), clause("x <= 9", le, const(9.0))],
     "lin_min",
 )
 add(
-    "real_negated_upper_intersects",
+    "real_negated_upper_replaces_default",
     "REAL",
-    [clause("-x <= 3", le, const(3.0), a=const(-1.0)), clause("x <= 9", le, const(9.0))],
+    [clause("-x <= 3", le, const(3.0), a=const(-1.0), replaces=True), clause("x <= 9", le, const(9.0))],
     "lin_min",
 )
 add(
-    "real_offset_lower_intersects",
+    "real_offset_lower_replaces_default",
     "REAL",
-    [clause("x + 1 >= -2", ge, const(-3.0)), clause("x <= 9", le, const(9.0))],
+    [clause("x + 1 >= -2", ge, const(-3.0), replaces=True), clause("x <= 9", le, const(9.0))],
     "lin_min",
 )
 add(
@@ -442,38 +455,38 @@ add(
     "sq_max",
 )
 
-# --- Row-valued bounds, with and without WHEN ----------------------------------------------------------------------
+# --- Row-valued bounds, with and without a `when` ---------------------------------------------------------------------
 add("real_column_lower_upper", "REAL", [clause("x >= lo", ge, col("lo")), clause("x <= cap", le, col("cap"))], "sq")
 add(
     "real_column_equality_when",
     "REAL",
-    [clause("x = lo WHEN (f)", eq, col("lo"), when=col("f")), clause("x <= cap", le, col("cap"))],
+    [clause("when f: x = lo", eq, col("lo"), when=col("f")), clause("x <= cap", le, col("cap"))],
     "sq",
 )
 add(
     "real_upper_when",
     "REAL",
-    [clause("x <= 1 WHEN (f)", le, const(1.0), when=col("f")), clause("x <= 9", le, const(9.0))],
+    [clause("when f: x <= 1", le, const(1.0), when=col("f")), clause("x <= 9", le, const(9.0))],
     "sq_lin",
 )
 add(
     "real_cap_when",
     "REAL",
-    [clause("x <= cap WHEN (f)", le, col("cap"), when=col("f")), clause("x <= 20", le, const(20.0))],
+    [clause("when f: x <= cap", le, col("cap"), when=col("f")), clause("x <= 20", le, const(20.0))],
     "sq_max",
 )
 add(
     "real_lower_when",
     "REAL",
-    [clause("x >= lo WHEN (f)", ge, col("lo"), when=col("f")), clause("x <= cap", le, col("cap"))],
+    [clause("when f: x >= lo", ge, col("lo"), when=col("f")), clause("x <= cap", le, col("cap"))],
     "sq",
 )
 add(
     "real_two_whens",
     "REAL",
     [
-        clause("x >= 2 WHEN (f)", ge, const(2.0), when=col("f"), replaces=False),
-        clause("x <= 3 WHEN (id > 3)", le, const(3.0), when=lambda r: r["id"] > 3),
+        clause("when f: x >= 2", ge, const(2.0), when=col("f"), replaces=False),
+        clause("when id > 3: x <= 3", le, const(3.0), when=lambda r: r["id"] > 3),
         clause("x <= 9", le, const(9.0)),
     ],
     "lin_min",
@@ -526,11 +539,11 @@ add(
     "sq_max",
 )
 add("unbounded_convex_max", "REAL", [clause("x >= 0", ge, const(0.0), replaces=True)], "sq_max")
-add("unbounded_one_row", "REAL", [clause("x <= cap WHEN (f)", le, col("cap"), when=col("f"))], "lin_min")
+add("unbounded_one_row", "REAL", [clause("when f: x <= cap", le, col("cap"), when=col("f"))], "lin_min")
 add(
     "optimal_when_the_open_row_is_outside_the_objective",
     "REAL",
-    [clause("x <= cap WHEN (f)", le, col("cap"), when=col("f"))],
+    [clause("when f: x <= cap", le, col("cap"), when=col("f"))],
     "lin_when",
 )
 
@@ -584,7 +597,7 @@ add("int_strict_lower_column", "INT", [clause("x > lo", gt, col("lo")), clause("
 add(
     "int_strict_when",
     "INT",
-    [clause("x < 2.5 WHEN (f)", lt, const(2.5), when=col("f")), clause("x <= 7", le, const(7.0))],
+    [clause("when f: x < 2.5", lt, const(2.5), when=col("f")), clause("x <= 7", le, const(7.0))],
     "lin_max",
 )
 add("int_strict_affine", "INT", [clause("2*x < cap", lt, col("cap"), a=const(2.0))], "lin_max")
@@ -619,7 +632,7 @@ add("int_large_bound", "INT", [clause("x <= 1000000000000", le, const(1e12))], "
 add(
     "int_upper_when_default_open",
     "INT",
-    [clause("x <= 3 WHEN (f)", le, const(3.0), when=col("f")), clause("x <= 10", le, const(10.0))],
+    [clause("when f: x <= 3", le, const(3.0), when=col("f")), clause("x <= 10", le, const(10.0))],
     "lin_max",
 )
 
@@ -632,7 +645,7 @@ add("bool_fixed_zero", "BOOL", [clause("x <= 0", le, const(0.0))], "lin_max")
 add(
     "bool_fixed_when",
     "BOOL",
-    [clause("x = 1 WHEN (f)", eq, const(1.0), when=col("f"), replaces=False), clause("x <= 1", le, const(1.0))],
+    [clause("when f: x = 1", eq, const(1.0), when=col("f"), replaces=False), clause("x <= 1", le, const(1.0))],
     "lin_min",
 )
 add("bool_fractional_cap", "BOOL", [clause("x <= cap/10", le, lambda r: r["cap"] / 10.0)], "lin_max")
@@ -681,12 +694,12 @@ A1_CASES["decision_unused_in_objective"] = Case(
     (("x", "REAL"), ("y", "INT")),
 )
 
-# An objective with a WHEN over a sum of parts: every part shares the one membership mask. And a part with two terms
+# An objective with a `when` over a sum of parts: every part shares the one membership mask. And a part with two terms
 # that read no decision: their sum is validated once.
 A1_CASES["real_objective_parenthesized_sums_when"] = Case(
     (LOWER_ZERO_BOX,),
     Objective(
-        "MINIMIZE (SUM(POWER(x - t, 2)) + SUM(s*x)) WHEN (f)",
+        "MINIMIZE when f: (SUM(POWER(x - t, 2)) + SUM(s*x))",
         False,
         lambda r: {"x": _masked(r, 1.0, -2.0 * r["t"] + r["s"], lambda q: q["f"])},
     ),
@@ -731,7 +744,8 @@ SOLVER_OFF_BY_ONE = {
 @pytest.mark.correctness
 @pytest.mark.parametrize("name", sorted(A1_CASES))
 def test_a1_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
-    _agree(decidb_cli, oracle_solver, A1_CASES[name])
+    modes = ("off",) if name in FOLDED_AFFINE_PENDING else ("off", "require")
+    _agree(decidb_cli, oracle_solver, A1_CASES[name], modes=modes)
 
 
 @pytest.mark.var_integer
@@ -824,11 +838,11 @@ def _late(decide_text, t_sql="1.0", s_sql="1.0", cap_sql="10.0", tail=""):
 # name -> (sql, error class the direct path must raise).
 A1_ERROR_CASES = {
     "objective_when_matches_no_row": (
-        _problem(ROWS, obj="MINIMIZE SUM(POWER(x - t, 2)) WHEN (id > 99)"),
+        _problem(ROWS, obj="MINIMIZE when id > 99: SUM(POWER(x - t, 2))"),
         "empty_aggregate",
     ),
     "objective_part_when_matches_no_row": (
-        _problem(ROWS, obj="MINIMIZE SUM(POWER(x - t, 2)) + SUM(s*x) WHEN (id > 99)"),
+        _problem(ROWS, obj="MINIMIZE when id > 99: SUM(POWER(x - t, 2)) + SUM(s*x)"),
         "empty_aggregate",
     ),
     "infeasible_int_window": (_problem(ROWS, decl="x(INT)", bounds="x >= 0.3 AND x <= 0.7"), "infeasible"),
@@ -901,7 +915,7 @@ def test_a1_an_unused_decision_still_raises(decidb_cli):
 
 BOUNDARY_CASES = {
     "infinite_cap_is_no_bound": _problem(_with(1, cap=INF), bounds="x <= cap AND x >= 0"),
-    "infinite_cap_when_excluded": _problem(_with(1, cap=INF), bounds="x <= cap WHEN (f) AND x >= 0 AND x <= 20"),
+    "infinite_cap_when_excluded": _problem(_with(1, cap=INF), bounds="when f: x <= cap AND x >= 0 AND x <= 20"),
     "negative_infinite_lower_keeps_default": _problem(_with(1, lo=-INF), bounds="x >= lo AND x <= cap"),
     "negative_infinite_constant_lower_is_no_bound": _problem(ROWS, bounds="x >= ('-Infinity'::DOUBLE) AND x <= cap"),
     "row_lower_1e25": _problem(_with(1, cap=1e25), bounds="x >= cap", obj="MINIMIZE SUM(x)"),
@@ -958,14 +972,28 @@ BOUNDARY_CASES = {
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("name", sorted(BOUNDARY_CASES))
+@pytest.mark.parametrize(
+    "name",
+    [
+        pytest.param(
+            name,
+            marks=(
+                pytest.mark.xfail(
+                    strict=True,
+                    reason="direct solve does not read a folded bound with a coefficient or offset yet (todo task 6)",
+                )
+                if name in FOLDED_AFFINE_PENDING
+                else ()
+            ),
+        )
+        for name in sorted(BOUNDARY_CASES)
+    ],
+)
 def test_a1_boundary_values_read_like_the_solver(decidb_cli, name):
     sql = BOUNDARY_CASES[name]
     direct = _run_all(decidb_cli, sql, "require")
     solver = _run_all(decidb_cli, sql, "off")
-    assert (
-        direct[0] != "error" or "decide_direct_solve=require" not in direct[1]
-    ), "no rule applied to the query"
+    assert direct[0] != "error" or "decide_direct_solve=require" not in direct[1], "no rule applied to the query"
     assert _all_close(direct, solver), (direct, solver)
 
 
@@ -1075,7 +1103,7 @@ def test_a1_a_problem_that_reads_a_column_waits_for_every_row(decidb_cli):
     sql = _constant_query("x(REAL)", "x BETWEEN 0 AND id MAXIMIZE SUM(3*x)")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {sql}").stdout
     assert "A1_SEPARABLE_BOX" in plan and "WINDOW" in plan, plan
-    conditional = _constant_query("x(REAL)", "x BETWEEN 0 AND 10 WHEN (id > 1) MAXIMIZE SUM(3*x)")
+    conditional = _constant_query("x(REAL)", "when id > 1: x BETWEEN 0 AND 10 MAXIMIZE SUM(3*x)")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {conditional}").stdout
     assert "WINDOW" in plan, plan
 

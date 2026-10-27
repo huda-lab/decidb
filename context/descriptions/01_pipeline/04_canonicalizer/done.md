@@ -18,7 +18,8 @@ current code.
 The boundary is two operations:
 
 1. **Canonicalize** a bound tree into the structural form in §3.
-2. **Validate** that the result is a supported per-row or aggregate constraint.
+2. **Validate** that the result takes a supported shape — per-row, aggregate or value
+   (§3.10).
 
 Keeping transformation and user-facing validation as separate operations is fine.
 The invariant is that both happen at one boundary, before optimization, and that
@@ -46,7 +47,7 @@ form `PlanSubqueries` produces. Both facts pin it to this point.
 The pass **never opens a term algebraically**. It decomposes each side additively
 and asks one question of each resulting term — "does it reference a decision
 variable?" — then moves terms across the relation. A quadratic `POWER(x-t,2)`, a
-composed `MAX(x*v)` and a filtered `SUM(x) WHEN c` are all just decision-bearing
+composed `MAX(x*v)` and a filtered `sum(when c: x)` are all just decision-bearing
 terms here, indistinguishable from `x`.
 
 That restriction is the whole design. A pass that may decline can never be the
@@ -89,7 +90,7 @@ physical extraction and runtime RHS/group evaluation
 | Logical plan | Store canonical constraints. New ones enter only through `AddConstraint`. |
 | Optimizer | Assume canonical input; lower NORM/IN and select other formulations. Generated rows return through `AddConstraint`. |
 | Physical extraction | Read model terms from the left and the bound from the right. May assert the invariant; must not repair it. |
-| Runtime evaluation | Evaluate coefficients, `WHEN`, `PER`, qualifiers, data reducers, row-varying bounds. Value operations, not shape decisions. |
+| Runtime evaluation | Evaluate coefficients, `when` conditions, `per` classes, `by` groups, a reducer's own key, data reducers, row-varying bounds. Value operations, not shape decisions. |
 | Model builder | Accumulate coefficients and build solver-neutral rows. No SQL-expression canonicalization. |
 | Diagnostics / EXPLAIN | Source provenance for user-facing text; canonical/rewritten trees for internal views. |
 
@@ -113,13 +114,13 @@ a rendering job rather than a re-plumbing job.
 
 | ID | Rule |
 |---|---|
-| **C0** | Ordinary `AND` conjunctions recurse into every child. A `WHEN` or `PER` wrapper recurses into child 0 only; its condition or grouping columns are copied unchanged. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
+| **C0** | Ordinary `AND` conjunctions recurse into every child. A `when` wrapper, a `per K:` wrapper (`PER_CLASS_TAG`) or the two-level objective's wrapper (`PER_CONSTRAINT_TAG`) recurses into child 0 only; its condition or key columns are copied unchanged. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
 | **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
-| **C4** | Both additive spines contain only `+`, binary `-`, unary `-`, and binder-generated casts over decision algebra. Data casts are atoms. The pass never opens an atom or distributes a cast. |
-| **C5** | An aggregate constraint contains only decision-bearing reducers and row-invariant decision terms at the top level. A per-row constraint contains no reducers. Unsupported mixtures are rejected here. |
-| **C6** | A factor attached to a decision-bearing reducer has one supported canonical representation and is one value for the whole query. |
+| **C4** | Both additive spines contain only `+`, binary `-`, unary `-`, and binder-generated casts over decision algebra. Data casts are atoms. A factor known before the query runs distributes over an additive child (`2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`), as a negation does; a row-varying factor or a subquery over a sum stays one atom. Like decision terms under such factors merge into one (`x + x` is `2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`); a group whose factors cancel is left as written. The pass never opens an atom or distributes a cast. |
+| **C5** | Every comparison takes one shape of §3.10: per-row (no decision reducer), aggregate (decision reducers sharing one `by` key, beside query-wide terms only) or value (any other side with a decision reducer, which the value rewrite turns per-row). A shape §3.10 refuses is rejected here. |
+| **C6** | A factor attached to a decision-bearing reducer has one canonical representation, outside the reducer. In the objective it is one value for the whole query; in a constraint it may vary by row, which makes the comparison VALUE. A decision is never a factor. |
 | **C7** | Structural tags and source provenance survive rebuilding. The result is a fixed point: `Canon(Canon(c)) == Canon(c)`. |
 
 This is a **structural** canonical form, not algebraic simplification. The model
@@ -137,7 +138,7 @@ anything else -> one atomic term
 ```
 
 Indivisible atoms include `x`, `price * x`, `POWER(x - target, 2)`,
-`SUM(x * price)`, `MAX(x * value)`, `SUM(x) WHEN condition`.
+`SUM(x * price)`, `MAX(x * value)`, `sum(when condition: x)`.
 
 `ReadCanonicalAtoms` reads these atoms back from a canonical side, with each sign
 and any reducer factor, by the same spine walk `Decompose` uses. Readers of
@@ -255,24 +256,67 @@ unknown sign costs performance instead of failing. An earlier version did fold,
 swapping MIN/MAX for a negative factor — exact, but it made the sign load-bearing
 and had nothing to fall back on when the sign was unknown.
 
-A legal factor must be one value for the whole query:
+What may be a factor (`PeelScale`, the single place that judges it):
 
-- literals and foldable expressions — legal;
-- uncorrelated scalar subqueries — legal;
-- arithmetic made entirely of query-wide values — legal;
-- row-varying columns and correlated subqueries — illegal;
-- a decision-bearing factor is not a scale at all; it is a product of decisions.
+- literals and foldable expressions, uncorrelated scalar subqueries, and arithmetic
+  made entirely of query-wide values — anywhere; so too a factor that is identically
+  zero before the query runs whatever its data factors hold (`0 * w`, read by
+  `PlanTimeSignOf` in `decide_cast_policy`): it is one value, 0, for the whole query, and
+  the term it scales vanishes rather than taking the VALUE shape;
+- a row-varying column or a correlated subquery — in a constraint, where it is a term
+  of each row's constraint: the comparison takes the VALUE shape (§3.10), whose helper
+  decision the row's factor multiplies. The objective is produced once, so there it is
+  refused: *"DECIDE objective: 'w' varies per row, so it cannot multiply SUM(x). Move
+  it inside the aggregate, e.g. SUM(x * w)."*, or, for a correlated subquery, *"this
+  subquery returns a different value for each row, ..."*;
+- a decision — nowhere: *"DECIDE constraint: 'b' is a decision, so it cannot multiply
+  SUM(x). Only data can scale SUM/AVG/MIN/MAX."* (the objective says *"Only constants and
+  query-wide values ..."*). A product
+  of a decision and a reducer is not a scale.
 
 **Peeling runs to exhaustion.** `2 * (3 * SUM(x))` and `(SUM(x) / 2) / 3` each
 yield *one* factor: multipliers compose into `M`, divisors into `D`, and the
 emitted factor is `M`, `D`, or `M / D`. Partial peeling would produce a term
 nothing downstream can read, since every consumer matches a single level. Each
 nesting level is judged separately, so an illegal inner factor names itself —
-`2 * (w * SUM(x))` reports `w`, not `2`.
+`2 * (w * SUM(x))` in the objective reports `w`, not `2`.
 
 The pass does not pre-evaluate a query-wide subquery; composition builds an
 expression, so `(SELECT a) * ((SELECT b) * SUM(x))` emits the factor
 `(SELECT a) * (SELECT b)` and the values still arrive at execution.
+
+**A factor known before the query runs distributes over an additive spine.**
+`2 * (min(x) - 1) >= -6` is emitted as `2 * min(x) >= -6 + 2 * 1` and
+`(min(x) + 1) / 2 >= -0.5` as `min(x) / 2 >= -0.5 - 1 / 2` (`Decompose` carries the
+factor down and `ComposeScale` folds it into each atom's own factor), exactly as a
+negation already distributes. Without it the product was one atom holding a reducer
+inside an expression, the VALUE shape, and a bound written that way never reached the
+MIN/MAX rewrite or bound absorption (2026-10-23). A factor that varies by row, or a
+subquery, is not distributed: the product stays one atom and takes the VALUE shape.
+
+**Like terms merge.** After decomposition, decision atoms that are multiples of one
+term, each by a factor known before the query runs (a reducer's peeled factor, none
+counting as 1 and a divisor as its reciprocal; for a bare decision the constant factors
+it stands under, `PeelBareDecisionFactors`), become one atom scaled by the sum of their
+signed factors (`MergeLikeAtoms`): `x + x >= -4` is emitted as `2 * x >= -4`,
+`x - 3 * x <= 4` as `-2 * x <= 4`, `2 * min(x) + min(x) >= -6` as `3 * min(x) >= -6`. The
+merge runs on each written side and again on the partitioned decision side, where a term
+that crossed the relation meets its twin: `3 * x >= x - 4` is `2 * x >= -4`, and the
+result is a fixed point (C7). The linear form merged
+like terms at extraction already, so no model row changes; what changes is that a
+bound written as a repeated term now reaches the MIN/MAX rewrite and bound absorption
+as the scaled single term it is (2026-10-25). A group whose factors cancel (`x - x`) is
+left as written rather than dropped, which could empty the side. A row-varying factor
+or a subquery is not summable and its atom is not merged.
+
+**A lone negated reducer** carries its sign in its factor:
+`-max(e) <= -cap` is emitted as `-1 * max(e) <= -cap`, `-(2 * max(e))` as
+`-(2) * max(e)` (`IsLoneNegatedReducer`, `FoldNegationIntoFactor`), and one written with
+signs around it, `-(-max(e))`, as the bare term (`IsSignedSpine`). The MIN/MAX rewrite
+then reads it as a factor of known sign, the route a `by` can take; left as `-max(e)` it
+would be an additive spine, which the composed formulation takes. Whether a factor's sign
+is known before the query runs is `ScaleSignAtPlanTime` (`decide_cast_policy`), which
+this stage and the MIN/MAX rewrite share.
 
 **Composition reassociates, and that is accepted.** `(SUM(x) / 2) / 3` emits
 `SUM(x) / (2 * 3)`, which in double arithmetic is not bit-identical to dividing
@@ -294,7 +338,7 @@ execution; diagnostics must still know what the user wrote. Preserved:
 - whether a value came from an uncorrelated or correlated scalar subquery;
 - whether a rebuilt RHS is wholly query-wide or contains row-varying data;
 - optimizer mechanism tags (structural, ABS, MIN/MAX, `<>`);
-- `WHEN`, `PER` and qualifier ownership.
+- `when`, `per` and `by` ownership, and a reducer's own key.
 
 Provenance is **side-agnostic**: `x <= (SELECT 5)` and `(SELECT 5) >= x` are the
 same shared cap after canonicalization and must produce the same actionable
@@ -329,11 +373,11 @@ reason objectives get a boundary instead of their own normalizer.
 
 | ID | Rule | Shared with |
 |---|---|---|
-| **O0** | A `WHEN`/`PER` wrapper recurses into child 0 only. | C0, same predicate |
+| **O0** | A `when` wrapper or the two-level objective's wrapper (`PER_CONSTRAINT_TAG`) recurses into child 0 only. | C0, same predicate |
 | **O1** | The body is an additive spine whose every term references a decision. | — |
 | **O2** | A decision-free additive term is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. One that does not fold to a constant is rejected here. | — |
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
-| **O4** | A factor on a decision-bearing reducer is one query-wide value, sits outside the reducer, and has one spelling. | C6, same `PeelScale` |
+| **O4** | A factor on a decision-bearing reducer is one query-wide value, sits outside the reducer, and has one spelling (in a constraint it may vary by row, which makes the comparison VALUE, §3.10). | C6, same `PeelScale` |
 | **O5** | Structural tags survive rebuilding. The result is a fixed point. | C7 |
 
 Two consequences:
@@ -350,18 +394,60 @@ Because objectives are canonicalized, `TryMatchScaledAggregate` needs no
 `objective_flexible` escape: `AGG * factor` was what an unnormalized clause looked
 like, and every consumer now sees `factor * AGG` or `AGG / factor`.
 
+### 3.10 How a comparison becomes model rows
+
+`ClassifyScoped` reads every canonical comparison's decision side and names its shape
+(`ScopedShape`: `ROWS`, `AGGREGATE`, `VALUE`, `UNSUPPORTED`), the rule of
+syntax_reference.md §6.4:
+
+| Decision side holds | Shape | Model rows |
+|---|---|---|
+| no reducer (a data-only reducer may sit on the bound side) | `ROWS` | one per kept row, or per class of an enclosing `per K:` |
+| decision reducers sharing one `by` key, under whole-query factors, beside query-wide terms only | `AGGREGATE` | one per `by` group of the kept rows |
+| anything else: a per-row or keyed decision beside a reducer, a factor that varies by row, a second `by` key, a reducer inside another expression, a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group, then one row per class |
+| `AVG` under `<>` unless every term is a plain `AVG` | refused | *"DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per"* |
+
+The refusal: an `AVG`'s exclusion under `<>` scales the bound by the group's row count,
+exact only when every term is a plain `AVG` over all of them. A query-wide decision
+beside a reducer whose body multiplies decisions (`s + sum(b * x)`, `sum(power(x, 2)) +
+s`) stays AGGREGATE: the quadratic builder counts it once per grouped row, as the linear
+one does (stage 06). A clause
+that takes the composed MIN/MAX formulation (`TakesComposedMinMax`: a MIN or MAX over
+decisions beside another term, or alone under a factor whose sign is not known before
+the query runs) is AGGREGATE only with no `by`, a constant bound and no decision beside
+it — that formulation is one row over all of the clause's kept rows under one bound;
+otherwise it is VALUE, where each extremum is pinned per group. `PeelScale` lets a
+row-varying factor stay on a constraint's reducer as its scale (the comparison is then
+VALUE); a factor that is a decision is refused (§3.7). Refusals quote the query through
+`QuoteMessagesWith`: columns qualified by relation over a join, a reducer with its
+scopes and `by`. `ClassifyCanonicalComparison` maps the shape onto
+`CanonicalConstraintClass` (`ROWS` is `PER_ROW`; `UNSUPPORTED`, or a decision on the
+bound side, is `INVALID`), so the linear form, the validation in `AddConstraint` and the
+debug verifier all read one classification; a VALUE comparison reaching the linear form
+is an internal error (the rewrite did not run).
+
+`CanonicalizeTree` stamps an aggregate-shape comparison with its `by` key
+(`__group_key_<i>__`) — the one grouping carrier after this stage, since later rewrites
+rebuild the reducers. A `per K:` wrapper over it stays, as over every shape
+(`IsPerClassWrapper`, a wrapper for every walker): one row per `by` group already stands
+for every class, whose constraints differ only in a bound the class determines, so the
+wrapper adds no row; it names the classes each group's row stands for, which the linear
+form reads as the clause's class key and a diagnosis reports one by one (D28). A
+VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and removes.
+
 ---
 
 ## 4. Classification and verification
 
-`ClassifyCanonicalComparison` returns `PER_ROW`, `AGGREGATE` or `INVALID` from
-reducer placement plus DECIDE variable scope. Aggregate rows admit only
-reducer-rooted decision terms and query-wide top-level terms; scalar decisions are
-query-wide, while row/entity decisions and data-varying expressions must be inside
-`SUM`/`AVG`/`MIN`/`MAX`. `PER` eligibility is validated against this same
-classification after binding, which closed the data-only-reducer loophole the
-earlier parsed-shape predicate had. Physical extraction consumes this classifier
-rather than re-deciding from the mere presence of an aggregate.
+`ClassifyCanonicalComparison` returns `PER_ROW`, `AGGREGATE`, `VALUE` (a comparison
+the value rewrite turns into `PER_ROW`, §3.10) or `INVALID`, from `ClassifyScoped`.
+Aggregate rows admit only reducer-rooted decision terms and query-wide top-level terms:
+a query-wide decision may sit beside the reducers, while a per-row or keyed decision, or
+row data, beside them makes the comparison VALUE. Physical extraction consumes this
+classifier rather than re-deciding from the mere presence of an aggregate.
+`ValidateCanonicalTree` throws `ClassifyScoped`'s refusal for an `INVALID` comparison,
+or an `InternalException` when a decision survived on the bound side, which no user
+query can cause.
 
 Foldable decision-free bounds that evaluate to NULL are rejected here, with
 `COALESCE(...)` guidance, including rebuilt and reversed forms.
@@ -391,11 +477,28 @@ function in release. Call sites at all three points above call it unconditionall
 regardless of build type. This exists because the check re-canonicalizes the
 whole tree a second time purely to assert idempotency, which is too expensive to
 pay on every DECIDE query once release is the target; `ValidateCanonicalTree`'s
-user-facing `BinderException`s (shape, NULL bound, PER-on-non-aggregate) are a
-separate function and are **not** gated — those stay in release. Build `debug` or
+user-facing `BinderException`s (the shape refusal, a NULL bound) are a separate
+function and are **not** gated — those stay in release. Build `debug` or
 `relassert` to exercise the invariant check; `test/common/test_decidb_canonical_verifier.cpp`
 pins both the debug-mode throwing behavior and the release-mode no-op via a
 `REQUIRE_VERIFY_THROWS` macro that switches on `DEBUG`.
+
+### Scope checks
+
+`BuildConstraintScopeChecks` and `BuildObjectiveScopeChecks` are read-only passes over
+the clauses and objective as bound, called once by `Binder::CreatePlan`, after
+`PlanSubqueries` (a check's expressions must be copyable) and before `CanonicalizeTree`.
+A rewrite's clause entering through
+`AddConstraint` builds none. Per clause, in this order: its `when` keeps a row
+(`KEEPS_A_ROW`); its `per` key determines each maximal decision- and reducer-free
+subexpression, each decision outside reducers and each `by` key (`DETERMINES`); then each
+reducer in turn: it reads a row in every `by` group when it has its own `when`
+(`READS_A_ROW`), and its own `per` key determines its body within its `by` group
+(`DETERMINES`). The objective: its `when`, then `per ()` over its values and decisions,
+then each top-level reducer in turn, its `by` key (`DETERMINES`) before its own checks.
+The first check to fail stops the query, so this order picks the message. Literals and query-wide values need no check. The message texts are rendered
+here, through `RenderDecideSource`, from source fragments and relation aliases
+(`DecideScopeChecks`), since only planning still knows them.
 
 ---
 
@@ -405,10 +508,11 @@ pins both the debug-mode throwing behavior and the release-mode no-op via a
 - combine like terms;
 - fold constants;
 - rewrite AVG, ABS, MIN/MAX, `<>`, bilinear products, L0 `norm()` or `IN`;
-- look inside reducer bodies. Splitting a body into `coefficient * variable` terms
-  opens terms and can fail, so it lives beside this stage in `DecideTermSplitter`
-  (`decide_term_split.cpp`), which reads canonical atoms;
-- evaluate data, reducers, `WHEN`, `PER` or qualifiers;
+- look inside reducer bodies, except to read them, unchanged, for the scope checks.
+  Splitting a body into `coefficient * variable` terms opens terms and can fail, so it
+  lives beside this stage in `DecideTermSplitter` (`decide_term_split.cpp`), which reads
+  canonical atoms;
+- evaluate data, reducers, `when` conditions, `per` classes or `by` groups;
 - choose a solver formulation.
 
 Expression association is fixed by the stage-01 grammar; this stage never
@@ -448,8 +552,7 @@ test/decide/.venv/bin/python3 -m pytest \
   test/decide/tests/test_bilinear.py \
   -v
 
-./test/decide/golden/capture.sh /tmp/canonicalize-after.dump
-diff -u test/decide/golden/baseline.dump /tmp/canonicalize-after.dump
+./test/decide/golden/check.sh    # diffs baseline.gurobi.dump and baseline.highs.dump
 
 make decide-test
 git diff --check
@@ -460,10 +563,10 @@ What each focused file pins:
 | File | Contract |
 |---|---|
 | `test_canonicalize_cast.py` | Mixed BIGINT/DECIMAL against direct DuckDB evaluation around `2^53`; every explicit decision-cast spelling rejected; data casts remain part of bounds and coefficients |
-| `test_canonicalize_scale.py` | Composed query-wide multiplication and division around reducers are supported, not rejected |
+| `test_canonicalize_scale.py` | Composed query-wide multiplication and division around reducers are supported; a row-varying or correlated factor on a constraint's reducer is read per row; a decision factor is refused |
 | `test_canonicalize_side_agnostic.py` | Correlated bounds on both sides |
-| `test_canonicalize_homogeneity.py` | Scalar / row / entity scope behavior and the data-only-reducer `PER` case |
-| `test_canonicalize_idempotence.py` | Byte-identical emitted models for non-canonical and fixed-point spellings — side swaps, exact casts, scales, `WHEN`, `PER` |
+| `test_canonicalize_homogeneity.py` | A query-wide decision beside a reducer (aggregate shape, under `per` too); a per-row or keyed decision, or a row-varying coefficient on a query-wide one, beside a reducer answered per row |
+| `test_canonicalize_idempotence.py` | Byte-identical emitted models for non-canonical and fixed-point spellings — side swaps, exact casts, scales, `when` and `per` wrappers |
 | `test_query_diagnostics_relation.py` | Forward and reversed uncorrelated subquery bounds emit the same editable SQL suggestion |
 | `test_bilinear.py` (`TestFactoredProductDegree`) | `SUM((x + y) * z)` is accepted in both clauses |
 

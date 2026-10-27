@@ -228,3 +228,19 @@ def test_the_backends_agree_beyond_int32(decidb_cli_highs, decidb_cli_gurobi, sq
 
     assert highs_rows == gurobi_rows
     assert highs_rows[0][1] == _LIMIT
+
+
+@pytest.mark.edge_case
+@pytest.mark.var_integer
+@pytest.mark.correctness
+def test_a_helper_beyond_int32_is_not_read_back(decidb_cli):
+    """The value rewrite's helper for `sum(x * 1000000000)` reaches 3e9, past int32, but
+    no one reads it: the answer comes back, and no error names `__value_0__`."""
+    rows, cols = decidb_cli.execute(
+        """
+        SELECT id, x, y FROM (VALUES (1, 3), (2, 3), (3, 3)) t(id, cap)
+        DECIDE x(INT), y(INT)
+        SUCH THAT x <= cap AND y <= 0 AND per row: y + sum(x * 1000000000) >= 3000000000
+        MINIMIZE SUM(x) + SUM(y)"""
+    )
+    assert sum(row[cols.index("x")] for row in rows) == 3, rows

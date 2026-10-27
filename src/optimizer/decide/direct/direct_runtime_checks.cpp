@@ -6,6 +6,7 @@
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 
 namespace duckdb {
 
@@ -56,16 +57,12 @@ static unique_ptr<Expression> DirectInvalidNumberError(Optimizer &optimizer, Dir
 	                                                                 "NaN or Infinity", string()));
 }
 
-string DirectBoundNullMessage(const string &column_name) {
-	return DecideNullValueMessage({column_name}, string());
-}
-
 string DirectBoundNaNMessage() {
 	return DecideInvalidValueMessage("constraint right-hand side", "NaN", string());
 }
 
-//! The NULL message of one value, as a VARCHAR expression over the row it is evaluated on: it names the columns of the
-//! value that are NULL on that row, and quotes the value when none is. The wording comes from the pieces in
+//! The column part of the NULL message, as a VARCHAR expression over the row it is evaluated on: it names the columns
+//! of the value that are NULL on that row, and quotes `text` when none is. The wording comes from the pieces in
 //! `decide_value_messages.hpp`, the ones `DecideNullValueMessage` joins for the solver.
 //!
 //! The expression grows with the number of columns, not with the number of sets of NULL columns. Each column
@@ -74,8 +71,7 @@ string DirectBoundNaNMessage() {
 //!   all   = concat_ws(', ', piece_1, ..., piece_n)   every NULL column, comma-joined (concat_ws skips NULL pieces)
 //! and the text follows from them: no NULL column when `last` is NULL, one when `all = last`, otherwise the names
 //! before the last one, ` and `, and the last one.
-unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expression &value) {
-	ExpressionBuilder calc(optimizer.context);
+static ExprPtr NullColumnsMessage(const ExpressionBuilder &calc, const Expression &value, const string &text) {
 	vector<const Expression *> leaves;
 	DecideCollectNamedColumns(value, leaves);
 	vector<string> names;
@@ -95,13 +91,12 @@ unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expressio
 	auto is_null = [&](idx_t i) {
 		return calc.IsNull(calc.Wrap(columns[i]->Copy()));
 	};
-	auto text = DirectTextOf(value);
 	auto no_column = DecideNullValueMessage({}, text);
 	if (names.empty()) {
-		return calc.Out(varchar(no_column));
+		return varchar(no_column);
 	}
 	if (names.size() == 1) {
-		return calc.Out(calc.If(is_null(0), varchar(DecideNullValueMessage(names, text)), varchar(no_column)));
+		return calc.If(is_null(0), varchar(DecideNullValueMessage(names, text)), varchar(no_column));
 	}
 	auto piece = [&](idx_t i) {
 		return calc.If(is_null(i), varchar(DecideNullNameQuote() + names[i] + DecideNullNameQuote()),
@@ -143,15 +138,42 @@ unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expressio
 	                         varchar(DecideNullColumnsAfter())};
 	auto exactly_one = calc.Cmp(ExpressionType::COMPARE_EQUAL, all(), last());
 	auto some = calc.If(exactly_one, calc.Fn("concat", one_column), calc.Fn("concat", several));
-	return calc.Out(calc.If(calc.IsNull(last()), varchar(no_column), some));
+	return calc.If(calc.IsNull(last()), varchar(no_column), some);
+}
+
+//! The NULL message of one value, as the solver gives it (DescribeNullSource): the first flattened subquery that is
+//! NULL on the row, else the columns that are, else the value as written.
+unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expression &value,
+                                           const vector<string> &fragments) {
+	ExpressionBuilder calc(optimizer.context);
+	// A coefficient or bound holds no reducer by now (the bound-side window rewrite made each a column), so no entity
+	// scope is needed to render it.
+	static const vector<EntityScopeInfo> no_scopes;
+	auto message = NullColumnsMessage(calc, value, RenderDecideSource(value, fragments, no_scopes));
+	vector<const Expression *> subqueries;
+	DecideCollectSubqueries(value, subqueries);
+	for (idx_t i = subqueries.size(); i > 0; i--) {
+		auto &leaf = *subqueries[i - 1];
+		idx_t fragment_id;
+		TryParseSourceFragmentTag(leaf.GetAlias(), fragment_id);
+		D_ASSERT(fragment_id < fragments.size());
+		message = calc.If(calc.IsNull(calc.Wrap(leaf.Copy())),
+		                  calc.Constant(Value(DecideNullSubqueryMessage(fragments[fragment_id]))), message);
+	}
+	return calc.Out(message);
+}
+
+unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, unique_ptr<Expression> kept,
+                                             unique_ptr<Expression> check) {
+	return calc.Out(calc.If(calc.Wrap(std::move(kept)), calc.Wrap(std::move(check)), calc.Bool(true)));
 }
 
 unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
                                                   ColumnBinding number_binding, const Expression *source,
-                                                  DirectNumberKind kind) {
+                                                  DirectNumberKind kind, const vector<string> &fragments) {
 	ExpressionBuilder calc(optimizer.context);
 	auto number = calc.Col(number_type, number_binding);
-	auto null_message = source ? DirectNullMessageOf(optimizer, *source)
+	auto null_message = source ? DirectNullMessageOf(optimizer, *source, fragments)
 	                           : calc.Out(calc.Constant(Value(DecideNullValueMessage({}, string()))));
 	vector<unique_ptr<Expression>> checks;
 	checks.push_back(
@@ -162,20 +184,16 @@ unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const Lo
 }
 
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
-                                                 const Expression &source_value) {
+                                                 const Expression &source_value, const vector<string> &fragments) {
 	ExpressionBuilder calc(optimizer.context);
 	auto bound = calc.Col(LogicalType::DOUBLE, bound_binding);
 	vector<unique_ptr<Expression>> checks;
-	checks.push_back(DirectRaiseIf(calc, calc.Out(calc.IsNull(bound)),
-	                               DirectErrorPredicate(optimizer, DirectNullMessageOf(optimizer, source_value))));
+	checks.push_back(
+	    DirectRaiseIf(calc, calc.Out(calc.IsNull(bound)),
+	                  DirectErrorPredicate(optimizer, DirectNullMessageOf(optimizer, source_value, fragments))));
 	checks.push_back(DirectRaiseIf(calc, calc.Out(calc.Fn("isnan", bound)),
 	                               DirectErrorPredicate(optimizer, DirectBoundNaNMessage())));
 	return DirectAllHold(calc, std::move(checks));
-}
-
-string DirectInvalidBoundMessage() {
-	return "DECIDE: the bound expression has an invalid value (NULL or NaN). Impute it with COALESCE(), or filter "
-	       "those rows out with a WHERE clause.";
 }
 
 } // namespace duckdb

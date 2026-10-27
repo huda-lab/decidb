@@ -7,7 +7,7 @@ models.  This is stronger than comparing optimal values: different rows and
 bounds can share an optimum.
 
 The pairs cover side swaps, exact casts, query-wide provenance, reducer scales,
-and WHEN/PER wrappers.
+and `when`/`per` wrappers.
 """
 
 import pytest
@@ -68,11 +68,33 @@ _PAIRS = [
     ),
     pytest.param(
         """
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(INT) SUCH THAT x <= 9 AND 2 * (SUM(x) - 1) <= 4 MAXIMIZE SUM(x)
+        """,
+        """
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(INT) SUCH THAT x <= 9 AND 2 * SUM(x) <= 6 MAXIMIZE SUM(x)
+        """,
+        id="factor_over_a_sum",
+    ),
+    pytest.param(
+        """
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(INT) SUCH THAT x <= 9 AND (SUM(x) + 1) / 2 <= 3 MAXIMIZE SUM(x)
+        """,
+        """
+            SELECT id, x FROM (VALUES (1), (2)) t(id)
+            DECIDE x(INT) SUCH THAT x <= 9 AND SUM(x) / 2 <= 2.5 MAXIMIZE SUM(x)
+        """,
+        id="divisor_over_a_sum",
+    ),
+    pytest.param(
+        """
             SELECT id, grp, active, x
             FROM (VALUES (1,'a',true),(2,'a',false),(3,'b',true),(4,'b',true))
                  t(id,grp,active)
             DECIDE x(INT)
-            SUCH THAT 3 >= SUM(x) WHEN active PER grp AND x <= 2
+            SUCH THAT when active per grp: 3 >= SUM(x) by (grp) AND x <= 2
             MAXIMIZE SUM(x)
         """,
         """
@@ -80,7 +102,7 @@ _PAIRS = [
             FROM (VALUES (1,'a',true),(2,'a',false),(3,'b',true),(4,'b',true))
                  t(id,grp,active)
             DECIDE x(INT)
-            SUCH THAT SUM(x) <= 3 WHEN active PER grp AND x <= 2
+            SUCH THAT when active per grp: SUM(x) by (grp) <= 3 AND x <= 2
             MAXIMIZE SUM(x)
         """,
         id="when_per_wrapper",

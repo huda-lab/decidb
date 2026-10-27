@@ -28,13 +28,9 @@ class LogicalDecide;
 //!     against it, and stage 08 later reads the recorded decision rather than
 //!     re-deriving it from a backend.
 //!
-//! Called first thing in DecideOptimizer::OptimizeDecide, before any rewrite. Physical
-//! planning calls it too, but only as a fallback for the case where the DECIDE
-//! optimizer never ran (`SET disabled_optimizers='decide_optimizer'`) — the decision
-//! still belongs to this file, it is merely triggered from there.
-//!
-//! Idempotent in the sense that matters: it is a no-op once a name is recorded, so the
-//! fallback can never overwrite a choice the rewrites were already selected against.
+//! Called once, first thing in DecideOptimizer::OptimizeDecide, before any rewrite. A plan
+//! the DECIDE optimizer never saw is refused at physical planning (`plan_decide.cpp`), so
+//! no other stage chooses a backend.
 void ChooseDecideSolver(LogicalDecide &op);
 
 //! What model class this query will demand of its solver, read off the prepared

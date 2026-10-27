@@ -151,7 +151,7 @@ The same argument proves infeasibility. If the selected corner violates a constr
 >
 > • Each selected endpoint is finite and legal for its BOOL, INT, or REAL domain.
 >
-> • WHEN, PER, NULL, and repeated-decision semantics have been included in the direction proof.
+> • `when`, `per`, `by`, NULL, and repeated-decision semantics have been included in the direction proof.
 >
 > • SQL validates every normalized constraint at the selected corner.
 >

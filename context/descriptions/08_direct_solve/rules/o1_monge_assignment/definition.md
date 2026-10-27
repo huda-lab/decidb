@@ -31,8 +31,8 @@ Its total penalty is 1 + 4 + 1 = 6.
 SELECT l.id AS left_id, r.id AS right_id, selected
 FROM left_items l CROSS JOIN right_items r
 DECIDE selected(BOOL)
-SUCH THAT SUM(selected) = 1 PER l.id
-AND SUM(selected) = 1 PER r.id
+SUCH THAT per l.id: sum(selected) by (l.id) = 1
+AND per r.id: sum(selected) by (r.id) = 1
 MINIMIZE SUM(POWER(l.position-r.position, 2)*selected);
 ```
 
@@ -126,7 +126,7 @@ For a product objective, the rearrangement inequality gives equal ranks for maxi
 >
 > • The only coupling constraints require exactly one selected pair per left identity and exactly one per right identity.
 >
-> • The two PER groups and their WHEN masks cover exactly the intended incident pairs, and any fixed decisions agree with the rank construction.
+> • The two `per` classes and their `when` masks cover exactly the intended incident pairs, and any fixed decisions agree with the rank construction.
 >
 > • An exact count gate preserves empty input and reports infeasibility for unequal nonempty side sizes.
 >

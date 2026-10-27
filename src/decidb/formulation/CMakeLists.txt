@@ -6,7 +6,8 @@ add_library_unity(
   linearization_bigm.cpp
   linearization_bilinear_abs.cpp
   linearization_minmax.cpp
-  linearization_not_equal.cpp)
+  linearization_not_equal.cpp
+  linearization_reducer_value.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_decidb_formulation>
     PARENT_SCOPE)

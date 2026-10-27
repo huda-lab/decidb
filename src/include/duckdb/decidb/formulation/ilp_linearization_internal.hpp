@@ -63,5 +63,25 @@ void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row, const vector
 idx_t FindUnboundedContributor(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
                                const vector<double> &upper_bounds);
 
+//! The family one group of a MIN/MAX row reduces over, in flat columns: one member per
+//! active row, each holding that row's expression negated (the shape `MinMaxLinkRow` and
+//! `EmitExtremumLink` take) with its constant part separate.
+//!
+//! `family` accumulates the reach of the whole group, which boxes the extremum column
+//! and sizes the Big-M; each member also keeps its OWN reach, which is the box a native
+//! arm gives a column pinned to it. Each end is kept independently — a row open above
+//! still contributes the floor it does have. `first_row` is the row the group reads its
+//! bound off: group-constant by construction.
+struct MinMaxGroup {
+    vector<ExtremumMember> members;
+    AuxRange family;
+    idx_t first_row = DConstants::INVALID_INDEX;
+};
+
+//! Split one grouped row into its groups' families. An ungrouped row is the single
+//! group 0.
+vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const VarIndexer &indexer,
+                                      const EvaluatedConstraint &ec);
+
 } // namespace decide_linearize
 } // namespace duckdb

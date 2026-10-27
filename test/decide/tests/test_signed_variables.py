@@ -29,6 +29,8 @@ import pytest
 from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
 from ._oracle_helpers import add_in_domain
+from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
+from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 
 
 @pytest.mark.var_real
@@ -566,3 +568,73 @@ def test_signed_norm_l1_parity(decidb_cli):
     v2 = sum(abs(float(r[xi2])) for r in r2)
     assert v1 == pytest.approx(v2, abs=1e-4)
     assert v1 == pytest.approx(3.0, abs=1e-4)  # min L1 with sum fixed at -3
+
+
+@pytest.mark.var_integer
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize("bound", [-2.5, -2.7, -0.5])
+def test_signed_integer_fractional_lower_bound(request, scope_solver, cli_fixture, bound):
+    """An INTEGER decision with a fractional negative lower bound and an open upper side
+    (`x <= cap` is a row, not a column bound): `x >= -2.5` minimizes to -2. HiGHS was handed
+    `lb = -2.5` on an integer column and answered -3, below the bound."""
+    cli = request.getfixturevalue(cli_fixture)
+    rows = [{"id": 1, "cap": 9}, {"id": 2, "cap": 9}]
+    x = lambda r: {"x": 1}  # noqa: E731
+    clauses = [
+        Scoped((x,), "<=", (lambda r: {CONSTANT: r["cap"]},)),
+        Scoped((x,), ">=", (lambda r: {CONSTANT: bound},)),
+    ]
+    objective = ScopedObjective(ObjSense.MINIMIZE, (Reduce("sum", x),))
+    model = ScopedModel(rows, [Decision("x", lb=float("-inf"))])
+    result = answer(
+        cli,
+        f"""SELECT id, x FROM (VALUES (1, 9), (2, 9)) t(id, cap)
+        DECIDE x(INT) SUCH THAT x <= cap AND x >= {bound} MINIMIZE SUM(x) ORDER BY id""",
+    )
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
+    )
+
+
+@pytest.mark.var_integer
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+def test_integer_bounds_without_a_whole_number(request, cli_fixture):
+    """`2.3 <= x <= 2.7` holds no integer: infeasible on both solvers, and DIAGNOSE still
+    names a bound to change (HiGHS refuses an inverted box on load, so the rounded box
+    never reaches it)."""
+    cli = request.getfixturevalue(cli_fixture)
+    query = """SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT) SUCH THAT x >= 2.3 AND x <= 2.7 MINIMIZE SUM(x)"""
+    assert "DECIDE optimization is infeasible" in cli.execute_raw(query).stderr
+    diagnosis = cli.execute_raw(f"DIAGNOSE {query}")
+    assert diagnosis.stdout.count("infeasible") >= 1, diagnosis.stdout + diagnosis.stderr
+
+
+@pytest.mark.var_integer
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize("shift", [0, 4])
+def test_signed_extremum_bounded_by_a_column(request, scope_solver, cli_fixture, shift):
+    """A signed decision whose upper side is a column bound (`x <= cap - shift`, a row per
+    data row) still gives the MIN/MAX rewrite a finite box on HiGHS: a row over one
+    decision bounds it whatever its sign, by a bound that may be negative. HiGHS refused
+    "requires a finite bound on 'x'"."""
+    cli = request.getfixturevalue(cli_fixture)
+    rows = [{"id": 1, "cap": 3}, {"id": 2, "cap": 5}, {"id": 3, "cap": 2}]
+    x = lambda r: {"x": 1}  # noqa: E731
+    clauses = [
+        Scoped((x,), "<=", (lambda r: {CONSTANT: r["cap"] - shift},)),
+        Scoped((Reduce("max", x),), ">", (lambda r: {CONSTANT: 0},)),
+    ]
+    objective = ScopedObjective(ObjSense.MINIMIZE, (Reduce("sum", x),))
+    model = ScopedModel(rows, [Decision("x", lb=-2.0)])
+    result = answer(
+        cli,
+        f"""SELECT id, x FROM (VALUES (1, 3), (2, 5), (3, 2)) t(id, cap)
+        DECIDE x(INT) SUCH THAT x >= -2 AND x <= cap - {shift} AND MAX(x) > 0 MINIMIZE SUM(x) ORDER BY id""",
+    )
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
+    )

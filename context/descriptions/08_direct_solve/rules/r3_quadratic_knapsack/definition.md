@@ -128,7 +128,7 @@ The resulting assignment satisfies the stationarity, feasibility, bound, multipl
 >
 > • Empty boxes or unreachable resource requirements produce DECIDE infeasibility.
 >
-> • WHEN, PER, NULL, decision-identity, and output-mapping semantics are preserved.
+> • `when`, `per`, `by`, NULL, decision-identity, and output-mapping semantics are preserved.
 >
 > • Breakpoint ordering, arithmetic error, final resource use, and all optimality residuals are certified under one DECIDE-compatible numeric policy.
 

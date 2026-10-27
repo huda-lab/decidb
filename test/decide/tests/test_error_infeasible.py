@@ -10,11 +10,6 @@ import pytest
 
 from solver.types import ObjSense, SolverStatus, VarType
 
-_USUAL_INFEASIBLE = (
-    r"DECIDE optimization is infeasible\. Prefix the query with DIAGNOSE to see which clause to change\."
-)
-
-
 @pytest.mark.error_infeasible
 @pytest.mark.error
 class TestInfeasibleModels:
@@ -106,14 +101,17 @@ class TestInfeasibleModels:
         self, decidb_cli, duckdb_conn, oracle_solver
     ):
         """WHEN forces ``x=0`` for every qualifying row; aggregate still demands SUM(x)>=1."""
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
             SELECT l_orderkey, l_quantity, l_returnflag, x
             FROM lineitem WHERE l_orderkey < 10
             DECIDE x(BOOL)
-            SUCH THAT x <= 0 WHEN l_quantity > 0
+            SUCH THAT when l_quantity > 0: x <= 0
                 AND SUM(x) >= 1
             MAXIMIZE SUM(x * l_quantity)
-        """, match=r"(?i)(infeasible|WHEN conditions)")
+        """,
+            match=r"(?i)(infeasible|WHEN conditions)",
+        )
 
         data = duckdb_conn.execute("""
             SELECT CAST(l_quantity AS DOUBLE)
@@ -157,12 +155,11 @@ class TestInfeasibleModels:
         self, decidb_cli, oracle_solver
     ):
         """A user lower bound above the BOOLEAN 0/1 ceiling (`x >= 2`) is Boolean
-        arithmetic that cannot hold, so the query is infeasible with DECIDE's usual
-        error. The 0/1 box is intrinsic and never loosened."""
+        arithmetic that cannot hold, so the query is infeasible, and the error names the
+        bound before any model is built. The 0/1 box is intrinsic and never loosened."""
         decidb_cli.assert_error(
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(BOOL) SUCH THAT x >= 2 MAXIMIZE SUM(x)",
-            match=_USUAL_INFEASIBLE,
+            "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(BOOL) SUCH THAT x >= 2 MAXIMIZE SUM(x)",
+            match=r"DECIDE optimization is infeasible: x >= 2 cannot hold for a BOOL variable\.",
         )
         oracle_solver.create_model("infeas_boolean_lower_above_one")
         oracle_solver.add_variable("x", VarType.BINARY, lb=0.0, ub=1.0)
@@ -173,22 +170,20 @@ class TestInfeasibleModels:
     def test_strict_bound_is_quoted_as_typed_in_domain_rejection(self, decidb_cli):
         """The pre-solve rejection of a bound against the type domain quotes the clause as the
         user wrote it. A strict `x < 0` is normalized to `x <= -1` inside the solver, but the
-        message says `x < 0`. A strict BOOLEAN bound outside 0 and 1 (`x > 1`, `x > 1.5`) is infeasible
-        with DECIDE's usual error."""
+        message says `x < 0`. A strict BOOLEAN bound outside 0 and 1 (`x > 1`, `x > 1.5`) is quoted
+        the same way."""
         decidb_cli.assert_error(
             "SELECT x FROM (VALUES (1)) t(id) "
             "DECIDE x(INT) SUCH THAT x < 0 MAXIMIZE SUM(x)",
             match=r"(?i)x < 0 cannot hold.*non-negative",
         )
         decidb_cli.assert_error(
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(BOOL) SUCH THAT x > 1 MAXIMIZE SUM(x)",
-            match=_USUAL_INFEASIBLE,
+            "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(BOOL) SUCH THAT x > 1 MAXIMIZE SUM(x)",
+            match=r"DECIDE optimization is infeasible: x > 1 cannot hold for a BOOL variable\.",
         )
         decidb_cli.assert_error(
-            "SELECT x FROM (VALUES (1)) t(id) "
-            "DECIDE x(BOOL) SUCH THAT x > 1.5 MAXIMIZE SUM(x)",
-            match=_USUAL_INFEASIBLE,
+            "SELECT x FROM (VALUES (1)) t(id) " "DECIDE x(BOOL) SUCH THAT x > 1.5 MAXIMIZE SUM(x)",
+            match=r"DECIDE optimization is infeasible: x > 1\.5 cannot hold for a BOOL variable\.",
         )
 
     def test_strict_fraction_inside_domain_is_not_rejected(self, decidb_cli):
@@ -213,14 +208,32 @@ class TestInfeasibleModels:
         would mean a different constraint), unlike `<>` (C3), which keeps every
         excluded value instead of contradicting.
         """
-        decidb_cli.assert_error("""
+        decidb_cli.assert_error(
+            """
             SELECT id, grp, x FROM (
                 VALUES (1, 'a', 500), (2, 'a', 350)
             ) t(id, grp, cap)
             DECIDE x(INT)
-            SUCH THAT SUM(x) = cap PER grp
+            SUCH THAT sum(x) by (grp) = cap
             MAXIMIZE SUM(x)
-        """, match=r"(?i)cannot hold two different values.*infeasible")
+        """,
+            match=r"(?i)cannot hold two different values.*infeasible",
+        )
+
+    def test_equal_bound_varying_within_a_per_class_does_not_determine(self, decidb_cli):
+        """The `per grp:` spelling of the clause above generates it once per class, so a
+        bound that varies within the class is refused before any model is built."""
+        decidb_cli.assert_error(
+            """
+            SELECT id, grp, x FROM (
+                VALUES (1, 'a', 500), (2, 'a', 350)
+            ) t(id, grp, cap)
+            DECIDE x(INT)
+            SUCH THAT per grp: sum(x) by (grp) = cap
+            MAXIMIZE SUM(x)
+        """,
+            match=r"per grp does not determine cap\. grp = 'a' has more than one value: 500, 350\.",
+        )
 
     def test_user_overridden_negative_lower_is_feasible(self, decidb_cli):
         """Part C guard: `x <= -1 AND x >= -5` explicitly lowers the floor below 0, so

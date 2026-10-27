@@ -1,10 +1,11 @@
 # R1 (continuous knapsack) — what works today
 
-Verified on 2026-10-24 on top of `99488c2b04` with the cross-product unpivot: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 3,019 passed (no
-failures, no expected failures); `DECIDB_FORCE_SOLVER=highs make decide-test` 3,018 passed and one failure that needs Gurobi
-(`test_norm_combined_l1_l2_objective`); `build/release/test/unittest "[decidb]"` 2,302 assertions in 59 cases.
-`test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
+Verified on 2026-10-27 on the Sami-Active merge (`577ac88efa` with `38275dde6f`): `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 4,838 passed
+and 17 strict expected failures (direct-solve follow-ups and the deferred bound reader); `DECIDB_FORCE_SOLVER=highs
+make decide-test` 4,836 passed and two failures, `test_norm_combined_l1_l2_objective`, which needs Gurobi, and
+`test_entity_scoped_mixed_when_per`, which HiGHS cannot close at a gap of 0 in time (`../../../06_issues/bugs/todo.md`); C++
+`build/release/test/unittest "[decidb]"` 2,714 assertions in 65 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp`; its per-row bounds and the linear terms of the
 budget and the objective come from the shared reader in `direct_bound_reader.cpp`. Class definition and correctness
 argument: [definition.md](definition.md).
@@ -14,7 +15,7 @@ argument: [definition.md](definition.md).
 One or more row-scoped `REAL` decisions with:
 
 - **Bounds, per row.** Every per-row bound the shared reader reads for A1: constants, columns and expressions, with a
-  coefficient, an offset and a `WHEN` on the clause. Lower bounds may be positive or negative. A bound of magnitude
+  coefficient, an offset and a `when` on the clause. Lower bounds may be positive or negative. A bound of magnitude
   1e20 or more is no bound, as on the solver, so a row may be uncapped, floorless or free.
 - **One budget, `L <= SUM(w*x) <= U`.** A plain `SUM` of linear terms in `x`. The weight `w` is a column or
   expression of any sign, read per row, and zero on some rows is allowed. The budget is written `<=`, `>=`, `=` or
@@ -22,18 +23,20 @@ One or more row-scoped `REAL` decisions with:
   are one budget, with the largest lower limit and the smallest upper one. Limits that cross are infeasible, as on the
   solver.
 - **Limits.** A finite constant or foldable constant expression, a source column or expression, or an aggregate of the
-  source (`<= 0.5*SUM(cost)`, which the right-hand-side rewrite turns into a per-row window value), mixed freely
-  across the clauses of one budget. A data-valued limit is reduced per group as S1 reduces its data-valued bound
-  (`DirectValidateBounds`): an upper limit takes the group's MIN, a lower one its MAX, and an equality needs one value
-  in the group. A NULL or NaN limit raises the solver's error, on every row, including rows outside the `WHEN`. A data
+  source (`<= 0.5*SUM(cost)`), mixed freely across the clauses of one budget. A data-valued limit reaches R1 already
+  reduced and checked by the bound-side window rewrite (`framework/done.md`): one value on the kept rows of a group (the
+  MIN of an upper limit, the MAX of a lower one, an equality that must agree), with its NULL, NaN and disagreement
+  errors raised by the scope checks under the plan, in the solver's words. R1 reads it on the budget's rows, and its
+  group aggregate only carries it to the group. A row the `when` drops is not read (syntax reference §6.3). A data
   value is the number it is, however large, as the solver loads it; an infinite one is infinite, so an upper limit of
   +infinity is no bound and a lower limit of +infinity (or an upper one of −infinity) is infeasible.
-- **Budget scope.** `PER` gives each group its own budget and its own price. A `WHEN` on the clause or on the aggregate
-  (the same meaning for a constant budget) and a NULL `PER` key leave a row out of every budget; that row takes its own
-  best end, as a zero-weight row does, and is unbounded when that end is infinite with a nonzero value. Its empty box,
-  and a NULL or NaN in any of its values, still raise. A group whose rows all fail the `WHEN` has no budget, as on the
-  solver; a `WHEN` that covers no row of a nonempty source raises the empty-aggregate error. Clauses merge into one
-  budget only with the same terms, the same `PER` keys in the same order, and equal `WHEN`s.
+- **Budget scope.** One budget over the source. A `when` on the clause or inside the sum (the same meaning for a
+  constant budget) leaves a row out of the budget; that row takes its own best end, as a zero-weight row does, and is
+  unbounded when that end is infinite with a nonzero value. Its empty box, and a NULL or NaN in its own bounds, still
+  raise; its weight is not read. A `when` that keeps no row of a nonempty source is an error (D4), which the plan's row
+  checks raise before any value is read, as on the solver. Clauses merge into one budget only with the same terms and
+  equal `when`s. A `by` key on the sum, a `per K:` in front of the clause, or a `when` both in front of the clause and
+  inside the sum makes R1 decline (`todo.md`).
 - **Several decisions in one budget.** Each (row, decision) is an item in the ranking with its own weight, value and
   box, and each decision answers in its own column. A decision the budget does not name has weight 0 and takes its own
   best end. Piece values may shrink or grow (`definition.md` § Correctness).
@@ -46,8 +49,9 @@ from S1, which counts `BOOL` decisions.
 
 | Shape | Why |
 |---|---|
-| An objective with `PER` or `WHEN` | Not a separable value per row. |
-| Budget clauses with different scopes (`PER` on one only, other keys or order, different `WHEN`s) | Two budgets have no single price per unit. |
+| An objective with a `when`, a `per` or a two-level reducer | Not a separable value per row. |
+| Budget clauses with different `when`s | Two budgets have no single price per unit. |
+| A `by` key on the budget's sum, a `per K:` in front of it, or a `when` both in front and inside the sum | R1 does not read them yet (`todo.md`). |
 | A decision that is not `REAL`, or not row-scoped | `BOOL` and `INT` cannot fill part of an item. |
 | A per-row constraint that reads two decisions, or an objective product of two decisions | It links items, so they are no longer separate in the ranking. |
 | Two aggregate constraints with different terms | Two budgets have no single price per unit. |
@@ -66,13 +70,11 @@ from S1, which counts `BOOL` decisions.
   direct solve returns the finite optimum the limit allows. The problem is bounded, so this is Gurobi's numerics, not
   a different reading. A data-valued upper limit of −infinity beside a floorless row is infeasible here and a status
   error on the solver.
-- **An equality limit that varies within a group.** Both paths raise; the wording differs ("varies within a group"
-  against the solver's "takes more than one value here").
 - **Ties at the price.** The solver returns a vertex: one tied item partly filled, the others at an end. The aggregate
   plan moves every tied item by the same fraction of its room, so the answer is the same on every run. The objective is the
   same.
-- **Which error wins.** A NULL or NaN value raises before infeasible or unbounded, wherever the
-  row lies, as on the solver; the empty-aggregate error of a `WHEN` that covers no row comes after a data error.
+- **Which error wins.** A `when` that keeps no row (D4) raises first, before any value is read, as on the solver. A
+  NULL or NaN value then raises before infeasible or unbounded, wherever the row lies, as on the solver.
 - **Error wording.** Infeasible, unbounded, NULL and NaN errors read as the solver's; `test_direct_user_facing.py`
   compares them in full.
 - **One unexplained garbage result.** Once, in a full `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
@@ -88,7 +90,8 @@ from S1, which counts `BOOL` decisions.
 
 `definition.md` § Relational construction and § The plan, built by `AggregatePlanBuilder` for every condition R1
 admits. The per-row values of an item (stage 1 of § The plan) come from `ItemStages`: every raw value (coefficient,
-bound, mask, data limit) evaluated on every row with its NULL and NaN check, each clause's bounds, the value `v`
+bound, mask, data limit) evaluated on the rows that read it, with its NULL and NaN check (a row a `when` drops reads
+nothing), each clause's bounds, the value `v`
 (negated under `MINIMIZE`, zero with no objective), the box `[l, u]`, and per decision whether the box is empty, the
 anchor, the break-even price `t = v / w` (items with `w = 0` or outside every budget take their best end and enter no
 sum), and the finite room up and down. An infinite room is a flag, counted apart, so no sum adds infinity to minus
@@ -98,19 +101,17 @@ infinity. `ItemAlgebra` holds the verdicts, the candidate price, the price, the 
 `DirectRepeatableSourceChain` accepts (non-volatile projections and filters over one repeatable DuckDB table scan) is
 rebuilt per read with fresh table indexes, its pushed-down table filters copied; any other source is one
 `LogicalMaterializedCTE`, defined through a projection that names its columns (a join under it may reorder its output
-in later passes) and read by `LogicalCTERef`s. The group key is the eligibility flag (the budget's `WHEN` holds and no
-`PER` key is NULL) and the `PER` keys, joined with IS NOT DISTINCT FROM in a SINGLE join, the form DuckDB uses for a scalar subquery: every
+in later passes) and read by `LogicalCTERef`s. The group key is the eligibility flag (the budget's `when` holds) and
+the group keys (none today: R1 declines a `by` key), joined with IS NOT DISTINCT FROM in a SINGLE join, the form DuckDB uses for a scalar subquery: every
 item finds its one group row. A SINGLE join is never flipped by `BUILD_SIDE_PROBE_SIDE` and JOIN_ORDER estimates it as
 its item side, so the hash table is always built on the group rows; an inner join would be estimated far larger than
 either side and flipped to build on the items. With no scope the aggregates are ungrouped and the joins are cross
 products with one row.
 
 1. Group totals: a hash aggregate of every item's sums, the row count, each data limit's MIN and MAX, and the check of
-   every raw value and `v`, so a NULL or NaN raises here, before any verdict. An upper data limit takes the group's
-   MIN, a lower one its MAX, and an equality both, which must agree in a group with a budget ("varies within a group").
-   A limit on a sum with its own `WHEN` is reduced over the budget's rows and the other rows with the same `PER` keys,
-   by a window over the group rows. With a scope a window over the group rows counts the eligible groups for the
-   empty-aggregate error. A projection raises the empty-aggregate error, then infeasible, then unbounded, and gives the
+   every raw value and `v`, so a NULL or NaN raises here, before any verdict. A data limit is one value on the group's
+   rows, so its MIN (upper) or MAX (lower) carries it. A projection raises the data checks, then infeasible, then unbounded, and
+   gives the
    stages after it `S`, `L`, `U`, the finite room down, the highest price of an infinite room up and the lowest of one
    down, and which limit binds.
 2. The price: the narrow items (group key, `t`, finite room up plus finite room down) go through the plan's one window,
@@ -141,7 +142,7 @@ An empty source returns no rows, whatever the limits are, as on the solver.
 
 | Check | What it covers |
 |---|---|
-| `test_direct_r1_continuous_knapsack.py` | The answers on the independent oracle (`oracle_solver`), the solver path (`off`) and the direct path (`require`): weights of each sign and zero, positive lower bounds, per-row and constant bounds, a lone free row, an improving pair, no objective, `MINIMIZE`, a budget that does not bind, ties; each budget direction binding and not binding, an exact fill reached from above and from below and at a negative price, `BETWEEN` binding at either side, and the minimum-cost cover. A parent query that joins the source, an empty source, a nested `DECIDE`, a parent filter and `LIMIT`, duplicate rows. Sources: a stored table read with a pushed filter, a filter operator, a projection, a join and a `LIMIT`, with and without a scope, against the solver; a volatile source read once; a source with a correlated subquery; a non-table source materialized once. Every hash join builds on the group rows, under `WHEN` and under `PER`. Proportional tie shares with finite and with infinite rooms; a NULL or NaN value raising before a verdict. Several decisions: two with shrinking and with growing piece values, three, a decision outside the budget, mixed signs, `MINIMIZE`, `=`, `PER`, late errors on a second decision; a plan whose one sort and one unnest carry only narrow columns and that has no group-back; tied items of several decisions sharing in proportion to their room. Scoped cases: several `PER` groups at different prices, `WHEN` in both spellings, `PER` with `WHEN`, a NULL key, a group with no covered row, `PER` with `>=` and `BETWEEN`; scopes that differ stay on the solver. Error cases that must fail on both paths (a `WHEN` covering no row, an unbounded row outside the `WHEN`, empty box, unreachable budget or fill, crossed limits, unbounded rows, including an uncapped improving row under `>=`, NULL and NaN values, late bad rows). Boundary cases against the solver only (a `BOOLEAN` column as a weight; an upper data limit of −infinity beside a row with no floor). Data-valued limits: a column, global and per group, an expression, an aggregate, global and with `PER`, under `WHEN`, a lower and an equality limit, a constant and a data clause mixed, two decisions with a column limit; errors for an equality limit that varies in a group and NULL and NaN limits; an equality to a data limit of 1e19, which is a number and not "no bound"; an equality that differs without a scope, and over the rows outside the sum's `WHEN`, raises, and one that differs only among rows outside the `WHEN` does not; a lower limit on a sum with its own `WHEN` takes the maximum over the rows outside it too, and is infeasible when that maximum is out of reach; a data limit, global and per group, with one and two decisions, runs the plan of a constant limit. Constant limits the solver reads by the rows stay on the solver. The plan has one sort and no solver operator; on the aggregate plan the sort carries only narrow columns (checked with twenty unused source columns), a stored table is read four times, and a scoped budget adds hash aggregates and joins. |
+| `test_direct_r1_continuous_knapsack.py` | The answers on the independent oracle (`oracle_solver`), the solver path (`off`) and the direct path (`require`): weights of each sign and zero, positive lower bounds, per-row and constant bounds, a lone free row, an improving pair, no objective, `MINIMIZE`, a budget that does not bind, ties; each budget direction binding and not binding, an exact fill reached from above and from below and at a negative price, `BETWEEN` binding at either side, and the minimum-cost cover. A parent query that joins the source, an empty source, a nested `DECIDE`, a parent filter and `LIMIT`, duplicate rows. Sources: a stored table read with a pushed filter, a filter operator, a projection, a join and a `LIMIT`, with and without a scope, against the solver; a volatile source read once; a source with a correlated subquery; a non-table source materialized once. Every hash join builds on the group rows, under `when` and under `by`. Proportional tie shares with finite and with infinite rooms; a NULL or NaN value raising before a verdict. Several decisions: two with shrinking and with growing piece values, three, a decision outside the budget, mixed signs, `MINIMIZE`, `=`, `by`, late errors on a second decision; a plan whose one sort and one unnest carry only narrow columns and that has no group-back; tied items of several decisions sharing in proportion to their room. Scoped cases: several `by` groups at different prices, `when` in front of the clause and inside the sum, `by` with `when`, a NULL key, a group with no covered row, `by` with `>=` and `BETWEEN`; scopes that differ stay on the solver. Error cases that must fail on both paths (a `when` keeping no row, an unbounded row outside the `when`, empty box, unreachable budget or fill, crossed limits, unbounded rows, including an uncapped improving row under `>=`, NULL and NaN values, late bad rows). Boundary cases against the solver only (a `BOOLEAN` column as a weight; an upper data limit of −infinity beside a row with no floor). Data-valued limits: a column, global and per group, an expression, an aggregate, global and with `by`, under `when`, a lower and an equality limit, a constant and a data clause mixed, two decisions with a column limit; errors for an equality limit that varies in a group and NULL and NaN limits; an equality to a data limit of 1e19, which is a number and not "no bound"; an equality that differs without a scope, and over the rows outside the sum's `when`, raises, and one that differs only among rows outside the `when` does not; a lower limit on a sum with its own `when` takes the maximum over the rows outside it too, and is infeasible when that maximum is out of reach; a data limit, global and per group, with one and two decisions, runs the plan of a constant limit. Constant limits the solver reads by the rows stay on the solver. The plan has one sort and no solver operator; on the aggregate plan the sort carries only narrow columns (checked with twenty unused source columns), a stored table is read four times, and a scoped budget adds hash aggregates and joins. Since the Sami-Active merge the cases with a `by` key run on the solver path alone (`direct_modes`), and the grouped plan-shape tests are `xfail(strict=True)`, until R1 reads a `by` key (`todo.md`). |
 | `test_direct_rule_conformance.py` | R1's fixture: the checks every rule owes, applying forms with `>=`, `=` and one sum compared twice, and a two-decision form, a column budget, an aggregate budget, and near misses that must decline (a per-row constraint linking two decisions, an `INT` decision, two budgets with different weights, a nonlinear objective term). |
 | `test_direct_user_facing.py` | R1's NULL, NaN, infinite and overflow errors name the right clause, and the infeasible and unbounded text match the solver's, compared in full. |
 | C++ `[decidb]` | R1's applicability condition: each decline branch, and the forms that apply; R1 never applies where S1 or A1 does; the rule driver reaches R1, S1 and A1 each for their own shapes. |
@@ -149,6 +150,8 @@ An empty source returns no rows, whatever the limits are, as on the solver.
 ## Performance
 
 Measured 2026-10-24 on top of `5269ad7c5e`, on a machine with 11 cores, with `benchmark/decide/direct_solve/archive/profile_direct_r1.py`.
+The `PER` rows were measured in the spelling before the Sami-Active merge (`SUM(w*x) <= B PER g`); R1 declines a
+grouped budget today, so they record what the per-group reading (`todo.md`) gave.
 Each run is a fresh `decidb` process that opens the stored database; peak memory is the process's own. Direct 3 runs
 (median), each solver 1 run; the solver path is `off` with `DECIDB_FORCE_SOLVER` set to `gurobi` or `highs`. The parent
 reads one aggregate row, so the time is the plan, not the transfer. Before timing, every shape's objective on direct and on Gurobi agreed within 1e-6.

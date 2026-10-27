@@ -19,7 +19,7 @@ All oracle-verified, in `test_bilinear.py` unless noted:
 
 - **Objectives**: Bool × Bool (AND-linearization), Bool × Real, Bool × Int; data-coefficient scaling (`profit * b * x`); MINIMIZE with data coefficient (both McCormick and AND-linearization shapes).
 - **Constraints**: Bool × Bool constraints; Bool × Real constraint (McCormick feasibility).
-- **Composition**: bilinear + WHEN, + PER (per-group McCormick aux), + WHEN + PER triple; entity-scoped Bool × row-scoped Real; aggregate-local WHEN on bilinear constraint and objective (`test_aggregate_local_when.py`).
+- **Composition**: bilinear under a `when`, under `per` (per-group McCormick auxiliaries), under `when` + `per`; a keyed Bool × a per-row Real; a reducer's own `when` on a bilinear constraint and objective (`test_aggregate_local_when.py`).
 - Backward compatibility: existing linear tests still pass.
 
 ### Non-convex (Gurobi only)
@@ -47,11 +47,11 @@ Bool × non-Bool; HiGHS rejects non-convex bilinear.
 | Bilinear | Real × Real (Gurobi Q) | ✓ |
 | Bilinear | Int × Int (Gurobi Q) | ✓ |
 | Bilinear | Int × Real (Gurobi Q) | ✓ |
-| Bilinear | WHEN (expression-level) | ✓ |
-| Bilinear | WHEN (aggregate-local) | ✓ |
-| Bilinear | PER | ✓ |
-| Bilinear | WHEN + PER (triple) | ✓ |
-| Bilinear | Entity-scoped Boolean factor | ✓ |
+| Bilinear | `when` in front | ✓ |
+| Bilinear | a reducer's own `when` | ✓ |
+| Bilinear | `per` | ✓ |
+| Bilinear | `when` + `per` (triple) | ✓ |
+| Bilinear | keyed Boolean factor | ✓ |
 | Bilinear | MAXIMIZE objective | ✓ |
 | Bilinear | MINIMIZE objective (with data coefficient) | ✓ |
 | Bilinear | constraint | ✓ (Bool × Bool, Bool × Real, and Gurobi coefficient regression cases) |

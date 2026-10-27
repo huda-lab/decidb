@@ -12,6 +12,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
@@ -19,14 +20,36 @@
 
 namespace duckdb {
 
-//! The columns an expression names, in the order a NULL message reports them. A leaf is a column reference that still
-//! carries the name the user wrote: before lowering it is a BoundColumnRefExpression, after it a positional
-//! BoundReferenceExpression with the alias retained. A leaf with no name is skipped, so the caller quotes the
-//! expression instead of printing `#3`.
-inline void DecideCollectNamedColumns(const Expression &expr, vector<const Expression *> &out) {
+//! A NULL value is explained the same way on both paths: by a flattened subquery that is NULL, else by the columns
+//! that are NULL, else by the expression as written (RenderDecideSource). These two collect the leaves each step reads.
+
+//! Whether `expr` is a leaf that reads a column: a BoundColumnRefExpression before lowering, a positional
+//! BoundReferenceExpression after it, which keeps its alias.
+inline bool DecideIsColumnLeaf(const Expression &expr) {
 	auto expression_class = expr.GetExpressionClass();
-	if (expression_class == ExpressionClass::BOUND_COLUMN_REF || expression_class == ExpressionClass::BOUND_REF) {
-		if (!expr.GetAlias().empty()) {
+	return expression_class == ExpressionClass::BOUND_COLUMN_REF || expression_class == ExpressionClass::BOUND_REF;
+}
+
+//! The flattened subqueries an expression reads, in the order a NULL message checks them: a leaf whose alias carries
+//! the source-fragment tag of the subquery the user wrote (TagDecideSourceFragments).
+inline void DecideCollectSubqueries(const Expression &expr, vector<const Expression *> &out) {
+	idx_t fragment_id;
+	if (DecideIsColumnLeaf(expr)) {
+		if (TryParseSourceFragmentTag(expr.GetAlias(), fragment_id)) {
+			out.push_back(&expr);
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { DecideCollectSubqueries(child, out); });
+}
+
+//! The columns an expression names, in the order a NULL message reports them: a leaf that still carries the name the
+//! user wrote. A leaf with no name is skipped, so the caller quotes the expression instead of printing `#3`, and so is
+//! a flattened subquery, which DecideCollectSubqueries names.
+inline void DecideCollectNamedColumns(const Expression &expr, vector<const Expression *> &out) {
+	idx_t fragment_id;
+	if (DecideIsColumnLeaf(expr)) {
+		if (!expr.GetAlias().empty() && !TryParseSourceFragmentTag(expr.GetAlias(), fragment_id)) {
 			out.push_back(&expr);
 		}
 		return;
@@ -96,6 +119,12 @@ inline string DecideNullValueMessage(const vector<string> &null_columns, const s
 	return DecideNullColumnsBefore() + names + DecideNullColumnsAfter();
 }
 
+//! A flattened subquery that is NULL, as written (`subquery`).
+inline string DecideNullSubqueryMessage(const string &subquery) {
+	return "DECIDE: the subquery " + subquery + " is NULL. Impute it with COALESCE(" + subquery +
+	       ", 0), or filter those rows out with a WHERE clause.";
+}
+
 //! The error for a NaN or infinite value. `context` names where the value sits (`objective coefficient`), `kind` what
 //! is not allowed (`NaN` or `NaN or Infinity`), and `location` is empty or the position the solver adds (` at row 3`).
 inline string DecideInvalidValueMessage(const string &context, const string &kind, const string &location) {
@@ -105,6 +134,16 @@ inline string DecideInvalidValueMessage(const string &context, const string &kin
 	       "  • Arithmetic overflow in calculations\n"
 	       "  • NULL values that propagated through math operations\n"
 	       "Check your expressions and input data.";
+}
+
+//! A `when` in front of a clause that keeps no row of a non-empty input (D4). `condition` is the condition as written.
+inline string DecideWhenMatchesNoRowsMessage(const string &condition) {
+	return "DECIDE: when " + condition + " matches no rows.";
+}
+
+//! A reducer whose own `when` keeps no row of the rows its clause keeps (D8, no `by` key). `reducer` is as written.
+inline string DecideReducerHasNoRowsMessage(const string &reducer) {
+	return "DECIDE: " + reducer + " has no rows.";
 }
 
 } // namespace duckdb

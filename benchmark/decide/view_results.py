@@ -173,10 +173,10 @@ def render_query_group(query_name: str, entries: list[dict]) -> str:
             metric_parts.append(f"{format_count(total_vars)} vars")
 
         # Model size in two units, never summed. `total_constraint_rows` is what the solver
-        # actually received (a per-row clause expands to one row per data row, a PER clause
-        # to one row per group), so it is the figure to read for matrix pressure;
-        # `total_constraint_specs` is the clause-level count that points at the DECIDE
-        # clause responsible. Runs recorded before the split carry only the old
+        # actually received (a per-row clause expands to one row per data row, a `per K:` or
+        # `by` clause to one row per class or group), so it is the figure to read for matrix
+        # pressure; `total_constraint_specs` is the clause-level count that points at the
+        # DECIDE clause responsible. Runs recorded before the split carry only the old
         # `total_constraints`, which summed the two units and reported neither — show it
         # flagged rather than silently comparing it against a row count.
         total_rows = stages.get("total_constraint_rows")

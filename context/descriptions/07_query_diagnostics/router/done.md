@@ -88,25 +88,27 @@ the classifier and the switch.
 ### Candidate-assembly helper (operator-side)
 
 The unbounded engine needs categorical groupings to characterize *which* instances
-escape. Assembling them is operator-bound (it reads the executor chunks, entity
-scopes, and `BuildGroupIds`), so it cannot live in the pure router. It was extracted
-out of `Finalize` into a stateful functor `UnboundedCandidateProvider` +
-`BuildUnboundedCandidateProvider(...)` in `physical_decide.cpp` (just above
-`Finalize`), so `Finalize` only calls it. The functor caches its row-scoped and
-per-scope entity candidates across the engine's per-variable calls.
+escape. Assembling them is operator-bound (it reads the executor chunks, the keyed
+decisions' key scopes (`EntityScopeInfo`), and `BuildGroupIds`), so it cannot live in
+the pure router. It was extracted out of `Finalize` into a stateful functor
+`UnboundedCandidateProvider` + `BuildUnboundedCandidateProvider(...)` in
+`physical_decide.cpp` (just above `Finalize`), so `Finalize` only calls it. The functor
+caches its per-row candidates and each key scope's class candidates across the engine's
+per-variable calls.
 
 ## Terminals: infeasible (elastic)
 
 R5 wired the `INFEASIBLE` terminal to the **elastic engine**. In the
-`DiagnosisTerminal::INFEASIBLE` arm, `Finalize` re-emits folded user bounds as
-slackable rows, resets implied bound tightenings to the intrinsic domain, builds the
-`InfeasibleDiagnosisInput` (the retained `SolverModel` + indexer + labels + an injected
-solve callback), and calls `DiagnoseInfeasible`. A valid diagnosis is reported as
-findings; a helper-solve timeout or a declined diagnosis reports an `undiagnosed` finding
-saying which it was. A residual `INF_OR_UNBD` (empty ray) is normalized to `INFEASIBLE`
-here first. The engine itself — the elastic program,
-per-shape slack placement, exact atomic DROP, and stage-2 achievable objective — is
-documented in `infeasible/done.md`.
+`DiagnosisTerminal::INFEASIBLE` arm, `Finalize` formulates the repair model
+(`FormulateElasticModel`: the model input retained under `DIAGNOSE`, every folded user
+bound's clause rows included, its column box widened and every Big-M and McCormick
+constant re-derived against that box), builds the `InfeasibleDiagnosisInput` (that
+model, its indexer, labels and an injected solve callback), and calls
+`DiagnoseInfeasible`. A valid diagnosis is reported as findings; a helper-solve timeout
+or a declined diagnosis reports an `undiagnosed` finding saying which it was. A residual
+`INF_OR_UNBD` (empty ray) is normalized to `INFEASIBLE` here first. The engine itself —
+the elastic program, per-shape slack placement, exact atomic DROP, and stage-2
+achievable objective — is documented in `infeasible/done.md`.
 
 ## Not a terminal: the time limit
 

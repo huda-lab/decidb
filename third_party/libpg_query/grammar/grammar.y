@@ -3,9 +3,7 @@
 %}
 #line 5 "third_party/libpg_query/grammar/grammar.y"
 %pure-parser
-/* %expect 6:
- * 2 inherited shift/reduce conflicts from DuckDB's PostgreSQL-derived grammar
- *   (postfix-operator states a_expr/b_expr qual_Op).
+/* %expect 4:
  * 4 from the optional DECIDE declaration slot, one per simple_select
  *   alternative (simple_select: ... into_clause . decide_declaration ...). On
  *   lookahead DECIDE the parser can shift into the declaration slot or reduce
@@ -14,12 +12,16 @@
  *   empty (SELECT 1 DECIDE x(INT) SUCH THAT ...), and both derivations build
  *   the identical PGDecideClause via makeDecideClause(), so bison's default
  *   shift is correct and the resolution is not load-bearing.
- * Aggregate-local WHEN_DECIDE conflicts are resolved explicitly: the empty
+ * The WHEN_DECIDE conflicts are resolved explicitly: the empty
  * within_group_clause and the plain relation-qualified reducer use
  * DECIDE_ITEM precedence, below both DECIDE WHEN tokens, so the parser shifts
  * WHEN. They are keyed on tokens base_yylex() emits only inside DECIDE.
+ * PER and the reducer's BY reach the grammar as DECIDE-only tokens too, so
+ * neither can be read as an identifier. A WHEN or PER written after a clause
+ * is a removed spelling: its productions survive only so the error can name
+ * the scope written in front (see RefuseRemovedDecideSpellings).
  */
-%expect 6
+%expect 4
 %name-prefix="base_yy"
 %locations
 
@@ -119,10 +121,17 @@
  */
 %token		NOT_LA NULLS_LA WITH_LA
 /* DecidB: context-sensitive WHEN tokens emitted only inside DECIDE. The
- * objective variant lets its condition consume a comparison safely because an
- * objective has no trailing comparison bound. Never produced by keywords. */
+ * objective variant lets the removed postfix "E WHEN c" name a comparison
+ * condition as written: an objective has no trailing comparison bound that
+ * the condition could take. Never produced by keywords. */
 %token		WHEN_DECIDE
 %token		WHEN_DECIDE_OBJECTIVE
+/* DecidB: PER and a reducer's BY, emitted only inside DECIDE. PER is split by
+ * what follows it, because PER (), PER ROW and PER <key> are not LALR(1)-
+ * separable otherwise: '(' also opens an expression, and ROW is also a column
+ * name. BY is BY_DECIDE only directly after ')', which is never where GROUP BY,
+ * ORDER BY or PARTITION BY put theirs. */
+%token		PER_DECIDE PER_DECIDE_PAREN PER_DECIDE_ROW BY_DECIDE
 
 
 /* Precedence: lowest to highest */

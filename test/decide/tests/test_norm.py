@@ -119,11 +119,9 @@ def test_norm_unsupported_order(decidb_cli):
 
 @pytest.mark.correctness
 def test_norm_with_when_objective(decidb_cli):
-    """norm(e,1) WHEN cond  ==  SUM(ABS(e)) WHEN cond (penalize one group only)."""
-    r1, c1 = decidb_cli.execute(
-        _BASE.format(obj="norm(new_qty - l_quantity, 1) WHEN l_orderkey = 1"))
-    r2, c2 = decidb_cli.execute(
-        _BASE.format(obj="SUM(ABS(new_qty - l_quantity)) WHEN l_orderkey = 1"))
+    """when cond: norm(e,1)  ==  when cond: sum(abs(e)) (penalize one group only)."""
+    r1, c1 = decidb_cli.execute(_BASE.format(obj="when l_orderkey = 1: norm(new_qty - l_quantity, 1)"))
+    r2, c2 = decidb_cli.execute(_BASE.format(obj="when l_orderkey = 1: sum(abs(new_qty - l_quantity))"))
 
     def val(rows, cols):
         ok, nq, lq = cols.index("l_orderkey"), cols.index("new_qty"), cols.index("l_quantity")
@@ -134,16 +132,18 @@ def test_norm_with_when_objective(decidb_cli):
 
 @pytest.mark.correctness
 def test_norm_with_per_constraint(decidb_cli):
-    """norm(e,1) <= K PER g  ==  SUM(ABS(e)) <= K PER g, and the per-group cap holds."""
+    """per g: norm(e, 1) by (g) <= K  ==  per g: sum(abs(e)) by (g) <= K, and the
+    per-group cap holds."""
     norm_sql = """
         SELECT l_orderkey, l_linenumber, l_quantity, new_qty
         FROM lineitem WHERE l_orderkey <= 3
         DECIDE new_qty(REAL)
-        SUCH THAT new_qty >= 1 AND norm(new_qty - l_quantity, 1) <= 5 PER l_orderkey
+        SUCH THAT new_qty >= 1 AND per l_orderkey: norm(new_qty - l_quantity, 1) by (l_orderkey) <= 5
         MINIMIZE SUM(new_qty)
     """
-    plain_sql = norm_sql.replace("norm(new_qty - l_quantity, 1) <= 5",
-                                 "SUM(ABS(new_qty - l_quantity)) <= 5")
+    plain_sql = norm_sql.replace(
+        "norm(new_qty - l_quantity, 1) by (l_orderkey)", "sum(abs(new_qty - l_quantity)) by (l_orderkey)"
+    )
     r1, c1 = decidb_cli.execute(norm_sql)
     r2, c2 = decidb_cli.execute(plain_sql)
     tot1 = sum(float(r[c1.index("new_qty")]) for r in r1)

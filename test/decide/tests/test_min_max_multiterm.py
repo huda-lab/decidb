@@ -6,7 +6,7 @@ arrays, so the same solver column can reach one row more than once:
 
   - `(qty + 1) * x` distributes into `qty*x + 1*x` — two terms, one column
   - `qty*x + x` — the same shape written out
-  - an entity-scoped variable spans several rows of one PER group, so even a
+  - an entity-scoped variable spans several rows of one `per` group, so even a
     single term lands on one column repeatedly
 
 A repeated column index is rejected outright by Gurobi and HiGHS, so every
@@ -23,10 +23,10 @@ Covers:
   - test_flat_max_additive_coefficient_hard: MAXIMIZE MAX((qty+1)*x), hard
   - test_flat_min_additive_coefficient_hard: MINIMIZE MIN((qty+1)*x), hard
   - test_composed_min_max_additive_coefficient: MAX((qty+1)*x) + SUM(x)
-  - test_per_outer_min_entity_scoped: MIN(SUM(keepN*acctbal)) PER segment
-  - test_per_sum_outer_min_inner_additive_coefficient: SUM(MIN((qty+1)*x)) PER flag
-  - test_per_sum_outer_min_inner_repeated_variable: SUM(MIN(qty*x + x)) PER flag
-  - test_per_sum_outer_max_inner_additive_coefficient: SUM(MAX((qty+1)*x)) PER flag
+  - test_per_outer_min_entity_scoped: min(per segment: sum(keepN*acctbal) by (segment))
+  - test_per_sum_outer_min_inner_additive_coefficient: sum(per flag: min((qty+1)*x) by (flag))
+  - test_per_sum_outer_min_inner_repeated_variable: sum(per flag: min(qty*x + x) by (flag))
+  - test_per_sum_outer_max_inner_additive_coefficient: sum(per flag: max((qty+1)*x) by (flag))
 """
 
 import time
@@ -479,7 +479,7 @@ def test_composed_min_max_additive_coefficient(
 
 
 # ===========================================================================
-# PER objective, outer MIN over group sums, entity-scoped variable
+# Two-level objective, outer MIN over group sums, entity-scoped variable
 # ===========================================================================
 
 @pytest.mark.min_max
@@ -488,7 +488,7 @@ def test_composed_min_max_additive_coefficient(
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
-    """MAXIMIZE MIN(SUM(keepN * c_acctbal)) PER c_mktsegment, entity-scoped keepN.
+    """MAXIMIZE min(per c_mktsegment: sum(keepN * c_acctbal) by (c_mktsegment)), keepN per nation.
 
     One group spans many rows, and an entity-scoped variable resolves to a
     single solver column across all of them — so one term is enough to place
@@ -499,9 +499,9 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
         SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, c.c_mktsegment, keepN
         FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
         WHERE n.n_regionkey = 0
-        DECIDE n.keepN(BOOL)
+        DECIDE per n: keepN(BOOL)
         SUCH THAT SUM(keepN) <= 150
-        MAXIMIZE MIN(SUM(keepN * c.c_acctbal)) PER c.c_mktsegment
+        MAXIMIZE min(per c.c_mktsegment: sum(keepN * c.c_acctbal) by (c.c_mktsegment))
     """
     rows, cols = decidb_cli.execute(sql)
     assert len(rows) > 0
@@ -571,9 +571,9 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
 
 
 # ===========================================================================
-# PER objective, SUM outer, MIN/MAX inner, multi-term row expression
+# Two-level objective, SUM outer, MIN/MAX inner, multi-term row expression
 #
-# Regression coverage for the `SUM(MIN(expr)) PER col` bind-time bug: the
+# Regression coverage for the `sum(per col: min(expr) by (col))` bind-time bug: the
 # outer-SUM nested form used to reject a multi-term inner MIN/MAX argument
 # (`MIN((qty+1)*x)`, `MIN(qty*x + x)`) with a binder error naming syntax the
 # user never wrote (`sum((x * (min(l.qty) + __MIN__)))`) — the CAS
@@ -581,8 +581,6 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
 # could be reassembled into a whole aggregate. The single-term inner
 # (`MIN(qty*x)`, already covered above) and the outer-MIN/MAX-instead-of-SUM
 # forms were unaffected; only outer SUM + multi-term inner MIN/MAX hit it.
-# See done.md → "SUM(MIN(expr)) PER col rejected a multi-term inner
-# MIN/MAX argument at bind time".
 # ===========================================================================
 
 @pytest.mark.min_max
@@ -593,7 +591,7 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
 def test_per_sum_outer_min_inner_additive_coefficient(
     decidb_cli, duckdb_conn, oracle_solver
 ):
-    """MAXIMIZE SUM(MIN((l_quantity + 1) * x)) PER l_returnflag.
+    """MAXIMIZE sum(per l_returnflag: min((l_quantity + 1) * x) by (l_returnflag)).
 
     Outer SUM over groups, inner MIN over a two-term row expression — the
     exact shape that used to fail at bind time. Requiring at least one active
@@ -610,10 +608,10 @@ def test_per_sum_outer_min_inner_additive_coefficient(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) WHEN (l_returnflag = 'A') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'N') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'R') >= 1
-        MAXIMIZE SUM(MIN((l_quantity + 1) * x)) PER l_returnflag
+        SUCH THAT sum(when l_returnflag = 'A': x) >= 1
+              AND sum(when l_returnflag = 'N': x) >= 1
+              AND sum(when l_returnflag = 'R': x) >= 1
+        MAXIMIZE sum(per l_returnflag: min((l_quantity + 1) * x) by (l_returnflag))
     """
     rows, cols = decidb_cli.execute(sql)
 
@@ -650,10 +648,10 @@ def test_per_sum_outer_min_inner_additive_coefficient(
 def test_per_sum_outer_min_inner_repeated_variable(
     decidb_cli, duckdb_conn, oracle_solver
 ):
-    """MAXIMIZE SUM(MIN(l_quantity * x + x)) PER l_returnflag.
+    """MAXIMIZE sum(per l_returnflag: min(l_quantity * x + x) by (l_returnflag)).
 
-    Algebraically identical to `SUM(MIN((l_quantity + 1) * x)) PER
-    l_returnflag` above; written out as two separate terms sharing the same
+    Algebraically identical to `sum(per l_returnflag: min((l_quantity + 1) * x)
+    by (l_returnflag))` above; written out as two separate terms sharing the same
     variable, since that's the second shape the bug report called out
     (`MIN(l.qty * x + x)`), distinct from the coefficient-distribution shape.
     """
@@ -665,10 +663,10 @@ def test_per_sum_outer_min_inner_repeated_variable(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) WHEN (l_returnflag = 'A') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'N') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'R') >= 1
-        MAXIMIZE SUM(MIN(l_quantity * x + x)) PER l_returnflag
+        SUCH THAT sum(when l_returnflag = 'A': x) >= 1
+              AND sum(when l_returnflag = 'N': x) >= 1
+              AND sum(when l_returnflag = 'R': x) >= 1
+        MAXIMIZE sum(per l_returnflag: min(l_quantity * x + x) by (l_returnflag))
     """
     rows, cols = decidb_cli.execute(sql)
 
@@ -705,7 +703,7 @@ def test_per_sum_outer_min_inner_repeated_variable(
 def test_per_sum_outer_max_inner_additive_coefficient(
     decidb_cli, duckdb_conn, oracle_solver
 ):
-    """MINIMIZE SUM(MAX((l_quantity + 1) * x)) PER l_returnflag.
+    """MINIMIZE sum(per l_returnflag: max((l_quantity + 1) * x) by (l_returnflag)).
 
     The other direction named in the bug report: outer SUM, inner MAX, sense
     MINIMIZE. Requiring at least one active row per group keeps the optimal
@@ -720,10 +718,10 @@ def test_per_sum_outer_max_inner_additive_coefficient(
         SELECT l_orderkey, l_linenumber, l_quantity, l_returnflag, x
         FROM lineitem WHERE l_orderkey <= 10
         DECIDE x(BOOL)
-        SUCH THAT SUM(x) WHEN (l_returnflag = 'A') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'N') >= 1
-              AND SUM(x) WHEN (l_returnflag = 'R') >= 1
-        MINIMIZE SUM(MAX((l_quantity + 1) * x)) PER l_returnflag
+        SUCH THAT sum(when l_returnflag = 'A': x) >= 1
+              AND sum(when l_returnflag = 'N': x) >= 1
+              AND sum(when l_returnflag = 'R': x) >= 1
+        MINIMIZE sum(per l_returnflag: max((l_quantity + 1) * x) by (l_returnflag))
     """
     rows, cols = decidb_cli.execute(sql)
 

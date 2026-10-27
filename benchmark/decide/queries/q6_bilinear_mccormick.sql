@@ -3,12 +3,12 @@
 --       cost — measured 2026-07-26 at 15.2s / 39.9s. Reaching 500K/1M would require
 --       moving off orders, which would change what the query tests.
 -- TAGS: type=BOOLEAN,REAL,multiple-vars; class=MILP,bilinear-McCormick;
---       obj=MAXIMIZE-bilinear(b*x); cons=bilinear-constraint; when+per=WHEN+PER-composition
+--       obj=MAXIMIZE-bilinear(b*x); cons=bilinear-constraint; when+per=when+per+by-composition,per-()
 SELECT o_orderkey, o_totalprice, o_orderpriority, pick, boost
 FROM (SELECT o_orderkey, o_totalprice, o_orderpriority FROM orders ORDER BY o_orderkey LIMIT ${Q6_ROW_LIMIT}) orders
 DECIDE pick(BOOL), boost(REAL)
 SUCH THAT boost <= 100
-    AND SUM(pick) <= ${Q6_PICK_CAP}
-    AND SUM(pick * boost) <= ${Q6_BILIN_CAP}
-    AND SUM(pick * boost) <= ${Q6_GRP_CAP} WHEN o_totalprice > 50000 PER o_orderpriority
+    AND per (): sum(pick) <= ${Q6_PICK_CAP}
+    AND per (): sum(pick * boost) <= ${Q6_BILIN_CAP}
+    AND when o_totalprice > 50000 per o_orderpriority: sum(pick * boost) by (o_orderpriority) <= ${Q6_GRP_CAP}
 MAXIMIZE SUM(pick * boost + 0.1 * pick * o_totalprice);

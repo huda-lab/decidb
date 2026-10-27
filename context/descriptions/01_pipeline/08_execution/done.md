@@ -10,7 +10,7 @@ flattened into terms.
 depends on the whole dataset, so it must consume its entire input before it can
 produce a row.
 
-**Key source file**: `src/execution/operator/decide/physical_decide.cpp` (~3,950 lines)
+**Key source file**: `src/execution/operator/decide/physical_decide.cpp` (~4,970 lines)
 **Header**: `src/include/duckdb/execution/operator/decide/physical_decide.hpp`
 
 `Finalize` itself is a short orchestrator; the phases below are private methods
@@ -18,10 +18,11 @@ on `PhysicalDecide`, in call order:
 
 | Method | Phase |
 |---|---|
-| `BuildEntityMappings` | 1.5 — entity mappings for table-scoped variables |
+| `BuildEntityMappings` | 1.5 — row → class maps for every key scope: a keyed decision's key, a reducer's own `per` or colon form, a helper decision's `by` key |
 | `EvaluateConstraints` | 2, constraints — appends to `gstate.evaluated_constraints` |
-| `EvaluateObjective` | 2, objective — per-term filters, the `WHEN` mask, and the objective's `PER` grouping |
-| `EvaluateComposedClauses` | 2, composed MIN/MAX — per-row coefficients, reducer factors, `WHEN` masks, constant RHS |
+| `EvaluateObjective` | 2, objective — per-term filters with the objective's `when` folded in, and the two-level form's classes |
+| `EvaluateComposedClauses` | 2, composed MIN/MAX — per-row coefficients, reducer factors, filter masks, constant RHS |
+| `EvaluateReducerValueLinks` | 2, the value rewrite's helper decisions — each reducer's members on the rows the clause and the reducer keep, grouped by its `by` key |
 | `BuildSolverInput` | 3a — assembles `SolverInput`, settles the column box, builds the `VarIndexer` |
 | `FormulateModel` | 3b — derives the constants and emits the rows, against a given box |
 | `FormulateElasticModel` | 3b again, under `DIAGNOSE` only — the same pass against the widened box a repair searches |
@@ -49,8 +50,9 @@ separate objective-side copy.
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
-| 3 | `Finalize` → `BuildEntityMappings` | Build entity mappings for table-scoped variables |
-| 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` | Evaluate coefficients, `WHEN` masks, `PER` groups, RHS values |
+| 3 | `Finalize` → `BuildEntityMappings` | Build the row → class maps of the key scopes |
+| 3a | `Finalize` → `RunScopeChecks` | Run the scope checks (§4a); the first failure stops the query |
+| 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` / `EvaluateReducerValueLinks` | Evaluate coefficients, `when` filters, `by` groups and `per` classes, RHS values, the helper decisions' members |
 | 5 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
 | 6 | `Finalize` → `FinalizeSolveResult` | `SolverModel::Build` → `SolveModel` (stage 07) |
 | 7 | `GetData` | Project solution values back onto rows |
@@ -67,7 +69,7 @@ query saw. Concurrent modifications cannot affect a running solve.
 ## 2. The folded variable box
 
 Whether a simple bound (`x <= 10`) becomes a column box or a model row is decided
-at stage 05 — see [`../05_optimizer/done.md`](../05_optimizer/done.md), "Bound
+at stage 05 — see [`../05_optimizer/done.md`](../05_optimizer/done.md), "Singleton-row
 folding". This stage consumes that decision and does not re-derive it.
 
 The sink state copies `op.singleton_row_boxes` and `op.user_singleton_row_bounds` in its
@@ -77,16 +79,22 @@ constructor. Three consumers read them:
   with no lower bound written takes the default 0 floor, so it is non-negative unless
   the query explicitly said otherwise.
 - The domain-contradiction guard below reads the box to reject a user bound that
-  contradicts a variable's intrinsic domain.
-- The infeasible diagnosis re-emits each `UserBoundSpec` as a loosenable row, after
-  `OpenElasticColumnBox` has re-opened the column it was folded into (below).
+  contradicts a variable's intrinsic domain, quoting the bound's clause as written.
+- `BuildSolverInput` re-opens each `UserBoundSpec`'s direction in the rigid box, which
+  `OpenElasticColumnBox` then widens for a diagnosis (below).
 
-Flattening skips any comparison tagged `SINGLETON_ROW_BOUND_TAG`, so an
+Flattening skips any comparison tagged `SINGLETON_ROW_BOUND_TAG`, so a
 singleton-row bound does not also produce `num_rows` redundant per-row model rows. The
 comparison itself stays in the tree, which is why `EXPLAIN` still renders the bound
-the user wrote. A bound against a data column (`x <= cap`) is not tagged: it flattens to a
-per-row spec, and the model builder folds each row into its column box when no diagnosis
-is armed (`06_model_formulation/done.md`, Path 3).
+the user wrote. A recorded one is flattened aside into
+`DecidePreparedModel::singleton_row_constraints`: under DIAGNOSE `EvaluateConstraints`
+evaluates it after every other prepared clause (numbered after them) into
+`evaluated_singleton_row_constraints`, and only the elastic input receives it, so the
+repair model loosens it one kept row or class at a time (D28) while the solved model
+keeps the box alone. Those clauses are the repair model's only rows for a folded bound.
+A bound against a data column (`x <= cap`) is not tagged: it flattens to a per-row spec,
+and the model builder folds each row into its column box when no diagnosis is armed
+(`06_model_formulation/done.md`, Path 3).
 
 ### The elastic box
 
@@ -120,7 +128,8 @@ reasoning, and what the looser constants cost in numerical noise, are in
 
 A user bound that contradicts the variable's *intrinsic* domain is deterministic —
 loosening cannot help, changing the type can — so it throws here, in the main
-pipeline, before the elastic engine ever sees it:
+pipeline, before the elastic engine ever sees it, quoting the bound as written
+(*"per g: max(x) <= -1 cannot hold because x is non-negative (>= 0)"*):
 
 - `x <= -1` on a non-negative type, guarded as `U < 0 AND L >= 0` so that
   `x = -1` or `x <= -1 AND x >= -5`, which explicitly lower the floor, still pass;
@@ -143,9 +152,11 @@ tightened box.
 The pass is a single sweep, not a fixpoint: a bound derived for one variable is
 not fed back to tighten others in the same pass. It skips constraints it cannot
 reason about soundly — any negative coefficient, bilinear or quadratic terms,
-MIN/MAX and `<>` indicator rows, and `WHEN`-conditional constraints (whose bound
-would wrongly cap the excluded rows, since the derived bound is shared across all
-of a variable's rows).
+MIN/MAX and `<>` indicator rows, and a clause with rows outside its row map, such as one
+under a `when` (whose bound would wrongly cap the excluded rows, since the derived bound
+is shared across all of a variable's rows). A `per K:` clause with no `when` is not
+skipped: each row it leaves out stands with its class's first row
+(`rows_stand_with_their_class`).
 
 ---
 
@@ -163,10 +174,12 @@ const unique_ptr<DecideObjective> &objective = op.prepared.objective;
 
 **What this stage receives.** For every constraint: its terms, each naming a
 variable index, a sign, a still-unevaluated coefficient `Expression`, an optional
-aggregate-local filter, an AVG-scaling flag and an entity-scope qualifier; plus the
-RHS expression, the comparison type, the `WHEN` condition, the `PER` columns, and
-the metadata linking it to indicators and diagnosis provenance. The objective
-arrives the same way, with `squared_terms` and `bilinear_terms` alongside `terms`.
+filter (its reducer's own `when`), an AVG-scaling flag and the key scope of its
+reducer's own `per` (`qualifier_scope_idx`); plus the RHS expression, the comparison
+type, the clause's `when`, its `by` key (`group_key`) and `per` key (`per_key`,
+`class_key`), and the metadata linking it to indicators and diagnosis provenance. The
+objective arrives the same way, with its `when`, the two-level form's key
+(`per_columns`), and `squared_terms` and `bilinear_terms` alongside `terms`.
 `ComposedMinMaxTerm::inner_terms` carries the composed MIN/MAX path's terms, so no
 construct is left re-deriving its own.
 
@@ -186,19 +199,127 @@ produces them, and why it cannot live here, is
 
 ## 4. PHASE 1.5 — entity mappings
 
-For each `EntityScopeInfo`, before coefficient evaluation:
+For each `EntityScopeInfo` — a keyed decision's key (`per K: x`), a reducer's own `per`
+or colon form (`sum(per K: e)`, `SUM(D: e)`), a helper decision's `by` key — before
+coefficient evaluation:
 
 1. Evaluate the entity-key columns per row from the materialized data, using
    `BoundReferenceExpression`s built from `entity_key_physical_indices` so one
-   `ExpressionExecutor` covers them all.
+   `ExpressionExecutor` covers them all. A helper decision's scope
+   (`EntityScopeInfo::value_link`, the value rewrite) has no key columns: its link's
+   `by` key expressions are evaluated instead (`CachedTransformToChunkExpression`), on
+   the rows the link's clause `when` keeps only (`BuildGroupIds`' `read_rows`), one
+   entity per value they take together, NULL a value. A row the clause drops is no
+   group; every such row maps to one spare entity, so each row has an id and the key is
+   never evaluated where the clause never reads.
 2. Concatenate each row's key values into a composite string key with NULL-safe
    tagging, so a real NULL is distinguishable from the string `"NULL"` — the same
-   pattern `PER` grouping uses.
-3. Assign entity ids in first-seen order via an `unordered_map<string, idx_t>`.
+   pattern the `by`, class and check keys use (`BuildGroupIds` serves both). NULL is a
+   key value. A key with no columns (a reducer's `per ()`) is one class, every row in it.
+3. Assign entity ids in first-seen order over every row via an
+   `unordered_map<string, idx_t>`.
 4. Fill a `row_to_entity` vector of size `num_rows`.
 
 The result is an `EntityMapping { num_entities, row_to_entity }` on the
 `SolverInput`, which is what makes several rows share one solver column.
+
+---
+
+## 4a. PHASE 1.6 — scope checks, and how a clause is read
+
+`RunScopeChecks` runs `LogicalDecide::scope_checks` (stage 04) in order, before any
+coefficient is evaluated, over the materialized rows — an empty input runs none. They are
+the data checks of [`syntax_reference.md`](../../00_project_overview/syntax_reference.md)
+§7.3:
+
+| Kind | Fails when | Message |
+|---|---|---|
+| `KEEPS_A_ROW` | the `when` keeps no row | `DECIDE: when <c> matches no rows.` |
+| `DETERMINES` | a class of the key (over the kept rows, and a reducer's own `when`) shows two values, NULL equal to NULL, or two instances of the decision | `DECIDE: per <K> does not determine <value>[ (<context>)]. <class> has more than one value: <a>, <b>.` · `... the decision <x> (declared ...). <class> covers more than one <x>.` |
+| `READS_A_ROW` | a `by` group of the kept rows has no row the reducer's own `when` keeps | `DECIDE: <reducer> has no rows for <group>.` · `... has no rows.` for `by ()` |
+| `VALUE_IS_VALID` | a row holds a value the model cannot read: its `value` is the message the row raises, NULL on a valid row | the first non-NULL message: a bound's or a bound-side reducer argument's NULL or NaN, or an `=` bound that takes two values in its group (`` `<bound>` takes more than one value here (a and b) ... infeasible.``) |
+
+The first three come from the canonicalizer (stage 04). The bound-side window rewrite
+(`RewriteRhsAggregates`, stage 05) appends the `VALUE_IS_VALID` checks after them, so a
+scope error is reported before a bad value, and a bad bound before a bad coefficient.
+
+A class or group is named by its key's values as SQL literals (`D.depotID = 'D1'`); over
+`()` the message says "The kept rows". Groups come from `LookupOrBuildPerGroupIds` with
+NULL a value. A key with no columns (`per ()`, `by ()`, a reducer's `per ()`) is one group
+of every row the filter keeps: `BuildGroupIds` says so once, for every caller. A key that
+is the same on every row (`by (1)`) hashes to a constant vector, which `BuildGroupIds`
+flattens before each row reads its own hash. A check reads its `when` on every row
+(`KeptRows`), a reducer's own `when` on the rows that keeps, and its key and value only on
+the rows it looks at.
+
+Every clause is then read by these rules; §5 gives the row maps they produce:
+
+- **Kept rows first.** Its `when` is read before anything else, on every row, the parts
+  of an AND or an OR left to right, each only on the rows the earlier parts leave
+  undecided -- an AND's on the rows they keep, an OR's on the rows they do not
+  (`KeptRows`; the composed rewrite folds the clause's `when` in front of a term's own).
+  Anything else, `not` included, is computed whole. Nothing is then
+  computed on a row the `when` drops: a reducer's own `when` is read on the kept rows,
+  a term's coefficient on the kept rows its own `when` keeps, a bound, a `by` key and a
+  class key on the kept rows (`ExecuteOnReadRows`, which slices each chunk to the rows an
+  expression reads and leaves the others NULL; `LookupOrBuildPerGroupIds`' `read_rows`,
+  which builds such a clause's groups afresh rather than from the cache's, computed on
+  every row). `ExtractDoubleColumn` writes 0 for a row it does not read, so a NULL or a
+  failing expression there is no error. An empty set has already failed a check (D4,
+  D8), so formulation asserts rather than refuses one.
+- **Grouping.** The aggregate shape groups the kept rows by its `by` key
+  (`group_keys[constraint->group_key]`), NULL a value: a group's members are the rows a
+  reducer's `when` keeps (all kept rows for `<>`, whose bound values are all excluded),
+  its bound the tightest over all its kept rows. A row the reducer's own `per`
+  de-duplication drops leaves the group when the clause is a hard MIN/MAX
+  (`minmax_agg_type`): the members are the rows the reducer reads, and a zeroed row
+  would be a member pinned at 0. The rows shape under `per K:` emits one row per class,
+  at its first kept row; under `when` alone, one per kept row.
+- **Bound-side reducers** never reach execution: the bound-side window rewrite
+  (`RewriteRhsAggregates`, stage 05) made each a column of the source, evaluated by
+  DuckDB over its own `by` groups of the kept rows, and reduced the bound of an
+  aggregate clause to its group's tightest value.
+- **De-duplication** for a reducer's own `per` keeps the first row of each class among
+  the rows its `when` keeps (`BuildQualifierKeepMask`'s `eligible`), within each group:
+  a class whose first joined row the `when` drops is still counted.
+- **The objective**: its `when` is folded into every
+  term's filter, so reading, de-duplication and AVG denominators all follow it. A
+  decision outside the reducers (`NONE`) keeps its coefficient on the first kept row only
+  (`CountTupleTermsOnce`; a query-wide one moves to row 0, where stage 06 reads it), and
+  so does a product of two query-wide decisions there (`CountOnce` on the evaluated
+  bilinear term; one inside a reducer is SUM and keeps every row). The two-level form
+  groups with NULL a class.
+- **Composed clauses** read the rows their folded filter keeps and de-duplicate among
+  them. Each takes its repair id here, after every prepared
+  and absorbed clause (`ComposedConstraint::repair_group_id`), since formulation drops rows
+  (a `<>` moved into indicator rows) and no count of the model's rows is the id space.
+- **Classes of a grouped row** (D28, `CollectGroupClasses`, under DIAGNOSE only). The
+  rows of a clause over `by` groups -- an aggregate-shape group row, an easy
+  MIN/MAX's member rows, a composed clause's one row -- stand for every class of its
+  `per` key in their group: with `per K:` in front (`per_key = NAMES_CLASSES`,
+  `class_key`) the key's values among the group's kept rows (`LookupOrBuildPerGroupIds`
+  over the kept rows, first-seen order); with no `per` (`NONE`) every kept row of the
+  group; `per ()` the whole clause (one `WHOLE_CLAUSE` set its groups share). A per-row
+  clause under `per K:` (`ONE_ROW_PER_CLASS`) calls it with its classes as the groups, so
+  each class's row gets a set naming that class. One `SolverInput::ClassSet` per group with
+  kept rows, its `Kind` saying which, referenced from
+  `EvaluatedConstraint::group_class_set` (a composed clause's from its
+  evaluated `class_set`, over the rows its `when` keeps); the model keeps the table and an
+  expanded diagnosis reports the group once per class (`FanOutByClass`).
+- **Helper decisions** (the value rewrite, `EvaluateReducerValueLinks`): each link's
+  reducer is read on the rows the clause's `when` keeps and its own `when` keeps among
+  them, grouped by its `by` key over the kept rows (`LookupOrBuildPerGroupIds`, NULL a
+  value; the scope checks guarantee no group is empty); its coefficients come from
+  `EvaluateTermColumns`, one scan for every term; its `per` de-duplicates within each
+  group, a dropped row leaves the group, and AVG divides by the members left. The result
+  is a `ReducerValueLinkSpec` carrying the members alone, with the link's label and
+  provenance; stage 06 states the definition over them (an equality per group for
+  SUM/AVG, an extremum link for MIN/MAX). `BuildSolverInput` frees a helper's floor before
+  the rigid box is captured; a refusal in formulation names a helper by its reducer.
+- **A NULL subquery** is named by its text as DuckDB prints it:
+  `NullSourceContext::fragments`, set wherever a prepared clause, the objective or a
+  helper's members are read, maps the flattened column back to the subquery's source
+  fragment.
 
 ---
 
@@ -214,11 +335,8 @@ The result is an `EntityMapping { num_entities, row_to_entity }` on the
 | `BoundColumnRefExpression` | `BoundReferenceExpression` on `binding.column_index` |
 | `BoundFunctionExpression` | recurse into children, copy `bind_info` |
 | `BoundCastExpression` | recurse into child, re-wrap with `AddCastToType` |
-| `BoundAggregateExpression` | a reference to an extra chunk column holding that reducer's per-group value, cast back to the reducer's own type (see `EvaluateRhsReducerPerGroup`) |
+| `BoundAggregateExpression` | an `InternalException`: the bound-side window rewrite made every reducer on the bound a column, and the binder keeps reducers out of coefficients and `when` conditions |
 | anything else | copied as-is |
-
-A reducer reached with no substitution prepared — inside a `WHEN` condition or a
-coefficient, where it has no meaning — is rejected with `InvalidInputException`.
 
 Results are cached per `Finalize` call, and the cache outlives every
 `ExpressionExecutor` created below it, so executors may safely retain references
@@ -246,72 +364,93 @@ row or group sum from the RHS.
 
 - **Constant** — extracted once and broadcast.
 - **Expression** — evaluated per row, giving row-varying bounds.
-- **Reducer** — evaluated per group and by reducer kind
-  (`EvaluateRhsReducerPerGroup`).
+- **Reducer** — a window column of the source by now (`RewriteRhsAggregates`),
+  read like an expression.
 
 The canonical RHS classification decides which: a bound tagged
 `QUERY_WIDE_BOUND_TAG` is a shared scalar; anything with a row-varying component
 stays data-backed.
 
-### `WHEN` and `PER` → `row_group_ids`
+### `when`, `by` and `per` → `row_group_ids`
 
-One per-row vector assigns each row to a constraint group or excludes it:
+One per-row vector assigns each row to a row of the clause, or excludes it. The clause's
+`when` is read first (`KeptRows`); every map is built over the kept rows only, NULL a key
+value, with ids dense in the order their rows first appear:
 
-| Case | `row_group_ids` | `num_groups` |
+| Clause | `row_group_ids` | `num_groups` |
 |---|---|---|
-| Neither | empty (fast path — all rows are one implicit group) | 0 |
-| `WHEN` only | 0 where true, `INVALID_INDEX` where false or NULL | 1 |
-| `PER` only | first-seen id per distinct key; NULL key → `INVALID_INDEX` (matching SQL `GROUP BY` NULL semantics) | K |
-| Both | `WHEN` filters first, then `PER` groups the survivors | K |
+| no `when`, no reducer `when`, no `by`, no `per K:` over the rows shape | empty (fast path — all rows are one implicit group) | 0 |
+| aggregate shape or easy MIN/MAX, `by (G)` | each row's `by` group, on the rows its reducers read (a kept row some reducer's own `when` keeps; every kept row for `<>`); `INVALID_INDEX` elsewhere | number of groups |
+| aggregate shape or easy MIN/MAX, `by ()`, with a `when` or a reducer's own `when` | 0 on the rows its reducers read, `INVALID_INDEX` elsewhere | 1 |
+| rows shape under `per K:` | the class id on each class's first kept row, `INVALID_INDEX` elsewhere | number of classes |
+| rows shape with a `when` only | 0 on kept rows, `INVALID_INDEX` on dropped rows | 1 |
 
-`PER` keys use a `string`-keyed hash map with the same NULL-safe tagging as entity
-mapping. Unfiltered `PER` assignments are cached across every constraint and the
-objective, so one `PER` spec is evaluated once however many clauses use it.
+The bound side of the aggregate shape gets its own map with the same numbering over every
+kept row (a bound-side reducer reads its own `by` groups, §4a). A `per K:` over the
+aggregate shape or an easy MIN/MAX adds no row: it only names the classes each group's
+row stands for (D28, §4a).
 
-### Aggregate-local `WHEN` masks
+Keys use a `string`-keyed hash map with the same NULL-safe tagging as entity mapping.
+The ids a key takes over every row are cached (`PerGroupCache`) across every constraint,
+check and the objective, so one key is evaluated once however many clauses use it; a
+clause whose `when` drops rows builds its groups afresh over its kept rows
+(`LookupOrBuildPerGroupIds`' `read_rows`), since the cached key was computed on every row.
+
+### A reducer's own `when`
 
 Term-level filters are carried on individual terms, not on the whole constraint:
 
-1. Each distinct filter expression is evaluated once into a boolean row mask.
+1. Each distinct filter expression is evaluated once into a boolean row mask, on the
+   clause's kept rows only (`KeptRowsOfEach`).
 2. Linear, bilinear and quadratic terms get coefficient `0` on rows their own
    filter excludes — **for that term only**.
-3. With `PER` present, a row joins a group only if it passes the expression-level
-   `WHEN` (if any), has a non-NULL `PER` key, and participates in at least one
-   aggregate-local term.
+3. A row joins a group when the clause's `when` keeps it and some reducer's own `when`
+   keeps it (a reducer with no `when` keeps every kept row). A `by` group that one
+   reducer's own `when` leaves with no row has already failed the scope checks (D8).
 
 So one clause can carry independent filters:
 
 ```sql
-SUM(x * a) WHEN active + SUM(x * b) WHEN priority <= 10 PER grp
+sum(when active: x * a) by (grp) + sum(when priority: x * b) by (grp) <= 10
 ```
 
-`active` filters only the `a` term, `priority` only the `b` term, and `PER grp`
-groups rows participating in at least one.
+`active` filters only the `a` term and `priority` only the `b` term; each `grp` group is
+one row, over the rows either keeps. A group where `priority` keeps no row is refused:
+*"DECIDE: sum(when priority: x * b) has no rows for grp = 'b'."*
 
-### Relation-qualified reducers
+### A reducer's own `per`, and `SUM(D: e)`
 
-`SUM(D: expr)` asks for one contribution per **tuple identity** of `D`, but the
-join repeats each `D` tuple once per matching row. De-duplication keeps the first
-row of each identity and zeroes the rest — sound because the binder already
-guarantees every row sharing an identity carries the same value, so whichever row
-is kept gives the same answer.
+`sum(per K: e)` asks for one contribution per **class** of `K`, and the colon form
+`SUM(D: e)` is `sum(per D: e)` with `K` every column of `D`; a join repeats each class
+once per matching row. De-duplication (`BuildQualifierKeepMask`) keeps the first row of
+each class among the rows the reducer reads — the kept rows its own `when` keeps — and
+zeroes the rest. That is sound because the scope checks have already proved that every
+row of a class carries the same value (`DETERMINES`, *"per D does not determine ..."*), so
+whichever row is kept gives the same answer. A class whose first joined row the `when`
+drops is still counted once.
 
-De-duplication runs **inside** the `PER` partition, after `WHEN` selection and
-`PER` partitioning, which is the construction order the paper pins. Group ids are
-dense in `[0, num_groups)` and entity ids in `[0, num_entities)`, so
-`(group, entity)` flattens into one dense index with no hashing.
+De-duplication runs **inside** each `by` group, after the clause's `when`, the reducer's
+own `when` and the grouping. Group ids are dense in `[0, num_groups)` and class ids in
+`[0, num_entities)`, so `(group, class)` flattens into one dense index with no hashing.
+The mask is folded into the term's filter (`ApplyQualifierToFilter`), so AVG's
+denominator counts classes. For a hard MIN/MAX, a row the de-duplication drops leaves the
+group (§4a).
 
 ### AVG scaling
 
 `AVG` was rewritten to `SUM` by the optimizer and tagged `AVG_REWRITE_TAG`. Terms
-marked `avg_scale` are divided by the active row count of the applicable scope:
+marked `avg_scale` are divided by the number of rows the reducer reads in the row's group
+(`ScaleAvgRows`):
 
-| Scope | Denominator |
+| Clause | Denominator |
 |---|---|
-| Ungrouped | total active rows |
-| Expression-level `WHEN` | rows passing the mask |
-| `PER` | group size |
-| Aggregate-local `WHEN` | rows passing that filter, within the group if `PER` is present |
+| `by ()` | the kept rows (every row with no `when`) |
+| `by (G)` | the kept rows of the row's `by` group |
+| a reducer's own `when` | further, only the rows it keeps |
+| a reducer's own `per` | further, one row per class (the de-duplication above) |
+
+In the objective the two-level form's classes are the groups. The scope checks guarantee
+no denominator is zero.
 
 Quadratic AVG terms scale their inner linear coefficients by `1/√N`, so the
 resulting outer product is scaled by `1/N`.
@@ -334,19 +473,11 @@ the per-row expression path was the only one refusing what the rest of the pipel
 handled; canonicalization rebuilds `x + v <= K` as `x <= K - v`, which put the *same*
 bound on the strict path purely because of how it was written.
 
-Two values sit on that path, and both now follow the rule. The row's own bound is
-one. The other is the input of a **bound-side reducer**: `MIN(x) <= MAX(cap) PER g`
-folds a column to one value per group, and `EvaluateRhsReducerPerGroup` extracted
-that column strictly, so a single infinite row in `cap` refused the query outright —
-before grouping, before folding, before anything knew which group the row belonged
-to, and before the reducer's own `WHEN` or relation-qualified dedup had masked the
-rows that contribute to nothing. The literal spelling of the same bound was accepted
-and classified per group, so the outcome depended on how the bound was written.
-
-It is now uniform: an infinite bound behaves the same in every spelling, and the
-solver decides what it means. `inf - inf` is still NaN, and still refused — a
-reducer's infinities reach the per-row extraction that reads the folded bound back,
-where the NaN guard is unchanged, so admitting them upstream costs nothing.
+The input of a **bound-side reducer** follows the same rule: `min(x) by (g) <= max(cap)
+by (g)` is a window of DuckDB's over `cap`, and its value check (a VALUE_IS_VALID scope
+check) refuses NULL and NaN only, so an infinite `cap` is a value. An infinite bound
+behaves the same in every spelling, and the solver decides what it means. `inf - inf`
+is still NaN, and still refused.
 
 **A non-finite bound is not folded into the column box.** `FoldSingletonRows`
 (stage 05) folds a bare `x OP const` into `lower_bounds` / `upper_bounds`, each
@@ -438,8 +569,9 @@ it is not immediately using, and nothing here re-selects.
 **Only two constructs still choose between two emitters**, and the count used to be
 six. `<>` no longer chooses at all: it is emitted once, as conditional rows, and
 `LowerDecideConstructs` turns those into Big-M rows where the backend cannot state a
-condition. Every MIN/MAX — a constraint, a flat objective, a PER-nested objective, an
-outer aggregate over groups or group sums, and a composed term — goes through one
+condition. Every MIN/MAX — a constraint, a flat objective, a two-level objective, an
+outer aggregate over groups or group sums, a composed term and a MIN/MAX helper of the
+value rewrite — goes through one
 `EmitExtremumLink`, which makes the choice once for all of them. What is left is ABS,
 where the two formulations are genuinely different objects rather than projections of
 one description: see [`../06_model_formulation/done.md`](../06_model_formulation/done.md)
@@ -486,8 +618,8 @@ When the objective is quadratic, the same evaluation runs on `squared_terms` **i
 addition to** `terms`, not instead of: `EvaluateObjectiveTermList` is called once
 per non-empty list, filling `objective_coefficients` / `objective_variable_indices`
 for the linear half and `quadratic_inner_coefficients` /
-`quadratic_variable_indices` for the quadratic half. The expression-level `WHEN`
-mask and each term's local filter are applied independently to each list.
+`quadratic_variable_indices` for the quadratic half. Each term's filter — its own
+`when` with the objective's folded in — applies to each list independently.
 
 `CoefficientColumn` keeps this compact: a column that is uniform across rows — a
 broadcast Big-M coefficient, a constant RHS, a McCormick constant — stores one
@@ -506,10 +638,10 @@ and stage 07 ([`../07_solver/done.md`](../07_solver/done.md)). The hand-off happ
 early: `solver_input.constraints` is populated as soon as bounds are resolved, and
 the linearization passes then work on it in place.
 
-The MIN/MAX objective (flat and nested-`PER`) and the composed MIN/MAX clauses are
+The MIN/MAX objective (flat and two-level) and the composed MIN/MAX clauses are
 emitted by stage 06, not here. What stays is the evaluation they need — a composed
-term's per-row coefficients, the query-wide factor on a reducer, its `WHEN` mask,
-the constant RHS. The evaluated terms travel to stage 06 as
+term's per-row coefficients, the query-wide factor on a reducer, its filter mask,
+the constant RHS, and the objective's member rows. The evaluated terms travel to stage 06 as
 `ComposedMinMaxTermData`; the objective's shape travels as `MinMaxObjectiveSpec`.
 
 ### Assembly and formulation are separate passes
@@ -520,7 +652,7 @@ in the sequence.
 `BuildSolverInput` **assembles**. It moves the evaluated constraints, objective and
 links off `gstate`, resolves the variable types and the column box (the folded
 bounds, the `lower_bounds` sentinel, the rigid snapshot, then
-`DecidePropagateImpliedBounds`), folds each relation qualifier's de-duplication into
+`DecidePropagateImpliedBounds`), folds each reducer's own `per` de-duplication into
 the objective's filter masks, applies AVG scaling, and builds the `VarIndexer`. It
 runs exactly once per query, because it is the pass that consumes `gstate`.
 
@@ -581,10 +713,10 @@ solution_idx = gstate.var_indexer.Get(decide_var_idx, global_row)
 value        = ilp_solution[solution_idx]
 ```
 
-For **row-scoped** variables each row has its own column. For **entity-scoped**
-variables every row of an entity resolves to the same column and therefore
-receives the same value — which is the whole semantic point of a table-scoped
-variable. For **scalar** variables every row resolves to the one column.
+A **per-row** decision (`DecideVarScope::ROW`) has its own column on each row. A
+**keyed** decision (`per K: x`, `ENTITY`) has one column per class of `K`: every row of
+a class resolves to it and receives the same value, which is the point of the key. A
+**query-wide** decision (`per (): x`, `SCALAR`) is one column every row resolves to.
 
 The readback indexer is the owning `VarIndexer::Build()` form, so it outlives the
 `SolverInput`.
@@ -628,10 +760,12 @@ Each output vector is `FLAT_VECTOR`, written through `FlatVector::GetData<T>()`.
 
 ### Auxiliary variables
 
-`GetData` projects **all** variables, user and auxiliary. The `Projection`
+`GetData` emits a column for **all** variables, user and auxiliary. The `Projection`
 operator that `plan_decide.cpp` places above `PhysicalDecide` prunes the auxiliary
 columns, so only user-declared variables reach the result. Auxiliaries occupy the
-last `num_auxiliary_vars` slots.
+last `num_auxiliary_vars` slots, and their columns are constant NULL: no one reads
+them, so no value is converted or range-checked (a helper of `sum(x * 1000000000)`
+past int32 would otherwise be refused under its internal name).
 
 ---
 
@@ -679,5 +813,6 @@ The slow-solve path is deliberately outside all of this: see `slow_solves.md`.
 | Logical → physical, entity key indices, input column names | `src/execution/physical_plan/plan_decide.cpp` |
 | Binding resolution shielding | `src/execution/column_binding_resolver.cpp` |
 | The `DIAGNOSE` operator (sink the rows, emit the findings) | `src/execution/operator/decide/physical_decide_diagnose.cpp` |
+| `per`, `when` and `by` semantics; the scope test suites | [`../../03_expressivity/scope/done.md`](../../03_expressivity/scope/done.md), [`../../04_testing/scope/done.md`](../../04_testing/scope/done.md) |
 | Its plan-generator case | `src/execution/physical_plan/plan_decide_diagnose.cpp` |
 | Slow solves: report, continuation, Ctrl-C | [`slow_solves.md`](slow_solves.md) |

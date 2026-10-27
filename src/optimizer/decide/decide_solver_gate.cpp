@@ -127,9 +127,7 @@ RefusalText DescribeGap(const LogicalDecide &op, SolverModelClassGap gap) {
 } // namespace
 
 void ChooseDecideSolver(LogicalDecide &op) {
-	if (!op.solver_backend_name.empty()) {
-		return;
-	}
+	D_ASSERT(op.solver_backend_name.empty());
 	SolverBackend backend = SelectSolverBackend();
 	op.solver_backend_name = backend.Name();
 	// The formulation decision, made HERE and read everywhere else. `Capabilities()`
@@ -148,7 +146,7 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op) {
 	SolverModelClass needed;
 
 	// A constraint carrying a squared or bilinear term becomes a quadratic row: the
-	// model builder emits one per data row or per PER group, and never folds it back
+	// model builder emits one per data row or per group, and never folds it back
 	// into the linear matrix.
 	for (auto &constraint : op.prepared.constraints) {
 		if (constraint->has_quadratic || constraint->has_bilinear) {

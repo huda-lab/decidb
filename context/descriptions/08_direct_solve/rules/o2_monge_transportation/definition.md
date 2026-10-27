@@ -40,8 +40,8 @@ The overlap lengths give the flow:
 SELECT s.id AS source_id, d.id AS destination_id, flow
 FROM sources s CROSS JOIN destinations d
 DECIDE flow(REAL)
-SUCH THAT SUM(flow) = s.supply PER s.id
-AND SUM(flow) = d.demand PER d.id
+SUCH THAT per s.id: sum(flow) by (s.id) = s.supply
+AND per d.id: sum(flow) by (d.id) = d.demand
 MINIMIZE SUM(ABS(s.position-d.position)*flow);
 ```
 
@@ -148,7 +148,7 @@ The final cross product also emits zero flow for nonoverlapping intervals, prese
 >
 > • The only coupling constraints are one supply equality per source and one demand equality per destination, with no arc bounds, fixed flows, or other constraints.
 >
-> • The PER groups and WHEN masks cover exactly the intended incident pairs.
+> • The `per` classes and `when` masks cover exactly the intended incident pairs.
 >
 > • Supplies and demands are finite, non-NULL, and nonnegative, and their totals balance under DECIDE's equality policy.
 >

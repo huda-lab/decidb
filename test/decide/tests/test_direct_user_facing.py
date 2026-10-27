@@ -359,33 +359,55 @@ def test_r1_infeasible_and_unbounded_errors_are_the_solvers_error_word_for_word(
     assert direct == solver
 
 
+def _s1_source_bound_error(decidb_cli, cap_type, cap, bound="cap"):
+    sql = f"""
+        SELECT x FROM (
+            FROM (VALUES (1,{cap}::{cap_type},9.0)) t(id,cap,score)
+            DECIDE x(BOOL) SUCH THAT SUM(x)<={bound} MAXIMIZE SUM(score*x)
+        ) q
+    """
+    return _raw(decidb_cli, sql, mode="require").stderr, _raw(decidb_cli, sql, mode="off").stderr
+
+
 @pytest.mark.correctness
-def test_s1_source_bound_error_for_a_column_is_the_solvers_and_for_a_computed_bound_is_direct_solves_own(decidb_cli):
-    """A bound that is one column raises the solver's NULL and NaN errors. A computed bound has no single column to name."""
-
-    def error(cap_type, cap, bound="cap"):
-        sql = f"""
-            SELECT x FROM (
-                FROM (VALUES (1,{cap}::{cap_type},9.0)) t(id,cap,score)
-                DECIDE x(BOOL) SUCH THAT SUM(x)<={bound} MAXIMIZE SUM(score*x)
-            ) q
-        """
-        return _raw(decidb_cli, sql, mode="require").stderr, _raw(decidb_cli, sql, mode="off").stderr
-
+def test_s1_source_bound_error_for_a_column_is_the_solvers(decidb_cli):
+    """A bound that is one column raises the solver's NULL and NaN errors."""
     for cap_type in ("INTEGER", "DOUBLE"):
-        direct, solver = error(cap_type, "NULL")
+        direct, solver = _s1_source_bound_error(decidb_cli, cap_type, "NULL")
         assert 'column "cap" is NULL' in direct and "COALESCE(cap, 0)" in direct and "WHERE" in direct, direct
         assert direct == solver
-    direct, solver = error("DOUBLE", "'NaN'")
+    direct, solver = _s1_source_bound_error(decidb_cli, "DOUBLE", "'NaN'")
     assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
     assert re.sub(r" at row \d+", "", solver) == direct
-    computed, _ = error("VARCHAR", "'bad'", bound="TRY_CAST(cap AS INTEGER)")
-    assert "the bound expression" in computed and "COALESCE()" in computed, computed
 
 
 @pytest.mark.correctness
-def test_r1_budget_limit_error_for_a_column_is_the_solvers_and_for_a_computed_limit_is_direct_solves_own(decidb_cli):
-    """A budget limit that is one column raises the solver's NULL and NaN errors. A computed limit has no single column to name."""
+def test_s1_source_bound_error_for_a_computed_bound_quotes_it_as_written(decidb_cli):
+    """A computed bound has no column to name, so both paths quote it as written: no internal tag, no implicit cast."""
+    direct, solver = _s1_source_bound_error(decidb_cli, "VARCHAR", "'bad'", bound="TRY_CAST(cap AS INTEGER)")
+    assert "DECIDE: TRY_CAST(cap AS INTEGER) is NULL. Impute it with COALESCE()" in direct, direct
+    assert direct == solver
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("bound", ["TRY_CAST(c AS INTEGER)", "b"], ids=["computed", "column"])
+def test_s1_per_row_bound_error_is_the_solvers(decidb_cli, bound):
+    """A per-row bound that is NULL raises the solver's text on both paths: a column is named, a computed one quoted."""
+    sql = f"""
+        SELECT id, x FROM (
+            FROM (VALUES (0, 'bad', NULL::BOOLEAN, 5.0)) t(id, c, b, p)
+            DECIDE x(BOOL) SUCH THAT x <= {bound} AND SUM(x) <= 1 MAXIMIZE SUM(p*x)
+        ) q
+    """
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    expected = 'column "b" is NULL' if bound == "b" else "DECIDE: TRY_CAST(c AS INTEGER) is NULL."
+    assert expected in direct, direct
+    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+
+
+@pytest.mark.correctness
+def test_r1_budget_limit_error_is_the_solvers_for_a_column_and_for_a_computed_limit(decidb_cli):
+    """A budget limit raises the solver's NULL and NaN errors: one that is a column names it, a computed one is quoted."""
 
     def error(lim_type, lim, limit="lim"):
         sql = f"""
@@ -404,8 +426,9 @@ def test_r1_budget_limit_error_for_a_column_is_the_solvers_and_for_a_computed_li
         direct, solver = error(lim_type, "'NaN'")
         assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
         assert re.sub(r" at row \d+", "", solver) == direct
-    computed, _ = error("VARCHAR", "'bad'", limit="TRY_CAST(lim AS DOUBLE)")
-    assert "the bound expression" in computed and "COALESCE()" in computed, computed
+    direct, solver = error("VARCHAR", "'bad'", limit="TRY_CAST(lim AS DOUBLE)")
+    assert "DECIDE: TRY_CAST(lim AS DOUBLE) is NULL. Impute it with COALESCE()" in direct, direct
+    assert direct == solver
 
 
 @pytest.mark.correctness
@@ -599,8 +622,12 @@ def test_invalid_forced_solver_and_disabled_optimizer_policy(decidb_cli):
     error = _raw(invalid, sql, mode="auto").stderr
     assert "DECIDB_FORCE_SOLVER=unknown_backend" in error
 
-    disabled = _raw(decidb_cli, f"SET disabled_optimizers='decide_optimizer'; {sql}").stderr
-    assert "DECIDE optimizer did not run" in disabled
+    # A plan the DECIDE optimizer never saw is refused on every path, whichever way the optimizer was switched off.
+    refusal = "DECIDE needs the DECIDE optimizer."
+    for mode in ("require", "off"):
+        disabled = _raw(decidb_cli, f"SET disabled_optimizers='decide_optimizer'; {sql}", mode=mode).stderr
+        assert refusal in disabled, disabled
+    assert refusal in _raw(decidb_cli, f"PRAGMA disable_optimizer; {sql}", mode="off").stderr
 
 
 @pytest.mark.correctness
@@ -623,13 +650,13 @@ def test_extension_registration_preserves_binder_errors(decidb_cli):
     sql = """
         SELECT x FROM (
             FROM (VALUES (1,2),(2,9)) n(id,score)
-            DECIDE x(BOOL) SUCH THAT SUM(n: x)<=1 MAXIMIZE SUM(score*x)
+            DECIDE x(BOOL) SUCH THAT SUM(m: x)<=1 MAXIMIZE SUM(score*x)
         ) q
     """
     for mode in ("off", "require"):
         result = _raw(decidb_cli, sql, mode=mode)
         assert "Binder Error" in result.stderr
-        assert "not a decision of n" in result.stderr
+        assert "Relation 'm' is not in the FROM clause" in result.stderr
 
 
 # --- Reading a stored table twice instead of holding wide rows ---------------------------------------------------------

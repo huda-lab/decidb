@@ -144,7 +144,7 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
 //! itself or needs it encoded with a Big-M is settled once, afterwards, by
 //! `LowerDecideConstructs` — so no bound is asked for here and no backend is consulted.
 //!
-//! Both spellings of the clause are finished here. A per-row `<>` expands against the
+//! Both forms of the clause are finished here. A per-row `<>` expands against the
 //! row-scoped indicator stage 05 allocated; an aggregate one allocates a *global* binary
 //! per group, because a group's rows sum onto one row and one row needs one binary.
 //! `aux_var_expressions` supplies the clause text stage 05 recorded for the indicator, so
@@ -221,6 +221,24 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
 //! Phase 2, LOWERING path: the Big-M sign-indicator rows that pin `aux = |inner|`.
 //! Reads the range DeriveAbsAuxiliaryBounds already derived; never recomputes it.
 void LinearizeAbsMaximize(SolverInput &input);
+
+//! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
+//! each helper by the reach of its members over every group -- the sum of their brackets
+//! for SUM/AVG, their cover for MIN/MAX -- so a Big-M over it has a span and the root LP
+//! a box. Only ever tightens, like DeriveAbsAuxiliaryBounds: a member may be an ABS
+//! auxiliary and an ABS may hold a helper, so FormulateModel runs the two to a fixed
+//! point. A helper may be negative, so its floor is derived like its ceiling, never
+//! defaulted to 0; an end no member bounds is left open.
+void DeriveReducerValueBounds(SolverInput &input);
+
+//! Phase 2: emit each helper's definition, one row per group of its members. SUM/AVG:
+//! the flat equality `value - members = constants` (an AVG's members carry their 1/n).
+//! MIN/MAX: an extremum link (EmitExtremumLink) on the sides the clause needs, its
+//! closing Big-M sized off the helper's box against the family's far end, and refused
+//! naming a column to bound where no such constant exists on the lowering arm. The
+//! evaluated member rows are consumed here; none reaches `input.constraints`.
+void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
+                                NativeConstructPolicy policy);
 
 //! Phase 2, NATIVE path: one column `t` per active row, an equality row `t = inner`,
 //! and a `GeneralConstraintSpec` saying `aux = |t|`. Emitted in flat columns, which is
@@ -394,18 +412,6 @@ struct MinMaxLinkRow {
         }
     }
 
-    //! True when no column survives accumulation — either nothing was added, or
-    //! every column's terms cancelled (`c*x - c*x`). Such a row constrains the
-    //! auxiliary against `constant` alone.
-    bool HasNoColumns() const {
-        for (auto coefficient : coefficients) {
-            if (std::abs(coefficient) >= 1e-15) {
-                return false;
-            }
-        }
-        return true;
-    }
-
     void AppendTo(SolverInput::RawConstraint &rc) const {
         for (idx_t i = 0; i < indices.size(); i++) {
             if (std::abs(coefficients[i]) < 1e-15) {
@@ -426,7 +432,7 @@ struct ExtremumMember {
 };
 
 //! `result = MIN/MAX(members)`, in flat columns. Every MIN/MAX auxiliary in the model is
-//! one of these: the flat objective's `z`, a `PER` group's `z_g`, the outer `w` over
+//! one of these: the flat objective's `z`, a `by` group's `z_g`, the outer `w` over
 //! those or over group sums, and each composed term's `z_k`.
 //!
 //! Two independent sides, because which of them the surrounding model already supplies
@@ -480,12 +486,11 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer,
 
 //! How stage 05 classified the objective's MIN/MAX shape, as `LinearizeMinMaxObjective`
 //! needs it. `flat_*` describes an unqualified `MIN(expr)` / `MAX(expr)` objective;
-//! `per_*` describes the two-level `OUTER(INNER(expr)) PER key` spelling, whose group
+//! `per_*` describes the two-level `outer(per k: inner(e) by (k))` form, whose group
 //! ids arrive on `SolverInput::objective_row_group_ids`. An objective is *easy* when the
 //! optimization direction already drives the auxiliary to the extreme (MINIMIZE+MAX,
 //! MAXIMIZE+MIN) and one envelope row per row suffices; the hard direction additionally
-//! needs the per-row indicator layer. `when_mask` is the evaluated `WHEN` filter and is
-//! read only when `has_when`.
+//! needs the per-row indicator layer.
 struct MinMaxObjectiveSpec {
     ObjectiveAggregateType flat_agg = ObjectiveAggregateType::NONE;
     bool flat_is_easy = false;
@@ -495,13 +500,15 @@ struct MinMaxObjectiveSpec {
     bool per_outer_is_easy = false;
     //! Inner reducer was AVG, rewritten to SUM with a per-group 1/n_g scale.
     bool per_inner_was_avg = false;
-    bool has_when = false;
-    vector<bool> when_mask;
+    //! Exactly the rows the objective's reducer reads (its terms' filters, the
+    //! objective's `when` folded in), each a member whatever its coefficients. Sized
+    //! to the input's rows.
+    vector<bool> member_rows;
 };
 
 //! Encode a MIN/MAX *objective* — the counterpart of `LinearizeMinMaxIndicators`, which
 //! encodes a MIN/MAX *constraint*. The per-row objective is replaced by a global
-//! auxiliary (`z` flat, `z_g` per group plus an outer `w` for the nested `PER` spelling),
+//! auxiliary (`z` flat, `z_g` per group plus an outer `w` for the two-level form),
 //! pinned by envelope rows against the evaluated objective coefficients; the hard
 //! direction adds one indicator binary per active row and a `SUM(y) >= 1` pin.
 //!
@@ -547,11 +554,15 @@ struct ComposedMinMaxTermData {
 //! Encode one composed MIN/MAX *constraint*: a global auxiliary and its pinning rows per
 //! MIN/MAX term, then one outer row summing the auxiliaries and the SUM/AVG terms against
 //! `rhs_val`. `terms` is mutated in place — each MIN/MAX term's `z_idx` is filled in.
+//! The outer row carries the clause's identity as execution numbered it: its repair group
+//! (`repair_group_id`, which no other clause shares) and `class_set`
+//! (SolverInput::class_sets, or INVALID_INDEX), the classes it stands for, which an
+//! expanded diagnosis reports one by one.
 void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &indexer,
-                                       vector<ComposedMinMaxTermData> &terms, double rhs_val,
-                                       ExpressionType outer_cmp, idx_t source_clause_id,
-                                       idx_t removal_group_id,
-                                       const vector<string> &var_names, NativeConstructPolicy native_min_max);
+                                       vector<ComposedMinMaxTermData> &terms, double rhs_val, ExpressionType outer_cmp,
+                                       idx_t source_clause_id, idx_t removal_group_id, idx_t repair_group_id,
+                                       idx_t class_set, const vector<string> &var_names,
+                                       NativeConstructPolicy native_min_max);
 
 //! Encode a composed MIN/MAX *objective*: the same auxiliary layer, but the composition is
 //! written into the objective — a coefficient on each auxiliary's column, and per-row

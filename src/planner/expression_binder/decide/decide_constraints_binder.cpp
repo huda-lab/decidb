@@ -69,7 +69,7 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
         case ExpressionClass::CONSTANT:
             return true;
         case ExpressionClass::COLUMN_REF:
-            // A plain data column, e.g. `stock` in `SUM(ship) <= stock PER depotID`.
+            // A plain data column, e.g. `stock` in `per depotID: sum(ship) by (depotID) <= stock`.
             // `ExpressionContainsDecideVariable` (checked by every caller of this
             // function) already excludes an actual decision variable by name on this
             // same parsed tree, so a bare column reaching here is always data.
@@ -77,25 +77,12 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
         case ExpressionClass::FUNCTION: {
             auto &func = expr.Cast<FunctionExpression>();
             if (func.is_operator) {
-                // A WHEN / PER / qualifier wrapper's children past the first are a
-                // predicate, PER key columns, or a relation alias -- not values on this
-                // side -- so validating them as bounds is a category error. A bare `w`
-                // is a legal WHEN condition and an illegal bound, and checking it as
-                // the latter rejected the whole wrapper. Same rule K0 already states
-                // for the canonicalizer: recurse into child 0 only.
-                //
-                // Reachable since the bind-time hoist was deleted by the
-                // canonicalization refactor; before that, `<= SUM(b) WHEN w` was
-                // rewritten away before this
-                // check ever saw it. The physical layer has always had the matching
-                // stages -- EvaluateRhsReducerPerGroup applies the reducer's own filter
-                // and BuildQualifierKeepMask its de-duplication -- so this opens paths
-                // that were built and unreachable, not new ones.
-                if (func.function_name == WHEN_CONSTRAINT_TAG ||
-                    func.function_name == QUALIFIED_REDUCER_TAG ||
-                    IsPerConstraintTag(func.function_name)) {
-                    return !func.children.empty() &&
-                           IsAllowedDecisionFreeBoundExpression(*func.children[0], variables);
+                // A qualifier or `by` marker's children past the first are relation
+                // names or a key -- not values on this side -- so validating them as
+                // bounds is a category error. Same rule K0 already states for the
+                // canonicalizer: recurse into child 0 only.
+                if (func.function_name == QUALIFIED_REDUCER_TAG || func.function_name == REDUCER_BY_TAG) {
+                    return !func.children.empty() && IsAllowedDecisionFreeBoundExpression(*func.children[0], variables);
                 }
                 // `-` used to be refused outright while `+` was allowed. Nothing
                 // downstream needs that asymmetry: a bound is evaluated as an
@@ -254,60 +241,6 @@ static unique_ptr<ConjunctionExpression> ExpandBetween(const BetweenExpression &
 	                                        std::move(upper_bound));
 }
 
-//! The conjuncts `expr` stands for once its WHEN / PER wrappers are peeled, each wrapped the way `expr` is.
-//!
-//! `(a AND b) WHEN c` is `(a WHEN c) AND (b WHEN c)`, and likewise for PER and for both together. A BETWEEN
-//! counts as the AND it expands to. Every later pass reads a WHEN or PER wrapper over ONE constraint: a
-//! wrapper over an untagged AND hands neither its condition nor its grouping to the conjuncts beneath it. So
-//! the wrapper is carried onto each conjunct here, where the wrapper and the AND first meet, and nothing
-//! downstream has to know a second shape. A conjunct that is itself an AND is split when it binds. Returns
-//! false, leaving `conjuncts` untouched, when `expr` does not end in an AND once its wrappers are peeled.
-static bool SplitWrappedConjunction(const ParsedExpression &expr, vector<unique_ptr<ParsedExpression>> &conjuncts) {
-	if (expr.GetExpressionClass() == ExpressionClass::BETWEEN) {
-		auto expanded = ExpandBetween(expr.Cast<BetweenExpression>());
-		conjuncts = std::move(expanded->children);
-		return true;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::CONJUNCTION) {
-		auto &conjunction = expr.Cast<ConjunctionExpression>();
-		if (conjunction.type != ExpressionType::CONJUNCTION_AND) {
-			return false;
-		}
-		for (auto &child : conjunction.children) {
-			conjuncts.push_back(child->Copy());
-		}
-		return true;
-	}
-	if (expr.GetExpressionClass() != ExpressionClass::FUNCTION) {
-		return false;
-	}
-	auto &wrapper = expr.Cast<FunctionExpression>();
-	if (!wrapper.is_operator ||
-	    (wrapper.function_name != WHEN_CONSTRAINT_TAG && !IsPerConstraintTag(wrapper.function_name))) {
-		return false;
-	}
-	vector<unique_ptr<ParsedExpression>> inner;
-	if (!SplitWrappedConjunction(*wrapper.children[0], inner)) {
-		return false;
-	}
-	for (auto &conjunct : inner) {
-		auto rewrapped = wrapper.Copy();
-		rewrapped->Cast<FunctionExpression>().children[0] = std::move(conjunct);
-		conjuncts.push_back(std::move(rewrapped));
-	}
-	return true;
-}
-
-//! Replaces a WHEN / PER wrapper around an AND with the AND of wrapped conjuncts (see SplitWrappedConjunction).
-static bool DistributeWrapperOverConjunction(unique_ptr<ParsedExpression> &expr_ptr) {
-	vector<unique_ptr<ParsedExpression>> conjuncts;
-	if (!SplitWrappedConjunction(*expr_ptr, conjuncts)) {
-		return false;
-	}
-	expr_ptr = make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(conjuncts));
-	return true;
-}
-
 BindResult DecideConstraintsBinder::BindBetween(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
 	expr_ptr = ExpandBetween(expr_ptr->Cast<BetweenExpression>());
 	return BindConjunction(expr_ptr, depth);
@@ -316,22 +249,20 @@ BindResult DecideConstraintsBinder::BindBetween(unique_ptr<ParsedExpression> &ex
 BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
     auto &expr = *expr_ptr;
     auto &conj = expr.Cast<ConjunctionExpression>();
-	// An OR met in constraint position is one the user wrote: `<>` becomes an OR only later, in the
-	// optimizer, and WHEN conditions and reducer arguments bind with is_top_expression false.
-	if (conj.GetExpressionType() == ExpressionType::CONJUNCTION_OR && is_top_expression) {
-		return BindResult(BinderException::Unsupported(
-		    expr, StringUtil::Format(
-		              "SUCH THAT does not support OR between constraints: '%s'. "
-		              "Write each constraint on its own, joined with AND; use <> or IN if that says what you mean.",
-		              expr.ToString())));
+	// Constraints are joined with AND. An OR between them would need an indicator per
+	// alternative, which no layer builds, and every later walk reads a conjunction as AND.
+	if (is_top_expression && conj.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+		return BindResult(BinderException::Unsupported(expr, "SUCH THAT: OR is not supported."));
 	}
-    // first try to bind the children of the case expression
-    ErrorData error;
-    for (idx_t i = 0; i < conj.children.size(); i++) {
-        is_top_expression = true;
-        BindChild(conj.children[i], depth, error);
-    }
-    if (error.HasError()) {
+	// A conjunction's children sit where it sits: constraints under a constraint list,
+	// data under an operand (`CAST((a AND (b OR c)) AS INT)`).
+	auto was_top_expression = is_top_expression;
+	ErrorData error;
+	for (idx_t i = 0; i < conj.children.size(); i++) {
+		is_top_expression = was_top_expression;
+		BindChild(conj.children[i], depth, error);
+	}
+	if (error.HasError()) {
         return BindResult(std::move(error));
     }
     // the children have been successfully resolved
@@ -346,128 +277,120 @@ BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression>
     return BindResult(std::move(result));
 }
 
-BindResult DecideConstraintsBinder::BindWhenConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-	if (DistributeWrapperOverConjunction(expr_ptr)) {
-		return BindConjunction(expr_ptr, depth);
+BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
+	// `[when c] [per K]: body`: the per marker is the outer one, the when marker the
+	// inner one. The markers stay where they are; their children bind in place. `per row`,
+	// the default written out, adds no class key: one constraint per kept row.
+	optional_ptr<FunctionExpression> per;
+	optional_ptr<FunctionExpression> when;
+	auto *body = &expr_ptr;
+	if (IsDecideMarker(**body, SCOPE_PER_ROW_TAG)) {
+		body = &(*body)->Cast<FunctionExpression>().children[0];
+	} else if (IsDecideMarker(**body, SCOPE_PER_TAG)) {
+		per = &(*body)->Cast<FunctionExpression>();
+		body = &per->children[0];
 	}
-	auto &func = expr_ptr->Cast<FunctionExpression>();
-	D_ASSERT(func.children.size() == 2);
-
-    // Validate: WHEN condition (child[1]) cannot reference DECIDE variables
-    if (ExpressionContainsDecideVariable(*func.children[1], variables)) {
-        return BindResult(BinderException::Unsupported(*expr_ptr,
-            "WHEN conditions cannot reference DECIDE variables. "
-            "The WHEN condition must only reference table columns."));
-    }
-    if (ContainsWhenOperator(*func.children[0])) {
-        return BindResult(BinderException::Unsupported(*expr_ptr,
-            "Cannot combine expression-level WHEN with aggregate-local WHEN in the same DECIDE constraint. "
-            "Move the shared condition into each aggregate-local WHEN, or keep a single expression-level WHEN."));
-    }
-
-    // A relation-qualified reducer (`sum(D: ...)`) is not a `func_application`, so WHEN
-    // written right after it always parses as this (whole-constraint) form rather than
-    // aggregate-local WHEN, taking everything after it — including a trailing comparison
-    // like `<= bound` — as the condition. What is left in child[0] is then the bare
-    // reducer, which can never be a constraint on its own. Catch that shape here with a
-    // message that names the fix, instead of falling through to the generic dispatch
-    // below, which would report the reducer's internal tag.
-    if (func.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION) {
-        auto &candidate = func.children[0]->Cast<FunctionExpression>();
-        if (candidate.is_operator && candidate.function_name == QUALIFIED_REDUCER_TAG &&
-            candidate.children.size() >= 2 &&
-            candidate.children[0]->GetExpressionClass() == ExpressionClass::FUNCTION) {
-            bool all_column_refs = true;
-            vector<string> relation_names;
-            for (idx_t i = 1; i < candidate.children.size(); i++) {
-                if (candidate.children[i]->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-                    all_column_refs = false;
-                    break;
-                }
-                relation_names.push_back(candidate.children[i]->Cast<ColumnRefExpression>().GetColumnName());
-            }
-            if (all_column_refs) {
-                auto agg_name = candidate.children[0]->Cast<FunctionExpression>().function_name;
-                auto relation = StringUtil::Join(relation_names, ", ");
-                return BindResult(BinderException::Unsupported(*expr_ptr,
-                    StringUtil::Format(
-                        "A relation-qualified reducer's WHEN must follow the comparison, not precede it. "
-                        "Write %s(%s: ...) <= bound WHEN cond.",
-                        StringUtil::Upper(agg_name), relation)));
-            }
-        }
-    }
-
-    // Bind the constraint (child[0]) through normal DECIDE constraint dispatch
-    is_top_expression = true;
-    ErrorData constraint_error;
-    BindChild(func.children[0], depth, constraint_error);
-    if (constraint_error.HasError()) {
-        return BindResult(std::move(constraint_error));
-    }
-
-    // Bind the condition (child[1]) using the base ExpressionBinder (not DECIDE-specific)
-    // RAII guard ensures flag is reset even if BindChild throws
-    is_top_expression = false;
-    binding_when_condition = true;
-    ErrorData condition_error;
-    try {
-        BindChild(func.children[1], depth, condition_error);
-    } catch (...) {
-        binding_when_condition = false;
-        throw;
-    }
-    binding_when_condition = false;
-    if (condition_error.HasError()) {
-        return BindResult(std::move(condition_error));
-    }
-
-    // Construct bound result: tagged BoundConjunctionExpression
-    // child[0] = bound constraint, child[1] = bound condition (cast to BOOLEAN)
-    auto &bound_constraint = BoundExpression::GetExpression(*func.children[0]);
-    auto &bound_condition = BoundExpression::GetExpression(*func.children[1]);
-
-    auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-    result->children.push_back(std::move(bound_constraint));
-    result->children.push_back(BoundCastExpression::AddCastToType(context, std::move(bound_condition), LogicalType::BOOLEAN));
-    result->alias = WHEN_CONSTRAINT_TAG;
-    return BindResult(std::move(result));
-}
-
-BindResult DecideConstraintsBinder::BindPerConstraint(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-	if (DistributeWrapperOverConjunction(expr_ptr)) {
-		return BindConjunction(expr_ptr, depth);
+	if (IsDecideMarker(**body, SCOPE_WHEN_TAG)) {
+		when = &(*body)->Cast<FunctionExpression>();
+		body = &when->children[0];
 	}
-	auto &func = expr_ptr->Cast<FunctionExpression>();
-	D_ASSERT(func.children.size() >= 2);
 
-    auto &constraint_child = func.children[0];  // constraint (possibly WHEN-wrapped)
+	ErrorData body_error;
+	is_top_expression = true;
+	BindChild(*body, depth, body_error);
+	if (body_error.HasError()) {
+		return BindResult(std::move(body_error));
+	}
 
-    // Validate each PER column (children[1..N])
-    for (idx_t i = 1; i < func.children.size(); i++) {
-        auto &column_child = func.children[i];
+	// The condition takes data only (ValidateDecideScopeSpellings): plain SQL, no
+	// parentheses needed around a compound one.
+	auto bind_condition = [&](unique_ptr<ParsedExpression> &parsed, unique_ptr<Expression> &bound) {
+		ErrorData error;
+		is_top_expression = false;
+		binding_when_condition = true;
+		try {
+			BindChild(parsed, depth, error);
+		} catch (...) {
+			binding_when_condition = false;
+			throw;
+		}
+		binding_when_condition = false;
+		if (!error.HasError()) {
+			bound = BoundCastExpression::AddCastToType(context, std::move(BoundExpression::GetExpression(*parsed)),
+			                                           LogicalType::BOOLEAN);
+		}
+		return error;
+	};
+	// A bound subquery cannot be copied, so a second constraint of the scope (a BETWEEN's
+	// other half) binds the condition afresh from it as written.
+	unique_ptr<ParsedExpression> condition_text;
+	unique_ptr<Expression> condition;
+	if (when) {
+		condition_text = when->children[1]->Copy();
+		auto error = bind_condition(when->children[1], condition);
+		if (error.HasError()) {
+			return BindResult(std::move(error));
+		}
+	}
+	vector<unique_ptr<Expression>> key;
+	idx_t key_fragment = DConstants::INVALID_INDEX;
+	if (per) {
+		// The key as written (`per D`), read before its elements bind. It cannot ride on
+		// the marker's alias: the expression binder gives the bound wrapper that alias.
+		if (qualifier_context && qualifier_context->source_fragments) {
+			auto key_text = DecideKeyToString(*per);
+			key_fragment = qualifier_context->source_fragments->size();
+			qualifier_context->source_fragments->push_back(key_text.empty() ? string("()") : key_text);
+		}
+		case_insensitive_set_t decision_names;
+		for (auto &variable : variables) {
+			decision_names.insert(variable.first);
+		}
+		key = BindKeyColumns(binder.bind_context, *per, decision_names);
+	}
 
-        // Validate: PER column must not reference a DECIDE variable
-        if (ExpressionContainsDecideVariable(*column_child, variables)) {
-            return BindResult(BinderException::Unsupported(*expr_ptr,
-                "PER column cannot be a DECIDE variable. "
-                "PER must group by a table column."));
-        }
-
-        // Validate: PER column must be a simple column reference
-        if (column_child->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-            return BindResult(BinderException::Unsupported(*expr_ptr,
-                "PER columns must be simple column references "
-                "(e.g., PER empID or PER (empID, dept)). Expressions are not supported."));
-        }
-    }
-
-    // Aggregate eligibility is deliberately deferred until the bound comparison has
-    // been canonicalized. Parsed shape cannot distinguish `SUM(p) + x <= 10` (a
-    // per-row decision beside a data-only reducer) from a homogeneous aggregate row.
-    // DecideCanonicalizer validates the completed shape and owns the PER error.
-
-    return BindPerWrapper(func, depth);
+	// One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and
+	// each half gets the whole scope.
+	auto scope = [&](unique_ptr<Expression> constraint) -> unique_ptr<Expression> {
+		if (when) {
+			unique_ptr<Expression> this_condition = std::move(condition);
+			if (!this_condition) {
+				auto parsed = condition_text->Copy();
+				auto error = bind_condition(parsed, this_condition);
+				if (error.HasError()) {
+					error.Throw();
+				}
+			}
+			auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+			wrapper->children.push_back(std::move(constraint));
+			wrapper->children.push_back(std::move(this_condition));
+			wrapper->alias = WHEN_CONSTRAINT_TAG;
+			constraint = std::move(wrapper);
+		}
+		if (per) {
+			auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+			wrapper->children.push_back(std::move(constraint));
+			for (auto &column : key) {
+				wrapper->children.push_back(column->Copy());
+			}
+			wrapper->alias = PER_CLASS_TAG;
+			if (key_fragment != DConstants::INVALID_INDEX) {
+				AddDecideTag(wrapper->alias, MakeSourceFragmentTag(key_fragment));
+			}
+			constraint = std::move(wrapper);
+		}
+		return constraint;
+	};
+	auto bound = std::move(BoundExpression::GetExpression(**body));
+	if (bound->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION && bound->alias.empty()) {
+		auto &halves = bound->Cast<BoundConjunctionExpression>();
+		auto result = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		for (auto &half : halves.children) {
+			result->children.push_back(scope(std::move(half)));
+		}
+		return BindResult(std::move(result));
+	}
+	return BindResult(scope(std::move(bound)));
 }
 
 BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
@@ -493,23 +416,18 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
         if (!is_top_expression) {
             return ExpressionBinder::BindExpression(expr_ptr, depth);
         }
-        // A bare column at the top level of SUCH THAT is never a valid
-        // constraint. Top-level commas are rejected by the parser, but keep
-        // the PER hint here for malformed single-column inputs and older
-        // prepared parse trees that surface a bare grouping key.
-        return BindResult(BinderException::Unsupported(
-            expr, StringUtil::Format(
-                      "'%s' is not a valid SUCH THAT constraint on its own. "
-                      "To group a constraint by multiple columns, parenthesize them: PER (col1, col2).",
-                      expr.ToString())));
-    }
-    case ExpressionClass::CONSTANT: {
-        if (!is_top_expression) {
+		// A bare column at the top level of SUCH THAT is never a valid constraint.
+		return BindResult(BinderException::Unsupported(
+		    expr, StringUtil::Format("'%s' is not a valid SUCH THAT constraint on its own; compare it with a value",
+		                             expr.ToString())));
+	}
+	case ExpressionClass::CONSTANT: {
+		if (!is_top_expression) {
             return ExpressionBinder::BindExpression(expr_ptr, depth);
         }
         break;
-    }
-    case ExpressionClass::CAST: {
+	}
+	case ExpressionClass::CAST: {
         if (!is_top_expression) {
             return ExpressionBinder::BindExpression(expr_ptr, depth);
         }
@@ -517,23 +435,16 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
     }
     case ExpressionClass::FUNCTION: {
         auto &func = expr.Cast<FunctionExpression>();
-        // DecidB: PER constraint wrapper (outermost, wraps optional WHEN)
-        if (func.is_operator && IsPerConstraintTag(func.function_name)) {
-            return BindPerConstraint(expr_ptr, depth);
-        }
-        // DecidB: top-level WHEN wraps a whole constraint. Nested WHEN is the
-        // aggregate-local form and binds through DecideBinder::BindFunction.
-        if (func.is_operator && func.function_name == WHEN_CONSTRAINT_TAG) {
-            if (!is_top_expression) {
-                return BindFunction(expr_ptr, depth);
-            }
-            return BindWhenConstraint(expr_ptr, depth);
-        }
-        if (!is_top_expression) {
-            return BindFunction(expr_ptr, depth);
-        }
-        break;
-    }
+		// `[when c] [per K]:` in front of a constraint.
+		if (func.is_operator && (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG ||
+		                         func.function_name == SCOPE_PER_ROW_TAG)) {
+			return BindScopedConstraint(expr_ptr, depth);
+		}
+		if (!is_top_expression) {
+			return BindFunction(expr_ptr, depth);
+		}
+		break;
+	}
     case ExpressionClass::COMPARISON:
         return BindComparison(expr_ptr, depth);
     case ExpressionClass::OPERATOR: {
@@ -564,7 +475,7 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
 DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &expr_ptr, string& error_msg){
     // A relation qualifier changes which tuples a reducer sums over, not what shape it
     // is, so classification looks straight through it.
-    auto &expr = const_cast<ParsedExpression &>(UnwrapQualifiedReducer(expr_ptr));
+    auto &expr = const_cast<ParsedExpression &>(UnwrapReducerMarkers(expr_ptr));
     switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF: {
         if (!IsVariableExpression(expr, variables)) {
@@ -572,8 +483,8 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
             return DecideExpression::INVALID;
         }
         return DecideExpression::VARIABLE;
-    }
-    case ExpressionClass::FUNCTION: {
+	}
+	case ExpressionClass::FUNCTION: {
 		auto &func = expr.Cast<FunctionExpression>();
 		DecideExpression reducer_result;
 		if (ClassifyReducerCall(func, reducer_result, error_msg)) {
@@ -602,7 +513,7 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
         error_msg = StringUtil::Format("The left-hand side of a SUCH THAT constraint must be a DECIDE variable or a SUM expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.", expr.ToString());
     	return DecideExpression::INVALID;
     }
-    }
+	}
 }
 
 } // namespace duckdb

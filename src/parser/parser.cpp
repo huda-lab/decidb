@@ -16,7 +16,6 @@
 #include "parser/parser.hpp"
 #include "postgres_parser.hpp"
 
-#include "duckdb/parser/decide/decide_parse_hints.hpp"
 
 namespace duckdb {
 
@@ -224,7 +223,7 @@ void Parser::ParseQuery(const string &query) {
 				transformer.TransformParseTree(parser.parse_tree, statements);
 				parsing_succeed = true;
 			} else {
-				parser_error = MaybeAppendDecideWhenHint(query, parser.error_message);
+				parser_error = parser.error_message;
 				if (parser.error_location > 0) {
 					parser_error_location = NumericCast<idx_t>(parser.error_location - 1);
 				}

@@ -547,6 +547,198 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 	return body;
 }
 
+/*
+ * DecidB: the PER half of a scope written in front of a body. A key names
+ * columns or relations and nothing else; an expression there is meant for BY,
+ * which is where expressions go.
+ */
+static PGNode *
+makeDecideScope(PGDecidePer per, PGList *key, int location, core_yyscan_t yyscanner)
+{
+	PGDecideScope *scope = makeNode(PGDecideScope);
+	PGListCell *element;
+	PGListCell *field;
+
+	foreach(element, key)
+	{
+		PGNode *name = (PGNode *) lfirst(element);
+		bool is_name = IsA(name, PGColumnRef);
+
+		if (is_name)
+			foreach(field, ((PGColumnRef *) name)->fields)
+				is_name = is_name && IsA((PGNode *) lfirst(field), PGString);
+		if (!is_name)
+			ereport(ERROR,
+					(errcode(PG_ERRCODE_SYNTAX_ERROR),
+					 errmsg("a per key lists columns or relations; put expressions in by (...)"),
+					 parser_errposition(location)));
+	}
+	scope->per = per;
+	scope->key = key;
+	scope->location = location;
+	return (PGNode *) scope;
+}
+
+/*
+ * DecidB: the type word of a declaration's type marker, so a message can quote
+ * the declaration as written.
+ */
+static const char *
+decideTypeWord(PGTypeName *type)
+{
+	const char *marker = strVal(llast(type->names));
+
+	if (strcmp(marker, "integer_variable") == 0)
+		return "INT";
+	if (strcmp(marker, "real_variable") == 0)
+		return "REAL";
+	return "BOOL";
+}
+
+/*
+ * DecidB: a name as a message quotes it, so the declaration it suggests parses: in double
+ * quotes when it is a keyword or holds anything but letters, digits and underscores, the
+ * rule DuckDB prints names by (KeywordHelper::WriteOptionallyQuoted).
+ */
+static char *
+decideName(const char *name)
+{
+	bool plain = name[0] != '\0';
+	int quotes = 0;
+	const char *c;
+	char *quoted;
+	char *out;
+
+	for (c = name; *c; c++)
+	{
+		bool letter = (*c >= 'a' && *c <= 'z') || (*c >= 'A' && *c <= 'Z') || *c == '_';
+		bool digit = c != name && *c >= '0' && *c <= '9';
+		if (!letter && !digit)
+			plain = false;
+		if (*c == '"')
+			quotes++;
+	}
+	if (plain && is_keyword(name) == PGKeywordCategory::PG_KEYWORD_NONE)
+		return pstrdup(name);
+	quoted = (char *) palloc(strlen(name) + quotes + 3);
+	out = quoted;
+	*out++ = '"';
+	for (c = name; *c; c++)
+	{
+		if (*c == '"')
+			*out++ = '"';
+		*out++ = *c;
+	}
+	*out++ = '"';
+	*out = '\0';
+	return quoted;
+}
+
+/*
+ * DecidB: a declaration's scope as written -- per (), per row, per a, D.b -- so a
+ * message can name the declaration.
+ */
+static char *
+decideScopeText(PGNode *scope_node)
+{
+	PGDecideScope *scope = (PGDecideScope *) scope_node;
+	PGListCell *element;
+	PGListCell *field;
+	char *text;
+
+	if (scope->per == PG_DECIDE_PER_ALL)
+		return psprintf("per ()");
+	if (scope->per == PG_DECIDE_PER_ROW)
+		return psprintf("per row");
+	text = psprintf("per");
+	foreach(element, scope->key)
+	{
+		const char *separator = element == list_head(scope->key) ? " " : ", ";
+
+		foreach(field, ((PGColumnRef *) lfirst(element))->fields)
+		{
+			text = psprintf("%s%s%s", text, separator, decideName(strVal(lfirst(field))));
+			separator = ".";
+		}
+	}
+	return text;
+}
+
+/*
+ * DecidB: the removed "C PER g, h" wrote a multi-column key with a comma, so its
+ * columns reach the constraint list one by one. Fold such a column into the PER
+ * marker that ends the list, so the error names the whole key; false for any
+ * other comma.
+ */
+static bool
+absorbRemovedPerKey(PGNode *constraints, PGNode *item)
+{
+	PGNode *last = constraints;
+	PGAExpr *per;
+
+	if (!IsA(item, PGColumnRef))
+		return false;
+	if (IsA(last, PGBoolExpr) && ((PGBoolExpr *) last)->boolop == PG_AND_EXPR)
+		last = (PGNode *) llast(((PGBoolExpr *) last)->args);
+	if (!IsA(last, PGAExpr) || ((PGAExpr *) last)->kind != PG_AEXPR_PER_CONSTRAINT)
+		return false;
+	per = (PGAExpr *) last;
+	if (per->rexpr && IsA(per->rexpr, PGList))
+		per->rexpr = (PGNode *) lappend((PGList *) per->rexpr, item);
+	else
+		per->rexpr = (PGNode *) list_make2(per->rexpr, item);
+	return true;
+}
+
+/*
+ * DecidB: fold a scope around the body it governs. WHEN applies first and PER
+ * second, so PER is the outer node. PER ROW is the default written out: it names
+ * no key, but it keeps a node of its own, so the clause follows the scoping
+ * language like every other spelling.
+ */
+static PGNode *
+applyDecideScope(PGNode *scope_node, PGNode *body)
+{
+	PGDecideScope *scope = (PGDecideScope *) scope_node;
+
+	if (scope->when)
+	{
+		((PGAExpr *) scope->when)->lexpr = body;
+		body = scope->when;
+	}
+	if (scope->per == PG_DECIDE_PER_ALL || scope->per == PG_DECIDE_PER_KEY)
+		body = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_PER, "scope_per", body,
+										  (PGNode *) scope->key, scope->location);
+	else if (scope->per == PG_DECIDE_PER_ROW)
+		body = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_PER_ROW, "scope_per_row", body,
+										  NULL, scope->location);
+	return body;
+}
+
+/*
+ * DecidB: a relation-qualified reducer, sum(D: expr) or sum(D, T: expr). Every
+ * item of the qualifier must be a bare relation name; the binder resolves them.
+ */
+static PGNode *
+makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
+					 int location, int qualifier_location, int colon_location,
+					 core_yyscan_t yyscanner)
+{
+	PGListCell *lc;
+
+	foreach(lc, qualifier)
+	{
+		if (!IsA((PGNode *) lfirst(lc), PGColumnRef))
+			ereport(ERROR,
+					(errcode(PG_ERRCODE_SYNTAX_ERROR),
+					 errmsg("the qualifier of a reducer must be a relation name or alias, as in sum(D: ...)"),
+					 parser_errposition(qualifier_location)));
+	}
+	return (PGNode *) makeSimpleAExpr(PG_AEXPR_QUALIFIED_REDUCER, "qualified_reducer",
+									  (PGNode *) makeFuncCall(funcname, args, location),
+									  (PGNode *) qualifier, colon_location);
+}
+
 static PGNode *
 makeAndExpr(PGNode *lexpr, PGNode *rexpr, int location)
 {

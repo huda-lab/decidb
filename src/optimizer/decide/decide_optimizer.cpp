@@ -23,6 +23,7 @@
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -97,10 +98,12 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	phase.Next("optimizer.in_domain");
 	RewriteInDomain(decide);
 	phase.Next("optimizer.abs");
-	TagAbsConstraintsForBigM(optimizer.context, decide); // Must run before RewriteAbs: marks ABS nodes that need Big-M
+	TagAbsForBigM(optimizer.context, decide); // Must run before RewriteAbs: marks ABS nodes that need Big-M
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
 	phase.Next("optimizer.bilinear");
 	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products
+	phase.Next("optimizer.scoped_reducers");
+	RewriteScopedReducers(decide); // The value rewrite: a VALUE-shape clause's reducers become helper decisions
 	phase.Next("optimizer.composed_minmax");
 	RewriteComposedMinMax(decide); // Detect composed MIN/MAX before single-term MIN/MAX rewrite
 	phase.Next("optimizer.minmax");
@@ -151,6 +154,9 @@ void decide_rewrite::CopyClauseProvenanceTags(const string &from_alias, Expressi
 	if (TryParseRemovalGroupTag(from_alias, removal_id)) {
 		AddDecideTag(alias, MakeRemovalGroupTag(removal_id));
 	}
+	if (HasDecideTag(from_alias, OBJECTIVE_ROW_TAG)) {
+		AddDecideTag(alias, OBJECTIVE_ROW_TAG);
+	}
 	to.SetAlias(std::move(alias));
 }
 
@@ -161,13 +167,61 @@ void decide_rewrite::MarkFormulationConstraint(Expression &expr, const string &s
 	CopyClauseProvenanceTags(source_alias, expr);
 }
 
+idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type,
+                                           bool is_boolean, DecideVarScopeInfo scope, const string &label) {
+	idx_t var_idx = decide.decide_variables.size();
+	decide.decide_variables.push_back(
+	    make_uniq<BoundColumnRefExpression>(name, type, ColumnBinding(decide.decide_index, var_idx)));
+	decide.num_auxiliary_vars++;
+	decide.is_boolean_var.push_back(is_boolean);
+	if (!decide.variable_scopes.empty() || scope.scope != DecideVarScope::ROW) {
+		while (decide.variable_scopes.size() < var_idx) {
+			decide.variable_scopes.push_back(DecideVarScopeInfo::Row());
+		}
+		decide.variable_scopes.push_back(scope);
+	}
+	if (!label.empty()) {
+		decide.aux_var_expressions.emplace_back(var_idx, label);
+	}
+	return var_idx;
+}
+
+unique_ptr<Expression> decide_rewrite::MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx) {
+	auto &ref = decide.decide_variables[var_idx]->Cast<BoundColumnRefExpression>();
+	return make_uniq<BoundColumnRefExpression>(ref.GetName(), ref.return_type, ref.binding);
+}
+
+string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide &decide) {
+	// The labels of the auxiliaries earlier passes made, so a construct over one prints
+	// it as what it stands for rather than by its internal name.
+	return RenderDecideSource(expr, DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys,
+	                                                decide.decide_index, decide.aux_var_expressions));
+}
+
+void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id,
+                                       LogicalDecide::RewriteAccount::Kind kind, string subject) {
+	LogicalDecide::RewriteAccount account;
+	account.source_clause_id = source_clause_id;
+	account.kind = kind;
+	account.subject = std::move(subject);
+	decide.rewrite_accounts.push_back(std::move(account));
+}
+
+void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, const string &clause_alias,
+                                       LogicalDecide::RewriteAccount::Kind kind, string subject) {
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	TryParseSourceClauseTag(clause_alias, source_clause_id);
+	AddRewriteAccount(decide, source_clause_id, kind, std::move(subject));
+}
+
 //! The user clause a rewrite is currently standing inside. A comparison carrying a
 //! source id starts a new one; every other node inherits its parent's. This is what lets
 //! a row emitted deep inside a clause still name the clause it came from.
 string decide_rewrite::DescendSourceAlias(const Expression &expr, const string &inherited) {
 	idx_t provenance_id;
 	return TryParseSourceClauseTag(expr.GetAlias(), provenance_id) ||
-	               TryParseRemovalGroupTag(expr.GetAlias(), provenance_id)
+	               TryParseRemovalGroupTag(expr.GetAlias(), provenance_id) ||
+	               HasDecideTag(expr.GetAlias(), OBJECTIVE_ROW_TAG)
 	           ? expr.GetAlias()
 	           : inherited;
 }
@@ -256,27 +310,25 @@ unique_ptr<Expression> decide_rewrite::MakeTrueExpression(const string &source_a
 	return placeholder;
 }
 
-//! The sign a factor contributes: +1, -1, or 0 when it is not known until the query
-//! runs. Any foldable numeric expression is decidable here; a scalar subquery is not.
-//!
-//! Nothing depends on this for correctness -- it selects between an exact cheap
-//! linearization and an exact expensive one. 0 must therefore be treated as "assume
-//! the expensive one", never as an error.
-int decide_rewrite::ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides) {
-	if (!scale) {
-		return 1;
+ClauseScope decide_rewrite::EnterClauseScope(const Expression &node, ClauseScope scope) {
+	if (node.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+		auto &conj = node.Cast<BoundConjunctionExpression>();
+		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+			scope.when = conj.children[1].get();
+		}
 	}
-	double d;
-	if (!TryEvaluateFoldableDouble(context, *scale, d, FOLD_CATCH_ALL)) {
-		return 0;
+	return scope;
+}
+
+unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row, const ClauseScope &scope) {
+	if (!scope.when) {
+		return row;
 	}
-	if (d == 0.0) {
-		// A zero factor annihilates the term. Dividing by it is an error the
-		// evaluator will raise; multiplying by it makes the sign irrelevant, and
-		// "positive" keeps the cheap path (every coefficient is zero either way).
-		return divides ? 0 : 1;
-	}
-	return d < 0.0 ? -1 : 1;
+	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	wrapper->children.push_back(std::move(row));
+	wrapper->children.push_back(scope.when->Copy());
+	wrapper->alias = WHEN_CONSTRAINT_TAG;
+	return std::move(wrapper);
 }
 
 } // namespace duckdb

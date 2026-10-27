@@ -4,6 +4,7 @@
 #include <functional>
 #include <limits>
 
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rules.hpp"
@@ -25,7 +26,7 @@
 // the probe declines, so the solver path stays in place.
 //
 // The edit is for the shapes the front end never produces from SQL (a per-row clause that carries a reducer, a term
-// over a second decision, an output type that is not INTEGER) and for PER keys. Every case names the branch it
+// over a second decision, an output type that is not INTEGER) and for grouping keys. Every case names the branch it
 // targets, and reaches an arm of the rule's decision code that no other case of the rule reaches (the per-arm
 // check is `make decide-coverage`). Each rule also has forms that apply, so a decline is about the one thing a
 // case changes.
@@ -51,6 +52,7 @@ struct Shape {
 const char *SOURCE_ROWS =
     "(VALUES (1, 2.0::DOUBLE, 3, TRUE, 'a', 1.5::FLOAT), (2, 1.0::DOUBLE, 1, FALSE, 'b', 2.5::FLOAT),"
     " (3, 4.0::DOUBLE, 2, TRUE, 'c', 0.5::FLOAT)) t(id, w, cap, flag, name, f)";
+constexpr idx_t FLAG_SLOT = 3;
 constexpr idx_t NAME_SLOT = 4;
 
 //! Offers the IR to `target`, after the edit, and records the answer. It always declines, so the query keeps its
@@ -75,8 +77,8 @@ public:
 	string Summary() const override {
 		return "probe";
 	}
-	DirectSubstitute Apply(duckdb::unique_ptr<LogicalOperator>, Optimizer &,
-	                       const DirectApplicabilityCondition &) const override {
+	DirectSubstitute Apply(duckdb::unique_ptr<LogicalOperator>, Optimizer &, const DirectApplicabilityCondition &,
+	                       const duckdb::vector<string> &) const override {
 		throw InternalException("The probe rule never applies");
 	}
 
@@ -170,6 +172,18 @@ duckdb::unique_ptr<Expression> PairWithSourceColumn(DirectIR &ir, duckdb::unique
 	    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ir.source_bindings[slot]));
 }
 
+//! Grouping keys on the constraints, one list of source slots per constraint in order. No SQL produces one until
+//! direct solve reads a reducer's `by` key, so every grouping case is an edit.
+Edit PerKeys(duckdb::vector<duckdb::vector<idx_t>> slots) {
+	return [slots](DirectIR &ir) {
+		for (idx_t i = 0; i < slots.size(); i++) {
+			for (auto slot : slots[i]) {
+				ir.constraints[i].scope.per_key_slots.push_back(slot);
+			}
+		}
+	};
+}
+
 Edit PerKeyOnConstraint(idx_t constraint) {
 	return [constraint](DirectIR &ir) {
 		ir.constraints[constraint].scope.per_key_slots.push_back(0);
@@ -201,8 +215,8 @@ duckdb::vector<Shape> S1AppliesShapes() {
 	shapes.push_back(S1("a scaled objective part", "SUM(x) <= 2", nullptr, "MINIMIZE 2 * SUM(w*x) / 4"));
 	shapes.push_back(S1("a count bound below zero", "SUM(x) <= -1"));
 	shapes.push_back(S1("a feasibility problem", "SUM(x) <= 2", nullptr, ""));
-	shapes.push_back(S1("counts PER a column", "SUM(x) <= 2 PER flag"));
-	shapes.push_back(S1("an aggregate-local WHEN", "SUM(x) WHEN flag <= 2 AND SUM(x) WHEN flag >= 1"));
+	shapes.push_back(S1("counts PER a column", "SUM(x) <= 2", PerKeys({{FLAG_SLOT}})));
+	shapes.push_back(S1("an aggregate-local WHEN", "SUM(when flag: x) <= 2 AND SUM(when flag: x) >= 1"));
 	shapes.push_back(S1("a negated body against every comparison",
 	                    "SUM(-x) <= -1 AND SUM(-x) < 5 AND SUM(-x) > -3 AND SUM(-x) >= -3"));
 	shapes.push_back(S1("a negated body against an equality", "SUM(-x) = -2"));
@@ -212,7 +226,7 @@ duckdb::vector<Shape> S1AppliesShapes() {
 	    S1("fixed values by a strict or not-equal comparison", "SUM(x) <= 2 AND x > 0 AND x < 1 AND x <> 1"));
 	shapes.push_back(S1("fixed values from a Boolean column", "SUM(x) <= 2 AND x = flag AND x <= flag AND x >= flag"));
 	shapes.push_back(S1("fixed values from a Boolean column under a WHEN",
-	                    "SUM(x) <= 2 AND x <= flag WHEN flag AND x = 1 WHEN flag"));
+	                    "SUM(x) <= 2 AND when flag: x <= flag AND when flag: x = 1"));
 	shapes.push_back(S1("a Boolean column compared strictly", "SUM(x) <= 2 AND x < flag"));
 	shapes.push_back(S1("a fixed value from a Boolean expression", "SUM(x) <= 2 AND x <= CAST(NOT flag AS INTEGER)"));
 	shapes.push_back(S1("a fixed value from a DOUBLE column", "SUM(x) <= 2 AND x <= w"));
@@ -228,7 +242,7 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	// CheckCondition: the decision.
 	shapes.push_back(S1("two decisions", "SUM(x) <= 2", nullptr, S1_OBJECTIVE, "x(BOOL), y(BOOL)"));
 	shapes.push_back(S1("a REAL decision", "SUM(x) <= 2", nullptr, S1_OBJECTIVE, "x(REAL)"));
-	shapes.push_back(S1("a query-wide decision", "s <= 1", nullptr, "MAXIMIZE s", "scalar s(BOOL)"));
+	shapes.push_back(S1("a query-wide decision", "s <= 1", nullptr, "MAXIMIZE s", "per (): s(BOOL)"));
 	shapes.push_back(S1("a decision whose output is not INTEGER", "SUM(x) <= 2",
 	                    [](DirectIR &ir) { ir.decisions[0].output_type = LogicalType::BIGINT; }));
 	shapes.push_back(S1("an entity scope", "SUM(x) <= 2", [](DirectIR &ir) { ir.entity_scopes.emplace_back(); }));
@@ -260,13 +274,16 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("a per-row clause over another decision", "SUM(x) <= 2 AND x <= 1",
 	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].var_a = 1; }));
 	// CheckCondition: the objective.
-	shapes.push_back(S1("an objective WHEN", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x) WHEN flag"));
+	shapes.push_back(S1("an objective WHEN", "SUM(x) <= 2", nullptr, "MAXIMIZE when flag: SUM(w*x)"));
 	shapes.push_back(
 	    S1("an objective PER key", "SUM(x) <= 2", [](DirectIR &ir) { ir.objective.scope.per_key_slots.push_back(0); }));
 	shapes.push_back(
 	    S1("a sense with no objective part", "SUM(x) <= 2", [](DirectIR &ir) { ir.objective.parts.clear(); }));
 	// ProveScope.
 	shapes.push_back(S1("a count with a negative sign", "0 - SUM(x) >= -2"));
+	// The canonicalizer reads `0 - SUM(x)` as a scale of -1, so only an edit sets the part's own sign.
+	shapes.push_back(
+	    S1("a count whose part has a negative sign", "SUM(x) <= 2", [](DirectIR &ir) { LeftPart(ir).sign = -1; }));
 	shapes.push_back(S1("an average where a count is", "AVG(x) <= 1"));
 	shapes.push_back(S1("a qualified count", "SUM(x) <= 2", [](DirectIR &ir) { LeftPart(ir).qualifier = 0; }));
 	shapes.push_back(
@@ -279,10 +296,10 @@ duckdb::vector<Shape> S1DeclineShapes() {
 		                    ir.constraints[1].scope.when = True();
 	                    }));
 	shapes.push_back(S1("bounds with different PER keys", "SUM(x) >= 1 AND SUM(x) <= 2", PerKeyOnConstraint(1)));
-	shapes.push_back(S1("a second bound without the WHEN the first has", "SUM(x) >= 1 WHEN flag AND SUM(x) <= 2"));
+	shapes.push_back(S1("a second bound without the WHEN the first has", "when flag: SUM(x) >= 1 AND SUM(x) <= 2"));
 	shapes.push_back(
-	    S1("bounds with different WHEN conditions", "SUM(x) >= 1 WHEN flag AND SUM(x) <= 2 WHEN (NOT flag)"));
-	shapes.push_back(S1("a WHEN that may raise", "SUM(x) <= 2 WHEN (CAST(cap AS TINYINT) > 0)"));
+	    S1("bounds with different WHEN conditions", "when flag: SUM(x) >= 1 AND when NOT flag: SUM(x) <= 2"));
+	shapes.push_back(S1("a WHEN that may raise", "when CAST(cap AS TINYINT) > 0: SUM(x) <= 2"));
 	shapes.push_back(S1("a WHEN that is not Boolean", "SUM(x) <= 2", [](DirectIR &ir) {
 		ir.constraints[0].scope.when = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
 	}));
@@ -291,8 +308,8 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("a fixed value with a column coefficient", "SUM(x) <= 2 AND w * x = 1"));
 	shapes.push_back(S1("a fixed value with no coefficient", "SUM(x) <= 2 AND x = 1",
 	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].coefficient.reset(); }));
-	shapes.push_back(
-	    S1("a fixed value under a WHEN that reads more than the source", "SUM(x) <= 2 AND x = 1 WHEN (random() < 2)"));
+	shapes.push_back(S1("a fixed value under a WHEN that reads more than the source",
+	                    "SUM(x) <= 2 AND when txid_current() >= 0: x = 1"));
 	shapes.push_back(S1("a fixed value below the Boolean domain", "SUM(x) <= 2 AND x <= -1"));
 	shapes.push_back(
 	    S1("a fixed value that is a constant but not a finite number", "SUM(x) <= 2 AND x = 'inf'::DOUBLE"));
@@ -359,7 +376,8 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(
 	    S1("an objective coefficient that reads a column outside the source", "SUM(x) <= 2",
 	       [](DirectIR &ir) { ir.objective.parts[0].terms[0].coefficient = ForeignColumn(LogicalType::DOUBLE); }));
-	shapes.push_back(S1("a random objective coefficient", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(random()*x)"));
+	shapes.push_back(S1("an objective coefficient fixed only within the query", "SUM(x) <= 2", nullptr,
+	                    "MAXIMIZE SUM(txid_current()*x)"));
 	shapes.push_back(S1("several objective terms where a coefficient has a child that may raise before another child",
 	                    "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x) + SUM(least(cap*cap, 5)*x)"));
 	return shapes;
@@ -379,11 +397,11 @@ Shape A1(const string &branch, const string &constraints, Edit edit = nullptr, c
 duckdb::vector<Shape> A1AppliesShapes() {
 	duckdb::vector<Shape> shapes;
 	shapes.push_back(A1("plain form: a per-row bound and a linear objective", "x <= cap"));
-	shapes.push_back(A1("an equality and a bound under a WHEN", "x = cap AND x >= -3 WHEN flag"));
+	shapes.push_back(A1("an equality and a bound under a WHEN", "x = cap AND when flag: x >= -3"));
 	shapes.push_back(A1("a Boolean decision", "x <= flag", nullptr, A1_OBJECTIVE, "x(BOOL)"));
 	shapes.push_back(A1("a square with a constant", "x <= cap", nullptr, "MINIMIZE SUM(POWER(x - w, 2) + 5)"));
 	shapes.push_back(
-	    A1("an objective part with a WHEN", "x <= cap", nullptr, "MINIMIZE SUM(POWER(w*x - 3, 2)) WHEN flag"));
+	    A1("an objective part with a WHEN", "x <= cap", nullptr, "MINIMIZE when flag: SUM(POWER(w*x - 3, 2))"));
 	shapes.push_back(A1("no objective", "x <= cap", nullptr, ""));
 	shapes.push_back(A1("an objective constant that reads a column", "x <= 5", nullptr, "MAXIMIZE SUM(2*x + w)"));
 	shapes.push_back(
@@ -405,7 +423,7 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	// CheckCondition: the decisions.
 	shapes.push_back(A1("no decision", "x <= cap", [](DirectIR &ir) { ir.decisions.clear(); }));
 	shapes.push_back(A1("an entity scope", "x <= cap", [](DirectIR &ir) { ir.entity_scopes.emplace_back(); }));
-	shapes.push_back(A1("a query-wide decision", "s <= 3", nullptr, "MAXIMIZE s", "scalar s(REAL)"));
+	shapes.push_back(A1("a query-wide decision", "s <= 3", nullptr, "MAXIMIZE s", "per (): s(REAL)"));
 	// CheckCondition: the constraints.
 	shapes.push_back(A1("an aggregate constraint", "SUM(x) <= 5"));
 	shapes.push_back(A1("a membership constraint", "x IN (1, 2)"));
@@ -471,7 +489,7 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	}));
 	shapes.push_back(A1("a bound whose value is a string", "x <= cap",
 	                    [](DirectIR &ir) { ir.constraints[0].rhs = make_uniq<BoundConstantExpression>(Value("a")); }));
-	shapes.push_back(A1("a bound under a WHEN that may raise", "x <= cap WHEN (CAST(cap AS TINYINT) > 0)"));
+	shapes.push_back(A1("a bound under a WHEN that may raise", "when CAST(cap AS TINYINT) > 0: x <= cap"));
 	shapes.push_back(A1("a bound under a WHEN that is not Boolean", "x <= cap", [](DirectIR &ir) {
 		ir.constraints[0].scope.when = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
 	}));
@@ -488,15 +506,17 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	shapes.push_back(A1("a Boolean bound below the domain", "x <= -1", nullptr, A1_OBJECTIVE, "x(BOOL)"));
 	// ProveObjective.
 	shapes.push_back(A1("an objective WHEN that reads more than the source", "x <= cap", nullptr,
-	                    "MAXIMIZE SUM(w*x) WHEN (random() < 2)"));
-	shapes.push_back(A1("a random objective coefficient", "x <= cap", nullptr, "MAXIMIZE SUM(random()*x)"));
+	                    "MAXIMIZE when txid_current() >= 0: SUM(w*x)"));
+	shapes.push_back(A1("an objective coefficient fixed only within the query", "x <= cap", nullptr,
+	                    "MAXIMIZE SUM(txid_current()*x)"));
 	shapes.push_back(A1("an objective divided by zero", "x <= cap", nullptr, "MAXIMIZE SUM(w*x) / 0"));
 	shapes.push_back(A1("an objective scaled by infinity", "x <= cap", nullptr, "MAXIMIZE 'inf'::DOUBLE * SUM(w*x)"));
 	shapes.push_back(A1("an objective term over a decision that is not declared", "x <= cap",
 	                    [](DirectIR &ir) { ir.objective.parts[0].terms[0].var_a = 5; }));
 	shapes.push_back(A1("an objective part with a filter that reads more than the source", "x <= cap",
 	                    [](DirectIR &ir) { ir.objective.parts[0].filter = ForeignBoolean(); }));
-	shapes.push_back(A1("an objective constant that is random", "x <= cap", nullptr, "MAXIMIZE SUM(w*x + random())"));
+	shapes.push_back(A1("an objective constant fixed only within the query", "x <= cap", nullptr,
+	                    "MAXIMIZE SUM(w*x + txid_current())"));
 	shapes.push_back(A1("an objective term with no coefficient", "x <= cap",
 	                    [](DirectIR &ir) { ir.objective.parts[0].terms[0].coefficient.reset(); }));
 	shapes.push_back(A1(
@@ -540,8 +560,8 @@ duckdb::vector<Shape> A1DeclineShapes() {
 		    inner.erase(inner.begin());
 	    },
 	    "MINIMIZE SUM(POWER(x - w, 2))"));
-	shapes.push_back(
-	    A1("a square with a random constant", "x <= cap", nullptr, "MINIMIZE SUM(POWER(x - random(), 2))"));
+	shapes.push_back(A1("a square with a constant fixed only within the query", "x <= cap", nullptr,
+	                    "MINIMIZE SUM(POWER(x - txid_current(), 2))"));
 	shapes.push_back(A1(
 	    "a square term with no coefficient", "x <= cap",
 	    [](DirectIR &ir) { ir.objective.parts[0].terms[0].inner[1].coefficient.reset(); },
@@ -567,7 +587,7 @@ duckdb::vector<Shape> R1AppliesShapes() {
 	shapes.push_back(R1("plain form: a bound, a budget and a linear objective", "x <= cap AND SUM(cap*x) <= 5"));
 	shapes.push_back(R1("a budget with no per-row bound", "SUM(cap*x) <= 5"));
 	shapes.push_back(R1("an equality and a bound under a WHEN, a folded lower bound",
-	                    "x = cap WHEN flag AND x >= -3 AND x <= cap WHEN (NOT flag) AND SUM(cap*x) <= 5"));
+	                    "when flag: x = cap AND x >= -3 AND when NOT flag: x <= cap AND SUM(cap*x) <= 5"));
 	shapes.push_back(R1("no objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, ""));
 	shapes.push_back(R1("a minimizing objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MINIMIZE SUM(w*x)"));
 	shapes.push_back(R1("an objective of two scaled parts", "x <= cap AND SUM(cap*x) <= 5", nullptr,
@@ -588,8 +608,9 @@ duckdb::vector<Shape> R1AppliesShapes() {
 	shapes.push_back(R1("a range read from the data", "SUM(w*x) >= cap AND SUM(w*x) <= cap + 10"));
 	shapes.push_back(R1("a column limit beside a constant one", "SUM(w*x) >= 1 AND SUM(w*x) <= cap"));
 	shapes.push_back(R1("a column limit and a constant one on the same side", "SUM(w*x) <= 7 AND SUM(w*x) <= cap"));
-	shapes.push_back(R1("a column limit with a PER key and a WHEN", "SUM(w*x) <= cap WHEN flag PER name"));
-	shapes.push_back(R1("a column limit under a WHEN of the sum", "SUM(w*x) WHEN flag <= cap"));
+	shapes.push_back(
+	    R1("a column limit with a PER key and a WHEN", "when flag: SUM(w*x) <= cap", PerKeys({{NAME_SLOT}})));
+	shapes.push_back(R1("a column limit under a WHEN of the sum", "SUM(when flag: w*x) <= cap"));
 	shapes.push_back(R1("a column limit on two decisions", "x <= cap AND y <= cap AND SUM(w*x + w*y) <= cap", nullptr,
 	                    "MAXIMIZE SUM(w*x + f*y)", "x(REAL), y(REAL)"));
 	// The budget's direction: a lower limit, both limits, a range, one sum compared twice.
@@ -602,21 +623,20 @@ duckdb::vector<Shape> R1AppliesShapes() {
 	shapes.push_back(R1("a budget whose limits cross", "SUM(cap*x) >= 5 AND SUM(cap*x) <= 3"));
 	// The budget's scope: a PER key, a WHEN written on the clause or on the aggregate, and the same scope on every
 	// clause of one budget, written either way.
-	shapes.push_back(R1("a budget with a PER key", "x <= cap AND SUM(cap*x) <= 5 PER name"));
 	shapes.push_back(
 	    R1("a budget with a PER key edited into the IR", "x <= cap AND SUM(cap*x) <= 5", PerKeyOnConstraint(1)));
-	shapes.push_back(R1("a budget with two PER keys", "SUM(cap*x) <= 5 PER (name, flag)"));
-	shapes.push_back(R1("a budget under a WHEN", "x <= cap AND SUM(cap*x) <= 5 WHEN flag"));
-	shapes.push_back(R1("a budget with an aggregate WHEN", "x <= cap AND SUM(cap*x) WHEN flag <= 5"));
-	shapes.push_back(R1("a budget with a PER key and a WHEN", "SUM(cap*x) <= 5 WHEN flag PER name"));
-	shapes.push_back(
-	    R1("a range with the same PER key on both clauses", "SUM(cap*x) >= 1 PER name AND SUM(cap*x) <= 5 PER name"));
-	shapes.push_back(
-	    R1("a range under a WHEN written on both clauses", "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) <= 5 WHEN flag"));
+	shapes.push_back(R1("a budget with two PER keys", "SUM(cap*x) <= 5", PerKeys({{NAME_SLOT, FLAG_SLOT}})));
+	shapes.push_back(R1("a budget under a WHEN", "x <= cap AND when flag: SUM(cap*x) <= 5"));
+	shapes.push_back(R1("a budget with an aggregate WHEN", "x <= cap AND SUM(when flag: cap*x) <= 5"));
+	shapes.push_back(R1("a budget with a PER key and a WHEN", "when flag: SUM(cap*x) <= 5", PerKeys({{NAME_SLOT}})));
+	shapes.push_back(R1("a range with the same PER key on both clauses", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
+	                    PerKeys({{NAME_SLOT}, {NAME_SLOT}})));
+	shapes.push_back(R1("a range under a WHEN written on both clauses",
+	                    "when flag: SUM(cap*x) >= 1 AND when flag: SUM(cap*x) <= 5"));
 	shapes.push_back(R1("a range with the WHEN on the clause of one and the aggregate of the other",
-	                    "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) WHEN flag <= 5"));
+	                    "when flag: SUM(cap*x) >= 1 AND SUM(when flag: cap*x) <= 5"));
 	shapes.push_back(R1("a range with the WHEN on the aggregate of both",
-	                    "SUM(cap*x) WHEN flag >= 1 AND SUM(cap*x) WHEN flag <= 5"));
+	                    "SUM(when flag: cap*x) >= 1 AND SUM(when flag: cap*x) <= 5"));
 	// Several decisions in one budget: the pieces of a benefit. Each decision has its own weight, value and bounds.
 	shapes.push_back(R1("two decisions in one budget, each with its own bound and its own weight",
 	                    "x <= cap AND y <= cap AND SUM(cap*x + w*y) <= 5", nullptr, "MAXIMIZE SUM(w*x + cap*y)",
@@ -629,9 +649,9 @@ duckdb::vector<Shape> R1AppliesShapes() {
 	shapes.push_back(R1("a decision the objective does not name", "SUM(cap*x + cap*y) <= 5", nullptr,
 	                    "MAXIMIZE SUM(w*x)", "x(REAL), y(REAL)"));
 	shapes.push_back(R1("a decision with a bound of its own under a WHEN",
-	                    "x <= cap AND y <= cap WHEN flag AND SUM(cap*x + cap*y) <= 5", nullptr,
+	                    "x <= cap AND when flag: y <= cap AND SUM(cap*x + cap*y) <= 5", nullptr,
 	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
-	shapes.push_back(R1("two decisions in a budget with a PER key", "SUM(cap*x + cap*y) <= 5 PER name", nullptr,
+	shapes.push_back(R1("two decisions in a budget with a PER key", "SUM(cap*x + cap*y) <= 5", PerKeys({{NAME_SLOT}}),
 	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
 	return shapes;
 }
@@ -648,10 +668,10 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	    [](DirectIR &ir) { ir.decisions[1].output_type = LogicalType::BIGINT; }, "MAXIMIZE SUM(w*x + w*y)",
 	    "x(REAL), y(REAL)"));
 	shapes.push_back(R1("a query-wide second decision", "SUM(cap*x + cap*s) <= 5", nullptr, "MAXIMIZE SUM(w*x) + s",
-	                    "x(REAL), scalar s(REAL)"));
+	                    "x(REAL), per (): s(REAL)"));
 	shapes.push_back(R1("an INT decision", "SUM(cap*x) <= 5", nullptr, R1_OBJECTIVE, "x(INT)"));
 	shapes.push_back(R1("a BOOL decision", "SUM(cap*x) <= 5", nullptr, R1_OBJECTIVE, "x(BOOL)"));
-	shapes.push_back(R1("a query-wide decision", "SUM(cap*s) <= 5", nullptr, "MAXIMIZE s", "scalar s(REAL)"));
+	shapes.push_back(R1("a query-wide decision", "SUM(cap*s) <= 5", nullptr, "MAXIMIZE s", "per (): s(REAL)"));
 	shapes.push_back(R1("a decision whose output is not DOUBLE", "SUM(cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.decisions[0].output_type = LogicalType::BIGINT; }));
 	shapes.push_back(R1("an entity scope", "SUM(cap*x) <= 5", [](DirectIR &ir) { ir.entity_scopes.emplace_back(); }));
@@ -679,27 +699,29 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(R1("a bound with a negative sign", "x <= cap AND SUM(cap*x) <= 5",
 	                    [](DirectIR &ir) { LeftPart(ir, 0).sign = -1; }));
 	// ProveBudgetScope: every clause of the budget covers the same rows.
-	shapes.push_back(R1("a PER key on one clause of the budget only", "SUM(cap*x) >= 1 PER name AND SUM(cap*x) <= 5"));
+	shapes.push_back(R1("a PER key on one clause of the budget only", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
+	                    PerKeys({{NAME_SLOT}, {}})));
+	shapes.push_back(R1("another PER key on the second clause", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
+	                    PerKeys({{NAME_SLOT}, {FLAG_SLOT}})));
+	shapes.push_back(R1("the PER keys in another order on the second clause", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
+	                    PerKeys({{NAME_SLOT, FLAG_SLOT}, {FLAG_SLOT, NAME_SLOT}})));
+	shapes.push_back(R1("a PER key more on the second clause", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
+	                    PerKeys({{NAME_SLOT}, {NAME_SLOT, FLAG_SLOT}})));
+	shapes.push_back(R1("a WHEN on one clause of the budget only", "when flag: SUM(cap*x) >= 1 AND SUM(cap*x) <= 5"));
 	shapes.push_back(
-	    R1("another PER key on the second clause", "SUM(cap*x) >= 1 PER name AND SUM(cap*x) <= 5 PER flag"));
-	shapes.push_back(R1("the PER keys in another order on the second clause",
-	                    "SUM(cap*x) >= 1 PER (name, flag) AND SUM(cap*x) <= 5 PER (flag, name)"));
-	shapes.push_back(
-	    R1("a PER key more on the second clause", "SUM(cap*x) >= 1 PER name AND SUM(cap*x) <= 5 PER (name, flag)"));
-	shapes.push_back(R1("a WHEN on one clause of the budget only", "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) <= 5"));
-	shapes.push_back(
-	    R1("another WHEN on the second clause", "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) <= 5 WHEN (NOT flag)"));
+	    R1("another WHEN on the second clause", "when flag: SUM(cap*x) >= 1 AND when NOT flag: SUM(cap*x) <= 5"));
 	shapes.push_back(R1("another WHEN on the aggregate of the second clause",
-	                    "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) WHEN (cap > 1) <= 5"));
-	shapes.push_back(R1("a WHEN on the clause and on the aggregate", "SUM(cap*x) WHEN flag <= 5",
+	                    "when flag: SUM(cap*x) >= 1 AND SUM(when cap > 1: cap*x) <= 5"));
+	shapes.push_back(R1("a WHEN on the clause and on the aggregate", "SUM(when flag: cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.constraints[0].scope.when = True(); }));
 	shapes.push_back(R1("a WHEN on the clause and on the aggregate of the second clause",
-	                    "SUM(cap*x) >= 1 WHEN flag AND SUM(cap*x) WHEN flag <= 5",
+	                    "when flag: SUM(cap*x) >= 1 AND SUM(when flag: cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.constraints[1].scope.when = True(); }));
 	shapes.push_back(
 	    R1("a second clause of the budget that is not a plain sum", "SUM(cap*x) >= 1 AND 2 * SUM(cap*x) <= 5"));
-	shapes.push_back(R1("a WHEN that reads more than the source", "SUM(cap*x) <= 5 WHEN (random() < 2)"));
-	shapes.push_back(R1("an aggregate WHEN that reads more than the source", "SUM(cap*x) WHEN (random() < 2) <= 5"));
+	shapes.push_back(R1("a WHEN that reads more than the source", "when txid_current() >= 0: SUM(cap*x) <= 5"));
+	shapes.push_back(
+	    R1("an aggregate WHEN that reads more than the source", "SUM(when txid_current() >= 0: cap*x) <= 5"));
 	// ProveBudget.
 	shapes.push_back(R1("a strict budget", "x <= cap AND SUM(cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.constraints[1].comparison = ExpressionType::COMPARE_LESSTHAN; }));
@@ -717,12 +739,15 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].var_a = 1; }));
 	shapes.push_back(R1("a budget term with no coefficient", "x <= cap AND SUM(cap*x) <= 5",
 	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].coefficient.reset(); }));
-	shapes.push_back(R1("a budget with a random weight", "x <= cap AND SUM(random()*x) <= 5"));
+	shapes.push_back(
+	    R1("a budget with a weight fixed only within the query", "x <= cap AND SUM(txid_current()*x) <= 5"));
 	shapes.push_back(R1("a budget with a weight outside the source", "x <= cap AND SUM(cap*x) <= 5", [](DirectIR &ir) {
 		LeftPart(ir, 1).terms[0].coefficient = ForeignColumn(LogicalType::DOUBLE);
 	}));
 	// A limit of the data must be a numeric value of the source row (ProveDataLimit); a constant is read as a number.
-	shapes.push_back(R1("a budget limit that is random", "x <= cap AND SUM(w*x) <= cap * random()"));
+	// The bound-side window rewrite reduces a limit that varies by row to a column, so this one has one value already.
+	shapes.push_back(
+	    R1("a budget limit fixed only within the query", "x <= cap AND SUM(w*x) <= SUM(cap) * txid_current()"));
 	shapes.push_back(
 	    R1("a budget limit that is an aggregate the rewrite left", "x <= cap AND SUM(w*x) <= 5", [](DirectIR &ir) {
 		    ir.constraints[1].rhs = make_uniq<BoundAggregateExpression>(
@@ -748,7 +773,7 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	// CheckCondition and ProveObjective: the objective.
 	shapes.push_back(R1("an objective PER key", "x <= cap AND SUM(cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.objective.scope.per_key_slots.push_back(0); }));
-	shapes.push_back(R1("an objective WHEN", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(w*x) WHEN flag"));
+	shapes.push_back(R1("an objective WHEN", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE when flag: SUM(w*x)"));
 	shapes.push_back(R1("an average objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE AVG(w*x)"));
 	shapes.push_back(R1("an objective part with a filter", "x <= cap AND SUM(cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.objective.parts[0].filter = True(); }));
@@ -768,8 +793,8 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	                    [](DirectIR &ir) { ir.objective.parts[0].terms[0].coefficient.reset(); }));
 	shapes.push_back(
 	    R1("an objective divided by zero", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(w*x) / 0"));
-	shapes.push_back(
-	    R1("a random objective coefficient", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(random()*x)"));
+	shapes.push_back(R1("an objective coefficient fixed only within the query", "x <= cap AND SUM(cap*x) <= 5", nullptr,
+	                    "MAXIMIZE SUM(txid_current()*x)"));
 	return shapes;
 }
 
@@ -846,6 +871,185 @@ TEST_CASE("The rule driver offers a rule only an IR the front end read in full",
 	constraint.constraints.emplace_back();
 	constraint.constraints[1].status = DirectAnalysisStatus::NOT_PROVED;
 	CHECK(!DirectIRIsReadable(constraint));
+}
+
+//===--------------------------------------------------------------------===//
+// Keyed plans, run from an edited IR
+//===--------------------------------------------------------------------===//
+
+// The front end declines a reducer's `by` key until direct solve reads one (framework todo H-04, H-05), yet S1's and
+// R1's keyed plans stay for that work. These cases run them: the rule checks and applies the IR after an edit adds the
+// key, and its answer must equal the solver's on the query that writes the same key as `by`.
+
+//! Edits the IR the driver offers, then lets `target` check and apply it, so the rule's real plan runs.
+class EditedRule final : public DirectSolveRule {
+public:
+	EditedRule(duckdb::unique_ptr<DirectSolveRule> target_p, Edit edit_p)
+	    : target(std::move(target_p)), edit(std::move(edit_p)) {
+	}
+	const char *Name() const override {
+		return target->Name();
+	}
+	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir,
+	                                                                ClientContext &context) const override {
+		edit(const_cast<DirectIR &>(ir));
+		return target->CheckCondition(ir, context);
+	}
+	string Summary() const override {
+		return target->Summary();
+	}
+	DirectSubstitute Apply(duckdb::unique_ptr<LogicalOperator> source, Optimizer &optimizer,
+	                       const DirectApplicabilityCondition &condition,
+	                       const duckdb::vector<string> &source_fragments) const override {
+		return target->Apply(std::move(source), optimizer, condition, source_fragments);
+	}
+
+private:
+	duckdb::unique_ptr<DirectSolveRule> target;
+	Edit edit;
+};
+
+//! Source columns: id, g (VARCHAR, never NULL: the keyed plans leave a NULL-key row ungrouped, framework todo H-05),
+//! w (DOUBLE), cap (INTEGER), flag (BOOLEAN). Within a group no two rows tie on w or on w / cap, so each optimum is
+//! unique.
+const char *KEYED_ROWS = "(VALUES (1, 'a', 5.0::DOUBLE, 2, TRUE), (2, 'a', 4.0::DOUBLE, 1, FALSE),"
+                         " (3, 'a', 1.5::DOUBLE, 3, TRUE), (4, 'b', 3.0::DOUBLE, 2, FALSE),"
+                         " (5, 'b', 6.0::DOUBLE, 1, TRUE), (6, 'c', 2.5::DOUBLE, 1, TRUE),"
+                         " (7, 'c', 7.0::DOUBLE, 2, FALSE)) t(id, g, w, cap, flag)";
+constexpr idx_t KEYED_ID_SLOT = 0;
+constexpr idx_t KEYED_G_SLOT = 1;
+constexpr idx_t KEYED_FLAG_SLOT = 4;
+
+string KeyedQuery(const string &declaration, const string &constraints, const string &objective,
+                  const string &selected) {
+	return "SELECT id, " + selected + " FROM (FROM " + string(KEYED_ROWS) + " DECIDE " + declaration + " SUCH THAT " +
+	       constraints + " " + objective + ") q ORDER BY id";
+}
+
+//! The answer of `query` under direct solve with only `rule` (after `edit`) registered; `require` fails the query when
+//! the rule declines.
+duckdb::unique_ptr<MaterializedQueryResult> RunEdited(Connection &con, MakeRule make_rule, Edit edit,
+                                                      const string &query) {
+	auto state = make_shared_ptr<DirectRuleTestSeam>();
+	state->make_rules = [make_rule, edit] {
+		duckdb::vector<duckdb::unique_ptr<DirectSolveRule>> rules;
+		rules.push_back(make_uniq<EditedRule>(make_rule(), edit));
+		return rules;
+	};
+	con.context->registered_state->Remove(DIRECT_RULE_TEST_SEAM_KEY);
+	con.context->registered_state->Insert(DIRECT_RULE_TEST_SEAM_KEY, std::move(state));
+	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='require'"));
+	auto result = con.Query(query);
+	con.context->registered_state->Remove(DIRECT_RULE_TEST_SEAM_KEY);
+	return result;
+}
+
+duckdb::unique_ptr<MaterializedQueryResult> RunSolver(Connection &con, const string &query) {
+	REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='off'"));
+	return con.Query(query);
+}
+
+struct KeyedCase {
+	string branch;
+	MakeRule make_rule;
+	string declaration;
+	//! The constraints direct solve reads; `{by}` is empty there and the written key for the solver.
+	string constraints;
+	string objective;
+	string selected;
+	//! The key slots of each constraint, in order.
+	duckdb::vector<duckdb::vector<idx_t>> keys;
+	string written_key;
+};
+
+string WithKey(const string &constraints, const string &key) {
+	return StringUtil::Replace(constraints, "{by}", key);
+}
+
+TEST_CASE("S1 and R1 keyed plans answer as the solver does on the same `by` key", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	duckdb::vector<KeyedCase> cases;
+	cases.push_back({"S1 counts per group",
+	                 MakeS1UniformMatroidRule,
+	                 "x(BOOL)",
+	                 "SUM(x){by} <= 1",
+	                 "MAXIMIZE SUM(w*x)",
+	                 "x",
+	                 {{KEYED_G_SLOT}},
+	                 " by (g)"});
+	// Fixed values and no lower bound: the plan counts the fixed rows per group but has no free count to keep.
+	cases.push_back({"S1 per group with a fixed value and no lower bound",
+	                 MakeS1UniformMatroidRule,
+	                 "x(BOOL)",
+	                 "SUM(x){by} <= 2 AND x >= flag",
+	                 "MAXIMIZE SUM(w*x)",
+	                 "x",
+	                 {{KEYED_G_SLOT}},
+	                 " by (g)"});
+	cases.push_back({"R1 fills each group's budget by value per weight",
+	                 MakeR1ContinuousKnapsackRule,
+	                 "x(REAL)",
+	                 "x <= cap AND SUM(cap*x){by} <= 3",
+	                 "MAXIMIZE SUM(w*x)",
+	                 "ROUND(x, 9)",
+	                 {{}, {KEYED_G_SLOT}},
+	                 " by (g)"});
+	cases.push_back({"R1 groups by two key columns",
+	                 MakeR1ContinuousKnapsackRule,
+	                 "x(REAL)",
+	                 "x <= cap AND SUM(cap*x){by} <= 2",
+	                 "MAXIMIZE SUM(w*x)",
+	                 "ROUND(x, 9)",
+	                 {{}, {KEYED_G_SLOT, KEYED_FLAG_SLOT}},
+	                 " by (g, flag)"});
+	// The second decision has no weight in the budget, so its rows spend nothing in any group.
+	cases.push_back({"R1 per group beside a decision outside the budget",
+	                 MakeR1ContinuousKnapsackRule,
+	                 "x(REAL), y(REAL)",
+	                 "x <= cap AND y <= cap AND SUM(cap*x){by} <= 3",
+	                 "MAXIMIZE SUM(w*x) + SUM(w*y)",
+	                 "ROUND(x, 9), ROUND(y, 9)",
+	                 {{}, {}, {KEYED_G_SLOT}},
+	                 " by (g)"});
+	for (auto &keyed : cases) {
+		INFO(keyed.branch);
+		auto solver = RunSolver(con, KeyedQuery(keyed.declaration, WithKey(keyed.constraints, keyed.written_key),
+		                                        keyed.objective, keyed.selected));
+		REQUIRE_NO_FAIL(*solver);
+		auto direct =
+		    RunEdited(con, keyed.make_rule, PerKeys(keyed.keys),
+		              KeyedQuery(keyed.declaration, WithKey(keyed.constraints, ""), keyed.objective, keyed.selected));
+		REQUIRE_NO_FAIL(*direct);
+		CHECK(direct->ToString() == solver->ToString());
+	}
+}
+
+//! A reducer row check that looks only at the rows `rows` keeps (`when flag: SUM(when id > bar: x)` in SQL, which no
+//! rule reads yet): the plan raises its message when none of those rows passes the filter.
+Edit RowCheckOverFlaggedRows(int32_t bar) {
+	return [bar](DirectIR &ir) {
+		DirectRowCheck check;
+		check.rows = make_uniq<BoundColumnRefExpression>(LogicalType::BOOLEAN, ir.source_bindings[KEYED_FLAG_SLOT]);
+		check.filter = make_uniq<BoundComparisonExpression>(
+		    ExpressionType::COMPARE_GREATERTHAN,
+		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ir.source_bindings[KEYED_ID_SLOT]),
+		    make_uniq<BoundConstantExpression>(Value::INTEGER(bar)));
+		check.message = "probe: the reducer reads no flagged row";
+		ir.row_checks.push_back(std::move(check));
+	};
+}
+
+TEST_CASE("A reducer row check reads only the rows its clause keeps", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	auto query = KeyedQuery("x(BOOL)", "SUM(x) <= 1", "MAXIMIZE SUM(w*x)", "x");
+	// Row 6 is flagged and has id > 5.
+	REQUIRE_NO_FAIL(*RunEdited(con, MakeS1UniformMatroidRule, RowCheckOverFlaggedRows(5), query));
+	// Row 7 has id > 6 but is not flagged, so the check must not count it.
+	auto failed = RunEdited(con, MakeS1UniformMatroidRule, RowCheckOverFlaggedRows(6), query);
+	REQUIRE(failed->HasError());
+	CHECK(failed->GetError().find("probe: the reducer reads no flagged row") != string::npos);
 }
 
 } // namespace direct_decline_test

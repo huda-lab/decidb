@@ -1,60 +1,88 @@
-# WHEN Clause Test Coverage — Done
+# `when` Test Coverage — Done
 
 Tests live in:
-- `test/decide/tests/test_when_constraint.py` — expression-level WHEN on constraints
-- `test/decide/tests/test_when_perrow.py` — WHEN on per-row constraints
-- `test/decide/tests/test_when_objective.py` — WHEN on objectives
+- `test/decide/tests/test_when_constraint.py` — `when c:` in front of an aggregate constraint
+- `test/decide/tests/test_when_perrow.py` — `when c:` in front of a per-row constraint
+- `test/decide/tests/test_when_objective.py` — `MAXIMIZE|MINIMIZE when c: E`
 - `test/decide/tests/test_when_compound.py` — compound AND/OR conditions
-- `test/decide/tests/test_aggregate_local_when.py` — aggregate-local WHEN variant
+- `test/decide/tests/test_when_grammar.py` — parenthesized and bare conditions
+- `test/decide/tests/test_aggregate_local_when.py` — a reducer's own `when`, `agg(when c: e)`
+
+The scoping language's own suites (kept rows, NULL conditions, the empty-set errors,
+the grid) are in [`../scope/done.md`](../scope/done.md). Syntax:
+`00_project_overview/syntax_reference.md` §4, §5.3, §6.3 and §7.2.
 
 ## Scenarios covered
 
 All oracle-verified unless noted:
 
-- **WHEN on aggregate constraints** (`test_when_constraint.py`): string-equality and numeric-comparison conditions, constant coefficient in WHEN-gated SUM, `<>` with WHEN (expression-level), all/no rows matching (trivially applies / trivially satisfied), NULL in condition column, mixed conditional + unconditional constraints, different WHEN per constraint, constraint ordering invariance. Note: explicit `IS NOT NULL` predicate in WHEN works but requires parens around the predicate (`test_when_is_not_null_predicate`).
-- **WHEN on per-row constraints** (`test_when_perrow.py`): force to zero when inactive, force selection under condition, numeric row filter, all/no rows matching. Note: REAL variable exercises the continuous skip-constraint path with no implicit [0,1] cap (`test_when_perrow_real`).
-- **WHEN on objectives** (`test_when_objective.py`): MAXIMIZE + WHEN, MINIMIZE + WHEN, unconditional constraint + WHEN objective, same vs different WHEN on constraint and objective, WHEN objective matching zero rows.
-- **Compound conditions** (`test_when_compound.py`): AND, OR (parenthesized), nested compound conditions.
-- **Aggregate-local WHEN** (`test_aggregate_local_when.py`): independent masks on additive aggregate terms (single aggregate, three terms, overlapping filters, all rows filtered out, mixed filtered + unfiltered terms in both objective and constraint, objective atomic-comparison grammar and constraint-bound ambiguity); composition with AVG, PER, AVG + PER, easy MAX, hard MAX (`>=`, Big-M indicators restricted to WHEN-matching rows), bilinear (constraint and objective), entity-scoped, BETWEEN, `<>` (plain and + PER); regression that expression-level WHEN + PER still works.
+- **`when` in front of an aggregate constraint** (`test_when_constraint.py`):
+  string-equality and numeric conditions, a constant coefficient in the reducer, `<>`
+  in the condition, every row kept (the same as no `when`), NULL in the condition column
+  (the row is dropped), an explicit `IS NOT NULL` condition, conditional and
+  unconditional constraints together, a different `when` per constraint, constraint
+  order invariance.
+- **`when` in front of a per-row constraint** (`test_when_perrow.py`): force to zero,
+  force selection, a numeric row filter, every row kept, and a REAL decision with no
+  implicit [0, 1] cap (`test_when_perrow_real`).
+- **`when` on the objective** (`test_when_objective.py`): MAXIMIZE and MINIMIZE under a
+  `when`, an unconditional constraint beside it, the same and different conditions on
+  the constraint and the objective, every row kept.
+- **Compound conditions** (`test_when_compound.py`): AND and OR, nested, mixed string
+  and numeric, on aggregate and per-row constraints and on the objective.
+- **Condition grammar** (`test_when_grammar.py`): parenthesized `NOT`, comparison and
+  arithmetic conditions on a reducer's `when` and on the objective's; a bare comparison
+  after the objective's `when` gives the same answer as its parenthesized spelling. A
+  condition runs to its colon, so no condition needs parentheses.
+- **A reducer's own `when`** (`test_aggregate_local_when.py`): independent filters on
+  additive reducers (one reducer, three, overlapping filters, filtered beside
+  unfiltered, in the constraint and the objective); a `when` in front applied before a
+  reducer's own; composition with AVG, `per`, AVG + `per`, easy MAX, hard MAX (`>=`,
+  Big-M indicators only on kept rows), bilinear terms (constraint and objective), keyed
+  decisions, `BETWEEN`, `<>` (plain and under `per`); constant offsets and scalar
+  multipliers around a filtered reducer; a data column multiplying or dividing a
+  filtered reducer (`col * sum(when w: x) <= 20`), which takes the value shape and is
+  judged by the scope oracle.
 
-### Empty aggregate-local WHEN
+### Empty row sets
 
-Every empty aggregate, including SUM/AVG and easy, hard, or composed MIN/MAX,
-is rejected before the solver runs by `RejectEmptyAggregate` in
-`physical_decide.cpp`. `test_edge_cases.py` covers bare, composed, and mixed
-empty/populated terms; `test_min_max.py` covers objective and constraint directions
-and the PER case where only one group is empty.
-
-### Condition grammar
-
-`test_when_grammar.py` covers parenthesized `NOT`, comparison, and arithmetic
-conditions on both constraints and objectives; the permitted unparenthesized atomic
-objective comparison; the corresponding rejected unparenthesized forms; and the
-parenthesization hint appended by `MaybeAppendDecideWhenHint`.
+A `when` in front that keeps no row is an error, "when c matches no rows." (D4):
+`test_when_constraint.py::test_when_no_rows_match`,
+`test_when_perrow.py::test_when_perrow_no_matches`,
+`test_when_objective.py::test_when_objective_no_match`. A reducer whose own `when`
+keeps no row is an error, "agg(when c: e) has no rows." (D8):
+`test_aggregate_local_when.py::test_aggregate_local_when_all_filtered_out` and the
+mixed-filter cases, and the empty MIN/MAX, SUM and AVG cases of `test_edge_cases.py`
+(see [`../min_max/done.md`](../min_max/done.md)). A `when` in front that leaves one
+`per` class without a kept row generates nothing for that class
+(`test_per_multi_column.py::test_multi_column_per_when_eliminates_all_in_group`).
 
 ### Error cases
 
-`test_aggregate_local_when.py` / `test_error_binder.py`: mixing
-expression-level and aggregate-local WHEN rejected; DECIDE variable in a WHEN
-condition (plain and compound) rejected.
+A decision in a condition is refused with "x is a decision; when, per and by may only
+use data" — `test_error_binder.py` (plain and compound) and
+`test_aggregate_local_when.py` (a reducer's `when` and the objective's). The removed
+spellings of a condition are refused by the parser (`syntax_reference.md` §10.3) —
+`test_scope_removed_syntax.py`.
 
 ## Feature interactions covered
 
 | Feature A | Feature B | Tested |
 |-----------|-----------|--------|
-| WHEN | aggregate constraint | ✓ |
-| WHEN | per-row constraint | ✓ (BOOL, INT, REAL) |
-| WHEN | objective | ✓ |
-| WHEN | compound AND/OR | ✓ |
-| WHEN | PER | ✓ |
-| WHEN | MIN/MAX (easy) | ✓ |
-| WHEN | MIN/MAX (hard, aggregate-local) | ✓ |
-| WHEN | AVG | ✓ |
-| WHEN | ABS (objective) | ✓ |
-| WHEN | QP | ✓ |
-| WHEN | quadratic constraint | ✓ |
-| WHEN | `<>` (expression-level) | ✓ |
-| WHEN | `<>` (aggregate-local) | ✓ |
-| WHEN | entity-scoped | ✓ |
-| WHEN | bilinear | ✓ |
-| WHEN | NULL in condition column | ✓ |
+| `when` | aggregate constraint | ✓ |
+| `when` | per-row constraint | ✓ (BOOL, INT, REAL) |
+| `when` | objective | ✓ |
+| `when` | compound AND/OR | ✓ |
+| `when` | `per` | ✓ |
+| `when` | MIN/MAX (easy) | ✓ |
+| `when` | MIN/MAX (hard, a reducer's own `when`) | ✓ |
+| `when` | AVG | ✓ |
+| `when` | ABS (objective) | ✓ |
+| `when` | QP | ✓ |
+| `when` | quadratic constraint | ✓ |
+| `when` | `<>` comparison under a `when` in front | ✓ (`test_cons_comparison.py`) |
+| `when` | `<>` (a reducer's own) | ✓ |
+| `when` | keyed decisions | ✓ |
+| `when` | bilinear | ✓ |
+| `when` | NULL in condition column | ✓ |
+| `when` | a data column scaling a filtered reducer | ✓ (scope oracle) |

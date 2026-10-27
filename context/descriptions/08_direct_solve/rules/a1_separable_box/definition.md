@@ -63,7 +63,7 @@ The catalogue builds candidates with `UNION ALL`, ranks them with `ROW_NUMBER` a
 holds its own decisions, none of that is needed: the plan is a chain of projections over the source, each reading only
 the one before it.
 
-> 1\. every coefficient, bound and `WHEN` is evaluated on every row;
+> 1\. every coefficient, bound and `when` is evaluated on every row its `when` keeps, and nothing on a row it drops;
 >
 > 2\. each bound clause becomes a lower and an upper bound on its decision, and the objective becomes `a*x² + b*x` per
 > decision;
@@ -98,26 +98,27 @@ For one bounded linear or quadratic function, the optimum can only occur at an e
 >
 > • Empty intervals produce DECIDE's infeasible result, while empty input remains empty.
 >
-> • WHEN, PER, NULL, numeric, tie, decision-identity, and output-mapping semantics are preserved.
+> • `when`, `per`, `by`, NULL, numeric, tie, decision-identity, and output-mapping semantics are preserved.
 
 ## As built
 
 What the implementation settles beyond the catalogue text:
 
-> • **Default box.** `BOOL` is [0, 1], `INT` and `REAL` are [0, ∞). A bare unconditional constant lower bound replaces
-> the default 0; every other lower bound intersects with it.
+> • **Default box.** `BOOL` is [0, 1], `INT` and `REAL` are [0, ∞). An unconditional constant lower bound the solver
+> folds replaces the default 0; every other lower bound intersects with it. A1 reads the bare spelling (`x >= -3`) and
+> declines an affine one (`2*x >= -6`, D41) until it reads the folded box.
 >
-> • **Bounds.** A clause may carry a coefficient and an offset on the decision, a `WHEN`, and a value that is a
+> • **Bounds.** A clause may carry a coefficient and an offset on the decision, a `when`, and a value that is a
 > constant, a numeric or Boolean source column, or any deterministic source expression, including one that can raise.
 >
-> • **Objective.** `MINIMIZE`, `MAXIMIZE` or none; signed `SUM` parts with constant factors, optional `WHEN`, at most one
+> • **Objective.** `MINIMIZE`, `MAXIMIZE` or none; signed `SUM` parts with constant factors, optional `when`, at most one
 > squared term whose inner weight and offset may be row-valued.
 >
 > • **Declined bound.** A bound the solver rejects before it reads any row (an upper bound below the default floor of 0,
 > or a `BOOL` lower bound above 1) is declined, so the solver reports it, on an empty source too.
 >
 > • **Errors.** An empty box on any row is infeasible; an improving direction with no finite limit on any row is unbounded;
-> an `INT` answer beyond 2^53 cannot be returned; NULL, NaN or infinite values raise on every row, including rows a
-> `WHEN` excludes.
+> an `INT` answer beyond 2^53 cannot be returned; NULL, NaN or infinite values raise on every row that reads them, and
+> nothing is computed on a row a `when` drops; a `when` that keeps no row is an error (D4).
 >
 > • **Ties** go to the smaller value, and a decision with no objective term takes the lowest value its box allows.

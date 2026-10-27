@@ -12,20 +12,23 @@ walked end to end see [`trace_life_of_a_query.md`](trace_life_of_a_query.md).
 DeciDB extends DuckDB's parser and planner to inject a new operator. It registers:
 
 - **Reserved keywords** — `DECIDE`, `SUCH` (as in `SUCH THAT`), `MAXIMIZE`, `MINIMIZE`.
-- **Gated tokens** — `WHEN_DECIDE` and `WHEN_DECIDE_OBJECTIVE`, which the lexer
-  emits only inside the matching DECIDE phase, so postfix `WHEN` never collides
-  with the global SQL `WHEN` and objective comparisons are unambiguous.
+- **Gated tokens** — `WHEN_DECIDE`, `WHEN_DECIDE_OBJECTIVE`, `PER_DECIDE`,
+  `PER_DECIDE_PAREN`, `PER_DECIDE_ROW` and `BY_DECIDE`, which the lexer emits only
+  inside a DECIDE clause, so the clause's `when`, `per` and `by` never collide with
+  SQL's `CASE ... WHEN`, a column named `per`, or `GROUP BY`.
 - **Grammar productions** — `decide_clause`, `decide_declaration`, `decide_body`,
-  `decide_tail`, `decide_constraint_item`, `decide_objective_item`.
-- **Transformer rules** — parsed nodes into `SelectNode` fields, and the tagged
-  `WHEN` / `PER` wrapper expressions.
+  `decide_tail`, `decide_constraint_item`, `decide_objective_item`, `decide_scope`,
+  `decide_by`.
+- **Transformer rules** — parsed nodes into `SelectNode` fields, the tagged scope,
+  `by` and colon-form markers, and the refusal of the removed spellings
+  (`RefuseRemovedDecideSpellings`).
 - **A logical operator** — `LogicalDecide`, with hand-written serialization.
 - **An optimizer pass** — `DecideOptimizer`.
 - **A physical operator** — `PhysicalDecide`.
 
 The design goal is to keep core DuckDB changes small and DeciDB's own code
-cohesive. Standard SQL is unaffected: the DECIDE-specific token is gated, and the
-grammar conflicts it introduces are keyed on that token.
+cohesive. Standard SQL is unaffected: the DECIDE-specific tokens are gated, and every
+grammar conflict DECIDE introduces is keyed on a DECIDE token.
 
 ---
 
@@ -33,14 +36,14 @@ grammar conflicts it introduces are keyed on that token.
 
 ```mermaid
 graph TD
-    User[User SQL] --> P[01 Parser: grammar, DECIDE WHEN gating, desugaring]
+    User[User SQL] --> P[01 Parser: grammar, DECIDE keyword tokens, removed-spelling refusal]
     P --> B[02 Binder: names, scopes, types, degree, reducers]
     B --> L[03 Logical plan: PlanSubqueries + correlation provenance]
     L --> C[04 Canonicalizer: ONE shape decision, constraints AND objective]
     C --> O[05 Optimizer: formulation choice; output re-canonicalized]
     O --> PH[Physical plan: verify canonical once more]
     PH --> S[08 Sink: materialize surviving rows]
-    S --> F[08 Finalize: entity mappings, extraction, coefficients]
+    S --> F[08 Finalize: entity mappings, scope checks, extraction, coefficients]
     F --> M[06 Model formulation: VarIndexer, COO, Q matrix]
     M --> SV[07 Solver: Gurobi preferred / HiGHS fallback]
     SV --> R[08 GetData: project values back onto rows by scope]
@@ -79,8 +82,10 @@ depends on the entire dataset, so the operator must consume all of its input
 before producing a row:
 
 1. **Sink** — buffer every tuple into a `ColumnDataCollection`.
-2. **Finalize** — build entity mappings, evaluate every coefficient, `WHEN` mask
-   and `PER` group against that buffer, build the solver-neutral model, solve.
+2. **Finalize** — build entity mappings, run the scope checks, evaluate every
+   coefficient against that buffer — over each clause's kept rows (`when`), its
+   classes (`per`) and its reducers' groups (`by`) — build the solver-neutral model,
+   solve.
 3. **Source** — re-scan the buffer and append solution values.
 
 Read consistency follows: the optimization runs on the snapshot the query saw, and

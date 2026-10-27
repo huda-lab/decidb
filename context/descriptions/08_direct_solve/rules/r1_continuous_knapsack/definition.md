@@ -106,9 +106,9 @@ An item with w ≠ 0 has:
 At a price λ, an item with t > λ belongs at its high end and one with t < λ at its low end. Spend therefore falls as the
 price rises: a positive-weight row leaves its upper end, a negative-weight row reaches it. One sort by t finds the price.
 
-For each group (the whole input when there is no `PER`):
+For each group (the whole input when the sum has no `by` key):
 
-> 1\. Items of rows outside the budget (its `WHEN` does not hold, or a `PER` key is NULL) and items with w = 0 take
+> 1\. Items of rows outside the budget (its `when` does not hold) and items with w = 0 take
 > their own best end: u when v > 0, l when v < 0, the anchor when v = 0.
 >
 > 2\. Infeasible when a box is empty or the reachable spend [S − Σ down, S + Σ up] misses [L, U], where S = Σ w·a.
@@ -148,7 +148,7 @@ budget is one L and U per group (§ Admitted class), so the steps are unchanged.
 
 The plan follows aggregate-then-join: each group is reduced to one row of numbers (its totals, its price, its sums at
 the price), and every source row joins its group's row and computes its answers in one projection. A *group key* is
-whether the row belongs to a budget, then its `PER` keys, compared with IS NOT DISTINCT FROM so a NULL key matches. Each join of items to group rows is a SINGLE join (each item finds its one group row,
+whether the row belongs to a budget, then its `by` keys, compared with IS NOT DISTINCT FROM so a NULL key matches. Each join of items to group rows is a SINGLE join (each item finds its one group row,
 as a scalar subquery does), so its hash table is built on the group rows.
 With no scope there is one group: the aggregates have no `GROUP BY` and the join is a cross product with one row.
 
@@ -184,8 +184,8 @@ on group keys, not on a row id.
 with no limit read from the data, the MIN and MAX; with no objective, v (zero); when every box end is a finite
 constant and no per-row bound clause applies, the open-room columns and counts.
 
-**Several cases, one plan.** Weights of each sign and zero, infinite rooms, the budget directions, ties, `PER` and
-`WHEN` change values inside stages 1, 2 and 4 (the high and low ends, the open-room counts, L and U, the group key);
+**Several cases, one plan.** Weights of each sign and zero, infinite rooms, the budget directions, ties, `by` and
+`when` change values inside stages 1, 2 and 4 (the high and low ends, the open-room counts, L and U, the group key);
 they add no stage. A row outside every budget is a group whose items are all outside the ranking: stage 5 gives each
 its best end, and of the verdicts only an empty box and an unbounded item apply to it.
 
@@ -236,8 +236,8 @@ t < λ* would make B infinite, so neither holds at the range that holds a finite
 an infinite zero-price spend on an open side. The answer is finite.
 
 **Groups and scope.** Groups share no item and the objective is a sum over items, so each group is its own problem with
-its own price. A row outside every budget is a group with no budget. The empty-aggregate error for a `WHEN` that covers
-no row comes before any of this, as on the solver.
+its own price. A row outside every budget is a group with no budget. A `when` that keeps no row (D4), and a group the
+sum's own `when` leaves empty (D8), raise before any of this, as on the solver.
 
 ## Eligibility conditions
 
@@ -255,7 +255,7 @@ no row comes before any of this, as on the solver.
 >
 > • Inconsistent bounds or an unreachable exact resource requirement produce DECIDE infeasibility.
 >
-> • WHEN, PER, NULL, numeric, tie, decision-identity, and output-mapping semantics are preserved.
+> • `when`, `per`, `by`, NULL, numeric, tie, decision-identity, and output-mapping semantics are preserved.
 
 ## Admitted class
 
@@ -282,10 +282,10 @@ What DeciDB admits beyond, or in place of, the catalogue text. Where the two dif
 > the budget, rows move toward it in order of least value lost per unit of budget. `BETWEEN` binds on at most one side.
 > A required spend outside what the boxes can reach is infeasible.
 >
-> • **Budget scope.** `PER` gives each group its own budget and price. A `WHEN` on the budget, on the clause or on the
-> aggregate (the same meaning for a constant budget), and a NULL `PER` key, leave a row out of every budget; such a
-> row takes its own best end, as an A1 row does. A budget whose `WHEN` covers no row of a nonempty source raises the
-> empty-aggregate error, as the solver does.
+> • **Budget scope.** A `by` key on the sum gives each group its own budget and price; a NULL key is a group of its own
+> (D5). A `when` on the clause or inside the sum (the same meaning for a constant budget) leaves a row out of every
+> budget; such a row takes its own best end, as an A1 row does. A `when` that keeps no row of a nonempty source is an
+> error (D4), as on the solver. As built, R1 reads no `by` key yet (`done.md`).
 >
 > • **Budget from the data.** A limit may be a source column or expression, or an aggregate of the source. Each group
 > reads one L and one U: an upper limit takes the group's MIN, a lower one its MAX, and an equality needs one value in

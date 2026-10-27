@@ -43,13 +43,16 @@ def _diagnostics(cli, sql):
 @pytest.mark.cons_between
 def test_decision_bearing_bound_is_quoted_as_written(decidb_cli):
     """Figure 1's line 7. The clause and its repair both name what the user typed."""
-    attrs, message = _diagnostics(decidb_cli, f"""
+    attrs, message = _diagnostics(
+        decidb_cli,
+        f"""
         SELECT routeID, ship, open
         FROM {_DEPOTS} JOIN {_ROUTES} USING (depotID)
-        DECIDE T.ship(INT), D.open(BOOL)
+        DECIDE per T: ship(INT), per D: open(BOOL)
         SUCH THAT ship BETWEEN 0 AND capacity * open AND SUM(ship) >= 5000
         MINIMIZE SUM(ship)
-    """)
+    """,
+    )
     assert "ship <= capacity * open" in message, message
     # The algebra stage 04 produced must not reach the user at all.
     assert "ship - capacity * open" not in message, message
@@ -66,13 +69,16 @@ def test_decision_bearing_bound_is_quoted_as_written(decidb_cli):
 @pytest.mark.cons_comparison
 def test_written_form_is_used_for_a_plain_comparison_too(decidb_cli):
     """Not BETWEEN-specific — the trigger is a decision in the bound."""
-    _, message = _diagnostics(decidb_cli, f"""
+    _, message = _diagnostics(
+        decidb_cli,
+        f"""
         SELECT routeID, ship, open
         FROM {_DEPOTS} JOIN {_ROUTES} USING (depotID)
-        DECIDE T.ship(INT), D.open(BOOL)
+        DECIDE per T: ship(INT), per D: open(BOOL)
         SUCH THAT ship >= 0 AND ship <= capacity * open AND SUM(ship) >= 5000
         MINIMIZE SUM(ship)
-    """)
+    """,
+    )
     assert "ship <= capacity * open" in message, message
     assert "ship - capacity * open" not in message, message
 
@@ -81,16 +87,19 @@ def test_written_form_is_used_for_a_plain_comparison_too(decidb_cli):
 @pytest.mark.cons_comparison
 def test_a_data_only_bound_is_untouched(decidb_cli):
     """Nothing moved, so there is no written form to prefer — and none is invented."""
-    attrs, message = _diagnostics(decidb_cli, f"""
+    attrs, message = _diagnostics(
+        decidb_cli,
+        f"""
         SELECT routeID, ship FROM {_ROUTES}
-        DECIDE T.ship(INT)
+        DECIDE per T: ship(INT)
         SUCH THAT ship BETWEEN 0 AND capacity AND SUM(ship) >= 9000
         MINIMIZE SUM(ship)
-    """)
-    assert "SUM(ship) >= 9000" in message, message
-    clause = attrs.get("SUM(ship) >= 9000")
+    """,
+    )
+    assert "sum(ship) >= 9000" in message, message
+    clause = attrs.get("sum(ship) >= 9000")
     assert clause is not None, attrs
-    assert clause["suggested_change"].startswith("SUM(ship) >= "), clause
+    assert clause["suggested_change"].startswith("sum(ship) >= "), clause
 
 
 @pytest.mark.explain
@@ -103,13 +112,15 @@ def test_explain_leads_with_the_written_clause(decidb_cli):
     the clause; ``ship - capacity * open <= 0`` is an indented ``≡`` continuation of it.
     What must never happen is the algebra standing alone as though the user wrote it.
     """
-    plan = decidb_cli.execute_raw(f"""
+    plan = decidb_cli.execute_raw(
+        f"""
         EXPLAIN SELECT routeID, ship, open
         FROM {_DEPOTS} JOIN {_ROUTES} USING (depotID)
-        DECIDE T.ship(INT), D.open(BOOL)
+        DECIDE per T: ship(INT), per D: open(BOOL)
         SUCH THAT ship BETWEEN 0 AND capacity * open
         MINIMIZE SUM(ship)
-    """).stdout
+    """
+    ).stdout
     # The box wraps mid-token at a fixed column, so no assertion may depend on where
     # the line breaks fall.
     packed = "".join(plan.split())

@@ -1,17 +1,18 @@
 # MIN/MAX Aggregate Test Coverage — Done
 
-> **Composed MIN/MAX coverage must use a multi-table join.** Every composed test predating
-> 2026-08-08 used a single-table `VALUES` source, where a logical column index and a chunk
-> position coincide — so the suite passed while the composed path read the wrong data column
-> over any join. `test_composed_minmax_entity_scoped_multi_row` is the join-based regression;
-> keep new composed tests on a join for the same reason.
+> **Composed MIN/MAX coverage must use a multi-table join.** On a single-table `VALUES`
+> source a logical column index and a chunk position coincide, so a composed path that
+> read the wrong data column over a join would still pass.
+> `test_composed_minmax_entity_scoped_multi_row` is the join-based guard; keep new
+> composed tests on a join for the same reason.
 
 Tests live in:
 - `test/decide/tests/test_min_max.py` — primary MIN/MAX test file
 - `test/decide/tests/test_min_max_multiterm.py` — row expressions that are not a single product term
-- `test/decide/tests/test_per_objective.py` — nested aggregate PER objectives
-- `test/decide/tests/test_aggregate_local_when.py` — aggregate-local WHEN with MAX
-- `test/decide/tests/test_per_interactions.py` — hard MIN/MAX constraints with PER (per-group Big-M)
+- `test/decide/tests/test_per_objective.py` — two-level objectives
+- `test/decide/tests/test_aggregate_local_when.py` — a reducer's own `when` with MAX
+- `test/decide/tests/test_per_interactions.py` — hard MIN/MAX constraints under `per` (per-group Big-M)
+- `test/decide/tests/test_edge_cases.py` — empty row sets under MIN/MAX (see [`../edge_cases/done.md`](../edge_cases/done.md))
 
 MIN/MAX linearization is performed by `DecideOptimizer::RewriteMinMax`. It
 classifies each occurrence as **easy** (naturally per-row, no Big-M) or
@@ -21,29 +22,37 @@ classifies each occurrence as **easy** (naturally per-row, no Big-M) or
 
 All oracle-verified unless noted.
 
-- **Easy cases** (`test_min_max.py`, plus entity-scoped variants in `test_entity_scope.py` and `test_aggregate_local_when.py`): `MAX(expr) <= K` / `MIN(expr) >= K` stripped to per-row, with column coefficients (`MAX(x * expr) <= K`), on INT vars, with WHEN, with PER (stripped as redundant), WHEN + PER composition, entity-scoped MAX/MIN, aggregate-local WHEN on easy MAX.
-- **Hard cases (Big-M indicators)** (`test_min_max.py`, `test_per_interactions.py`, `test_entity_scope.py`, `test_aggregate_local_when.py`): `MAX(expr) >= K`, `MIN(expr) <= K`, equality for both; multiple MIN/MAX constraints in one query; MIN/MAX in both constraint and objective; entity-scoped hard MAX; PER variants with Big-M per group (`MAX >= K PER`, `MIN <= K PER`, `MAX = K PER` combining easy + hard per group); hard MAX + aggregate-local WHEN.
-- **Objectives** (`test_min_max.py`): easy `MINIMIZE MAX(expr)` / `MAXIMIZE MIN(expr)` (plain, on INT, and with aggregate-local WHEN); hard `MAXIMIZE MAX(expr)` / `MINIMIZE MIN(expr)`.
-- **Multi-term and constant row expressions** (`test_min_max_multiterm.py`): the inner expression is a linear combination, not a single product — `MAX((qty + 1) * x)` (distributes into two terms on one column), `MAX(qty * x + x)` (the same shape written out), `MAX(qty * x + 5)` (constant folds into the bound). Covered on the flat path (both directions), the composed path, and the PER outer-MIN path with an **entity-scoped** variable, where one column spans every row of a group so a single term is enough to repeat it. Each test pins the objective value against the oracle, so a linking row that is accepted but mis-linearized still fails.
+- **Easy cases** (`test_min_max.py`, plus keyed variants in `test_entity_scope.py` and a reducer's own `when` in `test_aggregate_local_when.py`): `MAX(expr) <= K` / `MIN(expr) >= K` bound every member on its own row, with column coefficients (`MAX(x * expr) <= K`), on INT vars, under a `when`, under `per g: ... by (g)` (the same per-row bounds), `when` + `per` together, keyed MAX/MIN, a reducer's own `when` on an easy MAX. Over a bare decision with no `when` and no reducer filter the bound is absorbed into the decision's box (D41), so a negative K makes the decision signed (`test_scope_bare_clauses.py`).
+- **Hard cases (Big-M indicators)** (`test_min_max.py`, `test_per_interactions.py`, `test_entity_scope.py`, `test_aggregate_local_when.py`): `MAX(expr) >= K`, `MIN(expr) <= K`, equality for both; multiple MIN/MAX constraints in one query; MIN/MAX in both constraint and objective; keyed hard MAX; `per g:` variants with Big-M per group (`max(e) by (g) >= K`, `min(e) by (g) <= K`, `max(e) by (g) = K` combining easy + hard per group); hard MAX with a reducer's own `when`.
+- **Objectives** (`test_min_max.py`): easy `MINIMIZE MAX(expr)` / `MAXIMIZE MIN(expr)` (plain, on INT, and under a `when` in front); hard `MAXIMIZE MAX(expr)` / `MINIMIZE MIN(expr)`.
+- **Multi-term and constant row expressions** (`test_min_max_multiterm.py`): the inner expression is a linear combination, not a single product — `MAX((qty + 1) * x)` (distributes into two terms on one column), `MAX(qty * x + x)` (the same shape written out), `MAX(qty * x + 5)` (constant folds into the bound). Covered on the flat path (both directions), the composed path, and the two-level outer-MIN path with a **keyed** decision, where one column spans every row of a group so a single term is enough to repeat it. Each test pins the objective value against the oracle, so a linking row that is accepted but mis-linearized still fails.
 
-### Nested aggregate + PER objectives
+### Two-level objectives
 
-Tests in `test_per_objective.py` cover all 4 × 4 nesting combinations of
-inner/outer ∈ {SUM, MIN, MAX, AVG} with PER: `SUM(MAX)`, `SUM(MIN)` (both
-directions, including hard-outer shapes), `MAX(SUM)`, `MIN(SUM)`, plus
-MAX(AVG), MIN(AVG), SUM(AVG) nested variants.
+`test_per_objective.py` covers `outer(per k: inner(e) by (k))` with outer ∈ {SUM,
+MIN, MAX} and inner ∈ {SUM, MIN, MAX, AVG}: `sum(per k: max(...))` and
+`sum(per k: min(...))` (both directions, easy and hard inner), `max(per k: sum(...))`,
+`min(per k: sum(...))`, and `max`/`min`/`sum` over an inner `avg`.
+`max(per g: max(c * x) by (g))` with mixed-sign coefficients is in `test_min_max.py`.
+An outer AVG is refused ("not supported yet").
 
 ### Composed MIN/MAX (additive LHS/objective with mixed aggregate terms)
 
 Oracle-verified in `test_min_max.py`: easy-direction additive constraints and
 objectives; hard-direction constraints and objectives; scalar-multiplied terms;
-and subtraction such as `MAX(...) - MIN(...) <= K`.
+and subtraction such as `MAX(...) - MIN(...) <= K`. A composed clause under a
+`per` key (`per g: sum(x * v) by (g) + max(when w: x * v) by (g) <= 12`), under a
+`when` in front, and against a column or subquery bound answers, judged by the
+scope oracle (`test_composed_minmax_per_scope_answers`,
+`test_composed_minmax_front_when_answers`, `test_composed_minmax_column_rhs_answers`,
+`test_composed_minmax_subquery_rhs_answers`). Composed MIN/MAX expressivity:
+`03_expressivity/such_that/done.md` and `03_expressivity/maximize_minimize/done.md`.
 
 ### Error cases (binder rejections)
 
-`test_min_max.py` / `test_per_objective.py`: `MAX(x) <> K` rejected; flat
-`MIN/MAX + PER` (ambiguous) rejected; and composed MIN/MAX rejected for an outer
-`PER`/`WHEN` wrapper or a non-constant RHS.
+`test_min_max.py`: `MAX(x) <> K` rejected (`test_max_notequal_error`). The
+removed spellings of a grouped MIN/MAX objective are refused by the parser
+(`syntax_reference.md` §10.3, `test_scope_removed_syntax.py`).
 
 `<>` is the only outer comparison the composed path refuses, pinned by
 `test_composed_minmax_outer_not_equal_rejected` (over a whole-numbered column so
@@ -66,34 +75,31 @@ as `= K` and agree with it
 expensive spelling: two comparisons allocate an auxiliary each, where `= K`
 allocates one and pins both its sides.
 
-### Empty `WHEN` rejection (execution-time errors)
+### Empty row sets
 
-Previously tracked as a bug in `todo.md`: empty-WHEN on hard-direction MIN/MAX
-silently floated the `z`/`z_k` auxiliary, making constraints vacuous and
-objectives meaningless. Now rejected pre-solver by `RejectEmptyAggregate` in
-`physical_decide.cpp`. See `03_expressivity/when/done.md` → "Empty Row Sets"
-for the full rule.
-
-Covered in `test_min_max.py`: hard objectives (`MAXIMIZE MIN(...) WHEN empty`
-+ MAX/hard mirrors), hard constraints (`MAX WHEN empty >= K`,
-`MIN WHEN empty <= K`), easy directions (`MAX <= K WHEN empty`,
-`MIN >= K WHEN empty` + mirrors), composed `SUM + (MAX WHEN empty)`, mixed
-empty + populated aggregate-local WHEN terms (constraint and objective),
-SUM / AVG empty WHEN, and PER with one empty group (skip preserved,
-`test_avg_per_constraint_with_empty_group`).
+Both empty-set errors are raised before the solver runs, so an empty set never leaves
+a MIN/MAX auxiliary free (a vacuous constraint or a meaningless objective): a `when` in
+front that keeps no row ("when c matches no rows.", D4) and a reducer whose own `when`
+keeps no row ("max(when c: e) has no rows.", D8). The tests
+are in `test_edge_cases.py` and cover flat objectives in all four directions, hard and
+easy constraints, composed `sum(...) + max(when c: ...)`, mixed empty and populated
+reducers, SUM and AVG, and a `per` class the `when` in front leaves empty (no
+constraint for it) — see [`../edge_cases/done.md`](../edge_cases/done.md) → "Empty row
+sets".
 
 ## Feature interactions covered
 
 | Feature A | Feature B | Tested |
 |-----------|-----------|--------|
-| MIN/MAX (easy) | WHEN | ✓ |
-| MIN/MAX (hard) | aggregate-local WHEN | ✓ |
-| MIN/MAX (easy) | PER (stripped) | ✓ |
-| MIN/MAX (easy) | WHEN + PER | ✓ |
-| MIN/MAX (nested) | PER (objective) | ✓ |
-| MIN/MAX (easy) | entity-scoped | ✓ |
-| MIN/MAX (hard) | entity-scoped | ✓ |
+| MIN/MAX (easy) | `when` | ✓ |
+| MIN/MAX (hard) | a reducer's own `when` | ✓ |
+| MIN/MAX (easy) | `per` (per-row bounds) | ✓ |
+| MIN/MAX (easy) | `when` + `per` | ✓ |
+| MIN/MAX (inner or outer) | two-level objective | ✓ |
+| MIN/MAX (easy) | keyed decision | ✓ |
+| MIN/MAX (hard) | keyed decision | ✓ |
 | MIN/MAX | INT variables | ✓ |
-| MIN/MAX (hard) | PER (per-group Big-M) | ✓ |
+| MIN/MAX (hard) | `per` (per-group Big-M) | ✓ |
+| composed MIN/MAX | `per`, `when` in front, column or subquery bound | ✓ (scope oracle) |
 | MIN/MAX | multiple constraints in same query | ✓ |
 | MIN/MAX | constraint + objective in same query | ✓ |

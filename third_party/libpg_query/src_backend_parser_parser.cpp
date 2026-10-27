@@ -56,6 +56,7 @@ PGList *raw_parser(const char *str) {
 	yyextra.in_decide_objective = false;
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
+	yyextra.decide_after_rparen = false;
 	yyextra.decide_state_depth = 0;
 
 	/* initialize the bison parser */
@@ -116,6 +117,7 @@ std::vector<PGSimplifiedToken> tokenize(const char *str) {
 	yyextra.in_decide_objective = false;
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
+	yyextra.decide_after_rparen = false;
 	yyextra.decide_state_depth = 0;
 
 	while(true) {
@@ -207,13 +209,18 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 	} else
 		cur_token = core_yylex(&(lvalp->core_yystype), llocp, yyscanner);
 
+	/* DecidB: ')' is never rewritten below, so the raw token is enough here. */
+	bool after_rparen = yyextra->decide_after_rparen;
+	yyextra->decide_after_rparen = cur_token == ')';
+
 	/*
 	 * DecidB: track whether we are lexing inside a DECIDE clause, and while we
 	 * are, emit the clause's WHEN as a DECIDE-specific token. The objective gets
 	 * its own variant because it has no trailing comparison bound. This keeps
 	 * DECIDE WHEN out of the global expression grammar (where WHEN after a
 	 * function call collided with WITHIN GROUP and corrupted ordinary function
-	 * parsing). No lookahead is needed for this decision.
+	 * parsing). A BY directly after ')' is a reducer's BY and gets its own token
+	 * for the same reason. No lookahead is needed for these decisions.
 	 */
 	if (cur_token == DECIDE || cur_token == SUCH) {
 		/*
@@ -251,6 +258,8 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 				yyextra->decide_case_depth--;
 		} else if (cur_token == WHEN && yyextra->decide_case_depth == 0)
 			return yyextra->in_decide_objective ? WHEN_DECIDE_OBJECTIVE : WHEN_DECIDE;
+		else if (cur_token == BY && after_rparen)
+			return BY_DECIDE;
 	}
 
 	/*
@@ -268,6 +277,12 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 		break;
 	case WITH:
 		cur_token_length = 4;
+		break;
+	case PER:
+		/* DecidB: PER is a keyword only inside a DECIDE clause */
+		if (!yyextra->in_decide_clause)
+			return cur_token;
+		cur_token_length = 3;
 		break;
 	default:
 		return cur_token;
@@ -334,6 +349,25 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 		case TIME:
 		case ORDINALITY:
 			cur_token = WITH_LA;
+			break;
+		}
+		break;
+
+	case PER:
+		/*
+		 * DecidB: split PER by what follows. PER (), PER ROW and PER <key> are
+		 * not LALR(1)-separable otherwise: '(' also opens an expression, and
+		 * ROW is also a column name.
+		 */
+		switch (next_token) {
+		case '(':
+			cur_token = PER_DECIDE_PAREN;
+			break;
+		case ROW:
+			cur_token = PER_DECIDE_ROW;
+			break;
+		default:
+			cur_token = PER_DECIDE;
 			break;
 		}
 		break;

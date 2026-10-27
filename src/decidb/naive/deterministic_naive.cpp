@@ -42,7 +42,7 @@ const SolverCapabilities &DeterministicNaive::Capabilities() {
 
 namespace {
 
-//! Render a model row as the user wrote it (`SUM(x) >= 100 PER g`) from the provenance
+//! Render a model row as the user wrote it (`per g: sum(x) by (g) >= 100`) from the provenance
 //! the model already carries, so a refusal below reads in SQL terms rather than as a
 //! matrix row. `rhs_text` is the bound as the caller wants it spelled. Empty when the row
 //! has no source clause to quote; the caller then falls back to a clause-free message.
@@ -56,11 +56,7 @@ string DescribeRowClause(const SolverModel &model, const ModelConstraint &constr
         return string();
     }
     const char *sense = constr.sense == '<' ? "<=" : (constr.sense == '>' ? ">=" : "=");
-    string label = source.canonical_lhs + " " + sense + " " + rhs_text;
-    if (!source.qualifier.empty()) {
-        label += " " + source.qualifier;
-    }
-    return label;
+    return AttachDecideQualifier(source.canonical_lhs + " " + sense + " " + rhs_text, source.qualifier);
 }
 
 //! The `DescribeRowClause` spelling for the unreachable-bound refusal below. The bound is
@@ -246,7 +242,12 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_row
 class HighsSession : public SolverSession {
 public:
     SolverResult Solve(const SolverModel &model, double time_limit_seconds) override {
-        Load(model);
+        if (!Load(model)) {
+            // An integer column whose bounds hold no whole number: the model is empty.
+            SolverResult result;
+            result.status = SolverStatus::INFEASIBLE;
+            return result;
+        }
         return RunAndReadback(time_limit_seconds);
     }
 
@@ -263,11 +264,17 @@ private:
     //! defaults (0 / nan) that must not be read back as a proven bound.
     bool is_mip = false;
 
-    void Load(const SolverModel &model);
+    //! Load `model` into `highs`; false, loading nothing, when an integer column's bounds
+    //! hold no whole number.
+    bool Load(const SolverModel &model);
     SolverResult RunAndReadback(double time_limit_seconds);
 };
 
-void HighsSession::Load(const SolverModel &model) {
+//! How far a bound may sit from a whole number and still be read as it: HiGHS's default
+//! `mip_feasibility_tolerance`, the distance at which it calls a value integral.
+static constexpr double HIGHS_INTEGRALITY_TOLERANCE = 1e-6;
+
+bool HighsSession::Load(const SolverModel &model) {
     DecideProfileScope profile("highs.load");
     DecideProfileScope phase("highs.variable_types");
     total_vars = model.num_vars;
@@ -380,6 +387,20 @@ void HighsSession::Load(const SolverModel &model) {
     lp.col_cost_ = model.obj_coeffs;
     lp.col_lower_ = model.col_lower;
     lp.col_upper_ = model.col_upper;
+    // HiGHS can answer below a fractional bound of an integer column whose other side is
+    // open (`x >= -2.5` minimized to -3), so an integer column takes the whole bounds its
+    // bounds imply. One left with no whole number cannot be loaded: HiGHS refuses an
+    // inverted box.
+    for (idx_t i = 0; i < total_vars; i++) {
+        if (var_types[i] != HighsVarType::kInteger) {
+            continue;
+        }
+        lp.col_lower_[i] = std::ceil(lp.col_lower_[i] - HIGHS_INTEGRALITY_TOLERANCE);
+        lp.col_upper_[i] = std::floor(lp.col_upper_[i] + HIGHS_INTEGRALITY_TOLERANCE);
+        if (lp.col_lower_[i] > lp.col_upper_[i]) {
+            return false;
+        }
+    }
     lp.row_lower_ = row_lower;
     lp.row_upper_ = row_upper;
 
@@ -500,6 +521,7 @@ void HighsSession::Load(const SolverModel &model) {
                                     (int)status);
         }
     }
+    return true;
 }
 
 SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {

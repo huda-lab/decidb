@@ -1,17 +1,21 @@
 """Data-only aggregate RHS in aggregate constraints.
 
-`SUM(x*val) <= SUM(val)` (RHS aggregate over data columns only) is evaluated in
-place: the right-hand side reduces each data reducer to one value per group
-(EvaluateRhsReducerPerGroup), honouring the reducer's own WHEN, the constraint's
-WHEN/PER, and relation-qualifier de-duplication. These tests pin (a) parity with
+`SUM(x*val) <= SUM(val)` (RHS aggregate over data columns only) is evaluated by the
+bound-side window rewrite (RewriteRhsAggregates): each data reducer becomes a window
+column holding its value per group, honouring the reducer's own `when`, the constraint's
+`when`/`per`, and relation-qualifier de-duplication. These tests pin (a) parity with
 the explicit hoisted form the binder used to produce, (b) parity with the
-scalar-bound equivalent, and (c) WHEN / PER / AVG composition, including
+scalar-bound equivalent, and (c) `when` / `per` / AVG composition, including
 per-group RHS values.
 
 See context/descriptions/03_expressivity/sql_functions/done.md.
 """
 
 import pytest
+
+from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
+from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
+from solver.types import ObjSense, VarType
 
 
 # Deterministic knapsack: 4 unit-weight-10 items, unique optimum in every case.
@@ -65,10 +69,10 @@ def test_rhs_sum_plus_scalar(decidb_cli):
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_rhs_sum_per_group_bound(decidb_cli):
-    """PER carries a per-group RHS. Here every group's budget is 10 (SUM(b) over
+    """`per` carries a per-group RHS. Here every group's budget is 10 (SUM(b) over
     2 rows), so each group admits exactly one item: the higher-profit one."""
     # grp 0 → id 2 (profit 2 > 1); grp 1 → id 4 (profit 4 > 3).
-    assert _selected(decidb_cli, "SUM(x * weight) <= SUM(b) PER grp") == [2, 4]
+    assert _selected(decidb_cli, "per grp: sum(x * weight) by (grp) <= sum(b) by (grp)") == [2, 4]
 
 
 @pytest.mark.cons_aggregate
@@ -99,12 +103,12 @@ def test_rhs_avg_matches_scalar(decidb_cli):
 @pytest.mark.when_constraint
 @pytest.mark.correctness
 def test_rhs_aggregate_local_when(decidb_cli):
-    """A WHEN trailing a bare RHS aggregate is aggregate-local: it scopes only that
-    aggregate's rows, not the whole constraint. `SUM(x*weight) <= SUM(b) WHEN w`
-    means `SUM(x*weight) <= (SUM(b) WHEN w)` — the moved term keeps its filter, so
-    the bound is SUM(b) over w-rows (= 15) while the LHS still sums all rows."""
-    direct = _selected(decidb_cli, "SUM(x * weight) <= SUM(b) WHEN w")
-    hoist = _selected(decidb_cli, "SUM(x * weight) - (SUM(b) WHEN w) <= 0")
+    """A `when` inside a bound-side reducer is the reducer's own: it scopes only that
+    reducer's rows, not the whole constraint. In `SUM(x*weight) <= sum(when w: b)`
+    the moved term keeps its filter, so the bound is SUM(b) over w-rows (= 15) while
+    the LHS still sums all rows."""
+    direct = _selected(decidb_cli, "SUM(x * weight) <= sum(when w: b)")
+    hoist = _selected(decidb_cli, "SUM(x * weight) - sum(when w: b) <= 0")
     # 10*SUM(x) <= 15 over all rows ⇒ at most one item ⇒ highest profit (id 4).
     assert direct == [4]
     assert direct == hoist
@@ -126,17 +130,36 @@ def test_rhs_minmax_bound(decidb_cli):
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_rhs_count_is_group_aware(decidb_cli):
+def test_rhs_count_is_group_aware(decidb_cli, scope_solver):
     """COUNT(*) counts the constraint's own rows.
 
     It used to be folded to the operator's total input cardinality, which was a
-    wrong answer as soon as WHEN or PER made the constraint's row set smaller.
-    Here COUNT(*) = 4, so `SUM(x) <= COUNT(*)` admits every item.
+    wrong answer as soon as `when` or `per` made the constraint's row set smaller.
+    Here COUNT(*) = 4, so `SUM(x) <= COUNT(*)` admits every item. `count(*) by (grp)`
+    counts each group's two rows: less one, it admits one item per group, where the
+    operator's total would admit all four.
     """
     assert _selected(decidb_cli, "SUM(x) <= COUNT(*)") == [1, 2, 3, 4]
-    # PER splits the four rows into two groups of two, so each group's COUNT is 2 —
-    # not the operator's total of 4. This is the assertion the old fold got wrong.
-    assert _selected(decidb_cli, "SUM(x) <= COUNT(*) PER grp") == [1, 2, 3, 4]
+    rows = [
+        {"id": 1, "grp": 0, "profit": 1.0},
+        {"id": 2, "grp": 0, "profit": 2.0},
+        {"id": 3, "grp": 1, "profit": 3.0},
+        {"id": 4, "grp": 1, "profit": 4.0},
+    ]
+    model = ScopedModel(rows, [Decision("x", var_type=VarType.BINARY)])
+    clauses = [
+        Scoped(
+            (Reduce("sum", lambda r: {"x": 1}, by=("grp",)),),
+            "<=",
+            (Reduce("sum", lambda r: {CONSTANT: 1}, by=("grp",)), lambda r: {CONSTANT: -1}),
+            per=("grp",),
+        )
+    ]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": r["profit"]}),))
+    result = answer(decidb_cli, _DATA.format(cons="per grp: sum(x) by (grp) <= count(*) by (grp) - 1") + " ORDER BY id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
+    )
 
 
 @pytest.mark.cons_aggregate

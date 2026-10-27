@@ -17,20 +17,16 @@
 
 namespace duckdb {
 
-//! Tracks entity-scope metadata for decision variables scoped to a base table, or
-//! for a reducer qualifier scoped to a set of relations at once (`sum(D, T: e)`).
-//! When a variable is declared as "T.x IS BOOLEAN", it has one value per unique
-//! row in table T, not per join result row. A multi-relation qualifier extends the
-//! same idea: its tuple identity is the concatenation of every named relation's
-//! own key, so de-duplication collapses only the fan-out contributed by relations
-//! it does *not* name.
+//! A key scope: the columns whose values decide which result rows share one decision.
+//! `per K: x(TYPE)` keys on exactly the columns K names, possibly across relations; a
+//! relation named as a key (`per D`, `sum(D: e)`) stands for every column of that
+//! relation. One value per distinct tuple, so de-duplication collapses only the fan-out
+//! contributed by columns the key does *not* name.
 struct EntityScopeInfo {
-    //! Table alias or name used in the DECIDE declaration (e.g., "S" or "Sensors").
-    //! For a multi-relation qualifier, the named relations joined by ",", e.g. "D,T".
+    //! What the user wrote: the key of `per K:` ("D.depotID, S.customerID", "D", "()").
     string table_alias;
-    //! DuckDB table index/indices from the bind context (Binding::index). A
-    //! declaration scope always has exactly one; a qualifier scope has one per
-    //! named relation.
+    //! DuckDB table index/indices from the bind context (Binding::index): every
+    //! relation a key column comes from.
     vector<idx_t> source_table_indices;
     //! Column types for the entity key columns
     vector<LogicalType> entity_key_column_types;
@@ -40,14 +36,74 @@ struct EntityScopeInfo {
     vector<idx_t> entity_key_physical_indices;
     //! Logical column bindings (table_index, col_index) — used to resolve physical indices
     vector<ColumnBinding> entity_key_bindings;
-    //! Which decide_variables indices are scoped to this table
+    //! Which decide_variables indices this scope keys
     vector<idx_t> scoped_variable_indices;
+    //! Each key column as a message names it (`D.depotID`), in `entity_key_bindings`
+    //! order; for a helper decision's scope, the names of its link's `by` key.
+    vector<string> key_names;
+    //! A helper decision's scope (DecideOptimizer::RewriteScopedReducers): the link into
+    //! `LogicalDecide::reducer_value_links` it holds. Its entities are the groups of the
+    //! link's `by` key among the rows the link's clause keeps -- data expressions rather
+    //! than key columns, so `entity_key_bindings` is empty and execution builds the
+    //! mapping from the link. INVALID_INDEX for every scope the binder creates.
+    //! Deliberately absent from the serialization: the optimizer creates these scopes,
+    //! and an optimized plan is never serialized.
+    idx_t value_link = DConstants::INVALID_INDEX;
 
     //! Generated from `storage/serialization/nodes.json`. `entity_key_physical_indices`
     //! is deliberately absent: it is resolved at physical planning, after the only point
     //! a plan is ever serialized, so it is always empty on the wire.
     void Serialize(Serializer &serializer) const;
     static EntityScopeInfo Deserialize(Deserializer &deserializer);
+};
+
+//! A reducer's `by (key)`. At a class, the reducer reads the kept rows whose key value
+//! equals the class's, NULL being a value. Reducers whose keys are the same set of
+//! expressions share one entry, named by GROUP_KEY_TAG_PREFIX.
+struct DecideGroupKey {
+    //! The key's data expressions, in the order first written.
+    vector<unique_ptr<Expression>> expressions;
+    //! The key as written, for messages: `D.region, S.dispatchDay + S.transitDays`.
+    string text;
+    //! Each expression as a message names it (`D.region`), in `expressions` order; a
+    //! relation written in the key names each of its columns.
+    vector<string> names;
+
+    //! Generated from `storage/serialization/nodes.json`.
+    void Serialize(Serializer &serializer) const;
+    static DecideGroupKey Deserialize(Deserializer &deserializer);
+};
+
+//! One run-time requirement of a clause
+//! (syntax_reference.md §7.3): built by DecideCanonicalizer from the user's
+//! clause, before any rewrite, and run by PhysicalDecide before any model is built.
+struct DecideScopeCheck {
+    DecideScopeCheckKind kind = DecideScopeCheckKind::KEEPS_A_ROW;
+    //! The rows considered: those `rows` keeps, NULL dropping a row; null for every row.
+    unique_ptr<Expression> rows;
+    //! DETERMINES: the classes. READS_A_ROW: the groups. Empty for one class or group.
+    vector<unique_ptr<Expression>> key;
+    //! DETERMINES: the data value each class shows once; null when it is `decision`.
+    //! VALUE_IS_VALID: the message a row raises, NULL on a row whose value is valid.
+    unique_ptr<Expression> value;
+    //! DETERMINES: the decision (index into decide_variables) each class holds once.
+    idx_t decision = DConstants::INVALID_INDEX;
+    //! DETERMINES inside a reducer's `per`, READS_A_ROW: the reducer's own `when`.
+    unique_ptr<Expression> filter;
+    //! What the message quotes, as written. KEEPS_A_ROW: `subject` is the condition.
+    //! DETERMINES: `subject` the key (`D.depotID`, `()`), `object` the value or the
+    //! decision, `context` where it stands (`in by (S.region)`, `declared per row`).
+    //! READS_A_ROW: `subject` the reducer (`sum(when S.priority: ship)`).
+    string subject;
+    string object;
+    string context;
+    //! How a message names each key expression it describes a class or group by
+    //! (`D.depotID` in `D.depotID = 'D1'`), in key order: a prefix of `key`.
+    vector<string> key_names;
+
+    //! Generated from `storage/serialization/nodes.json`.
+    void Serialize(Serializer &serializer) const;
+    static DecideScopeCheck Deserialize(Deserializer &deserializer);
 };
 
 //! A source column's logical identity and the name the user wrote for it.
@@ -222,8 +278,82 @@ public:
         ExpressionType outer_cmp;             // Outer comparison (<=, >=, <, >, =)
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t removal_group_id = DConstants::INVALID_INDEX;
+        //! The classes its one row stands for, which an expanded diagnosis reports one by
+        //! one (D28) -- the values of its `per K:` key among the rows its `when` keeps
+        //! (`per_key` NAMES_CLASSES; `per ()` names none), or those rows themselves with
+        //! no `per` (NONE). `when` is the clause's own, also folded into each term's filter.
+        DecideConstraint::PerKeyRole per_key = DecideConstraint::PerKeyRole::NONE;
+        vector<unique_ptr<Expression>> class_key;
+        unique_ptr<Expression> when;
     };
     vector<ComposedMinMaxConstraint> composed_minmax_constraints;
+
+    //! A decision reducer of a scoped comparison in the VALUE shape
+    //! (CanonicalConstraintClass::VALUE), replaced by the helper decision `value_var`
+    //! that holds `agg([when c'] [per K']: e) by (Γ)` over the rows the clause keeps: one
+    //! instance per Γ group of those rows, defined once by stage 06 -- an equality row per
+    //! group for SUM/AVG, an extremum link per group for MIN/MAX. Produced by
+    //! DecideOptimizer::RewriteScopedReducers; an optimized plan is never serialized.
+    //!
+    //! One link per occurrence of a reducer in a clause, shared by every row the rewrites
+    //! before this one derived from that clause (an ABS envelope pair holds two copies):
+    //! the sides a shared MIN/MAX helper needs are the union of its rows' needs.
+    struct ReducerValueLink {
+        idx_t value_var = DConstants::INVALID_INDEX;
+        string agg_name;                   //!< "sum", "avg", "min" or "max"
+        string label;                      //!< the reducer as the user wrote it, for messages
+        unique_ptr<Expression> inner_expr; //!< e, as bound; the ABS and bilinear rewrites applied
+        unique_ptr<Expression> filter;     //!< the reducer's own `when`, or null
+        //! Its own `per K'`: the key scope whose classes it counts once; INVALID_INDEX
+        //! for per row.
+        idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+        //! Γ, into `group_keys`; INVALID_INDEX for `by ()`, every kept row.
+        idx_t group_key = DConstants::INVALID_INDEX;
+        unique_ptr<Expression> when; //!< the clause's `when`, or null
+        //! MIN/MAX: the sides that pin the helper (ExtremumLinkSpec), read from the way the
+        //! clause pushes it; both when the sign of its factor is not known before the query
+        //! runs or the comparison is `=` or `<>`. Unused for SUM/AVG, whose row is an equality.
+        bool need_envelope = false;
+        bool need_closing = false;
+        idx_t source_clause_id = DConstants::INVALID_INDEX;
+        idx_t removal_group_id = DConstants::INVALID_INDEX;
+        //! `inner_expr` flattened by BuildDecidePreparedModel, like a composed term's.
+        vector<DecideTerm> inner_terms;
+    };
+    vector<ReducerValueLink> reducer_value_links;
+
+    //! What a rewrite made of a construct, for EXPLAIN: the construct as a plan prints it
+    //! (`subject`) and what it became (`kind`), worded by the renderer in one place
+    //! (RenderDecideRewriteAccount). One per construct a rewrite replaced, under the
+    //! clause it came from; INVALID_INDEX is the objective. Produced by the rewrites; an
+    //! optimized plan is never serialized.
+    struct RewriteAccount {
+        enum class Kind : uint8_t {
+            AVG_SUM,                      //!< an AVG over decisions, a sum scaled by its row count
+            NORM_SUM_ABS,                 //!< `norm(e, 1)`, a sum of absolute values
+            NORM_SUM_SQUARES,             //!< `norm(e, 2)`, a sum of squares
+            NORM_MAX_ABS,                 //!< `norm(e, 'inf')`, a maximum of absolute values
+            EXTREMUM_EACH_MEMBER,         //!< a MIN/MAX in its cheap direction, a bound on each member
+            ABS_AUXILIARY,                //!< an ABS held by solver pressure alone
+            ABS_AUXILIARY_SIGN_INDICATOR, //!< an ABS pinned by Big-M rows and a sign binary
+            ABS_AUXILIARY_NATIVE,         //!< an ABS stated to the solver as an absolute value
+            PRODUCT_AND,                  //!< a Boolean product, AND rows
+            PRODUCT_MCCORMICK,            //!< a Boolean times a bounded decision, McCormick rows
+            IN_INDICATORS,                //!< `x IN (...)`, one indicator per value
+            L0_INDICATORS,                //!< `norm(e, 0)`, one indicator per row
+            VALUE_HELPER,                 //!< a reducer held by one helper decision
+            VALUE_HELPER_PER_GROUP,       //!< a reducer held by a helper decision per `by` group
+            EXTREMUM,                     //!< a MIN/MAX held by its envelope
+            EXTREMUM_PINNED,              //!< a MIN/MAX pinned by indicator rows
+            EXTREMUM_PER_GROUP,           //!< a two-level objective's inner MIN/MAX, per group
+            EXTREMUM_PER_GROUP_PINNED,    //!< the same, pinned by indicator rows
+            NOT_EQUAL,                    //!< `<>`, two conditional rows with an indicator
+        };
+        idx_t source_clause_id = DConstants::INVALID_INDEX;
+        Kind kind = Kind::ABS_AUXILIARY;
+        string subject;
+    };
+    vector<RewriteAccount> rewrite_accounts;
 
     //! Composed MIN/MAX objective: additive sum of SUM/AVG/MIN/MAX terms in the objective.
     //! Populated by DecideOptimizer::RewriteComposedMinMaxObjective. Empty when the
@@ -233,8 +363,9 @@ public:
     // --- Singleton-row variable bounds (set by DecideOptimizer::FoldSingletonRows) ---
 
     //! A user-written simple bound that was folded into a decision column's box instead
-    //! of being emitted as a model row. Kept so the infeasible diagnosis can re-emit it
-    //! as a slackable row and quote it back as the user wrote it.
+    //! of being emitted as a model row. Recorded so the linear form can check that its
+    //! clause was flattened for the repair model (SINGLETON_ROW_CLAUSE_ROWS_TAG), which is what
+    //! gives the diagnosis its rows and quotes the bound as the user wrote it.
     struct UserBoundSpec {
         idx_t decide_var_idx; //!< index into decide_variables
         char sense;           //!< '<' (<= K), '>' (>= K), '=' (== K)
@@ -259,12 +390,12 @@ public:
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
-    // Flat (non-PER) objective: original aggregate type before rewrite to SUM
+    // Flat (not two-level) objective: original aggregate type before rewrite to SUM
     ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
     // Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
     bool flat_objective_is_easy = false;
 
-    // PER nested objective: OUTER(INNER(expr)) PER col
+    // The two-level objective, outer(per k: inner(e) by (k))
     ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
     ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
     // Pre-computed easy/hard at each level (only meaningful when agg is MIN_AGG or MAX_AGG)
@@ -273,15 +404,26 @@ public:
     // True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
     bool per_inner_was_avg = false;
 
-    // --- Table-scoped variable metadata ---
+    // --- Key scopes ---
 
-    //! Entity scope info for each source table with table-scoped variables.
-    //! Empty if all variables are row-scoped (default behavior).
+    //! Every key scope: of `per K:` and `sum(T: ...)`, one per key. Empty when no decision
+    //! or reducer is keyed.
     vector<EntityScopeInfo> entity_scopes;
 
     //! Per-variable scope assignment (row / entity / query-wide scalar).
     //! Defaults to row-scoped; entity_scope_idx indexes entity_scopes.
     vector<DecideVarScopeInfo> variable_scopes;
+
+    //! Every `by (key)` written in the clause, indexed by GROUP_KEY_TAG_PREFIX tags.
+    vector<DecideGroupKey> group_keys;
+
+    //! The run-time requirements of every clause, in
+    //! clause order; PhysicalDecide runs them before it formulates anything.
+    //! The planner builds the scope checks (KEEPS_A_ROW, DETERMINES, READS_A_ROW); the
+    //! optimizer's right-hand-side window rewrite appends the VALUE_IS_VALID checks of the
+    //! bounds it computes, after them, so a bad value is reported only once every scope
+    //! check has passed, as when the bound was read in the operator.
+    vector<DecideScopeCheck> scope_checks;
 
     //! BoundColumnRefExpressions for every entity-key column (flattened in scope order).
     //! These live here so that DuckDB's binder initial column_id selection AND the
@@ -378,7 +520,9 @@ public:
 
     //! Calls back with every expression this operator owns: decide_variables,
     //! decide_constraints, decide_objective, the composed MIN/MAX constraint and
-    //! objective terms, and entity_key_expressions. This is the single place that
+    //! objective terms, the helper decisions' reducers, entity_key_expressions, the `by`
+    //! keys and the scope checks.
+    //! This is the single place that
     //! knows LogicalDecide's expression layout -- generic DuckDB passes (the
     //! LogicalOperatorVisitor dispatcher, ColumnBindingResolver, RemoveUnusedColumns)
     //! call through it instead of each re-listing these fields by hand, which is how

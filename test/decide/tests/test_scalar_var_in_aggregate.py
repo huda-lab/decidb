@@ -35,12 +35,14 @@ def test_scalar_slack_absorbs_aggregate_shortfall(decidb_cli):
     ``SUM(x) - 4s <= 4``, giving s = 2 — a different, smaller answer that still
     looks perfectly reasonable.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x, s FROM (VALUES (1), (2), (3), (4)) t(id)
-        DECIDE x(INT), scalar s(INT)
+        DECIDE x(INT), per (): s(INT)
         SUCH THAT x >= 3 AND x <= 3 AND SUM(x) - s <= 4
         MINIMIZE s
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     svals = {int(r[ci["s"]]) for r in rows}
     assert svals == {8}, f"expected s = 8 (SUM(x)=12, 12 - s <= 4), got {svals}"
@@ -56,12 +58,14 @@ def test_scalar_var_added_to_aggregate(decidb_cli):
     Fanning `s` out over 3 rows would leave ``SUM(x) <= 10 - 12``, i.e. infeasible
     or zero, so the two readings are far apart.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, x, s FROM (VALUES (1), (2), (3)) t(id)
-        DECIDE x(INT), scalar s(INT)
+        DECIDE x(INT), per (): s(INT)
         SUCH THAT x <= 9 AND s >= 4 AND s <= 4 AND SUM(x) + s <= 10
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     total = sum(int(r[ci["x"]]) for r in rows)
     assert total == 6, f"expected SUM(x) = 6, got {total}"
@@ -82,12 +86,14 @@ def test_scalar_slack_oracle_verified(decidb_cli, oracle_solver, perf_tracker):
 
     data = [(1, 3.0), (2, 5.0), (3, 7.0)]
     t0 = time.perf_counter()
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, v, x, s FROM (VALUES (1, 3.0), (2, 5.0), (3, 7.0)) t(id, v)
-        DECIDE x(INT), scalar s(INT)
+        DECIDE x(INT), per (): s(INT)
         SUCH THAT x <= 4 AND s <= 100 AND SUM(x * v) - s <= 20
         MINIMIZE 10 * s - SUM(x)
-    """)
+    """
+    )
     decidb_time = time.perf_counter() - t0
 
     t_build = time.perf_counter()
@@ -128,21 +134,23 @@ def test_scalar_slack_oracle_verified(decidb_cli, oracle_solver, perf_tracker):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_scalar_var_in_per_aggregate(decidb_cli):
-    """``SUM(x) + s <= 8 PER g`` — the PER accumulator fans out separately from the
+    """``per g: sum(x) by (g) + s <= 8`` — the `per` accumulator fans out separately from the
     ungrouped one, so it needs the same rule and would otherwise be wrong only for
     grouped constraints.
 
     Two groups of two rows each, ``s`` pinned to 2: each group gets SUM(x) <= 6.
     Fanning `s` over a group's 2 rows would give SUM(x) <= 4 per group.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, g, x, s FROM (
             VALUES (1, 'A'), (2, 'A'), (3, 'B'), (4, 'B')
         ) t(id, g)
-        DECIDE x(INT), scalar s(INT)
-        SUCH THAT x <= 9 AND s >= 2 AND s <= 2 AND SUM(x) + s <= 8 PER g
+        DECIDE x(INT), per (): s(INT)
+        SUCH THAT x <= 9 AND s >= 2 AND s <= 2 AND per g: sum(x) by (g) + s <= 8
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     ci = {c: i for i, c in enumerate(cols)}
     per_group = {}
     for r in rows:

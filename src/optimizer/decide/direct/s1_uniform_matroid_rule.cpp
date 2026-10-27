@@ -38,24 +38,19 @@ constexpr const char *RULE_NAME = "S1_UNIFORM_MATROID";
 
 struct Condition final : DirectApplicabilityCondition {
 	struct SourceBound {
-		idx_t source_slot;
-		LogicalType source_type;
 		ExpressionType comparison;
+		//! One value per group on every row the clause keeps: the bound-side window rewrite reduced the bound to its
+		//! group's tightest value and checked it (DecideOptimizer::RewriteRhsAggregates).
 		unique_ptr<Expression> value;
-		bool rhs_all_group_rows;
-		//! Name of the source column when the bound is exactly one; empty for a computed bound.
-		string column_name;
 		//! The count body is `-x`, so `comparison` is already flipped and the value to compare against is `-B`.
 		bool negated = false;
 	};
 	//! A fixed value that comes from the row: it must be neither NULL nor, for a floating point value, NaN.
 	struct SourceFixedValue {
 		unique_ptr<Expression> value;
-		//! The source column the value is exactly; empty for a computed value.
-		string column_name;
-		//! The error a computed value raises when it is NULL (or NaN, when `reject_nan`).
-		string invalid_message;
 		bool reject_nan;
+		//! The clause's `when`; the value is read only on the rows it keeps. Null for every row.
+		unique_ptr<Expression> when;
 	};
 	struct ObjectivePart {
 		int sign;
@@ -243,15 +238,15 @@ bool SatisfiesComparison(ExpressionType comparison, double value, double bound) 
 
 //! Reads `x <comparison> bound` as the values of {0, 1} it allows.
 //!
-//! The solver reads a bound with a WHEN, or one it does not fold, as a per-row constraint and applies plain arithmetic
-//! to it. A bound it folds (`variable_bound`) is a bound on the variable itself. The solver seeds the box of a Boolean
-//! at [0, 1] and a written bound only narrows it, so a bound that always holds (`x >= -3`, `x > -3`) changes nothing
-//! and reads here as both values allowed, which is what comparing 0 and 1 against it gives. A bound that cannot hold
-//! makes the solver raise DECIDE's usual infeasible error before it reads a row; that early error is not S1's to
-//! reproduce, so false for those. A strict bound is shifted to a whole number first, with the solver's own function, so
-//! `x > 0.5` is the lower bound 1 and `x < 1.5` the upper bound 1 here as there; for a variable that is 0 or 1 that is
-//! the same as the comparison itself. Whether the box contradicts the built-in domain of a Boolean is the solver's own
-//! test (DecideBoxContradictsDomain).
+//! The solver reads a bound with a `when`, or one it does not fold, as a per-row constraint and applies plain
+//! arithmetic to it. A bound it folds (`variable_bound`) is a bound on the variable itself. The solver seeds the box of
+//! a Boolean at [0, 1] and a written bound only narrows it, so a bound that always holds (`x >= -3`, `x > -3`) changes
+//! nothing and reads here as both values allowed, which is what comparing 0 and 1 against it gives. A bound that cannot
+//! hold makes the solver raise an error that quotes it (`x >= 2 cannot hold for a BOOL variable.`) before it reads a
+//! row; that early error is not S1's to reproduce, so false for those. A strict bound is shifted to a whole number
+//! first, with the solver's own function, so `x > 0.5` is the lower bound 1 and `x < 1.5` the upper bound 1 here as
+//! there; for a variable that is 0 or 1 that is the same as the comparison itself. Whether the box contradicts the
+//! built-in domain of a Boolean is the solver's own test (DecideBoxContradictsDomain).
 bool ConstantFixedDomain(const DirectIRConstraint &ir_node, double bound, FixedDomain &domain) {
 	auto comparison = ir_node.comparison;
 	if (ir_node.variable_bound) {
@@ -346,7 +341,8 @@ public:
 		return "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi";
 	}
 	DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate) const override;
+	                       const DirectApplicabilityCondition &candidate,
+	                       const vector<string> &source_fragments) const override;
 
 private:
 	bool ProveScope(const DirectIR &ir, Condition &condition) const;
@@ -355,8 +351,10 @@ private:
 	bool ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const;
 };
 
-//! Every bound counts the same rows: one `SUM(x)` per bound with the same PER keys and the same WHEN membership.
-//! Records the group keys and membership the plan scopes by.
+//! Every bound counts the same rows: one `SUM(x)` per bound with the same group keys and the same `when` membership.
+//! Records the group keys and membership the plan scopes by. The front end fills no group key today (it declines a
+//! `by` key); reading one must make a NULL key a group of its own (D5), where the scope leaves it out as the removed
+//! PER did.
 bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 	const auto &first_scope = *condition.bound_factors.front();
 	bool ok;
@@ -439,26 +437,16 @@ bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condi
 				condition.fixed_zero_conditions.push_back(
 				    active(calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Of(*source_value), calc.Bool(false))));
 			}
-			string column_name;
-			if (source_value->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-				column_name = source_value->GetAlias();
-			}
-			condition.source_fixed_values.push_back(
-			    {source_value->Copy(), column_name, "DECIDE per-row Boolean bound contains NULL", false});
+			condition.source_fixed_values.push_back({source_value->Copy(), false, when ? when->Copy() : nullptr});
 			continue;
 		}
 		// A numeric value from the row: the row allows 0 when `0 <comparison> value` holds and 1 when `1 <comparison>
-		// value` holds, as the solver reads it (with a WHEN or not), so the row is fixed to the one value it allows
+		// value` holds, as the solver reads it (with a `when` or not), so the row is fixed to the one value it allows
 		// and is infeasible when it allows neither.
 		auto &value = *factor->rhs;
 		if (value.IsFoldable() || !DirectIsSourceOnlyNumeric(value, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
-		idx_t column_slot;
-		LogicalType column_type;
-		string column_name;
-		bool is_column = DirectSourceNumericColumn(value, ir.source_bindings, column_slot, column_type, column_name);
-		auto invalid_type = is_column ? column_type : value.return_type;
 		auto disallows = [&](double allowed_value) {
 			auto as_double = calc.Cast(calc.Of(value), LogicalType::DOUBLE);
 			auto allowed = calc.Cmp(type, calc.Num(allowed_value), as_double);
@@ -466,15 +454,14 @@ bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condi
 		};
 		condition.fixed_one_conditions.push_back(active(disallows(0.0)));
 		condition.fixed_zero_conditions.push_back(active(disallows(1.0)));
-		condition.source_fixed_values.push_back(
-		    {value.Copy(), is_column ? column_name : string(), DirectInvalidBoundMessage(),
-		     invalid_type == LogicalType::FLOAT || invalid_type == LogicalType::DOUBLE});
+		auto reject_nan = value.return_type == LogicalType::FLOAT || value.return_type == LogicalType::DOUBLE;
+		condition.source_fixed_values.push_back({value.Copy(), reject_nan, when ? when->Copy() : nullptr});
 	}
 	return true;
 }
 
 //! The count bounds: constant ones fold into one inclusive interval, source-valued ones are kept for the plan to
-//! reduce per group. Every bound counts `x` once, as `x` or `-x`; `SUM(-x) <op> B` is `SUM(x) <flipped op> -B`. A
+//! read per group. Every bound counts `x` once, as `x` or `-x`; `SUM(-x) <op> B` is `SUM(x) <flipped op> -B`. A
 //! constant term in the body (`SUM(x + c)`) is a decline.
 bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	auto fold_bound = [&](const Expression &bound, ExpressionType side, idx_t &target, bool negate) {
@@ -494,28 +481,11 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 		auto &bound = *factor->rhs;
 		bool negated = body.direction < 0;
 		auto type = negated ? FlipComparison(factor->comparison) : factor->comparison;
-		idx_t source_slot = DConstants::INVALID_INDEX;
-		LogicalType source_type;
-		string source_name;
-		bool source_column =
-		    DirectSourceNumericColumn(bound, ir.source_bindings, source_slot, source_type, source_name);
-		auto add_source_bound = [&](idx_t slot, const LogicalType &bound_type, string column_name) {
-			Condition::SourceBound source_bound {
-			    slot, bound_type, type, bound.Copy(), sum->filter != nullptr, std::move(column_name)};
-			source_bound.negated = negated;
-			condition.source_bounds.push_back(std::move(source_bound));
-		};
-		// The right-hand-side rewrite turns an aggregate on the right into a source column. One it leaves (a WHEN of
-		// its own on the aggregate) is not a value this rule can read per row.
-		if (bound.IsAggregate()) {
-			return false;
-		}
-		// The plan evaluates a source-valued count bound on every row, as the solver does, so an expression that can
-		// raise (an overflow in `COUNT(*) * k` over a window column, or in `cap * k`) raises on both paths or on neither.
-		if (!bound.IsFoldable() &&
-		    (source_column || DirectIsSourceOnlyNumericMayRaise(bound, ir.decide_index, ir.source_bindings))) {
-			add_source_bound(source_slot, source_column ? source_type : bound.return_type,
-			                 source_column ? source_name : string());
+		// A source-valued bound has one value per group already. The plan evaluates it on the rows of the groups, as
+		// the solver does, so an expression that can raise (an overflow in `COUNT(*) * k` over a window column) raises
+		// on both paths or on neither.
+		if (!bound.IsFoldable() && DirectIsSourceOnlyNumericMayRaise(bound, ir.decide_index, ir.source_bindings)) {
+			condition.source_bounds.push_back({type, bound.Copy(), negated});
 			continue;
 		}
 		if (DirectIsLowerBound(type)) {
@@ -584,12 +554,14 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! shares; each stage takes the plan built so far and returns it extended. Data a later stage needs travels in explicit
 //! structs.
 //!
-//!   ProjectScopeState -> GuardEmptyAggregate -> AddBoundValidation -> ProjectScore
+//!   ProjectScopeState -> AddBoundValidation -> ProjectScore
 //!     -> RankAndFilterFeasibility -> ProjectAssignment
 class PlanBuilder {
 public:
-	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
-	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context) {
+	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source,
+	            const vector<string> &fragments_p)
+	    : condition(condition_p), fragments(fragments_p), optimizer(optimizer_p), binder(optimizer_p.binder),
+	      calc(optimizer_p.context) {
 		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
 		source_types = source.types;
@@ -615,17 +587,18 @@ public:
 			fixed_one_binding = ColumnBinding(score_index, next_slot++);
 			fixed_zero_binding = ColumnBinding(score_index, next_slot++);
 		}
+		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
+			bound_bindings.push_back(ColumnBinding(score_index, next_slot++));
+		}
 	}
 
 	DirectSubstitute Build(unique_ptr<LogicalOperator> source) const {
 		ScopeBindings scope;
 		source = ProjectScopeState(std::move(source), scope);
-		source = GuardEmptyAggregate(std::move(source), scope);
-		BoundChecks bounds(condition.source_bounds.size());
-		source = AddBoundValidation(std::move(source), scope, bounds);
-		source = ProjectScore(std::move(source), scope, bounds);
-		auto ranked = RankAndFilterFeasibility(std::move(source), bounds);
-		auto result = ProjectAssignment(std::move(ranked), bounds);
+		source = AddFixedValueValidation(std::move(source), scope);
+		source = ProjectScore(std::move(source), scope);
+		auto ranked = RankAndFilterFeasibility(std::move(source));
+		auto result = ProjectAssignment(std::move(ranked));
 
 		DirectSubstitute substitute;
 		substitute.prunable_decisions.push_back(1); // x is pure once score validation and ranking remain live
@@ -648,23 +621,6 @@ private:
 		ColumnBinding fixed_zero_binding;
 	};
 
-	//! Window slots of one source-valued count bound.
-	struct SourceBoundSlots {
-		idx_t min_window = DConstants::INVALID_INDEX;
-		idx_t max_window = DConstants::INVALID_INDEX;
-		//! Slots of the same extrema once the score projection forwards them.
-		idx_t min_score = DConstants::INVALID_INDEX;
-		idx_t max_score = DConstants::INVALID_INDEX;
-	};
-
-	//! The window the source-valued bounds were validated in, and the slots later stages read from it.
-	struct BoundChecks {
-		explicit BoundChecks(idx_t bound_count) : slots(bound_count) {
-		}
-		idx_t window_index = DConstants::INVALID_INDEX;
-		vector<SourceBoundSlots> slots;
-	};
-
 	//! Ranked, feasibility-checked rows and the window slots the assignment reads.
 	struct RankedRows {
 		unique_ptr<LogicalOperator> plan;
@@ -673,6 +629,8 @@ private:
 	};
 
 	const Condition &condition;
+	//! The DECIDE node's source-fragment registry, which a NULL message quotes the written subquery or cast from.
+	const vector<string> &fragments;
 	Optimizer &optimizer;
 	Binder &binder;
 	ExpressionBuilder calc;
@@ -690,6 +648,8 @@ private:
 	ColumnBinding eligible_binding;
 	ColumnBinding fixed_one_binding;
 	ColumnBinding fixed_zero_binding;
+	//! Each source-valued count bound's value, in the score projection.
+	vector<ColumnBinding> bound_bindings;
 
 	//! Copy of a proved expression whose source references follow the state projection, when there is one.
 	unique_ptr<Expression> CopyIntoState(const Expression &expr, const ScopeBindings &scope) const {
@@ -731,83 +691,27 @@ private:
 		return std::move(state.plan);
 	}
 
-	//! Stage 2: a scoped aggregate over no eligible row is DECIDE's empty-aggregate error.
-	unique_ptr<LogicalOperator> GuardEmptyAggregate(unique_ptr<LogicalOperator> source,
-	                                                const ScopeBindings &scope) const {
-		if (!condition.scoped) {
-			return source;
-		}
-		return DirectGuardEmptyAggregate(optimizer, std::move(source), scope.eligible_binding);
-	}
-
-	//! Stage 3: validate source-valued bounds and fixed values on every row, and reduce each bound to its group
-	//! extremum.
-	unique_ptr<LogicalOperator> AddBoundValidation(unique_ptr<LogicalOperator> source, const ScopeBindings &scope,
-	                                               BoundChecks &bounds) const {
-		vector<DirectBoundSpec> specs;
-		for (auto &bound : condition.source_bounds) {
-			D_ASSERT(bound.value && (bound.source_slot == DConstants::INVALID_INDEX ||
-			                         (bound.source_slot < source_types.size() &&
-			                          source_types[bound.source_slot] == bound.source_type)));
-			DirectBoundSpec spec;
-			spec.comparison = bound.comparison;
-			spec.value = CopyIntoState(*bound.value, scope);
-			if (bound.negated) {
-				spec.value = DirectScaledTerm(optimizer, std::move(spec.value), -1, false, 1.0, false);
-			}
-			if (bound.source_slot != DConstants::INVALID_INDEX) {
-				spec.is_column = true;
-				spec.column = scope.input_bindings[bound.source_slot];
-				spec.column_type = bound.source_type;
-			}
-			spec.all_group_rows = bound.rhs_all_group_rows;
-			if (bound.column_name.empty()) {
-				spec.invalid_message = DirectInvalidBoundMessage();
-			} else {
-				// The same column on every row, so the solver's message is known before any row is read.
-				spec.null_message = DirectBoundNullMessage(bound.column_name);
-				if (bound.source_type == LogicalType::FLOAT || bound.source_type == LogicalType::DOUBLE) {
-					spec.nan_message = DirectBoundNaNMessage();
-				}
-			}
-			specs.push_back(std::move(spec));
-		}
-		vector<DirectNotNullSpec> not_null;
+	//! Stage 2: validate the fixed values that come from the row, on the rows that read them. The source-valued bounds
+	//! were validated with the scope checks under the plan (VALUE_IS_VALID).
+	unique_ptr<LogicalOperator> AddFixedValueValidation(unique_ptr<LogicalOperator> source,
+	                                                    const ScopeBindings &scope) const {
+		vector<DirectRowBound> bounds;
 		for (auto &fixed : condition.source_fixed_values) {
-			DirectNotNullSpec spec;
-			spec.value = CopyIntoState(*fixed.value, scope);
-			spec.reject_nan = fixed.reject_nan;
-			if (fixed.column_name.empty()) {
-				spec.message = fixed.invalid_message;
-			} else {
-				spec.message = DirectBoundNullMessage(fixed.column_name);
-				if (fixed.reject_nan) {
-					spec.nan_message = DirectBoundNaNMessage();
-				}
+			DirectRowBound bound;
+			bound.value = CopyIntoState(*fixed.value, scope);
+			if (fixed.when) {
+				bound.kept = DirectActiveWhen(calc, CopyIntoState(*fixed.when, scope).get());
 			}
-			not_null.push_back(std::move(spec));
+			bound.reject_nan = fixed.reject_nan;
+			bounds.push_back(std::move(bound));
 		}
-		vector<ColumnBinding> keys;
-		vector<LogicalType> key_types;
-		for (auto slot : condition.group_key_slots) {
-			keys.push_back(scope.input_bindings[slot]);
-			key_types.push_back(source_types[slot]);
-		}
-		auto validation = DirectValidateBounds(optimizer, std::move(source), specs, not_null,
-		                                       condition.scoped ? &scope.eligible_binding : nullptr, keys, key_types);
-		bounds.window_index = validation.window_index;
-		for (idx_t i = 0; i < bounds.slots.size(); i++) {
-			bounds.slots[i].min_window = validation.min_slots[i];
-			bounds.slots[i].max_window = validation.max_slots[i];
-		}
-		return std::move(validation.plan);
+		return DirectCheckRowBounds(optimizer, std::move(source), bounds, fragments);
 	}
 
-	//! Stage 4: the score projection. It forwards the source columns, the combined linear score, the scope and
-	//! fixed-value flags, and the per-group bound extrema, so every later stage reads one projection. The constructor
-	//! laid out the score and flag slots; each is appended here at exactly that position.
-	unique_ptr<LogicalOperator> ProjectScore(unique_ptr<LogicalOperator> source, const ScopeBindings &scope,
-	                                         BoundChecks &bounds) const {
+	//! Stage 3: the score projection. It forwards the source columns, the combined linear score, the scope and
+	//! fixed-value flags, and the source-valued bounds, so every later stage reads one projection. The constructor
+	//! laid out the slots; each is appended here at exactly that position.
+	unique_ptr<LogicalOperator> ProjectScore(unique_ptr<LogicalOperator> source, const ScopeBindings &scope) const {
 		vector<unique_ptr<Expression>> score_expressions;
 		auto append_at = [&](const ColumnBinding &slot, unique_ptr<Expression> expression) {
 			D_ASSERT(slot.table_index == score_index && slot.column_index == score_expressions.size());
@@ -835,34 +739,29 @@ private:
 			append_at(fixed_one_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.fixed_one_binding)));
 			append_at(fixed_zero_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.fixed_zero_binding)));
 		}
-		for (idx_t i = 0; i < bounds.slots.size(); i++) {
-			auto &slots = bounds.slots[i];
-			if (slots.min_window != DConstants::INVALID_INDEX) {
-				slots.min_score = score_expressions.size();
-				score_expressions.push_back(
-				    calc.Out(calc.Col(LogicalType::DOUBLE, ColumnBinding(bounds.window_index, slots.min_window))));
+		// A bound is read on the eligible rows only. On a row its clause's `when` drops, the windows it reads hold NULL
+		// or a count of 0, so computing it there raises nothing.
+		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
+			auto &bound = condition.source_bounds[i];
+			auto value = CopyIntoState(*bound.value, scope);
+			if (bound.negated) {
+				value = DirectScaledTerm(optimizer, std::move(value), -1, false, 1.0, false);
 			}
-			if (slots.max_window != DConstants::INVALID_INDEX) {
-				slots.max_score = score_expressions.size();
-				score_expressions.push_back(
-				    calc.Out(calc.Col(LogicalType::DOUBLE, ColumnBinding(bounds.window_index, slots.max_window))));
-			}
+			append_at(bound_bindings[i], calc.Out(calc.Cast(calc.Wrap(std::move(value)), LogicalType::DOUBLE)));
 		}
 		auto score = make_uniq<LogicalProjection>(score_index, std::move(score_expressions));
 		score->children.push_back(std::move(source));
 		return std::move(score);
 	}
 
-	//! Inclusive count limit of one source-valued bound, as BIGINT: its group extremum rounded, clamped to the
-	//! BIGINT range, and -1 (upper) or 0 (lower) when the value is below zero.
-	ExprPtr SourceLimit(idx_t index, bool upper, const BoundChecks &bounds) const {
+	//! Inclusive count limit of one source-valued bound, as BIGINT: its value rounded, clamped to the BIGINT range,
+	//! and -1 (upper) or 0 (lower) when the value is below zero.
+	ExprPtr SourceLimit(idx_t index, bool upper) const {
 		auto &bound = condition.source_bounds[index];
-		auto &slots = bounds.slots[index];
-		auto slot = upper ? slots.min_score : slots.max_score;
 		// Every caller asks for a side the bound has: an upper limit of an upper bound, a lower of a lower bound.
-		D_ASSERT(slot != DConstants::INVALID_INDEX);
+		D_ASSERT(upper ? DirectIsUpperBound(bound.comparison) : DirectIsLowerBound(bound.comparison));
 		auto cap = [&]() {
-			return calc.Col(LogicalType::DOUBLE, ColumnBinding(score_index, slot));
+			return calc.Col(LogicalType::DOUBLE, bound_bindings[index]);
 		};
 		bool strict =
 		    bound.comparison == (upper ? ExpressionType::COMPARE_LESSTHAN : ExpressionType::COMPARE_GREATERTHAN);
@@ -882,33 +781,33 @@ private:
 	}
 
 	//! Largest lower limit across the constant and source-valued bounds.
-	ExprPtr LowerLimit(const BoundChecks &bounds) const {
+	ExprPtr LowerLimit() const {
 		vector<ExprPtr> limits;
 		limits.push_back(calc.Constant(Value::BIGINT(NumericCast<int64_t>(condition.lower))));
-		for (idx_t i = 0; i < bounds.slots.size(); i++) {
-			if (bounds.slots[i].max_score != DConstants::INVALID_INDEX) {
-				limits.push_back(SourceLimit(i, false, bounds));
+		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
+			if (DirectIsLowerBound(condition.source_bounds[i].comparison)) {
+				limits.push_back(SourceLimit(i, false));
 			}
 		}
 		return calc.Max(limits);
 	}
 
 	//! Smallest upper limit across the constant and source-valued bounds. Only asked for when there is an upper bound.
-	ExprPtr UpperLimit(const BoundChecks &bounds) const {
+	ExprPtr UpperLimit() const {
 		vector<ExprPtr> limits;
 		if (condition.has_upper) {
 			limits.push_back(calc.Constant(Value::BIGINT(NumericCast<int64_t>(condition.upper))));
 		}
-		for (idx_t i = 0; i < bounds.slots.size(); i++) {
-			if (bounds.slots[i].min_score != DConstants::INVALID_INDEX) {
-				limits.push_back(SourceLimit(i, true, bounds));
+		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
+			if (DirectIsUpperBound(condition.source_bounds[i].comparison)) {
+				limits.push_back(SourceLimit(i, true));
 			}
 		}
 		D_ASSERT(!limits.empty());
 		return calc.Min(limits);
 	}
 
-	//! Partition a rank or count window by eligibility and PER key.
+	//! Partition a rank or count window by eligibility and group key.
 	void AddScope(BoundWindowExpression &expression) const {
 		if (!condition.scoped) {
 			return;
@@ -936,9 +835,9 @@ private:
 		    OrderByNullType::NULLS_LAST, calc.Out(calc.Col(LogicalType::DOUBLE, score_binding)));
 	}
 
-	//! Stage 5: validate the score, rank rows within their scope, and raise the infeasibility error when the
+	//! Stage 4: validate the score, rank rows within their scope, and raise the infeasibility error when the
 	//! bounds, fixed values, and row counts cannot all hold.
-	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score, const BoundChecks &bounds) const {
+	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score) const {
 		// The score is checked above the score projection, which carries the source columns a NULL names.
 		vector<DirectSignedValue> score_terms;
 		for (auto &part : condition.objective_parts) {
@@ -946,7 +845,7 @@ private:
 		}
 		auto score_source = DirectMergedOverProjection(optimizer.context, score_terms, source_bindings, score_index);
 		auto guard = make_uniq<LogicalFilter>(DirectValidNumberPredicate(
-		    optimizer, LogicalType::DOUBLE, score_binding, score_source.get(), DirectNumberKind::OBJECTIVE));
+		    optimizer, LogicalType::DOUBLE, score_binding, score_source.get(), DirectNumberKind::OBJECTIVE, fragments));
 		guard->children.push_back(std::move(score));
 		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
 		// for.
@@ -988,18 +887,17 @@ private:
 		result.rank_binding = ColumnBinding(window_index, 0);
 		result.plan = std::move(window);
 		if (condition.impossible || has_lower || has_fixes || source_upper) {
-			auto feasible = make_uniq<LogicalFilter>(FeasiblePredicate(result, free_count_slot, bounds));
+			auto feasible = make_uniq<LogicalFilter>(FeasiblePredicate(result, free_count_slot));
 			feasible->children.push_back(std::move(result.plan));
 			result.plan = std::move(feasible);
 		}
 		return result;
 	}
 
-	//! The feasibility predicate of stage 5: a list of checks, each true when it passes and DECIDE's infeasible error
+	//! The feasibility predicate of stage 4: a list of checks, each true when it passes and DECIDE's infeasible error
 	//! when it fails. Which failing check raises is not specified, and all of them raise the same error. The checks on
 	//! the rows of a group apply to eligible rows only; a fixed-value conflict applies to every row.
-	unique_ptr<Expression> FeasiblePredicate(const RankedRows &ranked, idx_t free_count_slot,
-	                                         const BoundChecks &bounds) const {
+	unique_ptr<Expression> FeasiblePredicate(const RankedRows &ranked, idx_t free_count_slot) const {
 		// `ok` must hold; a NULL `ok` fails.
 		auto must_hold = [&](const ExprPtr &ok) {
 			return DirectRaiseUnless(calc, calc.Out(ok), DirectInfeasibleErrorPredicate(optimizer));
@@ -1023,27 +921,26 @@ private:
 				    has_fixes ? calc.Add(fixed_count(),
 				                         calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, free_count_slot)))
 				              : calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, 1));
-				group_checks.push_back(must_hold(
-				    calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, available_rows, LowerLimit(bounds))));
+				group_checks.push_back(
+				    must_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, available_rows, LowerLimit())));
 			}
 			if ((source_lower || source_upper) && has_upper) {
-				group_checks.push_back(must_hold(
-				    calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, LowerLimit(bounds), UpperLimit(bounds))));
+				group_checks.push_back(
+				    must_hold(calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, LowerLimit(), UpperLimit())));
 			}
 			if (source_lower) {
-				for (auto &slots : bounds.slots) {
-					if (slots.max_score == DConstants::INVALID_INDEX) {
+				for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
+					if (!DirectIsLowerBound(condition.source_bounds[i].comparison)) {
 						continue;
 					}
-					group_checks.push_back(must_not_hold(
-					    calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-					             calc.Col(LogicalType::DOUBLE, ColumnBinding(score_index, slots.max_score)),
-					             calc.Num(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT))));
+					group_checks.push_back(must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
+					                                              calc.Col(LogicalType::DOUBLE, bound_bindings[i]),
+					                                              calc.Num(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT))));
 				}
 			}
 			if (has_fixes && has_upper) {
 				group_checks.push_back(
-				    must_hold(calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, fixed_count(), UpperLimit(bounds))));
+				    must_hold(calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, fixed_count(), UpperLimit())));
 			}
 		}
 		vector<unique_ptr<Expression>> checks;
@@ -1062,9 +959,9 @@ private:
 		return DirectAllHold(calc, std::move(checks));
 	}
 
-	//! Stage 6: the 0/1 assignment (fixed values, then scope, then upper and lower rank limits, then score sign), the
+	//! Stage 5: the 0/1 assignment (fixed values, then scope, then upper and lower rank limits, then score sign), the
 	//! source columns, and the hidden rank that keeps score validation live.
-	unique_ptr<LogicalOperator> ProjectAssignment(RankedRows ranked, const BoundChecks &bounds) const {
+	unique_ptr<LogicalOperator> ProjectAssignment(RankedRows ranked) const {
 		auto &rank_binding = ranked.rank_binding;
 		auto fixed_count_slot = ranked.fixed_count_slot;
 		vector<unique_ptr<Expression>> result_expressions;
@@ -1081,12 +978,12 @@ private:
 			return calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, fixed_count_slot));
 		};
 		if (has_lower) {
-			auto remaining_lower = has_fixes ? calc.Sub(LowerLimit(bounds), fixed_count()) : LowerLimit(bounds);
+			auto remaining_lower = has_fixes ? calc.Sub(LowerLimit(), fixed_count()) : LowerLimit();
 			auto within_lower = calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, rank, remaining_lower);
 			choose = calc.If(within_lower, calc.Bool(true), choose);
 		}
 		if (has_upper) {
-			auto remaining_upper = has_fixes ? calc.Sub(UpperLimit(bounds), fixed_count()) : UpperLimit(bounds);
+			auto remaining_upper = has_fixes ? calc.Sub(UpperLimit(), fixed_count()) : UpperLimit();
 			auto within_upper = calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, rank, remaining_upper);
 			choose = calc.If(within_upper, choose, calc.Bool(false));
 		}
@@ -1109,11 +1006,12 @@ private:
 };
 
 DirectSubstitute Rule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate) const {
+                             const DirectApplicabilityCondition &candidate,
+                             const vector<string> &source_fragments) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	// CheckCondition declines an objective that is not there, and an objective that has no linear term.
 	D_ASSERT(!condition.objective_parts.empty() || condition.sense == DecideSense::FEASIBILITY);
-	PlanBuilder plan_builder(condition, optimizer, *source);
+	PlanBuilder plan_builder(condition, optimizer, *source, source_fragments);
 	return plan_builder.Build(std::move(source));
 }
 

@@ -1033,6 +1033,22 @@
         "id": 216,
         "name": "source_columns",
         "type": "vector<DecideSourceColumnName>"
+      },
+      {
+        "id": 217,
+        "name": "group_keys",
+        "type": "vector<DecideGroupKey>"
+      },
+      {
+        "id": 218,
+        "name": "scope_checks",
+        "type": "vector<DecideScopeCheck>"
+      },
+      {
+        "id": 219,
+        "name": "scoped_objective",
+        "type": "bool",
+        "deleted": true
       }
     ]
   },

@@ -1,8 +1,8 @@
-# Problem Types — Planned Features
+# Problem Types — open work
 
 ## SOCP (Second-Order Cone Programming)
 
-**Status: Deferred — not planned for the current release.**
+**Status: Deferred — not scheduled for the current release.**
 
 SOCP is a natural generalization beyond DeciDB's current QCQP support. It would
 enable constraints of the form `||Ax + b|| <= c^T x + d` — true Euclidean

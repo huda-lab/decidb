@@ -29,14 +29,14 @@ Cross-cutting issues that do not belong to a single stage live in
 
 | # | Stage | Owns | Primary source |
 |---|---|---|---|
-| 01 | [parser/](01_parser/) | Grammar, DECIDE `WHEN` lexing, the transformer, source-preserving parsed validation | `third_party/libpg_query/grammar/statements/select.y`, `src/planner/binder/query_node/bind_select_node.cpp` |
-| 02 | [binder/](02_binder/) | Variable declarations, scope, types, polynomial degree, reducer recognition, DECIDE validity | `src/planner/expression_binder/decide_*.cpp` |
+| 01 | [parser/](01_parser/) | Grammar, the DECIDE keyword tokens (`WHEN`, `PER`, `BY`), the transformer, the refusal of removed spellings, source-preserving parsed validation | `third_party/libpg_query/grammar/statements/select.y`, `src/parser/decide/decide_removed_spellings.cpp` |
+| 02 | [binder/](02_binder/) | Variable declarations and their keys, where `when` / `per` / `by` may stand, types, polynomial degree, reducer recognition, DECIDE validity | `src/planner/expression_binder/decide/*.cpp` |
 | 03 | [logical_plan/](03_logical_plan/) | `LogicalDecide`, subquery flattening and provenance, `AddConstraint` / `SetObjective`, serialization | `src/planner/operator/decide/logical_decide.cpp`, `src/planner/binder/query_node/plan_select_node.cpp` |
-| 04 | [canonicalizer/](04_canonicalizer/) | The one shape boundary: decisions left, bound right, one spelling for a reducer scale, C0–C7 / O0–O5 | `src/planner/decide/decide_canonicalizer.cpp` |
-| 05 | [optimizer/](05_optimizer/) | Formulation choice: NORM, DECIDE-variable IN, ABS, MIN/MAX easy/hard, AVG→SUM, `<>`, bilinear McCormick, composed MIN/MAX | `src/optimizer/decide/decide_optimizer.cpp` |
+| 04 | [canonicalizer/](04_canonicalizer/) | The one shape boundary: decisions left, bound right, one spelling for a reducer scale, the per-row / aggregate / value shape, the scope checks, C0–C7 / O0–O5 | `src/planner/decide/decide_canonicalizer.cpp` |
+| 05 | [optimizer/](05_optimizer/) | Formulation choice: NORM, DECIDE-variable IN, ABS, MIN/MAX easy/hard, AVG→SUM, `<>`, bilinear McCormick, composed MIN/MAX, the value rewrite (a reducer held by a helper decision) | `src/optimizer/decide/decide_optimizer.cpp` |
 | 06 | [model_formulation/](06_model_formulation/) | `SolverInput` → `SolverModel`: variable layout, coefficient accumulation, bounds | `src/decidb/formulation/ilp_model_builder.cpp` |
 | 07 | [solver/](07_solver/) | Backend dispatch, Gurobi and HiGHS translation, status normalization, time limits | `src/decidb/solver/ilp_solver.cpp`, `src/decidb/gurobi/` |
-| 08 | [execution/](08_execution/) | Materialization, coefficient evaluation, entity mapping, readback | `src/execution/operator/decide/physical_decide.cpp` |
+| 08 | [execution/](08_execution/) | Materialization, scope checks, coefficient evaluation, entity mapping, readback | `src/execution/operator/decide/physical_decide.cpp` |
 
 ---
 
@@ -44,10 +44,10 @@ Cross-cutting issues that do not belong to a single stage live in
 
 ```text
 SQL text
-   |  01 parser — grammar, DECIDE WHEN gating, transformer, desugaring
+   |  01 parser — grammar, DECIDE keyword tokens, transformer, removed-spelling refusal
    v
 parsed SelectNode with decide_variables / decide_constraints / decide_objective
-   |  02 binder — names, scopes, types, degree, reducers; produces bound expressions
+   |  02 binder — names, keys, scopes, types, degree, reducers; produces bound expressions
    v
 BoundSelectNode
    |  03 logical plan — PlanSubqueries, correlation provenance
@@ -61,7 +61,7 @@ LogicalDecide (rewritten)
    |  VerifyCanonical / VerifyCanonicalObjective once more at physical-plan entry
    v
 PhysicalDecide
-   |  08 execution — Sink: materialize; Finalize: entity mappings, extraction, coefficients
+   |  08 execution — Sink: materialize; Finalize: entity mappings, scope checks, extraction, coefficients
    v
 SolverInput
    |  06 model formulation — VarIndexer layout, coefficient accumulation

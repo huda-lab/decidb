@@ -27,7 +27,7 @@ enum class DirectAnalysisStatus : uint8_t { PROVED, NOT_PROVED };
 // tree before any DECIDE rewrite (see context/descriptions/08_direct_solve/architecture/
 // ir.md). The front end is the only code that knows LogicalDecide's layout and the
 // bound-tree spelling of DECIDE constructs; rules read meaning. Data-valued expressions
-// (coefficients, bounds, WHEN predicates) stay DuckDB expressions over the source.
+// (coefficients, bounds, `when` conditions) stay DuckDB expressions over the source.
 // The IR owns everything it holds. Anything the front end cannot model is NOT_PROVED,
 // per constraint and per objective part.
 
@@ -69,17 +69,20 @@ struct DirectPart {
 	unique_ptr<Expression> scale;
 	bool scale_divides = false;
 	DirectReducer reducer = DirectReducer::NONE;
-	//! Aggregate-local WHEN.
+	//! The reducer's own `when` (`sum(when c: x)`).
 	unique_ptr<Expression> filter;
 	//! Entity scope the reducer is qualified by (`SUM(D: e)`), or INVALID_INDEX.
 	idx_t qualifier = DConstants::INVALID_INDEX;
-	//! The body's terms. Empty when `inner` holds a nested reducer (`OUTER(INNER(e)) PER k` objectives).
+	//! The body's terms. Empty when `inner` holds a nested reducer (the two-level objective
+	//! `outer(per k: inner(e) by (k))`, which the front end declines today).
 	vector<DecideSplitTerm> terms;
 	unique_ptr<DirectPart> inner;
 };
 
-//! Which rows a constraint or objective applies to. PER keys exclude NULL rows; WHEN false or NULL rows do not
-//! join.
+//! Which rows a constraint or objective applies to: a row whose `when` is false or NULL does not join. `per_key_slots`
+//! are group keys, read by the per-group code S1 and R1 keep, which leaves a NULL-key row out of every group (the
+//! removed PER). Nothing fills them until the front end reads a reducer's `by` key, where a NULL key is a group of its
+//! own (D5).
 struct DirectIRScope {
 	vector<idx_t> per_key_slots;
 	unique_ptr<Expression> when;
@@ -104,11 +107,11 @@ struct DirectIRConstraint {
 	idx_t degree = 0;
 
 	//! The reduced left side when it is one plain `SUM(...)`: unsigned, unscaled, unqualified, not nested; null
-	//! otherwise. Its aggregate-local WHEN, if any, is the returned part's `filter`.
+	//! otherwise. Its own `when`, if any, is the returned part's `filter`.
 	const DirectPart *PlainSum() const;
 
-	//! The rows the constraint's sum covers: the aggregate-local WHEN on the plain SUM or the clause-level WHEN, never
-	//! both. Null for none. `ok` is false when the constraint is not a plain SUM or has both.
+	//! The rows the constraint's sum covers: the plain SUM's own `when` or the clause's `when`. Null for none. `ok` is
+	//! false when the constraint is not a plain SUM, or has both (the solver reads both; the rules decline it).
 	const Expression *Membership(bool &ok) const;
 };
 
@@ -119,6 +122,17 @@ struct DirectIRObjective {
 	double offset = 0;
 	vector<DirectPart> parts;
 	DirectIRScope scope;
+};
+
+//! A run-time scope check the solver makes before it reads a value: the input raises `message` when some row passes
+//! `rows` (every row, when null) and none of those rows also passes `filter`. NULL drops a row. A clause's `when` (D4)
+//! is `filter` with no `rows`; a reducer's own `when` without a `by` key (D8) is `filter` under its clause's `when`.
+//! A value check (VALUE_IS_VALID) has `invalid` instead: the message a row raises, NULL on a valid row.
+struct DirectRowCheck {
+	unique_ptr<Expression> rows;
+	unique_ptr<Expression> filter;
+	string message;
+	unique_ptr<Expression> invalid;
 };
 
 struct DirectIR {
@@ -132,6 +146,11 @@ struct DirectIR {
 	idx_t source_clause_count = 0;
 	vector<DirectIRConstraint> constraints;
 	DirectIRObjective objective;
+	//! The scope checks the plan makes on the source rows, which the rule driver adds above every rule's plan.
+	vector<DirectRowCheck> row_checks;
+	//! NOT_PROVED when the DECIDE operator owes the rows a scope check that is not a row check: one per `by` group or
+	//! per class of a key.
+	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 };
 
 //! Only CheckCondition can construct an applicability condition. Apply receives this
@@ -177,9 +196,11 @@ public:
 	virtual unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir,
 	                                                                ClientContext &context) const = 0;
 	virtual string Summary() const = 0;
-	//! `source` is the DECIDE input with its types resolved.
+	//! `source` is the DECIDE input with its types resolved. `source_fragments` is the DECIDE node's source-fragment
+	//! registry, for the messages that quote what the user wrote (DirectNullMessageOf).
 	virtual DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                               const DirectApplicabilityCondition &condition) const = 0;
+	                               const DirectApplicabilityCondition &condition,
+	                               const vector<string> &source_fragments) const = 0;
 };
 
 //! Every rule the rule driver tries, in registration order (direct_registry.cpp). A new problem class adds one line

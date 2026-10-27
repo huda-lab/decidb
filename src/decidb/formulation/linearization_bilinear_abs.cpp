@@ -211,7 +211,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
                            ec.comparison_type == ExpressionType::COMPARE_EQUAL;
         for (idx_t r = 0; r < num_rows; r++) {
             if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-                continue; // row excluded by WHEN/PER: this clause asks nothing here
+                continue; // row excluded by `when` or its group: this clause asks nothing here
             }
             double a = ec.row_coefficients[term].Get(r);
             if (std::abs(a) < 1e-15) {
@@ -256,7 +256,10 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
 
         // M = max over rows of |rhs[r]| + sum_{t: var != aux} |coeff[t][r]| * max(|lb|, |ub|),
         // reusing the shared per-row range helper (skipping the aux term). This
-        // upper-bounds |inner| across all rows and variable values.
+        // upper-bounds |inner| across all rows and variable values. Derived afresh each
+        // time: a run that found a member open may be followed by one that finds it
+        // boxed, once the value rewrite's helpers among the members are boxed.
+        link.range_unbounded = false;
         bool abs_unbounded = false;
         double M = 0.0;
         for (idx_t r = 0; r < num_rows; r++) {
@@ -393,7 +396,6 @@ void LinearizeAbsMaximize(SolverInput &input) {
         ec_ub1.row_group_ids = c1.row_group_ids;
         ec_ub1.num_groups = c1.num_groups;
         ec_ub1.group_labels = c1.group_labels;
-        ec_ub1.qualifier = c1.qualifier;
         ec_ub1.kind = ConstraintKind::STRUCTURAL;
         ec_ub1.source_clause_id = c1.source_clause_id;
         ec_ub1.repair_group_id = c1.repair_group_id;
@@ -412,7 +414,6 @@ void LinearizeAbsMaximize(SolverInput &input) {
         ec_ub2.row_group_ids = c2.row_group_ids;
         ec_ub2.num_groups = c2.num_groups;
         ec_ub2.group_labels = c2.group_labels;
-        ec_ub2.qualifier = c2.qualifier;
         ec_ub2.kind = ConstraintKind::STRUCTURAL;
         ec_ub2.source_clause_id = c2.source_clause_id;
         ec_ub2.repair_group_id = c2.repair_group_id;
@@ -449,7 +450,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
         // Dropping them would be a separate optimization that costs diagnosis.
         for (idx_t r = 0; r < num_rows; r++) {
             if (!c1.row_group_ids.empty() && c1.row_group_ids[r] == DConstants::INVALID_INDEX) {
-                continue; // row excluded by WHEN/PER: no ABS to express here
+                continue; // row excluded by `when` or its group: no ABS to express here
             }
             // `t = inner`, boxed by THIS ROW's own reach — the same per-row walk native
             // MIN/MAX boxes its argument columns with, rather than one table-wide

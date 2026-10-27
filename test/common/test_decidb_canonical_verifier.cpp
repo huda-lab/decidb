@@ -94,15 +94,6 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*canonical));
 	}
 
-	SECTION("PER requires an aggregate constraint child") {
-		auto wrapped = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		wrapped->SetAlias(PER_CONSTRAINT_TAG);
-		wrapped->children.push_back(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO,
-		                                       DecideRef(0), DoubleConstant(5)));
-		wrapped->children.push_back(DataRef());
-		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*wrapped));
-	}
-
 	SECTION("missing query-wide bound provenance breaks the fixed point") {
 		auto written = Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO,
 		                          DecideRef(0), DoubleConstant(5));

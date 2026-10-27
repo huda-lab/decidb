@@ -270,13 +270,24 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 	//
 	// T3 folding policy. A user knob fans into N rows; the minimal loosening is the max
 	// overshoot (a single `s` with `eᵢ − s ≤ K` is driven to the max), not the sum.
-	//   - SHARED_SCALAR (a query-wide cap, a PER/aggregate group row): always folds.
+	//   - SHARED_SCALAR (a query-wide cap, an aggregate group row): always folds.
 	//   - PER_ROW_DATA (a data-backed RHS `x <= col`): folds only in query mode, into one
 	//     virtual offset `x <= col + delta`; in expanded mode its rows stay independent so
 	//     the readback exposes the per-row profile.
 	// Rows without a clause id always stay independent.
+	//   - A row that stands for its group's classes (D28: an easy MIN/MAX's member rows,
+	//     bound by the group's tightest value): folds within its group in both modes, so
+	//     the group's bound moves once and the readback reports it per class.
+	//   - A row of a scoped clause with no `per` key (per row): each kept row is a class
+	//     of its own (D28), so in expanded mode it keeps its own slack whatever its shape.
 	auto folds = [&](const ConstraintProvenance &p) {
 		if (p.repair_group_id == DConstants::INVALID_INDEX) {
+			return false;
+		}
+		if (p.class_set != DConstants::INVALID_INDEX) {
+			return true;
+		}
+		if (p.per_kept_row && !fold_data) {
 			return false;
 		}
 		if (p.shape == ElasticShape::SHARED_SCALAR) {
@@ -284,9 +295,9 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 		}
 		return fold_data && p.shape == ElasticShape::PER_ROW_DATA;
 	};
-	// The block key decides how far a knob folds. In query mode a PER clause is ONE SQL
+	// The block key decides how far a knob folds. In query mode a grouped clause is ONE SQL
 	// literal the user edits, so all its groups fold into a single slack (key ignores
-	// group_key). In expanded mode each PER group is its own slack (key includes it), so
+	// group_key). In expanded mode each group is its own slack (key includes it), so
 	// the profile breaks out per group.
 	auto block_key = [&](const ConstraintProvenance &p) -> std::pair<idx_t, idx_t> {
 		return fold_data ? std::make_pair(p.repair_group_id, static_cast<idx_t>(0))
@@ -299,7 +310,12 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 		    !IsRelaxableForElastic(row.provenance.kind) || !folds(row.provenance)) {
 			continue;
 		}
-		blocks[block_key(row.provenance)].push_back(r);
+		auto &block = blocks[block_key(row.provenance)];
+		// Rows that share a slack are one clause's: a repair id two clauses hold welds them
+		// into one edit.
+		D_ASSERT(block.empty() ||
+		         elastic.constraints[block.front()].provenance.source_clause_id == row.provenance.source_clause_id);
+		block.push_back(r);
 	}
 
 	// Emit in row order: a shared block is emitted once, at its first row (its rows
@@ -388,10 +404,10 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
                                            const string &slack_scope) {
 	// T3 slack-scope policy.
 	//   query (default): each block is ONE SQL literal knob the user edits, folded across
-	//     PER groups (BuildElasticModel). Editable literals report `source_literal`, a
+	//     groups (BuildElasticModel). Editable literals report `source_literal`, a
 	//     data RHS reports a `virtual_offset` (`x <= col + delta`); both are clause-level,
 	//     so any per-group identity is dropped.
-	//   expanded: PER/aggregate groups get one slack each (`expanded_group`, keeping the
+	//   expanded: aggregate groups get one slack each (`expanded_group`, keeping the
 	//     group key); a data RHS stays per-row (`expanded_row`, keeping the row id); a
 	//     non-grouped literal has nothing to break out and reports `source_literal`.
 	bool expanded = slack_scope == "expanded";
@@ -444,16 +460,25 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		// same LHS/RHS, so the first row is canonical.
 		if (sl.quadratic) {
 			const auto &orig = orig_model.quadratic_constraints[sl.rows.front()];
-			auto display_provenance = SourceAwareProvenance(orig_model, orig.provenance);
-			ClauseEdit e = MakeLoosenEdit(display_provenance, SourceAwareQuadraticLhs(orig_model, orig, columns),
-			                              orig.rhs, sl.sense, amount);
+			ClauseEdit e =
+			    MakeLoosenEdit(orig.provenance, SourceQualifier(orig_model, orig.provenance),
+			                   SourceAwareQuadraticLhs(orig_model, orig, columns), orig.rhs, sl.sense, amount);
 			e.edit_source = "source_literal";
-			edits.push_back(std::move(e));
+			// A quadratic row never shares a slack (I2.d), so it reads back on its own, its
+			// group naming it in either scope; in the expanded scope a scoped clause's row
+			// reports the classes it stands for instead (D28).
+			if (!expanded) {
+				edits.push_back(std::move(e));
+				continue;
+			}
+			for (auto &finding : FanOutByClass(std::move(e), orig.provenance, orig_model, /*expanded=*/true)) {
+				edits.push_back(std::move(finding));
+			}
 			continue;
 		}
 		const ModelConstraint &orig = orig_model.constraints[sl.rows.front()];
 		const ConstraintProvenance &prov = orig.provenance;
-		auto display_provenance = SourceAwareProvenance(orig_model, prov);
+		const string qualifier = SourceQualifier(orig_model, prov);
 		string display_lhs = SourceAwareLhs(orig_model, orig, columns);
 		// Non-empty only when canonicalization moved a term across the comparison, in
 		// which case it pairs with the written LHS that SourceAwareLhs just returned.
@@ -461,18 +486,23 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		bool data_rhs = prov.shape == ElasticShape::PER_ROW_DATA &&
 		                prov.repair_group_id != DConstants::INVALID_INDEX;
 		if (expanded) {
-			// Only an unreduced per-row constraint expands row by row. A reduced
-			// constraint emits one elastic row per *group*, so a data-derived bound on
-			// one of those is a per-group knob, not a per-row profile entry — routing
-			// it here would relabel every group as a row and drop the group key.
-			if (data_rhs && !prov.is_aggregate) {
+			// Only a row that stands for its own data row expands row by row: an unreduced
+			// clause's data-derived bound, or any row of a scoped clause with no `per` key.
+			// A reduced constraint emits one elastic row per *group*, and a row that
+			// stands for classes (a `per K:` clause's, an easy MIN/MAX member) carries
+			// them, so a bound on one of those is a per-group knob, not a per-row profile
+			// entry -- routing it here would relabel it as a data row.
+			if (((data_rhs && !prov.is_aggregate) || prov.per_kept_row) &&
+			    prov.class_set == DConstants::INVALID_INDEX) {
 				// The independent per-row slack is that row's exact overshoot, one profile
-				// entry. A debug view, not a directly pasteable edit.
-				ClauseEdit e = MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount);
+				// entry, quoted against that row's bound -- or offsetting the written bound
+				// when canonicalization moved a term across it, as below.
+				ClauseEdit e = written_rhs.empty()
+				                   ? MakeLoosenEdit(prov, qualifier, display_lhs, orig.rhs, sl.sense, amount)
+				                   : MakeVirtualOffsetEdit(prov, qualifier, display_lhs, written_rhs, sl.sense, amount);
 				e.edit_source = "expanded_row";
-				// The emitted row's own identity, so an `expanded` profile can be read
-				// back row by row. `group_key` carries the row id for a per-row clause.
-				e.row = prov.group_key;
+				e.group.clear();
+				e.row = prov.data_row;
 				edits.push_back(std::move(e));
 				continue;
 			}
@@ -485,41 +515,48 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 				// model carries is a literal the query does not contain. Offset the bound
 				// the user actually wrote instead — the same relaxation, named where they
 				// can apply it.
-				e = MakeVirtualOffsetEdit(display_provenance, display_lhs, written_rhs, sl.sense, amount);
+				e = MakeVirtualOffsetEdit(prov, qualifier, display_lhs, written_rhs, sl.sense, amount);
 			} else if (data_rhs) {
 				string rhs_text = SourceAwareRhs(orig_model, prov, orig.rhs);
-				e = MakeVirtualOffsetEdit(display_provenance, display_lhs, rhs_text, sl.sense, amount);
+				e = MakeVirtualOffsetEdit(prov, qualifier, display_lhs, rhs_text, sl.sense, amount);
 			} else {
-				e = MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount);
+				e = MakeLoosenEdit(prov, qualifier, display_lhs, orig.rhs, sl.sense, amount);
 			}
-			// When PER-grouped this block is one group → break it out with its group
+			// An offset over the written bound is a virtual offset whichever bound it moves.
+			const char *clause_source = (data_rhs || !written_rhs.empty()) ? "virtual_offset" : "source_literal";
+			// A clause written over `by` groups reports once per class its group's row
+			// stands for (syntax_reference.md §8.1, D28), `per ()` as the clause.
+			if (prov.class_set != DConstants::INVALID_INDEX) {
+				e.edit_source = clause_source;
+				for (auto &finding : FanOutByClass(std::move(e), prov, orig_model, /*expanded=*/true)) {
+					edits.push_back(std::move(finding));
+				}
+				continue;
+			}
+			// When grouped this block is one group → break it out with its group
 			// key; otherwise there is nothing per-group to expose.
-			if (!prov.group_label.empty()) {
-				e.edit_source = "expanded_group";
-			} else {
-				e.edit_source = data_rhs ? "virtual_offset" : "source_literal";
-			}
+			e.edit_source = prov.group_label.empty() ? clause_source : "expanded_group";
 			edits.push_back(std::move(e));
 			continue;
 		}
-		// Query mode: the block folds a whole clause (all PER groups) into one edit, so it
+		// Query mode: the block folds a whole clause (all its groups) into one edit, so it
 		// is reported clause-level with no single-group identity.
 		ClauseEdit e;
 		if (!written_rhs.empty()) {
 			// As above: offset the written bound, not the literal canonicalization left
 			// behind. Reported as a virtual offset because that is what it is — there is
 			// no number in the query to retype.
-			e = MakeVirtualOffsetEdit(display_provenance, display_lhs, written_rhs, sl.sense, amount);
+			e = MakeVirtualOffsetEdit(prov, qualifier, display_lhs, written_rhs, sl.sense, amount);
 			e.edit_source = "virtual_offset";
 		} else if (data_rhs) {
 			// The folded shared slack `delta` is one virtual query-level offset over the
 			// data column (`x <= col + delta`). rhs_label names the column; fall back to
 			// the numeric representative RHS when it is unavailable.
 			string rhs_text = SourceAwareRhs(orig_model, prov, orig.rhs);
-			e = MakeVirtualOffsetEdit(display_provenance, display_lhs, rhs_text, sl.sense, amount);
+			e = MakeVirtualOffsetEdit(prov, qualifier, display_lhs, rhs_text, sl.sense, amount);
 			e.edit_source = "virtual_offset";
 		} else {
-			e = MakeLoosenEdit(display_provenance, display_lhs, orig.rhs, sl.sense, amount);
+			e = MakeLoosenEdit(prov, qualifier, display_lhs, orig.rhs, sl.sense, amount);
 			e.edit_source = "source_literal";
 		}
 		e.group.clear(); // folded across groups → clause-level, no single group key
@@ -759,7 +796,6 @@ namespace {
 struct RemovalGroupInfo {
 	idx_t id = DConstants::INVALID_INDEX;
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
-	string qualifier;
 };
 
 static vector<RemovalGroupInfo> CollectRemovalGroups(const SolverModel &model) {
@@ -768,16 +804,10 @@ static vector<RemovalGroupInfo> CollectRemovalGroups(const SolverModel &model) {
 		if (prov.removal_group_id == DConstants::INVALID_INDEX) {
 			return;
 		}
-		auto entry = by_group.emplace(
-		    prov.removal_group_id,
-		    RemovalGroupInfo {prov.removal_group_id, prov.source_clause_id, prov.qualifier});
-		if (!entry.second) {
-			if (entry.first->second.source_clause_id == DConstants::INVALID_INDEX) {
-				entry.first->second.source_clause_id = prov.source_clause_id;
-			}
-			if (entry.first->second.qualifier.empty()) {
-				entry.first->second.qualifier = prov.qualifier;
-			}
+		auto entry =
+		    by_group.emplace(prov.removal_group_id, RemovalGroupInfo {prov.removal_group_id, prov.source_clause_id});
+		if (!entry.second && entry.first->second.source_clause_id == DConstants::INVALID_INDEX) {
+			entry.first->second.source_clause_id = prov.source_clause_id;
 		}
 	};
 	for (const auto &row : model.constraints) record(row.provenance);
@@ -797,14 +827,7 @@ static ClauseEdit MakeDropEdit(const SolverModel &model, const RemovalGroupInfo 
 	edit.edit_source = "remove_only";
 	if (group.source_clause_id < model.constraint_sources.size()) {
 		const auto &source = model.constraint_sources[group.source_clause_id];
-		const string &lhs = source.written_lhs.empty() ? source.canonical_lhs : source.written_lhs;
-		const string &rhs = source.written_rhs.empty() ? source.canonical_rhs : source.written_rhs;
-		const string &cmp = source.written_cmp.empty() ? source.canonical_cmp : source.written_cmp;
-		edit.label = cmp.empty() || rhs.empty() ? lhs : lhs + " " + cmp + " " + rhs;
-		const string &qualifier = source.qualifier.empty() ? group.qualifier : source.qualifier;
-		if (!qualifier.empty()) {
-			edit.label += " " + qualifier;
-		}
+		edit.label = AttachDecideQualifier(WrittenDecideComparison(source), source.qualifier);
 	} else {
 		edit.label = "constraint " + to_string(group.id);
 	}
@@ -862,8 +885,7 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 		SetTierObjective(stage1_model, slacks, tier);
 		SolverResult pass = input.solve_model(stage1_model);
 		if (pass.status == SolverStatus::INFEASIBLE) {
-			result.status = input.has_unhandled_user_bounds ? CandidateStatus::ABORT
-			                                                : CandidateStatus::INFEASIBLE;
+			result.status = CandidateStatus::INFEASIBLE;
 			return result;
 		}
 		if (pass.status != SolverStatus::OPTIMAL || pass.solution.empty()) {
@@ -878,8 +900,7 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 	if (!solved) {
 		SolverResult pass = input.solve_model(stage1_model);
 		if (pass.status == SolverStatus::INFEASIBLE) {
-			result.status = input.has_unhandled_user_bounds ? CandidateStatus::ABORT
-			                                                : CandidateStatus::INFEASIBLE;
+			result.status = CandidateStatus::INFEASIBLE;
 			return result;
 		}
 		if (pass.status != SolverStatus::OPTIMAL || pass.solution.empty()) {
@@ -989,7 +1010,7 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 	vector<ColumnProvenance> columns =
 	    BuildColumnProvenance(input.indexer, input.var_labels, input.var_is_aux,
 	                          input.global_variable_labels);
-	auto unreachable = CollectUnreachableClauses(input.model, columns);
+	auto unreachable = CollectUnreachableClauses(input.model, columns, input.params.slack_scope == "expanded");
 	if (!unreachable.empty()) {
 		return BuildUnreachableBoundDiagnostic(unreachable);
 	}
@@ -1035,7 +1056,7 @@ DecideDiagnostic DiagnoseInfeasible(const InfeasibleDiagnosisInput &input) {
 		    best.edits,
 		    best.has_objective ? FormatNum(SnapDiagnosticValue(best.objective_value)) : string());
 	}
-	return input.has_unhandled_user_bounds ? DecideDiagnostic() : BuildElasticInfeasibleDiagnostic();
+	return BuildElasticInfeasibleDiagnostic();
 }
 
 } // namespace duckdb

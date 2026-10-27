@@ -15,7 +15,9 @@
 #pragma once
 
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 
@@ -44,11 +46,48 @@ string DescendSourceAlias(const Expression &expr, const string &inherited);
 //! A TRUE placeholder standing in for a clause a rewrite has consumed.
 unique_ptr<Expression> MakeTrueExpression(const string &source_alias = string());
 
-//! Sign of a scale factor resolved at plan time: -1, +1, or 0 when unknown.
-int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides);
+//! The clause a rewrite stands in. A row the rewrite adds for it keeps the clause's
+//! `when`, so it reads only the rows the clause keeps. `when` is null for none.
+struct ClauseScope {
+	const Expression *when = nullptr;
+};
 
-//! Mark the ABS nodes that need a Big-M envelope. Must run before RewriteAbs.
-void TagAbsConstraintsForBigM(ClientContext &context, LogicalDecide &decide);
+//! The clause scope in force below `node`, given the one above it: a `when` wrapper
+//! supplies its condition.
+ClauseScope EnterClauseScope(const Expression &node, ClauseScope scope);
+
+//! `row`, which a rewrite adds for a clause in `scope`: wrapped in a copy of the clause's
+//! `when` when it has one.
+unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const ClauseScope &scope);
+
+//! Mark the ABS nodes, in the constraints and the objective, that need a Big-M
+//! envelope: those whose sign under the relation or the sense does not push the
+//! auxiliary down, or is not known until the query runs. Must run before RewriteAbs.
+void TagAbsForBigM(ClientContext &context, LogicalDecide &decide);
+
+//! Allocate an auxiliary decision column `name` of `type`: its reference in
+//! `decide_variables`, its Boolean flag, and its scope -- recorded only when the plan
+//! keeps scopes at all (`variable_scopes` is empty while every decision is row-scoped,
+//! and stays so for a row-scoped auxiliary). A non-empty `label` names the column in a
+//! diagnosis (F6) by what it stands for. Returns the column's index.
+idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type, bool is_boolean,
+                           DecideVarScopeInfo scope = DecideVarScopeInfo::Row(), const string &label = string());
+
+//! A reference to decision column `var_idx`, as an expression of the DECIDE clause.
+unique_ptr<Expression> MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx);
+
+//! An expression as a plan prints it (RenderDecideSource, columns unqualified): the label
+//! of an auxiliary decision, the text of a rewrite account.
+string RenderForPlan(const Expression &expr, const LogicalDecide &decide);
+
+//! Record what a rewrite made of `subject` (as RenderForPlan prints it), for EXPLAIN
+//! (LogicalDecide::rewrite_accounts): under the clause `source_clause_id`, or the
+//! objective (INVALID_INDEX). The alias form reads the clause id off a clause's alias;
+//! an alias without one is the objective's.
+void AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id, LogicalDecide::RewriteAccount::Kind kind,
+                       string subject);
+void AddRewriteAccount(LogicalDecide &decide, const string &clause_alias, LogicalDecide::RewriteAccount::Kind kind,
+                       string subject);
 
 } // namespace decide_rewrite
 } // namespace duckdb

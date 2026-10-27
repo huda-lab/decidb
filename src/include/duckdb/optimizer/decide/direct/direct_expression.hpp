@@ -22,7 +22,8 @@ struct DirectPart;
 //! evaluated per source row; none of them knows which problem class it is serving.
 
 //! True when the expression is deterministic and independent of the decision variables: it mentions no decision
-//! column, is consistent and non-volatile, and has no subquery, parameter, aggregate, window, or correlated column.
+//! column, is consistent (not even constant only within a query, like `now()`), and has no subquery, parameter,
+//! aggregate, window, or correlated column.
 bool DirectIsDecisionFreeDeterministic(const Expression &expr, idx_t decide_index);
 
 //! True when every column reference is an uncorrelated column of the source plan.
@@ -60,16 +61,7 @@ constexpr uint32_t DIRECT_FINITE_CONSTANT = DIRECT_CONSTANT | FOLD_EXACT_FINITE;
 //! finite foldable constant, and nonzero when it divides.
 bool DirectPartScale(ClientContext &context, const DirectPart &part, double &scale);
 
-//! The uncorrelated numeric column an expression is exactly, looking through nonthrowing numeric casts; null when
-//! the expression is anything else.
-const BoundColumnRefExpression *DirectBareNumericColumn(const Expression &expr);
-
-//! The source column a data-valued bound is exactly, as DirectBareNumericColumn reads it: its slot in the source, its
-//! type, and the name the user wrote, for an error that names it. False for anything else.
-bool DirectSourceNumericColumn(const Expression &expr, const vector<ColumnBinding> &source_bindings, idx_t &slot,
-                               LogicalType &type, string &name);
-
-//! A data-valued bound a rule may validate and reduce per row (DirectValidateBounds): numeric, nonthrowing,
+//! A data-valued value a rule may read per row and check for NULL (DirectCheckRowBounds): numeric, nonthrowing,
 //! deterministic, decision-free, over source columns only, and mentioning at least one.
 bool DirectIsSourceOnlyNumeric(const Expression &expr, idx_t decide_index,
                                const vector<ColumnBinding> &source_bindings);
@@ -82,18 +74,14 @@ bool DirectIsSourceOnlyNumericMayRaise(const Expression &expr, idx_t decide_inde
 
 //! A numeric or Boolean value a rule may read per row: deterministic, independent of the decisions, over source columns
 //! only, with or without a column. Unlike DirectIsSourceOnlyNumeric it may raise when evaluated, for a rule that
-//! evaluates it on every row (the solver raises on every row, including rows a WHEN excludes).
+//! evaluates it on the rows that read it, where the solver raises too (nothing is computed on a row a `when` drops).
 bool DirectIsSourceOnlyValue(const Expression &expr, idx_t decide_index, const vector<ColumnBinding> &source_bindings);
-
-//! What a NULL value quotes when none of its columns is NULL: the source column when the value is exactly one,
-//! otherwise the expression.
-string DirectTextOf(const Expression &expr);
 
 //! True for an INT or BOOL decision, whose bounds round to whole numbers.
 bool DirectIsWholeNumbered(DirectDomain domain);
 
 //! A coefficient or value the plan evaluates per row: numeric, deterministic, independent of the decisions, over the
-//! source. It may raise when evaluated; the plan evaluates it on every row, as the solver does.
+//! source. It may raise when evaluated; the plan evaluates it on the rows that read it, as the solver does.
 bool DirectProveValue(const DirectIR &ir, const Expression &expr);
 
 //! `x >= v`, `x > v`, and `x = v` all bound a count from below; `x <= v`, `x < v`, and `x = v` from above.

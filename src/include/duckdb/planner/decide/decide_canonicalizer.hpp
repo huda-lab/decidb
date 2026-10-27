@@ -32,7 +32,7 @@
 // DecideOptimizer::RewriteNorm.
 //
 // That restriction is the whole design. A quadratic `POWER(x-t,2)`, a composed
-// `MAX(x*v)`, and a filtered `SUM(x) WHEN c` are all simply decision-bearing
+// `MAX(x*v)`, and a filtered `sum(when c: x)` are all simply decision-bearing
 // terms here, indistinguishable from `x`. The symbolic layer this replaced had to
 // carve out structural bypasses -- quadratic bodies, nested aggregates, opaque
 // placeholders for ABS/MIN/MAX/subqueries -- precisely because it opened terms to
@@ -77,10 +77,13 @@
 // Peeling is also where the scale-specific rule "a factor on a reducer must be
 // one value for the whole query" is enforced.
 //
-// K3 IS ENFORCED AT THIS BOUNDARY. After rebuilding, validation classifies the
-// whole comparison as per-row or aggregate using reducer placement plus DECIDE
-// variable scope. Row/entity-varying algebra beside a reducer is rejected here;
-// query-wide scalar decisions remain legal top-level aggregate terms.
+// SHAPE IS DECIDED AT THIS BOUNDARY. After rebuilding, ClassifyScoped reads the
+// decision side as one of three shapes: ROWS (no decision reducer: one row per kept
+// row or class), AGGREGATE (decision reducers sharing one `by` key beside query-wide
+// terms: one row per group) or VALUE (a decision reducer beside a per-row or keyed
+// decision, a row-varying factor or a second `by` key: the value rewrite replaces each
+// reducer by a helper decision). Only a decision on the bound side and the shapes
+// ClassifyScoped names in its refusal are rejected.
 //
 // K1 is now load-bearing rather than advisory. The physical operator's duplicate
 // partition logic (its per-row branch and lhs_offset_expr) was deleted at
@@ -99,12 +102,16 @@
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/unordered_set.hpp"
 #include "duckdb/planner/expression.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/common/unordered_map.hpp"
 
 namespace duckdb {
 
 class ClientContext;
 class BoundAggregateExpression;
 class BoundComparisonExpression;
+class BoundConjunctionExpression;
+struct DecideSourceNames;
 class BoundColumnRefExpression;
 class BoundFunctionExpression;
 
@@ -137,10 +144,32 @@ struct CanonicalAtom {
 //! reader of canonical trees cannot disagree with the pass that built them.
 vector<CanonicalAtom> ReadCanonicalAtoms(const Expression &side, idx_t decide_index);
 
-//! The semantic row shape of a canonical DECIDE comparison. INVALID means the
-//! tree mixes reduced values with row/entity-varying decision algebra and cannot
-//! denote either one constraint per row or one reduced constraint.
-enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, INVALID };
+//! The semantic row shape of a canonical DECIDE comparison. VALUE is a comparison whose
+//! decision side mixes a decision reducer with something the aggregate shape cannot hold
+//! -- a per-row or keyed decision, a factor that varies by row, a second `by` key, a
+//! reducer inside another expression: the value rewrite (stage 05) replaces each decision
+//! reducer by a helper decision defined once per `by` group, after which the comparison
+//! is PER_ROW. INVALID means the bound side bears a decision, or ClassifyScoped refused
+//! the shape.
+enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, VALUE, INVALID };
+
+//! The scope a clause is written under: the WHEN condition and the `per K:` wrapper
+//! (PER_CLASS_TAG) that enclose it, if any.
+struct DecideEnclosingScope {
+	const Expression *when = nullptr;
+	const BoundConjunctionExpression *per = nullptr;
+};
+
+//! What building the scope checks of the user's clauses reads besides the bound tree,
+//! and the checks it builds (LogicalDecide::scope_checks), in clause order.
+struct DecideScopeChecks {
+	const vector<DecideGroupKey> &group_keys;
+	const vector<EntityScopeInfo> &entity_scopes;
+	const vector<string> &source_fragments;
+	//! A relation's alias by table index, so a message names a column `D.depotID`.
+	unordered_map<idx_t, string> relations;
+	vector<DecideScopeCheck> checks;
+};
 
 class DecideCanonicalizer {
 public:
@@ -171,10 +200,31 @@ public:
 	                    unordered_set<idx_t> query_wide_table_indexes,
 	                    unordered_set<idx_t> correlated_subquery_table_indexes = {});
 
-	//! Canonicalize a whole SUCH THAT tree: AND-conjunctions plus WHEN/PER
-	//! wrappers. Descends only into the constraint child of a wrapper, never
-	//! into its condition or PER columns. Pure -- `constraints` is untouched.
+	//! Canonicalize a whole SUCH THAT tree: AND-conjunctions plus the `when` and `per K:`
+	//! wrappers. Descends only into the constraint child of a wrapper, never into its
+	//! condition or key columns. Pure -- `constraints` is untouched.
 	unique_ptr<Expression> CanonicalizeTree(const Expression &constraints) const;
+
+	//! The scope checks of every clause of the user's SUCH THAT tree, appended to `scope`
+	//! in clause order. Read-only, from the clauses as bound: before CanonicalizeTree,
+	//! which drops the `per K:` of a clause in the aggregate shape -- one model row per
+	//! `by` group already is one per class there -- while the checks are what that key
+	//! still requires of the data. Called once, by the planner; a rewrite's clause
+	//! (AddConstraint) never builds any.
+	void BuildConstraintScopeChecks(const Expression &constraints, DecideScopeChecks &scope) const;
+
+	//! The scope checks of the objective, built from
+	//! the bound objective before CanonicalizeObjective: its `when` keeps a row, it is
+	//! one value over the kept rows (`per ()`), and each reducer reads a row and is
+	//! determined by its own `per`.
+	void BuildObjectiveScopeChecks(const Expression &objective, DecideScopeChecks &scope) const;
+
+	//! Quote expressions in the scope refusals as the query writes them, from
+	//! these names, rather than through the bound tree's own names. Set by the planner,
+	//! which alone has them; `names` must outlive the canonicalizer.
+	void QuoteMessagesWith(const DecideSourceNames &names) {
+		message_names = &names;
+	}
 
 	//! Canonicalize a single comparison. Pure -- `comparison` is untouched.
 	unique_ptr<Expression> CanonicalizeComparison(const Expression &comparison) const;
@@ -226,10 +276,11 @@ public:
 	void VerifyCanonicalObjective(const Expression &objective) const;
 
 private:
-	//! Which clause a term was written in. This affects ONLY the wording of a
-	//! rejection -- the scale rule and the additive decomposition are identical in
-	//! both -- but a message that calls the objective a constraint sends the user to
-	//! the wrong line of their query.
+	//! Which clause a term was written in. It picks the wording of a rejection -- a
+	//! message that calls the objective a constraint sends the user to the wrong line of
+	//! their query -- and whether a row-varying factor on a reducer is a tuple term (a
+	//! constraint, whose comparison then takes the VALUE shape) or refused (the objective,
+	//! produced once).
 	enum class Clause : uint8_t { CONSTRAINT, OBJECTIVE };
 
 	//! Where a term is required to sit.
@@ -271,10 +322,23 @@ private:
 	};
 
 	//! Split an expression into signed additive terms. Descends through `+`,
-	//! binary `-`, unary `-`, and binder-inserted casts over decision algebra;
-	//! every other node, including a data-only cast, is a term boundary.
-	void Decompose(const Expression &expr, int sign, vector<Atom> &out,
-	               Clause clause = Clause::CONSTRAINT) const;
+	//! binary `-`, unary `-`, and binder-inserted casts over decision algebra, and
+	//! distributes a factor known before the query runs over an additive child
+	//! (`2 * (min(x) - 1)` is `2 * min(x) - 2 * 1`), carried down as `factor`; every
+	//! other node, including a data-only cast, is a term boundary.
+	void Decompose(const Expression &expr, int sign, vector<Atom> &out, Clause clause = Clause::CONSTRAINT,
+	               const Expression *factor = nullptr, bool factor_divides = false) const;
+
+	//! Merge like decision atoms -- the same term, each under a factor known before the
+	//! query runs -- into one atom scaled by the sum of their signed factors: `x + x` is
+	//! `2 * x`, `x - 3 * x` is `-2 * x`, `2 * min(x) + min(x)` is `3 * min(x)`. A group
+	//! whose factors cancel is left as written. Returns whether anything merged.
+	bool MergeLikeAtoms(vector<Atom> &atoms) const;
+
+	//! The one factor `outer` stands for when applied outside a term already scaled by
+	//! `inner`: `M`, `D` or `M / D`, in the spelling PeelScale emits. Either may be null.
+	unique_ptr<Expression> ComposeScale(const Expression *outer, bool outer_divides, unique_ptr<Expression> inner,
+	                                    bool inner_divides, bool &out_divides) const;
 
 	//! If `expr` is a decision-bearing reducer with factors on it, split them out into
 	//! `out_scale` / `out_divides` and return the bare reducer term. Returns `expr`
@@ -292,6 +356,9 @@ private:
 	//! judgement is made. A factor multiplying a reducer must be ONE value for the
 	//! whole query: `weight * SUM(x)` asks which row's weight scales a number that has
 	//! no row, and `s * SUM(x)` is a product of two decisions (bilinear), not a scale.
+	//! In a constraint a factor that varies by row is a tuple term of the row's constraint
+	//! (syntax_reference.md §6.4): it is peeled like any other and the comparison takes the
+	//! VALUE shape, where the reducer becomes a helper decision the row's factor multiplies.
 	const Expression &PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale, bool &out_divides,
 	                            Clause clause = Clause::CONSTRAINT) const;
 
@@ -320,8 +387,6 @@ private:
 
 	bool ReferencesDecideVar(const Expression &expr) const;
 	static bool ContainsReducer(const Expression &expr);
-	bool FindNonScalarDecideVar(const Expression &expr, idx_t &out_var_idx,
-	                            const BoundColumnRefExpression *&out_ref) const;
 	void ValidateCanonicalTree(const Expression &constraints) const;
 	void ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const;
 	void VerifyCanonicalTree(const Expression &constraints) const;
@@ -339,12 +404,41 @@ private:
 	//! rather than as whatever CanonicalizeObjective would have thrown re-reading it.
 	void VerifyCanonicalObjectiveBody(const Expression &objective) const;
 	void VerifyCanonicalComparison(const BoundComparisonExpression &comparison) const;
-	CanonicalConstraintClass ClassifyCanonicalTree(const Expression &constraints) const;
+
 	unique_ptr<Expression> CanonicalizeTreeInternal(const Expression &constraints) const;
+	void BuildConstraintScopeChecks(const Expression &constraints, DecideEnclosingScope enclosing,
+	                                DecideScopeChecks &scope) const;
+
+	//! The shape of a comparison's decision side (syntax_reference.md §6.4): ROWS has no
+	//! decision reducer; AGGREGATE has decision reducers sharing one `by` key under
+	//! whole-query factors with only query-wide terms beside them (one model row per group);
+	//! VALUE needs the value rewrite; UNSUPPORTED is refused with `refusal`. `group_key` is
+	//! the AGGREGATE shape's shared key, INVALID for `by ()`.
+	enum class ScopedShape : uint8_t { ROWS, AGGREGATE, VALUE, UNSUPPORTED };
+	ScopedShape ClassifyScoped(const BoundComparisonExpression &comparison, idx_t &group_key, string &refusal) const;
+	//! Whether a comparison's decision side takes the composed MIN/MAX formulation
+	//! (RewriteComposedMinMaxInConstraint): a MIN or MAX over decisions beside another
+	//! term, or alone under a factor whose sign is not known before the query runs.
+	bool TakesComposedMinMax(const vector<Atom> &atoms) const;
+
+	//! The scope checks of one clause, `leaf` its
+	//! comparison (or other constraint) as bound.
+	void BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing, DecideScopeChecks &scope) const;
+	//! The checks of one reducer: a row in every `by` group (D8), and its own `per`
+	//! determining its body. `rows` is the clause's `when`, null for every row.
+	void BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
+	                             DecideScopeChecks &scope) const;
 
 	//! Rebuild an additive chain from terms, negating every sign when `negate`
 	//! is set (used for the terms that crossed the relation).
 	unique_ptr<Expression> BuildAdditive(const vector<Atom> &atoms, bool negate) const;
+	//! Whether `atoms` is one negated reducer (`-max(e)`, `-(2 * max(e))`).
+	bool IsLoneNegatedReducer(const vector<Atom> &atoms) const;
+	//! Whether `side` spells one term with signs around it (`-(-max(e))`): its canonical
+	//! form is the bare term, which only a rebuild gives.
+	bool IsSignedSpine(const Expression &side, const vector<Atom> &atoms) const;
+	//! Moves a negated reducer's sign into its factor: `-1 * max(e)`, `-(2) * max(e)`.
+	void FoldNegationIntoFactor(Atom &atom) const;
 
 	unique_ptr<Expression> BindOp(const string &name, unique_ptr<Expression> left,
 	                              unique_ptr<Expression> right) const;
@@ -367,6 +461,13 @@ private:
 	//! False when the pass was given no flattening evidence. In that mode an arbitrary
 	//! column ref is never guessed to be query-wide; only explicit semantic tags qualify.
 	bool judge_column_refs = false;
+	//! See QuoteMessagesWith; null quotes through the bound tree (UserFacingName).
+	optional_ptr<const DecideSourceNames> message_names;
+
+	//! `expr` as a scope refusal quotes it.
+	string Quote(const Expression &expr) const;
+	//! `expr` by its written text when the query recorded it, else by its bound name.
+	string QuoteAsWritten(const Expression &expr) const;
 };
 
 } // namespace duckdb

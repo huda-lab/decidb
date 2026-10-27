@@ -665,21 +665,23 @@ CTEMaterialize EnumUtil::FromString<CTEMaterialize>(const char *value) {
 
 const StringUtil::EnumStringLiteral *GetCanonicalConstraintClassValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
-		{ static_cast<uint32_t>(CanonicalConstraintClass::PER_ROW), "PER_ROW" },
-		{ static_cast<uint32_t>(CanonicalConstraintClass::AGGREGATE), "AGGREGATE" },
-		{ static_cast<uint32_t>(CanonicalConstraintClass::INVALID), "INVALID" }
-	};
+	    {static_cast<uint32_t>(CanonicalConstraintClass::PER_ROW), "PER_ROW"},
+	    {static_cast<uint32_t>(CanonicalConstraintClass::AGGREGATE), "AGGREGATE"},
+	    {static_cast<uint32_t>(CanonicalConstraintClass::VALUE), "VALUE"},
+	    {static_cast<uint32_t>(CanonicalConstraintClass::INVALID), "INVALID"}};
 	return values;
 }
 
 template<>
 const char* EnumUtil::ToChars<CanonicalConstraintClass>(CanonicalConstraintClass value) {
-	return StringUtil::EnumToString(GetCanonicalConstraintClassValues(), 3, "CanonicalConstraintClass", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetCanonicalConstraintClassValues(), 4, "CanonicalConstraintClass",
+	                                static_cast<uint32_t>(value));
 }
 
 template<>
 CanonicalConstraintClass EnumUtil::FromString<CanonicalConstraintClass>(const char *value) {
-	return static_cast<CanonicalConstraintClass>(StringUtil::StringToEnum(GetCanonicalConstraintClassValues(), 3, "CanonicalConstraintClass", value));
+	return static_cast<CanonicalConstraintClass>(
+	    StringUtil::StringToEnum(GetCanonicalConstraintClassValues(), 4, "CanonicalConstraintClass", value));
 }
 
 const StringUtil::EnumStringLiteral *GetCatalogLookupBehaviorValues() {
@@ -1189,6 +1191,27 @@ const char* EnumUtil::ToChars<DecideExpression>(DecideExpression value) {
 template<>
 DecideExpression EnumUtil::FromString<DecideExpression>(const char *value) {
 	return static_cast<DecideExpression>(StringUtil::StringToEnum(GetDecideExpressionValues(), 3, "DecideExpression", value));
+}
+
+const StringUtil::EnumStringLiteral *GetDecideScopeCheckKindValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+	    {static_cast<uint32_t>(DecideScopeCheckKind::KEEPS_A_ROW), "KEEPS_A_ROW"},
+	    {static_cast<uint32_t>(DecideScopeCheckKind::DETERMINES), "DETERMINES"},
+	    {static_cast<uint32_t>(DecideScopeCheckKind::READS_A_ROW), "READS_A_ROW"},
+	    {static_cast<uint32_t>(DecideScopeCheckKind::VALUE_IS_VALID), "VALUE_IS_VALID"}};
+	return values;
+}
+
+template <>
+const char *EnumUtil::ToChars<DecideScopeCheckKind>(DecideScopeCheckKind value) {
+	return StringUtil::EnumToString(GetDecideScopeCheckKindValues(), 4, "DecideScopeCheckKind",
+	                                static_cast<uint32_t>(value));
+}
+
+template <>
+DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *value) {
+	return static_cast<DecideScopeCheckKind>(
+	    StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 4, "DecideScopeCheckKind", value));
 }
 
 const StringUtil::EnumStringLiteral *GetDecideSenseValues() {

@@ -1,15 +1,15 @@
-"""C1: a bare data column as the bound of a reduced constraint, under `PER`.
+"""C1: a bare data column as the bound of a reduced constraint, over `by` groups.
 
 `IsAllowedDecisionFreeBoundExpression` used to switch on `ExpressionClass` with no
 `COLUMN_REF` case, so a bare column fell to `default: return false` and every reduced
 constraint whose bound was a plain column was rejected — including both of the paper's
 own running-example constraints (Figure 1, lines 8-9). Adding the missing case did not
-require any change downstream: `ReduceAggregateRhsPerGroup` (physical_decide.cpp) already
-took the tightest bound per `PER` group, cited by name against paper §3.2.1 before this
-file existed. This was unblocking, not building.
+require any change downstream: the tightest bound per group was already taken (paper
+§3.2.1; today by the bound-side window rewrite, RewriteRhsAggregates). This was
+unblocking, not building.
 
 See `test_canonicalize_side_agnostic.py::test_row_varying_bound_collapses_to_tightest_on_either_side`
-for the no-PER case.
+for the ungrouped case.
 """
 
 import pytest
@@ -20,20 +20,23 @@ from solver.types import ObjSense, SolverStatus, VarType
 @pytest.mark.per_clause
 @pytest.mark.correctness
 def test_column_bound_reduces_to_tightest_per_group(decidb_cli, oracle_solver):
-    """`SUM(x) <= cap PER grp`: each group takes the tightest of its own rows' caps.
+    """`sum(x) by (grp) <= cap`: each group takes the tightest of its own rows' caps.
 
+    The clause has no per key, so every row bounds its group's sum by its own cap.
     Group 'a' has two rows (caps 10 and 15) so its bound is MIN(10, 15) = 10; group
     'b' has one row (cap 7) so its bound is just 7. Verified against an independently
     built model carrying the same per-row conjunction, not a hand-computed MIN.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(
+        """
         SELECT id, grp, x FROM (
             VALUES (1, 'a', 10), (2, 'a', 15), (3, 'b', 7)
         ) t(id, grp, cap)
         DECIDE x(INT)
-        SUCH THAT SUM(x) <= cap PER grp
+        SUCH THAT sum(x) by (grp) <= cap
         MAXIMIZE SUM(x)
-    """)
+    """
+    )
     gi, xi = cols.index("grp"), cols.index("x")
     by_group: dict[str, int] = {}
     for r in rows:
@@ -56,15 +59,33 @@ def test_column_bound_reduces_to_tightest_per_group(decidb_cli, oracle_solver):
 
 
 @pytest.mark.per_clause
+@pytest.mark.error
+def test_column_bound_varying_within_a_per_class_does_not_determine(decidb_cli):
+    """The `per grp:` spelling of the clause above generates it once per class, so a
+    cap that varies within the class is refused rather than collapsed to the tightest."""
+    decidb_cli.assert_error(
+        """
+        SELECT id, grp, x FROM (
+            VALUES (1, 'a', 10), (2, 'a', 15), (3, 'b', 7)
+        ) t(id, grp, cap)
+        DECIDE x(INT)
+        SUCH THAT per grp: sum(x) by (grp) <= cap
+        MAXIMIZE SUM(x)
+    """,
+        match=r"per grp does not determine cap\. grp = 'a' has more than one value: 10, 15\.",
+    )
+
+
+@pytest.mark.per_clause
 @pytest.mark.cons_subquery
 @pytest.mark.correctness
 def test_figure1_paper_query_matches_published_output(decidb_cli, oracle_solver):
     """The paper's own running example (Figure 1), verbatim data and both constraints.
 
-    Both `SUCH THAT` lines are a bare column bound under `PER` — line 8
-    (`SUM(ship) <= stock PER depotID`) and line 9
-    (`SUM(ship) >= demand WHEN priority = 'critical' PER regionID`) — and both were
-    a `Binder Error` before C1. This is the query that motivated the whole batch: one
+    Both `SUCH THAT` lines bound a group's sum by a bare column — line 8
+    (`per depotID: sum(ship) by (depotID) <= stock`) and line 9
+    (`when priority = 'critical' per regionID: sum(ship) by (regionID) >= demand`) — and
+    both were a `Binder Error` before C1. This is the query that motivated the whole batch: one
     missing `case` blocked the paper's central worked example.
 
     D1 (stock 800) serves routes T1 (cap 500, region R1, demand 450, critical) and T2
@@ -73,6 +94,7 @@ def test_figure1_paper_query_matches_published_output(decidb_cli, oracle_solver)
     ship along T3 costs 8000 up front for at most a 900 (300 * 3) shipping saving, so
     the minimizer leaves it closed — matching the paper's published output exactly.
     """
+    # The paper's Figure 1.
     query = """
         WITH Depots(depotID, stock, opening_cost) AS (
             VALUES ('D1', 800, 12000), ('D2', 500, 8000)
@@ -86,12 +108,12 @@ def test_figure1_paper_query_matches_published_output(decidb_cli, oracle_solver)
             VALUES ('R1', 450, 'critical'), ('R2', 600, 'standard')
         )
         SELECT routeID, depotID, regionID, open, ship
-        DECIDE D.open(BOOL), T.ship(INT)
+        DECIDE per D: open(BOOL), per T: ship(INT)
         FROM Depots D JOIN Routes T USING (depotID) JOIN Regions R USING (regionID)
         SUCH THAT
             ship BETWEEN 0 AND capacity * open AND
-            SUM(ship) <= stock PER depotID AND
-            SUM(ship) >= demand WHEN priority = 'critical' PER regionID
+            per depotID: sum(ship) by (depotID) <= stock AND
+            when priority = 'critical' per regionID: sum(ship) by (regionID) >= demand
         MINIMIZE SUM(unit_cost * ship) + SUM(D: opening_cost * open)
     """
     rows, cols = decidb_cli.execute(query)

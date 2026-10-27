@@ -146,7 +146,7 @@ static DegreeWalk WalkDegree(const Expression &expr, idx_t decide_index) {
 	case ExpressionClass::BOUND_AGGREGATE: {
 		// SUM / AVG / MIN / MAX and the norm marker combine values across rows without
 		// multiplying them, so a reducer has the degree of what it reduces. Its `filter`
-		// (an aggregate-local WHEN) may not reference a decision and is not walked.
+		// (the reducer's own `when`) may not reference a decision and is not walked.
 		auto &agg = expr.Cast<const BoundAggregateExpression>();
 		for (auto &child : agg.children) {
 			AbsorbAdditive(result, WalkDegree(*child, decide_index));
@@ -154,7 +154,7 @@ static DegreeWalk WalkDegree(const Expression &expr, idx_t decide_index) {
 		return result;
 	}
 	case ExpressionClass::BOUND_CONJUNCTION: {
-		// A tagged conjunction is a DECIDE wrapper, not a boolean AND: `WHEN` and `PER`
+		// A tagged conjunction is a DECIDE wrapper, not a boolean AND: `when` and `per`
 		// carry the term in children[0] and the condition / grouping columns after it,
 		// and those may not reference a decision at all. An untagged conjunction is a
 		// boolean, which is not an arithmetic term and carries no degree.
@@ -276,7 +276,7 @@ void ValidateDecideConstraintDegree(const Expression &expr, idx_t decide_index) 
 
 void ValidateDecideObjectiveDegree(const Expression &expr, idx_t decide_index) {
 	// An objective is one arithmetic tree, so there is no structure to descend here: the
-	// `WHEN` / `PER` wrappers it may carry are peeled by the walk itself.
+	// `when` / `per` wrappers it may carry are peeled by the walk itself.
 	ValidateSideDegree(expr, decide_index);
 }
 

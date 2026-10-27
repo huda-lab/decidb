@@ -375,8 +375,8 @@ static string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenanc
 	// suggested edit mislabel the user's AVG constraint as SUM (the value is already in AVG
 	// units, so the SUM label makes the suggestion a different, wrong constraint).
 	const char *agg_name = row.provenance.avg_scaled ? "AVG" : "SUM";
-	// Collapse a uniform SUM fan-out to SUM(c*var). PER-grouped aggregates fold too: they
-	// stay distinguishable in the relation via the finding's `group` column + WHEN/PER qualifier
+	// Collapse a uniform SUM fan-out to SUM(c*var). Grouped aggregates fold too: they
+	// stay distinguishable in the relation via the finding's `group` column + `when c per K:` qualifier
 	// (Facet A), so the old group_key == INVALID gate is gone.
 	// A row off the accumulating build path carries per-entity *totals*, not the coefficients
 	// the user wrote, so every matrix-inference path below misreads it — either as a literal
@@ -470,13 +470,10 @@ string SourceAwareQuadraticLhs(const SolverModel &model, const SolverModel::Quad
 	return source && !source->canonical_lhs.empty() ? source->canonical_lhs : FormatQuadraticLhs(row, columns);
 }
 
-ConstraintProvenance SourceAwareProvenance(const SolverModel &model, const ConstraintProvenance &provenance) {
-	auto result = provenance;
+string SourceQualifier(const SolverModel &model, const ConstraintProvenance &provenance) {
+	// The source registry is the one place a clause's `when c per K:` qualifier lives.
 	auto source = FindConstraintSource(model, provenance);
-	if (source && !source->qualifier.empty()) {
-		result.qualifier = source->qualifier;
-	}
-	return result;
+	return source ? source->qualifier : string();
 }
 
 string SourceAwareRhs(const SolverModel &model, const ConstraintProvenance &provenance, double fallback) {
@@ -492,8 +489,8 @@ static const char *SenseStr(char sense) {
 	return sense == '<' ? "<=" : (sense == '>' ? ">=" : "=");
 }
 
-//! The clause as the user wrote it: `lhs sense rhs`, with the WHEN/PER qualifier
-//! appended (Facet C) so it stays recognizable. For a strict `<` / `>` the δ offset was
+//! The clause as the user wrote it: `lhs sense rhs`, with the `when c per K:` qualifier
+//! in front (Facet C) so it stays recognizable. For a strict `<` / `>` the δ offset was
 //! baked into `rhs` at build time, so quote the user's typed literal (`typed_k`) and
 //! render `<` / `>` rather than the model's `<=` / `>=` (I2.d).
 //! The number to quote for a row whose own RHS is not what the user typed. Two things
@@ -508,42 +505,83 @@ static double DisplayRhs(const ConstraintProvenance &prov, double rhs, char sens
 	return rhs - prov.rhs_mechanism_offset;
 }
 
-static string MakeClauseLabel(const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
+static string MakeClauseLabel(const ConstraintProvenance &prov, const string &qualifier, const string &lhs, double rhs,
+                              char sense) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	double base_rhs = DisplayRhs(prov, rhs, sense);
-	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
-	return lhs + " " + sense_str + " " + FormatNum(base_rhs) + suffix;
+	return AttachDecideQualifier(lhs + " " + sense_str + " " + FormatNum(base_rhs), qualifier);
 }
 
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
 //! solved slack `amount` (signed; for `=` it is the net s⁺−s⁻). For a strict `<` /
 //! `>` the δ offset was baked into `rhs` at build time, so re-quote the suggestion
 //! against the user's typed literal (`typed_k`) and render `<` / `>` (I2.d).
-ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, double rhs,
+ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &qualifier, const string &lhs, double rhs,
                           char sense, double amount) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	double base_rhs = DisplayRhs(prov, rhs, sense);
 	// `≥` loosens downward (b − s), `≤` / `=` upward (b + s).
 	double new_rhs = (sense == '>') ? base_rhs - amount : base_rhs + amount;
-	// Facet C: append the WHEN/PER qualifier (`PER grp`) so the clause is recognizable;
+	// Facet C: attach the `when c per K:` qualifier so the clause is recognizable;
 	// Facet A: carry the group's printable key as its own field (a separate `group` EAV
 	// row) so two folded `SUM(x)` groups stay distinguishable in the relation.
-	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;
-	e.label = MakeClauseLabel(prov, lhs, rhs, sense);
-	e.suggestion = lhs + " " + sense_str + " " + FormatNum(new_rhs) + suffix;
+	e.label = MakeClauseLabel(prov, qualifier, lhs, rhs, sense);
+	e.suggestion = AttachDecideQualifier(lhs + " " + sense_str + " " + FormatNum(new_rhs), qualifier);
 	e.has_amount = true;
 	e.amount = std::fabs(amount);
 	e.group = prov.group_label;
 	return e;
 }
 
+vector<ClauseEdit> FanOutByClass(ClauseEdit edit, const ConstraintProvenance &prov, const SolverModel &model,
+                                 bool expanded) {
+	using Kind = SolverInput::ClassSet::Kind;
+	vector<ClauseEdit> out;
+	if (prov.class_set >= model.class_sets.size()) {
+		if (expanded && prov.per_kept_row) {
+			edit.group.clear();
+			edit.row = prov.data_row;
+			edit.edit_source = "expanded_row";
+		}
+		out.push_back(std::move(edit));
+		return out;
+	}
+	auto &set = model.class_sets[prov.class_set];
+	if (set.kind == Kind::KEY_VALUES) {
+		for (auto &label : set.labels) {
+			ClauseEdit per_class = edit;
+			per_class.group = label;
+			per_class.row = DConstants::INVALID_INDEX;
+			if (expanded) {
+				per_class.edit_source = "expanded_group";
+			}
+			out.push_back(std::move(per_class));
+		}
+		return out;
+	}
+	if (set.kind == Kind::KEPT_ROWS && expanded) {
+		for (auto row : set.rows) {
+			ClauseEdit per_row = edit;
+			per_row.group.clear();
+			per_row.row = row;
+			per_row.edit_source = "expanded_row";
+			out.push_back(std::move(per_row));
+		}
+		return out;
+	}
+	edit.group.clear();
+	out.push_back(std::move(edit));
+	return out;
+}
+
 //! Name every user clause whose bound is out of reach, before any solve. A clause fans
 //! into one row per relation row, all rendering the same text, so entries are
-//! de-duplicated on (label, group) — the user wrote one clause and reads one finding.
+//! de-duplicated on (label, group, row) — the user wrote one clause and reads one
+//! finding, or one per class it names (FanOutByClass).
 //!
 //! The gate is "does this row trace back to a clause the user wrote", not "is it
 //! elastically editable". They are different questions, and a hard MIN/MAX clause is
@@ -556,19 +594,23 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &lhs, d
 //! Big-M rewrite only when `K` is finite, and DecideTightPerRowBigM refuses a non-finite
 //! `M`. So an infinite bound on a mechanism row is never a helper's own bound — it is a
 //! user bound re-emitted per row, which is exactly what we want to name.
-vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
-                                                    const vector<ColumnProvenance> &columns) {
+vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, const vector<ColumnProvenance> &columns,
+                                                    bool expanded) {
 	vector<UnreachableClause> found;
-	std::set<std::pair<string, string>> seen;
+	std::set<std::tuple<string, string, idx_t>> seen;
 	auto record = [&](const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
-		auto display_provenance = SourceAwareProvenance(model, prov);
-		UnreachableClause c;
-		c.label = MakeClauseLabel(display_provenance, lhs, rhs, sense);
-		c.group = display_provenance.group_label;
-		if (!seen.insert({c.label, c.group}).second) {
-			return;
+		ClauseEdit base;
+		base.label = MakeClauseLabel(prov, SourceQualifier(model, prov), lhs, rhs, sense);
+		base.group = prov.group_label;
+		for (auto &finding : FanOutByClass(std::move(base), prov, model, expanded)) {
+			UnreachableClause c;
+			c.label = finding.label;
+			c.group = finding.group;
+			c.row = finding.row;
+			if (seen.insert(std::make_tuple(c.label, c.group, c.row)).second) {
+				found.push_back(std::move(c));
+			}
 		}
-		found.push_back(std::move(c));
 	};
 	for (const auto &row : model.constraints) {
 		if (row.provenance.kind == ConstraintKind::STRUCTURAL ||
@@ -591,25 +633,27 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model,
 
 //! Build a query-mode virtual-offset LOOSEN edit for a data-backed RHS clause
 //! (`x <= col`): the clause's folded shared slack `delta` becomes one synthetic
-//! query-level offset `x <= col + delta` (`>=` loosens downward → `col - delta`).
+//! query-level offset `x <= col + delta` (`>=` loosens downward → `col - delta`; `=`
+//! moves by its signed net slack). A strict `<` / `>` keeps its operator: its row was
+//! stepped onto the lattice, and the written bound moves by the same amount.
 //! `rhs_text` is the RHS column name (`prov.rhs_label`) or a numeric fallback when no
 //! name is available. `edit_source` is stamped by the caller.
-ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &lhs,
+ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &qualifier, const string &lhs,
                                  const string &rhs_text, char sense, double delta) {
-	string sense_str = SenseStr(sense);
-	string suffix = prov.qualifier.empty() ? "" : (" " + prov.qualifier);
-	string op = (sense == '>') ? " - " : " + ";
+	bool strict = prov.strict && sense != '=';
+	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
+	bool down = sense == '=' ? delta < 0.0 : sense == '>';
+	string op = down ? " - " : " + ";
 	string mag = FormatNum(std::fabs(delta));
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;
-	e.label = lhs + " " + sense_str + " " + rhs_text + suffix;
-	e.suggestion = lhs + " " + sense_str + " " + rhs_text + op + mag + suffix;
+	e.label = AttachDecideQualifier(lhs + " " + sense_str + " " + rhs_text, qualifier);
+	e.suggestion = AttachDecideQualifier(lhs + " " + sense_str + " " + rhs_text + op + mag, qualifier);
 	e.has_amount = true;
 	e.amount = std::fabs(delta);
 	e.group = prov.group_label;
 	return e;
 }
-
 
 } // namespace decide_render
 } // namespace duckdb

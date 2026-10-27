@@ -378,6 +378,14 @@ it in under a second (`test_quadratic.py::test_highs_qp_it_cannot_finish_is_an_o
 Raising the limit does not scale: at 100,000 such variables the matrix needs about 20 GB.
 Gurobi solves the same model.
 
+An integer column is loaded with whole bounds: `ceil(lower)` and `floor(upper)`, each read
+within HiGHS's default `mip_feasibility_tolerance` (1e-6) of a whole number. Handed a
+fractional bound on an integer column whose other side is open, HiGHS answered below it
+(`x >= -2.5` minimized to -3; Gurobi rounds such bounds itself). A column whose bounds hold
+no whole number (`2.3 <= x <= 2.7`) is an empty model: `Solve` returns `INFEASIBLE` without
+loading it, since HiGHS refuses an inverted box. The neutral model, its dump and the
+diagnosis engines keep the bounds as written.
+
 Sense characters convert to HiGHS's range rows:
 
 | Sense | `row_lower` | `row_upper` |

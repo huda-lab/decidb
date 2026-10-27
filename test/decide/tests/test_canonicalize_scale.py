@@ -42,6 +42,8 @@ import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
 from ._oracle_helpers import emit_hard_inner_max
+from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
+from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +233,7 @@ def test_negative_scale_on_max_constraint(decidb_cli):
 
 
 # ---------------------------------------------------------------------------
-# Objectives get no canonicalization, so the fold must match both spellings.
+# Objectives get no canonicalization, so the fold must match both orders.
 # ---------------------------------------------------------------------------
 #
 # `DecideCanonicalizer` runs on CONSTRAINTS only. It is what converges
@@ -328,36 +330,47 @@ def test_scalar_subquery_scale(decidb_cli):
 # A factor that is not one value for the whole query is rejected.
 # ---------------------------------------------------------------------------
 
+
+def _judged_per_row_factor(cli, solver, sql, rows, clauses):
+    """Judge `sql` (MAXIMIZE SUM(x) over `rows`, ordered by id) against the scope oracle."""
+    model = ScopedModel(rows, [Decision("x")])
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": 1}),))
+    assert model.judge_scoped(answer(cli, sql), clauses, objective) == pytest.approx(
+        model.solve_scoped(solver, clauses, objective), abs=1e-4
+    )
+
+
 @pytest.mark.cons_aggregate
-@pytest.mark.error_binder
-def test_correlated_subquery_factor_rejected(decidb_cli):
-    """A CORRELATED subquery yields a different value per row, so it is no more a
-    legal factor than a bare column is.
-
-    This is the case that shape-matching cannot catch and that an earlier version of
-    the rule silently accepted. Both an uncorrelated and a correlated scalar
-    subquery flatten into a plain ``BoundColumnRefExpression`` on a table index of
-    their own, so a rule phrased as "not one of the reduced relation's own bindings"
-    admits both. The rule is now an allow-list built from correlation information
-    captured before flattening, so anything not positively marked is row-varying.
-
-    Silently accepted, it computed ``SUM(k * x)`` — a per-row coefficient — which is
-    exactly what the error tells the user to write explicitly.
-    """
-    decidb_cli.assert_error("""
+@pytest.mark.correctness
+def test_correlated_subquery_factor_is_read_per_row(decidb_cli, scope_solver):
+    """A correlated subquery is row-varying, and a clause with no `per` is generated once
+    per row (D30): each row scales `SUM(x)` by its own k, so the tightest row binds."""
+    rows = [{"id": 1, "k": 10.0}, {"id": 2, "k": 100.0}]
+    clauses = [
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: 5},)),
+        Scoped((Reduce("sum", lambda r: {"x": 1}, factor=lambda r: r["k"]),), "<=", (lambda r: {CONSTANT: 100},)),
+    ]
+    _judged_per_row_factor(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) m(id, w)
         DECIDE x(INT)
         SUCH THAT x <= 5
             AND (SELECT k FROM (VALUES (1, 10.0), (2, 100.0)) s(sid, k) WHERE s.sid = m.id)
                 * SUM(x) <= 100
         MAXIMIZE SUM(x)
-    """, match=r"this subquery returns a different value for each row")
+        ORDER BY id
+    """,
+        rows,
+        clauses,
+    )
 
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_correlated_subquery_factor_moved_inside(decidb_cli):
-    """The edit the rejection recommends works and keeps the old meaning.
+    """Moving the factor inside the reducer works and reads it per row.
 
     ``SUM(x * (SELECT ...))`` gives the per-row-coefficient reading the buggy
     acceptance was silently producing: over k = (10, 100) with ``x <= 5``, the cap
@@ -375,32 +388,52 @@ def test_correlated_subquery_factor_moved_inside(decidb_cli):
     picks = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
     assert picks == {1: 5, 2: 0}, f"expected x=(5,0), got {picks}"
 
+
 @pytest.mark.cons_aggregate
-@pytest.mark.error_binder
-def test_row_varying_factor_rejected(decidb_cli):
-    """``w * SUM(x)`` — a reducer collapses many rows to one number, so "which
-    row's w scales it?" has no answer. The message names the column and gives the
-    edit that expresses the per-row-coefficient reading instead."""
-    decidb_cli.assert_error("""
+@pytest.mark.correctness
+def test_row_varying_factor_is_read_per_row(decidb_cli, scope_solver):
+    """``w * SUM(x) <= 4`` is generated once per row (D30): each row's w scales the one
+    total, so the largest w binds."""
+    rows = [{"id": 1, "w": 2.0}, {"id": 2, "w": 3.0}]
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, factor=lambda r: r["w"]),), "<=", (lambda r: {CONSTANT: 4},))]
+    _judged_per_row_factor(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
         DECIDE x(INT)
         SUCH THAT w * SUM(x) <= 4
         MAXIMIZE SUM(x)
-    """, match=r"'w' varies per row, so it cannot multiply SUM\(x\)")
+        ORDER BY id
+    """,
+        rows,
+        clauses,
+    )
 
 
 @pytest.mark.min_max
 @pytest.mark.cons_aggregate
-@pytest.mark.error_binder
-def test_row_varying_factor_on_minmax_rejected(decidb_cli):
-    """Same rule for MIN/MAX, reached by a different route: the simplifier declines
-    a MIN/MAX-only LHS, so this shape arrives at canonicalization untouched."""
-    decidb_cli.assert_error("""
+@pytest.mark.correctness
+def test_row_varying_factor_on_minmax_is_read_per_row(decidb_cli, scope_solver):
+    """The same for MAX: ``w * MAX(x) <= 4`` once per row (D30)."""
+    rows = [{"id": 1, "w": 2.0}, {"id": 2, "w": 3.0}]
+    clauses = [
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: 9},)),
+        Scoped((Reduce("max", lambda r: {"x": 1}, factor=lambda r: r["w"]),), "<=", (lambda r: {CONSTANT: 4},)),
+    ]
+    _judged_per_row_factor(
+        decidb_cli,
+        scope_solver,
+        """
         SELECT id, x FROM (VALUES (1, 2.0), (2, 3.0)) t(id, w)
         DECIDE x(INT)
         SUCH THAT x <= 9 AND w * MAX(x) <= 4
         MAXIMIZE SUM(x)
-    """, match=r"'w' varies per row, so it cannot multiply MAX\(x\)")
+        ORDER BY id
+    """,
+        rows,
+        clauses,
+    )
 
 
 @pytest.mark.cons_aggregate
@@ -410,12 +443,15 @@ def test_decision_factor_rejected(decidb_cli):
     decisions is bilinear, not a scale. Before B.3 this produced the unrelated
     "SUM(s) has nothing to aggregate over", because the fold pushed ``s`` into the
     reducer's body."""
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         SELECT id, x, s FROM (VALUES (1), (2)) t(id)
-        DECIDE x(INT), scalar s(INT)
+        DECIDE x(INT), per (): s(INT)
         SUCH THAT x <= 5 AND s <= 3 AND s * SUM(x) <= 12
         MAXIMIZE SUM(x)
-    """, match=r"'s' is a decision, so it cannot multiply SUM\(x\)")
+    """,
+        match=r"'s' is a decision, so it cannot multiply SUM\(x\)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -569,12 +605,15 @@ def test_decision_factor_in_objective_rejected(decidb_cli):
     that can say no — without a guard the decision column was read as a data
     coefficient and evaluation crashed with an internal DuckDB assertion.
     """
-    decidb_cli.assert_error("""
+    decidb_cli.assert_error(
+        """
         SELECT id, x, s FROM (VALUES (1), (2)) t(id)
-        DECIDE x(INT), scalar s(INT)
+        DECIDE x(INT), per (): s(INT)
         SUCH THAT x <= 5 AND s <= 3 AND SUM(x) <= 4
         MAXIMIZE s * SUM(x)
-    """, match=r"'s' is a decision, so it cannot multiply SUM\(x\)")
+    """,
+        match=r"'s' is a decision, so it cannot multiply SUM\(x\)",
+    )
 
 
 @pytest.mark.min_max

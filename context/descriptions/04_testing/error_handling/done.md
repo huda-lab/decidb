@@ -9,8 +9,15 @@ Tests live in:
 
 `test_error_parser.py`, all expecting `decidb.ParserException`: DECIDE without
 SUCH THAT, DECIDE without a variable name, MAXIMIZE/MINIMIZE without an
-objective expression, `IS <unknown-type>`, comma-separated `SUCH THAT`
-constraints.
+objective expression, an unknown type, comma-separated `SUCH THAT`
+constraints ("use AND between constraints").
+
+The removed spellings (`00_project_overview/syntax_reference.md` §10.3) are parser
+errors whose message carries "is removed" and names the replacement —
+`test_scope_removed_syntax.py`. The scoping language's own
+parse errors (a `per` key or `per row` on the objective, a parenthesized key, an
+expression in a key) are pinned in `test/decidb/test_scope_parser.test`. See
+[`../scope/done.md`](../scope/done.md).
 
 ## Binder errors
 
@@ -21,21 +28,31 @@ Categories covered in `test_error_binder.py` unless noted:
 - Unsupported syntax in SUCH THAT: IS NULL, `SUM(x) IN (...)`, non-DECIDE variable in constraint, non-SUM/AVG/MIN/MAX function in objective.
 - Non-linear / invalid aggregate: no DECIDE variable in SUM, multiple DECIDE variables in SUM, nonlinear DECIDE variables.
 - RHS shape: non-scalar BETWEEN / SUM RHS / `SUM = RHS`, DECIDE variable in BETWEEN bounds, IN RHS, or constraint RHS.
-- Objective rejections: objective with addition, bare column objective.
+- Objective: a constant added to the objective is accepted
+  (`test_objective_with_addition_succeeds`); a bare data column is rejected.
 - Subquery: non-scalar subquery RHS, scalar subquery returning multiple rows.
-- WHEN restrictions: DECIDE var in WHEN condition (aggregate + compound), correlated subquery non-scalar.
-- Aggregate-local WHEN: mixing expression-level and aggregate-local, DECIDE var in local condition.
-- PER on per-row constraint rejected.
-- Aggregate LHS vs aggregate RHS rejected.
-- Flat MIN/MAX + PER rejected (via `test_per_objective.py`).
+- A decision in a `when` condition, plain and compound, and in a reducer's own `when`
+  (`test_aggregate_local_when.py`): "x is a decision; when, per and by may only use
+  data".
+- A correlated subquery bound that takes two values under `=`
+  (`test_correlated_subquery_aggregate_equality_rhs_rejected`).
+- `OR` between constraints, in every scope spelling, and data-only aggregates as
+  divisors (`TestRefusalsInEverySpelling`).
+- The scope errors — a key that does not determine, a `when` that keeps no row, a
+  reducer with no row for a group, key errors — are in the `test_scope_*.py` suites
+  ([`../scope/done.md`](../scope/done.md)).
 
 ## Infeasibility detection
 
-`test_error_infeasible.py::TestInfeasibleModels`, all expecting
+`test_error_infeasible.py::TestInfeasibleModels`, expecting
 `decidb.InvalidInputException` matching `"infeasible"`: contradictory per-row
 bounds (`x >= 10 AND x <= 5`), impossible SUM constraint (`SUM(x) >= 1000`
-with too few rows), negative SUM upper bound, WHEN-forced infeasibility (all
-rows zero).
+with too few rows), negative SUM upper bound, a `when` that forces every row to
+zero beside `SUM(x) >= 1` (`when l_quantity > 0: x <= 0`), and
+`sum(x) by (grp) = cap` with two caps in one group
+(`test_equal_bound_varying_per_group_is_infeasible`). Its `per grp:` form raises
+the determination error, "per grp does not determine cap", instead
+(`test_equal_bound_varying_within_a_per_class_does_not_determine`).
 
 ## Unboundedness detection
 
