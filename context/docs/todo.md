@@ -30,15 +30,6 @@ coding, at the question written on the line. **Part C** the owner runs, or is no
 
 # Part A — Agent works alone
 
-## A1. Direct solve: one bound reader (Seam 2)
-
-One rule for "a bound on one decision", read at plan time by the optimizer, the model builder and direct solve.
-
-- [ ] One classifier for a bound on one decision, with the scaled solver-path fold — [code_quality § classified three times](issues/code_quality.md#a-bound-on-one-decision-is-classified-three-times)
-- [ ] A1 reads a folded affine bound — [A1 § Read a folded affine bound](direct_solve/rules/a1_separable_box/todo.md#read-a-folded-affine-bound)
-- [ ] S1 reads a folded affine bound — [S1 § Read a folded affine bound](direct_solve/rules/s1_uniform_matroid/todo.md#read-a-folded-affine-bound)
-- [ ] Direct solve rounds a bound just below a whole number differently — [bugs § integer bound](issues/bugs.md#direct-solve-reads-an-integer-bound-just-below-a-whole-number-more-strictly-than-both-backends)
-
 ## A2. Direct solve reads the new language: scope
 
 Until each lands, direct solve declines the construct and the solver path answers the query.
@@ -105,11 +96,38 @@ Each is ruled; the nested section says which shapes lift and which stay refused.
 
 The agent may read code and investigate; it writes no fix until the owner answers the question on the line.
 
+## B0. Direct solve: one bound reader (Seam 2)
+
+One rule for "a bound on one decision", read at plan time by the optimizer, the model builder and direct solve.
+Owner answers, before coding:
+
+1. The shared rounding rule (a whole-numbered decision admits `n` when `coefficient * n` passes the written
+   comparison in doubles) changes two backend answers: `x <= c/0.1` with `c = 4.3` and `x <= 42.9999999` go from 43
+   to 42 on Gurobi and HiGHS, as direct solve answers today; `0.1*x <= 4.3` stays 43. Accept? (Recommended: yes;
+   the alternative copies the backends' integrality tolerance into the model.)
+2. Does "every bound on one decision folds" cover a data coefficient (`cap * x <= 10`)? A row with `cap = 0` has no
+   quotient. (Recommended: no; only a coefficient known before the query runs.)
+
+- [ ] One classifier for a bound on one decision, with the scaled solver-path fold — [code_quality § classified three times](issues/code_quality.md#a-bound-on-one-decision-is-classified-three-times)
+- [ ] A1 reads a folded affine bound — [A1 § Read a folded affine bound](direct_solve/rules/a1_separable_box/todo.md#read-a-folded-affine-bound)
+- [ ] S1 reads a folded affine bound — [S1 § Read a folded affine bound](direct_solve/rules/s1_uniform_matroid/todo.md#read-a-folded-affine-bound)
+- [ ] Direct solve rounds a bound just below a whole number differently — [bugs § integer bound](issues/bugs.md#direct-solve-reads-an-integer-bound-just-below-a-whole-number-more-strictly-than-both-backends)
+
 ## B1. NULL keys and key grouping (one batch; blocks A3)
 
 Ruled: a NULL key is not a class, one numbering, keys follow collation. All four touch the same grouping code.
-Owner looks at: which numbering (first-seen or dense), the NULL keyed-decision error text, and the golden diff before
-it is re-captured.
+Owner answers, before coding:
+
+1. **Numbering.** Today a keyed decision's classes are numbered first-seen over every row (`BuildEntityMappings`), and
+   each `by`/`per K:` clause renumbers the groups it keeps densely, in first-kept-row order
+   (`LookupOrBuildPerGroupIds`). Recommended: one id per class, first-seen over every row, and each clause reads the
+   classes it keeps as a subsequence in that order, so equal keys get equal ids in every clause. A dump changes only
+   where a `when` drops a class's first row (its groups then come out in a different order).
+2. **NULL keyed-decision error.** A row whose key is NULL under `DECIDE per g: x(INT)` raises. Recommended text:
+   *"DECIDE: 'g' is NULL on some rows, so they have no 'x' (declared per g). Add WHERE g IS NOT NULL."*
+3. **Golden diff.** Expected to change: entries whose keys hold NULL (the NULL class leaves `by`, `per K:` and
+   `per`-in-reducer clauses) and entries where a `when` drops a class's first row (question 1). Entries 22, 23, 38,
+   39, 56, 61, 62, 65, 70 and 91–94 print ids. The agent shows the diff, entry by entry, before re-capturing.
 
 - [ ] A NULL key is not a class; its rows skip the keyed clause (reverses D5; closes infeasible § 2) — [execution § 2](pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)
 - [ ] One key table on `LogicalDecide` (one numbering; re-capture goldens) — [logical_plan § 1](pipeline/03_logical_plan/todo.md#1-one-key-table)
