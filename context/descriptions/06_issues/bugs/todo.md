@@ -160,20 +160,13 @@ Each reproduces on the current build.
   never be called"* (also `when c: sum(...)`, a per-row bound, the objective);
   `SUM(x * len(list_filter([cap, b], q -> q > 1))) <= 12` answers *"Column 'q' must be one
   of the DECIDE variables"*.
-- **DIAGNOSE names a NULL slice `g = 'NULL'`:** its suggested change
-  `when g = 'NULL': x <= <cap>` matches no row; owned by
-  `../../07_query_diagnostics/unbounded/todo.md` §1.
-- **Expected:** a refusal or an answer in SQL terms; `g IS NULL` for a NULL slice.
-- **Impact:** an internal error, and a suggested change that matches no row.
+- **Expected:** a refusal or an answer in SQL terms.
+- **Impact:** an internal error.
 
-## Wrong answers or refusals: `IN`, bounds and rounding
+## Wrong answers: infinite bounds
 
-Each reproduces on the current build.
+Reproduces on the current build.
 
-- **A negative `IN` value with a negative upper bound is refused:** `x IN (-5, 0, 5) AND
-  x <= -3` answers *"x <= -3 cannot hold because x is non-negative"*; the answer is
-  `x = -5`. Location: the domain check in `DecideGlobalSinkState`'s constructor
-  (`physical_decide.cpp`) rebuilds the box without the removable `IN` floor.
 - **Gurobi calls an infinite floor on a decision the objective does not read unbounded:**
   `y >= 'inf'::DOUBLE` on such a decision -- per row, keyed (`per t.depot: y >=
   'inf'::DOUBLE` on `per t.depot: y`) or query-wide -- answers *"DECIDE optimization is
@@ -183,7 +176,7 @@ Each reproduces on the current build.
   `x >= 'inf'::DOUBLE MINIMIZE SUM(x)` with `x = 1e+100` for a REAL `x` (the row's `+inf` meets the open column at
   Gurobi's infinity, 1e100) and fails with *"DECIDE optimization failed (solver status 6)"* for an INT `x`
   (found 2026-10-27; direct solve reports it infeasible).
-- **Impact:** a refused feasible query, a misleading verdict, and an answer to a bound no value meets.
+- **Impact:** a misleading verdict, and an answer to a bound no value meets.
 
 ## Wrong answers: MIN/MAX bodies and solver tolerance
 
@@ -227,6 +220,15 @@ Each reproduces on the current build.
   clause echoes `sum(D: "cost" * open) <= 7`. Both keys name the same columns, so they
   share one exact scope (`FindOrCreateExactScope`, `decide_binder.cpp`), which holds one
   key text. Expected: each clause echoed as written.
+- **A column reference is named in two forms:** `BindKeyColumns` names a key column's
+  reference by its SQL spelling (`t.depot`, `t."my col"`, `D."cost"`); every other reference
+  carries its bare column name. Anything that prints a reference's name has to tell the two
+  apart. The unbounded remedy (`plan_decide.cpp`, the name harvest) does it by comparing the
+  name with the binder's source name: equal is bare and is quoted where SQL needs it,
+  different is taken as SQL. A reference whose name differs from the source only in case
+  is taken as SQL unquoted. Expected: one form on every reference (the bare name, with the
+  key's SQL spelling kept beside it, as `group_keys[].names` already keeps it), so no
+  printer infers which it holds. Same field as the shared key text above.
 - **Impact:** messages, and one refused query the language could answer (the comparison
   inside an operand).
 
@@ -252,10 +254,6 @@ Each reproduces on the current build.
 - **A `BETWEEN` echoes its lower half only:** `x BETWEEN 18 AND 25` beside `SUM(x) <= 20`
   over two rows reports the clause `x >= 18` and suggests `x >= 10`; pasted back, the upper
   half is lost. The binder splits a BETWEEN into two comparisons that share the clause.
-- **The unbounded remedy names a plain column unquoted:** the cap names a column as the
-  clause's own reference does -- a `per`/`by` key column as SQL already (`t.depot`), any
-  other by its bare name -- so a column whose name needs quotes (`"my col"`) prints as
-  `when my col = 'v': x <= <cap>`. The harvested names (`plan_decide.cpp`) mix the two.
 - **A quadratic clause is reported once per row or group in the query scope:** quadratic
   rows never share a slack (I2.d), so `power(x - 20, 2) <= 4` beside `x >= 25` over two rows
   gives two identical query-scope findings with no row to tell them apart; the expanded

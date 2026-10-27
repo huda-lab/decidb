@@ -207,6 +207,7 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 			EscapeRule r;
 			r.column = cg.column;
 			r.value = cg.group_value[g];
+			r.value_is_null = g == cg.null_group;
 			r.escaping = esc_members[g].size();
 			r.total = total_count[g];
 			// On a narrow input many columns correlate perfectly with the escape by
@@ -313,14 +314,14 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 //! merely over-restrictive, but missing an escaper would leave the query unbounded.
 //!
 //! The disjunction keeps its parentheses, so the condition reads as one unit before the
-//! colon. The column prints as the clause's own reference to it names it (`t.depot` for a
-//! key column, already SQL); the value is a SQL string.
+//! colon. The column prints as SQL (the harvested names are quoted where needed); the value
+//! is a SQL string, or `IS NULL` for the column's NULL group.
 static string PrescribeCap(const VarEscape &ve) {
 	string cap = ve.name + " <= <cap>";
 	vector<string> scope;
 	for (const auto &r : ve.rules) {
 		if (r.covers_scope) {
-			scope.push_back(r.column + " = " + KeywordHelper::WriteQuoted(r.value));
+			scope.push_back(r.column + (r.value_is_null ? " IS NULL" : " = " + KeywordHelper::WriteQuoted(r.value)));
 		}
 	}
 	if (scope.empty()) {

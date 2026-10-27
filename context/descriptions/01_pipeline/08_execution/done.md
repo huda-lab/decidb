@@ -133,6 +133,10 @@ pipeline, before the elastic engine ever sees it, quoting the bound as written
 
 - `x <= -1` on a non-negative type, guarded as `U < 0 AND L >= 0` so that
   `x = -1` or `x <= -1 AND x >= -5`, which explicitly lower the floor, still pass;
+  a negative value in an `IN` lowers it too (`x IN (-5, 0, 5) AND x <= -3` answers -5).
+  An `IN`'s bounds are removable (diagnosis may drop the whole clause), so the guard
+  rebuilds the box from the retained bounds and keeps of the removable ones only a
+  negative floor: that is a fact about the domain, not a bound the user wrote;
 - `x >= 2` or `x = 2` on a BOOLEAN.
 
 A purely user-vs-user inverted box such as `x >= 5 AND x <= 1` does **not** match

@@ -566,3 +566,97 @@ class TestScopedRemedy:
         assert values == sorted(
             expected.variable_values[f"buy_{i}"] for i in range(1, 7)
         )
+
+
+def _sliced_query(source, clause_condition):
+    """Rows 1-2 are uncapped by the clause, rows 3-6 capped at 4: the first two escape.
+
+    `source` is a six-row relation and `clause_condition` the `when` that keeps rows
+    3-6. `{extra}` is where a pasted remedy goes."""
+    return (
+        f"SELECT id, x FROM {source} "
+        f"DECIDE x(REAL) SUCH THAT when {clause_condition}: x <= 4 {{extra}}"
+        "MAXIMIZE SUM(x)"
+    )
+
+
+def _assert_pasted_remedy_caps_rows_1_2(cli, oracle_solver, model_name, query, remedy):
+    """The remedy with a real cap pasted in solves, and caps exactly rows 1-2 at 7.
+
+    Judged against an independent solve of the repaired program: rows 3-6 are capped
+    at 4 by the original clause and rows 1-2 at 7 by the pasted remedy."""
+    fixed = query.format(extra=f"AND {remedy.replace('<cap>', '7')} ")
+    result = cli.execute_script(f".mode csv\n{fixed};\n")
+    combined = result.stdout + result.stderr
+    assert "unbounded" not in combined.lower(), combined
+    assert "matches no rows" not in combined, combined
+
+    oracle_solver.create_model(model_name)
+    objective = {}
+    for i in range(1, 7):
+        name = f"x_{i}"
+        oracle_solver.add_variable(name, VarType.CONTINUOUS, lb=0.0)
+        oracle_solver.add_constraint({name: 1.0}, "<=", 7.0 if i <= 2 else 4.0, name=f"cap_{i}")
+        objective[name] = 1.0
+    oracle_solver.set_objective(objective, ObjSense.MAXIMIZE)
+    expected = oracle_solver.solve()
+    assert expected.status == SolverStatus.OPTIMAL, expected.status
+
+    values = sorted(float(r["x"]) for r in csv.DictReader(io.StringIO(result.stdout)))
+    assert values == sorted(expected.variable_values[f"x_{i}"] for i in range(1, 7))
+
+
+_NULL_SLICE_ROWS = "(VALUES (1,NULL),(2,NULL),(3,'a'),(4,'a'),(5,'b'),(6,'b')) t(id,g)"
+_STRING_NULL_SLICE_ROWS = "(VALUES (1,'NULL'),(2,'NULL'),(3,'a'),(4,'a'),(5,'b'),(6,'b')) t(id,g)"
+_QUOTED_NAME_ROWS = "(VALUES (1,'v'),(2,'v'),(3,'a'),(4,'a'),(5,'b'),(6,'b')) t(id,\"my col\")"
+
+
+@pytest.mark.query_diagnostics
+class TestRemedyIsPasteableSql:
+    """The prescribed cap is SQL the user can paste back: a NULL slice is an `IS NULL`
+    test and a column name is quoted where it needs it."""
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_null_slice_remedy_is_an_is_null_test(self, request, cli_fixture, oracle_solver):
+        """The rows whose `g` is NULL escape; the remedy tests `g IS NULL`, and pasted
+        back with a finite cap the query solves."""
+        cli = request.getfixturevalue(cli_fixture)
+        query = _sliced_query(_NULL_SLICE_ROWS, "g is not null")
+        rows = _rows(_diagnose(cli, query.format(extra="")))
+        remedy = _remedy(rows, "x")
+        assert remedy == "when g IS NULL: x <= <cap>"
+        _assert_pasted_remedy_caps_rows_1_2(cli, oracle_solver, "null_slice_paste_back", query, remedy)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_string_null_slice_stays_an_equality(self, request, cli_fixture):
+        """A slice whose value is the text 'NULL' is not a NULL: it keeps `g = 'NULL'`."""
+        cli = request.getfixturevalue(cli_fixture)
+        query = _sliced_query(_STRING_NULL_SLICE_ROWS, "g <> 'NULL'")
+        rows = _rows(_diagnose(cli, query.format(extra="")))
+        assert _remedy(rows, "x") == "when g = 'NULL': x <= <cap>"
+        assert (2, 2, "row", "g = 'NULL'") in _escape(rows, "x")
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_column_needing_quotes_is_quoted(self, request, cli_fixture, oracle_solver):
+        """A column named `my col` prints quoted, and the remedy pastes back."""
+        cli = request.getfixturevalue(cli_fixture)
+        query = _sliced_query(_QUOTED_NAME_ROWS, "\"my col\" <> 'v'")
+        rows = _rows(_diagnose(cli, query.format(extra="")))
+        remedy = _remedy(rows, "x")
+        assert remedy == "when \"my col\" = 'v': x <= <cap>"
+        _assert_pasted_remedy_caps_rows_1_2(cli, oracle_solver, "quoted_column_paste_back", query, remedy)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_relation_key_column_is_not_quoted_twice(self, request, cli_fixture, oracle_solver):
+        """`by (t)` names the relation's columns in SQL already (`t."my col"`); that text
+        reaches the remedy as it is."""
+        cli = request.getfixturevalue(cli_fixture)
+        query = (
+            f"SELECT id, x FROM {_QUOTED_NAME_ROWS} "
+            "DECIDE x(REAL) SUCH THAT when id > 2: max(x) by (t) <= 4 {extra}"
+            "MAXIMIZE SUM(x)"
+        )
+        rows = _rows(_diagnose(cli, query.format(extra="")))
+        remedy = _remedy(rows, "x")
+        assert remedy == "when t.\"my col\" = 'v': x <= <cap>"
+        _assert_pasted_remedy_caps_rows_1_2(cli, oracle_solver, "relation_key_paste_back", query, remedy)

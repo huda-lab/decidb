@@ -651,3 +651,107 @@ def test_real_in_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         n, n * 4, 1 + n, result.objective_value, oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
+
+
+@pytest.mark.cons_in
+@pytest.mark.var_integer
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_in_negative_value_with_negative_upper_bound(
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """x IN (-5, 0, 5) AND x <= -3 — the IN's negative value signs x down, so -5 is the answer.
+
+    The default floor of 0 is lowered by the IN's own `x >= -5`. A check that read
+    the bounds without that floor saw `x <= -3` under a floor of 0 and refused the
+    query as "x is non-negative", although -5 is allowed.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, x
+        FROM lineitem WHERE l_orderkey < 50
+        DECIDE x(INT)
+        SUCH THAT x IN (-5, 0, 5) AND x <= -3
+        MAXIMIZE SUM(x * l_quantity)
+    """
+    t0 = time.perf_counter()
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
+    n = len(data)
+
+    t_build = time.perf_counter()
+    vnames = _build_in_domain_model(
+        oracle_solver, "in_negative_value_negative_upper", data, [-5, 0, 5],
+        big_M=5.0, lb=-5.0,
+    )
+    for v in vnames:
+        oracle_solver.add_constraint({v: 1.0}, "<=", -3.0, name=f"upper_{v}")
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
+    )
+    perf_tracker.record(
+        "in_negative_value_negative_upper", decidb_time, build_time,
+        result.solve_time_seconds, n, n * 4, 0, result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )
+
+
+@pytest.mark.cons_in
+@pytest.mark.var_integer
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_in_negative_value_with_per_row_upper_bound(
+    decidb_cli, duckdb_conn, oracle_solver, perf_tracker
+):
+    """x IN (-5, 0, 5) AND x <= l_linenumber - 4 — the upper bound varies per row.
+
+    Rows whose bound is below 0 can only take -5; rows whose bound is 0 to 3 take 0.
+    """
+    sql = """
+        SELECT l_orderkey, l_linenumber, l_quantity, x
+        FROM lineitem WHERE l_orderkey < 50
+        DECIDE x(INT)
+        SUCH THAT x IN (-5, 0, 5) AND x <= l_linenumber - 4
+        MAXIMIZE SUM(x * l_quantity)
+    """
+    t0 = time.perf_counter()
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    data = _common_lineitem(duckdb_conn, "l_orderkey < 50")
+    n = len(data)
+
+    t_build = time.perf_counter()
+    vnames = _build_in_domain_model(
+        oracle_solver, "in_negative_value_per_row_upper", data, [-5, 0, 5],
+        big_M=5.0, lb=-5.0,
+    )
+    for i, v in enumerate(vnames):
+        oracle_solver.add_constraint(
+            {v: 1.0}, "<=", float(data[i][1] - 4), name=f"upper_{v}",
+        )
+    oracle_solver.set_objective(
+        {vnames[i]: data[i][3] for i in range(n)}, ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    cmp = compare_solutions(
+        decidb_rows, decidb_cols, result, data, ["x"],
+        coeff_fn=lambda row: {"x": float(row[decidb_cols.index("l_quantity")])},
+    )
+    perf_tracker.record(
+        "in_negative_value_per_row_upper", decidb_time, build_time,
+        result.solve_time_seconds, n, n * 4, 0, result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
+    )

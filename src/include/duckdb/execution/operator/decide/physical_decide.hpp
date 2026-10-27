@@ -177,8 +177,10 @@ public:
     vector<DecideScopeCheck> scope_checks;
 
     //! Source column name per physical child-output column (positionally aligned
-    //! with gstate.data columns), resolved post-pruning in plan_decide.cpp. Used by
-    //! the unbounded diagnosis to label escaping categorical groups (affected_rows).
+    //! with gstate.data columns), resolved post-pruning in plan_decide.cpp. Each name
+    //! is SQL, quoted where it needs it, so a remedy that prints one can be pasted
+    //! back. Used by the unbounded diagnosis to label escaping categorical groups
+    //! (affected_rows).
     vector<string> input_column_names;
 
     //! Positionally aligned with `input_column_names`: true when the DECIDE clause

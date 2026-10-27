@@ -1224,17 +1224,23 @@ public:
                 // error. Reconstruct the box from intrinsic domain plus only retained
                 // (non-removable) bounds; the actual primary solve still receives the
                 // full box and therefore still proves the original query infeasible.
+                // The one removable bound kept is a negative floor: an IN with a
+                // negative value signs the decision down, so `x IN (-5, 0, 5) AND
+                // x <= -3` is not a bound below the default floor of 0.
                 DecideBoundBox retained;
                 if (is_bool) {
                     DecideFoldSingletonRow(retained, '=', 0.0);
                     retained.upper = 1.0;
                 }
                 for (const auto &bound : user_singleton_row_bounds) {
-                    if (bound.decide_var_idx != var ||
-                        bound.removal_group_id != DConstants::INVALID_INDEX) {
+                    if (bound.decide_var_idx != var) {
                         continue;
                     }
-                    DecideFoldSingletonRow(retained, bound.sense, bound.k);
+                    if (bound.removal_group_id == DConstants::INVALID_INDEX) {
+                        DecideFoldSingletonRow(retained, bound.sense, bound.k);
+                    } else if (bound.sense != '<' && bound.k < 0.0) {
+                        DecideFoldSingletonRow(retained, '>', bound.k);
+                    }
                 }
                 box = retained;
             }
@@ -1441,6 +1447,9 @@ struct UnboundedCandidateProvider {
 		out.group_value.resize(num_groups);
 		for (idx_t g = 0; g < num_groups && g < rep_keys[0].size(); g++) {
 			out.group_value[g] = rep_keys[0][g].IsNull() ? "NULL" : rep_keys[0][g].ToString();
+			if (rep_keys[0][g].IsNull()) {
+				out.null_group = g;
+			}
 		}
 		return true;
 	}
@@ -1467,6 +1476,7 @@ struct UnboundedCandidateProvider {
 		out.column = rowcg.column;
 		out.clause_referenced = rowcg.clause_referenced;
 		out.group_value = rowcg.group_value;
+		out.null_group = rowcg.null_group;
 		out.instance_to_group.assign(num_entities, DConstants::INVALID_INDEX);
 		vector<bool> seen(num_entities, false);
 		for (idx_t r = 0; r < num_rows && r < mapping.row_to_entity.size() && r < rowcg.instance_to_group.size(); r++) {

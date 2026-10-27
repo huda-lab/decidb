@@ -86,6 +86,8 @@ struct DiagnosticFinding {
 struct EscapeRule {
 	string column;
 	string value;
+	//! The slice is the column's NULL group, not the text `value` (which still labels it).
+	bool value_is_null = false;
 	idx_t escaping = 0; //!< a
 	idx_t total = 0;    //!< b (group size, counted in instances)
 	//! True when this rule is part of a set that accounts for EVERY escaping instance
@@ -103,6 +105,9 @@ struct ColumnGrouping {
 	vector<idx_t> instance_to_group; //!< size = total_instances; group id per
 	                                 //!< instance (INVALID_INDEX = excluded)
 	vector<string> group_value;      //!< size = num_groups; value label per group
+	//! The group holding the column's NULLs, INVALID_INDEX if none. Kept apart from the
+	//! label so a real string 'NULL' is not read as a NULL.
+	idx_t null_group = DConstants::INVALID_INDEX;
 	//! True when the DECIDE clause references this column. Only used to break a tie
 	//! between columns that describe exactly the same escaping instances.
 	bool clause_referenced = false;

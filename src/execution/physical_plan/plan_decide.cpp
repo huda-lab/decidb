@@ -1,4 +1,5 @@
 #include "duckdb/common/decide_profile.hpp"
+#include "duckdb/parser/keyword_helper.hpp"
 #include "duckdb/execution/physical_plan_generator.hpp"
 #include "duckdb/execution/physical_operator.hpp"
 #include "duckdb/execution/operator/decide/physical_decide.hpp"
@@ -15,6 +16,16 @@
 #include <functional>
 
 namespace duckdb {
+
+//! A column name as SQL: quoted only where SQL requires it. An unreserved keyword (`zone`) is a valid
+//! column reference as it stands, so it stays bare.
+static string QuoteColumnName(const string &name) {
+	if (KeywordHelper::RequiresQuotes(name) &&
+	    KeywordHelper::KeywordCategoryType(name) != KeywordCategory::KEYWORD_UNRESERVED) {
+		return KeywordHelper::WriteQuoted(name, '"');
+	}
+	return name;
+}
 
 //! The operator in `plan` whose own output carries `table_index`, or null.
 static LogicalOperator *FindBindingProducer(LogicalOperator &plan, idx_t table_index) {
@@ -230,6 +241,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // unnamed columns rather than inventing a positional `colN` the user never typed.
     decide_op->input_column_names.assign(child_bindings.size(), string());
     decide_op->input_column_in_clause.assign(child_bindings.size(), false);
+    // Names are kept as SQL, quoted where they need it, so a remedy that prints one is
+    // pasteable. A reference is named either by its bare column name, or, for a key
+    // column, by its SQL spelling (`t.depot`, `D."cost"`). The binder's source name is the
+    // bare one, so a reference named otherwise already carries SQL and is taken as it is.
     std::function<void(const Expression &)> harvest = [&](const Expression &e) {
         if (e.GetExpressionClass() == ExpressionClass::BOUND_REF) {
             auto &r = e.Cast<BoundReferenceExpression>();
@@ -238,7 +253,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
                 // — recorded even when an earlier reference already supplied the name.
                 decide_op->input_column_in_clause[r.index] = true;
                 if (decide_op->input_column_names[r.index].empty()) {
-                    decide_op->input_column_names[r.index] = r.GetName();
+                    auto name = r.GetName();
+                    auto &source_name = child_userwritten_names[r.index];
+                    decide_op->input_column_names[r.index] =
+                        source_name.empty() || name == source_name ? QuoteColumnName(name) : name;
                 }
             }
         }
@@ -312,8 +330,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // Only slots the DECIDE-clause harvest left empty are touched, so a name the user
     // referenced in the clause always wins over the raw projection alias.
     for (idx_t i = 0; i < decide_op->input_column_names.size() && i < child_userwritten_names.size(); i++) {
-        if (decide_op->input_column_names[i].empty()) {
-            decide_op->input_column_names[i] = child_userwritten_names[i];
+        if (decide_op->input_column_names[i].empty() && !child_userwritten_names[i].empty()) {
+            decide_op->input_column_names[i] = QuoteColumnName(child_userwritten_names[i]);
         }
     }
     return std::move(decide_op);

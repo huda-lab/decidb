@@ -39,8 +39,8 @@ nullable column meets this.
 **Decision needed.** Keep `NULL` (documented in `syntax_reference.md` §8.1), give a NULL
 a label no value can have, or print every label as a SQL literal (`NULL`, `'NULL'`,
 `'a'`, `''`), which changes every `group` pin and the composite form (`EU, 2024`). The
-unbounded engine's slice label should follow the same choice
-(`../unbounded/todo.md` §1).
+unbounded engine's `group` label for a NULL slice should follow the same choice; its remedy
+already prints `IS NULL` (`../unbounded/done.md`, "Scoping the prescribed cap").
 
 **Test.** In `test_query_diagnostics_relation.py`, beside
 `test_infeasible_per_group_expanded_mode_preserves_empty_string_group`: a key holding
