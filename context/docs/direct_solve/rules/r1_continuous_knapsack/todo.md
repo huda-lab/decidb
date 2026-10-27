@@ -38,12 +38,3 @@ still counts the deleted guard window (D8 comes from the row checks); re-derive 
 scope mismatch they were written for. The direct-solve benchmark's `r1.sql`
 (`benchmark/decide/direct_solve/queries/`) fails in `direct` mode; run it again, and once S1 reads it too, drop the
 sentence about it in `../../../performance/benchmarking/direct_solve.md`.
-
-## A `when` in front of the clause and inside the sum
-
-`when c: sum(when d: w*x) <= B` is valid in the new language: the sum reads the rows both keep. The solver answers it;
-R1 and S1 decline it (`DirectIRConstraint::Membership` returns `ok = false`). Read the conjunction as the budget's
-membership, for both rules.
-
-Tests: a differential case per rule (R1 and S1) with both `when`s, including one where they keep disjoint rows (D8 on
-the sum when its own `when` keeps none of the clause's rows).

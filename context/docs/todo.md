@@ -30,29 +30,15 @@ coding, at the question written on the line. **Part C** the owner runs, or is no
 
 # Part A — Agent works alone
 
-## A2. Direct solve reads the new language: scope
-
-Until each lands, direct solve declines the construct and the solver path answers the query.
-
-- [ ] H-04 Keyed scope checks in the direct plan — [framework § H-04](direct_solve/framework/todo.md#h-04--keyed-scope-checks-in-the-direct-plan)
-- [ ] H-08 VALUE-shape clauses (helper decisions) — [framework § H-08](direct_solve/framework/todo.md#h-08--value-shape-clauses-helper-decisions)
-- [ ] `when` in front of a clause and inside its sum (R1, S1) — [R1 § A `when` in front](direct_solve/rules/r1_continuous_knapsack/todo.md#a-when-in-front-of-the-clause-and-inside-the-sum)
-- [ ] H-03 Read a data bound through the bound-side window — [framework § H-03](direct_solve/framework/todo.md#h-03--read-a-data-bound-through-the-bound-side-window)
-
 ## A3. Direct solve reads the new language: grouping
 
-Every line waits for B1: the NULL-key rule changes how a key becomes groups, and these build on it.
+Every line waits for B1 (the NULL-key rule changes how a key becomes groups) and B5 (H-04).
 
-- [ ] H-05 Read a reducer's `by` key into the IR as a GROUP BY in the direct plan (key on the reducer; ~280 keyed cases are strict xfails on the direct path until then) — [framework § H-05](direct_solve/framework/todo.md#h-05--read-a-reducers-by-key-into-the-ir) (needs: H-04, B1)
+- [ ] H-05 Read a reducer's `by` key into the IR as a GROUP BY in the direct plan (key on the reducer; ~280 keyed cases are strict xfails on the direct path until then) — [framework § H-05](direct_solve/framework/todo.md#h-05--read-a-reducers-by-key-into-the-ir) (needs: B5, B1)
 - [ ] S1 reads a `by` key again — [S1 § Read a `by` key](direct_solve/rules/s1_uniform_matroid/todo.md#read-a-by-key-again-counts-per-group) (needs: H-05)
 - [ ] R1 reads a `by` key again — [R1 § Read a `by` key](direct_solve/rules/r1_continuous_knapsack/todo.md#read-a-by-key-again-one-budget-per-group) (needs: H-05)
 - [ ] H-06 Two-level objective `outer(per k: inner(e) by (k))` — [framework § H-06](direct_solve/framework/todo.md#h-06--the-two-level-objective-outerper-k-innere-by-k) (needs: B1)
-- [ ] H-07 `per K:` on a constraint — [framework § H-07](direct_solve/framework/todo.md#h-07--per-k-on-a-constraint-one-constraint-per-class) (needs: H-04, B1)
-
-## A4. Wrong answers and hangs
-
-- [ ] Negative lower bound under a `when` stays non-negative (applies to the kept rows) — [bugs § negative bound under `when`](issues/bugs.md#a-negative-lower-bound-under-a-when-leaves-the-decision-non-negative)
-- [ ] `DECIDB_TIME_LIMIT` not enforced on HiGHS for large models (override the interrupt poll, as Gurobi does; test on a small model) — [bugs § HiGHS time limit](issues/bugs.md#decidb_time_limit-is-not-enforced-on-highs-for-large-models)
+- [ ] H-07 `per K:` on a constraint — [framework § H-07](direct_solve/framework/todo.md#h-07--per-k-on-a-constraint-one-constraint-per-class) (needs: B5, B1)
 
 ## A5. Language: refusals to lift
 
@@ -142,6 +128,13 @@ Owner answers, before coding:
 - [ ] Gurobi calls an infinite floor unbounded — owner rules what an infinite bound means: refuse it, or read it as no bound — [bugs § infinite bounds](issues/bugs.md#wrong-answers-infinite-bounds)
 - [ ] HiGHS at gap 0 cannot finish an entity-scoped test MIP — owner approves the proposed `decide_mip_gap` setting (a new user setting) — [bugs § gap of 0](issues/bugs.md#with-a-gap-of-0-highs-cannot-finish-an-entity-scoped-mip-the-test-suite-runs)
 
+- [ ] Negative lower bound under a `when` stays non-negative (ruled: applies to the kept rows) — owner picks the
+  representation. Only an unconditional constant bound replaces the default floor of 0 today (a data bound
+  `x >= lo` only intersects, D41), and `SolverInput` has one box per decision, so a floor lowered on some rows needs
+  either (1) hidden `x >= 0` clauses on the rows or classes no such `when` keeps (DIAGNOSE must keep them rigid and
+  unquoted), or (2) a floor per instance in the stage 06/08 contract, which item 19 (a box per helper instance) also
+  needs. Recommended: (2). A1 must read the same floor. — [bugs § negative bound under `when`](issues/bugs.md#a-negative-lower-bound-under-a-when-leaves-the-decision-non-negative)
+
 ## B3. Messages whose fix has an open route
 
 - [ ] Stage-05 messages name columns without their relation — owner picks: carry relation names into stage 05, or move the refusal to stage 04 — [bugs § without their relation](issues/bugs.md#messages-raised-while-choosing-a-formulation-name-columns-without-their-relation)
@@ -151,8 +144,34 @@ Owner answers, before coding:
 
 The agent finds the cause alone and stops with a proposed fix.
 
+- [ ] `DECIDB_TIME_LIMIT` not enforced on HiGHS for large models — the interrupt poll carries Ctrl-C only
+  (`context.interrupted`), so overriding it does not bound the solve; HiGHS stopped checking its own `time_limit` in
+  the phase it stalled in. Next: find that phase from the vendored source (`third_party/highs`; interrupt callbacks
+  exist for MIP and simplex) and propose a deadline callback; only the owner's large-tier run (Q2, HiGHS) confirms
+  the fix. — [bugs § HiGHS time limit](issues/bugs.md#decidb_time_limit-is-not-enforced-on-highs-for-large-models)
 - [ ] Quadratic clause reported once per row in query scope — [bugs § Diagnosis text](issues/bugs.md#diagnosis-text)
 - [ ] HiGHS expanded repair carries a 1e-5 cushion — [bugs § Diagnosis text](issues/bugs.md#diagnosis-text)
+
+## B5. Direct solve: keyed scope checks, helper decisions, reading through the window
+
+- [ ] H-04 Keyed scope checks in the direct plan — owner picks how both paths choose what a message names when the
+  answer depends on row order: which failing group (several fail), and which two values a determination message
+  quotes (`more than one value: 7, 5`; the solver quotes the first value seen, then the first that differs). A
+  relational plan has no reliable row order; its existing checks raise the least message. Recommended: both paths
+  name the least failing group and quote the least and greatest values, so the message never depends on row
+  order; the solver's pins that quote another order change with it. — [framework § H-04](direct_solve/framework/todo.md#h-04--keyed-scope-checks-in-the-direct-plan)
+
+- [ ] H-08 VALUE-shape clauses (helper decisions) — owner names the rule and clause shape it is for: no rule's
+  definition takes a VALUE-shape clause, so reading the helper into the IR alone reaches no code. Recommended: leave
+  it until a rule names the shape it needs (then the task is that rule's). — [framework § H-08](direct_solve/framework/todo.md#h-08--value-shape-clauses-helper-decisions)
+
+- [ ] H-03 Read a data bound through the bound-side window — owner picks where the reduction lives. (1) The rewrite
+  records each reduced bound (raw value, MIN/MAX/`=`, its value-check messages) as one value object; the solver path
+  turns it into windows only when no rule takes the query, and a rule that reads through computes it in its own group
+  aggregate (R1 already takes the group MIN/MAX of a data limit). (2) The rewrite installs the windows as today and a
+  rule that reads through removes them, rebinding shared, stacked window slots. Recommended: (1), the one place that
+  states the tightest bound; nothing is built to be torn down. Either way the value checks move into the rule's pass
+  and must keep the solver's order (scope checks, then the bound's NULL/NaN, then weights). — [framework § H-03](direct_solve/framework/todo.md#h-03--read-a-data-bound-through-the-bound-side-window)
 
 ---
 

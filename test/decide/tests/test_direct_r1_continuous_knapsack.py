@@ -923,6 +923,15 @@ scoped("per_three_groups_at_different_prices_max", THREE_GROUPS, "SUM(w*amount) 
 scoped("when_on_the_clause", COVERED + OUTSIDE, "when f: SUM(w*amount) <= 6", (-INF, 6.0), when=lambda r: r["f"])
 # `when` inside the sum (the reducer's own filter): the same membership, read from the other place in the IR.
 scoped("when_on_the_aggregate", COVERED + OUTSIDE, "SUM(when f: w*amount) <= 6", (-INF, 6.0), when=lambda r: r["f"])
+# `when` in front of the clause and inside the sum: the sum covers the rows both keep. Row 2 is in the clause's `when`
+# and out of the sum's; the rows outside the clause's `when` have a cap above 3 too.
+scoped(
+    "when_in_front_and_inside_the_sum",
+    COVERED + OUTSIDE,
+    "when f: SUM(when cap > 3: w*amount) <= 4",
+    (-INF, 4.0),
+    when=lambda r: r["f"] and r["cap"] > 3,
+)
 # One budget written as two clauses, one with each spelling of the `when`, is one budget.
 scoped(
     "when_written_both_ways_on_two_clauses",
@@ -1414,6 +1423,11 @@ def _last_row(late, ordinary):
 
 # name -> (sql, error class the direct path must raise).
 R1_ERROR_CASES = {
+    # The sum's own `when` keeps none of the rows the clause's `when` keeps (D8).
+    "when_in_front_and_inside_keep_disjoint_rows": (
+        _scoped_sql(COVERED + OUTSIDE, "when f: SUM(when NOT f: w*amount) <= 6"),
+        "empty_aggregate",
+    ),
     "weight_nan": (_late(LATE_DECIDE, w_sql=_last_row("'NaN'::DOUBLE", "1.0")), "invalid_value"),
     "weight_infinite": (_late(LATE_DECIDE, w_sql=_last_row("'Infinity'::DOUBLE", "1.0")), "invalid_value"),
     "weight_null": (_late(LATE_DECIDE, w_sql=_last_row("NULL::DOUBLE", "1.0")), "null_bound"),

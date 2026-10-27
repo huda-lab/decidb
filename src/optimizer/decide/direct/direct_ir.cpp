@@ -395,13 +395,20 @@ const DirectPart *DirectIRConstraint::PlainSum() const {
 	return &part;
 }
 
-const Expression *DirectIRConstraint::Membership(bool &ok) const {
+unique_ptr<Expression> DirectIRConstraint::Membership(bool &ok) const {
 	auto sum = PlainSum();
-	ok = sum && !(sum->filter && scope.when);
-	if (!ok) {
+	ok = sum != nullptr;
+	if (!ok || (!sum->filter && !scope.when)) {
 		return nullptr;
 	}
-	return sum->filter ? sum->filter.get() : scope.when.get();
+	if (!sum->filter || !scope.when) {
+		return (sum->filter ? sum->filter : scope.when)->Copy();
+	}
+	// A row is in the sum when both keep it. The solver reads the sum's own `when` only on the rows the clause's `when`
+	// keeps; a rule reads only a membership that cannot raise (DirectIsSourceOnlyPredicate), and over those the
+	// conjunction keeps the same rows.
+	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, scope.when->Copy(),
+	                                             sum->filter->Copy());
 }
 
 } // namespace duckdb

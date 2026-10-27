@@ -358,12 +358,12 @@ private:
 bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 	const auto &first_scope = *condition.bound_factors.front();
 	bool ok;
-	const Expression *first_when = first_scope.Membership(ok);
+	auto first_when = first_scope.Membership(ok);
 	if (!ok) {
 		return false;
 	}
 	for (auto factor : condition.bound_factors) {
-		const Expression *when = factor->Membership(ok);
+		auto when = factor->Membership(ok);
 		if (!ok) {
 			return false;
 		}
@@ -380,7 +380,7 @@ bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 		if (!DirectIsSourceOnlyPredicate(*first_when, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
-		condition.when_condition = first_when->Copy();
+		condition.when_condition = std::move(first_when);
 	}
 	condition.scoped = !condition.group_key_slots.empty() || condition.when_condition != nullptr;
 	return true;

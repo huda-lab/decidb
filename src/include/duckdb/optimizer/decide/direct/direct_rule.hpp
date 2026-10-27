@@ -110,9 +110,9 @@ struct DirectIRConstraint {
 	//! otherwise. Its own `when`, if any, is the returned part's `filter`.
 	const DirectPart *PlainSum() const;
 
-	//! The rows the constraint's sum covers: the plain SUM's own `when` or the clause's `when`. Null for none. `ok` is
-	//! false when the constraint is not a plain SUM, or has both (the solver reads both; the rules decline it).
-	const Expression *Membership(bool &ok) const;
+	//! The rows the constraint's sum covers: the plain SUM's own `when`, the clause's `when`, or, with both, the rows
+	//! both keep. Null for none. `ok` is false when the constraint is not a plain SUM.
+	unique_ptr<Expression> Membership(bool &ok) const;
 };
 
 struct DirectIRObjective {

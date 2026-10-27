@@ -195,7 +195,7 @@ bool Rule::ProveBudgetScope(const DirectIR &ir, const vector<const DirectIRConst
 		if (!DirectIsSourceOnlyPredicate(*first_when, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
-		condition.when = first_when->Copy();
+		condition.when = std::move(first_when);
 	}
 	condition.group_key_slots = budgets[0]->scope.per_key_slots;
 	condition.scoped = !condition.group_key_slots.empty() || condition.when != nullptr;

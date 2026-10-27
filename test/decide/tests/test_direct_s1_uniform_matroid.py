@@ -227,6 +227,8 @@ def _values(records, names=NAMES):
 #   when      "top"                    `when flag:` in front of the bound: rows outside it are out of the problem
 #             "local"                  `when flag` inside the sum: only flagged rows are counted,
 #                                      but every row of the group still states a bound
+#             "both"                   `when flag:` in front and `when score > 5` inside the sum: the flagged rows
+#                                      state the bound, and those with a score above 5 are counted
 #   fixed     [(value, [ids])]         when id = i: x = value
 #   fixedwhen True                     when fixed_value: x = 1 (the column is NULL on some rows: those are not fixed)
 #   flagfixed_below N                  when id < N: x = flag
@@ -253,6 +255,7 @@ S1_CASES = {
     # --- a `when` inside the sum ---
     "local_when_interval": {"bounds": [(">=", 1), ("<=", 1)], "per": True, "when": "local"},
     "local_when_upper_global": {"bounds": [("<=", 2)], "when": "local"},
+    "both_whens_upper_global": {"bounds": [("<=", 1)], "when": "both"},
     # Row 5 is not flagged, but its cap (1) still limits the flagged rows of group b.
     "local_when_source_bound_reads_unflagged_rows": {"bounds": [("<=", "cap")], "per": True, "when": "local"},
     "local_when_source_bound_global": {"bounds": [("<=", "cap")], "when": "local"},
@@ -474,11 +477,12 @@ def _decide_clause(case):
     for bound in case.get("bounds", ()):
         op, limit = bound[0], str(bound[1])
         scope = bound[2] if len(bound) > 2 else default_scope
-        total = f"SUM(when flag: {body})" if scope == "local" else f"SUM({body})"
+        inner = {"local": "flag", "both": "score > 5"}.get(scope)
+        total = f"SUM(when {inner}: {body})" if inner else f"SUM({body})"
         if per:
             total, limit = _by_group(total), _by_group(limit)
         # A NULL key is a group of its own (D5); the cases leave those rows out, as the oracle does.
-        kept = (["flag"] if scope == "top" else []) + (["g IS NOT NULL"] if per else [])
+        kept = (["flag"] if scope in ("top", "both") else []) + (["g IS NOT NULL"] if per else [])
         prefix = f"when {' AND '.join(kept)}: " if kept else ""
         clauses.append(f"{prefix}{total} {op} {limit}")
     for value, ids in case.get("fixed", ()):
@@ -601,6 +605,9 @@ def _s1_constraints(case):
                 counted = members
             elif scope == "local":
                 counted = [i for i in members if rows[i]["flag"]]
+            elif scope == "both":
+                members = [i for i in members if rows[i]["flag"]]
+                counted = [i for i in members if rows[i]["score"] > 5]
             else:
                 counted = members
             if not counted:
@@ -913,6 +920,11 @@ S1_ERROR_CASES = {
             "id, dept, flag, score",
             "when flag AND dept IS NOT NULL: SUM(x) by (dept) <= -1",
         ),
+        "empty_aggregate",
+    ),
+    # The sum's own `when` keeps none of the rows the clause's `when` keeps (D8).
+    "inner_when_disjoint_from_the_front_when": (
+        _problem("(1, 2.0, true), (2, 3.0, false)", "id, score, flag", "when flag: SUM(when NOT flag: x) <= 1"),
         "empty_aggregate",
     ),
     # --- an equality bound has one value per group ---
