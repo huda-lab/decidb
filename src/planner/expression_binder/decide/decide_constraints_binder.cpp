@@ -10,6 +10,7 @@
 #include "duckdb/parser/expression/cast_expression.hpp"
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
+#include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/common/constants.hpp"
 #include "duckdb/common/enums/expression_type.hpp"
 #include "duckdb/common/string_util.hpp"
@@ -141,6 +142,20 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
             }
             return true;
         }
+        case ExpressionClass::PARAMETER:
+            // A prepared statement's `$1`: one value, supplied at EXECUTE.
+            return true;
+        case ExpressionClass::COMPARISON:
+        case ExpressionClass::CONJUNCTION:
+        case ExpressionClass::BETWEEN:
+        case ExpressionClass::LAMBDA: {
+            // Data as long as every part is: `sum(x) <= CAST(cap > 2 AS INT)`.
+            bool allowed = true;
+            ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
+                allowed = allowed && IsAllowedDecisionFreeBoundExpression(child, variables);
+            });
+            return allowed;
+        }
         default:
             return false;
     }
@@ -257,15 +272,14 @@ BindResult DecideConstraintsBinder::BindConjunction(unique_ptr<ParsedExpression>
     auto &conj = expr.Cast<ConjunctionExpression>();
 	// Constraints are joined with AND. An OR between them would need an indicator per
 	// alternative, which no layer builds, and every later walk reads a conjunction as AND.
-	if (is_top_expression && conj.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+	if (conj.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
 		return BindResult(BinderException::Unsupported(expr, "SUCH THAT: OR is not supported."));
 	}
-	// A conjunction's children sit where it sits: constraints under a constraint list,
-	// data under an operand (`CAST((a AND (b OR c)) AS INT)`).
-	auto was_top_expression = is_top_expression;
+	// Only a constraint list reaches here (an operand conjunction is data or refused), so
+	// each child is a constraint.
 	ErrorData error;
 	for (idx_t i = 0; i < conj.children.size(); i++) {
-		is_top_expression = was_top_expression;
+		is_top_expression = true;
 		BindChild(conj.children[i], depth, error);
 	}
 	if (error.HasError()) {
@@ -405,7 +419,7 @@ BindResult DecideConstraintsBinder::BindExpression(unique_ptr<ParsedExpression> 
     if (!result.HasError() && result.expression) {
         PreserveDecideSourceFragment(*expr_ptr, *result.expression);
     }
-    return PreserveQueryLocation(location, std::move(result));
+    return ThrowClauseError(PreserveQueryLocation(location, std::move(result)), root_expression);
 }
 
 BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
@@ -417,6 +431,18 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
         return ExpressionBinder::BindExpression(expr_ptr, depth);
     }
     auto &expr = *expr_ptr;
+	// Below a constraint's top, an operand that reads no decision is data, whatever its
+	// shape: `CAST(cap > 2 AS INT)`, a parameter `$1`, a lambda and its parameters.
+	if (!is_top_expression && IsDataOperand(expr)) {
+		return ExpressionBinder::BindExpression(expr_ptr, depth);
+	}
+	// A comparison over a decision below the top, as in `x <= (x > 1)`, is neither a
+	// constraint nor data.
+	if (!is_top_expression && (expr.GetExpressionClass() == ExpressionClass::COMPARISON ||
+	                           expr.GetExpressionClass() == ExpressionClass::BETWEEN ||
+	                           expr.GetExpressionClass() == ExpressionClass::CONJUNCTION)) {
+		return UnsupportedConstraint(expr);
+	}
     switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF: {
         if (!is_top_expression) {

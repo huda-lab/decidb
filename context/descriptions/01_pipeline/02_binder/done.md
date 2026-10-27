@@ -284,9 +284,10 @@ Dedicated binding methods: `BindComparison`, `BindOperator`, `BindBetween`,
 
 Constraints are joined with `AND`. `BindConjunction` refuses any other conjunction in a
 constraint position (`x <= cap OR x <= 1`, also under a scope): every later walk reads a
-conjunction as `AND`, and no layer builds the indicator an `OR` needs. A conjunction's
-children keep its position, so one inside an operand (`CAST((a AND (b OR c)) AS INT)`) is
-data, as is an `OR` in a `when` condition, a reducer's `when` or a subquery.
+conjunction as `AND`, and no layer builds the indicator an `OR` needs. Only a constraint
+list reaches `BindConjunction`: a conjunction inside an operand is data or refused (Data
+operands, below), and an `OR` in a `when` condition, a reducer's `when` or a subquery is
+data.
 
 `GetExpressionType`'s `norm`/`SUM`/`AVG`/`MIN`/`MAX` classification is shared with
 `DecideObjectiveBinder` through `DecideBinder::ClassifyReducerCall` — the base class
@@ -316,12 +317,67 @@ reducer never shares a scaled term with a decision (S10): `ValidateDecideNoNonLi
 refuses `x * avg(cap)`, `sum(x) / sum(cap)` and `(sum(x) + sum(cap)) / 2` on the parsed
 tree.
 
+### Data operands
+
+Below a clause's top, an operand that reads no decision is data, and DuckDB binds it by
+its own rules (`DecideBinder::IsDataOperand`). The shape does not matter: a comparison
+read as 0/1 (`x <= 4 * CAST(cap > 2 AS INT)`), a lambda and its parameters
+(`sum(x * list_reduce([cap, b], (a, z) -> a + z))`), a prepared statement's `$1`. A
+function, a subquery and a CASE keep their DECIDE handling: a function may be a reducer
+or a scope marker, a subquery has the checks above, and a CASE is refused wherever it
+stands (`DecideCaseUnsupportedMessage`).
+
+The rule holds in four places, one per walk that reads an operand:
+
+- `DecideConstraintsBinder` and `DecideObjectiveBinder`, before their dispatch.
+- The reducer-argument validator (`ValidateSumArgument`): a shape it does not list is a
+  per-row coefficient when it reads no decision, as data-only operators already were.
+- The bound check (`IsAllowedDecisionFreeBoundExpression`): a parameter is one value, and
+  a comparison, conjunction, `BETWEEN` or lambda is allowed when every part is.
+
+A comparison, `BETWEEN` or conjunction that reads a decision, below the top, is neither a
+constraint nor data. `x <= (x > 1 AND cap > 1)` has a meaning in SQL (DuckDB casts the
+boolean to 0/1), but modelling it needs an indicator no layer builds, so it is refused
+with the clause quoted: *"SUCH THAT does not support '((x > 1) AND (cap > 1))'"*. The
+same shape inside a reducer gets *"SUM expression does not support '(x BETWEEN 1 AND
+2)'"*, and in the objective *"MAXIMIZE does not support '(x > 1)'"*. Written with an
+explicit cast, it meets the cast rule first.
+
+A table macro's parameter reaches a clause because `ParsedExpressionIterator` visits a
+DECIDE's `SUCH THAT` and objective, which macro substitution walks (`ReplaceMacroParameters`).
+The CTE reference count and the prepared-statement verifier walk them too. Declarations
+are not visited: they hold names, types and key columns, never a value.
+
 ### Subqueries
 
 Both uncorrelated and correlated **scalar** subqueries are supported, and are
 delegated to DuckDB's standard `ExpressionBinder::BindExpression`. Non-scalar
 subqueries are rejected, as is any subquery referencing a decision variable
-(`ExpressionContainsDecideVariable`). Correlation is observed later, in
+(`ExpressionContainsDecideVariable`). The DECIDE walks over a subquery's body read it as
+ordinary SQL and pass `decide_clauses = false` to `ParsedExpressionIterator`: a DECIDE
+nested in it keeps its clauses to itself, and its own binder checks them, so its `per ():`
+is not taken for a scope written inside a subquery.
+
+A DECIDE inside a subquery reports its own refusal. When an expression fails to bind in a
+subquery, DuckDB retries it in each outer query, in case it refers to one, and reports the
+retry's error, so an inner *"SUCH THAT: OR is not supported"* reached the user as the
+outer *"Referenced column "y" not found"*. Only a missing name can be an outer reference,
+so `DecideBinder::ThrowClauseError` throws any other error at the clause's root, before
+the retry; a column or table not found (`COLUMN_NOT_FOUND`, `TABLE_NOT_FOUND`) goes on to
+it. `BindContext` marks a table not found with `TABLE_NOT_FOUND` for this.
+
+A DECIDE cannot read a column of an outer query, in any clause or in its `WHERE`: it solves
+one problem, and re-solving it per outer row is not built. At the end of `BindSelectNode`,
+a DECIDE query whose binder holds a correlated column is refused, naming it: *"DECIDE: 'k'
+refers to an outer query, which a DECIDE cannot read; to solve per group, join that table
+into this query's FROM and write the clause with per"*. A subquery inside a clause that is
+correlated to the DECIDE's own rows keeps that correlation on its own binder, so it is not
+caught. A clause reaches the outer column through the retry above (a column or a table not
+found); when the column sits inside a reducer, SQL binds the whole aggregate in the outer
+query, and the message quotes the reducer. Before this, such a query raised an internal
+error (a dependent join over `DECIDE`, or an unbound column).
+
+Correlation is observed later, in
 `plan_select_node.cpp`, at the only point where it is still visible — see
 [`../03_logical_plan/done.md`](../03_logical_plan/done.md).
 
@@ -422,7 +478,7 @@ Four things are deliberately **not** refused:
 A constraint shape the binder does not read is refused by quoting it as written,
 through one helper (`UnsupportedConstraint`): *"SUCH THAT does not support '(x IS
 NULL)'"*. A reducer body it does not read gets *"SUM expression does not support
-'(cap > 2)'"*. A function on either side is named as the user wrote it
+'(x BETWEEN 1 AND 2)'"*. A function on either side is named as the user wrote it
 (`DecideWrittenFunctionName`): `count(*)`, not DuckDB's internal `count_star`. A
 reducer whose body holds no decision (`sum(1)`, `sum(cap)`) gets *"SUM expression must
 reference at least one DECIDE variable"*; only a body that holds a query-wide decision
@@ -526,7 +582,8 @@ the bound tree, alongside constraints.
 
 A body it cannot read is refused in SQL terms, with the sense the user wrote: a body
 with no decision gets *"MAXIMIZE 3 has no decision to optimize"*, any other *"MAXIMIZE
-does not support '(x > 1)'"*.
+does not support '(x > 1)'"*. A decision-free operand below the top is data (§4, Data
+operands).
 
 ---
 
@@ -556,9 +613,11 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 | Concern | Location |
 |---|---|
 | Declarations, scopes, types, the parsed-tree validators (`BindDeclarations`, `RefuseQualifiedDecisionReferences`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
-| Shared DECIDE expression rules, reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateExactScope`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
+| Shared DECIDE expression rules (`IsDataOperand`), reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateExactScope`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
 | `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
 | Objective binding, its scope and the two-level form | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
+| Refusing a DECIDE that reads an outer query | `src/planner/binder/query_node/bind_select_node.cpp` |
+| Which parts of a query a walk visits (`decide_clauses`) | `src/parser/parsed_expression_iterator.cpp` |
 | Key scope struct | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
 | Scope enum and DECIDE tags | `src/include/duckdb/common/enums/decide.hpp` |

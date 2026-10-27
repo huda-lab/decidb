@@ -39,18 +39,13 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 
 - [ ] `DECIDB_TIME_LIMIT` not enforced on HiGHS for large models — [bugs § HiGHS time limit](06_issues/bugs/todo.md#decidb_time_limit-is-not-enforced-on-highs-for-large-models)
 - [ ] HiGHS at gap 0 cannot finish an entity-scoped test MIP — [bugs § gap of 0](06_issues/bugs/todo.md#with-a-gap-of-0-highs-cannot-finish-an-entity-scoped-mip-the-test-suite-runs)
-- [ ] Correlated DECIDE (LATERAL, outer reference) raises an internal error — [bugs § outer query](06_issues/bugs/todo.md#a-decide-that-refers-to-an-outer-query-raises-an-internal-error)
-- [ ] Lambda in a coefficient raises an internal error — [bugs § Coefficients and keys](06_issues/bugs/todo.md#coefficients-and-keys)
-- [ ] Prepared-statement and table-macro parameters fail in a clause — [bugs § parameters](06_issues/bugs/todo.md#parameters-of-a-prepared-statement-or-a-table-macro-fail-in-a-decide-clause)
 
 ## 5. Bugs: messages and diagnosis text
 
 - [ ] Subquery, condition or `by` key printed as DuckDB renders it — [bugs § as DuckDB renders it](06_issues/bugs/todo.md#messages-print-a-subquery-a-condition-or-a-by-key-as-duckdb-renders-it)
 - [ ] Stage-05 messages name columns without their relation — [bugs § without their relation](06_issues/bugs/todo.md#messages-raised-while-choosing-a-formulation-name-columns-without-their-relation)
-- [ ] Data comparison inside an operand bound as a constraint — [bugs § operands](06_issues/bugs/todo.md#messages-operands-coefficients-and-keys)
 - [ ] Two keys over the same columns share one key text — [bugs § operands](06_issues/bugs/todo.md#messages-operands-coefficients-and-keys)
 - [ ] A column reference is named in two forms (key SQL spelling vs bare name) — [bugs § operands](06_issues/bugs/todo.md#messages-operands-coefficients-and-keys)
-- [ ] Refusal inside a nested DECIDE is masked — [bugs § nested DECIDE](06_issues/bugs/todo.md#messages-nested-decide-and-refusals)
 - [ ] `BETWEEN` echoes its lower half only — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
 - [ ] Quadratic clause reported once per row in query scope — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)
 - [ ] HiGHS expanded repair carries a 1e-5 cushion — [bugs § Diagnosis text](06_issues/bugs/todo.md#diagnosis-text)

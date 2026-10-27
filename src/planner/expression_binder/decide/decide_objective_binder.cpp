@@ -157,7 +157,8 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 
 BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
 	auto location = expr_ptr->GetQueryLocation();
-	return PreserveQueryLocation(location, BindExpressionInternal(expr_ptr, depth, root_expression));
+	return ThrowClauseError(PreserveQueryLocation(location, BindExpressionInternal(expr_ptr, depth, root_expression)),
+	                        root_expression);
 }
 
 BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,
@@ -169,6 +170,11 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 		return ExpressionBinder::BindExpression(expr_ptr, depth, root_expression);
 	}
 	auto &expr = *expr_ptr;
+	// Below the objective's top, an operand that reads no decision is data, whatever its
+	// shape: a parameter `$1`, a lambda and its parameters, a comparison.
+	if (!is_top_expression && IsDataOperand(expr)) {
+		return ExpressionBinder::BindExpression(expr_ptr, depth);
+	}
     string error_msg;
 	switch (expr.GetExpressionClass()) {
     case ExpressionClass::COLUMN_REF:

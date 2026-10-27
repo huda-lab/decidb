@@ -44,7 +44,8 @@ bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_m
 }
 
 //! ParsedExpressionIterator::EnumerateChildren, plus the body (SELECT list, WHERE,
-//! FROM, ...) of a subquery, which EnumerateChildren does not enter.
+//! FROM, ...) of a subquery, which EnumerateChildren does not enter. A DECIDE nested in
+//! the subquery keeps its clauses to itself: its own binder checks them.
 static void EnumerateChildrenAndSubqueries(const ParsedExpression &expr,
                                            const std::function<void(const ParsedExpression &child)> &callback) {
 	if (expr.GetExpressionClass() == ExpressionClass::SUBQUERY) {
@@ -53,7 +54,8 @@ static void EnumerateChildrenAndSubqueries(const ParsedExpression &expr,
 			// const_cast: EnumerateQueryNodeChildren requires non-const but we only read
 			ParsedExpressionIterator::EnumerateQueryNodeChildren(
 			    const_cast<QueryNode &>(*subquery_expr.subquery->node),
-			    [&](unique_ptr<ParsedExpression> &child) { callback(*child); }, [&](TableRef &ref) {});
+			    [&](unique_ptr<ParsedExpression> &child) { callback(*child); }, [&](TableRef &ref) {},
+			    /*decide_clauses=*/false);
 		}
 	}
 	ParsedExpressionIterator::EnumerateChildren(expr, callback);
@@ -1418,6 +1420,11 @@ static bool ValidateSumArgumentInternal(ParsedExpression &expr, const case_insen
         error_msg = DecideCaseUnsupportedMessage();
         return false;
     default:
+		// Any other shape that reads no decision (a comparison, a parameter, a lambda) is a
+		// per-row coefficient DuckDB evaluates, like the data-only operators above.
+		if (!ExpressionContainsDecideVariable(expr, variables)) {
+			return true;
+		}
 		error_msg = StringUtil::Format("SUM expression does not support '%s'", expr.ToString());
 		return false;
     }
@@ -1453,6 +1460,17 @@ BindResult DecideBinder::PreserveQueryLocation(optional_idx location, BindResult
 	return result;
 }
 
+BindResult DecideBinder::ThrowClauseError(BindResult result, bool root_expression) {
+	if (root_expression && result.HasError()) {
+		auto subtype = result.error.ExtraInfo().find("error_subtype");
+		if (subtype == result.error.ExtraInfo().end() ||
+		    (subtype->second != "COLUMN_NOT_FOUND" && subtype->second != "TABLE_NOT_FOUND")) {
+			result.error.Throw();
+		}
+	}
+	return result;
+}
+
 bool DecideBinder::IsScalarDecideVariable(const ParsedExpression &expr) const {
 	if (expr.GetExpressionClass() != ExpressionClass::COLUMN_REF) {
 		return false;
@@ -1461,6 +1479,17 @@ bool DecideBinder::IsScalarDecideVariable(const ParsedExpression &expr) const {
 	// A decision is referenced by its bare name (the declarations binder refuses `D.x`),
 	// so only the bare name can name a query-wide one.
 	return !colref.IsQualified() && scalar_variables.count(colref.GetColumnName()) > 0;
+}
+
+bool DecideBinder::IsDataOperand(const ParsedExpression &expr) const {
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::FUNCTION:
+	case ExpressionClass::SUBQUERY:
+	case ExpressionClass::CASE:
+		return false;
+	default:
+		return !ExpressionContainsDecideVariable(expr, variables);
+	}
 }
 
 bool DecideBinder::IsRowInvariantExpression(const ParsedExpression &expr) const {

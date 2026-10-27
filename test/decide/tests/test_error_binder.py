@@ -880,6 +880,9 @@ class TestRefusalsSpeakSql:
             ("x IS DISTINCT FROM 3", "'(x IS DISTINCT FROM 3)'"),  # a comparison DECIDE does not read
             ("NOT (x <= 1 OR x >= 3)", "'(NOT ((x <= 1) OR (x >= 3)))'"),  # an operator it does not read
             ("1", "'1'"),  # a clause of no kind it reads
+            ("x = (x > 2)", "'(x > 2)'"),  # a comparison over a decision as an operand
+            ("x >= (x BETWEEN 1 AND 3)", "'(x BETWEEN 1 AND 3)'"),  # the same, a BETWEEN
+            ("x <= (x > 1 AND cap > 1)", "'((x > 1) AND (cap > 1))'"),  # the same, an AND
         ],
     )
     def test_unsupported_constraint_is_quoted(self, decidb_cli, clause, quoted):
@@ -887,8 +890,10 @@ class TestRefusalsSpeakSql:
         assert f"SUCH THAT does not support {quoted}" in stderr, stderr
 
     def test_unsupported_reducer_body_is_quoted(self, decidb_cli):
-        stderr = self._refusal(decidb_cli, "SUM(x * CAST(cap > 2 AS INT)) <= 3")
-        assert "SUM expression does not support '(cap > 2)'" in stderr, stderr
+        # A comparison over data is a 0/1 coefficient (test_data_operands.py); over a
+        # decision it is refused.
+        stderr = self._refusal(decidb_cli, "SUM(x * (x BETWEEN 1 AND 2)) <= 3")
+        assert "SUM expression does not support '(x BETWEEN 1 AND 2)'" in stderr, stderr
 
     @pytest.mark.parametrize(
         "objective,message",

@@ -284,8 +284,10 @@ vector<reference<Binding>> BindContext::GetBindings(const BindingAlias &alias, E
 		}
 		string candidate_str = StringUtil::CandidatesMessage(StringUtil::TopNJaroWinkler(candidates, alias.GetAlias()),
 		                                                     "Candidate tables");
-		out_error = ErrorData(ExceptionType::BINDER, StringUtil::Format("Referenced table \"%s\" not found!%s",
-		                                                                alias.GetAlias(), candidate_str));
+		// The subtype marks a name an outer query may still resolve (ExpressionBinder retries there).
+		out_error = ErrorData(BinderException(
+		    StringUtil::Format("Referenced table \"%s\" not found!%s", alias.GetAlias(), candidate_str),
+		    Exception::InitializeExtraInfo("TABLE_NOT_FOUND", optional_idx())));
 	}
 	return matching_bindings;
 }

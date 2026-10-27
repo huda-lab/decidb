@@ -718,6 +718,16 @@ unique_ptr<BoundQueryNode> Binder::BindSelectNode(SelectNode &statement, unique_
 
 	// now that the SELECT list is bound, we set the types of DISTINCT/ORDER BY expressions
 	BindModifiers(*result, result->projection_index, result->names, internal_sql_types, bind_state);
+
+	// A DECIDE solves one problem, so it cannot be re-run per row of an outer query. A
+	// subquery's own correlation to this query stays on that subquery's binder; what is
+	// left here names an outer query, in any clause. It may be a whole reducer: SQL binds
+	// an aggregate over an outer column in the outer query.
+	if (statement.HasDecideClause() && !correlated_columns.empty()) {
+		throw BinderException("DECIDE: '%s' refers to an outer query, which a DECIDE cannot read; to solve per group, "
+		                      "join that table into this query's FROM and write the clause with per",
+		                      correlated_columns[0].name);
+	}
 	return std::move(result);
 }
 

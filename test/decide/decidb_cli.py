@@ -180,6 +180,14 @@ class DecidBCli:
         """
         return DecidBCli(self.exe, self.db, env=self.env, verify_serializer=True)
 
+    def without_verify_serializer(self) -> "DecidBCli":
+        """A copy of this wrapper that never round-trips plans, whatever the environment says.
+
+        For a script DuckDB's round trip cannot replay: it re-runs a ``CREATE TEMP MACRO``
+        against the read-only database and fails there, with or without DECIDE.
+        """
+        return DecidBCli(self.exe, self.db, env=self.env, verify_serializer=False)
+
     def _argv(self, *args: str) -> list[str]:
         """The CLI invocation, with the round-trip self-check attached when asked for."""
         argv = [self.exe, self.db, "-readonly"]

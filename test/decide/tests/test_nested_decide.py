@@ -271,3 +271,88 @@ def test_plain_subquery_inside_a_nested_decide_objective(decidb_cli, oracle_solv
     expected = _oracle_chain(oracle_solver, [(3.0, None, 0.0), (9.0, "budget", 0.0)])
     assert abs(_objective(rows) - expected) < 1e-6, \
         f"DecidB={_objective(rows)}, Oracle={expected}"
+
+
+# A refusal of the inner clause used to reach the user as the outer query's error: DuckDB
+# retries a failed expression in each outer query, in case it refers to one, and reported
+# the retry's *"Referenced column "y" not found"*. Only a missing name is retried now.
+@pytest.mark.error_binder
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "inner_clauses,message",
+    [
+        ("SUCH THAT y <= cap OR y <= 1 MAXIMIZE SUM(y)", "SUCH THAT: OR is not supported"),
+        ("SUCH THAT y <= cap MAXIMIZE y > 1", r"MAXIMIZE does not support '\(y > 1\)'"),
+    ],
+    ids=["constraint", "objective"],
+)
+def test_a_nested_refusal_reaches_the_user(decidb_cli, inner_clauses, message):
+    table = "(VALUES (1, 3), (2, 5)) t(id, cap)"
+    decidb_cli.assert_error(
+        f"SELECT id, x FROM {table} DECIDE x(INT) SUCH THAT x <= "
+        f"(SELECT max(y) FROM (SELECT y FROM {table} DECIDE y(INT) {inner_clauses})) MAXIMIZE SUM(x)",
+        match=message,
+    )
+
+
+# A DECIDE solves one problem, so one that reads a column of an outer query (to be
+# re-solved per outer row) is refused at bind time. It used to fail with an internal
+# error. Each case reaches the outer column a different way: from WHERE, which binds as
+# ordinary SQL; from a clause by its bare name, which DuckDB retries as a missing column;
+# and qualified, which it retries as a missing table.
+@pytest.mark.error_binder
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "inner,name",
+    [
+        ("FROM t WHERE t.k = g.k DECIDE x(INT) SUCH THAT x <= 1 MAXIMIZE SUM(x)", "k"),
+        ("FROM t DECIDE x(INT) SUCH THAT x <= lim MAXIMIZE SUM(x)", "lim"),
+        ("FROM t DECIDE x(INT) SUCH THAT x <= 1 AND SUM(x) <= g.lim MAXIMIZE SUM(x)", "lim"),
+    ],
+    ids=["where", "clause column", "clause table"],
+)
+def test_a_decide_cannot_read_an_outer_query(decidb_cli, inner, name):
+    decidb_cli.assert_error(
+        "SELECT g.k, q.x FROM (VALUES (1, 2)) g(k, lim), "
+        f"LATERAL ({inner.replace('FROM t', 'FROM (VALUES (1), (2)) t(k)')}) q",
+        match=f"DECIDE: '{name}' refers to an outer query, which a DECIDE cannot read; to solve per group",
+    )
+
+
+# A DECIDE in another DECIDE's FROM (or WITH) is a two-stage pipeline: the inner problem
+# solves once, and its answer, decisions included, is data for the outer one. The inner
+# optimum is unique, so the oracle can hand its values to the second stage.
+_STAGE_ROWS = [(1, 3), (2, 5), (3, 7)]
+_STAGE_TABLE = "(VALUES (1, 3), (2, 5), (3, 7)) t(id, cap)"
+_STAGE_1 = f"SELECT id, y FROM {_STAGE_TABLE} DECIDE y(INT) SUCH THAT y <= cap AND SUM(y) <= 8 MAXIMIZE SUM(y * cap)"
+
+
+@pytest.mark.correctness
+@pytest.mark.sql_subquery
+@pytest.mark.parametrize(
+    "sql",
+    [
+        f"SELECT id, x FROM ({_STAGE_1}) s DECIDE x(INT) SUCH THAT x <= y + 1 AND SUM(x) <= 6 MAXIMIZE SUM(x * id)",
+        f"WITH s AS ({_STAGE_1}) "
+        "SELECT id, x FROM s DECIDE x(INT) SUCH THAT x <= y + 1 AND SUM(x) <= 6 MAXIMIZE SUM(x * id)",
+    ],
+    ids=["from", "with"],
+)
+def test_a_decide_over_a_decide_in_from(decidb_cli, oracle_solver, sql):
+    oracle_solver.create_model("stage_1")
+    for i, cap in _STAGE_ROWS:
+        oracle_solver.add_variable(f"y{i}", VarType.INTEGER, lb=0.0, ub=float(cap))
+    oracle_solver.add_constraint({f"y{i}": 1.0 for i, _ in _STAGE_ROWS}, "<=", 8.0, name="budget")
+    oracle_solver.set_objective({f"y{i}": float(cap) for i, cap in _STAGE_ROWS}, ObjSense.MAXIMIZE)
+    stage_1 = oracle_solver.solve().variable_values
+
+    oracle_solver.create_model("stage_2")
+    for i, _ in _STAGE_ROWS:
+        oracle_solver.add_variable(f"x{i}", VarType.INTEGER, lb=0.0, ub=round(stage_1[f"y{i}"]) + 1.0)
+    oracle_solver.add_constraint({f"x{i}": 1.0 for i, _ in _STAGE_ROWS}, "<=", 6.0, name="budget")
+    oracle_solver.set_objective({f"x{i}": float(i) for i, _ in _STAGE_ROWS}, ObjSense.MAXIMIZE)
+    expected = oracle_solver.solve().objective_value
+
+    rows, cols = decidb_cli.execute(sql)
+    ci = {c: i for i, c in enumerate(cols)}
+    assert sum(int(r[ci["x"]]) * int(r[ci["id"]]) for r in rows) == pytest.approx(expected)

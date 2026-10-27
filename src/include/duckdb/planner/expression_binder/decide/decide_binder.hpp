@@ -187,6 +187,11 @@ protected:
     //! marker replaces `expr_ptr` in place, so by the time the result comes back the
     //! node the caller held is no longer the one the user wrote.
     static BindResult PreserveQueryLocation(optional_idx location, BindResult result);
+    //! Throws a clause's error at its root unless a column or table was not found. DuckDB
+    //! retries a failed expression in each outer query, in case it refers to one, and reports
+    //! that retry's error; only a missing name can be such a reference, so any other error is
+    //! the clause's own verdict and must reach the user as it is.
+    static BindResult ThrowClauseError(BindResult result, bool root_expression);
 
     //! True when `expr` is a bare reference to a query-wide (`per ()`) decision.
     //! A scalar has one solver column, so it needs no reducer to collapse it —
@@ -200,6 +205,10 @@ protected:
     //! mixes a scalar with row-varying data (SUM(cost * cap)) is not row-invariant
     //! and is legal — the scalar just contributes uniformly to every term.
     bool IsRowInvariantExpression(const ParsedExpression &expr) const;
+    //! True when `expr`, sitting below a clause's top, is plain data that DuckDB binds by its
+    //! own rules: it reads no decision, and it is not a function (a reducer or a scope
+    //! marker), a subquery or a CASE, which keep their DECIDE handling.
+    bool IsDataOperand(const ParsedExpression &expr) const;
 
     BindResult BindAggregate(FunctionExpression &aggr, AggregateFunctionCatalogEntry &func, idx_t depth) override;
     //! Binds the colon form `agg(D, T: expr)` as `agg(per D, T: expr)` (syntax_reference.md §5.1): the

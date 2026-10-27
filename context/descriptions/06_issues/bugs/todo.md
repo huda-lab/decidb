@@ -24,24 +24,6 @@
   the query hang indefinitely on HiGHS once the model is large enough; there
   is no DeciDB-level safety net.
 
-## A DECIDE that refers to an outer query raises an internal error
-
-- **Location:** not traced; DuckDB's subquery decorrelation (`FlattenDependentJoins`), which has no case for the
-  `DECIDE` operator.
-- **Observed:** with `g(k)` and `t(id, k, v)`,
-  `SELECT g.k, q.id, q.x FROM g, LATERAL (FROM t WHERE t.k = g.k DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE
-  SUM(v*x)) q` raises `INTERNAL Error: Logical operator type "DECIDE" for dependent join`, with `decide_direct_solve`
-  `off` and `auto` alike, and with a `PER` clause added. When only the right side refers to the outer query,
-  `... LATERAL (FROM t DECIDE x(REAL) SUCH THAT x BETWEEN 0 AND 1 AND SUM(x*w) <= SUM(cap) + g.k MAXIMIZE SUM(w*x)) q`
-  raises `INTERNAL Error: Failed to bind column reference "k"`. A scalar subquery whose clause reads the outer row fails the same way:
-  `SELECT i, (SELECT MAX(x) FROM range(2) s(j) DECIDE x(INT) SUCH THAT x <= t.i MAXIMIZE SUM(x)) AS m FROM range(3)
-  t(i)` raises `INTERNAL Error: Failed to bind column reference "i"` (`ColumnBindingResolver`, when the outer column
-  is used only in `SUCH THAT`).
-- **Expected:** a correlated DECIDE either runs once per outer row or is rejected at bind time with an ordinary error
-  that says a DECIDE cannot refer to an outer query.
-- **Impact:** a user who writes one problem per group with `LATERAL` gets an internal error instead of a pointer to
-  `PER`.
-
 ## One matrix run of `DECIDB_TEST_DIRECT_SOLVE=off` reported one outcome fewer
 
 - **Observed:** on 2026-10-27 `test/decide/run_direct_matrix.sh` printed `off: 4520 passed, 335 xfailed, 0 failed`
@@ -136,18 +118,6 @@
   field, serialized), or the refusal moves to stage 04.
 - **Impact:** messages only.
 
-## Coefficients and keys
-
-Each reproduces on the current build.
-
-- **A lambda in a coefficient:** `SUM(x * list_reduce([cap, b], (a, z) -> a + z)) <= 30`
-  raises *"INTERNAL Error: lambda reference expressions are transient, ToString should
-  never be called"* (also `when c: sum(...)`, a per-row bound, the objective);
-  `SUM(x * len(list_filter([cap, b], q -> q > 1))) <= 12` answers *"Column 'q' must be one
-  of the DECIDE variables"*.
-- **Expected:** a refusal or an answer in SQL terms.
-- **Impact:** an internal error.
-
 ## Wrong answers: infinite bounds
 
 Reproduces on the current build.
@@ -191,13 +161,6 @@ Each reproduces on the current build.
 
 Each reproduces on the current build.
 
-- **A data comparison inside an operand is bound as a constraint:** `x <= CAST((cap > 2
-  AND cap < 6) AS INT)` (or `CAST(cap > 2 AS INT)`) answers *"SUCH THAT clause: Column
-  'cap' must be one of the DECIDE variables"*: `DecideConstraintsBinder` binds a
-  conjunction's children (`BindConjunction`) and a comparison as constraints wherever they
-  sit. Inside a reducer, `sum(x * CAST(cap > 2 AS INT))` answers *"SUM expression does not
-  support '(cap > 2)'"*; `CAST(cap IN (3, 4) AS INT)` is accepted. Expected: the comparison
-  read as a 0/1 data value.
 - **Two keys over the same columns keep the key text of the one bound first**
   (cosmetic): with `per D.d, D.cost: open(BOOL)` declared, `SUM(D: D.cost * open) <= 7`
   is echoed by EXPLAIN as `sum(D.d, D."cost": "cost" * open) <= 7`, and a determination
@@ -214,17 +177,6 @@ Each reproduces on the current build.
   is taken as SQL unquoted. Expected: one form on every reference (the bare name, with the
   key's SQL spelling kept beside it, as `group_keys[].names` already keeps it), so no
   printer infers which it holds. Same field as the shared key text above.
-- **Impact:** messages, and one refused query the language could answer (the comparison
-  inside an operand).
-
-## Messages: nested DECIDE and refusals
-
-Each reproduces on the current build.
-
-- **A refusal inside a nested DECIDE is masked:** `x <= (SELECT max(y) FROM (SELECT y
-  FROM t DECIDE y(INT) SUCH THAT y <= cap OR y <= 1 MAXIMIZE SUM(y)))` answers
-  *"Referenced column "y" not found in FROM clause!"*, not the inner refusal; the same for
-  any binder refusal of the inner clause.
 - **Impact:** messages only.
 
 ## Diagnosis text
@@ -244,16 +196,6 @@ Each reproduces on the current build.
   edit over-repairs by 1e-5.
 - **Impact:** a suggested change that does not repair the query, or findings the user
   cannot tell apart.
-
-## Parameters of a prepared statement or a table macro fail in a DECIDE clause
-
-- **Observed:** `PREPARE p AS SELECT id, x FROM t DECIDE x(INT) SUCH THAT x <= $1 AND
-  x <= cap MAXIMIZE sum(x)` answers *"SUCH THAT does not support '$1'"*; `sum(x) <= $1` answers *"SUM cannot be compared to
-  an expression that is not a scalar or aggregate without DECIDE variables"*. A table
-  macro's parameter in a clause answers *"Referenced column "lim" not found in FROM
-  clause!"*.
-- **Expected:** a parameter is data, bound like a constant.
-- **Impact:** a prepared or macro DECIDE query cannot take a value.
 
 ## Direct solve reads an integer bound just below a whole number more strictly than both backends
 
