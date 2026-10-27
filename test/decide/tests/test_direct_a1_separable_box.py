@@ -321,7 +321,7 @@ def _check_assignment(case_, rows, columns, oracle, mode):
     assert abs(total - expected) <= 1e-4 * max(1.0, abs(expected)), (mode, total, expected)
 
 
-def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "require")):
+def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "require"), pending=None):
     """Runs the case on the oracle and on the chosen DeciDB paths, and checks they agree."""
     sql = _sql(case_, wrap)
     oracle = _solve_with_oracle(oracle_solver, case_)
@@ -329,7 +329,7 @@ def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "requir
     def check_assignment(rows, columns, mode):
         _check_assignment(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes)
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes, pending)
 
 
 # ---------------------------------------------------------------------------
@@ -342,7 +342,9 @@ le, lt, ge, gt, eq = "<=", "<", ">=", ">", "="
 A1_CASES = {}
 
 # Bounds written with a coefficient or offset on x fold into the column box (D41), but direct solve reads only a plain
-# folded bound so far and declines these. They run on the solver path only until it reads them (todo task 6).
+# folded bound so far and declines these: their direct path is a strict xfail until it reads them (todo.md § Read a
+# folded affine bound).
+FOLDED_AFFINE_REASON = "direct solve does not read a folded bound with a coefficient or offset yet (A1 todo)"
 FOLDED_AFFINE_PENDING = {
     "bool_scaled",
     "real_arithmetic_constant_replaces_default",
@@ -744,8 +746,8 @@ SOLVER_OFF_BY_ONE = {
 @pytest.mark.correctness
 @pytest.mark.parametrize("name", sorted(A1_CASES))
 def test_a1_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
-    modes = ("off",) if name in FOLDED_AFFINE_PENDING else ("off", "require")
-    _agree(decidb_cli, oracle_solver, A1_CASES[name], modes=modes)
+    pending = FOLDED_AFFINE_REASON if name in FOLDED_AFFINE_PENDING else None
+    _agree(decidb_cli, oracle_solver, A1_CASES[name], pending=pending)
 
 
 @pytest.mark.var_integer
@@ -978,12 +980,7 @@ BOUNDARY_CASES = {
         pytest.param(
             name,
             marks=(
-                pytest.mark.xfail(
-                    strict=True,
-                    reason="direct solve does not read a folded bound with a coefficient or offset yet (todo task 6)",
-                )
-                if name in FOLDED_AFFINE_PENDING
-                else ()
+                pytest.mark.xfail(strict=True, reason=FOLDED_AFFINE_REASON) if name in FOLDED_AFFINE_PENDING else ()
             ),
         )
         for name in sorted(BOUNDARY_CASES)

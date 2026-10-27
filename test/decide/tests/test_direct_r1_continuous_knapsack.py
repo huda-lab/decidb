@@ -35,7 +35,7 @@ from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import BY_KEY_PENDING, READ_THROUGH_PENDING, agree_with_oracle, direct_modes as _modes
+from ._direct_oracle_common import BY_KEY_PENDING, READ_THROUGH_PENDING, agree_with_oracle, direct_path
 from ._direct_oracle_common import outcome as _run_all, run as _run, sql_literal, values_clause
 
 
@@ -1054,7 +1054,7 @@ def test_r1_scoped_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solv
     def check_assignment(rows, columns, mode):
         _check_scoped_assignment(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, _modes(sql))
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
 
 
 @pytest.mark.cons_aggregate
@@ -1388,7 +1388,7 @@ def test_r1_data_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solver
         _check_data_budget_assignment(case_, rows, columns, oracle, mode)
 
     sql = _data_sql(case_)
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, _modes(sql))
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
 
 
 # ---------------------------------------------------------------------------
@@ -1646,12 +1646,11 @@ def test_r1_error_cases_fail_on_both_paths(decidb_cli, name):
     with pytest.raises(DecidBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
     assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
-    if "require" not in _modes(sql):
-        return
-    with pytest.raises(DecidBCliError) as direct_error:
-        _run(decidb_cli, sql, "require")
-    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
-    assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
+    with direct_path(sql):
+        with pytest.raises(DecidBCliError) as direct_error:
+            _run(decidb_cli, sql, "require")
+        assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+        assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
 
 
 @pytest.mark.cons_aggregate
@@ -1661,11 +1660,10 @@ def test_r1_an_equality_limit_that_differs_only_among_rows_outside_the_when_is_n
     # differ, are not a second required spend.
     sql = _data_error(OUTSIDE_ROWS, "when f: SUM(w*amount) by (g) = b")
     values = {row["id"]: row["v"] for row in OUTSIDE_ROWS}
-    totals = []
-    for mode in _modes(sql):
-        rows, _ = _run(decidb_cli, sql, mode)
-        totals.append(sum(values[row[0]] * row[1] for row in rows))
-    assert totals[-1] == pytest.approx(totals[0])
+    solver = sum(values[row[0]] * row[1] for row in _run(decidb_cli, sql, "off")[0])
+    with direct_path(sql):
+        direct = sum(values[row[0]] * row[1] for row in _run(decidb_cli, sql, "require")[0])
+        assert direct == pytest.approx(solver)
 
 
 @pytest.mark.error
@@ -2321,7 +2319,7 @@ def _agree_pieces(decidb_cli, oracle_solver, case_):
         _check_pieces(case_, rows, columns, oracle, mode)
 
     sql = _piece_sql(case_)
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, _modes(sql))
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
 
 
 # Each row is a benefit of two pieces that spend the same budget per unit. Shrinking: the first piece of a row earns more

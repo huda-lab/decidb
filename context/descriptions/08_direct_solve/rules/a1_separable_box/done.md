@@ -1,9 +1,10 @@
 # A1 (separable box-constrained problem) — what works today
 
-Verified on 2026-10-27 on the Sami-Active merge (`577ac88efa` with `38275dde6f`): `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 4,838 passed
-and 17 strict expected failures (direct-solve follow-ups and the deferred bound reader); `DECIDB_FORCE_SOLVER=highs
-make decide-test` 4,836 passed and two failures, `test_norm_combined_l1_l2_objective`, which needs Gurobi, and
+Verified on 2026-10-27 after the Sami-Active merge (`a14b1f8129`), with the strict xfails on the direct path of pending cases: `make decide-test`,
+`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 4,521 passed
+and 335 strict expected failures (the direct path of keyed and folded-affine cases, other direct-solve follow-ups
+and the deferred bound reader); `DECIDB_FORCE_SOLVER=highs
+make decide-test` 4,519 passed and two failures, `test_norm_combined_l1_l2_objective`, which needs Gurobi, and
 `test_entity_scoped_mixed_when_per`, which HiGHS cannot close at a gap of 0 in time (`../../../06_issues/bugs/todo.md`); C++
 `build/release/test/unittest "[decidb]"` 2,714 assertions in 65 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_separable_box_rule.cpp`; its per-row bounds come from the shared reader in

@@ -143,7 +143,8 @@ private:
 		D_ASSERT(!reducer.IsDistinct() && !reducer.order_bys && !HasDecideTag(reducer.GetAlias(), AVG_REWRITE_TAG) &&
 		         !ExtractDecideTagPayload(reducer.GetAlias(), NORM_MARKER_TAG_PREFIX, payload));
 		auto reads = Reads(reducer);
-		if (!reducer.children.empty()) {
+		// COUNT reads its argument as SQL's COUNT does: it skips a NULL and counts a NaN, so it has nothing to check.
+		if (!reducer.children.empty() && name != "count") {
 			// A norm's definition can hide a NaN (an L0 count's SIGN reads it as 0), so the value checked is the body.
 			auto body = DecideWrittenNormBody(reducer);
 			AddValueCheck(InvalidValueMessage(body ? *body : *reducer.children[0],

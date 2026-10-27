@@ -157,12 +157,11 @@ def test_rhs_aggregate_window_matches_the_oracle(decidb_cli, oracle_solver, aggr
 @pytest.mark.correctness
 @pytest.mark.parametrize("scope", ["global", "by"])
 def test_rhs_count_of_a_text_column_counts_its_values(decidb_cli, oracle_solver, scope):
-    """`COUNT(g)` over the VARCHAR key counts its rows, as it counts a number column's; the solver once cast the
-    argument to DOUBLE. The rows hold no NULL key: a NULL argument raises (bugs todo, `COUNT` of a column that holds
-    NULL)."""
-    rows = [row for row in ROWS if row[1] is not None]
+    """`COUNT(g)` over the VARCHAR key counts its non-NULL values, as SQL's COUNT does; the solver once cast the
+    argument to DOUBLE. ROWS holds NULL keys, which COUNT skips."""
     constraint, clause = _scoped(scope, "COUNT(g)")
-    _agree(decidb_cli, oracle_solver, rows, constraint, _clause_limits(rows, len, **clause))
+    counted = lambda reads: sum(1 for row in reads if row[1] is not None)  # noqa: E731
+    _agree(decidb_cli, oracle_solver, ROWS, constraint, _clause_limits(ROWS, counted, **clause))
 
 
 @pytest.mark.cons_aggregate
@@ -287,6 +286,8 @@ def test_diagnose_names_the_clause_with_a_right_hand_aggregate(decidb_cli):
 # Right sides whose reducer the window reads in a way no other case does. id -> (aggregate text, its value over the rows
 # a group reads, scope).
 READER_CASES = {
+    # A constant argument reads no source column, yet the window still sums it once per row of the group.
+    "constant_argument": ("SUM(2)", lambda members: 2 * len(members), "by"),
     # `norm(cap, 1)` arrives as `SUM(ABS(cap))` with the written-norm tag: the value check reads the written body.
     "written_norm": ("norm(cap, 1)", lambda members: sum(abs(row[4]) for row in members), "when_by"),
     # A norm of order 0 over data is the count of its non-zero rows, `SUM(ABS(SIGN(e)))`: its body is two calls deep.

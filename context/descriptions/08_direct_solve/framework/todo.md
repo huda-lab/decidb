@@ -74,8 +74,15 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Change.** Read both spellings. The merge converted `C PER g` to `C` with `by (g)` after each reducer (one clause
   per row, each reading its row's group), which keeps the old meaning of a limit that varies by row. The
   removed-spelling message suggests `per g: C` with `by (g)`: one clause per class, which needs `g` to determine the
-  limit. Honour D5 (a NULL key is its own group; the old PER dropped it) and D8 (a group the reducer's own `when`
+  limit. Honour the live NULL-key rule: D5 today (a NULL key is its own group; the old PER dropped it), which the owner has ruled to reverse (`../../03_expressivity/scope/todo.md` § A NULL key is not a class) and D8 (a group the reducer's own `when`
   empties is an error, from H-04).
+- **Plan shape (owner's direction).** A `by` key is a GROUP BY in the direct plan: the rule groups the covered rows by
+  the key (a hash aggregate on the key columns, joined back to the rows on the key), as the per-group plans kept from
+  before the merge do. It is not one clause per row and not a window per clause.
+- **Tests waiting on this.** `direct_path` (`test/decide/tests/_direct_oracle_common.py`) makes the direct path of any
+  case whose SQL holds ` by (` a strict xfail; its solver path is checked as usual. That is about 260 S1 grid cases (`S1_CASES` 77, `S1_OFFSET_CASES` 32,
+  `S1_REDUCER_CASES` 151) and 22 R1 cases (`DATA_BUDGET_CASES` 13, `PIECE_CASES` 1, `SCOPED_CASES` 8). Delete the
+  ` by (` branch of `direct_path` when S1 and R1 read the key; a case that then passes fails until the branch is gone.
 - **Needs.** H-04.
 - **Done when.** The IR carries the key for both spellings; the rule tasks `../rules/s1_uniform_matroid/todo.md` and
   `../rules/r1_continuous_knapsack/todo.md` § "Read a `by` key again" can start.

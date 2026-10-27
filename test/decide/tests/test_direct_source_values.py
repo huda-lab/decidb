@@ -112,7 +112,7 @@ SLOTS = {
         "cap", "x(REAL)", "x BETWEEN 0 AND 3 AND SUM(when f: x) <= cap", _PICK, ("null",), when_holds=False
     ),
 }
-# Direct solve reads no `by` key yet (context/descriptions/todo.md, task 1): these slots wait for S1 to read one.
+# Direct solve reads no `by` key yet (framework todo H-05): these slots wait for S1 to read one.
 _NEEDS_BY_KEY = {"s1_limit_per_group", "s1_limit_per_key_is_null"}
 CASES = [
     pytest.param(
@@ -120,7 +120,7 @@ CASES = [
         value,
         id=f"{slot}-{value}",
         marks=(
-            pytest.mark.xfail(strict=True, reason="direct solve reads no by key yet (todo task 1)")
+            pytest.mark.xfail(strict=True, reason="direct solve reads no by key yet (framework todo H-05)")
             if slot in _NEEDS_BY_KEY
             else ()
         ),

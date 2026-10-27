@@ -25,7 +25,7 @@ What the old reading did, as the spec to restore:
 What changed in the language, and must change in the reading:
 
 - A NULL key is its own group (D5). The old reading let a NULL-key row bypass every bound (it still obeyed its fixed
-  value), and read 0 for it, so a NULL-key group could not raise.
+  value), and read 0 for it, so a NULL-key group could not raise. The owner has ruled that a NULL key skips instead (`../../../03_expressivity/scope/todo.md` § A NULL key is not a class); follow whichever rule is live when this task starts.
 - A group the reducer's own `when` leaves empty is an error that quotes the group (D8: `sum(when c: x) has no rows for
   g = 'c'.`), where the old reading raised the empty-aggregate error. The keyed check belongs to the row checks
   (`AddRowChecks`; `../../framework/todo.md` § H-04).
@@ -37,7 +37,7 @@ Needs: `../../framework/todo.md` § H-04 and § H-05.
 
 Tests: `test_direct_source_values.py` marks `s1_limit_per_group` and `s1_limit_per_key_is_null` `xfail(strict=True)`;
 remove the marks. The grouped cases of `test_direct_s1_uniform_matroid.py` run on the solver path alone
-(`direct_modes`); run them on both paths, and restore the SQL-spelled decline-grid and differential cases that the
+(`direct_path`); run them on both paths, and restore the SQL-spelled decline-grid and differential cases that the
 merge turned into "`by` declines", each reaching its own grouped branch again. The direct-solve benchmark's `s1.sql`
 (`benchmark/decide/direct_solve/queries/`) fails in `direct` mode; run it again, and once R1 reads it too, drop the
 sentence about it in `05_performance/benchmarking/direct_solve.md`.

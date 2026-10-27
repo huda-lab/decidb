@@ -11,7 +11,7 @@ Checks: [08_direct_solve/framework/todo.md § How to work](08_direct_solve/frame
 Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` task.
 
 - [ ] H-04 Keyed scope checks in the direct plan — [framework § H-04](08_direct_solve/framework/todo.md#h-04--keyed-scope-checks-in-the-direct-plan)
-- [ ] H-05 Read a reducer's `by` key into the IR (decision) — [framework § H-05](08_direct_solve/framework/todo.md#h-05--read-a-reducers-by-key-into-the-ir) (needs: H-04)
+- [ ] H-05 Read a reducer's `by` key into the IR as a GROUP BY in the direct plan (decision; ~280 keyed cases are strict xfails on the direct path until then) — [framework § H-05](08_direct_solve/framework/todo.md#h-05--read-a-reducers-by-key-into-the-ir) (needs: H-04)
 - [ ] S1 reads a `by` key again — [S1 § Read a `by` key](08_direct_solve/rules/s1_uniform_matroid/todo.md#read-a-by-key-again-counts-per-group) (needs: H-05)
 - [ ] R1 reads a `by` key again — [R1 § Read a `by` key](08_direct_solve/rules/r1_continuous_knapsack/todo.md#read-a-by-key-again-one-budget-per-group) (needs: H-05)
 - [ ] H-06 Two-level objective `outer(per k: inner(e) by (k))` — [framework § H-06](08_direct_solve/framework/todo.md#h-06--the-two-level-objective-outerper-k-innere-by-k)
@@ -43,7 +43,6 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 - [ ] `DECIDB_TIME_LIMIT` not enforced on HiGHS for large models — [bugs § HiGHS time limit](06_issues/bugs/todo.md#decidb_time_limit-is-not-enforced-on-highs-for-large-models)
 - [ ] HiGHS at gap 0 cannot finish an entity-scoped test MIP — [bugs § gap of 0](06_issues/bugs/todo.md#with-a-gap-of-0-highs-cannot-finish-an-entity-scoped-mip-the-test-suite-runs)
 - [ ] Correlated DECIDE (LATERAL, outer reference) raises an internal error — [bugs § outer query](06_issues/bugs/todo.md#a-decide-that-refers-to-an-outer-query-raises-an-internal-error)
-- [ ] `COUNT` of a column that holds NULL raises on the right side (decision) — [bugs § COUNT NULL](06_issues/bugs/todo.md#count-of-a-column-that-holds-null-raises-on-the-right-side)
 - [ ] Lambda in a coefficient raises an internal error — [bugs § Coefficients and keys](06_issues/bugs/todo.md#coefficients-and-keys)
 - [ ] Prepared-statement and table-macro parameters fail in a clause — [bugs § parameters](06_issues/bugs/todo.md#parameters-of-a-prepared-statement-or-a-table-macro-fail-in-a-decide-clause)
 - [ ] Scaled `norm(e, 0)` non-canonical on debug builds — [bugs § scaled norm](06_issues/bugs/todo.md#a-scaled-norme-0-leaves-a-constraint-the-debug-verifier-calls-non-canonical)
@@ -79,6 +78,7 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 - [ ] `test_large_scale.py` is never collected — [bugs § test_large_scale](06_issues/bugs/todo.md#test_large_scalepy-is-never-collected)
 - [ ] `make decide-view` opens the wrong JSON — [bugs § decide-view](06_issues/bugs/todo.md#make-decide-view-opens-the-newest-json-in-results-whichever-tool-wrote-it)
 - [ ] S1 overflow test passes either way on the NULL-key group — [bugs § S1 overflow test](06_issues/bugs/todo.md#an-s1-overflow-test-passes-whether-or-not-the-null-key-group-is-evaluated)
+- [ ] One off-mode matrix run reported one outcome fewer — [bugs § one outcome fewer](06_issues/bugs/todo.md#one-matrix-run-of-decidb_test_direct_solveoff-reported-one-outcome-fewer)
 
 ## 7. Testing gaps
 
@@ -107,6 +107,8 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 - [ ] `AVG` under `<>` beside another term — [canonicalizer § 1](01_pipeline/04_canonicalizer/todo.md#1-avg-under--beside-another-term-or-with-its-own-when-or-per)
 - [ ] A decision as a factor on a reducer — [canonicalizer § 2](01_pipeline/04_canonicalizer/todo.md#2-a-decision-as-a-factor-on-a-reducer) (same as bugs § Limitations, first item)
 - [ ] Quadratic row refuses a row-varying factor on a query-wide decision — [bugs § Limitations](06_issues/bugs/todo.md#limitations-not-bugs)
+- [ ] A NULL key is not a class; its rows skip the keyed clause (reverses D5; scope questions open) — [scope § NULL key](03_expressivity/scope/todo.md#a-null-key-is-not-a-class-its-rows-skip-the-keyed-clause-reverses-d5)
+- [ ] Functions that behave unlike SQL: audit, and decide on NULL in SUM/MIN/MAX/AVG (decision) — [sql_functions § unlike SQL](03_expressivity/sql_functions/todo.md#functions-that-behave-unlike-sql)
 - [ ] SOCP (deferred, revisit on a concrete query) — [problem_types](03_expressivity/problem_types/todo.md#socp-second-order-cone-programming)
 
 ## 10. Smaller models

@@ -91,7 +91,10 @@ def test_per_key_makes_one_constraint_per_class(decidb_cli, scope_solver, tmp_pa
 
 
 @pytest.mark.correctness
-@pytest.mark.xfail(strict=True, reason="a scaled per-row bound stays a row (context/descriptions/todo.md, task 8)")
+@pytest.mark.xfail(
+    strict=True,
+    reason="a scaled per-row bound stays a row (code_quality todo, a bound on one decision is classified three times)",
+)
 def test_a_scaled_bound_on_one_decision_folds_like_the_plain_one(decidb_cli, tmp_path):
     """`2 * reserve <= 2 * (D.capacity - 5)` is `reserve <= D.capacity - 5`: the same column box, no row."""
 

@@ -42,19 +42,13 @@
 - **Impact:** a user who writes one problem per group with `LATERAL` gets an internal error instead of a pointer to
   `PER`.
 
-## `COUNT` of a column that holds NULL raises on the right side
+## One matrix run of `DECIDB_TEST_DIRECT_SOLVE=off` reported one outcome fewer
 
-- **Location:** the value check on a bound-side reducer's argument in `RewriteBound`
-  (`src/optimizer/decide/decide_rewrite_rhs_window.cpp`, "constraint right-hand side aggregate"), which treats
-  `COUNT(col)`'s argument as it treats `SUM(col)`'s.
-- **Observed:** with `g` NULL on a row the clause keeps, `SUM(x*w) <= COUNT(g)` raises *"DECIDE: column "g" is NULL.
-  Impute it with COALESCE(g, 0), or filter those rows out with a WHERE clause."*, with `decide_direct_solve` `off` and
-  `auto` alike. Found 2026-10-27 while testing the merged window's `COUNT` of a text column
-  (`test_rhs_aggregate_window.py::test_rhs_count_of_a_text_column_counts_its_values` avoids NULL keys for this reason).
-- **Decision needed:** SQL's `COUNT(col)` exists to count the non-NULL values, so the NULL rule that protects `SUM`,
-  `MIN`, `MAX` and `AVG` may not apply to it. Either `COUNT` skips the check and counts as DuckDB does, or the refusal
-  stays and the message names `COUNT`, not imputation.
-- **Impact:** a valid SQL count is refused, and the suggested `COALESCE(g, 0)` would change what is counted.
+- **Observed:** on 2026-10-27 `test/decide/run_direct_matrix.sh` printed `off: 4520 passed, 335 xfailed, 0 failed`
+  (4,855 outcomes) where `auto` and `serializer` printed 4,521 + 335. The rerun of the off suite gave 4,521 passed and 0
+  skipped. The matrix wrote its logs to a `mktemp -d` folder that was gone, so the missing test is unknown.
+- **Next step:** keep the matrix logs (set `MATRIX_LOG_DIR`) and compare outcome totals per mode; when it recurs, find
+  the test from the log.
 
 ## Q10 on HiGHS at the large tier is killed for memory, and the profiler records it as a timeout
 

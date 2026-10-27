@@ -11,6 +11,7 @@ plus a hash of the test function's source, so moving a test or editing its body 
 live here, and the helpers are not part of that hash.
 """
 
+import contextlib
 import math
 
 import pytest
@@ -30,16 +31,30 @@ def _allow_direct_path(monkeypatch):
     monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
 
 
-# Direct solve declines a reducer's `by` key until S1 and R1 read it (context/descriptions/todo.md, task 1). Until then
-# a query with one runs on the solver path alone, and a test of the direct plan's per-group shape is expected to fail,
-# strictly, so that task 1 removes the mark.
-BY_KEY_PENDING = "direct solve reads no by key yet (todo task 1)"
+# Direct solve declines a reducer's `by` key until S1 and R1 read it (framework todo H-05). Until then the direct path
+# of a query with one is expected to fail, strictly, so that H-05 removes the mark.
+BY_KEY_PENDING = "direct solve reads no by key yet (framework todo H-05)"
 READ_THROUGH_PENDING = "a data bound costs two windows before the rule (framework todo H-03)"
 
 
-def direct_modes(sql):
-    """The paths a query runs on: the solver alone while direct solve declines its `by` key."""
-    return ("off",) if " by (" in sql else ("off", "require")
+@contextlib.contextmanager
+def direct_path(sql, pending=None):
+    """Wraps the checks of `sql`'s direct path. While direct solve cannot read the query yet (`pending` names the task;
+    a `by` key implies BY_KEY_PENDING) they are a strict xfail: the test is reported xfailed when the block fails and
+    fails when it passes. Run the solver path before the block, so its checks stay ordinary assertions."""
+    reason = pending or (BY_KEY_PENDING if " by (" in sql else None)
+    if reason is None:
+        yield
+        return
+    try:
+        yield
+    except (AssertionError, DecidBCliError, pytest.fail.Exception) as error:
+        pytest.xfail(f"{reason}: {str(error)[:200]}")
+    pytest.fail(f"[XPASS(strict)] {reason}: the direct path passes; remove the pending mark")
+
+
+def _path(sql, mode, pending):
+    return direct_path(sql, pending) if mode == "require" else contextlib.nullcontext()
 
 
 def run(cli, sql, mode):
@@ -77,23 +92,25 @@ def sql_literal(value, sql_type):
     return f"CAST({value!r} AS {sql_type})"
 
 
-def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require")):
+def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require"), pending=None):
     """Checks that DeciDB, on each of `modes`, gives the answer the oracle's result says it should.
 
     `oracle` is the solved oracle model. When it is infeasible or unbounded, every mode must raise that error. Otherwise
     every mode must return an assignment for which `check_assignment(rows, columns, mode)` raises no AssertionError; the
-    callback owns what a valid assignment is for the rule (row layout, boxes, constraints, objective value).
+    callback owns what a valid assignment is for the rule (row layout, boxes, constraints, objective value). `pending`
+    makes the direct path a strict xfail (`direct_path`).
     """
     if oracle.status in (SolverStatus.INFEASIBLE, SolverStatus.UNBOUNDED):
         pattern = r"(?i)infeasible" if oracle.status == SolverStatus.INFEASIBLE else r"(?i)unbounded"
         for mode in modes:
-            with pytest.raises(DecidBCliError, match=pattern):
+            with _path(sql, mode, pending), pytest.raises(DecidBCliError, match=pattern):
                 run(cli, sql, mode)
         return
     assert oracle.status == SolverStatus.OPTIMAL, oracle.status
     for mode in modes:
-        rows, columns = run(cli, sql, mode)
-        try:
-            check_assignment(rows, columns, mode)
-        except AssertionError as error:
-            raise AssertionError(f"[{mode}] {error}") from None
+        with _path(sql, mode, pending):
+            rows, columns = run(cli, sql, mode)
+            try:
+                check_assignment(rows, columns, mode)
+            except AssertionError as error:
+                raise AssertionError(f"[{mode}] {error}") from None

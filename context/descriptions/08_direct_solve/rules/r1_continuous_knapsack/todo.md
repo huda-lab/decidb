@@ -25,7 +25,7 @@ What the old reading did, as the spec to restore:
 
 What changed in the language, and must change in the reading:
 
-- A NULL key is its own group, with its own budget (D5).
+- A NULL key is its own group, with its own budget (D5). The owner has ruled that a NULL key skips instead (`../../../03_expressivity/scope/todo.md` § A NULL key is not a class); follow whichever rule is live when this task starts.
 - A group the sum's own `when` leaves empty is an error that quotes the group (D8), raised by keyed row checks
   (`AddRowChecks`; `../../framework/todo.md` § H-04). The old guard window is gone.
 - `per g:` in front of a clause does not group its sum (D6); only a `by` key does.
@@ -33,8 +33,8 @@ What changed in the language, and must change in the reading:
 
 Needs: `../../framework/todo.md` § H-04 and § H-05.
 
-Tests: remove the `xfail(strict=True)` marks of the plan-shape tests and run the solver-only `by` cases (`_modes`) in
-`test_direct_r1_continuous_knapsack.py` on both paths. `test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key`
+Tests: remove the `xfail(strict=True)` marks of the plan-shape tests and delete the `by` branch of `direct_path` so the `by` cases
+in `test_direct_r1_continuous_knapsack.py` run on both paths. `test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key`
 still counts the deleted guard window (D8 comes from the row checks); re-derive its counts. The leave-to-solver grid's
 `by` cases (`test_r1_leaves_budgets_that_do_not_share_a_scope_to_the_solver`) decline on the key today, not on the
 scope mismatch they were written for. The direct-solve benchmark's `r1.sql`

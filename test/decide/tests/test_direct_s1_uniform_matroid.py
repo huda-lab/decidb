@@ -19,7 +19,7 @@ side, `< K` is `<= ceil(K) - 1` and `> K` is `>= floor(K) + 1`.
 
 A per-group case writes `by (g)` after every reducer of its clause, the sum and the bound's, and keeps a NULL `g` out
 of every group with `when g IS NOT NULL` (a NULL key is its own group otherwise, D5). Direct solve reads no `by` key
-yet, so those cases run on the solver path alone (`direct_modes`).
+yet, so on those cases the direct path is a strict xfail (`direct_path`); the solver path is checked as usual.
 
 A new class adds rows to the tables below. What a result comparison cannot see (which plan
 ran, EXPLAIN, prepared plans, DIAGNOSE, pruning) stays in `test_direct_rule_conformance.py`.
@@ -43,7 +43,7 @@ from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import agree_with_oracle, direct_modes, outcome as _outcome, run as _run, sql_literal
+from ._direct_oracle_common import agree_with_oracle, direct_path, outcome as _outcome, run as _run, sql_literal
 from ._direct_oracle_common import values_clause
 
 
@@ -686,7 +686,7 @@ def _agree(decidb_cli, oracle_solver, case, wrap="plain"):
             coeff_fn=lambda row: {"x": float(coefficient(rows_data[by_id[row[0]]]))},
         )
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, direct_modes(sql))
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment)
 
 
 @pytest.mark.var_boolean
@@ -947,16 +947,15 @@ S1_ERROR_CASES = {
 @pytest.mark.parametrize("name", sorted(S1_ERROR_CASES))
 def test_s1_error_cases_fail_on_both_paths(decidb_cli, name):
     sql, expected = S1_ERROR_CASES[name]
-    messages = {}
-    for mode in direct_modes(sql):
-        with pytest.raises(DecidBCliError) as error:
-            _run(decidb_cli, sql, mode)
-        messages[mode] = str(error.value)
-    if "require" not in messages:
-        assert error_class(messages["off"]) == expected, messages
-        return
-    assert "decide_direct_solve=require" not in messages["require"], f"direct solve declined:\n{messages['require']}"
-    assert error_class(messages["require"]) == expected, messages
+    with pytest.raises(DecidBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
+    with direct_path(sql):
+        with pytest.raises(DecidBCliError) as direct_error:
+            _run(decidb_cli, sql, "require")
+        message = str(direct_error.value)
+        assert "decide_direct_solve=require" not in message, f"direct solve declined:\n{message}"
+        assert error_class(message) == expected, message
 
 
 @pytest.mark.var_boolean
@@ -1076,7 +1075,7 @@ def test_s1_count_bound_raises_only_where_the_solver_does(decidb_cli, name):
     )
     solver = _outcome(decidb_cli, sql, "off")
     assert solver[0] == expected, f"the solver gave {solver}, so this case no longer tests what it says"
-    if "require" in direct_modes(sql):
+    with direct_path(sql):
         direct = _outcome(decidb_cli, sql, "require")
         assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
         assert direct == solver
@@ -1319,7 +1318,6 @@ _REDUCER_ROWS = (
     "(1, 'a', true, 9.0, {v1}), (2, 'a', false, 8.0, {v2}), (3, 'b', true, 7.0, {v3}), (4, NULL, true, 6.0, {v4})"
 )
 S1_REDUCER_ERROR_CASES = {
-    "nan_count_column": ("DOUBLE", ("1.0", "'NaN'::DOUBLE", "3.0", "4.0"), "SUM(x) <= COUNT(v)"),
     # The NaN is on the NULL-key row, a group of its own (D5), which the aggregate reads.
     "nan_float_column": ("FLOAT", ("1.0", "2.0", "3.0", "'NaN'::FLOAT"), "SUM(x) by (g) <= MAX(v) by (g)"),
     # A `when` that keeps no row is an error (D4).
@@ -1344,16 +1342,14 @@ def test_s1_reducer_bound_errors_fail_on_both_paths(decidb_cli, name):
         f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, g, flag, score, v) "
         f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
     )
-    messages = {}
-    for mode in direct_modes(sql):
-        with pytest.raises(DecidBCliError) as error:
-            _run(decidb_cli, sql, mode)
-        messages[mode] = str(error.value)
-    if "require" in messages:
-        assert (
-            "decide_direct_solve=require" not in messages["require"]
-        ), f"direct solve declined:\n{messages['require']}"
-        assert error_class(messages["require"]) == error_class(messages["off"]), messages
+    with pytest.raises(DecidBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    with direct_path(sql):
+        with pytest.raises(DecidBCliError) as direct_error:
+            _run(decidb_cli, sql, "require")
+        message = str(direct_error.value)
+        assert "decide_direct_solve=require" not in message, f"direct solve declined:\n{message}"
+        assert error_class(message) == error_class(str(solver_error.value)), (message, str(solver_error.value))
 
 
 # A NaN on a row the clause's `when` drops is never read (nothing is computed on a dropped row), so the query solves,
@@ -1368,6 +1364,24 @@ def test_s1_reducer_bound_reads_no_value_on_a_row_the_when_drops(decidb_cli):
     direct = _outcome(decidb_cli, sql, "require")
     assert direct[0] == "ok", direct
     assert direct == _outcome(decidb_cli, sql, "off")
+
+
+# COUNT reads its argument as SQL's COUNT does: it skips a NULL and counts a NaN, so neither raises. Every score is
+# positive, so the best answer fills the limit; DuckDB's own COUNT over the same rows gives the limit.
+def test_s1_count_bound_skips_null_and_counts_nan_as_sql_does(decidb_cli):
+    typed = tuple(f"CAST({value} AS DOUBLE)" for value in ("1.0", "'NaN'::DOUBLE", "NULL", "4.0"))
+    rows = _REDUCER_ROWS.format(v1=typed[0], v2=typed[1], v3=typed[2], v4=typed[3])
+    source = f"FROM (VALUES {rows}) t(id, g, flag, score, v)"
+    sql = (
+        f"SELECT id, x FROM ({source} DECIDE x(BOOL) SUCH THAT SUM(x) <= COUNT(v) - 1 MAXIMIZE SUM(score*x)) q "
+        "ORDER BY id"
+    )
+    counted = _run(decidb_cli, f"SELECT COUNT(v) {source}", "off")[0][0][0]
+    solver = _outcome(decidb_cli, sql, "off")
+    assert solver[0] == "ok", solver
+    assert sum(x for _, x in solver[1]) == counted - 1, (solver, counted)
+    with direct_path(sql):
+        assert _outcome(decidb_cli, sql, "require") == solver
 
 
 # Infinity is a value of the aggregate, not an error: no limit above, or a limit no count meets.
@@ -1528,7 +1542,7 @@ def test_s1_bound_over_a_column_raises_only_where_the_solver_does(decidb_cli, na
     )
     solver = _outcome(decidb_cli, sql, "off")
     assert solver[0] == expected, f"the solver gave {solver}, so this case no longer tests what it says"
-    if "require" in direct_modes(sql):
+    with direct_path(sql):
         direct = _outcome(decidb_cli, sql, "require")
         assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
         assert direct == solver
