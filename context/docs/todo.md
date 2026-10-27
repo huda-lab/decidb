@@ -46,17 +46,6 @@ Each is ruled; the nested section says which shapes lift and which stay refused.
 
 - [ ] Functions that behave unlike SQL: a data-only reducer skips NULL; audit the rest and bring each divergence to the owner — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
 
-## A7. Messages and diagnosis text
-
-- [ ] `BETWEEN` echoes its lower half only — [bugs § Diagnosis text](issues/bugs.md#diagnosis-text)
-
-## A9. Code quality and naming
-
-- [ ] One `DecideClauseScope` for a clause's scope copies (D47) — [code_quality § parallel copies](issues/code_quality.md#a-clauses-scope-is-carried-in-parallel-copies)
-- [ ] One step chooses direct solve, Gurobi or HiGHS — [code_quality § chosen in two places](issues/code_quality.md#how-a-query-is-answered-is-chosen-in-two-places)
-- [ ] Rename the keyed scope "keyed" everywhere (D46), with the test files and markers in the same change — [code_quality § keyed](issues/code_quality.md#name-the-keyed-scope-keyed-everywhere), [testing § names](testing/todo.md#names-that-still-say-the-removed-spellings)
-- [ ] Normalize the DecidB spelling in comments — [operations](operations/todo.md#normalize-the-decidb-spelling-in-internal-comments)
-
 ---
 
 # Part B — Owner checkpoint before coding
@@ -239,8 +228,10 @@ The agent finds the cause alone and stops with a proposed fix.
   `by (g)` or `per g:` (the hard half is an extremum column per group), so the rows need a new instance id, and the
   check is conservative: it falls back whenever the solution does not happen to sit at `K'`. (b) Verify by one more
   solve, the original model with both halves (and the other findings' edits) moved, feasible or not: exact, the same
-  for the lowered rows and Gurobi's native MAX, one solve per diagnosis that reports an `=` MIN/MAX. Recommended:
-  (b). The fallback is today's output, which names the half (`max(2 * x) >= 20` → `max(2 * x) >= 6`).
+  for the lowered rows and Gurobi's native MAX, one solve per diagnosis that reports an `=` MIN/MAX. (c) Suggest a
+  range instead, `max(2 * x) BETWEEN 6 AND 20`, which always repairs and needs no check; it is B16's mechanism.
+  Recommended: (c) if B16 lands, else (b). The fallback is today's output, which names the half
+  (`max(2 * x) >= 20` → `max(2 * x) >= 6`).
   — [infeasible § 1](diagnostics/infeasible/todo.md#1-an--on-a-minmax-is-echoed-as-the-half-its-finding-loosens)
 
 ## B15. Display text per occurrence: qualify over a join (D45), one name form, one key text per clause (architect review done)
@@ -260,6 +251,92 @@ The agent finds the cause alone and stops with a proposed fix.
   a join (D45 qualifies columns; keys "keep as written")? Recommended: as written.
   — [logical plan § 2](pipeline/03_logical_plan/todo.md#2-columns-print-by-their-bare-name-over-a-join),
   [bugs § operands](issues/bugs.md#messages-operands-coefficients-and-keys)
+
+## B16. A `BETWEEN` is quoted as written: six design calls (architect review done)
+
+- [ ] `ExpandBetween` (`decide_constraints_binder.cpp`) splits `x BETWEEN 18 AND 25` into two comparisons before the
+  source registry sees it, so a finding names one half and the paste-back loses the other. Design: keep one source id
+  per half (one id for both is unsound: `FinalizeConstraintSourceInfo` writes canonical text, `rhs_kind` and
+  `source_*` once per id, so one half overwrites the other) and link both to the written clause (a many-to-one
+  source map, the Composite pattern): a binder tag pairs the halves, `written_*` holds the whole clause, one pass
+  after `ReadElasticEdits` spells `x BETWEEN 10 AND 25` from the moved end and the partner's text, merging two moved
+  ends into one edit (the paste-back cannot find the clause after the first). EXPLAIN groups the halves. Choices:
+  (1) the link as fields on each half, or a separate written-clause vector? Recommended: fields. (2) When
+  canonicalization moved a term (`x + 2 BETWEEN 18 AND 25`), quote the canonical `x BETWEEN 16 AND 23` or the
+  written text with an offset? Recommended: as the comparisons are quoted today (canonical). (3) Both ends moved:
+  `amount` is the sum, or one row per end? Recommended: one row, the sum. (4) The same mechanism serves B14 (c).
+  (5) EXPLAIN's canonical line for a BETWEEN: one line `x >= 18 AND x <= 25`, or two rows under the clause?
+  Recommended: two rows, as a split MIN/MAX shows. (6) DROP of one half of a `norm(...) BETWEEN`: drop the clause, or
+  keep the other half? Recommended: drop the clause, as written. The test at `test_query_diagnostics_relation.py`
+  mapping `x <= 5` to `x BETWEEN 0 AND 5` hides this bug and goes with the fix.
+  — [bugs § Diagnosis text](issues/bugs.md#diagnosis-text)
+
+## B17. The DecidB spelling: the acceptance test contradicts "no identifier changes"
+
+- [ ] The item asks for zero `DecidB` matches outside `context/docs/` and for no identifier changes. 476 matches remain
+  (65 in `src/`, most in `test/decide/`), and 130 of them are names: the test harness classes `DecidBCli` and
+  `DecidBCliError` (129 uses), the workflow file `.github/workflows/DecidBRelease.yml`, and CMake's
+  `project(DecidB)` (the build's project name). Choices: (a) rename those too (`DeciDBCli`, `DeciDBRelease.yml`,
+  `project(DeciDB)`), one mechanical change; (b) comments and prose only, and the acceptance test excludes the names.
+  Recommended: (a), since the test classes are internal and the spelling would otherwise stay. Do it after the held
+  NULL item (B11) commits: four of its files carry the old spelling.
+  — [operations](operations/todo.md#normalize-the-decidb-spelling-in-internal-comments)
+
+## B18. One step chooses how a query is answered: seven calls (architect review done)
+
+- [ ] Verified: the direct rules need the window rewrite's output and not the solver choice; `ChooseDecideSolver`
+  needs neither, so one step can hold both without changing which queries go direct. Design: Strategy selection with
+  fallback (try the direct rules, else choose a solver), the window rewrite as pass 0 inside `OptimizeDecide`, the
+  policy gate and both `require` errors moved out of `direct_rule_driver.cpp` into the step. Making direct solve a
+  solver-registry entry is not recommended: it rewrites the plan, it is not a solver session. Choices: (1) choose the
+  backend lazily (only on the solver path) or eagerly? Recommended: lazily; eager makes every first direct query
+  probe Gurobi's licence and changes the error for `require` plus an unknown `DECIDB_FORCE_SOLVER`. (2)
+  `DECIDB_FORCE_SOLVER=""` is read two ways today: direct solve treats it as unset, `SelectSolverBackend` throws "is
+  not a solver DeciDB knows". One reader must pick one. Recommended: empty means unset, with a test. (3) What
+  `optimizer_ms` and the `optimizer.decide` span cover: the whole stage on both paths (direct queries start printing
+  it), or a separate `direct_ms`? Recommended: the whole stage; update `pipeline_profiler.md` and `tpch_suite.md`.
+  (4) `LogicalDecide::optimized` is documented as "the optimizer started rewriting", which the window rewrite already
+  breaks; set it in `ChooseDecideSolver` and document it as "the solver formulation has begun", or rename it
+  `formulated`? Recommended: keep the name, fix the doc. (5) Name and home: `ChooseDecideAnswer` in a new
+  `decide_answer_choice.cpp`, or keep `decide_solver_gate.cpp`? Recommended: the new file. (6) Replace `phase.Next`
+  with a `RunPass(name, fn)` helper in the same change? Two spans time the wrong passes today (`RewriteNorm` under
+  `optimizer.tag_groups`, `RewriteAbs` under `optimizer.abs` with `TagAbsForBigM`). Recommended: yes. (7) Land after
+  the held NULL item (B11): both rewrite `05_optimizer/done.md` § 1's "two steps run before these passes".
+  — [code_quality § chosen in two places](issues/code_quality.md#how-a-query-is-answered-is-chosen-in-two-places)
+
+## B19. One clause scope (D47): five calls (architect review done; the once-count part stays with B6/B12)
+
+- [ ] Verified: behaviour can stay the same, nothing in D47 is serialized (so `DECIDB_VERIFY_SERIALIZER=1` cannot
+  catch a regression; `EnumerateExpressions` and the `plan_decide.cpp` column harvest can), and the doc undercounts:
+  eleven walkers track the enclosing `when`/`per`, not two; `ReducerValueLink` and `DecideObjective` hold scope copies
+  too; a helper row is wrapped back two ways (`ScopeHelperRow` keeps the `when` only, the MIN/MAX easy half keeps the
+  `per` too, which is B13's question and stays as is). Design: a borrowed `DecideEnclosingScope` view with one step
+  function `EnterDecideScope` and a read-only leaf visitor in `decide_constraint_walk.hpp` (rewrites that replace
+  nodes keep their own recursion and call the step); an owned `DecideClauseScope` built from the view, embedded in
+  `DecideConstraint` and `ComposedMinMaxConstraint` (Introduce Parameter Object); one exported two-level splitter
+  with three formatters. About 15 files. Choices: (1) `group_key` in the struct, as the doc says, or not? It is read
+  off the comparison, not the wrapper, and the composed path can never hold one. Recommended: leave it out. (2) Under
+  a wrapper, a plain AND starts a fresh scope in four walkers and carries it in five; a `when` inside a `when`
+  overwrites in all but direct solve, which asserts it never happens. Nothing builds either shape today. One walker
+  must pick: fresh scope, or make both shapes refused by the canonical-tree check C0 (with a C++ test)?
+  Recommended: refuse in C0. (3) Field names: `per_key` holds a role, not a key; rename it `per`, `when_condition`
+  becomes `scope.when`? Recommended: yes. (4) Convert the window rewrite and `RewriteInDomain` walkers now, direct
+  solve's at H-07? Recommended: yes. (5) `DecideObjective` and `ReducerValueLink` stay outside D47 (D46 renames
+  `per_columns`)? Recommended: yes. Order: after B11 commits (two shared files), before D46 (B20) and before B12 if B12
+  passes the wrapper to every site.
+  — [code_quality § parallel copies](issues/code_quality.md#a-clauses-scope-is-carried-in-parallel-copies)
+
+## B20. Name the keyed scope keyed (D46): the names the ruling does not give
+
+- [ ] Settled: `ROW / KEYED / GLOBAL` with values 0/1/2, `Entity()`/`Keyed()` merge, `Scalar()` becomes `Global()`,
+  DIAGNOSE reports `keyed`, test files and markers renamed in the same change. Not given: (1) the two-level
+  objective's tag and key field (`PER_CONSTRAINT_TAG`, `DecideObjective::per_columns`): "names that say so".
+  Proposed: `TWO_LEVEL_OBJECTIVE_TAG`, `two_level_key`. (2) The test files: `test_entity_scope.py` and its
+  `test_entity_scoped_*` tests → `test_keyed_scope.py` / `test_keyed_*`; `test_scalar_scope.py` →
+  `test_global_scope.py`; `test_aggregate_local_when.py` → ? (3) The `per_clause` and `when*` markers in `pytest.ini`:
+  which names and descriptions replace them? Order: after D47 (B19), which removes some renderer parameters D46
+  would otherwise rename, and after B11 (shares `enums/decide.hpp`).
+  — [code_quality § keyed](issues/code_quality.md#name-the-keyed-scope-keyed-everywhere), [testing § names](testing/todo.md#names-that-still-say-the-removed-spellings)
 
 ## C1. Long or memory-heavy runs (owner starts them)
 
