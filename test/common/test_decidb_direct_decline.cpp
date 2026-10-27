@@ -621,8 +621,8 @@ duckdb::vector<Shape> R1AppliesShapes() {
 	shapes.push_back(R1("a budget compared twice from above, the sum of two terms",
 	                    "SUM(cap*x + w*x) <= 5 AND SUM(cap*x + w*x) <= 3"));
 	shapes.push_back(R1("a budget whose limits cross", "SUM(cap*x) >= 5 AND SUM(cap*x) <= 3"));
-	// The budget's scope: a PER key, a WHEN written on the clause or on the aggregate, and the same scope on every
-	// clause of one budget, written either way.
+	// The budget's scope: a PER key, a WHEN written on the clause, on the aggregate or on both, and the same scope on
+	// every clause of one budget, written either way.
 	shapes.push_back(
 	    R1("a budget with a PER key edited into the IR", "x <= cap AND SUM(cap*x) <= 5", PerKeyOnConstraint(1)));
 	shapes.push_back(R1("a budget with two PER keys", "SUM(cap*x) <= 5", PerKeys({{NAME_SLOT, FLAG_SLOT}})));
@@ -637,6 +637,8 @@ duckdb::vector<Shape> R1AppliesShapes() {
 	                    "when flag: SUM(cap*x) >= 1 AND SUM(when flag: cap*x) <= 5"));
 	shapes.push_back(R1("a range with the WHEN on the aggregate of both",
 	                    "SUM(when flag: cap*x) >= 1 AND SUM(when flag: cap*x) <= 5"));
+	shapes.push_back(R1("a WHEN on the clause and on the aggregate", "SUM(when flag: cap*x) <= 5",
+	                    [](DirectIR &ir) { ir.constraints[0].scope.when = True(); }));
 	// Several decisions in one budget: the pieces of a benefit. Each decision has its own weight, value and bounds.
 	shapes.push_back(R1("two decisions in one budget, each with its own bound and its own weight",
 	                    "x <= cap AND y <= cap AND SUM(cap*x + w*y) <= 5", nullptr, "MAXIMIZE SUM(w*x + cap*y)",
@@ -712,8 +714,6 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	    R1("another WHEN on the second clause", "when flag: SUM(cap*x) >= 1 AND when NOT flag: SUM(cap*x) <= 5"));
 	shapes.push_back(R1("another WHEN on the aggregate of the second clause",
 	                    "when flag: SUM(cap*x) >= 1 AND SUM(when cap > 1: cap*x) <= 5"));
-	shapes.push_back(R1("a WHEN on the clause and on the aggregate", "SUM(when flag: cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.constraints[0].scope.when = True(); }));
 	shapes.push_back(R1("a WHEN on the clause and on the aggregate of the second clause",
 	                    "when flag: SUM(cap*x) >= 1 AND SUM(when flag: cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.constraints[1].scope.when = True(); }));
