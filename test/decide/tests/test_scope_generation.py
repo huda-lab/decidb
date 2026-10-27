@@ -17,6 +17,7 @@ import math
 
 import pytest
 
+from ._brute_force import judge_rows
 from ._diagnose_relation import rows as diagnose_rows
 from ._diagnose_relation import run as run_diagnose
 from ._output_helpers import assert_no_internal_leak
@@ -155,25 +156,34 @@ def test_per_row_written_follows_the_new_rules(decidb_cli, scope_solver, clause)
 
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "clause, objective, value",
+    "clause, objective, strict, lower",
     [
-        pytest.param("per row: x > 2.5", "MINIMIZE", 3, id="greater"),
-        pytest.param("per row: x < 2.5", "MAXIMIZE", 2, id="less"),
-        pytest.param("per row: x > -2.5 AND per row: x >= -10", "MINIMIZE", -2, id="negative"),
+        pytest.param("per row: x > 2.5", "MINIMIZE", (">", 2.5), 0.0, id="greater"),
+        pytest.param("per row: x < 2.5", "MAXIMIZE", ("<", 2.5), 0.0, id="less"),
+        pytest.param("per row: x > -2.5 AND per row: x >= -10", "MINIMIZE", (">", -2.5), -10.0, id="negative"),
     ],
 )
-def test_a_fractional_strict_bound_steps_onto_the_lattice(decidb_cli, clause, objective, value):
+def test_a_fractional_strict_bound_steps_onto_the_lattice(decidb_cli, scope_solver, clause, objective, strict, lower):
     """`x > 2.5` on a whole-number decision is `x >= 3`, as every row states it. Folded into
-    the column box, the bound steps the same way."""
-    rows = answer(
-        decidb_cli,
-        f"""
-        SELECT id, x {table('t', ('id',), ((1,), (2,)))}
+    the column box, the bound steps the same way. The oracle steps the strict bound itself."""
+    rows = ((1,), (2,))
+    sql = f"""
+        SELECT id, x {table('t', ('id',), rows)}
         DECIDE x(INT)
         SUCH THAT x <= 10 AND {clause}
-        {objective} SUM(x)""",
+        {objective} SUM(x)"""
+    # `lower` is x's lower bound as the query states it: 0 unless it writes a negative one.
+    model = ScopedModel(table_rows(("id",), rows), [Decision("x", lb=lower)])
+    clauses = [
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: 10},)),
+        Scoped((lambda r: {"x": 1},), strict[0], (lambda r: {CONSTANT: strict[1]},)),
+    ]
+    sum_x = (Reduce("sum", lambda r: {"x": 1}),)
+    oracle_objective = ScopedObjective(ObjSense[objective], sum_x)
+    result = answer(decidb_cli, sql)
+    assert model.judge_scoped(result, clauses, oracle_objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, oracle_objective)
     )
-    assert [row["x"] for row in rows] == [value, value], rows
 
 
 @pytest.mark.correctness
@@ -349,43 +359,57 @@ TARGETS = ((1, 3), (2, None), (3, 5), (4, None))
 
 @pytest.mark.correctness
 @pytest.mark.parametrize(
-    "clause, expected",
+    "clause, holds",
     [
-        pytest.param("ship <= t.target", [3, 9, 5, 9], id="bound"),
-        pytest.param("ship BETWEEN t.target AND t.target + 1", [4, 9, 6, 9], id="between"),
-        pytest.param("abs(ship - t.target) <= 1", [4, 9, 6, 9], id="abs"),
-        pytest.param("ship IN (t.target, 0)", [3, 9, 5, 9], id="in"),
-        pytest.param("norm(ship - t.target, 'inf') <= 1", [4, 9, 6, 9], id="norm-inf"),
+        pytest.param("ship <= t.target", lambda ship, target: ship <= target, id="bound"),
+        pytest.param(
+            "ship BETWEEN t.target AND t.target + 1", lambda ship, target: target <= ship <= target + 1, id="between"
+        ),
+        pytest.param("abs(ship - t.target) <= 1", lambda ship, target: abs(ship - target) <= 1, id="abs"),
+        pytest.param("ship IN (t.target, 0)", lambda ship, target: ship in (target, 0), id="in"),
+        pytest.param("norm(ship - t.target, 'inf') <= 1", lambda ship, target: abs(ship - target) <= 1, id="norm-inf"),
     ],
 )
-def test_rows_a_when_drops_are_never_read(decidb_cli, clause, expected):
+def test_rows_a_when_drops_are_never_read(decidb_cli, clause, holds):
     """`when t.target is not null:` drops the NULL rows, so their NULL is no error -- in
-    the clause itself and in every row a rewrite adds for it."""
-    rows, _ = decidb_cli.execute(
+    the clause itself and in every row a rewrite adds for it. The scope oracle states no
+    `IN`, so every assignment is enumerated."""
+    rows = answer(
+        decidb_cli,
         f"""
         SELECT id, ship {table('t', TARGET_COLUMNS, TARGETS)}
         DECIDE ship(INT)
         SUCH THAT ship <= 9 AND when t.target is not null: {clause}
         MAXIMIZE SUM(ship)
-        ORDER BY id"""
+        ORDER BY id""",
     )
-    assert [ship for _, ship in rows] == expected
+    judge_rows(
+        rows,
+        {f"ship{i}": range(10) for i in range(len(TARGETS))},
+        lambda a: all(holds(a[f"ship{i}"], target) for i, (_, target) in enumerate(TARGETS) if target is not None),
+        lambda a: sum(a.values()),
+    )
 
 
 @pytest.mark.correctness
 def test_a_norm_reads_only_the_rows_its_when_keeps(decidb_cli):
-    """`norm(e, 1)` sums |e| over the kept rows: 1 to share between targets 3 and 5."""
-    rows, _ = decidb_cli.execute(
+    """`norm(e, 1)` sums |e| over the kept rows. The scope oracle states no `norm`, so
+    every assignment is enumerated."""
+    rows = answer(
+        decidb_cli,
         f"""
         SELECT id, ship {table('t', TARGET_COLUMNS, TARGETS)}
         DECIDE ship(INT)
         SUCH THAT ship <= 9 AND when t.target is not null: norm(ship - t.target, 1) <= 1
         MAXIMIZE SUM(ship)
-        ORDER BY id"""
+        ORDER BY id""",
     )
-    ships = [ship for _, ship in rows]
-    assert ships[0] + ships[2] == 9 and abs(ships[0] - 3) + abs(ships[2] - 5) == 1
-    assert ships[1] == ships[3] == 9
+    judge_rows(
+        rows,
+        {f"ship{i}": range(10) for i in range(len(TARGETS))},
+        lambda a: sum(abs(a[f"ship{i}"] - target) for i, (_, target) in enumerate(TARGETS) if target is not None) <= 1,
+        lambda a: sum(a.values()),
+    )
 
 
 GUARD_COLUMNS = ("id", "s", "v", "grp")
@@ -527,19 +551,26 @@ def test_nothing_is_computed_on_a_row_the_when_drops(
 
 
 @pytest.mark.correctness
-def test_a_when_guards_a_function_that_fails_on_its_dropped_rows(decidb_cli):
+def test_a_when_guards_a_function_that_fails_on_its_dropped_rows(decidb_cli, scope_solver):
     """`ln(0)` is an error: the `when` drops the row where w is 0, so it is never taken."""
     columns = ("id", "w", "v")
     rows = ((1, 0.0, 10), (2, 4.0, 20), (3, 9.0, 30))
-    rows_out, _ = decidb_cli.execute(
-        f"""
+    sql = f"""
         SELECT id, x {table('t', columns, rows)}
         DECIDE x(INT)
         SUCH THAT x <= t.v AND when t.w > 0: x <= ln(t.w) * 10
         MAXIMIZE SUM(x)
         ORDER BY id"""
+    model = ScopedModel(table_rows(columns, rows), [Decision("x")])
+    clauses = [
+        X_BOUND,
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: math.log(r["w"]) * 10},), when=lambda r: r["w"] > 0),
+    ]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (_x_sum(),))
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
     )
-    assert [x for _, x in rows_out] == [10, int(math.log(4.0) * 10), int(math.log(9.0) * 10)]
 
 
 # ---------------------------------------------------------------------------

@@ -73,7 +73,6 @@ Batches: A = H-05, H-06, H-07 (grouping); B = H-04, H-08 (scope); C = R1 `when` 
 
 - [ ] No test sees a solver's optimality gap — [edge_cases](04_testing/edge_cases/todo.md#no-differential-test-is-large-enough-to-see-a-solvers-optimality-gap)
 - [ ] `group_indices` drops NULL keys — [testing/scope § group_indices](04_testing/scope/todo.md#group_indices-drops-null-keys)
-- [ ] Hand-checked scope tests judged by an oracle — [testing/scope § hand-checked](04_testing/scope/todo.md#hand-checked-scope-tests)
 
 ## 8. Code quality and naming
 

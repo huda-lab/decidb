@@ -18,6 +18,7 @@ import re
 
 import pytest
 
+from ._brute_force import judge_rows
 from ._diagnose_relation import run as run_diagnose
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import (
@@ -71,6 +72,18 @@ def _judged(cli, solver, sql, model, clauses, objective=MAXIMIZE_SHIP):
         model.solve_scoped(solver, clauses, objective), abs=1e-4
     )
     return [row["ship"] for row in result]
+
+
+def _judge_apart(rows, group, holds):
+    """Judge `rows` one group at a time (`group` reads a joined row) against every assignment
+    of the group's ship values, each from 0 to its demand. The clauses bind a group's own
+    total and the objective adds the groups up, so the optimum is the sum of the groups'
+    optima; `holds(g, ships)` is the clause over group g's values."""
+    data = joined()
+    for g in dict.fromkeys(group(row) for row in data):
+        picked = [i for i, row in enumerate(data) if group(row) == g]
+        domains = {f"ship{k}": range(data[i]["demand"] + 1) for k, i in enumerate(picked)}
+        judge_rows([rows[i] for i in picked], domains, lambda a: holds(g, list(a.values())), lambda a: sum(a.values()))
 
 
 def _ship_reduce(agg="sum", by=(), when=None, per=None, factor=1.0):
@@ -193,17 +206,6 @@ def test_reducers_with_different_by_keys(decidb_cli, scope_solver, tmp_path, cla
     model = ScopedModel(joined(), SHIP)
     clauses = [SHIP_BOUND, Scoped(tuple(_ship_reduce(by=by) for by in reducers), "<=", (_const(bound),))]
     _judged(decidb_cli, scope_solver, sql, model, clauses)
-
-
-@pytest.mark.correctness
-def test_two_keys_hand_checked(decidb_cli, scope_solver):
-    """`sum by depot + sum by region <= 50`: East's two depots split 33 (16 and 17), West's
-    one depot takes 25 -- the most each row allows."""
-    sql = _ship_query("sum(ship) by (D.depotID) + sum(ship) by (D.region) <= 50")
-    model = ScopedModel(joined(), SHIP)
-    clauses = [SHIP_BOUND, Scoped((_ship_reduce(by=("depotID",)), _ship_reduce(by=("region",))), "<=", (_const(50),))]
-    ships = _judged(decidb_cli, scope_solver, sql, model, clauses)
-    assert ships[0] + ships[1] + ships[2] + ships[3] == 33 and ships[4] == 25
 
 
 # ---------------------------------------------------------------------------
@@ -486,17 +488,26 @@ def test_null_is_a_group_of_the_helper_key(decidb_cli, scope_solver):
 @pytest.mark.correctness
 def test_a_query_wide_decision_beside_a_reducer_in_a_product_row(decidb_cli):
     """`sum(ship) + b * s <= 50` under `when S.priority:`: the product beside the reducer
-    is a term of each row (McCormick), the helper holds the priority total."""
+    is a term of each row (McCormick), the helper holds the priority total. The scope
+    oracle states no product, so every assignment is enumerated: the priority shipments
+    with `b` and `s`, and apart from them the shipments the clause leaves alone."""
     sql = _ship_query(
         "s <= 3 AND when S.priority: sum(ship) + b * s <= 50",
         decide="ship(INT), per (): b(BOOL), per (): s(INT)",
         columns="shipmentID, ship, b, s",
     )
-    rows, _ = decidb_cli.execute(sql)
-    ships = [row[1] for row in rows]
-    priority = ships[0] + ships[2] + ships[4]
-    assert priority + rows[0][2] * rows[0][3] <= 50 and priority == 50
-    assert ships[1] == 20 and ships[3] == 15
+    rows = answer(decidb_cli, sql)
+    priority = [i for i, row in enumerate(joined()) if row["priority"]]
+    others = [i for i in range(len(rows)) if i not in priority]
+    domains = {f"ship{k}": range(joined()[i]["demand"] + 1) for k, i in enumerate(priority)}
+    judge_rows(
+        [rows[i] for i in priority],
+        dict(domains, b=range(2), s=range(4)),
+        lambda a: sum(a[name] for name in domains) + a["b"] * a["s"] <= 50,
+        lambda a: sum(a[name] for name in domains),
+    )
+    free = {f"ship{k}": range(joined()[i]["demand"] + 1) for k, i in enumerate(others)}
+    judge_rows([rows[i] for i in others], free, lambda a: True, lambda a: sum(a.values()))
 
 
 @pytest.mark.correctness
@@ -524,49 +535,64 @@ def test_a_row_varying_factor_on_a_decision_beside_a_reducer(decidb_cli, scope_s
 
 @pytest.mark.correctness
 def test_a_reducer_inside_abs(decidb_cli):
-    """`abs(sum(ship) by (D.region) - 20) <= 5`: each region's total within 5 of 20."""
-    rows, _ = decidb_cli.execute(_ship_query("abs(sum(ship) by (D.region) - 20) <= 5"))
-    ships = [ship for _, ship in rows]
-    assert ships[0] + ships[1] + ships[2] + ships[3] == 25 and ships[4] == 25
-    # The totals the deck's data allows: 25 and 25; nothing in [35, 45] for West.
+    """`abs(sum(ship) by (D.region) - 20) <= 5`: each region's total within 5 of 20. The
+    scope oracle states no `abs`, so every assignment is enumerated, a region at a time;
+    with `- 40` no assignment of some region is feasible, and the query is infeasible."""
+    rows = answer(decidb_cli, _ship_query("abs(sum(ship) by (D.region) - 20) <= 5"))
+    _judge_apart(rows, lambda row: row["region"], lambda region, ships: abs(sum(ships) - 20) <= 5)
     result = decidb_cli.execute_raw(_ship_query("abs(sum(ship) by (D.region) - 40) <= 5"))
     assert "infeasible" in result.stderr, result.stderr
+    demands = {}
+    for row in joined():
+        demands.setdefault(row["region"], []).append(range(row["demand"] + 1))
+    assert not all(
+        any(abs(sum(ships) - 40) <= 5 for ships in itertools.product(*ranges)) for ranges in demands.values()
+    )
 
 
 @pytest.mark.correctness
 @pytest.mark.quadratic
 @pytest.mark.parametrize(
-    "clause, totals",
+    "clause, holds",
     [
-        pytest.param("power(sum(ship) by (D.region), 2) <= 900", (30, 25), id="square-of-a-helper"),
-        pytest.param("power(sum(ship) by (D.region), 2) <= 50", (7, 7), id="square-of-a-helper-small"),
-        pytest.param("sum(ship) by (D.region) * sum(ship) by (D.region) <= 50", (7, 7), id="product-of-helpers"),
+        pytest.param(
+            "power(sum(ship) by (D.region), 2) <= 900", lambda g, ships: sum(ships) ** 2 <= 900, id="square-of-a-helper"
+        ),
+        pytest.param(
+            "power(sum(ship) by (D.region), 2) <= 50",
+            lambda g, ships: sum(ships) ** 2 <= 50,
+            id="square-of-a-helper-small",
+        ),
+        pytest.param(
+            "sum(ship) by (D.region) * sum(ship) by (D.region) <= 50",
+            lambda g, ships: sum(ships) * sum(ships) <= 50,
+            id="product-of-helpers",
+        ),
     ],
 )
-def test_a_reducer_inside_a_square(decidb_cli_gurobi, clause, totals):
-    """The helper enters a quadratic row like any decision (Gurobi): each region's total
-    stays within the root of the bound."""
-    rows, _ = decidb_cli_gurobi.execute(_ship_query(clause))
-    ships = [ship for _, ship in rows]
-    assert (ships[0] + ships[1] + ships[2] + ships[3], ships[4]) == totals
+def test_a_reducer_inside_a_square(decidb_cli_gurobi, clause, holds):
+    """The helper enters a quadratic row like any decision (Gurobi). The scope oracle is
+    linear, so every assignment is enumerated, a region at a time."""
+    rows = answer(decidb_cli_gurobi, _ship_query(clause))
+    _judge_apart(rows, lambda row: row["region"], holds)
 
 
 @pytest.mark.correctness
 @pytest.mark.quadratic
 def test_a_square_of_a_helper_with_an_inner_when(decidb_cli_gurobi):
-    """`power(sum(when S.priority: ship), 2) <= 50`: the priority total at most 7, the
-    other shipments untouched."""
-    rows, _ = decidb_cli_gurobi.execute(_ship_query("power(sum(when S.priority: ship), 2) <= 50"))
-    ships = [ship for _, ship in rows]
-    assert ships[0] + ships[2] + ships[4] == 7 and ships[1] == 20 and ships[3] == 15
+    """`power(sum(when S.priority: ship), 2) <= 50` bounds the priority shipments only. The
+    scope oracle is linear, so every assignment is enumerated, priority and other shipments
+    apart."""
+    rows = answer(decidb_cli_gurobi, _ship_query("power(sum(when S.priority: ship), 2) <= 50"))
+    _judge_apart(rows, lambda row: row["priority"], lambda priority, ships: not priority or sum(ships) ** 2 <= 50)
 
 
 @pytest.mark.correctness
 def test_abs_of_a_helper_bounds_the_total(decidb_cli):
-    """`abs(sum(ship) by (D.region)) <= 5`: each region ships 5."""
-    rows, _ = decidb_cli.execute(_ship_query("abs(sum(ship) by (D.region)) <= 5"))
-    ships = [ship for _, ship in rows]
-    assert ships[0] + ships[1] + ships[2] + ships[3] == 5 and ships[4] == 5
+    """`abs(sum(ship) by (D.region)) <= 5`. The scope oracle states no `abs`, so every
+    assignment is enumerated, a region at a time."""
+    rows = answer(decidb_cli, _ship_query("abs(sum(ship) by (D.region)) <= 5"))
+    _judge_apart(rows, lambda row: row["region"], lambda region, ships: abs(sum(ships)) <= 5)
 
 
 # ---------------------------------------------------------------------------
@@ -645,7 +671,8 @@ def test_abs_around_a_helper_in_the_hard_direction(decidb_cli_gurobi, decidb_cli
 def test_a_helper_inside_a_hard_abs_is_boxed_with_it(decidb_cli_highs, decidb_cli_gurobi):
     """`abs(sum(x) by (t.i % 2) - 7) >= 3`: the ABS Big-M needs the helper's box and the
     helper's box its members', so the two are derived together; the lowering arm used to
-    refuse this query naming the helper. Each parity's total reaches 10."""
+    refuse this query naming the helper. Judged by enumerating every assignment: the scope
+    oracle states no `abs`."""
     rows = ((1, 5), (2, 5), (3, 5), (4, 5))
     sql = f"""
         SELECT i, x {table('t', ('i', 'cap'), rows)}
@@ -653,9 +680,13 @@ def test_a_helper_inside_a_hard_abs_is_boxed_with_it(decidb_cli_highs, decidb_cl
         SUCH THAT x <= t.cap AND abs(sum(x) by (t.i % 2) - 7) >= 3
         MAXIMIZE SUM(x)
         ORDER BY i"""
+    domains = {f"x{k}": range(cap + 1) for k, (_, cap) in enumerate(rows)}
+
+    def feasible(a):
+        return all(abs(a[f"x{k}"] + a[f"x{k + 2}"] - 7) >= 3 for k in range(2))
+
     for cli in (decidb_cli_highs, decidb_cli_gurobi):
-        out, _ = cli.execute(sql)
-        assert [x for _, x in out] == [5, 5, 5, 5]
+        judge_rows(answer(cli, sql), domains, feasible, lambda a: sum(a.values()))
 
 
 @pytest.mark.correctness

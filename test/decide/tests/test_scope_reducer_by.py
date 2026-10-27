@@ -15,6 +15,7 @@ Model size is read from DECIDB_DUMP_MODEL; optima are judged against
 
 import pytest
 
+from ._brute_force import judge_rows
 from ._diagnose_relation import rows as diagnose_rows
 from ._diagnose_relation import run as run_diagnose
 from ._output_helpers import assert_no_internal_leak
@@ -761,20 +762,29 @@ def test_avg_by_group(decidb_cli, scope_solver):
 @pytest.mark.correctness
 @pytest.mark.avg_rewrite
 def test_avg_not_equal(decidb_cli):
-    """`<>` over a plain AVG excludes the value from each group's average: East's four
-    shipments of at most 2 cannot average 2, so they sum to 7; West's one is 1. (The
-    oracle's `<>` steps a whole-numbered side, which an average is not.)"""
-    rows, _ = decidb_cli.execute(_ship_query("ship <= 2 AND per D.region: avg(ship) by (D.region) <> 2"))
-    ships = [ship for _, ship in rows]
-    assert all(ship <= 2 for ship in ships)
-    assert sum(ships[:4]) == 7 and ships[4] == 1
+    """`<>` over a plain AVG excludes the value from each group's average. The scope
+    oracle steps a whole-numbered side, which an average is not, so every assignment is
+    enumerated."""
+    sql = _ship_query("ship <= 2 AND per D.region: avg(ship) by (D.region) <> 2")
+    regions = [row["region"] for row in joined()]
+
+    def feasible(a):
+        totals = {}
+        for i, region in enumerate(regions):
+            total, count = totals.get(region, (0, 0))
+            totals[region] = (total + a[f"ship{i}"], count + 1)
+        return all(total != 2 * count for total, count in totals.values())
+
+    domains = {f"ship{i}": range(3) for i in range(len(regions))}
+    judge_rows(answer(decidb_cli, sql), domains, feasible, lambda a: sum(a.values()))
 
 
 @pytest.mark.correctness
 @pytest.mark.quadratic
 def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
     """`POWER(…, 2)` inside reducers sharing one `by` key is the aggregate shape (§10.2).
-    A quadratic constraint needs Gurobi."""
+    A quadratic constraint needs Gurobi, and the scope oracle is linear, so every
+    assignment is enumerated."""
     rows = ((1, "a", 5), (2, "a", 4), (3, "b", 6), (4, "b", 2))
     columns = ("id", "g", "cap")
     sql = f"""
@@ -783,10 +793,12 @@ def test_a_square_in_a_grouped_reducer(decidb_cli_gurobi):
         SUCH THAT x <= t.cap AND per t.g: sum(x * x) by (t.g) <= 20
         MAXIMIZE SUM(x)
         ORDER BY id"""
-    rows_out, _ = decidb_cli_gurobi.execute(sql)
-    xs = [x for _, x in rows_out]
-    assert xs[0] ** 2 + xs[1] ** 2 <= 20 and xs[2] ** 2 + xs[3] ** 2 <= 20
-    assert sum(xs) == 12
+
+    def feasible(a):
+        return a["x0"] ** 2 + a["x1"] ** 2 <= 20 and a["x2"] ** 2 + a["x3"] ** 2 <= 20
+
+    domains = {f"x{i}": range(cap + 1) for i, (_, _, cap) in enumerate(rows)}
+    judge_rows(answer(decidb_cli_gurobi, sql), domains, feasible, lambda a: sum(a.values()))
 
 
 # ---------------------------------------------------------------------------

@@ -45,7 +45,7 @@ def test_when_in_front_is_the_reducer_when(decidb_cli, tmp_path):
 
 
 @pytest.mark.correctness
-def test_when_in_front_reads_kept_rows_only(decidb_cli):
+def test_when_in_front_reads_kept_rows_only(decidb_cli, scope_solver):
     """S2 and S4 carry a NULL weight; the `when` drops them, so it is never read."""
     columns = ("id", "w", "cap")
     rows = ((1, 3, 5), (2, None, 4), (3, 2, 6), (4, None, 2))
@@ -55,7 +55,18 @@ def test_when_in_front_reads_kept_rows_only(decidb_cli):
         SUCH THAT x <= t.cap AND sum(x) <= 8
         MAXIMIZE when t.w is not null: sum(t.w * x)
         ORDER BY id"""
-    assert [x for _, x in decidb_cli.execute(sql)[0]] == [5, 0, 3, 0]
+    model = ScopedModel(table_rows(columns, rows), [Decision("x")])
+    clauses = [
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: r["cap"]},)),
+        Scoped((Reduce("sum", lambda r: {"x": 1}),), "<=", (lambda r: {CONSTANT: 8},)),
+    ]
+    objective = ScopedObjective(
+        ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": r["w"]}),), when=lambda r: r["w"] is not None
+    )
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )
 
 
 # ---------------------------------------------------------------------------

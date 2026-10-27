@@ -57,7 +57,7 @@ same thing.
 - **Strict comparisons step onto whole numbers.** `< K` becomes `<= ceil(K) - 1`,
   `> K` becomes `>= floor(K) + 1`, and `<> K` an indicator pair over both. The judge
   checks the strict senses as strict. This is exact only when the decision side is
-  whole-numbered, so an `AVG` under `<>` is judged by `_brute_force` or by hand.
+  whole-numbered, so an `AVG` under `<>` is judged by `_brute_force`.
 - `scope_solver` (in `_scope_cases.py`) is Gurobi, solving afresh each time so that a
   change to the oracle is never hidden behind a cached optimum; a test that needs it is
   skipped where gurobipy is missing.
@@ -84,8 +84,11 @@ statement and returns its objective.
 
 "Oracle" below means the answer is judged by `judge_scoped` (or `ScopeModel.judge`)
 and must reach the oracle's optimum. "Dump" means the model size or the whole model
-read from `DECIDB_DUMP_MODEL`. "Hand-checked" means the test asserts a small answer its
-docstring derives.
+read from `DECIDB_DUMP_MODEL`. "Brute force" means `_brute_force.judge_rows` enumerates
+every assignment of small whole-number domains, for shapes the scope oracle cannot state
+(a square, an `abs`, a product beside a reducer, an `AVG` under `<>`). Where the clauses
+bind each group's own total and the objective adds the groups up, the enumeration runs
+one group at a time. No test asserts an answer its docstring derives.
 
 - **`test_scope_declare.py`** — `DECIDE per K: x(TYPE)`. A column key, a relation key
   (every stored column of the relation), a key across two relations; `per ()` is one
@@ -104,15 +107,15 @@ docstring derives.
   computed on a row the `when` drops, so a NULL or a failing function there is no
   error; a `when` that keeps no row is an error (D4) while an input with no rows is
   not; the scope errors; the EXPLAIN echo, including a key or condition ending in a
-  colon; a serialization round trip. Oracle and dump; the fractional strict bound and
-  the dropped-row cases are hand-checked.
+  colon; a serialization round trip. Oracle, brute force (the dropped-row cases) and
+  dump.
 - **`test_scope_reducer_by.py`** — `agg(e) by (G)`. No `by` is `by ()`; a reducer reads
   rows outside its class; a data-only reducer on the bound side reads its own group;
   NULL is a group; a constant key and an all-NULL key are one group; a `by` key with a
   subquery; the tightest bound per group without `per`; MIN and MAX in both directions,
   under a factor, a strict bound and in a composed clause; AVG divides by the rows its
-  `when` keeps; the refused shapes. Oracle and dump; `test_avg_not_equal` and
-  `test_a_square_in_a_grouped_reducer` are hand-checked.
+  `when` keeps; the refused shapes. Oracle, brute force (`test_avg_not_equal`,
+  `test_a_square_in_a_grouped_reducer`) and dump.
 - **`test_scope_reducer_inner.py`** — `agg([when c] [per K]: e)`. The inner `when`
   filters its own reducer only; an inner `per` counts each class once, from its first
   kept row; the colon form `SUM(D: e)` builds the model of `sum(per D: e)` and takes a
@@ -142,8 +145,8 @@ docstring derives.
   NULL as a group of the helper key, the model growing linearly, the scope checks still
   guarding the rewritten clause, a product of decisions inside a rewritten reducer
   refused, DIAGNOSE naming the clause rather than the helper, the EXPLAIN echo, and the
-  same answers on HiGHS. Oracle, brute force and dump; the `abs`/square/product cases
-  and `test_two_keys_hand_checked` are hand-checked.
+  same answers on HiGHS. Oracle, brute force (the `abs`, square and product cases) and
+  dump.
 - **`test_scope_bare_clauses.py`** — a clause with no `when`, `per` or `by` means its
   explicit form (`per row:` in front, `by ()` on each reducer, the objective once).
   Strict bounds step onto whole numbers; a negative factor on a hard MAX; an objective
@@ -223,9 +226,8 @@ docstring derives.
 | Tier | Where |
 |------|-------|
 | Oracle (`_scope_oracle`) | declare, generation, reducer_by, reducer_inner, objective, value_rewrite, bare_clauses, combinations, deck_examples |
-| Brute force (`_brute_force`) | bare_clauses, value_rewrite |
+| Brute force (`_brute_force`) | bare_clauses, generation, reducer_by, value_rewrite |
 | Model dump | declare, generation, reducer_by, reducer_inner, objective, value_rewrite, deck_examples |
-| Hand-checked | listed under each suite above |
 | Error / message pins | determination, removed_syntax, and the error cases of every suite |
 | Output text pins | explain_diagnose, and the echo cases of generation and value_rewrite |
 | Scanner and guards | `test_no_old_spellings_remain.py`, `decidb_cli.py` |
