@@ -394,8 +394,9 @@ Two consequences:
   rewrite. `VerifyCanonicalObjective` asserts that re-canonicalizing a canonical
   objective peels *nothing*, which is what makes double-counting detectable.
 - **A decision-free objective is legal and returned unchanged.**
-  `RewriteComposedMinMaxObjectiveTop` deliberately installs a constant placeholder
-  and supplies coefficients from `composed_minmax_objective_terms` instead.
+  `RewriteComposedMinMaxObjectiveTop` installs one when the composed objective has no
+  term beside its reducers, and supplies their coefficients from
+  `composed_minmax_objective_terms`.
 
 Because objectives are canonicalized, `TryMatchScaledAggregate` needs no
 escape for `AGG * factor`: every consumer sees `factor * AGG` or `AGG / factor`.

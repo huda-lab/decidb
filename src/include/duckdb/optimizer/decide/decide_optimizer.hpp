@@ -134,10 +134,10 @@ private:
 	                                       const Expression *scoped_when = nullptr,
 	                                       const BoundConjunctionExpression *per_class = nullptr);
 
-	//! Detect a composed MIN/MAX objective (additive sum of SUM/AVG/MIN/MAX terms).
-	//! Extracts term metadata into decide.composed_minmax_objective_terms and replaces
-	//! the objective with a zero placeholder. Must run before RewriteMinMax (which
-	//! handles single top-level MIN/MAX objectives).
+	//! Detect a composed MIN/MAX objective (MIN/MAX terms beside other terms, or one under a factor).
+	//! Extracts the MIN/MAX terms into decide.composed_minmax_objective_terms and leaves the
+	//! others as the objective, a zero placeholder when there are none. Must run before
+	//! RewriteMinMax (which handles single top-level MIN/MAX objectives).
 	void RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide);
 
 	//! Rewrite MIN/MAX aggregates in constraints and objectives.

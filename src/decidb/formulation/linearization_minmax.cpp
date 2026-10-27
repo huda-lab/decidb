@@ -1116,49 +1116,15 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
 void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                                       vector<ComposedMinMaxTermData> &terms,
                                       const vector<string> &var_names, NativeConstructPolicy native_min_max) {
-    idx_t num_rows = input.num_rows;
-
-    // Clear any existing objective terms — the placeholder constant produced
-    // none, but be defensive in case other paths populated them.
-    input.objective_coefficients.clear();
-    input.objective_variable_indices.clear();
-
     EmitComposedMinMaxAuxiliaries(input, indexer, terms, DConstants::INVALID_INDEX,
                                   DConstants::INVALID_INDEX, var_names, native_min_max);
 
-    // Populate objective coefficients. For MIN/MAX terms, the obj coef on z_k
-    // is ta.sign (i.e., sign×1.0); set via global_obj_coeffs. For SUM/AVG
-    // terms, accumulate per-row linear coefficients into objective_coefficients
-    // keyed by decide variable.
-    // Accumulator: decide_var_index -> per-row coefficient vector.
-    std::unordered_map<idx_t, vector<double>> obj_coef_accum;
+    // Each MIN/MAX term's auxiliary z_k joins the objective the other terms already built (`s` in `max(x) + s`),
+    // at its sign and factor.
     for (auto &ta : terms) {
-        if (ta.is_minmax) {
-            // The z_k's obj coef is ta.sign (the MIN/MAX term's sign in the additive sum).
-            idx_t gslot = ta.z_idx - indexer.global_block_start;
-            input.global_obj_coeffs[gslot] = (double)ta.sign * ta.scale;
-            continue;
-        }
-        double avg_divisor = 1.0;
-        if (ta.agg_name == "avg") {
-            idx_t cnt = ComposedAvgDivisor(ta, num_rows);
-            if (cnt == 0) continue;
-            avg_divisor = (double)cnt;
-        }
-        for (idx_t it = 0; it < (*ta.inner_terms).size(); it++) {
-            auto &inner_t = (*ta.inner_terms)[it];
-            if (inner_t.variable_index == DConstants::INVALID_INDEX) continue;
-            auto &dst = obj_coef_accum[inner_t.variable_index];
-            if (dst.empty()) dst.assign(num_rows, 0.0);
-            for (idx_t row = 0; row < num_rows; row++) {
-                if (!ta.filter_mask[row]) continue;
-                dst[row] += ta.per_term_coefs[it][row] * (double)ta.sign * ta.scale / avg_divisor;
-            }
-        }
-    }
-    for (auto &p : obj_coef_accum) {
-        input.objective_variable_indices.push_back(p.first);
-        input.objective_coefficients.push_back(CoefficientColumn::FromVector(std::move(p.second)));
+        D_ASSERT(ta.is_minmax);
+        idx_t gslot = ta.z_idx - indexer.global_block_start;
+        input.global_obj_coeffs[gslot] = (double)ta.sign * ta.scale;
     }
 }
 

@@ -239,6 +239,22 @@ def test_a_constant_addend_leaves_a_min_or_max_in_the_objective(request, cli_fix
 
 
 @BOTH_SOLVERS
+@pytest.mark.correctness
+def test_a_query_wide_decision_inside_a_composed_objective_sum_counts_on_every_row(request, cli_fixture):
+    """`MAXIMIZE MAX(x) + SUM(s * w)` sums `s * w` over every row, `7 * s`: the optimum takes
+    `s = 2`. Counted once, with one row's `w`, it would take `s = 0`."""
+    cli = request.getfixturevalue(cli_fixture)
+    ws = [w for _, _, _, w in ROWS]
+    _enumerated(
+        cli,
+        _query("x(INT), per (): s(INT)", "x <= cap AND x + 3 * s <= 7", "MAXIMIZE MAX(x) + SUM(s * w)", "id, x, s"),
+        _x_domains(s=range(3)),
+        lambda a: all(x + 3 * a["s"] <= 7 for x in _xs(a)),
+        lambda a: max(_xs(a)) + sum(a["s"] * w for w in ws),
+    )
+
+
+@BOTH_SOLVERS
 @pytest.mark.error
 def test_a_column_addend_keeps_a_min_or_max_fractional(request, cli_fixture):
     """`MAX(x + w)` is not `MAX(x)` plus one number: `w` varies by row, so it stays inside and

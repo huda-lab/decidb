@@ -558,13 +558,18 @@ term's own, so stage 08 reads only the rows the clause keeps; under a `per K:` t
 clause's one row names the key's classes (`per_key` `NAMES_CLASSES`, `class_key`, D28).
 Stage 06 steps a strict outer bound onto the lattice. The canonicalizer has refused such a
 clause with a `by` or a bound that is not a constant (stage 04 §3.10); `AssertComposable`
-asserts it. A decision beside a MIN or MAX is refused here, for the constraint and the
-objective alike, quoting it (*"DECIDE: 's' beside MIN or MAX is not supported yet"*).
+asserts it. In a constraint a decision beside a MIN or MAX is refused here, quoting it
+(*"DECIDE: 's' beside MIN or MAX is not supported yet"*).
 
-For the objective, `RewriteComposedMinMaxObjectiveTop` installs a **constant
-placeholder** and supplies the coefficients from
-`composed_minmax_objective_terms` instead — which is why a decision-free objective
-is legal and returned unchanged by the canonicalizer.
+In the objective it stays where it is. A constraint's terms share the one row its MIN/MAX
+auxiliaries stand in, so the composed path owns them all; an objective has no such row. So
+`WalkComposedLhs` lifts only the objective's MIN/MAX terms and hands back every other term
+(`sum(x)` and `s` in `MAXIMIZE max(x) + sum(x) + s`), and `RewriteComposedMinMaxObjectiveTop`
+keeps those, under the objective's `when`, as the objective; with none it installs a
+**constant placeholder**, which is why a decision-free objective is legal and returned
+unchanged by the canonicalizer. They take the objective's own path, which reads their `when`,
+qualifier and AVG and counts a query-wide decision beside the reducers once.
+`LinearizeComposedMinMaxObjective` only adds each auxiliary's coefficient.
 
 ### Auxiliary boxes — `AuxRange`
 

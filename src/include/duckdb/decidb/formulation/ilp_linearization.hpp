@@ -564,9 +564,8 @@ void LinearizeComposedMinMaxConstraint(SolverInput &input, const VarIndexer &ind
                                        idx_t class_set, const vector<string> &var_names,
                                        NativeConstructPolicy native_min_max);
 
-//! Encode a composed MIN/MAX *objective*: the same auxiliary layer, but the composition is
-//! written into the objective — a coefficient on each auxiliary's column, and per-row
-//! coefficients for the SUM/AVG terms. Replaces `input.objective_coefficients`.
+//! Encode a composed MIN/MAX *objective*: the same auxiliary layer, and a coefficient on each
+//! auxiliary's column beside the objective the other terms already built.
 void LinearizeComposedMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                                       vector<ComposedMinMaxTermData> &terms,
                                       const vector<string> &var_names, NativeConstructPolicy native_min_max);

@@ -100,3 +100,18 @@ and when/during which task it was discovered.
   `DECIDB_VERIFY_SERIALIZER=1` over `test/decide/tests` proves the enum values still round-trip.
 - **Docs:** [scopes.md](../language/scopes.md), [diagnose.md](../language/diagnose.md),
   [guide.md §8.1](../language/guide.md#81-what-it-returns), [../diagnostics/](../diagnostics/README.md).
+
+## "Count once" is encoded twice
+
+- **Location:** `CountTupleTermsOnce` (`physical_decide.cpp`) and the model builder's `is_reduced_scalar`
+  shortcut (`ilp_model_builder.cpp`, the objective loop; the constraint loops use the same pattern), read from
+  `SolverInput::objective_term_reductions` and the constraint-side `linear_term_reductions`.
+- **What's wrong:** stage 08 already zeroes every row but one of a term that is counted once. The model builder
+  encodes the same fact again, from a parallel array, and reads a missing entry as "once, from row 0".
+- **Why it matters:** a writer that appends coefficient columns without their reduction entry gets a wrong answer
+  and no error. The composed MIN/MAX objective did this (`MAXIMIZE max(x) + sum(s * cap)` counted `s * cap` on
+  one row); that writer is gone, but the trap is not.
+- **Work:** one encoding. Either the builder sums every row (the rows not counted are already 0) and the
+  reduction arrays leave `SolverInput`, or the builder keeps them and refuses arrays whose sizes differ. Check the
+  zero-row fallback (`col.Size() == 0 ? 1.0`) first.
+- **Discovered:** 2026-10-27, reviewing the lift of a decision beside MIN/MAX in the objective.

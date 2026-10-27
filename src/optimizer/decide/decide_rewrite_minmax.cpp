@@ -127,16 +127,19 @@ static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
 // `outer_push` is which way the outer comparison or objective drives the LHS, and decides
 // each MIN/MAX term's easy/hard classification; NONE (an outer `=`) classifies every
 // MIN/MAX term hard, with its auxiliary pinned from both sides.
-//! `names` quotes a refused term as written.
+//! `names` quotes a refused term as written. `beside`, given for the objective, takes each term that is not a MIN or
+//! MAX (`sum(x)` and `s` in `max(x) + sum(x) + s`) with its sign: a constraint's terms share the row its MIN/MAX
+//! auxiliaries stand in, but an objective has no such row, so its other terms stay on the objective's own path.
 static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t source_clause_id, const Expression &e,
                             int sign, idx_t decide_index, ExtremumPush outer_push,
-                            vector<LogicalDecide::ComposedMinMaxTerm> &out_terms, const DecideSourceNames &names) {
+                            vector<LogicalDecide::ComposedMinMaxTerm> &out_terms, const DecideSourceNames &names,
+                            optional_ptr<vector<pair<int, const Expression *>>> beside = nullptr) {
 	auto &u = (*UnwrapDecideCasts(e, decide_index));
 	if (IsAddNode(u, decide_index)) {
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		for (auto &child : fn.children) {
-			WalkComposedLhs(context, decide, source_clause_id, *child, sign, decide_index, outer_push, out_terms,
-			                names);
+			WalkComposedLhs(context, decide, source_clause_id, *child, sign, decide_index, outer_push, out_terms, names,
+			                beside);
 		}
 		return;
 	}
@@ -149,14 +152,14 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 		auto &fn = u.Cast<BoundFunctionExpression>();
 		if (fn.children.size() == 2) {
 			WalkComposedLhs(context, decide, source_clause_id, *fn.children[0], sign, decide_index, outer_push,
-			                out_terms, names);
+			                out_terms, names, beside);
 			WalkComposedLhs(context, decide, source_clause_id, *fn.children[1], -sign, decide_index, outer_push,
-			                out_terms, names);
+			                out_terms, names, beside);
 			return;
 		}
 		if (fn.children.size() == 1) {
 			WalkComposedLhs(context, decide, source_clause_id, *fn.children[0], -sign, decide_index, outer_push,
-			                out_terms, names);
+			                out_terms, names, beside);
 			return;
 		}
 	}
@@ -177,11 +180,19 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 	auto scale = scale_match.scale;
 	bool scale_divides = scale_match.divides;
 
-	if (!scaled_agg && u.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+	const BoundAggregateExpression *found = scaled_agg ? scaled_agg
+	                                        : u.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE
+	                                            ? &u.Cast<BoundAggregateExpression>()
+	                                            : nullptr;
+	auto name = found ? StringUtil::Lower(found->function.name) : string();
+	if (beside && name != "min" && name != "max") {
+		beside->emplace_back(sign, &e);
+		return;
+	}
+	if (!found) {
 		throw BinderException("DECIDE: '%s' beside MIN or MAX is not supported yet", RenderDecideSource(e, names));
 	}
-	auto &agg = scaled_agg ? *scaled_agg : u.Cast<BoundAggregateExpression>();
-	auto name = StringUtil::Lower(agg.function.name);
+	auto &agg = *found;
 	if (name != "sum" && name != "avg" && name != "min" && name != "max") {
 		throw BinderException("Composed MIN/MAX in DECIDE v1 does not support aggregate '%s'; "
 		                      "only SUM/AVG/MIN/MAX are supported.", name);
@@ -442,18 +453,38 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	    decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
 
 	vector<LogicalDecide::ComposedMinMaxTerm> terms;
+	vector<pair<int, const Expression *>> beside;
 	// An objective always has a direction, so no term needs the both-sides pin here.
 	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	WalkComposedLhs(optimizer.context, decide, DConstants::INVALID_INDEX, *body, /*sign=*/1, decide.decide_index,
-	                outer_push, terms, names);
+	                outer_push, terms, names, beside);
 	ScopeComposedTerms(terms, scoped_when);
 
 	decide.composed_minmax_objective_terms = std::move(terms);
 
-	// Replace the objective with a zero placeholder. The physical layer fills in
-	// objective coefficients from the spec.
-	decide.SetObjective(optimizer.context, make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)));
+	// The objective keeps the terms beside its MIN/MAX terms, under its `when`, and the physical layer adds each
+	// auxiliary's coefficient to theirs; with none it is a zero placeholder.
+	unique_ptr<Expression> rest;
+	for (auto &term : beside) {
+		auto copy = term.second->Copy();
+		if (!rest) {
+			rest = term.first > 0 ? std::move(copy) : optimizer.BindScalarFunction("-", std::move(copy));
+		} else {
+			rest = optimizer.BindScalarFunction(term.first > 0 ? "+" : "-", std::move(rest), std::move(copy));
+		}
+	}
+	if (!rest) {
+		rest = make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0));
+	} else if (scoped_when) {
+		auto &conj = obj.Cast<BoundConjunctionExpression>();
+		auto wrapper = make_uniq<BoundConjunctionExpression>(conj.type);
+		wrapper->children.push_back(std::move(rest));
+		wrapper->children.push_back(scoped_when->Copy());
+		wrapper->SetAlias(conj.GetAlias());
+		rest = std::move(wrapper);
+	}
+	decide.SetObjective(optimizer.context, std::move(rest));
 }
 
 // ---------------------------------------------------------------------------

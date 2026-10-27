@@ -31,7 +31,7 @@ from ._scope_cases import (
     table,
     table_rows,
 )
-from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
+from ._scope_oracle import CONSTANT, GLOBAL, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense, VarType
 
 SHIP = [Decision("ship")]
@@ -878,13 +878,6 @@ def test_refused_shapes(decidb_cli, clause, message):
             "Comparison '<' is not supported here: 'avg(per D.depotID: r)' has type DOUBLE",
             id="strict-avg-keyed",
         ),
-        pytest.param(
-            "ship(INT), per (): s(INT)",
-            "s <= 7",
-            "MAXIMIZE when S.priority: sum(ship) - max(ship) + s",
-            "DECIDE: 's' beside MIN or MAX is not supported yet",
-            id="decision-beside-max-in-the-objective",
-        ),
     ],
 )
 def test_refused_shapes_beside_other_decisions(decidb_cli, decide, clause, objective, message):
@@ -897,6 +890,40 @@ def test_refused_shapes_beside_other_decisions(decidb_cli, decide, clause, objec
     )
     assert message in result.stderr, result.stderr
     assert_no_internal_leak(result, "a refused shape beside another decision")
+
+
+@pytest.mark.correctness
+@pytest.mark.min_max
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+def test_a_decision_beside_max_in_the_objective_counts_once(request, cli_fixture, scope_solver):
+    """`MAXIMIZE when S.priority: sum(ship) - max(ship) - s` counts `s` once beside the
+    composed terms: raising `s` lifts the two smallest priority ships by one each and costs
+    one, so the optimum takes `s = 7`; counted on each kept row it would take `s = 0`."""
+    cli = request.getfixturevalue(cli_fixture)
+    model = ScopedModel(joined(), [Decision("ship"), Decision("s", key=GLOBAL)])
+    clauses = [
+        Scoped((lambda r: {"ship": 1, "s": -1},), "<=", (lambda r: {CONSTANT: r["demand"]},)),
+        Scoped((lambda r: {"s": 1},), "<=", (lambda r: {CONSTANT: 7},), per=GLOBAL),
+    ]
+    ship = lambda r: {"ship": 1}  # noqa: E731
+    objective = ScopedObjective(
+        ObjSense.MAXIMIZE,
+        (Reduce("sum", ship), Reduce("max", ship, factor=lambda r: -1.0), lambda r: {"s": -1}),
+        when=lambda r: r["priority"],
+    )
+    result = answer(
+        cli,
+        f"""
+        SELECT shipmentID, ship, s {from_clause()}
+        DECIDE ship(INT), per (): s(INT)
+        SUCH THAT ship <= S.demand + s AND s <= 7
+        MAXIMIZE when S.priority: sum(ship) - max(ship) - s
+        ORDER BY shipmentID""",
+    )
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective), abs=1e-4
+    )
+    assert {row["s"] for row in result} == {7}
 
 
 @pytest.mark.correctness

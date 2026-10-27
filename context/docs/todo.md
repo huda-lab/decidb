@@ -44,9 +44,6 @@ Every line waits for B1 (the NULL-key rule changes how a key becomes groups) and
 
 Each is ruled; the nested section says which shapes lift and which stay refused.
 
-- [ ] Lift a decision beside MIN/MAX in the objective — [optimizer § 4](pipeline/05_optimizer/todo.md#4-refusals-a-later-change-may-lift)
-- [ ] A `BOOL` decision as a factor on a reducer — [canonicalizer § 1](pipeline/04_canonicalizer/todo.md#1-a-decision-as-a-factor-on-a-reducer) (same as bugs § Limitations, first item)
-- [ ] Quadratic row refuses a row-varying factor on a query-wide decision — [bugs § Limitations](issues/bugs.md#limitations-not-bugs)
 - [ ] Functions that behave unlike SQL: a data-only reducer skips NULL; audit the rest and bring each divergence to the owner — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
 
 ## A6. Smaller models
@@ -172,9 +169,43 @@ The agent finds the cause alone and stops with a proposed fix.
   states the tightest bound; nothing is built to be torn down. Either way the value checks move into the rule's pass
   and must keep the solver's order (scope checks, then the bound's NULL/NaN, then weights). — [framework § H-03](direct_solve/framework/todo.md#h-03--read-a-data-bound-through-the-bound-side-window)
 
+## B7. A `BOOL` decision as a factor on a reducer
+
+- [ ] The design (VALUE shape: a helper `v` for `sum(x)`, then `b * v` through the bilinear rewrite) assumes an order
+  the optimizer does not have: `RewriteBilinear` runs before `RewriteScopedReducers`, on purpose, so the value rewrite
+  reads bodies whose `BOOL` products are already linear. A `b * v` the value rewrite makes would reach the linear form
+  unlinearized. (1) How does `b * v` get linearized? (a) The value rewrite hands each product it makes to the bilinear
+  rewrite's one-product linearization (one linearizer, order kept); (b) move `RewriteBilinear` after the value rewrite
+  and let the value rewrite read `BOOL` products in bodies. Recommended: (a). (2) Is the objective lifted too
+  (`MAXIMIZE b * sum(x)`)? It has no helper path. Recommended: constraints now; the objective as its own item. The
+  `INT` pins (`test_canonicalize_scale.py::test_decision_factor_rejected`, `::test_decision_factor_in_objective_rejected`)
+  stay as they are. — [canonicalizer § 1](pipeline/04_canonicalizer/todo.md#1-a-decision-as-a-factor-on-a-reducer)
+
+## B6. Model builder: one encoding of "count once"
+
+- [ ] Stage 08 zeroes every row but one of a term counted once, and the model builder encodes it again from
+  `objective_term_reductions` / `linear_term_reductions`, reading a missing entry as "once, from row 0" (it caused a
+  wrong answer, now fixed at the writer). Pick one encoding: (1) the builder sums every row and the reduction
+  arrays leave `SolverInput`, or (2) the builder keeps them and refuses arrays whose sizes differ. Recommended: (1),
+  one fact in one place. — [code_quality § count once](issues/code_quality.md#count-once-is-encoded-twice)
+
 ---
 
 # Part C — Owner runs, or not ready
+
+## B8. A quadratic SUM behind a helper decision
+
+- [ ] Lifting the quadratic-row refusal (`sum(power(x, 2)) + gcap * s <= 30`) means a helper `v` for a quadratic
+  `SUM`. Today every `SUM` helper is defined by an equality, `v = Σ e`, which for a square is a nonconvex quadratic
+  equality, so a convex clause would become a nonconvex model (Gurobi spatial branch and bound; HiGHS refuses either
+  way). (1) How is the helper defined? (a) Equality, emitted through the quadratic-row path: simplest, but the model
+  class changes. (b) The epigraph form, the side the rows push against, as `MIN`/`MAX` helpers already do
+  (`need_envelope`/`need_closing`): `v >= Σ e` when the rows push the term down, `v <= Σ e` when up, the equality only
+  for `=`, `<>` or an unknown sign. The clause keeps its convexity, and nothing reads a helper's value back, so a slack
+  `v` is harmless. Recommended: (b), applied to every `SUM`/`AVG` helper, linear ones included, so there is one rule;
+  linear models change from `=` to `>=`/`<=` rows on one side (same answers, golden dumps that print them change).
+  (2) Apply (b) to linear helpers too, or only to quadratic ones? Recommended: all, one rule.
+  — [bugs § Limitations](issues/bugs.md#limitations-not-bugs)
 
 ## C1. Long or memory-heavy runs (owner starts them)
 

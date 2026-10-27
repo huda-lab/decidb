@@ -58,27 +58,3 @@ indicators and four rows (a pick-one row and a linking row per class), not six a
 DIAGNOSE still names the clause.
 
 **done.md.** "NORM and IN — `RewriteNorm` / `RewriteInDomain`".
-
-## 4. Refusals a later change may lift
-
-**Why.** Three shapes reach this stage and are refused here, each with a message that
-says "not supported yet" (../../language/errors.md §2). None is a wrong answer; each lacks
-a formulation.
-
-| Refused | Where | What lifting it needs |
-|---|---|---|
-| A square or a product of two non-Boolean decisions inside a reducer the value rewrite replaces (`x <= 0.5 * sum(x * x)`): *"DECIDE: 'sum(x * x)' is not supported yet in this constraint: a product or square of decisions inside a reducer is accepted only where ..."* | `RewriteScopedReducers` (`decide_rewrite_scoped.cpp`) | a quadratic definition row for the helper (`v = Σ x²`), which stage 06 does not state; only the side the clause pushes `v` toward would be convex |
-| A decision beside a `MIN` or `MAX` in the objective (`MAXIMIZE max(x) + s`): *"DECIDE: 's' beside MIN or MAX is not supported yet"* | `RewriteComposedMinMaxObjectiveTop`, through `WalkComposedLhs` (`decide_rewrite_minmax.cpp`) | the composed objective's extremum column beside a once-counted term, as the constraint's VALUE shape already does with a helper |
-| A square, or a product of two decisions outside a reducer in the objective, other than two distinct query-wide decisions or a product with a `BOOL` (`MAXIMIZE sum(x) + x * y`, `+ s * s`): *"DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet"* | `ExtractAggregateObjectiveTerms` (`decide_linear_form.cpp`, the linear-form flattening) | a once-only reading of the product in the model: a per-row product needs the determination check to give it one instance over the kept rows, then a quadratic or McCormick term counted once |
-
-**Ruling (owner, 2026-10-27).** Lift the decision beside a `MIN` or `MAX` in the objective. The other two
-stay refused: each needs a quadratic term that is convex in one direction only.
-
-**Test.** For each lifted shape, an oracle- or brute-force-judged test on both solvers
-(`test_scope_value_rewrite.py`, `test_scope_objective.py`); the pinned refusals
-(`test_scope_value_rewrite.py::test_a_product_of_decisions_inside_a_rewritten_reducer_is_refused`,
-`test_scope_reducer_by.py`'s decision-beside-max case,
-`test_scope_objective.py::test_objective_tuple_term_errors`) become answer tests.
-
-**done.md.** "The value rewrite — `RewriteScopedReducers`", "Composed MIN/MAX —
-`RewriteComposedMinMax`", §1a; `../../language/errors.md` §2.
