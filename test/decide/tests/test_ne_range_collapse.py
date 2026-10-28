@@ -291,3 +291,109 @@ def test_collapse_still_fires_natively(decidb_cli, tmp_path):
     assert "sense=> rhs=1" in rows[0], f"expected `>= 1`, got: {rows[0]}"
     assert "num_indconstrs: 0" in dump, \
         f"a collapsed clause has no disjunction to state as implications:\n{dump}"
+
+
+# A negative floor under a `when` lowers the decision's floor on the rows the `when` keeps. The decision's box then
+# reaches below 0, but a row the `when` does not keep holds the default floor of 0 on its own instance, and every
+# reader that tells instances apart (the collapse, the Big-M) takes that floor, not the decision's.
+_LOWERED = "(VALUES (1, true), (2, false), (3, false)) t(id, p)"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.when
+@pytest.mark.correctness
+def test_collapse_fires_on_a_default_instance_of_a_lowered_decision(decidb_cli, tmp_path):
+    """`when not p: x <> 0` reads rows 2 and 3, where the floor is still 0, so each collapses to `x >= 1` although
+    row 1's floor is -5. The rigid box of the decision is re-opened below 0 (a diagnosis may loosen the floor), but
+    the default instances keep their 0."""
+    dump = _lowering(decidb_cli).dump_model(
+        f"""
+            SELECT id, x FROM {_LOWERED}
+            DECIDE x(INT) SUCH THAT when p: x >= -5 AND x <= 4 AND when not p: x <> 0 MINIMIZE SUM(x)
+        """,
+        tmp_path / "default_instance_collapse.dump",
+    )
+
+    rows = _rows(dump)
+    assert len(rows) == 2 and all("sense=> rhs=1" in r for r in rows), f"expected two `>= 1` rows:\n{dump}"
+    assert not _has_bigm(dump), f"collapsed rows should carry no Big-M:\n{dump}"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.when
+@pytest.mark.correctness
+def test_lowered_instance_keeps_the_disjunction(decidb_cli, tmp_path):
+    """`when p: x <> 0` reads row 1, whose floor is -5: 0 is interior, so both branches are live."""
+    dump = _lowering(decidb_cli).dump_model(
+        f"""
+            SELECT id, x FROM {_LOWERED}
+            DECIDE x(INT) SUCH THAT when p: x >= -5 AND x <= 4 AND when p: x <> 0 MINIMIZE SUM(x)
+        """,
+        tmp_path / "lowered_instance_disjunction.dump",
+    )
+
+    assert len(_rows(dump)) == 2 and _has_bigm(dump), f"a lowered instance keeps the Big-M pair:\n{dump}"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.when
+@pytest.mark.correctness
+def test_bigm_on_a_default_instance_is_sized_from_zero(decidb_cli, tmp_path):
+    """`x <> 2` on rows 2 and 3 sizes M from their box [0, 4], as the same clause over a decision no `when` lowers.
+    Sized from the decision's box (-5 to 4) it would be 5 larger."""
+
+    def bigm(dump: str) -> float:
+        magnitudes = [
+            abs(float(c)) for row in _rows(dump) for c in re.findall(r"\d+:(-?[\d.e+]+)", row) if abs(float(c)) > 1.0
+        ]
+        assert magnitudes, f"expected a Big-M coefficient:\n{dump}"
+        return max(magnitudes)
+
+    lowered = _lowering(decidb_cli).dump_model(
+        f"""
+            SELECT id, x FROM {_LOWERED}
+            DECIDE x(INT) SUCH THAT when p: x >= -5 AND x <= 4 AND when not p: x <> 2 MINIMIZE SUM(x)
+        """,
+        tmp_path / "lowered_bigm.dump",
+    )
+    plain = _lowering(decidb_cli).dump_model(
+        """
+            SELECT id, x FROM (VALUES (2), (3)) t(id)
+            DECIDE x(INT) SUCH THAT x <= 4 AND x <> 2 MINIMIZE SUM(x)
+        """,
+        tmp_path / "plain_bigm.dump",
+    )
+
+    assert bigm(lowered) == bigm(
+        plain
+    ), f"M follows the decision's box, not the instance's:\nLOWERED:\n{lowered}\nPLAIN:\n{plain}"
+
+
+@pytest.mark.cons_comparison
+@pytest.mark.when
+@pytest.mark.correctness
+def test_bigm_on_a_floor_every_row_keeps_is_sized_from_that_floor(decidb_cli, tmp_path):
+    """`when p: x >= 3` over rows `p` keeps all of is the floor of every instance, so `x <> 4` sizes M from [3, 5] as
+    the unconditional `x >= 3` does, and not from the default floor of 0."""
+
+    def bigm(dump: str) -> float:
+        magnitudes = [
+            abs(float(c)) for row in _rows(dump) for c in re.findall(r"\d+:(-?[\d.e+]+)", row) if abs(float(c)) > 1.0
+        ]
+        assert magnitudes, f"expected a Big-M coefficient:\n{dump}"
+        return max(magnitudes)
+
+    conditional = _lowering(decidb_cli).dump_model(
+        """
+            SELECT id, x FROM (VALUES (1, true), (2, true)) t(id, p)
+            DECIDE x(INT) SUCH THAT when p: x >= 3 AND x <= 5 AND x <> 4 MINIMIZE SUM(x)
+        """,
+        tmp_path / "shared_floor_conditional.dump")
+    unconditional = _lowering(decidb_cli).dump_model(
+        """
+            SELECT id, x FROM (VALUES (1, true), (2, true)) t(id, p)
+            DECIDE x(INT) SUCH THAT x >= 3 AND x <= 5 AND x <> 4 MINIMIZE SUM(x)
+        """,
+        tmp_path / "shared_floor_unconditional.dump")
+
+    assert bigm(conditional) == bigm(unconditional), f"CONDITIONAL:\n{conditional}\nUNCONDITIONAL:\n{unconditional}"

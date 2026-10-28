@@ -227,6 +227,9 @@ struct EvaluatedConstraint {
     //! admitted_upper), ±infinity on an open side. Logical size 0 for any other constraint.
     CoefficientColumn admitted_lower;
     CoefficientColumn admitted_upper;
+    //! The decision whose default floor of 0 this bound replaces on the rows its clause keeps
+    //! (DecideConstraint::lifted_floor), or INVALID_INDEX. ResolveLiftedFloors reads it.
+    idx_t lifted_floor = DConstants::INVALID_INDEX;
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
     //! Which hard MIN/MAX clause this row is, as an index into `minmax_clause_labels`.
@@ -515,6 +518,25 @@ struct SolverInput {
     //! derived from; see `FormulationBox` below. Size = num_decide_vars.
     vector<double> rigid_lower_bounds;
     vector<double> rigid_upper_bounds;
+
+    //! The instance box refines the decision box (a Flyweight box per decision, refined per instance): per
+    //! decision, either empty or one entry per instance (the order of `VarIndexer::InstanceColumn`). An instance
+    //! stores 0 when the decision's default floor holds there, and -infinity when it follows the decision's box
+    //! (`lower_bounds`), which a constant lower bound under a `when` sets (ResolveLiftedFloors). An instance's
+    //! floor is `InstanceLower`; the refinement only narrows the decision's box, so a reader that takes the
+    //! decision's box is sound, only looser.
+    vector<vector<double>> instance_lower_bounds;
+
+    //! The floor of one instance of `var` against a box floor vector (`lower_bounds`, `rigid_lower_bounds`, or a
+    //! formulation's box): the box floor raised by the instance's refinement. The one accessor every reader that
+    //! tells instances apart uses.
+    double InstanceLower(idx_t var, idx_t instance, const vector<double> &box_lower) const {
+        double floor = box_lower[var];
+        if (var < instance_lower_bounds.size() && !instance_lower_bounds[var].empty()) {
+            floor = std::max(floor, instance_lower_bounds[var][instance]);
+        }
+        return floor;
+    }
 
     // Constraints
     vector<EvaluatedConstraint> constraints;

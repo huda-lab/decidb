@@ -800,6 +800,12 @@ private:
 			if (!folded && !constraint->lhs_is_aggregate && DecideReadSingletonRow(context, op, comp, bound)) {
 				constraint->admitted_lower = std::move(bound.lower);
 				constraint->admitted_upper = std::move(bound.upper);
+				// A bound the folding pass did not enter (a `when`, a reducer filter) that lowers the default floor
+				// signs its decision on the rows the clause keeps (stage 06, ResolveLiftedFloors).
+				if (bound.LiftsDefaultFloor()) {
+					constraint->lifted_floor = bound.var_idx;
+					constraint->lifted_floor_k = bound.written_k;
+				}
 			}
 
 			(folded ? op.prepared.singleton_row_constraints : op.prepared.constraints).push_back(std::move(constraint));

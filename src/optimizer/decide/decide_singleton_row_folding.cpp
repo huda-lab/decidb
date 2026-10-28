@@ -265,15 +265,31 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 	                     : type_id == LogicalTypeId::INTEGER ? double(NumericLimits<int32_t>::Maximum())
 	                                                         : DECIDE_MAX_FRACTIONAL_MAGNITUDE;
 	AdmittedInterval(calc, type, exact_limit, a, r, admits, lower, upper);
-	if (member_filter) {
-		// A row the reducer's filter leaves out is no member and admits every value; its member is never read.
-		auto member = calc.Of(*member_filter);
-		lower = calc.If(member, lower, calc.Num(-std::numeric_limits<double>::infinity()));
-		upper = calc.If(member, upper, calc.Num(std::numeric_limits<double>::infinity()));
-	}
 	out.lower = calc.Out(lower);
 	out.upper = calc.Out(upper);
 	FoldKnownBound(context, calc, type, a, r, out);
+	out.constant_on_read_rows = out.folds;
+	if (member_filter) {
+		// A row the reducer's filter leaves out is no member and admits every value; its member is never read. The
+		// interval then depends on the row, so it folds into the box only if the filter itself is known.
+		auto member = calc.Of(*member_filter);
+		lower = calc.If(member, lower, calc.Num(-std::numeric_limits<double>::infinity()));
+		upper = calc.If(member, upper, calc.Num(std::numeric_limits<double>::infinity()));
+		out.folds = false;
+		DecideSingletonRow filtered;
+		filtered.lower = calc.Out(lower);
+		filtered.upper = calc.Out(upper);
+		FoldKnownBound(context, calc, type, a, r, filtered);
+		if (filtered.folds) {
+			out.folds = true;
+			out.sense = filtered.sense;
+			out.lower_value = filtered.lower_value;
+			out.upper_value = filtered.upper_value;
+			out.written_k = filtered.written_k;
+		}
+		out.lower = std::move(filtered.lower);
+		out.upper = std::move(filtered.upper);
+	}
 	return true;
 }
 

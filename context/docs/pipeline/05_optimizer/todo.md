@@ -10,11 +10,11 @@ is per decision, not per instance. A small group's instance is boxed as wide as 
 largest group's, which loosens the LP and the closing Big-M of a MIN/MAX helper, read off
 that box.
 
-**Ruling (owner, 2026-10-27).** Deferred until measured. Start it only when the helper-box measurement
-(queue §11) shows a model where the shared box slows the solve. Where per-instance bounds live: `SolverInput` carries one
-`lower_bounds` / `upper_bounds` entry per decision and stage 06 expands it across
-`NumInstances`, so this needs a per-instance box in the stage 06/08 contract, or a box per
-helper instance stated as rows.
+**Ruling (owner, 2026-10-28).** Do it now, without waiting for the measurement. It builds on
+the per-instance refinement the floors under a `when` use (`SolverInput::instance_lower_bounds`,
+`../06_model_formulation/done.md` §2): the decision's box stays the cover of every instance's
+box, so passes that read it stay sound. A helper instance needs both ends from its own group's
+reach, so the refinement's shape for helpers gets an architect review before coding.
 
 **Test.** A dump of a helper over groups of different sizes shows each instance boxed by
 its own group's reach and a smaller closing Big-M; the answer is unchanged on both

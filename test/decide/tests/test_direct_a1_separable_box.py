@@ -9,11 +9,11 @@ the rule does not apply to fails instead of quietly using the solver). The case 
   for INT and BOOL, that reaches the oracle's objective (rows may differ on ties);
 - the oracle finds it infeasible or unbounded: both DeciDB runs raise that error.
 
-The solver has one behavior the oracle cannot derive from the SQL, so each bound states it: a bare unconditional
-constant lower bound replaces the variable's default lower bound of 0 (D41), whether written plainly (`x >= -3`) or with
-a coefficient or offset on x (`2*x >= -6`, `x + 1 >= -2`), while every other lower bound (a column, a `when`) only
-intersects with it. `Bound.replaces_default` pins that, and the cases that
-use it are the ones that would notice if the two paths ever disagreed about it.
+The solver has one behavior the oracle cannot derive from the SQL, so each bound states it: a constant lower bound
+replaces the variable's default lower bound of 0 (D41), whether written plainly (`x >= -3`) or with a coefficient or
+offset on x (`2*x >= -6`, `x + 1 >= -2`). Under a `when` it replaces the default on the rows the `when` keeps alone; a
+NULL `when` keeps no row. Every other lower bound (a column) only intersects with the default. `Bound.replaces_default`
+pins that, and the cases that use it are the ones that would notice if the two paths ever disagreed about it.
 
 A bare strict bound against a fractional literal on a whole-numbered decision (`x > 0.5`, `x < 2.5`) rounds to the first
 whole value inside the bound: `x > 0.5` gives 1 and `x < 2.5` gives 2. The solver once moved the bound by a whole unit
@@ -112,8 +112,10 @@ class Bound:
     #: (row, domain) -> (lower, upper) this clause puts on the decision on that row.
     box: object
     decision: str = "x"
-    #: The solver folds this clause into the variable, replacing its default lower bound of 0.
+    #: The solver folds this clause into the variable, replacing its default lower bound of 0 on the rows it keeps.
     replaces_default: bool = False
+    #: row -> whether the clause keeps the row (a NULL `when` keeps none); None for every row.
+    keeps: object = None
 
 
 def clause(sql, op, rhs, a=lambda row: 1.0, when=None, replaces=False, decision="x"):
@@ -125,7 +127,7 @@ def clause(sql, op, rhs, a=lambda row: 1.0, when=None, replaces=False, decision=
             return (-INF, INF)
         return _interval(a(row), op, rhs(row), domain)
 
-    return Bound(sql, box, decision, replaces)
+    return Bound(sql, box, decision, replaces, None if when is None else (lambda row: bool(when(row))))
 
 
 def const(value):
@@ -219,10 +221,11 @@ def _box(case_, row, decision):
             continue
         lo, up = bound.box(row, domain)
         lower, upper = max(lower, lo), min(upper, up)
-        replaced = replaced or bound.replaces_default
+        replaced = replaced or (bound.replaces_default and (bound.keeps is None or bound.keeps(row)))
     if domain == "BOOL":
         return (max(lower, 0.0), min(upper, 1.0))
-    # A written constant lower bound replaces the default of 0; any other lower bound only intersects with it.
+    # A written constant lower bound replaces the default of 0 on the rows it keeps; any other lower bound only
+    # intersects with it.
     return (lower if replaced else max(lower, 0.0), upper)
 
 
@@ -391,7 +394,7 @@ add(
 add(
     "real_negative_lower_under_when_intersects",
     "REAL",
-    [clause("when f: x >= -3", ge, const(-3.0), when=col("f")), clause("x <= 9", le, const(9.0))],
+    [clause("when f: x >= -3", ge, const(-3.0), when=col("f"), replaces=True), clause("x <= 9", le, const(9.0))],
     "lin_min",
 )
 add(
@@ -725,6 +728,28 @@ A1_CASES["null_bound_and_coefficient_skip_their_instance"] = Case(
     ),
     Objective("MAXIMIZE SUM(s*x)", True, lambda r: {"x": (0.0, 0.0 if r["s"] is None else r["s"])}),
     rows=NULL_ROWS,
+)
+# A NULL `when` keeps no row, so a negative floor under it leaves the default of 0 there (rows 3 and 5), while row 1,
+# where the `when` holds, takes -3. Row 3's score is positive, so the default floor decides its answer.
+NULL_WHEN_ROWS = (ROWS[0], ROWS[1], dict(ROWS[2], f=None), ROWS[3], dict(ROWS[4], f=None))
+A1_CASES["real_negative_lower_under_null_when_keeps_default"] = Case(
+    (clause("when f: x >= -3", ge, const(-3.0), when=col("f"), replaces=True), clause("x <= 9", le, const(9.0))),
+    OBJECTIVES["lin_min"],
+    (("x", "REAL"),),
+    rows=NULL_WHEN_ROWS,
+)
+# An upper bound below 0 beside a negative floor under a `when`: the early check of the built-in domain counts the floor
+# as lowering the default, so both paths leave the query to the solve. With every row kept the box [-3, -2] holds a
+# value; with a row the `when` leaves out, that row's default floor of 0 is above its upper bound.
+UPPER_BELOW_ZERO = (
+    clause("x <= -2", le, const(-2.0)),
+    clause("when f: x >= -3", ge, const(-3.0), when=col("f"), replaces=True),
+)
+A1_CASES["real_upper_below_zero_with_every_row_kept"] = Case(
+    UPPER_BELOW_ZERO, OBJECTIVES["lin_min"], (("x", "REAL"),), rows=tuple(dict(row, f=True) for row in ROWS)
+)
+A1_CASES["real_upper_below_zero_with_a_row_the_when_leaves_out"] = Case(
+    UPPER_BELOW_ZERO, OBJECTIVES["lin_min"], (("x", "REAL"),)
 )
 A1_CASES["null_like_terms_drop_the_whole_summand"] = Case(
     (UPPER_CAP,),

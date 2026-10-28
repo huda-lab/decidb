@@ -416,6 +416,8 @@ private:
 	struct Bounds {
 		vector<ColumnBinding> lower;
 		vector<ColumnBinding> upper;
+		//! Each decision's static lower end on the row (DirectStaticFloor).
+		vector<ColumnBinding> floor;
 		vector<ColumnBinding> a;
 		vector<ColumnBinding> b;
 		ColumnBinding valid_data;
@@ -601,6 +603,18 @@ private:
 			bounds.lower.push_back(p2.Add(calc.Out(lower)));
 			bounds.upper.push_back(p2.Add(calc.Out(upper)));
 		}
+		for (idx_t d = 0; d < condition.decisions.size(); d++) {
+			// The default floor of 0 is lowered on the rows a clause with a lower bound under a `when` keeps.
+			vector<ColumnBinding> lowering_whens;
+			for (idx_t j = 0; j < condition.clauses.size(); j++) {
+				if (condition.clauses[j].decision == d && condition.clauses[j].lifts_floor) {
+					D_ASSERT(raw.clauses[j].has_when);
+					lowering_whens.push_back(raw.clauses[j].when);
+				}
+			}
+			bounds.floor.push_back(
+			    p2.Add(calc.Out(DirectStaticFloor(calc, condition.decisions[d].lower, lowering_whens))));
+		}
 		double sense = condition.sense == DecideSense::MAXIMIZE ? -1.0 : 1.0;
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			ExprPtr a_total = calc.Num(0.0);
@@ -664,8 +678,8 @@ private:
 				}
 			}
 			ExprPtr lower, upper;
-			DirectRowBox(calc, condition.decisions[d].lower, condition.decisions[d].upper, clause_lowers, clause_uppers,
-			             lower, upper);
+			DirectRowBox(calc, calc.Col(LogicalType::DOUBLE, bounds.floor[d]), condition.decisions[d].upper,
+			             clause_lowers, clause_uppers, lower, upper);
 			box.lower.push_back(p3.Add(calc.Out(lower)));
 			box.upper.push_back(p3.Add(calc.Out(upper)));
 			box.a.push_back(p3.Add(calc.Out(calc.Col(LogicalType::DOUBLE, bounds.a[d]))));

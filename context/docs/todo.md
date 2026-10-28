@@ -49,14 +49,10 @@ The agent may read code and investigate; it writes no fix until the owner answer
 
 ## B2. Wrong answers whose fix has an open choice
 
-- [ ] Gurobi accepts a row violated by 1 near 10⁹ coefficients (ruled: warn) — owner sets the span threshold and where the warning shows — [bugs § solver tolerance](issues/bugs.md#wrong-answers-solver-tolerance)
+Both lines are ruled (owner, 2026-10-28); work them in this order.
 
-- [ ] Negative lower bound under a `when` stays non-negative (ruled: applies to the kept rows) — owner picks the
-  representation. Only an unconditional constant bound replaces the default floor of 0 today (a data bound
-  `x >= lo` only intersects, D41), and `SolverInput` has one box per decision, so a floor lowered on some rows needs
-  either (1) hidden `x >= 0` clauses on the rows or classes no such `when` keeps (DIAGNOSE must keep them rigid and
-  unquoted), or (2) a floor per instance in the stage 06/08 contract, which item 19 (a box per helper instance) also
-  needs. Recommended: (2). A1 must read the same floor. — [bugs § negative bound under `when`](issues/bugs.md#a-negative-lower-bound-under-a-when-leaves-the-decision-non-negative)
+- [ ] Warn when a clause's coefficients span more than the solver resolves — [bugs § solver tolerance](issues/bugs.md#wrong-answers-solver-tolerance)
+- [ ] A box per helper instance, on the per-instance refinement — [optimizer § 1](pipeline/05_optimizer/todo.md#1-a-box-per-helper-instance)
 
 ## B3. Messages whose fix has an open route
 
@@ -287,7 +283,6 @@ The agent finds the cause alone and stops with a proposed fix.
 
 - [ ] Q10 on HiGHS large tier killed for memory, logged as timeout — [bugs § Q10](issues/bugs.md#q10-on-highs-at-the-large-tier-is-killed-for-memory-and-the-profiler-records-it-as-a-timeout)
 - [ ] No test sees a solver's optimality gap (needs a large dataset) — [testing § optimality gap](testing/todo.md#no-differential-test-is-large-enough-to-see-a-solvers-optimality-gap)
-- [ ] A box per helper instance (deferred until the helper-box measurement below shows it matters) — [optimizer § 1](pipeline/05_optimizer/todo.md#1-a-box-per-helper-instance)
 
 Performance measurement (run last):
 

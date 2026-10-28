@@ -24,10 +24,14 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   with both ends set.
 - **Default box.** `BOOL` is [0, 1]; `INT` and `REAL` are [0, ∞). An unconditional constant lower bound replaces the
   default 0 on the solver, so it does here, in any spelling the classifier reads as a bound on one decision (`x >= -3`,
-  `2*x >= -6`, `x + 1 >= -3`, `x >= 0 - 3`, D41). A lower bound from a column or under a `when` only intersects with the
-  default. The solver and direct solve read which clauses are folded into the variable from the same classifier
-  (`DirectIRConstraint::variable_bound`), and combine the folded values with one function (`DecideFoldSingletonRow`), so
-  they cannot disagree. A bound of magnitude 1e20 or more is no bound, as on the solver, including a written -1e30 and a
+  `2*x >= -6`, `x + 1 >= -3`, `x >= 0 - 3`, D41). A constant lower bound under a `when` replaces it on the rows the
+  `when` keeps: the decision's static floor on a row is −∞ where any such `when` holds and 0 elsewhere, a NULL `when`
+  keeping the 0 (`DirectStaticFloor`), and the clause's own bound column gives the value. A decision with a lower bound
+  written, or a `BOOL`, keeps its floor. A lower bound from a column only intersects with the default. The solver and
+  direct solve read which clauses are folded into the variable from the same classifier
+  (`DirectIRConstraint::variable_bound`), which clauses replace the default under a `when` from the same predicate
+  (`DecideSingletonRow::LiftsDefaultFloor`), and combine the folded values with one function (`DecideFoldSingletonRow`),
+  so they cannot disagree. R1 reads its box through the same reader and static floor. A bound of magnitude 1e20 or more is no bound, as on the solver, including a written -1e30 and a
   literal `-inf` floor. An infinite data value is no bound in the open direction (`x <= cap` with `cap = +inf`) and
   admits nothing in the other (`x >= cap`), which empties the row's box (D65).
 - **Whole-number rounding.** An `INT` or `BOOL` decision admits the whole numbers the written comparison admits as

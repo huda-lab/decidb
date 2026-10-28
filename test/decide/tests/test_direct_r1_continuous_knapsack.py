@@ -12,8 +12,8 @@ of quietly using the solver). The case passes when all three agree:
 - the oracle finds it infeasible or unbounded: both DeciDB runs raise that error.
 
 The solver has one behavior the oracle cannot derive from the SQL, so each case states it: a bare unconditional constant
-lower bound (`amount >= 1`) replaces the variable's default lower bound of 0, while every other lower bound (a column, a
-`when`) only intersects with it.
+lower bound (`amount >= 1`) replaces the variable's default lower bound of 0, as does a constant lower bound under a
+`when` on the rows the `when` keeps, while every other lower bound (a column) only intersects with it.
 
 What a result comparison cannot see (which plan ran, EXPLAIN, prepared plans, DIAGNOSE, pruning) stays in
 `test_direct_rule_conformance.py`.
@@ -150,6 +150,13 @@ BOXES = {
     "equality_pin": Box(
         "when id = 4: amount = lo AND amount >= 0 AND amount <= cap",
         lambda r: ((r["lo"], r["lo"]) if r["id"] == 4 else (0.0, r["cap"])),
+    ),
+    # A constant floor under a `when` replaces the default of 0 on the rows it keeps (3 to 6) alone.
+    "negative_lower_under_when": Box(
+        "when id > 2: amount >= -2 AND amount <= cap", lambda r: (-2.0 if r["id"] > 2 else 0.0, r["cap"])
+    ),
+    "positive_lower_under_when": Box(
+        "when id > 2: amount >= 1 AND amount <= cap", lambda r: (1.0 if r["id"] > 2 else 0.0, r["cap"])
     ),
     "open_floor": Box("amount >= -1e30 AND amount <= cap", lambda r: (-INF, r["cap"])),
     "uncapped": Box("amount >= 0", lambda r: (0.0, INF)),
@@ -330,6 +337,11 @@ def add(name, *args, **kwargs):
 
 # The worked example: the budget is used up and one row is partly filled.
 add("worked_example", WORKED, "between_constants_and_cap", 14.0, "max")
+# A constant floor under a `when` is the floor of the rows it keeps: rows 5 and 6 lose value as they grow, so a negative
+# floor lets them gain by going below 0, while rows 1 and 2 keep the default floor.
+add("negative_lower_under_when_max", MIXED, "negative_lower_under_when", 8.0, "max")
+add("negative_lower_under_when_min", MIXED, "negative_lower_under_when", 8.0, "min")
+add("positive_lower_under_when", MIXED, "positive_lower_under_when", 20.0, "max")
 # A NULL value is dropped where it is read (B1). A NULL weight leaves its row out of the budget, which then fills row 2
 # for free; a NULL value leaves it out of the objective.
 NULL_WEIGHT = tuple(dict(row, w=None) if row["id"] == 2 else row for row in WORKED)

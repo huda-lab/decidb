@@ -32,7 +32,8 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
                           idx_t row, const vector<double> &lower_bounds,
                           const vector<double> &upper_bounds,
                           bool &has_unbounded,
-                          idx_t skip_idx) {
+                          idx_t skip_idx,
+                          const InstanceFloors *floors) {
     double sum = 0.0;
     for (idx_t t = 0; t < variable_indices.size(); t++) {
         idx_t v = variable_indices[t];
@@ -43,7 +44,7 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
         if (coef < 1e-15) {
             continue;
         }
-        double lb = lower_bounds[v];
+        double lb = floors ? floors->OfRow(v, row, lower_bounds) : lower_bounds[v];
         double ub = upper_bounds[v];
         if (DecideIsOpenAbove(ub) || DecideIsOpenBelow(lb)) {
             has_unbounded = true;
@@ -90,7 +91,7 @@ double decide_linearize::DecideRowEffectiveBound(const EvaluatedConstraint &ec, 
 void decide_linearize::DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row,
                                  const vector<double> &lower_bounds,
                                  const vector<double> &upper_bounds, double &out_lo,
-                                 double &out_hi, idx_t skip_idx) {
+                                 double &out_hi, idx_t skip_idx, const InstanceFloors *floors) {
     constexpr double INF = std::numeric_limits<double>::infinity();
     double lo = 0.0;
     double hi = 0.0;
@@ -112,7 +113,7 @@ void decide_linearize::DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t
             hi_unbounded = true;
             continue;
         }
-        double lb = lower_bounds[v];
+        double lb = floors ? floors->OfRow(v, row, lower_bounds) : lower_bounds[v];
         double ub = upper_bounds[v];
         bool lb_unbounded = DecideIsOpenBelow(lb);
         bool ub_unbounded = DecideIsOpenAbove(ub);
@@ -218,7 +219,7 @@ static const char *DescribeBigMConstruct(const EvaluatedConstraint &ec) {
 
 double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box,
                              idx_t num_rows,
-                             const vector<string> &var_names) {
+                             const vector<string> &var_names, const InstanceFloors &floors) {
     const vector<double> &lower_bounds = box.lower;
     const vector<double> &upper_bounds = box.upper;
     bool has_unbounded = false;
@@ -245,7 +246,8 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
         }
         double rhs_mag = std::abs(rhs);
         double range = rhs_mag + DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
-                                                    r, lower_bounds, upper_bounds, has_unbounded);
+                                                    r, lower_bounds, upper_bounds, has_unbounded,
+                                                    DConstants::INVALID_INDEX, &floors);
         M = std::max(M, range);
     }
     // Refuse before finishing the constant: an open contributor means there is no M

@@ -45,23 +45,6 @@
 - **Impact:** a large HiGHS query can take the whole process down, and the profile misreports why.
 - **Reproduce:** `make decide-bench-setup`, remove the entry from `SKIP`, run `profile_pipeline.py`. Memory-heavy.
 
-## A negative lower bound under a `when` leaves the decision non-negative
-
-- **Location:** singleton-row folding does not enter a `when` wrapper
-  (`FoldSingletonRowsInExpression` in `decide_singleton_row_folding.cpp`), the `IN` rewrite emits its
-  negative floor under the same `when` (`RewriteInDomain` in `decide_rewrite_norm_in.cpp`),
-  and `PhysicalDecide::Finalize` resolves a floor the query never lowered to 0.
-- **Observed:** over `(1, true), (2, false) t(i, p)`, `DECIDE r(INT) SUCH THAT when p: r IN
-  (-5, 7, 12) AND r <= 20 MINIMIZE SUM(r)` returns r = 7 on the row where `p` holds; -5 is
-  optimal. A query-wide `per (): r` and a keyed `per g: r` return 7 too. Over `(1, 'A'),
-  (2, 'B') t(id, g)`, `when g = 'A': x >= -5 AND x <= 10 MINIMIZE SUM(x)` returns 0 on row
-  A. Written without the `when`, either bound makes the decision signed;
-  `../language/guide.md` §2 states the `when` case as open.
-- **Expected:** -5 on the rows the `when` keeps. **Ruling (owner, 2026-10-27).** A negative floor under a
-  `when` applies only to the rows the `when` keeps. A decision shared by several rows (a
-  keyed or query-wide decision) is signed when any row the `when` keeps lowers its floor.
-- **Impact:** a wrong optimum, silently.
-
 ## Messages print a subquery, a condition or a `by` key as DuckDB renders it
 
 - **Location:** a subquery's source fragment, and a `by` key's text, is its parsed
@@ -101,9 +84,27 @@ Each reproduces on the current build.
   >= 5000000001` (or `> 5000000000`), `MINIMIZE SUM(x) + SUM(y)` answers `sum(x) = 5`,
   `y = 0` on Gurobi: `5000000000 >= 5000000001` fails. HiGHS answers `sum(x) = 6`. Presolve
   folds the helper's definition into the row and scales it, so the violation falls under
-  the feasibility tolerance. **Ruling (owner, 2026-10-27).** Warn when a clause's coefficients span more
+  the feasibility tolerance. The same clause without `y` (every coefficient 1e9) answers 6
+  on Gurobi, so the trigger is the span between a clause's coefficients, not a large right
+  side. **Ruling (owner, 2026-10-27).** Warn when a clause's coefficients span more
   than the solver resolves, naming the clause. Rescaling the model is a vendor workaround
   and stays out of it.
+- **Design (owner, 2026-10-28).**
+  - The span is `max|a| / min|a|` over each row a clause makes, in the user's own numbers:
+    every auxiliary is replaced by what it stands for (a value helper by its sum, a MIN/MAX
+    helper by its members, an ABS by its argument, a product helper by the coefficient on
+    the product), an `IN` domain's values count, and so do a quadratic clause's
+    coefficients. Numbers DeciDB invents (Big-M, the L0 tolerance) are left out.
+  - The check runs over `SolverInput` after `BuildSolverInput`, before the linearizers clear
+    the helper definitions, and attributes to the reading clause.
+  - The threshold is 1 / the backend's feasibility tolerance (Gurobi 1e-6 → 1e6, HiGHS 1e-7
+    → 1e7, the vendor defaults), declared beside the backend's other properties
+    (`SolverCapabilities`, not `SolverConstructSupport`).
+  - stderr, once per query, one line per clause, quoted as written: *DECIDE warning: the
+    numbers in 'per row: y + sum(x * 1000000000) >= 5000000001' range from 1 to
+    1000000000, wider than the solver checks exactly; the answer may break this clause
+    slightly.*
+  - Before committing, count the clauses that warn over the test suite and the TPC-H models.
 - **Impact:** a wrong optimum, or a clause violated in the answer.
 
 ## Messages: operands, coefficients and keys

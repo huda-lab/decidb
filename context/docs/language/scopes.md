@@ -88,7 +88,9 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 - **Easy `MIN`/`MAX` absorption.** An easy `max(m) <= K` / `min(m) >= K` with no `when` and no filter, whose member is
   affine in one decision with constant coefficients, is a bound on every member, absorbed into the decision's box
   (`DecideReadSingletonRow`, `decide_singleton_row_folding.cpp`, D41), in any affine spelling with a constant other
-  side: `max(-x) <= 2` is `x >= -2`. The reducer stays in the tree so EXPLAIN and DIAGNOSE quote the clause as written.
+  side: `max(-x) <= 2` is `x >= -2`. With a `when` or a filter, an easy `min(m) >= K` is not absorbed; it replaces
+  the default floor of 0 on the members it reads (D41). The reducer stays in the tree so EXPLAIN and DIAGNOSE quote
+  the clause as written.
 - **Scope checks.** `BuildConstraintScopeChecks`, `BuildClauseScopeChecks`, `BuildReducerScopeChecks` and
   `BuildObjectiveScopeChecks` build `DETERMINES` checks on `LogicalDecide::scope_checks`, from the clauses as bound.
   The bound-side window rewrite adds `VALUE_IS_VALID` checks for the data values bounds read.

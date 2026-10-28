@@ -110,6 +110,12 @@ struct DecideConstraint {
 	//! replaces its floor of 0 (D41).
 	unique_ptr<Expression> admitted_lower;
 	unique_ptr<Expression> admitted_upper;
+	//! The decision whose default floor of 0 this bound replaces on the rows the clause keeps, or INVALID_INDEX: a
+	//! constant lower bound under a `when` or a reducer filter (DecideSingletonRow::LiftsDefaultFloor), which
+	//! singleton-row folding does not enter. An unconditional one is folded into the decision's box and sets no field
+	//! here. `lifted_floor_k` is the bound as written, for the domain check.
+	idx_t lifted_floor = DConstants::INVALID_INDEX;
+	double lifted_floor_k = 0.0;
 
 	// Bilinear terms in constraint (non-Boolean pairs left by optimizer)
 	vector<BilinearConstraintTerm> bilinear_terms;

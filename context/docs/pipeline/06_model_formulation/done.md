@@ -98,7 +98,37 @@ plain bounded integer**. Backends do not accept a binary paired with an
 out-of-range bound; the solve result is the same, the column is just not flagged
 binary.
 
-Bounds and type flags then expand across `NumInstances(var)` for each variable.
+Bounds and type flags then expand across `NumInstances(var)` for each variable, each
+instance's floor read through `SolverInput::InstanceLower`.
+
+**The instance box refines the decision box.** A constant lower bound under a `when` or
+a reducer filter (`EvaluatedConstraint::lifted_floor`) replaces the default floor of 0 on
+the instances its kept rows reach, and only there (`ResolveLiftedFloors`,
+`instance_floors.cpp`, run after the rigid snapshot and before implied bounds). A keyed or
+query-wide instance is lowered when any of its rows is kept. The box stays one per
+decision (a Flyweight), and `instance_lower_bounds[v]` refines it:
+- `lower_bounds[v]` is the lowest floor of any instance: a lowered instance's tightest kept
+  bound, 0 for an instance no such bound keeps. It is therefore a valid floor of every
+  column, and every pass that reads the decision's box stays sound.
+- `instance_lower_bounds[v][i]` is 0 where the default floor holds and −∞ where the
+  instance follows the decision's box. An instance's floor is
+  `max(instance_lower_bounds[v][i], box[v])`.
+- The exact value of a lowered instance (−5, or −3 where two bounds keep a row) comes from
+  the clause's own row, which `TryFoldPerRowBound` folds into the column, and which a
+  diagnosis can loosen.
+- `rigid_lower_bounds[v]` is re-opened, as for a folded user bound. A default instance
+  stays at 0 through its refinement, so a diagnosis widens only the lowered instances and
+  never quotes the default floor.
+
+Storing "default or follow" per instance, rather than each instance's value, keeps the
+refinement valid when a later pass moves the decision's box: `DeriveReducerValueBounds`
+raises a helper's floor after this runs, and `OpenElasticColumnBox` widens it for a
+diagnosis. A decision with a lower bound written (an unconditional floor, a BOOL, a signed
+helper) never takes the default, so a conditional floor only intersects with it and the
+pass skips it. The Big-M sizings (`FlatColumnBox`, `DecideTightPerRowBigM`) and the `<>`
+range collapse read each instance's floor through the same accessor, so a default
+instance is sized and collapsed from 0.
+
 Global auxiliaries take their own bounds and types from
 `input.global_lower_bounds` / `global_upper_bounds` / `global_variable_types`. A helper
 decision of the value rewrite (`SolverInput::reducer_value_links`) holds a reducer's
@@ -200,8 +230,9 @@ data-valued bound differs per row and is known only here. The fold:
 
 - **narrows, never replaces.** The admitted range is intersected with the box it finds, so it
   keeps the meaning of the row: a negative data value does not lower a decision's floor of 0,
-  unlike a literal `x >= -3` (D41). Several rows on one column (an entity-scoped decision, a
-  keyed decision) all hold.
+  unlike a literal `x >= -3` (D41). A constant floor under a `when` has already replaced
+  the default on the instances it keeps (§2), so its row sets their exact value. Several
+  rows on one column (an entity-scoped decision, a keyed decision) all hold.
 - **admits what DuckDB admits.** A whole-numbered decision's range ends on whole numbers that
   pass the written comparison as DuckDB evaluates it, so `0.1 * x <= c` with `c = 0.3` admits
   3, as SQL does; the builder does no division or rounding of its own.

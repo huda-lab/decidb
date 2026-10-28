@@ -92,6 +92,32 @@ struct VarIndexer {
         }
     }
 
+    //! The instance of a variable that data row `row` reads: the row itself, its entity, or the single query-wide
+    //! instance. Up to the block offset the inverse of Get(): `InstanceColumn(v, InstanceOf(v, row)) == Get(v, row)`.
+    inline idx_t InstanceOf(idx_t var_idx, idx_t row) const {
+        switch (var_scope[var_idx]) {
+        case DecideVarScope::ROW:
+            return row;
+        case DecideVarScope::SCALAR:
+            return 0;
+        default:
+            return entity_mappings[var_entity_mapping_idx[var_idx]].row_to_entity[row];
+        }
+    }
+
+    //! The instance of `var_idx` that flat column `col` is, for a column in the decide-variable blocks: the inverse of
+    //! InstanceColumn().
+    inline idx_t InstanceOfColumn(idx_t var_idx, idx_t col) const {
+        switch (var_scope[var_idx]) {
+        case DecideVarScope::ROW:
+            return col / num_row_vars;
+        case DecideVarScope::SCALAR:
+            return 0;
+        default:
+            return col - entity_var_base[var_idx];
+        }
+    }
+
     //! Get the number of instances (copies) for a given decide variable
     inline idx_t NumInstances(idx_t var_idx) const {
         switch (var_scope[var_idx]) {
@@ -117,6 +143,18 @@ struct VarIndexer {
     //! Build a VarIndexer that owns a copy of entity_mappings.
     //! Safe to use after the SolverInput is destroyed (e.g., stored on gstate for readback).
     static VarIndexer Build(const SolverInput &input);
+};
+
+//! The floors a reader that tells the instances of a decision apart takes (SolverInput::instance_lower_bounds), by the
+//! data row that reads the instance. A reader that takes the decision's box instead is sound, only looser.
+struct InstanceFloors {
+    const SolverInput &input;
+    const VarIndexer &indexer;
+
+    //! The floor of `var` as data row `row` reads it, against the box floors `box_lower`.
+    double OfRow(idx_t var, idx_t row, const vector<double> &box_lower) const {
+        return input.InstanceLower(var, indexer.InstanceOf(var, row), box_lower);
+    }
 };
 
 //! One summed decide variable of an aggregate LHS, paired with the coefficient the user

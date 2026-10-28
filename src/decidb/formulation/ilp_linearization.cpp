@@ -94,10 +94,6 @@ void decide_linearize::PinGlobalAux(SolverInput &input, const VarIndexer &indexe
 // Lowering: constructs the chosen backend cannot state
 //===--------------------------------------------------------------------===//
 
-//! The box of one flat column, in the coordinates every construct emits in. Mirrors
-//! what `SolverModel::Build` will expand into `col_lower` / `col_upper`, and must:
-//! a Big-M derived from a wider box than the model declares would be slack, and one
-//! derived from a narrower box would cut the feasible region.
 //! The bilinear link whose auxiliary is decision `v` (`w = b * x`), or null.
 static const BilinearLinkSpec *BilinearLinkOf(const SolverInput &input, idx_t v) {
     for (const auto &link : input.bilinear_links) {
@@ -108,6 +104,11 @@ static const BilinearLinkSpec *BilinearLinkOf(const SolverInput &input, idx_t v)
     return nullptr;
 }
 
+//! The box of one flat column, in the coordinates every construct emits in. Mirrors
+//! what `SolverModel::Build` will expand into `col_lower` / `col_upper`, and must:
+//! a Big-M derived from a wider box than the model declares would be slack, and one
+//! derived from a narrower box would cut the feasible region. The floor is the instance's
+//! (`SolverInput::InstanceLower`), as the builder writes it.
 static void FlatColumnBox(const SolverInput &input, const FormulationBox &box,
                           const VarIndexer &indexer, int col, double &lo, double &hi) {
     idx_t c = static_cast<idx_t>(col);
@@ -126,7 +127,7 @@ static void FlatColumnBox(const SolverInput &input, const FormulationBox &box,
     // The same asymmetry the model builder applies: the lower bound is authoritative
     // (stage 08 already resolved it, negatives included), the upper is intersected with
     // the type ceiling.
-    lo = box.lower[v];
+    lo = input.InstanceLower(v, indexer.InstanceOfColumn(v, c), box.lower);
     hi = box.upper[v];
     if (input.variable_types[v] == LogicalType::BOOLEAN) {
         hi = MinValue<double>(hi, 1.0);

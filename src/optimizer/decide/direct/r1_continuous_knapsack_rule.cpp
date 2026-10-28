@@ -978,16 +978,19 @@ private:
 	void AddBox() {
 		Named added;
 		for (idx_t k = 0; k < DecisionCount(); k++) {
-			vector<ColumnBinding> clause_lowers, clause_uppers;
+			vector<ColumnBinding> clause_lowers, clause_uppers, lowering_whens;
 			for (idx_t j = 0; j < condition.clauses.size(); j++) {
 				if (condition.clauses[j].decision == k) {
 					clause_lowers.push_back(columns.at("lo" + std::to_string(j)).binding);
 					clause_uppers.push_back(columns.at("up" + std::to_string(j)).binding);
+					if (condition.clauses[j].lifts_floor) {
+						lowering_whens.push_back(columns.at("wh" + std::to_string(j)).binding);
+					}
 				}
 			}
 			ExprPtr lower, upper;
-			DirectRowBox(calc, condition.boxes[k].lower, condition.boxes[k].upper, clause_lowers, clause_uppers, lower,
-			             upper);
+			DirectRowBox(calc, DirectStaticFloor(calc, condition.boxes[k].lower, lowering_whens),
+			             condition.boxes[k].upper, clause_lowers, clause_uppers, lower, upper);
 			added.emplace_back(Dec("l", k), lower);
 			added.emplace_back(Dec("u", k), upper);
 		}

@@ -375,7 +375,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         idx_t num_instances = indexer.NumInstances(var);
         for (idx_t inst = 0; inst < num_instances; inst++) {
             idx_t var_idx = indexer.InstanceColumn(var, inst);
-            model.col_lower[var_idx] = per_var_lower[var];
+            // The instance's floor: the decision's, raised by the refinement where the default floor of 0 still holds
+            // (a constant lower bound under a `when` replaces the default floor on the instances it keeps alone).
+            model.col_lower[var_idx] = input.InstanceLower(var, inst, per_var_lower);
             model.col_upper[var_idx] = per_var_upper[var];
             model.is_integer[var_idx] = !(input.variable_types[var] == LogicalType::DOUBLE ||
                                           input.variable_types[var] == LogicalType::FLOAT);
@@ -710,9 +712,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // (decide_singleton_row_folding.cpp). A literal is the same for every row and folds once in the optimizer; a
     // data-valued bound differs per row and is known only here, as the values it admits on each row (stage 08 reads
     // them from the classifier both paths share). The bound narrows the box it finds, as the row did: it never
-    // replaces the default floor of 0 (D41). An infinite end on the side it binds (`x >= c` with c = +inf) admits
-    // no value and keeps the row, and a box the folds invert stays inverted: ProvesInfeasible answers both, as it would
-    // the row.
+    // replaces the default floor of 0 itself (D41). A constant floor under a `when` has set the floor of
+    // the instances its rows keep before this runs (ResolveLiftedFloors), and its row then sets the exact value. An
+    // infinite end on the side it binds (`x >= c` with c = +inf) admits no value and keeps the row, and a box the
+    // folds invert stays inverted: ProvesInfeasible answers both, as it would the row.
     //
     // HiGHS's QP solver does not turn such rows back into bounds: a 9,600-row box-bounded QP ran past 60 s as rows
     // and solves in 0.4 s as bounds. Under diagnosis the rows stay, because the elastic engine relaxes rows and

@@ -105,8 +105,8 @@ For one bounded linear or quadratic function, the optimum can only occur at an e
 What the implementation settles beyond the catalogue text:
 
 > • **Default box.** `BOOL` is [0, 1], `INT` and `REAL` are [0, ∞). An unconditional constant lower bound the solver
-> folds replaces the default 0, in any spelling of a bound on one decision (`x >= -3`, `2*x >= -6`, D41); every other
-> lower bound intersects with it.
+> folds replaces the default 0, in any spelling of a bound on one decision (`x >= -3`, `2*x >= -6`, D41); a constant
+> lower bound under a `when` replaces it on the rows the `when` keeps; every other lower bound intersects with it.
 >
 > • **Bounds.** A clause may carry a coefficient and an offset on the decision, a `when`, and a value that is a
 > constant, a numeric or Boolean source column, or any deterministic source expression, including one that can raise.

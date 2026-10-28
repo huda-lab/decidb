@@ -35,7 +35,8 @@ mark it not proved.
   when it is a bound on one decision, and `bound`, the interval of values it admits as DuckDB evaluates the comparison
   (D64). `variable_bound` is set when the solver path folds it into its decision's box instead of emitting a model row
   (an unconditional bound whose ends fold at plan time, in any spelling, D41). Such a bound replaces the variable's
-  default lower bound of 0; every other bound only intersects with it. Direct rules run before the MIN/MAX rewrite tags
+  default lower bound of 0. A constant lower bound under a `when` replaces it on the rows the `when` keeps
+  (`DecideSingletonRow::LiftsDefaultFloor`); every other bound only intersects with it. Direct rules run before the MIN/MAX rewrite tags
   an easy extremum, so only a per-row bound reads here. The classifier is the solver's, so the two cannot disagree.
 - `row_checks` are the value checks the DECIDE operator runs before it reads a value
   (`PhysicalDecide::RunScopeChecks`): the bound-side window's `VALUE_IS_VALID` checks, each a per-row message, NULL on

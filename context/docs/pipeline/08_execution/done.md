@@ -77,12 +77,17 @@ constructor. Three consumers read them:
 
 - `Finalize` copies each box into `SolverInput` through `EffectiveLower`: a decision
   with no lower bound written takes the default 0 floor, so it is non-negative unless
-  the query explicitly said otherwise.
+  the query explicitly said otherwise. A constant lower bound under a `when` or a
+  reducer filter then replaces that floor on the instances its rows reach
+  (`ResolveLiftedFloors`, [`../06_model_formulation/done.md`](../06_model_formulation/done.md) §2).
 - The domain-contradiction guard below rebuilds a box from the bounds as written
   (`user_singleton_row_bounds`) to reject a user bound that contradicts a variable's
   intrinsic domain, quoting the bound's clause as written. It reads the written values,
   not the admitted ones: `x = -0.5` on an INT admits nothing, and that is an ordinary
-  infeasible, not a claim that `x` is non-negative.
+  infeasible, not a claim that `x` is non-negative. A negative floor under a `when`
+  (`DecideConstraint::lifted_floor`) counts as lowering the box: the rows it keeps may
+  reach below 0, so `x <= -2` beside `when p: x >= -5` is left to the solve, which
+  reports the rows no such floor keeps.
 - `BuildSolverInput` re-opens each `UserBoundSpec`'s direction in the rigid box, which
   `OpenElasticColumnBox` then widens for a diagnosis (below).
 
@@ -562,7 +567,7 @@ stage 05. This stage reads the answer off the operator and applies it.
 const bool native_abs = use_native_constructs.abs;          // decided by stage 05
 const NativeConstructPolicy native_min_max {use_native_constructs.min_max,
                                             force_native_constructs};
-VarIndexer var_indexer = VarIndexer::Build(solver_input);   // the flat column space
+const VarIndexer &var_indexer = ...;   // the flat column space, built by BuildSolverInput
 
 DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, /*refuse_when_unbounded=*/!native_abs);
 if (native_abs) { EmitNativeAbs(solver_input, var_indexer); }
@@ -582,12 +587,13 @@ against, and a second, independently-derived answer is exactly how the plan and 
 solve come to disagree about what was lowered. Deferring the choice also kept stage 05
 from acting on it: see [`../05_optimizer/done.md`](../05_optimizer/done.md) §0.
 
-**The `VarIndexer` is built before linearization, not after.** It reads `num_rows`, the
-variable scopes and the entity mappings — all settled by the time the first pass runs —
-and only the global block grows afterwards, with `total_vars` refreshed before the
-solve. Building it first is what lets every construct site emit in flat columns at the
-point it decides something, instead of stashing a decision for a second pass to
-execute. A deferral would exist for no reason but ordering.
+**The `VarIndexer` is built first, before the column box is settled.** It reads
+`num_rows`, the variable scopes and the entity mappings, all settled when
+`BuildSolverInput` starts, and only the global block grows afterwards, with
+`total_vars` refreshed before the solve. The floors a `when` lowers need its row to
+instance map before the first box pass, and every construct site emits in flat
+columns at the point it decides something, instead of stashing a decision for a
+second pass to execute.
 
 **MIN/MAX arrives as a policy, not an answer**, and the difference matters. It reaches
 this stage as a `NativeConstructPolicy` — the capability, plus whether a declared
@@ -694,10 +700,10 @@ PHASE 3 is two methods, split by *what each one reads* rather than by where it s
 in the sequence.
 
 `BuildSolverInput` **assembles**. It moves the evaluated constraints, objective and
-links off `gstate`, resolves the variable types and the column box (the folded
-bounds, the `lower_bounds` sentinel, the rigid snapshot, then
-`DecidePropagateImpliedBounds`), folds each reducer's own `per` de-duplication into
-the objective's filter masks, applies AVG scaling, and builds the `VarIndexer`. It
+links off `gstate`, builds the `VarIndexer`, resolves the variable types and the
+column box (the folded bounds, the `lower_bounds` sentinel, the rigid snapshot, the
+floors a `when` lowers, then `DecidePropagateImpliedBounds`), folds each reducer's own
+`per` de-duplication into the objective's filter masks, and applies AVG scaling. It
 runs exactly once per query, because it is the pass that consumes `gstate`.
 
 `FormulateModel` **formulates**, against a `FormulationBox` handed to it: the auto-`M`

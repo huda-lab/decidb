@@ -102,11 +102,13 @@ inside an ordinary SQL subquery written in the clause is refused.
   rounded.
 - **Signed variables.** 0 is a *default* lower bound for `INT` and `REAL`, not a floor. A variable becomes signed when
   the query bounds it alone below zero, read by value: `x >= -K` in any affine spelling with constants known before
-  the query runs (`x - 1 >= -3`, `2 * x >= -4`, `-x <= 2`), `x BETWEEN -K AND K`, an easy `min(x) >= -K` with no `when`
-  and no filter of its own (§5), or a negative literal in an `IN` domain. A bound whose other side is data
-  (`x >= w - 4`) is a row, not a floor. A bound under a `when` does not lower the floor (an open bug,
-  `../issues/bugs.md`). There is no free (−∞) domain: a two-sided-unbounded variable is the case most likely to
-  make a model unbounded, so a signed variable always has a finite lower bound.
+  the query runs (`x - 1 >= -3`, `2 * x >= -4`, `-x <= 2`), `x BETWEEN -K AND K`, an easy `min(x) >= -K` (§5), or a
+  negative literal in an `IN` domain. Such a bound replaces the default on the rows it keeps: under `when p:` (or a
+  reducer's own filter) the rows `p` keeps take the written floor and the other rows keep 0, so
+  `when g = 'A': x >= -5` lets `x` reach -5 on the rows of `A` alone. A keyed or query-wide decision is signed when any
+  row it reads is kept. A bound whose other side is data (`x >= w - 4`) is a row, not a floor. There is no free (−∞)
+  domain to declare: a two-sided-unbounded variable is the case most likely to make a model unbounded, so a signed
+  variable has a finite lower bound unless the query writes `-1e30` or below, which is no bound (D41).
 
 ```sql
 DECIDE x(BOOL), y(INT), z(REAL)

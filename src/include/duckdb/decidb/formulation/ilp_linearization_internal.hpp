@@ -48,9 +48,12 @@ double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row);
 //!
 //! `lower_bounds` / `upper_bounds` must be the rigid box: see
 //! `SolverInput::rigid_lower_bounds`.
+//!
+//! `floors`, when given, reads each instance's floor through the refinement (SolverInput::instance_lower_bounds)
+//! instead of the decision's: a lowered decision keeps its default floor of 0 on the instances it was not lowered on.
 void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row, const vector<double> &lower_bounds,
                           const vector<double> &upper_bounds, double &out_lo, double &out_hi,
-                          idx_t skip_idx = DConstants::INVALID_INDEX);
+                          idx_t skip_idx = DConstants::INVALID_INDEX, const InstanceFloors *floors = nullptr);
 
 //! Refuse a Big-M that has no finite M, naming the column to bound. Every caller
 //! refuses in the same words, so the message the user reads lives in one place.

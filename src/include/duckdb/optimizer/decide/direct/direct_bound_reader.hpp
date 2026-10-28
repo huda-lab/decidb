@@ -43,10 +43,15 @@ struct DirectBoundClause {
 	unique_ptr<Expression> lower;
 	unique_ptr<Expression> upper;
 	unique_ptr<Expression> when;
+	//! True when the clause replaces the default floor of 0 on the rows its `when` keeps (DecideSingletonRow::
+	//! LiftsDefaultFloor): a constant lower bound under a `when`, on a decision with no lower bound written.
+	//! The decision's static floor is then -infinity where any such `when` holds (DirectStaticFloor).
+	bool lifts_floor = false;
 };
 
 //! A decision's box before any per-row bound: its default, replaced or tightened by the bounds the solver folds into
-//! the variable. An end of magnitude 1e20 or more is infinite.
+//! the variable. An end of magnitude 1e20 or more is infinite. A default lower end of 0 is lowered, on the rows a
+//! clause with `lifts_floor` keeps, by DirectStaticFloor.
 struct DirectDecisionBox {
 	double lower = 0.0;
 	double upper = std::numeric_limits<double>::infinity();
@@ -87,8 +92,15 @@ struct DirectBoundColumns {
 void DirectClauseBounds(const ExpressionBuilder &calc, const DirectBoundColumns &columns, ExprPtr &lower,
                         ExprPtr &upper);
 
-//! A decision's box on one row: the static box intersected with the bounds of its clauses.
-void DirectRowBox(const ExpressionBuilder &calc, double static_lower, double static_upper,
+//! A decision's static lower end on one row: `static_lower` where none of `lowering_whens` holds, and -infinity where
+//! one does. `lowering_whens` are the `when` columns of the clauses with `lifts_floor`; a NULL `when` keeps no row, as
+//! in DirectClauseBounds, so the static end stays.
+ExprPtr DirectStaticFloor(const ExpressionBuilder &calc, double static_lower,
+                          const vector<ColumnBinding> &lowering_whens);
+
+//! A decision's box on one row: the static box intersected with the bounds of its clauses. `static_lower` is the
+//! decision's static lower end on the row (DirectStaticFloor).
+void DirectRowBox(const ExpressionBuilder &calc, const ExprPtr &static_lower, double static_upper,
                   const vector<ColumnBinding> &clause_lowers, const vector<ColumnBinding> &clause_uppers,
                   ExprPtr &lower, ExprPtr &upper);
 

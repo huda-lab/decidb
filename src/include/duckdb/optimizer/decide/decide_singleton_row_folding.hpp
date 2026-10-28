@@ -32,7 +32,8 @@ struct DecideSingletonRow {
 	unique_ptr<Expression> upper;
 	//! True when the bound folds into the decision's box (D41): the interval is known before the query runs, the
 	//! coefficient is not 0, and the side it binds is within the solvers' infinity. A folded bound replaces the default
-	//! floor of 0, while one that stays a model row only intersects with it. The fields below are set only then.
+	//! floor of 0, while one that stays a model row only intersects with it, except a constant floor under a `when` or
+	//! a reducer filter (LiftsDefaultFloor). The fields below are set only then.
 	bool folds = false;
 	//! The side the clause binds: '<' above, '>' below, '=' both.
 	char sense = '<';
@@ -41,6 +42,20 @@ struct DecideSingletonRow {
 	//! The bound as written, moved onto the decision (`r / a`, a strict bound stepped by DecideStrictBound). The domain
 	//! check and the diagnosis read it; the box holds the admitted ends.
 	double written_k = 0.0;
+	//! True when the interval is a constant on every row the clause reads: `folds` without the reducer filter of an
+	//! easy extremum, whose rows are only the members. The other fields above are set then, as for `folds`. A filtered
+	//! easy extremum (`min(x) filter (where p) >= -5`) does not fold, since a row the filter leaves out admits every
+	//! value, but it bounds each member by a constant.
+	bool constant_on_read_rows = false;
+
+	//! True when the bound replaces the default floor of 0 on the rows its clause keeps: a constant lower bound (D41,
+	//! applied per row). A bound under a `when` or a reducer filter replaces it on those rows alone, so the decision's
+	//! floor is the bound's on the instances those rows reach, and 0 on the others. A data bound and an upper bound
+	//! never lift it. The solver path (DecideConstraint::lifted_floor) and direct solve (A1) both ask this, so they
+	//! cannot disagree.
+	bool LiftsDefaultFloor() const {
+		return constant_on_read_rows && sense != '<';
+	}
 };
 
 //! Reads `comparison` as a bound on one decision. False when it is not one: its decision side is not linear terms of
@@ -58,7 +73,10 @@ public:
 	void Add(char sense, double k);
 	//! Folds a bound an IN lowering wrote. Only a negative floor counts: an IN with a negative value signs the decision
 	//! down, so `x IN (-5, 0, 5) AND x <= -3` is no bound below the default floor of 0. The rest is not the user's
-	//! bound, and exact diagnosis may omit its whole clause; the solve still reads the lowering's rows.
+	//! bound, and exact diagnosis may omit its whole clause; the solve still reads the lowering's rows. A floor
+	//! under a `when` or a reducer filter (DecideSingletonRow::LiftsDefaultFloor) counts the same way: it lowers the
+	//! floor only when negative, and the clauses that keep the other rows are left to the solve. A floor of 0 or more
+	//! adds nothing, since it cannot make an upper bound below 0 feasible on its own.
 	void AddLowered(char sense, double k);
 	//! True when the box contradicts the decision's built-in domain. A box with no lower bound written has the default
 	//! floor of 0. It contradicts the domain when the upper bound is below 0 while the floor is still at or above 0 (a

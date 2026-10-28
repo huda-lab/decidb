@@ -34,6 +34,10 @@ bool DirectContradictsDomain(const DirectIR &ir) {
 	for (auto &ir_node : ir.constraints) {
 		if (ir_node.variable_bound && DirectIsSingletonRow(ir, ir_node)) {
 			written[ir_node.bound.var_idx].Add(ir_node.bound.sense, ir_node.bound.written_k);
+		} else if (ir_node.scope.when && DirectIsSingletonRow(ir, ir_node) && ir_node.bound.LiftsDefaultFloor()) {
+			// A floor under a `when` replaces the default on the rows it keeps (AddLowered counts it only when
+			// negative); the solve says whether the clauses on the other rows leave a value.
+			written[ir_node.bound.var_idx].AddLowered('>', ir_node.bound.written_k);
 		}
 	}
 	for (idx_t decision = 0; decision < written.size(); decision++) {
@@ -89,8 +93,15 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 		clause.upper = bound.upper->Copy();
 		if (ir_node.scope.when) {
 			clause.when = ir_node.scope.when->Copy();
+			clause.lifts_floor = bound.LiftsDefaultFloor();
 		}
 		reading.clauses.push_back(std::move(clause));
+	}
+	// A floor under a `when` replaces the default floor of 0 only on a decision with no lower bound written, which a
+	// BOOL always has: its floor stays 0.
+	for (auto &clause : reading.clauses) {
+		clause.lifts_floor = clause.lifts_floor && !admitted[clause.decision].lower_written &&
+		                     ir.decisions[clause.decision].domain != DirectDomain::BOOL;
 	}
 	reading.boxes.resize(decision_count);
 	for (idx_t decision = 0; decision < decision_count; decision++) {
@@ -117,10 +128,22 @@ void DirectClauseBounds(const ExpressionBuilder &calc, const DirectBoundColumns 
 	}
 }
 
-void DirectRowBox(const ExpressionBuilder &calc, double static_lower, double static_upper,
+ExprPtr DirectStaticFloor(const ExpressionBuilder &calc, double static_lower,
+                          const vector<ColumnBinding> &lowering_whens) {
+	if (lowering_whens.empty()) {
+		return calc.Num(static_lower);
+	}
+	vector<ExprPtr> whens;
+	for (auto &binding : lowering_whens) {
+		whens.push_back(calc.Col(LogicalType::BOOLEAN, binding));
+	}
+	return calc.If(calc.Any(whens), calc.Num(NEGATIVE_INFINITY), calc.Num(static_lower));
+}
+
+void DirectRowBox(const ExpressionBuilder &calc, const ExprPtr &static_lower, double static_upper,
                   const vector<ColumnBinding> &clause_lowers, const vector<ColumnBinding> &clause_uppers,
                   ExprPtr &lower, ExprPtr &upper) {
-	vector<ExprPtr> lowers {calc.Num(static_lower)};
+	vector<ExprPtr> lowers {static_lower};
 	vector<ExprPtr> uppers {calc.Num(static_upper)};
 	for (auto &binding : clause_lowers) {
 		lowers.push_back(calc.Col(LogicalType::DOUBLE, binding));

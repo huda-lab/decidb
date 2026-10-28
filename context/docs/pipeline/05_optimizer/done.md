@@ -813,6 +813,14 @@ sign (`signed_helper_vars`: a value rewrite's reducer, a defined non-linear body
 marked written before folding, so it starts with no floor and a bound written on it still
 folds in.
 
+Folding never enters a `when`: `when c: x >= -5` does not bound `x` on every row. Such a
+bound replaces the default floor on the rows it keeps instead. The linear form marks the
+constraint `lifted_floor` when `DecideSingletonRow::LiftsDefaultFloor()` holds: a lower
+side whose interval is a constant on every row the clause reads (`constant_on_read_rows`,
+which an easy MIN with a reducer filter has although it does not fold). Stage 06 lowers
+the instances those rows reach (`../06_model_formulation/done.md` §2). A1 asks the same
+predicate.
+
 **A recorded bound is flattened aside too.** The box is how a written negative bound
 makes a decision signed, so every form of a bound reaches it. But a clause is one knob
 per kept row or class in an expanded diagnosis (D28), which one column bound cannot say.

@@ -1212,6 +1212,13 @@ public:
                     written.AddLowered(bound.sense, bound.k);
                 }
             }
+            // A floor under a `when` replaces the default on the rows it keeps (AddLowered counts it only when
+            // negative). The solve says whether the clauses on the other rows leave a value.
+            for (const auto &constraint : op.prepared.constraints) {
+                if (constraint->lifted_floor == var) {
+                    written.AddLowered('>', constraint->lifted_floor_k);
+                }
+            }
             if (!written.ContradictsDomain(is_bool)) {
                 continue;
             }
@@ -2049,6 +2056,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         eval_const.removal_group_id = constraint->removal_group_id;
         // Preserve whether the original LHS was an aggregate (e.g., SUM(...))
         eval_const.lhs_is_aggregate = constraint->lhs_is_aggregate;
+        eval_const.lifted_floor = constraint->lifted_floor;
         eval_const.minmax_clause_idx = constraint->minmax_clause_idx;
         eval_const.minmax_agg_type = constraint->minmax_agg_type;
         eval_const.ne_clause_idx = constraint->ne_clause_idx;
@@ -3317,7 +3325,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
                                              vector<EntityMapping> entity_mappings,
                                              EvaluatedClauses &evaluated,
                                              VarIndexer &out_var_indexer) const {
-    DecideProfileScope phase("assembly.copy_and_bounds");
+    DecideProfileScope phase("assembly.var_indexer");
     idx_t num_decide_vars = decide_variables.size();
 
     // Construct SolverInput
@@ -3326,7 +3334,21 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     solver_input.num_decide_vars = num_decide_vars;
     solver_input.entity_mappings = std::move(entity_mappings);
     solver_input.variable_scopes = variable_scopes;
-    
+
+    // The flat column space, built ONCE and handed to every consumer below. It reads only the scopes and the entity
+    // mappings, which are final here, and the floors a `when` lowers (ResolveLiftedFloors) need its row to instance
+    // map before the first box pass.
+    //
+    // It is reused for: (1) the row to instance map of the floors, (2) the flat indices every construct site emits
+    // against, a general or indicator constraint naming flat columns, so a site that may state one natively needs the
+    // index before it can emit, (3) the SolverModel::Build() call inside SolveModel(), and (4) gstate.var_indexer for
+    // solution readback after the solve. Nothing below adds a decide variable, so the row / entity / scalar blocks are
+    // final from this point; only `solver_input.num_global_vars` keeps growing as auxiliary globals are appended,
+    // and `total_vars` is refreshed just before the solve. The owning form survives past `solver_input` once that is
+    // moved onto gstate.
+    out_var_indexer = VarIndexer::Build(solver_input);
+    phase.Next("assembly.copy_and_bounds");
+
     // Variable types and bounds
     solver_input.variable_types.resize(num_decide_vars);
     for (idx_t var = 0; var < num_decide_vars; var++) {
@@ -3398,11 +3420,16 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         }
     }
 
+    // A constant lower bound under a `when` replaces the default floor of 0 on the instances its rows reach. After the
+    // rigid box is captured, which it re-opens for the decisions it lowers, and before any pass reads the box.
+    phase.Next("assembly.lifted_floors");
+    ResolveLiftedFloors(solver_input, out_var_indexer, gstate.singleton_row_boxes);
+    phase.Next("assembly.implied_bounds");
+
     // Data-driven implied-bound propagation: derive finite upper bounds for
     // otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
     // knapsack/budget pattern), so the downstream Big-M can be finite and tight.
     // Only provably-implied bounds are applied; the feasible region is unchanged.
-    phase.Next("assembly.implied_bounds");
     DecidePropagateImpliedBounds(solver_input.constraints, solver_input.lower_bounds,
                                  solver_input.upper_bounds, num_rows);
     phase.Next("assembly.objective_and_avg");
@@ -3504,22 +3531,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 		             /*quadratic_inner=*/false, num_rows, solver_input.objective_row_group_ids,
 		             solver_input.objective_num_groups);
 	}
-	// The flat column space, built ONCE and handed to every construct site below. A
-	// general or indicator constraint names flat columns, so a site that may state one
-	// natively needs the index before it can emit — which is why this is built here,
-	// ahead of linearization, rather than after it. Nothing below adds a decide
-	// variable, so the row / entity / scalar blocks are final from this point; only
-	// `solver_input.num_global_vars` keeps growing as auxiliary globals are appended,
-	// and `total_vars` is refreshed just before the solve.
-	//
-	// It is reused for: (1) the flat indices every construct site emits against,
-	// (2) the SolverModel::Build() call inside SolveModel(), and (3) gstate.var_indexer
-	// for solution readback after the solve. The owning form, so it survives past
-	// `solver_input` once that is moved onto gstate.
-	phase.Next("assembly.var_indexer");
-    VarIndexer var_indexer = VarIndexer::Build(solver_input);
-
-    out_var_indexer = std::move(var_indexer);
     return solver_input;
 }
 
@@ -3598,7 +3609,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
                 // coefficient is positive.
                 ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
                 double M = DecideTightPerRowBigM(
-                    ec, box, num_rows, decide_var_names);
+                    ec, box, num_rows, decide_var_names, InstanceFloors {solver_input, var_indexer});
                 ec.row_coefficients[z_term].AssignScalar(num_rows, M);
             }
         }

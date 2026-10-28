@@ -86,10 +86,10 @@ enum class NECollapse : uint8_t {
 //! cleanly separates "can reach K" from "cannot".
 static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row,
                                 const vector<double> &lower_bounds,
-                                const vector<double> &upper_bounds) {
+                                const vector<double> &upper_bounds, const InstanceFloors &floors) {
     double lo;
     double hi;
-    DecideRowSignedRange(ec, row, lower_bounds, upper_bounds, lo, hi);
+    DecideRowSignedRange(ec, row, lower_bounds, upper_bounds, lo, hi, DConstants::INVALID_INDEX, &floors);
     double k = DecideRowEffectiveBound(ec, row);
     if (!std::isfinite(k)) {
         return NECollapse::DISJUNCTION;
@@ -116,14 +116,14 @@ static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row,
 //! verdict for every row. So a mixed constraint keeps the Big-M pair, unsplit.
 static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_rows,
                                        const vector<double> &lower_bounds,
-                                       const vector<double> &upper_bounds) {
+                                       const vector<double> &upper_bounds, const InstanceFloors &floors) {
     bool seen = false;
     NECollapse verdict = NECollapse::DISJUNCTION;
     for (idx_t r = 0; r < num_rows; r++) {
         if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
             continue;
         }
-        NECollapse row_verdict = ClassifyNERow(ec, r, lower_bounds, upper_bounds);
+        NECollapse row_verdict = ClassifyNERow(ec, r, lower_bounds, upper_bounds, floors);
         if (!seen) {
             verdict = row_verdict;
             seen = true;
@@ -321,7 +321,7 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
         // Range collapse, decided before anything is emitted. When the LHS cannot reach
         // the far side of K, one disjunct is dead and the clause is a plain inequality.
         NECollapse collapse = ClassifyNEConstraint(ec, num_rows, input.rigid_lower_bounds,
-                                                   input.rigid_upper_bounds);
+                                                   input.rigid_upper_bounds, InstanceFloors {input, indexer});
         if (collapse == NECollapse::ALWAYS_TRUE) {
             continue; // excludes nothing reachable — drop, like the tautology case
         }
@@ -361,6 +361,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
         }
     }
 
+    const InstanceFloors floors {input, var_indexer};
     for (auto &ec : deferred_aggregate) {
         bool has_groups = !ec.row_group_ids.empty();
 
@@ -451,7 +452,8 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
                     double row_lo;
                     double row_hi;
                     DecideRowSignedRange(ec, flat_rows[k], input.rigid_lower_bounds,
-                                         input.rigid_upper_bounds, row_lo, row_hi);
+                                         input.rigid_upper_bounds, row_lo, row_hi, DConstants::INVALID_INDEX,
+                                         &floors);
                     grp_lo += row_lo; // -inf is absorbing, and only ever accumulates here
                     grp_hi += row_hi;
                 }

@@ -21,6 +21,7 @@
 
 #pragma once
 
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 
@@ -41,7 +42,8 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
                           idx_t row, const vector<double> &lower_bounds,
                           const vector<double> &upper_bounds,
                           bool &has_unbounded,
-                          idx_t skip_idx = DConstants::INVALID_INDEX);
+                          idx_t skip_idx = DConstants::INVALID_INDEX,
+                          const InstanceFloors *floors = nullptr);
 
 //! Tight scalar Big-M for a per-row indicator constraint: the maximum over
 //! active rows of |rhs[r]| + (worst-case row contribution), plus a 1-unit margin
@@ -57,9 +59,25 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
 //! `box` is the box the returned constant is valid for, and it is the caller's job to
 //! pass the one the constant will be used against — see `FormulationBox`. Widening a
 //! column after this returns does not make the constant conservative; it makes it a cap.
+//! `floors` gives each row's instance its own floor (SolverInput::instance_lower_bounds), so an instance the default
+//! floor of 0 holds on is sized from 0 and not from a lowered instance's floor.
 double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box,
                              idx_t num_rows,
-                             const vector<string> &var_names);
+                             const vector<string> &var_names, const InstanceFloors &floors);
+
+//! The instances of a decision whose default floor of 0 a constant lower bound under a `when` replaces (a constraint's
+//! `lifted_floor`). A constant lower bound replaces the default floor on the instances whose rows it keeps; a decision
+//! shared by several rows (keyed or query-wide) is lowered when any row its clause keeps lowers it. A decision with a
+//! lower bound written (`boxes[v].lower_written`) is skipped.
+//!
+//! The instance box refines the decision box: `lower_bounds[v]` becomes the lowest floor of any instance (a lowered
+//! instance's is its tightest kept bound, an instance no bound keeps has 0), so it stays a valid floor of every
+//! column, and `instance_lower_bounds[v]` holds 0 on an instance the default floor still holds on and -infinity on one
+//! that follows the decision's box. The exact floor (-5, or -3 where two bounds keep a row) still comes from the
+//! clause's own row, which the model builder folds into the column, and which a diagnosis can loosen. The rigid floor of
+//! a lowered decision is re-opened, as for a folded user bound. Runs after the rigid box is captured and before
+//! implied bounds are derived, and needs the VarIndexer for the row to instance map.
+void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const vector<DecideBoundBox> &boxes);
 
 //! Data-driven implied-bound propagation. For a non-negative `<=`/`=` constraint
 //! Sum_t a_t x_t (<=|=) K with a_t >= 0 and x_t >= 0, each variable instance
