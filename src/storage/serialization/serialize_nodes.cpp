@@ -454,6 +454,7 @@ void DecideKeyElement::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(100, "expression", expression);
 	serializer.WritePropertyWithDefault<string>(101, "name", name);
 	serializer.WriteProperty<DecideKeyNullMode>(102, "null_mode", null_mode);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(103, "collated", collated);
 }
 
 DecideKeyElement DecideKeyElement::Deserialize(Deserializer &deserializer) {
@@ -461,6 +462,7 @@ DecideKeyElement DecideKeyElement::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(100, "expression", result.expression);
 	deserializer.ReadPropertyWithDefault<string>(101, "name", result.name);
 	deserializer.ReadProperty<DecideKeyNullMode>(102, "null_mode", result.null_mode);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(103, "collated", result.collated);
 	return result;
 }
 

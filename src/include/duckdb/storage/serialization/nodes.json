@@ -1096,6 +1096,11 @@
         "id": 102,
         "name": "null_mode",
         "type": "DecideKeyNullMode"
+      },
+      {
+        "id": 103,
+        "name": "collated",
+        "type": "Expression*"
       }
     ],
     "pointer_type": "none"

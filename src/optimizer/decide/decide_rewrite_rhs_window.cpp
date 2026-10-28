@@ -233,7 +233,7 @@ private:
 		}
 		// `per ()` has no key column: one class per group.
 		for (auto &element : DecideKeyElements(decide.keys, scope.key)) {
-			rank->partitions.push_back(calc.Out(calc.Of(*element.expression)));
+			rank->partitions.push_back(calc.Out(calc.Of(element.Grouping())));
 		}
 		return Place(std::move(rank));
 	}
@@ -398,7 +398,7 @@ private:
 		if (TryParseGroupKeyTag(tagged.GetAlias(), index)) {
 			D_ASSERT(index < decide.keys.size());
 			for (auto &element : decide.keys[index].elements) {
-				keys.push_back(element.expression.get());
+				keys.push_back(&element.Grouping());
 			}
 		}
 		return keys;

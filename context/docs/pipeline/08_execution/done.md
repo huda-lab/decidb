@@ -413,6 +413,13 @@ never depend on row order. A key is computed only on rows some reader keeps: an 
 records the rows it was computed on, and a reader needing rows outside them rebuilds it
 over both sets, so the numbering stays one.
 
+**A key groups under its collation** (D69). The planner gives each key element whose type
+carries a collation a `collated` copy (`ExpressionBinder::PushCollation`, as GROUP BY binds
+its groups); rows group and number on it (`DecideKeyElement::Grouping()`), and
+`BuildGroupIds` keeps each group's least raw value of the element for its label, so a
+message quotes `'A'` for a NOCASE group of 'a' and 'A' in any row order. The bound-side
+window partitions on the same expression (`decide_rewrite_rhs_window.cpp`).
+
 The bound side of the aggregate shape gets its own map with the same numbering over every
 kept row (a bound-side reducer reads its own `by` groups, §4a). A `per K:` over the
 aggregate shape or an easy MIN/MAX adds no row: it only names the classes each group's

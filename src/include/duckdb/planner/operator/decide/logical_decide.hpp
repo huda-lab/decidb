@@ -25,8 +25,16 @@ struct DecideKeyElement {
     //! relation (`D.depotID`) for a column a relation element stands for.
     string name;
     DecideKeyNullMode null_mode = DecideKeyNullMode::NO_GROUP;
+	//! `expression` under its collation, as GROUP BY groups (`PushCollation`); null when
+	//! its type has none. Rows group on it, and a label quotes `expression`.
+	unique_ptr<Expression> collated;
 
-    DecideKeyElement Copy() const;
+	//! The expression rows group on: `collated`, else `expression`.
+	const Expression &Grouping() const {
+		return collated ? *collated : *expression;
+	}
+
+	DecideKeyElement Copy() const;
 
     //! Generated from `storage/serialization/nodes.json`.
     void Serialize(Serializer &serializer) const;

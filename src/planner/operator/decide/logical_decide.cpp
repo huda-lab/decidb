@@ -14,6 +14,9 @@ DecideKeyElement DecideKeyElement::Copy() const {
 	result.expression = expression->Copy();
 	result.name = name;
 	result.null_mode = null_mode;
+	if (collated) {
+		result.collated = collated->Copy();
+	}
 	return result;
 }
 
@@ -233,6 +236,9 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 	for (auto &key : keys) {
 		for (auto &element : key.elements) {
 			callback(&element.expression);
+			if (element.collated) {
+				callback(&element.collated);
+			}
 		}
 	}
 	for (auto &check : scope_checks) {

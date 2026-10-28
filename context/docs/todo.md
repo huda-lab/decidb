@@ -32,57 +32,25 @@ coding, at the question written on the line. **Part C** the owner runs, or is no
 
 ## A4. Wrong answers the owner ruled (2026-10-28)
 
-It waits for B1: B1 is still editing `physical_decide.cpp`, and the build is shared.
-
 - [ ] Lift a quadratic MIN/MAX body into a row helper; Gurobi's native MAX/MIN takes it, HiGHS refuses (reverses the
-  2026-10-27 refusal) — [optimizer § 4](pipeline/05_optimizer/todo.md#4-lift-a-quadratic-minmax-body-into-a-row-helper) (needs: B1)
+  2026-10-27 refusal) — [optimizer § 4](pipeline/05_optimizer/todo.md#4-lift-a-quadratic-minmax-body-into-a-row-helper)
 
 ## A3. Direct solve reads the new language: grouping
 
-Every line waits for B1 (the NULL-key rule changes how a key becomes groups) and B5 (H-04).
+Every line waits for B5 (H-04). A plan that groups rows on a key groups on `DecideKeyElement::Grouping()`, the
+collated expression.
 
-- [ ] H-05 Read a reducer's `by` key into the IR as a GROUP BY in the direct plan (key on the reducer; ~280 keyed cases are strict xfails on the direct path until then) — [framework § H-05](direct_solve/framework/todo.md#h-05--read-a-reducers-by-key-into-the-ir) (needs: B5, B1)
+- [ ] H-05 Read a reducer's `by` key into the IR as a GROUP BY in the direct plan (key on the reducer; ~280 keyed cases are strict xfails on the direct path until then) — [framework § H-05](direct_solve/framework/todo.md#h-05--read-a-reducers-by-key-into-the-ir) (needs: B5)
 - [ ] S1 reads a `by` key again — [S1 § Read a `by` key](direct_solve/rules/s1_uniform_matroid/todo.md#read-a-by-key-again-counts-per-group) (needs: H-05)
 - [ ] R1 reads a `by` key again — [R1 § Read a `by` key](direct_solve/rules/r1_continuous_knapsack/todo.md#read-a-by-key-again-one-budget-per-group) (needs: H-05)
-- [ ] H-06 Two-level objective `outer(per k: inner(e) by (k))` — [framework § H-06](direct_solve/framework/todo.md#h-06--the-two-level-objective-outerper-k-innere-by-k) (needs: B1)
-- [ ] H-07 `per K:` on a constraint — [framework § H-07](direct_solve/framework/todo.md#h-07--per-k-on-a-constraint-one-constraint-per-class) (needs: B5, B1)
+- [ ] H-06 Two-level objective `outer(per k: inner(e) by (k))` — [framework § H-06](direct_solve/framework/todo.md#h-06--the-two-level-objective-outerper-k-innere-by-k)
+- [ ] H-07 `per K:` on a constraint — [framework § H-07](direct_solve/framework/todo.md#h-07--per-k-on-a-constraint-one-constraint-per-class) (needs: B5)
 
 ---
 
 # Part B — Owner checkpoint before coding
 
 The agent may read code and investigate; it writes no fix until the owner answers the question on the line.
-
-## B1. NULL keys, key grouping and empty groups (one batch; blocks A3; owner answered 2026-10-28)
-
-The deck (`context/New_syntax.pdf`) defines a group as the rows whose key `=` this row's (p. 30) and skips a
-constraint instance a NULL reaches unreduced (pp. 50, 56). Read with SQL's `=`, that gives every ruling below.
-Rulings (architect review done):
-
-1. **Numbering.** One id per class over the whole query, ordered by the collated key value (NULL is no class); each
-   clause reads the classes it keeps as a subsequence, so equal keys get equal ids everywhere and nothing depends on
-   row order. The key is evaluated once per key-table entry, on the union of the rows its clauses read.
-2. **NULL key is no group** of that key only: no `by` group, no `per K:` class, no inner `per` entry. Every other
-   reducer in the clause still reads the row (`sum(x) by (g) <= 0.5 * sum(x)`: a NULL-`g` row has no limit and counts
-   in the total), so it is not a fold of `g IS NOT NULL` into the `when`. The bound-side window filters the NULL key
-   for that key only. Shipped (D5).
-3. **A keyed decision with a NULL key: no decision on that row** (deck p. 6), no error. The row's decision value is
-   absent: a reducer skips it, an unreduced use skips that instance (p. 50). Shipped (guide §2.3).
-4. **Composite key:** NULL when any written column is NULL. **A relation key** (`per D:`) is unchanged (owner,
-   2026-10-28, "Keep todays per D"; Anh: defer replacing `per D`): the columns it stands for compare NULL as a value
-   (NOT DISTINCT). A column written on its own beside its relation (`per D, D.g`) is NULL in no group. Shipped.
-5. **An empty group skips its constraint** (deck: a reducer over no rows is NULL). It retires the errors for both: a
-   `when` that keeps no rows yields no constraints, and a group a reducer's own `when` or NULL keys empty yields none
-   Shipped (D68).
-8. **A NULL data value follows the deck** (pp. 50, 56): shipped (guide §3, §7.2).
-6. **Collation:** keys group on the collated expression (`PushCollation`, as GROUP BY); a label quotes the group's
-   least raw spelling.
-7. **Goldens:** the agent shows the diff entry by entry before re-capturing, once, after the numbering lands.
-
-Commits, in order: key table (shipped: `LogicalDecide::keys`) → one numbering (shipped: ids by key value) → NULL data
-values (shipped) → NULL key and keyed decision (shipped) → empty groups (shipped, D68) → collation.
-
-- [ ] Key grouping ignores collation (follow the collation) — [bugs § collation](issues/bugs.md#key-grouping-ignores-collation)
 
 ## B2. Wrong answers whose fix has an open choice
 
@@ -175,7 +143,7 @@ The agent finds the cause alone and stops with a proposed fix.
 
 - [ ] Three places still read a value differently from DuckDB, each with a recommendation: NaN in a bound (keep),
   infinity in a coefficient (keep), and the NaN message (name the column and the smallest edit). A reducer over no rows
-  follows the deck in B1 (owner, 2026-10-28). — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
+  follows the deck (D68). — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
 
 ## B10. One helper for a reducer several clauses hold: the definition's provenance
 

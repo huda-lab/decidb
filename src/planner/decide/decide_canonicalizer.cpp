@@ -1747,7 +1747,7 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideE
 			auto &by = scope.keys[group_key];
 			for (auto &element : by.elements) {
 				auto check = make_check();
-				check.value = element.expression->Copy();
+				check.value = element.Grouping().Copy();
 				check.object = element.name;
 				check.context = "in by (" + by.text + ")";
 				scope.checks.push_back(std::move(check));
@@ -1815,7 +1815,7 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 			auto &by = scope.keys[group_key];
 			for (auto &element : by.elements) {
 				auto check = make_check();
-				check.value = element.expression->Copy();
+				check.value = element.Grouping().Copy();
 				check.object = element.name;
 				check.context = "in by (" + by.text + ")";
 				scope.checks.push_back(std::move(check));

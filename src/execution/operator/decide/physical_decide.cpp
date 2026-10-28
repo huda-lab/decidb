@@ -307,13 +307,17 @@ static void NumberGroupsByValue(vector<vector<Value>> &rep_keys, idx_t num_group
 //!   out_num_groups   — K, count of distinct groups, numbered in key-value order
 //!   read_rows        — the clause's kept rows: the key is computed on these only, and no
 //!                      other row joins a group (null = every row)
+//!   label_exprs      — per key column, the value a label quotes when it differs from the
+//!                      one rows group on (a collated column): `out_rep_keys` then holds
+//!                      the group's least value of it, so a label is the same in any row
+//!                      order; null entries quote the grouped value
 //!
 //! A key with no columns (`per ()`, `by ()`) has one class: every row the filter keeps.
 static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientContext &context,
                           ColumnDataCollection &data, idx_t num_rows, const std::function<bool(idx_t)> &row_filter,
                           vector<idx_t> &out_row_to_group, idx_t &out_num_groups,
                           vector<vector<Value>> *out_rep_keys = nullptr, const vector<bool> *read_rows = nullptr,
-                          const vector<bool> &null_no_group = {}) {
+                          const vector<bool> &null_no_group = {}, const vector<const Expression *> &label_exprs = {}) {
 	DecideProfileScope profile("extraction.group_ids");
 	out_row_to_group.assign(num_rows, DConstants::INVALID_INDEX);
 	out_num_groups = 0;
@@ -343,10 +347,22 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 		key_executor.AddExpression(*e);
 		key_types.push_back(e->return_type);
 	}
+	// The label columns follow the key columns in the same chunk; label_column[c] is key
+	// column c's, or c itself.
+	vector<idx_t> label_column(num_key_cols);
+	std::iota(label_column.begin(), label_column.end(), 0);
+	for (idx_t c = 0; c < label_exprs.size(); c++) {
+		if (label_exprs[c]) {
+			label_column[c] = key_types.size();
+			key_executor.AddExpression(*label_exprs[c]);
+			key_types.push_back(label_exprs[c]->return_type);
+		}
+	}
 
 	// rep_keys[c][gid] — key values for the representative row of group `gid`.
 	// Size grows with num_groups, not num_rows.
 	vector<vector<Value>> rep_keys(num_key_cols);
+	vector<vector<Value>> rep_labels(num_key_cols);
 	std::unordered_multimap<hash_t, idx_t> hash_to_rep_group;
 
 	ColumnDataScanState scan;
@@ -417,6 +433,15 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 				if (eq) {
 					out_row_to_group[row] = gid;
 					matched = true;
+					for (idx_t c = 0; c < num_key_cols; c++) {
+						if (label_column[c] == c) {
+							continue;
+						}
+						Value label = key_results.data[label_column[c]].GetValue(i);
+						if (!label.IsNull() && label < rep_labels[c][gid]) {
+							rep_labels[c][gid] = std::move(label);
+						}
+					}
 					break;
 				}
 			}
@@ -424,6 +449,7 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 				idx_t gid = next_group++;
 				for (idx_t c = 0; c < num_key_cols; c++) {
 					rep_keys[c].push_back(key_results.data[c].GetValue(i));
+					rep_labels[c].push_back(key_results.data[label_column[c]].GetValue(i));
 				}
 				hash_to_rep_group.emplace(h, gid);
 				out_row_to_group[row] = gid;
@@ -438,12 +464,18 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 			row_offset, num_rows);
 	}
 
+	// The labels ride as trailing columns: distinct groups differ in a key column, so they
+	// never decide the order, and they are permuted with it.
+	for (auto &column : rep_labels) {
+		rep_keys.push_back(std::move(column));
+	}
 	NumberGroupsByValue(rep_keys, next_group, out_row_to_group);
 	out_num_groups = next_group;
 	if (out_rep_keys) {
-		// Expose the per-group representative key values (group g's value for each key
-		// column) — used by the unbounded diagnosis to label escaping categorical groups.
-		*out_rep_keys = std::move(rep_keys);
+		// Expose each group's label values (group g's value for each key column), which
+		// messages and the unbounded diagnosis quote.
+		out_rep_keys->assign(std::make_move_iterator(rep_keys.begin() + NumericCast<int64_t>(num_key_cols)),
+		                     std::make_move_iterator(rep_keys.end()));
 	}
 }
 
@@ -505,14 +537,18 @@ static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<De
 		}
 		auto &entry = found->second;
 		vector<const Expression *> key_exprs;
+		vector<const Expression *> label_exprs;
 		vector<bool> null_no_group;
 		for (auto &element : DecideKeyElements(keys, key)) {
-			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *element.expression, context));
+			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, element.Grouping(), context));
+			label_exprs.push_back(
+			    element.collated ? &CachedTransformToChunkExpression(chunk_expr_cache, *element.expression, context)
+			                     : nullptr);
 			null_no_group.push_back(element.null_mode == DecideKeyNullMode::NO_GROUP);
 		}
 		BuildGroupIds(key_exprs, context, data, num_rows, std::function<bool(idx_t)> {}, entry.unfiltered_row_group_ids,
 		              entry.unfiltered_num_groups, &entry.unfiltered_rep_keys, rows.empty() ? nullptr : &rows,
-		              null_no_group);
+		              null_no_group, label_exprs);
 		entry.evaluated_rows = std::move(rows);
 	}
 	return found->second;

@@ -49,6 +49,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D66 | A right side of magnitude 1e20 or more in the open direction (`x <= 1e30`) is no bound |
 | D67 | A NULL data value is skipped where it is read (deck pp. 50, 56): a reducer skips a row whose summand is NULL, as SQL does; a NULL that reaches a constraint unreduced skips that instance; a NULL objective term is dropped before like terms merge. A NULL written in the query beside a decision, and NaN, stay errors |
 | D68 | An empty group skips its constraint (deck p. 56): a reducer over no rows is NULL, and a NULL that reaches the comparison skips the instance. A `when` that keeps no row yields no constraint; a group in which some reducer reads no row yields none; an objective term over no rows is dropped. `count(*)` over no rows is 0, as in SQL (owner, 2026-10-28) |
+| D69 | A key groups rows under its column's collation, as `GROUP BY` does (`PushCollation` on each key element): `per K:` classes, `by` groups, bound-side reducers and keyed decisions alike. A label quotes the group's least raw spelling, so it does not depend on row order (owner, 2026-10-27) |
 
 ## Spelling calls
 
