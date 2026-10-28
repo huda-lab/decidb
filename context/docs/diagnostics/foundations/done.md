@@ -270,7 +270,7 @@ it and no automatic path.
   → logical plan → stage 08, and never read back out of a setting.
 - **What it arms.** `PhysicalDecide::FinalizeSolveResult` reads the flag once as
   `diagnosis_armed` and pre-arms the shared diagnosis prep it gates:
-  `SolveModelOptions::extract_unbounded_ray`, `tolerate_infeasible_bounds`, and
+  `SolveModelOptions::extract_unbounded_ray`, `keep_singleton_rows` (data-valued singleton rows stay rows), and
   retained-model capture. An unprefixed query pays for none of it.
 - **The gate helper.** `DiagnosisApplies(bool armed, SolverStatus)`
   (`decide_diagnostic.cpp`) — true only under the prefix, and only for INFEASIBLE /

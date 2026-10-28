@@ -1027,11 +1027,9 @@ domain rigid:
   box. A BOOLEAN-domain column (`SolverInput::variable_types[var] == BOOLEAN`) is clamped
   to `[0,1]` and never widens past it, so a pin on one opens only back to its domain and a
   BOOLEAN implied-tightened below 1 (the budget example) opens back to 1.
-- **Inverted-box survival (`SolverInput::tolerate_infeasible_bounds`).** Two opposite folded
-  bounds (`x <= 4 AND x >= 10`) invert the box (`col_lower > col_upper`). Without help,
-  `SolverModel::Build` throws before `retained_model` is populated, so the engine never sees the
-  model. Under `DIAGNOSE` the flag (set in `Finalize`, same trigger as the unbounded-ray extraction)
-  makes `Build` keep the inverted box, and `SolveModel` short-circuits to INFEASIBLE **without
+- **Inverted-box survival.** Two opposite folded bounds (`x <= 4 AND x >= 10`) invert the box
+  (`col_lower > col_upper`). `SolverModel::Build` keeps the inverted box, and `SolveModel`
+  short-circuits to INFEASIBLE (`SolverModel::ProvesInfeasible`) with the model retained, **without
   handing the box to the backend** — HiGHS hard-rejects `lb>ub` at load and poisons the session;
   Gurobi tolerates it, so the short-circuit is the solver-agnostic path. The box widening then
   un-inverts the box for the elastic re-solve, which loosens one of the two bounds.

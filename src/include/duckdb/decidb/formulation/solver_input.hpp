@@ -683,7 +683,7 @@ struct SolverInput {
     //! When set (infeasible diagnosis armed), SolverModel::Build keeps each data-valued bound on one
     //! decision as a row instead of folding it into the column box, so the elastic engine can relax
     //! the row and quote its clause. Off by default: the fold is faster to solve.
-    bool tolerate_infeasible_bounds = false;
+    bool keep_singleton_rows = false;
 };
 
 //! The column box a derived constant is valid against.

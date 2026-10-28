@@ -262,22 +262,23 @@ def test_null_error_of_a_wide_value_is_the_solvers_error_word_for_word(decidb_cl
 
 
 # A plan prints an expression by its alias, so a pipeline tag left on a value a direct plan computes reaches EXPLAIN
-# (`__source_fragment_0__`). A scalar subquery's NULL check is built by S1's row-bound check and by A1's value check; a
-# data reducer's bound carries the bound-side window's tags.
+# (`__source_fragment_0__`). The rule driver strips every tag from the operators it installs; the cases are the values
+# that carry one: a scalar subquery in a bound, a `when` and an objective coefficient, and a data reducer's bound.
 _TAGGED_BOUNDS = {
-    "s1_scalar_subquery": "x(BOOL) SUCH THAT SUM(x) <= 1 AND x <= (SELECT max(v) FROM range(2) r(v))",
-    "a1_scalar_subquery": "x(REAL) SUCH THAT x <= (SELECT max(v) FROM range(2) r(v))",
-    "a1_data_reducer": "x(REAL) SUCH THAT x <= SUM(c) / 4",
+    "s1_scalar_subquery": "x(BOOL) SUCH THAT SUM(x) <= 1 AND x <= (SELECT max(v) FROM range(2) r(v)) MAXIMIZE SUM(s * x)",
+    "a1_scalar_subquery": "x(REAL) SUCH THAT x <= (SELECT max(v) FROM range(2) r(v)) MAXIMIZE SUM(s * x)",
+    "a1_data_reducer": "x(REAL) SUCH THAT x <= SUM(c) / 4 MAXIMIZE SUM(s * x)",
+    "a1_subquery_in_a_when": (
+        "x(REAL) SUCH THAT x <= 5 AND when c > (SELECT max(v) FROM range(2) r(v)): x <= 1 MAXIMIZE SUM(s * x)"
+    ),
+    "a1_subquery_coefficient": "x(REAL) SUCH THAT x <= 1 MAXIMIZE SUM((SELECT max(v) FROM range(2) r(v)) * s * x)",
 }
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("shape", sorted(_TAGGED_BOUNDS))
 def test_explain_of_a_direct_plan_shows_no_pipeline_tag(decidb_cli, shape):
-    sql = (
-        "SELECT id, x FROM (VALUES (1, 2.0, 1.0), (2, 3.0, 2.0)) t(id, c, s) "
-        f"DECIDE {_TAGGED_BOUNDS[shape]} MAXIMIZE SUM(s * x)"
-    )
+    sql = "SELECT id, x FROM (VALUES (1, 2.0, 1.0), (2, 3.0, 2.0)) t(id, c, s) " f"DECIDE {_TAGGED_BOUNDS[shape]}"
     plan = _raw(decidb_cli, f"EXPLAIN {sql}").stdout
     assert "Direct solve" in plan and "__" not in plan, plan
 

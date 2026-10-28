@@ -18,6 +18,7 @@
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
+#include "duckdb/planner/logical_operator_visitor.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_comparison_join.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
@@ -131,6 +132,20 @@ bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
 //! least message a row raises, so that every row reads the same one), and a filter above it raises the first check
 //! that fails. The filter passes on exactly the source's columns, so the source keeps its bindings. Filter
 //! pullup leaves a filter with a projection map in place, and pushdown moves nothing below an unpartitioned window.
+//! Strips the pipeline's tags from every expression of the operators above `source`. The row checks and the rule read
+//! the tags while they build those operators (a NULL message quotes a subquery by its fragment tag); once built,
+//! nothing reads them, and a plan prints an expression by its alias, so a tag left there would reach EXPLAIN. The
+//! source keeps its own aliases.
+void StripTagsAbove(LogicalOperator &op, const LogicalOperator &source) {
+	if (&op == &source) {
+		return;
+	}
+	LogicalOperatorVisitor::EnumerateExpressions(op, [](unique_ptr<Expression> *expr) { DirectStripTags(**expr); });
+	for (auto &child : op.children) {
+		StripTagsAbove(*child, source);
+	}
+}
+
 void AddRowChecks(Optimizer &optimizer, const DirectIR &ir, unique_ptr<LogicalOperator> &source) {
 	if (ir.row_checks.empty()) {
 		return;
@@ -306,6 +321,7 @@ void ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	                                 std::move(output_types), std::move(prunable_sources), std::move(annotation),
 	                                 late_materialization);
 	auto &installed = *adapter;
+	StripTagsAbove(installed, source);
 	op = std::move(adapter);
 	// The operators above read the DECIDE node's bindings; from here they read the adapter's own.
 	RebindAboveAdapter(*root, installed, output_bindings);

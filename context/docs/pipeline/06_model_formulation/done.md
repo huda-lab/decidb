@@ -208,7 +208,7 @@ data-valued bound differs per row and is known only here. The fold:
 - **leaves an open end open.** `x <= +inf` admits every value, so the box stays as it is. An
   end that admits nothing (`x >= +inf`) keeps the row, which `SolverModel::ProvesInfeasible`
   answers before any backend.
-- **does not run under diagnosis** (`tolerate_infeasible_bounds`, set by the `DIAGNOSE`
+- **does not run under diagnosis** (`keep_singleton_rows`, set by the `DIAGNOSE`
   prefix). The elastic engine relaxes rows and quotes the clause from their provenance
   (`x <= cap_col + delta`), so a diagnosed statement keeps the rows.
 
@@ -401,10 +401,9 @@ non-contiguous 1/2/3/5/6/7 before this consolidation, from a since-removed site
 
 After building:
 
-1. **Bounds** — every variable must have finite bounds with `lower <= upper`.
-   Under `tolerate_infeasible_bounds` (diagnosis mode) an inverted box is kept
-   rather than thrown, so the model survives for the elastic engine; stage 07
-   short-circuits to `INFEASIBLE` without handing it to a backend.
+1. **Bounds** — every variable must have finite bounds. An inverted box
+   (`lower > upper`) is kept, so the model survives for the elastic engine;
+   stage 07 short-circuits to `INFEASIBLE` without handing it to a backend.
 2. **Objective coefficients** — every entry finite.
 3. **Constraints** — `indices` and `coefficients` the same size, every index in
    `[0, total_vars)`, every coefficient finite, RHS not NaN (infinity is allowed

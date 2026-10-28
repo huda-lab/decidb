@@ -679,12 +679,6 @@ private:
 		return value;
 	}
 
-	//! The same, for a value the plan computes: without the pipeline's tags, which only a check's message reads, so
-	//! EXPLAIN shows the value as written.
-	unique_ptr<Expression> ValueIntoState(const Expression &expr, const ScopeBindings &scope) const {
-		return calc.Out(calc.Of(*CopyIntoState(expr, scope)));
-	}
-
 	//! Stage 1: pass the source through and append the per-row scope flags (group eligibility, fixed values).
 	unique_ptr<LogicalOperator> ProjectScopeState(unique_ptr<LogicalOperator> source, ScopeBindings &scope) const {
 		vector<unique_ptr<Expression>> fixed_flags;
@@ -749,7 +743,7 @@ private:
 			combined_score = calc.Num(0.0);
 		}
 		for (auto &part : condition.objective_parts) {
-			auto coefficient = ValueIntoState(*part.coefficient, scope);
+			auto coefficient = CopyIntoState(*part.coefficient, scope);
 			auto term = calc.Wrap(
 			    DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.scaled, part.scale, part.divides));
 			combined_score = combined_score ? calc.Add(combined_score, term) : term;
@@ -766,7 +760,7 @@ private:
 		// or a count of 0, so computing it there raises nothing.
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
 			auto &bound = condition.source_bounds[i];
-			auto value = ValueIntoState(*bound.value, scope);
+			auto value = CopyIntoState(*bound.value, scope);
 			if (bound.negated) {
 				value = DirectScaledTerm(optimizer, std::move(value), -1, false, 1.0, false);
 			}

@@ -32,6 +32,10 @@ bool DirectReferencesOnlySource(const Expression &expr, const vector<ColumnBindi
 //! True when the expression mentions at least one column.
 bool DirectHasColumnReference(const Expression &expr);
 
+//! Strips the DECIDE tags from every alias in `expr`: a plan prints an expression by its alias, so a tag would reach
+//! EXPLAIN. A user's own name (a column's) stays.
+void DirectStripTags(Expression &expr);
+
 //! Re-points every source column reference at the same position in a projection over the source. Returns false,
 //! leaving the expression partly rewritten, when a reference is not a source column.
 bool DirectRemapSourceReferences(Expression &expr, const vector<ColumnBinding> &source_bindings,

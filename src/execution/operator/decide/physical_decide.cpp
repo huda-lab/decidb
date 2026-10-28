@@ -3819,12 +3819,12 @@ static void OpenElasticColumnBox(SolverInput &input) {
 //! solved formulation can leak into the repair formulation.
 SolverModel PhysicalDecide::FormulateElasticModel(const ElasticFormulation &elastic,
                                                   const EvaluatedClauses &evaluated,
-                                                  bool tolerate_infeasible_bounds,
+                                                  bool keep_singleton_rows,
                                                   VarIndexer &out_var_indexer,
                                                   vector<string> &out_global_labels) const {
     SolverInput input = elastic.input;
     VarIndexer indexer = elastic.var_indexer;
-    input.tolerate_infeasible_bounds = tolerate_infeasible_bounds;
+    input.keep_singleton_rows = keep_singleton_rows;
 
     OpenElasticColumnBox(input);
     FormulateModel(input, FormulationBox::OfSolvedModel(input), indexer, evaluated);
@@ -3882,7 +3882,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
     // diagnosis so the INFEASIBLE terminal can reset it to the intrinsic domain and
     // diagnose it (Bug 1, all-column-bound conflicts). An unprefixed query keeps the
     // fast throw.
-    solver_input.tolerate_infeasible_bounds = diagnosis_armed;
+    solver_input.keep_singleton_rows = diagnosis_armed;
 
     // H5: slow-solve continuation is ordinary execution behaviour, not diagnosis, so it
     // runs with or without the prefix. The interactive prompt needs a human, so it falls
@@ -4227,7 +4227,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         vector<string> elastic_global_labels;
         try {
             elastic_model = FormulateElasticModel(*elastic, evaluated,
-                                                  /*tolerate_infeasible_bounds=*/true,
+                                                  /*keep_singleton_rows=*/true,
                                                   elastic_indexer, elastic_global_labels);
         } catch (const InvalidInputException &ex) {
             // The only thing the formulation raises by design: a construct the widened box

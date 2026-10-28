@@ -724,7 +724,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             }
             return true;
         }
-        if (input.tolerate_infeasible_bounds || constr.indices.size() != 1) {
+        if (input.keep_singleton_rows || constr.indices.size() != 1) {
             return false;
         }
         if (lower == std::numeric_limits<double>::infinity() || upper == -std::numeric_limits<double>::infinity()) {

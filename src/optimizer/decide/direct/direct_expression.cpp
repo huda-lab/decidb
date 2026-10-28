@@ -151,16 +151,14 @@ ExprPtr ExpressionBuilder::Wrap(unique_ptr<Expression> expr) const {
 unique_ptr<Expression> ExpressionBuilder::Out(const ExprPtr &expr) const {
 	return expr->Copy();
 }
-//! Strips the DECIDE tags from every alias in `expr`: a plan prints an expression by its alias, so a tag would reach
-//! EXPLAIN. A user's own name (a column's) stays.
-static void StripTags(Expression &expr) {
+void DirectStripTags(Expression &expr) {
 	expr.SetAlias(StripDecideTags(expr.GetAlias()));
-	ExpressionIterator::EnumerateChildren(expr, [](Expression &child) { StripTags(child); });
+	ExpressionIterator::EnumerateChildren(expr, [](Expression &child) { DirectStripTags(child); });
 }
 
 ExprPtr ExpressionBuilder::Of(const Expression &expr) const {
 	auto copy = expr.Copy();
-	StripTags(*copy);
+	DirectStripTags(*copy);
 	return Wrap(std::move(copy));
 }
 ExprPtr ExpressionBuilder::Num(double value) const {

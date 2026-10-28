@@ -28,6 +28,8 @@ bool DirectIsSingletonRow(const DirectIR &ir, const DirectIRConstraint &ir_node)
 }
 
 bool DirectContradictsDomain(const DirectIR &ir) {
+	// Every bound here is the user's (Add): direct solve runs before RewriteInDomain, so a rule reads an IN as written
+	// and never the bounds its lowering adds (AddLowered).
 	vector<DecideWrittenBox> written(ir.decisions.size());
 	for (auto &ir_node : ir.constraints) {
 		if (ir_node.variable_bound && DirectIsSingletonRow(ir, ir_node)) {

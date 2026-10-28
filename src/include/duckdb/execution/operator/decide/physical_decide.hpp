@@ -386,7 +386,7 @@ private:
     //! left untouched — the copy it works on is local.
     SolverModel FormulateElasticModel(const ElasticFormulation &elastic,
                                       const EvaluatedClauses &evaluated,
-                                      bool tolerate_infeasible_bounds, VarIndexer &out_var_indexer,
+                                      bool keep_singleton_rows, VarIndexer &out_var_indexer,
                                       vector<string> &out_global_labels) const;
 };
 

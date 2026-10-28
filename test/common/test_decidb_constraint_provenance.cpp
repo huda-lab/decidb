@@ -91,7 +91,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		input.constraints.push_back(MakePerRow(0, 3, 5.0));
 		// `x <= 5` on one decision folds into the column box unless diagnosis is armed; provenance is what the
 		// diagnosis reads, and under it the rows are kept.
-		input.tolerate_infeasible_bounds = true;
+		input.keep_singleton_rows = true;
 
 		SolverModel model = BuildModel(input);
 
@@ -107,7 +107,7 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		SolverInput input = MakeBaseInput(3, 2);
 		input.constraints.push_back(MakeAggregate({0, 1}, 3, 10.0)); // clause 0
 		input.constraints.push_back(MakePerRow(0, 3, 5.0));          // clause 1
-		input.tolerate_infeasible_bounds = true;                     // keep the per-row rows (see above)
+		input.keep_singleton_rows = true;                     // keep the per-row rows (see above)
 
 		SolverModel model = BuildModel(input);
 

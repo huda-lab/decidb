@@ -1,6 +1,6 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-28 at `9852d3e4c9` or later, with the strict xfails on the direct path of pending cases: `make
+Verified on 2026-10-28 at `13a9336394`, with the strict xfails on the direct path of pending cases: `make
 decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each
 4,684 outcomes and 327 strict expected failures (the direct path of keyed cases and other direct-solve follow-ups);
 `DECIDB_FORCE_SOLVER=highs make decide-test` 4,682 passed and two failures, `test_norm_combined_l1_l2_objective`, which
@@ -157,7 +157,9 @@ check). Design: `../architecture/`.
     as a per-row expression (`DirectNullMessageOf`, used by `DirectValidNumberPredicate`, `DirectValidBoundPredicate`
     and `DirectCheckRowBounds`) that `error()` evaluates only on the failing row. Both read the source-fragment registry,
     which the rule driver hands every rule's `Apply`. A value's source columns are read from the stage above the one
-    that carries the source (`DirectOverProjection`).
+    that carries the source (`DirectOverProjection`). A message quotes a subquery by the fragment tag on its alias, so
+    the values keep their tags while the rule builds its plan; once the plan is installed, nothing reads them, and the
+    driver strips every tag from the operators above the source (`StripTagsAbove`), so EXPLAIN never prints one.
   - A NaN or infinite number raises the solver's message, whose first words name the clause: `objective coefficient`,
     `constraint coefficient` or `constraint right-hand side`, without the solver's ` at row N`. The rule passes the
     `DirectNumberKind` (S1 and A1's objective values: objective; A1's coefficient on the left of a bound: constraint).
