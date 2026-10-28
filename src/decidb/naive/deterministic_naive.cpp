@@ -277,9 +277,10 @@ bool HighsSession::Load(const SolverModel &model) {
     //===--------------------------------------------------------------------===//
 
     highs.setOptionValue("log_to_console", std::getenv("DECIDB_PROFILE_SOLVER_LOG") != nullptr);
-    // The optimum, not an incumbent within the default relative gap of 1e-4; Gurobi's `MIPGap` is set the same way.
-    highs.setOptionValue("mip_rel_gap", 0.0);
-    // Note: the time_limit is NOT set here — it is a per-chunk budget applied in
+	// The gap the user accepts (`decide_mip_gap`, default 0: the optimum, not HiGHS's default incumbent within 1e-4);
+	// Gurobi's `MIPGap` is set the same way.
+	highs.setOptionValue("mip_rel_gap", mip_gap);
+	// Note: the time_limit is NOT set here — it is a per-chunk budget applied in
     // RunAndReadback(), so a warm Continue() can extend it without a reload.
 
     vector<HighsVarType> var_types(total_vars);

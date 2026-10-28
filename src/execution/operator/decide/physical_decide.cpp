@@ -3872,12 +3872,15 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
     // The first solve chunk uses the same per-chunk budget every Continue() chunk will,
     // so elapsed climbs in even multiples (300s, 600s, ...) across the loop.
     solve_options.time_limit_seconds = ResolveDecideTimeLimit();
-    // Ctrl-C cuts the solve short and returns the best-so-far instead of aborting the
-    // query — also ordinary execution behaviour, so the poll is installed unconditionally.
-    // Gurobi honors it mid-solve; HiGHS stays boundary-only.
-    solve_options.interrupt_poll = [&context]() { return context.interrupted.load(); };
-    SolveModelOptions diagnostic_solve_options;
-    diagnostic_solve_options.time_limit_seconds =
+	solve_options.mip_gap = GetDecideMipGap(context);
+	// Ctrl-C cuts the solve short and returns the best-so-far instead of aborting the
+	// query — also ordinary execution behaviour, so the poll is installed unconditionally.
+	// Gurobi honors it mid-solve; HiGHS stays boundary-only.
+	solve_options.interrupt_poll = [&context]() {
+		return context.interrupted.load();
+	};
+	SolveModelOptions diagnostic_solve_options;
+	diagnostic_solve_options.time_limit_seconds =
         ResolveDecideDiagnosticTimeLimit(solve_options.time_limit_seconds);
     diagnostic_solve_options.interrupt_poll = solve_options.interrupt_poll;
 

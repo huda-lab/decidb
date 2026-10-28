@@ -314,6 +314,9 @@ void RegisterDecideDiagnosticOptions(DBConfig &config);
 //! 1e-4). Clamped to the floor (>= 1e-5) so the indicator link is always enforced.
 double GetDecideL0Tolerance(ClientContext &context);
 
+//! Read the relative MIP gap a query's solve may stop at (`decide_mip_gap`, default 0: prove the optimum).
+double GetDecideMipGap(ClientContext &context);
+
 //! Read the unbounded-characterization knobs (escape rate / categorical ratio /
 //! min-categories floor) from the session settings, falling back to defaults.
 DecideDiagParams GetDecideDiagnosticParams(ClientContext &context);

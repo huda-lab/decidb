@@ -45,20 +45,6 @@
 - **Impact:** a large HiGHS query can take the whole process down, and the profile misreports why.
 - **Reproduce:** `make decide-bench-setup`, remove the entry from `SKIP`, run `profile_pipeline.py`. Memory-heavy.
 
-## With a gap of 0, HiGHS cannot finish an entity-scoped MIP the test suite runs
-
-- **Location:** `HighsSession::Load` in `src/decidb/naive/deterministic_naive.cpp`, which sets `mip_rel_gap` to 0
-  (`../pipeline/07_solver/done.md`, Optimality gap); the test is
-  `test/decide/tests/test_entity_scope.py::test_entity_scoped_mixed_when_per`.
-- **Observed:** under `DECIDB_FORCE_SOLVER=highs` (the matrix's `highs` run), HiGHS reaches incumbent 74,999.84 against
-  bound 75,000 within seconds, a gap of 0.0002%, and then fails to close it before the test's 120 s timeout. With HiGHS's
-  default gap of 1e-4 the test passed. Gurobi closes the same model at gap 0. The test is unchanged.
-- **Expected:** a query answers with the optimum by default, and a user who accepts a near-optimal answer can say so.
-  The proposed fix is a `decide_mip_gap` setting, default 0, passed to both backends in place of the hard-coded 0;
-  this test would then set 1e-4 on HiGHS.
-- **Impact:** the `highs` matrix run has a second failure besides `test_norm_combined_l1_l2_objective`. A HiGHS user
-  with a hard MIP can wait far longer than before for a proof the answer did not need.
-
 ## A negative lower bound under a `when` leaves the decision non-negative
 
 - **Location:** singleton-row folding does not enter a `when` wrapper

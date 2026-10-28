@@ -55,6 +55,15 @@ public:
 	//! returns. Set once by the operator before the continuation loop.
 	virtual void SetInterruptPoll(std::function<bool()> poll) {
 	}
+
+	//! The relative MIP gap a solve may stop at (`decide_mip_gap`). Set before Solve(); both backends read it when
+	//! they load the model, so it holds for every Continue() chunk too.
+	void SetMipGap(double gap) {
+		mip_gap = gap;
+	}
+
+protected:
+	double mip_gap = 0.0;
 };
 
 } // namespace duckdb

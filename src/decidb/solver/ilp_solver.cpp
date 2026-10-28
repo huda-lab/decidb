@@ -284,6 +284,7 @@ SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
 	}
 	double time_limit = options.time_limit_seconds > 0.0 ? options.time_limit_seconds : ResolveDecideTimeLimit();
 	auto session = backend.CreateSession();
+	session->SetMipGap(options.mip_gap);
 	if (options.interrupt_poll) {
 		session->SetInterruptPoll(options.interrupt_poll);
 	}
@@ -451,6 +452,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	SolveModelOptions diagnostic_options = MakeDiagnosticSolveOptions(options);
 	phase.Next("solver.session_create");
 	auto session = backend.CreateSession();
+	session->SetMipGap(options.mip_gap);
 	// Install the interrupt poll before the first solve so a user Ctrl-C cuts the
 	// *initial* solve short (not just continuation chunks). The poll is a session
 	// member, so it carries into every later Continue() when the session is retained.

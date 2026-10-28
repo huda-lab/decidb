@@ -75,6 +75,13 @@ static void L0ToleranceSetCallback(ClientContext &context, SetScope scope, Value
 	}
 }
 
+static void MipGapSetCallback(ClientContext &context, SetScope scope, Value &parameter) {
+	double v = parameter.GetValue<double>();
+	if (!(v >= 0.0)) {
+		throw InvalidInputException("decide_mip_gap must be >= 0; got " + parameter.ToString() + ".");
+	}
+}
+
 void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	// Unbounded characterization knobs: they shape the `group` / `amount` columns a
 	// runaway variable reports under DIAGNOSE.
@@ -111,6 +118,20 @@ void RegisterDecideDiagnosticOptions(DBConfig &config) {
 	    "enforced, so >= 1e-5. Default 1e-4. Lower it toward the floor for small-magnitude "
 	    "data; raise it to treat larger residuals as zero.",
 	    LogicalType::DOUBLE, Value::DOUBLE(DECIDE_L0_TOLERANCE_DEFAULT), L0ToleranceSetCallback);
+	config.AddExtensionOption(
+	    "decide_mip_gap",
+	    "Relative gap at which a DECIDE solve may stop with a near-optimal answer. Default 0: the answer is the "
+	    "optimum. 1e-4 accepts an answer within 0.01% of it.",
+	    LogicalType::DOUBLE, Value::DOUBLE(0.0), MipGapSetCallback);
+}
+
+double GetDecideMipGap(ClientContext &context) {
+	Value value;
+	// The option is registered with a default, and its callback rejects a negative gap.
+	bool found = context.TryGetCurrentSetting("decide_mip_gap", value);
+	D_ASSERT(found && !value.IsNull());
+	(void)found;
+	return value.GetValue<double>();
 }
 
 double GetDecideL0Tolerance(ClientContext &context) {

@@ -928,7 +928,9 @@ def test_entity_scoped_mixed_when_per(
           AND when c.c_acctbal > 0 per r_name: sum(x * c.c_acctbal) by (r_name) <= 15000
         MAXIMIZE SUM(x * c.c_acctbal)
     """
-    result, cols = decidb_cli.execute(sql)
+    # At gap 0 HiGHS reaches 0.0002% of the bound within seconds but cannot close it before the timeout; the
+    # comparison below already allows each side 1e-4 of the optimum.
+    result, cols = decidb_cli.execute("SET decide_mip_gap = 1e-4;\n" + sql)
     assert len(result) > 0
 
     keepN_idx = cols.index("keepN")

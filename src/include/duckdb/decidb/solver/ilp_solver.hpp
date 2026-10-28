@@ -28,6 +28,9 @@ struct SolveModelOptions {
 	//! shared default" (ResolveDecideTimeLimit). The slow-solve continuation loop
 	//! sets this so the first chunk uses the same limit later Continue() chunks do.
 	double time_limit_seconds = -1.0;
+	//! The relative MIP gap the solve may stop at: 0 (the default) proves the optimum. The query's solve reads
+	//! `decide_mip_gap`; diagnostic follow-up solves keep 0.
+	double mip_gap = 0.0;
 	//! Installed on the session before the first solve, so a user Ctrl-C interrupts
 	//! the *initial* solve — not only continuation chunks after a timeout. The poll
 	//! is a session member, so it persists across Continue() automatically. Empty =

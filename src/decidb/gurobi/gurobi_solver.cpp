@@ -156,12 +156,13 @@ void GurobiSession::Load(const SolverModel &ilp) {
                                 error);
     }
     api.setintparam(guard.env, "OutputFlag", std::getenv("DECIDB_PROFILE_SOLVER_LOG") ? 1 : 0);
-    // A query answers with the optimum, not an incumbent within Gurobi's default relative gap of 1e-4: on a 1.6M-row
-    // selection that default returned objectives up to 0.005% short of the optimum, different on every run. HiGHS is
-    // held to the same rule (`mip_rel_gap` in HighsSession::Load). A solve that cannot close the gap in time stops
-    // at the time limit and reports it.
-    api.setdblparam(guard.env, "MIPGap", 0.0);
-    // Note: the TimeLimit is NOT set here — it is a per-chunk budget applied in
+	// By default a query answers with the optimum (`decide_mip_gap` = 0), not an incumbent within Gurobi's default
+	// relative gap of 1e-4: on a 1.6M-row selection that default returned objectives up to 0.005% short of the
+	// optimum, different on every run. A user who accepts a near-optimal answer sets the gap. HiGHS reads the same
+	// value (`mip_rel_gap` in HighsSession::Load). A solve that cannot close the gap in time stops at the time limit
+	// and reports it.
+	api.setdblparam(guard.env, "MIPGap", mip_gap);
+	// Note: the TimeLimit is NOT set here — it is a per-chunk budget applied in
     // RunAndReadback() (on the live model's env), so a warm Continue() can raise it
     // without a reload.
     // Enable non-convex QP solving via spatial branching when needed

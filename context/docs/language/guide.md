@@ -616,6 +616,9 @@ Hitting the time limit or pressing Ctrl-C happens with or without the prefix. Th
 then: at a terminal it offers to keep solving (Enter continues, `s` stops with the best so far); elsewhere it errors;
 after Ctrl-C it returns the best solution found, marked not proven best.
 
+A query answers with the proven optimum by default. `SET decide_mip_gap = 1e-4` accepts an answer within 0.01% of
+it, which can finish a hard integer model sooner; the value must be 0 or more.
+
 How the engine works: [diagnose.md](diagnose.md) and `../diagnostics/`.
 
 ## 9. `EXPLAIN`

@@ -212,9 +212,13 @@ internal re-solves before the user sees anything.
 ### Optimality gap
 
 A mixed-integer solve answers with the optimum, not with an incumbent inside the
-solver's default relative gap of 1e-4. Both backends set the gap to 0: Gurobi
-`MIPGap` on the environment (`gurobi_solver.cpp`), HiGHS `mip_rel_gap` in
-`HighsSession::Load` (`deterministic_naive.cpp`). With the default, Gurobi returned
+solver's default relative gap of 1e-4. The gap is the session setting `decide_mip_gap`
+(default 0, rejected below 0; registered with the other DECIDE options in
+`decide_diagnostic.cpp`). The operator reads it into `SolveModelOptions::mip_gap`, the
+facade hands it to the session (`SolverSession::SetMipGap`), and both backends apply it
+when they load the model: Gurobi `MIPGap` on the environment (`gurobi_solver.cpp`),
+HiGHS `mip_rel_gap` in `HighsSession::Load` (`deterministic_naive.cpp`), so it holds for
+every continuation chunk. Diagnostic follow-up solves keep 0. With the default, Gurobi returned
 a 1.6M-row selection up to 0.005% short of the optimum, a different incumbent on
 every run, while direct solve and HiGHS returned the optimum
 (`../../performance/benchmarking/direct_solve.md`). A solve that cannot prove the
