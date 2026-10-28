@@ -175,8 +175,6 @@ public:
     //! Every key of the clause (LogicalDecide::keys), its expressions resolved against the
     //! input chunk.
     vector<DecideKey> keys;
-    //! The elements of `keys[key]`; none for INVALID_INDEX, the empty key.
-    const vector<DecideKeyElement> &KeyElements(idx_t key) const;
 
     //! The run-time checks of the clauses, run first.
     vector<DecideScopeCheck> scope_checks;

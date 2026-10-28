@@ -1630,10 +1630,6 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
     }
 }
 
-const vector<DecideKeyElement> &PhysicalDecide::KeyElements(idx_t key) const {
-	return DecideKeyElements(keys, key);
-}
-
 //===--------------------------------------------------------------------===//
 // Finalize: PHASE 1.5 — Build Entity Mappings for Keyed Decisions
 //===--------------------------------------------------------------------===//

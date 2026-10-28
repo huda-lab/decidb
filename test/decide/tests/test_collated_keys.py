@@ -61,17 +61,14 @@ def test_a_bound_side_reducer_reads_its_group_under_the_collation(decidb_cli, sc
 
 @pytest.mark.correctness
 def test_a_keyed_decision_has_one_value_per_collated_key(decidb_cli, scope_solver):
-    """`per g: y`: rows 1 and 2 share one decision, rows 3-5 another."""
+    """`per g: y` with `y <= cap`: rows 1 ('a', cap 1) and 2 ('A', cap 2) share one decision, so both hold 1."""
     sql = f"""
         SELECT id, y {_source()}
-        DECIDE per t.g: y(INT) SUCH THAT y <= t.cap AND sum(y) <= 2 MAXIMIZE SUM(t.p * y) ORDER BY id"""
-    clauses = [
-        Scoped((lambda r: {"y": 1},), "<=", (lambda r: {CONSTANT: r["cap"]},)),
-        Scoped((Reduce("sum", lambda r: {"y": 1}),), "<=", (lambda r: {CONSTANT: 2},), per=()),
-    ]
+        DECIDE per t.g: y(INT) SUCH THAT y <= t.cap MAXIMIZE SUM(t.p * y) ORDER BY id"""
+    clauses = [Scoped((lambda r: {"y": 1},), "<=", (lambda r: {CONSTANT: r["cap"]},))]
     objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"y": r["p"]}),))
     result = _judged(decidb_cli, scope_solver, sql, [Decision("y", key=("gk",))], clauses, objective)
-    assert result[0]["y"] == result[1]["y"]
+    assert [row["y"] for row in result[:2]] == [1, 1]
 
 
 def test_a_message_quotes_the_least_spelling_of_the_group(decidb_cli):
@@ -79,3 +76,59 @@ def test_a_message_quotes_the_least_spelling_of_the_group(decidb_cli):
     rows = ((1, "a", 1, 5.0), (2, "A", 3, 4.0))
     sql = f"SELECT id, x {_source(rows)} DECIDE x(BOOL) SUCH THAT per t.g: sum(x) <= t.cap MAXIMIZE SUM(t.p * x)"
     decidb_cli.assert_error(sql, match=r"t\.g = 'A' has more than one value")
+
+
+KEYED_COLUMNS = ("id", "k", "g", "cap", "p")
+# `cap` is one value per NOCASE group, so an inner `per g` reads one per class.
+KEYED_ROWS = ((1, 1, "a", 1, 5.0), (2, 1, "A", 1, 4.0), (3, 2, "b", 2, 3.0), (4, 2, "B", 2, 2.0))
+
+
+def _keyed_source(rows=KEYED_ROWS):
+    return f"FROM (SELECT id, k, g COLLATE NOCASE AS g, cap, p FROM {values(rows, 'v', KEYED_COLUMNS)}) t"
+
+
+def _keyed_judged(cli, solver, sql, clauses, objective, rows=KEYED_ROWS):
+    model = ScopedModel([dict(zip(KEYED_COLUMNS, row), gk=row[2].lower()) for row in rows], [X])
+    result = aligned(answer(cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(solver, clauses, objective)
+    )
+
+
+@pytest.mark.correctness
+def test_an_inner_per_counts_each_collated_class_once(decidb_cli, scope_solver):
+    """`sum(x) <= sum(per g: cap)`: the classes are {a, A} and {b, B}, so the bound is 1 + 2 = 3, not 6."""
+    sql = f"""
+        SELECT id, x {_keyed_source()}
+        DECIDE x(BOOL) SUCH THAT sum(x) <= sum(per t.g: t.cap) MAXIMIZE SUM(t.p * x) ORDER BY id"""
+    clauses = [
+        Scoped(
+            (Reduce("sum", lambda r: {"x": 1}),),
+            "<=",
+            (Reduce("sum", lambda r: {CONSTANT: r["cap"]}, per=("gk",)),),
+            per=(),
+        )
+    ]
+    _keyed_judged(decidb_cli, scope_solver, sql, clauses, MAXIMIZE_PX)
+
+
+@pytest.mark.correctness
+def test_a_per_key_determines_a_collated_by_group(decidb_cli, scope_solver):
+    """`per k: sum(x) by (g) <= 1`: class k = 1 holds 'a' and 'A', which are one `by` group, so `k` determines it."""
+    sql = f"""
+        SELECT id, x {_keyed_source()}
+        DECIDE x(BOOL) SUCH THAT per t.k: sum(x) by (t.g) <= 1 MAXIMIZE SUM(t.p * x) ORDER BY id"""
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}, by=("gk",)),), "<=", (lambda r: {CONSTANT: 1},), per=("k",))]
+    _keyed_judged(decidb_cli, scope_solver, sql, clauses, MAXIMIZE_PX)
+
+
+@pytest.mark.correctness
+def test_an_objective_reads_one_collated_by_group(decidb_cli, scope_solver):
+    """`MAXIMIZE sum(p * x) by (g)` over rows 'a' and 'A' alone: one `by` group, so the objective is produced once."""
+    rows = KEYED_ROWS[:2]
+    sql = f"""
+        SELECT id, x {_keyed_source(rows)}
+        DECIDE x(BOOL) SUCH THAT sum(x) <= 1 MAXIMIZE sum(t.p * x) by (t.g) ORDER BY id"""
+    clauses = [Scoped((Reduce("sum", lambda r: {"x": 1}),), "<=", (lambda r: {CONSTANT: 1},), per=())]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": r["p"]}, by=("gk",)),))
+    _keyed_judged(decidb_cli, scope_solver, sql, clauses, objective, rows)

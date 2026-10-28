@@ -450,7 +450,8 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
 - **A NULL key is no class** (D5): a row whose written `per` column is NULL gets no constraint from the clause. A
   relation's columns compare NULL as a value.
 - **A key groups under its collation** (D69), as `GROUP BY` does: over a `COLLATE NOCASE` column, 'a' and 'A' are one
-  class, and a message names the class by its least spelling ('A'). Plain text compares case-sensitively.
+  class, one `by` group and one keyed decision, and a message names the group by its least spelling ('A'). Plain text
+  compares case-sensitively.
 - **`per` does not group reducers** (D6): `per g: sum(x) <= 10` bounds the total over all kept rows, once per `g`
   (identical rows collapse to one). Write `per g: sum(x) by (g) <= 10` for each group's own total.
 - **An explicit `per` must determine the body**; no `per` always does. So `sum(x) <= cap` takes the tightest `cap`

@@ -506,6 +506,8 @@ maximal decision- and reducer-free subexpression, each decision outside reducers
 within its `by` group (`DETERMINES`). An empty set is no check: execution skips its
 instance (D68). The objective: `per ()` over its values and decisions,
 then each top-level reducer in turn, its `by` key (`DETERMINES`) before its own checks.
+A `by` key's check reads the key as its rows group (`DecideKeyElement::Grouping()`, D69): over
+a NOCASE column, 'a' and 'A' are one value.
 The first check to fail stops the query, so this order picks the message. Literals and query-wide values need no check. The message texts are rendered
 here, through `RenderDecideSource`, from source fragments and relation aliases
 (`DecideScopeChecks`), since only planning still knows them.

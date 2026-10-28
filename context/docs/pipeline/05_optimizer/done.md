@@ -152,7 +152,8 @@ short fails loudly instead of handing a backend a model it cannot load.
 Two steps run on each `LogicalDecide` before these passes (`OptimizeSubtree`). First,
 `RewriteRhsAggregates` (`decide_rewrite_rhs_window.cpp`) replaces each data-only reducer on
 a bound's right side (`sum(x) <= sum(cap)`) with a window column over the source: the same
-DuckDB aggregate, partitioned by the reducer's `by` key, over
+DuckDB aggregate, partitioned by the reducer's `by` key as its rows group (under the key's
+collation, D69), over
 the rows the clause's `when` keeps. It reads its argument as that SQL aggregate does: a NULL is
 skipped, and only a NaN is checked (`COUNT` counts one). The column carries the reducer as written
 and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. A partitioned window hands its rows on in an order that
