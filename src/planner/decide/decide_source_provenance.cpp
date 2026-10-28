@@ -848,7 +848,8 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 	if (!TryParseSourceClauseTag(expr.GetAlias(), leaf_source_id) && HasDecideTag(expr.GetAlias(), OBJECTIVE_ROW_TAG)) {
 		leaf_source_id = OBJECTIVE_ROW_SOURCE_ID;
 	}
-	if (IsTruePlaceholder(expr)) {
+	// A defined body's row restates the body the reducer already prints; the account line says how it is held.
+	if (IsTruePlaceholder(expr) || HasDecideTag(expr.GetAlias(), BODY_DEFINITION_TAG)) {
 		// Emitted as an empty string rather than dropped: the placeholder is the only
 		// thing left marking where the extracted clause stood, and a caller ordering
 		// clauses by tree position needs that position. Callers drop the empty string.
@@ -1075,6 +1076,21 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 		break;
 	case Kind::NOT_EQUAL:
 		became = "two conditional rows with an indicator";
+		break;
+	case Kind::BODY_AT_LEAST:
+		became = "a helper decision per row, at least its value";
+		break;
+	case Kind::BODY_AT_MOST:
+		became = "a helper decision per row, at most its value";
+		break;
+	case Kind::BODY_EQUAL:
+		became = "a helper decision per row, equal to its value";
+		break;
+	case Kind::EXTREMUM_NATIVE:
+		became = "an extremum column stated to the solver natively";
+		break;
+	case Kind::EXTREMUM_PER_GROUP_NATIVE:
+		became = "an extremum column per group stated to the solver natively";
 		break;
 	}
 	return account.subject + " becomes " + became;

@@ -164,7 +164,7 @@ one query. Neither changes the answer's optimum. Tests that compare models run o
 ordinary operators (`../../direct_solve/README.md`); a node they leave takes the passes
 below.
 
-`DecideOptimizer::OptimizeDecide` runs eleven passes, and the order is load-bearing:
+`DecideOptimizer::OptimizeDecide` runs twelve passes, and the order is load-bearing:
 
 | # | Pass | Why here |
 |---|---|---|
@@ -173,17 +173,18 @@ below.
 | 3 | `TagAbsForBigM` | Marks the ABS nodes, in the constraints and the objective, that will need a Big-M envelope. Must precede `RewriteAbs`, which replaces the nodes. |
 | 4 | `RewriteAbs` | Creates auxiliaries replacing ABS nodes; must be first of the remaining rewrites so later passes see plain variables. |
 | 5 | `RewriteBilinear` | McCormick linearization for Boolean × anything. |
-| 6 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers become helper decisions. After ABS and bilinear, whose auxiliaries may stand in a reducer's body; before the MIN/MAX passes, which never see these reducers. |
-| 7 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
-| 8 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
-| 9 | `RewriteNotEqual` | Creates `<>` indicators. |
-| 10 | `RewriteAvgToSum` | Last of the rewrites, so every reducer that reaches it is settled. |
-| 11 | `FoldSingletonRows` | Must be last of all — see below. |
+| 6 | `DefineNonlinearReducerBodies` | Names each non-linear body a MIN/MAX formulation reads by a helper decision per row. After bilinear, whose Boolean products are then linear; before the value and MIN/MAX rewrites, which read members as linear. |
+| 7 | `RewriteScopedReducers` | The value rewrite: a VALUE-shape comparison's reducers become helper decisions. After ABS and bilinear, whose auxiliaries may stand in a reducer's body; before the MIN/MAX passes, which never see these reducers. |
+| 8 | `RewriteComposedMinMax` | Detects composed (additive, mixed-reducer) MIN/MAX **before** single-term MIN/MAX handling. |
+| 9 | `RewriteMinMax` | Classifies and rewrites single top-level MIN/MAX in constraints and objectives. |
+| 10 | `RewriteNotEqual` | Creates `<>` indicators. |
+| 11 | `RewriteAvgToSum` | Last of the rewrites, so every reducer that reaches it is settled. |
+| 12 | `FoldSingletonRows` | Must be last of all — see below. |
 
 `RewriteComposedMinMaxObjectiveTop` runs within the composed pass for the
 objective side. Setting `DECIDB_BENCH` prints `optimizer_ms` for the whole block.
 
-A twelfth pass, `BuildDecidePreparedModel`, belongs to this stage but is
+A thirteenth pass, `BuildDecidePreparedModel`, belongs to this stage but is
 **triggered later** — see §1a. It also flattens each `ReducerValueLink`'s body into
 `inner_terms`, as it does a composed term's.
 
@@ -318,8 +319,10 @@ objective the same way with the sense standing in for the relation: `MINIMIZE E`
 pins what `E <= K` pins, `MAXIMIZE E` what `E >= K` pins. So `MINIMIZE -abs(e)` and
 `MAXIMIZE abs(e)` take the envelope, `MAXIMIZE -abs(e)` does not. Reading the sense alone would
 call `MINIMIZE 0 * sum(x) - abs(sum(x) - 9)` unbounded.
-`CollectAbsWithSign` folds signs through `+`, unary and binary `-`, casts,
-aggregate bodies, and constant factors. A factor whose value is not known until
+`CollectAbsWithSign` reads each ABS term's sign from the polarity walk
+`WalkPolarity` (`decide_optimizer.cpp`), which the definition of non-linear reducer bodies
+shares: it folds signs through `+`, unary and binary `-`, casts, aggregate bodies, and
+constant factors. A factor whose value is not known until
 execution — a data column, as in `SUM(w * ABS(x - t))` — yields sign 0, which
 never matches the pinning direction and so forces Big-M, in the objective as in a
 constraint: `MINIMIZE SUM(w * ABS(x - t))` with a negative `w` on one row answers
@@ -424,6 +427,83 @@ DROP removes them with their clause, whose `removal_group_id` they carry.
 
 `ExtractMultiplicativeCoefficient` walks a chain shaped
 `coeff * ... * decide_var * ... * coeff` and combines the non-variable factors.
+
+### Non-linear reducer bodies — `DefineNonlinearReducerBodies`
+
+Every extremum the later passes build reads its members as linear: the hard rows, the
+composed terms, the flat and the two-level objective, and the value rewrite's links. A body
+that squares or multiplies decisions (`max(power(x, 2))`, `min(x * y)`) would lose its
+square there. This pass names such a body first (`decide_rewrite_define.cpp`): one helper
+decision `t` per row (`__body_<n>__`, labelled by the body) and one quadratic row defining
+it by the body `q`; the reducer then reads the bare column `t`. It is the auxiliary-variable
+reformulation `RewriteAbs` applies to ABS, done once, before any pass that reads members.
+
+**The row is one-sided where the clause pushes the reducer one way**, as the
+Plaisted–Greenbaum encoding (the polarity-aware Tseitin transformation) states a
+definition only in the polarity it occurs in. SUM, AVG, MIN and MAX never decrease when a
+member grows, so a member is pushed the way its reducer is, and the reducer's sign comes
+from the same polarity walk the ABS classifier reads (`WalkPolarity`): the clause read as
+`LHS - RHS <op> 0`, the objective under its sense. Pushed down, `t >= q`; pushed up,
+`t <= q`; neither (`=`, a factor whose sign only the rows decide, a dead term under a
+factor of 0), `t = q`. A convex `q` pushed down stays convex. `t` is `INTEGER` when the
+body is whole-numbered by declared types (`DecideValueIsWholeNumbered`), so a strict
+`max(power(x, 2)) > 48` over an `INT` `x` steps to 49.
+
+**One reducer is defined once per clause** (structural sharing, as the encoding names one
+subterm once). An earlier rewrite may have copied a reducer into several rows of one
+clause: `RewriteAbs` writes `abs(max(power(x, 2)) - 4) >= 1` as two envelope rows, one
+pushing the MAX up and one down. The copies must keep reading one value, so the pass
+collects every site first and groups the copies (the same clause, an equal reducer and
+alias, an equal `when`); a group shares one helper whose row is the union of the copies'
+sides, `t = q` when they are pushed both ways. A helper per copy, each one-sided, lets the
+two copies read different values and answers `x = 2` there, where the MAX is 4. Copies in
+different clauses keep their own helper, so each clause's rows stay its own under
+DIAGNOSE.
+
+**Which bodies.** Every MIN or MAX whose body is not linear (`DecideExpressionDegree`). In
+a constraint that holds a MIN or MAX, every SUM and AVG term too, since the composed row
+reads them as linear (`sum(power(x, 2)) + max(x) <= 30`). In the objective, the inner
+reducer of a two-level form under an outer MIN or MAX
+(`max(per g: sum(power(x - t, 2)) by (g))`); a SUM beside a MIN or MAX stays on the
+objective's own quadratic path. A plain constraint whose one MIN or MAX is pushed its
+cheap way (`max(power(x, 2)) <= 16`) is left alone: `RewriteMinMax` bounds each member,
+which is one quadratic row per member with no helper. `IsCheapLoneExtremum` reads that
+shape as `RewriteMinMaxInConstraint` does.
+
+The row holds on the rows the reducer reads: the clause's `when` and the reducer's own
+filter (`max(when g = 'A': power(x, 2))`), through `ScopeHelperRow`. It is a formulation
+row (`MarkFormulationConstraint`), rigid under DIAGNOSE. A row whose body reads a NULL is
+skipped by the reducer as before; its helper row is skipped too and leaves `t` free on a
+row nothing reads.
+
+**A helper has no box.** It holds the body's value, which may be negative
+(`power(x, 2) - 10 * x`), so `FoldSingletonRows` gives `defined_body_vars` no floor of 0,
+and nothing derives a ceiling. With no box there is no Big-M for an extremum over `t`, so
+only a backend that states MIN/MAX natively takes it: stage 08 takes the native arm for a
+family with no box (`../06_model_formulation/done.md`). When the backend chosen in §0
+states no MIN/MAX (HiGHS, or Gurobi under `DECIDB_NATIVE_CONSTRUCTS=off`), the pass refuses
+before a row is read, through the same sentence the model-class gate raises
+(`ThrowDecideSolverGap`): `'max(power(x, 2))' takes the maximum of a squared or multiplied
+expression, which needs Gurobi — not available on this machine. Install Gurobi, or replace
+power(x, 2) with an expression linear in the decision variables.` A SUM term reads
+`squares or multiplies decision variables beside a MIN or MAX` (`inside` for a two-level
+inner reducer). The refusal names the reducer and not a column to bound, because bounding
+`x` would not give `t` a box.
+
+EXPLAIN says how the helper holds the body: `power(x, 2) becomes a helper decision per row,
+at least its value` (`BODY_AT_LEAST`; `at most`, `equal to` for `BODY_AT_MOST`,
+`BODY_EQUAL`). The defining row itself is left out (`BODY_DEFINITION_TAG` on the row): it
+restates the body the reducer already prints. A MIN or MAX over defined members that is not
+held by its envelope alone `becomes an extremum column stated to the solver natively`
+(`EXTREMUM_NATIVE`, `EXTREMUM_PER_GROUP_NATIVE`), read off `BODY_DEFINITION_TAG` on the
+reducer, instead of claiming indicator rows it never has.
+
+**Exit contract.** `VerifyExtremumBodiesLinear` runs after `RewriteMinMax` and raises an
+internal error when any member an extremum reads is not linear: a composed term, a MIN/MAX
+value link, a hard MIN/MAX row (`MINMAX_CLAUSE_TAG_PREFIX`) or a MIN/MAX objective. The
+cheap half (`MINMAX_EASY_REWRITE_TAG`) bounds each member in its own quadratic row and is
+exempt. A body this pass misses fails there by name instead of losing its square. Tests:
+`test_minmax_body_definition.py`.
 
 ### The value rewrite — `RewriteScopedReducers`
 
@@ -873,6 +953,7 @@ stage 07.
 | MIN/MAX, plain and composed | `src/optimizer/decide/decide_rewrite_minmax.cpp` |
 | The value rewrite (VALUE-shape reducers to helper decisions) | `src/optimizer/decide/decide_rewrite_scoped.cpp` |
 | Bilinear McCormick | `src/optimizer/decide/decide_rewrite_bilinear.cpp` |
+| Non-linear reducer bodies (the definition) | `src/optimizer/decide/decide_rewrite_define.cpp` |
 | Singleton-row folding | `src/optimizer/decide/decide_singleton_row_folding.cpp` |
 | Linear-form flattening | `src/optimizer/decide/decide_linear_form.cpp` |
 | Backend selection and the model-class gate | `src/optimizer/decide/decide_solver_gate.cpp` |

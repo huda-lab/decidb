@@ -247,6 +247,11 @@ public:
     };
     vector<AbsMaximizeLink> abs_maximize_links;
 
+    //! The helper decisions DecideOptimizer::DefineNonlinearReducerBodies made, one per member of a reducer whose body is
+    //! not linear. A helper holds the body's value, which may be negative, so FoldSingletonRows gives it no floor; it
+    //! gets no other box either, and stage 08 states the extremum over it natively.
+    vector<idx_t> defined_body_vars;
+
     //! Maps an auxiliary variable's index in decide_variables to a human-readable
     //! source expression (the user's original ABS(...) / MAX(...) / product / <>),
     //! captured at optimizer time for diagnosis variable-naming (F6 variable
@@ -367,6 +372,11 @@ public:
             EXTREMUM_PER_GROUP,           //!< a two-level objective's inner MIN/MAX, per group
             EXTREMUM_PER_GROUP_PINNED,    //!< the same, pinned by indicator rows
             NOT_EQUAL,                    //!< `<>`, two conditional rows with an indicator
+            BODY_AT_LEAST,                //!< a reducer's non-linear body, a helper per row at least its value
+            BODY_AT_MOST,                 //!< the same, at most its value
+            BODY_EQUAL,                   //!< the same, equal to its value
+            EXTREMUM_NATIVE,              //!< a MIN/MAX over defined bodies, stated to the solver as one
+            EXTREMUM_PER_GROUP_NATIVE,    //!< a two-level objective's inner MIN/MAX over defined bodies, the same
         };
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         Kind kind = Kind::ABS_AUXILIARY;

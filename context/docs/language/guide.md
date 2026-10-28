@@ -280,6 +280,8 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))      -- two-level form
 - **Quadratic objectives**: `MINIMIZE SUM(POWER(linear, 2))` is convex QP on both solvers (HiGHS only when continuous
   and the Q matrix is non-singular). `-POWER(...)` under `MAXIMIZE` is concave QP on both. `MAXIMIZE SUM(POWER(...))`
   is non-convex, Gurobi only. Integer variables with a quadratic objective (MIQP) need Gurobi.
+- **A square or product under `MIN`/`MAX`**, in the objective or a constraint (`MINIMIZE MAX(POWER(x - t, 2))`,
+  `SUM(x) + MAX(POWER(x, 2)) <= 20`): Gurobi only ([problem_types.md](problem_types.md)).
 - **Bilinear (`x * y`)**, in objectives and constraints: with one `BOOL` factor it is linearized exactly (McCormick;
   both solvers; the other factor needs a finite upper bound, written or inferred, §5). Otherwise it is non-convex,
   Gurobi only. Data coefficients work (`SUM(profit * b * x)`); three-factor products are refused.

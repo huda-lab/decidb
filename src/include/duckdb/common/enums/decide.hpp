@@ -320,6 +320,12 @@ static constexpr const char *NE_CLAUSE_TAG_PREFIX = "__ne_clause_tag_";
 //! BoundComparisonExpression.alias during RewriteMinMax.
 static constexpr const char *MINMAX_EASY_REWRITE_TAG = "__minmax_easy__";
 
+//! Tag marking a reducer whose members DecideOptimizer::DefineNonlinearReducerBodies replaced by helper decisions. A
+//! helper has no box, so stage 08 states a MIN/MAX over it natively, and the MIN/MAX rewrites say so in the plan.
+//! Set on the BoundAggregateExpression.alias, and on the BoundComparisonExpression.alias of the row defining the
+//! helper, which EXPLAIN leaves out: it restates the body, and the clause's account line says how it is held.
+static constexpr const char *BODY_DEFINITION_TAG = "__body_definition__";
+
 //! Tag marking optimizer-generated helper constraints that define auxiliaries or
 //! link rewrite machinery. These rows are rigid and must not be elastic-relaxed.
 static constexpr const char *STRUCTURAL_CONSTRAINT_TAG = "__decide_structural_constraint__";

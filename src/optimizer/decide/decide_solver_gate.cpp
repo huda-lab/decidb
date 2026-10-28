@@ -190,17 +190,20 @@ void RequireDecideSolverSupport(const LogicalDecide &op) {
 	}
 
 	RefusalText text = DescribeGap(op, gap);
+	ThrowDecideSolverGap(needed, text.cause, text.remedy);
+}
+
+void ThrowDecideSolverGap(const SolverModelClass &needed, const string &cause, const string &remedy) {
 	// Name the solvers that could run it, from the registry rather than from a
 	// hard-coded name here, so the sentence stays true as backends are added.
 	vector<string> capable = SolverRegistry::BackendsSupporting(needed);
 	if (capable.empty()) {
-		throw InvalidInputException("DECIDE: %s, which no solver DeciDB supports can optimize. Instead, %s.",
-		                            text.cause, text.remedy);
+		throw InvalidInputException("DECIDE: %s, which no solver DeciDB supports can optimize. Instead, %s.", cause,
+		                            remedy);
 	}
 	throw InvalidInputException("DECIDE: %s, which needs %s — not available on this machine. Install %s, "
 	                            "or %s.",
-	                            text.cause, StringUtil::Join(capable, " or "),
-	                            StringUtil::Join(capable, " or "), text.remedy);
+	                            cause, StringUtil::Join(capable, " or "), StringUtil::Join(capable, " or "), remedy);
 }
 
 } // namespace duckdb

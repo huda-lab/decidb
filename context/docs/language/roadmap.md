@@ -132,6 +132,7 @@ Constraints of the form `‖Ax + b‖ ≤ cᵀx + d`, a true Euclidean norm boun
 - **A backend that takes only convex quadratic rows.** Gurobi solves a non-convex quadratic row at its default
   settings, so DECIDE does not classify row convexity; the model class records it for the objective only
   (`decide_solver_capabilities.hpp`). A backend that refuses non-convex rows needs that classification, for
-  user-written rows and for the rows a lifted MIN/MAX body emits (`../pipeline/05_optimizer/todo.md` § 4).
+  user-written rows and for the rows a defined MIN/MAX body emits (`../pipeline/05_optimizer/done.md`, "Non-linear
+  reducer bodies").
 - **DIAGNOSE on a feasible query** returns one `feasible` row. A richer report (solve time, model size, gap), as a
   true `EXPLAIN ANALYZE` counterpart, is unscheduled.

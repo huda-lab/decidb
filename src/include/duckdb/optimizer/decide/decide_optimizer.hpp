@@ -29,6 +29,8 @@ class Optimizer;
 //!   - RewriteAbs: detects ABS(expr) over decide vars, creates auxiliary REAL vars,
 //!     replaces ABS nodes with aux var refs, generates linearization constraints
 //!   - RewriteBilinear: McCormick linearization for Boolean × anything products
+//!   - DefineNonlinearReducerBodies: names each non-linear body a MIN/MAX formulation would read by a helper decision
+//!     per row, defined on the side its clause pushes it (decide_rewrite_define.cpp)
 //!   - RewriteScopedReducers: the value rewrite of a scoped comparison -- each decision
 //!     reducer of a VALUE-shape comparison becomes a helper decision defined per group
 //!   - RewriteComposedMinMax: detects composed MIN/MAX before the single-term pass
@@ -177,6 +179,13 @@ private:
 	//!   w <= U*b and w >= x-U*(1-b) at execution time via BilinearLink).
 	//! Non-Boolean × Non-Boolean: left in place for Q matrix handling in physical operator.
 	void RewriteBilinear(LogicalDecide &decide);
+
+	//! Give each non-linear reducer body a MIN/MAX formulation would read as linear a helper decision `t` per row and
+	//! one quadratic row: `t >= body` where the clause pushes the reducer down, `t <= body` up, `t = body` neither
+	//! way (WalkPolarity). The reducer then reads the bare `t`, so every later pass sees linear members. Refuses on a
+	//! backend that states no MIN/MAX natively: a helper has no box, so no Big-M exists for an extremum over it. Runs
+	//! after RewriteBilinear, whose Boolean products are linear, and before the value and MIN/MAX rewrites.
+	void DefineNonlinearReducerBodies(LogicalDecide &decide);
 
 	//! Helper: recursively find bilinear products in expression tree, replace Boolean cases
 	//! with auxiliary variable references, and collect metadata.

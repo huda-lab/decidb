@@ -120,97 +120,41 @@ static void TagAbsSubtreeForBigM(Expression &expr, idx_t decide_index) {
 }
 
 // Collect every ABS-over-decide-var node together with the sign it carries once
-// the constraint is expanded additively. `sign` is the sign of the path taken to
-// reach the current node; `pinning_sign` the sign the relation or the sense pushes
-// down (+1 under `<=` and MINIMIZE, -1 under `>=` and MAXIMIZE, 0 when nothing is
-// pushed), which a MIN or MAX on the path needs to tell its cheap direction from
-// its hard one.
+// the constraint is expanded additively (WalkPolarity). `pinning_sign` is the sign
+// the relation or the sense pushes down (+1 under `<=` and MINIMIZE, -1 under `>=`
+// and MAXIMIZE, 0 when nothing is pushed), which a MIN or MAX on the path needs to
+// tell its cheap direction from its hard one.
 //
-// Only structure whose sign is known at plan time is traversed with a flip: `+`,
-// binary and unary `-`, casts, aggregate bodies, and numeric literal factors. A
-// factor whose sign is not known until execution -- a data column, as in
+// A factor whose sign is not known until execution -- a data column, as in
 // `SUM(w * ABS(x - t))` -- yields sign 0, "unknown", which never matches the
 // pinning direction and so forces Big-M. That is conservative: for `w >= 0` the
 // aux would have been pinned without it. Deciding per row at execution time
 // would recover those rows, but the indicator is allocated at plan time, so it
-// cannot be chosen lazily as the code stands.
+// cannot be chosen lazily as the code stands. A factor that is exactly zero makes
+// the term vanish: nothing pushes its auxiliary anywhere, so nothing has to pin it,
+// and asking for the exact envelope would demand a finite box the term has no use for.
 static void CollectAbsWithSign(ClientContext &context, Expression &expr, int sign, idx_t decide_index,
                                vector<std::pair<Expression *, int>> &out, int pinning_sign) {
-	if (!ContainsAbsOverDecideVar(expr, decide_index)) {
-		return;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		CollectAbsWithSign(context, *expr.Cast<BoundCastExpression>().child, sign, decide_index, out, pinning_sign);
-		return;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &func = expr.Cast<BoundFunctionExpression>();
-		auto name = StringUtil::Lower(func.function.name);
-		if (StringUtil::CIEquals(name, "abs") && func.children.size() == 1 &&
-		    BoundExpressionReferencesDecide(*func.children[0], decide_index)) {
-			// The ABS node itself is the unit that gets tagged. An ABS nested inside it
-			// sits under a function that is not monotone in it, so no pressure and no
-			// shape pins it: it is collected with sign 0, which never classifies as pinned.
-			// A dead ABS (under a factor of exactly zero, above) never reaches here, and
-			// neither does anything nested in it: nothing needs pinning in a vanished term.
-			out.emplace_back(&expr, sign);
-			CollectAbsWithSign(context, *func.children[0], 0, decide_index, out, pinning_sign);
-			return;
-		}
-		if (name == "+") {
-			for (auto &child : func.children) {
-				CollectAbsWithSign(context, *child, sign, decide_index, out, pinning_sign);
+	PolarityHolds holds = [&](const Expression &node) {
+		return ContainsAbsOverDecideVar(node, decide_index);
+	};
+	PolarityVisit visit = [&](Expression &node, int node_sign) {
+		if (node.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+			auto &func = node.Cast<BoundFunctionExpression>();
+			if (StringUtil::CIEquals(func.function.name, "abs") && func.children.size() == 1 &&
+			    BoundExpressionReferencesDecide(*func.children[0], decide_index)) {
+				// The ABS node itself is the unit that gets tagged. An ABS nested inside it
+				// sits under a function that is not monotone in it, so no pressure and no
+				// shape pins it: it is collected with sign 0, which never classifies as pinned.
+				out.emplace_back(&node, node_sign);
+				WalkPolarity(context, *func.children[0], 0, holds, visit);
+				return true;
 			}
-			return;
+			return false;
 		}
-		if (name == "-" && func.children.size() == 2) {
-			CollectAbsWithSign(context, *func.children[0], sign, decide_index, out, pinning_sign);
-			CollectAbsWithSign(context, *func.children[1], -sign, decide_index, out, pinning_sign);
-			return;
+		if (node.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+			return false;
 		}
-		if (name == "-" && func.children.size() == 1) {
-			CollectAbsWithSign(context, *func.children[0], -sign, decide_index, out, pinning_sign);
-			return;
-		}
-		if (name == "*" || name == "/") {
-			// Fold the sign of every factor beside the ABS-bearing one, read before the
-			// query runs (PlanTimeSignOf, which sees through products: `0 * w` is zero
-			// whatever the data column `w` holds). For division only the numerator can
-			// carry an ABS, but the divisor's sign still applies. An ABS-bearing factor is
-			// the term being collected rather than a multiplier, and is non-negative by
-			// construction, so it never flips.
-			//
-			// A factor whose sign is not known until execution -- `w` in
-			// `SUM(w * ABS(x - t))` -- makes the whole path sign 0, which never classifies
-			// as pinned. A factor that is exactly zero makes the term vanish: nothing
-			// pushes its auxiliary anywhere, so nothing has to pin it, and asking for the
-			// exact envelope would demand a finite box the term has no use for.
-			int factor_sign = 1;
-			for (idx_t i = 0; i < func.children.size(); i++) {
-				auto &child = *func.children[i];
-				if (ContainsAbsOverDecideVar(child, decide_index)) {
-					continue;
-				}
-				auto child_sign = PlanTimeSignOf(context, child);
-				const bool is_divisor = name == "/" && i == 1;
-				if (child_sign == PlanTimeSign::ZERO && !is_divisor) {
-					return;
-				}
-				if (child_sign == PlanTimeSign::UNKNOWN || child_sign == PlanTimeSign::ZERO) {
-					factor_sign = 0;
-				} else if (child_sign == PlanTimeSign::NEGATIVE) {
-					factor_sign = -factor_sign;
-				}
-			}
-			for (auto &child : func.children) {
-				if (ContainsAbsOverDecideVar(*child, decide_index)) {
-					CollectAbsWithSign(context, *child, sign * factor_sign, decide_index, out, pinning_sign);
-				}
-			}
-			return;
-		}
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		// Aggregates compose: when the constraint bounds the aggregate's value in
 		// the pinning direction, the auxes underneath are pinned transitively --
 		// through a SUM or AVG, and through a MIN or MAX pushed its cheap way (a MAX
@@ -220,25 +164,21 @@ static void CollectAbsWithSign(ClientContext &context, Expression &expr, int sig
 		// alone has none. So an ABS under a hard extremum reads as unknown sign and
 		// takes the exact envelope, which boxes it: `MINIMIZE min(abs(x - 1))`,
 		// `MAXIMIZE -min(abs(x - 1))`, `min(abs(x - 1)) <= K`.
-		auto &agg = expr.Cast<BoundAggregateExpression>();
+		auto &agg = node.Cast<BoundAggregateExpression>();
 		auto agg_name = StringUtil::Lower(agg.function.name);
-		int inner_sign = sign;
-		if ((agg_name == "min" || agg_name == "max") && sign != 0 && pinning_sign != 0) {
-			const auto push = sign == pinning_sign ? ExtremumPush::DOWN : ExtremumPush::UP;
-			if (!IsEasyExtremum(agg_name == "max", push)) {
-				inner_sign = 0;
-			}
+		if ((agg_name != "min" && agg_name != "max") || node_sign == 0 || pinning_sign == 0) {
+			return false;
+		}
+		const auto push = node_sign == pinning_sign ? ExtremumPush::DOWN : ExtremumPush::UP;
+		if (IsEasyExtremum(agg_name == "max", push)) {
+			return false;
 		}
 		for (auto &child : agg.children) {
-			CollectAbsWithSign(context, *child, inner_sign, decide_index, out, pinning_sign);
+			WalkPolarity(context, *child, 0, holds, visit);
 		}
-		return;
-	}
-	// Anything else (subqueries, CASE, operators with no sign discipline): the
-	// sign of the path is unknown, so the safe answer is "not pinned". Hand the
-	// contained ABS nodes back with sign 0, which never classifies as pinned.
-	ExpressionIterator::EnumerateChildren(
-	    expr, [&](Expression &child) { CollectAbsWithSign(context, child, 0, decide_index, out, pinning_sign); });
+		return true;
+	};
+	WalkPolarity(context, expr, sign, holds, visit);
 }
 
 static void ClassifyAbsConstraints(ClientContext &context, Expression &expr, idx_t decide_index) {

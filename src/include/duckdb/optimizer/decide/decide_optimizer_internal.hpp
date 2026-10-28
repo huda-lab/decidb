@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -59,6 +61,21 @@ ClauseScope EnterClauseScope(const Expression &node, ClauseScope scope);
 //! `row`, which a rewrite adds for a clause in `scope`: wrapped in a copy of the clause's
 //! `when` when it has one.
 unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const ClauseScope &scope);
+
+//! Polarity analysis: the sign each subterm carries once a clause is read as one expression `E` under `E <op> 0`
+//! (`LHS - RHS`), or the objective as `E` under its sense. Walking `expr` with `sign`, a node keeps its parent's sign
+//! through `+`, casts and reducer bodies (SUM, AVG, MIN and MAX never decrease when a member grows), flips it through
+//! `-` and a factor known negative before the query runs, and gets 0 ("unknown") under a factor whose sign only the
+//! rows decide or any other node. A term under a factor of exactly zero vanishes and is not walked.
+//!
+//! `holds(node)` says whether a subtree holds anything the caller wants; a subtree that does not is skipped, and a
+//! factor that does not is read as a multiplier. `visit(node, sign)` sees each held node first and returns true when it
+//! has taken the node and its subtree (it may walk below itself, with any sign). The ABS classifier and the definition
+//! of non-linear reducer bodies read their direction from this one walk.
+using PolarityHolds = std::function<bool(const Expression &)>;
+using PolarityVisit = std::function<bool(Expression &, int)>;
+void WalkPolarity(ClientContext &context, Expression &expr, int sign, const PolarityHolds &holds,
+                  const PolarityVisit &visit);
 
 //! Mark the ABS nodes, in the constraints and the objective, that need a Big-M
 //! envelope: those whose sign under the relation or the sense does not push the

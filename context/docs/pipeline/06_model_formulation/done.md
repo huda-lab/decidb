@@ -558,6 +558,14 @@ the Big-M family that encodes it — is made once, inside `EmitExtremumLink`, an
 rule is `NativeConstructPolicy`: native is the fallback, taken where the family's reach
 is underivable and there is therefore no Big-M at all.
 
+A member stage 05 defined for a non-linear body (`max(power(x, 2))`) is a helper column
+with no box (`../05_optimizer/done.md`, "Non-linear reducer bodies"), so its family is
+always underivable and every extremum over it takes the native arm, the outer extremum of a
+two-level objective over defined inner members included. `ExtremumArgumentColumn` hands the
+helper itself to the general constraint (a sole column), so no pinned copy is added. Stage
+05 refuses such a query on a backend with no native MIN/MAX, so the lowering arm never meets
+one.
+
 **`closing_kind` is a diagnosis-visible choice, not bookkeeping.** A closing row carries the
 Big-M, and marking it `USER_PARAMETER` offers it to the elastic engine as a clause the user
 may be told to edit. It is not one: it encodes `z = MIN/MAX(members)`, its slack is in the

@@ -64,6 +64,15 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 //               (`ComposedMinMaxTerm::scale`), or distributed over the per-row
 //               form when the constraint linearizes the easy way.
 
+//! What the plan says a MIN/MAX column became: held by its envelope in the cheap direction; otherwise pinned by
+//! indicator rows, or stated natively when its members are defined bodies (BODY_DEFINITION_TAG), which have no box.
+static LogicalDecide::RewriteAccount::Kind ExtremumAccount(bool is_easy, const BoundAggregateExpression &agg) {
+	using Kind = LogicalDecide::RewriteAccount::Kind;
+	return is_easy                                        ? Kind::EXTREMUM
+	       : HasDecideTag(agg.alias, BODY_DEFINITION_TAG) ? Kind::EXTREMUM_NATIVE
+	                                                      : Kind::EXTREMUM_PINNED;
+}
+
 // ---------------------------------------------------------------------------
 // Composed MIN/MAX constraints (additive LHS mixing SUM/AVG/MIN/MAX terms)
 // ---------------------------------------------------------------------------
@@ -234,10 +243,7 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 		int scale_sign = ScaleSignAtPlanTime(context, scale, scale_divides);
 		term.is_easy = ScaleVanishesAtPlanTime(context, scale, scale_divides) ||
 		               IsEasyExtremum(is_max, ExtremumPushOf(outer_push, sign * scale_sign));
-		AddRewriteAccount(decide, source_clause_id,
-		                  term.is_easy ? LogicalDecide::RewriteAccount::Kind::EXTREMUM
-		                               : LogicalDecide::RewriteAccount::Kind::EXTREMUM_PINNED,
-		                  RenderForPlan(agg, decide));
+		AddRewriteAccount(decide, source_clause_id, ExtremumAccount(term.is_easy, agg), RenderForPlan(agg, decide));
 	}
 	out_terms.push_back(std::move(term));
 }
@@ -660,8 +666,7 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	// What the plan says the reducer became: an extremum column for the hard direction, a
 	// bound on each member for the cheap one, both for an equality.
 	if (is_hard || cmp_type == ExpressionType::COMPARE_EQUAL) {
-		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::EXTREMUM_PINNED,
-		                  RenderForPlan(agg, decide));
+		AddRewriteAccount(decide, comp.alias, ExtremumAccount(false, agg), RenderForPlan(agg, decide));
 	}
 	if (is_easy || cmp_type == ExpressionType::COMPARE_EQUAL) {
 		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::EXTREMUM_EACH_MEMBER,
@@ -872,9 +877,13 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 					using Kind = LogicalDecide::RewriteAccount::Kind;
 					const string key = RenderDecidePerKey(*per_wrapper, decide.source_fragments);
 					auto inner_text = RenderForPlan(inner_agg, decide) + " by (" + key + ")";
+					// Defined members have no box, so every extremum over them, the outer one's
+					// included, is stated natively.
+					const bool defined = HasDecideTag(inner_agg.alias, BODY_DEFINITION_TAG);
 					if (inner_name == "min" || inner_name == "max") {
 						AddRewriteAccount(decide, DConstants::INVALID_INDEX,
 						                  decide.per_inner_is_easy ? Kind::EXTREMUM_PER_GROUP
+						                  : defined                ? Kind::EXTREMUM_PER_GROUP_NATIVE
 						                                           : Kind::EXTREMUM_PER_GROUP_PINNED,
 						                  inner_text);
 					}
@@ -883,7 +892,9 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 					}
 					if (outer_name == "min" || outer_name == "max") {
 						AddRewriteAccount(decide, DConstants::INVALID_INDEX,
-						                  decide.per_outer_is_easy ? Kind::EXTREMUM : Kind::EXTREMUM_PINNED,
+						                  decide.per_outer_is_easy ? Kind::EXTREMUM
+						                  : defined                ? Kind::EXTREMUM_NATIVE
+						                                           : Kind::EXTREMUM_PINNED,
 						                  outer_name + "(per " + key + ": " + inner_text + ")");
 					}
 				}
@@ -926,9 +937,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		bool is_min = (outer_name == "min");
 		decide.flat_objective_is_easy = (is_min && decide.decide_sense == DecideSense::MAXIMIZE) ||
 		                                (!is_min && decide.decide_sense == DecideSense::MINIMIZE);
-		AddRewriteAccount(decide, DConstants::INVALID_INDEX,
-		                  decide.flat_objective_is_easy ? LogicalDecide::RewriteAccount::Kind::EXTREMUM
-		                                                : LogicalDecide::RewriteAccount::Kind::EXTREMUM_PINNED,
+		AddRewriteAccount(decide, DConstants::INVALID_INDEX, ExtremumAccount(decide.flat_objective_is_easy, outer_agg),
 		                  RenderForPlan(outer_agg, decide));
 		// Replace MIN/MAX with SUM
 		vector<unique_ptr<Expression>> sum_children;

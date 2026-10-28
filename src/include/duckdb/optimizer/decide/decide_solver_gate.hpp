@@ -51,4 +51,10 @@ SolverModelClass DeriveDecideModelClass(const LogicalDecide &op);
 //! which the shape of every constraint and the objective is settled.
 void RequireDecideSolverSupport(const LogicalDecide &op);
 
+//! The refusal both gates raise: `cause` names what the query does in the user's words, `remedy` the smallest edit
+//! that avoids it, and the sentence names the solvers that take `needed`, from the registry. RequireDecideSolverSupport
+//! raises it for a model class; the definition of a non-linear reducer body raises it when the backend chosen here
+//! states no MIN/MAX natively, before any model is built.
+[[noreturn]] void ThrowDecideSolverGap(const SolverModelClass &needed, const string &cause, const string &remedy);
+
 } // namespace duckdb

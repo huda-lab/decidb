@@ -47,6 +47,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | A `BOOL` bound that cannot hold (`x >= 2`) | before reading rows | `DECIDE optimization is infeasible: x >= 2 cannot hold for a BOOL variable.` |
 | An unbounded member under a lowered hard `MIN`/`MAX`, `<>`, Big-M `ABS` or McCormick product | run | names the variable and the bound to add |
 | A model class the available solver cannot run (non-convex QP, MIQP, quadratic constraints on HiGHS) | plan | names what the query does and that it needs Gurobi |
+| A square or product under a `MIN`/`MAX` on HiGHS | plan | `DECIDE: 'max(power(x, 2))' takes the maximum of a squared or multiplied expression, which needs Gurobi — not available on this machine. Install Gurobi, or replace power(x, 2) with an expression linear in the decision variables.` |
 
 ## 2. Not supported yet
 

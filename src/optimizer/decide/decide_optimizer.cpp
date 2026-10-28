@@ -24,6 +24,7 @@
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic.hpp"
 #include "duckdb/common/exception/binder_exception.hpp"
@@ -43,6 +44,7 @@ ObjectiveAggregateType decide_rewrite::StrToAggType(const string &name) {
 
 //! Defined below with the other NORM marker helpers; called at the end of OptimizeDecide.
 static void VerifyNormMarkersLowered(LogicalDecide &decide);
+static void VerifyExtremumBodiesLinear(LogicalDecide &decide);
 
 DecideOptimizer::DecideOptimizer(Optimizer &optimizer) : optimizer(optimizer) {
 }
@@ -102,12 +104,15 @@ void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
 	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
 	phase.Next("optimizer.bilinear");
 	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products
+	phase.Next("optimizer.define_bodies");
+	DefineNonlinearReducerBodies(decide); // A non-linear reducer body a MIN/MAX reads becomes a helper per row
 	phase.Next("optimizer.scoped_reducers");
 	RewriteScopedReducers(decide); // The value rewrite: a VALUE-shape clause's reducers become helper decisions
 	phase.Next("optimizer.composed_minmax");
 	RewriteComposedMinMax(decide); // Detect composed MIN/MAX before single-term MIN/MAX rewrite
 	phase.Next("optimizer.minmax");
 	RewriteMinMax(decide);       // Classify + rewrite min/max (creates indicators and SUM nodes)
+	VerifyExtremumBodiesLinear(decide);
 	phase.Next("optimizer.not_equal");
 	RewriteNotEqual(decide);
 	phase.Next("optimizer.avg");
@@ -267,6 +272,72 @@ static void VerifyNormMarkersLowered(LogicalDecide &decide) {
 	});
 }
 
+//! The MIN/MAX rewrites' exit contract: every member an extremum reads is linear.
+//!
+//! The hard rows, the composed terms, the value links and the MIN/MAX objectives all read a
+//! member as a linear form; a square there is dropped without a word and the extremum is of
+//! something else. DefineNonlinearReducerBodies names every such body before they run, so
+//! a non-linear member here is a body that pass missed. The cheap half of a MIN/MAX
+//! (MINMAX_EASY_REWRITE_TAG) bounds each member in its own quadratic row and is exempt.
+static void VerifyExtremumBodiesLinear(LogicalDecide &decide) {
+	const idx_t decide_index = decide.decide_index;
+	auto check = [&](const Expression &body) {
+		if (!DecideExpressionDegree(body, decide_index).IsLinear()) {
+			throw InternalException("DECIDE MIN/MAX member '%s' is not linear", body.ToString());
+		}
+	};
+	auto is_extremum = [](const string &name) {
+		return name == "min" || name == "max";
+	};
+	for (auto &constraint : decide.composed_minmax_constraints) {
+		for (auto &term : constraint.terms) {
+			check(*term.inner_expr);
+		}
+	}
+	for (auto &term : decide.composed_minmax_objective_terms) {
+		if (is_extremum(term.agg_name)) {
+			check(*term.inner_expr);
+		}
+	}
+	for (auto &link : decide.reducer_value_links) {
+		if (is_extremum(link.agg_name)) {
+			check(*link.inner_expr);
+		}
+	}
+	std::function<void(const Expression &)> hard_rows = [&](const Expression &expr) {
+		if (HasDecideTag(expr.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
+			return;
+		}
+		if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
+		    expr.GetAlias().find(MINMAX_CLAUSE_TAG_PREFIX) != string::npos) {
+			for (auto &child : expr.Cast<BoundAggregateExpression>().children) {
+				check(*child);
+			}
+			return;
+		}
+		ExpressionIterator::EnumerateChildren(expr, hard_rows);
+	};
+	if (decide.decide_constraints) {
+		hard_rows(*decide.decide_constraints);
+	}
+	auto is_extremum_agg = [](ObjectiveAggregateType agg) {
+		return agg == ObjectiveAggregateType::MIN_AGG || agg == ObjectiveAggregateType::MAX_AGG;
+	};
+	if (decide.decide_objective && (is_extremum_agg(decide.flat_objective_agg) ||
+	                                is_extremum_agg(decide.per_inner_agg) || is_extremum_agg(decide.per_outer_agg))) {
+		std::function<void(const Expression &)> bodies = [&](const Expression &expr) {
+			if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+				for (auto &child : expr.Cast<BoundAggregateExpression>().children) {
+					check(*child);
+				}
+				return;
+			}
+			ExpressionIterator::EnumerateChildren(expr, bodies);
+		};
+		bodies(*decide.decide_objective);
+	}
+}
+
 void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 	if (!decide.decide_constraints) {
 		return;
@@ -335,6 +406,80 @@ unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row
 	wrapper->children.push_back(scope.when->Copy());
 	wrapper->alias = WHEN_CONSTRAINT_TAG;
 	return std::move(wrapper);
+}
+
+void decide_rewrite::WalkPolarity(ClientContext &context, Expression &expr, int sign, const PolarityHolds &holds,
+                                  const PolarityVisit &visit) {
+	if (!holds(expr) || visit(expr, sign)) {
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
+		WalkPolarity(context, *expr.Cast<BoundCastExpression>().child, sign, holds, visit);
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &func = expr.Cast<BoundFunctionExpression>();
+		auto name = StringUtil::Lower(func.function.name);
+		if (name == "+") {
+			for (auto &child : func.children) {
+				WalkPolarity(context, *child, sign, holds, visit);
+			}
+			return;
+		}
+		if (name == "-" && func.children.size() == 2) {
+			WalkPolarity(context, *func.children[0], sign, holds, visit);
+			WalkPolarity(context, *func.children[1], -sign, holds, visit);
+			return;
+		}
+		if (name == "-" && func.children.size() == 1) {
+			WalkPolarity(context, *func.children[0], -sign, holds, visit);
+			return;
+		}
+		if (name == "*" || name == "/") {
+			// Fold the sign of every factor beside the held one, read before the query runs
+			// (PlanTimeSignOf, which sees through products: `0 * w` is zero whatever the data
+			// column `w` holds). For division only the numerator can hold the term, but the
+			// divisor's sign still applies. A held factor is the term being walked rather
+			// than a multiplier, and never flips.
+			//
+			// A factor whose sign is not known until execution -- `w` in `SUM(w * ABS(x - t))`
+			// -- makes the whole path sign 0. A factor that is exactly zero makes the term
+			// vanish: nothing pushes it anywhere, so it is not walked.
+			int factor_sign = 1;
+			for (idx_t i = 0; i < func.children.size(); i++) {
+				auto &child = *func.children[i];
+				if (holds(child)) {
+					continue;
+				}
+				auto child_sign = PlanTimeSignOf(context, child);
+				const bool is_divisor = name == "/" && i == 1;
+				if (child_sign == PlanTimeSign::ZERO && !is_divisor) {
+					return;
+				}
+				if (child_sign == PlanTimeSign::UNKNOWN || child_sign == PlanTimeSign::ZERO) {
+					factor_sign = 0;
+				} else if (child_sign == PlanTimeSign::NEGATIVE) {
+					factor_sign = -factor_sign;
+				}
+			}
+			for (auto &child : func.children) {
+				WalkPolarity(context, *child, sign * factor_sign, holds, visit);
+			}
+			return;
+		}
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		// SUM, AVG, MIN and MAX never decrease when a member grows, so a member carries the
+		// reducer's sign.
+		for (auto &child : expr.Cast<BoundAggregateExpression>().children) {
+			WalkPolarity(context, *child, sign, holds, visit);
+		}
+		return;
+	}
+	// Anything else (subqueries, CASE, operators with no sign discipline): the sign of the
+	// path is unknown.
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](Expression &child) { WalkPolarity(context, child, 0, holds, visit); });
 }
 
 } // namespace duckdb

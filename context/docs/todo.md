@@ -30,11 +30,6 @@ coding, at the question written on the line. **Part C** the owner runs, or is no
 
 # Part A — Agent works alone
 
-## A4. Wrong answers the owner ruled (2026-10-28)
-
-- [ ] Lift a quadratic MIN/MAX body into a row helper; Gurobi's native MAX/MIN takes it, HiGHS refuses (reverses the
-  2026-10-27 refusal) — [optimizer § 4](pipeline/05_optimizer/todo.md#4-lift-a-quadratic-minmax-body-into-a-row-helper)
-
 ## A3. Direct solve reads the new language: grouping
 
 Every line waits for B5 (H-04). A plan that groups rows on a key groups on `DecideKeyElement::Grouping()`, the
@@ -54,7 +49,7 @@ The agent may read code and investigate; it writes no fix until the owner answer
 
 ## B2. Wrong answers whose fix has an open choice
 
-- [ ] Gurobi accepts a row violated by 1 near 10⁹ coefficients (ruled: warn) — owner sets the span threshold and where the warning shows — [bugs § solver tolerance](issues/bugs.md#wrong-answers-minmax-bodies-and-solver-tolerance)
+- [ ] Gurobi accepts a row violated by 1 near 10⁹ coefficients (ruled: warn) — owner sets the span threshold and where the warning shows — [bugs § solver tolerance](issues/bugs.md#wrong-answers-solver-tolerance)
 
 - [ ] Negative lower bound under a `when` stays non-negative (ruled: applies to the kept rows) — owner picks the
   representation. Only an unconditional constant bound replaces the default floor of 0 today (a data bound
