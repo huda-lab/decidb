@@ -3,19 +3,24 @@
 //
 // src/optimizer/decide/decide_singleton_row_folding.cpp
 //
-// DECIDE singleton-row folding: fold a literal bound into a column box. See decide_optimizer.cpp.
+// A bound on one decision: the values it admits, and singleton-row folding of a bound known before the query runs
+// into a column box. See decide_optimizer.cpp.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
+#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
+#include "duckdb/planner/decide/decide_term_split.hpp"
 
 #include <cmath>
 #include <cstdlib>
+#include <functional>
 #include <limits>
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/limits.hpp"
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
@@ -39,298 +44,232 @@
 namespace duckdb {
 
 // ---------------------------------------------------------------------------
-// Singleton-row folding: a bound, not a row
+// A bound on one decision: the values it admits
 // ---------------------------------------------------------------------------
 //
-// `x <= 10` is one fact about a column, so it belongs in that column's box rather
-// than in `num_rows` identical model rows. Choosing between the two is a
-// formulation decision, which is why it lives here and not in physical execution.
+// `x <= 10`, `2 * x >= -4`, `0.1 * x <= cap` and an easy `min(x) >= K` each bound one decision: the clause admits an
+// interval of its values and says nothing else. The interval is read here once, as expressions, and every reader uses
+// them: singleton-row folding folds an interval known before the query runs into the column box, stage 08 evaluates a
+// data bound's interval per row so the model builder writes it into the column box, and direct solve projects it. So
+// the solver path and direct solve cannot disagree about which values a bound admits.
 //
-// The pass reads a comparison, a decision variable and a bound known before the query
-// runs. It never touches data, so it needs types, not rows.
+// The interval is what DuckDB says. A whole-numbered decision admits `n` exactly when the written comparison, with `n`
+// in place of the decision, evaluates true: `0.1 * x <= 0.3` admits 3 (`0.1 * 3` is the DECIMAL 0.3), while
+// `x <= 0.3 / 0.1` does not (the DOUBLE quotient is 2.9999999999999996). The quotient `r / a` in doubles is within one
+// of the answer, and the written comparison, typed as the binder typed it, picks among its neighbours. No copy of
+// DuckDB's DECIMAL or DOUBLE arithmetic is written here, so none can drift from it (parity by construction).
 //
-// A bound is read by value, not by spelling (D41): `x - 1 >= -3`, `2 * x >= -4`,
-// `-x <= 2`, `2 * (x - 1) >= -6` and `x >= -2` are one fact, the column bound `x >= -2`,
-// and each makes `x` signed the same way. So the decision may stand under any affine
-// spelling whose constants are known before the query runs, and the other side may be
-// any expression that folds to a number then. A side that is data -- a column, a
-// subquery -- is not a bound and stays a row.
+// A bound is read by value, not by spelling (D41). The decision side is linear terms of one decision over coefficients
+// that hold no decision, as the term splitter reads them for the linear form and direct solve, or an easy
+// `factor * min(m)` / `max(m)` whose member `m` is such terms. Canonicalization has moved every shift to the other side
+// and merged repeated constant terms, so `x - 1 >= -3`, `2 * (x - 1) >= -6` and `x + x >= -4` arrive as one term.
 
-//! One decision variable, resolved, plus the type facts folding needs about it, and
-//! the affine spelling it stands in: the comparison's side is `scale * x + offset`
-//! (`2 * x`: 2 and 0; `-x`: -1 and 0; `2 * (x - 1)`: 2 and -2).
-struct FoldingTarget {
-	LogicalDecide *decide = nullptr;
-	idx_t var_idx = DConstants::INVALID_INDEX;
-	bool is_integer = false;
-	bool is_boolean = false;
-	double scale = 1.0;
-	double offset = 0.0;
+//! Replaces, in `expr`, each node `is_term` matches by `replacement` of it.
+static void ReplaceDecisionTerm(unique_ptr<Expression> &expr, const std::function<bool(const Expression &)> &is_term,
+                                const std::function<unique_ptr<Expression>(const Expression &)> &replacement) {
+	if (is_term(*expr)) {
+		expr = replacement(*expr);
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    *expr, [&](unique_ptr<Expression> &child) { ReplaceDecisionTerm(child, is_term, replacement); });
+}
 
-	//! A bound that merely restates a BOOLEAN's intrinsic [0,1] box is not a loosenable
-	//! parameter: the domain is applied to the solver column directly and never
-	//! synthesized as a constraint, so such a bound only exists because the user wrote
-	//! it redundantly. A genuine pin (`x <= 0`, `x >= 1`, `x = 1`) does tighten the box
-	//! and is recorded — erasing those made the elastic model diverge from the query.
-	bool ShouldRecord(char sense, double k) const {
-		if (!is_boolean) {
-			return true;
-		}
-		if (sense == '<' && k >= 1.0) {
+//! The interval of values `a * x <comparison> r` admits, with `admits(n)` the written comparison at `x = n`. On a side
+//! the clause leaves open the end is infinite; a zero coefficient admits every value or none. A whole-numbered
+//! decision checks the whole numbers next to `r / a` while that quotient is below `exact_limit` in magnitude, where
+//! each candidate is a value of the decision's type; a REAL one has `exact_limit` 0.
+static void AdmittedInterval(const ExpressionBuilder &calc, ExpressionType comparison, double exact_limit,
+                             const ExprPtr &a, const ExprPtr &r, const std::function<ExprPtr(const ExprPtr &)> &admits,
+                             ExprPtr &lower, ExprPtr &upper) {
+	constexpr double INF = std::numeric_limits<double>::infinity();
+	auto positive_infinity = calc.Num(INF);
+	auto negative_infinity = calc.Num(-INF);
+	auto zero = calc.Num(0.0);
+	auto v = calc.Div(r, a);
+	// The greatest admitted value, for a side bounded above, and the least, for a side bounded below.
+	ExprPtr greatest = v;
+	ExprPtr least = v;
+	if (exact_limit > 0.0) {
+		// Below the limit the quotient is within one of the answer. Beyond it, or when it is not a number, the
+		// rounded quotient is the answer: past 2^52 a DOUBLE holds no fraction to round, and past an INTEGER's range
+		// the bound lies beyond every value the decision can take.
+		auto exact = calc.Cmp(ExpressionType::COMPARE_LESSTHAN, calc.Fn("abs", v), calc.Num(exact_limit));
+		auto one = calc.Num(1.0);
+		auto floored = calc.Fn("floor", v);
+		auto above_floor = calc.Add(floored, one);
+		greatest = calc.If(
+		    exact, calc.If(admits(above_floor), above_floor, calc.If(admits(floored), floored, calc.Sub(floored, one))),
+		    floored);
+		auto ceiled = calc.Fn("ceil", v);
+		auto below_ceil = calc.Sub(ceiled, one);
+		least = calc.If(exact,
+		                calc.If(admits(below_ceil), below_ceil, calc.If(admits(ceiled), ceiled, calc.Add(ceiled, one))),
+		                ceiled);
+	}
+	auto positive = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, a, zero);
+	auto negative = calc.Cmp(ExpressionType::COMPARE_LESSTHAN, a, zero);
+	bool at_most =
+	    comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO || comparison == ExpressionType::COMPARE_LESSTHAN;
+	bool at_least =
+	    comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO || comparison == ExpressionType::COMPARE_GREATERTHAN;
+	// `at most` bounds x above when the coefficient is positive and below when it is negative; `at least` the opposite;
+	// `=` both.
+	if (at_most) {
+		upper = calc.If(positive, greatest, positive_infinity);
+		lower = calc.If(negative, least, negative_infinity);
+	} else if (at_least) {
+		upper = calc.If(negative, greatest, positive_infinity);
+		lower = calc.If(positive, least, negative_infinity);
+	} else {
+		upper = greatest;
+		lower = least;
+	}
+	auto holds = admits(zero);
+	auto zero_coefficient = calc.Cmp(ExpressionType::COMPARE_EQUAL, a, zero);
+	upper = calc.If(zero_coefficient, calc.If(holds, positive_infinity, negative_infinity), upper);
+	lower = calc.If(zero_coefficient, calc.If(holds, negative_infinity, positive_infinity), lower);
+	// A right side the solvers read as infinite, in the direction no value can miss, binds nothing.
+	if (at_most || at_least) {
+		auto vacuous =
+		    at_most ? calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, r, calc.Num(DECIDE_EFFECTIVE_INFINITY))
+		            : calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, r, calc.Num(-DECIDE_EFFECTIVE_INFINITY));
+		upper = calc.If(vacuous, positive_infinity, upper);
+		lower = calc.If(vacuous, negative_infinity, lower);
+	}
+}
+
+//! The decision side as the row it bounds. An easy `max(m) <= K` / `min(m) >= K` bounds every member its reducer
+//! reads (its `when`, the reducer's filter, chooses them), and the extremum of one member is that member: the clause is
+//! read with the member in the reducer's place (`2 * max(c * x) <= K` reads as `2 * (c * x) <= K`), and `filter` is
+//! set to the reducer's filter. The reducer stays in the tree, so EXPLAIN and DIAGNOSE read the clause as written.
+static unique_ptr<Expression> ReadAsRow(const ExpressionBuilder &calc, const BoundComparisonExpression &comparison,
+                                        unique_ptr<Expression> &filter) {
+	auto row = calc.Out(calc.Of(*comparison.left));
+	if (HasDecideTag(comparison.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
+		ReplaceDecisionTerm(
+		    row, [](const Expression &node) { return node.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE; },
+		    [&](const Expression &node) {
+			    auto &reducer = node.Cast<BoundAggregateExpression>();
+			    D_ASSERT(reducer.children.size() == 1);
+			    filter = reducer.filter ? reducer.filter->Copy() : nullptr;
+			    return calc.Out(calc.Cast(calc.Of(*reducer.children[0]), reducer.return_type));
+		    });
+	}
+	return row;
+}
+
+//! Reads `row` as `a * x + b`: linear terms of one decision, whose coefficients add up to `a`, and constant terms,
+//! which add up to `b` (null when there are none). The canonicalizer merges constant coefficients (`x + x` is `2 * x`)
+//! and moves a clause's shifts to the right side; terms over data (`cap * x + w * x`) stay apart, and a member keeps
+//! its own (`max(x + 1)`).
+static bool ReadAffine(const ExpressionBuilder &calc, const DecideTermSplitter &splitter, const Expression &row,
+                       idx_t &var_idx, ExprPtr &a, ExprPtr &b) {
+	vector<DecideSplitTerm> terms;
+	splitter.Split(row, 1, terms);
+	var_idx = DConstants::INVALID_INDEX;
+	for (auto &term : terms) {
+		bool constant = term.kind == DecideTermKind::CONSTANT;
+		if ((!constant && term.kind != DecideTermKind::LINEAR) || !term.coefficient ||
+		    (!constant && var_idx != DConstants::INVALID_INDEX && term.var_a != var_idx)) {
 			return false;
 		}
-		if (sense == '>' && k <= 0.0) {
-			return false;
+		auto value = calc.Mul(calc.Num(term.sign), calc.Cast(calc.Of(*term.coefficient), LogicalType::DOUBLE));
+		auto &sum = constant ? b : a;
+		sum = sum ? calc.Add(sum, value) : value;
+		if (!constant) {
+			var_idx = term.var_a;
 		}
-		return true;
 	}
+	return var_idx != DConstants::INVALID_INDEX;
+}
 
-	//! Tighten one side of the box and record the bound, in the one order that is always
-	//! correct: tighten unconditionally (a BOOLEAN restatement is a harmless no-op against
-	//! the intrinsic box), record only when ShouldRecord agrees. Returns whether it
-	//! recorded: only a recorded bound is loosened by a diagnosis.
-	bool Fold(char sense, double k, bool strict, double typed_k, idx_t source_clause_id, idx_t removal_group_id) const {
-		DecideFoldSingletonRow(decide->singleton_row_boxes[var_idx], sense, k);
-		if (!ShouldRecord(sense, k)) {
-			return false;
-		}
-		decide->user_singleton_row_bounds.push_back(
-		    {var_idx, sense, k, strict, typed_k, source_clause_id, removal_group_id});
-		return true;
+//! Fills the fields a bound known before the query runs carries (D41): everything folds to a number, which a column,
+//! a subquery or a parameter does not.
+static void FoldKnownBound(ClientContext &context, const ExpressionBuilder &calc, ExpressionType type, const ExprPtr &a,
+                           const ExprPtr &r, DecideOneDecisionBound &out) {
+	double a_value, r_value;
+	out.folds = TryEvaluateFoldableDouble(context, *calc.Out(a), a_value, FOLD_CATCH_ALL) && a_value != 0.0 &&
+	            !std::isnan(a_value) && TryEvaluateFoldableDouble(context, *calc.Out(r), r_value, FOLD_CATCH_ALL) &&
+	            !std::isnan(r_value) &&
+	            TryEvaluateFoldableDouble(context, *out.lower, out.lower_value, FOLD_CATCH_ALL) &&
+	            TryEvaluateFoldableDouble(context, *out.upper, out.upper_value, FOLD_CATCH_ALL);
+	if (!out.folds) {
+		return;
 	}
-};
+	bool strict = type == ExpressionType::COMPARE_LESSTHAN || type == ExpressionType::COMPARE_GREATERTHAN;
+	bool at_most = type == ExpressionType::COMPARE_LESSTHANOREQUALTO || type == ExpressionType::COMPARE_LESSTHAN;
+	out.sense = type == ExpressionType::COMPARE_EQUAL ? '=' : ((at_most == (a_value > 0.0)) ? '<' : '>');
+	double quotient = r_value / a_value;
+	out.written_k = strict ? DecideStrictBound(out.sense == '>', quotient) : quotient;
+	// A side that admits no value (`x >= +inf`) is no box a backend reads: the clause stays a row the model reports
+	// infeasible without a solve (SolverModel::ProvesInfeasible).
+	constexpr double INF = std::numeric_limits<double>::infinity();
+	out.folds = (out.sense == '<' || out.lower_value != INF) && (out.sense == '>' || out.upper_value != -INF);
+}
 
-//! Read `expr` as the affine spelling `scale * e + offset` of the term `e` beneath its
-//! factors and shifts -- `c * e`, `e * c`, `-e`, `e / c`, `e + c`, `c + e`, `e - c` and
-//! `c - e`, with `c` a finite number known before the query runs and a factor nonzero --
-//! and return `e`, under the binder's casts. A constant that is data, a subquery, or not
-//! finite is not peeled: the term is then no bound, and the caller declines on its shape.
-//! Canonicalization moves a top-level shift to the other side already; one under a
-//! factor (`2 * (x - 1)`) it leaves in place, which is what the shifts are here for.
-static const Expression *PeelAffine(ClientContext &context, const Expression &expr, idx_t decide_index, double &scale,
-                                    double &offset) {
-	scale = 1.0;
-	offset = 0.0;
-	const Expression *current = UnwrapDecideCasts(expr, decide_index);
-	if (current->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
-		return current;
+bool DecideReadOneDecisionBound(ClientContext &context, const LogicalDecide &decide,
+                                const BoundComparisonExpression &comparison, DecideOneDecisionBound &out) {
+	auto type = comparison.type;
+	if (type != ExpressionType::COMPARE_LESSTHAN && type != ExpressionType::COMPARE_GREATERTHAN &&
+	    type != ExpressionType::COMPARE_LESSTHANOREQUALTO && type != ExpressionType::COMPARE_GREATERTHANOREQUALTO &&
+	    type != ExpressionType::COMPARE_EQUAL) {
+		return false;
 	}
-	auto &func = current->Cast<BoundFunctionExpression>();
-	const auto &name = func.function.name;
-	auto constant = [&](const Expression &candidate, double &value) {
-		return TryEvaluateFoldableDouble(context, candidate, value, FOLD_CATCH_ALL) && std::isfinite(value);
+	ExpressionBuilder calc(context);
+	DecideTermSplitter splitter(context, decide.decide_index, decide.decide_variables);
+	unique_ptr<Expression> member_filter;
+	auto row = ReadAsRow(calc, comparison, member_filter);
+	ExprPtr a, b;
+	if (!ReadAffine(calc, splitter, *row, out.var_idx, a, b) || out.var_idx >= decide.decide_variables.size()) {
+		return false;
+	}
+	auto type_id = decide.decide_variables[out.var_idx]->return_type.id();
+	bool whole = type_id == LogicalTypeId::INTEGER || type_id == LogicalTypeId::BIGINT;
+	if (!whole && type_id != LogicalTypeId::DOUBLE) {
+		return false;
+	}
+	// A strict bound steps onto the whole numbers (`x < 10` admits 9). The binder refuses one on a REAL, which has no
+	// such step (ValidateDecideIntegralComparisonOperands).
+	D_ASSERT(whole || (type != ExpressionType::COMPARE_LESSTHAN && type != ExpressionType::COMPARE_GREATERTHAN));
+	// The right side moved onto `a * x`.
+	auto r = calc.Cast(calc.Of(*comparison.right), LogicalType::DOUBLE);
+	if (b) {
+		r = calc.Sub(r, b);
+	}
+	// The check is a comparison of its own, bound as the binder binds one: both sides cast to the type it compares in.
+	// A rebuilt clause (`x <= -sum(w) + 10`) is a model of the constraint and may compare a BIGINT with a DECIMAL. Any
+	// reference that names the decision takes `n`, whatever type the binder gave it there.
+	auto input_type = BoundComparisonExpression::BindComparison(context, comparison.left->return_type,
+	                                                            comparison.right->return_type, type);
+	auto admits = [&](const ExprPtr &n) {
+		auto left = row->Copy();
+		ReplaceDecisionTerm(
+		    left,
+		    [&](const Expression &node) {
+			    return node.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+			           splitter.FindVariable(node) == out.var_idx;
+		    },
+		    [&](const Expression &node) { return calc.Out(calc.Cast(n, node.return_type)); });
+		// The check reads the row and `n` only: a decision left in it would read a source column at stage 08.
+		D_ASSERT(!BoundExpressionReferencesDecide(*left, decide.decide_index));
+		return calc.Cmp(type, calc.Cast(calc.Wrap(std::move(left)), input_type),
+		                calc.Cast(calc.Of(*comparison.right), input_type));
 	};
-	double c;
-	if (name == "-" && func.children.size() == 1) {
-		auto *term = PeelAffine(context, *func.children[0], decide_index, scale, offset);
-		scale = -scale;
-		offset = -offset;
-		return term;
+	ExprPtr lower, upper;
+	double exact_limit = !whole                              ? 0.0
+	                     : type_id == LogicalTypeId::INTEGER ? double(NumericLimits<int32_t>::Maximum())
+	                                                         : DECIDE_MAX_FRACTIONAL_MAGNITUDE;
+	AdmittedInterval(calc, type, exact_limit, a, r, admits, lower, upper);
+	if (member_filter) {
+		// A row the reducer's filter leaves out is no member and admits every value; its member is never read.
+		auto member = calc.Of(*member_filter);
+		lower = calc.If(member, lower, calc.Num(-std::numeric_limits<double>::infinity()));
+		upper = calc.If(member, upper, calc.Num(std::numeric_limits<double>::infinity()));
 	}
-	if (func.children.size() != 2) {
-		return current;
-	}
-	if (name == "*") {
-		for (idx_t side = 0; side < 2; side++) {
-			if (constant(*func.children[side], c) && c != 0.0) {
-				auto *term = PeelAffine(context, *func.children[1 - side], decide_index, scale, offset);
-				scale *= c;
-				offset *= c;
-				return term;
-			}
-		}
-		return current;
-	}
-	if (name == "/" && constant(*func.children[1], c) && c != 0.0) {
-		auto *term = PeelAffine(context, *func.children[0], decide_index, scale, offset);
-		scale /= c;
-		offset /= c;
-		return term;
-	}
-	if (name == "+") {
-		for (idx_t side = 0; side < 2; side++) {
-			if (constant(*func.children[side], c)) {
-				auto *term = PeelAffine(context, *func.children[1 - side], decide_index, scale, offset);
-				offset += c;
-				return term;
-			}
-		}
-		return current;
-	}
-	if (name == "-") {
-		if (constant(*func.children[1], c)) {
-			auto *term = PeelAffine(context, *func.children[0], decide_index, scale, offset);
-			offset -= c;
-			return term;
-		}
-		if (constant(*func.children[0], c)) {
-			auto *term = PeelAffine(context, *func.children[1], decide_index, scale, offset);
-			scale = -scale;
-			offset = c - offset;
-			return term;
-		}
-	}
-	return current;
-}
-
-//! Resolve `expr`, one bare decision reference under casts, to its variable. Anything
-//! else -- a multi-variable LHS (`x - 3*z_1 - 5*z_2 = 0`, the IN linking row), a product
-//! -- is a genuine relation, not a bound.
-static bool TryMatchBareDecision(const Expression &expr, LogicalDecide &decide, FoldingTarget &out) {
-	auto *term = UnwrapDecideCasts(expr, decide.decide_index);
-	if (term->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
-		return false;
-	}
-	auto &colref = term->Cast<BoundColumnRefExpression>();
-	for (idx_t i = 0; i < decide.decide_variables.size(); i++) {
-		auto &decide_var = decide.decide_variables[i]->Cast<BoundColumnRefExpression>();
-		if (colref.binding != decide_var.binding) {
-			continue;
-		}
-		auto type_id = decide.decide_variables[i]->return_type.id();
-		out.decide = &decide;
-		out.var_idx = i;
-		out.is_integer = (type_id == LogicalTypeId::INTEGER || type_id == LogicalTypeId::BIGINT);
-		out.is_boolean = i < decide.is_boolean_var.size() && decide.is_boolean_var[i];
-		out.scale = 1.0;
-		out.offset = 0.0;
-		return true;
-	}
-	return false;
-}
-
-//! Resolve `expr`, one decision in an affine spelling (`2 * x`, `-x`, `x / 2`,
-//! `2 * (x - 1)`), to its variable and the spelling it stands in.
-static bool TryMatchFoldingTarget(ClientContext &context, const Expression &expr, LogicalDecide &decide,
-                                  FoldingTarget &out) {
-	double scale, offset;
-	auto *term = PeelAffine(context, expr, decide.decide_index, scale, offset);
-	if (!TryMatchBareDecision(*term, decide, out)) {
-		return false;
-	}
-	out.scale = scale;
-	out.offset = offset;
-	return true;
-}
-
-//! Resolve an easy `max(x) <= K` / `min(x) >= K` (MINMAX_EASY_REWRITE_TAG), in an affine
-//! spelling outside the reducer (`2 * min(x)`, `-min(x)`, `2 * (min(x) - 1)`), to its
-//! decision. The member is a bare decision: `max(2 * x) <= K` bounds the member `2 * x`,
-//! and stays one row per member. It bounds every row its reducer reads: with no reducer
-//! filter and no front `when` (whose wrapper this pass never enters) that is every kept
-//! row, so it is the column bound `x <= K` / `x >= K`, and a negative K lets x go negative
-//! as `x >= -5` does (D41). The reducer stays in the tree, so EXPLAIN and DIAGNOSE read
-//! the clause as written.
-static bool TryMatchEasyExtremumTarget(ClientContext &context, const BoundComparisonExpression &comp,
-                                       LogicalDecide &decide, FoldingTarget &out) {
-	if (!HasDecideTag(comp.GetAlias(), MINMAX_EASY_REWRITE_TAG)) {
-		return false;
-	}
-	double scale, offset;
-	auto *term = PeelAffine(context, *comp.left, decide.decide_index, scale, offset);
-	if (term->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-		return false;
-	}
-	auto &agg = term->Cast<BoundAggregateExpression>();
-	if ((agg.function.name != "min" && agg.function.name != "max") || agg.filter || agg.children.size() != 1 ||
-	    !TryMatchBareDecision(*agg.children[0], decide, out)) {
-		return false;
-	}
-	out.scale = scale;
-	out.offset = offset;
-	return true;
-}
-
-//! The solver's reading of a comparison that belongs in a variable's box: the decision, the side it tightens and the
-//! value it tightens to. This is the one place that says which comparisons are folded, shared with direct solve
-//! through DecideIsSingletonRowBound so the two cannot disagree about whether a bound replaces a variable's default.
-struct SingletonRowBound {
-	FoldingTarget target;
-	char sense = '<';
-	double k = 0.0;
-	bool strict = false;
-	//! The user's bound, moved onto the bare decision, when `strict` normalized it by a whole unit.
-	double typed_k = 0.0;
-	//! True when the clause is spelled as one bare decision against a literal under casts (`x <= 10`, `x > 2.5`).
-	bool plain = false;
-};
-
-static bool TryReadSingletonRowBound(ClientContext &context, LogicalDecide &decide,
-                                     const BoundComparisonExpression &comp, SingletonRowBound &out) {
-	bool extremum = false;
-	if (!TryMatchFoldingTarget(context, *comp.left, decide, out.target)) {
-		if (!TryMatchEasyExtremumTarget(context, comp, decide, out.target)) {
-			return false;
-		}
-		extremum = true;
-	}
-
-	// A non-finite bound is left for the constraint path, which already reads it the
-	// way the solver does: `x <= +inf` is no bound, `x >= +inf` has no solution, and
-	// NaN is an error naming the arithmetic. Folding it instead would write it into
-	// the column box, where min/max against the ±1e30 sentinels keep an upper bound
-	// but not a lower one — the same infinity silently vanishing in one direction and
-	// reaching the model validator as an internal error in the other.
-	//
-	// The bound is whatever the other side folds to before the query runs: a literal
-	// under casts, or the `1 + -3` canonicalization leaves of `x - 1 >= -3`. A side that
-	// does not fold -- a column, a subquery -- is data, and the comparison stays a row.
-	double k;
-	if (!TryEvaluateFoldableDouble(context, *comp.right, k, FOLD_PLAIN) || !std::isfinite(k)) {
-		return false;
-	}
-	// StripCastsForIdentity reads only the innermost node's class, never its value.
-	out.plain = !extremum && out.target.scale == 1.0 && out.target.offset == 0.0 &&
-	            StripCastsForIdentity(*comp.right)->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT;
-	// The spelling the decision stands in is undone on the bound: a shift moves
-	// across, a factor divides and, when negative, reverses the relation. `2 * x >= -4`
-	// is `x >= -2`, and so are `-x <= 2` and `2 * (x - 1) >= -6`.
-	k = (k - out.target.offset) / out.target.scale;
-	const auto relation = out.target.scale < 0 ? FlipComparisonExpression(comp.type) : comp.type;
-	out.k = k;
-
-	// `=` intersects both sides rather than assigning, so `x = 5 AND x = 10` inverts
-	// the box and the conflict is caught instead of resolving to whichever was
-	// written last. A strict `<` / `>` normalizes into the bound for an integer
-	// (`x < 10` is `x <= 9`, `x > 0.5` is `x >= 1`), carrying the user's literal as `typed_k` so the
-	// diagnosis re-quotes `< 10`. A REAL has no such normalization, so it declines
-	// and the constraint path rejects it with a message naming the clause. The bound
-	// steps onto the lattice as every row does (`x > 2.5` is `x >= 3`).
-	switch (relation) {
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		out.sense = '<';
-		return true;
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		out.sense = '>';
-		return true;
-	case ExpressionType::COMPARE_EQUAL:
-		out.sense = '=';
-		return true;
-	case ExpressionType::COMPARE_LESSTHAN:
-		out.sense = '<';
-		out.k = DecideStrictBound(false, k);
-		out.strict = true;
-		out.typed_k = k;
-		return out.target.is_integer;
-	case ExpressionType::COMPARE_GREATERTHAN:
-		out.sense = '>';
-		out.k = DecideStrictBound(true, k);
-		out.strict = true;
-		out.typed_k = k;
-		return out.target.is_integer;
-	default:
-		return false;
-	}
-}
-
-bool DecideIsSingletonRowBound(ClientContext &context, LogicalDecide &decide,
-                               const BoundComparisonExpression &comparison, bool &plain) {
-	SingletonRowBound bound;
-	if (!TryReadSingletonRowBound(context, decide, comparison, bound)) {
-		plain = false;
-		return false;
-	}
-	plain = bound.plain;
+	out.lower = calc.Out(lower);
+	out.upper = calc.Out(upper);
+	FoldKnownBound(context, calc, type, a, r, out);
 	return true;
 }
 
@@ -365,16 +304,36 @@ void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDec
 		idx_t removal_group_id = DConstants::INVALID_INDEX;
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
 
-		SingletonRowBound bound;
-		if (!TryReadSingletonRowBound(optimizer.context, decide, comp, bound)) {
+		DecideOneDecisionBound bound;
+		if (!DecideReadOneDecisionBound(optimizer.context, decide, comp, bound) || !bound.folds) {
 			break;
 		}
 		// The comparison stays in the tree so EXPLAIN keeps rendering what the user
-		// wrote; the tag is what stops it also becoming a model row. A clause is one
+		// wrote; the tag is what stops it also becoming a model row. The box takes the
+		// admitted ends (`x <= 42.9999999` admits 42 for an INT), tightening
+		// unconditionally: a BOOLEAN restatement is a harmless no-op against its
+		// intrinsic box. A `-inf` floor writes the solver's "no bound", which frees `x`
+		// below as `x >= -1e30` does (D41).
+		AddDecideTag(comp.alias, SINGLETON_ROW_BOUND_TAG);
+		auto &box = decide.singleton_row_boxes[bound.var_idx];
+		if (bound.sense != '>') {
+			DecideFoldSingletonRow(box, '<', bound.upper_value);
+		}
+		if (bound.sense != '<') {
+			DecideFoldSingletonRow(box, '>', bound.lower_value);
+		}
+		// A bound that merely restates a BOOLEAN's intrinsic [0,1] box is not a
+		// loosenable parameter: the domain is applied to the solver column directly and
+		// never synthesized as a constraint, so such a bound only exists because the
+		// user wrote it redundantly. A genuine pin (`x <= 0`, `x >= 1`, `x = 1`) is
+		// recorded. Only a recorded bound is loosened by a diagnosis, and a clause is one
 		// knob per kept row or class in an expanded diagnosis (D28), which one column
 		// bound cannot say, so a recorded one is flattened for the repair model too.
-		AddDecideTag(comp.alias, SINGLETON_ROW_BOUND_TAG);
-		if (bound.target.Fold(bound.sense, bound.k, bound.strict, bound.typed_k, source_clause_id, removal_group_id)) {
+		bool is_boolean = bound.var_idx < decide.is_boolean_var.size() && decide.is_boolean_var[bound.var_idx];
+		bool restates_domain = is_boolean && bound.lower_value <= 0.0 && bound.upper_value >= 1.0;
+		if (!restates_domain) {
+			decide.user_singleton_row_bounds.push_back(
+			    {bound.var_idx, bound.sense, bound.written_k, source_clause_id, removal_group_id});
 			AddDecideTag(comp.alias, SINGLETON_ROW_CLAUSE_ROWS_TAG);
 		}
 		break;

@@ -223,6 +223,10 @@ struct EvaluatedConstraint {
     //! linear term so fixed LHS offsets cannot silently acquire generic SUM semantics.
     vector<LinearTermReduction> linear_term_reductions;
     CoefficientColumn rhs_values;                // RHS column (logical size = num_rows)
+    //! A per-row bound on one decision: the values it admits on each row (DecideConstraint::admitted_lower and
+    //! admitted_upper), ±infinity on an open side. Logical size 0 for any other constraint.
+    CoefficientColumn admitted_lower;
+    CoefficientColumn admitted_upper;
     ExpressionType comparison_type;
     bool lhs_is_aggregate = false;            // True if original LHS was an aggregate (e.g., SUM(...))
     //! Which hard MIN/MAX clause this row is, as an index into `minmax_clause_labels`.

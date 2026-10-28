@@ -21,7 +21,7 @@ rewrite cannot follow from a gap in the front end. A decline carries no reason: 
 
 Not proved covers what the binder admits and no rule models: a per-row term the splitter cannot read, an order-0 norm,
 a reducer's `by` key, a `per K:` in front of a clause, a clause whose reducer value became a helper decision
-(`VALUE_REWRITE_TAG`), the two-level objective, and a folded bound that is not plain. A scope check with a key (one per
+(`VALUE_REWRITE_TAG`) and the two-level objective. A scope check with a key (one per
 `by` group or per class) makes the whole IR not proved.
 The reader trusts the invariants of the bound tree for everything else (one source child, the four reducers, comparison
 and `IN` leaves, a `SUCH THAT` that is an `AND` of clauses (the binder rejects `OR` between constraints), at most one
@@ -31,12 +31,12 @@ mark it not proved.
 
 ## Things worth knowing
 
-- A per-row bound has `variable_bound` set when the solver path folds it into its decision's box instead of emitting a
-  model row (an unconditional comparison of one decision against a constant, affine spellings included, D41). Such a
-  bound replaces the variable's default lower bound of 0; every other bound only intersects with it. The flag's
-  `plain` half marks a bare decision against a cast-wrapped constant, the only fold the rules read; any other folded
-  bound is not proved. The flag comes from one predicate shared with the solver (`DecideIsSingletonRowBound`), so the
-  two cannot disagree.
+- A per-row comparison carries the solver path's own reading of it (`DecideReadOneDecisionBound`): `one_decision_bound`
+  when it is a bound on one decision, and `bound`, the interval of values it admits as DuckDB evaluates the comparison
+  (D64). `variable_bound` is set when the solver path folds it into its decision's box instead of emitting a model row
+  (an unconditional bound whose ends fold at plan time, in any spelling, D41). Such a bound replaces the variable's
+  default lower bound of 0; every other bound only intersects with it. Direct rules run before the MIN/MAX rewrite tags
+  an easy extremum, so only a per-row bound reads here. The classifier is the solver's, so the two cannot disagree.
 - `row_checks` are the scope checks the DECIDE operator runs before it reads a value
   (`PhysicalDecide::RunScopeChecks`): a `when` that keeps no row (D4) and a reducer whose own `when` keeps no row (D8),
   each with its message from `decide_value_messages.hpp`. The rule driver puts them under every rule's plan

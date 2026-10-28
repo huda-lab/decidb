@@ -22,9 +22,17 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
 - **Signed variables.** Singleton-row folding (`decide_singleton_row_folding.cpp`) starts each lower bound at −1e30
   so the `std::max` combiner keeps the tightest `>=` bound for negatives too, and records whether any lower bound was
   written; `Finalize` gives 0 to a variable with none. The model builder takes the resolved lower bound directly
-  instead of clamping it to the type default. A bound of magnitude 1e20 or more is no bound. Implied-bound propagation
+  instead of clamping it to the type default. A bound of magnitude 1e20 or more is no bound (D66), and a literal
+  `x >= -'inf'` frees `x` below the same way (D65). Implied-bound propagation
   does not run for a variable with a negative lower bound (skipping is sound), so a signed variable in a bilinear
   product needs a written upper bound. Tests: `test_signed_variables.py`.
+- **A bound on one decision admits what DuckDB admits** (D64). `DecideReadOneDecisionBound`
+  (`decide_singleton_row_folding.cpp`) gives the interval a comparison like `0.1 * x <= c` admits as two DOUBLE
+  expressions; on a whole-numbered decision each end is a whole number the written comparison, evaluated by DuckDB with
+  that number cast to the decision's type, passes. The optimizer folds a literal interval, stage 08 evaluates a data
+  one per row, and direct solve reads the same expressions. An infinite end keeps its SQL meaning (D65): an open end is
+  no bound, and an end that admits nothing is answered infeasible before any backend (`SolverModel::ProvesInfeasible`).
+  Tests: `test_one_decision_bound.py`, `test_infinite_bounds.py`.
 - **Query-wide decisions** occupy their own block of `VarIndexer` (`[row | keyed | query-wide | auxiliary]`), below
   `global_block_start`, so "user decisions occupy `[0, global_block_start)`" holds for the model builder and the
   diagnostic labeller. `Get()` ignores the row for them. The model builder adds a query-wide coefficient **once per

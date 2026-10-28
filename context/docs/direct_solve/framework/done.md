@@ -1,12 +1,11 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-27 at `a14b1f8129` or later, with the strict xfails on the direct path of pending cases: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 4,570 passed
-and 335 strict expected failures (the direct path of keyed and folded-affine cases, other direct-solve follow-ups
-and the deferred bound reader); `DECIDB_FORCE_SOLVER=highs
-make decide-test` 4,568 passed and two failures, `test_norm_combined_l1_l2_objective`, which needs Gurobi, and
-`test_entity_scoped_mixed_when_per`, which HiGHS cannot close at a gap of 0 in time (`../../issues/bugs.md`); C++
-`build/release/test/unittest "[decidb]"` 2,714 assertions in 65 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+Verified on 2026-10-28 at `8f254312d7` or later, with the strict xfails on the direct path of pending cases: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each
+4,672 outcomes and 327 strict expected failures (the direct path of keyed cases and other direct-solve follow-ups);
+`DECIDB_FORCE_SOLVER=highs make decide-test` 4,670 passed and two failures, `test_norm_combined_l1_l2_objective`, which
+needs Gurobi, and `test_entity_scoped_mixed_when_per`, which HiGHS cannot close at a gap of 0 in time
+(`../../issues/bugs.md`); C++ `build/release/test/unittest "[decidb]"` 2,686 assertions in 65 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
 ## What it does
@@ -20,7 +19,7 @@ check). Design: `../architecture/`.
   run-time scope checks the plan must run (`row_checks`: D4, and D8 without a key). Parts the binder admits and no rule
   models are *not proved*, and building the IR never throws: `norm(e, 0)` (it needs indicator variables), any norm tag
   the front end does not expect, a reducer's `by` key, a `per K:` in front of a clause, a clause whose reducer value
-  became a helper decision, the two-level objective, and a folded bound that is not plain (D41) are not-proved parts; a
+  became a helper decision and the two-level objective are not-proved parts; a
   scope check with a key makes the whole IR not proved (`DirectIR::status`). Shapes the binder never produces are `D_ASSERT`s
   (`../architecture/ir.md`). No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
@@ -55,12 +54,15 @@ check). Design: `../architecture/`.
   query reports is not specified.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
-  every direct-solve file. `DirectReadBounds` folds `variable_bound`s into each decision's static box
-  (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude 1e20 or more infinite) and lists every other bound as a
-  per-row clause, an equality split into its two halves. `DirectClauseBounds` turns one clause's row values into a lower
-  and an upper bound as the solver reads them. `DirectRowBox` intersects them with the box. `DirectReadsOneDecision` is the shape a per-row bound must have to be read
-  (one unfiltered linear left side in one decision, no constant), and `DirectBoxIsEmpty` is true on a row whose box no
-  value satisfies. `DirectReadLinearPart` reads one linear part (an objective part or a budget) into a `DirectLinearPart`: its sign and
+  every direct-solve file. A per-row bound is read by the solver path's own classifier
+  (`DecideReadOneDecisionBound`, stored on the IR node as `one_decision_bound` and `bound`), so direct solve admits the
+  values the solver admits, as DuckDB evaluates the comparison (D64). `DirectIsBoundOnOneDecision` is the shape a
+  per-row bound must have to be read: the classifier read it, on a declared decision. `DirectReadBounds` folds
+  `variable_bound`s into each decision's static box (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude
+  1e20 or more infinite): the written `(sense, k)` into a box the domain check reads, the admitted ends into the box the
+  answer reads. Every other bound is a per-row clause carrying the classifier's admitted `lower` and `upper`
+  expressions. `DirectClauseBounds` reads one clause's two ends on a row (no bound on a row its `when` drops), and
+  `DirectRowBox` intersects them with the box. `DirectBoxIsEmpty` is true on a row whose box no value satisfies. `DirectReadLinearPart` reads one linear part (an objective part or a budget) into a `DirectLinearPart`: its sign and
   constant factor, and each linear term's decision, sign and proved coefficient; it skips other term kinds. Each rule keeps
   its own policy around it: S1 declines a filtered part, a non-linear term, a second decision and a coefficient that may
   raise beside other terms, and flattens the part per term; A1 reads constants and squares itself and sums a part's
@@ -110,7 +112,7 @@ check). Design: `../architecture/`.
 - **One evaluate-to-DOUBLE function.** `TryEvaluateFoldableDouble(context, expr, out, flags)` (`decide_cast_policy.hpp`)
   is the only code that folds a constant expression to a `DOUBLE`, for the planner, the rewrites and the direct rules.
   Callers differ only in the flags they pass: `FOLD_STABLE` (no row, parameter or subquery can change it),
-  `FOLD_ALLOW_BOOLEAN`, `FOLD_EXACT_FINITE` (through `DecideIsExactFiniteDouble`), `FOLD_CATCH_DUCKDB_ERRORS` and
+  `FOLD_EXACT_FINITE` (through `DecideIsExactFiniteDouble`), `FOLD_CATCH_DUCKDB_ERRORS` and
   `FOLD_CATCH_ALL`. The planner passes `FOLD_PLAIN` and lets a conversion error reach its own error policy; the sign test
   for a scale factor and the `IN` rewrite catch everything; direct rules pass `DIRECT_CONSTANT` or
   `DIRECT_FINITE_CONSTANT`.
@@ -206,9 +208,9 @@ A rule registers with one line in `direct_registry.cpp` and one in the folder's 
 (`direct_rule_driver.cpp`) and the result adapter (`direct_result_adapter.cpp`) hold no rule-specific code. S1 and A1
 are materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a
 breaker or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own
-reading comes from the solver's code, not a copy: `DirectIRConstraint::variable_bound` is the predicate
-`DecideIsSingletonRowBound` (`decide_singleton_row_folding.cpp`), so a rule can ask which bounds replace a variable's
-default box.
+reading comes from the solver's code, not a copy: `DirectIRConstraint::one_decision_bound`, `bound` and
+`variable_bound` come from the classifier `DecideReadOneDecisionBound` (`decide_singleton_row_folding.cpp`), so a rule
+asks the solver's own question about which values a bound admits and which bounds replace a variable's default box.
 
 ## Verified by
 
@@ -252,13 +254,12 @@ default box.
   test_decidb_direct_decline.cpp`, "keyed plans"). Every other check follows one policy: a query reaches it and a test runs it; a
   check on what a rule hands the engine raises in release builds and a stub-rule C++ test reaches it; a check on a plan,
   IR or setting the engine builds itself is a `D_ASSERT`, which debug builds run; code no query reaches is deleted.
-  Branch coverage shows which branches a test runs, not whether its assertion would catch a wrong value there, so 45
+  Branch coverage shows which branches a test runs, not whether its assertion would catch a wrong value there, so 44
   one-line changes to value-handling code (a comparison, a constant, an operator) were each planted and run against the six `test_direct_*.py` files. Every direct-solve test case reaches an
   arm no other test reaches, catches one of these changes, or pins a behavior coverage does not measure (the solver
-  path's wording, prepared plans, `DIAGNOSE`, an empty source). 43 changes are caught. No query can tell the other two
+  path's wording, prepared plans, `DIAGNOSE`, an empty source). 43 changes are caught. No query can tell the other one
   apart: `inclusive <= 0.0` against `< 0.0` for a lower bound in S1's `NormalizeCapacity` (a bound of exactly 0 gives
-  capacity 0 either way), and `a > 0` against `a >= 0` in `DirectClauseBounds` (a zero coefficient's bounds come from
-  the zero-coefficient branch). A subset
+  capacity 0 either way). A subset
   run by hand needs `-m` (the script passes a marker that matches every test), or `conftest.py` prunes the oracle cache.
 - A1 plan size: each bound clause makes a large expression, but it scales cheaply. At 1,000,000 rows: 1 clause 0.08 s, 3
   clauses 0.13 s, 8 clauses with `when` 0.26 s, 3 decisions and 8 clauses 0.29 s.

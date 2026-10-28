@@ -516,7 +516,7 @@ member does, so it needs no Big-M: the comparison keeps its reducer and is tagge
 `MINMAX_EASY_REWRITE_TAG`, and the linear form emits one row per member. The reducer's
 `when` picks the members, while a bound-side reducer is reduced over every kept row of the
 `by` group; hoisting the `when` onto the clause would reduce the bound over the members
-only. A `max(x) <= K` over a bare decision with no `when` and no reducer filter is then a
+only. A `max(x) <= K` over one decision with no `when` and no reducer filter is then a
 column bound, which bound absorption folds into the box (below). A *hard* direction
 rewrites to a `SUM` tagged with the clause (`EmitHardMinMaxClause`), which keeps the
 reducer's `by`; stage 06 creates the extremum column and any binaries its link needs.
@@ -650,49 +650,65 @@ semantics.
 
 `x <= 10` is one fact about a column, so it belongs in that column's box rather than
 in `num_rows` identical model rows. A box is also strictly better for the solver:
-smaller model, tighter presolve. The pass folds every simple `x OP const` (a `BETWEEN`
-arrives as its two comparisons, split by the binder) into one `DecideBoundBox` per
-decision (`singleton_row_boxes` on `LogicalDecide`), and tags the comparison
-`SINGLETON_ROW_BOUND_TAG` so physical extraction skips it.
+smaller model, tighter presolve. The pass folds every bound on one decision that is known
+before the query runs (a `BETWEEN` arrives as its two comparisons, split by the binder)
+into one `DecideBoundBox` per decision (`singleton_row_boxes` on `LogicalDecide`), and
+tags the comparison `SINGLETON_ROW_BOUND_TAG` so physical extraction skips it.
 
-A bound is read by value, not by spelling. It qualifies when the LHS is one decision
-variable under casts — not inside a reducer — in any affine spelling whose constants
-are known before the query runs (`2 * x`, `x * 2`, `-x`, `x / 2`, `2 * (x - 1)`:
-`PeelAffine` reads the side as `scale * x + offset`), and the RHS is anything that folds
-to a finite number then: a literal under casts, or the `1 + -3` canonicalization leaves
-of `x - 1 >= -3`. The shift moves across, the factor divides the bound and, when
-negative, reverses the relation, so `x - 1 >= -3`, `2 * x >= -4`, `-x <= 2`,
-`2 * (x - 1) >= -6` and `x >= -2` are one fact, the column bound `x >= -2`, and each
-makes `x` signed the same way (D41, read by value). A side that is data — a column, a subquery,
-a column factor — is not a bound known before the query runs: the comparison stays a
-row.
+**One classifier reads every bound on one decision** (`DecideReadOneDecisionBound`,
+`decide_singleton_row_folding.hpp`). This pass, the linear form (a data bound, stage 06)
+and direct solve all call it, so the paths cannot disagree about which values a bound
+admits. It follows MIP presolve: a row on one variable becomes a column bound, and an
+integer variable's bound is rounded inward. A comparison is a bound on one decision when
+the term splitter reads its decision side as `a * x + b`: linear terms of one decision over
+decision-free coefficients (`x`, `2 * x`, `cap * x + w * x`, `0.1 * x`), whose coefficients
+add up to `a`, and constant terms, which add up to `b` and move to the right side. An easy
+`max(m) <= K` / `min(m) >= K` (`MINMAX_EASY_REWRITE_TAG`) is read as its row: the extremum
+of one member is that member, so the reducer is replaced by its member (`2 * max(c * x)`
+reads as `2 * (c * x)`). The canonicalizer has already moved a clause's shifts across and
+merged like terms, so `x - 1 >= -3`, `2 * x >= -4`, `-x <= 2`, `2 * (x - 1) >= -6`,
+`x + x >= -4`, `-min(x) <= 2`, `max(-x) <= 2`, `min(x + 1) >= -1` and `x >= -2` are each
+the column bound `x >= -2` (D41, read by value).
+
+The classifier returns the **interval of values the clause admits**, as two DOUBLE
+expressions over the source row (±infinity on an open side). The interval is what DuckDB
+says. A whole-numbered decision admits `n` exactly when the written comparison, with `n`
+cast to the decision's type in place of the decision, evaluates true: `0.1 * x <= 0.3`
+admits 3 (`0.1 * 3` is the DECIMAL 0.3), while `x <= 0.3 / 0.1` admits only 2 (the
+DOUBLE quotient is 2.9999999999999996). The quotient `r / a` is within one of the answer,
+and the written comparison picks among its neighbours. Past the decision's range of exact
+candidates (2^52 for BIGINT, the INTEGER maximum for INTEGER) the rounded quotient is the
+answer. No copy of DuckDB's DECIMAL or DOUBLE rules is written, so none can drift from it.
+The coefficient's sign picks the side: `-x <= 2` bounds below. A zero coefficient admits
+every value or none, as `0 <op> r` evaluates. A strict `x < 10` on a whole-numbered
+decision admits 9, by the same check; the binder refuses a strict comparison on a REAL.
+
+A bound folds when its coefficient and right side fold to numbers at plan time. A side
+that is data (a column, a subquery, a column factor) is a data bound: the linear form
+hands its interval to stage 08, which evaluates it per row, and the model builder writes
+it into the column box there. On the side the clause binds, an interval end of `+inf`
+below or `-inf` above admits no value (`x >= 'inf'`): the clause stays a row, and the
+model is answered infeasible before any solve (`SolverModel::ProvesInfeasible`). A right
+side of magnitude 1e20 or more in the open direction (`x <= 1e30`) binds nothing.
 Recursion goes through `AND` and a `per K:` wrapper, whose key children hold no
 comparison, so `per row: x >= -5` is folded like `x >= -5`. **A `when`-guarded
 comparison is never folded**: `when c: x <= 0` is conditional per row, not a domain,
 so the pass stops at the wrapper. This is why it keeps its own descent rather than
 `ForEachConstraintLeaf`.
 
-An easy `max(x) <= K` / `min(x) >= K` over one decision, with no filter on the reducer
-(`TryMatchEasyExtremumTarget`, `MINMAX_EASY_REWRITE_TAG`), bounds every row its reducer
-reads, and with no `when` that is every row: it is the column bound `x <= K` / `x >= K`
-and is folded the same way, in the same affine spellings outside the reducer
-(`2 * min(x) >= -4`, `-min(x) <= 2`, `2 * (min(x) - 1) >= -6`), so a negative `K` makes
-`x` signed, as `x >= -5` does. The member itself is a bare decision: `max(2 * x) <= K`
-bounds the member `2 * x` and stays one row per member. The reducer stays in the tree,
-so EXPLAIN and DIAGNOSE read the clause as written.
+An easy `max(m) <= K` / `min(m) >= K` bounds every row its reducer reads, and with no
+`when` and no filter on the reducer that is every row: it is a column bound and is folded
+the same way, so a negative `K` makes `x` signed, as `x >= -5` does. A row the reducer's
+filter leaves out is no member: the interval there is open on both sides, so a NULL in its
+member is never read, and the clause does not fold at plan time. The reducer stays in the
+tree, so EXPLAIN and DIAGNOSE read the clause as written.
 
-- `<=` tightens the upper bound (`min`), `>=` the lower (`max`), `=` intersects both.
-  Intersecting rather than assigning is what makes `x = 5 AND x = 10` invert the box
-  and be caught, instead of silently resolving to whichever was written last.
-- Strict `<` / `>` on an integer step onto the lattice as every row does, carrying the
-  user's typed literal so the diagnosis re-quotes `< 10` rather than the normalized
-  `<= 9`: `x > 2.5` is `x >= 3` (`floor(k) + 1`), `x < 2.5` is `x <= 2` (`ceil(k) - 1`).
-- Strict `<` / `>` on a REAL variable are deliberately **not** folded. Stage 02
-  refuses them (`ValidateDecideNoIntegerStepComparisonOnReal`); the pass declines rather
-  than step a bound off the lattice, so one reaching it would stay a row and trip the
-  model builder's invariant check (`ApplyComparisonSense`).
-- A non-finite constant is **not** folded either: the box has one sentinel per
-  direction and cannot hold it.
+- The box takes the admitted ends: `<=` tightens the upper bound (`min`), `>=` the lower
+  (`max`), `=` intersects both. Intersecting rather than assigning is what makes
+  `x = 5 AND x = 10` invert the box and be caught, instead of silently resolving to
+  whichever was written last. `x = 2.5` on an INT admits nothing and inverts the box.
+- A literal floor of `-inf` writes the solver's "no bound" (-1e30) as a written lower
+  bound, so `x >= -'inf'` frees `x` below as `x >= -1e30` does.
 
 Every bound goes through `DecideFoldSingletonRow` (`decide_numeric_policy.hpp`), the same
 combiner A1 and S1 call. Lower bounds start at -1e30 rather than 0, so an explicit
@@ -729,9 +745,13 @@ to nothing instead of emitting a disjunction against a bound no assignment can m
 Corpus query 85 pins the tight constant; queries 82–84 either collapse or use INT
 decisions and so do not exercise it.
 
-Each recorded bound is a `UserBoundSpec` in `user_singleton_row_bounds`, with its clause ids
-and, for a strict one, the typed literal: stage 08 re-opens its direction in the rigid box
-and in the elastic box, and quotes its clause when it contradicts the variable's domain. A
+Each recorded bound is a `UserBoundSpec` in `user_singleton_row_bounds`: the bound as
+written moved onto the decision (`r / a`, a strict one stepped by `DecideStrictBound`) and
+its clause ids. Stage 08 re-opens its direction in the rigid box and in the elastic box,
+and checks the box of the written bounds against the variable's domain, quoting the clause
+that contradicts it. The written bound, not the admitted end, is what that check reads:
+`x = -0.5` on an INT admits nothing, which the solve reports as infeasible, rather than
+"x is non-negative". A
 variable's *intrinsic* domain is excluded: a BOOLEAN's `[0,1]` box is never
 synthesized as a constraint, so it only appears here when the user restated it
 redundantly, and `is_boolean_var` is consulted to skip that restatement. A genuine
@@ -747,7 +767,7 @@ Running last also guarantees every auxiliary variable created by `RewriteAbs`,
 **Why here and not stage 04.** "Bound or row" looks like shape, which stage 04 owns,
 but stage 04's contract rules it out three times: that pass is pure (it returns a new
 tree; folding writes into bound arrays), it is total and never declines
-(folding declines on strict-`<`-over-REAL), and §5 explicitly excludes choosing a
+(folding leaves every comparison that is not a bound on one decision as it is), and §5 explicitly excludes choosing a
 solver formulation, which bound-versus-row is. Stage 05 already chooses formulations
 with types in scope and is forbidden only from evaluating *data* — a foldable literal
 is not data.

@@ -290,13 +290,10 @@ private:
 			}
 			ir_node.rhs = comparison.right->Copy();
 			ir_node.degree = DecideExpressionDegree(*comparison.left, decide.decide_index).degree;
-			// Folding never reads a clause under a `when`: `when c: x <= 0` does not bound `x` everywhere. A folded
-			// bound that is not plain (an affine spelling or an extremum) is one the rules do not model yet.
-			bool plain = false;
-			ir_node.variable_bound = !wrappers.when && DecideIsSingletonRowBound(context, decide, comparison, plain);
-			if (ir_node.variable_bound && !plain) {
-				MarkNotProved(ir_node.status);
-			}
+			// Direct rules run before the MIN/MAX rewrite tags an easy extremum, so only a per-row bound reads here.
+			ir_node.one_decision_bound = DecideReadOneDecisionBound(context, decide, comparison, ir_node.bound);
+			// Folding never reads a clause under a `when`: `when c: x <= 0` does not bound `x` everywhere.
+			ir_node.variable_bound = ir_node.one_decision_bound && ir_node.bound.folds && !wrappers.when;
 		}
 		for (auto &part : ir_node.lhs) {
 			if (part.status == DirectAnalysisStatus::NOT_PROVED) {

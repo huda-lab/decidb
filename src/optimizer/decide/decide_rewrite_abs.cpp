@@ -490,7 +490,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				                     scope.when ? scope.when->Copy() : nullptr, std::move(label)});
 
 				// Replace ABS(inner) with aux var reference
-				expr = MakeDecisionRef(decide, aux_idx);
+				ReplaceWithDecision(optimizer.context, decide, aux_idx, expr);
 				return;
 			}
 		}

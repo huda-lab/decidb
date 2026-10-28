@@ -83,8 +83,8 @@ so callers branch on the outcome. This gates the whole area.
   `PhysicalDecide::Finalize` gate as backend-reported infeasibility instead of
   bypassing diagnostics with a direct builder error. The two differ in whether a
   model comes back. A violated coefficient-free row (`SUM(0 * x) <= -1`,
-  `x - x <= -1`) is **kept** in the model and sets `build_proven_infeasible`, so
-  diagnosis runs normally and names the clause. Contradictory bounds still throw
+  `x - x <= -1`) is **kept** in the model and answered by
+  `SolverModel::ProvesInfeasible`, so diagnosis runs normally and names the clause. Contradictory bounds still throw
   `DecideInfeasibleModelException` for an unprefixed query, abandoning the half-built
   model; under `DIAGNOSE` the inverted box is kept instead.
 - **An unretained model becomes an `undiagnosed` finding.** When

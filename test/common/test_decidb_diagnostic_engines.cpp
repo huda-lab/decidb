@@ -5,6 +5,8 @@
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb.hpp"
 
+#include <limits>
+
 using namespace duckdb;
 
 namespace {
@@ -976,7 +978,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(dropped.general_constraints.size() == 1);
 	}
 
-	SECTION("atomic removal recomputes stale build-proven infeasibility") {
+	SECTION("atomic removal of the row that proved infeasibility leaves a solvable model") {
 		SolverModel model = MakeNotEqualModel();
 		model.constraints.clear();
 		ModelConstraint impossible;
@@ -985,10 +987,45 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		impossible.provenance.source_clause_id = 0;
 		impossible.provenance.removal_group_id = 0;
 		model.constraints.push_back(std::move(impossible));
-		model.build_proven_infeasible = true;
+		CHECK(model.ProvesInfeasible());
 		SolverModel dropped = DropRemovalGroups(model, std::set<idx_t> {0});
 		CHECK(dropped.constraints.empty());
-		CHECK(!dropped.build_proven_infeasible);
+		CHECK(!dropped.ProvesInfeasible());
+	}
+
+	SECTION("a model proves itself infeasible by a failing empty row, an unreachable bound or an inverted box") {
+		const double inf = std::numeric_limits<double>::infinity();
+		SolverModel model = MakeNotEqualModel();
+		model.constraints.clear();
+		REQUIRE(!model.ProvesInfeasible());
+
+		ModelConstraint holds; // 0 <= 1
+		holds.sense = '<';
+		holds.rhs = 1.0;
+		model.constraints.push_back(holds);
+		ModelConstraint vacuous; // x <= +inf
+		vacuous.indices = {0};
+		vacuous.coefficients = {1.0};
+		vacuous.sense = '<';
+		vacuous.rhs = inf;
+		model.constraints.push_back(vacuous);
+		CHECK(!model.ProvesInfeasible());
+
+		SolverModel unreachable = model; // x >= +inf
+		unreachable.constraints[1].sense = '>';
+		CHECK(unreachable.ProvesInfeasible());
+
+		SolverModel quadratic = model; // x^2 = -inf
+		SolverModel::QuadraticConstraint square;
+		square.sense = '=';
+		square.rhs = -inf;
+		quadratic.quadratic_constraints.push_back(square);
+		CHECK(quadratic.ProvesInfeasible());
+
+		SolverModel inverted = model; // under diagnosis the builder keeps 3 <= x <= 2
+		inverted.col_lower[0] = 3.0;
+		inverted.col_upper[0] = 2.0;
+		CHECK(inverted.ProvesInfeasible());
 	}
 
 	// A labeled 2-var (x DOUBLE, `<>` indicator BOOLEAN) layout so the dropped clause

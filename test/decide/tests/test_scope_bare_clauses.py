@@ -561,6 +561,9 @@ def test_negative_floor_is_read_by_value(request, scope_solver, cli_fixture, bou
         "2 * (min(x) - 1) >= -6",
         "min(x) + min(x) >= -4",
         "3 * min(x) >= min(x) - 4",
+        "max(-x) <= 2",
+        "min(3 * x - 2 * x) >= -2",
+        "min(x + 1) >= -1",
     ],
 )
 def test_affine_bound_builds_the_model_of_a_column_bound(decidb_cli, tmp_path, bound):
@@ -572,11 +575,11 @@ def test_affine_bound_builds_the_model_of_a_column_bound(decidb_cli, tmp_path, b
     )
 
 
-@pytest.mark.parametrize("bound", ["x >= w - 4", "2 * x >= (SELECT -4)", "w * x >= -4", "max(-x) <= 2"])
-def test_a_data_bound_stays_a_row(decidb_cli, tmp_path, bound):
-    """A side that is data -- a column, a subquery, a column factor -- is not a bound known
-    before the query runs, and a MIN/MAX whose member is not a bare decision bounds that
-    member: each stays a row, and the decision keeps its default floor."""
+@pytest.mark.parametrize("bound", ["x >= w - 4", "2 * x >= (SELECT -4)", "w * x >= -4", "max(-w * x) <= 4"])
+def test_a_data_bound_keeps_the_default_floor(decidb_cli, tmp_path, bound):
+    """A side that is data -- a column, a subquery, a column factor, inside a MIN/MAX too --
+    is not a bound known before the query runs: each narrows the decision's box and never
+    replaces its default floor (D41)."""
     sql = _query("x(INT)", f"x <= cap AND {bound}", "MINIMIZE SUM(x)")
     assert [row["x"] for row in answer(decidb_cli, sql)] == [0, 0, 0]
 

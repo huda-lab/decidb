@@ -394,12 +394,15 @@ TEST_CASE("Direct-solve IR says which bounds the solver folds into a variable's 
 	check("x(INT)", "x < 3 AND x > -2", {true, true});
 	check("x(BOOL)", "x <= 1", {true});
 
-	// A bound is read by value (D41): a coefficient or offset on the decision and an arithmetic right side fold too. No
-	// rule models such a box yet, so the clause is not proved.
-	for (auto affine : {"2*x >= -6", "x + 1 >= -3", "-x <= 3", "x >= 0 - 3"}) {
+	// A bound is read by value (D41): a coefficient or offset on the decision and an arithmetic right side fold too,
+	// into the box the classifier reads for both paths.
+	for (auto affine : {"2*x >= -6", "x + 1 >= -2", "-x <= 3", "x >= 0 - 3"}) {
 		check("x(REAL)", affine, {true});
 		QueryIR query(con, IRQuery("x(REAL)", affine, "MINIMIZE SUM(x)"));
-		REQUIRE(query.ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
+		auto &bound = query.ir.constraints[0];
+		REQUIRE(bound.status == DirectAnalysisStatus::PROVED);
+		REQUIRE(bound.bound.sense == '>');
+		REQUIRE(bound.bound.lower_value == -3.0);
 	}
 
 	// Anything else only intersects with the default box: a column, a `when`, and a comparison that is not a bound.

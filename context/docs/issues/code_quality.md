@@ -7,6 +7,21 @@ ordinary optimization result. Solve-correctness bugs belong in [bugs.md](bugs.md
 Each entry: short title, location (`file:line`), what's wrong, why it matters,
 and when/during which task it was discovered.
 
+## A bound on one decision: three loose ends
+
+- **Location:** `src/decidb/formulation/ilp_model_builder.cpp` (the inverted-box throw in `SolverModel::Build`,
+  `PushNormalizedConstraint`, `TryFoldPerRowBound`); `src/execution/operator/decide/physical_decide.cpp` (the
+  domain-check box); `src/optimizer/decide/direct/direct_bound_reader.cpp` (`DirectReadBounds`);
+  `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp` (`ProveFixedVariables`).
+- **What's wrong:** an inverted column box is answered by a build-time throw and again by
+  `SolverModel::ProvesInfeasible`; the box of bounds as written is folded in three places, and the repair model
+  loosens the written `k` where the solve reads the admitted end (a BOOL `x <= 0.99999999999999999` admits only 0,
+  and DIAGNOSE cannot name it); a coefficient-free row is judged with a 1e-9 tolerance where the classifier reads
+  DuckDB's answer. "Singleton row" and "one-decision bound" name the same thing.
+- **Why it matters:** each is a second reading of a fact the classifier already gives, which can drift from it.
+- **Work:** B21 in the queue holds the calls. Behaviour that does not change: every answer on the golden corpus.
+- **Discovered:** 2026-10-28, the architect review of the one-classifier change (B0).
+
 ## A clause's scope is carried in parallel copies
 
 - **Location:** `src/include/duckdb/planner/decide/decide_prepared_model.hpp`
@@ -36,39 +51,6 @@ and when/during which task it was discovered.
   (D46) are [Name the keyed scope "keyed" everywhere](#name-the-keyed-scope-keyed-everywhere).
 - **Discovered:** 2026-10-18, removing the spellings the scope language replaced
   (D47 in [../language/decisions.md](../language/decisions.md)).
-
-## "A bound on one decision" is classified three times
-
-- **Location:** `FoldSingletonRows` / `PeelAffine` (`decide_singleton_row_folding.cpp`),
-  `TryFoldPerRowBound` (`ilp_model_builder.cpp`, around line 702), `DirectReadBounds` /
-  `DirectClauseBounds` (`src/optimizer/decide/direct/direct_bound_reader.cpp`).
-- **What's wrong:** the optimizer folds a literal bound in any affine spelling
-  (`2 * x >= -4`); the model builder folds a data bound only when the emitted row has one
-  index with coefficient ±1 (`x <= cap`, not `2 * x <= cap`), deciding after it has built
-  the row and its provenance; direct solve reads any coefficient per row and rounds for an
-  integer decision, but declines a bound the optimizer folded in an affine spelling. Three
-  stages, three shape tests, three reaches.
-- **Why it matters:** whether a bound is a column bound or a row depends on which stage
-  looks; the HiGHS QP speedup from folding misses the scaled spellings; direct solve
-  declines queries the solver folds.
-- **Work:** one classifier that decides at plan time (the optimizer, where the backend
-  choice is also made once) and tags the comparison with its coefficient and side; the model
-  builder and direct solve read the tag, with one rounding rule
-  (`decide_numeric_policy.hpp`). It covers the direct todo "Read a folded affine bound"
-  (A1 and S1) and the solver-path fold below.
-- **Solver-path fold of a scaled per-row bound:** `TryFoldPerRowBound`
-  (`ilp_model_builder.cpp`) folds a data-valued bound on one decision only when its
-  coefficient is 1 or -1. `2 * reserve <= 2 * (D.capacity - 5)` stays one row per class,
-  while `reserve <= D.capacity - 5` is the column's box. The owner wants every bound on one
-  decision to fold, so the scope tests assert the box. Divide the right side by the
-  coefficient, flip the sense on a negative one, and round the quotient for a
-  whole-number decision with the same rule as the direct reading (the boundary of
-  `int_upper_quotient_just_below_a_whole_number`). Test:
-  `test_a_scaled_bound_on_one_decision_folds_like_the_plain_one` in
-  `test_scope_generation.py` is `xfail(strict=True)`; remove the mark. Add a golden corpus
-  case with a negative coefficient and one whose quotient is not a whole number. Record the
-  result in `../pipeline/06_model_formulation/done.md`.
-- **Discovered:** 2026-10-27, tracing a query through the code.
 
 ## How a query is answered is chosen in two places
 

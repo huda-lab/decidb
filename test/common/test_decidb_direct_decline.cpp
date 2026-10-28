@@ -306,6 +306,7 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	// ProveFixedVariables.
 	shapes.push_back(S1("a fixed value under PER", "SUM(x) <= 2 AND x = 1", PerKeyOnConstraint(1)));
 	shapes.push_back(S1("a fixed value with a column coefficient", "SUM(x) <= 2 AND w * x = 1"));
+	shapes.push_back(S1("a not-equal value with a coefficient other than 1", "SUM(x) <= 2 AND 2 * x <> 2"));
 	shapes.push_back(S1("a fixed value with no coefficient", "SUM(x) <= 2 AND x = 1",
 	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].coefficient.reset(); }));
 	shapes.push_back(S1("a fixed value under a WHEN that reads more than the source",
@@ -428,28 +429,12 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	shapes.push_back(A1("an aggregate constraint", "SUM(x) <= 5"));
 	shapes.push_back(A1("a membership constraint", "x IN (1, 2)"));
 	shapes.push_back(A1("a not-equal constraint", "x <> 2", nullptr, A1_OBJECTIVE, "x(INT)"));
-	shapes.push_back(A1("a comparison that is not a bound", "x <= cap",
-	                    [](DirectIR &ir) { ir.constraints[0].comparison = ExpressionType::COMPARE_DISTINCT_FROM; }));
 	shapes.push_back(A1("a PER key", "x <= cap", PerKeyOnConstraint(0)));
-	// DirectReadsOneDecision.
-	shapes.push_back(
-	    A1("a constraint with two left parts", "x <= cap", [](DirectIR &ir) { ir.constraints[0].lhs.emplace_back(); }));
+	// DirectIsBoundOnOneDecision.
 	shapes.push_back(A1("a product of two decisions", "x * y <= 4", nullptr, A1_OBJECTIVE, "x(REAL), y(REAL)"));
-	shapes.push_back(A1("a left part with a negative sign", "x <= cap", [](DirectIR &ir) { LeftPart(ir).sign = -1; }));
-	shapes.push_back(
-	    A1("a left part with a reducer", "x <= cap", [](DirectIR &ir) { LeftPart(ir).reducer = DirectReducer::SUM; }));
-	shapes.push_back(A1("a left part with a scale", "x <= cap", [](DirectIR &ir) {
-		LeftPart(ir).scale = make_uniq<BoundConstantExpression>(Value::DOUBLE(2.0));
-	}));
-	shapes.push_back(A1("a left part with a filter", "x <= cap", [](DirectIR &ir) { LeftPart(ir).filter = True(); }));
-	shapes.push_back(
-	    A1("a nested left part", "x <= cap", [](DirectIR &ir) { LeftPart(ir).inner = make_uniq<DirectPart>(); }));
-	shapes.push_back(A1("a left part with no term", "x <= cap", [](DirectIR &ir) { LeftPart(ir).terms.clear(); }));
-	shapes.push_back(A1("a left part with a term that is not linear", "x <= cap",
-	                    [](DirectIR &ir) { LeftPart(ir).terms[0].kind = DecideTermKind::CONSTANT; }));
 	shapes.push_back(A1("a left part over two decisions", "x + y <= 3", nullptr, A1_OBJECTIVE, "x(REAL), y(REAL)"));
-	shapes.push_back(A1("a left part with a term that has no coefficient", "x <= cap",
-	                    [](DirectIR &ir) { LeftPart(ir).terms[0].coefficient.reset(); }));
+	shapes.push_back(A1("a bound on a decision that is not declared", "x <= cap",
+	                    [](DirectIR &ir) { ir.constraints[0].bound.var_idx = 1; }));
 	// CheckCondition: the objective.
 	shapes.push_back(
 	    A1("an objective PER key", "x <= cap", [](DirectIR &ir) { ir.objective.scope.per_key_slots.push_back(0); }));
@@ -498,11 +483,6 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	}));
 	shapes.push_back(A1("a bound with a coefficient that reads a column outside the source", "x <= cap",
 	                    [](DirectIR &ir) { LeftPart(ir).terms[0].coefficient = ForeignColumn(LogicalType::DOUBLE); }));
-	shapes.push_back(A1("a folded bound that is not a constant", "x <= cap",
-	                    [](DirectIR &ir) { ir.constraints[0].variable_bound = true; }));
-	// The binder rejects a strict bound on a REAL decision, so the comparison is edited.
-	shapes.push_back(A1("a strict folded bound on a real decision", "x <= 3",
-	                    [](DirectIR &ir) { ir.constraints[0].comparison = ExpressionType::COMPARE_LESSTHAN; }));
 	shapes.push_back(A1("a Boolean bound below the domain", "x <= -1", nullptr, A1_OBJECTIVE, "x(BOOL)"));
 	// ProveObjective.
 	shapes.push_back(A1("an objective WHEN that reads more than the source", "x <= cap", nullptr,
@@ -687,19 +667,12 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	// Two decisions share the budget; the clauses of one budget name the same decisions (SameBudgetTerms).
 	shapes.push_back(R1("two budgets with the same weights over different decisions",
 	                    "SUM(cap*x) >= 1 AND SUM(cap*y) <= 5", nullptr, "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
-	// A per-row constraint that reads two decisions links them (DirectReadsOneDecision).
+	// A per-row constraint that reads two decisions links them (DirectIsBoundOnOneDecision).
 	shapes.push_back(R1("a per-row constraint that links two decisions",
 	                    "x <= cap AND y <= cap AND x + y <= 4 AND SUM(cap*x + cap*y) <= 5", nullptr,
 	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
 	shapes.push_back(R1("a membership constraint", "x IN (1, 2) AND SUM(cap*x) <= 5"));
-	// The binder rejects `x <> 2` on a REAL decision, so the comparison is edited.
-	shapes.push_back(R1("a not-equal constraint", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.constraints[0].comparison = ExpressionType::COMPARE_NOTEQUAL; }));
-	shapes.push_back(R1("a comparison that is not a bound", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.constraints[0].comparison = ExpressionType::COMPARE_DISTINCT_FROM; }));
 	shapes.push_back(R1("a bound with a PER key", "x <= cap AND SUM(cap*x) <= 5", PerKeyOnConstraint(0)));
-	shapes.push_back(R1("a bound with a negative sign", "x <= cap AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { LeftPart(ir, 0).sign = -1; }));
 	// ProveBudgetScope: every clause of the budget covers the same rows.
 	shapes.push_back(R1("a PER key on one clause of the budget only", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
 	                    PerKeys({{NAME_SLOT}, {}})));
@@ -767,9 +740,6 @@ duckdb::vector<Shape> R1DeclineShapes() {
 		ir.constraints[0].rhs = make_uniq<BoundSubqueryExpression>(LogicalType::DOUBLE);
 	}));
 	shapes.push_back(R1("a bound below the built-in domain", "x <= -1 AND SUM(cap*x) <= 5"));
-	// The binder rejects a strict bound on a REAL decision, so the comparison is edited.
-	shapes.push_back(R1("a strict folded bound on a real decision", "x <= 3 AND SUM(cap*x) <= 5",
-	                    [](DirectIR &ir) { ir.constraints[0].comparison = ExpressionType::COMPARE_LESSTHAN; }));
 	// CheckCondition and ProveObjective: the objective.
 	shapes.push_back(R1("an objective PER key", "x <= cap AND SUM(cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.objective.scope.per_key_slots.push_back(0); }));

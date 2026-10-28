@@ -52,22 +52,9 @@ Each is ruled; the nested section says which shapes lift and which stay refused.
 
 The agent may read code and investigate; it writes no fix until the owner answers the question on the line.
 
-## B0. Direct solve: one bound reader (Seam 2)
+## A4. S1 reads a fixed value with a data coefficient
 
-One rule for "a bound on one decision", read at plan time by the optimizer, the model builder and direct solve.
-Owner answers, before coding:
-
-1. The shared rounding rule (a whole-numbered decision admits `n` when `coefficient * n` passes the written
-   comparison in doubles) changes two backend answers: `x <= c/0.1` with `c = 4.3` and `x <= 42.9999999` go from 43
-   to 42 on Gurobi and HiGHS, as direct solve answers today; `0.1*x <= 4.3` stays 43. Accept? (Recommended: yes;
-   the alternative copies the backends' integrality tolerance into the model.)
-2. Does "every bound on one decision folds" cover a data coefficient (`cap * x <= 10`)? A row with `cap = 0` has no
-   quotient. (Recommended: no; only a coefficient known before the query runs.)
-
-- [ ] One classifier for a bound on one decision, with the scaled solver-path fold — [code_quality § classified three times](issues/code_quality.md#a-bound-on-one-decision-is-classified-three-times)
-- [ ] A1 reads a folded affine bound — [A1 § Read a folded affine bound](direct_solve/rules/a1_separable_box/todo.md#read-a-folded-affine-bound)
-- [ ] S1 reads a folded affine bound — [S1 § Read a folded affine bound](direct_solve/rules/s1_uniform_matroid/todo.md#read-a-folded-affine-bound)
-- [ ] Direct solve rounds a bound just below a whole number differently — [bugs § integer bound](issues/bugs.md#direct-solve-reads-an-integer-bound-just-below-a-whole-number-more-strictly-than-both-backends)
+- [ ] `w * x >= 1` on a Boolean: read the classifier's ends per row — [S1 § data coefficient](direct_solve/rules/s1_uniform_matroid/todo.md#a-fixed-value-with-a-data-coefficient)
 
 ## B1. NULL keys and key grouping (one batch; blocks A3)
 
@@ -95,7 +82,6 @@ Owner answers, before coding:
 
 - [ ] MIN/MAX over a squared or multiplied body modelled wrongly (ruled: refuse the wrong directions) — owner approves the exact list of refused forms and the message — [bugs § MIN/MAX bodies](issues/bugs.md#wrong-answers-minmax-bodies-and-solver-tolerance)
 - [ ] Gurobi accepts a row violated by 1 near 10⁹ coefficients (ruled: warn) — owner sets the span threshold and where the warning shows — [bugs § solver tolerance](issues/bugs.md#wrong-answers-minmax-bodies-and-solver-tolerance)
-- [ ] Gurobi calls an infinite floor unbounded — owner rules what an infinite bound means: refuse it, or read it as no bound — [bugs § infinite bounds](issues/bugs.md#wrong-answers-infinite-bounds)
 - [ ] HiGHS at gap 0 cannot finish an entity-scoped test MIP — owner approves the proposed `decide_mip_gap` setting (a new user setting) — [bugs § gap of 0](issues/bugs.md#with-a-gap-of-0-highs-cannot-finish-an-entity-scoped-mip-the-test-suite-runs)
 
 - [ ] Negative lower bound under a `when` stays non-negative (ruled: applies to the kept rows) — owner picks the
@@ -337,6 +323,20 @@ The agent finds the cause alone and stops with a proposed fix.
   which names and descriptions replace them? Order: after D47 (B19), which removes some renderer parameters D46
   would otherwise rename, and after B11 (shares `enums/decide.hpp`).
   — [code_quality § keyed](issues/code_quality.md#name-the-keyed-scope-keyed-everywhere), [testing § names](testing/todo.md#names-that-still-say-the-removed-spellings)
+
+## B21. A bound on one decision: three calls left by the one-classifier change (architect review done)
+
+- [ ] (1) An inverted column box is answered twice: the model builder throws `DecideInfeasibleModelException`
+  ("conflicting lower and upper bounds"), and `SolverModel::ProvesInfeasible` also reads an inverted box. Drop the throw
+  so one gate answers, which changes the message a user sees? Recommended: yes. (2) The box
+  of bounds as written is built in three places (stage 08's domain check, direct solve's `DirectReadBounds`, S1), and
+  the repair model loosens the written `k` while the solve reads the admitted end: on a BOOL,
+  `x <= 0.99999999999999999` (DECIMAL, admits only 0) is a bound DIAGNOSE cannot name. One builder, read by all
+  three, and the repair model loosening the admitted end? Recommended: yes. Does an `IN` lowering count as written?
+  (3) A coefficient-free row (`cap * x <= -1e-10` on a row where `cap` is 0) is judged with the 1e-9 tolerance
+  (`ConstantRowFails`), while the classifier's admitted ends say what DuckDB says. Which one decides? Recommended:
+  DuckDB. Also: the names `singleton row` and `one-decision bound` mean one thing; pick one.
+  — [code_quality § one-decision bound](issues/code_quality.md#a-bound-on-one-decision-three-loose-ends)
 
 ## C1. Long or memory-heavy runs (owner starts them)
 

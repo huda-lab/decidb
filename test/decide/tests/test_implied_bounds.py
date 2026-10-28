@@ -55,15 +55,17 @@ def test_repeated_variable_bound_uses_the_combined_coefficient(decidb_cli, tmp_p
 def test_single_term_bounds_are_unchanged(decidb_cli, tmp_path):
     """The combining loop must not disturb the ordinary one-term-per-variable case.
 
-    `3*ship <= 10` still implies ship <= 10/3, and a second variable in the same
-    constraint is still bounded independently of the first.
+    `SUM(3*ship) <= 10` still implies ship <= 10/3, and a second variable in the same
+    constraint is still bounded independently of the first. (A per-row `3*ship <= 10`
+    is a bound on one decision, folded before propagation runs.)
     """
     single = decidb_cli.dump_model(
         """
             SELECT id, ship FROM (VALUES (1)) t(id)
-            DECIDE ship(INT) SUCH THAT 3 * ship <= 10 MAXIMIZE SUM(ship)
+            DECIDE ship(INT) SUCH THAT SUM(3 * ship) <= 10 MAXIMIZE SUM(ship)
         """,
-        tmp_path / "single.dump")
+        tmp_path / "single.dump",
+    )
     assert _column_upper_bounds(single) == pytest.approx([10.0 / 3.0])
 
     two_vars = decidb_cli.dump_model(
@@ -74,6 +76,23 @@ def test_single_term_bounds_are_unchanged(decidb_cli, tmp_path):
         """,
         tmp_path / "two_vars.dump")
     assert _column_upper_bounds(two_vars) == pytest.approx([5.0, 2.0])
+
+
+@pytest.mark.correctness
+def test_easy_max_over_a_data_scaled_member_caps_each_column_at_what_duckdb_admits(decidb_cli, tmp_path):
+    """`MAX(c * x) <= 0.3` bounds each member: with c = 0.1 the row admits 3 (`0.1 * 3` is
+    the DECIMAL 0.3), with c = 0.2 it admits 1. The quotient 0.3 / 0.1 is just below 3 in
+    doubles, so a column capped by it reads 2.9999999999999996; the bound is the value
+    DuckDB admits, and the rows fold away."""
+    dump = decidb_cli.dump_model(
+        """
+            SELECT id, x FROM (VALUES (1, 0.1), (2, 0.2)) t(id, c)
+            DECIDE x(INT) SUCH THAT MAX(c * x) <= 0.3 MAXIMIZE SUM(x)
+        """,
+        tmp_path / "member.dump",
+    )
+    assert _column_upper_bounds(dump) == [3.0, 1.0], dump
+    assert "num_rows: 0" in dump, dump
 
 
 @pytest.mark.correctness

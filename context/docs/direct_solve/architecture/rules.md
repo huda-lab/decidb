@@ -45,7 +45,7 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
    (`DirectProjectScope`), the check of a per-row bound read from the data (`DirectCheckRowBounds`) and
    `DirectWindowExtremum` from `direct_plan_fragments.cpp`, the
    number checks and error predicates from `direct_runtime_checks.cpp`, and the per-row bounds on a decision
-   (`DirectReadsOneDecision`, `DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`, `DirectBoxIsEmpty`) and the
+   (`DirectIsBoundOnOneDecision`, `DirectReadBounds`, `DirectClauseBounds`, `DirectRowBox`, `DirectBoxIsEmpty`) and the
    linear terms of an objective part or a budget (`DirectReadLinearPart`) from `direct_bound_reader.cpp`. Build
    every expression with the `ExpressionBuilder` (`direct_expression.hpp`); build a node by hand only when the builder
    has no operation for it (a window expression), and say so in a comment. A helper only your rule uses stays in

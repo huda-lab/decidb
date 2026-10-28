@@ -46,8 +46,14 @@ and the objective. The keyed direct plans already skip NULL-key rows (`../../dir
 1. `by (g)` on a reducer: rows with a NULL `g` are out of that reducer.
 2. `per g:` in front of a constraint: NULL-`g` rows get no constraint from that clause.
 3. `per` inside a reducer (`sum(per cap: cap)`): NULL-`cap` rows are left out of the sum.
-4. A keyed decision (`per K:` declaration): a NULL-key row is an error whose message suggests
-   `WHERE g IS NOT NULL`. Skipping it would drop a decision silently.
+4. A keyed decision (`per K:` declaration): a NULL-key row has no decision (owner, 2026-10-28, following deck p. 6).
+   Its value is absent: a reducer skips it and an unreduced use skips that constraint instance (deck p. 50).
+6. A NULL key is no group of that key only: the clause's other reducers still read the row, so this is not a fold of
+   `g IS NOT NULL` into the `when` (`sum(x) by (g) <= 0.5 * sum(x)`: the NULL-`g` row has no limit and counts in the
+   total). A composite key is NULL when any column is; a relation key (`per D:`) only when all its columns are
+   (owner, 2026-10-28; deck p. 76).
+7. A group left empty, by NULL keys, a reducer's own `when` or a clause `when` that keeps no row, skips its
+   constraint (owner, 2026-10-28): D4 and D8 retire in this batch. Rulings in full: `../../todo.md` B1.
 5. SQL's `GROUP BY` keeps NULL as one group. The docs say DECIDE departs from it because a NULL key is an unknown
    group, and a limit for an unknown group means nothing.
 

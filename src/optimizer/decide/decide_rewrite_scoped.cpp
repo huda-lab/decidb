@@ -115,6 +115,7 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 //! rewrite added for the objective (OBJECTIVE_ROW_TAG) share theirs the same way. Rows of
 //! different clauses never share one: the definition carries one clause's provenance.
 struct Helpers {
+	ClientContext &context;
 	LogicalDecide &decide;
 	vector<unique_ptr<Expression>> reducers; //!< parallel to decide.reducer_value_links
 	vector<bool> objective;                  //!< parallel: the helper serves the objective
@@ -206,7 +207,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 		auto &link = decide.reducer_value_links[link_idx];
 		link.need_envelope = link.need_envelope || need_envelope;
 		link.need_closing = link.need_closing || need_closing;
-		*site.slot = MakeDecisionRef(decide, link.value_var);
+		ReplaceWithDecision(helpers.context, decide, link.value_var, *site.slot);
 		return;
 	}
 
@@ -255,7 +256,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	}
 	helpers.reducers.push_back(agg.Copy());
 	helpers.objective.push_back(objective_row);
-	*site.slot = MakeDecisionRef(decide, link.value_var);
+	ReplaceWithDecision(helpers.context, decide, link.value_var, *site.slot);
 	decide.reducer_value_links.push_back(std::move(link));
 }
 
@@ -267,7 +268,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	}
 	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys, decide.decide_index,
 	                             decide.aux_var_expressions);
-	Helpers helpers {decide, {}, {}};
+	Helpers helpers {optimizer.context, decide, {}, {}};
 
 	std::function<void(unique_ptr<Expression> &, ClauseScope)> rewrite = [&](unique_ptr<Expression> &expr,
 	                                                                         ClauseScope scope) {

@@ -91,19 +91,19 @@ bool OnlyDecisionTerms(const vector<DecideSplitTerm> &terms) {
 	return !terms.empty();
 }
 
-//! The terms add up to exactly one `x`: `x`, `1*x`, `x*1.0`, `(1+0)*x`. Their signed constant coefficients are
-//! summed as the solver's like-term collection sums them; a constant term (`x + 0`) is not a unit contribution.
-bool IsUnitContribution(ClientContext &context, const vector<DecideSplitTerm> &terms) {
-	double total = 0;
+//! The signed sum of the terms' coefficients, as the solver's like-term collection sums them; false when one is not a
+//! finite constant.
+bool ConstantSlope(ClientContext &context, const vector<DecideSplitTerm> &terms, double &slope) {
+	slope = 0;
 	for (auto &term : terms) {
 		double value;
 		if (!term.coefficient ||
 		    !TryEvaluateFoldableDouble(context, *term.coefficient, value, DIRECT_FINITE_CONSTANT)) {
 			return false;
 		}
-		total += term.sign * value;
+		slope += term.sign * value;
 	}
-	return total == 1.0;
+	return true;
 }
 
 //! What the sum counts: `direction * (number of selected rows)`.
@@ -207,70 +207,6 @@ bool NormalizeCapacity(ClientContext &context, const Expression &expr, Expressio
 		return false;
 	}
 	capacity = static_cast<idx_t>(inclusive);
-	return true;
-}
-
-//! Which of the values 0 and 1 a per-row bound on `x` leaves allowed. Neither allowed means no row it covers can
-//! satisfy it.
-struct FixedDomain {
-	bool zero = true;
-	bool one = true;
-};
-
-bool SatisfiesComparison(ExpressionType comparison, double value, double bound) {
-	switch (comparison) {
-	case ExpressionType::COMPARE_EQUAL:
-		return value == bound;
-	case ExpressionType::COMPARE_NOTEQUAL:
-		return value != bound;
-	case ExpressionType::COMPARE_LESSTHAN:
-		return value < bound;
-	case ExpressionType::COMPARE_LESSTHANOREQUALTO:
-		return value <= bound;
-	case ExpressionType::COMPARE_GREATERTHAN:
-		return value > bound;
-	case ExpressionType::COMPARE_GREATERTHANOREQUALTO:
-		return value >= bound;
-	default:
-		throw InternalException("S1 direct solve received a fixed-value comparison it did not match");
-	}
-}
-
-//! Reads `x <comparison> bound` as the values of {0, 1} it allows.
-//!
-//! The solver reads a bound with a `when`, or one it does not fold, as a per-row constraint and applies plain
-//! arithmetic to it. A bound it folds (`variable_bound`) is a bound on the variable itself. The solver seeds the box of
-//! a Boolean at [0, 1] and a written bound only narrows it, so a bound that always holds (`x >= -3`, `x > -3`) changes
-//! nothing and reads here as both values allowed, which is what comparing 0 and 1 against it gives. A bound that cannot
-//! hold makes the solver raise an error that quotes it (`x >= 2 cannot hold for a BOOL variable.`) before it reads a
-//! row; that early error is not S1's to reproduce, so false for those. A strict bound is shifted to a whole number
-//! first, with the solver's own function, so `x > 0.5` is the lower bound 1 and `x < 1.5` the upper bound 1 here as
-//! there; for a variable that is 0 or 1 that is the same as the comparison itself. Whether the box contradicts the
-//! built-in domain of a Boolean is the solver's own test (DecideBoxContradictsDomain).
-bool ConstantFixedDomain(const DirectIRConstraint &ir_node, double bound, FixedDomain &domain) {
-	auto comparison = ir_node.comparison;
-	if (ir_node.variable_bound) {
-		bool has_lower = comparison == ExpressionType::COMPARE_GREATERTHAN ||
-		                 comparison == ExpressionType::COMPARE_GREATERTHANOREQUALTO ||
-		                 comparison == ExpressionType::COMPARE_EQUAL;
-		bool has_upper = comparison == ExpressionType::COMPARE_LESSTHAN ||
-		                 comparison == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
-		                 comparison == ExpressionType::COMPARE_EQUAL;
-		double lower = comparison == ExpressionType::COMPARE_GREATERTHAN ? DecideStrictBound(true, bound) : bound;
-		double upper = comparison == ExpressionType::COMPARE_LESSTHAN ? DecideStrictBound(false, bound) : bound;
-		DecideBoundBox box;
-		if (has_lower) {
-			DecideFoldSingletonRow(box, '>', lower);
-		}
-		if (has_upper) {
-			DecideFoldSingletonRow(box, '<', upper);
-		}
-		if (DecideBoxContradictsDomain(box, true)) {
-			return false;
-		}
-	}
-	domain.zero = SatisfiesComparison(comparison, 0.0, bound);
-	domain.one = SatisfiesComparison(comparison, 1.0, bound);
 	return true;
 }
 
@@ -386,48 +322,32 @@ bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 	return true;
 }
 
-//! Per-row fixed Boolean values: `x = 0/1` and its one-sided forms against a constant, or against a source Boolean.
-//! Each becomes a condition under which the row is fixed to one or to zero.
+//! Per-row fixed Boolean values: a clause on `x` alone (`x = 1`, `2 * x >= 1`, `x <= flag`, `x <> c`) allows 0, 1,
+//! both or neither on each row it covers. Each becomes a condition under which the row is fixed to one or to zero.
 bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condition &condition) const {
 	ExpressionBuilder calc(context);
 	for (auto factor : condition.local_fixes) {
 		if (!factor->scope.per_key_slots.empty()) {
 			return false;
 		}
-		if (!IsUnitContribution(context, *FixedTerms(*factor))) {
-			return false;
-		}
 		auto &when = factor->scope.when;
 		if (when && !DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
-		double constant;
-		if (TryEvaluateFoldableDouble(context, *factor->rhs, constant, DIRECT_FINITE_CONSTANT)) {
-			FixedDomain domain;
-			if (!ConstantFixedDomain(*factor, constant, domain)) {
-				return false;
-			}
-			// Both values allowed is no constraint. Neither allowed fixes the row to both, which the plan reports as
-			// DECIDE's infeasible error.
-			if (!domain.zero || !domain.one) {
-				auto row_condition = [&]() {
-					return calc.Out(when ? calc.Of(*when) : calc.Bool(true));
-				};
-				if (!domain.zero) {
-					condition.fixed_one_conditions.push_back(row_condition());
-				}
-				if (!domain.one) {
-					condition.fixed_zero_conditions.push_back(row_condition());
-				}
-			}
-			continue;
-		}
-		auto type = factor->comparison;
 		auto active = [&](const ExprPtr &value) {
 			return calc.Out(when ? calc.If(calc.Of(*when), value, calc.Bool(false)) : value);
 		};
-		auto source_value = SourceBooleanFixedValue(*factor->rhs, ir.decide_index, ir.source_bindings);
-		if (source_value &&
+		auto type = factor->comparison;
+		auto &value = *factor->rhs;
+		// A `<>` and a Boolean source compare one `x`: `x`, `1*x`, `(1+0)*x`, their coefficients summed as the
+		// solver's like-term collection sums them.
+		double slope;
+		if (!ConstantSlope(context, *FixedTerms(*factor), slope)) {
+			return false;
+		}
+		bool unit = slope == 1.0;
+		auto source_value = SourceBooleanFixedValue(value, ir.decide_index, ir.source_bindings);
+		if (source_value && unit &&
 		    (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
 		     type == ExpressionType::COMPARE_GREATERTHANOREQUALTO)) {
 			if (type == ExpressionType::COMPARE_EQUAL || type == ExpressionType::COMPARE_GREATERTHANOREQUALTO) {
@@ -440,17 +360,57 @@ bool Rule::ProveFixedVariables(const DirectIR &ir, ClientContext &context, Condi
 			condition.source_fixed_values.push_back({source_value->Copy(), false, when ? when->Copy() : nullptr});
 			continue;
 		}
-		// A numeric value from the row: the row allows 0 when `0 <comparison> value` holds and 1 when `1 <comparison>
-		// value` holds, as the solver reads it (with a `when` or not), so the row is fixed to the one value it allows
-		// and is infeasible when it allows neither.
-		auto &value = *factor->rhs;
+		// Whether the row allows `x = v`. A bound on one decision allows the values between the ends the solver
+		// path's classifier reads (DecideOneDecisionBound), as DuckDB evaluates the comparison: `2 * x >= 1` allows
+		// 1, `x < 1.5` allows 0 and 1. A `<>` bounds nothing and allows the values that compare unequal.
+		auto le = ExpressionType::COMPARE_LESSTHANOREQUALTO;
+		auto allows = [&](double v) -> ExprPtr {
+			if (factor->one_decision_bound) {
+				return calc.If(calc.Cmp(le, calc.Of(*factor->bound.lower), calc.Num(v)),
+				               calc.Cmp(le, calc.Num(v), calc.Of(*factor->bound.upper)), calc.Bool(false));
+			}
+			return calc.Cmp(type, calc.Num(v), calc.Cast(calc.Of(value), LogicalType::DOUBLE));
+		};
+		if (!factor->one_decision_bound && !unit) {
+			return false;
+		}
+		double constant;
+		if (TryEvaluateFoldableDouble(context, value, constant, DIRECT_FINITE_CONSTANT)) {
+			double zero, one;
+			auto as_number = [&](double v) {
+				return calc.Out(calc.If(allows(v), calc.Num(1.0), calc.Num(0.0)));
+			};
+			if (!TryEvaluateFoldableDouble(context, *as_number(0.0), zero, FOLD_CATCH_ALL) ||
+			    !TryEvaluateFoldableDouble(context, *as_number(1.0), one, FOLD_CATCH_ALL)) {
+				return false;
+			}
+			// A bound the solver folds that contradicts the Boolean's built-in domain makes it raise an error that
+			// quotes the bound (`x >= 2 cannot hold for a BOOL variable.`) before it reads a row; that early error is
+			// not S1's to reproduce (DecideBoxContradictsDomain, the solver's own test).
+			if (factor->variable_bound) {
+				DecideBoundBox box;
+				DecideFoldSingletonRow(box, factor->bound.sense, factor->bound.written_k);
+				if (DecideBoxContradictsDomain(box, true)) {
+					return false;
+				}
+			}
+			// Both values allowed is no constraint. Neither allowed fixes the row to both, which the plan reports as
+			// DECIDE's infeasible error.
+			if (zero == 0.0) {
+				condition.fixed_one_conditions.push_back(active(calc.Bool(true)));
+			}
+			if (one == 0.0) {
+				condition.fixed_zero_conditions.push_back(active(calc.Bool(true)));
+			}
+			continue;
+		}
+		// A value from the row: the row is fixed to the one value it allows, and is infeasible when it allows neither.
+		// A literal that is not a finite number is the solver's to report.
 		if (value.IsFoldable() || !DirectIsSourceOnlyNumeric(value, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
-		auto disallows = [&](double allowed_value) {
-			auto as_double = calc.Cast(calc.Of(value), LogicalType::DOUBLE);
-			auto allowed = calc.Cmp(type, calc.Num(allowed_value), as_double);
-			return calc.If(allowed, calc.Bool(false), calc.Bool(true));
+		auto disallows = [&](double v) {
+			return calc.If(allows(v), calc.Bool(false), calc.Bool(true));
 		};
 		condition.fixed_one_conditions.push_back(active(disallows(0.0)));
 		condition.fixed_zero_conditions.push_back(active(disallows(1.0)));
@@ -663,6 +623,12 @@ private:
 		return value;
 	}
 
+	//! The same, for a value the plan computes: without the pipeline's tags, which only a check's message reads, so
+	//! EXPLAIN shows the value as written.
+	unique_ptr<Expression> ValueIntoState(const Expression &expr, const ScopeBindings &scope) const {
+		return calc.Out(calc.Of(*CopyIntoState(expr, scope)));
+	}
+
 	//! Stage 1: pass the source through and append the per-row scope flags (group eligibility, fixed values).
 	unique_ptr<LogicalOperator> ProjectScopeState(unique_ptr<LogicalOperator> source, ScopeBindings &scope) const {
 		vector<unique_ptr<Expression>> fixed_flags;
@@ -726,7 +692,7 @@ private:
 			combined_score = calc.Num(0.0);
 		}
 		for (auto &part : condition.objective_parts) {
-			auto coefficient = CopyIntoState(*part.coefficient, scope);
+			auto coefficient = ValueIntoState(*part.coefficient, scope);
 			auto term = calc.Wrap(
 			    DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.scaled, part.scale, part.divides));
 			combined_score = combined_score ? calc.Add(combined_score, term) : term;
@@ -743,7 +709,7 @@ private:
 		// or a count of 0, so computing it there raises nothing.
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
 			auto &bound = condition.source_bounds[i];
-			auto value = CopyIntoState(*bound.value, scope);
+			auto value = ValueIntoState(*bound.value, scope);
 			if (bound.negated) {
 				value = DirectScaledTerm(optimizer, std::move(value), -1, false, 1.0, false);
 			}

@@ -321,7 +321,7 @@ def _check_assignment(case_, rows, columns, oracle, mode):
     assert abs(total - expected) <= 1e-4 * max(1.0, abs(expected)), (mode, total, expected)
 
 
-def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "require"), pending=None):
+def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "require")):
     """Runs the case on the oracle and on the chosen DeciDB paths, and checks they agree."""
     sql = _sql(case_, wrap)
     oracle = _solve_with_oracle(oracle_solver, case_)
@@ -329,7 +329,7 @@ def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "requir
     def check_assignment(rows, columns, mode):
         _check_assignment(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes, pending)
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes)
 
 
 # ---------------------------------------------------------------------------
@@ -340,21 +340,6 @@ T, X = "t", "x"
 le, lt, ge, gt, eq = "<=", "<", ">=", ">", "="
 
 A1_CASES = {}
-
-# Bounds written with a coefficient or offset on x fold into the column box (D41), but direct solve reads only a plain
-# folded bound so far and declines these: their direct path is a strict xfail until it reads them (todo.md § Read a
-# folded affine bound).
-FOLDED_AFFINE_REASON = "direct solve does not read a folded bound with a coefficient or offset yet (A1 todo)"
-FOLDED_AFFINE_PENDING = {
-    "bool_scaled",
-    "real_arithmetic_constant_replaces_default",
-    "real_negated_upper_replaces_default",
-    "real_offset_lower_replaces_default",
-    "real_offset_upper",
-    "real_scaled_lower_replaces_default",
-    "int_upper_quotient_just_below_a_whole_number",
-}
-
 
 def add(name, domain, bounds, objective_name):
     A1_CASES[name] = case(domain, bounds, objective_name)
@@ -746,8 +731,7 @@ SOLVER_OFF_BY_ONE = {
 @pytest.mark.correctness
 @pytest.mark.parametrize("name", sorted(A1_CASES))
 def test_a1_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
-    pending = FOLDED_AFFINE_REASON if name in FOLDED_AFFINE_PENDING else None
-    _agree(decidb_cli, oracle_solver, A1_CASES[name], pending=pending)
+    _agree(decidb_cli, oracle_solver, A1_CASES[name])
 
 
 @pytest.mark.var_integer
@@ -755,7 +739,7 @@ def test_a1_oracle_solver_and_direct_agree(decidb_cli, oracle_solver, name):
 @pytest.mark.correctness
 @pytest.mark.parametrize("name", sorted(SOLVER_OFF_BY_ONE))
 def test_a1_reads_a_fractional_strict_bound_correctly(decidb_cli, oracle_solver, name):
-    _agree(decidb_cli, oracle_solver, SOLVER_OFF_BY_ONE[name], modes=("require",))
+    _agree(decidb_cli, oracle_solver, SOLVER_OFF_BY_ONE[name])
 
 
 @pytest.mark.var_integer
@@ -919,7 +903,8 @@ BOUNDARY_CASES = {
     "infinite_cap_is_no_bound": _problem(_with(1, cap=INF), bounds="x <= cap AND x >= 0"),
     "infinite_cap_when_excluded": _problem(_with(1, cap=INF), bounds="when f: x <= cap AND x >= 0 AND x <= 20"),
     "negative_infinite_lower_keeps_default": _problem(_with(1, lo=-INF), bounds="x >= lo AND x <= cap"),
-    "negative_infinite_constant_lower_is_no_bound": _problem(ROWS, bounds="x >= ('-Infinity'::DOUBLE) AND x <= cap"),
+    # A literal floor of -inf replaces the default of 0, as -1e30 does (D41): row 2 reaches t = -3.
+    "negative_infinite_constant_lower_frees_x": _problem(ROWS, bounds="x >= ('-Infinity'::DOUBLE) AND x <= cap"),
     "row_lower_1e25": _problem(_with(1, cap=1e25), bounds="x >= cap", obj="MINIMIZE SUM(x)"),
     "int_exactly_2_53": _problem(ROWS, decl="x(INT)", bounds="x <= 9007199254740992 AND x >= 0", obj="MAXIMIZE SUM(x)"),
     "int_2_53_minus_1": _problem(ROWS, decl="x(INT)", bounds="x <= 9007199254740991 AND x >= 0", obj="MAXIMIZE SUM(x)"),
@@ -929,7 +914,7 @@ BOUNDARY_CASES = {
     "int_negative_2_53": _problem(
         ROWS, decl="x(INT)", bounds="x >= -9007199254740992 AND x <= 0", obj="MINIMIZE SUM(x)"
     ),
-    # 4.3 / 0.1 is 42.99999999999999 in a double, but 0.1 * 43 is not more than 4.3, so the solver allows 43.
+    # 4.3 / 0.1 is 42.99999999999999 in a double, but DuckDB reads 0.1 * 43 <= 4.3 in DECIMAL, where it holds: 43.
     "int_upper_quotient_just_below_a_whole_number": _problem(
         ROWS, decl="x(INT)", bounds="0.1*x <= 4.3 AND x >= 0", obj="MAXIMIZE SUM(x)"
     ),
@@ -974,18 +959,7 @@ BOUNDARY_CASES = {
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize(
-    "name",
-    [
-        pytest.param(
-            name,
-            marks=(
-                pytest.mark.xfail(strict=True, reason=FOLDED_AFFINE_REASON) if name in FOLDED_AFFINE_PENDING else ()
-            ),
-        )
-        for name in sorted(BOUNDARY_CASES)
-    ],
-)
+@pytest.mark.parametrize("name", sorted(BOUNDARY_CASES))
 def test_a1_boundary_values_read_like_the_solver(decidb_cli, name):
     sql = BOUNDARY_CASES[name]
     direct = _run_all(decidb_cli, sql, "require")

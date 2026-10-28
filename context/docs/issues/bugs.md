@@ -120,21 +120,6 @@
   field, serialized), or the refusal moves to stage 04.
 - **Impact:** messages only.
 
-## Wrong answers: infinite bounds
-
-Reproduces on the current build.
-
-- **Gurobi calls an infinite floor on a decision the objective does not read unbounded:**
-  `y >= 'inf'::DOUBLE` on such a decision -- per row, keyed (`per t.depot: y >=
-  'inf'::DOUBLE` on `per t.depot: y`) or query-wide -- answers *"DECIDE optimization is
-  unbounded"*, and DIAGNOSE suggests a cap (`y <= <cap>`, a runaway) instead of naming the
-  bound no value reaches. On a decision the objective reads, `x >= 'inf'::DOUBLE` is
-  reported infeasible; HiGHS refuses the bound in SQL terms. With no upper bound on the decision, Gurobi answers
-  `x >= 'inf'::DOUBLE MINIMIZE SUM(x)` with `x = 1e+100` for a REAL `x` (the row's `+inf` meets the open column at
-  Gurobi's infinity, 1e100) and fails with *"DECIDE optimization failed (solver status 6)"* for an INT `x`
-  (found 2026-10-27; direct solve reports it infeasible).
-- **Impact:** a misleading verdict, and an answer to a bound no value meets.
-
 ## Wrong answers: MIN/MAX bodies and solver tolerance
 
 Each reproduces on the current build.
@@ -200,20 +185,6 @@ Each reproduces on the current build.
   edit over-repairs by 1e-5.
 - **Impact:** a suggested change that does not repair the query, or findings the user
   cannot tell apart.
-
-## Direct solve reads an integer bound just below a whole number more strictly than both backends
-
-- **Location:** `DirectClauseBounds` and the box rounding in `DirectReadBounds`
-  (`src/optimizer/decide/direct/direct_bound_reader.cpp`); the solver path writes the bound into the column box
-  unrounded (`TryFoldPerRowBound`, `FoldSingletonRows`) and leaves the integer reading to the backend.
-- **Observed:** `FROM (VALUES (1, 4.3)) t(id, c) DECIDE x(INT) SUCH THAT x <= c/0.1 AND x >= 0 MAXIMIZE SUM(x)`
-  answers 43 on Gurobi and HiGHS and 42 on direct solve (A1). `c/0.1` is 42.99999999999999 in a double. A literal
-  `x <= 42.9999999` gives the same split: both backends round the bound up within their integrality tolerance,
-  direct solve takes the floor. `0.1*x <= c` agrees on 43 (direct checks the row `0.1 * 43 <= 4.3` in doubles).
-- **Expected:** one rule for which integers a bound admits, used by the model builder, the folding pass and direct
-  solve (`decide_numeric_policy.hpp`): the code-quality entry "A bound on one decision is classified three times".
-- **Impact:** a whole-number answer can differ by one between `auto` and `off` for a bound within about 1e-6 below a
-  whole number.
 
 ## Limitations (not bugs)
 

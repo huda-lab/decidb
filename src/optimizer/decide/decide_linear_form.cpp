@@ -5,6 +5,7 @@
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/execution/expression_executor.hpp"
 #include "duckdb/function/function_binder.hpp"
+#include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
@@ -763,6 +764,13 @@ private:
 					//  or POWER(x - target, 2) <= K quadratic constraint)
 					ExtractConstraintTerms(*lhs, *constraint, 1);
 				}
+			}
+			// A bound on one decision, a per-row one or an easy MIN/MAX on each member it reads, folds into the
+			// decision's column on each row it emits (stage 06).
+			DecideOneDecisionBound bound;
+			if (!folded && !constraint->lhs_is_aggregate && DecideReadOneDecisionBound(context, op, comp, bound)) {
+				constraint->admitted_lower = std::move(bound.lower);
+				constraint->admitted_upper = std::move(bound.upper);
 			}
 
 			(folded ? op.prepared.singleton_row_constraints : op.prepared.constraints).push_back(std::move(constraint));

@@ -248,23 +248,21 @@ order:
    on the freshly built model so diagnostic re-solves never pollute the dump. This
    is the golden corpus's characterization oracle.
 4. Record `model_constraint_rows` before anything moves the model.
-5. `model.build_proven_infeasible`: a constraint reduced to a coefficient-free row
-   against a bound it cannot meet (`SUM(0 * x) <= -1`, `x - x <= -1`). `Build`
-   keeps that row — with its source provenance — instead of throwing, so the model
-   survives for the elastic engine to name and relax the clause. No backend is
-   asked to load a row with no coefficients: this short-circuits to `INFEASIBLE`,
-   retaining the model. Unconditional, unlike the box below; with diagnosis off the
-   retained model is simply discarded.
-6. Under `tolerate_infeasible_bounds` (diagnosis mode), `Build` keeps an inverted
-   column box rather than throwing, so the model survives for the elastic engine. An
-   inverted box is not a hard model, it is an empty one — the answer is already known,
-   and no solver contract says a backend must accept it — so this short-circuits to
-   `INFEASIBLE`, retaining the model, without handing the box to any backend. (HiGHS
-   is the concrete case: it errors hard on load and poisons the session.)
-7. Solve on a live session.
-8. `DisambiguateInfOrUnbd`.
-9. `AttachUnboundedRayIfRequested`.
-10. Hand back the session, then the model, to whoever asked.
+5. `model.ProvesInfeasible()`: the model has no solution and needs no solver to
+   say so. That is a coefficient-free row against a bound it cannot meet
+   (`SUM(0 * x) <= -1`, `x - x <= -1`), a row whose infinite right-hand side points
+   the way no value reaches (`x >= +inf`, `x = -inf`), or an inverted column box,
+   which `Build` keeps under `tolerate_infeasible_bounds` (diagnosis mode) rather than
+   throwing. `Build` keeps those rows — with their source provenance — so the model
+   survives for the elastic engine to name and relax the clause. No backend is asked
+   to load them, and no solver contract says one must accept them (HiGHS errors hard
+   on an inverted box or an infinite row bound): this short-circuits to `INFEASIBLE`,
+   retaining the model, so Gurobi and HiGHS give the same answer. With diagnosis off
+   the retained model is simply discarded. `SolvePreparedModel` runs the same check.
+6. Solve on a live session.
+7. `DisambiguateInfOrUnbd`.
+8. `AttachUnboundedRayIfRequested`.
+9. Hand back the session, then the model, to whoever asked.
 
 ### Disambiguating INF_OR_UNBD
 

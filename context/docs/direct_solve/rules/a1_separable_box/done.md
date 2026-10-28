@@ -20,23 +20,22 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   a row-valued coefficient picks the side by its sign, and a zero coefficient leaves the row alone or infeasible. Each
   clause may carry its own `when`. The value expressions may raise at run time (an overflowing cast, a division by
   zero): the plan evaluates them on every row the clause's `when` keeps, as the solver does, and computes nothing on a
-  row the `when` drops (syntax reference §6.3). An equality is an at-least clause and an at-most
-  clause; the second is `A1Clause::Copy()` of the first with its comparison changed, so no field can differ.
-- **Default box.** `BOOL` is [0, 1]; `INT` and `REAL` are [0, ∞). A bare unconditional constant lower bound (`x >= -3`)
-  replaces the default 0 on the solver, so it does here. The solver also folds an affine constant bound (`2*x >= -6`,
-  `x + 1 >= -3`, `x >= 0 - 3`, D41), which replaces the default 0 too; A1 declines such a bound until it reads the
-  folded box (`todo.md`). A lower bound from a column or under a `when` only intersects with the default. The solver and direct solve ask one
-  shared predicate which clauses are folded into the variable (`DecideIsSingletonRowBound`, surfaced as
-  `DirectIRConstraint::variable_bound`), and combine the folded values with one function (`DecideFoldSingletonRow`),
-  so they cannot disagree. A bound of magnitude 1e20 or more is no bound, as on the solver, including a written -1e30;
-  an infinite data value is no bound on that side.
-- **Whole-number rounding.** `INT` and `BOOL` bounds round inward, strict bounds included, and the rounding is tested
-  in `DOUBLE` arithmetic against the clause as written, so `0.1*x <= 0.3` does not lose an integer to a quotient that
-  rounds the wrong way. A strict bound against a fraction (`x > 0.5`, `x < 2.5`, no `when`) rounds to the first whole
-  value inside it (1 and 2). The solver and A1 take that shift from one function (`DecideStrictBound`), so they agree;
-  on a `BOOL`, A1 and the solver both answer `BOOL x > 0.5` with `x = 1`. The six cases are in `SOLVER_OFF_BY_ONE`
-  (`test_direct_a1_separable_box.py`), checked against the oracle on both paths. S1 admits the same bounds on a `BOOL`
-  (`x > 0.5`, `x < 1.5`) with the same shift.
+  row the `when` drops (syntax reference §6.3). Each clause reads as the lower and upper end of the values it admits,
+  the two expressions the solver path's classifier builds (`DecideReadOneDecisionBound`), so an equality is one clause
+  with both ends set.
+- **Default box.** `BOOL` is [0, 1]; `INT` and `REAL` are [0, ∞). An unconditional constant lower bound replaces the
+  default 0 on the solver, so it does here, in any spelling the classifier reads as a bound on one decision (`x >= -3`,
+  `2*x >= -6`, `x + 1 >= -3`, `x >= 0 - 3`, D41). A lower bound from a column or under a `when` only intersects with the
+  default. The solver and direct solve read which clauses are folded into the variable from the same classifier
+  (`DirectIRConstraint::variable_bound`), and combine the folded values with one function (`DecideFoldSingletonRow`), so
+  they cannot disagree. A bound of magnitude 1e20 or more is no bound, as on the solver, including a written -1e30 and a
+  literal `-inf` floor. An infinite data value is no bound in the open direction (`x <= cap` with `cap = +inf`) and
+  admits nothing in the other (`x >= cap`), which empties the row's box (D65).
+- **Whole-number rounding.** An `INT` or `BOOL` decision admits the whole numbers the written comparison admits as
+  DuckDB evaluates it (D64), strict bounds included: `0.1*x <= 0.3` admits 3 (the DECIMAL product is exactly 0.3), and
+  `x > 0.5`, `x < 2.5` admit 1 and 2 at their ends. The six strict cases are in `SOLVER_OFF_BY_ONE`
+  (`test_direct_a1_separable_box.py`), checked against the oracle on both paths; `test_one_decision_bound.py` checks the
+  DECIMAL and DOUBLE spellings against DuckDB on both paths and both backends. S1 reads the same interval on a `BOOL`.
 - **Objective.** `MINIMIZE`, `MAXIMIZE`, or none (the lowest allowed value). Signed `SUM` parts, each with an optional
   constant factor or divisor and an optional `when`, plus an optional objective-level `when`. A part's values are
   computed only on the rows its `when` and the objective's keep. Terms: a row-valued
@@ -105,7 +104,7 @@ the parent reads does, so reading a wide column back costs memory in proportion 
 
 | Check | What it covers |
 |---|---|
-| `test_direct_a1_separable_box.py` (231 tests) | The answers. 123 cases run on the independent oracle (`oracle_solver`, built from the raw rows and the per-row bounds each case states in Python), on the solver path (`off`) and on the direct path (`require`): constant boxes, the default-lower rule in every spelling that does and does not replace it, row-valued bounds with and without `when`, coefficient forms (positive, negative, zero), `INT` rounding and strict bounds, `BOOL` pins and Boolean-column bounds, every objective spelling, objective `when`, infeasible and unbounded problems, ties, and three decisions of different types. 28 parent-query contexts. 13 error cases that must fail on both paths. 21 boundary cases against the solver path only (infinities, the 1e20 and 2^53 limits, every numeric source type). 12 cases on how bounds combine, on both paths: a written lower bound of -1e30 or -1e31 is no bound for `INT` and `REAL`, a second lower bound beside it still applies, and no written lower bound leaves the floor at 0. 6 random-row tests against exact `Fraction` arithmetic. The constant-problem tests (streaming plan, errors under `LIMIT 1`, `COUNT(*)` and a filter, empty source), a nested `DECIDE`, and duplicate rows The affine-fold cases (`FOLDED_AFFINE_PENDING`) run on the solver path alone and one boundary case is `xfail(strict=True)`, until A1 reads the folded box (`todo.md`). |
+| `test_direct_a1_separable_box.py` (231 tests) | The answers. 123 cases run on the independent oracle (`oracle_solver`, built from the raw rows and the per-row bounds each case states in Python), on the solver path (`off`) and on the direct path (`require`): constant boxes, the default-lower rule in every spelling that does and does not replace it, row-valued bounds with and without `when`, coefficient forms (positive, negative, zero), `INT` rounding and strict bounds, `BOOL` pins and Boolean-column bounds, every objective spelling, objective `when`, infeasible and unbounded problems, ties, and three decisions of different types. 28 parent-query contexts. 13 error cases that must fail on both paths. 21 boundary cases against the solver path only (infinities, the 1e20 and 2^53 limits, every numeric source type). 12 cases on how bounds combine, on both paths: a written lower bound of -1e30 or -1e31 is no bound for `INT` and `REAL`, a second lower bound beside it still applies, and no written lower bound leaves the floor at 0. 6 random-row tests against exact `Fraction` arithmetic. The constant-problem tests (streaming plan, errors under `LIMIT 1`, `COUNT(*)` and a filter, empty source), a nested `DECIDE`, and duplicate rows The affine spellings of a folded bound run on both paths. |
 | `test_direct_rule_conformance.py` | The checks every rule owes, with A1's fixture: schema and rows, all-rows read for 10 kinds of late bad row, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced HiGHS, `DIAGNOSE`, and 17 near misses that must decline under `require` and answer under `auto` as under `off`, and a plain form that applies |
 | `test_direct_user_facing.py` | A 200-byte unused payload column stays out of the scan and the breaker; a computed column that can raise is not pruned; a NaN in a constraint coefficient says "constraint coefficient" and in the objective "objective coefficient"; every NULL and NaN error reads as the solver's, compared in full |
 | `test_error_infeasible.py` | The solver's rejection of a bound against the built-in domain quotes the clause as typed for a non-negative decision (`x <= -1 cannot hold ... non-negative`, strict `x < 0`); for a `BOOL` (`x >= 2`, `x > 1`, `x > 1.5`) it is the usual infeasible error |

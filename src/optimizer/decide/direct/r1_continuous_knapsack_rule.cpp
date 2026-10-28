@@ -149,11 +149,7 @@ bool Rule::ProveConstraints(const DirectIR &ir, vector<const DirectIRConstraint 
 			budgets.push_back(&ir_node);
 			continue;
 		}
-		// A membership and a not-equal constraint are neither a lower nor an upper bound.
-		if (!DirectIsLowerBound(ir_node.comparison) && !DirectIsUpperBound(ir_node.comparison)) {
-			return false;
-		}
-		if (!ir_node.scope.per_key_slots.empty() || !DirectReadsOneDecision(ir_node, ir.decisions.size())) {
+		if (!ir_node.scope.per_key_slots.empty() || !DirectIsBoundOnOneDecision(ir, ir_node)) {
 			return false;
 		}
 	}
@@ -883,6 +879,8 @@ private:
 			added.emplace_back("c" + std::to_string(j), on_kept(calc.Wrap(SumOf(clause.coefficient))));
 			added.emplace_back("r" + std::to_string(j),
 			                   on_kept(calc.Cast(calc.Of(*OverState(*clause.rhs)), LogicalType::DOUBLE)));
+			added.emplace_back("lo_raw" + std::to_string(j), on_kept(calc.Of(*OverState(*clause.lower))));
+			added.emplace_back("up_raw" + std::to_string(j), on_kept(calc.Of(*OverState(*clause.upper))));
 			if (clause.when) {
 				added.emplace_back("wh" + std::to_string(j),
 				                   calc.Wrap(DirectActiveWhen(calc, OverState(*clause.when).get())));
@@ -960,14 +958,14 @@ private:
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto suffix = std::to_string(j);
 			DirectBoundColumns raw;
-			raw.coefficient = columns.at("c" + suffix).binding;
-			raw.rhs = columns.at("r" + suffix).binding;
+			raw.lower = columns.at("lo_raw" + suffix).binding;
+			raw.upper = columns.at("up_raw" + suffix).binding;
 			if (condition.clauses[j].when) {
 				raw.has_when = true;
 				raw.when = columns.at("wh" + suffix).binding;
 			}
 			ExprPtr lower, upper;
-			DirectClauseBounds(calc, condition.clauses[j].comparison, false, raw, lower, upper);
+			DirectClauseBounds(calc, raw, lower, upper);
 			added.emplace_back("lo" + suffix, lower);
 			added.emplace_back("up" + suffix, upper);
 		}

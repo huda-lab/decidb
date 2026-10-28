@@ -51,7 +51,7 @@ bool DirectIsSourceOnlyPredicate(const Expression &expr, idx_t decide_index,
 
 //! What a direct rule demands of a constant it reads with `TryEvaluateFoldableDouble` (`decide_cast_policy.hpp`): one
 //! that no row, parameter or subquery can change, with an evaluation error read as "not a constant". The value may be
-//! infinite or NaN; a rule that reads a Boolean adds `FOLD_ALLOW_BOOLEAN`.
+//! infinite or NaN.
 constexpr uint32_t DIRECT_CONSTANT = FOLD_STABLE | FOLD_CATCH_DUCKDB_ERRORS;
 
 //! The same, for a numeric constant that must also be finite and survive a round trip through DOUBLE.

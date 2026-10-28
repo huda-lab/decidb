@@ -72,8 +72,7 @@ static bool EvaluateFoldableDouble(ClientContext &context, const Expression &exp
 	if (!ExpressionExecutor::TryEvaluateScalar(context, expr, value) || value.IsNull()) {
 		return false;
 	}
-	bool readable = value.type().IsNumeric() || ((flags & FOLD_ALLOW_BOOLEAN) && value.type() == LogicalType::BOOLEAN);
-	if (!readable) {
+	if (!value.type().IsNumeric()) {
 		return false;
 	}
 	out = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();

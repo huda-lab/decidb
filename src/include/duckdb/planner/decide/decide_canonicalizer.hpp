@@ -16,9 +16,12 @@
 // THE RULE THAT MAKES THE TRANSFORM WORK: canonicalization NEVER opens a term
 // algebraically. It decomposes each side additively and asks one question of each
 // resulting term -- "does it reference a decision variable?" -- then moves terms
-// across the relation accordingly. It does not expand, combine like terms, fold
-// constants, or distribute. Validation subsequently inspects reducer placement,
-// variable scope, and query-wide provenance without rewriting the term.
+// across the relation accordingly. It does not expand a product of terms or fold
+// constants. Two steps give a bound one spelling: a factor known before the query
+// runs distributes over an additive spine (`2 * (x - 1)` is `2 * x - 2`), and like
+// terms under such factors merge (`x + x` is `2 * x`). Validation subsequently
+// inspects reducer placement, variable scope, and query-wide provenance without
+// rewriting the term.
 //
 // ONE SPELLING PER MEANING. Two inputs that mean the same thing leave this pass
 // spelled the same way, so no consumer has to know both. A reducer factor is always

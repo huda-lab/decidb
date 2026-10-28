@@ -238,19 +238,28 @@ struct ModelConstraint {
 //! nothing and are never the reason a solve failed.
 //!
 //! This is a rule about the MODEL, not about any backend: a row spelled this way is not
-//! a hard problem to solve, it is a row with no solution, and no solver is expected to
-//! make sense of it. Two layers ask the question and must agree. Infeasible diagnosis
-//! uses it to name the clause before it builds an elastic program that structurally
-//! cannot repair such a row, and a backend uses it to refuse the model in SQL terms
-//! rather than pass it down. HiGHS shows why the refusal has to come first: it spells a
-//! one-sided row bound by pairing the user's bound with its own ±1e30 sentinel, so an
-//! unreachable bound arrives as an inverted `lower > upper` pair that `passModel`
-//! rejects with an internal error.
+//! a hard problem to solve, it is a row with no solution. SolverModel::ProvesInfeasible
+//! answers such a model before any backend sees it, so every backend reports the same
+//! verdict, and infeasible diagnosis names the clause, which no finite loosening repairs.
 inline bool IsUnreachableBound(char sense, double rhs) {
 	if (!std::isinf(rhs)) {
 		return false;
 	}
 	return sense == '=' || ((rhs > 0.0) == (sense == '>'));
+}
+
+//! A row whose left-hand side reduced to no terms (`SUM(0 * x) <= -1`, `x - x <= -1`) is
+//! the constant comparison `0 <sense> rhs`. It fails when `rhs` is out of 0's reach by
+//! more than the builder's tolerance; one that holds is a tautology and is dropped.
+inline bool ConstantRowFails(char sense, double rhs) {
+	constexpr double EPS = 1e-9;
+	if (sense == '<') {
+		return rhs < -EPS;
+	}
+	if (sense == '>') {
+		return rhs > EPS;
+	}
+	return std::fabs(rhs) > EPS;
 }
 
 //! Solver-agnostic optimization model, ready for any backend to consume.
@@ -352,15 +361,13 @@ struct SolverModel {
     };
     vector<QuadraticConstraint> quadratic_constraints;
 
-    //! Set by Build when a constraint was proven unsatisfiable while the model was being
-    //! assembled — a row whose left-hand side reduced to no terms at all (every decision
-    //! coefficient cancelled or evaluated to zero) against a bound it cannot meet, e.g.
-    //! `SUM(0 * x) <= -1` or `x - x <= -1`. The row is KEPT (coefficient-free) and carries
-    //! its own provenance, so the infeasible-diagnosis engine can relax it like any other
-    //! user row. Build never throws for this: SolveModel short-circuits to INFEASIBLE
-    //! without handing the model to a backend, exactly as it does for an inverted column
-    //! box, so the model still exists for diagnosis.
-    bool build_proven_infeasible = false;
+    //! True when the model has no solution and needs no solver to say so: a coefficient-free
+    //! row that fails (ConstantRowFails), a row no finite assignment reaches
+    //! (IsUnreachableBound), or an inverted column box. Such a model is not hard, it is
+    //! empty, and no backend contract says it must accept one (HiGHS errors on load). Every
+    //! solve asks this first and answers INFEASIBLE without a backend; the rows stay in the
+    //! model with their provenance, so diagnosis can name or relax them.
+    bool ProvesInfeasible() const;
 
     //! Build a SolverModel from a SolverInput (the shared model-building logic).
     //! Takes a non-const reference because raw global constraints are moved out of `input`

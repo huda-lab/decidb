@@ -190,29 +190,36 @@ member of an easy MIN/MAX, or under `per K:` a class's first kept row; every oth
 skipped. RHS is `rhs_values[row]`; fixed LHS terms are subtracted one row at a time.
 
 **A row that bounds one decision goes into its column box instead** (`TryFoldPerRowBound`).
-When the row has one term with coefficient exactly 1 or -1 and a finite right-hand side
-(`x <= cap`, `x >= lo`, `x = v`, `-x >= -cap`), it narrows that column's `col_lower` /
-`col_upper` and is not emitted. This is the per-row counterpart of singleton-row folding
-(`decide_singleton_row_folding.cpp`), which folds a literal bound once per decision in the
-optimizer; a data-valued bound differs per row and is known only here. The fold:
+When the clause is a bound on one decision (`x <= cap`, `2 * x >= lo`, `cap * x <= 10`,
+`0.1 * x = c`), stage 08 has already evaluated, on each row, the values of `x` the comparison
+admits (`EvaluatedConstraint::admitted_lower` / `admitted_upper`, from the classifier
+`DecideReadOneDecisionBound`, `../05_optimizer/done.md`). The builder intersects that column's
+`col_lower` / `col_upper` with them and emits no row. This is the per-row counterpart of
+singleton-row folding, which folds a literal bound once per decision in the optimizer; a
+data-valued bound differs per row and is known only here. The fold:
 
-- **narrows, never replaces.** The bound is intersected with the box it finds, so it keeps
-  the meaning of the row: a negative data value does not lower a decision's floor of 0,
-  unlike a literal `x >= -3`. Several rows on one column (an entity-scoped decision) all hold.
-- **does not divide.** `2*x <= cap` stays a row, so the bound is the row's own right-hand
-  side, with no rounding. A row with two decisions stays a row.
-- **leaves non-finite bounds alone.** `x <= +inf` stays a row with its existing handling.
+- **narrows, never replaces.** The admitted range is intersected with the box it finds, so it
+  keeps the meaning of the row: a negative data value does not lower a decision's floor of 0,
+  unlike a literal `x >= -3` (D41). Several rows on one column (an entity-scoped decision, a
+  keyed decision) all hold.
+- **admits what DuckDB admits.** A whole-numbered decision's range ends on whole numbers that
+  pass the written comparison as DuckDB evaluates it, so `0.1 * x <= c` with `c = 0.3` admits
+  3, as SQL does; the builder does no division or rounding of its own.
+- **leaves an open end open.** `x <= +inf` admits every value, so the box stays as it is. An
+  end that admits nothing (`x >= +inf`) keeps the row, which `SolverModel::ProvesInfeasible`
+  answers before any backend.
 - **does not run under diagnosis** (`tolerate_infeasible_bounds`, set by the `DIAGNOSE`
   prefix). The elastic engine relaxes rows and quotes the clause from their provenance
   (`x <= cap_col + delta`), so a diagnosed statement keeps the rows.
 
-A box the fold inverts is caught by the sanity check (§8), which answers INFEASIBLE as the
-row would have. Constants derived from the formulation box (Big-M, McCormick) are computed
-before the fold, against a box at least as wide, so they stay valid. Gurobi's presolve turns
-such rows into bounds on its own; HiGHS's QP solver does not, and a 9,600-row box-bounded QP
-that ran past 60 s as rows solves in 0.4 s as bounds. The golden corpus (cases 95 to 101)
-shows each branch: lower, equality, coefficient -1, coefficient 2, two decisions, an
-infinite bound, and `DIAGNOSE`.
+A row with two decisions stays a row. A box the fold inverts is caught by the sanity check
+(§8), which answers INFEASIBLE as the row would have. Constants derived from the formulation
+box (Big-M, McCormick) are computed before the fold, against a box at least as wide, so they
+stay valid. Gurobi's presolve turns such rows into bounds on its own; HiGHS's QP solver does
+not, and a 9,600-row box-bounded QP that ran past 60 s as rows solves in 0.4 s as bounds. The
+golden corpus (cases 102 to 110) shows each branch: lower, equality, coefficient -1,
+coefficient 2, two decisions, an infinite bound, `DIAGNOSE`, a data coefficient that changes
+sign, and a DECIMAL coefficient.
 
 AVG terms are already coefficient-scaled by stage 08, by the rows the reducer reads in
 its group: the kept rows of its `by` group, less those its own `when` drops, one per class
@@ -235,12 +242,13 @@ Every path pushes through `PushNormalizedConstraint()` rather than
 `k>=0`, `0 >= k` for `k<=0`, `0 = 0`).
 
 A *violated* empty-LHS row — `0 <= -1` after bounds folding and term
-cancellation, as written by `SUM(0 * x) <= -1` or `x - x <= -1` — is **kept**, and
-sets `model.build_proven_infeasible`. The row stays coefficient-free and keeps its
-own `source_clause_id`, which is what lets the infeasible-diagnosis engine name the
+cancellation, as written by `SUM(0 * x) <= -1` or `x - x <= -1` — is **kept**
+(`ConstantRowFails`). The row stays coefficient-free and keeps its own
+`source_clause_id`, which is what lets the infeasible-diagnosis engine name the
 clause and report a least-change repair (`SUM(0 * x) <= 0`) instead of a bare
-status. The infeasibility is still decided here, not by a solver: `SolveModel`
-short-circuits on the flag, so no backend is handed a row with no coefficients.
+status. The infeasibility is decided by DeciDB, not by a solver:
+`SolverModel::ProvesInfeasible` reads the model's rows, and `SolveModel` answers
+INFEASIBLE on it, so no backend is handed a row with no coefficients.
 
 Emitting nothing and throwing instead would take the whole model with it — every
 later consumer, diagnosis included, then has no model to read.

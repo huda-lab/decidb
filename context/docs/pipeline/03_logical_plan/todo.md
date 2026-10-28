@@ -24,7 +24,8 @@ The two paths number groups differently: entity ids are first-seen over all rows
 ids are dense in first-kept-row order. **Ruling (owner, 2026-10-27).** Merge them into one numbering,
 the one the design calls for, and re-capture the golden dumps that print it (entries 22,
 23, 38, 39, 56, 61, 62, 65, 70 and 91–94 are known to). Keeping a numbering to spare the
-goldens is not a reason. Which numbering is chosen at the start of the task. Do it with
+goldens is not a reason. Chosen (owner, 2026-10-28): ids ordered by the collated key value, each clause reading
+its kept classes as a subsequence, so no message or dump depends on row order. Do it with
 the NULL-key change (`../08_execution/todo.md` §2) and collation (`../../issues/bugs.md`),
 which touch the same grouping code.
 

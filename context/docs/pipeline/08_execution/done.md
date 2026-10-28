@@ -78,8 +78,11 @@ constructor. Three consumers read them:
 - `Finalize` copies each box into `SolverInput` through `EffectiveLower`: a decision
   with no lower bound written takes the default 0 floor, so it is non-negative unless
   the query explicitly said otherwise.
-- The domain-contradiction guard below reads the box to reject a user bound that
-  contradicts a variable's intrinsic domain, quoting the bound's clause as written.
+- The domain-contradiction guard below rebuilds a box from the bounds as written
+  (`user_singleton_row_bounds`) to reject a user bound that contradicts a variable's
+  intrinsic domain, quoting the bound's clause as written. It reads the written values,
+  not the admitted ones: `x = -0.5` on an INT admits nothing, and that is an ordinary
+  infeasible, not a claim that `x` is non-negative.
 - `BuildSolverInput` re-opens each `UserBoundSpec`'s direction in the rigid box, which
   `OpenElasticColumnBox` then widens for a diagnosis (below).
 
@@ -92,9 +95,14 @@ evaluates it after every other prepared clause (numbered after them) into
 `evaluated_singleton_row_constraints`, and only the elastic input receives it, so the
 repair model loosens it one kept row or class at a time (D28) while the solved model
 keeps the box alone. Those clauses are the repair model's only rows for a folded bound.
-A bound against a data column (`x <= cap`) is not tagged: it flattens to a per-row spec,
-and the model builder folds each row into its column box when no diagnosis is armed
-(`../06_model_formulation/done.md`, Path 3).
+A bound against a data column (`x <= cap`, `cap * x <= 10`, an easy `max(cap * x) <= 10`)
+is not tagged: it flattens to a per-row spec that carries the classifier's admitted range
+(`DecideConstraint::admitted_lower` / `admitted_upper`, stage 05). `EvaluateConstraints`
+evaluates both ends on the kept rows in the same pass that reads a data right-hand side,
+after it, admitting ±infinity as an open end, into
+`EvaluatedConstraint::admitted_lower` / `admitted_upper`, and the model builder folds each
+row into its column box when no diagnosis is armed (`../06_model_formulation/done.md`,
+Path 3).
 
 ### The elastic box
 
@@ -480,19 +488,16 @@ bound on the strict path purely because of how it was written.
 The input of a **bound-side reducer** follows the same rule: `min(x) by (g) <= max(cap)
 by (g)` is a window of DuckDB's over `cap`, and its value check (a VALUE_IS_VALID scope
 check) refuses NULL and NaN only, so an infinite `cap` is a value. An infinite bound
-behaves the same in every spelling, and the solver decides what it means. `inf - inf`
+behaves the same in every spelling, and its direction decides what it means. `inf - inf`
 is still NaN, and still refused.
 
-**A non-finite bound is not folded into the column box.** `FoldSingletonRows`
-(stage 05) folds a bare `x OP const` into `lower_bounds` / `upper_bounds`, each
-initialized to a ±1e30 sentinel and tightened with `min` / `max`. Those sentinels swallow an infinity
-in one direction and keep it in the other, so one spelling of one bound became "no
-bound" and its mirror reached the bounds validator as a non-finite column — an
-internal error, which also invalidates the connection for every later query in the
-session. Folding is an optimization, not a semantic step, so a non-finite value is
-left unfolded and takes the ordinary constraint path: `x >= +inf` becomes one
-infeasible row and `x <= +inf` one satisfied row, the same answer the rebuilt
-spelling `x + v >= +inf` gives.
+**An infinite bound keeps its SQL meaning on every path.** `x <= +inf` and `x >= -inf`
+hold for every value, so they are no bound: the classifier's admitted end is open and the
+column box stays as it is (a literal `x >= -inf` is the exception that frees `x` below, as
+`x >= -1e30` does, D41). `x >= +inf`, `x <= -inf` and `x = ±inf` hold for no value, so
+they stay a row, and `SolverModel::ProvesInfeasible` answers the model infeasible before
+any backend reads it; `DIAGNOSE` names the clause. The rebuilt spelling `x + v >= +inf`
+reaches the same row.
 
 The exception is Big-M, which needs a constant that dominates the row's range, and
 nothing finite dominates infinity. Every rewrite that faces this — `<>`, MIN/MAX,

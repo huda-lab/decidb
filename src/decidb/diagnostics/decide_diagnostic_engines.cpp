@@ -102,24 +102,6 @@ SolverModel DropRemovalGroups(const SolverModel &base, const std::set<idx_t> &re
 	DropTaggedEntries(result.quadratic_constraints, removal_group_ids);
 	DropTaggedEntries(result.indicator_constraints, removal_group_ids);
 	DropTaggedEntries(result.general_constraints, removal_group_ids);
-
-	// Build-time infeasibility is cached on the whole model, so dropping the constant
-	// row that proved it must clear the stale flag. Recompute from exactly the retained
-	// coefficient-free linear rows using the builder's own tolerance and rules.
-	result.build_proven_infeasible = false;
-	constexpr double EPS = 1e-9;
-	for (const auto &row : result.constraints) {
-		if (!row.indices.empty()) {
-			continue;
-		}
-		bool violated = row.sense == '<' ? row.rhs < -EPS
-		                : row.sense == '>' ? row.rhs > EPS
-		                                   : std::fabs(row.rhs) > EPS;
-		if (violated) {
-			result.build_proven_infeasible = true;
-			break;
-		}
-	}
 	return result;
 }
 

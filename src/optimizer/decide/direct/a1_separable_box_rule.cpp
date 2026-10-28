@@ -144,18 +144,7 @@ public:
 			if (ir_node.aggregate) {
 				return nullptr;
 			}
-			if (ir_node.comparison == ExpressionType::COMPARE_IN ||
-			    ir_node.comparison == ExpressionType::COMPARE_NOTEQUAL) {
-				return nullptr;
-			}
-			if (ir_node.comparison != ExpressionType::COMPARE_EQUAL && !DirectIsLowerBound(ir_node.comparison) &&
-			    !DirectIsUpperBound(ir_node.comparison)) {
-				return nullptr;
-			}
-			if (!ir_node.scope.per_key_slots.empty()) {
-				return nullptr;
-			}
-			if (!DirectReadsOneDecision(ir_node, ir.decisions.size())) {
+			if (!ir_node.scope.per_key_slots.empty() || !DirectIsBoundOnOneDecision(ir, ir_node)) {
 				return nullptr;
 			}
 		}
@@ -496,8 +485,10 @@ private:
 				return clause.when ? DirectOnKeptRows(calc, calc.Wrap(DirectActiveWhen(calc, clause.when.get())), value)
 				                   : value;
 			};
-			columns.coefficient = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(clause.coefficient)))));
-			columns.rhs = p1.Add(calc.Out(on_kept(calc.Cast(calc.Of(*clause.rhs), LogicalType::DOUBLE))));
+			auto coefficient = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(clause.coefficient)))));
+			auto rhs = p1.Add(calc.Out(on_kept(calc.Cast(calc.Of(*clause.rhs), LogicalType::DOUBLE))));
+			columns.lower = p1.Add(calc.Out(on_kept(calc.Of(*clause.lower))));
+			columns.upper = p1.Add(calc.Out(on_kept(calc.Of(*clause.upper))));
 			if (clause.when) {
 				columns.has_when = true;
 				columns.when = p1.Add(DirectActiveWhen(calc, clause.when.get()));
@@ -511,10 +502,10 @@ private:
 				           : std::move(check);
 			};
 			checks.push_back(
-			    read_on(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, columns.coefficient,
+			    read_on(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, coefficient,
 			                                       coefficient_source.get(), DirectNumberKind::CONSTRAINT, fragments)));
 			checks.push_back(read_on(DirectValidBoundPredicate(
-			    optimizer, columns.rhs, *DirectOverProjection(*clause.rhs, source_bindings, p1.index), fragments)));
+			    optimizer, rhs, *DirectOverProjection(*clause.rhs, source_bindings, p1.index), fragments)));
 			raw.clauses.push_back(columns);
 		}
 		bool has_shared_mask = false;
@@ -625,9 +616,7 @@ private:
 	void ComputeBounds(Stage &p2, const Raw &raw, vector<unique_ptr<Expression>> &checks, Bounds &bounds) const {
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			ExprPtr lower, upper;
-			DirectClauseBounds(calc, condition.clauses[j].comparison,
-			                   DirectIsWholeNumbered(condition.decisions[condition.clauses[j].decision].domain),
-			                   raw.clauses[j], lower, upper);
+			DirectClauseBounds(calc, raw.clauses[j], lower, upper);
 			bounds.lower.push_back(p2.Add(calc.Out(lower)));
 			bounds.upper.push_back(p2.Add(calc.Out(upper)));
 		}

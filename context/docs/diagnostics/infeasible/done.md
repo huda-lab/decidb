@@ -87,16 +87,14 @@ finite by construction — `ClassifyMinMaxBound` sends a group to the Big-M rewr
 `K` is finite, and `DecideTightPerRowBigM` refuses a non-finite `M` — so an infinite bound
 on a mechanism row is always a user bound re-emitted per row.
 
-**Backends do not agree here, and cannot.** Gurobi loads an unreachable row and reports the
-infeasibility, which is what the diagnosis above then explains. HiGHS spells a one-sided row
-bound by pairing the user's bound with its own ±1e30 infinity sentinel, so `Ax >= +inf`
-arrives as `lower = +inf, upper = 1e30` — an inverted pair `passModel` rejects, which
-surfaced as `INTERNAL Error: Failed to pass model to HiGHS` and invalidated the connection.
-`HighsSession::Load` refuses the model first, using the same `IsUnreachableBound`
-predicate (promoted to `ilp_model.hpp` so the two layers cannot drift), and names the clause
-from `constraint_sources` in the same spelling the diagnosis uses. The error is an ordinary
-`InvalidInputException`, so the session survives it. Only the unreachable direction differs
-between backends: a vacuous infinity pairs cleanly with the sentinel and solves on both.
+**Both backends give this verdict, because neither reads the row.** HiGHS spells a one-sided
+row bound by pairing the user's bound with its own ±1e30 infinity sentinel, so `Ax >= +inf`
+would arrive as `lower = +inf, upper = 1e30`, an inverted pair `passModel` rejects. A model
+with such a row has no solution and needs no solver to say so, so `SolveModel` answers it
+INFEASIBLE before any backend loads it (`SolverModel::ProvesInfeasible`, which reads the same
+`IsUnreachableBound` predicate) and retains the model for this diagnosis. An unprefixed query
+reports the ordinary infeasible error on Gurobi and HiGHS alike; a vacuous infinity pairs
+cleanly with the sentinel and solves on both.
 
 **Output shape.** One finding per clause with `edit_source='unreachable_bound'`;
 `clause` names the clause and `suggested_change` explains that no assignment can reach the
@@ -270,17 +268,18 @@ actionable: a `virtual_offset` (query) or an `expanded_row` profile (expanded), 
 (`per grp: sum(x) by (grp) >= 5`) with `group` NULL; expanded mode emits one finding per
 failing class, same clause text, with the key value in `group`.
 
-**An easy MIN/MAX over a bare decision is a column bound.** `max(x) <= K` (and
+**An easy MIN/MAX over one decision is a column bound.** `max(x) <= K` (and
 `min(x) >= K`) with no `when` and no reducer filter means `x <= K` on every row it reads
 (D41), whatever its `per` key or `by`, so bound absorption folds it into the column box
-like `x <= K` (`TryMatchEasyExtremumTarget`, `decide_singleton_row_folding.cpp`) and it reaches
-the repair model through its own clause's rows. The `query` scope reports
+like `x <= K` (`DecideReadOneDecisionBound`, `decide_singleton_row_folding.cpp`) and it
+reaches the repair model through its own clause's rows. A member scaled or shifted by
+constants is read by value (`max(2 * x) <= -10` is `x <= -5`). The `query` scope reports
 one edit on the clause as written, by the max overshoot
 (`per g: max(x) by (g) <= 2` → `per g: max(x) by (g) <= 4`); the `expanded` scope reports
 it once per class of its `per` key, or once per kept row when it has none. An easy
-MIN/MAX with a `when`, a reducer filter or a member that is not a bare decision
-(`max(2 * x) <= K`) stays rows: its member rows carry their group's classes and fold
-within each group.
+MIN/MAX with a `when`, a reducer filter or a member scaled by data (`max(cap * x) <= K`)
+stays rows under diagnosis: its member rows carry their group's classes and fold within
+each group.
 
 **Tests.** C++ structural (`test_decidb_diagnostic_engines.cpp`): `BuildElasticModel` folds a
 grouped `SHARED_SCALAR` clause into one block in query mode and one per group in expanded; a
@@ -557,7 +556,7 @@ The two-level objective's `per` key passes a throwaway labels vector (objective 
 are not diagnosed by clause key). A composite key is written as a comma list
 (`per region, year:`); parentheses are only for `per ()`, and `per (region, year):` is a
 parse error that names the comma spelling. An easy `max(x) <= K` is a column bound, not a
-grouped clause — see "An easy MIN/MAX over a bare decision is a column bound" above.
+grouped clause — see "An easy MIN/MAX over one decision is a column bound" above.
 
 ### Rigid shapes
 
@@ -1107,12 +1106,10 @@ pre-solve verdict: the bare, aggregate, and hard MIN/MAX spellings each name the
 emit `unreachable_bound` with no edit rows; one clause over three relation rows reports once;
 two out-of-reach bounds are two findings; a vacuous `x <= +inf` is not a finding and the real
 conflict beside it still gets an ordinary loosen edit; and a merely far-out-of-reach finite
-bound still goes through the elastic solve. The infinite-bound cases run on Gurobi only,
-because HiGHS refuses the model before a solve can produce anything to diagnose; its side of
-that split is covered in `test_infinite_bounds.py`
-(`test_highs_refuses_an_unreachable_bound_in_sql_terms`, which asserts the named clause,
-`test_highs_refusal_leaves_the_connection_usable`, which asserts the session survives the refusal, and `test_highs_still_solves_a_vacuous_infinity`, which
-pins that the guard keys on direction rather than on the infinity). The semantics side is in
+bound still goes through the elastic solve. The infinite-bound cases run on both backends;
+`test_infinite_bounds.py` (`test_highs_answers_an_unreachable_bound_as_infeasible`,
+`test_highs_still_solves_a_vacuous_infinity`) pins that the unprefixed verdict keys on direction
+rather than on the infinity. The semantics side is in
 `test/decide/tests/test_infinite_bounds.py`, whose unreachable cases assert the named
 verdict rather than just the word "infeasible".
 

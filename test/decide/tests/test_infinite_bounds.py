@@ -10,17 +10,14 @@ the solver's, not a new DeciDB convention: a right-hand side may be infinite, an
 the model builder has always accepted that and rejected only NaN. What direction
 the infinity points still decides the outcome — ``<= +inf`` constrains nothing,
 ``>= +inf`` cannot be satisfied — and that is the solver's answer to give, not a
-guard's. A bare bound is not folded into the column box when it is infinite, for
-that reason: the box has one sentinel per direction and would have kept the
-infinity in one and lost it in the other.
+guard's. A bare bound whose infinity points the unreachable way admits no value, so
+it is not folded into the column box: it stays a row.
 
-**The verdict is shared; the outcome is the backend's.** Both backends refuse the
-query. HiGHS cannot load an inverted row-bound pair at all, so it names the clause on
-the spot — that refusal is a model-build fact, not a diagnosis. Gurobi solves and comes
-back INFEASIBLE, so an unprefixed query reports just that; ``DIAGNOSE`` names the clause
-and says no assignment can reach its bound. Which of the two a host gives is not a
-DeciDB decision, so the assertions below accept either ending and check the naming
-through whichever path that host takes.
+**The verdict is shared, and so is the outcome.** A model with a row no value can
+reach is answered infeasible before any backend reads it (``ProvesInfeasible``), so
+Gurobi and HiGHS give the same answer: an unprefixed query reports the infeasible
+optimization, and ``DIAGNOSE`` names the clause and says no assignment can reach its
+bound.
 
 That leaves one thing a rewrite genuinely cannot do: no finite Big-M dominates an
 infinite range. But a bound is only linearized when it constrains something, so an
@@ -49,30 +46,26 @@ it follows the same rule; the direction still decides the outcome, now per group
   - test_data_reducer_unreachable_bound_is_infeasible: the solver gives the verdict
   - test_nan_from_reducer_arithmetic_is_still_rejected: inf + -inf is still not a bound
 
-The two backends do not agree on an unreachable bound, and cannot. Gurobi loads the row
-and reports the infeasibility, which is the answer this module is built around. HiGHS
-spells a one-sided row bound by pairing the user's bound with its own ±1e30 infinity
-sentinel, so `Ax >= +inf` becomes `lower = +inf, upper = 1e30` — an inverted pair it
-rejects at model load. DeciDB refuses it in SQL terms rather than letting that surface as
-an internal error that invalidates the connection. Only the unreachable direction differs;
-a vacuous infinity pairs cleanly with the sentinel and solves on both.
+HiGHS cannot load an unreachable row (it pairs a one-sided bound with its own 1e30
+infinity, so ``Ax >= +inf`` is an inverted pair), which is why the answer comes before
+any backend:
 
-  - test_highs_refuses_an_unreachable_bound_in_sql_terms: named clause, live connection
+  - test_highs_answers_an_unreachable_bound_as_infeasible: same verdict as Gurobi
   - test_highs_still_solves_a_vacuous_infinity: the vacuous direction is unaffected
-"""
 
-import csv
-import io
-import re
+Neither backend reads such a row, so neither can turn it into another verdict: Gurobi once called a floor of
+``+inf`` on a decision the objective does not read unbounded, and met an uncapped one at its own infinity (1e100).
+
+  - test_an_unreachable_floor_is_infeasible_wherever_it_is_written: every scope, both backends, both paths
+"""
 
 import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
 
 
-# Both endings of the shared verdict: HiGHS names the clause it cannot load, Gurobi
-# reports the infeasible optimization (and names the clause under DIAGNOSE).
-_UNREACHABLE = r"(sets a bound no value can reach|optimization is infeasible)"
+# The shared verdict; DIAGNOSE names the clause.
+_UNREACHABLE = r"optimization is infeasible"
 
 
 @pytest.mark.cons_perrow
@@ -131,14 +124,9 @@ def test_infinite_bound_wrong_direction_is_infeasible(decidb_cli):
 
     Nothing finite reaches an infinite floor, so this is a genuine infeasibility
     and is reported as one — the same diagnosis the aggregate spelling
-    (``SUM(x) >= 1e1000``) has always produced.
-
-    The bare spelling is checked with the rebuilt one because it takes a different
-    route: a bare ``x >= K`` is folded into the column box instead of becoming a
-    model row. The box clamps an upper bound to a large sentinel but had no such
-    floor for a lower one, so ``+inf`` was written straight into it and the model
-    validator raised an internal error — which also invalidated the connection, so
-    every later query in the session failed too.
+    (``SUM(x) >= 1e1000``) has. The bare spelling admits no value, so it stays a
+    model row rather than folding into the column box, and the model is answered
+    infeasible before any backend reads it, as the rebuilt spelling's is.
     """
     for bound in ("x + l_linenumber >= 1e1000::DOUBLE", "x >= 1e1000::DOUBLE"):
         decidb_cli.assert_error(f"""
@@ -505,57 +493,32 @@ def test_nan_from_reducer_arithmetic_is_still_rejected(decidb_cli):
 @pytest.mark.edge_case
 @pytest.mark.error
 @pytest.mark.parametrize(
-    "constraint,clause",
+    "constraint",
     [
-        ("x >= 1e1000::DOUBLE", "x >= inf"),
-        ("SUM(x) >= 1e1000::DOUBLE", "sum(x) >= inf"),
-        ("SUM(x) <= -1e1000::DOUBLE", "sum(x) <= -inf"),
-        ("SUM(x) = 1e1000::DOUBLE", "sum(x) = inf"),
-        ("MIN(x) <= -1e1000::DOUBLE", "min(x) <= -inf"),
-        ("MAX(x) >= 1e1000::DOUBLE", "max(x) >= inf"),
+        "x >= 1e1000::DOUBLE",
+        "SUM(x) >= 1e1000::DOUBLE",
+        "SUM(x) <= -1e1000::DOUBLE",
+        "SUM(x) = 1e1000::DOUBLE",
+        "MIN(x) <= -1e1000::DOUBLE",
+        "MAX(x) >= 1e1000::DOUBLE",
     ],
 )
-def test_highs_refuses_an_unreachable_bound_in_sql_terms(
-    decidb_cli_highs, constraint, clause
-):
-    """HiGHS cannot load the row, and says so as a SQL error naming the clause.
+def test_highs_answers_an_unreachable_bound_as_infeasible(decidb_cli_highs, constraint):
+    """HiGHS answers a bound no value can reach as Gurobi does: infeasible.
 
-    The row it cannot load is exactly the unreachable one: HiGHS pairs a one-sided
-    bound with its own 1e30 infinity sentinel, so `Ax >= +inf` arrives as
-    `lower = +inf, upper = 1e30` and is rejected as an inverted pair. Left to the
-    backend that surfaced as `INTERNAL Error: Failed to pass model to HiGHS`, which
-    invalidated the connection and forced a restart — a solver-internals error for a
-    question the user asked in SQL. It is now caught before the model is passed.
+    HiGHS cannot load such a row (it pairs a one-sided bound with its own 1e30
+    infinity, so `Ax >= +inf` is an inverted pair), so the model is answered
+    before any backend reads it, and the two backends cannot disagree.
     """
-    decidb_cli_highs.assert_error(f"""
+    decidb_cli_highs.assert_error(
+        f"""
         SELECT id, x FROM (VALUES (1), (2)) t(id)
         DECIDE x(INT)
         SUCH THAT x >= 0 AND x <= 6 AND {constraint}
         MAXIMIZE SUM(x)
-    """, match=rf"`{re.escape(clause)}` sets a bound no value can reach")
-
-
-@pytest.mark.cons_perrow
-@pytest.mark.edge_case
-@pytest.mark.error
-def test_highs_refusal_leaves_the_connection_usable(decidb_cli_highs):
-    """The refusal is an ordinary SQL error, not a fatal one.
-
-    This is the half that mattered: the old internal error left the database needing a
-    restart, so one infinite bound cost the user every later statement in the session.
-    """
-    result = decidb_cli_highs.execute_script(
-        ".mode csv\n"
-        "SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) "
-        "SUCH THAT x >= 0 AND x <= 6 AND SUM(x) >= 1e1000::DOUBLE MAXIMIZE SUM(x);\n"
-        "SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) "
-        "SUCH THAT x >= 0 AND x <= 6 MAXIMIZE SUM(x);\n"
+    """,
+        match=r"(?i)infeasible",
     )
-    assert "INTERNAL Error" not in result.stderr, result.stderr
-    assert "restarted" not in result.stderr, result.stderr
-    # The second DECIDE ran on the same connection and solved.
-    rows = list(csv.DictReader(io.StringIO(result.stdout)))
-    assert [r["x"] for r in rows] == ["6", "6"], result.stdout
 
 
 @pytest.mark.cons_perrow
@@ -575,3 +538,27 @@ def test_highs_still_solves_a_vacuous_infinity(decidb_cli_highs):
     """)
     xi = cols.index("x")
     assert sum(int(r[xi]) for r in rows) == 7
+
+
+@pytest.mark.cons_perrow
+@pytest.mark.edge_case
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "declare,clause,objective",
+    [
+        ("x(INT), y(INT)", "x <= 3 AND y >= 'inf'::DOUBLE", "MAXIMIZE SUM(x)"),
+        ("x(INT), per t.g: y(INT)", "x <= 3 AND per t.g: y >= 'inf'::DOUBLE", "MAXIMIZE SUM(x)"),
+        ("x(INT), per (): y(INT)", "x <= 3 AND y >= 'inf'::DOUBLE", "MAXIMIZE SUM(x)"),
+        ("x(REAL)", "x >= 'inf'::DOUBLE", "MINIMIZE SUM(x)"),
+        ("x(INT)", "x >= 'inf'::DOUBLE", "MINIMIZE SUM(x)"),
+    ],
+    ids=["unread-row", "unread-keyed", "unread-query-wide", "real-uncapped", "int-uncapped"],
+)
+def test_an_unreachable_floor_is_infeasible_wherever_it_is_written(
+    decidb_cli_gurobi, decidb_cli_highs, declare, clause, objective
+):
+    """A floor of ``+inf`` admits no value, whether or not the objective reads the decision and whatever caps it."""
+    sql = f"SELECT id FROM (VALUES (1, 'a'), (2, 'b')) t(id, g) DECIDE {declare} SUCH THAT {clause} {objective}"
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        for mode in ("off", "auto"):
+            cli.assert_error(f"SET decide_direct_solve='{mode}'; {sql}", match=_UNREACHABLE)

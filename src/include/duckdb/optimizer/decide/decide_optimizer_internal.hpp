@@ -76,6 +76,12 @@ idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const Logi
 //! A reference to decision column `var_idx`, as an expression of the DECIDE clause.
 unique_ptr<Expression> MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx);
 
+//! The helper decision `var_idx` in place of the construct `replaced` it stands for (an ABS, a reducer's value), cast
+//! to that construct's type as the binder would cast it. The clause stays a tree DuckDB can evaluate: the bound
+//! classifier evaluates it with the decision replaced by a value (DecideReadOneDecisionBound).
+void ReplaceWithDecision(ClientContext &context, const LogicalDecide &decide, idx_t var_idx,
+                         unique_ptr<Expression> &replaced);
+
 //! An expression as a plan prints it (RenderDecideSource, columns unqualified): the label
 //! of an auxiliary decision, the text of a rewrite account.
 string RenderForPlan(const Expression &expr, const LogicalDecide &decide);

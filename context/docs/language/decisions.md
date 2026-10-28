@@ -32,7 +32,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D37 | Removed-spelling messages carry the fixed phrase "is removed" and quote the user's own expressions, built by the transformer from the parse tree |
 | D38 | The colon form takes an exact key on `D`'s stored columns, the run-time data check and a keyed decision inside it, and echoes as written |
 | D40 | `OR` between constraints is refused; a data-only reducer on the decision side is refused with a message; no internal name appears in "does not reference a decision" |
-| D41 | An easy `min(x) >= K` / `max(x) <= K` means `x >= K` / `x <= K` on every row it reads; with no `when` and no reducer filter it is absorbed into the decision's box, so a negative `K` makes `x` signed. The bound is read by value: any affine or scaled spelling with a constant other side (`min(x) - 1 >= K - 1`, `2 * min(x) >= 2K`, `-min(x) <= -K`) is absorbed like the literal one |
+| D41 | An easy `min(x) >= K` / `max(x) <= K` means `x >= K` / `x <= K` on every row it reads; with no `when` and no reducer filter it is absorbed into the decision's box, so a negative `K` makes `x` signed. The bound is read by value: any affine or scaled spelling with a constant other side (`min(x) - 1 >= K - 1`, `2 * min(x) >= 2K`, `-min(x) <= -K`) is absorbed like the literal one, and so is a member scaled or shifted by constants (`max(-x) <= 2` is `x >= -2`, `max(2 * x) <= -10` is `x <= -5`) |
 | D43 | `D.x` is refused at bind time when `D` is a `FROM` relation and `D.x` binds to no column (*"write open, not D.open; a decision is referenced by its bare name"*); in a `when`, `per` or `by`: *"D.open is a decision; when, per and by may only use data"* |
 | D44 | Open: the NULL class label in DIAGNOSE's `group` column prints as the text `NULL` (`../diagnostics/infeasible/todo.md` §2) |
 | D45 | Open: EXPLAIN and DIAGNOSE print a non-key column by its bare name over a join ([logical plan todo §2](../pipeline/03_logical_plan/todo.md#2-columns-print-by-their-bare-name-over-a-join)) |
@@ -47,6 +47,9 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D60 | The scope oracle steps a strict sense onto whole numbers (`> K` → `floor(K) + 1`, `< K` → `ceil(K) - 1`), the same as stepping by one for a whole `K` |
 | D62 | The removed-`PER` message adds the NULL note: *"a NULL g is now its own group, so write when g is not null per g: to leave those rows out"* |
 | D63 | Determination and D8 messages print the colon form as written |
+| D64 | A bound on one decision admits what DuckDB admits: a whole-numbered decision takes `n` exactly when the written comparison, evaluated by DuckDB with `n` in place of the decision, is true (`0.1 * x <= 0.3` admits 3, since `0.1` is DECIMAL; `0.1::DOUBLE * x = 0.3::DOUBLE` admits nothing). Every such bound folds into the decision's box, a data coefficient (`cap * x <= 10`) included; only an unconditional literal bound replaces the default floor of 0 (D41) |
+| D65 | An infinite bound keeps its SQL meaning: `x <= inf` and `x >= -inf` are no bound; `x >= inf`, `x <= -inf` and `x = ±inf` make the query infeasible on every backend, and `DIAGNOSE` names the clause. A literal `x >= -'inf'` frees `x` below, as `x >= -1e30` does |
+| D66 | A right side of magnitude 1e20 or more in the open direction (`x <= 1e30`) is no bound |
 
 ## Spelling calls
 

@@ -1208,41 +1208,31 @@ public:
         // least-change loosen.
         for (idx_t var = 0; var < num_decide_vars; var++) {
             bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
-            // The raw box: an unwritten lower bound is the default floor of 0 to
-            // DecideBoxContradictsDomain.
-            DecideBoundBox box = singleton_row_boxes[var];
-            bool has_removable_bound = false;
-            for (const auto &bound : user_singleton_row_bounds) {
-                has_removable_bound = has_removable_bound ||
-                                      (bound.decide_var_idx == var &&
-                                       bound.removal_group_id != DConstants::INVALID_INDEX);
+            // The box of the bounds as written, over the intrinsic domain; an unwritten
+            // lower bound is the default floor of 0 to DecideBoxContradictsDomain. The
+            // folded box holds the admitted ends instead (`x = -0.5` admits no INT, which
+            // the solve reports as infeasible), so it is not the box the user wrote.
+            // A singleton/negative IN lowering (a removable bound) is not an independently
+            // written bound, and exact diagnosis may omit its whole source clause, so it
+            // must not trigger the pre-solve static bound error; the actual primary solve
+            // still receives the full box and therefore still proves the original query
+            // infeasible. The one removable bound kept is a negative floor: an IN with a
+            // negative value signs the decision down, so `x IN (-5, 0, 5) AND x <= -3` is
+            // not a bound below the default floor of 0.
+            DecideBoundBox box;
+            if (is_bool) {
+                DecideFoldSingletonRow(box, '=', 0.0);
+                box.upper = 1.0;
             }
-            if (has_removable_bound) {
-                // A singleton/negative IN lowering can be folded into the box. It is
-                // not an independently written bound, and exact diagnosis may omit its
-                // whole source clause, so it must not trigger the pre-solve static bound
-                // error. Reconstruct the box from intrinsic domain plus only retained
-                // (non-removable) bounds; the actual primary solve still receives the
-                // full box and therefore still proves the original query infeasible.
-                // The one removable bound kept is a negative floor: an IN with a
-                // negative value signs the decision down, so `x IN (-5, 0, 5) AND
-                // x <= -3` is not a bound below the default floor of 0.
-                DecideBoundBox retained;
-                if (is_bool) {
-                    DecideFoldSingletonRow(retained, '=', 0.0);
-                    retained.upper = 1.0;
+            for (const auto &bound : user_singleton_row_bounds) {
+                if (bound.decide_var_idx != var) {
+                    continue;
                 }
-                for (const auto &bound : user_singleton_row_bounds) {
-                    if (bound.decide_var_idx != var) {
-                        continue;
-                    }
-                    if (bound.removal_group_id == DConstants::INVALID_INDEX) {
-                        DecideFoldSingletonRow(retained, bound.sense, bound.k);
-                    } else if (bound.sense != '<' && bound.k < 0.0) {
-                        DecideFoldSingletonRow(retained, '>', bound.k);
-                    }
+                if (bound.removal_group_id == DConstants::INVALID_INDEX) {
+                    DecideFoldSingletonRow(box, bound.sense, bound.k);
+                } else if (bound.sense != '<' && bound.k < 0.0) {
+                    DecideFoldSingletonRow(box, '>', bound.k);
                 }
-                box = retained;
             }
             if (!DecideBoxContradictsDomain(box, is_bool)) {
                 continue;
@@ -2350,31 +2340,65 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				    RenderDecideSource(*constraint->rhs_expr, source_fragments, entity_scopes, &group_keys);
 			}
 			eval_const.rhs_values.Reserve(num_rows);
+		}
 
-			auto &transformed_rhs = CachedTransformToChunkExpression(chunk_expr_cache, *constraint->rhs_expr, context);
-			ExpressionExecutor rhs_executor(context);
-			rhs_executor.AddExpression(transformed_rhs);
-
-			ColumnDataScanState rhs_scan_state;
-			gstate.data.InitializeScan(rhs_scan_state);
+		// One pass over the rows reads what each row holds: a right side of data, and, for a bound on one decision,
+		// the values it admits there, which the model builder folds into the decision's column. The right side is
+		// read first, so a NULL or NaN there is reported as the right side's.
+		bool rhs_per_row = constraint->rhs_expr->GetExpressionClass() != ExpressionClass::BOUND_CONSTANT;
+		bool admitted = constraint->admitted_lower != nullptr;
+		if (rhs_per_row || admitted) {
+			ExpressionExecutor row_executor(context);
+			vector<LogicalType> row_types;
+			if (rhs_per_row) {
+				auto &transformed_rhs =
+				    CachedTransformToChunkExpression(chunk_expr_cache, *constraint->rhs_expr, context);
+				row_executor.AddExpression(transformed_rhs);
+				row_types.push_back(transformed_rhs.return_type);
+			}
+			if (admitted) {
+				row_executor.AddExpression(
+				    CachedTransformToChunkExpression(chunk_expr_cache, *constraint->admitted_lower, context));
+				row_executor.AddExpression(
+				    CachedTransformToChunkExpression(chunk_expr_cache, *constraint->admitted_upper, context));
+				row_types.push_back(LogicalType::DOUBLE);
+				row_types.push_back(LogicalType::DOUBLE);
+				eval_const.admitted_lower.Reserve(num_rows);
+				eval_const.admitted_upper.Reserve(num_rows);
+			}
+			ColumnDataScanState scan_state;
+			gstate.data.InitializeScan(scan_state);
 			DataChunk scan_chunk;
-            scan_chunk.Initialize(context, gstate.data.Types());
-            DataChunk rhs_result;
-			rhs_result.Initialize(context, vector<LogicalType> {transformed_rhs.return_type});
+			scan_chunk.Initialize(context, gstate.data.Types());
+			DataChunk row_result;
+			row_result.Initialize(context, row_types);
 			idx_t scanned = 0;
-			while (gstate.data.Scan(rhs_scan_state, scan_chunk)) {
-				rhs_result.Reset();
-				ExecuteOnReadRows(rhs_executor, scan_chunk, scanned, &scoped_kept, rhs_result);
-				auto &rhs_col = eval_const.rhs_values.MutableDense();
-				// Infinities are admitted here and nowhere else: this column becomes
-				// the model row's `rhs`, where ±inf is a meaningful bound. Canonical-
-				// ization rebuilds `x + v <= K` as `x <= K - v`, so an infinite K that
-				// was folded as a column bound in its bare spelling must stay legal
-				// in its rebuilt one. `inf - inf` still yields NaN and is still refused.
-				NullSourceContext null_ctx {constraint->rhs_expr.get(), &scan_chunk, &source_fragments};
-				ExtractDoubleColumn(rhs_result.data[0], scan_chunk.size(), 1.0, rhs_col, "constraint right-hand side",
-				                    /*allow_infinite=*/true, &null_ctx, &scoped_kept, scanned);
-				eval_const.rhs_values.SyncSize();
+			while (gstate.data.Scan(scan_state, scan_chunk)) {
+				row_result.Reset();
+				ExecuteOnReadRows(row_executor, scan_chunk, scanned, &scoped_kept, row_result);
+				idx_t column = 0;
+				if (rhs_per_row) {
+					// Infinities are admitted here and nowhere else: this column becomes
+					// the model row's `rhs`, where ±inf is a meaningful bound. Canonical-
+					// ization rebuilds `x + v <= K` as `x <= K - v`, so an infinite K that
+					// was folded as a column bound in its bare spelling must stay legal
+					// in its rebuilt one. `inf - inf` still yields NaN and is still refused.
+					NullSourceContext null_ctx {constraint->rhs_expr.get(), &scan_chunk, &source_fragments};
+					ExtractDoubleColumn(row_result.data[column++], scan_chunk.size(), 1.0,
+					                    eval_const.rhs_values.MutableDense(), "constraint right-hand side",
+					                    /*allow_infinite=*/true, &null_ctx, &scoped_kept, scanned);
+					eval_const.rhs_values.SyncSize();
+				}
+				if (admitted) {
+					ExtractDoubleColumn(row_result.data[column++], scan_chunk.size(), 1.0,
+					                    eval_const.admitted_lower.MutableDense(), "constraint bound",
+					                    /*allow_infinite=*/true, nullptr, &scoped_kept, scanned);
+					ExtractDoubleColumn(row_result.data[column++], scan_chunk.size(), 1.0,
+					                    eval_const.admitted_upper.MutableDense(), "constraint bound",
+					                    /*allow_infinite=*/true, nullptr, &scoped_kept, scanned);
+					eval_const.admitted_lower.SyncSize();
+					eval_const.admitted_upper.SyncSize();
+				}
 				scanned += scan_chunk.size();
 			}
 		}

@@ -69,10 +69,11 @@ inline double DecideStrictBound(bool is_lower, double k) {
 	return is_lower ? std::floor(k) + 1.0 : std::ceil(k) - 1.0;
 }
 
-//! The box the solver path folds a decision's unconditional bounds into, in the raw values it reads them (after
-//! `DecideStrictBound`, before any rounding of a fraction). `lower_written` records that some lower bound was written,
-//! so a written bound of -1e30 or below ("no bound") is told apart from no bound written at all, which leaves the
-//! decision at its default floor of 0. The unset upper side starts at the solver sentinel, which reads as infinite.
+//! The box the solver path folds a decision's unconditional bounds into: the values each bound admits for the column
+//! box, or the bounds as written for the domain check (DecideBoxContradictsDomain). `lower_written` records that some
+//! lower bound was written, so a written bound of -1e30 or below ("no bound") is told apart from no bound written at
+//! all, which leaves the decision at its default floor of 0. The unset upper side starts at the solver sentinel, which
+//! reads as infinite.
 struct DecideBoundBox {
 	double lower = -DECIDE_SOLVER_INFINITY;
 	double upper = DECIDE_SOLVER_INFINITY;

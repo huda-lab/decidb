@@ -85,10 +85,10 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   correlated subquery all look alike — so `plan_select_node.cpp` hands the canonicalizer an allow-list of the table
   indexes uncorrelated subqueries flattened into. Anything not on it is row-varying. (The reverse test, "not the
   reduced relation's own column", would silently admit a correlated subquery.)
-- **Easy `MIN`/`MAX` absorption.** An easy `max(x) <= K` / `min(x) >= K` with no `when` and no filter is a bound on
-  every member, absorbed into the decision's box (`TryMatchEasyExtremumTarget`, `decide_singleton_row_folding.cpp`,
-  D41), in any affine spelling with a constant other side. The reducer stays in the tree so EXPLAIN and DIAGNOSE quote
-  the clause as written.
+- **Easy `MIN`/`MAX` absorption.** An easy `max(m) <= K` / `min(m) >= K` with no `when` and no filter, whose member is
+  affine in one decision with constant coefficients, is a bound on every member, absorbed into the decision's box
+  (`DecideReadOneDecisionBound`, `decide_singleton_row_folding.cpp`, D41), in any affine spelling with a constant other
+  side: `max(-x) <= 2` is `x >= -2`. The reducer stays in the tree so EXPLAIN and DIAGNOSE quote the clause as written.
 - **Scope checks.** `BuildConstraintScopeChecks`, `BuildClauseScopeChecks`, `BuildReducerScopeChecks` and
   `BuildObjectiveScopeChecks` build `DecideScopeCheck`s of three kinds — `KEEPS_A_ROW` (D4), `DETERMINES`,
   `READS_A_ROW` (D8) — on `LogicalDecide::scope_checks`, from the clauses as bound. The bound-side window rewrite adds

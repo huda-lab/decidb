@@ -191,6 +191,12 @@ unique_ptr<Expression> decide_rewrite::MakeDecisionRef(const LogicalDecide &deci
 	return make_uniq<BoundColumnRefExpression>(ref.GetName(), ref.return_type, ref.binding);
 }
 
+void decide_rewrite::ReplaceWithDecision(ClientContext &context, const LogicalDecide &decide, idx_t var_idx,
+                                         unique_ptr<Expression> &replaced) {
+	auto type = replaced->return_type;
+	replaced = BoundCastExpression::AddCastToType(context, MakeDecisionRef(decide, var_idx), type);
+}
+
 string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide &decide) {
 	// The labels of the auxiliaries earlier passes made, so a construct over one prints
 	// it as what it stands for rather than by its internal name.

@@ -20,10 +20,11 @@ constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 // Per-row bounds on one decision
 //===--------------------------------------------------------------------===//
 //
-// A bound `coefficient * x  comparison  rhs` on one decision reads, on each row, as a lower and an upper bound on x.
-// The reader has two halves that a rule composes. At plan time, DirectReadBounds proves the bounds and separates what
-// the solver folds into the decision's static box from the clauses the plan evaluates per row. In the plan,
-// DirectClauseBounds turns one clause's raw values into its two bounds and DirectRowBox intersects them with the box.
+// A bound on one decision reads, on each row, as the lower and upper end of the values it admits: the solver path's
+// own classifier (DecideReadOneDecisionBound) builds both ends. The reader has two halves that a rule composes. At plan
+// time, DirectReadBounds separates what the solver folds into the decision's static box from the clauses the plan
+// evaluates per row. In the plan, DirectClauseBounds reads one clause's two ends and DirectRowBox intersects them with
+// the box.
 
 //! A numeric expression over the source, read as DOUBLE and multiplied by `sign`.
 struct DirectSignedValue {
@@ -31,17 +32,17 @@ struct DirectSignedValue {
 	unique_ptr<Expression> expr;
 };
 
-//! One bound the plan evaluates per row: `coefficient * x  comparison  rhs`, under an optional `when`. A bound the
-//! solver folds into the variable's box is not a clause, it is part of the decision's static box.
+//! One bound the plan evaluates per row, under an optional `when`. A bound the solver folds into the variable's box is
+//! not a clause, it is part of the decision's static box.
 struct DirectBoundClause {
 	idx_t decision = 0;
-	ExpressionType comparison = ExpressionType::INVALID;
+	//! The clause's coefficient and right side, which the plan checks as the solver path checks them.
 	vector<DirectSignedValue> coefficient;
 	unique_ptr<Expression> rhs;
+	//! The values of the decision the clause admits (DecideOneDecisionBound): DOUBLE, ±infinity on an open side.
+	unique_ptr<Expression> lower;
+	unique_ptr<Expression> upper;
 	unique_ptr<Expression> when;
-
-	//! A deep copy of every field, so a field added later cannot be missing from a clause split in two.
-	DirectBoundClause Copy() const;
 };
 
 //! A decision's box before any per-row bound: its default, replaced or tightened by the bounds the solver folds into
@@ -52,38 +53,35 @@ struct DirectDecisionBox {
 };
 
 struct DirectBoundReading {
-	//! The per-row clauses, in the order the constraints came. An equality is split into its lower and its upper half.
+	//! The per-row clauses, in the order the constraints came.
 	vector<DirectBoundClause> clauses;
 	//! One static box per decision.
 	vector<DirectDecisionBox> boxes;
 };
 
-//! Reads every per-row constraint of `ir` as a bound on one decision (a constraint of the form `a*x <comparison>
-//! value`). An aggregate constraint is not a bound and is skipped: the rule reads it, and A1, which has none, declines
-//! it. The rule's CheckCondition has checked each per-row constraint with DirectReadsOneDecision. A
-//! bound the solver folds into the variable (`variable_bound`: an unconditional comparison of the bare decision
-//! against a constant) replaces the default lower bound of 0 and tightens the upper one; every other bound is a
-//! clause. Returns false when a bound cannot be proved, or when the folded box contradicts the decision's built-in
-//! domain, which the solver reports.
+//! Reads every per-row constraint of `ir` as a bound on one decision. An aggregate constraint is not a bound and is
+//! skipped: the rule reads it, and A1, which has none, declines it. The rule's CheckCondition has checked each per-row
+//! constraint with DirectIsBoundOnOneDecision. A bound the solver folds into the variable (`variable_bound`) replaces
+//! the default lower bound of 0 and tightens the upper one; every other bound is a clause. Returns false when a value
+//! cannot be proved or the box as written contradicts the decision's built-in domain, which the solver reports.
 bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading);
 
-//! One unfiltered per-row left side: only linear terms, in one decision of the `decision_count`, and no constant. The
-//! shape a per-row bound must have for DirectReadBounds to read it.
-bool DirectReadsOneDecision(const DirectIRConstraint &ir_node, idx_t decision_count);
+//! A per-row constraint the solver's classifier reads as a bound on one declared decision (DecideReadOneDecisionBound):
+//! the shape a per-row bound must have for DirectReadBounds to read it.
+bool DirectIsBoundOnOneDecision(const DirectIR &ir, const DirectIRConstraint &ir_node);
 
-//! The columns of one clause's raw values, evaluated on every row.
+//! The columns of one clause's values, evaluated on every row.
 struct DirectBoundColumns {
-	ColumnBinding coefficient;
-	ColumnBinding rhs;
+	ColumnBinding lower;
+	ColumnBinding upper;
 	bool has_when = false;
 	ColumnBinding when;
 };
 
-//! The lower and upper bound one clause puts on its decision on one row, as the solver reads it: a clause holds
-//! `coefficient * x  comparison  rhs`, so the coefficient's sign picks the side, a zero coefficient leaves the row
-//! alone or infeasible, and a whole-numbered decision rounds to the integer DOUBLE arithmetic accepts.
-void DirectClauseBounds(const ExpressionBuilder &calc, ExpressionType comparison, bool whole,
-                        const DirectBoundColumns &columns, ExprPtr &lower, ExprPtr &upper);
+//! The lower and upper bound one clause puts on its decision on one row: the admitted ends where the clause keeps the
+//! row, and no bound elsewhere.
+void DirectClauseBounds(const ExpressionBuilder &calc, const DirectBoundColumns &columns, ExprPtr &lower,
+                        ExprPtr &upper);
 
 //! A decision's box on one row: the static box intersected with the bounds of its clauses.
 void DirectRowBox(const ExpressionBuilder &calc, double static_lower, double static_upper,

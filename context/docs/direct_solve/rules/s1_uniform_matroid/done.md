@@ -50,16 +50,15 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   >= 0.5` fixes to 1); none allowed makes the row infeasible. A bound with a `when` takes any constant. A constant bound
   without a `when` is read the same way when it can hold: a lower bound below 0 (`x >= -3`, `x > -3`) allows both
   values, because the solver keeps a Boolean's box at [0, 1] and a written bound only narrows it. One that cannot hold
-  is left to the solver (see the out-of-scope table). A strict bound against a fraction is first shifted to a whole
-  number by `DecideStrictBound`, the function the solver uses (`x > 0.5` is `x >= 1`, `x < 1.5` is `x <= 1`, `x < 0.5`
-  is `x <= 0`, `x > -0.5` is `x >= 0`), and then read like any other bound; a column value is read as arithmetic with or
-  without a `when`, as the solver does. A source Boolean column is also a fixed value (`x = flag`). Whether a constant bound is one the solver folds into the
-  variable's box is the IR's `variable_bound` flag (`DecideIsSingletonRowBound`, no `when`), the same flag A1 reads. Its
-  `plain` half marks a bare `x` against a cast-wrapped constant; the solver also folds an affine spelling (`1*x >= 2`,
-  `x >= 1+1`, `2*x >= 1`, D41), and S1 declines such a bound until it reads the folded box (`todo.md`). Any other bound
-  is read per row like a column bound. The rest of the reading stays S1's own and is not the shared bound reader's: S1 asks which of {0, 1} a
-  row allows, A1 asks for an interval, and S1 alone admits `!=` and Boolean sources, requires a coefficient of exactly 1
-  and a finite constant. Contradictory active bounds are infeasible. A NULL or NaN value raises the solver's error on
+  is left to the solver (see the out-of-scope table). A bound on `x` allows the values in the interval the solver path's
+  classifier admits (`DecideReadOneDecisionBound`, D64), whatever its constant coefficient: `x > 0.5` and `2*x >= 1`
+  allow 1, `x < 1.5` allows 0 and 1, `2*x <= cap` allows 0 where `cap` is below 2. One expression says whether a row
+  allows `x = v`, for 0 and for 1: folded once against a constant, evaluated per row against a column value, with or
+  without a `when`, as the solver does. Whether a constant
+  bound is one the solver folds into the variable's box is the IR's `variable_bound` flag (no `when`), the same flag A1
+  reads. The rest of the reading stays S1's own and is not the shared bound reader's: S1 asks which of {0, 1} a row
+  allows, A1 asks for an interval, and S1 alone admits `<>` and Boolean sources (`x = flag`), which the classifier does
+  not read; those require a coefficient of exactly 1. Every coefficient is a finite constant. Contradictory active bounds are infeasible. A NULL or NaN value raises the solver's error on
   every row the bound's `when` keeps (`DirectCheckRowBounds`): it names the NULL column, or quotes a computed value as
   written; a row the `when` drops is not read.
 - **Objective:** a signed sum of per-row coefficients times `x`, `MAXIMIZE` or `MINIMIZE`, plus an optional finite constant,

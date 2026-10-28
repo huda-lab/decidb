@@ -272,8 +272,8 @@ SUCH THAT SUM(x * price) * 2 <= 400 AND x <= 9 MAXIMIZE SUM(x);
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT SUM(x * price) / 2 <= 100 AND x <= 9 MAXIMIZE SUM(x);
 
--- 50 scaled MAX in a constraint. Rejected before B.3 ("non-aggregate term");
--- the fold leaves a bare MAX for the easy-direction per-row rewrite.
+-- 50 scaled MAX in a constraint: an easy MAX bounds each member, so each row's
+-- `2 * x * weight <= 20` folds into its column as the whole values it admits.
 SELECT id, x FROM items DECIDE x(INT)
 SUCH THAT 2 * MAX(x * weight) <= 20 AND x <= 9 MAXIMIZE SUM(x);
 
@@ -728,7 +728,9 @@ SELECT id, x, open FROM items JOIN groups ON grp = g DECIDE x(INT), per grp: ope
 -- ---------------------------------------------------------------------------
 -- Per-row data bounds folded into the column box (ilp_model_builder.cpp, TryFoldPerRowBound)
 -- ---------------------------------------------------------------------------
--- A bound on one decision with coefficient 1 or -1 against a data value becomes that column's bound, not a row.
+-- A bound on one decision against a data value becomes that column's bound, not a row: on each row, the values
+-- the comparison admits as DuckDB evaluates it (DecideReadOneDecisionBound). It narrows the box, never replacing the
+-- default floor of 0 (D41).
 -- Every case carries `SUM(x) <= 100` over INT decisions so no direct-solve rule takes it and the solver builds it.
 
 -- 102 lower bound from data: each column's lb is its weight
@@ -740,15 +742,21 @@ SELECT id, x FROM items DECIDE x(INT) SUCH THAT x = weight AND SUM(x) <= 100 MAX
 -- 104 coefficient -1: `-x >= -price` is `x <= price`, an upper bound
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT -x >= -price AND SUM(x) <= 100 MAXIMIZE SUM(weight * x);
 
--- 105 coefficient 2 stays a row: folding it would divide
+-- 105 coefficient 2: each column's ub is the greatest whole x with 2 * x <= price
 SELECT id, x FROM items DECIDE x(INT) SUCH THAT 2 * x <= price AND SUM(x) <= 100 MAXIMIZE SUM(weight * x);
 
 -- 106 two decisions in one row stay a row
 SELECT id, x, y FROM items DECIDE x(INT), y(INT) SUCH THAT x + y <= price AND SUM(x) <= 100 MAXIMIZE SUM(x + y);
 
--- 107 an infinite data bound stays a row (row 1 has no cap); the finite ones fold
+-- 107 an infinite cap binds nothing (row 1): every row folds
 SELECT id, x FROM (SELECT id, CASE WHEN id = 1 THEN 'infinity'::DOUBLE ELSE price END AS cap FROM items) t
 DECIDE x(INT) SUCH THAT x <= cap AND SUM(x) <= 100 MAXIMIZE SUM(x);
 
 -- 108 under DIAGNOSE the bounds stay rows, so the elastic engine can relax them
 DIAGNOSE SELECT id, x FROM items DECIDE x(INT) SUCH THAT x >= weight AND SUM(x) <= 100 MINIMIZE SUM(price * x);
+
+-- 109 a data coefficient that changes sign: a negative one bounds below, which the floor of 0 already covers
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT (price - 25) * x <= 10 AND SUM(x) <= 100 MAXIMIZE SUM(x);
+
+-- 110 a DECIMAL coefficient: 0.1 * 3 <= 0.3 holds, so row 3's ub is 3, where the DOUBLE quotient 0.3 / 0.1 is below 3
+SELECT id, x FROM items DECIDE x(INT) SUCH THAT 0.1 * x <= price / 100 AND SUM(x) <= 100 MAXIMIZE SUM(x);

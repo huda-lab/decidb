@@ -369,13 +369,9 @@ public:
     struct UserBoundSpec {
         idx_t decide_var_idx; //!< index into decide_variables
         char sense;           //!< '<' (<= K), '>' (>= K), '=' (== K)
-        double k;             //!< the (integer-strict-normalized) bound value
-        //! True when the user wrote a strict `<` / `>` that was integer-normalized into
-        //! `k` (e.g. `x < 10` → k=9). `typed_k` carries the user's original literal so the
-        //! re-emitted row mirrors `ConstraintProvenance::strict` / `typed_k` and the
-        //! infeasible diagnosis re-quotes the suggestion as `<` / `>` against it.
-        bool strict = false;
-        double typed_k = 0.0;
+        //! The bound as written, moved onto the decision (`2 * x <= 9` is 4.5; a strict
+        //! `x < 10` is 9). The box holds the admitted ends; the domain check reads this.
+        double k;
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t removal_group_id = DConstants::INVALID_INDEX;
     };

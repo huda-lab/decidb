@@ -2092,17 +2092,12 @@ class TestUnreachableBound:
     exists, so every shape names its clause and reports `unreachable_bound`
     instead of a suggested change.
 
-    The cases that need an infinite bound to survive into the model run on Gurobi
-    only: HiGHS pairs a one-sided row bound with its own 1e30 infinity sentinel, so an
-    unreachable bound arrives as an inverted `lower > upper` pair it rejects at model
-    load. It never reaches a solve, so there is nothing to diagnose; DeciDB refuses the
-    query with a named SQL error instead, covered in `test_infinite_bounds.py`. The two
-    regression cases below that do not need an infinite bound in the model cover both
-    backends.
+    No backend reads such a model: it is answered infeasible before any solve
+    (SolverModel::ProvesInfeasible), so every case runs on both backends.
     """
 
     _ROWS = "SELECT id, x FROM (VALUES (1), (2), (3)) t(id) "
-    _INF_BACKENDS = ["decidb_cli_gurobi"]
+    _INF_BACKENDS = ["decidb_cli_gurobi", "decidb_cli_highs"]
 
     @pytest.mark.parametrize("cli_fixture", _INF_BACKENDS)
     @pytest.mark.parametrize(

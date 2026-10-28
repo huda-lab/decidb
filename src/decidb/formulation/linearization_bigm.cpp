@@ -399,7 +399,9 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
                     every_row_constrained = false;
                     break;
                 }
-                bound = std::max(bound, k / a);
+                // A bound on one decision caps it at the greatest value it admits (stage 08), which the quotient
+                // may miss: `0.1 * x <= 0.3` admits 3, while 0.3 / 0.1 is just below 3.
+                bound = std::max(bound, ec.admitted_upper.logical_size ? ec.admitted_upper.Get(r) : k / a);
             }
             if (every_row_constrained && bound < upper_bounds[v] && bound >= lower_bounds[v]) {
                 upper_bounds[v] = bound;

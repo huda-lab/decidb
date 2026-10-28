@@ -59,14 +59,6 @@ string DescribeRowClause(const SolverModel &model, const ModelConstraint &constr
     return AttachDecideQualifier(source.canonical_lhs + " " + sense + " " + rhs_text, source.qualifier);
 }
 
-//! The `DescribeRowClause` spelling for the unreachable-bound refusal below. The bound is
-//! always ±inf there — that is what makes the row unreachable — so there is no number to
-//! format, and the strict-`<` δ offset that `ConstraintProvenance::typed_k` exists for
-//! cannot apply.
-string DescribeUnreachableRow(const SolverModel &model, const ModelConstraint &constr) {
-    return DescribeRowClause(model, constr, constr.rhs > 0.0 ? "inf" : "-inf");
-}
-
 //===--------------------------------------------------------------------===//
 // HiGHS's coefficient window, and the row scaling that keeps our models inside it
 //===--------------------------------------------------------------------===//
@@ -198,8 +190,9 @@ void ScaleRowsIntoHighsWindow(const SolverModel &model, const vector<int> &a_row
         // side holds HiGHS's ±1e30 "no bound here" sentinel, and a user limit of 1e40 is
         // indistinguishable from that sentinel by magnitude alone. The sense says which
         // side is which, exactly as the loop that packed them did. A non-finite rhs is the
-        // vacuous infinity `IsUnreachableBound` deliberately lets through — HiGHS reads it
-        // as no bound at all, and it is not a number to scale.
+        // vacuous infinity (SolverModel::ProvesInfeasible answers the other direction before
+        // HiGHS sees the model) — HiGHS reads it as no bound at all, and it is not a number
+        // to scale.
         const auto &constr = model.constraints[r];
         double bound = std::isfinite(constr.rhs) ? std::fabs(constr.rhs) : 0.0;
         RowScaleResult why = ChooseHighsRowScale(lo[r], hi[r], bound, exponent[r]);
@@ -319,30 +312,6 @@ bool HighsSession::Load(const SolverModel &model) {
     a_vals.reserve(total_nnz);
     row_lower.reserve(model.constraints.size());
     row_upper.reserve(model.constraints.size());
-
-    // A bound no assignment can reach (`SUM(x) >= inf`) cannot be handed to HiGHS at all.
-    // HiGHS spells a one-sided row bound by pairing the user's bound with its own ±1e30
-    // infinity sentinel, so `Ax >= +inf` becomes `lower = +inf, upper = 1e30` — an
-    // inverted pair that `passModel` rejects outright, taking the connection down with an
-    // internal error. Refuse it here in SQL terms instead. Only the unreachable direction
-    // is affected: `Ax <= +inf` is vacuous, pairs cleanly with the sentinel, and solves.
-    for (auto &constr : model.constraints) {
-        if (!IsUnreachableBound(constr.sense, constr.rhs)) {
-            continue;
-        }
-        string clause = DescribeUnreachableRow(model, constr);
-        if (clause.empty()) {
-            throw InvalidInputException(
-                "A constraint in this query sets a bound no value can reach (an infinite "
-                "limit), and HiGHS cannot load it. Replace the infinite bound with a finite "
-                "value, or install Gurobi, which reports this as an infeasible query.");
-        }
-        throw InvalidInputException(
-            "Constraint `%s` sets a bound no value can reach, and HiGHS cannot load it. "
-            "Replace the infinite bound with a finite value, or install Gurobi, which "
-            "reports this as an infeasible query.",
-            clause);
-    }
 
     idx_t constraint_idx = 0;
     for (auto &constr : model.constraints) {

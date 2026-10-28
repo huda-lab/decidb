@@ -364,17 +364,17 @@ def test_a_hard_min_or_max_reports_once_per_class_too(decidb_cli):
     "clause, expected",
     [
         pytest.param(
-            "per t.depot: max(2 * x) by (t.region) <= -10",
+            "per t.depot: max(t.cap * x) by (t.region) <= -10",
             [
-                ("D1", "NULL", 10, "expanded_group", "per t.depot: max(2 * x) by (t.region) <= 0"),
-                ("D2", "NULL", 10, "expanded_group", "per t.depot: max(2 * x) by (t.region) <= 0"),
-                ("D3", "NULL", 10, "expanded_group", "per t.depot: max(2 * x) by (t.region) <= 0"),
+                ("D1", "NULL", 10, "expanded_group", "per t.depot: max(cap * x) by (t.region) <= 0"),
+                ("D2", "NULL", 10, "expanded_group", "per t.depot: max(cap * x) by (t.region) <= 0"),
+                ("D3", "NULL", 10, "expanded_group", "per t.depot: max(cap * x) by (t.region) <= 0"),
             ],
             id="easy-max-per-key",
         ),
         pytest.param(
-            "max(2 * x) by (t.region) <= -10",
-            [("NULL", str(row), 10, "expanded_row", "max(2 * x) by (t.region) <= 0") for row in range(4)],
+            "max(t.cap * x) by (t.region) <= -10",
+            [("NULL", str(row), 10, "expanded_row", "max(cap * x) by (t.region) <= 0") for row in range(4)],
             id="easy-max-no-per",
         ),
         pytest.param(
@@ -417,7 +417,7 @@ def test_every_grouped_clause_kind_reports_once_per_class(decidb_cli, clause, ex
     """An easy MIN/MAX (a bound on each member, its group's bound moving once) and a
     composed clause (one row) report like a sum: once per class of the `per` key, or per
     kept row with none. The amounts are each group's own shortfall. (The easy MAX scales
-    its body: over a bare decision it is a column bound, D41.)"""
+    its body by data: under a constant factor it is a column bound, D41.)"""
     assert _findings(_diagnose(decidb_cli, clause)) == sorted(expected)
     # The query scope still folds each clause into one edit.
     folded = _findings(_diagnose(decidb_cli, clause, scope="query"))
@@ -498,21 +498,29 @@ def test_per_global_is_one_class(decidb_cli):
 
 @pytest.mark.diagnose
 def test_per_global_equality_reports_once(decidb_cli):
-    """`per (): max(2 * x) = -10`: its `<=` half bounds every member, and `per ()` is one
+    """`per (): max(t.cap * x) = -10`: its `<=` half bounds every member, and `per ()` is one
     class with no key value, so it reports once with no group or row, as `<= -10` alone
     does."""
-    rows = _diagnose(decidb_cli, "per (): max(2 * x) = -10")
+    rows = _diagnose(decidb_cli, "per (): max(t.cap * x) = -10")
     assert [(row["group"], row["row"], int(float(row["amount"])), row["edit_source"]) for row in rows] == [
         ("NULL", "NULL", 10, "source_literal")
     ], rows
 
 
 @pytest.mark.diagnose
-@pytest.mark.parametrize("clause", ["max(x) by (t.region) <= -5", "per (): max(x) = -5"])
+@pytest.mark.parametrize(
+    "clause",
+    [
+        "max(x) by (t.region) <= -5",
+        "per (): max(x) = -5",
+        "max(2 * x) by (t.region) <= -10",
+        "per (): max(2 * x) = -10",
+    ],
+)
 def test_an_easy_max_below_the_floor_is_refused_as_written(decidb_cli, clause):
-    """An easy `max(x) <= -5` is the column bound `x <= -5` (D41), which a non-negative x
-    cannot meet: refused before solving, as `x <= -5` is, naming the clause as written --
-    under DIAGNOSE too."""
+    """An easy `max(x) <= -5`, or `max(2 * x) <= -10` read by value, is the column bound
+    `x <= -5` (D41), which a non-negative x cannot meet: refused before solving, as
+    `x <= -5` is, naming the clause as written -- under DIAGNOSE too."""
     sql = f"""
         SELECT id, x {table('t', T_COLUMNS, T_ROWS)}
         DECIDE x(INT) SUCH THAT x <= t.cap AND {clause} MAXIMIZE SUM(x)"""
@@ -602,14 +610,15 @@ def test_a_kept_row_finding_offsets_the_bound_as_written(decidb_cli):
         pytest.param("per (): sum(x) >= 'inf'::DOUBLE", [("NULL", "NULL")], [("NULL", "NULL")], id="per-global"),
     ],
 )
-def test_an_unreachable_bound_names_its_classes(decidb_cli_gurobi, clause, query, expanded):
+def test_an_unreachable_bound_names_its_classes(decidb_cli_gurobi, decidb_cli_highs, clause, query, expanded):
     """An unreachable bound names the values of its `per` key in either scope -- never the
     `by` groups (E, W) -- and the kept rows of a clause with no `per` key in the expanded
-    scope only. Gurobi only: HiGHS refuses an infinite row bound when the model loads."""
-    for scope, expected in (("query", query), ("expanded", expanded)):
-        rows = _diagnose(decidb_cli_gurobi, clause, scope=scope)
-        assert all(row["edit_source"] == "unreachable_bound" for row in rows), rows
-        assert sorted((row["group"], row["row"]) for row in rows) == expected, (scope, rows)
+    scope only. The model is answered before any backend, so both give the same names."""
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        for scope, expected in (("query", query), ("expanded", expanded)):
+            rows = _diagnose(cli, clause, scope=scope)
+            assert all(row["edit_source"] == "unreachable_bound" for row in rows), rows
+            assert sorted((row["group"], row["row"]) for row in rows) == expected, (scope, rows)
 
 
 @pytest.mark.diagnose
@@ -772,22 +781,16 @@ def test_diagnose_names_functions_as_the_scope_spellings_write_them(decidb_cli):
     assert rows[0]["suggested_change"].startswith("when id = 1: abs(x - 50) <= "), rows
 
 
-@pytest.mark.error
 @pytest.mark.parametrize(
     "clause, quoted",
     [
-        pytest.param("per row: x >= 'inf'::DOUBLE", "`x >= inf`", id="per-row"),
-        pytest.param("when t.id > 1: x >= 'inf'::DOUBLE", "`when id > 1: x >= inf`", id="when"),
+        pytest.param("per row: x >= 'inf'::DOUBLE", "x >= inf", id="per-row"),
+        pytest.param("when t.id > 1: x >= 'inf'::DOUBLE", "when id > 1: x >= inf", id="when"),
     ],
 )
-def test_a_highs_refusal_quotes_the_scope_in_front(decidb_cli_highs, clause, quoted):
-    """HiGHS cannot load an infinite row bound, and its refusal quotes the clause as it is
-    written: the scope in front, not trailing after it with its colon."""
-    out = decidb_cli_highs.execute_raw(
-        f"""
-        SELECT id, x {table('t', T_COLUMNS, T_ROWS)}
-        DECIDE x(INT)
-        SUCH THAT x <= t.cap AND {clause}
-        MAXIMIZE SUM(x)"""
-    )
-    assert quoted in out.stderr, out.stderr
+def test_an_unreachable_bound_quotes_the_scope_in_front(decidb_cli_highs, clause, quoted):
+    """A bound no value can reach is named as it is written: the scope in front, not
+    trailing after it with its colon. HiGHS cannot load such a row, so this is the
+    verdict reached before any backend reads the model."""
+    rows = _diagnose(decidb_cli_highs, clause, scope="query")
+    assert [(row["clause"], row["edit_source"]) for row in rows] == [(quoted, "unreachable_bound")], rows

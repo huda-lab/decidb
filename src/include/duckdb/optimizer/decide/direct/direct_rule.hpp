@@ -5,6 +5,7 @@
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/main/client_context_state.hpp"
+#include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -99,9 +100,13 @@ struct DirectIRConstraint {
 	ExpressionType comparison = ExpressionType::INVALID;
 	vector<DirectPart> lhs;
 	unique_ptr<Expression> rhs;
-	//! True when the solver path folds this clause into its decision's box (see DecideIsSingletonRowBound): an
-	//! unconditional comparison of one bare decision against a finite constant. Such a bound replaces the variable's
-	//! default lower bound of 0, where every other bound only intersects with it.
+	//! True when the comparison is a bound on one decision, read into `bound` by the solver path's own classifier
+	//! (DecideReadOneDecisionBound): the values it admits, on each row it keeps.
+	bool one_decision_bound = false;
+	DecideOneDecisionBound bound;
+	//! True when the solver path folds this clause into its decision's box: a bound known before the query runs, with
+	//! no `when`. Such a bound replaces the variable's default lower bound of 0, where every other bound only
+	//! intersects with it (D41).
 	bool variable_bound = false;
 	DirectIRScope scope;
 	idx_t degree = 0;

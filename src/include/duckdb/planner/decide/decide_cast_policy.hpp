@@ -125,8 +125,6 @@ enum FoldableDoubleFlag : uint32_t {
 	//! Also demand a constant no row, parameter or subquery can change: consistent, and free of parameters,
 	//! subqueries, aggregates and windows.
 	FOLD_STABLE = 1,
-	//! Also accept a BOOLEAN value (read as 0 or 1).
-	FOLD_ALLOW_BOOLEAN = 2,
 	//! Also demand a finite result that survives a round trip back to the expression's own type.
 	FOLD_EXACT_FINITE = 4,
 	//! Report a DuckDB error raised by the evaluation or the conversion as false.
@@ -136,7 +134,7 @@ enum FoldableDoubleFlag : uint32_t {
 };
 
 //! Evaluate a complete foldable SQL expression and convert its result to DOUBLE. Data-only casts remain part of the
-//! computation. Returns false for a non-foldable, NULL, non-numeric (or, unless allowed, BOOLEAN) expression, and for
+//! computation. Returns false for a non-foldable, NULL or non-numeric expression, and for
 //! whatever else `flags` (a combination of `FoldableDoubleFlag`) rules out. `out` is written once the value is
 //! converted, before the finite and round-trip check, so it is meaningful only when the call returns true.
 bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, double &out, uint32_t flags);

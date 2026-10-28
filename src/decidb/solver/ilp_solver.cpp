@@ -277,6 +277,11 @@ SolverBackend SelectSolverBackend() {
 
 SolverResult SolvePreparedModel(const SolverModel &model, SolverBackend backend,
                                 const SolveModelOptions &options) {
+	if (model.ProvesInfeasible()) {
+		SolverResult result;
+		result.status = SolverStatus::INFEASIBLE;
+		return result;
+	}
 	double time_limit = options.time_limit_seconds > 0.0 ? options.time_limit_seconds : ResolveDecideTimeLimit();
 	auto session = backend.CreateSession();
 	if (options.interrupt_poll) {
@@ -408,9 +413,9 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 		// Infeasibility proven during Build by a throw that abandoned the half-built
 		// model, so there is nothing to retain and diagnosis cannot run. Only the
 		// conflicting-column-bounds check still throws this way, and only when
-		// diagnosis is off (under diagnosis it keeps the inverted box instead) — the
-		// unsatisfiable-constraint case flags `build_proven_infeasible` and keeps its
-		// model. The operator must treat an unretained model as "no diagnosis".
+		// diagnosis is off (under diagnosis it keeps the inverted box instead, which
+		// ProvesInfeasible answers below). The operator must treat an unretained model
+		// as "no diagnosis".
 		SolverResult result;
 		result.status = SolverStatus::INFEASIBLE;
 		return result;
@@ -441,14 +446,10 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	idx_t built_constraint_rows = model.constraints.size() + model.quadratic_constraints.size() +
 	                              model.general_constraints.size() +
 	                              model.indicator_constraints.size();
-	// Build proved a constraint unsatisfiable while assembling the model: a row whose
-	// left-hand side reduced to no terms at all, against a bound it cannot meet
-	// (`SUM(0 * x) <= -1`, `x - x <= -1`). The row was kept so diagnosis can name and
-	// relax it, but it is a coefficient-free row that no backend should be asked to
-	// load. Short-circuit to INFEASIBLE here — retaining the model — for the same
-	// reason as the inverted column box below. Unconditional: on an unprefixed statement
-	// the retained model is simply discarded and the operator throws its static error.
-	if (model.build_proven_infeasible) {
+	// A model with no solution is answered here, retaining it for diagnosis, rather than
+	// handed to a backend (SolverModel::ProvesInfeasible). On an unprefixed statement the
+	// retained model is simply discarded and the operator throws its static error.
+	if (model.ProvesInfeasible()) {
 		SolverResult result;
 		result.status = SolverStatus::INFEASIBLE;
 		result.model_constraint_rows = built_constraint_rows;
@@ -456,26 +457,6 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 			*retained_model = std::move(model);
 		}
 		return result;
-	}
-	// Under diagnosis (tolerate_infeasible_bounds), Build keeps an inverted column box
-	// (col_lower > col_upper) instead of throwing, so the model can be retained for the
-	// elastic engine. But an inverted box is not a hard model, it is an EMPTY one: the
-	// answer is already known, and asking a solver to confirm it is asking it to load a
-	// model no solver contract says it must accept. Short-circuit to INFEASIBLE here —
-	// retaining the model — without handing the inverted box to any backend. (HiGHS is
-	// the concrete case: it errors hard on load and poisons the session.)
-	if (input.tolerate_infeasible_bounds) {
-		for (idx_t col = 0; col < model.num_vars; col++) {
-			if (model.col_lower[col] > model.col_upper[col]) {
-				SolverResult result;
-				result.status = SolverStatus::INFEASIBLE;
-				result.model_constraint_rows = built_constraint_rows;
-				if (retained_model) {
-					*retained_model = std::move(model);
-				}
-				return result;
-			}
-		}
 	}
 	// Solve on a live session (the warm-continuation substrate). The first chunk
 	// uses the caller's requested limit, or the shared default when unset (<0).

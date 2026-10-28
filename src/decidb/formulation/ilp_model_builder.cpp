@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdlib>
+#include <limits>
 #include <numeric>
 #include <unordered_map>
 #include <unordered_set>
@@ -273,6 +274,25 @@ SolverModelClass SolverModel::ModelClass() const {
         }
     }
     return needed;
+}
+
+bool SolverModel::ProvesInfeasible() const {
+    for (const auto &row : constraints) {
+        if ((row.indices.empty() && ConstantRowFails(row.sense, row.rhs)) || IsUnreachableBound(row.sense, row.rhs)) {
+            return true;
+        }
+    }
+    for (const auto &row : quadratic_constraints) {
+        if (IsUnreachableBound(row.sense, row.rhs)) {
+            return true;
+        }
+    }
+    for (idx_t col = 0; col < num_vars && col < col_lower.size() && col < col_upper.size(); col++) {
+        if (col_lower[col] > col_upper[col]) {
+            return true;
+        }
+    }
+    return false;
 }
 
 SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
@@ -660,64 +680,45 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
     // Handle constraints whose LHS reduced to 0 (all coefficients cancelled or
     // all variables folded into column bounds). A tautology is dropped; a
-    // violated constant constraint (`0 <= -1`) is KEPT as a coefficient-free row
-    // and flags the model, so the whole model still gets built and retained.
+    // violated constant constraint (`0 <= -1`) is KEPT as a coefficient-free row,
+    // so the whole model still gets built and retained.
     // Keeping the row is what lets the infeasible-diagnosis engine name and relax
     // the offending clause — it stays a USER_PARAMETER row with its own source
     // provenance, and the elastic weighting already guards an all-zero row. No
-    // backend ever sees it: SolveModel short-circuits on the flag.
+    // backend ever sees it: SolverModel::ProvesInfeasible answers the model first.
     auto PushNormalizedConstraint = [&](ModelConstraint &&constr) {
-        if (!constr.indices.empty()) {
+        // A coefficient-free row that fails is kept, with its provenance, so ProvesInfeasible
+        // answers the model and diagnosis can relax the row; one that holds is a tautology.
+        if (!constr.indices.empty() || ConstantRowFails(constr.sense, constr.rhs)) {
             model.constraints.push_back(std::move(constr));
-            return;
         }
-        constexpr double EPS = 1e-9;
-        bool violated = false;
-        if (constr.sense == '<') {
-            violated = constr.rhs < -EPS;
-        } else if (constr.sense == '>') {
-            violated = constr.rhs > EPS;
-        } else { // '='
-            violated = std::abs(constr.rhs) > EPS;
-        }
-        if (violated) {
-            model.build_proven_infeasible = true;
-            model.constraints.push_back(std::move(constr));
-            return;
-        }
-        // Tautology (0 <= k>=0, 0 >= k<=0, 0 = 0) — drop.
     };
 
-    // A per-row bound on one decision (`x <= cap`, `x >= lo`, `-x <= -cap`) is a fact about one column, so it goes
-    // into that column's box rather than becoming a model row, as a literal bound already does
+    // A per-row bound on one decision (`x <= cap`, `2 * x >= lo`, `0.1 * x <= c`) is a fact about one column, so it
+    // goes into that column's box rather than becoming a model row, as a literal bound already does
     // (decide_singleton_row_folding.cpp). A literal is the same for every row and folds once in the optimizer; a
-    // data-valued bound differs per row and is known only here. The bound narrows the box it finds, as the row did:
-    // it never replaces the default floor of 0. Only a coefficient of exactly 1 or -1 folds, so the bound is the
-    // row's own right-hand side with no division to round, and only a finite one (a row the backend refuses or
-    // ignores keeps its existing handling). A box the folds invert is caught by the sanity check below, which
-    // answers INFEASIBLE as the row would have.
+    // data-valued bound differs per row and is known only here, as the values it admits on each row (stage 08 reads
+    // them from the classifier both paths share). The bound narrows the box it finds, as the row did: it never
+    // replaces the default floor of 0 (D41). An infinite end on the side it binds (`x >= c` with c = +inf) admits
+    // no value and keeps the row, which ProvesInfeasible answers; a box the folds invert is caught by the sanity check
+    // below, which answers INFEASIBLE as the row would have.
     //
     // HiGHS's QP solver does not turn such rows back into bounds: a 9,600-row box-bounded QP ran past 60 s as rows
     // and solves in 0.4 s as bounds. Under diagnosis the rows stay, because the elastic engine relaxes rows and
     // quotes the clause from their provenance (`x <= cap_col + delta`).
-    auto TryFoldPerRowBound = [&](const ModelConstraint &constr) -> bool {
-        if (input.tolerate_infeasible_bounds || constr.indices.size() != 1 || !std::isfinite(constr.rhs)) {
+    auto TryFoldPerRowBound = [&](const EvaluatedConstraint &ec, idx_t row, const ModelConstraint &constr) -> bool {
+        if (input.tolerate_infeasible_bounds || ec.admitted_lower.logical_size == 0 || constr.indices.size() != 1) {
             return false;
         }
-        double coefficient = constr.coefficients[0];
-        if (coefficient != 1.0 && coefficient != -1.0) {
+        double lower = ec.admitted_lower[row];
+        double upper = ec.admitted_upper[row];
+        if (lower == std::numeric_limits<double>::infinity() || upper == -std::numeric_limits<double>::infinity()) {
             return false;
         }
+        // The column's box is finite, so an open end (±infinity) leaves it as it is.
         idx_t col = (idx_t)constr.indices[0];
-        double bound = coefficient * constr.rhs;
-        // `-x <= -cap` is `x >= cap`: a negative coefficient turns the sense around.
-        char sense = constr.sense == '=' ? '=' : ((constr.sense == '<') == (coefficient > 0.0) ? '<' : '>');
-        if (sense != '>') {
-            model.col_upper[col] = std::min(model.col_upper[col], bound);
-        }
-        if (sense != '<') {
-            model.col_lower[col] = std::max(model.col_lower[col], bound);
-        }
+        model.col_lower[col] = std::max(model.col_lower[col], lower);
+        model.col_upper[col] = std::min(model.col_upper[col], upper);
         return true;
     };
 
@@ -1103,7 +1104,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // `per K:` clause's row for its class; any other per-row row for its data row.
                 constr.provenance.class_set = ClassSetOf(eval_const, has_groups ? row_group_key : 0);
                 StampDataRow(constr.provenance, row);
-                if (TryFoldPerRowBound(constr)) {
+                if (TryFoldPerRowBound(eval_const, row, constr)) {
                     continue;
                 }
                 PushNormalizedConstraint(std::move(constr));

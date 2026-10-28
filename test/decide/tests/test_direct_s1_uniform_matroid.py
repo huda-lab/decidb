@@ -232,7 +232,10 @@ def _values(records, names=NAMES):
 #   fixed     [(value, [ids])]         when id = i: x = value
 #   fixedwhen True                     when fixed_value: x = 1 (the column is NULL on some rows: those are not fixed)
 #   flagfixed_below N                  when id < N: x = flag
-#   rowbounds [(op, number, ids|None[, lhs])]  lhs op number on the given ids (None: every row, no `when`)
+#   flagscaled_below N                 when id < N: 2*x <= CAST(flag AS INTEGER)
+#   rowbounds [(op, number, ids|None[, a])]  a*x op number on the given ids (None: every row, no `when`); `x` alone
+#                                      when a is left out, so a = 1 spells the unit body `1*x`
+#   colscaled True                     2*x <= hi, the bound read from each row
 #   noop      [SQL]                    clauses that restate the BOOL domain and change nothing
 #   colfixed  True                     x >= lo AND x <= hi, the bounds read from each row
 #   objective key of OBJECTIVES (default "score"), or "none" for a query with no objective (every score is 0)
@@ -335,7 +338,16 @@ S1_CASES = {
     "fixed_with_source_bound": {"bounds": [(">=", 1), ("<=", "cap")], "per": True, "fixed": [(1, [2]), (0, [1])]},
     "fixed_by_nullable_boolean_column": {"bounds": [("<=", 3)], "fixedwhen": True},
     "fixed_to_boolean_column": {"bounds": [("<=", 5)], "flagfixed_below": 5},
-    "fixed_written_as_unit_body": {"bounds": [("<=", 2)], "rowbounds": [("<=", 0, [1], "1*x")]},
+    "fixed_written_as_unit_body": {"bounds": [("<=", 2)], "rowbounds": [("<=", 0, [1], 1)]},
+    # A bound with another constant coefficient reads through the solver's classifier: 2*x >= 1 fixes to 1, 2*x <= 1
+    # to 0, and 2*x <= 2.5 restates the domain.
+    "scaled_rowbounds": {
+        "bounds": [("<=", 3)],
+        "rowbounds": [(">=", 1, [3], 2), ("<=", 1, [5], 2), ("<=", 2.5, None, 2)],
+    },
+    "scaled_column_bound": {"bounds": [("<=", 3)], "colscaled": True},
+    # 2*x <= flag fixes every row to 0, where `x <= flag` leaves a flagged row free.
+    "scaled_boolean_column": {"bounds": [("<=", 5)], "flagscaled_below": 5},
     "domain_restatements": {
         "bounds": [("<=", 3)],
         "noop": ["x <= 1", "x >= 0", "x < 2", "x > -1", "x <> 2", "x BETWEEN 0 AND 1"],
@@ -491,9 +503,11 @@ def _decide_clause(case):
         clauses.append("when fixed_value: x = 1")
     if case.get("flagfixed_below") is not None:
         clauses.append(f"when id < {case['flagfixed_below']}: x = flag")
+    if case.get("flagscaled_below") is not None:
+        clauses.append(f"when id < {case['flagscaled_below']}: 2*x <= CAST(flag AS INTEGER)")
     for rowbound in case.get("rowbounds", ()):
         op, constant, ids = rowbound[:3]
-        lhs = rowbound[3] if len(rowbound) > 3 else "x"
+        lhs = f"{rowbound[3]}*x" if len(rowbound) > 3 else "x"
         if ids is None:
             clauses.append(f"{lhs} {op} {constant}")
         else:
@@ -501,6 +515,8 @@ def _decide_clause(case):
     clauses.extend(case.get("noop", ()))
     if case.get("colfixed"):
         clauses.extend(["x >= lo", "x <= hi"])
+    if case.get("colscaled"):
+        clauses.append("2*x <= hi")
     objective = case.get("objective", "score")
     tail = "" if objective == "none" else f" {case.get('sense', 'MAXIMIZE')} {OBJECTIVES[objective][0]}"
     return f"DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)}{tail}"
@@ -565,8 +581,11 @@ def _inclusive(op, limit):
     return op, limit
 
 
-def _row_bound(name, op, constant):
-    """`x op constant` on one row, as constraints on the 0/1 variable."""
+def _row_bound(name, op, constant, coefficient=1):
+    """`coefficient*x op constant` on one row, as constraints on the 0/1 variable."""
+    if coefficient != 1:
+        assert op in ("<=", ">=", "="), op
+        return [({name: float(coefficient)}, op, float(constant))]
     op, constant = _inclusive(op, float(constant))
     if op == "<>":
         # x <> c removes c from {0, 1}.
@@ -634,14 +653,22 @@ def _s1_constraints(case):
             for i, row in enumerate(rows)
             if row["id"] < case["flagfixed_below"]
         )
+    if case.get("flagscaled_below") is not None:
+        constraints.extend(
+            ({names[i]: 2.0}, "<=", 1.0 if row["flag"] else 0.0)
+            for i, row in enumerate(rows)
+            if row["id"] < case["flagscaled_below"]
+        )
     for rowbound in case.get("rowbounds", ()):
         op, constant, ids = rowbound[:3]
         for i in range(len(rows)) if ids is None else (i for i in ids if i < len(rows)):
-            constraints.extend(_row_bound(names[i], op, constant))
+            constraints.extend(_row_bound(names[i], op, constant, *rowbound[3:]))
     if case.get("colfixed"):
         for i, row in enumerate(rows):
             constraints.append(({names[i]: 1.0}, ">=", float(row["lo"])))
             constraints.append(({names[i]: 1.0}, "<=", float(row["hi"])))
+    if case.get("colscaled"):
+        constraints.extend(({names[i]: 2.0}, "<=", float(row["hi"])) for i, row in enumerate(rows))
     return names, constraints
 
 

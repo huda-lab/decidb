@@ -42,11 +42,13 @@ remove the marks. The grouped cases of `test_direct_s1_uniform_matroid.py` run o
 (`benchmark/decide/direct_solve/queries/`) fails in `direct` mode; run it again, and once R1 reads it too, drop the
 sentence about it in `../../../performance/benchmarking/direct_solve.md`.
 
-## Read a folded affine bound
+## A fixed value with a data coefficient
 
-The solver folds an affine bound on `x` into its box (`1*x >= 2`, `x >= 1+1`, `2*x >= 1`, D41). The IR marks it
-`variable_bound` but not `plain`, and S1 declines it. Read the folded box, or the scaled and offset bound, as A1 must
-(`../a1_separable_box/todo.md`).
+`w * x >= 1` on a Boolean `x` is a bound on one decision the solver path reads per row, and the classifier already
+gives its admitted ends over the row's `w`. S1 declines it: `ProveFixedVariables` requires constant coefficients
+(`ConstantSlope`). Accept a coefficient that is source-only when the clause is a bound on one decision, read its
+`allows(v)` per row as for a column right side, and keep the decline for `<>` and Boolean sources. Tests: the per-row
+bounds grid with a column factor, a NULL and a zero `w` on a kept row and on a row the `when` drops.
 
 ## Exit gate for any S1 widening
 
