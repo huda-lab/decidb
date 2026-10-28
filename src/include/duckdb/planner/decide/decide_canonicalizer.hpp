@@ -175,7 +175,8 @@ struct DecideEnclosingScope {
 //! What building the scope checks of the user's clauses reads besides the bound tree,
 //! and the checks it builds (LogicalDecide::scope_checks), in clause order.
 struct DecideScopeChecks {
-	const vector<DecideGroupKey> &group_keys;
+	//! A check keyed by a scope's key and a `by` key together adds their union.
+	vector<DecideKey> &keys;
 	const vector<EntityScopeInfo> &entity_scopes;
 	const vector<string> &source_fragments;
 	//! A relation's alias by table index, so a message names a column `D.depotID`.

@@ -191,7 +191,7 @@ reducer's own `per` (`qualifier_scope_idx`); plus the RHS expression, the compar
 type, the clause's `when`, its `by` key (`group_key`) and `per` key (`per_key`,
 `class_key`), and the metadata linking it to indicators and diagnosis provenance. The
 objective arrives the same way, with its `when`, the two-level form's key
-(`per_columns`), and `squared_terms` and `bilinear_terms` alongside `terms`.
+(`per_key`, an index into the key table), and `squared_terms` and `bilinear_terms` alongside `terms`.
 `ComposedMinMaxTerm::inner_terms` carries the composed MIN/MAX path's terms, so no
 construct is left re-deriving its own.
 
@@ -215,11 +215,11 @@ For each `EntityScopeInfo` — a keyed decision's key (`per K: x`), a reducer's 
 or colon form (`sum(per K: e)`, `SUM(D: e)`), a helper decision's `by` key — before
 coefficient evaluation:
 
-1. Evaluate the entity-key columns per row from the materialized data, using
-   `BoundReferenceExpression`s built from `entity_key_physical_indices` so one
+1. Evaluate the scope's key per row from the materialized data: its resolved elements
+   (`PhysicalDecide::KeyElements`), through `CachedTransformToChunkExpression`, so one
    `ExpressionExecutor` covers them all. A helper decision's scope
-   (`EntityScopeInfo::value_link`, the value rewrite) has no key columns: its link's
-   `by` key expressions are evaluated instead (`CachedTransformToChunkExpression`), on
+   (`EntityScopeInfo::value_link`, the value rewrite) has its link's `by` key, evaluated
+   on
    the rows the link's clause `when` keeps only (`BuildGroupIds`' `read_rows`), one
    entity per value they take together, NULL a value. A row the clause drops is no
    group; every such row maps to one spare entity, so each row has an id and the key is
@@ -280,7 +280,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   failing expression there is no error. An empty set has already failed a check (D4,
   D8), so formulation asserts rather than refuses one.
 - **Grouping.** The aggregate shape groups the kept rows by its `by` key
-  (`group_keys[constraint->group_key]`), NULL a value: a group's members are the rows a
+  (`keys[constraint->group_key]`), NULL a value: a group's members are the rows a
   reducer's `when` keeps (all kept rows for `<>`, whose bound values are all excluded),
   its bound the tightest over all its kept rows. A row the reducer's own `per`
   de-duplication drops leaves the group when the clause is a hard MIN/MAX

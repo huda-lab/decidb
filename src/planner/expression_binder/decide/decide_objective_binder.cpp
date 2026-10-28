@@ -120,22 +120,21 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	for (auto &variable : variables) {
 		decision_names.insert(variable.first);
 	}
-	auto key = BindKeyColumns(binder.bind_context, per, decision_names);
-	auto by_key = BindKeyColumns(binder.bind_context, inner_by, decision_names);
-	bool same_key = key.size() == by_key.size();
-	for (idx_t i = 0; same_key && i < key.size(); i++) {
-		same_key =
-		    key[i]->Cast<BoundColumnRefExpression>().binding == by_key[i]->Cast<BoundColumnRefExpression>().binding;
+	if (!qualifier_context || !qualifier_context->keys) {
+		throw InternalException("DECIDE: a two-level objective needs the clause's keys");
 	}
-	if (!same_key) {
+	auto &keys = *qualifier_context->keys;
+	const auto key_text = DecideKeyToString(per);
+	auto key = BindKey(binder.bind_context, per, decision_names, key_text, keys);
+	auto by_key = BindKey(binder.bind_context, inner_by, decision_names, DecideKeyToString(inner_by), keys);
+	if (key != by_key) {
 		return BindResult(BinderException::Unsupported(
 		    inner_by, StringUtil::Format("DECIDE: in %s the by key must be the per key; any other is not supported "
 		                                 "yet",
 		                                 form)));
 	}
 	// The key as written, read before the move below destroys the marker that holds it.
-	const auto key_text = DecideKeyToString(per);
-	// The bound form: `outer(inner(e))` under a PER wrapper whose columns are the key.
+	// The bound form: `outer(inner(e))` under a PER wrapper naming the key.
 	outer.children[0] = std::move(inner_by.children[0]);
 	auto result = BindExpression(*outer_slot, depth);
 	if (result.HasError()) {
@@ -143,10 +142,10 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	}
 	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 	wrapper->children.push_back(std::move(result.expression));
-	for (auto &column : key) {
-		wrapper->children.push_back(std::move(column));
-	}
 	wrapper->alias = PER_CONSTRAINT_TAG;
+	if (key != DConstants::INVALID_INDEX) {
+		AddDecideTag(wrapper->alias, MakePerKeyTag(key));
+	}
 	// The plan prints the key as written rather than its columns (RenderDecidePerKey).
 	if (qualifier_context && qualifier_context->source_fragments) {
 		AddDecideTag(wrapper->alias, MakeSourceFragmentTag(qualifier_context->source_fragments->size()));

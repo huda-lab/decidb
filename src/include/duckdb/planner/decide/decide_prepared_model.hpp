@@ -87,7 +87,7 @@ struct DecideConstraint {
 	//! evaluated), NULL is a key value, every bound-side reducer reads its own `by` group of
 	//! the kept rows, and LogicalDecide::scope_checks have passed before it is evaluated.
 	//! Scoped, aggregate shape: the `by` key its decision reducers share, which groups its
-	//! rows (index into LogicalDecide::group_keys); INVALID_INDEX for `by ()`.
+	//! rows (index into LogicalDecide::keys); INVALID_INDEX for `by ()`.
 	idx_t group_key = DConstants::INVALID_INDEX;
 	//! What a scoped clause's `per K:` / `per ()` does. ONE_ROW_PER_CLASS: the per-row
 	//! shape emits one row per class of `class_key` among the kept rows, the class's
@@ -97,7 +97,8 @@ struct DecideConstraint {
 	//! written, so every kept row of a group is a class of its own.
 	enum class PerKeyRole : uint8_t { NONE, ONE_ROW_PER_CLASS, NAMES_CLASSES };
 	PerKeyRole per_key = PerKeyRole::NONE;
-	vector<unique_ptr<Expression>> class_key;
+	//! The `per` key (index into LogicalDecide::keys); INVALID_INDEX with NONE.
+	idx_t class_key = DConstants::INVALID_INDEX;
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 	//! Stable origin in LogicalDecide::constraint_sources.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
@@ -146,7 +147,8 @@ struct DecideConstraint {
 struct DecideObjective {
 	vector<DecideTerm> terms;              // Linear objective terms
 	unique_ptr<Expression> when_condition; // the objective's `when` (nullptr = every row)
-	vector<unique_ptr<Expression>> per_columns; // the two-level form's key (empty = none)
+	//! The two-level form's key (index into LogicalDecide::keys); INVALID_INDEX for none.
+	idx_t per_key = DConstants::INVALID_INDEX;
 	//! The objective reads only the rows its `when` keeps, its two-level form's key has
 	//! NULL as a class, and a term beside its reducers counts once, read on the first
 	//! kept row.

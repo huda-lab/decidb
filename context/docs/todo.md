@@ -61,22 +61,26 @@ Rulings (architect review done):
    for that key only.
 3. **A keyed decision with a NULL key: no decision on that row** (deck p. 6), no error. The row's decision value is
    absent: a reducer skips it, an unreduced use skips that instance (p. 50).
-4. **Composite key:** NULL when any column is NULL. **A relation key** (`per D:`) is NULL only when all its columns
-   are NULL (an outer-join miss); otherwise its columns compare NOT DISTINCT (p. 76: `per Depots` gives the classes
-   of `per depotID`).
+4. **Composite key:** NULL when any written column is NULL. **A relation key** (`per D:`) is unchanged (owner,
+   2026-10-28, "Keep todays per D"; Anh: defer replacing `per D`): the columns it stands for compare NULL as a value
+   (NOT DISTINCT). A column written on its own beside its relation (`per D, D.g`) is NULL in no group.
 5. **An empty group skips its constraint** (deck: a reducer over no rows is NULL). This retires D4 and D8 together: a
    `when` that keeps no rows yields no constraints, and a group a reducer's own `when` or NULL keys empty yields none
-   ([roadmap § the deck changes](language/roadmap.md#current-behavior-the-deck-changes), its first two guards only;
-   a NULL coefficient or bound still raises).
+   ([roadmap § the deck changes](language/roadmap.md#current-behavior-the-deck-changes)).
+8. **A NULL data value follows the deck** (pp. 50, 56): a NULL coefficient or bound inside a reducer drops that term
+   (`sum(S.weight * x)`), and one that reaches the comparison unreduced (`x <= S.cap`, a reducer bound that comes out
+   NULL) skips that constraint instance. The "is NULL. Impute it with COALESCE" errors go, and so does the message
+   quoting a NULL reducer bound. A NULL written in the query itself (`x + NULL`) stays an error, raised from the
+   query text before any data is read. NaN stays an error (B9).
 6. **Collation:** keys group on the collated expression (`PushCollation`, as GROUP BY); a label quotes the group's
    least raw spelling.
 7. **Goldens:** the agent shows the diff entry by entry before re-capturing, once, after the numbering lands.
 
-Commits, in order: key table → one numbering (goldens) → NULL key and keyed decision → empty groups (D4, D8) →
-collation. Starts after B0 commits (shared files).
+Commits, in order: key table (shipped: `LogicalDecide::keys`) → one numbering (goldens) → NULL key and keyed decision → empty groups (D4, D8) →
+NULL data values → collation.
 
 - [ ] A NULL key is not a class; its rows skip the keyed clause (reverses D5; closes infeasible § 2) — [execution § 2](pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)
-- [ ] One key table on `LogicalDecide` (one numbering; re-capture goldens) — [logical_plan § 1](pipeline/03_logical_plan/todo.md#1-one-key-table)
+- [ ] One numbering for the key table (re-capture goldens) — [logical_plan § 1](pipeline/03_logical_plan/todo.md#1-one-numbering-for-the-key-table)
 - [ ] One key-grouping path at execution (with the key table) — [execution § 1](pipeline/08_execution/todo.md#1-one-key-grouping-path-optional)
 - [ ] Key grouping ignores collation (follow the collation) — [bugs § collation](issues/bugs.md#key-grouping-ignores-collation)
 - [ ] `group_indices` drops NULL keys (both oracle helpers drop a NULL key) — [testing § group_indices](testing/todo.md#group_indices-drops-null-keys)
@@ -172,9 +176,9 @@ The agent finds the cause alone and stops with a proposed fix.
 
 ## B9. Functions that behave unlike SQL: the audit's rulings
 
-- [ ] Five places still read a value differently from DuckDB, each with a recommendation: NaN in a bound (keep),
-  infinity in a coefficient (keep), a reducer over no rows and a data group of NULLs only (follow SQL and the deck, or
-  keep the guard), and the NaN message (reshape like the NULL one). — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
+- [ ] Three places still read a value differently from DuckDB, each with a recommendation: NaN in a bound (keep),
+  infinity in a coefficient (keep), and the NaN message (reshape like the NULL one). A reducer over no rows and a data
+  group of NULLs only follow the deck in B1 (owner, 2026-10-28). — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
 
 ## B10. One helper for a reducer several clauses hold: the definition's provenance
 
@@ -207,9 +211,8 @@ The agent finds the cause alone and stops with a proposed fix.
 ## B13. `IN` under `per K:`: which scope keys the indicators
 
 - [ ] Per class, the indicators need a decision scope keyed by the wrapper's `K`. Today a scope is made only by the
-  binder (declarations, reducer keys) and by the value rewrite (helpers); the one key table
-  (`pipeline/03_logical_plan/todo.md` §1, batch B1) is the planned single way to make one from any key. (a) Wait for
-  B1 and key the indicators by `K`'s entry. (b) Now, for the case where `K` is the decision's own declared key: the
+  binder (declarations, reducer keys) and by the value rewrite (helpers); every key, `K` included, is an entry of the
+  one key table (`LogicalDecide::keys`), from which a scope can be made. (a) Key the indicators by `K`'s entry. (b) Now, for the case where `K` is the decision's own declared key: the
   indicators take the decision's scope and the rows keep the wrapper (as the MIN/MAX easy half keeps it); any other
   `K` keeps one set per row. Recommended: (a); (b) adds a special case that B1 removes.
   — [optimizer § 3](pipeline/05_optimizer/todo.md#3-in-under-per-k-once-per-class)

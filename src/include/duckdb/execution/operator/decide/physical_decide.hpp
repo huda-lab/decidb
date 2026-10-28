@@ -28,14 +28,14 @@ using ChunkExprCache = std::unordered_map<const Expression *, unique_ptr<Express
 //! evaluated once (e.g. by a constraint) is reused by every other call site that asks
 //! for the same expression set (e.g. the objective, or a later constraint).
 struct PerGroupCacheEntry {
-    vector<const Expression *> exprs;
     vector<idx_t> unfiltered_row_group_ids;
     idx_t unfiltered_num_groups;
     //! Representative key values per unfiltered group ([key_col][gid]); used to label
     //! each group with its printable key for infeasible diagnosis.
     vector<vector<Value>> unfiltered_rep_keys;
 };
-using PerGroupCache = std::unordered_map<size_t, vector<PerGroupCacheEntry>>;
+//! Keyed by the key's index in PhysicalDecide::keys (INVALID_INDEX: the empty key).
+using PerGroupCache = std::unordered_map<idx_t, PerGroupCacheEntry>;
 
 //! Per-term filter state for a reducer's own `when` (constraint terms, bilinear terms,
 //! quadratic groups, and their objective-side equivalents all share this shape).
@@ -170,8 +170,11 @@ public:
     //! entity_scope_idx indexes entity_scopes
     vector<DecideVarScopeInfo> variable_scopes;
 
-    //! Every `by (key)` of the clause, its expressions resolved against the input chunk.
-    vector<DecideGroupKey> group_keys;
+    //! Every key of the clause (LogicalDecide::keys), its expressions resolved against the
+    //! input chunk.
+    vector<DecideKey> keys;
+    //! The elements of `keys[key]`; none for INVALID_INDEX, the empty key.
+    const vector<DecideKeyElement> &KeyElements(idx_t key) const;
 
     //! The run-time checks of the clauses, run first.
     vector<DecideScopeCheck> scope_checks;

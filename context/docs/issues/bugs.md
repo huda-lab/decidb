@@ -155,16 +155,16 @@ Each reproduces on the current build.
   is echoed by EXPLAIN as `sum(D.d, D."cost": "cost" * open) <= 7`, and a determination
   message quotes `(in sum(D.d, D."cost": ...))`; declared `per D: open(BOOL)`, the same
   clause echoes `sum(D: "cost" * open) <= 7`. Both keys name the same columns, so they
-  share one exact scope (`FindOrCreateExactScope`, `decide_binder.cpp`), which holds one
-  key text. Expected: each clause echoed as written.
-- **A column reference is named in two forms:** `BindKeyColumns` names a key column's
+  share one entry of the key table (`FindOrCreateDecideKey`, `logical_decide.cpp`), which
+  holds one key text. Expected: each clause echoed as written.
+- **A column reference is named in two forms:** `KeyElements` (`decide_binder.cpp`) names a key column's
   reference by its SQL spelling (`t.depot`, `t."my col"`, `D."cost"`); every other reference
   carries its bare column name. Anything that prints a reference's name has to tell the two
   apart. The unbounded remedy (`plan_decide.cpp`, the name harvest) does it by comparing the
   name with the binder's source name: equal is bare and is quoted where SQL needs it,
   different is taken as SQL. A reference whose name differs from the source only in case
   is taken as SQL unquoted. Expected: one form on every reference (the bare name, with the
-  key's SQL spelling kept beside it, as `group_keys[].names` already keeps it), so no
+  key's SQL spelling kept beside it, as `DecideKeyElement::name` already keeps it), so no
   printer infers which it holds. Same field as the shared key text above.
 - **Impact:** messages only.
 

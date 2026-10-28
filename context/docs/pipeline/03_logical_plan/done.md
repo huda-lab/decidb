@@ -118,27 +118,36 @@ Grouped by who writes it:
 
 **From the binder** — `decide_index`, `decide_variables`, `decide_constraints`,
 `decide_sense`, `decide_objective`, `num_auxiliary_vars`, `is_boolean_var`,
-`variable_scopes`, `entity_scopes`, `entity_key_expressions`,
-`constraint_sources`. `entity_scopes` holds every key scope, one per set of key columns
-(possibly spanning several relations): of a declaration's `per K:`, of a reducer's own
-`per K'` and of the colon form `SUM(D: …)`; a scope's `key_names` are its columns as a
-message names them. `variable_scopes` points each keyed decision at one, with its key as
-written (`declared_key`). `group_keys` holds every `by (G)` key of the clauses
-(`DecideGroupKey`: the bound expressions, the key as written, each element's name); a
-reducer's `__group_key_<i>__` tag names entry `i`. A constraint's `per K:` key lives in
-its `PER_CLASS_TAG` wrapper, and the two-level objective's in its `PER_CONSTRAINT_TAG` wrapper, as bound
-column references. A scope the optimizer creates for a
-helper decision of the value rewrite names the link it holds instead of key columns
-(`EntityScopeInfo::value_link`; its `entity_key_bindings` are empty, and the field is
-deliberately absent from the serialization: an optimized plan is never serialized). Its
-entities are the link's `by` groups among the rows the link's clause keeps.
+`variable_scopes`, `keys`, `entity_scopes`, `constraint_sources`. `keys` is the one
+key table (`DecideKey`): every key the clauses write -- a declaration's `per K:`, a
+reducer's own `per K'` and the colon form `SUM(D: …)`, a reducer's `by (G)`, a
+constraint's `per K:` and the two-level objective's key -- is one entry, and keys with
+the same elements share it, whichever spelling wrote them (`FindOrCreateDecideKey`
+compares elements as a set). An entry holds the key as first written and its elements
+(`DecideKeyElement`: the bound expression, its name as a message prints it, and its
+`DecideKeyNullMode` -- `VALUE` for a column a relation element stands for, `NO_GROUP`
+for one written on its own, which the written one keeps when both name it), sorted (columns
+by binding, then other expressions by text), and `written_as_by` when a `by` names it. The
+empty key (`per ()`, `by ()`) has no entry: it is `INVALID_INDEX`. A key holding
+a subquery is recognised by its text instead, since bound subqueries do not compare. Tags
+name entries: a reducer's `__group_key_<i>__` its `by` key, and a `PER_CLASS_TAG` or
+`PER_CONSTRAINT_TAG` wrapper's `__per_key_<i>__` its `per` key (`PerWrapperKey`; no tag is
+`per ()`). The two tags differ so a walker that reads `by` keys never reads a `per` key.
+`entity_scopes` holds the key scopes, one per key that keys decisions or a reducer's own
+`per` (`EntityScopeInfo`: the key, the decisions it keys). `variable_scopes` points each
+keyed decision at one, with its key as written (`declared_key`). A scope the optimizer
+creates for a helper decision of the value rewrite has the link's `by` key and names the
+link (`EntityScopeInfo::value_link`, deliberately absent from the serialization: an
+optimized plan is never serialized); its entities are the link's `by` groups among the
+rows the link's clause keeps, so it shares no scope with a binder scope on the same key.
 
 **From the canonicalizer** — `objective_constant_offset`, and `scope_checks`: the
 run-time checks of every clause and of the objective (`DecideScopeCheck`: kind, the
 rows it looks at, the key, the value or decision, a reducer's own `when`, and the texts
-its message quotes). `PlanSubqueries` runs on the
-`by` keys as on the trees, and `EnumerateExpressions` visits both lists, so binding
-resolution and column pruning see their columns.
+its message quotes; the key is an index into `keys`, its union with a `by` key for a
+check within groups). `PlanSubqueries` runs on the key elements as on the trees, and
+`EnumerateExpressions` visits the key table and the checks, so binding resolution and
+column pruning see their columns.
 
 **From the optimizer** — `solver_backend_name`, `use_native_constructs`,
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
@@ -184,32 +193,33 @@ to run — `PhysicalDecide::PlannedSolverBackend()` — not on the plan.
 None of the three is serialized. Which solver a host has is a fact about the host, not
 about the query, so a plan replayed elsewhere re-resolves them.
 
-### `entity_key_expressions`
+### The key table keeps its columns alive
 
-A `BoundColumnRefExpression` per entity-key column, held here **only so DuckDB's
-column pruning keeps those columns alive**. Without them, an entity key not
-referenced in `SELECT` / `WHERE` / the clause would be pruned from the scan,
-silently collapsing distinct entities into whatever grouping happened to survive.
-`plan_decide.cpp` reads refreshed bindings back off these expressions — the
-pruner's rebinding pass keeps them in sync — and copies them into
-`entity_scopes.entity_key_bindings`.
+Every key element is an expression `EnumerateExpressions` visits, so DuckDB's column
+pruning keeps a key column a declaration alone names (`per region: x`), and binding
+resolution turns it into a chunk position like any other expression. Without that, a key
+column not referenced in `SELECT` / `WHERE` / the clause would be pruned from the scan,
+collapsing distinct entities into whatever grouping happened to survive. Execution reads
+the key's resolved elements directly (`PhysicalDecide::KeyElements`).
 
-They are deliberately **not** column-binding-resolved: `plan_decide.cpp` matches
-them against the child's `GetColumnBindings()` by `(table_index, column_index)`,
-which needs the logical binding intact.
+A key only a declaration writes names no column for a message: `plan_decide.cpp` names
+the columns a clause writes, a `per K:` key's as written, a `by` key's as it binds, and
+leaves a column only a declaration's key reads unnamed, as it leaves any column no clause
+names.
 
 ### Column binding resolution
 
 `ColumnBindingResolver`'s `LOGICAL_DECIDE` case enumerates DECIDE's
 expression-holding fields **explicitly** rather than calling
 `VisitOperatorExpressions`, because DECIDE variables must be shielded from
-resolution via `ignored_bindings`. Currently enumerated: `decide_variables`,
+resolution via `ignored_bindings`; it visits every field through
+`LogicalDecide::EnumerateExpressions`, the one list of them: `decide_variables`,
 `decide_constraints`, `decide_objective`, `composed_minmax_objective_terms`,
 `composed_minmax_constraints`, `reducer_value_links` (body, own `when`, clause `when`),
-`entity_key_expressions`, `group_keys`, `scope_checks`.
+`keys`, `scope_checks`.
 
 **Any new field holding expressions that execution will evaluate must be added to
-that enumeration.** An optimizer rewrite that moves subexpressions out of
+`EnumerateExpressions`.** An optimizer rewrite that moves subexpressions out of
 `decide_objective` into a side vector — as the composed MIN/MAX rewrite does —
 otherwise silently opts them out, and the operator then reads a logical index as a
 chunk position. A single-table source hides the bug entirely, because the two
@@ -256,17 +266,17 @@ binding fact, and the parser cannot see it (the clause may sit inside a subquery
 
 `LogicalDecide` and `LogicalDecideDiagnose` are serialized by DuckDB's generator.
 The field list lives in `storage/serialization/logical_operator.json`; the structs
-it names — `EntityScopeInfo`, `DecideVarScopeInfo`, `ConstraintSourceInfo`,
-`DecideSourceColumnName`, `DecideGroupKey`, `DecideScopeCheck` — have their own entries
+it names — `DecideKey`, `DecideKeyElement`, `EntityScopeInfo`, `DecideVarScopeInfo`,
+`ConstraintSourceInfo`, `DecideSourceColumnName`, `DecideScopeCheck` — have their own entries
 in `nodes.json`, and both
 directions are generated into `src/storage/serialization/serialize_*.cpp`. There is
 no hand-written copy. Adding a field means adding one JSON entry, not two mirrored
 lines in two functions that can drift apart; `python3 scripts/generate_serialization.py`
 with no arguments rewrites the generated files in place (`--target` alone is ignored).
 
-Nothing is flattened into parallel vectors. `entity_key_bindings` is serialized as
-`vector<ColumnBinding>`, using the `ColumnBinding` entry `nodes.json` already had.
-Source-column display metadata is likewise a `vector<DecideSourceColumnName>`:
+Nothing is flattened into parallel vectors. A key is serialized whole -- its text and
+its elements, each with its expression, name and NULL mode -- and a scope or a check
+holds the key's index. Source-column display metadata is likewise a `vector<DecideSourceColumnName>`:
 each record keeps a `ColumnBinding` and its user-written name together from binding,
 through serialization, to physical planning.
 

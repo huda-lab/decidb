@@ -490,7 +490,7 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 //! PerGroupCacheEntry/PerGroupCache are declared in physical_decide.hpp (Finalize's
 //! private phase methods need PerGroupCache in their signatures). Cache for group
 //! assignments: shares one full-data scan + group-map build across constraints/
-//! objectives that use the same key expression set. The cached value is the
+//! objectives that use the same key. The cached value is the
 //! *unfiltered* row→group mapping (BuildGroupIds run with row_filter=nullptr); each
 //! call site then applies its own `when` filter and remaps the surviving group IDs
 //! to consecutive 0..K' to preserve today's "encounter-order, no holes" semantics.
@@ -518,26 +518,7 @@ static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, idx_t gid
 	return s;
 }
 
-//! Hash a key expression set into a size_t for the cache.
-static size_t HashPerKey(const vector<unique_ptr<Expression>> &per_columns) {
-	size_t h = 0;
-	for (auto &e : per_columns) {
-		size_t eh = static_cast<size_t>(e->Hash());
-		h ^= eh + 0x9e3779b97f4a7c15ULL + (h << 6) + (h >> 2);
-	}
-	return h;
-}
-
-//! Returns true if the cache entry's expression set matches the key being evaluated.
-static bool PerKeyMatches(const PerGroupCacheEntry &entry, const vector<unique_ptr<Expression>> &per_columns) {
-	if (entry.exprs.size() != per_columns.size()) return false;
-	for (idx_t i = 0; i < per_columns.size(); i++) {
-		if (!entry.exprs[i]->Equals(*per_columns[i])) return false;
-	}
-	return true;
-}
-
-//! Look up (or build + cache) the unfiltered group ids for `per_columns`,
+//! Look up (or build + cache) the unfiltered group ids for `keys[key]`,
 //! then materialize a filter-aware view in `out_row_group_ids` / `out_num_groups`.
 //!
 //! Filter semantics (preserved from BuildGroupIds): rows where row_filter(r) is
@@ -548,7 +529,7 @@ static bool PerKeyMatches(const PerGroupCacheEntry &entry, const vector<unique_p
 //! `read_rows` is the clause's kept rows, which hold every row either filter keeps: the
 //! key is computed on them only, so a clause that drops rows builds its groups afresh
 //! instead of sharing the cache's, whose key was computed on every row.
-static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<unique_ptr<Expression>> &per_columns,
+static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
                                      ChunkExprCache &chunk_expr_cache, ClientContext &context,
                                      ColumnDataCollection &data, idx_t num_rows,
                                      const std::function<bool(idx_t)> &row_filter, const vector<bool> *read_rows,
@@ -565,11 +546,12 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<unique_p
                                      // message that quotes them as SQL literals.
                                      vector<vector<Value>> *out_group_values = nullptr) {
 	// Build unfiltered group ids (over `read_rows` when given).
+	auto &elements = DecideKeyElements(keys, key);
 	auto build = [&](PerGroupCacheEntry &built, const vector<bool> *rows) {
 		vector<const Expression *> key_exprs;
-		key_exprs.reserve(per_columns.size());
-		for (auto &col : per_columns) {
-			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *col, context));
+		key_exprs.reserve(elements.size());
+		for (auto &col : elements) {
+			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *col.expression, context));
 		}
 		std::function<bool(idx_t)> no_filter; // empty = include all
 		BuildGroupIds(key_exprs, context, data, num_rows, no_filter, built.unfiltered_row_group_ids,
@@ -581,23 +563,14 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<unique_p
 		build(read_entry, read_rows);
 		entry = &read_entry;
 	} else {
-		size_t key = HashPerKey(per_columns);
-		auto &bucket = cache[key];
-		for (auto &e : bucket) {
-			if (PerKeyMatches(e, per_columns)) {
-				entry = &e;
-				break;
-			}
+		// Keys are interned, so the key's index is its identity; INVALID_INDEX is the
+		// empty key, which has one entry like any other.
+		auto found = cache.find(key);
+		if (found == cache.end()) {
+			found = cache.emplace(key, PerGroupCacheEntry()).first;
+			build(found->second, nullptr);
 		}
-		if (entry == nullptr) {
-			bucket.emplace_back();
-			entry = &bucket.back();
-			entry->exprs.reserve(per_columns.size());
-			for (auto &e : per_columns) {
-				entry->exprs.push_back(e.get());
-			}
-			build(*entry, nullptr);
-		}
+		entry = &found->second;
 	}
 
 	// Apply per-call filter and remap surviving group IDs to consecutive 0..K'
@@ -760,16 +733,16 @@ static void MaskCoefficientColumn(CoefficientColumn &column, const vector<bool> 
 //! one set its groups share. One `SolverInput::ClassSet` per group with kept rows,
 //! referenced from `ec.group_class_set`. `kept_row_group` maps each kept row to its group;
 //! empty when the clause has one implicit group, which then holds every kept row.
-static vector<idx_t> CollectGroupClasses(DecideConstraint::PerKeyRole role,
-                                         const vector<unique_ptr<Expression>> &class_key,
-                                         PerGroupCache &per_group_cache, ChunkExprCache &chunk_expr_cache,
-                                         ClientContext &context, ColumnDataCollection &data, idx_t num_rows,
-                                         const vector<bool> &kept_rows, const vector<idx_t> &kept_row_group,
-                                         idx_t groups, vector<SolverInput::ClassSet> &class_sets) {
+static vector<idx_t> CollectGroupClasses(DecideConstraint::PerKeyRole role, const vector<DecideKey> &keys,
+                                         idx_t class_key, PerGroupCache &per_group_cache,
+                                         ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                         ColumnDataCollection &data, idx_t num_rows, const vector<bool> &kept_rows,
+                                         const vector<idx_t> &kept_row_group, idx_t groups,
+                                         vector<SolverInput::ClassSet> &class_sets) {
 	using Kind = SolverInput::ClassSet::Kind;
 	const bool keyed = role != DecideConstraint::PerKeyRole::NONE;
 	vector<idx_t> group_class_set(groups, DConstants::INVALID_INDEX);
-	if (keyed && class_key.empty()) {
+	if (keyed && class_key == DConstants::INVALID_INDEX) {
 		group_class_set.assign(groups, class_sets.size());
 		class_sets.push_back({Kind::WHOLE_CLAUSE, {}, {}});
 		return group_class_set;
@@ -789,7 +762,7 @@ static vector<idx_t> CollectGroupClasses(DecideConstraint::PerKeyRole role,
 	idx_t num_classes = 0;
 	vector<string> class_labels;
 	if (keyed) {
-		LookupOrBuildPerGroupIds(per_group_cache, class_key, chunk_expr_cache, context, data, num_rows, kept,
+		LookupOrBuildPerGroupIds(per_group_cache, keys, class_key, chunk_expr_cache, context, data, num_rows, kept,
 		                         &kept_rows, class_ids, num_classes, class_labels);
 	}
 	// `named_in[c]` is the last group that recorded class c; groups are walked one at a
@@ -1125,7 +1098,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 
 	// What the optimizer made of the clauses: a column that stands for an expression
 	// prints it, and each rewrite's account follows its clause, the objective's its own.
-	auto names = DecidePlanNames(source_fragments, entity_scopes, group_keys, decide_index, aux_var_expressions);
+	auto names = DecidePlanNames(source_fragments, entity_scopes, keys, decide_index, aux_var_expressions);
 	vector<string> objective_accounts;
 	for (auto &account : rewrite_accounts) {
 		if (account.source_clause_id == DConstants::INVALID_INDEX) {
@@ -1640,6 +1613,10 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
     }
 }
 
+const vector<DecideKeyElement> &PhysicalDecide::KeyElements(idx_t key) const {
+	return DecideKeyElements(keys, key);
+}
+
 //===--------------------------------------------------------------------===//
 // Finalize: PHASE 1.5 — Build Entity Mappings for Keyed Decisions
 //===--------------------------------------------------------------------===//
@@ -1647,12 +1624,10 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
 vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate,
                                                           idx_t num_rows, ChunkExprCache &chunk_expr_cache) const {
     vector<EntityMapping> entity_mappings;
-    auto data_types = gstate.data.Types();
     for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
         auto &scope = entity_scopes[scope_idx];
         EntityMapping mapping;
 
-		vector<unique_ptr<Expression>> key_exprs_owned;
 		vector<const Expression *> key_exprs;
 		if (scope.value_link != DConstants::INVALID_INDEX) {
 			// A helper decision's scope: the groups of its link's `by` key among the rows
@@ -1660,8 +1635,8 @@ vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context
 			// value). The key is never evaluated on a row the clause drops; those rows
 			// are no group, and share one spare entity so that every row has an id.
 			auto &link = reducer_value_links[scope.value_link];
-			for (auto &expr : group_keys[link.group_key].expressions) {
-				key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *expr, context));
+			for (auto &element : KeyElements(link.group_key)) {
+				key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *element.expression, context));
 			}
 			vector<bool> kept;
 			if (link.when) {
@@ -1682,16 +1657,9 @@ vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context
 			entity_mappings.push_back(std::move(mapping));
 			continue;
 		}
-		// Build BoundReferenceExpression for each entity-key physical column index
-		// so BuildGroupIds can run them through one ExpressionExecutor.
-		key_exprs_owned.reserve(scope.entity_key_physical_indices.size());
-		key_exprs.reserve(scope.entity_key_physical_indices.size());
-        for (idx_t col_idx = 0; col_idx < scope.entity_key_physical_indices.size(); col_idx++) {
-            idx_t phys_idx = scope.entity_key_physical_indices[col_idx];
-            key_exprs_owned.push_back(make_uniq_base<Expression, BoundReferenceExpression>(
-                data_types[phys_idx], phys_idx));
-            key_exprs.push_back(key_exprs_owned.back().get());
-        }
+		for (auto &element : KeyElements(scope.key)) {
+			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *element.expression, context));
+		}
 
 		// A reducer's `per ()` has no key columns: one class, every row in it.
 		BuildGroupIds(key_exprs, context, gstate.data, num_rows, std::function<bool(idx_t)> {}, mapping.row_to_entity,
@@ -1909,10 +1877,11 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 		idx_t count = 0;
 		vector<string> labels;
 		vector<vector<Value>> key_values;
-		LookupOrBuildPerGroupIds(per_group_cache, check.key, chunk_expr_cache, context, gstate.data, num_rows,
+		auto one_class = check.key == DConstants::INVALID_INDEX;
+		LookupOrBuildPerGroupIds(per_group_cache, keys, check.key, chunk_expr_cache, context, gstate.data, num_rows,
 		                         looked_at_row, &looked_at, ids, count, labels, nullptr, nullptr, &key_values);
 		auto describe = [&](idx_t group, const char *one, const char *all) {
-			return check.key.empty() ? string(all) : DescribeKeyValues(check.key_names, key_values[group]) + one;
+			return one_class ? string(all) : DescribeKeyValues(keys[check.key].Names(), key_values[group]) + one;
 		};
 		if (reads) {
 			vector<bool> read(count, false);
@@ -1925,11 +1894,11 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 				if (read[group]) {
 					continue;
 				}
-				if (check.key.empty()) {
+				if (one_class) {
 					throw InvalidInputException(DecideReducerHasNoRowsMessage(check.subject));
 				}
 				throw InvalidInputException("DECIDE: %s has no rows for %s.", check.subject,
-				                            DescribeKeyValues(check.key_names, key_values[group]));
+				                            DescribeKeyValues(keys[check.key].Names(), key_values[group]));
 			}
 			continue;
 		}
@@ -2202,10 +2171,10 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					return scoped_kept[row] && (every_kept_row || !has_local_filters || local_row_active[row]);
 				};
 				if (constraint->group_key != DConstants::INVALID_INDEX) {
-					LookupOrBuildPerGroupIds(per_group_cache, group_keys[constraint->group_key].expressions,
-					                         chunk_expr_cache, context, gstate.data, num_rows, emitted, &scoped_kept,
-					                         eval_const.row_group_ids, eval_const.num_groups, eval_const.group_labels,
-					                         &kept, &kept_row_group_ids);
+					LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->group_key, chunk_expr_cache, context,
+					                         gstate.data, num_rows, emitted, &scoped_kept, eval_const.row_group_ids,
+					                         eval_const.num_groups, eval_const.group_labels, &kept,
+					                         &kept_row_group_ids);
 				} else if (has_when || has_local_filters) {
 					eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 					kept_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
@@ -2221,7 +2190,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				if (diagnose) {
 					const bool one_group = eval_const.row_group_ids.empty();
 					eval_const.group_class_set = CollectGroupClasses(
-					    constraint->per_key, constraint->class_key, per_group_cache, chunk_expr_cache, context,
+					    constraint->per_key, keys, constraint->class_key, per_group_cache, chunk_expr_cache, context,
 					    gstate.data, num_rows, scoped_kept, one_group ? vector<idx_t>() : kept_row_group_ids,
 					    one_group ? 1 : eval_const.num_groups, gstate.class_sets);
 				}
@@ -2231,8 +2200,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				vector<idx_t> class_ids;
 				idx_t num_classes = 0;
 				vector<string> labels;
-				LookupOrBuildPerGroupIds(per_group_cache, constraint->class_key, chunk_expr_cache, context, gstate.data,
-				                         num_rows, kept, &scoped_kept, class_ids, num_classes, labels);
+				LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->class_key, chunk_expr_cache, context,
+				                         gstate.data, num_rows, kept, &scoped_kept, class_ids, num_classes, labels);
 				eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 				vector<bool> seen(num_classes, false);
 				for (idx_t row = 0; row < num_rows; row++) {
@@ -2248,7 +2217,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				// Each class's row stands for its class (D28), under DIAGNOSE only.
 				if (diagnose) {
 					eval_const.group_class_set = CollectGroupClasses(
-					    constraint->per_key, constraint->class_key, per_group_cache, chunk_expr_cache, context,
+					    constraint->per_key, keys, constraint->class_key, per_group_cache, chunk_expr_cache, context,
 					    gstate.data, num_rows, scoped_kept, eval_const.row_group_ids, num_classes, gstate.class_sets);
 				}
 			} else if (has_when) {
@@ -2326,7 +2295,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			if (!eval_const.rhs_is_shared_scalar &&
                 !ContainsScalarSubqueryProvenance(*constraint->rhs_expr)) {
 				eval_const.rhs_label =
-				    RenderDecideSource(*constraint->rhs_expr, source_fragments, entity_scopes, &group_keys);
+				    RenderDecideSource(*constraint->rhs_expr, source_fragments, entity_scopes, &keys);
 			}
 			eval_const.rhs_values.Reserve(num_rows);
 		}
@@ -2829,9 +2798,9 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
     // belongs to this phase and not to the formulation pass — the grouping a widened
     // variable bound produces is the same grouping. It runs last here because the
     // "does this row carry a term at all" test below reads the filter masks settled above.
-    if (gstate.objective && !gstate.objective->per_columns.empty()) {
-        bool objective_has_local_filters = false;
-        bool objective_has_unfiltered_part = false;
+	if (gstate.objective && gstate.objective->per_key != DConstants::INVALID_INDEX) {
+		bool objective_has_local_filters = false;
+		bool objective_has_unfiltered_part = false;
         for (auto &f : result.linear_filters) {
             objective_has_local_filters |= f.has_filter;
             objective_has_unfiltered_part |= !f.has_filter;
@@ -2877,8 +2846,8 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 
 		vector<string> obj_group_labels; // unused: objective groups are not diagnosed by clause key
 		// The two-level objective keeps NULL as a class (D5).
-		LookupOrBuildPerGroupIds(per_group_cache, gstate.objective->per_columns, chunk_expr_cache, context, gstate.data,
-		                         num_rows, obj_row_is_included, nullptr, result.objective_row_group_ids,
+		LookupOrBuildPerGroupIds(per_group_cache, keys, gstate.objective->per_key, chunk_expr_cache, context,
+		                         gstate.data, num_rows, obj_row_is_included, nullptr, result.objective_row_group_ids,
 		                         result.objective_num_groups, obj_group_labels);
 	}
 
@@ -3025,7 +2994,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 				// Named as the plan prints the reducer, so a diagnosis over the extremum
 				// column reads `max(ship)`.
 				ta.label = term.agg_name + "(" +
-				           RenderDecideSource(*term.inner_expr, source_fragments, entity_scopes, &group_keys) + ")";
+				           RenderDecideSource(*term.inner_expr, source_fragments, entity_scopes, &keys) + ")";
 			}
 			ta.inner_terms = &term.inner_terms;
 			if (term.filter) {
@@ -3082,7 +3051,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 				kept_rows = KeptRows(*spec.when, chunk_expr_cache, context, gstate.data, num_rows);
 			}
 			clause.class_set =
-			    CollectGroupClasses(spec.per_key, spec.class_key, per_group_cache, chunk_expr_cache, context,
+			    CollectGroupClasses(spec.per_key, keys, spec.class_key, per_group_cache, chunk_expr_cache, context,
 			                        gstate.data, num_rows, kept_rows, {}, 1, gstate.class_sets)[0];
 		}
 		evaluated.composed_constraints.push_back(std::move(clause));
@@ -3170,12 +3139,8 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		std::function<bool(idx_t)> is_member = [&](idx_t row) {
 			return read[row];
 		};
-		vector<unique_ptr<Expression>> no_key;
-		LookupOrBuildPerGroupIds(per_group_cache,
-		                         link.group_key != DConstants::INVALID_INDEX ? group_keys[link.group_key].expressions
-		                                                                     : no_key,
-		                         chunk_expr_cache, context, gstate.data, num_rows, is_member, &kept, ec.row_group_ids,
-		                         ec.num_groups, ec.group_labels);
+		LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
+		                         num_rows, is_member, &kept, ec.row_group_ids, ec.num_groups, ec.group_labels);
 
 		// The members' coefficients, computed on the member rows alone.
 		EvaluateTermColumns(context, gstate.data, chunk_expr_cache, link.inner_terms, read, num_rows, source_fragments,

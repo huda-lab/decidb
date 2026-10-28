@@ -26,17 +26,17 @@ void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments)
 void PreserveDecideSourceFragment(const ParsedExpression &source, Expression &bound);
 
 //! Assign stable source ids to bound comparisons before planning rewrites them.
-//! `group_keys` lets a reducer print its
-//! `by (...)`; every renderer below takes it for the same reason.
+//! `keys` lets a reducer print its
+//! `per K` and `by (...)`; every renderer below takes it for the same reason.
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const vector<string> &fragments,
                                                             const vector<EntityScopeInfo> &entity_scopes,
                                                             idx_t decide_index,
-                                                            const vector<DecideGroupKey> *group_keys = nullptr);
+                                                            const vector<DecideKey> *keys = nullptr);
 
 //! Rebuild canonical display templates after PlanSubqueries and canonicalization.
 void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,
                                   const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
-                                  const vector<DecideGroupKey> *group_keys = nullptr);
+                                  const vector<DecideKey> *keys = nullptr);
 
 //! Render one bound expression as the user wrote it.
 //!
@@ -50,8 +50,7 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 //! Every surface that echoes a DECIDE clause back to a user goes through here:
 //! EXPLAIN on both plans, and the clause labels an infeasibility diagnosis prints.
 string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
-                          const vector<EntityScopeInfo> &entity_scopes,
-                          const vector<DecideGroupKey> *group_keys = nullptr);
+                          const vector<EntityScopeInfo> &entity_scopes, const vector<DecideKey> *keys = nullptr);
 
 //! What a message about a clause renders with: the
 //! registries above, and each relation's alias by table index, so a column reads
@@ -59,8 +58,8 @@ string RenderDecideSource(const Expression &expr, const vector<string> &fragment
 struct DecideSourceNames {
     const vector<string> &fragments;
     const vector<EntityScopeInfo> &entity_scopes;
-    const vector<DecideGroupKey> &group_keys;
-    const unordered_map<idx_t, string> &relations;
+	const vector<DecideKey> &keys;
+	const unordered_map<idx_t, string> &relations;
     //! The decision columns that stand for an expression (`LogicalDecide::aux_var_expressions`:
     //! an ABS auxiliary `abs(e)`, a product `(b * x)`, an indicator `(x = v)`, a helper
     //! `sum(e) by (g)`), which print as that expression rather than by their internal
@@ -72,7 +71,7 @@ struct DecideSourceNames {
 //! The names a plan and the rewrites render with: the clause registries, no relation
 //! aliases (a column prints its name alone), and the auxiliary labels.
 DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
-                                  const vector<DecideGroupKey> &group_keys, idx_t decide_index,
+                                  const vector<DecideKey> &keys, idx_t decide_index,
                                   const vector<pair<idx_t, string>> &aux_labels);
 
 //! An expression as the query writes it (lower-case names, a reducer's `when`,
@@ -92,8 +91,7 @@ string RenderDecideReducer(const BoundAggregateExpression &reducer, const Decide
 //! norm's body goes through here, so a new definition changes one function.
 const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer);
 
-//! The key of a `per` wrapper: as written, else its columns, which
-//! BindKeyColumns named in SQL already (`D.region`); `()` for none.
+//! The key of a `per` wrapper, as written (`D.region`, `()`).
 string RenderDecidePerKey(const BoundConjunctionExpression &per, const vector<string> &fragments);
 
 //! Split a DECIDE constraint or objective tree into one rendered string per clause,

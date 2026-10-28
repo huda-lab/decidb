@@ -352,13 +352,16 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 			return BindResult(std::move(error));
 		}
 	}
-	vector<unique_ptr<Expression>> key;
+	idx_t key = DConstants::INVALID_INDEX;
 	idx_t key_fragment = DConstants::INVALID_INDEX;
 	if (per) {
+		if (!qualifier_context || !qualifier_context->keys) {
+			throw InternalException("DECIDE: a per wrapper needs the clause's keys");
+		}
 		// The key as written (`per D`), read before its elements bind. It cannot ride on
 		// the marker's alias: the expression binder gives the bound wrapper that alias.
-		if (qualifier_context && qualifier_context->source_fragments) {
-			auto key_text = DecideKeyToString(*per);
+		auto key_text = DecideKeyToString(*per);
+		if (qualifier_context->source_fragments) {
 			key_fragment = qualifier_context->source_fragments->size();
 			qualifier_context->source_fragments->push_back(key_text.empty() ? string("()") : key_text);
 		}
@@ -366,7 +369,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 		for (auto &variable : variables) {
 			decision_names.insert(variable.first);
 		}
-		key = BindKeyColumns(binder.bind_context, *per, decision_names);
+		key = BindKey(binder.bind_context, *per, decision_names, key_text, *qualifier_context->keys);
 	}
 
 	// One scope per constraint: a BETWEEN bound to the conjunction of its two halves, and
@@ -390,10 +393,10 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 		if (per) {
 			auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 			wrapper->children.push_back(std::move(constraint));
-			for (auto &column : key) {
-				wrapper->children.push_back(column->Copy());
-			}
 			wrapper->alias = PER_CLASS_TAG;
+			if (key != DConstants::INVALID_INDEX) {
+				AddDecideTag(wrapper->alias, MakePerKeyTag(key));
+			}
 			if (key_fragment != DConstants::INVALID_INDEX) {
 				AddDecideTag(wrapper->alias, MakeSourceFragmentTag(key_fragment));
 			}

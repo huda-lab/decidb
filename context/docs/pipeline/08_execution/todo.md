@@ -24,8 +24,8 @@ key once and give equal keys equal ids.
 column order of keyed decisions and helpers follows the entity ids, and the row order of
 grouped rows follows the dense ids; golden corpus entries 22, 23, 38, 39, 56, 61, 62, 65,
 70 and 91–94 depend on them. A merge that keeps entity ids first-seen over every row and
-the per-call dense renumbering changes no dump. If `entity_scopes` and `group_keys` also
-merge into one key table, that part is stage 03's.
+the per-call dense renumbering changes no dump. Both paths already read their keys from
+the one key table (`LogicalDecide::keys`).
 
 **Test.** The golden corpus dumps identically on Gurobi and HiGHS; a query with a
 decision keyed by `g` and a `by (g)` reducer evaluates `g` once (a profile counter on
@@ -50,8 +50,8 @@ and the objective. The keyed direct plans already skip NULL-key rows (`../../dir
    Its value is absent: a reducer skips it and an unreduced use skips that constraint instance (deck p. 50).
 6. A NULL key is no group of that key only: the clause's other reducers still read the row, so this is not a fold of
    `g IS NOT NULL` into the `when` (`sum(x) by (g) <= 0.5 * sum(x)`: the NULL-`g` row has no limit and counts in the
-   total). A composite key is NULL when any column is; a relation key (`per D:`) only when all its columns are
-   (owner, 2026-10-28; deck p. 76).
+   total). A composite key is NULL when any written column is; a relation key (`per D:`) is unchanged, its columns
+   comparing NULL as a value (owner, 2026-10-28). Each key element records which (`DecideKeyNullMode`).
 7. A group left empty, by NULL keys, a reducer's own `when` or a clause `when` that keeps no row, skips its
    constraint (owner, 2026-10-28): D4 and D8 retire in this batch. Rulings in full: `../../todo.md` B1.
 5. SQL's `GROUP BY` keeps NULL as one group. The docs say DECIDE departs from it because a NULL key is an unknown

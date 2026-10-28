@@ -7,10 +7,40 @@
 #include "duckdb/parser/parser.hpp"
 #include "duckdb/parser/statement/select_statement.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/planner/expression/bound_constant_expression.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 
 using namespace duckdb;
 
 namespace {
+
+//! The key table came through a round trip whole: every key's text and elements.
+void RequireSameKeys(const LogicalDecide &after, const LogicalDecide &before) {
+	REQUIRE(after.keys.size() == before.keys.size());
+	for (idx_t i = 0; i < before.keys.size(); i++) {
+		auto &key = before.keys[i];
+		auto &copy = after.keys[i];
+		REQUIRE(copy.text == key.text);
+		REQUIRE(copy.written_as_by == key.written_as_by);
+		REQUIRE(copy.elements.size() == key.elements.size());
+		for (idx_t e = 0; e < key.elements.size(); e++) {
+			REQUIRE(copy.elements[e].name == key.elements[e].name);
+			REQUIRE(copy.elements[e].null_mode == key.elements[e].null_mode);
+			REQUIRE(copy.elements[e].expression->Equals(*key.elements[e].expression));
+		}
+	}
+}
+
+//! The index of the key written as `text`.
+idx_t KeyWritten(const LogicalDecide &decide, const string &text) {
+	for (idx_t i = 0; i < decide.keys.size(); i++) {
+		if (decide.keys[i].text == text) {
+			return i;
+		}
+	}
+	FAIL("no key written as " << text);
+	return DConstants::INVALID_INDEX;
+}
 
 //! The DECIDE node inside an extracted plan, wherever the projection put it.
 LogicalDecide *FindDecide(LogicalOperator &op) {
@@ -240,9 +270,9 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	Connection con(db);
 	SetUp(con);
 
-	// `r_name` is referenced ONLY by the keyed declaration. Its column ref lives on
-	// entity_key_expressions purely so column pruning keeps it alive, so a round trip
-	// that loses that vector loses the entity's identity.
+	// `r_name` is referenced ONLY by the keyed declaration. Its column ref lives in the
+	// key table, which column pruning reads, so a round trip that loses the table loses
+	// the entity's identity.
 	// `ship <= cap * open` is the one shape canonicalization has to move -- a bound that
 	// CONTAINS a decision -- so it is the only thing that populates source_lhs/source_rhs.
 	auto plan = con.ExtractPlan("SELECT s_key, ship FROM site JOIN region USING (r_key) "
@@ -257,19 +287,14 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
 
-	// Entity scopes, including the key column types and bindings that the previous
-	// hand-written serializer dropped entirely.
+	// Entity scopes and the keys they name, which the previous hand-written serializer
+	// dropped entirely.
 	REQUIRE(after->entity_scopes.size() == before->entity_scopes.size());
 	REQUIRE(after->entity_scopes.size() == 1);
-	REQUIRE(after->entity_scopes[0].table_alias == before->entity_scopes[0].table_alias);
-	REQUIRE(after->entity_scopes[0].key_names == before->entity_scopes[0].key_names);
-	REQUIRE(after->entity_scopes[0].source_table_indices == before->entity_scopes[0].source_table_indices);
-	REQUIRE(after->entity_scopes[0].entity_key_column_types.size() ==
-	        before->entity_scopes[0].entity_key_column_types.size());
-	REQUIRE(after->entity_scopes[0].entity_key_bindings.size() == before->entity_scopes[0].entity_key_bindings.size());
+	REQUIRE(after->entity_scopes[0].key == before->entity_scopes[0].key);
 	REQUIRE(after->entity_scopes[0].scoped_variable_indices == before->entity_scopes[0].scoped_variable_indices);
-	REQUIRE(after->entity_key_expressions.size() == before->entity_key_expressions.size());
-	REQUIRE(!after->entity_key_expressions.empty());
+	REQUIRE(!before->keys[before->entity_scopes[0].key].elements.empty());
+	RequireSameKeys(*after, *before);
 
 	// Per-variable scope assignment.
 	REQUIRE(after->variable_scopes.size() == before->variable_scopes.size());
@@ -335,15 +360,20 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	REQUIRE(vars[0].declared_key == "region.r_name, site.cap");
 	REQUIRE(vars[1].declared_key == "site.cap, r_name, r_name");
 	REQUIRE(vars[0].entity_scope_idx == vars[1].entity_scope_idx);
-	auto &shared = scopes[vars[0].entity_scope_idx];
-	REQUIRE(shared.entity_key_bindings.size() == 2);
-	REQUIRE(shared.source_table_indices.size() == 2);
+	auto &shared = before->keys[scopes[vars[0].entity_scope_idx].key];
+	REQUIRE(shared.elements.size() == 2);
+	for (auto &element : shared.elements) {
+		REQUIRE(element.null_mode == DecideKeyNullMode::NO_GROUP);
+	}
 	// A relation key is the relation's stored columns, one scope for every declaration
 	// that names it; a column key over some of those columns is another scope.
 	REQUIRE(vars[2].IsKeyed());
 	REQUIRE(vars[3].IsKeyed());
 	REQUIRE(vars[2].entity_scope_idx == vars[3].entity_scope_idx);
 	REQUIRE(vars[2].entity_scope_idx != vars[0].entity_scope_idx);
+	for (auto &element : before->keys[scopes[vars[2].entity_scope_idx].key].elements) {
+		REQUIRE(element.null_mode == DecideKeyNullMode::VALUE);
+	}
 	REQUIRE(vars[4].IsScalar());
 	REQUIRE(vars[5].scope == DecideVarScope::ROW);
 
@@ -352,17 +382,87 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	REQUIRE(after != nullptr);
 	REQUIRE(after->entity_scopes.size() == scopes.size());
 	for (idx_t i = 0; i < scopes.size(); i++) {
-		REQUIRE(after->entity_scopes[i].table_alias == scopes[i].table_alias);
-		REQUIRE(after->entity_scopes[i].entity_key_bindings == scopes[i].entity_key_bindings);
-		REQUIRE(after->entity_scopes[i].source_table_indices == scopes[i].source_table_indices);
+		REQUIRE(after->entity_scopes[i].key == scopes[i].key);
 	}
+	RequireSameKeys(*after, *before);
 	REQUIRE(after->variable_scopes.size() == vars.size());
 	for (idx_t i = 0; i < vars.size(); i++) {
 		REQUIRE(after->variable_scopes[i].scope == vars[i].scope);
 		REQUIRE(after->variable_scopes[i].entity_scope_idx == vars[i].entity_scope_idx);
 		REQUIRE(after->variable_scopes[i].declared_key == vars[i].declared_key);
 	}
-	REQUIRE(after->entity_key_expressions.size() == before->entity_key_expressions.size());
+}
+
+TEST_CASE("A column written beside its relation keeps the written column's NULL mode", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+
+	// `region` stands for r_key and r_name, NULL compared as a value; `r_name` written on
+	// its own is NULL in no group, and the one element both write keeps that mode.
+	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
+	                            "DECIDE per region, r_name: g(INT) SUCH THAT g <= 1 MAXIMIZE SUM(g)");
+	auto *before = FindDecide(*plan);
+	REQUIRE(before != nullptr);
+	REQUIRE(before->entity_scopes.size() == 1);
+	auto &key = before->keys[before->entity_scopes[0].key];
+	REQUIRE(key.elements.size() == 2);
+	idx_t written = 0;
+	for (auto &element : key.elements) {
+		if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
+			written++;
+			REQUIRE(element.name == "r_name");
+		}
+	}
+	REQUIRE(written == 1);
+
+	auto copied = RoundTrip(con, *plan);
+	auto *after = FindDecide(*copied);
+	REQUIRE(after != nullptr);
+	RequireSameKeys(*after, *before);
+}
+
+TEST_CASE("A key's elements are in one order however it is written", "[decidb]") {
+	auto column = [](idx_t column_index, const string &name, DecideKeyNullMode mode) {
+		DecideKeyElement element;
+		element.expression =
+		    make_uniq<BoundColumnRefExpression>(name, LogicalType::INTEGER, ColumnBinding(0, column_index));
+		element.name = name;
+		element.null_mode = mode;
+		return element;
+	};
+	auto expression = [&](const string &name) {
+		auto element = column(9, name, DecideKeyNullMode::NO_GROUP);
+		element.expression = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+		return element;
+	};
+	duckdb::vector<DecideKey> keys;
+	// Written b, a: kept a, b, columns by binding.
+	duckdb::vector<DecideKeyElement> written;
+	written.push_back(column(2, "b", DecideKeyNullMode::NO_GROUP));
+	written.push_back(column(1, "a", DecideKeyNullMode::NO_GROUP));
+	auto key = FindOrCreateDecideKey(std::move(written), "b, a", keys);
+	REQUIRE(keys[key].Names() == duckdb::vector<string> {"a", "b"});
+	REQUIRE(keys[key].text == "b, a");
+	// Written a, b, a: the same entry.
+	written.push_back(column(1, "a", DecideKeyNullMode::NO_GROUP));
+	written.push_back(column(2, "b", DecideKeyNullMode::NO_GROUP));
+	written.push_back(column(1, "a", DecideKeyNullMode::NO_GROUP));
+	REQUIRE(FindOrCreateDecideKey(std::move(written), "a, b", keys) == key);
+	// An expression comes after the columns.
+	written.push_back(expression("1"));
+	written.push_back(column(2, "b", DecideKeyNullMode::NO_GROUP));
+	auto mixed = FindOrCreateDecideKey(std::move(written), "1, b", keys);
+	REQUIRE(keys[mixed].Names() == duckdb::vector<string> {"b", "1"});
+	// A column through its relation, then written: the written one, name and mode.
+	written.push_back(column(1, "D.a", DecideKeyNullMode::VALUE));
+	written.push_back(column(1, "a", DecideKeyNullMode::NO_GROUP));
+	auto relation = FindOrCreateDecideKey(std::move(written), "D, a", keys);
+	REQUIRE(keys[relation].elements.size() == 1);
+	REQUIRE(keys[relation].elements[0].name == "a");
+	REQUIRE(keys[relation].elements[0].null_mode == DecideKeyNullMode::NO_GROUP);
+	// The empty key is no entry.
+	REQUIRE(FindOrCreateDecideKey({}, "()", keys) == DConstants::INVALID_INDEX);
 }
 
 TEST_CASE("DIAGNOSE survives a serialization round trip", "[decidb]") {
@@ -453,10 +553,12 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	                            "MAXIMIZE when cap > 0: sum(x)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
-	REQUIRE(before->group_keys.size() == 2);
-	REQUIRE(before->group_keys[0].text == "r_name");
-	REQUIRE(before->group_keys[1].text == "site.r_key");
-	REQUIRE(before->group_keys[1].names == duckdb::vector<string> {"site.r_key"});
+	// The clause's `per r_name` and its `by (r_name)` are one key; the reducer's own
+	// `per region` within its `by (site.r_key)` groups adds their union for its check.
+	REQUIRE(before->keys.size() == 4);
+	REQUIRE(before->scope_checks[3].key == KeyWritten(*before, "region, site.r_key"));
+	REQUIRE(KeyWritten(*before, "region") == before->entity_scopes[0].key);
+	REQUIRE(before->keys[KeyWritten(*before, "site.r_key")].Names() == duckdb::vector<string> {"site.r_key"});
 	duckdb::vector<DecideScopeCheckKind> kinds;
 	for (auto &check : before->scope_checks) {
 		kinds.push_back(check.kind);
@@ -474,17 +576,7 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
-	REQUIRE(after->group_keys.size() == before->group_keys.size());
-	for (idx_t i = 0; i < before->group_keys.size(); i++) {
-		auto &key = before->group_keys[i];
-		auto &copy = after->group_keys[i];
-		REQUIRE(copy.text == key.text);
-		REQUIRE(copy.names == key.names);
-		REQUIRE(copy.expressions.size() == key.expressions.size());
-		for (idx_t e = 0; e < key.expressions.size(); e++) {
-			REQUIRE(copy.expressions[e]->Equals(*key.expressions[e]));
-		}
-	}
+	RequireSameKeys(*after, *before);
 	REQUIRE(after->scope_checks.size() == before->scope_checks.size());
 	auto same = [](const duckdb::unique_ptr<Expression> &a, const duckdb::unique_ptr<Expression> &b) {
 		return a ? (b && a->Equals(*b)) : !b;
@@ -496,19 +588,14 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 		REQUIRE(same(copy.rows, check.rows));
 		REQUIRE(same(copy.value, check.value));
 		REQUIRE(same(copy.filter, check.filter));
-		REQUIRE(copy.key.size() == check.key.size());
-		for (idx_t k = 0; k < check.key.size(); k++) {
-			REQUIRE(copy.key[k]->Equals(*check.key[k]));
-		}
+		REQUIRE(copy.key == check.key);
 		REQUIRE(copy.decision == check.decision);
 		REQUIRE(copy.subject == check.subject);
 		REQUIRE(copy.object == check.object);
 		REQUIRE(copy.context == check.context);
-		REQUIRE(copy.key_names == check.key_names);
 	}
-	// A reducer's own `per` names its key as written.
 	REQUIRE(after->entity_scopes.size() == before->entity_scopes.size());
 	for (idx_t i = 0; i < before->entity_scopes.size(); i++) {
-		REQUIRE(after->entity_scopes[i].key_names == before->entity_scopes[i].key_names);
+		REQUIRE(after->entity_scopes[i].key == before->entity_scopes[i].key);
 	}
 }

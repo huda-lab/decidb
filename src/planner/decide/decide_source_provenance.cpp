@@ -66,8 +66,8 @@ namespace {
 struct RenderContext {
 	const vector<string> &fragments;
 	const vector<EntityScopeInfo> &entity_scopes;
-	//! The `by` keys, so a reducer prints its `by (...)`; null prints none.
-	const vector<DecideGroupKey> *group_keys = nullptr;
+	//! The keys, so a reducer prints its `per K` and `by (...)`; null prints neither.
+	const vector<DecideKey> *keys = nullptr;
 	//! A relation's alias by table index, so a column prints as `D.depotID`; null
 	//! prints its name alone.
 	const unordered_map<idx_t, string> *relations = nullptr;
@@ -75,12 +75,14 @@ struct RenderContext {
 	//! which print as that expression; null prints a column's name.
 	idx_t decide_index = DConstants::INVALID_INDEX;
 	const vector<pair<idx_t, string>> *aux_labels = nullptr;
+	//! False when the caller writes the `by` itself.
+	bool print_by = true;
 };
 } // namespace
 
 //! The context `names` describes.
 static RenderContext ContextOf(const DecideSourceNames &names) {
-	RenderContext ctx {names.fragments, names.entity_scopes, &names.group_keys, &names.relations};
+	RenderContext ctx {names.fragments, names.entity_scopes, &names.keys, &names.relations};
 	ctx.decide_index = names.decide_index;
 	ctx.aux_labels = names.aux_labels;
 	return ctx;
@@ -212,27 +214,27 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 		// `count(*)` binds as `count_star()`; it takes no scope inside it.
 		idx_t group_key;
 		bool has_by =
-		    ctx.group_keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.group_keys->size();
+		    ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.keys->size();
 		return (scope.empty() ? "count(*)" : "sum(" + scope + ": 1)") +
-		       (has_by ? " by (" + (*ctx.group_keys)[group_key].text + ")" : string());
+		       (has_by ? " by (" + (*ctx.keys)[group_key].text + ")" : string());
 	}
 	string result = (!carrier.empty() ? carrier
 	                 : order.empty()  ? StringUtil::Lower(agg.function.name)
 	                                  : string("norm")) +
 	                "(";
 	idx_t scope_idx;
-	if (TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < ctx.entity_scopes.size()) {
-		auto &key = ctx.entity_scopes[scope_idx];
+	if (ctx.keys && TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < ctx.entity_scopes.size()) {
+		auto key_text = DecideKeyText(*ctx.keys, ctx.entity_scopes[scope_idx].key);
 		if (HasDecideTag(agg.GetAlias(), COLON_FORM_TAG)) {
-			result += key.table_alias + ": ";
+			result += key_text + ": ";
 		} else {
-			scope += (scope.empty() ? "per " : " per ") + key.table_alias;
+			scope += (scope.empty() ? "per " : " per ") + key_text;
 		}
 	}
 	result += (scope.empty() ? "" : scope + ": ") + body + (order.empty() ? "" : ", " + order) + ")";
 	idx_t group_key;
-	if (ctx.group_keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.group_keys->size()) {
-		result += " by (" + (*ctx.group_keys)[group_key].text + ")";
+	if (ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.keys->size()) {
+		result += " by (" + (*ctx.keys)[group_key].text + ")";
 	}
 	return result;
 }
@@ -290,11 +292,10 @@ const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer)
 }
 
 //! An expression with the registries alone -- no relation names, no auxiliary labels: the form
-//! the clause renderers in this file use. `group_keys` prints each reducer's `by`.
+//! the clause renderers in this file use. `keys` prints each reducer's `per` and `by`.
 static string RenderSource(const Expression &expr, const vector<string> &fragments,
-                           const vector<EntityScopeInfo> &entity_scopes,
-                           const vector<DecideGroupKey> *group_keys = nullptr) {
-	RenderContext ctx {fragments, entity_scopes, group_keys};
+                           const vector<EntityScopeInfo> &entity_scopes, const vector<DecideKey> *keys = nullptr) {
+	RenderContext ctx {fragments, entity_scopes, keys};
 	return RenderSource(expr, ctx);
 }
 
@@ -424,14 +425,10 @@ static string AppendQualifier(string prefix, const string &suffix) {
 
 string RenderDecidePerKey(const BoundConjunctionExpression &conj, const vector<string> &fragments) {
 	idx_t fragment_id;
-	if (TryParseSourceFragmentTag(conj.GetAlias(), fragment_id) && fragment_id < fragments.size()) {
-		return fragments[fragment_id];
+	if (!TryParseSourceFragmentTag(conj.GetAlias(), fragment_id) || fragment_id >= fragments.size()) {
+		throw InternalException("DECIDE: a per wrapper keeps no written key");
 	}
-	string key;
-	for (idx_t i = 1; i < conj.children.size(); i++) {
-		key += (i > 1 ? ", " : "") + conj.children[i]->GetName();
-	}
-	return key.empty() ? string("()") : key;
+	return fragments[fragment_id];
 }
 
 //! `per K`, in front of its clause.
@@ -527,8 +524,7 @@ static bool ReferencesDecideVariable(const Expression &expr, idx_t decide_index)
 
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const vector<string> &fragments,
                                                             const vector<EntityScopeInfo> &entity_scopes,
-                                                            idx_t decide_index,
-                                                            const vector<DecideGroupKey> *group_keys) {
+                                                            idx_t decide_index, const vector<DecideKey> *keys) {
 	vector<ConstraintSourceInfo> result;
 	VisitSourceComparisons(constraints, fragments, entity_scopes, string(),
 	                       [&](BoundComparisonExpression &cmp, const string &qualifier) {
@@ -561,8 +557,8 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       // A scope written in front belongs to the clause as written:
 		                       // canonicalization drops the `per K:` of a clause in the
 		                       // aggregate shape, which still holds (its scope checks).
-		                       info.written_lhs = RenderSource(*cmp.left, fragments, entity_scopes, group_keys);
-		                       info.written_rhs = RenderSource(*cmp.right, fragments, entity_scopes, group_keys);
+		                       info.written_lhs = RenderSource(*cmp.left, fragments, entity_scopes, keys);
+		                       info.written_rhs = RenderSource(*cmp.right, fragments, entity_scopes, keys);
 		                       info.written_cmp = DecideComparisonOperator(cmp.type);
 		                       info.qualifier = qualifier;
 		                       if (ReferencesDecideVariable(*cmp.left, decide_index) &&
@@ -605,7 +601,7 @@ static bool ContainsSubquerySource(const Expression &expr) {
 
 void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,
                                   const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
-                                  const vector<DecideGroupKey> *group_keys) {
+                                  const vector<DecideKey> *keys) {
 	auto &mutable_constraints = const_cast<Expression &>(constraints);
 	VisitSourceComparisons(mutable_constraints, fragments, entity_scopes, string(),
 	                       [&](BoundComparisonExpression &cmp, const string &) {
@@ -614,8 +610,8 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 			                       return;
 		                       }
 		                       auto &info = sources[source_id];
-		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, entity_scopes, group_keys);
-		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, entity_scopes, group_keys);
+		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, entity_scopes, keys);
+		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, entity_scopes, keys);
 		                       info.canonical_cmp = DecideComparisonOperator(cmp.type);
 		                       // The written spelling is only worth carrying when it differs
 		                       // from the canonical one. Two cases retire it here. When both
@@ -644,8 +640,8 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 }
 
 string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
-                          const vector<EntityScopeInfo> &entity_scopes, const vector<DecideGroupKey> *group_keys) {
-	return RenderSource(expr, fragments, entity_scopes, group_keys);
+                          const vector<EntityScopeInfo> &entity_scopes, const vector<DecideKey> *keys) {
+	return RenderSource(expr, fragments, entity_scopes, keys);
 }
 
 string RenderDecideSource(const Expression &expr, const DecideSourceNames &names) {
@@ -653,10 +649,10 @@ string RenderDecideSource(const Expression &expr, const DecideSourceNames &names
 }
 
 DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
-                                  const vector<DecideGroupKey> &group_keys, idx_t decide_index,
+                                  const vector<DecideKey> &keys, idx_t decide_index,
                                   const vector<pair<idx_t, string>> &aux_labels) {
 	static const unordered_map<idx_t, string> no_relations;
-	DecideSourceNames names {fragments, entity_scopes, group_keys, no_relations};
+	DecideSourceNames names {fragments, entity_scopes, keys, no_relations};
 	names.decide_index = decide_index;
 	names.aux_labels = &aux_labels;
 	return names;
@@ -677,7 +673,7 @@ unordered_map<idx_t, string> DecideRelationNames(BindContext &bind_context, idx_
 
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names) {
 	auto ctx = ContextOf(names);
-	ctx.group_keys = nullptr;
+	ctx.print_by = false;
 	return RenderSource(reducer, ctx);
 }
 
@@ -758,7 +754,7 @@ static unique_ptr<string> RenderTwoLevelInner(const BoundConjunctionExpression &
 	}
 	auto &inner = parts.body->Cast<BoundAggregateExpression>();
 	auto ctx = ContextOf(names);
-	ctx.group_keys = nullptr; // the `by` is the per key, written once below
+	ctx.print_by = false; // the `by` is the per key, written once below
 	string inner_body = inner.children.empty() ? string() : RenderSource(*inner.children[0], ctx);
 	return make_uniq<string>((parts.when.empty() ? string() : "when " + parts.when + " ") + "per " + parts.key + ": " +
 	                         StringUtil::Lower(inner.function.name) + "(" + inner_body + ") by (" + parts.key + ")");

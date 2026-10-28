@@ -683,9 +683,7 @@ private:
 			TryParseGroupKeyTag(comp.alias, constraint->group_key);
 			if (per_class) {
 				constraint->per_key = DecideConstraint::PerKeyRole::NAMES_CLASSES;
-				for (idx_t i = 1; i < per_class->children.size(); i++) {
-					constraint->class_key.push_back(per_class->children[i]->Copy());
-				}
+				constraint->class_key = PerWrapperKey(*per_class);
 			}
 
 			// Extract terms from LHS
@@ -886,7 +884,7 @@ private:
 				    (obj.bilinear_terms.size() != bilinear_before && !ReadsOnlyQueryWideDecisions(expr))) {
 					throw InvalidInputException(
 					    "DECIDE objective: '%s' multiplies decisions outside a reducer, which is not supported yet",
-					    RenderDecideSource(expr, op.source_fragments, op.entity_scopes, &op.group_keys));
+					    RenderDecideSource(expr, op.source_fragments, op.entity_scopes, &op.keys));
 				}
 				continue;
 			}
@@ -936,13 +934,12 @@ private:
 		auto *expr = UnwrapDecideCasts(*expr_ptr, decide_index);
 
 		// DecidB: Check for PER wrapper on objective (outermost layer)
-		vector<unique_ptr<Expression>> per_cols;
+		idx_t per_key = DConstants::INVALID_INDEX;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			if (IsPerConstraintWrapper(conj) && conj.children.size() >= 2) {
-				for (idx_t i = 1; i < conj.children.size(); i++) {
-					per_cols.push_back(conj.children[i]->Copy());
-				}
+			if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
+				// `per ()` groups nothing: the objective is read once.
+				per_key = PerWrapperKey(conj);
 				expr = UnwrapDecideCasts(*conj.children[0], decide_index);
 			}
 		}
@@ -991,14 +988,14 @@ private:
 			}
 
 			objective->when_condition = std::move(when_cond);
-			objective->per_columns = std::move(per_cols);
+			objective->per_key = per_key;
 		} else if (BoundExpressionContainsAggregate(*expr) || FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
 			// The second arm covers an objective with no aggregate at all: decisions
 			// outside every reducer (e.g. `minimize max_shortfall`), read once.
 			objective = make_uniq<DecideObjective>();
 			ExtractAggregateObjectiveTerms(*expr, *objective);
 			objective->when_condition = std::move(when_cond);
-			objective->per_columns = std::move(per_cols);
+			objective->per_key = per_key;
 		}
 	}
 

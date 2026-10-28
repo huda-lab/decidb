@@ -1077,6 +1077,55 @@
     "pointer_type": "none"
   },
   {
+    "class": "DecideKeyElement",
+    "includes": [
+      "duckdb/planner/operator/decide/logical_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "expression",
+        "type": "Expression*"
+      },
+      {
+        "id": 101,
+        "name": "name",
+        "type": "string"
+      },
+      {
+        "id": 102,
+        "name": "null_mode",
+        "type": "DecideKeyNullMode"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "DecideKey",
+    "includes": [
+      "duckdb/planner/operator/decide/logical_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "elements",
+        "type": "vector<DecideKeyElement>"
+      },
+      {
+        "id": 101,
+        "name": "text",
+        "type": "string"
+      },
+      {
+        "id": 102,
+        "name": "written_as_by",
+        "type": "bool",
+        "default": "false"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
     "class": "EntityScopeInfo",
     "includes": [
       "duckdb/planner/operator/decide/logical_decide.hpp"
@@ -1085,22 +1134,26 @@
       {
         "id": 100,
         "name": "table_alias",
-        "type": "string"
+        "type": "string",
+        "deleted": true
       },
       {
         "id": 101,
         "name": "source_table_indices",
-        "type": "vector<idx_t>"
+        "type": "vector<idx_t>",
+        "deleted": true
       },
       {
         "id": 102,
         "name": "entity_key_column_types",
-        "type": "vector<LogicalType>"
+        "type": "vector<LogicalType>",
+        "deleted": true
       },
       {
         "id": 103,
         "name": "entity_key_bindings",
-        "type": "vector<ColumnBinding>"
+        "type": "vector<ColumnBinding>",
+        "deleted": true
       },
       {
         "id": 104,
@@ -1116,31 +1169,13 @@
       {
         "id": 106,
         "name": "key_names",
-        "type": "vector<string>"
-      }
-    ],
-    "pointer_type": "none"
-  },
-  {
-    "class": "DecideGroupKey",
-    "includes": [
-      "duckdb/planner/operator/decide/logical_decide.hpp"
-    ],
-    "members": [
-      {
-        "id": 100,
-        "name": "expressions",
-        "type": "vector<Expression*>"
+        "type": "vector<string>",
+        "deleted": true
       },
       {
-        "id": 101,
-        "name": "text",
-        "type": "string"
-      },
-      {
-        "id": 102,
-        "name": "names",
-        "type": "vector<string>"
+        "id": 107,
+        "name": "key",
+        "type": "idx_t"
       }
     ],
     "pointer_type": "none"
@@ -1163,8 +1198,9 @@
       },
       {
         "id": 102,
-        "name": "key",
-        "type": "vector<Expression*>"
+        "name": "key_expressions",
+        "type": "vector<Expression*>",
+        "deleted": true
       },
       {
         "id": 103,
@@ -1199,7 +1235,13 @@
       {
         "id": 109,
         "name": "key_names",
-        "type": "vector<string>"
+        "type": "vector<string>",
+        "deleted": true
+      },
+      {
+        "id": 110,
+        "name": "key",
+        "type": "idx_t"
       }
     ],
     "pointer_type": "none"

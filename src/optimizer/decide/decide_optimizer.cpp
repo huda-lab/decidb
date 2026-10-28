@@ -200,7 +200,7 @@ void decide_rewrite::ReplaceWithDecision(ClientContext &context, const LogicalDe
 string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide &decide) {
 	// The labels of the auxiliaries earlier passes made, so a construct over one prints
 	// it as what it stands for rather than by its internal name.
-	return RenderDecideSource(expr, DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys,
+	return RenderDecideSource(expr, DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.keys,
 	                                                decide.decide_index, decide.aux_var_expressions));
 }
 

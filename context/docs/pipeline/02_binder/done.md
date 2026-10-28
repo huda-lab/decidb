@@ -65,14 +65,17 @@ the decision as it was declared; everything past the binder treats it as `ENTITY
 `per ()` creates no key scope. The names of the query-wide decisions travel to the two
 clause binders (`scalar_variables`), which treat such a decision as one value.
 
-A keyed decision points at an `EntityScopeInfo` (`logical_decide.hpp`): `table_alias`
-(the key as written: `D.depotID, S.customerID`, `D`, `()`), `source_table_indices`,
-`entity_key_bindings`, `entity_key_column_types`, `scoped_variable_indices`,
-`key_names` (each key column as a message names it) and `value_link`, which only stage
-05 sets, on a helper decision's scope. `entity_key_physical_indices` is filled in later,
-at physical-plan creation. One scope exists per set of key columns, whichever spelling
-names it: a declaration's `per K`, a reducer's own `per K` and the colon form
-`SUM(D: e)` (§3) all go through `FindOrCreateExactScope`.
+Every key the clauses write is an entry of one key table (`DecideKey`,
+`logical_decide.hpp`; [../03_logical_plan/done.md §4](../03_logical_plan/done.md#4-what-logicaldecide-carries)):
+the key as first written (`D.depotID, S.customerID`, `D`, `()`) and its elements, each
+a bound expression with the name a message prints and a NULL mode (`VALUE` for a column
+a relation element stands for, `NO_GROUP` for one written on its own).
+`FindOrCreateDecideKey` finds the entry with the same elements as a set, or appends one.
+A keyed decision points at an `EntityScopeInfo`: the key, the decisions it keys
+(`scoped_variable_indices`), and `value_link`, which only stage 05 sets, on a helper
+decision's scope. One scope exists per key, whichever spelling names it: a declaration's
+`per K`, a reducer's own `per K` and the colon form `SUM(D: e)` (§3) all go through
+`FindOrCreateKeyScope` or, for the colon form's relation list, `FindOrCreateScope`.
 
 ### Keyed declarations
 
@@ -94,9 +97,10 @@ never an outer query, whose column would be one constant per run of this one:
 
 `rowid` and a generated column are not stored columns: named, they are an error;
 inside a relation, they are skipped. Columns are registered through
-`TableBinding::GetColumnBinding` for a base table, so the scan keeps them, then sorted
-and de-duplicated by binding (`SortedKey`). A scope with the same bindings is reused,
-so equal keys share one grouping however they were written.
+`TableBinding::GetColumnBinding` for a base table, so the scan keeps them.
+`FindOrCreateDecideKey` de-duplicates them and puts them in one order (columns by
+binding, then other expressions by their text), so equal keys share one entry and one
+grouping however they were written.
 
 ### Types and domains
 
@@ -234,9 +238,8 @@ reducer counts once. `per row` adds nothing. A `by` after the reducer is
 
 `DecideBinder::BindQualifiedReducer` binds the colon form `SUM(D: expr)` as
 `sum(per D: expr)` (../../language/guide.md §5.1): each listed relation must be a relation
-of the FROM clause, its stored columns form the key (`AddRelationColumns`,
-`SortedKey`), and `FindOrCreateExactScope` — shared with `FindOrCreateKeyScope` —
-finds or creates the exact key scope, so `SUM(D: e)` and `sum(per D: e)` share one
+of the FROM clause, its stored columns form the key (`AddRelationColumns`), and `FindOrCreateScope` — shared with `FindOrCreateKeyScope` —
+finds or creates the key's scope, so `SUM(D: e)` and `sum(per D: e)` share one
 scope and one tag (`__qualified_by_<i>__`, appended to the aggregate's alias). `COLON_FORM_TAG` keeps the
 spelling for the echo (D38). Nothing is checked against the body at bind time: that `D`
 determines it — every column, per-row and keyed decision in it — is the DETERMINES
@@ -507,27 +510,27 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 | Written | Bound |
 |---|---|
 | `when c: C` | a WHEN wrapper (`WHEN_CONSTRAINT_TAG`) `[C, c]` |
-| `per K: C` | a `PER_CLASS_TAG` wrapper `[C, key columns...]`, none for `per ()`, its key as written a source fragment on the alias |
-| `when c per K: C` | `PER_CLASS{WHEN{C, c}, K}` |
+| `per K: C` | a `PER_CLASS_TAG` wrapper `[C]` tagged `__per_key_<i>__` with K's entry of the key table (no tag for `per ()`, which has no entry), its key as written a source fragment on the alias |
+| `when c per K: C` | `PER_CLASS{WHEN{C, c}}`, tagged with K |
 | `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`SCOPE_PER_ROW_TAG`, peeled) |
-| `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide_group_keys[i]`; `by ()` adds nothing |
+| `agg(...) by (G)` | the aggregate tagged `__group_key_<i>__`, naming `BoundSelectNode::decide_keys[i]`, whose `written_as_by` is set; `by ()` adds nothing |
 | `agg(when c: e)` | the aggregate's `filter` (§3) |
 | `agg(per K': e)`, `SUM(D: e)` | a `__qualified_by_<i>__` tag on an exact key scope; the colon form adds `COLON_FORM_TAG` (§3) |
 | `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
-| `outer(per k: inner(e) by (k))` | `PER{outer(inner(e)), k}` (`PER_CONSTRAINT_TAG`), its key as written a source fragment; a `when` in front sits inside it, `PER{WHEN{outer(inner(e)), c}, k}` |
+| `outer(per k: inner(e) by (k))` | `PER{outer(inner(e))}` (`PER_CONSTRAINT_TAG`), tagged with k's entry, its key as written a source fragment; a `when` in front sits inside it, `PER{WHEN{outer(inner(e)), c}}` |
 
 - `BindScopedConstraint` binds the body, the condition as data, the key through
-  `BindKeyColumns` (a declaration key's resolution; a column element keeps its written
-  name for messages). A `BETWEEN` binds to two comparisons, each under the whole scope;
+  `BindKey` (a declaration key's resolution into the key table; a column element keeps
+  its written name for messages). A `BETWEEN` binds to two comparisons, each under the whole scope;
   the second binds the condition again from its parsed text, since a bound subquery
   cannot be copied.
 - The key's text becomes a source fragment while binding, not on the parsed marker:
   `ExpressionBinder::Bind` copies a parsed node's alias onto the node it binds to, which
   would replace the wrapper's tag.
 - `BindReducerBy`: a relation element stands for its stored columns (a column of that
-  name wins); any other element binds as data. Equal key sets share one
-  `DecideGroupKey` (expressions, text as written, each element's name): equal as bound
-  expressions, or written alike — a bound subquery equals nothing, not even itself.
+  name wins); any other element binds as data. Equal key sets share one entry of the key
+  table, with every other key of those elements: equal as bound expressions, or, for a key
+  holding a subquery, written alike — a bound subquery equals nothing, not even itself.
 - `BindScopedReducer` peels the inner `per`/`when` (§3); `SUM(D: e)` is `sum(per D: e)`
   (`BindQualifiedReducer`, §3) and may take a `by`.
 - `BindScopedObjective`: `per ()` adds nothing; a `when` wraps the body, inside the
@@ -602,7 +605,7 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 | Concern | Location |
 |---|---|
 | Declarations, scopes, types, the parsed-tree validators (`BindDeclarations`, `RefuseQualifiedDecisionReferences`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
-| Shared DECIDE expression rules (`IsDataOperand`), reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateExactScope`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
+| Shared DECIDE expression rules (`IsDataOperand`), reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateScope`, `BindKey`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
 | `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
 | Objective binding, its scope and the two-level form | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |

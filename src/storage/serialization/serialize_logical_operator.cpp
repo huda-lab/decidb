@@ -380,15 +380,15 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty<double>(208, "objective_constant_offset", objective_constant_offset);
 	serializer.WritePropertyWithDefault<vector<DecideVarScopeInfo>>(209, "variable_scopes", variable_scopes);
 	serializer.WritePropertyWithDefault<vector<EntityScopeInfo>>(210, "entity_scopes", entity_scopes);
-	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(211, "entity_key_expressions", entity_key_expressions);
+	/* [Deleted] (vector<unique_ptr<Expression>>) "entity_key_expressions" */
 	serializer.WritePropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", constraint_sources);
 	serializer.WritePropertyWithDefault<string>(213, "written_objective", written_objective);
 	serializer.WritePropertyWithDefault<string>(214, "canonical_objective", canonical_objective);
 	serializer.WritePropertyWithDefault<vector<string>>(215, "source_fragments", source_fragments);
 	serializer.WritePropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", source_columns);
-	serializer.WritePropertyWithDefault<vector<DecideGroupKey>>(217, "group_keys", group_keys);
 	serializer.WritePropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", scope_checks);
 	/* [Deleted] (bool) "scoped_objective" */
+	serializer.WritePropertyWithDefault<vector<DecideKey>>(220, "keys", keys);
 }
 
 unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserializer) {
@@ -404,15 +404,15 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadProperty<double>(208, "objective_constant_offset", result->objective_constant_offset);
 	deserializer.ReadPropertyWithDefault<vector<DecideVarScopeInfo>>(209, "variable_scopes", result->variable_scopes);
 	deserializer.ReadPropertyWithDefault<vector<EntityScopeInfo>>(210, "entity_scopes", result->entity_scopes);
-	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(211, "entity_key_expressions", result->entity_key_expressions);
+	deserializer.ReadDeletedProperty<vector<unique_ptr<Expression>>>(211, "entity_key_expressions");
 	deserializer.ReadPropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", result->constraint_sources);
 	deserializer.ReadPropertyWithDefault<string>(213, "written_objective", result->written_objective);
 	deserializer.ReadPropertyWithDefault<string>(214, "canonical_objective", result->canonical_objective);
 	deserializer.ReadPropertyWithDefault<vector<string>>(215, "source_fragments", result->source_fragments);
 	deserializer.ReadPropertyWithDefault<vector<DecideSourceColumnName>>(216, "source_columns", result->source_columns);
-	deserializer.ReadPropertyWithDefault<vector<DecideGroupKey>>(217, "group_keys", result->group_keys);
 	deserializer.ReadPropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", result->scope_checks);
 	deserializer.ReadDeletedProperty<bool>(219, "scoped_objective");
+	deserializer.ReadPropertyWithDefault<vector<DecideKey>>(220, "keys", result->keys);
 	return std::move(result);
 }
 

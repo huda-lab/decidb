@@ -44,7 +44,8 @@ until the deck's behavior is built; the move replaces it.
   rule. The owner's audit of SQL NULL behavior is
   [../pipeline/02_binder/todo.md §1](../pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql).
 - **Scheduled** (owner, 2026-10-28): the empty group moves with the NULL-key batch, B1 in [../todo.md](../todo.md),
-  and skips its constraint. A NULL coefficient or bound still raises; that part is not scheduled.
+  and skips its constraint; a NULL coefficient or bound follows the deck in the same batch (a reducer drops the term,
+  an unreduced NULL skips the instance). A NULL written in the query stays an error.
 
 ## Nested reducers (ANR, pp. 25, 28–32)
 

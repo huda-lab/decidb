@@ -206,9 +206,8 @@ private:
 			rank->partitions.push_back(key->Copy());
 		}
 		// `per ()` has no key column: one class per group.
-		for (idx_t i = 0; i < scope.entity_key_bindings.size(); i++) {
-			rank->partitions.push_back(
-			    calc.Out(calc.Col(scope.entity_key_column_types[i], scope.entity_key_bindings[i])));
+		for (auto &element : DecideKeyElements(decide.keys, scope.key)) {
+			rank->partitions.push_back(calc.Out(calc.Of(*element.expression)));
 		}
 		return Place(std::move(rank));
 	}
@@ -363,9 +362,9 @@ private:
 		vector<const Expression *> keys;
 		idx_t index;
 		if (TryParseGroupKeyTag(tagged.GetAlias(), index)) {
-			D_ASSERT(index < decide.group_keys.size());
-			for (auto &key : decide.group_keys[index].expressions) {
-				keys.push_back(key.get());
+			D_ASSERT(index < decide.keys.size());
+			for (auto &element : decide.keys[index].elements) {
+				keys.push_back(element.expression.get());
 			}
 		}
 		return keys;
@@ -391,7 +390,7 @@ private:
 	}
 
 	string Written(const Expression &expr) const {
-		return RenderDecideSource(expr, decide.source_fragments, decide.entity_scopes, &decide.group_keys);
+		return RenderDecideSource(expr, decide.source_fragments, decide.entity_scopes, &decide.keys);
 	}
 
 	Optimizer &optimizer;

@@ -2,6 +2,9 @@
 #include "test_helpers.hpp"
 
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
+#include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/parser/parser.hpp"
+#include "duckdb/planner/planner.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
@@ -22,15 +25,26 @@ LogicalDecide *FindDirectIRInput(LogicalOperator &op) {
 	return nullptr;
 }
 
+//! The optimized plan of `sql` with the DECIDE optimizer off, as the IR reads it: bound
+//! columns not yet resolved to chunk positions, which `ExtractPlan` also does.
+duckdb::unique_ptr<LogicalOperator> IRPlan(Connection &con, const string &sql) {
+	if (!con.HasActiveTransaction()) {
+		con.BeginTransaction();
+	}
+	Parser parser;
+	parser.ParseQuery(sql);
+	Planner planner(*con.context);
+	planner.CreatePlan(std::move(parser.statements[0]));
+	Optimizer optimizer(*planner.binder, *con.context);
+	return optimizer.Optimize(std::move(planner.plan));
+}
+
 //! IR for one DECIDE query, read before any DECIDE rewrite.
 struct QueryIR {
 	QueryIR(Connection &con, const string &sql) {
 		REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
 		// Reading the IR can rebind a coefficient, which reads the catalog; the optimizer always has a transaction.
-		if (!con.HasActiveTransaction()) {
-			con.BeginTransaction();
-		}
-		plan = con.ExtractPlan(sql);
+		plan = IRPlan(con, sql);
 		decide = FindDirectIRInput(*plan);
 		REQUIRE(decide != nullptr);
 		client = con.context.get();
@@ -99,10 +113,10 @@ TEST_CASE("Direct-solve IR retains complete bound-clause attribution", "[decidb]
 	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
 	con.BeginTransaction();
 
-	auto plan = con.ExtractPlan("SELECT id, x FROM ("
-	                            " FROM (VALUES (1, 9.0::DOUBLE), (2, -1.0::DOUBLE)) s(id,score)"
-	                            " DECIDE x(BOOL) SUCH THAT SUM(x)<=1 MAXIMIZE SUM(score*x)"
-	                            ") q");
+	auto plan = IRPlan(con, "SELECT id, x FROM ("
+	                        " FROM (VALUES (1, 9.0::DOUBLE), (2, -1.0::DOUBLE)) s(id,score)"
+	                        " DECIDE x(BOOL) SUCH THAT SUM(x)<=1 MAXIMIZE SUM(score*x)"
+	                        ") q");
 	auto *decide = FindDirectIRInput(*plan);
 	REQUIRE(decide != nullptr);
 	auto ir = DirectIR::Read(*con.context, *decide);
@@ -140,10 +154,10 @@ TEST_CASE("S1 IR preserves both interval bounds and exact equality", "[decidb]")
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
 	for (auto &constraint : {"SUM(x)>=1 AND SUM(x)<=2", "SUM(x)=2", "SUM(x)>=1"}) {
-		auto plan = con.ExtractPlan("SELECT id,x FROM ("
-		                            " FROM (VALUES (1, 9.0::DOUBLE), (2, -1.0::DOUBLE)) s(id,score)"
-		                            " DECIDE x(BOOL) SUCH THAT " + string(constraint) +
-		                            " MAXIMIZE SUM(score*x)) q");
+		auto plan = IRPlan(con, "SELECT id,x FROM ("
+		                        " FROM (VALUES (1, 9.0::DOUBLE), (2, -1.0::DOUBLE)) s(id,score)"
+		                        " DECIDE x(BOOL) SUCH THAT " +
+		                            string(constraint) + " MAXIMIZE SUM(score*x)) q");
 		auto *decide = FindDirectIRInput(*plan);
 		REQUIRE(decide != nullptr);
 		auto ir = DirectIR::Read(*con.context, *decide);
@@ -163,9 +177,9 @@ TEST_CASE("S1 condition normalizes finite count bounds", "[decidb]") {
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
 	for (auto &constraint : {"SUM(x)<=1.5", "SUM(x)<2", "SUM(x)=1.5"}) {
-		auto plan = con.ExtractPlan("SELECT id, x FROM ("
-		                            " FROM (VALUES (1, 9.0::DOUBLE)) s(id,score)"
-		                            " DECIDE x(BOOL) SUCH THAT " +
+		auto plan = IRPlan(con, "SELECT id, x FROM ("
+		                        " FROM (VALUES (1, 9.0::DOUBLE)) s(id,score)"
+		                        " DECIDE x(BOOL) SUCH THAT " +
 		                            string(constraint) + " MAXIMIZE SUM(score*x)) q");
 		auto *decide = FindDirectIRInput(*plan);
 		REQUIRE(decide != nullptr);
@@ -185,9 +199,9 @@ TEST_CASE("S1 condition rejects an unrepresentable bound and volatile coefficien
 	auto *s1 = FindS1Rule(rules);
 	REQUIRE(s1 != nullptr);
 	auto applies = [&](const string &constraint, const string &objective) {
-		auto plan = con.ExtractPlan("SELECT id, x FROM ("
-		                            " FROM (VALUES (1, 9.0::DOUBLE)) s(id,score)"
-		                            " DECIDE x(BOOL) SUCH THAT " +
+		auto plan = IRPlan(con, "SELECT id, x FROM ("
+		                        " FROM (VALUES (1, 9.0::DOUBLE)) s(id,score)"
+		                        " DECIDE x(BOOL) SUCH THAT " +
 		                            constraint + " MAXIMIZE " + objective + ") q");
 		auto *decide = FindDirectIRInput(*plan);
 		REQUIRE(decide != nullptr);
@@ -206,11 +220,11 @@ TEST_CASE("Direct-solve IR retains a when and declines a reducer's by key", "[de
 	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
 	con.BeginTransaction();
 
-	auto constraint_plan = con.ExtractPlan("SELECT id, x FROM ("
-	                                       " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
-	                                       " DECIDE x(BOOL) SUCH THAT when active: SUM(x)<=1"
-	                                       " MAXIMIZE SUM(score*x)"
-	                                       ") q");
+	auto constraint_plan = IRPlan(con, "SELECT id, x FROM ("
+	                                   " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
+	                                   " DECIDE x(BOOL) SUCH THAT when active: SUM(x)<=1"
+	                                   " MAXIMIZE SUM(score*x)"
+	                                   ") q");
 	auto *constraint_decide = FindDirectIRInput(*constraint_plan);
 	REQUIRE(constraint_decide != nullptr);
 	auto constraint_ir = DirectIR::Read(*con.context, *constraint_decide);
@@ -218,12 +232,12 @@ TEST_CASE("Direct-solve IR retains a when and declines a reducer's by key", "[de
 	REQUIRE(constraint_ir.constraints[0].scope.when != nullptr);
 	REQUIRE(constraint_ir.constraints[0].scope.per_key_slots.empty());
 
-	auto per_plan = con.ExtractPlan("SELECT id, x FROM ("
-	                                " FROM (VALUES (1, 9.0::DOUBLE, 'A'::VARCHAR),"
-	                                " (2, -1.0::DOUBLE, 'B'::VARCHAR)) s(id,score,dept)"
-	                                " DECIDE x(BOOL) SUCH THAT SUM(x) by (dept)<=1"
-	                                " MAXIMIZE SUM(score*x)"
-	                                ") q");
+	auto per_plan = IRPlan(con, "SELECT id, x FROM ("
+	                            " FROM (VALUES (1, 9.0::DOUBLE, 'A'::VARCHAR),"
+	                            " (2, -1.0::DOUBLE, 'B'::VARCHAR)) s(id,score,dept)"
+	                            " DECIDE x(BOOL) SUCH THAT SUM(x) by (dept)<=1"
+	                            " MAXIMIZE SUM(score*x)"
+	                            ") q");
 	auto *per_decide = FindDirectIRInput(*per_plan);
 	REQUIRE(per_decide != nullptr);
 	auto per_ir = DirectIR::Read(*con.context, *per_decide);
@@ -232,11 +246,11 @@ TEST_CASE("Direct-solve IR retains a when and declines a reducer's by key", "[de
 	REQUIRE(per_ir.constraints.size() == 1);
 	REQUIRE(per_ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
 
-	auto objective_plan = con.ExtractPlan("SELECT id, x FROM ("
-	                                      " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
-	                                      " DECIDE x(BOOL) SUCH THAT SUM(x)<=1"
-	                                      " MAXIMIZE when active: SUM(score*x)"
-	                                      ") q");
+	auto objective_plan = IRPlan(con, "SELECT id, x FROM ("
+	                                  " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"
+	                                  " DECIDE x(BOOL) SUCH THAT SUM(x)<=1"
+	                                  " MAXIMIZE when active: SUM(score*x)"
+	                                  ") q");
 	auto *objective_decide = FindDirectIRInput(*objective_plan);
 	REQUIRE(objective_decide != nullptr);
 	auto objective_ir = DirectIR::Read(*con.context, *objective_decide);

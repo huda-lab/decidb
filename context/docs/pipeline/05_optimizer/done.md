@@ -219,10 +219,10 @@ workaround is gone.
 **A clause's scope** (stage 04 §3.10). `AnalyzeConstraint` reads the wrappers the binder
 nests around a comparison. A `when c:` wrapper (`WHEN_CONSTRAINT_TAG`) gives
 `DecideConstraint::when_condition`. A `per K:` wrapper (`PER_CLASS_TAG`, kept over every
-shape) gives `class_key`, empty for `per ()`, and `per_key`: `ONE_ROW_PER_CLASS` over the
+shape) gives `class_key`, the wrapper's key (`PerWrapperKey`; no elements for `per ()`), and `per_key`: `ONE_ROW_PER_CLASS` over the
 per-row shape, `NAMES_CLASSES` over the aggregate shape and an easy MIN/MAX, whose rows are
 their `by` groups and their members and only stand for the classes (D28). The
-comparison's `by` stamp gives `group_key`, an index into `LogicalDecide::group_keys`. An
+comparison's `by` stamp gives `group_key`, an index into `LogicalDecide::keys`. An
 easy MIN/MAX (`MINMAX_EASY_REWRITE_TAG` on the comparison, its reducer kept:
 `was_minmax_easy`) extracts its body's terms with the reducer's `when` as their filter,
 one row per member (`ExtractEasyExtremumTerms`). The filter is attached once, after
@@ -238,7 +238,7 @@ second. So is a term that holds a decision under anything but a bare reference
 construct without a word.
 
 The objective's `when` wrapper gives `DecideObjective::when_condition`, and the two-level
-form's wrapper (`PER_CONSTRAINT_TAG`, outside the `when`) gives `DecideObjective::per_columns`,
+form's wrapper (`PER_CONSTRAINT_TAG`, outside the `when`) gives `DecideObjective::per_key`,
 the key `k` of `outer(per k: inner(e) by (k))`. A decision outside the objective's reducers
 — query-wide or not — is a `NONE` term, counted once at execution, and so is a product of
 two query-wide decisions (`MAXIMIZE SUM(x) + s * u`, a bilinear term with `reduction`

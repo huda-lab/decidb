@@ -96,9 +96,9 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         PlanSubqueries(statement.decide_constraints, root);
         PlanSubqueries(statement.decide_objective, root);
 		// A `by` key is a data expression too, and may hold a subquery of its own.
-		for (auto &group_key : statement.decide_group_keys) {
-			for (auto &expr : group_key.expressions) {
-				PlanSubqueries(expr, root);
+		for (auto &key : statement.decide_keys) {
+			for (auto &element : key.elements) {
+				PlanSubqueries(element.expression, root);
 			}
 		}
 		is_outside_flattened = outer_flatten_state;
@@ -162,11 +162,11 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		// canonicalizer from each clause as bound, before it is canonicalized. When the
 		// FROM clause joins relations, their messages name a column by its relation, which
 		// only the BindContext still knows; over one relation the name alone is clear.
-		DecideScopeChecks scope_checks {statement.decide_group_keys, statement.entity_scopes,
+		DecideScopeChecks scope_checks {statement.decide_keys, statement.entity_scopes,
 		                                statement.decide_source_fragments,
 		                                DecideRelationNames(bind_context, statement.decide_index)};
-		DecideSourceNames message_names {scope_checks.source_fragments, scope_checks.entity_scopes,
-		                                 scope_checks.group_keys, scope_checks.relations};
+		DecideSourceNames message_names {scope_checks.source_fragments, scope_checks.entity_scopes, scope_checks.keys,
+		                                 scope_checks.relations};
 		{
 			DecideCanonicalizer canonicalizer(context, statement.decide_index, statement.variable_scopes,
 			                                  std::move(query_wide_table_indexes),
@@ -178,7 +178,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				canonicalizer.VerifyCanonical(*statement.decide_constraints);
 				FinalizeConstraintSourceInfo(*statement.decide_constraints, statement.decide_constraint_sources,
 				                             statement.decide_source_fragments, statement.entity_scopes,
-				                             &statement.decide_group_keys);
+				                             &statement.decide_keys);
 			}
 			// The objective is one side of a comparison, so it belongs to the same
 			// boundary. It carries no relation to orient, which is the only part of
@@ -190,7 +190,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 // exactly one objective, so these are two strings rather than a registry.
 				unordered_map<idx_t, string> no_relations;
 				DecideSourceNames objective_names {statement.decide_source_fragments, statement.entity_scopes,
-				                                   statement.decide_group_keys, no_relations};
+				                                   statement.decide_keys, no_relations};
 				written_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
 				canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
 				statement.decide_objective = canonicalizer.CanonicalizeObjective(*statement.decide_objective,
@@ -227,10 +227,9 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 decide_op->source_columns.push_back({ColumnBinding(binding->index, i), binding->names[i]});
             }
         }
-        decide_op->entity_key_expressions = std::move(statement.entity_key_expressions);
         decide_op->scope_checks = std::move(scope_checks.checks);
-        decide_op->group_keys = std::move(statement.decide_group_keys);
-        // ne_clause_labels, ABS aux vars, and MIN/MAX indicator links +
+		decide_op->keys = std::move(statement.decide_keys);
+		// ne_clause_labels, ABS aux vars, and MIN/MAX indicator links +
         // objective types are created by DecideOptimizer (runs after plan creation)
         decide_op->AddChild(std::move(root));
         root = std::move(decide_op);

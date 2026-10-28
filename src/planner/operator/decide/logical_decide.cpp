@@ -1,11 +1,117 @@
 // src/planner/operator/logical_decide.cpp
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/planner/expression_iterator.hpp"
 
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
+#include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 
 namespace duckdb {
+
+DecideKeyElement DecideKeyElement::Copy() const {
+	DecideKeyElement result;
+	result.expression = expression->Copy();
+	result.name = name;
+	result.null_mode = null_mode;
+	return result;
+}
+
+//! Whether `expr` holds a bound subquery, which equals nothing, not even itself.
+static bool HoldsSubquery(const Expression &expr) {
+	bool found = expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY;
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](const Expression &child) { found = found || HoldsSubquery(child); });
+	return found;
+}
+
+//! The written column wins over the same column a relation element stands for: its name,
+//! and its NULL mode, which is no group (NO_GROUP) rather than a value (VALUE).
+static bool WrittenWins(const DecideKeyElement &candidate, const DecideKeyElement &kept) {
+	return candidate.null_mode == DecideKeyNullMode::NO_GROUP && kept.null_mode == DecideKeyNullMode::VALUE;
+}
+
+//! One order on key elements, so a key's elements are the same list however it was
+//! written: columns by binding, then any other expression by its text.
+static bool ElementBefore(const DecideKeyElement &a, const DecideKeyElement &b) {
+	auto is_column = [](const DecideKeyElement &element) {
+		return element.expression->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF;
+	};
+	if (is_column(a) != is_column(b)) {
+		return is_column(a);
+	}
+	if (is_column(a)) {
+		auto &left = a.expression->Cast<BoundColumnRefExpression>().binding;
+		auto &right = b.expression->Cast<BoundColumnRefExpression>().binding;
+		return left.table_index != right.table_index ? left.table_index < right.table_index
+		                                             : left.column_index < right.column_index;
+	}
+	return a.expression->ToString() < b.expression->ToString();
+}
+
+idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &text, vector<DecideKey> &keys) {
+	vector<DecideKeyElement> unique;
+	for (auto &element : elements) {
+		auto kept = std::find_if(unique.begin(), unique.end(), [&](const DecideKeyElement &member) {
+			return member.expression->Equals(*element.expression);
+		});
+		if (kept == unique.end()) {
+			unique.push_back(std::move(element));
+		} else if (WrittenWins(element, *kept)) {
+			*kept = std::move(element);
+		}
+	}
+	if (unique.empty()) {
+		return DConstants::INVALID_INDEX;
+	}
+	std::stable_sort(unique.begin(), unique.end(), ElementBefore);
+	auto holds = [](const vector<DecideKeyElement> &set, const DecideKeyElement &element) {
+		for (auto &member : set) {
+			if (member.null_mode == element.null_mode && member.expression->Equals(*element.expression)) {
+				return true;
+			}
+		}
+		return false;
+	};
+	bool subquery = false;
+	for (auto &element : unique) {
+		subquery = subquery || HoldsSubquery(*element.expression);
+	}
+	for (idx_t i = 0; i < keys.size(); i++) {
+		auto &existing = keys[i].elements;
+		bool equal = existing.size() == unique.size();
+		for (auto &element : unique) {
+			equal = equal && holds(existing, element);
+		}
+		// A key holding a subquery is recognised by its text: written the same way in one
+		// query, it is the same key.
+		if (equal || (subquery && keys[i].text == text)) {
+			return i;
+		}
+	}
+	DecideKey key;
+	key.elements = std::move(unique);
+	key.text = text;
+	keys.push_back(std::move(key));
+	return keys.size() - 1;
+}
+
+const vector<DecideKeyElement> &DecideKeyElements(const vector<DecideKey> &keys, idx_t key) {
+	static const vector<DecideKeyElement> no_elements;
+	return key == DConstants::INVALID_INDEX ? no_elements : keys[key].elements;
+}
+
+string DecideKeyText(const vector<DecideKey> &keys, idx_t key) {
+	return key == DConstants::INVALID_INDEX ? string("()") : keys[key].text;
+}
+
+vector<string> DecideKey::Names() const {
+	vector<string> names;
+	for (auto &element : elements) {
+		names.push_back(element.name);
+	}
+	return names;
+}
 
 LogicalDecide::LogicalDecide(idx_t decide_index, vector<unique_ptr<Expression>> decide_variables,
                              unique_ptr<Expression> decide_constraints, DecideSense decide_sense,
@@ -107,9 +213,6 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 				callback(&term.scale);
 			}
 		}
-		for (auto &column : spec.class_key) {
-			callback(&column);
-		}
 		if (spec.when) {
 			callback(&spec.when);
 		}
@@ -125,14 +228,11 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			}
 		}
 	}
-	for (auto &expr : entity_key_expressions) {
-		if (expr) {
-			callback(&expr);
-		}
-	}
-	for (auto &group_key : group_keys) {
-		for (auto &expr : group_key.expressions) {
-			callback(&expr);
+	// A key's columns are live even where no clause reads them: a decision keyed by a
+	// column the query never mentions still needs it in the scan.
+	for (auto &key : keys) {
+		for (auto &element : key.elements) {
+			callback(&element.expression);
 		}
 	}
 	for (auto &check : scope_checks) {
@@ -140,9 +240,6 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			if (*expr) {
 				callback(expr);
 			}
-		}
-		for (auto &expr : check.key) {
-			callback(&expr);
 		}
 	}
 }
@@ -165,7 +262,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	// wrappers print as written rather than as a generic conjunction. What the optimizer
 	// made of them: a column that stands for an expression prints it, and each rewrite's
 	// account follows its clause, the objective's its own.
-	auto names = DecidePlanNames(source_fragments, entity_scopes, group_keys, decide_index, aux_var_expressions);
+	auto names = DecidePlanNames(source_fragments, entity_scopes, keys, decide_index, aux_var_expressions);
 	vector<string> objective_accounts;
 	for (auto &account : rewrite_accounts) {
 		if (account.source_clause_id == DConstants::INVALID_INDEX) {

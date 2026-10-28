@@ -7,6 +7,7 @@
 #include "duckdb/planner/operator/logical_projection.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/optimizer/decide/decide_linear_form.hpp"
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
@@ -201,27 +202,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // final pass. Execution evaluates their coefficients; it does not re-derive them.
     decide_op->prepared = std::move(op.prepared);
 
-    // Entity key expressions are resolved by the column-binding resolver like every
-    // other expression LogicalDecide owns (LogicalDecide::EnumerateExpressions), so by
-    // this point each one holds a BoundReferenceExpression naming its physical position
-    // in the child data chunk directly -- no separate lookup against child_bindings is
-    // needed.
-    if (!op.entity_scopes.empty()) {
-        idx_t expr_cursor = 0;
-        for (auto &scope : op.entity_scopes) {
-            scope.entity_key_physical_indices.clear();
-            for (idx_t k = 0; k < scope.entity_key_bindings.size(); k++) {
-                D_ASSERT(expr_cursor < op.entity_key_expressions.size());
-                auto &ref = op.entity_key_expressions[expr_cursor]->Cast<BoundReferenceExpression>();
-                scope.entity_key_physical_indices.push_back(ref.index);
-                expr_cursor++;
-            }
-        }
-    }
     decide_op->entity_scopes = std::move(op.entity_scopes);
     decide_op->variable_scopes = std::move(op.variable_scopes);
     // Resolved like every other expression the operator owns (EnumerateExpressions).
-    decide_op->group_keys = std::move(op.group_keys);
+    decide_op->keys = std::move(op.keys);
     decide_op->scope_checks = std::move(op.scope_checks);
 
     // Resolve source column names for the surviving (post-pruning) child columns,
@@ -245,7 +229,26 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // pasteable. A reference is named either by its bare column name, or, for a key
     // column, by its SQL spelling (`t.depot`, `D."cost"`). The binder's source name is the
     // bare one, so a reference named otherwise already carries SQL and is taken as it is.
-    std::function<void(const Expression &)> harvest = [&](const Expression &e) {
+    std::function<void(const Expression &)> harvest;
+    // A `per` key names a column as the key was written (`t.depot`), whichever clause
+    // added the key first; a `by` key as its expression binds.
+    auto harvest_key = [&](idx_t key, bool as_written) {
+        for (auto &element : DecideKeyElements(decide_op->keys, key)) {
+            auto &expr = *element.expression;
+            if (!as_written || expr.GetExpressionClass() != ExpressionClass::BOUND_REF) {
+                harvest(expr);
+                continue;
+            }
+            auto index = expr.Cast<BoundReferenceExpression>().index;
+            if (index < decide_op->input_column_names.size()) {
+                decide_op->input_column_in_clause[index] = true;
+                if (decide_op->input_column_names[index].empty()) {
+                    decide_op->input_column_names[index] = element.name;
+                }
+            }
+        }
+    };
+    harvest = [&](const Expression &e) {
         if (e.GetExpressionClass() == ExpressionClass::BOUND_REF) {
             auto &r = e.Cast<BoundReferenceExpression>();
             if (r.index < decide_op->input_column_names.size()) {
@@ -261,6 +264,13 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
             }
         }
         ExpressionIterator::EnumerateChildren(e, harvest);
+        // A `per K:` names its key after its clause, as written.
+        if (e.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+            auto &conjunction = e.Cast<BoundConjunctionExpression>();
+            if (IsPerClassWrapper(conjunction) || IsPerConstraintWrapper(conjunction)) {
+                harvest_key(PerWrapperKey(conjunction), true);
+            }
+        }
     };
     if (decide_op->decide_constraints) {
         harvest(*decide_op->decide_constraints);
@@ -269,10 +279,11 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         harvest(*decide_op->decide_objective);
     }
     // A `by` key and a scope check read the clause's data too; an aggregate-shape clause
-    // keeps its `per` key only in its checks.
-    for (auto &group_key : decide_op->group_keys) {
-        for (auto &expr : group_key.expressions) {
-            harvest(*expr);
+    // keeps its `per` key only in its checks. A key only a declaration writes names no
+    // column: a column the clauses never name stays unnamed.
+    for (idx_t key = 0; key < decide_op->keys.size(); key++) {
+        if (decide_op->keys[key].written_as_by) {
+            harvest_key(key, false);
         }
     }
     for (auto &check : decide_op->scope_checks) {
@@ -281,9 +292,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
                 harvest(*expr);
             }
         }
-        for (auto &column : check.key) {
-            harvest(*column);
-        }
+        harvest_key(check.key, true);
     }
     // A lifted reducer's expressions live beside the tree: a composed term's and a helper
     // decision's (reducer_value_links). The columns they read explain the answer too.
@@ -304,9 +313,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         if (spec.when) {
             harvest(*spec.when);
         }
-        for (auto &column : spec.class_key) {
-            harvest(*column);
-        }
+        harvest_key(spec.class_key, true);
     }
     for (auto &term : decide_op->composed_minmax_objective_terms) {
         harvest_composed_term(term);
@@ -318,14 +325,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
             }
         }
     }
-    // entity_key_expressions are deliberately NOT harvested for names: every entry
-    // carries the synthetic "entity_key_<alias>" placeholder (see
-    // LogicalDecide::entity_key_expressions / bind_select_node.cpp), needed only to
-    // keep the pruner and column-binding resolver treating the column as live, never
-    // meant as a display name. A real name still reaches a given entity-key column
-    // through decide_constraints/decide_objective (if referenced there) or the
-    // back-fill below (if selected in the outer query); columns named only this way
-    // stay unnamed on purpose, same as any other column no clause referenced by name.
     // Back-fill SELECT-only columns from the child projection's user-written names.
     // Only slots the DECIDE-clause harvest left empty are touched, so a name the user
     // referenced in the clause always wins over the raw projection alias.

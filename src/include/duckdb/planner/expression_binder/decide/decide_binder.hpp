@@ -24,17 +24,19 @@ struct DecideSourceNames;
 //! (children: the body, then the elements of K). Each element resolves against the FROM
 //! clause alone, never an outer query: a declared decision is an error; otherwise it is a
 //! column, else a relation standing for its stored columns. Equal keys -- order and
-//! repetition aside -- share one scope. `key_text` is the key as written, kept for
-//! display. A reducer's `per ()` is the empty key: one scope every row belongs to.
+//! repetition aside -- share one key (BindKey) and one scope. `key_text` is the key as
+//! written, kept for display. A reducer's `per ()` is the empty key: one scope every row
+//! belongs to.
 idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
-                           vector<EntityScopeInfo> &entity_scopes);
+                           vector<DecideKey> &keys, vector<EntityScopeInfo> &entity_scopes);
 
-//! The columns of `per K` (the parser's `SCOPE_PER_TAG` marker) as bound column
-//! references, resolved and ordered as FindOrCreateKeyScope resolves them; none for
-//! `per ()`. The bound form of a constraint's generation key.
-vector<unique_ptr<Expression>> BindKeyColumns(BindContext &bind_context, const FunctionExpression &per,
-                                              const case_insensitive_set_t &decision_names);
+//! The entry of `keys` for the columns of `per K` (the parser's `SCOPE_PER_TAG` marker),
+//! created when no key so far has them: a column element compares NULL as SQL's `=`
+//! does, a relation element stands for its stored columns, which compare NULL as a
+//! value. `key_text` is the key as written, kept for display.
+idx_t BindKey(BindContext &bind_context, const FunctionExpression &per, const case_insensitive_set_t &decision_names,
+              const string &key_text, vector<DecideKey> &keys);
 
 //! What a reducer's own key (`sum(per K: e)`, `SUM(D: e)`) and `by` need in order to
 //! resolve. Owned by the declarations binder, which is still filling `entity_scopes` when
@@ -44,8 +46,8 @@ struct DecideQualifierContext {
     //! Table index the decision-variable column refs bind to.
     idx_t decide_index = DConstants::INVALID_INDEX;
     vector<EntityScopeInfo> *entity_scopes = nullptr;
-    //! Every `by (key)` bound so far; a reducer's GROUP_KEY_TAG_PREFIX tag indexes it.
-    vector<DecideGroupKey> *group_keys = nullptr;
+    //! Every key bound so far; a reducer's GROUP_KEY_TAG_PREFIX tag names its `by` key.
+    vector<DecideKey> *keys = nullptr;
     //! The query's source fragments (TagDecideSourceFragments): a `per K:` in front of a
     //! constraint adds its key as written, which binding expands past recognition.
     vector<string> *source_fragments = nullptr;
@@ -219,7 +221,7 @@ protected:
     //! `K` as the key it keeps one row of each class by (an exact key scope, tagged like a
     //! qualifier; `per ()` is the empty key).
     BindResult BindScopedReducer(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
-    //! Binds `agg(...) BY (key)`: the reducer, then the key into LogicalDecide::group_keys,
+    //! Binds `agg(...) BY (key)`: the reducer, then the key into LogicalDecide::keys,
     //! named on the aggregate by a GROUP_KEY_TAG_PREFIX tag (none for `BY ()`).
     BindResult BindReducerBy(FunctionExpression &by, idx_t depth);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);

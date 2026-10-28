@@ -8,11 +8,11 @@
 //
 // A bound DECIDE constraint tree is AND-conjunctions plus WRAPPERS. A wrapper is a
 // conjunction carrying a tag: `when c:` holds the constraint in child 0 and its
-// condition in child 1; `per K:` holds the constraint in child 0 and its key columns in
-// children 1..N; the two-level objective's PER wrapper holds the objective body in child
-// 0 and its key in children 1..N. The condition and the key columns are METADATA --
-// walking into them treats `when c` as though the user had written another constraint,
-// which is silently wrong rather than loudly wrong.
+// condition in child 1; `per K:` holds the constraint in child 0 and names its key K by a
+// tag (PerWrapperKey); the two-level objective's PER wrapper holds the objective body in
+// child 0 and names its key the same way. The condition is METADATA -- walking into it
+// treats `when c` as though the user had written another constraint, which is silently
+// wrong rather than loudly wrong.
 //
 // So every pass over the tree has to know the same rule: at a wrapper, descend only
 // into child 0. That rule used to be retyped as
@@ -49,15 +49,23 @@ inline bool IsWhenConstraintWrapper(const BoundConjunctionExpression &conjunctio
 }
 
 //! The two-level objective `outer(per k: inner(e) by (k))`: child 0 is the objective
-//! body, children 1..N the key columns. Only the objective carries it.
+//! body; the tag names the key. Only the objective carries it.
 inline bool IsPerConstraintWrapper(const BoundConjunctionExpression &conjunction) {
 	return IsPerConstraintTag(conjunction.GetAlias());
 }
 
-//! `per K: <constraint>`: child 0 is the constraint, children 1..N the key columns, none
-//! for `per ()`. One constraint per class of the key; it groups no reducer.
+//! `per K: <constraint>`: child 0 is the constraint; the tag names the key, none for
+//! `per ()`. One constraint per class of the key; it groups no reducer.
 inline bool IsPerClassWrapper(const BoundConjunctionExpression &conjunction) {
 	return HasDecideTag(conjunction.GetAlias(), PER_CLASS_TAG);
+}
+
+//! The key a `per K:` wrapper or the two-level objective's PER wrapper names: an index
+//! into LogicalDecide::keys, INVALID_INDEX for `per ()`.
+inline idx_t PerWrapperKey(const BoundConjunctionExpression &wrapper) {
+	idx_t key = DConstants::INVALID_INDEX;
+	TryParsePerKeyTag(wrapper.GetAlias(), key);
+	return key;
 }
 
 //! True for any wrapper. An untagged conjunction is a plain AND, every child of which

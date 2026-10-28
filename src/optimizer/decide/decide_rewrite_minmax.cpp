@@ -369,7 +369,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 
 	const ExtremumPush outer_push = ExtremumPushOf(cmp_type);
 
-	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys, decide.decide_index,
+	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	AssertComposable(comp);
 	LogicalDecide::ComposedMinMaxConstraint spec;
@@ -385,9 +385,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 	// every row its `when` keeps.
 	if (per_class) {
 		spec.per_key = DecideConstraint::PerKeyRole::NAMES_CLASSES;
-		for (idx_t i = 1; i < per_class->children.size(); i++) {
-			spec.class_key.push_back(per_class->children[i]->Copy());
-		}
+		spec.class_key = PerWrapperKey(*per_class);
 	}
 	if (scoped_when) {
 		spec.when = scoped_when->Copy();
@@ -455,7 +453,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	vector<LogicalDecide::ComposedMinMaxTerm> terms;
 	vector<pair<int, const Expression *>> beside;
 	// An objective always has a direction, so no term needs the both-sides pin here.
-	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys, decide.decide_index,
+	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	WalkComposedLhs(optimizer.context, decide, DConstants::INVALID_INDEX, *body, /*sign=*/1, decide.decide_index,
 	                outer_push, terms, names, beside);

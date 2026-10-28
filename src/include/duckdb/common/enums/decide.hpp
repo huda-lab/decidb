@@ -94,6 +94,13 @@ struct DecideVarScopeInfo {
 //!   VALUE_IS_VALID — every row holds a value the model can read: a computed message, NULL on a valid row
 enum class DecideScopeCheckKind : uint8_t { KEEPS_A_ROW = 0, DETERMINES = 1, READS_A_ROW = 2, VALUE_IS_VALID = 3 };
 
+//! How one column of a key (LogicalDecide::keys) compares NULL.
+//!   NO_GROUP — a column the user wrote: rows group as SQL's `=` compares them, so a NULL
+//!              value is in no group (deck p. 30)
+//!   VALUE    — a column a relation element stands for (`per D`, `by (D)`): NULL is a value,
+//!              so every row of D is one class whatever its NULLs
+enum class DecideKeyNullMode : uint8_t { NO_GROUP = 0, VALUE = 1 };
+
 //! Type of aggregate used in MIN/MAX objective linearization
 enum class ObjectiveAggregateType : uint8_t {
     NONE = 0,   //! No MIN/MAX objective (pure SUM or no objective)
@@ -273,7 +280,7 @@ static constexpr const char *PER_CLASS_TAG = "__per_class__";
 //! after which the comparison is one row per class like any other.
 static constexpr const char *VALUE_REWRITE_TAG = "__value_rewrite__";
 
-//! Tag prefix naming a `BY (key)`: "__group_key_<i>__" indexes LogicalDecide::group_keys.
+//! Tag prefix naming a `BY (key)`: "__group_key_<i>__" indexes LogicalDecide::keys.
 //! On a reducer, the rows it reads at a class are the kept rows sharing the class's key
 //! value; on a scoped aggregate comparison, the key its decision reducers share, which
 //! is the comparison's grouping. No tag means `BY ()`: every kept row.
@@ -281,6 +288,14 @@ static constexpr const char *GROUP_KEY_TAG_PREFIX = "__group_key_";
 
 inline string MakeGroupKeyTag(idx_t group_key_idx) {
 	return string(GROUP_KEY_TAG_PREFIX) + to_string(group_key_idx) + "__";
+}
+
+//! Tag prefix naming the key of a `per K:` wrapper (PER_CLASS_TAG, PER_CONSTRAINT_TAG):
+//! "__per_key_<i>__" indexes LogicalDecide::keys. No tag means `per ()`: one class.
+static constexpr const char *PER_KEY_TAG_PREFIX = "__per_key_";
+
+inline string MakePerKeyTag(idx_t key_idx) {
+	return string(PER_KEY_TAG_PREFIX) + to_string(key_idx) + "__";
 }
 
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
@@ -413,6 +428,10 @@ inline bool TryParseSourceFragmentTag(const string &alias, idx_t &fragment_id) {
 
 inline bool TryParseGroupKeyTag(const string &alias, idx_t &group_key_idx) {
 	return TryParseDecideIndexTag(alias, GROUP_KEY_TAG_PREFIX, group_key_idx);
+}
+
+inline bool TryParsePerKeyTag(const string &alias, idx_t &key_idx) {
+	return TryParseDecideIndexTag(alias, PER_KEY_TAG_PREFIX, key_idx);
 }
 
 //! Classification stamped by DecideCanonicalizer on the complete canonical RHS when

@@ -236,8 +236,7 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	auto var_scope = DecideVarScopeInfo::Scalar();
 	if (link.group_key != DConstants::INVALID_INDEX) {
 		EntityScopeInfo helper_scope;
-		helper_scope.table_alias = decide.group_keys[link.group_key].text;
-		helper_scope.key_names = decide.group_keys[link.group_key].names;
+		helper_scope.key = link.group_key;
 		helper_scope.value_link = link_idx;
 		decide.entity_scopes.push_back(std::move(helper_scope));
 		var_scope = DecideVarScopeInfo::Entity(decide.entity_scopes.size() - 1);
@@ -266,7 +265,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	if (!decide.decide_constraints) {
 		return;
 	}
-	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.group_keys, decide.decide_index,
+	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	Helpers helpers {optimizer.context, decide, {}, {}};
 

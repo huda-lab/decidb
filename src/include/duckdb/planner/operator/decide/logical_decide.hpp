@@ -17,61 +17,74 @@
 
 namespace duckdb {
 
-//! A key scope: the columns whose values decide which result rows share one decision.
-//! `per K: x(TYPE)` keys on exactly the columns K names, possibly across relations; a
-//! relation named as a key (`per D`, `sum(D: e)`) stands for every column of that
-//! relation. One value per distinct tuple, so de-duplication collapses only the fan-out
-//! contributed by columns the key does *not* name.
-struct EntityScopeInfo {
-    //! What the user wrote: the key of `per K:` ("D.depotID, S.customerID", "D", "()").
-    string table_alias;
-    //! DuckDB table index/indices from the bind context (Binding::index): every
-    //! relation a key column comes from.
-    vector<idx_t> source_table_indices;
-    //! Column types for the entity key columns
-    vector<LogicalType> entity_key_column_types;
-    //! Physical column indices in the child's output data chunk.
-    //! These are resolved during physical plan creation (plan_decide.cpp)
-    //! from the logical column bindings by matching against the child's GetColumnBindings().
-    vector<idx_t> entity_key_physical_indices;
-    //! Logical column bindings (table_index, col_index) — used to resolve physical indices
-    vector<ColumnBinding> entity_key_bindings;
-    //! Which decide_variables indices this scope keys
-    vector<idx_t> scoped_variable_indices;
-    //! Each key column as a message names it (`D.depotID`), in `entity_key_bindings`
-    //! order; for a helper decision's scope, the names of its link's `by` key.
-    vector<string> key_names;
-    //! A helper decision's scope (DecideOptimizer::RewriteScopedReducers): the link into
-    //! `LogicalDecide::reducer_value_links` it holds. Its entities are the groups of the
-    //! link's `by` key among the rows the link's clause keeps -- data expressions rather
-    //! than key columns, so `entity_key_bindings` is empty and execution builds the
-    //! mapping from the link. INVALID_INDEX for every scope the binder creates.
-    //! Deliberately absent from the serialization: the optimizer creates these scopes,
-    //! and an optimized plan is never serialized.
-    idx_t value_link = DConstants::INVALID_INDEX;
+//! One column of a key: a data expression and how it compares NULL.
+struct DecideKeyElement {
+    //! The column or data expression, as bound.
+    unique_ptr<Expression> expression;
+    //! How a message names it: as written for a column element (`g`), qualified by its
+    //! relation (`D.depotID`) for a column a relation element stands for.
+    string name;
+    DecideKeyNullMode null_mode = DecideKeyNullMode::NO_GROUP;
 
-    //! Generated from `storage/serialization/nodes.json`. `entity_key_physical_indices`
-    //! is deliberately absent: it is resolved at physical planning, after the only point
-    //! a plan is ever serialized, so it is always empty on the wire.
-    void Serialize(Serializer &serializer) const;
-    static EntityScopeInfo Deserialize(Deserializer &deserializer);
-};
-
-//! A reducer's `by (key)`. At a class, the reducer reads the kept rows whose key value
-//! equals the class's, NULL being a value. Reducers whose keys are the same set of
-//! expressions share one entry, named by GROUP_KEY_TAG_PREFIX.
-struct DecideGroupKey {
-    //! The key's data expressions, in the order first written.
-    vector<unique_ptr<Expression>> expressions;
-    //! The key as written, for messages: `D.region, S.dispatchDay + S.transitDays`.
-    string text;
-    //! Each expression as a message names it (`D.region`), in `expressions` order; a
-    //! relation written in the key names each of its columns.
-    vector<string> names;
+    DecideKeyElement Copy() const;
 
     //! Generated from `storage/serialization/nodes.json`.
     void Serialize(Serializer &serializer) const;
-    static DecideGroupKey Deserialize(Deserializer &deserializer);
+    static DecideKeyElement Deserialize(Deserializer &deserializer);
+};
+
+//! A grouping key: the expressions whose values decide which rows share a class. Every
+//! key the clause writes is one entry of LogicalDecide::keys -- a declaration's `per K:`,
+//! a reducer's own `per K'` and the colon form `SUM(D: e)`, a reducer's `by (key)`, and a
+//! constraint's or the two-level objective's `per K:` -- and keys with the same columns
+//! share it, whichever spelling wrote them. A relation element (`per D`) stands for every
+//! column D stores. The empty key (`per ()`, `by ()`) is no entry: INVALID_INDEX, one
+//! class.
+struct DecideKey {
+    //! In one order, whichever order wrote them (FindOrCreateDecideKey).
+    vector<DecideKeyElement> elements;
+    //! The key as first written, for messages and EXPLAIN: `D.region, S.dispatchDay +
+    //! S.transitDays`, `D`.
+    string text;
+    //! A reducer's `by` wrote it.
+    bool written_as_by = false;
+
+    //! The element names, in element order.
+    vector<string> Names() const;
+
+    //! Generated from `storage/serialization/nodes.json`.
+    void Serialize(Serializer &serializer) const;
+    static DecideKey Deserialize(Deserializer &deserializer);
+};
+
+//! The entry of `keys` holding `elements` as a set -- order and repetition aside --
+//! appending it, as written, when no key so far holds them; INVALID_INDEX for no
+//! elements. An element written on its own and through its relation is the written one.
+idx_t FindOrCreateDecideKey(vector<DecideKeyElement> elements, const string &text, vector<DecideKey> &keys);
+//! The elements of `keys[key]`; none for INVALID_INDEX, the empty key.
+const vector<DecideKeyElement> &DecideKeyElements(const vector<DecideKey> &keys, idx_t key);
+//! The key as first written; `()` for the empty key.
+string DecideKeyText(const vector<DecideKey> &keys, idx_t key);
+
+//! The classes some decisions are keyed by: one decision instance per class of `key`.
+//! A declaration's `per K:` and a reducer's own `per K'` (or `SUM(D: e)`, whose classes
+//! a reducer counts once) each make one; scopes on the same key share it.
+struct EntityScopeInfo {
+    //! Index into LogicalDecide::keys.
+    idx_t key = DConstants::INVALID_INDEX;
+    //! Which decide_variables indices this scope keys
+    vector<idx_t> scoped_variable_indices;
+    //! A helper decision's scope (DecideOptimizer::RewriteScopedReducers): the link into
+    //! `LogicalDecide::reducer_value_links` it holds. Its entities are the groups of
+    //! `key` -- the link's `by` key -- among the rows the link's clause keeps, so
+    //! execution builds the mapping from the link. INVALID_INDEX for every scope the
+    //! binder creates. Deliberately absent from the serialization: the optimizer creates
+    //! these scopes, and an optimized plan is never serialized.
+    idx_t value_link = DConstants::INVALID_INDEX;
+
+    //! Generated from `storage/serialization/nodes.json`.
+    void Serialize(Serializer &serializer) const;
+    static EntityScopeInfo Deserialize(Deserializer &deserializer);
 };
 
 //! One run-time requirement of a clause
@@ -81,8 +94,9 @@ struct DecideScopeCheck {
     DecideScopeCheckKind kind = DecideScopeCheckKind::KEEPS_A_ROW;
     //! The rows considered: those `rows` keeps, NULL dropping a row; null for every row.
     unique_ptr<Expression> rows;
-    //! DETERMINES: the classes. READS_A_ROW: the groups. Empty for one class or group.
-    vector<unique_ptr<Expression>> key;
+    //! DETERMINES: the classes. READS_A_ROW: the groups. An index into
+    //! LogicalDecide::keys; INVALID_INDEX for one class or group.
+    idx_t key = DConstants::INVALID_INDEX;
     //! DETERMINES: the data value each class shows once; null when it is `decision`.
     //! VALUE_IS_VALID: the message a row raises, NULL on a row whose value is valid.
     unique_ptr<Expression> value;
@@ -97,9 +111,6 @@ struct DecideScopeCheck {
     string subject;
     string object;
     string context;
-    //! How a message names each key expression it describes a class or group by
-    //! (`D.depotID` in `D.depotID = 'D1'`), in key order: a prefix of `key`.
-    vector<string> key_names;
 
     //! Generated from `storage/serialization/nodes.json`.
     void Serialize(Serializer &serializer) const;
@@ -283,7 +294,8 @@ public:
         //! (`per_key` NAMES_CLASSES; `per ()` names none), or those rows themselves with
         //! no `per` (NONE). `when` is the clause's own, also folded into each term's filter.
         DecideConstraint::PerKeyRole per_key = DecideConstraint::PerKeyRole::NONE;
-        vector<unique_ptr<Expression>> class_key;
+        //! Index into `keys`; INVALID_INDEX with NONE.
+        idx_t class_key = DConstants::INVALID_INDEX;
         unique_ptr<Expression> when;
     };
     vector<ComposedMinMaxConstraint> composed_minmax_constraints;
@@ -307,7 +319,7 @@ public:
         //! Its own `per K'`: the key scope whose classes it counts once; INVALID_INDEX
         //! for per row.
         idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
-        //! Γ, into `group_keys`; INVALID_INDEX for `by ()`, every kept row.
+        //! Γ, into `keys`; INVALID_INDEX for `by ()`, every kept row.
         idx_t group_key = DConstants::INVALID_INDEX;
         unique_ptr<Expression> when; //!< the clause's `when`, or null
         //! MIN/MAX: the sides that pin the helper (ExtremumLinkSpec), read from the way the
@@ -402,6 +414,10 @@ public:
 
     // --- Key scopes ---
 
+    //! Every key the clause writes, one entry per set of columns (DecideKey). Scopes,
+    //! reducers' `by`, the `per K:` wrappers and the scope checks index it.
+    vector<DecideKey> keys;
+
     //! Every key scope: of `per K:` and `sum(T: ...)`, one per key. Empty when no decision
     //! or reducer is keyed.
     vector<EntityScopeInfo> entity_scopes;
@@ -410,9 +426,6 @@ public:
     //! Defaults to row-scoped; entity_scope_idx indexes entity_scopes.
     vector<DecideVarScopeInfo> variable_scopes;
 
-    //! Every `by (key)` written in the clause, indexed by GROUP_KEY_TAG_PREFIX tags.
-    vector<DecideGroupKey> group_keys;
-
     //! The run-time requirements of every clause, in
     //! clause order; PhysicalDecide runs them before it formulates anything.
     //! The planner builds the scope checks (KEEPS_A_ROW, DETERMINES, READS_A_ROW); the
@@ -420,18 +433,6 @@ public:
     //! bounds it computes, after them, so a bad value is reported only once every scope
     //! check has passed, as when the bound was read in the operator.
     vector<DecideScopeCheck> scope_checks;
-
-    //! BoundColumnRefExpressions for every entity-key column (flattened in scope order).
-    //! These live here so that DuckDB's binder initial column_id selection AND the
-    //! RemoveUnusedColumns pruner track them as live references. Without them,
-    //! entity-key columns that aren't referenced elsewhere (SELECT/WHERE/
-    //! constraints/objective) would be pruned from the table scan, silently
-    //! collapsing distinct entities into whatever grouping happens to survive.
-    //! Reached by EnumerateExpressions below like every other owned expression, so
-    //! the column-binding resolver rewrites these to physical BoundReferenceExpressions
-    //! the same way it does decide_constraints/decide_objective; plan_decide.cpp reads
-    //! the resolved physical index straight off them.
-    vector<unique_ptr<Expression>> entity_key_expressions;
 
     //! The registered name ("gurobi", "highs") of the solver this query will run on,
     //! chosen ONCE by ChooseDecideSolver before any rewrite pass and carried from here
@@ -516,13 +517,12 @@ public:
 
     //! Calls back with every expression this operator owns: decide_variables,
     //! decide_constraints, decide_objective, the composed MIN/MAX constraint and
-    //! objective terms, the helper decisions' reducers, entity_key_expressions, the `by`
-    //! keys and the scope checks.
+    //! objective terms, the helper decisions' reducers, every key and the scope checks.
     //! This is the single place that
     //! knows LogicalDecide's expression layout -- generic DuckDB passes (the
     //! LogicalOperatorVisitor dispatcher, ColumnBindingResolver, RemoveUnusedColumns)
     //! call through it instead of each re-listing these fields by hand, which is how
-    //! a field (entity_key_expressions, composed_minmax_*) previously went missing
+    //! a field (composed_minmax_*) previously went missing
     //! from one visitor while another already had it.
     void EnumerateExpressions(const std::function<void(unique_ptr<Expression> *)> &callback);
 

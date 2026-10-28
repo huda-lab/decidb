@@ -308,7 +308,8 @@ form `SUM(D: e)` use the same key scopes; only a declaration owns solver columns
 
 | Struct | Where | What |
 |---|---|---|
-| `EntityScopeInfo` | `logical_decide.hpp` | `table_alias` (the key as written), `source_table_indices`, `entity_key_column_types`, `entity_key_bindings`, `entity_key_physical_indices`, `scoped_variable_indices`, `key_names`, `value_link` |
+| `DecideKey` | `logical_decide.hpp` | One entry of `LogicalDecide::keys`: `text` (the key as first written) and `elements` (`DecideKeyElement`: bound `expression`, `name`, `null_mode`) |
+| `EntityScopeInfo` | `logical_decide.hpp` | `key` (an index into `keys`), `scoped_variable_indices`, `value_link` |
 | `EntityMapping` | `solver_input.hpp` | `num_entities`, `row_to_entity` — built at execution |
 | `VarIndexer` | `ilp_model.hpp` | The four-block layout and `Get` / `InstanceColumn` / `NumInstances` |
 
@@ -317,13 +318,13 @@ The path:
 1. **Grammar** — `decide_per ':' ColId '(' variable_type ')'` in `select.y`, which
    wraps the name in the `SCOPE_PER` marker.
 2. **Binder** — `FindOrCreateKeyScope` resolves each key element (a column, or a
-   relation standing for its stored columns), finds or creates the one scope for that
-   set of columns, and `DecideVarScopeInfo::Keyed(idx, K)` records it (an `ENTITY`
+   relation standing for its stored columns), finds or creates the key's entry of the
+   key table and the one scope for that key, and `DecideVarScopeInfo::Keyed(idx, K)` records it (an `ENTITY`
    scope with its key as written).
-3. **Logical plan** — `entity_key_expressions` keeps the key columns alive through
-   column pruning.
-4. **Plan creation** — `plan_decide.cpp` resolves logical bindings to physical
-   chunk indices against the child's `GetColumnBindings()`.
+3. **Logical plan** — the key table's elements keep the key columns alive through
+   column pruning (`LogicalDecide::EnumerateExpressions`).
+4. **Plan creation** — binding resolution turns each key element into a chunk position,
+   as it does every expression the operator owns.
 5. **Optimizer** — a helper decision of the value rewrite over a `by` key is an
    `ENTITY` decision too: its scope names its link (`value_link`) instead of key
    columns, and its entities are the `by` groups among the rows the link's clause keeps

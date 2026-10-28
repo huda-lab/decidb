@@ -1498,13 +1498,20 @@ static void CollectClauseParts(const Expression &expr, idx_t decide_index,
 	    expr, [&](const Expression &child) { CollectClauseParts(child, decide_index, query_wide, parts); });
 }
 
-//! A key column as a message names it: the name binding gave it (as written, or
-//! relation-qualified for a relation element), else the expression rendered.
-static string KeyColumnName(const Expression &column, const DecideSourceNames &names) {
-	if (column.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		return column.Cast<BoundColumnRefExpression>().GetName();
+//! The key of a scope check over `key` within each group of `by`: their union, added to
+//! `keys` when no key holds it yet. INVALID_INDEX is the empty key.
+static idx_t WithinGroups(idx_t key, idx_t by, vector<DecideKey> &keys) {
+	if (key == DConstants::INVALID_INDEX || by == DConstants::INVALID_INDEX) {
+		return key == DConstants::INVALID_INDEX ? by : key;
 	}
-	return RenderDecideSource(column, names);
+	vector<DecideKeyElement> elements;
+	for (auto index : {key, by}) {
+		for (auto &element : keys[index].elements) {
+			elements.push_back(element.Copy());
+		}
+	}
+	auto text = keys[key].text + ", " + keys[by].text;
+	return FindOrCreateDecideKey(std::move(elements), text, keys);
 }
 
 //! How a message describes a decision's own key: `declared per row`, `declared per
@@ -1518,27 +1525,16 @@ static string DeclaredScope(const DecideVarScopeInfo &scope) {
 
 void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
                                                   DecideScopeChecks &scope) const {
-	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.group_keys, scope.relations};
+	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys, scope.relations};
 	auto reducer_text = RenderDecideReducer(reducer, names);
-	idx_t group_key;
-	const DecideGroupKey *by = TryParseGroupKeyTag(reducer.GetAlias(), group_key) && group_key < scope.group_keys.size()
-	                               ? &scope.group_keys[group_key]
-	                               : nullptr;
-	auto by_key = [&](vector<unique_ptr<Expression>> &key, vector<string> &key_names) {
-		if (!by) {
-			return;
-		}
-		for (idx_t i = 0; i < by->expressions.size(); i++) {
-			key.push_back(by->expressions[i]->Copy());
-			key_names.push_back(i < by->names.size() ? by->names[i] : by->expressions[i]->ToString());
-		}
-	};
+	idx_t by = DConstants::INVALID_INDEX;
+	TryParseGroupKeyTag(reducer.GetAlias(), by);
 	// D8: every `by` group of the kept rows has a row the reducer's own `when` keeps.
 	if (reducer.filter) {
 		DecideScopeCheck check;
 		check.kind = DecideScopeCheckKind::READS_A_ROW;
 		check.rows = rows ? rows->Copy() : nullptr;
-		by_key(check.key, check.key_names);
+		check.key = by;
 		check.filter = reducer.filter->Copy();
 		check.subject = reducer_text;
 		scope.checks.push_back(std::move(check));
@@ -1550,7 +1546,8 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	    reducer.children.empty()) {
 		return;
 	}
-	auto &key_scope = scope.entity_scopes[scope_idx];
+	auto key = WithinGroups(scope.entity_scopes[scope_idx].key, by, scope.keys);
+	auto subject = DecideKeyText(scope.keys, scope.entity_scopes[scope_idx].key);
 	ClauseParts body;
 	CollectClauseParts(
 	    *reducer.children[0], decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, body);
@@ -1558,15 +1555,9 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 		DecideScopeCheck check;
 		check.kind = DecideScopeCheckKind::DETERMINES;
 		check.rows = rows ? rows->Copy() : nullptr;
-		for (idx_t i = 0; i < key_scope.entity_key_bindings.size(); i++) {
-			check.key.push_back(make_uniq<BoundColumnRefExpression>(
-			    i < key_scope.key_names.size() ? key_scope.key_names[i] : string(),
-			    key_scope.entity_key_column_types[i], key_scope.entity_key_bindings[i]));
-			check.key_names.push_back(i < key_scope.key_names.size() ? key_scope.key_names[i] : string());
-		}
-		by_key(check.key, check.key_names);
+		check.key = key;
 		check.filter = reducer.filter ? reducer.filter->Copy() : nullptr;
-		check.subject = key_scope.table_alias;
+		check.subject = subject;
 		check.context = "in " + reducer_text;
 		return check;
 	};
@@ -1590,7 +1581,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 
 void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing,
                                                  DecideScopeChecks &scope) const {
-	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.group_keys, scope.relations};
+	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys, scope.relations};
 	// D4: the `when` keeps a row of a non-empty input.
 	if (enclosing.when) {
 		DecideScopeCheck check;
@@ -1605,22 +1596,16 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideE
 	// The `per` key determines every tuple term, decision and `by` key of the clause.
 	if (enclosing.per) {
 		auto &per = *enclosing.per;
-		vector<string> key_names;
-		for (idx_t i = 1; i < per.children.size(); i++) {
-			key_names.push_back(KeyColumnName(*per.children[i], names));
-		}
+		auto key = PerWrapperKey(per);
 		idx_t fragment;
 		auto key_text = TryParseSourceFragmentTag(per.GetAlias(), fragment) && fragment < scope.source_fragments.size()
 		                    ? scope.source_fragments[fragment]
-		                    : (key_names.empty() ? string("()") : StringUtil::Join(key_names, ", "));
+		                    : DecideKeyText(scope.keys, key);
 		auto make_check = [&]() {
 			DecideScopeCheck check;
 			check.kind = DecideScopeCheckKind::DETERMINES;
 			check.rows = enclosing.when ? enclosing.when->Copy() : nullptr;
-			for (idx_t i = 1; i < per.children.size(); i++) {
-				check.key.push_back(per.children[i]->Copy());
-			}
-			check.key_names = key_names;
+			check.key = key;
 			check.subject = key_text;
 			return check;
 		};
@@ -1644,14 +1629,14 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideE
 		}
 		for (auto *reducer : parts.reducers) {
 			idx_t group_key;
-			if (!TryParseGroupKeyTag(reducer->GetAlias(), group_key) || group_key >= scope.group_keys.size()) {
+			if (!TryParseGroupKeyTag(reducer->GetAlias(), group_key) || group_key >= scope.keys.size()) {
 				continue;
 			}
-			auto &by = scope.group_keys[group_key];
-			for (idx_t i = 0; i < by.expressions.size(); i++) {
+			auto &by = scope.keys[group_key];
+			for (auto &element : by.elements) {
 				auto check = make_check();
-				check.value = by.expressions[i]->Copy();
-				check.object = i < by.names.size() ? by.names[i] : by.expressions[i]->ToString();
+				check.value = element.expression->Copy();
+				check.object = element.name;
 				check.context = "in by (" + by.text + ")";
 				scope.checks.push_back(std::move(check));
 			}
@@ -1678,7 +1663,7 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 		}
 		body = conj.children[0].get();
 	}
-	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.group_keys, scope.relations};
+	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys, scope.relations};
 	if (enclosing.when) {
 		DecideScopeCheck check;
 		check.kind = DecideScopeCheckKind::KEEPS_A_ROW;
@@ -1721,12 +1706,12 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 	}
 	for (auto *reducer : parts.reducers) {
 		idx_t group_key;
-		if (TryParseGroupKeyTag(reducer->GetAlias(), group_key) && group_key < scope.group_keys.size()) {
-			auto &by = scope.group_keys[group_key];
-			for (idx_t i = 0; i < by.expressions.size(); i++) {
+		if (TryParseGroupKeyTag(reducer->GetAlias(), group_key) && group_key < scope.keys.size()) {
+			auto &by = scope.keys[group_key];
+			for (auto &element : by.elements) {
 				auto check = make_check();
-				check.value = by.expressions[i]->Copy();
-				check.object = i < by.names.size() ? by.names[i] : by.expressions[i]->ToString();
+				check.value = element.expression->Copy();
+				check.object = element.name;
 				check.context = "in by (" + by.text + ")";
 				scope.checks.push_back(std::move(check));
 			}

@@ -139,7 +139,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         vector<string> decide_source_fragments;
 
         // Key scopes: one per distinct key, shared by the declarations and reducers on it.
-        vector<EntityScopeInfo> entity_scopes;
+	    vector<DecideKey> keys;
+	    vector<EntityScopeInfo> entity_scopes;
         vector<DecideVarScopeInfo> variable_scopes; // per variable: row / keyed / query-wide
 
         // A parse tree stored by an earlier version (a view, a macro) may still carry a
@@ -175,9 +176,9 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 variable_scopes.push_back(DecideVarScopeInfo::Scalar());
             } else if (declaration.per) {
                 auto key_text = DecideKeyToString(*declaration.per);
-                auto scope_idx =
-                    FindOrCreateKeyScope(bind_context, *declaration.per, declared_names, key_text, entity_scopes);
-                entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
+			    auto scope_idx =
+			        FindOrCreateKeyScope(bind_context, *declaration.per, declared_names, key_text, keys, entity_scopes);
+			    entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
                 variable_scopes.push_back(DecideVarScopeInfo::Keyed(scope_idx, key_text));
             } else {
                 variable_scopes.push_back(DecideVarScopeInfo::Row());
@@ -310,9 +311,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         DecideQualifierContext qualifier_context;
         qualifier_context.decide_index = result.decide_index;
         qualifier_context.entity_scopes = &entity_scopes;
-        vector<DecideGroupKey> group_keys;
-        qualifier_context.group_keys = &group_keys;
-        qualifier_context.source_fragments = &decide_source_fragments;
+	    qualifier_context.keys = &keys;
+	    qualifier_context.source_fragments = &decide_source_fragments;
         // Isolate with brackets to avoid multiple active binders.
         {
             DecideConstraintsBinder decide_constraints_binder (binder, context, decide_variable_names, scalar_variable_names, &qualifier_context);
@@ -325,17 +325,16 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 // operand's type is only known now that binding has resolved it. Together
                 // they are the whole refusal, so the model builder no longer raises one.
                 auto relations = DecideRelationNames(bind_context, result.decide_index);
-                DecideSourceNames names {decide_source_fragments, entity_scopes, group_keys, relations};
-                ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, &names);
+			    DecideSourceNames names {decide_source_fragments, entity_scopes, keys, relations};
+			    ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, &names);
                 // Degree has one owner, and this is it. Running on the bound tree makes the
                 // rule total: a reducer argument and a bare per-row constraint are judged
                 // the same way, which the parsed-tree gate could not do because it was only
                 // ever called for SUM/AVG/MIN/MAX arguments.
                 ValidateDecideConstraintDegree(*result.decide_constraints, result.decide_index);
-                result.decide_constraint_sources =
-                    InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, entity_scopes,
-                                                   result.decide_index, &group_keys);
-            }
+			    result.decide_constraint_sources = InitializeConstraintSourceInfo(
+			        *result.decide_constraints, decide_source_fragments, entity_scopes, result.decide_index, &keys);
+		    }
             // Types are now determined from the DECIDE clause, not from constraint binding
         }
         if (statement.decide_objective) {
@@ -348,12 +347,12 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 ValidateDecideObjectiveDegree(*result.decide_objective, result.decide_index);
             }
         }
-        for (auto &key : group_keys) {
-            for (auto &element : key.expressions) {
-                RefuseVolatile(*element, "a by key");
-            }
-        }
-        result.decide_source_fragments = decide_source_fragments;
+	    for (auto &key : keys) {
+		    for (auto &element : key.elements) {
+			    RefuseVolatile(*element.expression, "a by key");
+		    }
+	    }
+	    result.decide_source_fragments = decide_source_fragments;
         result.decide_sense = statement.decide_sense;
         // Update types in bind context to reflect the determined types from DECIDE clause
         bind_context.GetBindingsList().back()->types = var_types;
@@ -368,26 +367,9 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         result.num_auxiliary_vars = num_auxiliary_vars;
         result.is_boolean_var = is_boolean_var;
 
-        // Create BoundColumnRefExpressions for entity-key columns.
-        // These are stored on LogicalDecide so that DuckDB's binder column-reference
-        // tracking (used by the initial Get column_id selection AND by the column
-        // pruner's rebinding pass) treats entity-key columns as live. Without this,
-        // entity-key columns that don't also appear in SELECT/WHERE/constraints/
-        // objective get pruned by the Binder, leaving the VarIndexer with a
-        // degenerate key set that silently collapses distinct entities.
-        for (auto &scope : entity_scopes) {
-            for (idx_t k = 0; k < scope.entity_key_bindings.size(); k++) {
-                result.entity_key_expressions.push_back(
-                    make_uniq<BoundColumnRefExpression>(
-                        "entity_key_" + scope.table_alias,
-                        scope.entity_key_column_types[k],
-                        scope.entity_key_bindings[k]));
-            }
-        }
+	    result.decide_keys = std::move(keys);
 
-        result.decide_group_keys = std::move(group_keys);
-
-        result.entity_scopes = std::move(entity_scopes);
+	    result.entity_scopes = std::move(entity_scopes);
         result.variable_scopes = variable_scopes;
 
         // ne_clause_labels is now populated by DecideOptimizer (post-binding)

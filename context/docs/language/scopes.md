@@ -35,18 +35,18 @@ the clause the user wrote.
   and keys use data only. `RefuseQualifiedDecisionReferences` (`decide_declarations_binder.cpp`) refuses `D.x`.
 - **Declarations.** `BindDeclarations` resolves a key through `FindOrCreateKeyScope`: each element against the query's
   own `FROM` (a declared decision is refused first, then a column, then a relation standing for its stored columns).
-  The key is sorted and de-duplicated by binding (`SortedKey`), so equal keys share one `EntityScopeInfo`
-  (`FindOrCreateExactScope`). `DecideVarScope` records `ROW`, `ENTITY` (keyed) or `SCALAR` (query-wide); a keyed
+  `FindOrCreateDecideKey` de-duplicates the key and puts its elements in one order, so equal keys share one entry of
+  the key table and one `EntityScopeInfo`. `DecideVarScope` records `ROW`, `ENTITY` (keyed) or `SCALAR` (query-wide); a keyed
   declaration's `DecideVarScopeInfo` also keeps the key as written (`declared_key`) for messages. It is one struct
   rather than parallel arrays so an auxiliary appended by the optimizer cannot desync a scope from its key.
 - **Constraints.** `DecideConstraintsBinder::BindScopedConstraint` binds the body, then wraps it: `when` as a
   conjunction tagged `WHEN_CONSTRAINT_TAG` (child 0 the constraint, child 1 the condition), `per` as one tagged
-  `PER_CLASS_TAG` (child 0 the constraint, children 1.. the key columns, none for `per ()`). The key's written text
+  `PER_CLASS_TAG` (child 0 the constraint), tagged with its key's entry (`MakePerKeyTag`; no tag for `per ()`). The key's written text
   is recorded as a source fragment.
 - **Reducers.** `DecideBinder::BindScopedReducer` puts the inner `when` on `BoundAggregateExpression::filter` and tags
   an inner `per` with its key scope (`MakeQualifiedReducerTag`). `BindReducerBy` registers the `by` key in
-  `LogicalDecide::group_keys` (one entry per key as written; keys compare as sets, a subquery by its text,
-  `FindOrCreateGroupKey`) and tags the reducer `MakeGroupKeyTag`. `BindQualifiedReducer` binds the colon form onto the
+  `LogicalDecide::keys` (one entry per key; keys compare as sets, a key holding a subquery by its text,
+  `FindOrCreateDecideKey`) and tags the reducer `MakeGroupKeyTag`. `BindQualifiedReducer` binds the colon form onto the
   same key scope as `sum(per D: e)` and adds `COLON_FORM_TAG`, which only affects how it prints. Tags are composable
   (`AddDecideTag`, `HasDecideTag`), because a keyed `AVG` is tagged by the binder and again by the AVG→SUM rewrite.
 - **Objective.** `DecideObjectiveBinder::BindScopedObjective` wraps a front `when` the same way; `per ()` adds
@@ -100,7 +100,7 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 
 - `RewriteScopedReducers` (VALUE shape, above), after `RewriteBilinear` and before the MIN/MAX passes.
 - `RewriteMinMaxObjective` (`decide_rewrite_minmax.cpp`) reads the two-level wrapper into `per_inner_*` /
-  `per_outer_*` (reducer kinds, easy or hard); execution groups by `DecideObjective::per_columns`. An inner
+  `per_outer_*` (reducer kinds, easy or hard); execution groups by `DecideObjective::per_key`. An inner
   `MIN`/`MAX` emits linking rows only for rows with a nonzero coefficient; a group with none has its auxiliary pinned
   to 0.
 - `RewriteRhsAggregates` (`decide_rewrite_rhs_window.cpp`) turns every reducer on a bound into a window column over
@@ -125,7 +125,7 @@ In `src/execution/operator/decide/physical_decide.cpp`:
   carries the same value. The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
 - The prepared model (`decide_prepared_model.hpp`) carries the scope on `DecideConstraint` — `when_condition`,
   `group_key`, `per_key` (`PerKeyRole`: `NONE`, `ONE_ROW_PER_CLASS`, `NAMES_CLASSES`) and `class_key` — and on
-  `DecideObjective` — `when_condition` and `per_columns`.
+  `DecideObjective` — `when_condition` and `per_key`. Each key is an index into `LogicalDecide::keys`.
 
 ## Rendering
 

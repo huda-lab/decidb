@@ -1193,6 +1193,24 @@ DecideExpression EnumUtil::FromString<DecideExpression>(const char *value) {
 	return static_cast<DecideExpression>(StringUtil::StringToEnum(GetDecideExpressionValues(), 3, "DecideExpression", value));
 }
 
+const StringUtil::EnumStringLiteral *GetDecideKeyNullModeValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+	    {static_cast<uint32_t>(DecideKeyNullMode::NO_GROUP), "NO_GROUP"},
+	    {static_cast<uint32_t>(DecideKeyNullMode::VALUE), "VALUE"}};
+	return values;
+}
+
+template <>
+const char *EnumUtil::ToChars<DecideKeyNullMode>(DecideKeyNullMode value) {
+	return StringUtil::EnumToString(GetDecideKeyNullModeValues(), 2, "DecideKeyNullMode", static_cast<uint32_t>(value));
+}
+
+template <>
+DecideKeyNullMode EnumUtil::FromString<DecideKeyNullMode>(const char *value) {
+	return static_cast<DecideKeyNullMode>(
+	    StringUtil::StringToEnum(GetDecideKeyNullModeValues(), 2, "DecideKeyNullMode", value));
+}
+
 const StringUtil::EnumStringLiteral *GetDecideScopeCheckKindValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 	    {static_cast<uint32_t>(DecideScopeCheckKind::KEEPS_A_ROW), "KEEPS_A_ROW"},

@@ -351,21 +351,24 @@ static bool IsStoredColumn(Binding &binding, column_t column_index) {
 	return !entry->Cast<TableCatalogEntry>().GetColumn(LogicalIndex(column_index)).Generated();
 }
 
-//! One column of a key: where it binds, its type, and its name as a message quotes it --
-//! as written for a column element, qualified by its relation (`D.depotID`) for a column
-//! a relation element stands for.
+//! One column of a key: where it binds, its type, its name as a message quotes it -- as
+//! written for a column element, qualified by its relation (`D.depotID`) for a column a
+//! relation element stands for -- and how it compares NULL, which follows the same split.
 struct KeyColumn {
 	ColumnBinding binding;
 	LogicalType type;
 	string name;
+	DecideKeyNullMode null_mode;
 };
 using KeyColumns = vector<KeyColumn>;
 
-//! Column `column_index` of `binding` as a key column, registered with the scan.
+//! Column `column_index` of `binding` as a key column a relation element stands for,
+//! registered with the scan.
 static KeyColumn MakeKeyColumn(Binding &binding, column_t column_index) {
 	return KeyColumn {RegisterKeyColumn(binding, column_index), binding.types[column_index],
 	                  KeywordHelper::WriteOptionallyQuoted(binding.GetAlias()) + "." +
-	                      KeywordHelper::WriteOptionallyQuoted(binding.names[column_index])};
+	                      KeywordHelper::WriteOptionallyQuoted(binding.names[column_index]),
+	                  DecideKeyNullMode::VALUE};
 }
 
 //! Adds the stored columns of `relation`: a relation in a key stands for them.
@@ -388,6 +391,7 @@ static void AddKeyColumn(const ColumnRefExpression &element, Binding &binding, c
 	}
 	auto column = MakeKeyColumn(binding, column_index);
 	column.name = element.ToString();
+	column.null_mode = DecideKeyNullMode::NO_GROUP;
 	columns.push_back(std::move(column));
 }
 
@@ -456,19 +460,6 @@ static void ResolveKeyElement(BindContext &bind_context, const ColumnRefExpressi
 	AddRelationColumns(*relation, columns);
 }
 
-//! A key is a set: order and repetition do not change which rows share a class, so its
-//! columns are kept sorted by binding, without repeats.
-static KeyColumns SortedKey(KeyColumns columns) {
-	std::sort(columns.begin(), columns.end(), [](const KeyColumn &a, const KeyColumn &b) {
-		return a.binding.table_index != b.binding.table_index ? a.binding.table_index < b.binding.table_index
-		                                                      : a.binding.column_index < b.binding.column_index;
-	});
-	columns.erase(std::unique(columns.begin(), columns.end(),
-	                          [](const KeyColumn &a, const KeyColumn &b) { return a.binding == b.binding; }),
-	              columns.end());
-	return columns;
-}
-
 //! The columns of the key `per` lists (its children[1..]; none for `per ()`), each element
 //! resolved by ResolveKeyElement.
 static KeyColumns ResolveKey(BindContext &bind_context, const FunctionExpression &per,
@@ -484,50 +475,45 @@ static KeyColumns ResolveKey(BindContext &bind_context, const FunctionExpression
 	if (columns.empty() && per.children.size() > 1) {
 		throw InternalException("DECIDE per key '%s' resolved to no column", DecideKeyToString(per));
 	}
-	return SortedKey(std::move(columns));
+	return columns;
 }
 
-//! The scope keyed on `columns` (a SortedKey): one per key, whichever spelling names it.
-//! `key_text` is the key as first written, kept for display.
-static idx_t FindOrCreateExactScope(const KeyColumns &columns, const string &key_text,
-                                    vector<EntityScopeInfo> &entity_scopes) {
-	vector<ColumnBinding> bindings;
+//! `columns` as key elements, for FindOrCreateDecideKey to order and de-duplicate.
+static vector<DecideKeyElement> KeyElements(const KeyColumns &columns) {
+	vector<DecideKeyElement> elements;
 	for (auto &column : columns) {
-		bindings.push_back(column.binding);
+		DecideKeyElement element;
+		element.expression = make_uniq<BoundColumnRefExpression>(column.name, column.type, column.binding);
+		element.name = column.name;
+		element.null_mode = column.null_mode;
+		elements.push_back(std::move(element));
 	}
+	return elements;
+}
+
+//! The scope of the decisions and reducers keyed by `key`: one per key.
+static idx_t FindOrCreateScope(idx_t key, vector<EntityScopeInfo> &entity_scopes) {
 	for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
-		if (entity_scopes[scope_idx].entity_key_bindings == bindings) {
+		if (entity_scopes[scope_idx].key == key && entity_scopes[scope_idx].value_link == DConstants::INVALID_INDEX) {
 			return scope_idx;
 		}
 	}
 	EntityScopeInfo scope_info;
-	scope_info.table_alias = key_text.empty() ? "()" : key_text;
-	scope_info.entity_key_bindings = std::move(bindings);
-	for (auto &column : columns) {
-		scope_info.entity_key_column_types.push_back(column.type);
-		scope_info.key_names.push_back(column.name);
-		auto &tables = scope_info.source_table_indices;
-		if (std::find(tables.begin(), tables.end(), column.binding.table_index) == tables.end()) {
-			tables.push_back(column.binding.table_index);
-		}
-	}
+	scope_info.key = key;
 	entity_scopes.push_back(std::move(scope_info));
 	return entity_scopes.size() - 1;
 }
 
 idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
-                           vector<EntityScopeInfo> &entity_scopes) {
-	return FindOrCreateExactScope(ResolveKey(bind_context, per, decision_names), key_text, entity_scopes);
+                           vector<DecideKey> &keys, vector<EntityScopeInfo> &entity_scopes) {
+	auto key = BindKey(bind_context, per, decision_names, key_text, keys);
+	return FindOrCreateScope(key, entity_scopes);
 }
 
-vector<unique_ptr<Expression>> BindKeyColumns(BindContext &bind_context, const FunctionExpression &per,
-                                              const case_insensitive_set_t &decision_names) {
-	vector<unique_ptr<Expression>> result;
-	for (auto &column : ResolveKey(bind_context, per, decision_names)) {
-		result.push_back(make_uniq<BoundColumnRefExpression>(column.name, column.type, column.binding));
-	}
-	return result;
+idx_t BindKey(BindContext &bind_context, const FunctionExpression &per, const case_insensitive_set_t &decision_names,
+              const string &key_text, vector<DecideKey> &keys) {
+	return FindOrCreateDecideKey(KeyElements(ResolveKey(bind_context, per, decision_names)), key_text, keys);
 }
 
 //! The relation `element` names when it names no column of the FROM clause: `by (D)`
@@ -553,15 +539,11 @@ static optional_ptr<Binding> ResolveRelationName(BindContext &bind_context, cons
 	return bind_context.GetBinding(RelationAlias(names), error);
 }
 
-//! A relation's stored columns as bound column references, registered with the scan.
-static vector<unique_ptr<Expression>> BindRelationColumns(Binding &relation) {
+//! A relation's stored columns as key elements, registered with the scan.
+static vector<DecideKeyElement> BindRelationColumns(Binding &relation) {
 	KeyColumns columns;
 	AddRelationColumns(relation, columns);
-	vector<unique_ptr<Expression>> result;
-	for (auto &column : columns) {
-		result.push_back(make_uniq<BoundColumnRefExpression>(column.name, column.type, column.binding));
-	}
-	return result;
+	return KeyElements(columns);
 }
 
 bool ContainsDecideAggregate(const ParsedExpression &expr) {
@@ -1672,7 +1654,8 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	}
 	// `SUM(D, T: e)` is `sum(per D, T: e)` (language/guide.md §5.1): the same exact scope, so the same
 	// classes and the same check that the key determines the body.
-	auto scope_idx = FindOrCreateExactScope(SortedKey(std::move(key)), relation_list, *ctx.entity_scopes);
+	auto scope_idx =
+	    FindOrCreateScope(FindOrCreateDecideKey(KeyElements(key), relation_list, *ctx.keys), *ctx.entity_scopes);
 
 	auto aggregate_result = BindExpression(qualified_expr.children[0], depth);
 	if (aggregate_result.HasError()) {
@@ -1706,50 +1689,6 @@ static case_insensitive_set_t DecisionNames(const case_insensitive_map_t<idx_t> 
 		names.insert(variable.first);
 	}
 	return names;
-}
-
-//! The index of the `by` key equal to `key` as a set -- order and repetition aside --
-//! appending it as written when no reducer has used it yet.
-static idx_t FindOrCreateGroupKey(vector<unique_ptr<Expression>> key, vector<string> names, const string &text,
-                                  vector<DecideGroupKey> &group_keys) {
-	vector<unique_ptr<Expression>> unique_key;
-	vector<string> unique_names;
-	for (idx_t i = 0; i < key.size(); i++) {
-		bool seen = false;
-		for (auto &kept : unique_key) {
-			seen = seen || kept->Equals(*key[i]);
-		}
-		if (!seen) {
-			unique_key.push_back(std::move(key[i]));
-			unique_names.push_back(std::move(names[i]));
-		}
-	}
-	auto contains = [](const vector<unique_ptr<Expression>> &set, const Expression &expr) {
-		for (auto &member : set) {
-			if (member->Equals(expr)) {
-				return true;
-			}
-		}
-		return false;
-	};
-	for (idx_t i = 0; i < group_keys.size(); i++) {
-		auto &existing = group_keys[i].expressions;
-		bool equal = existing.size() == unique_key.size();
-		for (auto &expr : unique_key) {
-			equal = equal && contains(existing, *expr);
-		}
-		// A bound subquery equals nothing, not even itself, so a key holding one is
-		// recognised by its text: written the same way in one query, it is the same key.
-		if (equal || group_keys[i].text == text) {
-			return i;
-		}
-	}
-	DecideGroupKey group_key;
-	group_key.expressions = std::move(unique_key);
-	group_key.text = text;
-	group_key.names = std::move(unique_names);
-	group_keys.push_back(std::move(group_key));
-	return group_keys.size() - 1;
 }
 
 BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
@@ -1806,8 +1745,9 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 			throw InternalException("DECIDE: a reducer's per needs the clause's key scopes");
 		}
 		auto &marker = per->Cast<FunctionExpression>();
-		auto scope_idx = FindOrCreateKeyScope(binder.bind_context, marker, DecisionNames(variables),
-		                                      DecideKeyToString(marker), *qualifier_context->entity_scopes);
+		auto scope_idx =
+		    FindOrCreateKeyScope(binder.bind_context, marker, DecisionNames(variables), DecideKeyToString(marker),
+		                         *qualifier_context->keys, *qualifier_context->entity_scopes);
 		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
 	}
 	return result;
@@ -1827,25 +1767,24 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 	if (by.children.size() == 1) {
 		return result; // `by ()`: every kept row, the default
 	}
-	if (!qualifier_context || !qualifier_context->group_keys) {
-		throw InternalException("DECIDE: a reducer's by needs the clause's group keys");
+	if (!qualifier_context || !qualifier_context->keys) {
+		throw InternalException("DECIDE: a reducer's by needs the clause's keys");
 	}
 	// Each element is a data expression, or a relation standing for its stored columns.
-	vector<unique_ptr<Expression>> key;
-	vector<string> names;
+	vector<DecideKeyElement> key;
 	for (idx_t i = 1; i < by.children.size(); i++) {
 		auto &element = by.children[i];
 		if (element->GetExpressionClass() == ExpressionClass::COLUMN_REF) {
 			auto relation = ResolveRelationName(binder.bind_context, element->Cast<ColumnRefExpression>());
 			if (relation) {
 				for (auto &column : BindRelationColumns(*relation)) {
-					names.push_back(column->GetName());
 					key.push_back(std::move(column));
 				}
 				continue;
 			}
 		}
-		names.push_back(element->ToString());
+		DecideKeyElement key_element;
+		key_element.name = element->ToString();
 		ErrorData key_error;
 		binding_when_condition = true;
 		try {
@@ -1858,10 +1797,14 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 		if (key_error.HasError()) {
 			return BindResult(std::move(key_error));
 		}
-		key.push_back(std::move(BoundExpression::GetExpression(*element)));
+		key_element.expression = std::move(BoundExpression::GetExpression(*element));
+		key.push_back(std::move(key_element));
 	}
-	auto group_key = FindOrCreateGroupKey(std::move(key), std::move(names), key_text, *qualifier_context->group_keys);
-	AddDecideTag(aggregate->alias, MakeGroupKeyTag(group_key));
+	auto group_key = FindOrCreateDecideKey(std::move(key), key_text, *qualifier_context->keys);
+	if (group_key != DConstants::INVALID_INDEX) {
+		(*qualifier_context->keys)[group_key].written_as_by = true;
+		AddDecideTag(aggregate->alias, MakeGroupKeyTag(group_key));
+	}
 	return result;
 }
 

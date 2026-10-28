@@ -101,7 +101,7 @@ private:
 			if (check.kind == DecideScopeCheckKind::KEEPS_A_ROW) {
 				row_check.filter = check.rows->Copy();
 				row_check.message = DecideWhenMatchesNoRowsMessage(check.subject);
-			} else if (check.kind == DecideScopeCheckKind::READS_A_ROW && check.key.empty()) {
+			} else if (check.kind == DecideScopeCheckKind::READS_A_ROW && check.key == DConstants::INVALID_INDEX) {
 				row_check.rows = check.rows ? check.rows->Copy() : nullptr;
 				row_check.filter = check.filter->Copy();
 				row_check.message = DecideReducerHasNoRowsMessage(check.subject);
@@ -149,8 +149,14 @@ private:
 	void ReadEntityScopes(DirectIR &ir) const {
 		for (auto &scope : decide.entity_scopes) {
 			DirectIREntityScope ir_node;
-			ir_node.relations = scope.source_table_indices;
-			for (auto &binding : scope.entity_key_bindings) {
+			// The IR is read before the value rewrite makes its helper scopes; a binder scope's key is columns.
+			D_ASSERT(scope.value_link == DConstants::INVALID_INDEX);
+			for (auto &element : DecideKeyElements(decide.keys, scope.key)) {
+				auto &binding = element.expression->Cast<BoundColumnRefExpression>().binding;
+				if (std::find(ir_node.relations.begin(), ir_node.relations.end(), binding.table_index) ==
+				    ir_node.relations.end()) {
+					ir_node.relations.push_back(binding.table_index);
+				}
 				auto found = std::find(source_bindings.begin(), source_bindings.end(), binding);
 				// The binder keeps every entity key live in the source.
 				D_ASSERT(found != source_bindings.end());

@@ -1007,7 +1007,8 @@
       {
         "id": 211,
         "name": "entity_key_expressions",
-        "type": "vector<Expression*>"
+        "type": "vector<Expression*>",
+        "deleted": true
       },
       {
         "id": 212,
@@ -1035,11 +1036,6 @@
         "type": "vector<DecideSourceColumnName>"
       },
       {
-        "id": 217,
-        "name": "group_keys",
-        "type": "vector<DecideGroupKey>"
-      },
-      {
         "id": 218,
         "name": "scope_checks",
         "type": "vector<DecideScopeCheck>"
@@ -1049,6 +1045,11 @@
         "name": "scoped_objective",
         "type": "bool",
         "deleted": true
+      },
+      {
+        "id": 220,
+        "name": "keys",
+        "type": "vector<DecideKey>"
       }
     ]
   },
