@@ -86,8 +86,9 @@
   `per c: sum(x) by (c) <= 1` lets each of the three spellings of 'abc' reach 1.
 - **Expected:** **Ruling (owner, 2026-10-27).** Key equality follows the column's collation, as GROUP BY
   does. Every key compares plain values today. Do it with the NULL-key change
-  (`../pipeline/08_execution/todo.md` §2) and the one grouping path (§1 there), which touch
-  the same grouping code.
+  (`../pipeline/08_execution/todo.md` §2), which touches the same grouping code; the
+  numbering by key value (`../pipeline/08_execution/done.md` §5) then sorts by the
+  collated value.
 - **Impact:** more classes than SQL grouping would give on collated text keys.
 
 ## Messages print a subquery, a condition or a `by` key as DuckDB renders it

@@ -76,12 +76,10 @@ Rulings (architect review done):
    least raw spelling.
 7. **Goldens:** the agent shows the diff entry by entry before re-capturing, once, after the numbering lands.
 
-Commits, in order: key table (shipped: `LogicalDecide::keys`) → one numbering (goldens) → NULL key and keyed decision → empty groups (D4, D8) →
+Commits, in order: key table (shipped: `LogicalDecide::keys`) → one numbering (shipped: ids by key value) → NULL key and keyed decision → empty groups (D4, D8) →
 NULL data values → collation.
 
 - [ ] A NULL key is not a class; its rows skip the keyed clause (reverses D5; closes infeasible § 2) — [execution § 2](pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)
-- [ ] One numbering for the key table (re-capture goldens) — [logical_plan § 1](pipeline/03_logical_plan/todo.md#1-one-numbering-for-the-key-table)
-- [ ] One key-grouping path at execution (with the key table) — [execution § 1](pipeline/08_execution/todo.md#1-one-key-grouping-path-optional)
 - [ ] Key grouping ignores collation (follow the collation) — [bugs § collation](issues/bugs.md#key-grouping-ignores-collation)
 - [ ] `group_indices` drops NULL keys (both oracle helpers drop a NULL key) — [testing § group_indices](testing/todo.md#group_indices-drops-null-keys)
 

@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <functional>
 #include <map>
+#include <numeric>
 #include <set>
 #include <unordered_map>
 #include <unordered_set>
@@ -344,6 +345,51 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, ve
 	}
 }
 
+//! Renumbers `num_groups` groups by key value, so no id depends on row order: columns
+//! compare in key order, NULL after every value as `ORDER BY` places it. `rep_keys`
+//! ([key column][group]) and `row_to_group` are rewritten in the new numbering.
+static void NumberGroupsByValue(vector<vector<Value>> &rep_keys, idx_t num_groups, vector<idx_t> &row_to_group) {
+	auto before = [&](idx_t a, idx_t b) {
+		for (auto &column : rep_keys) {
+			auto &va = column[a];
+			auto &vb = column[b];
+			if (va.IsNull() || vb.IsNull()) {
+				if (va.IsNull() != vb.IsNull()) {
+					return vb.IsNull();
+				}
+				continue;
+			}
+			if (va < vb) {
+				return true;
+			}
+			if (vb < va) {
+				return false;
+			}
+		}
+		return false;
+	};
+	vector<idx_t> order(num_groups);
+	std::iota(order.begin(), order.end(), 0);
+	std::sort(order.begin(), order.end(), before);
+	vector<idx_t> rank(num_groups);
+	for (idx_t position = 0; position < num_groups; position++) {
+		rank[order[position]] = position;
+	}
+	for (auto &gid : row_to_group) {
+		if (gid != DConstants::INVALID_INDEX) {
+			gid = rank[gid];
+		}
+	}
+	for (auto &column : rep_keys) {
+		vector<Value> sorted;
+		sorted.reserve(num_groups);
+		for (auto gid : order) {
+			sorted.push_back(std::move(column[gid]));
+		}
+		column = std::move(sorted);
+	}
+}
+
 //! Streaming typed-hash grouping. Assigns group IDs during the chunk scan
 //! instead of materializing all key Values up front. Representative key tuples
 //! are stored once per group (size O(num_groups)), not once per row, and only
@@ -353,7 +399,7 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, ve
 //!   row_filter      — return true to include row in grouping (empty function = include all)
 //!   (a NULL key value is a value: NULL-keyed rows form one group, D5)
 //!   out_row_to_group — sized num_rows; INVALID_INDEX for excluded rows, [0..K) otherwise
-//!   out_num_groups   — K, count of distinct groups in input order
+//!   out_num_groups   — K, count of distinct groups, numbered in key-value order
 //!   read_rows        — the clause's kept rows: the key is computed on these only, and no
 //!                      other row joins a group (null = every row)
 //!
@@ -479,6 +525,7 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 			row_offset, num_rows);
 	}
 
+	NumberGroupsByValue(rep_keys, next_group, out_row_to_group);
 	out_num_groups = next_group;
 	if (out_rep_keys) {
 		// Expose the per-group representative key values (group g's value for each key
@@ -488,13 +535,10 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 }
 
 //! PerGroupCacheEntry/PerGroupCache are declared in physical_decide.hpp (Finalize's
-//! private phase methods need PerGroupCache in their signatures). Cache for group
-//! assignments: shares one full-data scan + group-map build across constraints/
-//! objectives that use the same key. The cached value is the
-//! *unfiltered* row→group mapping (BuildGroupIds run with row_filter=nullptr); each
-//! call site then applies its own `when` filter and remaps the surviving group IDs
-//! to consecutive 0..K' to preserve today's "encounter-order, no holes" semantics.
-//! Lifetime: one PerGroupCache per Finalize invocation; cleared at end.
+//! private phase methods need PerGroupCache in their signatures). One entry per key
+//! table entry: the key's groups over the rows it was computed on, numbered by key
+//! value, so every call site reading the key sees the same ids and takes its kept
+//! groups as a subsequence. Lifetime: one PerGroupCache per Finalize invocation.
 
 //! Printable key for an (unfiltered) group: the per-key-column representative values
 //! joined with ", " (composite key → `EU, 2024`); a NULL value renders "NULL".
@@ -518,17 +562,55 @@ static string FormatPerGroupKey(const vector<vector<Value>> &rep_keys, idx_t gid
 	return s;
 }
 
-//! Look up (or build + cache) the unfiltered group ids for `keys[key]`,
-//! then materialize a filter-aware view in `out_row_group_ids` / `out_num_groups`.
+//! The cache's grouping of `keys[key]`, computed on every row of `read_rows` (null: every
+//! row). Keys are interned, so the key's index is its identity; INVALID_INDEX is the
+//! empty key, which has one entry like any other. An entry computed on fewer rows is
+//! rebuilt over both row sets, so a key keeps one numbering however many read it.
+static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
+                                           ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                           ColumnDataCollection &data, idx_t num_rows, const vector<bool> *read_rows) {
+	auto found = cache.find(key);
+	bool covers = found != cache.end();
+	if (covers && !found->second.evaluated_rows.empty()) {
+		auto &evaluated = found->second.evaluated_rows;
+		for (idx_t r = 0; r < num_rows && covers; r++) {
+			covers = evaluated[r] || (read_rows && !(*read_rows)[r]);
+		}
+	}
+	if (!covers) {
+		vector<bool> rows;
+		if (read_rows) {
+			rows = *read_rows;
+			if (found != cache.end() && !found->second.evaluated_rows.empty()) {
+				for (idx_t r = 0; r < num_rows; r++) {
+					rows[r] = rows[r] || found->second.evaluated_rows[r];
+				}
+			}
+		}
+		if (found == cache.end()) {
+			found = cache.emplace(key, PerGroupCacheEntry()).first;
+		}
+		auto &entry = found->second;
+		vector<const Expression *> key_exprs;
+		for (auto &element : DecideKeyElements(keys, key)) {
+			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *element.expression, context));
+		}
+		BuildGroupIds(key_exprs, context, data, num_rows, std::function<bool(idx_t)> {}, entry.unfiltered_row_group_ids,
+		              entry.unfiltered_num_groups, &entry.unfiltered_rep_keys, rows.empty() ? nullptr : &rows);
+		entry.evaluated_rows = std::move(rows);
+	}
+	return found->second;
+}
+
+//! Look up (or build + cache) the group ids of `keys[key]`, then materialize the
+//! call's view in `out_row_group_ids` / `out_num_groups`.
 //!
-//! Filter semantics (preserved from BuildGroupIds): rows where row_filter(r) is
-//! false get INVALID_INDEX in the output.
-//! Surviving group IDs are remapped to consecutive 0..K' in their first-seen
-//! row order so downstream code sees a dense [0..K') range exactly as today.
+//! Rows where row_filter(r) is false, or outside `read_rows`, get INVALID_INDEX. The
+//! groups the call keeps are renumbered 0..K' in key-value order, the subsequence of
+//! the key's own numbering.
 //!
 //! `read_rows` is the clause's kept rows, which hold every row either filter keeps: the
-//! key is computed on them only, so a clause that drops rows builds its groups afresh
-//! instead of sharing the cache's, whose key was computed on every row.
+//! key is computed on no row outside them (`CachedKeyGroups`).
 static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<DecideKey> &keys, idx_t key,
                                      ChunkExprCache &chunk_expr_cache, ClientContext &context,
                                      ColumnDataCollection &data, idx_t num_rows,
@@ -545,36 +627,12 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<DecideKe
                                      // Each group's key values ([group][key column]), for a
                                      // message that quotes them as SQL literals.
                                      vector<vector<Value>> *out_group_values = nullptr) {
-	// Build unfiltered group ids (over `read_rows` when given).
-	auto &elements = DecideKeyElements(keys, key);
-	auto build = [&](PerGroupCacheEntry &built, const vector<bool> *rows) {
-		vector<const Expression *> key_exprs;
-		key_exprs.reserve(elements.size());
-		for (auto &col : elements) {
-			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *col.expression, context));
-		}
-		std::function<bool(idx_t)> no_filter; // empty = include all
-		BuildGroupIds(key_exprs, context, data, num_rows, no_filter, built.unfiltered_row_group_ids,
-		              built.unfiltered_num_groups, &built.unfiltered_rep_keys, rows);
-	};
-	PerGroupCacheEntry read_entry;
-	PerGroupCacheEntry *entry = nullptr;
-	if (read_rows && std::find(read_rows->begin(), read_rows->end(), false) != read_rows->end()) {
-		build(read_entry, read_rows);
-		entry = &read_entry;
-	} else {
-		// Keys are interned, so the key's index is its identity; INVALID_INDEX is the
-		// empty key, which has one entry like any other.
-		auto found = cache.find(key);
-		if (found == cache.end()) {
-			found = cache.emplace(key, PerGroupCacheEntry()).first;
-			build(found->second, nullptr);
-		}
-		entry = &found->second;
+	if (read_rows && std::find(read_rows->begin(), read_rows->end(), false) == read_rows->end()) {
+		read_rows = nullptr;
 	}
+	auto *entry = &CachedKeyGroups(cache, keys, key, chunk_expr_cache, context, data, num_rows, read_rows);
 
-	// Apply per-call filter and remap surviving group IDs to consecutive 0..K'
-	// in encounter order, the dense numbering every consumer expects.
+	// The call's kept groups, renumbered densely in key-value order.
 	out_row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 	out_group_labels.clear();
 	if (out_group_values) {
@@ -587,38 +645,44 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache, const vector<DecideKe
 		out_num_groups = 0;
 		return;
 	}
+	auto reads = [&](idx_t r) {
+		return (!read_rows || (*read_rows)[r]) && entry->unfiltered_row_group_ids[r] != DConstants::INVALID_INDEX;
+	};
 	vector<idx_t> remap(entry->unfiltered_num_groups, DConstants::INVALID_INDEX);
-	idx_t next_remap = 0;
 	for (idx_t r = 0; r < num_rows; r++) {
-		idx_t unf_gid = entry->unfiltered_row_group_ids[r];
-		if (unf_gid == DConstants::INVALID_INDEX) continue;
-		if (row_filter && !row_filter(r)) continue;
-		idx_t mapped = remap[unf_gid];
-		if (mapped == DConstants::INVALID_INDEX) {
-			mapped = next_remap++;
-			remap[unf_gid] = mapped;
-			// Reindex the printable key in lockstep with the dense 0..K' renumber:
-			// mapped == out_group_labels.size() exactly here, so labels stay aligned.
-			out_group_labels.push_back(FormatPerGroupKey(entry->unfiltered_rep_keys, unf_gid));
-			if (out_group_values) {
-				vector<Value> values;
-				for (auto &column : entry->unfiltered_rep_keys) {
-					values.push_back(unf_gid < column.size() ? column[unf_gid] : Value());
-				}
-				out_group_values->push_back(std::move(values));
-			}
+		if (reads(r) && (!row_filter || row_filter(r))) {
+			remap[entry->unfiltered_row_group_ids[r]] = 0;
 		}
-		out_row_group_ids[r] = mapped;
+	}
+	idx_t next_remap = 0;
+	for (idx_t unf_gid = 0; unf_gid < remap.size(); unf_gid++) {
+		if (remap[unf_gid] == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		remap[unf_gid] = next_remap++;
+		out_group_labels.push_back(FormatPerGroupKey(entry->unfiltered_rep_keys, unf_gid));
+		if (out_group_values) {
+			vector<Value> values;
+			for (auto &column : entry->unfiltered_rep_keys) {
+				values.push_back(unf_gid < column.size() ? column[unf_gid] : Value());
+			}
+			out_group_values->push_back(std::move(values));
+		}
+	}
+	for (idx_t r = 0; r < num_rows; r++) {
+		if (reads(r) && (!row_filter || row_filter(r))) {
+			out_row_group_ids[r] = remap[entry->unfiltered_row_group_ids[r]];
+		}
 	}
 	out_num_groups = next_remap;
 
 	if (out_loose_row_group_ids) {
 		// Same `remap`, so a row lands in the group the model builder will emit for.
 		for (idx_t r = 0; r < num_rows; r++) {
-			idx_t unf_gid = entry->unfiltered_row_group_ids[r];
-			if (unf_gid == DConstants::INVALID_INDEX) continue;
-			if (loose_row_filter && *loose_row_filter && !(*loose_row_filter)(r)) continue;
-			idx_t mapped = remap[unf_gid];
+			if (!reads(r) || (loose_row_filter && *loose_row_filter && !(*loose_row_filter)(r))) {
+				continue;
+			}
+			idx_t mapped = remap[entry->unfiltered_row_group_ids[r]];
 			if (mapped == DConstants::INVALID_INDEX) continue; // group emits no constraint
 			(*out_loose_row_group_ids)[r] = mapped;
 		}
@@ -728,7 +792,7 @@ static void MaskCoefficientColumn(CoefficientColumn &column, const vector<bool> 
 }
 
 //! The classes each group's rows stand for (language/guide.md §8.1, D28), kept for
-//! the diagnosis: under a `per K:`, K's values among the group's kept rows (first-seen
+//! the diagnosis: under a `per K:`, K's values among the group's kept rows (key-value
 //! order); with no `per`, every kept row of the group; under `per ()`, the whole clause,
 //! one set its groups share. One `SolverInput::ClassSet` per group with kept rows,
 //! referenced from `ec.group_class_set`. `kept_row_group` maps each kept row to its group;
@@ -1622,48 +1686,42 @@ const vector<DecideKeyElement> &PhysicalDecide::KeyElements(idx_t key) const {
 //===--------------------------------------------------------------------===//
 
 vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate,
-                                                          idx_t num_rows, ChunkExprCache &chunk_expr_cache) const {
-    vector<EntityMapping> entity_mappings;
-    for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
-        auto &scope = entity_scopes[scope_idx];
-        EntityMapping mapping;
-
-		vector<const Expression *> key_exprs;
-		if (scope.value_link != DConstants::INVALID_INDEX) {
-			// A helper decision's scope: the groups of its link's `by` key among the rows
-			// the link's clause keeps, one entity per value the key takes there (NULL a
-			// value). The key is never evaluated on a row the clause drops; those rows
-			// are no group, and share one spare entity so that every row has an id.
-			auto &link = reducer_value_links[scope.value_link];
-			for (auto &element : KeyElements(link.group_key)) {
-				key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *element.expression, context));
-			}
-			vector<bool> kept;
-			if (link.when) {
-				kept = KeptRows(*link.when, chunk_expr_cache, context, gstate.data, num_rows);
-			}
-			BuildGroupIds(key_exprs, context, gstate.data, num_rows, std::function<bool(idx_t)> {},
-			              mapping.row_to_entity, mapping.num_entities, nullptr, link.when ? &kept : nullptr);
-			bool dropped = false;
-			for (auto &entity : mapping.row_to_entity) {
-				if (entity == DConstants::INVALID_INDEX) {
-					entity = mapping.num_entities;
-					dropped = true;
-				}
-			}
-			if (dropped) {
-				mapping.num_entities++;
-			}
+                                                          idx_t num_rows, ChunkExprCache &chunk_expr_cache,
+                                                          PerGroupCache &per_group_cache) const {
+	vector<EntityMapping> entity_mappings;
+	vector<string> labels; // entities are not labelled
+	for (auto &scope : entity_scopes) {
+		EntityMapping mapping;
+		if (scope.value_link == DConstants::INVALID_INDEX) {
+			// A reducer's `per ()` has no key columns: one class, every row in it.
+			LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data, num_rows,
+			                         std::function<bool(idx_t)> {}, nullptr, mapping.row_to_entity,
+			                         mapping.num_entities, labels);
 			entity_mappings.push_back(std::move(mapping));
 			continue;
 		}
-		for (auto &element : KeyElements(scope.key)) {
-			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *element.expression, context));
+		// A helper decision's scope: the groups of its link's `by` key among the rows the
+		// link's clause keeps, one entity per value the key takes there (NULL a value). The
+		// key is never evaluated on a row the clause drops; those rows are no group, and
+		// share one spare entity so that every row has an id.
+		auto &link = reducer_value_links[scope.value_link];
+		vector<bool> kept;
+		if (link.when) {
+			kept = KeptRows(*link.when, chunk_expr_cache, context, gstate.data, num_rows);
 		}
-
-		// A reducer's `per ()` has no key columns: one class, every row in it.
-		BuildGroupIds(key_exprs, context, gstate.data, num_rows, std::function<bool(idx_t)> {}, mapping.row_to_entity,
-		              mapping.num_entities);
+		LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
+		                         num_rows, std::function<bool(idx_t)> {}, link.when ? &kept : nullptr,
+		                         mapping.row_to_entity, mapping.num_entities, labels);
+		bool dropped = false;
+		for (auto &entity : mapping.row_to_entity) {
+			if (entity == DConstants::INVALID_INDEX) {
+				entity = mapping.num_entities;
+				dropped = true;
+			}
+		}
+		if (dropped) {
+			mapping.num_entities++;
+		}
 		entity_mappings.push_back(std::move(mapping));
 	}
 	return entity_mappings;
@@ -1712,7 +1770,8 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     //===--------------------------------------------------------------------===//
 
     DecideProfileScope phase("execution.entity_mapping");
-    vector<EntityMapping> entity_mappings = BuildEntityMappings(context, gstate, num_rows, chunk_expr_cache);
+    vector<EntityMapping> entity_mappings =
+        BuildEntityMappings(context, gstate, num_rows, chunk_expr_cache, per_group_cache);
 
     //===--------------------------------------------------------------------===//
     // PHASE 1.6: Scope checks of the clauses

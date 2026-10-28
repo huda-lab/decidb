@@ -519,7 +519,7 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   key of `per r, y:`). `LookupOrBuildPerGroupIds` (`physical_decide.cpp`) requests
   `BuildGroupIds`'s `rep_keys` out-param and stores each group's representative values on
   the cache entry; the per-call renumbering to consecutive `0..K'` (the groups the call's
-  filter keeps, in the order their rows first appear) reindexes the labels in lockstep (a
+  filter keeps, in key-value order) reindexes the labels in lockstep (a
   new `mapped` id is pushed at exactly `out_group_labels.size()`, so labels stay aligned
   with the dense ordinals). `FormatPerGroupKey` joins composite columns with `, `; a NULL
   key value — a class of its own (D5) — renders `NULL`, and an empty-string key renders

@@ -222,6 +222,51 @@ def test_a_key_that_is_null_on_every_row_is_one_group(decidb_cli, scope_solver):
     )
 
 
+def test_a_key_shared_by_a_decision_and_a_by_is_computed_once(decidb_cli):
+    """The decision's entities and the reducer's groups read one grouping of `g`."""
+    sql = """SET decide_direct_solve='off';
+        SELECT id, x FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)
+        DECIDE per g: x(INT)
+        SUCH THAT x <= 9 AND sum(x) by (g) <= 12
+        MAXIMIZE SUM(x)"""
+    result = decidb_cli.with_env({"DECIDB_PROFILE": "1"}).execute_raw(sql)
+    assert result.returncode == 0, result.stderr
+    groupings = [
+        line
+        for line in result.stderr.splitlines()
+        if '"event":"begin"' in line and '"name":"extraction.group_ids"' in line
+    ]
+    assert len(groupings) == 1, result.stderr
+
+
+@pytest.mark.correctness
+def test_a_by_key_is_computed_only_on_rows_its_clauses_keep(decidb_cli, scope_solver):
+    """Two clauses keep different rows and group by one key; neither keeps row 5, whose
+    key does not cast, so the key is never computed there."""
+    columns = ("id", "s", "flag")
+    rows = ((1, "1", True), (2, "1", True), (3, "2", False), (4, "2", False), (5, "bad", False))
+    sql = f"""SET decide_direct_solve='off';
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= 9
+            AND when t.flag: sum(x) by (CAST(t.s AS INT)) <= 5
+            AND when (NOT t.flag AND t.s <> 'bad'): sum(x) by (CAST(t.s AS INT)) <= 7
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    model = ScopedModel(table_rows(columns, rows), [Decision("x")])
+    x_sum = Reduce("sum", lambda r: {"x": 1}, by=("s",))
+    clauses = [
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: 9},)),
+        Scoped((x_sum,), "<=", (lambda r: {CONSTANT: 5},), when=lambda r: r["flag"]),
+        Scoped((x_sum,), "<=", (lambda r: {CONSTANT: 7},), when=lambda r: not r["flag"] and r["s"] != "bad"),
+    ]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"x": 1}),))
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )
+
+
 @pytest.mark.correctness
 @pytest.mark.parametrize(
     "key, oracle_key",

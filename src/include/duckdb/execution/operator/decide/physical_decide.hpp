@@ -23,11 +23,13 @@ class DecideGlobalSinkState;
 //! Finalize, so it's safe for executors to retain references into cached entries.
 using ChunkExprCache = std::unordered_map<const Expression *, unique_ptr<Expression>>;
 
-//! One cached key grouping: the expression set it was built from, plus the resulting
-//! unfiltered row→group assignment. Keyed by a hash of the expression set so a key
-//! evaluated once (e.g. by a constraint) is reused by every other call site that asks
-//! for the same expression set (e.g. the objective, or a later constraint).
+//! One cached key grouping: the key's row→group assignment, groups numbered by key
+//! value, over the rows the key was computed on. A key computed once (e.g. by a
+//! constraint) is reused by every other call site that reads it (e.g. the objective,
+//! a later constraint, or a decision the key declares).
 struct PerGroupCacheEntry {
+    //! The rows the key was computed on; empty: every row.
+    vector<bool> evaluated_rows;
     vector<idx_t> unfiltered_row_group_ids;
     idx_t unfiltered_num_groups;
     //! Representative key values per unfiltered group ([key_col][gid]); used to label
@@ -275,7 +277,8 @@ private:
     //! or a helper decision's `by` key over the rows its clause keeps
     //! (EntityScopeInfo::value_link).
     vector<EntityMapping> BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
-                                              ChunkExprCache &chunk_expr_cache) const;
+                                              ChunkExprCache &chunk_expr_cache,
+                                              PerGroupCache &per_group_cache) const;
 
     //! PHASE 1.6: the scope checks (language/guide.md §7.3), before any clause is
     //! evaluated, so every later phase may assume a well-defined clause. Raises the first

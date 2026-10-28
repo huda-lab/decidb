@@ -215,21 +215,18 @@ For each `EntityScopeInfo` — a keyed decision's key (`per K: x`), a reducer's 
 or colon form (`sum(per K: e)`, `SUM(D: e)`), a helper decision's `by` key — before
 coefficient evaluation:
 
-1. Evaluate the scope's key per row from the materialized data: its resolved elements
-   (`PhysicalDecide::KeyElements`), through `CachedTransformToChunkExpression`, so one
-   `ExpressionExecutor` covers them all. A helper decision's scope
-   (`EntityScopeInfo::value_link`, the value rewrite) has its link's `by` key, evaluated
-   on
-   the rows the link's clause `when` keeps only (`BuildGroupIds`' `read_rows`), one
-   entity per value they take together, NULL a value. A row the clause drops is no
-   group; every such row maps to one spare entity, so each row has an id and the key is
-   never evaluated where the clause never reads.
-2. Concatenate each row's key values into a composite string key with NULL-safe
-   tagging, so a real NULL is distinguishable from the string `"NULL"` — the same
-   pattern the `by`, class and check keys use (`BuildGroupIds` serves both). NULL is a
-   key value. A key with no columns (a reducer's `per ()`) is one class, every row in it.
-3. Assign entity ids in first-seen order over every row via an
-   `unordered_map<string, idx_t>`.
+1. Read the scope's key from the one key cache (`LookupOrBuildPerGroupIds`, §5), which
+   every reader of a key shares: the key's resolved elements
+   (`PhysicalDecide::KeyElements`) are evaluated through
+   `CachedTransformToChunkExpression`, one `ExpressionExecutor` for them all, NULL a key
+   value. A key with no columns (a reducer's `per ()`) is one class, every row in it.
+2. A helper decision's scope (`EntityScopeInfo::value_link`, the value rewrite) reads its
+   link's `by` key on the rows the link's clause `when` keeps only, one entity per value
+   they take together. A row the clause drops is no group; every such row maps to one
+   spare entity, so each row has an id and the key is never evaluated where the clause
+   never reads.
+3. Entity ids are the key's group ids: numbered by key value (below), so a keyed
+   decision's solver columns follow its key's values, not the rows' order.
 4. Fill a `row_to_entity` vector of size `num_rows`.
 
 The result is an `EntityMapping { num_entities, row_to_entity }` on the
@@ -310,7 +307,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   MIN/MAX's member rows, a composed clause's one row -- stand for every class of its
   `per` key in their group: with `per K:` in front (`per_key = NAMES_CLASSES`,
   `class_key`) the key's values among the group's kept rows (`LookupOrBuildPerGroupIds`
-  over the kept rows, first-seen order); with no `per` (`NONE`) every kept row of the
+  over the kept rows, in key-value order); with no `per` (`NONE`) every kept row of the
   group; `per ()` the whole clause (one `WHOLE_CLAUSE` set its groups share). A per-row
   clause under `per K:` (`ONE_ROW_PER_CLASS`) calls it with its classes as the groups, so
   each class's row gets a set naming that class. One `SolverInput::ClassSet` per group with
@@ -387,7 +384,7 @@ stays data-backed.
 
 One per-row vector assigns each row to a row of the clause, or excludes it. The clause's
 `when` is read first (`KeptRows`); every map is built over the kept rows only, NULL a key
-value, with ids dense in the order their rows first appear:
+value, with ids dense in key-value order:
 
 | Clause | `row_group_ids` | `num_groups` |
 |---|---|---|
@@ -396,6 +393,16 @@ value, with ids dense in the order their rows first appear:
 | aggregate shape or easy MIN/MAX, `by ()`, with a `when` or a reducer's own `when` | 0 on the rows its reducers read, `INVALID_INDEX` elsewhere | 1 |
 | rows shape under `per K:` | the class id on each class's first kept row, `INVALID_INDEX` elsewhere | number of classes |
 | rows shape with a `when` only | 0 on kept rows, `INVALID_INDEX` on dropped rows | 1 |
+
+**One numbering per key** (`BuildGroupIds`, `LookupOrBuildPerGroupIds`). A key is
+computed once per query into a `PerGroupCache` entry, its index in the key table the
+cache key. `BuildGroupIds` hashes the distinct key tuples, then numbers them by value:
+columns compare in key order, NULL after every value, as `ORDER BY` places it. Each
+reader takes the groups its filters keep as a subsequence, renumbered `0..K'` in the same
+order, so a keyed decision's columns, a clause's group rows and a message's group labels
+never depend on row order. A key is computed only on rows some reader keeps: an entry
+records the rows it was computed on, and a reader needing rows outside them rebuilds it
+over both sets, so the numbering stays one.
 
 The bound side of the aggregate shape gets its own map with the same numbering over every
 kept row (a bound-side reducer reads its own `by` groups, §4a). A `per K:` over the
