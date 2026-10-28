@@ -301,7 +301,8 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 	using Kind = LogicalDecide::RewriteAccount::Kind;
 	// The rows are appended after both walks, so neither walks a row this pass added.
 	vector<unique_ptr<Expression>> rows;
-	for (auto &members : families) {
+	for (idx_t family = 0; family < families.size(); family++) {
+		auto &members = families[family];
 		auto &first = sites[members[0]];
 		bool down = false;
 		bool up = false;
@@ -316,10 +317,10 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		const string body_text = RenderForPlan(*body, decide);
 		// Whole-numbered when the body is, so a strict bound over the reducer still steps on the integer lattice.
 		const bool whole = DecideValueIsWholeNumbered(*body, decide_index);
-		idx_t helper = AddAuxiliaryDecision(decide, "__body_" + to_string(decide.defined_body_vars.size()) + "__",
+		idx_t helper = AddAuxiliaryDecision(decide, "__body_" + to_string(family) + "__",
 		                                    whole ? LogicalType::INTEGER : LogicalType::DOUBLE, false,
 		                                    DecideVarScopeInfo::Row(), body_text);
-		decide.defined_body_vars.push_back(helper);
+		decide.signed_helper_vars.push_back(helper);
 		AddRewriteAccount(decide, first.source_alias,
 		                  equal  ? Kind::BODY_EQUAL
 		                  : down ? Kind::BODY_AT_LEAST

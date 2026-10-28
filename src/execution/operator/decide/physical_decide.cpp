@@ -3361,12 +3361,6 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         solver_input.lower_bounds[var] = gstate.singleton_row_boxes[var].EffectiveLower();
         solver_input.upper_bounds[var] = gstate.singleton_row_boxes[var].upper;
     }
-	// A helper decision of the value rewrite holds a reducer's value, which may be
-	// negative: no default floor. The formulation pass boxes it by its members' reach
-	// (DeriveReducerValueBounds), after the rigid box below is captured with it free.
-	for (auto &link : gstate.evaluated_value_links) {
-		solver_input.lower_bounds[link.value_var] = -NumericLimits<double>::Maximum();
-	}
 
 	// Everything below this point is stage 06 working on the evaluated model, so
 	// hand the constraints and the formulation links over before the first pass.

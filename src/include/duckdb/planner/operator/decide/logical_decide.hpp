@@ -247,10 +247,11 @@ public:
     };
     vector<AbsMaximizeLink> abs_maximize_links;
 
-    //! The helper decisions DecideOptimizer::DefineNonlinearReducerBodies made, one per member of a reducer whose body is
-    //! not linear. A helper holds the body's value, which may be negative, so FoldSingletonRows gives it no floor; it
-    //! gets no other box either, and stage 08 states the extremum over it natively.
-    vector<idx_t> defined_body_vars;
+    //! The helper decisions that hold a value of either sign: a value rewrite's reducer (RewriteScopedReducers) and a
+    //! defined non-linear body (DefineNonlinearReducerBodies). FoldSingletonRows gives them no default floor of 0; a
+    //! value helper is boxed later by its members' reach, and a body helper stays unboxed, so stage 08 states the
+    //! extremum over it natively.
+    vector<idx_t> signed_helper_vars;
 
     //! Maps an auxiliary variable's index in decide_variables to a human-readable
     //! source expression (the user's original ABS(...) / MAX(...) / product / <>),

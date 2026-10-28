@@ -393,9 +393,8 @@ void DecideOptimizer::FoldSingletonRows(LogicalDecide &decide) {
 			DecideFoldSingletonRow(decide.singleton_row_boxes[i], '>', 0.0);
 		}
 	}
-	// A defined body's helper holds the body's value (`power(x, 2) - 10 * x`, `x * y`), which may be negative: no
-	// default floor.
-	for (auto var : decide.defined_body_vars) {
+	// A helper that holds a value of either sign (`sum(x - 5)`, `power(x, 2) - 10 * x`): no default floor.
+	for (auto var : decide.signed_helper_vars) {
 		decide.singleton_row_boxes[var].lower_written = true;
 	}
 

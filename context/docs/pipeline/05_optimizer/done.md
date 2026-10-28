@@ -480,8 +480,8 @@ skipped by the reducer as before; its helper row is skipped too and leaves `t` f
 row nothing reads.
 
 **A helper has no box.** It holds the body's value, which may be negative
-(`power(x, 2) - 10 * x`), so `FoldSingletonRows` gives `defined_body_vars` no floor of 0,
-and nothing derives a ceiling. With no box there is no Big-M for an extremum over `t`, so
+(`power(x, 2) - 10 * x`), so it is a signed helper (`signed_helper_vars`), which
+`FoldSingletonRows` gives no floor of 0, and nothing derives a ceiling. With no box there is no Big-M for an extremum over `t`, so
 only a backend that states MIN/MAX natively takes it: stage 08 takes the native arm for a
 family with no box (`../06_model_formulation/done.md`). When the backend chosen in §0
 states no MIN/MAX (HiGHS, or Gurobi under `DECIDB_NATIVE_CONSTRUCTS=off`), the pass refuses
@@ -801,7 +801,10 @@ combiner A1 and S1 call. Lower bounds start at -1e30 rather than 0, so an explic
 negative bound is honored instead of clamped up. Whether a lower bound was written is a
 separate flag (`lower_written`), not a reserved value: stage 08 gives the default 0
 floor only to a decision with no lower bound written, and a written `x >= -1e30` is no
-bound, like any bound of magnitude 1e20 or more.
+bound, like any bound of magnitude 1e20 or more. A helper that holds a value of either
+sign (`signed_helper_vars`: a value rewrite's reducer, a defined non-linear body) is
+marked written before folding, so it starts with no floor and a bound written on it still
+folds in.
 
 **A recorded bound is flattened aside too.** The box is how a written negative bound
 makes a decision signed, so every form of a bound reaches it. But a clause is one knob

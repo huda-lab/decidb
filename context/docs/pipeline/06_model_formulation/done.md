@@ -102,8 +102,8 @@ Bounds and type flags then expand across `NumInstances(var)` for each variable.
 Global auxiliaries take their own bounds and types from
 `input.global_lower_bounds` / `global_upper_bounds` / `global_variable_types`. A helper
 decision of the value rewrite (`SolverInput::reducer_value_links`) holds a reducer's
-value, which may be negative: assembly frees its floor before the rigid box is captured,
-and `DeriveReducerValueBounds` (§9) boxes it by its members' reach. The rigid box
+value, which may be negative: stage 05 lists it in `signed_helper_vars`, so its box has no
+default floor when the rigid box is captured, and `DeriveReducerValueBounds` (§9) boxes it by its members' reach. The rigid box
 therefore holds a helper open below, so a diagnosis never lifts a floor it never had.
 
 ---

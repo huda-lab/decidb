@@ -253,6 +253,8 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	if (var_scope.IsEntity()) {
 		decide.entity_scopes[var_scope.entity_scope_idx].scoped_variable_indices.push_back(link.value_var);
 	}
+	// A reducer's value may be negative: no default floor. The formulation pass boxes it by its members' reach.
+	decide.signed_helper_vars.push_back(link.value_var);
 	helpers.reducers.push_back(agg.Copy());
 	helpers.objective.push_back(objective_row);
 	ReplaceWithDecision(helpers.context, decide, link.value_var, *site.slot);
