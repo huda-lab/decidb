@@ -46,8 +46,8 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   by the first integer whose next step no longer improves, so a tie goes to the smaller value (as on the solver).
   Maximizing a convex square and minimizing a concave one compare the two endpoints.
 
-It raises an error wherever the solver does: NULL, NaN or infinite coefficients and NULL or NaN bounds on a row that
-reads them, an empty box on any row (infeasible), an improving direction with no finite limit on any row (unbounded), an
+A NULL coefficient or bound skips its instance, as on the solver. It raises an error wherever the solver does: NaN or
+infinite coefficients and NaN bounds on a row that reads them, an empty box on any row (infeasible), an improving direction with no finite limit on any row (unbounded), an
 `INT` answer beyond 2^53 after rounding (with the solver's message word for word, naming the variable and its rounded
 value), a `when` that keeps no row of a non-empty source (D4, raised by the plan's row checks), and any expression that
 raises on a row that computes it. Every input row is read before one is released, so a late bad row raises under `LIMIT 1`,

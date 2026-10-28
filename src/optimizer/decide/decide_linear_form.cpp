@@ -16,6 +16,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
@@ -111,6 +112,7 @@ public:
 			CollectLikeTerms(constraint->lhs_terms);
 		}
 		if (op.prepared.objective) {
+			DropNullObjectiveTerms(*op.prepared.objective);
 			CollectLikeTerms(op.prepared.objective->terms);
 		}
 		for (auto &spec : op.composed_minmax_constraints) {
@@ -239,6 +241,32 @@ private:
 		return !a.filter || a.filter->Equals(*b.filter);
 	}
 
+	//! A NULL term of the objective is dropped (B1): its coefficient reads 0. This is
+	//! what keeps a NULL from reaching the objective's solver row, wherever it comes
+	//! from -- a factor on a reducer known only at run time (`(SELECT k) * SUM(p*x)`) or
+	//! a term read once outside every reducer (`c * u`); a NULL inside a reducer is
+	//! already out of its filter (DecideCanonicalizer::SkipNullData). It runs before like
+	//! terms merge, which would let one NULL term drop another on the same decision. A
+	//! squared term is not a sum of its coefficients, so its NULL is not read as 0.
+	void DropNullObjectiveTerms(DecideObjective &objective) const {
+		auto zero_if_null = [&](unique_ptr<Expression> &coefficient) {
+			if (!coefficient || coefficient->IsFoldable()) {
+				return;
+			}
+			auto type = coefficient->return_type;
+			auto guarded = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, type);
+			guarded->children.push_back(std::move(coefficient));
+			guarded->children.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(0).DefaultCastAs(type)));
+			coefficient = std::move(guarded);
+		};
+		for (auto &term : objective.terms) {
+			zero_if_null(term.coefficient);
+		}
+		for (auto &term : objective.bilinear_terms) {
+			zero_if_null(term.coefficient);
+		}
+	}
+
 	//! Sum like terms into one, in place, preserving first-occurrence order.
 	//!
 	//! `2*ship + 3*ship` used to reach the solver as two terms naming one column. The
@@ -247,6 +275,9 @@ private:
 	//! index can repeat, and one of them did not: the implied-bound derivation read a
 	//! single term's coefficient instead of the sum (fixed 2026-08-15 by a defensive
 	//! accumulate, which stays). Collecting here removes the trap at its source.
+	//!
+	//! A NULL coefficient merges to NULL, so a NULL objective term is made 0 first
+	//! (DropNullObjectiveTerms); in a constraint the NULL is the instance's and skips it.
 	//!
 	//! A term contributes `sign * coefficient`, so a group merges as
 	//! `sign_first * (coef_first ± coef_next ± ...)`, taking `-` exactly when a term's

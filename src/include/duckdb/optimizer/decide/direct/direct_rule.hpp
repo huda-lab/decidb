@@ -201,11 +201,9 @@ public:
 	virtual unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir,
 	                                                                ClientContext &context) const = 0;
 	virtual string Summary() const = 0;
-	//! `source` is the DECIDE input with its types resolved. `source_fragments` is the DECIDE node's source-fragment
-	//! registry, for the messages that quote what the user wrote (DirectNullMessageOf).
+	//! `source` is the DECIDE input with its types resolved.
 	virtual DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                               const DirectApplicabilityCondition &condition,
-	                               const vector<string> &source_fragments) const = 0;
+	                               const DirectApplicabilityCondition &condition) const = 0;
 };
 
 //! Every rule the rule driver tries, in registration order (direct_registry.cpp). A new problem class adds one line

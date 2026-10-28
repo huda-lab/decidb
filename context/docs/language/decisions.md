@@ -50,6 +50,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D64 | A bound on one decision admits what DuckDB admits: a whole-numbered decision takes `n` exactly when the written comparison, evaluated by DuckDB with `n` in place of the decision, is true (`0.1 * x <= 0.3` admits 3, since `0.1` is DECIMAL; `0.1::DOUBLE * x = 0.3::DOUBLE` admits nothing). Every such bound folds into the decision's box, a data coefficient (`cap * x <= 10`) included; only an unconditional literal bound replaces the default floor of 0 (D41) |
 | D65 | An infinite bound keeps its SQL meaning: `x <= inf` and `x >= -inf` are no bound; `x >= inf`, `x <= -inf` and `x = ±inf` make the query infeasible on every backend, and `DIAGNOSE` names the clause. A literal `x >= -'inf'` frees `x` below, as `x >= -1e30` does |
 | D66 | A right side of magnitude 1e20 or more in the open direction (`x <= 1e30`) is no bound |
+| D67 | A NULL data value is skipped where it is read (deck pp. 50, 56): a reducer skips a row whose summand is NULL, as SQL does; a NULL that reaches a constraint unreduced skips that instance; a NULL objective term is dropped before like terms merge. A NULL written in the query beside a decision, and NaN, stay errors |
 
 ## Spelling calls
 

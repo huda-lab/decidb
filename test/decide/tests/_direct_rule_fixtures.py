@@ -243,15 +243,6 @@ R1 = RuleFixture(
             ),
             "invalid value",
         ),
-        # A budget read from the data that is NULL on the last row.
-        (
-            f"""
-        FROM (SELECT i, 1.0 AS w, 1.0 AS v, 10.0 AS cap, CASE WHEN i=4999 THEN NULL ELSE 3000.0 END AS lim
-              FROM range(5000) t(i)) s
-        DECIDE x(REAL) SUCH THAT x >= 0 AND x <= cap AND SUM(w*x) <= lim MAXIMIZE SUM(v*x)
-        """,
-            "is NULL",
-        ),
     ),
     late_column="i",
 )

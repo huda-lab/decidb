@@ -208,7 +208,19 @@ def add_directed(name, rows, box, written, limits, objective, budget="plain"):
 
 
 def _weight(case_, row):
-    return BUDGETS[case_.budget][1](row)
+    # A NULL makes the whole summand NULL, and SUM skips it, as in SQL.
+    sql, weight = BUDGETS[case_.budget]
+    return 0.0 if re.search(r"\bw\b", sql) and row["w"] is None else weight(row)
+
+
+def _value(case_, row):
+    return 0.0 if row["v"] is None else case_.objective.value(row)
+
+
+def _box(case_, row):
+    """The row's box. A NULL bound skips its instance, which admits every value on that side."""
+    lower, upper = case_.box.box(row)
+    return (-INF if lower is None else lower, INF if upper is None else upper)
 
 
 # ---------------------------------------------------------------------------
@@ -253,11 +265,11 @@ def _solve_with_oracle(oracle_solver, case_):
     oracle_solver.create_model("direct_r1_continuous_knapsack")
     weights, linear = {}, {}
     for index, row in enumerate(case_.rows):
-        lower, upper = case_.box.box(row)
+        lower, upper = _box(case_, row)
         name = f"amount_{index}"
         oracle_solver.add_variable(name, VarType.CONTINUOUS, max(lower, -BIG), min(upper, BIG))
         weights[name] = _weight(case_, row)
-        linear[name] = case_.objective.value(row)
+        linear[name] = _value(case_, row)
     lower, upper = _limits(case_)
     if lower == upper:
         oracle_solver.add_constraint(weights, "=", lower)
@@ -278,7 +290,7 @@ def _check_assignment(case_, rows, columns, oracle, mode):
     for result, source in zip(rows, case_.rows):
         value = result[1]
         assert isinstance(value, float), (mode, source["id"], value)
-        lower, upper = case_.box.box(source)
+        lower, upper = _box(case_, source)
         assert lower - 1e-9 * max(1.0, abs(lower)) <= value <= upper + 1e-9 * max(1.0, abs(upper)), (
             mode,
             source["id"],
@@ -286,7 +298,7 @@ def _check_assignment(case_, rows, columns, oracle, mode):
             (lower, upper),
         )
         spend += _weight(case_, source) * value
-        total += case_.objective.value(source) * value
+        total += _value(case_, source) * value
     lower, upper = _limits(case_)
     assert spend <= upper + 1e-6 * max(1.0, abs(upper)), (mode, spend, upper)
     assert spend >= lower - 1e-6 * max(1.0, abs(lower)), (mode, spend, lower)
@@ -318,6 +330,27 @@ def add(name, *args, **kwargs):
 
 # The worked example: the budget is used up and one row is partly filled.
 add("worked_example", WORKED, "between_constants_and_cap", 14.0, "max")
+# A NULL value is dropped where it is read (B1). A NULL weight leaves its row out of the budget, which then fills row 2
+# for free; a NULL value leaves it out of the objective.
+NULL_WEIGHT = tuple(dict(row, w=None) if row["id"] == 2 else row for row in WORKED)
+add("null_weight_leaves_the_row_out_of_the_budget", NULL_WEIGHT, "between_constants_and_cap", 14.0, "max")
+add(
+    "null_value_leaves_the_row_out_of_the_objective",
+    tuple(dict(row, v=None) if row["id"] == 1 else row for row in WORKED),
+    "between_constants_and_cap",
+    14.0,
+    "max",
+)
+# `w*amount + 2*amount` is NULL as a whole when `w` is: row 2 weighs 0, not 2.
+add("null_weight_drops_the_whole_summand", NULL_WEIGHT, "between_constants_and_cap", 14.0, "max", budget="like_terms")
+# A NULL cap skips that row's bound: row 3 is held by the budget alone.
+add(
+    "null_cap_skips_the_row_bound",
+    tuple(dict(row, cap=None) if row["id"] == 3 else row for row in WORKED),
+    "cap_only",
+    14.0,
+    "max",
+)
 add("worked_example_min", WORKED, "between_constants_and_cap", 14.0, "min")
 
 # Weights of every sign, positive lower bounds, ties between rows, under every objective.
@@ -932,6 +965,14 @@ scoped(
     (-INF, 4.0),
     when=lambda r: r["f"] and r["cap"] > 3,
 )
+# A sum's own `when` of two conditions: the IR takes the NULL tests out of the filter and keeps both conditions.
+scoped(
+    "when_of_two_conditions_inside_the_sum",
+    COVERED + OUTSIDE,
+    "SUM(when f AND cap > 3: w*amount) <= 4",
+    (-INF, 4.0),
+    when=lambda r: r["f"] and r["cap"] > 3,
+)
 # One budget written as two clauses, one with each spelling of the `when`, is one budget.
 scoped(
     "when_written_both_ways_on_two_clauses",
@@ -1235,7 +1276,10 @@ def _solve_data_budget_with_oracle(oracle_solver, case_):
         over = _read_over(case_, key)
         for comparison, limit in case_.clauses:
             for row in over:
-                oracle_solver.add_constraint(weights, comparison, limit(row, over))
+                bound = limit(row, over)
+                # A NULL limit skips its instance.
+                if bound is not None:
+                    oracle_solver.add_constraint(weights, comparison, bound)
     sense = ObjSense.MAXIMIZE if case_.objective == "max" else ObjSense.MINIMIZE
     oracle_solver.set_objective(linear, sense)
     return oracle_solver.solve()
@@ -1261,6 +1305,8 @@ def _check_data_budget_assignment(case_, rows, columns, oracle, mode):
         for comparison, limit in case_.clauses:
             for row in over:
                 bound = limit(row, over)
+                if bound is None:
+                    continue
                 slack = 1e-6 * max(1.0, abs(bound))
                 assert comparison == ">=" or used <= bound + slack, (mode, key, used, bound)
                 assert comparison == "<=" or used >= bound - slack, (mode, key, used, bound)
@@ -1288,6 +1334,20 @@ data_budget(
     "SUM(w*amount) by (g) <= 2*b - 3",
     [("<=", lambda r, rows: 2 * r["b"] - 3)],
     per=("g",),
+)
+# A NULL limit skips its instance (B1): with both 5s NULL the smallest is 7, and with every limit NULL there is no
+# budget at all.
+data_budget(
+    "null_limit_skips_its_instance",
+    [dict(row, b=None) if row["id"] in (4, 6) else row for row in DATA_ROWS],
+    "SUM(w*amount) <= b",
+    [("<=", _limit)],
+)
+data_budget(
+    "null_limit_on_every_row",
+    [dict(row, b=None) for row in DATA_ROWS],
+    "SUM(w*amount) <= 2*b - 3",
+    [("<=", lambda r, rows: None if r["b"] is None else 2 * r["b"] - 3)],
 )
 # A lower limit takes the group's largest value (a: 14, b: 7); the minimum cover binds on it.
 data_budget(
@@ -1430,12 +1490,9 @@ R1_ERROR_CASES = {
     ),
     "weight_nan": (_late(LATE_DECIDE, w_sql=_last_row("'NaN'::DOUBLE", "1.0")), "invalid_value"),
     "weight_infinite": (_late(LATE_DECIDE, w_sql=_last_row("'Infinity'::DOUBLE", "1.0")), "invalid_value"),
-    "weight_null": (_late(LATE_DECIDE, w_sql=_last_row("NULL::DOUBLE", "1.0")), "null_bound"),
     "value_nan": (_late(LATE_DECIDE, v_sql=_last_row("'NaN'::DOUBLE", "1.0")), "invalid_value"),
     "value_infinite": (_late(LATE_DECIDE, v_sql=_last_row("'-Infinity'::DOUBLE", "1.0")), "invalid_value"),
-    "value_null": (_late(LATE_DECIDE, v_sql=_last_row("NULL::DOUBLE", "1.0")), "null_bound"),
     "cap_nan": (_late(LATE_DECIDE, cap_sql=_last_row("'NaN'::DOUBLE", "10.0")), "null_bound"),
-    "cap_null": (_late(LATE_DECIDE, cap_sql=_last_row("NULL::DOUBLE", "10.0")), "null_bound"),
     "infeasible_empty_box": (_late(LATE_DECIDE, cap_sql=_last_row("-1.0", "10.0")), "infeasible"),
     "infeasible_budget": (_late(LATE_DECIDE, limit="-1"), "infeasible"),
     "unbounded_zero_weight": (
@@ -1469,20 +1526,21 @@ R1_ERROR_CASES = {
         ),
         "infeasible",
     ),
-    # A NULL or NaN value raises before any verdict, whichever row holds it: the budget is unreachable on every row, yet
-    # the bad value on the last row is what the query reports.
+    # A NaN value raises before any verdict, whichever row holds it: the budget is unreachable on every row, yet the bad
+    # value on the last row is what the query reports.
     "nan_weight_before_infeasible_budget": (
         _late(LATE_DECIDE, w_sql=_last_row("'NaN'::DOUBLE", "1.0"), limit="-1"),
         "invalid_value",
     ),
-    "null_value_before_unbounded": (
+    # A NULL value drops its row from the objective and hides nothing: row 0 still improves without end.
+    "null_value_beside_unbounded": (
         _late(
             LATE_DECIDE,
             w_sql="CASE WHEN i = 0 THEN -1.0 ELSE 1.0 END",
             v_sql=_last_row("NULL::DOUBLE", "1.0"),
             cap_sql="CASE WHEN i = 0 THEN 1e30 ELSE 10.0 END",
         ),
-        "null_bound",
+        "unbounded",
     ),
 }
 
@@ -1537,10 +1595,6 @@ R1_ERROR_CASES.update(
         "weight_nan_exact_fill": (
             _late(LATE_BUDGET.format(budget="SUM(w*amount) = 3000"), w_sql=_last_row("'NaN'::DOUBLE", "1.0")),
             "invalid_value",
-        ),
-        "weight_null_minimum": (
-            _late(LATE_BUDGET.format(budget="SUM(w*amount) >= 3000"), w_sql=_last_row("NULL::DOUBLE", "1.0")),
-            "null_bound",
         ),
     }
 )
@@ -1621,14 +1675,9 @@ R1_ERROR_CASES.update(
             ),
             "infeasible",
         ),
-        # A NULL or NaN limit, on the last row, in a column and in an expression (which cannot name its column).
-        "data_budget_column_null": (_data_error(_with_limit(DATA_ROWS, 5, None), "SUM(w*amount) <= b"), "null_bound"),
+        # A NaN limit, on the last row, in a column and in an expression.
         "data_budget_column_nan": (
             _data_error(_with_limit(DATA_ROWS, 5, float("nan")), "SUM(w*amount) <= b"),
-            "null_bound",
-        ),
-        "data_budget_expression_null": (
-            _data_error(_with_limit(DATA_ROWS, 5, None), "SUM(w*amount) by (g) <= 2*b"),
             "null_bound",
         ),
         "data_budget_expression_nan": (
@@ -2281,16 +2330,27 @@ def _piece_key(case_, row):
     return row["g"] if case_.per else ()
 
 
+def _piece_coefficients(case_, row, field, prefix):
+    """The row's coefficient of each decision in one sum, as SQL sums it: a NULL in one piece makes the row's whole
+    summand NULL, and SUM skips it."""
+    chosen = _on(case_, field)
+    if any(row[f"{prefix}{d}"] is None for d in chosen):
+        return [0.0] * case_.count
+    return [row[f"{prefix}{d}"] if d in chosen else 0.0 for d in range(case_.count)]
+
+
 def _solve_pieces_with_oracle(oracle_solver, case_):
     oracle_solver.create_model("direct_r1_several_decisions")
     members, linear = {}, {}
     for index, row in enumerate(case_.rows):
+        weights = _piece_coefficients(case_, row, "budget_on", "w")
+        values = _piece_coefficients(case_, row, "value_on", "v")
         for d in range(case_.count):
             name = f"{PIECE_NAMES[d]}_{index}"
             oracle_solver.add_variable(name, VarType.CONTINUOUS, 0.0, min(row[f"cap{d}"], BIG))
-            linear[name] = row[f"v{d}"] if d in _on(case_, "value_on") else 0.0
+            linear[name] = values[d]
             if d in _on(case_, "budget_on"):
-                members.setdefault(_piece_key(case_, row), {})[name] = row[f"w{d}"]
+                members.setdefault(_piece_key(case_, row), {})[name] = weights[d]
     lower, upper = case_.limits
     for weights in members.values():
         if lower == upper:
@@ -2309,6 +2369,8 @@ def _check_pieces(case_, rows, columns, oracle, mode):
     assert [row[0] for row in rows] == [row["id"] for row in case_.rows], mode
     spend, total = {}, 0.0
     for result, source in zip(rows, case_.rows):
+        weights = _piece_coefficients(case_, source, "budget_on", "w")
+        values = _piece_coefficients(case_, source, "value_on", "v")
         for d in range(case_.count):
             value = result[1 + d]
             assert isinstance(value, float), (mode, source["id"], d, value)
@@ -2316,9 +2378,8 @@ def _check_pieces(case_, rows, columns, oracle, mode):
             assert -1e-9 <= value <= cap + 1e-9 * max(1.0, abs(cap)), (mode, source["id"], d, value, cap)
             if d in _on(case_, "budget_on"):
                 key = _piece_key(case_, source)
-                spend[key] = spend.get(key, 0.0) + source[f"w{d}"] * value
-            if d in _on(case_, "value_on"):
-                total += source[f"v{d}"] * value
+                spend[key] = spend.get(key, 0.0) + weights[d] * value
+            total += values[d] * value
     lower, upper = case_.limits
     for key, used in spend.items():
         assert lower - 1e-6 * max(1.0, abs(lower)) <= used <= upper + 1e-6 * max(1.0, abs(upper)), (mode, key, used)
@@ -2479,6 +2540,18 @@ pieces(
     ),
     (-INF, 5.0),
 )
+# A NULL in one piece makes the row's whole summand NULL, as in SQL: row 2 leaves the budget, both decisions, and row
+# 1 leaves the objective, both decisions.
+pieces(
+    "two_decisions_null_weight_drops_the_row_from_the_budget",
+    (_prow(1, "x", (2.0, 1.0, 8.0), (2.0, 1.0, 4.0)), _prow(2, "x", (3.0, None, 10.0), (1.0, 2.0, 2.0))),
+    (-INF, 3.0),
+)
+pieces(
+    "two_decisions_null_value_drops_the_row_from_the_objective",
+    (_prow(1, "x", (2.0, 1.0, 8.0), (2.0, 1.0, None)), _prow(2, "x", (3.0, 2.0, 10.0), (1.0, 2.0, 2.0))),
+    (-INF, 3.0),
+)
 # Errors the oracle finds: an empty box on one decision of one row (cap -1 leaves [0, -1]) is infeasible, whatever the
 # other decisions of the row and the other rows do.
 pieces(
@@ -2530,8 +2603,6 @@ PIECE_ERROR_CASES = {
     ),
     # The weight of the second decision is NaN on the last row: its raw value is checked on every row.
     "second_decision_weight_nan": (_late_pair(w_sql=_last_row("'NaN'::DOUBLE", "1.0")), "invalid_value"),
-    # The value is NULL on the last row: both decisions read it, and the check of the second decision's value runs too.
-    "second_decision_value_null": (_late_pair(v_sql=_last_row("NULL::DOUBLE", "1.0")), "null_bound"),
     # The budget cannot be met: no group of items reaches the limit.
     "infeasible_minimum_over_two_decisions": (
         _late_pair().replace("<= 3000", ">= 999999"),

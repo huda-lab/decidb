@@ -120,6 +120,9 @@ def clause(sql, op, rhs, a=lambda row: 1.0, when=None, replaces=False, decision=
     def box(row, domain):
         if when is not None and not when(row):
             return (-INF, INF)
+        # A NULL coefficient or right side skips the row's instance (B1).
+        if a(row) is None or rhs(row) is None:
+            return (-INF, INF)
         return _interval(a(row), op, rhs(row), domain)
 
     return Bound(sql, box, decision, replaces)
@@ -702,6 +705,44 @@ A1_CASES["real_objective_two_constant_terms"] = Case(
     (LOWER_ZERO_BOX,),
     Objective("MINIMIZE SUM(s*x + 5 + w)", False, lambda r: {"x": (0.0, r["s"])}),
     (("x", "REAL"),),
+)
+
+# A NULL is dropped where it is read (B1), each on its own row: row 2's score, row 3's target, row 4's cap and row 5's
+# weight. A NULL bound or coefficient skips the row's instance, and a NULL in an objective summand drops the summand.
+NULL_ROWS = (
+    ROWS[0],
+    dict(ROWS[1], s=None),
+    dict(ROWS[2], t=None),
+    dict(ROWS[3], cap=None),
+    dict(ROWS[4], w=None),
+)
+
+
+A1_CASES["null_bound_and_coefficient_skip_their_instance"] = Case(
+    (
+        UPPER_CAP,
+        clause("w*x <= cap + lo", le, lambda r: None if r["cap"] is None else r["cap"] + r["lo"], a=col("w")),
+    ),
+    Objective("MAXIMIZE SUM(s*x)", True, lambda r: {"x": (0.0, 0.0 if r["s"] is None else r["s"])}),
+    rows=NULL_ROWS,
+)
+A1_CASES["null_like_terms_drop_the_whole_summand"] = Case(
+    (UPPER_CAP,),
+    Objective(
+        "MAXIMIZE SUM(s*x - w*x)",
+        True,
+        lambda r: {"x": (0.0, 0.0 if r["s"] is None or r["w"] is None else r["s"] - r["w"])},
+    ),
+    rows=NULL_ROWS,
+)
+A1_CASES["null_target_drops_the_square"] = Case(
+    (UPPER_CAP,),
+    Objective(
+        "MINIMIZE SUM(POWER(x - t, 2))",
+        False,
+        lambda r: {"x": (0.0, 0.0) if r["t"] is None else (1.0, -2.0 * r["t"])},
+    ),
+    rows=NULL_ROWS,
 )
 
 # A bare strict bound against a fractional literal on a whole-numbered decision (the solver once moved it by a whole unit

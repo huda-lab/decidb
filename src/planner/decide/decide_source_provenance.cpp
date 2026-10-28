@@ -200,12 +200,48 @@ static string NormOrder(const BoundAggregateExpression &agg) {
 	return payload;
 }
 
+static bool HoldsSkipNullTest(const Expression &expr) {
+	if (HasDecideTag(expr.GetAlias(), SKIP_NULL_TAG)) {
+		return true;
+	}
+	if (expr.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+		return false;
+	}
+	for (auto &child : expr.Cast<BoundConjunctionExpression>().children) {
+		if (HoldsSkipNullTest(*child)) {
+			return true;
+		}
+	}
+	return false;
+}
+
+//! A reducer's own `when` as written: without the tests SkipNullData added, which the
+//! query never wrote; empty when nothing else is left.
+static string RenderWrittenWhen(const Expression &filter, const RenderContext &ctx) {
+	if (!HoldsSkipNullTest(filter)) {
+		return RenderSource(filter, ctx);
+	}
+	string written;
+	if (filter.GetExpressionType() == ExpressionType::CONJUNCTION_AND) {
+		for (auto &child : filter.Cast<BoundConjunctionExpression>().children) {
+			auto part = RenderWrittenWhen(*child, ctx);
+			if (!part.empty()) {
+				written += (written.empty() ? "" : " AND ") + part;
+			}
+		}
+	}
+	return written;
+}
+
 //! A reducer as the query writes it: `sum(when c per K: e) by (g)`. The colon form
 //! (`SUM(D: e)`) prints as written.
 static string RenderReducer(const BoundAggregateExpression &agg, const string &body, const RenderContext &ctx) {
 	string scope;
 	if (agg.filter) {
-		scope = "when " + RenderSource(*agg.filter, ctx);
+		auto written = RenderWrittenWhen(*agg.filter, ctx);
+		if (!written.empty()) {
+			scope = "when " + written;
+		}
 	}
 	auto order = NormOrder(agg);
 	auto carrier = MinMaxCarrierName(agg);

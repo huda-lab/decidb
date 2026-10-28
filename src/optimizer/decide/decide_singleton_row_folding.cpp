@@ -137,6 +137,10 @@ static void AdmittedInterval(const ExpressionBuilder &calc, ExpressionType compa
 		upper = calc.If(vacuous, positive_infinity, upper);
 		lower = calc.If(vacuous, negative_infinity, lower);
 	}
+	// A NULL coefficient or right side skips the instance, which admits every value.
+	auto skipped = calc.Any({calc.IsNull(a), calc.IsNull(r)});
+	upper = calc.If(skipped, positive_infinity, upper);
+	lower = calc.If(skipped, negative_infinity, lower);
 }
 
 //! The decision side as the row it bounds. An easy `max(m) <= K` / `min(m) >= K` bounds every member its reducer

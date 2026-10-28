@@ -179,6 +179,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				FinalizeConstraintSourceInfo(*statement.decide_constraints, statement.decide_constraint_sources,
 				                             statement.decide_source_fragments, statement.entity_scopes,
 				                             &statement.decide_keys);
+				canonicalizer.SkipNullData(*statement.decide_constraints);
 			}
 			// The objective is one side of a comparison, so it belongs to the same
 			// boundary. It carries no relation to orient, which is the only part of
@@ -200,6 +201,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				if (canonical_objective == written_objective) {
 					canonical_objective.clear();
 				}
+				canonicalizer.SkipNullData(*statement.decide_objective);
 			}
 		}
 

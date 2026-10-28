@@ -184,8 +184,7 @@ public:
 	}
 
 	DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate,
-	                       const vector<string> &source_fragments) const override;
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
 	bool ProveBounds(const DirectIR &ir, ClientContext &context, Condition &condition) const;
@@ -320,10 +319,8 @@ struct Stage {
 //!   P5 the source columns, the typed answers, and the breaker
 class PlanBuilder {
 public:
-	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source,
-	            const vector<string> &fragments_p)
-	    : condition(condition_p), fragments(fragments_p), optimizer(optimizer_p), binder(optimizer_p.binder),
-	      calc(optimizer_p.context) {
+	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
+	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context) {
 		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
 		source_types = source.types;
@@ -443,8 +440,6 @@ private:
 	};
 
 	const Condition &condition;
-	//! The DECIDE node's source-fragment registry, which a NULL message quotes the written subquery or cast from.
-	const vector<string> &fragments;
 	Optimizer &optimizer;
 	Binder &binder;
 	ExpressionBuilder calc;
@@ -493,19 +488,15 @@ private:
 				columns.has_when = true;
 				columns.when = p1.Add(DirectActiveWhen(calc, clause.when.get()));
 			}
-			auto coefficient_source =
-			    DirectMergedOverProjection(optimizer.context, clause.coefficient, source_bindings, p1.index);
 			auto read_on = [&](unique_ptr<Expression> check) {
 				return columns.has_when
 				           ? DirectCheckOnKeptRows(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, columns.when)),
 				                                   std::move(check))
 				           : std::move(check);
 			};
-			checks.push_back(
-			    read_on(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, coefficient,
-			                                       coefficient_source.get(), DirectNumberKind::CONSTRAINT, fragments)));
-			checks.push_back(read_on(DirectValidBoundPredicate(
-			    optimizer, rhs, *DirectOverProjection(*clause.rhs, source_bindings, p1.index), fragments)));
+			checks.push_back(read_on(
+			    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, coefficient, DirectNumberKind::CONSTRAINT)));
+			checks.push_back(read_on(DirectValidBoundPredicate(optimizer, rhs)));
 			raw.clauses.push_back(columns);
 		}
 		bool has_shared_mask = false;
@@ -564,18 +555,12 @@ private:
 				square.decision = term.decision;
 				square.scale = term.sign * term.square_scale;
 				square.linear = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(term.inner_linear)))));
-				auto linear_source =
-				    DirectMergedOverProjection(optimizer.context, term.inner_linear, source_bindings, p1.index);
 				checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.linear,
-				                                            linear_source.get(), DirectNumberKind::OBJECTIVE,
-				                                            fragments));
+				                                            DirectNumberKind::OBJECTIVE));
 				if (!term.inner_constant.empty()) {
 					square.constant = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(term.inner_constant)))));
-					auto constant_source =
-					    DirectMergedOverProjection(optimizer.context, term.inner_constant, source_bindings, p1.index);
 					checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.constant,
-					                                            constant_source.get(), DirectNumberKind::OBJECTIVE,
-					                                            fragments));
+					                                            DirectNumberKind::OBJECTIVE));
 				} else {
 					square.constant = p1.Add(calc.Out(calc.Num(0.0)));
 				}
@@ -587,19 +572,15 @@ private:
 				continue;
 			}
 			auto binding = p1.Add(calc.Out(on_kept(linear_sums[d])));
-			auto linear_source =
-			    DirectMergedOverProjection(optimizer.context, linear_terms[d], source_bindings, p1.index);
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding, linear_source.get(),
-			                                            DirectNumberKind::OBJECTIVE, fragments));
+			checks.push_back(
+			    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding, DirectNumberKind::OBJECTIVE));
 			columns.linear_decision.push_back(d);
 			columns.linear.push_back(binding);
 		}
 		if (constant_sum) {
 			auto binding = p1.Add(calc.Out(on_kept(constant_sum)));
-			auto constant_source =
-			    DirectMergedOverProjection(optimizer.context, constant_terms, source_bindings, p1.index);
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding, constant_source.get(),
-			                                            DirectNumberKind::OBJECTIVE, fragments));
+			checks.push_back(
+			    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding, DirectNumberKind::OBJECTIVE));
 		}
 		for (auto &check : checks) {
 			all_checks.push_back(
@@ -768,11 +749,10 @@ private:
 			auto value = [&]() {
 				return calc.Col(LogicalType::DOUBLE, answers.value[d]);
 			};
-			// Raw values were named in P2; these are derived, so a NULL here has no source to name.
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.a[d], nullptr,
-			                                            DirectNumberKind::OBJECTIVE, fragments));
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.b[d], nullptr,
-			                                            DirectNumberKind::OBJECTIVE, fragments));
+			checks.push_back(
+			    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.a[d], DirectNumberKind::OBJECTIVE));
+			checks.push_back(
+			    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.b[d], DirectNumberKind::OBJECTIVE));
 			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, answers.infeasible[d])),
 			                               DirectInfeasibleErrorPredicate(optimizer)));
 			checks.push_back(DirectRaiseUnless(calc, calc.Out(calc.Fn("isfinite", value())),
@@ -800,10 +780,9 @@ private:
 };
 
 DirectSubstitute Rule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate,
-                             const vector<string> &source_fragments) const {
+                             const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	PlanBuilder plan_builder(condition, optimizer, *source, source_fragments);
+	PlanBuilder plan_builder(condition, optimizer, *source);
 	return plan_builder.Build(std::move(source));
 }
 

@@ -48,9 +48,9 @@ check). Design: `../architecture/`.
   of a coefficient) and `DirectIsNull`.
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
   their messages: `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`, `DirectValidBoundPredicate`,
-  `DirectValidNumberPredicate` and `DirectNullMessageOf`. Every check that raises is built with `DirectRaiseUnless(ok,
+  and `DirectValidNumberPredicate`. Every check that raises is built with `DirectRaiseUnless(ok,
   error)` or `DirectRaiseIf(bad, error)`, which return true or raise, and a list of checks is joined by `DirectAllHold`, a
-  `CASE` chain in the order given, so an earlier check (a NULL test) guards the later ones. Which of several errors a
+  `CASE` chain in the order given, so an earlier check guards the later ones. Which of several errors a
   query reports is not specified.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
@@ -144,36 +144,28 @@ check). Design: `../architecture/`.
     directly above the DECIDE source, so they append columns and renumber none. They end late materialization for an
     S1 source with an aggregate limit, and a window over a `by` key or a `when` regroups rows, so output row order and
     the choice among equal optima are not guaranteed. Test: `test_rhs_aggregate_window.py`.
-- **Number messages.** The NULL and NaN texts have one author for both paths, `decide_value_messages.hpp`
-  (`DecideNullValueMessage`, `DecideNullSubqueryMessage`, `DecideInvalidValueMessage`, and the two collectors
-  `DecideCollectSubqueries` and `DecideCollectNamedColumns`, which decide what a NULL message names).
-  - A NULL value is explained in one order on both paths: the first flattened subquery that is NULL (`the subquery
-    (SELECT ...) is NULL`), else the NULL source columns on the failing row (`column "a" is NULL. Impute it with
-    COALESCE(a, 0)...`, or `columns "a", "b" and "c" are NULL`), else the value as written, through `RenderDecideSource`
-    (`TRY_CAST(s AS DOUBLE) is NULL`: no internal tag, no cast the binder added). The value is the coefficient as the
-    solver evaluates it: terms of one decision are merged by `DecideMergeLikeCoefficients`, which the solver's like-term
-    collection also calls, so `SUM(a*x + b*x)` names `a` and `b` together.
-  - The solver builds the text in C++ (`DescribeNullSource`). A direct plan and the bound-side window rewrite build it
-    as a per-row expression (`DirectNullMessageOf`, used by `DirectValidNumberPredicate`, `DirectValidBoundPredicate`
-    and `DirectCheckRowBounds`) that `error()` evaluates only on the failing row. Both read the source-fragment registry,
-    which the rule driver hands every rule's `Apply`. A value's source columns are read from the stage above the one
-    that carries the source (`DirectOverProjection`). A message quotes a subquery by the fragment tag on its alias, so
-    the values keep their tags while the rule builds its plan; once the plan is installed, nothing reads them, and the
-    driver strips every tag from the operators above the source (`StripTagsAbove`), so EXPLAIN never prints one.
+- **NULL values.** A NULL is skipped where it is read, as on the solver path (deck p. 50). A reducer's NULL summand
+  arrives as the tests `DecideCanonicalizer::SkipNullData` added to its filter; the IR moves them out of
+  `part.filter` into the part's tests, and `GuardCoefficients` reads a coefficient as 0 on a row they fail, so the SUM
+  adds nothing for it. A NULL limit or per-row bound is open: S1's `SourceLimit` reads it as no limit, R1's limits pass
+  over it through `MIN`/`MAX`/`LEAST`/`GREATEST`, and `DirectCheckRowBounds` and the singleton-row box
+  (`AdmittedInterval`) give the instance no bound. The driver strips every tag from the operators above the source
+  (`StripTagsAbove`), so EXPLAIN never prints one.
+- **Number messages.** The NaN texts have one author for both paths, `DecideInvalidValueMessage` in
+  `decide_value_messages.hpp`.
   - A NaN or infinite number raises the solver's message, whose first words name the clause: `objective coefficient`,
     `constraint coefficient` or `constraint right-hand side`, without the solver's ` at row N`. The rule passes the
     `DirectNumberKind` (S1 and A1's objective values: objective; A1's coefficient on the left of a bound: constraint).
   - A source value read as a coefficient must be finite; one read as a bound (a count limit, a fixed value, a per-row
     lower or upper bound) only has to be a number, because an infinite bound means "no bound" or "nothing satisfies it".
-    NaN and NULL raise in every slot.
+    NaN raises in every slot.
   - Direct applies this in SQL and the solver in C++ (`ExtractDoubleColumn`); the two cannot share code, so
     `test_direct_source_values.py` puts an infinite value in each of 13 bound slots S1 and A1 read, where an infinity
     means "no bound" or "nothing satisfies it", and asserts the same error or rows on `require`, `off` and forced
-    HiGHS. NaN and NULL reach the same checks through each rule's error grid. Message tests are in
-    `test_direct_user_facing.py`: `test_null_value_error_is_the_solvers_error_word_for_word` compares the full text of
-    `require` with `off` for S1 and A1, and `test_invalid_score_error_matches_solver_wording` and
-    `test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in` do so for a NaN or infinite score and
-    coefficient. The cost on clean data is not measured.
+    HiGHS. NaN reaches the same checks through each rule's error grid, and NULL through each rule's skip cases. Message
+    tests are in `test_direct_user_facing.py`: `test_invalid_score_error_matches_solver_wording` and
+    `test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in` compare `require` with `off` for a NaN or
+    infinite score and coefficient. The cost on clean data is not measured.
 - **`EXPLAIN` annotation.** When a rule applies, mode, rule and one fixed condition line per rule appear in logical and
   physical `EXPLAIN` and profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x
   <= u, each row independent`. There is no number from the query. `require` explains why no rule applied; under `auto`

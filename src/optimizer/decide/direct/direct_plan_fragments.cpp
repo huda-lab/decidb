@@ -80,22 +80,6 @@ unique_ptr<Expression> DirectOverProjection(const Expression &value, const vecto
 	return copy;
 }
 
-unique_ptr<Expression> DirectMergedOverProjection(ClientContext &context, const vector<DirectSignedValue> &values,
-                                                  const vector<ColumnBinding> &source_bindings,
-                                                  idx_t projection_index) {
-	unique_ptr<Expression> merged;
-	int first_sign = 1;
-	for (auto &value : values) {
-		if (!merged) {
-			merged = value.expr->Copy();
-			first_sign = value.sign;
-			continue;
-		}
-		merged = DecideMergeLikeCoefficients(context, first_sign, std::move(merged), value.sign, value.expr->Copy());
-	}
-	return merged ? DirectOverProjection(*merged, source_bindings, projection_index) : nullptr;
-}
-
 //===--------------------------------------------------------------------===//
 // DECIDE semantics every aggregate rule shares
 //===--------------------------------------------------------------------===//
@@ -163,8 +147,7 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 }
 
 unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
-                                                 const vector<DirectRowBound> &bounds,
-                                                 const vector<string> &fragments) {
+                                                 const vector<DirectRowBound> &bounds) {
 	if (bounds.empty()) {
 		return input;
 	}
@@ -182,8 +165,8 @@ unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_pt
 		} else if (bound.reject_nan) {
 			message = calc.If(calc.Fn("isnan", as_double), calc.Constant(Value(DirectBoundNaNMessage())), none);
 		}
-		message = calc.If(calc.IsNull(calc.Of(*bound.value)),
-		                  calc.Wrap(DirectNullMessageOf(optimizer, *bound.value, fragments)), message);
+		// A NULL value skips the instance it reaches.
+		message = calc.If(calc.IsNull(calc.Of(*bound.value)), none, message);
 		if (bound.kept) {
 			message = calc.If(calc.Of(*bound.kept), message, none);
 		}

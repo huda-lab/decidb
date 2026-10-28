@@ -27,15 +27,10 @@ unique_ptr<BoundWindowExpression> DirectWindowMatchingCount(const ExpressionBuil
 unique_ptr<Expression> DirectScaledTerm(Optimizer &optimizer, unique_ptr<Expression> value, int sign, bool scaled,
                                         double scale, bool divides);
 
-//! A copy of a value re-pointed at a projection that carries the source (see DirectRemapSourceReferences), for the
-//! check above that projection to name the value's source columns.
+//! A copy of a value re-pointed at a projection that carries the source (see DirectRemapSourceReferences), for an
+//! operator above that projection to read it.
 unique_ptr<Expression> DirectOverProjection(const Expression &value, const vector<ColumnBinding> &source_bindings,
                                             idx_t projection_index);
-
-//! The values summed into one coefficient as the solver sums like terms (`DecideMergeLikeCoefficients`), re-pointed at
-//! a projection over the source. Null for no values.
-unique_ptr<Expression> DirectMergedOverProjection(ClientContext &context, const vector<DirectSignedValue> &values,
-                                                  const vector<ColumnBinding> &source_bindings, idx_t projection_index);
 
 //! A plan that releases no row before `valid` has been evaluated on every input row.
 struct DirectPipelineBreaker {
@@ -106,10 +101,10 @@ struct DirectRowBound {
 	bool coefficient = false;
 };
 
-//! Raises the solver's error when a per-row bound is NULL (DirectNullMessageOf, over `fragments`), NaN, or, for a
-//! coefficient, infinite, on a row its clause keeps; nothing is read on a row a `when` drops. Which failing row is
-//! reported is not specified. Nothing is added when there is nothing to check.
+//! Raises the solver's error when a per-row bound is NaN or, for a coefficient, infinite, on a row its clause keeps;
+//! nothing is read on a row a `when` drops, and a NULL passes (it skips the instance). Which failing row is reported is
+//! not specified. Nothing is added when there is nothing to check.
 unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
-                                                 const vector<DirectRowBound> &bounds, const vector<string> &fragments);
+                                                 const vector<DirectRowBound> &bounds);
 
 } // namespace duckdb

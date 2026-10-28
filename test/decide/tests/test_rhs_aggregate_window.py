@@ -124,6 +124,9 @@ def _agree(cli, oracle_solver, rows, constraint, limits):
     weight = {row[0]: row[3] for row in rows}
     constraints = []
     for members, limit in limits:
+        # A NULL bound skips its instance.
+        if limit is None:
+            continue
         coefficients = {names[i]: float(weight[i]) for i in members}
         constraints.append((members, limit))
         oracle_solver.add_constraint(coefficients, "<=", float(limit))
@@ -225,13 +228,18 @@ def test_rhs_aggregate_skips_a_null_argument_as_sql_does(decidb_cli, oracle_solv
     _agree(decidb_cli, oracle_solver, rows, constraint, _clause_limits(rows, reads, **clause))
 
 
-@pytest.mark.error
-def test_rhs_aggregate_over_only_nulls_is_a_null_bound(decidb_cli):
-    """Every cap of group b is NULL, so its MAX is NULL, as in SQL; a NULL bound is an error, which quotes the reducer
-    as written rather than calling it a column."""
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_rhs_aggregate_over_only_nulls_skips_the_group(decidb_cli, oracle_solver):
+    """Every cap of group b is NULL, so its MAX is NULL, as in SQL, and group b's instances are skipped (B1)."""
     rows = [row[:4] + (None if row[1] == "b" else row[4], row[5]) for row in ROWS]
-    with pytest.raises(DecidBCliError, match=r"DECIDE: max\(cap\) by \(g\) is NULL\. Impute it with COALESCE\(\)"):
-        run(decidb_cli, _sql(rows, "SUM(x * w) by (g) <= MAX(cap) by (g)"), "off")
+
+    def largest(members):
+        caps = [row[4] for row in members if row[4] is not None]
+        return max(caps) if caps else None
+
+    limits = _clause_limits(rows, largest, left_key=1, right_key=1)
+    _agree(decidb_cli, oracle_solver, rows, "SUM(x * w) by (g) <= MAX(cap) by (g)", limits)
 
 
 @pytest.mark.cons_aggregate
@@ -277,19 +285,28 @@ def test_rhs_value_is_checked_after_the_scope_checks(decidb_cli, mode):
         run(decidb_cli, sql, mode)
 
 
-@pytest.mark.error
-def test_rhs_subquery_that_is_null_is_named_alike_on_both_paths(decidb_cli):
-    """A query-wide bound is checked with the other bounds, and a NULL subquery is named as the user wrote it."""
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("op", ["<=", ">="])
+def test_rhs_subquery_that_is_null_skips_the_bound_on_both_paths(decidb_cli, oracle_solver, op):
+    """A query-wide bound that is NULL skips its one instance (B1), so nothing limits the count, from above or below."""
     sql = (
         "SELECT id, x FROM (FROM (VALUES (0, 3, 5.0), (1, 4, 4.0)) t(id, w, p) "
-        "DECIDE x(BOOL) SUCH THAT SUM(x) <= (SELECT NULL::INTEGER) MAXIMIZE SUM(p*x)) q"
+        f"DECIDE x(BOOL) SUCH THAT SUM(x) {op} (SELECT NULL::INTEGER) MAXIMIZE SUM(p*x)) q ORDER BY id"
     )
-    messages = []
-    for mode in ("off", "require"):
-        with pytest.raises(DecidBCliError, match=r"the subquery \(SELECT CAST\(NULL AS INTEGER\)\) is NULL") as error:
-            run(decidb_cli, sql, mode)
-        messages.append(str(error.value))
-    assert messages[0] == messages[1]
+    profits = {0: 5.0, 1: 4.0}
+    oracle_solver.create_model("rhs_null_subquery")
+    for i in profits:
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    oracle_solver.set_objective({f"x_{i}": p for i, p in profits.items()}, ObjSense.MAXIMIZE)
+    oracle = oracle_solver.solve()
+
+    def check_assignment(result, columns, mode):
+        assert columns == ["id", "x"], mode
+        value = sum(profits[row[0]] * row[1] for row in result)
+        assert math.isclose(value, oracle.objective_value, abs_tol=1e-6), (mode, value, oracle.objective_value)
+
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes=("off", "require"))
 
 
 @pytest.mark.query_diagnostics

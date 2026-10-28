@@ -38,7 +38,8 @@ constexpr const char *RULE_NAME = "R1_CONTINUOUS_KNAPSACK";
 struct Condition final : DirectApplicabilityCondition {
 	//! A limit of the budget read from the data: a source column or an expression over source columns. The bound-side
 	//! window rewrite (RewriteRhsAggregates) made it one value on every kept row of a group (its tightest, with `=`
-	//! values that agree) and checked it for NULL and NaN under the plan, so the rule only reads it.
+	//! values that agree) and checked it for NaN under the plan, so the rule only reads it. A NULL skips its instance:
+	//! the group's MIN or MAX passes over it (LimitOf).
 	struct DataLimit {
 		ExpressionType comparison = ExpressionType::INVALID;
 		unique_ptr<Expression> value;
@@ -107,8 +108,7 @@ public:
 	}
 
 	DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate,
-	                       const vector<string> &source_fragments) const override;
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
 	bool ProveDecision(const DirectIR &ir) const;
@@ -650,9 +650,9 @@ public:
 	//! `proved_bindings` are the bindings the proved expressions of the condition refer to, and `source_types` the
 	//! types of the source columns in the same order. The plan reads the source through a fresh set of bindings each
 	//! time, and the expressions are re-pointed at it (Build).
-	ItemStages(const Condition &condition_p, Optimizer &optimizer_p, const vector<string> &fragments_p,
-	           vector<ColumnBinding> proved_bindings_p, vector<LogicalType> source_types_p)
-	    : ItemAlgebra(optimizer_p), condition(condition_p), fragments(fragments_p), binder(optimizer_p.binder),
+	ItemStages(const Condition &condition_p, Optimizer &optimizer_p, vector<ColumnBinding> proved_bindings_p,
+	           vector<LogicalType> source_types_p)
+	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder),
 	      proved_bindings(std::move(proved_bindings_p)), source_types(std::move(source_types_p)) {
 		// The source reader hands the input over with its types resolved.
 		D_ASSERT(proved_bindings.size() == source_types.size());
@@ -733,8 +733,6 @@ private:
 	using Named = vector<std::pair<string, ExprPtr>>;
 
 	const Condition &condition;
-	//! The DECIDE node's source-fragment registry, which a NULL message quotes the written subquery or cast from.
-	const vector<string> &fragments;
 	Binder &binder;
 	//! The bindings the proved expressions refer to, and the types of the source columns.
 	vector<ColumnBinding> proved_bindings;
@@ -900,12 +898,9 @@ private:
 		}
 		auto p1 = Project(added);
 
-		// The checks name the source columns a NULL comes from, so they read the source through P1.
 		vector<unique_ptr<Expression>> checks;
-		auto number = [&](const string &name, const vector<DirectSignedValue> &values, DirectNumberKind kind) {
-			auto source = DirectMergedOverProjection(optimizer.context, values, proved_bindings, p1);
-			return DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, columns.at(name).binding, source.get(),
-			                                  kind, fragments);
+		auto number = [&](const string &name, DirectNumberKind kind) {
+			return DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, columns.at(name).binding, kind);
 		};
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
@@ -914,20 +909,18 @@ private:
 				return clause.when ? DirectCheckOnKeptRows(calc, calc.Out(C("wh" + suffix)), std::move(check))
 				                   : std::move(check);
 			};
-			checks.push_back(read_on(number("c" + suffix, clause.coefficient, DirectNumberKind::CONSTRAINT)));
-			checks.push_back(
-			    read_on(DirectValidBoundPredicate(optimizer, columns.at("r" + suffix).binding,
-			                                      *DirectOverProjection(*clause.rhs, proved_bindings, p1), fragments)));
+			checks.push_back(read_on(number("c" + suffix, DirectNumberKind::CONSTRAINT)));
+			checks.push_back(read_on(DirectValidBoundPredicate(optimizer, columns.at("r" + suffix).binding)));
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = SignedValues(condition.budget, k);
 			if (!weights.empty()) {
-				checks.push_back(ReadOnBudgetRows(number(Dec("w", k), weights, DirectNumberKind::CONSTRAINT)));
+				checks.push_back(ReadOnBudgetRows(number(Dec("w", k), DirectNumberKind::CONSTRAINT)));
 			}
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
 				if (!values.empty()) {
-					checks.push_back(number(Dec("o" + std::to_string(p), k), values, DirectNumberKind::OBJECTIVE));
+					checks.push_back(number(Dec("o" + std::to_string(p), k), DirectNumberKind::OBJECTIVE));
 				}
 			}
 		}
@@ -1137,10 +1130,8 @@ private:
 //! no answer still raises.
 class AggregatePlanBuilder : public ItemAlgebra {
 public:
-	AggregatePlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, DirectSourceReader &reader_p,
-	                     const vector<string> &fragments_p)
-	    : ItemAlgebra(optimizer_p), condition(condition_p), fragments(fragments_p), binder(optimizer_p.binder),
-	      reader(reader_p) {
+	AggregatePlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, DirectSourceReader &reader_p)
+	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder), reader(reader_p) {
 		if (condition.scoped) {
 			key_types.push_back(LogicalType::BOOLEAN);
 			for (auto slot : condition.group_key_slots) {
@@ -1196,8 +1187,6 @@ private:
 	};
 
 	const Condition &condition;
-	//! The DECIDE node's source-fragment registry, which a NULL message quotes the written subquery or cast from.
-	const vector<string> &fragments;
 	Binder &binder;
 	DirectSourceReader &reader;
 	//! The types of the group key: BOOLEAN, then the group keys. Empty without a scope.
@@ -1227,7 +1216,7 @@ private:
 	//! A new read of the source, as stage 1 computes it.
 	Items ReadItems() {
 		auto read = reader.ReadSource();
-		ItemStages stages(condition, optimizer, fragments, reader.SourceBindings(), reader.SourceTypes());
+		ItemStages stages(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
 		Items items;
 		items.plan = stages.Build(std::move(read.plan), read.table_index);
 		items.columns = stages.Columns();
@@ -1347,8 +1336,8 @@ private:
 		vector<unique_ptr<Expression>> data_checks;
 		data_checks.push_back(calc.Out(BoolColumn(items.columns.valid_data)));
 		for (auto &decision : items.columns.decisions) {
-			data_checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, decision.v, nullptr,
-			                                                 DirectNumberKind::OBJECTIVE, fragments));
+			data_checks.push_back(
+			    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, decision.v, DirectNumberKind::OBJECTIVE));
 		}
 		auto data_valid = aggregate.Add(Aggregate("bool_and", calc.Wrap(DirectAllHold(calc, std::move(data_checks)))));
 		vector<ColumnBinding> sums;
@@ -1652,11 +1641,10 @@ private:
 };
 
 DirectSubstitute Rule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate,
-                             const vector<string> &source_fragments) const {
+                             const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	DirectSourceReader reader(optimizer, std::move(source));
-	AggregatePlanBuilder builder(condition, optimizer, reader, source_fragments);
+	AggregatePlanBuilder builder(condition, optimizer, reader);
 	return builder.Build();
 }
 

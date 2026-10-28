@@ -135,8 +135,8 @@ For each group (the whole input when the sum has no `by` key):
 >
 > 7\. Each decision of a row answers in its own column.
 
-Steps 2 and 3 are aggregates over the group, decided after every row is read. A NULL or NaN value raises first, as on
-the solver, then infeasibility, then unboundedness. After them, every sum steps 4 to 6 use at λ* is finite. When T lies
+Steps 2 and 3 are aggregates over the group, decided after every row is read. A NaN value raises first, as on
+the solver (a NULL is skipped), then infeasibility, then unboundedness. After them, every sum steps 4 to 6 use at λ* is finite. When T lies
 on the shared end of two adjacent ranges, both give the same assignment.
 
 The budget directions differ only in T. `<=` and `>=` bind on their one side. `=` fixes T, so an exact fill continues
@@ -167,7 +167,7 @@ over the decisions of a row inside one aggregate input, and stage 5 computes eac
 No row number, unnest of source columns or group-back is needed, because a row's answer reads only its own values and
 its group's numbers.
 
-**Every row is checked before any is released.** Stage 2 evaluates every row's NULL and NaN checks and raises on the
+**Every row is checked before any is released.** Stage 2 evaluates every row's NaN checks and raises on the
 first bad value, and its projection raises infeasible, then unbounded. Stage 5's rows come out of a join with the
 group's numbers, which exist only once stages 2 to 4 have read every row. The verdict column rides into the output, so
 a parent that reads no answer still raises.

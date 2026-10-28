@@ -20,6 +20,7 @@
 #include "duckdb/planner/expression/bound_conjunction_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
 #include "duckdb/planner/expression/bound_function_expression.hpp"
+#include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
@@ -171,6 +172,105 @@ DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_in
 
 bool DecideCanonicalizer::ReferencesDecideVar(const Expression &expr) const {
 	return BoundExpressionReferencesDecide(expr, decide_index);
+}
+
+//! True when `expr` is NULL exactly when one of its columns is: a column, a constant, or
+//! `+`, `-`, `*` and casts over such. A division can be NULL over values (by zero).
+static bool NullOnlyFromColumns(const Expression &expr) {
+	switch (expr.GetExpressionClass()) {
+	case ExpressionClass::BOUND_COLUMN_REF:
+	case ExpressionClass::BOUND_CONSTANT:
+		return true;
+	case ExpressionClass::BOUND_CAST:
+		if (expr.Cast<BoundCastExpression>().try_cast) {
+			return false;
+		}
+		break;
+	case ExpressionClass::BOUND_FUNCTION: {
+		auto &name = expr.Cast<BoundFunctionExpression>().function.name;
+		if (name != "+" && name != "-" && name != "*") {
+			return false;
+		}
+		break;
+	}
+	default:
+		return false;
+	}
+	bool only = true;
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](const Expression &child) { only = only && NullOnlyFromColumns(child); });
+	return only;
+}
+
+static void AddNullTest(const Expression &value, vector<unique_ptr<Expression>> &out) {
+	for (auto &seen : out) {
+		if (seen->Equals(value)) {
+			return;
+		}
+	}
+	out.push_back(value.Copy());
+}
+
+static void AddColumnsOf(const Expression &expr, vector<unique_ptr<Expression>> &out) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		AddNullTest(expr, out);
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) { AddColumnsOf(child, out); });
+}
+
+//! The values to test so that `expr` is not NULL where a NULL makes it NULL: of each largest
+//! decision-free part that is not a constant, its columns when only they can make it NULL,
+//! else the part itself; looking through casts and functions with SQL's default NULL
+//! handling only. A nested reducer is its own reducer and is not looked into.
+static void CollectNullableData(const Expression &expr, idx_t decide_index, vector<unique_ptr<Expression>> &out) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		return;
+	}
+	if (!BoundExpressionReferencesDecide(expr, decide_index)) {
+		if (expr.IsFoldable()) {
+			return;
+		}
+		if (NullOnlyFromColumns(expr)) {
+			AddColumnsOf(expr, out);
+		} else {
+			AddNullTest(expr, out);
+		}
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		if (expr.Cast<BoundFunctionExpression>().function.null_handling !=
+		    FunctionNullHandling::DEFAULT_NULL_HANDLING) {
+			return;
+		}
+	} else if (expr.GetExpressionClass() != ExpressionClass::BOUND_CAST) {
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    expr, [&](const Expression &child) { CollectNullableData(child, decide_index, out); });
+}
+
+void DecideCanonicalizer::SkipNullData(Expression &expr) const {
+	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { SkipNullData(child); });
+	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE || !ReferencesDecideVar(expr)) {
+		return;
+	}
+	auto &reducer = expr.Cast<BoundAggregateExpression>();
+	vector<unique_ptr<Expression>> data;
+	for (auto &child : reducer.children) {
+		CollectNullableData(*child, decide_index, data);
+	}
+	for (auto &value : data) {
+		auto test = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);
+		test->children.push_back(std::move(value));
+		test->SetAlias(SKIP_NULL_TAG);
+		if (!reducer.filter) {
+			reducer.filter = std::move(test);
+			continue;
+		}
+		reducer.filter = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND,
+		                                                       std::move(reducer.filter), std::move(test));
+	}
 }
 
 bool DecideCanonicalizer::ContainsReducer(const Expression &expr) {

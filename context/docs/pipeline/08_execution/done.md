@@ -246,7 +246,7 @@ the data checks of [`../../language/guide.md`](../../language/guide.md)
 | `KEEPS_A_ROW` | the `when` keeps no row | `DECIDE: when <c> matches no rows.` |
 | `DETERMINES` | a class of the key (over the kept rows, and a reducer's own `when`) shows two values, NULL equal to NULL, or two instances of the decision | `DECIDE: per <K> does not determine <value>[ (<context>)]. <class> has more than one value: <a>, <b>.` · `... the decision <x> (declared ...). <class> covers more than one <x>.` |
 | `READS_A_ROW` | a `by` group of the kept rows has no row the reducer's own `when` keeps | `DECIDE: <reducer> has no rows for <group>.` · `... has no rows.` for `by ()` |
-| `VALUE_IS_VALID` | a row holds a value the model cannot read: its `value` is the message the row raises, NULL on a valid row | the first non-NULL message: a bound's NULL or NaN, a NaN in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound that takes two values in its group (`` `<bound>` takes more than one value here (a and b) ... infeasible.``) |
+| `VALUE_IS_VALID` | a row holds a value the model cannot read: its `value` is the message the row raises, NULL on a valid row | the first non-NULL message: a bound's NaN, a NaN in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound that takes two values in its group (`` `<bound>` takes more than one value here (a and b) ... infeasible.``) |
 
 The first three come from the canonicalizer (stage 04). The bound-side window rewrite
 (`RewriteRhsAggregates`, stage 05) appends the `VALUE_IS_VALID` checks after them, so a
@@ -325,10 +325,6 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   provenance; stage 06 states the definition over them (an equality per group for
   SUM/AVG, an extremum link for MIN/MAX). `BuildSolverInput` frees a helper's floor before
   the rigid box is captured; a refusal in formulation names a helper by its reducer.
-- **A NULL subquery** is named by its text as DuckDB prints it:
-  `NullSourceContext::fragments`, set wherever a prepared clause, the objective or a
-  helper's members are read, maps the flattened column back to the subquery's source
-  fragment.
 
 ---
 
@@ -478,11 +474,15 @@ resulting outer product is scaled by `1/N`.
 
 Every coefficient and RHS value is checked after evaluation:
 
-- **NULL** → `InvalidInputException` suggesting `COALESCE()` or a `WHERE` filter.
+- **NULL** → the value is skipped (deck p. 50). In a constraint, `ExtractDoubleColumn`
+  marks the row in `null_rows` and `SkipNullInstances` cuts the instance the row
+  reaches: the row of a row constraint, the group of a grouped one (`INVALID_INDEX` in
+  `row_group_ids`, which the model builder already skips). A reducer never meets a NULL
+  summand: `SkipNullData` tested it in the reducer's filter. The objective never meets
+  one: `DropNullObjectiveTerms` read it as 0 in stage 05, so a NULL there is an
+  internal error.
 - **NaN / Infinity** → `InvalidInputException` naming the common causes (division
-  by zero, arithmetic overflow, NULL propagation through math).
-
-Both apply to constraint and objective coefficients alike.
+  by zero, arithmetic overflow).
 
 **Infinity is admitted on one path only: the values that become a row's `rhs`.** An
 infinite bound is not an error there — it is the absence of a constraint (`<= +inf`)
@@ -494,7 +494,7 @@ bound on the strict path purely because of how it was written.
 
 The input of a **bound-side reducer** follows the same rule: `min(x) by (g) <= max(cap)
 by (g)` is a window of DuckDB's over `cap`, and its value check (a VALUE_IS_VALID scope
-check) refuses NULL and NaN only, so an infinite `cap` is a value. An infinite bound
+check) refuses NaN only, so an infinite `cap` is a value; a NULL bound skips its instance. An infinite bound
 behaves the same in every spelling, and its direction decides what it means. `inf - inf`
 is still NaN, and still refused.
 

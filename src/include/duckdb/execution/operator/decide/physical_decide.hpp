@@ -318,7 +318,9 @@ private:
             //! The classes its one row stands for (SolverInput::class_sets), under
             //! DIAGNOSE; INVALID_INDEX for none.
             idx_t class_set = DConstants::INVALID_INDEX;
-        };
+			//! A NULL factor made its one instance NULL: no row is emitted.
+			bool skipped = false;
+		};
         vector<ComposedConstraint> composed_constraints;
         //! The composed MIN/MAX *objective*'s terms, evaluated.
         vector<ComposedMinMaxTermData> composed_objective_terms;

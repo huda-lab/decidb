@@ -213,13 +213,14 @@ data and unaffected.
   or a scalar subquery in another query's select list), in any clause or its `WHERE`. The message names the column
   and points to joining that table into the FROM and writing the clause with `per`; when the column sits inside a
   reducer, it quotes the reducer.
-- **NULL**: a NULL in a coefficient or a bound is an error, never a zero. A zero would silently optimize a different
-  problem, and a NULL bound read as 0 (`SUM(x) <= 0`) would report the query infeasible for a reason nobody can see.
-  The message names the column and offers `COALESCE` or a `WHERE` filter; `SUM(x * COALESCE(w, 0))` works inline. A
-  reducer over data skips a NULL, as SQL does (`AVG(cap)` averages the caps that are not NULL); one whose every value
-  is NULL is NULL, an error as a bound. `COUNT(col)` also counts a NaN, as SQL does. A NULL beside a
-  decision (`SUM(x + NULL)`) is refused where it is written. In a `when`, NULL is false; in a key, NULL is a class
-  (§7.2).
+- **NULL**: a NULL data value is skipped where it is read, never read as a zero (deck pp. 50, 56). A reducer skips a
+  row whose summand is NULL, as SQL does: `SUM(w * x)` leaves out the rows where `w` is NULL, `SUM(a*x + b*y)` drops
+  the row's whole summand when `a` is NULL, and `AVG(w * x)` divides by the rows it kept. A NULL that reaches a
+  constraint unreduced (a bound, a coefficient outside a reducer, a factor on an aggregate) skips that instance, so
+  `SUM(x) <= cap` with a NULL `cap` has no constraint there. In the objective, a NULL term is dropped. `COALESCE`
+  imputes a value instead: `SUM(x * COALESCE(w, 0))`. A NULL written in the query beside a decision
+  (`SUM(x + NULL)`) is refused where it is written, and NaN is an error. `COUNT(col)` also counts a NaN, as SQL does.
+  In a `when`, NULL is false; in a key, NULL is a class (§7.2).
 
 ### 3.1 Quadratic constraints
 
@@ -529,16 +530,18 @@ Tests: `test/decide/tests/test_scope_determination.py`.
 |---|---|
 | NULL in a declaration's, constraint's or `by` key | its own class or group (D5) |
 | NULL `when` condition | row dropped |
-| NULL in a coefficient or bound | error (§3) |
-| NULL in a reducer over data | skipped, as in SQL; a group of NULLs only gives a NULL bound, an error (§3) |
+| NULL in a reducer's summand | the row is skipped, as in SQL; AVG divides by the rows kept (§3) |
+| NULL bound, unreduced coefficient or factor on an aggregate | the instance is skipped (§3) |
+| NULL in an objective term | the term is dropped (§3) |
+| NULL or NaN written in the query beside a decision; NaN in data | error (§3) |
 | a `when` keeps no row | error (D4) |
 | a key value has no kept row | no class, no constraint, no error |
 | a reducer's own `when` empties a generated class's group | error naming the class (D8) |
 | the input has no rows | empty result |
 
 NULL as a class is under review ([execution todo §2](../pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)).
-The three errors above are guards the deck replaces: there, a `when` that keeps no row yields no constraints, an empty
-group is NULL, and a NULL skips its constraint instance ([roadmap](roadmap.md#current-behavior-the-deck-changes)).
+The two errors above are guards the deck replaces: there, a `when` that keeps no row yields no constraints, and an
+empty group is NULL ([roadmap](roadmap.md#current-behavior-the-deck-changes)).
 
 ### 7.3 Data checks
 

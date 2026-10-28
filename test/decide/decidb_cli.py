@@ -11,11 +11,14 @@ possibly preceded by solver-license preamble lines (e.g. Gurobi).
 
 from __future__ import annotations
 
+import atexit
 import json
 import os
 import re
+import selectors
 import signal
 import subprocess
+import tempfile
 import time
 from pathlib import Path
 
@@ -86,15 +89,157 @@ def assert_no_removed_spelling(result: subprocess.CompletedProcess, sql: str) ->
     )
 
 
-def _run(argv: list[str], sql: str, *, removed_spelling: bool = False, **kwargs) -> subprocess.CompletedProcess:
-    """Run the CLI on ``sql`` and fail the calling test if it showed the user an internal
-    error or an internal tag: no query, accepted or refused, may do either. Unless
-    ``removed_spelling`` says the test is about one, a removed-spelling error fails it too."""
-    result = subprocess.run(argv, capture_output=True, text=True, **kwargs)
+def _check(result: subprocess.CompletedProcess, sql: str, removed_spelling: bool) -> subprocess.CompletedProcess:
+    """Fail the calling test if the query showed the user an internal error or an internal
+    tag: no query, accepted or refused, may do either. Unless ``removed_spelling`` says the
+    test is about one, a removed-spelling error fails it too."""
     assert_no_internal_leak(result, f"the query {sql[:300]!r}", sql)
     if not removed_spelling:
         assert_no_removed_spelling(result, sql)
     return result
+
+
+def _run(argv: list[str], sql: str, *, removed_spelling: bool = False, **kwargs) -> subprocess.CompletedProcess:
+    """Run the CLI on ``sql`` in a process of its own (see ``_check``)."""
+    return _check(subprocess.run(argv, capture_output=True, text=True, **kwargs), sql, removed_spelling)
+
+
+#: Set to ``0`` to start a new process for every query, as the wrapper did before sessions.
+_REUSE_ENV = "DECIDB_TEST_REUSE_PROCESS"
+
+#: SQL that changes or reads the connection's state, so a later query in the same process
+#: could see it: a setting, a variable, a catalog object, a transaction, the last query's
+#: diagnosis. Such a query gets a process of its own. A false match only costs a process.
+_SESSION_STATE = re.compile(
+    r"\b(SET|RESET|PRAGMA|CREATE|ATTACH|DETACH|USE|LOAD|INSTALL|BEGIN|COMMIT|ROLLBACK|ABORT|CALL|EXPORT|IMPORT|COPY|"
+    r"DROP|INSERT|UPDATE|DELETE|ALTER|CHECKPOINT|VACUUM|PREPARE|EXECUTE|DEALLOCATE|setvariable|decide_diagnostics)\b",
+    re.IGNORECASE,
+)
+
+#: A leading ``SET decide_direct_solve='mode';``, how the direct-solve suites pick a path. It is the
+#: one setting a session admits: every query of that session sets the same mode (the mode is in the
+#: session's key), so none sees another's.
+_DIRECT_MODE_PREFIX = re.compile(r"\A\s*SET\s+decide_direct_solve\s*=\s*'(\w+)'\s*;", re.IGNORECASE)
+
+#: The header DuckDB's shell prints in front of every error (``Parser Error:``,
+#: ``Invalid Input Error:``). Under ``-c`` the shell exits 1 after one; a session reports the same.
+_ERROR_HEADER = re.compile(r"^[A-Za-z ]*Error:", re.MULTILINE)
+
+
+class _Session:
+    """One long-lived CLI process that runs queries one after another (a connection pool of size one).
+
+    Starting the CLI costs ~20 ms, more than most queries in this suite; a test runs two or three
+    queries, so starting one process per query was most of the suite's time. Each query is written
+    to a file and run with ``.read``, which ends at the file's end, so an unterminated quote in a
+    parser-error test cannot swallow what follows. After it, ``.print`` ends stdout and a query
+    that raises ends stderr; the wrapper reads both pipes until it sees both markers.
+    """
+
+    def __init__(self, argv: list[str], env: dict[str, str]) -> None:
+        self.proc = subprocess.Popen(
+            argv, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env
+        )
+        fd, self.query_file = tempfile.mkstemp(suffix=".sql", prefix="decidb_session_")
+        os.close(fd)
+        self.count = 0
+
+    def alive(self) -> bool:
+        return self.proc.poll() is None
+
+    def close(self) -> None:
+        if self.alive():
+            self.proc.kill()
+            self.proc.wait()
+        Path(self.query_file).unlink(missing_ok=True)
+
+    def run(self, sql: str, *, json_mode: bool, timeout: float) -> subprocess.CompletedProcess:
+        self.count += 1
+        marker = f"__DECIDB_SESSION_END_{self.count}__"
+        Path(self.query_file).write_text(sql)
+        mode = "json" if json_mode else "duckbox"
+        commands = f".mode {mode}\n.read {self.query_file}\n.print {marker}\nSELECT error('{marker}');\n"
+        out, err = bytearray(), bytearray()
+        end_out, end_err = marker.encode() + b"\n", f"Invalid Input Error: {marker}\n".encode()
+        deadline = time.monotonic() + timeout
+        try:
+            self.proc.stdin.write(commands.encode())
+            self.proc.stdin.flush()
+            with selectors.DefaultSelector() as pipes:
+                pipes.register(self.proc.stdout, selectors.EVENT_READ, out)
+                pipes.register(self.proc.stderr, selectors.EVENT_READ, err)
+                while not (out.endswith(end_out) and err.endswith(end_err)) and pipes.get_map():
+                    left = deadline - time.monotonic()
+                    if left <= 0:
+                        self.close()
+                        raise subprocess.TimeoutExpired(self.proc.args, timeout)
+                    for ready, _ in pipes.select(left):
+                        chunk = os.read(ready.fd, 1 << 16)
+                        if not chunk:
+                            pipes.unregister(ready.fileobj)  # the process died: report what it wrote
+                        ready.data.extend(chunk)
+        except BrokenPipeError:
+            pass
+        stdout = bytes(out).decode(errors="replace")
+        stderr = bytes(err).decode(errors="replace")
+        if self.alive():
+            stdout, stderr = stdout[: -len(end_out)], stderr[: -len(end_err)]
+            returncode = 1 if _ERROR_HEADER.search(stderr) else 0
+        else:
+            returncode = self.proc.returncode
+        return subprocess.CompletedProcess(self.proc.args, returncode, stdout, stderr)
+
+
+#: This process's sessions (one per pytest-xdist worker), keyed by the CLI arguments and the
+#: environment they start with, since DeciDB reads its environment variables when it starts.
+#: Least recently used first; past ``_MAX_SESSIONS`` the oldest is closed.
+_SESSIONS: dict[tuple, _Session] = {}
+_MAX_SESSIONS = 6
+
+#: Variables pytest changes on every test, which DeciDB never reads: left out of a session's key.
+_PER_TEST_ENV = ("PYTEST_CURRENT_TEST",)
+
+
+def _close_sessions() -> None:
+    for session in _SESSIONS.values():
+        session.close()
+    _SESSIONS.clear()
+
+
+atexit.register(_close_sessions)
+
+
+def _run_in_session(
+    argv: list[str],
+    sql: str,
+    env: dict[str, str] | None,
+    *,
+    json_mode: bool,
+    timeout: float,
+    removed_spelling: bool = False,
+) -> subprocess.CompletedProcess | None:
+    """Run ``sql`` in this worker's long-lived process for ``argv`` and ``env``, or return None
+    when it must run in a process of its own: it touches session state other than a leading
+    direct-solve mode, it is a dot command, or reuse is switched off."""
+    prefix = _DIRECT_MODE_PREFIX.match(sql)
+    rest = sql[prefix.end() :] if prefix else sql
+    if os.environ.get(_REUSE_ENV) == "0" or _SESSION_STATE.search(rest) or rest.lstrip().startswith("."):
+        return None
+    env = {name: value for name, value in (env if env is not None else os.environ).items() if name not in _PER_TEST_ENV}
+    key = (tuple(argv), frozenset(env.items()), prefix and prefix.group(1).lower())
+    session = _SESSIONS.pop(key, None)
+    if session is None or not session.alive():
+        if session is not None:
+            session.close()
+        session = _Session(argv, env)
+    _SESSIONS[key] = session
+    while len(_SESSIONS) > _MAX_SESSIONS:
+        _SESSIONS.pop(next(iter(_SESSIONS))).close()
+    result = session.run(sql, json_mode=json_mode, timeout=timeout)
+    if not session.alive():
+        session.close()
+        del _SESSIONS[key]
+    return _check(result, sql, removed_spelling)
 
 
 def _last_complete_model_dump(text: str) -> str:
@@ -224,11 +369,9 @@ class DecidBCli:
         DecidBCliError
             If the CLI writes anything to stderr (error messages).
         """
-        proc = _run(
-            self._argv("-json", "-c", sql),
-            sql,
-            timeout=timeout,
-            env=self._subprocess_env(status_markers=True),
+        env = self._subprocess_env(status_markers=True)
+        proc = _run_in_session(self._argv(), sql, env, json_mode=True, timeout=timeout) or _run(
+            self._argv("-json", "-c", sql), sql, timeout=timeout, env=env
         )
 
         stderr = proc.stderr.strip()
@@ -296,9 +439,10 @@ class DecidBCli:
     ) -> subprocess.CompletedProcess:
         """Run a SQL query and return the raw ``CompletedProcess``. ``removed_spelling``
         says the query is expected to be refused for a removed DECIDE spelling."""
-        return _run(
-            self._argv("-c", sql), sql, removed_spelling=removed_spelling, timeout=timeout, env=self._subprocess_env()
-        )
+        env = self._subprocess_env()
+        return _run_in_session(
+            self._argv(), sql, env, json_mode=False, timeout=timeout, removed_spelling=removed_spelling
+        ) or _run(self._argv("-c", sql), sql, removed_spelling=removed_spelling, timeout=timeout, env=env)
 
     def execute_script(
         self, sql: str, *, timeout: float = 120

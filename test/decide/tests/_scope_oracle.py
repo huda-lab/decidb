@@ -315,8 +315,11 @@ class ScopedModel(ScopeModel):
 
     # -- one row ------------------------------------------------------------
 
-    def _linear(self, terms: Terms, row_index: int) -> Linear:
-        """``terms`` on row ``row_index``, each decision replaced by its class column."""
+    def _linear(self, terms: Terms, row_index: int) -> Linear | None:
+        """``terms`` on row ``row_index``, each decision replaced by its class column; None (SQL's NULL) when a
+        coefficient is None."""
+        if any(coefficient is None for coefficient in terms.values()):
+            return None
         expr: Linear = {}
         for name, coefficient in terms.items():
             column = CONSTANT if name == CONSTANT else (name, self.classes[name][row_index])
@@ -332,16 +335,20 @@ class ScopedModel(ScopeModel):
 
     # -- reducers -----------------------------------------------------------
 
-    def _reducer(self, reduce: Reduce, kept: Sequence[int], at: int, emit) -> Linear:
+    def _reducer(self, reduce: Reduce, kept: Sequence[int], at: int, emit) -> Linear | None:
         """The value of ``reduce`` for the class generated from row ``at``: the kept rows
         sharing its ``by`` value, then its own ``when``, then one value per class of its
-        own ``per``, then the aggregate. ``emit`` turns MIN/MAX over decisions into an
-        auxiliary (``solve``) or a number (``judge``)."""
+        own ``per``, then the aggregate. A row whose body is NULL is skipped, as SQL's
+        aggregates skip one, and a reducer left with no row is NULL (None). ``emit`` turns
+        MIN/MAX over decisions into an auxiliary (``solve``) or a number (``judge``)."""
         group = _key_of(self.rows[at], reduce.by)
         read = [i for i in kept if _key_of(self.rows[i], reduce.by) == group]
         read = [i for i in read if reduce.when is None or reduce.when(self.rows[i]) is True]
         if not read:
             raise ScopeError("reducer_empty", f"{reduce.agg} for by value {group}")
+        read = [i for i in read if self._linear(reduce.body(self.rows[i]), i) is not None]
+        if not read:
+            return None
         members = []
         for inner in _split(self.rows, read, reduce.per):
             self._require_determined(
@@ -360,10 +367,15 @@ class ScopedModel(ScopeModel):
             return emit(reduce.agg, members)
         raise ValueError(f"unknown reducer {reduce.agg!r}")
 
-    def _part(self, part, kept: Sequence[int], at: int, emit) -> Linear:
+    def _part(self, part, kept: Sequence[int], at: int, emit) -> Linear | None:
+        """One part's value on the class generated from row ``at``; None when it is NULL."""
         if isinstance(part, Reduce):
+            reduced = self._reducer(part, kept, at, emit)
+            factor = part.factor(self.rows[at])
+            if reduced is None or factor is None:
+                return None
             value: Linear = {}
-            _add(value, self._reducer(part, kept, at, emit), float(part.factor(self.rows[at])))
+            _add(value, reduced, float(factor))
             return value
         return self._linear(part(self.rows[at]), at)
 
@@ -386,18 +398,21 @@ class ScopedModel(ScopeModel):
         return kept
 
     def _generate(self, clause: Scoped, emit) -> list[tuple[Linear, str]]:
-        """``clause`` as one ``lhs - rhs sense 0`` per class of its ``per`` key."""
+        """``clause`` as one ``lhs - rhs sense 0`` per class of its ``per`` key. An instance
+        with a NULL part is skipped."""
         kept = self._kept_rows(clause.when)
         generated = []
         for class_rows in _split(self.rows, kept, clause.per):
             if clause.per is not PER_ROW:
                 self._determined_parts(clause.lhs + clause.rhs, class_rows, str(clause.per))
             at = class_rows[0]
+            sides = [(self._part(part, kept, at, emit), 1.0) for part in clause.lhs]
+            sides += [(self._part(part, kept, at, emit), -1.0) for part in clause.rhs]
+            if any(value is None for value, _ in sides):
+                continue
             expr: Linear = {}
-            for part in clause.lhs:
-                _add(expr, self._part(part, kept, at, emit))
-            for part in clause.rhs:
-                _add(expr, self._part(part, kept, at, emit), -1.0)
+            for value, scale in sides:
+                _add(expr, value, scale)
             generated.append((expr, clause.sense))
         return generated
 
@@ -413,14 +428,19 @@ class ScopedModel(ScopeModel):
                 values = []
                 for class_rows in _split(self.rows, kept, part.key):
                     inner = Reduce(part.inner, part.body, by=part.key)
-                    values.append(self._reducer(inner, kept, class_rows[0], emit))
+                    value = self._reducer(inner, kept, class_rows[0], emit)
+                    if value is not None:
+                        values.append(value)
                 if part.outer in ("sum", "avg"):
                     for value in values:
                         _add(expr, value, 1.0 if part.outer == "sum" else 1.0 / len(values))
                 else:
                     _add(expr, emit(part.outer, values))
             else:
-                _add(expr, self._part(part, kept, kept[0], emit))
+                # A NULL term of the objective is dropped.
+                value = self._part(part, kept, kept[0], emit)
+                if value is not None:
+                    _add(expr, value)
         return expr
 
     def check(self, clauses: Sequence[Scoped], objective: ScopedObjective | None = None) -> None:

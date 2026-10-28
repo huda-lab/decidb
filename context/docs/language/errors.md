@@ -39,7 +39,6 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | `<`, `>` or `<>` on a helper decision whose value can be fractional | bind | `Comparison '>' is not supported here: 'sum(ship + 0.5) by (D.region)' can take fractional values in this constraint, and stepping the bound is exact only on whole numbers. Compare with '>=' instead.` |
 | A strict bound on a `MIN`/`MAX` whose body can be fractional once its constant addends move to the bound | bind | `Comparison '>' is not supported here: 'max(x + w)' has type DECIMAL(21,1) ... Compare with '>=' instead.` |
 | A NULL beside a decision | bind | `DECIDE: '(x + NULL)' is NULL whatever the decisions are; replace the NULL with a value, as in COALESCE(column, 0)` |
-| A NULL in a value the solver reads | run | `DECIDE: column "weight" is NULL. Impute it with COALESCE(weight, 0) or filter those rows out with a WHERE clause.` |
 | A cast over a decision | bind | refused in `SUCH THAT` and the objective ([guide.md §3.2](guide.md#32-numeric-precision-and-casts)) |
 | A non-linear function over a decision | bind | `Scalar function 'sqrt' over a DECIDE variable is not supported: it would make the model non-linear. Only ABS() and POWER(..., 2) can wrap a decision variable.` |
 | `POWER(e, n)` over a decision with `n` other than the constant 2 | bind | names the exponent |

@@ -263,6 +263,13 @@ public:
 	//! placeholder and supplies coefficients from its own spec.
 	unique_ptr<Expression> CanonicalizeObjective(const Expression &objective, double &out_constant_offset) const;
 
+	//! A reducer skips a row whose data it reads is NULL, as SQL's does (deck p. 50): for each
+	//! reducer over decisions, every data value its body reads where a NULL makes the summand
+	//! NULL is tested `IS NOT NULL` in the reducer's own `when`. A function that handles NULL
+	//! itself (`COALESCE`) is not looked into. Runs on the canonical tree, before any rewrite
+	//! copies a reducer's `when`, and after the clause's texts are recorded.
+	void SkipNullData(Expression &expr) const;
+
 	//! Classify an already-canonical comparison using the same scope rules as
 	//! planning validation. Physical extraction uses this instead of re-deciding
 	//! aggregate-versus-per-row shape from the mere presence of an aggregate.

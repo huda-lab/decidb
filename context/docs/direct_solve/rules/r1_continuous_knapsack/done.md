@@ -74,8 +74,8 @@ from S1, which counts `BOOL` decisions.
   plan moves every tied item by the same fraction of its room, so the answer is the same on every run. The objective is the
   same.
 - **Which error wins.** A `when` that keeps no row (D4) raises first, before any value is read, as on the solver. A
-  NULL or NaN value then raises before infeasible or unbounded, wherever the row lies, as on the solver.
-- **Error wording.** Infeasible, unbounded, NULL and NaN errors read as the solver's; `test_direct_user_facing.py`
+  NaN value then raises before infeasible or unbounded, wherever the row lies, as on the solver.
+- **Error wording.** Infeasible, unbounded and NaN errors read as the solver's; `test_direct_user_facing.py`
   compares them in full.
 - **One unexplained garbage result.** Once, in a full `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
   `test_correlated_subquery_is_real` (its source is materialized as a `LogicalMaterializedCTE`) returned an `l_orderkey`
@@ -109,7 +109,8 @@ either side and flipped to build on the items. With no scope the aggregates are 
 products with one row.
 
 1. Group totals: a hash aggregate of every item's sums, the row count, each data limit's MIN and MAX, and the check of
-   every raw value and `v`, so a NULL or NaN raises here, before any verdict. A data limit is one value on the group's
+   every raw value and `v`, so a NaN raises here, before any verdict; a NULL weight or value leaves its row out of the
+   sums, and a NULL limit is no limit. A data limit is one value on the group's
    rows, so its MIN (upper) or MAX (lower) carries it. A projection raises the data checks, then infeasible, then unbounded, and
    gives the
    stages after it `S`, `L`, `U`, the finite room down, the highest price of an infinite room up and the lowest of one

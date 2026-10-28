@@ -11,7 +11,7 @@ Language-surface work is owned by `../../language/` (the scopes:
 
 **Rule (owner, 2026-10-27).** A function inside DECIDE behaves as the same SQL function does, NULL and NaN included,
 unless a strong reason that helps users says otherwise; each divergence is stated in the docs with that reason. A
-reducer over data already follows it for NULL and `COUNT` for NaN (`../../language/functions.md`, "Constraints", NULL).
+reducer over data already follows it for NULL, a NULL data value is skipped (deck pp. 50, 56), and `COUNT` follows it for NaN (`../../language/functions.md`, "Constraints", NULL).
 
 **Audit (2026-10-27).** Each place DECIDE still reads a value differently from DuckDB, with the reason to keep it or
 the change. Each needs a ruling.
@@ -23,13 +23,10 @@ the change. Each needs a ruling.
    infinite coefficient.
 3. **A reducer over no rows** (its own `when` keeps none: D8; a clause `when` keeps none: D4) is an error; SQL's
    `SUM`, `AVG`, `MIN`, `MAX` over no rows are NULL. The deck makes it NULL and skips the constraint instance a NULL
-   reaches ([roadmap](../../language/roadmap.md#an-empty-reducer-group-and-a-null-value-pp-45-50-56)). Ruling needed:
+   reaches ([roadmap](../../language/roadmap.md#an-empty-reducer-group-pp-45-56)). Ruling needed:
    follow SQL and the deck, or keep the guard (a typo in a `when` would otherwise drop a constraint silently).
-4. **A data group whose every value is NULL** gives a NULL reducer, as in SQL, and the NULL bound is an error. It is
-   the same question as 3: under the deck the instance is skipped.
-5. **The NaN and infinity message** lists "common causes" in a block, one of them a NULL that "propagated through
-   math", which DuckDB never turns into a NaN. Recommended: the NULL message's shape, naming the column and the
-   smallest edit (`../../language/errors.md`).
+4. **The NaN and infinity message** lists "common causes" in a block. Recommended: name the column and the smallest
+   edit (`../../language/errors.md`).
 
 Integer arithmetic follows DuckDB: a bound is computed in DuckDB's types before the model reads it (2^60 + 1 - 2^60
 is 1; a `HUGEINT` overflow raises as in SQL), and division by zero gives DuckDB's `inf`, `nan` or NULL. The model reads

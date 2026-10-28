@@ -524,10 +524,11 @@ class TestBinderErrors:
         refuses on those grounds. For this test that refusal counts as acceptance — the
         binder let the constraint through, which is the whole claim. A binder rejection
         looks different and is pinned by the sibling test above: it carries a `LINE n:`
-        source position.
+        source position. Three rows are enough: the claim is the binder's, and over all of
+        `lineitem` the `x * y` case is a non-convex model the solver needs 40 s for.
         """
         sql = f"""
-                SELECT l_quantity FROM lineitem
+                SELECT l_quantity FROM (SELECT * FROM lineitem LIMIT 3) lineitem
                 DECIDE x(INT), y(INT)
                 SUCH THAT {constraint} AND x <= 3 AND y <= 3
                 MAXIMIZE SUM(x) LIMIT 1

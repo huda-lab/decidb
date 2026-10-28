@@ -132,10 +132,9 @@ bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
 //! least message a row raises, so that every row reads the same one), and a filter above it raises the first check
 //! that fails. The filter passes on exactly the source's columns, so the source keeps its bindings. Filter
 //! pullup leaves a filter with a projection map in place, and pushdown moves nothing below an unpartitioned window.
-//! Strips the pipeline's tags from every expression of the operators above `source`. The row checks and the rule read
-//! the tags while they build those operators (a NULL message quotes a subquery by its fragment tag); once built,
-//! nothing reads them, and a plan prints an expression by its alias, so a tag left there would reach EXPLAIN. The
-//! source keeps its own aliases.
+//! Strips the pipeline's tags from every expression of the operators above `source`. The row checks and the rule copy
+//! tagged expressions into those operators; nothing reads the tags there, and a plan prints an expression by its
+//! alias, so a tag left there would reach EXPLAIN. The source keeps its own aliases.
 void StripTagsAbove(LogicalOperator &op, const LogicalOperator &source) {
 	if (&op == &source) {
 		return;
@@ -304,8 +303,7 @@ void ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 		source.ResolveOperatorTypes();
 	}
 	AddRowChecks(optimizer, ir, decide.children[0]);
-	auto substitute =
-	    selected.rule->Apply(std::move(decide.children[0]), optimizer, *selected.condition, decide.source_fragments);
+	auto substitute = selected.rule->Apply(std::move(decide.children[0]), optimizer, *selected.condition);
 	if (carries_rowid) {
 		if (substitute.slot_map.size() != output_bindings.size() + 1) {
 			throw InternalException("Direct solve rule did not pass the source row id through");

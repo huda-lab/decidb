@@ -18,7 +18,7 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   a foldable constant expression, or a numeric source column or deterministic expression over source columns that varies per
   row, including one that can raise (`cap + 1`, a narrowing `CAST`). A data bound reaches S1 already reduced and checked
   by the bound-side window rewrite (`../../framework/done.md`): one value on every kept row (the MIN of an upper bound, the MAX
-  of a lower one, and an `=` bound that must agree), with its NULL, NaN and disagreement errors raised by the scope
+  of a lower one, and an `=` bound that must agree), with its NaN and disagreement errors raised by the scope (a NULL skips the instance)
   checks under the plan, in the solver's words. S1 reads that value in its score projection, on the rows its clause
   keeps; nothing is computed on a row the `when` drops (syntax reference §6.3). Values are converted to DOUBLE as the
   solver does; strict and fractional limits become inclusive integer counts; limits are exact up to 2^53.
@@ -61,9 +61,9 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   not read; those require a coefficient of exactly 1. A bound on `x` may also read its coefficient from the row (`w *
   x >= 1`, `hi * x <= cap2`), as a deterministic nonthrowing source expression; the row allows the values the
   classifier admits over that row's `w`, so a zero `w` allows what `0 >= 1` says. Any other coefficient is a finite
-  constant. Contradictory active bounds are infeasible. A NULL or NaN value raises the solver's error on every row the
-  bound's `when` keeps (`DirectCheckRowBounds`): it names the NULL column, or quotes a computed value as written; a
-  NULL, NaN or infinite coefficient raises the solver's coefficient error. A row the `when` drops is not read.
+  constant. Contradictory active bounds are infeasible. A NULL value or coefficient skips the bound on that row, and a
+  NaN value raises the solver's error on every row the bound's `when` keeps (`DirectCheckRowBounds`); a NaN or
+  infinite coefficient raises the solver's coefficient error. A row the `when` drops is not read.
 - **Objective:** a signed sum of per-row coefficients times `x`, `MAXIMIZE` or `MINIMIZE`, plus an optional finite constant,
   or none. Without one every row scores 0, so the plan picks only the rows the lower limits and fixed values require.
   Coefficients are numeric, decision-free, deterministic; several terms must be non-throwing. Each `SUM(...)` may carry a
@@ -72,7 +72,7 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   The factor must be a finite foldable constant, and a divisor must not be zero.
 
 It raises an error wherever the solver does: a `when` that keeps no row (D4), a sum whose own `when` keeps no row (D8),
-invalid or NULL bounds on a row that reads them, NULL or non-finite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1`
+NaN bounds on a row that reads them, NaN or infinite scores, infeasible counts. Every input row is read, so a late bad value raises under `LIMIT 1`
 or `COUNT(*)`. When a query has several errors, direct may report a different one than the solver. When scores tie it
 may pick different rows than the solver, with the same objective. Without an objective every feasible assignment is
 optimal, so which rows it picks is not specified; Gurobi and HiGHS pick different ones as well. The feasibility check is
@@ -89,11 +89,10 @@ solver. Chosen over declining near-integer bounds because a column value is only
 decline it. To avoid the difference, round the bound. `test_s1_direct_reads_bounds_exactly_near_an_integer` pins the
 behavior, so changing it is deliberate.
 
-**Error wording** (`../../architecture/policy.md`). The messages are the solver's, built by the same functions. A NULL
-count bound, fixed value or `SUM` source column that is one column raises `DECIDE: column "cap" is NULL. Impute it with
-COALESCE(cap, 0) or filter those rows out with a WHERE clause.`, and a NaN one `DECIDE constraint right-hand side
-contains invalid value (NaN)...`. Neither path names a row: a row's place in the input depends on the scan. A NULL score names the NULL columns of the
-score as the solver does (`column "score"`, or `columns "a" and "b"`), and quotes the score only when no column is NULL.
+**Error wording** (`../../architecture/policy.md`). The messages are the solver's, built by the same functions. A NaN
+count bound, fixed value or `SUM` source column raises `DECIDE constraint right-hand side contains invalid value
+(NaN)...`. Neither path names a row: a row's place in the input depends on the scan. A NULL is skipped on both paths:
+a NULL limit is no limit, and a NULL score leaves its row out of the objective.
 The D4 and D8 messages (`DecideWhenMatchesNoRowsMessage`, `DecideReducerHasNoRowsMessage` in
 `decide_value_messages.hpp`), the non-finite score and the infeasible messages are the solver's too. A computed bound or fixed value
 (`TRY_CAST(cap AS INTEGER)`) is quoted as written, and an `=` bound that takes two values in a group raises `` `cap`
@@ -111,7 +110,7 @@ A query S1 does not apply to keeps its answer: it runs on the solver, and `requi
 | A right-hand reducer whose own `when` is volatile (`min(when random() < 2: v)`), a relation-qualified one, or another reducer (`MEDIAN`) | Kept on the solver by decision | A separate task per shape |
 | A count body with a constant or a column term (`SUM(x + 1)`, `SUM(x + bonus)`) | The class is a count of `x`; the solver answers these exactly | A rewrite to `SUM(x) <op> B - c*COUNT(*)` before both paths, which changes the solver's overflow, `DIAGNOSE` and error text |
 | A count body with a weight on `x` other than 1 or -1 (`SUM(2*x + 1)`) | A weighted constraint (S3, S4) | A weighted rule |
-| A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor, a NULL factor, or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. The solver reads a NULL factor as an objective of zeros, which is not a result worth copying. A subquery factor has no sign when the plan is built, and the sign decides whether the sense reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
+| A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. A subquery factor has no sign when the plan is built, and the sign decides whether the sense reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
 | A bound on `x` the solver folds (`variable_bound`) that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises `x >= 2 cannot hold for a BOOL variable.` before it reads a row, so an empty source raises it too, and under `DIAGNOSE` too. A query that can only fail has no speed to win, so S1 declines it (`DirectContradictsDomain`) and the solver answers. The same bound with a `when` is admitted and raises DECIDE's generic infeasible error from the plan, as the solver does. An affine spelling (`1*x >= 2`) folds too, and S1 declines it the same way | Not planned |
 
 **Belongs to another problem class or is intentional:** weighted constraints such as `SUM(w * x) <= B` (S3 and S4 cover two special cases of them); `INT` and
@@ -126,7 +125,7 @@ different `when` membership (S2); `SUM(x) <> k` (not an interval); bounds that a
 |---|---|
 | `test_direct_s1_uniform_matroid.py` (578 tests) | The answers. Each case runs on the independent ILP oracle (`oracle_solver`, built from the raw rows), on the solver path (`off`) and on the direct path (`require`, so the test fails if S1 does not apply); both DeciDB runs must satisfy every constraint and reach the oracle's objective, or all must say infeasible. Cases: every comparison against whole and fractional limits (strict bounds as the solver path reads them), intervals, `by` and NULL keys, a `when` in front, inside the sum and in both places, source-valued bounds and `COALESCE`, several bounds at once, row-count bounds (`COUNT(*)`, exact decimal arithmetic, and `test_s1_count_bound_raises_only_where_the_solver_does` for where an overflow may raise), group-aggregate bounds (`MIN`, `MAX`, `COUNT(col)`, small-integer `SUM` and `AVG`, in arithmetic, with `by`, a `when` in front and inside the sum, their NULL, NaN, infinity and empty-group errors, and every declined reducer), negated count bodies (each comparison and an interval, every scope, a group whose own `when` keeps no row, an unreachable limit, constant, column, `COALESCE`, `COUNT(*)` and group-aggregate limits), constant terms with and without `by` and an own `when` included, pins and per-row bounds on `x` (a generated grid with and without `when`), column pins, no objective (every count bound shape, with and without `by` and `when`, checked for feasibility only), 11 objective shapes (sums, differences, negation, scaled and divided, offset, products), the nine beyond the plain score in both senses, and tied scores. Parent-query contexts (CTE, wide source, joined and correlated source, parent join, recombined filters), a nested `DECIDE`, and empty inputs. Error cases that must fail on both paths (a `when` in front that keeps no row, a sum's own `when` that keeps none of the clause's rows, all keys NULL, an infeasible `byR` bound, an equality bound that varies within a group, a NaN fixed value, NaN and empty groups in a group-aggregate bound). Boundary cases against the solver path only (infinite and beyond-2^53 limits, every numeric source type, exact decimal arithmetic) and tiny scores against the exact finite-DOUBLE optimum The direct path of a case with a `by` key is a strict xfail (`direct_path`), a separate dataset covers a `by` group with an own `when` under D8, and `test_direct_source_values.py` marks the grouped slots `xfail(strict=True)`, until S1 reads a `by` key (`todo.md`). |
 | `test_direct_rule_conformance.py` (118 tests, shared with A1) | The checks every rule owes: schema and rows, all-rows read, serializer, prepared plans, `EXPLAIN` and profiling, `off`, forced backend, `DIAGNOSE`, an empty source, constant bounds that contradict the built-in domain, and near misses, each of which must decline under `require`, keep the solver plan, and answer under `auto` as under `off` (this is where the shapes S1 leaves on the solver are tested) |
-| `test_direct_user_facing.py` (75 tests, shared with A1) | What a SQL user sees besides the answer: direct solve on by default, the pinned exact reading of a bound near an integer, the full text of every NULL and NaN error compared with the solver's, unused wide columns pruned, forced-backend and binder-error policy |
+| `test_direct_user_facing.py` (75 tests, shared with A1) | What a SQL user sees besides the answer: direct solve on by default, the pinned exact reading of a bound near an integer, the full text of every NaN error compared with the solver's, a NULL bound skipped on both paths, unused wide columns pruned, forced-backend and binder-error policy |
 | C++ `[decidb]` | S1 applicability condition, IR, rule driver |
 
 ## Performance
@@ -160,10 +159,6 @@ skips. A shape whose solver model is cheap would show a smaller win.
 **Without an objective** (`SUM(x) BETWEEN rows/20 AND rows/10`, one aggregate row, direct 3 runs, solver 1): 0.05 against
 0.07 s at 100,000 rows, 0.06 against 0.28 s (85 against 325 MiB) at 1,000,000, and 0.16 against 1.23 s (541 to 657 MiB
 against 1.6 GiB) at 5,000,000.
-
-**The NULL check.** Every score is checked for NULL on every run, and the check cannot be switched off, so its cost on
-clean data is part of every number above and is not measured apart. With one NULL score on the last row, direct raises
-in 0.04 s at 1,000,000 rows and 0.07 s at 5,000,000 (clean: 0.06 and 0.19 s), and the solver in 0.06 and 0.12 s.
 
 **Weak spots**
 

@@ -294,8 +294,7 @@ public:
 		return "min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi";
 	}
 	DirectSubstitute Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-	                       const DirectApplicabilityCondition &candidate,
-	                       const vector<string> &source_fragments) const override;
+	                       const DirectApplicabilityCondition &candidate) const override;
 
 private:
 	bool ProveScope(const DirectIR &ir, Condition &condition) const;
@@ -574,10 +573,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //!     -> RankAndFilterFeasibility -> ProjectAssignment
 class PlanBuilder {
 public:
-	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source,
-	            const vector<string> &fragments_p)
-	    : condition(condition_p), fragments(fragments_p), optimizer(optimizer_p), binder(optimizer_p.binder),
-	      calc(optimizer_p.context) {
+	PlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, LogicalOperator &source)
+	    : condition(condition_p), optimizer(optimizer_p), binder(optimizer_p.binder), calc(optimizer_p.context) {
 		// The rule driver hands the input over with its types resolved.
 		source_bindings = source.GetColumnBindings();
 		source_types = source.types;
@@ -645,8 +642,6 @@ private:
 	};
 
 	const Condition &condition;
-	//! The DECIDE node's source-fragment registry, which a NULL message quotes the written subquery or cast from.
-	const vector<string> &fragments;
 	Optimizer &optimizer;
 	Binder &binder;
 	ExpressionBuilder calc;
@@ -722,7 +717,7 @@ private:
 			bound.coefficient = fixed.coefficient;
 			bounds.push_back(std::move(bound));
 		}
-		return DirectCheckRowBounds(optimizer, std::move(source), bounds, fragments);
+		return DirectCheckRowBounds(optimizer, std::move(source), bounds);
 	}
 
 	//! Stage 3: the score projection. It forwards the source columns, the combined linear score, the scope and
@@ -772,7 +767,7 @@ private:
 	}
 
 	//! Inclusive count limit of one source-valued bound, as BIGINT: its value rounded, clamped to the BIGINT range,
-	//! and -1 (upper) or 0 (lower) when the value is below zero.
+	//! and -1 (upper) or 0 (lower) when the value is below zero. A NULL value skips its instance: no limit.
 	ExprPtr SourceLimit(idx_t index, bool upper) const {
 		auto &bound = condition.source_bounds[index];
 		// Every caller asks for a side the bound has: an upper limit of an upper bound, a lower of a lower bound.
@@ -794,7 +789,9 @@ private:
 		auto below_zero =
 		    calc.Cmp(strict == upper ? ExpressionType::COMPARE_LESSTHANOREQUALTO : ExpressionType::COMPARE_LESSTHAN,
 		             cap(), calc.Num(0.0));
-		return calc.If(below_zero, calc.Constant(Value::BIGINT(upper ? -1 : 0)), bounded);
+		auto limit = calc.If(below_zero, calc.Constant(Value::BIGINT(upper ? -1 : 0)), bounded);
+		auto open = calc.Constant(Value::BIGINT(upper ? std::numeric_limits<int64_t>::max() : 0));
+		return calc.If(calc.IsNull(cap()), open, limit);
 	}
 
 	//! Largest lower limit across the constant and source-valued bounds.
@@ -855,14 +852,8 @@ private:
 	//! Stage 4: validate the score, rank rows within their scope, and raise the infeasibility error when the
 	//! bounds, fixed values, and row counts cannot all hold.
 	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score) const {
-		// The score is checked above the score projection, which carries the source columns a NULL names.
-		vector<DirectSignedValue> score_terms;
-		for (auto &part : condition.objective_parts) {
-			score_terms.push_back({part.sign, part.coefficient->Copy()});
-		}
-		auto score_source = DirectMergedOverProjection(optimizer.context, score_terms, source_bindings, score_index);
-		auto guard = make_uniq<LogicalFilter>(DirectValidNumberPredicate(
-		    optimizer, LogicalType::DOUBLE, score_binding, score_source.get(), DirectNumberKind::OBJECTIVE, fragments));
+		auto guard = make_uniq<LogicalFilter>(
+		    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, score_binding, DirectNumberKind::OBJECTIVE));
 		guard->children.push_back(std::move(score));
 		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
 		// for.
@@ -1023,12 +1014,11 @@ private:
 };
 
 DirectSubstitute Rule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
-                             const DirectApplicabilityCondition &candidate,
-                             const vector<string> &source_fragments) const {
+                             const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
 	// CheckCondition declines an objective that is not there, and an objective that has no linear term.
 	D_ASSERT(!condition.objective_parts.empty() || condition.sense == DecideSense::FEASIBILITY);
-	PlanBuilder plan_builder(condition, optimizer, *source, source_fragments);
+	PlanBuilder plan_builder(condition, optimizer, *source);
 	return plan_builder.Build(std::move(source));
 }
 

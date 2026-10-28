@@ -136,6 +136,18 @@ OBJECTIVES = {
     "constant_offset": ("SUM(score * x) + 10", lambda r: r["score"]),
     "product_of_columns": ("SUM(score * id * x)", lambda r: r["score"] * r["id"]),
     "parenthesized_sum": ("SUM((score + id) * x)", lambda r: r["score"] + r["id"]),
+    # A NULL score drops the row's term (B1). The whole summand is NULL when one of its columns is, and an integer
+    # division by zero makes a NULL from columns that are not (row 0; the other quotients are positive).
+    "nullable_column": ("SUM(nhi * x)", lambda r: 0.0 if r["nhi"] is None else r["nhi"]),
+    "nullable_in_a_sum_of_columns": (
+        "SUM((score + nhi) * x)",
+        lambda r: 0.0 if r["nhi"] is None else r["score"] + r["nhi"],
+    ),
+    "nullable_like_terms": ("SUM(score * x + nhi * x)", lambda r: 0.0 if r["nhi"] is None else r["score"] + r["nhi"]),
+    "division_by_zero": (
+        "SUM(score * ((id + 1) // id) * x)",
+        lambda r: 0.0 if r["id"] == 0 else r["score"] * ((r["id"] + 1) // r["id"]),
+    ),
 }
 NEW_OBJECTIVES = [name for name in OBJECTIVES if name not in ("score", "score_plus_id")]
 
@@ -360,6 +372,8 @@ S1_CASES = {
         "bounds": [("<=", 3)],
         "colcoefficient": [("nlo", "<=", 0.5, "nlo IS NOT NULL")],
     },
+    # Without the `when`, a row whose nlo is NULL skips its instance of the bound (B1): the same answer.
+    "column_coefficient_null_skips_its_instance": {"bounds": [("<=", 3)], "colcoefficient": [("nlo", "<=", 0.5)]},
     "domain_restatements": {
         "bounds": [("<=", 3)],
         "noop": ["x <= 1", "x >= 0", "x < 2", "x > -1", "x <> 2", "x BETWEEN 0 AND 1"],
@@ -475,7 +489,14 @@ S1_CASES["no_objective_ties_dataset"] = {"data": "ties", "bounds": [(">=", 3)], 
 
 # One representative objective shape per sense, over an interval so that both senses bind. Two shapes are checked under
 # MAXIMIZE only.
-_MAXIMIZE_ONLY = ("product_of_columns", "scaled")
+_MAXIMIZE_ONLY = (
+    "product_of_columns",
+    "scaled",
+    "nullable_column",
+    "nullable_in_a_sum_of_columns",
+    "nullable_like_terms",
+    "division_by_zero",
+)
 for _name in NEW_OBJECTIVES:
     for _sense in ("MAXIMIZE",) if _name in _MAXIMIZE_ONLY else ("MAXIMIZE", "MINIMIZE"):
         S1_CASES[f"objective_{_name}_{_sense.lower()[:3]}"] = {
@@ -687,9 +708,10 @@ def _s1_constraints(case):
             constraints.append(({names[i]: 1.0}, "<=", float(row["hi"])))
     if case.get("colscaled"):
         constraints.extend(({names[i]: 2.0}, "<=", float(row["hi"])) for i, row in enumerate(rows))
-    for column, op, rhs, *when in case.get("colcoefficient", ()):
+    for column, op, rhs, *_ in case.get("colcoefficient", ()):
         for i, row in enumerate(rows):
-            if when and row[column] is None:  # the cases' `when` is `<column> IS NOT NULL`
+            # A NULL coefficient skips the instance, and the cases' `when` is `<column> IS NOT NULL`.
+            if row[column] is None:
                 continue
             limit = float(rhs) if isinstance(rhs, (int, float)) else _COLUMN_RHS[rhs](row)
             constraints.append(({names[i]: float(row[column])}, op, limit))
@@ -992,7 +1014,7 @@ S1_ERROR_CASES = {
         "SELECT x FROM (FROM (VALUES (1, false)) t(id, flag) DECIDE x(BOOL) SUCH THAT when flag: SUM(x) >= 1) q",
         "empty_aggregate",
     ),
-    # A computed value has no single column to name, so it raises direct solve's own NULL and NaN errors.
+    # A computed value raises direct solve's own NaN error.
     "fixed_computed_value_nan": (
         _problem(
             "(1, 9.0, 'NaN'), (2, 5.0, '1')",
@@ -1010,7 +1032,6 @@ S1_ERROR_CASES = {
 @pytest.mark.parametrize(
     "rows",
     [
-        pytest.param("(1, 9.0, NULL::DOUBLE), (2, 5.0, 2.0)", id="null"),
         pytest.param("(1, 9.0, 'inf'::DOUBLE), (2, 5.0, 2.0)", id="infinite"),
         pytest.param("(1, 9.0, 'nan'::DOUBLE), (2, 5.0, 2.0)", id="nan"),
     ],

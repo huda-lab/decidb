@@ -133,109 +133,6 @@ static const Expression &CachedTransformToChunkExpression(ChunkExprCache &cache,
 	return *raw;
 }
 
-//! The pieces a failed extraction needs in order to name what was NULL: the expression
-//! as the user wrote it, and the input chunk it was evaluated against.
-//!
-//! The tree handed to the ExpressionExecutor is no use for this. `TransformToChunkExpression`
-//! rewrites every BoundColumnRefExpression into a positional BoundReferenceExpression, so
-//! by evaluation time the names are gone. The ORIGINAL tree still carries them, and its
-//! leaves still carry the same `binding.column_index` the transform used, which is exactly
-//! the chunk column to test. Keeping the original beside the chunk is therefore enough to
-//! turn "something was NULL" into "this column was NULL".
-struct NullSourceContext {
-	const Expression *source_expr = nullptr;
-	const DataChunk *input_chunk = nullptr;
-	//! The written text of each source fragment, which names a flattened subquery and renders a written cast.
-	const vector<string> *fragments = nullptr;
-};
-
-//! Whether `expr` is a leaf reading a chunk column: its column and the name it carries.
-//! Both leaf spellings appear here. A coefficient reaches execution already lowered to
-//! positional BoundReferenceExpressions in the common case, and it is only their retained
-//! alias that makes a message readable; a BoundColumnRefExpression survives on the paths
-//! that never went through that lowering. The two carry the chunk column in different
-//! fields, so each is read from its own.
-static bool ChunkColumnLeaf(const Expression &expr, idx_t &col, string &name) {
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
-		auto &colref = expr.Cast<BoundColumnRefExpression>();
-		col = colref.binding.column_index;
-		name = colref.GetAlias();
-		return true;
-	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_REF) {
-		auto &ref = expr.Cast<BoundReferenceExpression>();
-		col = ref.index;
-		name = ref.GetAlias();
-		return true;
-	}
-	return false;
-}
-
-//! The written text of the first flattened subquery inside `expr` that is NULL on chunk row `row`, or empty if none
-//! is.
-static string NullSubqueryAtRow(const Expression &expr, const DataChunk &chunk, idx_t row,
-                                const vector<string> &fragments) {
-	vector<const Expression *> leaves;
-	DecideCollectSubqueries(expr, leaves);
-	for (auto leaf : leaves) {
-		idx_t col;
-		string name;
-		idx_t fragment_id;
-		ChunkColumnLeaf(*leaf, col, name);
-		TryParseSourceFragmentTag(name, fragment_id);
-		if (fragment_id < fragments.size() && col < chunk.ColumnCount() && chunk.data[col].GetValue(row).IsNull()) {
-			return fragments[fragment_id];
-		}
-	}
-	return string();
-}
-
-//! Names the columns inside `expr` that are NULL on chunk row `row`, skipping duplicates.
-//! Reached only when an extraction has already failed, so it reads values one at a time
-//! rather than making every successful scan carry per-leaf bookkeeping.
-//!
-//! A coefficient reaches execution already lowered to positional BoundReferenceExpressions in
-//! the common case, and a BoundColumnRefExpression survives on the paths that never went through
-//! that lowering. The two carry the chunk column in different fields, so each is read from its
-//! own. Which leaves are named, and the message built from them, are shared with the direct-solve
-//! plans (`decide_value_messages.hpp`).
-static void CollectNullColumnsAtRow(const Expression &expr, const DataChunk &chunk, idx_t row,
-                                    vector<string> &out) {
-	vector<const Expression *> leaves;
-	DecideCollectNamedColumns(expr, leaves);
-	for (auto leaf : leaves) {
-		idx_t col = leaf->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF
-		                ? leaf->Cast<BoundColumnRefExpression>().binding.column_index
-		                : leaf->Cast<BoundReferenceExpression>().index;
-		auto name = leaf->GetAlias();
-		if (col >= chunk.ColumnCount() || !chunk.data[col].GetValue(row).IsNull()) {
-			continue;
-		}
-		if (std::find(out.begin(), out.end(), name) == out.end()) {
-			out.push_back(std::move(name));
-		}
-	}
-}
-
-//! The NULL message, in the terms the user wrote the query in (`decide_value_messages.hpp`), as the direct-solve plans
-//! build it (DirectNullMessageOf).
-static string DescribeNullSource(const NullSourceContext *ctx, idx_t row) {
-	if (!ctx || !ctx->source_expr) {
-		return DecideNullValueMessage({}, string());
-	}
-	D_ASSERT(ctx->input_chunk && ctx->fragments);
-	auto subquery = NullSubqueryAtRow(*ctx->source_expr, *ctx->input_chunk, row, *ctx->fragments);
-	if (!subquery.empty()) {
-		return DecideNullSubqueryMessage(subquery);
-	}
-	vector<string> null_columns;
-	CollectNullColumnsAtRow(*ctx->source_expr, *ctx->input_chunk, row, null_columns);
-	// A coefficient or bound holds no reducer by now (the bound-side window rewrite made each a column), so no entity
-	// scope is needed to render it.
-	static const vector<EntityScopeInfo> no_scopes;
-	return DecideNullValueMessage(null_columns, RenderDecideSource(*ctx->source_expr, *ctx->fragments, no_scopes));
-}
-
 //! Runs each expression of `executor` over `chunk`, whose first row is row `row_offset` of
 //! the data, into `results`: expression i only on the rows `*reads[i]` marks (every row
 //! when null), NULL on the others. A scoped clause filters before it generates
@@ -296,7 +193,10 @@ static void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, id
 }
 
 //! Vectorized extraction of a chunk-result column into a vector<double>, multiplied by `sign`.
-//! Throws InvalidInputException on NULL or non-finite values, citing `err_context`.
+//! Throws InvalidInputException on a non-finite value, citing `err_context`. A NULL reads
+//! 0 and marks its row in `null_rows`: the caller skips what it reaches (deck p. 50). With
+//! no `null_rows` the value cannot be NULL (a reducer's `when` tests its data,
+//! DecideCanonicalizer::SkipNullData).
 //! Fast path for DOUBLE; otherwise casts via VectorOperations::DefaultCast.
 //!
 //! `allow_infinite` relaxes the check to NaN-only, and is used exclusively for values
@@ -308,9 +208,8 @@ static void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, id
 //! singleton-row-bound RHS paths have always passed infinities straight through. A
 //! coefficient has no such reading, so every other caller stays strict.
 static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, vector<double> &out,
-                                const char *err_context, bool allow_infinite = false,
-                                const NullSourceContext *null_ctx = nullptr, const vector<bool> *read_rows = nullptr,
-                                idx_t row_offset = 0) {
+                                const char *err_context, bool allow_infinite = false, vector<bool> *null_rows = nullptr,
+                                const vector<bool> *read_rows = nullptr, idx_t row_offset = 0) {
 	if (count == 0) {
 		return;
 	}
@@ -334,7 +233,12 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, ve
 		}
 		idx_t idx = format.sel->get_index(i);
 		if (!format.validity.RowIsValid(idx)) {
-			throw InvalidInputException(DescribeNullSource(null_ctx, i));
+			if (!null_rows) {
+				throw InternalException("DECIDE: a %s is NULL on a row its reducer reads", err_context);
+			}
+			(*null_rows)[row_offset + i] = true;
+			out.push_back(0.0);
+			continue;
 		}
 		double dv = data[idx];
 		if (allow_infinite ? std::isnan(dv) : !std::isfinite(dv)) {
@@ -971,6 +875,8 @@ static void CountTupleTermsOnce(const vector<DecideTerm> &terms, const vector<De
 // way). Batches every term's coefficient expression into a single ExpressionExecutor
 // and scans `data` once, then zeroes rows `filters[i]` excludes (a clause's `when` is
 // folded into every term's filter upstream).
+// A NULL coefficient marks its row in `null_rows` (a constraint skips that instance); with no
+// `null_rows` it is an internal error (the objective has none, DropNullObjectiveTerms).
 // AVG scaling is deliberately left to the caller: the constraint side applies it
 // immediately per-constraint, the objective side defers it until its two-level grouping is
 // resolved in Phase 3 — a real difference in control flow, not something to collapse.
@@ -979,7 +885,7 @@ static vector<EvaluatedConstraint::BilinearTerm>
 EvaluateBilinearTerms(const vector<BilinearTermSource> &terms, const vector<TermFilterState> &filters,
                       ChunkExprCache &chunk_expr_cache, ClientContext &context, ColumnDataCollection &data,
                       idx_t num_rows, const char *coefficient_err_label, const vector<bool> &read_rows,
-                      const vector<string> &fragments) {
+                      vector<bool> *null_rows) {
 	const idx_t num_bl = terms.size();
 	// A term is computed on the rows the clause keeps that the term's own `when` keeps,
 	// and nowhere else; its messages quote the query's `fragments`.
@@ -1034,9 +940,8 @@ EvaluateBilinearTerms(const vector<BilinearTermSource> &terms, const vector<Term
 			for (idx_t j = 0; j < bl_route.size(); j++) {
 				idx_t term_idx = bl_route[j];
 				auto &col = ebts[term_idx].row_coefficients.MutableDense();
-				NullSourceContext null_ctx {terms[term_idx].coefficient.get(), &bl_chunk, &fragments};
 				ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(), terms[term_idx].sign, col,
-				                    coefficient_err_label, /*allow_infinite=*/false, &null_ctx, &term_reads[term_idx],
+				                    coefficient_err_label, /*allow_infinite=*/false, null_rows, &term_reads[term_idx],
 				                    row_offset);
 				ebts[term_idx].row_coefficients.SyncSize();
 			}
@@ -2004,6 +1909,36 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 	}
 }
 
+//! A NULL that reaches a comparison unreduced makes that instance NULL, and a NULL instance
+//! is skipped (deck p. 50): in the aggregate shape the group the row is in (its bound and its
+//! terms beside the reducers are one value per group), else the row. `row_group_ids` empty
+//! is every row in one group.
+static void SkipNullInstances(const vector<bool> &null_rows, bool grouped, idx_t num_rows, vector<idx_t> &row_group_ids,
+                              idx_t &num_groups) {
+	if (std::find(null_rows.begin(), null_rows.end(), true) == null_rows.end()) {
+		return;
+	}
+	if (row_group_ids.empty()) {
+		row_group_ids.assign(num_rows, 0);
+		num_groups = 1;
+	}
+	vector<bool> skipped(num_groups, false);
+	for (idx_t row = 0; row < num_rows; row++) {
+		if (null_rows[row] && row_group_ids[row] != DConstants::INVALID_INDEX) {
+			if (grouped) {
+				skipped[row_group_ids[row]] = true;
+			} else {
+				row_group_ids[row] = DConstants::INVALID_INDEX;
+			}
+		}
+	}
+	for (auto &group : row_group_ids) {
+		if (group != DConstants::INVALID_INDEX && skipped[group]) {
+			group = DConstants::INVALID_INDEX;
+		}
+	}
+}
+
 void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate,
                                          idx_t num_rows, ChunkExprCache &chunk_expr_cache,
                                          PerGroupCache &per_group_cache,
@@ -2158,6 +2093,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             coef_results.Initialize(context, coef_result_types);
         }
 
+		// The rows where a value the clause reads unreduced is NULL: their instances are
+		// skipped once everything is read (SkipNullInstances).
+		vector<bool> null_rows(num_rows, false);
 		vector<vector<bool>> term_reads;
 		vector<const vector<bool> *> term_read_ptrs;
 		std::function<bool(idx_t)> kept = [&](idx_t row) {
@@ -2182,11 +2120,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			ExecuteOnReadRows(coef_executor, chunk, coefficient_row_base, term_read_ptrs, coef_results);
 			for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
 				auto &col = eval_const.row_coefficients[term_idx].MutableDense();
-				NullSourceContext null_ctx {constraint->lhs_terms[term_idx].coefficient.get(), &chunk,
-				                            &source_fragments};
 				ExtractDoubleColumn(coef_results.data[term_idx], chunk.size(), constraint->lhs_terms[term_idx].sign,
 				                    col, "constraint coefficient",
-				                    /*allow_infinite=*/false, &null_ctx, &term_reads[term_idx], coefficient_row_base);
+				                    /*allow_infinite=*/false, &null_rows, &term_reads[term_idx], coefficient_row_base);
 				eval_const.row_coefficients[term_idx].SyncSize();
 			}
 			coefficient_row_base += chunk.size();
@@ -2400,19 +2336,18 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					// ization rebuilds `x + v <= K` as `x <= K - v`, so an infinite K that
 					// was folded as a column bound in its bare spelling must stay legal
 					// in its rebuilt one. `inf - inf` still yields NaN and is still refused.
-					NullSourceContext null_ctx {constraint->rhs_expr.get(), &scan_chunk, &source_fragments};
 					ExtractDoubleColumn(row_result.data[column++], scan_chunk.size(), 1.0,
 					                    eval_const.rhs_values.MutableDense(), "constraint right-hand side",
-					                    /*allow_infinite=*/true, &null_ctx, &scoped_kept, scanned);
+					                    /*allow_infinite=*/true, &null_rows, &scoped_kept, scanned);
 					eval_const.rhs_values.SyncSize();
 				}
 				if (admitted) {
 					ExtractDoubleColumn(row_result.data[column++], scan_chunk.size(), 1.0,
 					                    eval_const.admitted_lower.MutableDense(), "constraint bound",
-					                    /*allow_infinite=*/true, nullptr, &scoped_kept, scanned);
+					                    /*allow_infinite=*/true, &null_rows, &scoped_kept, scanned);
 					ExtractDoubleColumn(row_result.data[column++], scan_chunk.size(), 1.0,
 					                    eval_const.admitted_upper.MutableDense(), "constraint bound",
-					                    /*allow_infinite=*/true, nullptr, &scoped_kept, scanned);
+					                    /*allow_infinite=*/true, &null_rows, &scoped_kept, scanned);
 					eval_const.admitted_lower.SyncSize();
 					eval_const.admitted_upper.SyncSize();
 				}
@@ -2464,10 +2399,10 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 
         // Evaluate bilinear terms in constraint (if any).
         if (constraint->has_bilinear) {
-            auto ebts = EvaluateBilinearTerms(constraint->bilinear_terms, bilinear_filters, chunk_expr_cache, context,
-                                              gstate.data, num_rows, "bilinear constraint coefficient", scoped_kept,
-                                              source_fragments);
-            for (idx_t term_idx = 0; term_idx < ebts.size(); term_idx++) {
+			auto ebts = EvaluateBilinearTerms(constraint->bilinear_terms, bilinear_filters, chunk_expr_cache, context,
+			                                  gstate.data, num_rows, "bilinear constraint coefficient", scoped_kept,
+			                                  &null_rows);
+			for (idx_t term_idx = 0; term_idx < ebts.size(); term_idx++) {
                 auto &ebt = ebts[term_idx];
                 if (bilinear_filters[term_idx].avg_scale) {
                     ScaleAvgRows(ebt.row_coefficients, bilinear_filters[term_idx].has_filter,
@@ -2506,10 +2441,14 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                         scale_result.Initialize(context, {transformed.return_type});
                         scale_executor.Execute(scale_chunk, scale_result);
                         Value value = scale_result.data[0].GetValue(0);
-                        if (value.IsNull()) {
-                            throw InvalidInputException(
-                                "DECIDE constraint: the factor on a squared aggregate evaluated to NULL.");
-                        }
+						got_scale = true;
+						if (value.IsNull()) {
+							// A NULL factor makes every instance of the clause NULL.
+							for (idx_t row = 0; row < num_rows; row++) {
+								null_rows[row] = null_rows[row] || scoped_kept[row];
+							}
+							continue;
+						}
                         double factor = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
                         if (!std::isfinite(factor)) {
                             throw InvalidInputException(
@@ -2520,7 +2459,6 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                                 "DECIDE constraint: division by zero -- the factor on a squared aggregate evaluated to 0.");
                         }
                         eqg.sign *= qg.scale_divides ? 1.0 / factor : factor;
-                        got_scale = true;
                     }
                 }
 
@@ -2558,11 +2496,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 						ExecuteOnReadRows(q_executor, qchunk, q_offset, &q_reads, q_results);
 						for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
 							auto &col = eqg.row_coefficients[inner_idx].MutableDense();
-							NullSourceContext null_ctx {qg.inner_terms[inner_idx].coefficient.get(), &qchunk,
-							                            &source_fragments};
 							ExtractDoubleColumn(q_results.data[inner_idx], qchunk.size(),
 							                    qg.inner_terms[inner_idx].sign, col, "quadratic constraint coefficient",
-							                    /*allow_infinite=*/false, &null_ctx, &q_reads, q_offset);
+							                    /*allow_infinite=*/false, &null_rows, &q_reads, q_offset);
 							eqg.row_coefficients[inner_idx].SyncSize();
 						}
 						q_offset += qchunk.size();
@@ -2590,6 +2526,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
         }
 
+		SkipNullInstances(null_rows, constraint->lhs_is_aggregate || constraint->was_minmax_easy, num_rows,
+		                  eval_const.row_group_ids, eval_const.num_groups);
 		(c < num_constraints ? gstate.evaluated_constraints : gstate.evaluated_singleton_row_constraints)
 		    .push_back(std::move(eval_const));
 	}
@@ -2762,13 +2700,11 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 					idx_t term_idx = route[j].second;
                     auto &out = (*b.out_coeffs)[term_idx].MutableDense();
                     int term_sign = (*b.src_terms)[term_idx].sign;
-					NullSourceContext null_ctx {(*b.src_terms)[term_idx].coefficient.get(), &obj_chunk,
-					                            &source_fragments};
 					auto &filter = (*b.out_term_filters)[term_idx];
+					// A NULL term was read as 0 before like terms merged (DropNullObjectiveTerms).
 					ExtractDoubleColumn(obj_results.data[j], obj_chunk.size(), static_cast<double>(term_sign), out,
-					                    "objective coefficient",
-					                    /*allow_infinite=*/false, &null_ctx, filter.has_filter ? &filter.mask : nullptr,
-					                    obj_row_offset);
+					                    "objective coefficient", /*allow_infinite=*/false, nullptr,
+					                    filter.has_filter ? &filter.mask : nullptr, obj_row_offset);
 					(*b.out_coeffs)[term_idx].SyncSize();
 				}
 				obj_row_offset += obj_chunk.size();
@@ -2834,9 +2770,10 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 		// Evaluate bilinear term coefficients (non-Boolean pairs left by optimizer).
         if (gstate.objective->has_bilinear) {
 			vector<bool> every_row(num_rows, true);
-			gstate.evaluated_bilinear_terms = EvaluateBilinearTerms(
-			    gstate.objective->bilinear_terms, obj_bilinear_filters, chunk_expr_cache, context, gstate.data,
-			    num_rows, "bilinear objective coefficient", every_row, source_fragments);
+			// A NULL product was read as 0 before the model was built (DropNullObjectiveTerms).
+			gstate.evaluated_bilinear_terms =
+			    EvaluateBilinearTerms(gstate.objective->bilinear_terms, obj_bilinear_filters, chunk_expr_cache, context,
+			                          gstate.data, num_rows, "bilinear objective coefficient", every_row, nullptr);
 			// A product outside every reducer (`MAXIMIZE sum(x) + s * u`) counts once, as a
 			// linear term there does; one inside a reducer sums over its rows.
 			idx_t first_kept = FirstKeptRow(objective_has_when ? &objective_when_mask : nullptr, num_rows);
@@ -2956,8 +2893,9 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 				}
 				Value val = result.data[0].GetValue(r);
 				if (val.IsNull()) {
-					throw InvalidInputException(
-                        "Composed MIN/MAX %s: coefficient expression returned NULL.", what);
+					// A reducer's `when` tests its data (DecideCanonicalizer::SkipNullData).
+					throw InternalException("Composed MIN/MAX %s: a coefficient is NULL on a row its reducer reads",
+					                        what);
 				}
 				double d = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
                 if (!std::isfinite(d)) {
@@ -2981,8 +2919,10 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 	//! CachedTransformToChunkExpression keys its cache on the Expression's address,
 	//! so a temporary would leave a dangling key that a later allocation at the
 	//! same address silently inherits.
-	auto EvaluateQueryWideScale = [&](const Expression &scale, bool divides, const char *what) -> double {
-        const Expression &transformed =
+	//! A NULL factor is NULL: `is_null` is set and 0 returned.
+	auto EvaluateQueryWideScale = [&](const Expression &scale, bool divides, const char *what,
+	                                  bool &is_null) -> double {
+		const Expression &transformed =
             CachedTransformToChunkExpression(chunk_expr_cache, scale, context);
         ExpressionExecutor exec(context);
         exec.AddExpression(transformed);
@@ -3001,9 +2941,9 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
             exec.Execute(chunk, result);
             Value val = result.data[0].GetValue(0);
             if (val.IsNull()) {
-                throw InvalidInputException(
-                    "DECIDE: the factor on an aggregate evaluated to NULL.");
-            }
+				is_null = true;
+				return 0.0;
+			}
             v = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
             if (!std::isfinite(v)) {
                 throw InvalidInputException(
@@ -3023,12 +2963,13 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
             return 1.0 / v;
         }
         return v;
-    };
+	};
 
-    // Evaluate one composed clause's terms into the stage-06 input. `what` is
-    // "constraint" or "objective"; it names the clause in every error raised here.
-	auto EvaluateComposedTerms = [&](const vector<LogicalDecide::ComposedMinMaxTerm> &terms,
-	                                 const char *what) -> vector<ComposedMinMaxTermData> {
+	// Evaluate one composed clause's terms into the stage-06 input. `what` is
+	// "constraint" or "objective"; it names the clause in every error raised here.
+	// `null_factor` is set when a term's factor is NULL; the term's coefficients are then 0.
+	auto EvaluateComposedTerms = [&](const vector<LogicalDecide::ComposedMinMaxTerm> &terms, const char *what,
+	                                 bool &null_factor) -> vector<ComposedMinMaxTermData> {
 		// Collect filter expressions for batch evaluation. The clause's terms share its
 		// `when`, folded in front of each term's own.
 		vector<const Expression *> cond_ptrs;
@@ -3047,8 +2988,8 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
             ta.sign = term.sign;
             ta.is_easy = term.is_easy;
             if (term.scale) {
-                ta.scale = EvaluateQueryWideScale(*term.scale, term.scale_divides, what);
-            }
+				ta.scale = EvaluateQueryWideScale(*term.scale, term.scale_divides, what, null_factor);
+			}
             if (ta.is_minmax) {
 				// Named as the plan prints the reducer, so a diagnosis over the extremum
 				// column reads `max(ship)`.
@@ -3099,7 +3040,10 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 		clause.rhs = ExpressionExecutor::EvaluateScalar(context, *spec.rhs_expr)
                          .DefaultCastAs(LogicalType::DOUBLE)
                          .GetValue<double>();
-        clause.terms = EvaluateComposedTerms(spec.terms, "constraint");
+		// A NULL factor makes the clause's one instance NULL, which is skipped (deck p. 50).
+		bool null_factor = false;
+		clause.terms = EvaluateComposedTerms(spec.terms, "constraint", null_factor);
+		clause.skipped = null_factor;
 		clause.repair_group_id =
 		    gstate.constraints.size() + gstate.singleton_row_constraints.size() + evaluated.composed_constraints.size();
 		// The classes its one row stands for (D28), under DIAGNOSE: its `per` key's values
@@ -3117,8 +3061,10 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 	}
 
 	if (!composed_minmax_objective_terms.empty()) {
+		// A term with a NULL factor is dropped: its factor reads 0.
+		bool null_factor = false;
 		evaluated.composed_objective_terms =
-            EvaluateComposedTerms(composed_minmax_objective_terms, "objective");
+		    EvaluateComposedTerms(composed_minmax_objective_terms, "objective", null_factor);
 	}
 }
 
@@ -3154,9 +3100,8 @@ static void EvaluateTermColumns(ClientContext &context, ColumnDataCollection &da
 		results.Reset();
 		ExecuteOnReadRows(executor, chunk, row_base, &read, results);
 		for (idx_t t = 0; t < terms.size(); t++) {
-			NullSourceContext null_ctx {terms[t].coefficient.get(), &chunk, &source_fragments};
 			ExtractDoubleColumn(results.data[t], chunk.size(), terms[t].sign, columns[t].MutableDense(),
-			                    "constraint coefficient", /*allow_infinite=*/false, &null_ctx, &read, row_base);
+			                    "constraint coefficient", /*allow_infinite=*/false, nullptr, &read, row_base);
 			columns[t].SyncSize();
 		}
 		row_base += chunk.size();
@@ -3689,6 +3634,9 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
         auto &spec = composed_minmax_constraints[i];
         auto terms = evaluated.composed_constraints[i].terms;
 		auto &clause = evaluated.composed_constraints[i];
+		if (clause.skipped) {
+			continue;
+		}
 		LinearizeComposedMinMaxConstraint(solver_input, var_indexer, terms, clause.rhs, spec.outer_cmp,
 		                                  spec.source_clause_id, spec.removal_group_id, clause.repair_group_id,
 		                                  clause.class_set, decide_var_names, native_min_max);

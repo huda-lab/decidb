@@ -157,12 +157,28 @@ def test_only_kept_rows_are_compared(decidb_cli):
 
 
 @pytest.mark.error
-def test_null_is_one_value(decidb_cli):
-    """Two NULL capacities in one class are one value; the error quotes NULL."""
+@pytest.mark.correctness
+def test_null_is_one_value(decidb_cli, scope_solver):
+    """Two NULL capacities in one class are one value, so the key determines the bound; the NULL bound then skips
+    East's instance (B1), which only its demands hold. A NULL beside a number is two values, and the error quotes
+    NULL."""
     depots = (("D1", "East", "US", None, 8, 0.1, 0.5, 60), ("D2", "East", "CA", None, 12, 0.2, 0.6, 60), DEPOTS[2])
-    result = decidb_cli.execute_raw(_query("per D.region: sum(ship) by (D.region) <= D.capacity", depots))
-    assert "does not determine" not in result.stderr
-    assert 'column "capacity" is NULL' in result.stderr, result.stderr
+    sql = _query("per D.region: sum(ship) by (D.region) <= D.capacity", depots)
+    model = ScopedModel(joined(depots=depots), [Decision("ship")])
+    clauses = [
+        Scoped((lambda r: {"ship": 1},), "<=", (lambda r: {CONSTANT: r["demand"]},)),
+        Scoped(
+            (Reduce("sum", lambda r: {"ship": 1}, by=("region",)),),
+            "<=",
+            (lambda r: {CONSTANT: r["capacity"]},),
+            per=("region",),
+        ),
+    ]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
+    result = aligned(answer(decidb_cli, sql), model)
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )
     depots = (("D1", "East", "US", None, 8, 0.1, 0.5, 60), DEPOTS[1], DEPOTS[2])
     _stops(
         decidb_cli,

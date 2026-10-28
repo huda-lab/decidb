@@ -170,6 +170,54 @@ private:
 	// Parts: one additive term of a left side or the objective
 	//===--------------------------------------------------------------------===//
 
+	//! `filter` without the tests DecideCanonicalizer::SkipNullData added, which move to `tests`; null when nothing
+	//! else is left.
+	static unique_ptr<Expression> TakeSkipNullTests(unique_ptr<Expression> filter,
+	                                                vector<unique_ptr<Expression>> &tests) {
+		if (HasDecideTag(filter->GetAlias(), SKIP_NULL_TAG)) {
+			tests.push_back(std::move(filter));
+			return nullptr;
+		}
+		if (filter->GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+			return filter;
+		}
+		auto &conjunction = filter->Cast<BoundConjunctionExpression>();
+		vector<unique_ptr<Expression>> kept;
+		for (auto &child : conjunction.children) {
+			auto rest = TakeSkipNullTests(std::move(child), tests);
+			if (rest) {
+				kept.push_back(std::move(rest));
+			}
+		}
+		if (kept.empty()) {
+			return nullptr;
+		}
+		if (kept.size() == 1) {
+			return std::move(kept[0]);
+		}
+		conjunction.children = std::move(kept);
+		return filter;
+	}
+
+	//! Each coefficient of `term` read as 0 on a row `valid` fails: a SUM that skips a row adds nothing for it.
+	void GuardCoefficients(const ExpressionBuilder &calc, const ExprPtr &valid, DecideSplitTerm &term) const {
+		auto zero = [&](const LogicalType &type) {
+			return calc.Constant(Value::INTEGER(0).DefaultCastAs(type));
+		};
+		if (term.coefficient) {
+			auto type = term.coefficient->return_type;
+			term.coefficient = calc.Out(calc.If(valid, calc.Of(*term.coefficient), zero(type)));
+		} else {
+			term.coefficient = calc.Out(calc.If(valid, calc.Num(1), calc.Num(0)));
+		}
+		for (auto &inner : term.inner) {
+			if (inner.coefficient) {
+				auto type = inner.coefficient->return_type;
+				inner.coefficient = calc.Out(calc.If(valid, calc.Of(*inner.coefficient), zero(type)));
+			}
+		}
+	}
+
 	void ReadReducer(const BoundAggregateExpression &aggregate, DirectPart &part) const {
 		D_ASSERT(!aggregate.IsDistinct() && !aggregate.order_bys && aggregate.children.size() == 1);
 		string order;
@@ -210,6 +258,23 @@ private:
 			return;
 		}
 		splitter.Split(*aggregate.children[0], 1, part.terms);
+		// A SUM skips a row whose data is NULL by reading its terms as 0 there, which every rule reads as it reads any
+		// coefficient; the written `when` stays the reducer's.
+		if (part.filter && part.reducer == DirectReducer::SUM) {
+			vector<unique_ptr<Expression>> tests;
+			part.filter = TakeSkipNullTests(std::move(part.filter), tests);
+			if (!tests.empty()) {
+				ExpressionBuilder calc(context);
+				ExprPtr valid = calc.Wrap(std::move(tests[0]));
+				for (idx_t i = 1; i < tests.size(); i++) {
+					valid = calc.Wrap(make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND,
+					                                                        calc.Out(valid), std::move(tests[i])));
+				}
+				for (auto &term : part.terms) {
+					GuardCoefficients(calc, valid, term);
+				}
+			}
+		}
 	}
 
 	DirectPart ReadPart(const CanonicalAtom &atom) const {

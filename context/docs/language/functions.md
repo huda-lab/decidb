@@ -74,16 +74,20 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   node, so `(0 - 3) + 0` still counts as constant. All links go through `EmitExtremumLink` (`linearization_minmax.cpp`).
 - **Subqueries.** Correlated subqueries are decorrelated by DuckDB (`PlanSubqueries`) into per-row values.
   `DecideBinder::BindExpression` refuses a subquery that references a decision (`ExpressionContainsDecideVariable`).
-- **NULL.** A reducer over data reads its argument as the same SQL aggregate does: it skips a NULL, so `AVG(cap)`
-  divides by the caps that are not NULL. A group whose every value is NULL has a NULL reducer, and a NULL bound is an
-  error (`DECIDE: max(cap) by (g) is NULL. Impute it with COALESCE(), ...`). Every other NULL the model reads is an
-  error, a NULL that multiplies a decision (`sum(price * x)`) included: skipping it would change the model silently.
-  `ExtractDoubleColumn` is the one gate every evaluated coefficient and bound passes; on failure
-  `CollectNullColumnsAtRow` / `DescribeNullSource` name the column by walking the expression's leaf references, so a
-  NULL inside `x * (weight / capacity)` names `weight`. A bound's reducer is a column by then; it carries
-  `BOUND_REDUCER_TAG`, so a message quotes it as written instead of naming it as a column. No row number is given:
-  the fix is to the column, and a scan ordinal is not something a user can look up. `COALESCE`/`IFNULL` work inline
-  when decision-free. Tests: `test_null_coalesce_reducer.py`, `test_rhs_aggregate_window.py`.
+- **NULL.** A reducer reads its argument as the same SQL aggregate does: it skips a row whose summand is NULL, so
+  `AVG(cap)` and `AVG(w * x)` divide by the rows kept. `DecideCanonicalizer::SkipNullData` (plan_select_node, after
+  canonicalization and before any rewrite copies a filter) ANDs a tagged `e IS NOT NULL` into a reducer's filter for
+  each data factor of its summand, so the term masks and AVG's row count do the skipping. A reducer over data whose
+  every value is NULL is NULL. A NULL that reaches a constraint unreduced (a bound, an unreduced coefficient, a factor
+  on an aggregate) marks its row in `ExtractDoubleColumn`'s `null_rows`, and `SkipNullInstances` cuts the instance
+  that row reaches: one row of a row constraint, the whole group of a grouped one. A composed MIN/MAX clause with a
+  NULL factor is skipped (`clause.skipped`). In the objective, `DropNullObjectiveTerms` (stage 05) reads a NULL
+  coefficient as 0 before like terms merge, so `NULL*SUM(x) + SUM(x)` keeps the second term; objective extraction
+  then treats a NULL as an internal error. The direct-solve rules read the same filter tests (`part.filter`), guard
+  their coefficients with a CASE, and open a box or limit whose value is NULL. NaN stays an error, named by
+  `DirectInvalidNumberError` and `DecideInvalidValueMessage`. A bound's reducer carries `BOUND_REDUCER_TAG`, so a
+  render quotes it as written. `COALESCE`/`IFNULL` work inline when decision-free. Tests: `test_null_values.py`,
+  `test_null_coalesce_reducer.py`, `test_rhs_aggregate_window.py`, the R1/S1/A1 rule files.
 
 ## Objectives
 

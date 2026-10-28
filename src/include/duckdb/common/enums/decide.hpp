@@ -379,6 +379,10 @@ static constexpr const char *ROW_VARYING_SUBQUERY_TAG = "__row_varying_subquery_
 //! computed value, not a column of the source.
 static constexpr const char *BOUND_REDUCER_TAG = "__bound_reducer__";
 
+//! On the `IS NOT NULL` test a reducer's own `when` gains for a value its body reads
+//! (DecideCanonicalizer::SkipNullData): the query never wrote it, so no render prints it.
+static constexpr const char *SKIP_NULL_TAG = "__skip_null__";
+
 //! Stable source-comparison identity. The payload indexes the per-DECIDE
 //! ConstraintSourceInfo registry; it survives canonical rebuilding and optimizer
 //! one-to-many rewrites but is never used to group elastic slacks.

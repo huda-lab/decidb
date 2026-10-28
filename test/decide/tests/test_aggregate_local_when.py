@@ -1969,10 +1969,26 @@ def test_easy_extremum_own_when_never_reads_a_dropped_row(request, scope_solver,
 
 @pytest.mark.when
 @pytest.mark.min_max
-def test_easy_extremum_own_when_still_reads_its_members(decidb_cli):
-    """A NULL in the body on a member row is still the error naming the column."""
-    decidb_cli.assert_error(
-        """SELECT id, x FROM (VALUES (1, true, NULL), (2, false, 2)) t(id, p, a)
-        DECIDE x(INT) SUCH THAT x <= 5 AND min(when p: x + a) >= 3 MINIMIZE SUM(x)""",
-        match=re.escape('column "a" is NULL'),
+@pytest.mark.correctness
+def test_easy_extremum_own_when_skips_a_null_member(decidb_cli, scope_solver):
+    """Row 1 is a member, but its body `x + a` is NULL, so MIN skips it as SQL does (B1): only row 2 must reach 3."""
+    rows = table_rows(("id", "p", "a"), ((1, True, None), (2, True, 2), (3, False, 7)))
+    model = ScopedModel(rows, [Decision("x")])
+    x = lambda r: {"x": 1.0}  # noqa: E731
+    clauses = [
+        Scoped((x,), "<=", (lambda r: {CONSTANT: 5.0},)),
+        Scoped(
+            (Reduce("min", lambda r: {"x": 1.0, CONSTANT: r["a"]}, when=lambda r: r["p"]),),
+            ">=",
+            (lambda r: {CONSTANT: 3.0},),
+        ),
+    ]
+    objective = ScopedObjective(ObjSense.MINIMIZE, (Reduce("sum", x),))
+    result = answer(
+        decidb_cli,
+        """SELECT id, x FROM (VALUES (1, true, NULL), (2, true, 2), (3, false, 7)) t(id, p, a)
+        DECIDE x(INT) SUCH THAT x <= 5 AND min(when p: x + a) >= 3 MINIMIZE SUM(x) ORDER BY id""",
+    )
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
     )

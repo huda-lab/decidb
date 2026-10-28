@@ -139,128 +139,6 @@ def test_a1_whole_number_range_error_is_the_solvers_error_word_for_word(
     assert _raw(decidb_cli_highs, sql, mode="off").stderr == direct
 
 
-@pytest.mark.correctness
-def test_null_score_error_quotes_the_score(decidb_cli):
-    # A NULL score is reported with the score as the user wrote it. The solver path says the same for this score.
-    sql = """
-        SELECT id, x FROM (
-            FROM (VALUES (1, '2.0'), (2, 'bad')) t(id, s)
-            DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(TRY_CAST(s AS DOUBLE) * x)
-        ) q
-    """
-    solver = _raw(decidb_cli, sql, mode="off").stderr
-    direct = _raw(decidb_cli, sql, mode="require").stderr
-    assert "TRY_CAST(s AS DOUBLE) is NULL. Impute it with COALESCE()" in direct, direct
-    assert solver == direct
-
-
-_NULL_ERROR_CASES = {
-    # S1: a score built from several columns.
-    "s1_score_expression_one_null_column": (
-        "FROM (VALUES (1, 1.0, 2.0), (2, 3.0, NULL::DOUBLE)) t(id, a, b) "
-        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM((a + b) * x)"
-    ),
-    "s1_score_expression_two_null_columns": (
-        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, NULL::DOUBLE)) t(id, a, b) "
-        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM((a + b) * x)"
-    ),
-    "s1_score_terms_added_like_terms": (
-        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, NULL::DOUBLE)) t(id, a, b) "
-        "DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(a * x + b * x)"
-    ),
-    # A1: like terms and a bound expression.
-    "a1_like_terms": (
-        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, NULL::DOUBLE)) t(id, a, b) "
-        "DECIDE x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x - b * x)"
-    ),
-    "a1_bound_expression": (
-        "FROM (VALUES (1, 1.0, 2.0, 1.0), (2, 1.0, NULL::DOUBLE, 1.0)) t(id, score, cap, k) "
-        "DECIDE x(REAL) SUCH THAT x <= cap * k MAXIMIZE SUM(score * x)"
-    ),
-    # R1: the weight of a budget, the value of an objective and a per-row bound.
-    "r1_budget_weight_two_null_columns": (
-        "FROM (VALUES (1, 1.0, 1.0, 2.0), (2, 1.0, NULL::DOUBLE, NULL::DOUBLE)) t(id, score, a, b) "
-        "DECIDE x(REAL) SUCH THAT x <= 5 AND SUM((a + b) * x) <= 9 MAXIMIZE SUM(score * x)"
-    ),
-    "r1_budget_weight_like_terms": (
-        "FROM (VALUES (1, 1.0, 1.0, 2.0), (2, 1.0, NULL::DOUBLE, 3.0)) t(id, score, a, b) "
-        "DECIDE x(REAL) SUCH THAT x <= 5 AND SUM(a * x + b * x) <= 9 MAXIMIZE SUM(score * x)"
-    ),
-    "r1_objective_value": (
-        "FROM (VALUES (1, 1.0, 2.0), (2, NULL::DOUBLE, 1.0)) t(id, score, w) "
-        "DECIDE x(REAL) SUCH THAT x <= 5 AND SUM(w * x) <= 9 MAXIMIZE SUM(score * x)"
-    ),
-    "r1_bound_expression": (
-        "FROM (VALUES (1, 1.0, 2.0, 1.0), (2, 1.0, NULL::DOUBLE, 1.0)) t(id, score, cap, k) "
-        "DECIDE x(REAL) SUCH THAT x <= cap * k AND SUM(score * x) <= 9 MAXIMIZE SUM(score * x)"
-    ),
-    # R1: a budget limit read from a column.
-    "r1_budget_limit_column": (
-        "FROM (VALUES (1, 1.0, 2.0, 9.0), (2, 1.0, 3.0, NULL::DOUBLE)) t(id, score, w, lim) "
-        "DECIDE x(REAL) SUCH THAT x <= 5 AND SUM(w * x) <= lim MAXIMIZE SUM(score * x)"
-    ),
-}
-
-
-def _errors(cli, decide):
-    sql = f"SELECT id, x FROM ({decide}) q"
-    return _raw(cli, sql, mode="require").stderr, _raw(cli, sql, mode="off").stderr
-
-
-@pytest.mark.correctness
-@pytest.mark.parametrize("name", list(_NULL_ERROR_CASES))
-def test_null_value_error_is_the_solvers_error_word_for_word(decidb_cli, name):
-    # One function in `decide_value_messages.hpp` builds the NULL message for both paths, and the direct plan names the
-    # columns that are NULL on the failing row as the solver does. The full text is compared, never a hand-written string.
-    direct, solver = _errors(decidb_cli, _NULL_ERROR_CASES[name])
-    assert "is NULL" in direct or "are NULL" in direct, direct
-    assert direct == solver
-
-
-# A value that names many columns: the message must name exactly the columns that are NULL on the failing row, however
-# many the value has, and a rule still applies to the query (it is not capped at a few names).
-_WIDE_NULL_SUBSETS = {
-    "one_null_first": (0,),
-    "one_null_last": (-1,),
-    "two_nulls": (1, 3),
-    "all_null": "all",
-    "non_leading_subset": (2, 4, 5),
-}
-
-
-def _wide_null_columns(width, subset):
-    return set(range(width)) if subset == "all" else {i % width for i in subset}
-
-
-def _wide_null_decide(shape, width, subset):
-    columns = [f"c{i}" for i in range(width)]
-    nulls = _wide_null_columns(width, subset)
-    # DOUBLE throughout: a sum of DECIMAL literals can overflow, which direct solve does not take.
-    good = ", ".join(["1", "1.0::DOUBLE"] + ["1.0::DOUBLE"] * width)
-    bad = ", ".join(["2", "1.0::DOUBLE"] + ["NULL::DOUBLE" if i in nulls else "1.0::DOUBLE" for i in range(width)])
-    source = f"FROM (VALUES ({good}), ({bad})) t(id, score, {', '.join(columns)})"
-    total = " + ".join(columns)
-    if shape == "s1":
-        return f"{source} DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(({total}) * x)"
-    return f"{source} DECIDE x(REAL) SUCH THAT x <= {total} MAXIMIZE SUM(score * x)"
-
-
-@pytest.mark.correctness
-@pytest.mark.parametrize("shape", ["s1", "a1"])
-@pytest.mark.parametrize("width", [7, 8])
-@pytest.mark.parametrize("subset", list(_WIDE_NULL_SUBSETS))
-def test_null_error_of_a_wide_value_is_the_solvers_error_word_for_word(decidb_cli, shape, width, subset):
-    decide = _wide_null_decide(shape, width, _WIDE_NULL_SUBSETS[subset])
-    direct, solver = _errors(decidb_cli, decide)
-    # `require` raises the NULL error, not a "no rule applied" error, so a rule applied.
-    assert "is NULL" in direct or "are NULL" in direct, direct
-    assert "Direct solve" not in direct and "direct solve" not in direct, direct
-    assert direct == solver
-    # The text really names the NULL columns, and only them.
-    named = {int(i) for i in re.findall(r'"c(\d+)"', direct)}
-    assert named == _wide_null_columns(width, _WIDE_NULL_SUBSETS[subset]), direct
-
-
 # A plan prints an expression by its alias, so a pipeline tag left on a value a direct plan computes reaches EXPLAIN
 # (`__source_fragment_0__`). The rule driver strips every tag from the operators it installs; the cases are the values
 # that carry one: a scalar subquery in a bound, a `when` and an objective coefficient, and a data reducer's bound.
@@ -283,10 +161,21 @@ def test_explain_of_a_direct_plan_shows_no_pipeline_tag(decidb_cli, shape):
     assert "Direct solve" in plan and "__" not in plan, plan
 
 
+def _wide_decide(shape, width):
+    columns = [f"c{i}" for i in range(width)]
+    # DOUBLE throughout: a sum of DECIMAL literals can overflow, which direct solve does not take.
+    row = ", ".join(["1.0::DOUBLE"] * (width + 1))
+    source = f"FROM (VALUES (1, {row}), (2, {row})) t(id, score, {', '.join(columns)})"
+    total = " + ".join(columns)
+    if shape == "s1":
+        return f"{source} DECIDE x(BOOL) SUCH THAT SUM(x) <= 1 MAXIMIZE SUM(({total}) * x)"
+    return f"{source} DECIDE x(REAL) SUCH THAT x <= {total} MAXIMIZE SUM(score * x)"
+
+
 @pytest.mark.correctness
 @pytest.mark.parametrize("shape", ["s1", "a1"])
 def test_wide_value_is_proved_by_direct_solve_and_answers_like_the_solver(decidb_cli, shape):
-    decide = _wide_null_decide(shape, 8, ())
+    decide = _wide_decide(shape, 8)
     sql = f"SELECT id, x FROM ({decide}) q ORDER BY id"
     plan = _raw(decidb_cli, f"EXPLAIN {sql}", mode="require").stdout
     assert "Direct solve rule" in plan and not _has_decide_operator(plan), plan
@@ -380,11 +269,11 @@ def test_r1_infeasible_and_unbounded_errors_are_the_solvers_error_word_for_word(
     assert direct == solver
 
 
-def _s1_source_bound_error(decidb_cli, cap_type, cap, bound="cap"):
+def _s1_source_bound_error(decidb_cli, cap_type, cap):
     sql = f"""
         SELECT x FROM (
             FROM (VALUES (1,{cap}::{cap_type},9.0)) t(id,cap,score)
-            DECIDE x(BOOL) SUCH THAT SUM(x)<={bound} MAXIMIZE SUM(score*x)
+            DECIDE x(BOOL) SUCH THAT SUM(x)<=cap MAXIMIZE SUM(score*x)
         ) q
     """
     return _raw(decidb_cli, sql, mode="require").stderr, _raw(decidb_cli, sql, mode="off").stderr
@@ -392,64 +281,55 @@ def _s1_source_bound_error(decidb_cli, cap_type, cap, bound="cap"):
 
 @pytest.mark.correctness
 def test_s1_source_bound_error_for_a_column_is_the_solvers(decidb_cli):
-    """A bound that is one column raises the solver's NULL and NaN errors."""
-    for cap_type in ("INTEGER", "DOUBLE"):
-        direct, solver = _s1_source_bound_error(decidb_cli, cap_type, "NULL")
-        assert 'column "cap" is NULL' in direct and "COALESCE(cap, 0)" in direct and "WHERE" in direct, direct
-        assert direct == solver
+    """A bound that is one column raises the solver's NaN error."""
     direct, solver = _s1_source_bound_error(decidb_cli, "DOUBLE", "'NaN'")
     assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
     assert solver == direct
 
 
 @pytest.mark.correctness
-def test_s1_source_bound_error_for_a_computed_bound_quotes_it_as_written(decidb_cli):
-    """A computed bound has no column to name, so both paths quote it as written: no internal tag, no implicit cast."""
-    direct, solver = _s1_source_bound_error(decidb_cli, "VARCHAR", "'bad'", bound="TRY_CAST(cap AS INTEGER)")
-    assert "DECIDE: TRY_CAST(cap AS INTEGER) is NULL. Impute it with COALESCE()" in direct, direct
-    assert direct == solver
+@pytest.mark.parametrize("cap_type", ["INTEGER", "DOUBLE"])
+def test_s1_null_source_bound_is_no_bound_on_both_paths(decidb_cli, cap_type):
+    """A NULL bound skips its instance (B1): S1 applies and answers like the solver."""
+    sql = f"""
+        SELECT x FROM (
+            FROM (VALUES (1,NULL::{cap_type},9.0)) t(id,cap,score)
+            DECIDE x(BOOL) SUCH THAT SUM(x)<=cap MAXIMIZE SUM(score*x)
+        ) q
+    """
+    assert _run(decidb_cli, sql, mode="require") == _run(decidb_cli, sql, mode="off")
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("bound", ["TRY_CAST(c AS INTEGER)", "b"], ids=["computed", "column"])
-def test_s1_per_row_bound_error_is_the_solvers(decidb_cli, bound):
-    """A per-row bound that is NULL raises the solver's text on both paths: a column is named, a computed one quoted."""
+def test_s1_null_per_row_bound_is_no_bound_on_both_paths(decidb_cli, bound):
+    """A per-row bound that is NULL skips its instance (B1): S1 applies and answers like the solver."""
     sql = f"""
         SELECT id, x FROM (
             FROM (VALUES (0, 'bad', NULL::BOOLEAN, 5.0)) t(id, c, b, p)
             DECIDE x(BOOL) SUCH THAT x <= {bound} AND SUM(x) <= 1 MAXIMIZE SUM(p*x)
         ) q
     """
-    direct = _raw(decidb_cli, sql, mode="require").stderr
-    expected = 'column "b" is NULL' if bound == "b" else "DECIDE: TRY_CAST(c AS INTEGER) is NULL."
-    assert expected in direct, direct
-    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+    assert _run(decidb_cli, sql, mode="require") == _run(decidb_cli, sql, mode="off")
 
 
 @pytest.mark.correctness
-def test_r1_budget_limit_error_is_the_solvers_for_a_column_and_for_a_computed_limit(decidb_cli):
-    """A budget limit raises the solver's NULL and NaN errors: one that is a column names it, a computed one is quoted."""
+def test_r1_budget_limit_error_is_the_solvers(decidb_cli):
+    """A budget limit raises the solver's NaN error. A NULL one skips its instance (the R1 data-budget cases)."""
 
-    def error(lim_type, lim, limit="lim"):
+    def error(lim_type, lim):
         sql = f"""
             SELECT x FROM (
                 FROM (VALUES (1,2.0,9.0,{lim}::{lim_type}),(2,3.0,5.0,{lim}::{lim_type})) t(id,w,score,lim)
-                DECIDE x(REAL) SUCH THAT x<=5 AND SUM(w*x)<={limit} MAXIMIZE SUM(score*x)
+                DECIDE x(REAL) SUCH THAT x<=5 AND SUM(w*x)<=lim MAXIMIZE SUM(score*x)
             ) q
         """
         return _raw(decidb_cli, sql, mode="require").stderr, _raw(decidb_cli, sql, mode="off").stderr
 
-    for lim_type in ("INTEGER", "DOUBLE"):
-        direct, solver = error(lim_type, "NULL")
-        assert 'column "lim" is NULL' in direct and "COALESCE(lim, 0)" in direct and "WHERE" in direct, direct
-        assert direct == solver
     for lim_type in ("FLOAT", "DOUBLE"):
         direct, solver = error(lim_type, "'NaN'")
         assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
         assert solver == direct
-    direct, solver = error("VARCHAR", "'bad'", limit="TRY_CAST(lim AS DOUBLE)")
-    assert "DECIDE: TRY_CAST(lim AS DOUBLE) is NULL. Impute it with COALESCE()" in direct, direct
-    assert direct == solver
 
 
 @pytest.mark.correctness
@@ -485,9 +365,9 @@ def test_unused_wide_output_is_pruned_without_losing_rank_or_bindings(decidb_cli
     full, _ = _run(decidb_cli, setup + f"SELECT i, score, payload, x FROM ({decide}) q WHERE i=0")
     assert full == [(0, 0.0, "p" * 200, 0)]
 
-    invalid = setup.replace("(i % 101)::DOUBLE AS score", "CASE WHEN i=4999 THEN NULL ELSE 1.0 END AS score")
+    invalid = setup.replace("(i % 101)::DOUBLE AS score", "CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END AS score")
     count_only = f"SELECT COUNT(*) FROM ({decide.replace('<=500', '<=0')}) q"
-    assert "is NULL" in _raw(decidb_cli, invalid + count_only).stderr
+    assert "invalid value" in _raw(decidb_cli, invalid + count_only).stderr
 
     throwing_source = """
         SELECT i, i::DOUBLE AS score,

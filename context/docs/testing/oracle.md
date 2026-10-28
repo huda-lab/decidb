@@ -321,7 +321,9 @@ same `OracleSolver` interface.
   `when` / `per`, its `by (G)`, the objective's `when` and the two-level objective. It
   filters the rows, splits the kept rows into classes, generates the body once per
   class and evaluates each reducer on the kept rows sharing the class's `by` value.
-  NULL is a value like any other (`class_ids`). `check` raises `ScopeError` for the
+  NULL is a value like any other (`class_ids`). A NULL data value is skipped: a
+  reducer leaves out a NULL member, an instance with a NULL part is not generated, and
+  the objective drops a NULL term. `check` raises `ScopeError` for the
   three run-time errors (a `when` that keeps no row, a key that does not determine a
   term, a reducer left with no rows) before any model is built.
 - `solve_scoped` returns the oracle's optimum; `judge_scoped` checks DeciDB's answer

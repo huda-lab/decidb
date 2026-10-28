@@ -665,21 +665,26 @@ def test_scope_errors(decidb_cli, clause, message):
     assert_no_internal_leak(result, "a scope error")
 
 
-@pytest.mark.error
-def test_a_null_subquery_is_named_by_its_text(decidb_cli):
-    """West has no row in the subquery's table, so its bound is NULL: the message quotes
-    the subquery as DuckDB prints it, never the column it was flattened into."""
-    result = decidb_cli.execute_raw(
-        _ship_query(
-            "per D.region: sum(ship) by (D.region) <= (SELECT max(c.cap) FROM (VALUES ('East', 30)) c(region, cap) "
-            "WHERE c.region = D.region)"
-        )
+@pytest.mark.correctness
+def test_a_null_subquery_skips_its_instance(decidb_cli, scope_solver):
+    """West has no row in the subquery's table, so its bound is NULL and West's instance is skipped (B1): only its
+    demands hold it, while East's total stays under 30."""
+    sql = _ship_query(
+        "per D.region: sum(ship) by (D.region) <= (SELECT max(c.cap) FROM (VALUES ('East', 30)) c(region, cap) "
+        "WHERE c.region = D.region)"
     )
-    assert "DECIDE: the subquery (SELECT max(c.cap) FROM " in result.stderr, result.stderr
-    assert (
-        "WHERE (c.region = D.region)) is NULL. Impute it with COALESCE((SELECT max(c.cap) FROM " in result.stderr
-    ), result.stderr
-    assert_no_internal_leak(result, "a NULL subquery")
+    model = ScopedModel(joined(), [Decision("ship")])
+    clauses = [
+        Scoped((lambda r: {"ship": 1},), "<=", (lambda r: {CONSTANT: r["demand"]},)),
+        Scoped(
+            (Reduce("sum", lambda r: {"ship": 1}, by=("region",)),),
+            "<=",
+            (lambda r: {CONSTANT: 30 if r["region"] == "East" else None},),
+            per=("region",),
+        ),
+    ]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"ship": 1}),))
+    _check_optimum(decidb_cli, scope_solver, sql, model, clauses, objective)
 
 
 # ---------------------------------------------------------------------------

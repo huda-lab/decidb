@@ -67,17 +67,13 @@ Rulings (architect review done):
 5. **An empty group skips its constraint** (deck: a reducer over no rows is NULL). This retires D4 and D8 together: a
    `when` that keeps no rows yields no constraints, and a group a reducer's own `when` or NULL keys empty yields none
    ([roadmap § the deck changes](language/roadmap.md#current-behavior-the-deck-changes)).
-8. **A NULL data value follows the deck** (pp. 50, 56): a NULL coefficient or bound inside a reducer drops that term
-   (`sum(S.weight * x)`), and one that reaches the comparison unreduced (`x <= S.cap`, a reducer bound that comes out
-   NULL) skips that constraint instance. The "is NULL. Impute it with COALESCE" errors go, and so does the message
-   quoting a NULL reducer bound. A NULL written in the query itself (`x + NULL`) stays an error, raised from the
-   query text before any data is read. NaN stays an error (B9).
+8. **A NULL data value follows the deck** (pp. 50, 56): shipped (guide §3, §7.2).
 6. **Collation:** keys group on the collated expression (`PushCollation`, as GROUP BY); a label quotes the group's
    least raw spelling.
 7. **Goldens:** the agent shows the diff entry by entry before re-capturing, once, after the numbering lands.
 
-Commits, in order: key table (shipped: `LogicalDecide::keys`) → one numbering (shipped: ids by key value) → NULL key and keyed decision → empty groups (D4, D8) →
-NULL data values → collation.
+Commits, in order: key table (shipped: `LogicalDecide::keys`) → one numbering (shipped: ids by key value) → NULL data
+values (shipped) → NULL key and keyed decision → empty groups (D4, D8) → collation.
 
 - [ ] A NULL key is not a class; its rows skip the keyed clause (reverses D5; closes infeasible § 2) — [execution § 2](pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)
 - [ ] Key grouping ignores collation (follow the collation) — [bugs § collation](issues/bugs.md#key-grouping-ignores-collation)
@@ -175,8 +171,8 @@ The agent finds the cause alone and stops with a proposed fix.
 ## B9. Functions that behave unlike SQL: the audit's rulings
 
 - [ ] Three places still read a value differently from DuckDB, each with a recommendation: NaN in a bound (keep),
-  infinity in a coefficient (keep), and the NaN message (reshape like the NULL one). A reducer over no rows and a data
-  group of NULLs only follow the deck in B1 (owner, 2026-10-28). — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
+  infinity in a coefficient (keep), and the NaN message (name the column and the smallest edit). A reducer over no rows
+  follows the deck in B1 (owner, 2026-10-28). — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
 
 ## B10. One helper for a reducer several clauses hold: the definition's provenance
 

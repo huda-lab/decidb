@@ -999,10 +999,14 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
 
 @pytest.mark.edge_case
-@pytest.mark.error
-def test_null_coefficients(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
-    """NULL values in coefficient columns — DecidB rejects with helpful COALESCE hint."""
-    decidb_cli.assert_error("""
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.obj_maximize
+@pytest.mark.correctness
+def test_null_coefficients(decidb_cli, oracle_solver, perf_tracker):
+    """A NULL coefficient is skipped where a reducer reads it, as SQL's SUM skips a NULL: row 2's weight leaves it out
+    of the budget, and row 4's value leaves it out of the objective."""
+    sql = """
         WITH data AS (
             SELECT 1 AS id, 10.0 AS weight, 5.0 AS value UNION ALL
             SELECT 2, NULL, 3.0 UNION ALL
@@ -1014,7 +1018,48 @@ def test_null_coefficients(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         DECIDE x(BOOL)
         SUCH THAT SUM(x * weight) <= 15
         MAXIMIZE SUM(x * value)
-    """, match=r"NULL")
+    """
+    weights = {1: 10.0, 2: None, 3: 8.0, 4: 6.0}
+    values = {1: 5.0, 2: 3.0, 3: 7.0, 4: None}
+    t0 = time.perf_counter()
+    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_time = time.perf_counter() - t0
+
+    t_build = time.perf_counter()
+    oracle_solver.create_model("null_coefficients")
+    for i in weights:
+        oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
+    oracle_solver.add_constraint(
+        {f"x_{i}": w for i, w in weights.items() if w is not None},
+        "<=",
+        15.0,
+        name="budget",
+    )
+    oracle_solver.set_objective(
+        {f"x_{i}": v for i, v in values.items() if v is not None},
+        ObjSense.MAXIMIZE,
+    )
+    build_time = time.perf_counter() - t_build
+    result = oracle_solver.solve()
+
+    id_idx, x_idx = decidb_cols.index("id"), decidb_cols.index("x")
+    picked = {int(r[id_idx]): int(r[x_idx]) for r in decidb_rows}
+    assert sum(weights[i] * x for i, x in picked.items() if weights[i] is not None) <= 15.0
+    decidb_obj = sum(values[i] * x for i, x in picked.items() if values[i] is not None)
+    assert abs(decidb_obj - result.objective_value) <= 1e-6, (decidb_obj, result.objective_value)
+
+    perf_tracker.record(
+        "null_coefficients",
+        decidb_time,
+        build_time,
+        result.solve_time_seconds,
+        len(weights),
+        len(weights),
+        1,
+        result.objective_value,
+        oracle_solver.solver_name(),
+        comparison_status="optimal",
+    )
 
 
 @pytest.mark.edge_case

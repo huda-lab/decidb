@@ -1,6 +1,6 @@
 """Explicit NULL imputation is legal inside DECIDE reducer coefficients.
 
-NULL values still fail by default. These tests pin the explicit opt-in path:
+A reducer skips a NULL summand by default, as SQL does. COALESCE imputes a value instead:
 data-only COALESCE/IFNULL nodes are evaluated by DuckDB as coefficient atoms,
 while the same operators over a DECIDE variable remain unsupported.
 """

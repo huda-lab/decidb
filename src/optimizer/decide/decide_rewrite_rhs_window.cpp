@@ -15,8 +15,9 @@
 // The solver (PhysicalDecide) and the direct-solve rules then read plain columns, and neither reduces a bound.
 //
 // The values the windows read are checked by VALUE_IS_VALID checks appended to the DECIDE node's scope checks, so a
-// NULL, a NaN, or an `=` bound with two values in a group is reported after the scope checks, as the bound's reader
-// would report it. A window itself raises nothing.
+// NaN, or an `=` bound with two values in a group, is reported after the scope checks, as the bound's reader would
+// report it. A NULL bound is no value: the window's reducer skips it as SQL's does, and a group whose tightest bound
+// is NULL has no instance, which the bound's reader skips. A window itself raises nothing.
 //
 //===----------------------------------------------------------------------===//
 #include "duckdb/optimizer/decide/decide_optimizer.hpp"
@@ -269,15 +270,15 @@ private:
 		return calc.Out(OnRows(kept, calc.If(differs, message, calc.Constant(Value(LogicalType::VARCHAR)))));
 	}
 
-	//! The message a row raises for a NULL or NaN `value` among `rows` (every row when null), and NULL elsewhere: the
-	//! solver's text, the NULL one naming the columns that are NULL on the row. Infinity is a value.
+	//! The message a row raises for a NaN `value` among `rows` (every row when null), and NULL elsewhere: the solver's
+	//! text; null when `value` cannot be NaN. A NULL bound skips its instance (deck p. 50) and infinity is a value.
 	unique_ptr<Expression> InvalidValueMessage(const Expression &value, const string &context,
 	                                           const ExprPtr &rows) const {
 		auto nan = NanMessage(value, context);
-		auto message = calc.If(calc.IsNull(calc.Of(value)),
-		                       calc.Wrap(DirectNullMessageOf(optimizer, value, decide.source_fragments)),
-		                       nan ? nan : calc.Constant(Value(LogicalType::VARCHAR)));
-		return calc.Out(OnRows(rows, message));
+		if (!nan) {
+			return nullptr;
+		}
+		return calc.Out(OnRows(rows, nan));
 	}
 
 	//! The message a row raises for a NaN `value`, and NULL elsewhere; null when `value` cannot be NaN.
@@ -291,6 +292,9 @@ private:
 	}
 
 	void AddValueCheck(unique_ptr<Expression> message) {
+		if (!message) {
+			return;
+		}
 		for (auto &check : decide.scope_checks) {
 			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && check.value->Equals(*message)) {
 				return;
