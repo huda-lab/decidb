@@ -223,13 +223,14 @@ def test_a_key_that_is_null_on_every_row_is_one_group(decidb_cli, scope_solver):
 
 
 def test_a_key_shared_by_a_decision_and_a_by_is_computed_once(decidb_cli):
-    """The decision's entities and the reducer's groups read one grouping of `g`."""
+    """The decision's entities and the reducer's groups read one grouping of `g`. One execution is counted, so the
+    serializer check, which runs the query again from the round-tripped plan, is off."""
     sql = """SET decide_direct_solve='off';
         SELECT id, x FROM (VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)
         DECIDE per g: x(INT)
         SUCH THAT x <= 9 AND sum(x) by (g) <= 12
         MAXIMIZE SUM(x)"""
-    result = decidb_cli.with_env({"DECIDB_PROFILE": "1"}).execute_raw(sql)
+    result = decidb_cli.without_verify_serializer().with_env({"DECIDB_PROFILE": "1"}).execute_raw(sql)
     assert result.returncode == 0, result.stderr
     groupings = [
         line

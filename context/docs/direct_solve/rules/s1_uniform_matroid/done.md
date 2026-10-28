@@ -1,12 +1,11 @@
 # S1 (uniform-matroid optimization) — what works today
 
-Verified on 2026-10-27 at `a14b1f8129` or later, with the strict xfails on the direct path of pending cases: `make decide-test`,
-`DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each 4,521 passed
-and 335 strict expected failures (the direct path of keyed and folded-affine cases, other direct-solve follow-ups
-and the deferred bound reader); `DECIDB_FORCE_SOLVER=highs
-make decide-test` 4,519 passed and two failures, `test_norm_combined_l1_l2_objective`, which needs Gurobi, and
-`test_entity_scoped_mixed_when_per`, which HiGHS cannot close at a gap of 0 in time (`../../../issues/bugs.md`); C++
-`build/release/test/unittest "[decidb]"` 2,714 assertions in 65 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (it prints one line per check). Code:
+Verified on 2026-10-28 at `c83bef034f` or later, with the strict xfails on the direct path of pending cases: `make
+decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each
+4,681 passed and 326 strict expected failures (the direct path of keyed cases and other direct-solve follow-ups);
+`DECIDB_FORCE_SOLVER=highs make decide-test` 4,680 passed and one failure, `test_norm_combined_l1_l2_objective`, which
+needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,764 assertions in 67 cases.
+`test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check). Code:
 `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp`; its scope projection and bound validation are the shared
 fragments in `direct_plan_fragments.{hpp,cpp}`. Class definition: [definition.md](definition.md).
 

@@ -75,9 +75,9 @@ def test_a_null_coefficient_of_a_product_of_decisions_skips_its_instance(decidb_
 
 @pytest.mark.cons_perrow
 @pytest.mark.correctness
-def test_a_null_coefficient_in_a_square_skips_its_instance(decidb_cli, oracle_solver):
-    """`POWER(c*x, 2) <= 4` on row 2 is NULL and skipped, so row 2 takes its cap."""
-    answer = _answer(decidb_cli, "x", "DECIDE x(REAL) SUCH THAT x <= 5 AND POWER(c*x, 2) <= 4 MAXIMIZE SUM(p*x)")
+def test_a_null_coefficient_in_a_square_skips_its_instance(decidb_cli_gurobi, oracle_solver):
+    """`POWER(c*x, 2) <= 4` on row 2 is NULL and skipped, so row 2 takes its cap. A quadratic row needs Gurobi."""
+    answer = _answer(decidb_cli_gurobi, "x", "DECIDE x(REAL) SUCH THAT x <= 5 AND POWER(c*x, 2) <= 4 MAXIMIZE SUM(p*x)")
 
     def build(oracle):
         for i, c, _ in KEPT:
@@ -93,10 +93,10 @@ def test_a_null_coefficient_in_a_square_skips_its_instance(decidb_cli, oracle_so
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_a_null_factor_on_a_squared_sum_skips_the_clause(decidb_cli, oracle_solver):
-    """The clause's one instance is NULL, so only the boxes hold."""
+def test_a_null_factor_on_a_squared_sum_skips_the_clause(decidb_cli_gurobi, oracle_solver):
+    """The clause's one instance is NULL, so only the boxes hold. A quadratic row needs Gurobi."""
     answer = _answer(
-        decidb_cli,
+        decidb_cli_gurobi,
         "x",
         "DECIDE x(REAL) SUCH THAT x <= 5 AND (SELECT NULL::DOUBLE) * SUM(POWER(x, 2)) <= 4 MAXIMIZE SUM(p*x)",
     )

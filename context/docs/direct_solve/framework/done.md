@@ -1,12 +1,11 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-28 at `13a9336394`, with the strict xfails on the direct path of pending cases: `make
+Verified on 2026-10-28 at `c83bef034f` or later, with the strict xfails on the direct path of pending cases: `make
 decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each
-4,684 outcomes and 327 strict expected failures (the direct path of keyed cases and other direct-solve follow-ups);
-`DECIDB_FORCE_SOLVER=highs make decide-test` 4,682 passed and two failures, `test_norm_combined_l1_l2_objective`, which
-needs Gurobi, and `test_entity_scoped_mixed_when_per`, which HiGHS cannot close at a gap of 0 in time
-(`../../issues/bugs.md`); C++ `build/release/test/unittest "[decidb]"` 2,696 assertions in 65 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
-check). Design: `../architecture/`.
+4,681 passed and 326 strict expected failures (the direct path of keyed cases and other direct-solve follow-ups);
+`DECIDB_FORCE_SOLVER=highs make decide-test` 4,680 passed and one failure, `test_norm_combined_l1_l2_objective`, which
+needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,764 assertions in 67 cases.
+`test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check). Design: `../architecture/`.
 
 ## What it does
 
