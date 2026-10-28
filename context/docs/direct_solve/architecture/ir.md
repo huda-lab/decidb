@@ -37,11 +37,12 @@ mark it not proved.
   (an unconditional bound whose ends fold at plan time, in any spelling, D41). Such a bound replaces the variable's
   default lower bound of 0; every other bound only intersects with it. Direct rules run before the MIN/MAX rewrite tags
   an easy extremum, so only a per-row bound reads here. The classifier is the solver's, so the two cannot disagree.
-- `row_checks` are the scope checks the DECIDE operator runs before it reads a value
-  (`PhysicalDecide::RunScopeChecks`): a `when` that keeps no row (D4) and a reducer whose own `when` keeps no row (D8),
-  each with its message from `decide_value_messages.hpp`. The rule driver puts them under every rule's plan
-  (`AddRowChecks`: a window that counts the rows and a filter that raises), so a rule does not see them. A check with
-  a key is not one of them yet.
+- `row_checks` are the value checks the DECIDE operator runs before it reads a value
+  (`PhysicalDecide::RunScopeChecks`): the bound-side window's `VALUE_IS_VALID` checks, each a per-row message, NULL on
+  a valid row. The rule driver puts them under every rule's plan (`AddRowChecks`: a window that takes the least
+  message and a filter that raises it), so a rule does not see them. A `DETERMINES` check is not one of them yet: it
+  makes the IR not proved. An empty group needs no check: a rule reads no row there, as the solver path skips its
+  instance (D68).
 - The term splitter that breaks `SUM(2*x - x)` into linear terms is shared with the solver path
   (`src/planner/decide/decide_term_split.cpp`), so the two paths cannot read one term differently.
 - `norm(e, p)` is replaced by its definition when the query is canonicalized (L0 stays a marker). The binder tags the

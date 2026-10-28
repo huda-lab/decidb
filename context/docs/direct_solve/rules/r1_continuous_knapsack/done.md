@@ -33,8 +33,8 @@ One or more row-scoped `REAL` decisions with:
 - **Budget scope.** One budget over the source. A `when` on the clause or inside the sum (the same meaning for a
   constant budget), or one in each place (the budget then covers the rows both keep), leaves a row out of the budget; that row takes its own best end, as a zero-weight row does, and is
   unbounded when that end is infinite with a nonzero value. Its empty box, and a NULL or NaN in its own bounds, still
-  raise; its weight is not read. A `when` that keeps no row of a nonempty source is an error (D4), which the plan's row
-  checks raise before any value is read, as on the solver. Clauses merge into one budget only with the same terms and
+  raise; its weight is not read. A `when` that keeps no row, or a sum whose own `when` keeps none, leaves no budget,
+  so every row takes its own best end, as on the solver (D68). Clauses merge into one budget only with the same terms and
   equal memberships. A `by` key on the sum or a `per K:` in front of the clause makes R1 decline (`todo.md`).
 - **Several decisions in one budget.** Each (row, decision) is an item in the ranking with its own weight, value and
   box, and each decision answers in its own column. A decision the budget does not name has weight 0 and takes its own
@@ -72,8 +72,7 @@ from S1, which counts `BOOL` decisions.
 - **Ties at the price.** The solver returns a vertex: one tied item partly filled, the others at an end. The aggregate
   plan moves every tied item by the same fraction of its room, so the answer is the same on every run. The objective is the
   same.
-- **Which error wins.** A `when` that keeps no row (D4) raises first, before any value is read, as on the solver. A
-  NaN value then raises before infeasible or unbounded, wherever the row lies, as on the solver.
+- **Which error wins.** A NaN value raises before infeasible or unbounded, wherever the row lies, as on the solver.
 - **Error wording.** Infeasible, unbounded and NaN errors read as the solver's; `test_direct_user_facing.py`
   compares them in full.
 - **One unexplained garbage result.** Once, in a full `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,

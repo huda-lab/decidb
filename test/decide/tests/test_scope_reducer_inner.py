@@ -249,17 +249,9 @@ def test_an_inner_key_must_determine_the_body(decidb_cli, scope_solver):
     assert [ship for _, ship in rows] == [10, 20, 30, 15, 0]
 
 
-@pytest.mark.error
-def test_a_reducer_with_no_row_for_a_group_is_an_error(decidb_cli, scope_solver):
-    """D1 has no shipment on hold (D8); the message names the `by` group (D18). Written in
-    front, the same condition leaves D1 and D3 out instead."""
-    result = decidb_cli.execute_raw(_open_query("per D.depotID: sum(when S.status = 'hold': ship) by (D.depotID) <= 3"))
-    assert "DECIDE: sum(when S.status = 'hold': ship) has no rows for D.depotID = 'D1'." in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a reducer with no row for a group")
-
-    result = decidb_cli.execute_raw(_open_query("sum(when S.status = 'lost': ship) <= 3"))
-    assert "DECIDE: sum(when S.status = 'lost': ship) has no rows." in result.stderr, result.stderr
-
+@pytest.mark.correctness
+def test_a_when_in_front_leaves_the_groups_it_keeps_no_row_of_out(decidb_cli, scope_solver):
+    """D1 and D3 have no shipment on hold, so only D2's group is bounded."""
     rows, _ = decidb_cli.execute(_open_query("when S.status = 'hold' per D.depotID: sum(ship) by (D.depotID) <= 3"))
     assert [ship for _, ship, _ in rows] == [10, 20, 30, 3, 25]
 

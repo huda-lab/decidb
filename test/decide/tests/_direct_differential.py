@@ -20,8 +20,6 @@ ERROR_CLASSES = [
     # Before "infeasible": an `=` bound that disagrees within a group ends "so this DECIDE query is infeasible".
     (r"takes more than one value here", "equality_varies"),
     (r"(?i)infeasible", "infeasible"),
-    # A `when` that keeps no row (D4), or a reducer with no rows for a group (D8).
-    (r"matches no rows\.|has no rows( for |\.)", "empty_aggregate"),
     # A NaN bound reads "contains invalid value (NaN)" on the solver path.
     (r"(?i)is NULL|NULL or NaN|contains NULL|invalid value \(NaN\)", "null_bound"),
     # A coefficient that is NaN or infinite.

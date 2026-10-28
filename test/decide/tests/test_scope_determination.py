@@ -218,27 +218,21 @@ def test_raised_under_diagnose(decidb_cli):
     )
 
 
-@pytest.mark.error
+@pytest.mark.correctness
 @pytest.mark.parametrize(
-    "clause, message",
+    "clause",
     [
-        pytest.param(
-            "when S.status = 'lost': ship <= 1",
-            "DECIDE: when S.status = 'lost' matches no rows.",
-            id="when-keeps-no-row",
-        ),
+        pytest.param("when S.status = 'lost': ship <= 1", id="when-keeps-no-row"),
         pytest.param(
             "per D.depotID: sum(when S.status = 'hold': ship) by (D.depotID) <= 3",
-            "DECIDE: sum(when S.status = 'hold': ship) has no rows for D.depotID = 'D1'.",
             id="reducer-with-no-row",
         ),
     ],
 )
-def test_empty_sets_raised_under_diagnose(decidb_cli, clause, message):
-    """D4 and D8 are data errors too: DIAGNOSE raises them rather than diagnosing."""
-    result = decidb_cli.execute_raw("DIAGNOSE " + _query(clause))
-    assert message in result.stderr, result.stderr
-    assert_no_internal_leak(result, "an empty set under DIAGNOSE")
+def test_empty_sets_under_diagnose_are_no_instance(decidb_cli, clause):
+    """A `when` that keeps no row, or a group a reducer reads no row of, has no instance: the query is feasible."""
+    rows, columns = decidb_cli.execute("DIAGNOSE " + _query(clause))
+    assert [row[columns.index("state")] for row in rows] == ["feasible"], rows
 
 
 @pytest.mark.error

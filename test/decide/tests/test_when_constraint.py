@@ -5,12 +5,10 @@ Covers:
   - Multiple WHEN constraints with different categories
   - Numeric comparison in WHEN condition
   - Boundary: all rows match (equivalent to no WHEN)
-  - Boundary: no rows match (an error: the when matches no rows)
   - Mixed conditional + unconditional constraints
   - Constant coefficient in SUM with WHEN
 """
 
-import re
 import time
 
 import pytest
@@ -265,27 +263,6 @@ def test_when_all_rows_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
-
-
-@pytest.mark.when_constraint
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-@pytest.mark.error_infeasible
-def test_when_no_rows_match(decidb_cli):
-    """Aggregate constraint whose `when` matches no rows — rejected pre-solver
-    per the "reject all empty aggregate sets" rule: a front ``when`` that keeps
-    no row is refused as "when l_returnflag = 'Z' matches no rows." (D4)."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_returnflag, x
-        FROM lineitem
-        WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when l_returnflag = 'Z': SUM(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    decidb_cli.assert_error(sql, match=re.escape("DECIDE: when l_returnflag = 'Z' matches no rows."))
 
 
 @pytest.mark.when_constraint

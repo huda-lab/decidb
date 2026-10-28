@@ -7,13 +7,13 @@ query with a message or answers it correctly. None is scheduled; when one is, it
 that owns it.
 
 Already implemented from the deck: keyed declarations (`per K: x(TYPE)`, pp. 6–7), the prefix `when`/`per` and the
-postfix `by` with their defaults (p. 16), the determination rule (pp. 26–31), deck examples 1–8 (pp. 17–24), and one
-nested shape, the two-level objective `outer(per k: inner(e) by (k))`.
+postfix `by` with their defaults (p. 16), the determination rule (pp. 26–31), deck examples 1–8 (pp. 17–24), NULL keys
+and empty groups (pp. 30, 50, 56), and one nested shape, the two-level objective `outer(per k: inner(e) by (k))`.
 
 ## Current behavior the deck changes
 
-DeciDB refuses or raises in three places where the deck answers. Each guard was added for a reason that still holds
-until the deck's behavior is built; the move replaces it.
+DeciDB refuses in one place where the deck answers. The guard was added for a reason that still holds until the
+deck's behavior is built; the move replaces it.
 
 ### A qualified decision name (p. 7)
 
@@ -23,24 +23,6 @@ until the deck's behavior is built; the move replaces it.
 - **Why today:** so a qualifier is never read as a scope, which the removed `T.x(TYPE)` spelling did.
 - **Deck:** "Reason 3": a qualifier keeps its SQL role and only resolves the name; with the same scope, `T.ship(INT)`
   and `ship(INT)` differ only in name resolution.
-
-### A `when` that keeps no rows (pp. 29–30)
-
-- **Today:** `when region = 'Mars': sum(x) <= 5` over data with no such region raises before solving
-  (`PhysicalDecide::RunScopeChecks`, D4; [guide.md §7.2](guide.md#72-null-and-empty-sets)).
-- **Why today:** a typo in the condition would otherwise drop a constraint silently.
-- **Deck:** the clause yields one instance per class of `R_θ / κ`; an empty `R_θ` has no classes, so the clause yields
-  no constraints.
-- **Scheduled** (owner, 2026-10-28): moves with the NULL-key batch, B1 in [../todo.md](../todo.md).
-
-### An empty reducer group (pp. 45, 56)
-
-- **Today:** `per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity` raises when a depot has
-  no priority shipment (deck example 7; `RunScopeChecks`, D8, D18).
-- **Why today:** an empty group can hide missing data; the error names the group.
-- **Deck:** a reducer over no rows is NULL, and a NULL that reaches the comparison skips that constraint instance.
-- **Scheduled** (owner, 2026-10-28): moves with the NULL-key batch, B1 in [../todo.md](../todo.md), and skips its
-  constraint.
 
 ## Nested reducers (ANR, pp. 25, 28–32)
 

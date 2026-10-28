@@ -1610,20 +1610,31 @@ vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context
 	for (auto &scope : entity_scopes) {
 		EntityMapping mapping;
 		// A declaration's scope: the classes of its key over every row. A helper decision's
-		// scope: the groups of its link's `by` key among the rows the link's clause keeps;
-		// the key is never evaluated on a row the clause drops.
-		idx_t key = scope.key;
-		vector<bool> kept;
+		// scope: the groups of its link's `by` key among the rows the link's clause keeps
+		// that hold a member, numbered as its definition numbers them; the key is never
+		// evaluated on a row the clause drops. A group with no member has no helper: its
+		// reducer is NULL there, so a read of it skips its instance.
 		if (scope.value_link != DConstants::INVALID_INDEX) {
 			auto &link = reducer_value_links[scope.value_link];
-			key = link.group_key;
+			vector<bool> kept(num_rows, true);
 			if (link.when) {
 				kept = KeptRows(*link.when, chunk_expr_cache, context, gstate.data, num_rows);
 			}
+			vector<bool> read =
+			    link.filter ? KeptRows(*link.filter, chunk_expr_cache, context, gstate.data, num_rows, &kept) : kept;
+			std::function<bool(idx_t)> is_member = [&](idx_t row) {
+				return read[row];
+			};
+			std::function<bool(idx_t)> every_kept_row;
+			vector<idx_t> member_ids;
+			LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
+			                         num_rows, is_member, &kept, member_ids, mapping.num_entities, labels,
+			                         &every_kept_row, &mapping.row_to_entity);
+		} else {
+			LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data, num_rows,
+			                         std::function<bool(idx_t)> {}, nullptr, mapping.row_to_entity,
+			                         mapping.num_entities, labels);
 		}
-		LookupOrBuildPerGroupIds(per_group_cache, keys, key, chunk_expr_cache, context, gstate.data, num_rows,
-		                         std::function<bool(idx_t)> {}, kept.empty() ? nullptr : &kept, mapping.row_to_entity,
-		                         mapping.num_entities, labels);
 		// A row in no class (a NULL written key, a dropped row) has no decision: it maps to
 		// one spare entity, so that every row has an id (EntityMapping::absent_entity).
 		for (auto &entity : mapping.row_to_entity) {
@@ -1815,12 +1826,6 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 		if (check.rows) {
 			rows = KeptRows(*check.rows, chunk_expr_cache, context, gstate.data, num_rows);
 		}
-		if (check.kind == DecideScopeCheckKind::KEEPS_A_ROW) {
-			if (std::find(rows.begin(), rows.end(), true) == rows.end()) {
-				throw InvalidInputException(DecideWhenMatchesNoRowsMessage(check.subject));
-			}
-			continue;
-		}
 		if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
 			// The first row with a message raises it. Which row is first is not specified.
 			for (auto &message :
@@ -1835,12 +1840,10 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 		if (check.filter) {
 			filter = KeptRows(*check.filter, chunk_expr_cache, context, gstate.data, num_rows, &rows);
 		}
-		// The classes (DETERMINES, over the rows the reducer's own `when` keeps) or the
-		// groups (READS_A_ROW, over every kept row) of the check's key.
-		bool reads = check.kind == DecideScopeCheckKind::READS_A_ROW;
+		// The classes of the check's key, over the rows the reducer's own `when` keeps.
 		vector<bool> looked_at(num_rows);
 		for (idx_t row = 0; row < num_rows; row++) {
-			looked_at[row] = rows[row] && (reads || filter.empty() || filter[row]);
+			looked_at[row] = rows[row] && (filter.empty() || filter[row]);
 		}
 		std::function<bool(idx_t)> looked_at_row = [&](idx_t row) {
 			return looked_at[row];
@@ -1855,25 +1858,6 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 		auto describe = [&](idx_t group, const char *one, const char *all) {
 			return one_class ? string(all) : DescribeKeyValues(keys[check.key].Names(), key_values[group]) + one;
 		};
-		if (reads) {
-			vector<bool> read(count, false);
-			for (idx_t row = 0; row < num_rows; row++) {
-				if (ids[row] != DConstants::INVALID_INDEX && filter[row]) {
-					read[ids[row]] = true;
-				}
-			}
-			for (idx_t group = 0; group < count; group++) {
-				if (read[group]) {
-					continue;
-				}
-				if (one_class) {
-					throw InvalidInputException(DecideReducerHasNoRowsMessage(check.subject));
-				}
-				throw InvalidInputException("DECIDE: %s has no rows for %s.", check.subject,
-				                            DescribeKeyValues(keys[check.key].Names(), key_values[group]));
-			}
-			continue;
-		}
 		auto context_text = check.context.empty() ? string() : " (" + check.context + ")";
 		if (check.decision != DConstants::INVALID_INDEX) {
 			if (check.decision >= variable_scopes.size() || variable_scopes[check.decision].IsScalar()) {
@@ -1963,6 +1947,45 @@ static void SkipNullInstances(const vector<bool> &null_rows, bool grouped, idx_t
 			} else {
 				row_group_ids[row] = DConstants::INVALID_INDEX;
 			}
+		}
+	}
+	for (auto &group : row_group_ids) {
+		if (group != DConstants::INVALID_INDEX && skipped[group]) {
+			group = DConstants::INVALID_INDEX;
+		}
+	}
+}
+
+//! A reducer over no rows is NULL, and a NULL instance is skipped (deck p. 56): in the
+//! aggregate shape, a group in which some reducer reads no row has no instance. Only a
+//! reducer's term carries a filter (its own `when`, its NULL-data and absent-decision tests,
+//! its de-duplication), so a term with none reads every row of its group. `row_group_ids`
+//! empty is every row in one group.
+static void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &filters, idx_t num_rows,
+                                         vector<idx_t> &row_group_ids, idx_t &num_groups) {
+	auto filtered = [](const TermFilterState *filter) {
+		return filter->has_filter;
+	};
+	if (std::none_of(filters.begin(), filters.end(), filtered)) {
+		return;
+	}
+	if (row_group_ids.empty()) {
+		row_group_ids.assign(num_rows, 0);
+		num_groups = 1;
+	}
+	vector<bool> skipped(num_groups, false);
+	for (auto filter : filters) {
+		if (!filter->has_filter) {
+			continue;
+		}
+		vector<bool> read(num_groups, false);
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (row_group_ids[row] != DConstants::INVALID_INDEX && filter->mask[row]) {
+				read[row_group_ids[row]] = true;
+			}
+		}
+		for (idx_t group = 0; group < num_groups; group++) {
+			skipped[group] = skipped[group] || !read[group];
 		}
 	}
 	for (auto &group : row_group_ids) {
@@ -2188,8 +2211,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		{
 			// The clause's rows are the kept rows (language/guide.md §6.1):
 			// grouped by the `by` key its reducers share in the aggregate shape, one per
-			// class of its `per` key in the per-row shape, else one per kept row. NULL is a
-			// key value. The scope checks have already run, so no group or class is empty.
+			// class of its `per` key in the per-row shape, else one per kept row. A row whose
+			// written key is NULL is in no group; a `when` that keeps no row leaves none.
 			if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
 				// A reducer's members are the rows its own `when` keeps -- a MIN/MAX reads
 				// them as members -- while every kept row of a group bounds it. A `<>`
@@ -2310,6 +2333,15 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				}
 				eval_const.row_group_ids[row] = DConstants::INVALID_INDEX;
 			}
+		}
+		if (constraint->lhs_is_aggregate || constraint->was_minmax_easy) {
+			vector<const TermFilterState *> filters;
+			for (auto *each : {&term_filters, &bilinear_filters, &quadratic_filters}) {
+				for (auto &filter : *each) {
+					filters.push_back(&filter);
+				}
+			}
+			SkipGroupsWithAnEmptyReducer(filters, num_rows, eval_const.row_group_ids, eval_const.num_groups);
 		}
 
 		// Evaluate RHS: a constant, or a value of each row.
@@ -2609,7 +2641,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
     bool objective_has_when = false;
 	// The objective's `when` joins every term's own, only the rows a term keeps are read,
 	// and a decision outside its reducers counts once (language/guide.md §4).
-	// Its empty-set errors are the scope checks'.
+	// A reducer that keeps no row is NULL, so its terms are dropped.
 	// A term's `when` with the objective's folded in.
 	auto fold_objective_when = [&](TermFilterState &state) {
 		if (!objective_has_when) {
@@ -2903,7 +2935,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 		};
 
 		vector<string> obj_group_labels; // unused: objective groups are not diagnosed by clause key
-		// The two-level objective keeps NULL as a class (D5).
+		// A row whose written key is NULL is in no class; a class no row reads has no term.
 		LookupOrBuildPerGroupIds(per_group_cache, keys, gstate.objective->per_key, chunk_expr_cache, context,
 		                         gstate.data, num_rows, obj_row_is_included, nullptr, result.objective_row_group_ids,
 		                         result.objective_num_groups, obj_group_labels);
@@ -3084,8 +3116,11 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 			evaluated.push_back(std::move(ta));
 		}
 
-		// Empty sets are the scope checks' errors (they have run).
 		return evaluated;
+	};
+	// A reducer over no rows is NULL (deck p. 56): its clause is skipped, its objective term dropped.
+	auto reads_no_row = [](const ComposedMinMaxTermData &term) {
+		return std::find(term.filter_mask.begin(), term.filter_mask.end(), true) == term.filter_mask.end();
 	};
 
 	for (auto &spec : composed_minmax_constraints) {
@@ -3105,7 +3140,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 		// A NULL factor makes the clause's one instance NULL, which is skipped (deck p. 50).
 		bool null_factor = false;
 		clause.terms = EvaluateComposedTerms(spec.terms, "constraint", null_factor);
-		clause.skipped = null_factor;
+		clause.skipped = null_factor || std::any_of(clause.terms.begin(), clause.terms.end(), reads_no_row);
 		clause.repair_group_id =
 		    gstate.constraints.size() + gstate.singleton_row_constraints.size() + evaluated.composed_constraints.size();
 		// The classes its one row stands for (D28), under DIAGNOSE: its `per` key's values
@@ -3125,8 +3160,9 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 	if (!composed_minmax_objective_terms.empty()) {
 		// A term with a NULL factor is dropped: its factor reads 0.
 		bool null_factor = false;
-		evaluated.composed_objective_terms =
-		    EvaluateComposedTerms(composed_minmax_objective_terms, "objective", null_factor);
+		auto terms = EvaluateComposedTerms(composed_minmax_objective_terms, "objective", null_factor);
+		terms.erase(std::remove_if(terms.begin(), terms.end(), reads_no_row), terms.end());
+		evaluated.composed_objective_terms = std::move(terms);
 	}
 }
 
@@ -3199,9 +3235,9 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		vector<bool> read =
 		    link.filter ? KeptRows(*link.filter, chunk_expr_cache, context, gstate.data, num_rows, &kept) : kept;
 
-		// One group per `by` value among the kept rows (NULL a value); a member row
-		// stands in its group, every other row outside. The scope checks have passed, so
-		// no group is empty.
+		// One group per `by` value among the kept rows that holds a member, numbered as the
+		// helper's scope numbers them (BuildEntityMappings); a member row stands in its
+		// group, every other row outside.
 		std::function<bool(idx_t)> is_member = [&](idx_t row) {
 			return read[row];
 		};

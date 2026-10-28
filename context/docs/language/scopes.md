@@ -90,10 +90,10 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
   (`DecideReadSingletonRow`, `decide_singleton_row_folding.cpp`, D41), in any affine spelling with a constant other
   side: `max(-x) <= 2` is `x >= -2`. The reducer stays in the tree so EXPLAIN and DIAGNOSE quote the clause as written.
 - **Scope checks.** `BuildConstraintScopeChecks`, `BuildClauseScopeChecks`, `BuildReducerScopeChecks` and
-  `BuildObjectiveScopeChecks` build `DecideScopeCheck`s of three kinds — `KEEPS_A_ROW` (D4), `DETERMINES`,
-  `READS_A_ROW` (D8) — on `LogicalDecide::scope_checks`, from the clauses as bound. The bound-side window rewrite adds
-  a fourth, `VALUE_IS_VALID`, for the data values bounds read. `PhysicalDecide::RunScopeChecks` runs them all before
-  any clause is evaluated. They are run on the data rather than proved statically because whether a key determines a
+  `BuildObjectiveScopeChecks` build `DETERMINES` checks on `LogicalDecide::scope_checks`, from the clauses as bound.
+  The bound-side window rewrite adds `VALUE_IS_VALID` checks for the data values bounds read.
+  `PhysicalDecide::RunScopeChecks` runs them all before any clause is evaluated. An empty group is no check: execution
+  skips its instance (D68, `SkipGroupsWithAnEmptyReducer`). They are run on the data rather than proved statically because whether a key determines a
   column is a property of the rows, and a static rule would refuse queries that are fine on their data.
 
 ## Optimizer

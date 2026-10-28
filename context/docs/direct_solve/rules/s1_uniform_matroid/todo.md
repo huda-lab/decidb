@@ -27,9 +27,8 @@ Where the language differs from that plan:
 
 - A NULL key is in no group (D5), as in the kept plan: a NULL-key row bypasses every bound of that key and still obeys
   its fixed value.
-- A group the reducer's own `when` leaves empty is an error that quotes the group (D8: `sum(when c: x) has no rows for
-  g = 'c'.`), where the kept plan raises the empty-aggregate error. The keyed check belongs to the row checks
-  (`AddRowChecks`; `../../framework/todo.md` § H-04).
+- A group in which some reducer reads no row has no instance (D68), where the kept plan raises the empty-aggregate
+  error: the plan leaves such a group unbounded.
 - `per g:` in front of a clause does not group its reducers (D6): `per g: sum(x) <= K` bounds the whole total once
   per class. Only a `by` key groups.
 - Nothing is computed on a row a `when` drops (syntax reference §6.3).

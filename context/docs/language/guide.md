@@ -391,12 +391,12 @@ sum(when S.priority per D: D.opening_cost * open)   -- filter, then each remaini
 - **Inner `when`** filters this reducer only. A `when` in front of the clause applies first.
 - **Inner `per K'`** hands the reducer one value per class, so a tuple repeated by a join counts once. `K'` must
   determine the body.
-- **A reducer with no row for some generated class is an error** (D8): only an inner `when` can empty a group. To
-  leave such classes out, move the condition in front:
+- **A reducer with no row in a group is NULL** (D68), so that group's constraint is skipped; the other reducers of
+  the clause do not save it. Written in front, the condition leaves the same depots out:
 
 ```sql
-per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity    -- error if a depot has none
-when S.priority per D.depotID: sum(ship) by (D.depotID) <= D.priorityCapacity     -- those depots get no constraint
+per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity    -- a depot with none: no constraint
+when S.priority per D.depotID: sum(ship) by (D.depotID) <= D.priorityCapacity     -- the same depots get none
 ```
 
 Tests: `test/decide/tests/test_scope_reducer_inner.py`.
@@ -465,7 +465,7 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
   parts of an `and`/`or` are read left to right, each only on rows the earlier parts leave undecided, so
   `when s <> '' and CAST(s AS INT) > 3:` casts no empty text.
 - Dropped rows keep their decisions; the clause just does not constrain them.
-- **A `when` that keeps no row is an error** (D4). An input with no rows at all gives an empty result.
+- **A `when` that keeps no row yields no constraint** (D68). An input with no rows at all gives an empty result.
 
 ### 6.4 How a clause becomes model rows
 
@@ -539,13 +539,12 @@ Tests: `test/decide/tests/test_scope_determination.py`.
 | NULL bound, unreduced coefficient or factor on an aggregate | the instance is skipped (§3) |
 | NULL in an objective term | the term is dropped (§3) |
 | NULL or NaN written in the query beside a decision; NaN in data | error (§3) |
-| a `when` keeps no row | error (D4) |
-| a key value has no kept row | no class, no constraint, no error |
-| a reducer's own `when` empties a generated class's group | error naming the class (D8) |
+| a `when` keeps no row | no constraint (D68) |
+| a key value has no kept row | no class, no constraint |
+| a reducer reads no row of a group (its own `when`, NULL data, an absent decision) | the reducer is NULL: that group's instance is skipped (D68) |
+| an objective reducer reads no row | the term is dropped (D68) |
+| `count(*)` over no rows | 0, as in SQL |
 | the input has no rows | empty result |
-
-The two errors above are guards the deck replaces: there, a `when` that keeps no row yields no constraints, and an
-empty group is NULL ([roadmap](roadmap.md#current-behavior-the-deck-changes)).
 
 ### 7.3 Data checks
 
@@ -553,12 +552,9 @@ Run before solving, on every run, also under `DIAGNOSE`:
 
 | Check | Message |
 |---|---|
-| A `when` keeps no row of a non-empty input | `DECIDE: when S.status = 'actve' matches no rows.` |
 | A `per` key determines what it must (§7.1) | `DECIDE: per D.depotID does not determine D.capacity. D.depotID = 'D1' has more than one value: 25, 40.` · for a decision: `... covers more than one ship.` · context: `(in by (S.region))`, `(in sum(D: ...))` · for `per ()`: `The kept rows have more than one value: 3, 5.` |
-| A reducer's own `when` leaves a group empty | `DECIDE: sum(when S.priority: ship) has no rows for D.depotID = 'D2'.` (`by ()`: `... has no rows.`) |
 
-The phrases `does not determine`, `matches no rows` and `has no rows for` are fixed; names and values come from the
-query and the data. Over a join a column is named with its relation.
+The phrase `does not determine` is fixed; names and values come from the query and the data. Over a join a column is named with its relation.
 
 ## 8. `DIAGNOSE`
 

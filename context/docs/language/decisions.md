@@ -1,6 +1,6 @@
 # Language decisions
 
-Rulings on the DECIDE language that code and tests cite by number (`D8`, `S3`). Each row is the ruling as it stands.
+Rulings on the DECIDE language that code and tests cite by number (`D5`, `S3`). Each row is the ruling as it stands.
 A number not in the table is retired and is not reused. Add a new ruling with the next free number.
 
 ## Decisions
@@ -10,13 +10,10 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D1 | `SUM(D: e)` means `sum(per D: e)` (S4) |
 | D2 | The nested objective is written `outer(per k: inner(e) by (k))` |
 | D3 | The clause shapes support `SUM`, `AVG`, `MIN` and `MAX` |
-| D4 | A `when` that keeps no rows is an error, with or without a reducer in the clause |
 | D5 | A NULL in a written key column (a declaration's `per`, a constraint's `per`, `by`, a `per` inside a reducer) puts the row in no class or group of that key, as SQL's `=` has it (deck p. 30). The row keeps every other key's groups. A keyed decision has no value on that row: the output is NULL, a reducer skips it, an unreduced use skips the instance. A relation element (`per D`) compares NULL as a value. SQL's `GROUP BY` keeps NULL as one group; DECIDE does not, because a limit for an unknown group means nothing (owner, 2026-10-27/28) |
 | D6 | `per g: sum(x) <= 10` is accepted; no `by` means `by ()` |
 | D7 | Each declarator has its own key; a `per` does not carry over |
-| D8 | A reducer with no rows for some class is an error, not a skipped constraint |
 | D15 | A scope or `by` on a call other than `SUM`/`AVG`/`MIN`/`MAX` is refused with a message (D34 and D35 admit `by` on `count` and `norm`) |
-| D18 | The D8 message names the `by` group the reducer reads (`has no rows for D.region = 'North'.`); with `by ()` it ends `has no rows.` |
 | D19 | A written `per row:`, in front of a constraint, inside a reducer or before a declaration, is the default written out (`PG_AEXPR_SCOPE_PER_ROW`, `SCOPE_PER_ROW_TAG`) |
 | D22 | A reducer or `norm` with no argument gets a binder message (`SUM needs one argument, found 'sum()'`) |
 | D24 | The value rewrite handles exactly: a decision beside a reducer, different `by` keys, a row-varying factor, a reducer inside another expression, a `MIN`/`MAX` beside another term with a `by` or a non-constant bound, a decision beside a `MIN`/`MAX` in a constraint, a query-wide product beside a reducer |
@@ -46,11 +43,12 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D56 | The `T.x` message names `per T:` and says that `per T` keys on every column of `T` |
 | D60 | The scope oracle steps a strict sense onto whole numbers (`> K` → `floor(K) + 1`, `< K` → `ceil(K) - 1`), the same as stepping by one for a whole `K` |
 | D62 | The removed-`PER` message names the new spelling only: a NULL key is no group under both spellings (D5), so it needs no NULL note |
-| D63 | Determination and D8 messages print the colon form as written |
+| D63 | Determination messages print the colon form as written |
 | D64 | A bound on one decision admits what DuckDB admits: a whole-numbered decision takes `n` exactly when the written comparison, evaluated by DuckDB with `n` in place of the decision, is true (`0.1 * x <= 0.3` admits 3, since `0.1` is DECIMAL; `0.1::DOUBLE * x = 0.3::DOUBLE` admits nothing). Every such bound folds into the decision's box, a data coefficient (`cap * x <= 10`) included; only an unconditional literal bound replaces the default floor of 0 (D41) |
 | D65 | An infinite bound keeps its SQL meaning: `x <= inf` and `x >= -inf` are no bound; `x >= inf`, `x <= -inf` and `x = ±inf` make the query infeasible on every backend, and `DIAGNOSE` names the clause. A literal `x >= -'inf'` frees `x` below, as `x >= -1e30` does |
 | D66 | A right side of magnitude 1e20 or more in the open direction (`x <= 1e30`) is no bound |
 | D67 | A NULL data value is skipped where it is read (deck pp. 50, 56): a reducer skips a row whose summand is NULL, as SQL does; a NULL that reaches a constraint unreduced skips that instance; a NULL objective term is dropped before like terms merge. A NULL written in the query beside a decision, and NaN, stay errors |
+| D68 | An empty group skips its constraint (deck p. 56): a reducer over no rows is NULL, and a NULL that reaches the comparison skips the instance. A `when` that keeps no row yields no constraint; a group in which some reducer reads no row yields none; an objective term over no rows is dropped. `count(*)` over no rows is 0, as in SQL (owner, 2026-10-28) |
 
 ## Spelling calls
 
@@ -63,6 +61,6 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | S6 | `per (a, b):` is refused with a message; parentheses mean only `per ()` |
 | S7 | Inside a DECIDE clause, `when`, `per` and `by` after a `)` are keywords; a column with such a name is quoted there |
 | S8 | `per` keys are columns and relations; expressions are allowed only in `by` |
-| S9 | An input with no rows gives an empty result; D4 is about a `when` that removes every row of a non-empty input |
+| S9 | An input with no rows gives an empty result |
 | S10 | Data-only reducers stay on the bound side of a comparison |
 | S11 | A reducer over a lone query-wide decision (`SUM(cap)`) is refused |

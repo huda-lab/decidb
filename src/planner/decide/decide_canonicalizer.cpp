@@ -1659,16 +1659,6 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	auto reducer_text = RenderDecideReducer(reducer, names);
 	idx_t by = DConstants::INVALID_INDEX;
 	TryParseGroupKeyTag(reducer.GetAlias(), by);
-	// D8: every `by` group of the kept rows has a row the reducer's own `when` keeps.
-	if (reducer.filter) {
-		DecideScopeCheck check;
-		check.kind = DecideScopeCheckKind::READS_A_ROW;
-		check.rows = rows ? rows->Copy() : nullptr;
-		check.key = by;
-		check.filter = reducer.filter->Copy();
-		check.subject = reducer_text;
-		scope.checks.push_back(std::move(check));
-	}
 	// The reducer's own `per K'` -- or `D` of the colon form `SUM(D: e)` -- determines its
 	// body within each `by` group, over the rows its `when` keeps.
 	idx_t scope_idx;
@@ -1712,14 +1702,6 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing,
                                                  DecideScopeChecks &scope) const {
 	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys, scope.relations};
-	// D4: the `when` keeps a row of a non-empty input.
-	if (enclosing.when) {
-		DecideScopeCheck check;
-		check.kind = DecideScopeCheckKind::KEEPS_A_ROW;
-		check.rows = enclosing.when->Copy();
-		check.subject = RenderDecideSource(*enclosing.when, names);
-		scope.checks.push_back(std::move(check));
-	}
 	ClauseParts parts;
 	CollectClauseParts(
 	    leaf, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
@@ -1794,13 +1776,6 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 		body = conj.children[0].get();
 	}
 	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys, scope.relations};
-	if (enclosing.when) {
-		DecideScopeCheck check;
-		check.kind = DecideScopeCheckKind::KEEPS_A_ROW;
-		check.rows = enclosing.when->Copy();
-		check.subject = RenderDecideSource(*enclosing.when, names);
-		scope.checks.push_back(std::move(check));
-	}
 	if (two_level) {
 		return; // its classes are the inner reducer's own `by` groups, its key's
 	}

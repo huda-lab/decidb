@@ -91,25 +91,24 @@ struct EntityScopeInfo {
 //! (language/guide.md §7.3): built by DecideCanonicalizer from the user's
 //! clause, before any rewrite, and run by PhysicalDecide before any model is built.
 struct DecideScopeCheck {
-    DecideScopeCheckKind kind = DecideScopeCheckKind::KEEPS_A_ROW;
-    //! The rows considered: those `rows` keeps, NULL dropping a row; null for every row.
-    unique_ptr<Expression> rows;
-    //! DETERMINES: the classes. READS_A_ROW: the groups. An index into
-    //! LogicalDecide::keys; INVALID_INDEX for one class or group.
-    idx_t key = DConstants::INVALID_INDEX;
-    //! DETERMINES: the data value each class shows once; null when it is `decision`.
+	DecideScopeCheckKind kind = DecideScopeCheckKind::DETERMINES;
+	//! The rows considered: those `rows` keeps, NULL dropping a row; null for every row.
+	unique_ptr<Expression> rows;
+	//! DETERMINES: the classes. An index into LogicalDecide::keys; INVALID_INDEX for one
+	//! class.
+	idx_t key = DConstants::INVALID_INDEX;
+	//! DETERMINES: the data value each class shows once; null when it is `decision`.
     //! VALUE_IS_VALID: the message a row raises, NULL on a row whose value is valid.
     unique_ptr<Expression> value;
     //! DETERMINES: the decision (index into decide_variables) each class holds once.
     idx_t decision = DConstants::INVALID_INDEX;
-    //! DETERMINES inside a reducer's `per`, READS_A_ROW: the reducer's own `when`.
-    unique_ptr<Expression> filter;
-    //! What the message quotes, as written. KEEPS_A_ROW: `subject` is the condition.
-    //! DETERMINES: `subject` the key (`D.depotID`, `()`), `object` the value or the
-    //! decision, `context` where it stands (`in by (S.region)`, `declared per row`).
-    //! READS_A_ROW: `subject` the reducer (`sum(when S.priority: ship)`).
-    string subject;
-    string object;
+	//! DETERMINES inside a reducer's `per`: the reducer's own `when`.
+	unique_ptr<Expression> filter;
+	//! What the message quotes, as written. DETERMINES: `subject` the key (`D.depotID`,
+	//! `()`), `object` the value or the decision, `context` where it stands (`in by
+	//! (S.region)`, `declared per row`).
+	string subject;
+	string object;
     string context;
 
     //! Generated from `storage/serialization/nodes.json`.
@@ -426,15 +425,15 @@ public:
     //! Defaults to row-scoped; entity_scope_idx indexes entity_scopes.
     vector<DecideVarScopeInfo> variable_scopes;
 
-    //! The run-time requirements of every clause, in
-    //! clause order; PhysicalDecide runs them before it formulates anything.
-    //! The planner builds the scope checks (KEEPS_A_ROW, DETERMINES, READS_A_ROW); the
-    //! optimizer's right-hand-side window rewrite appends the VALUE_IS_VALID checks of the
-    //! bounds it computes, after them, so a bad value is reported only once every scope
-    //! check has passed, as when the bound was read in the operator.
-    vector<DecideScopeCheck> scope_checks;
+	//! The run-time requirements of every clause, in
+	//! clause order; PhysicalDecide runs them before it formulates anything.
+	//! The planner builds the scope checks (DETERMINES); the
+	//! optimizer's right-hand-side window rewrite appends the VALUE_IS_VALID checks of the
+	//! bounds it computes, after them, so a bad value is reported only once every scope
+	//! check has passed, as when the bound was read in the operator.
+	vector<DecideScopeCheck> scope_checks;
 
-    //! The registered name ("gurobi", "highs") of the solver this query will run on,
+	//! The registered name ("gurobi", "highs") of the solver this query will run on,
     //! chosen ONCE by ChooseDecideSolver before any rewrite pass and carried from here
     //! to PhysicalDecide. A NAME and not a handle: layer 3 describes the query, and a
     //! live backend handle here would let a logical plan open a solver session, which

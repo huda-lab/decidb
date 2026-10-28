@@ -39,6 +39,9 @@ fi
 
 export DECIDB_EXE_PATH="${EXE}"
 export DECIDB_COVERAGE_DIR="${OUT_DIR}"
+# A test's profile is written when its CLI exits, under the LLVM_PROFILE_FILE of that test; a long-lived
+# session (decidb_cli.py) is started once and killed, so it would write none.
+export DECIDB_TEST_REUSE_PROCESS=0
 export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 
 # `-m` is not a test filter here. conftest.py prunes the oracle cache after a run that has no

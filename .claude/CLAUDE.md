@@ -38,11 +38,19 @@ Follow surrounding DuckDB conventions: C++ types and methods use PascalCase; var
 
 Use pytest files/functions named `test_*` and existing category markers. Correctness tests compare CLI results with independent Python solver oracles; the oracle suite requires a valid Gurobi license. Add behavior-focused regressions for changed semantics, including relevant error cases.
 
-Keep tests linked to the decision points of the code they test. Measure with lizard (installed in the test venv by `make decide-setup`): `test/decide/.venv/bin/python -m lizard -l cpp <files>` prints the cyclomatic complexity (CCN) of each function. Every decision point a change adds needs a test that reaches it and fails if that branch is removed; `make decide-coverage` shows which tests reach each branch of the direct-solve code, and `test/decide/coverage_report.py compare OLD_RUN NEW_RUN` lists the branches a change stopped reaching. A parametrized grid case must reach a branch no other case reaches; name the branch before adding it. When a change deletes code, delete the tests that only reached that code in the same change.
+Keep tests linked to the decision points of the code they test. Measure with lizard (installed in the test venv by `make decide-setup`): `test/decide/.venv/bin/python -m lizard -l cpp <files>` prints the cyclomatic complexity (CCN) of each function. Every decision point a change adds needs a test that reaches it and fails if that branch is removed; name the branch each new test reaches, from the code. A parametrized grid case must reach a branch no other case reaches; name the branch before adding it. When a change deletes code, delete the tests that only reached that code in the same change.
 
-The suites are slow, so test economically. While developing, run only the focused tests a change touches with `./test/decide/run_tests.sh -k <pattern>` (always pass `-k` or `-m`: a file-only run prunes the oracle cache). Do not rerun a suite without a reason, such as a code change since the last run. Keep the long runs to commit boundaries or the end of a batch: `make decide-test`, `test/decide/run_direct_matrix.sh` (all five configurations, several minutes) and `make decide-coverage`. For coverage, read `build/coverage/run/report.json` directly; `coverage_report.py report --unreached` takes over ten minutes.
+The suites are slow; run each one only when the change touches what it checks. Do not rerun a suite without a code change since its last run.
 
-For solver changes, also run `DECIDB_FORCE_SOLVER=highs make decide-test`. Direct solve is on by default; `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` runs the whole suite on the solver path alone. For serialization changes, run `DECIDB_VERIFY_SERIALIZER=1 make decide-test` and C++ serialization regressions. Inspect golden differences before regenerating baselines; include intentional baseline changes with the implementation.
+- **While developing:** build, then run the focused tests the change touches with `./test/decide/run_tests.sh -k <pattern>` (always pass `-k` or `-m`: a file-only run prunes the oracle cache). Nothing else.
+- **At each commit:** `make decide-test` once (goldens and the full pytest suite, about a minute; direct solve is on by default, so it also compares the direct path). Add `build/release/test/unittest "[decidb]"` when the change touches C++ tests or the code they cover (serialization, the direct IR).
+- **Only when the change is in that area:**
+  - serialization (`Serialize`/`Deserialize`, `nodes.json`, `logical_operator.json`): `DECIDB_VERIFY_SERIALIZER=1 make decide-test` and the C++ serialization regressions;
+  - solver backends or model building: `DECIDB_FORCE_SOLVER=highs make decide-test`;
+  - a direct-solve rule: `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` (the solver path alone) or `test/decide/run_direct_matrix.sh` (all five configurations, several minutes).
+- **Coverage is not part of development.** `make decide-coverage` (8+ minutes) runs only in a test-evaluation pass the owner asks for, which trims tests that reach no branch of their own. Read `build/coverage/run/report.json` directly and compare runs with `test/decide/coverage_report.py compare OLD_RUN NEW_RUN`; `coverage_report.py report --unreached` takes over ten minutes.
+
+Inspect golden differences before regenerating baselines; include intentional baseline changes with the implementation.
 
 ## Commit & Pull Request Guidelines
 

@@ -864,14 +864,6 @@ def _late(decide_text, t_sql="1.0", s_sql="1.0", cap_sql="10.0", tail=""):
 
 # name -> (sql, error class the direct path must raise).
 A1_ERROR_CASES = {
-    "objective_when_matches_no_row": (
-        _problem(ROWS, obj="MINIMIZE when id > 99: SUM(POWER(x - t, 2))"),
-        "empty_aggregate",
-    ),
-    "objective_part_when_matches_no_row": (
-        _problem(ROWS, obj="MINIMIZE when id > 99: SUM(POWER(x - t, 2)) + SUM(s*x)"),
-        "empty_aggregate",
-    ),
     "infeasible_int_window": (_problem(ROWS, decl="x(INT)", bounds="x >= 0.3 AND x <= 0.7"), "infeasible"),
     "unbounded_linear_max": (_problem(ROWS, bounds="x >= 0", obj="MAXIMIZE SUM(x)"), "unbounded"),
     "unbounded_concave": (_problem(ROWS, bounds="x >= 0", obj="MINIMIZE SUM(-POWER(x - t, 2))"), "unbounded"),

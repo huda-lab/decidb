@@ -262,9 +262,7 @@ class ScopeError(Exception):
 
     #: The fixed phrase DeciDB's message carries for each kind.
     PHRASES = {
-        "kept_no_rows": "matches no rows",
         "not_determined": "does not determine",
-        "reducer_empty": "has no rows",
     }
 
     def __init__(self, kind: str, detail: str):
@@ -388,8 +386,6 @@ class ScopedModel(ScopeModel):
             return None  # the row is in no group of the `by` key: the reducer has no value there
         read = [i for i in kept if key_value(self.rows[i], reduce.by) == group]
         read = [i for i in read if reduce.when is None or reduce.when(self.rows[i]) is True]
-        if not read:
-            raise ScopeError("reducer_empty", f"{reduce.agg} for by value {group}")
         read = [i for i in read if self._linear(reduce.body(self.rows[i]), i) is not None]
         if not read:
             return None
@@ -435,16 +431,10 @@ class ScopedModel(ScopeModel):
 
     # -- clauses ------------------------------------------------------------
 
-    def _kept_rows(self, when) -> list[int]:
-        kept = _kept(self.rows, when)
-        if when is not None and self.rows and not kept:
-            raise ScopeError("kept_no_rows", "when")
-        return kept
-
     def _generate(self, clause: Scoped, emit) -> list[tuple[Linear, str]]:
         """``clause`` as one ``lhs - rhs sense 0`` per class of its ``per`` key. An instance
         with a NULL part is skipped."""
-        kept = self._kept_rows(clause.when)
+        kept = _kept(self.rows, clause.when)
         generated = []
         for class_rows in _split(self.rows, kept, clause.per):
             if clause.per is not PER_ROW:
@@ -461,7 +451,7 @@ class ScopedModel(ScopeModel):
         return generated
 
     def _objective(self, objective: ScopedObjective, emit) -> Linear:
-        kept = self._kept_rows(objective.when)
+        kept = _kept(self.rows, objective.when)
         if not kept:
             return {}
         flat = tuple(part for part in objective.parts if not isinstance(part, Nested))
@@ -475,6 +465,8 @@ class ScopedModel(ScopeModel):
                     value = self._reducer(inner, kept, class_rows[0], emit)
                     if value is not None:
                         values.append(value)
+                if not values:
+                    continue  # an outer reducer over no class is NULL: the term is dropped
                 if part.outer in ("sum", "avg"):
                     for value in values:
                         _add(expr, value, 1.0 if part.outer == "sum" else 1.0 / len(values))

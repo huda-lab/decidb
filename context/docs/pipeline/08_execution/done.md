@@ -222,8 +222,10 @@ coefficient evaluation:
    NULL in a written key column is in no class; a relation's columns compare NULL as a
    value. A key with no columns (a reducer's `per ()`) is one class, every row in it.
 2. A helper decision's scope (`EntityScopeInfo::value_link`, the value rewrite) reads its
-   link's `by` key on the rows the link's clause `when` keeps only, one entity per value
-   they take together, so the key is never evaluated where the clause never reads.
+   link's `by` key on the rows the link's clause `when` keeps only, so the key is never
+   evaluated where the clause never reads: one entity per group that holds a member,
+   numbered as its definition numbers them. A group with no member has no helper (its
+   reducer is NULL there, D68), so its rows map to the absent entity below.
 3. A row in no class (a NULL written key, or a row a helper's clause drops) has no
    decision. It maps to one spare entity, `EntityMapping::absent_entity` (the Null Object
    pattern), so every row has an id and `VarIndexer::Get` stays total. The model builder
@@ -249,14 +251,14 @@ the data checks of [`../../language/guide.md`](../../language/guide.md)
 
 | Kind | Fails when | Message |
 |---|---|---|
-| `KEEPS_A_ROW` | the `when` keeps no row | `DECIDE: when <c> matches no rows.` |
 | `DETERMINES` | a class of the key (over the kept rows, and a reducer's own `when`) shows two values, NULL equal to NULL, or two instances of the decision | `DECIDE: per <K> does not determine <value>[ (<context>)]. <class> has more than one value: <a>, <b>.` · `... the decision <x> (declared ...). <class> covers more than one <x>.` |
-| `READS_A_ROW` | a `by` group of the kept rows has no row the reducer's own `when` keeps | `DECIDE: <reducer> has no rows for <group>.` · `... has no rows.` for `by ()` |
 | `VALUE_IS_VALID` | a row holds a value the model cannot read: its `value` is the message the row raises, NULL on a valid row | the first non-NULL message: a bound's NaN, a NaN in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound that takes two values in its group (`` `<bound>` takes more than one value here (a and b) ... infeasible.``) |
 
-The first three come from the canonicalizer (stage 04). The bound-side window rewrite
+`DETERMINES` comes from the canonicalizer (stage 04). The bound-side window rewrite
 (`RewriteRhsAggregates`, stage 05) appends the `VALUE_IS_VALID` checks after them, so a
-scope error is reported before a bad value, and a bad bound before a bad coefficient.
+scope error is reported before a bad value, and a bad bound before a bad coefficient. An
+empty group is no check: a reducer over no rows is NULL, so its instance is skipped where
+the clause is read (D68; below).
 
 A class or group is named by its key's values as SQL literals (`D.depotID = 'D1'`); over
 `()` the message says "The kept rows". Groups come from `LookupOrBuildPerGroupIds`: a row
@@ -281,8 +283,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   expression reads and leaves the others NULL; `LookupOrBuildPerGroupIds`' `read_rows`,
   which builds such a clause's groups afresh rather than from the cache's, computed on
   every row). `ExtractDoubleColumn` writes 0 for a row it does not read, so a NULL or a
-  failing expression there is no error. An empty set has already failed a check (D4,
-  D8), so formulation asserts rather than refuses one.
+  failing expression there is no error.
 - **Grouping.** The aggregate shape groups the kept rows by its `by` key
   (`keys[constraint->group_key]`), a NULL written key in no group: a group's members are the rows a
   reducer's `when` keeps (all kept rows for `<>`, whose bound values are all excluded),
@@ -304,9 +305,11 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   (`CountTupleTermsOnce`; a query-wide one moves to row 0, where stage 06 reads it), and
   so does a product of two query-wide decisions there (`CountOnce` on the evaluated
   bilinear term; one inside a reducer is SUM and keeps every row). The two-level form
-  groups with NULL a class.
+  puts a row whose written key is NULL in no class. A flat MIN/MAX that reads no row is
+  dropped in formulation (D68).
 - **Composed clauses** read the rows their folded filter keeps and de-duplicate among
-  them. Each takes its repair id here, after every prepared
+  them. A clause in which some term reads no row is skipped, and an objective term that
+  reads none is dropped (D68). Each takes its repair id here, after every prepared
   and absorbed clause (`ComposedConstraint::repair_group_id`), since formulation drops rows
   (a `<>` moved into indicator rows) and no count of the model's rows is the id space.
 - **Classes of a grouped row** (D28, `CollectGroupClasses`, under DIAGNOSE only). The
@@ -324,8 +327,8 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   expanded diagnosis reports the group once per class (`FanOutByClass`).
 - **Helper decisions** (the value rewrite, `EvaluateReducerValueLinks`): each link's
   reducer is read on the rows the clause's `when` keeps and its own `when` keeps among
-  them, grouped by its `by` key over the kept rows (`LookupOrBuildPerGroupIds`, NULL a
-  value; the scope checks guarantee no group is empty); its coefficients come from
+  them, grouped by its `by` key over the kept rows (`LookupOrBuildPerGroupIds`, a NULL
+  written key in no group, only the groups that hold a member); its coefficients come from
   `EvaluateTermColumns`, one scan for every term; its `per` de-duplicates within each
   group, a dropped row leaves the group, and AVG divides by the members left. The result
   is a `ReducerValueLinkSpec` carrying the members alone, with the link's label and
@@ -437,8 +440,11 @@ Term-level filters are carried on individual terms, not on the whole constraint:
 2. Linear, bilinear and quadratic terms get coefficient `0` on rows their own
    filter excludes — **for that term only**.
 3. A row joins a group when the clause's `when` keeps it and some reducer's own `when`
-   keeps it (a reducer with no `when` keeps every kept row). A `by` group that one
-   reducer's own `when` leaves with no row has already failed the scope checks (D8).
+   keeps it (a reducer with no `when` keeps every kept row).
+4. A reducer over no rows is NULL (D68): `SkipGroupsWithAnEmptyReducer` cuts every group
+   in which some term's mask keeps no row, after the de-duplication masks are folded in.
+   Only a reducer's term carries a mask (its own `when`, its NULL-data and absent-decision
+   tests, its de-duplication), so a term with none reads every row of its group.
 
 So one clause can carry independent filters:
 
@@ -447,8 +453,8 @@ sum(when active: x * a) by (grp) + sum(when priority: x * b) by (grp) <= 10
 ```
 
 `active` filters only the `a` term and `priority` only the `b` term; each `grp` group is
-one row, over the rows either keeps. A group where `priority` keeps no row is refused:
-*"DECIDE: sum(when priority: x * b) has no rows for grp = 'b'."*
+one row, over the rows either keeps. A group where `priority` keeps no row has no row:
+its second reducer is NULL there.
 
 ### A reducer's own `per`, and `SUM(D: e)`
 
@@ -481,8 +487,8 @@ marked `avg_scale` are divided by the number of rows the reducer reads in the ro
 | a reducer's own `when` | further, only the rows it keeps |
 | a reducer's own `per` | further, one row per class (the de-duplication above) |
 
-In the objective the two-level form's classes are the groups. The scope checks guarantee
-no denominator is zero.
+In the objective the two-level form's classes are the groups. A class no row reads is no
+group, so no denominator is zero.
 
 Quadratic AVG terms scale their inner linear coefficients by `1/√N`, so the
 resulting outer product is scaled by `1/N`.

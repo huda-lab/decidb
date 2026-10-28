@@ -698,9 +698,9 @@ row family's derivability.
 The members are the rows the objective's reducer reads, `MinMaxObjectiveSpec::member_rows`
 (stage 08 folds the objective's `when` into the terms' filters), whatever their
 coefficients: a row whose data is 0 is the member 0, not an absent one, and every class of
-the two-level form, an all-zero one included, is a member of the outer link. An objective
-with no member row is an `InternalException`, since the scope checks refuse an objective
-reducer that reads no row (D4, D8). The shape flags (`flat_agg`, `per_inner_agg`,
+the two-level form, an all-zero one included, is a member of the outer link. A flat
+objective with no member row reads no row, so it is NULL and dropped: the model keeps no
+objective term (D68). The shape flags (`flat_agg`, `per_inner_agg`,
 easy/hard per level, the inner-AVG rewrite) arrive from stage 05 as `MinMaxObjectiveSpec`;
 the coefficients arrive evaluated.
 

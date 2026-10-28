@@ -84,8 +84,8 @@ struct DecideConstraint {
 	bool abs_is_pos_bound = false;                          // true=C1 (aux >= inner), false=C2 (aux >= -inner)
 	unique_ptr<Expression> when_condition;                  // the clause's `when` (nullptr = every row)
 	//! A clause reads only the rows its `when` keeps (a NULL on another row is never
-	//! evaluated), NULL is a key value, every bound-side reducer reads its own `by` group of
-	//! the kept rows, and LogicalDecide::scope_checks have passed before it is evaluated.
+	//! evaluated), every bound-side reducer reads its own `by` group of the kept rows, and
+	//! LogicalDecide::scope_checks have passed before it is evaluated.
 	//! Scoped, aggregate shape: the `by` key its decision reducers share, which groups its
 	//! rows (index into LogicalDecide::keys); INVALID_INDEX for `by ()`.
 	idx_t group_key = DConstants::INVALID_INDEX;
@@ -149,8 +149,8 @@ struct DecideObjective {
 	unique_ptr<Expression> when_condition; // the objective's `when` (nullptr = every row)
 	//! The two-level form's key (index into LogicalDecide::keys); INVALID_INDEX for none.
 	idx_t per_key = DConstants::INVALID_INDEX;
-	//! The objective reads only the rows its `when` keeps, its two-level form's key has
-	//! NULL as a class, and a term beside its reducers counts once, read on the first
+	//! The objective reads only the rows its `when` keeps, its two-level form's key puts
+	//! a row whose written key is NULL in no class, and a term beside its reducers counts once, read on the first
 	//! kept row.
 
 	//! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.

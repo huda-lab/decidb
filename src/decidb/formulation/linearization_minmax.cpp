@@ -837,11 +837,13 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
             }
         }
         if (active_rows.empty()) {
-            // The scope checks refuse an objective reducer that reads no row (D4, D8).
-            throw InternalException("DECIDE: a MIN/MAX objective reached formulation with no member row");
-        }
+			// A reducer over no rows is NULL, and a NULL objective term is dropped (deck p. 56).
+			input.objective_coefficients.clear();
+			input.objective_variable_indices.clear();
+			return;
+		}
 
-        // z is the extremum over the objective's rows, so the per-row family boxes it.
+		// z is the extremum over the objective's rows, so the per-row family boxes it.
         idx_t z_idx = AddGlobalContinuousAux(input, indexer, row_family(), 1.0); // objective = z
 
         // Clear per-row objective (z is the sole objective term now)

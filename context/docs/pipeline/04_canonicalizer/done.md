@@ -500,12 +500,11 @@ pins both the debug-mode throwing behavior and the release-mode no-op via a
 the clauses and objective as bound, called once by `Binder::CreatePlan`, after
 `PlanSubqueries` (a check's expressions must be copyable) and before `CanonicalizeTree`.
 A rewrite's clause entering through
-`AddConstraint` builds none. Per clause, in this order: its `when` keeps a row
-(`KEEPS_A_ROW`); its `per` key determines each maximal decision- and reducer-free
-subexpression, each decision outside reducers and each `by` key (`DETERMINES`); then each
-reducer in turn: it reads a row in every `by` group when it has its own `when`
-(`READS_A_ROW`), and its own `per` key determines its body within its `by` group
-(`DETERMINES`). The objective: its `when`, then `per ()` over its values and decisions,
+`AddConstraint` builds none. Per clause, in this order: its `per` key determines each
+maximal decision- and reducer-free subexpression, each decision outside reducers and each
+`by` key (`DETERMINES`); then each reducer in turn: its own `per` key determines its body
+within its `by` group (`DETERMINES`). An empty set is no check: execution skips its
+instance (D68). The objective: `per ()` over its values and decisions,
 then each top-level reducer in turn, its `by` key (`DETERMINES`) before its own checks.
 The first check to fail stops the query, so this order picks the message. Literals and query-wide values need no check. The message texts are rendered
 here, through `RenderDecideSource`, from source fragments and relation aliases

@@ -4,13 +4,11 @@ Covers:
   - Force zero: when condition: x <= 0 (block selection of matching rows)
   - Force select: when condition: x = 1 (require matching rows)
   - Numeric condition on per-row bound
-  - Boundary: no rows match (an error: the when matches no rows)
   - Boundary: all rows match (equivalent to unconditional per-row)
   - test_when_perrow_real: REAL variable (no implicit [0,1] cap) + WHEN
     per-row — continuous skip-constraint path
 """
 
-import re
 import time
 
 import pytest
@@ -213,30 +211,6 @@ def test_when_perrow_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, p
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
-
-
-@pytest.mark.when_perrow
-@pytest.mark.var_boolean
-@pytest.mark.cons_perrow
-@pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-@pytest.mark.error_infeasible
-def test_when_perrow_no_matches(decidb_cli):
-    """A `when` that matches nothing — rejected pre-solver: a front ``when`` that
-    keeps no row is refused as "when l_returnflag = 'Z' matches no rows." (D4),
-    rather than leaving the per-row constraint inert and solving with only the
-    aggregate limit."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_returnflag, x
-        FROM lineitem
-        WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT when l_returnflag = 'Z': x <= 0
-            AND SUM(x * l_quantity) <= 100
-        MAXIMIZE SUM(x * l_extendedprice)
-    """
-    decidb_cli.assert_error(sql, match=re.escape("DECIDE: when l_returnflag = 'Z' matches no rows."))
 
 
 @pytest.mark.when_perrow

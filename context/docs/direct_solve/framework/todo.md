@@ -48,13 +48,12 @@ solver path answers those queries, so none of them is wrong, only slower.
 
 ## H-04 — Keyed scope checks in the direct plan
 
-- **Problem.** The key-less scope checks run under every rule's plan: D4 (a `when` keeps a row) and key-less D8, in
-  `AddRowChecks` (`direct_rule_driver.cpp`), a window and a filter that keep the source's bindings. A check with a key
-  makes the whole query decline (`DirectIR::status`).
-- **Change.** Partition the window by the key for READS_A_ROW under `by`, and for DETERMINES. Quote the failing group
-  in the message, as `PhysicalDecide::RunScopeChecks` does.
-- **Done when.** For each check kind, the same message on both paths, including a NULL key value. H-05 and H-07 need
-  this task.
+- **Problem.** The value checks run under every rule's plan, in `AddRowChecks` (`direct_rule_driver.cpp`), a window
+  and a filter that keep the source's bindings. A `DETERMINES` check makes the whole query decline
+  (`DirectIR::status`).
+- **Change.** Partition the window by the check's key for `DETERMINES`. Quote the failing class in the message, as
+  `PhysicalDecide::RunScopeChecks` does.
+- **Done when.** The same message on both paths, including a NULL key value. H-05 and H-07 need this task.
 
 ## H-05 — Read a reducer's `by` key into the IR
 
@@ -75,8 +74,8 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Change.** Read both spellings: `C` with `by (g)` after each reducer (one clause per row, each reading its
   row's group), which allows a limit that varies by row. The
   removed-spelling message suggests `per g: C` with `by (g)`: one clause per class, which needs `g` to determine the
-  limit. Honour the NULL-key rule D5 (a NULL key is in no group, as the kept plans have it) and D8 (a group the reducer's own `when`
-  empties is an error, from H-04).
+  limit. Honour the NULL-key rule D5 (a NULL key is in no group, as the kept plans have it) and D68 (a group in which
+  some reducer reads no row has no instance).
 - **Plan shape (owner's direction).** A `by` key is a GROUP BY in the direct plan: the rule groups the covered rows by
   the key (a hash aggregate on the key columns, joined back to the rows on the key), as the per-group plans kept in the code do. It is not one clause per row and not a window per clause.
 - **Tests waiting on this.** `direct_path` (`test/decide/tests/_direct_oracle_common.py`) makes the direct path of any

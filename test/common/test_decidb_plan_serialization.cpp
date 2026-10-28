@@ -544,8 +544,8 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	Connection con(db);
 	SetUp(con);
 
-	// Two `by` keys, the checks of a `when` (D4), a `per` key (determination), a reducer's
-	// own `when` (D8) and its own `per`, and an objective written with a scope.
+	// Two `by` keys, the determination checks of a `per` key and of a reducer's own `per`
+	// under its own `when`, and an objective written with a scope.
 	auto plan = con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) "
 	                            "DECIDE x(INT), per region: open(BOOL) "
 	                            "SUCH THAT when cap > 10 per r_name: sum(x) by (r_name) <= 50 "
@@ -556,22 +556,19 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	// The clause's `per r_name` and its `by (r_name)` are one key; the reducer's own
 	// `per region` within its `by (site.r_key)` groups adds their union for its check.
 	REQUIRE(before->keys.size() == 4);
-	REQUIRE(before->scope_checks[3].key == KeyWritten(*before, "region, site.r_key"));
+	REQUIRE(before->scope_checks[1].key == KeyWritten(*before, "region, site.r_key"));
 	REQUIRE(KeyWritten(*before, "region") == before->entity_scopes[0].key);
 	REQUIRE(before->keys[KeyWritten(*before, "site.r_key")].Names() == duckdb::vector<string> {"site.r_key"});
 	duckdb::vector<DecideScopeCheckKind> kinds;
 	for (auto &check : before->scope_checks) {
 		kinds.push_back(check.kind);
 	}
-	// The clause's `when`, its per key over the `by` key, then the reducer's `when` and its
-	// own per key over the reducer's body; then the objective's `when`.
+	// The clause's per key over the `by` key, then the reducer's own per key over the reducer's body.
 	REQUIRE(kinds ==
-	        duckdb::vector<DecideScopeCheckKind> {DecideScopeCheckKind::KEEPS_A_ROW, DecideScopeCheckKind::DETERMINES,
-	                                              DecideScopeCheckKind::READS_A_ROW, DecideScopeCheckKind::DETERMINES,
-	                                              DecideScopeCheckKind::KEEPS_A_ROW});
-	REQUIRE(before->scope_checks[1].subject == "r_name");
-	REQUIRE(before->scope_checks[1].context == "in by (r_name)");
-	REQUIRE(before->scope_checks[3].decision != DConstants::INVALID_INDEX);
+	        duckdb::vector<DecideScopeCheckKind> {DecideScopeCheckKind::DETERMINES, DecideScopeCheckKind::DETERMINES});
+	REQUIRE(before->scope_checks[0].subject == "r_name");
+	REQUIRE(before->scope_checks[0].context == "in by (r_name)");
+	REQUIRE(before->scope_checks[1].decision != DConstants::INVALID_INDEX);
 
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);

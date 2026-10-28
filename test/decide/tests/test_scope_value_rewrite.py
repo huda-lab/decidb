@@ -796,15 +796,11 @@ def test_a_helper_that_can_be_fractional_takes_no_step(decidb_cli, op, why):
 @pytest.mark.error
 def test_the_scope_checks_still_guard_the_rewritten_clause(decidb_cli):
     """The checks run on the clause as written: a `per` that does not determine the
-    decision beside the reducer, and a reducer's `when` leaving a `by` group empty."""
+    decision beside the reducer."""
     assert (
         "DECIDE: per D.region does not determine the decision ship (declared per row). D.region = 'East' "
         "covers more than one ship."
     ) in error_of(decidb_cli, _ship_query("per D.region: ship <= 0.5 * sum(ship) by (D.depotID)"))
-    shipments = SHIPMENTS[:4] + ((5, "D3", 25, False, 3, 1, "active"),)
-    assert "DECIDE: sum(when S.priority: ship) has no rows for D.depotID = 'D3'." in error_of(
-        decidb_cli, _ship_query("ship <= sum(when S.priority: ship) by (D.depotID)", shipments=shipments)
-    )
 
 
 @pytest.mark.diagnose

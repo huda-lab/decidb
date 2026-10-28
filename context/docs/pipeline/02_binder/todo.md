@@ -11,7 +11,8 @@ Language-surface work is owned by `../../language/` (the scopes:
 
 **Rule (owner, 2026-10-27).** A function inside DECIDE behaves as the same SQL function does, NULL and NaN included,
 unless a strong reason that helps users says otherwise; each divergence is stated in the docs with that reason. A
-reducer over data already follows it for NULL, a NULL data value is skipped (deck pp. 50, 56), and `COUNT` follows it for NaN (`../../language/functions.md`, "Constraints", NULL).
+reducer over data already follows it for NULL, a NULL data value is skipped (deck pp. 50, 56), a reducer over no rows
+is NULL (D68), and `COUNT` follows it for NaN (`../../language/functions.md`, "Constraints", NULL).
 
 **Audit (2026-10-27).** Each place DECIDE still reads a value differently from DuckDB, with the reason to keep it or
 the change. Each needs a ruling.
@@ -21,11 +22,7 @@ the change. Each needs a ruling.
 2. **Infinity in a coefficient** is an error (`... (NaN or Infinity)`); SQL computes `inf * x`. In a bound it is a
    value, as in SQL (`x <= 4 / 0` holds always). Recommended: keep, and state the reason: a model cannot hold an
    infinite coefficient.
-3. **A reducer over no rows** (its own `when` keeps none: D8; a clause `when` keeps none: D4) is an error; SQL's
-   `SUM`, `AVG`, `MIN`, `MAX` over no rows are NULL. The deck makes it NULL and skips the constraint instance a NULL
-   reaches ([roadmap](../../language/roadmap.md#an-empty-reducer-group-pp-45-56)). Ruling needed:
-   follow SQL and the deck, or keep the guard (a typo in a `when` would otherwise drop a constraint silently).
-4. **The NaN and infinity message** lists "common causes" in a block. Recommended: name the column and the smallest
+3. **The NaN and infinity message** lists "common causes" in a block. Recommended: name the column and the smallest
    edit (`../../language/errors.md`).
 
 Integer arithmetic follows DuckDB: a bound is computed in DuckDB's types before the model reads it (2^60 + 1 - 2^60

@@ -25,7 +25,7 @@ The per-group plan kept in the code does the following, which is the spec:
 Where the language differs from that plan:
 
 - A NULL key is in no group, so it has no budget (D5); the row takes its own best end.
-- A group the sum's own `when` leaves empty is an error that quotes the group (D8), raised by keyed row checks (`AddRowChecks`; `../../framework/todo.md` § H-04).
+- A group the sum's own `when` leaves empty has no budget (D68); its rows take their own best ends.
 - `per g:` in front of a clause does not group its sum (D6); only a `by` key does.
 - Nothing is computed on a row a `when` drops (syntax reference §6.3).
 
@@ -33,7 +33,7 @@ Needs: `../../framework/todo.md` § H-04 and § H-05.
 
 Tests: remove the `xfail(strict=True)` marks of the plan-shape tests and delete the `by` branch of `direct_path` so the `by` cases
 in `test_direct_r1_continuous_knapsack.py` run on both paths. `test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key`
-still counts the deleted guard window (D8 comes from the row checks); re-derive its counts. The leave-to-solver grid's
+still counts the deleted guard window; re-derive its counts. The leave-to-solver grid's
 `by` cases (`test_r1_leaves_budgets_that_do_not_share_a_scope_to_the_solver`) decline on the key today, not on the
 scope mismatch they were written for. The direct-solve benchmark's `r1.sql`
 (`benchmark/decide/direct_solve/queries/`) fails in `direct` mode; run it again, and once S1 reads it too, drop the

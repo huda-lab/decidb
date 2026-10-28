@@ -27,7 +27,6 @@ from ._scope_cases import (
     scope_solver,
 )  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
-from ._output_helpers import assert_no_internal_leak
 from solver.types import ObjSense, VarType
 
 DECISIONS = [Decision("ship"), Decision("reserve", ("depotID",), VarType.CONTINUOUS)]
@@ -186,36 +185,32 @@ def test_deck_example(decidb_cli, scope_solver, tmp_path, written, explicit, cla
 
 @pytest.mark.correctness
 def test_deck_example_7_on_a_depot_without_priority_shipments(decidb_cli, scope_solver):
-    """D3's only shipment is not a priority: `sum(when S.priority: ship) by (D.depotID)`
-    reads no row for it, an error naming the group (D8, D18). Written in front, the
-    same condition leaves D3 out instead (§5.3)."""
+    """D3's only shipment is not a priority, so `sum(when S.priority: ship) by (D.depotID)`
+    reads no row for it: a reducer over no rows is NULL, and D3's instance is skipped.
+    Written in front, the same condition leaves D3 out too (§5.3)."""
     shipments = SHIPMENTS[:4] + ((5, "D3", 25, False, 3, 1, "active"),)
-    sql = _query(
-        "per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity",
-        "MAXIMIZE SUM(ship)",
-        shipments,
-    )
-    result = decidb_cli.execute_raw(sql)
-    assert "DECIDE: sum(when S.priority: ship) has no rows for D.depotID = 'D3'." in result.stderr, result.stderr
-    assert_no_internal_leak(result, "deck example 7 on a depot without priority shipments")
-
-    moved = _query(
-        "when S.priority per D.depotID: sum(ship) by (D.depotID) <= D.priorityCapacity", "MAXIMIZE SUM(ship)", shipments
-    )
     model = ScopedModel(joined(shipments), DECISIONS)
-    clauses = [
-        SHIP_BOUND,
-        Scoped(
-            (Reduce("sum", lambda r: {"ship": 1}, by=("depotID",)),),
+    priority = lambda r: r["priority"]  # noqa: E731
+    capacity = (lambda r: {CONSTANT: r["priorityCapacity"]},)
+    spellings = {
+        "per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity": Scoped(
+            (Reduce("sum", lambda r: {"ship": 1}, when=priority, by=("depotID",)),),
             "<=",
-            (lambda r: {CONSTANT: r["priorityCapacity"]},),
-            when=lambda r: r["priority"],
+            capacity,
             per=("depotID",),
         ),
-    ]
+        "when S.priority per D.depotID: sum(ship) by (D.depotID) <= D.priorityCapacity": Scoped(
+            (Reduce("sum", lambda r: {"ship": 1}, by=("depotID",)),),
+            "<=",
+            capacity,
+            when=priority,
+            per=("depotID",),
+        ),
+    }
     objective = MAXIMIZE_SHIP[1]
-    rows = aligned(answer(decidb_cli, moved), model)
-    assert model.judge_scoped(rows, clauses, objective) == pytest.approx(
-        model.solve_scoped(scope_solver, clauses, objective)
-    )
-    assert rows[4]["ship"] == 25  # D3 has no constraint: its shipment takes its whole demand
+    for clause, scoped in spellings.items():
+        clauses = [SHIP_BOUND, scoped]
+        rows = aligned(answer(decidb_cli, _query(clause, "MAXIMIZE SUM(ship)", shipments)), model)
+        assert model.judge_scoped(rows, clauses, objective) == pytest.approx(
+            model.solve_scoped(scope_solver, clauses, objective)
+        ), clause

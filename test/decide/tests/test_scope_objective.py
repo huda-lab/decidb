@@ -292,23 +292,51 @@ def test_a_nested_reducer_in_a_constraint_is_refused(decidb_cli):
     assert "DECIDE: an aggregate inside an aggregate is not supported yet" in result.stderr, result.stderr
 
 
-@pytest.mark.error
+_NO_ROW_COLUMNS = ("id", "g", "cap", "w", "c")
+_NO_ROW_ROWS = ((1, "a", 5, 1, True), (2, "a", 4, 5, False), (3, "b", 3, 2, True), (4, "b", 6, 1, True))
+
+
+@pytest.mark.correctness
 @pytest.mark.parametrize(
-    "objective",
+    "objective_sql, objective",
     [
-        "MAXIMIZE when S.status = 'lost': sum(ship)",
-        "MINIMIZE when S.status = 'lost': max(per D.depotID: sum(ship) by (D.depotID))",
+        pytest.param(
+            "MAXIMIZE when t.id > 99: max(per t.g: sum(t.w * x) by (t.g))",
+            ScopedObjective(
+                ObjSense.MAXIMIZE, (Nested("max", ("g",), "sum", lambda r: {"x": r["w"]}),), when=lambda r: r["id"] > 99
+            ),
+            id="two-level-when-keeps-no-row",
+        ),
+        pytest.param(
+            "MAXIMIZE sum(t.w * x) - sum(when t.id > 99: x)",
+            ScopedObjective(
+                ObjSense.MAXIMIZE,
+                (
+                    Reduce("sum", lambda r: {"x": r["w"]}),
+                    Reduce("sum", lambda r: {"x": -1}, when=lambda r: r["id"] > 99),
+                ),
+            ),
+            id="reducer-reads-no-row",
+        ),
     ],
 )
-def test_an_objective_when_that_keeps_no_row(decidb_cli, objective):
-    result = decidb_cli.execute_raw(_query(objective))
-    assert "DECIDE: when S.status = 'lost' matches no rows." in result.stderr, result.stderr
-
-
-@pytest.mark.error
-def test_an_objective_reducer_with_no_row(decidb_cli):
-    result = decidb_cli.execute_raw(_query("MAXIMIZE sum(ship) - sum(when S.status = 'lost': ship)"))
-    assert "DECIDE: sum(when S.status = 'lost': ship) has no rows." in result.stderr, result.stderr
+def test_an_objective_part_that_reads_no_row_is_dropped(decidb_cli, scope_solver, objective_sql, objective):
+    """A reducer over no rows is NULL, and a NULL objective term is dropped: the other terms still count."""
+    sql = f"""
+        SELECT id, x {table('t', _NO_ROW_COLUMNS, _NO_ROW_ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.cap AND sum(x) <= 5
+        {objective_sql}
+        ORDER BY id"""
+    model = ScopedModel(table_rows(_NO_ROW_COLUMNS, _NO_ROW_ROWS), [Decision("x")])
+    clauses = [
+        Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: r["cap"]},)),
+        Scoped((Reduce("sum", lambda r: {"x": 1}),), "<=", (lambda r: {CONSTANT: 5},), per=()),
+    ]
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )
 
 
 @pytest.mark.correctness

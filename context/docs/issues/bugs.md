@@ -82,8 +82,8 @@
   expression's `ToString` (`TagDecideSourceFragments` in `decide_source_provenance.cpp`,
   `BindReducerBy`), and a condition is re-rendered from its bound form
   (`RenderDecideSource`).
-- **Observed:** `when v in (SELECT 1000): x <= 1` gives *"DECIDE: when (v = ANY(SELECT
-  1000)) matches no rows."*; `when exists (SELECT 1 WHERE false): ...` gives
+- **Observed:** `when v in (SELECT 1000): ...` is quoted as `when (v = ANY(SELECT
+  1000))`; `when exists (SELECT 1 WHERE false): ...` gives
   *"... when EXISTS(SELECT 1 WHERE CAST('f' AS BOOLEAN)) ..."*; `when id > 100 and g is
   not null:` gives *"when id > 100 AND (g IS NOT NULL)"*. A `VALUES` list in a subquery
   becomes `(SELECT * FROM (VALUES ('East', 30)) AS valueslist) AS c(region, cap)`, in a

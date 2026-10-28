@@ -54,7 +54,7 @@ namespace {
 //!
 //! Every window is partitioned by whether the clause's `when` keeps the row (when it has one): the rows the clause
 //! drops form partitions no constraint reads, and nothing a window computes is evaluated on them. A group a reducer's
-//! own `when` leaves empty is D8, which a scope check raises before any value is read, so its NULL is never read.
+//! own `when` leaves empty reads NULL, and a NULL bound skips its instance.
 class RhsWindowRewriter {
 public:
 	RhsWindowRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)

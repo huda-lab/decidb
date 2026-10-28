@@ -206,9 +206,8 @@ def test_rhs_sum_with_arithmetic_keeps_the_aggregate_type(decidb_cli, oracle_sol
     sql = _sql(ROWS, "SUM(x * w) <= COUNT(*) * 4611686018427387904")
     assert outcome(decidb_cli, sql, "off")[0] == "error"
     covered = "when id > 100: SUM(x * w) <= COUNT(*) * 4611686018427387904"
-    # No row is kept: the clause has nothing to evaluate, and its `when` keeping no row is the error (D4).
-    with pytest.raises(DecidBCliError, match=r"when id > 100 matches no rows\."):
-        run(decidb_cli, _sql(ROWS, covered), "off")
+    # No row is kept: the clause has no instance, so nothing is evaluated.
+    _agree(decidb_cli, oracle_solver, ROWS, covered, [])
 
 
 @pytest.mark.cons_aggregate
@@ -277,16 +276,11 @@ def test_rhs_l0_norm_reads_a_nan_body_as_invalid(decidb_cli, mode):
         run(decidb_cli, sql, mode)
 
 
-@pytest.mark.error
-@pytest.mark.parametrize("mode", ["off", "require"])
-def test_rhs_value_is_checked_after_the_scope_checks(decidb_cli, mode):
-    """`cap` is NULL on a kept row and the reducer keeps no row: the scope check (D8) is reported, not the NULL."""
-    sql = (
-        "SELECT id, x FROM (FROM (VALUES (0, 3, NULL::DOUBLE, 5.0), (1, 4, 4.0, 4.0)) t(id, w, cap, p) "
-        "DECIDE x(BOOL) SUCH THAT SUM(x) <= cap + sum(when id > 5: w) MAXIMIZE SUM(p*x)) q"
-    )
-    with pytest.raises(DecidBCliError, match=r"DECIDE: sum\(when id > 5: w\) has no rows\."):
-        run(decidb_cli, sql, mode)
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_a_bound_reducer_that_reads_no_row_skips_the_instance(decidb_cli, oracle_solver):
+    """`SUM(when id > 100: w)` reads no row, so the bound is NULL on every row and no instance is left."""
+    _agree(decidb_cli, oracle_solver, PLAIN, "SUM(x * w) <= cap + SUM(when id > 100: w)", [])
 
 
 @pytest.mark.cons_aggregate
@@ -410,11 +404,18 @@ def test_rhs_aggregate_with_its_own_when_under_a_clause_when_matches_the_oracle(
     _agree(decidb_cli, oracle_solver, PLAIN, constraint, limits)
 
 
-@pytest.mark.error
-def test_rhs_aggregate_whose_own_when_empties_a_group_raises_d8(decidb_cli):
-    """Group c has no flagged row, so the right side has no rows to read there (D8)."""
-    with pytest.raises(DecidBCliError, match=r"sum\(when flag: cap\) has no rows for g = 'c'\."):
-        run(decidb_cli, _sql(ROWS, "SUM(x * w) by (g) <= SUM(when flag: cap) by (g)"), "off")
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_rhs_aggregate_whose_own_when_empties_a_group_skips_it(decidb_cli, oracle_solver):
+    """Group c has no flagged row, so its right side is NULL there and its instance is skipped."""
+    limits = _clause_limits(
+        ROWS,
+        lambda reads: sum(row[4] for row in reads) if reads else None,
+        left_key=1,
+        right_key=1,
+        right=lambda row: row[2],
+    )
+    _agree(decidb_cli, oracle_solver, ROWS, "SUM(x * w) by (g) <= SUM(when flag: cap) by (g)", limits)
 
 
 @pytest.mark.error

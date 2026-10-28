@@ -167,8 +167,6 @@ Rows with unique caveats:
   a column nor a relation of the FROM clause".
 - `test_entity_scoped_var_in_when_condition_error` — error test: "keepN is a decision;
   when, per and by may only use data".
-- `test_entity_scoped_when_entity_invisible` — error test: a `when` that keeps no row
-  is "when c.c_acctbal > 9998 matches no rows" (D4).
 - `test_entity_scoped_over_subquery_of_base_table` /
   `test_entity_scoped_over_cte_of_base_table` — `FROM (SELECT ... FROM base) t DECIDE
   per t: x(BOOL)` and the same shape through a `WITH` CTE keep one decision per row of
@@ -560,14 +558,13 @@ All oracle-verified unless noted:
 
 #### Empty row sets
 
-A `when` in front that keeps no row is an error, "when c matches no rows." (D4):
-`test_when_constraint.py::test_when_no_rows_match`,
-`test_when_perrow.py::test_when_perrow_no_matches`,
-`test_when_objective.py::test_when_objective_no_match`. A reducer whose own `when`
-keeps no row is an error, "agg(when c: e) has no rows." (D8):
-`test_aggregate_local_when.py::test_aggregate_local_when_all_filtered_out` and the
-mixed-filter cases, and the empty MIN/MAX, SUM and AVG cases of `test_edge_cases.py`
-(see [`coverage.md#min-and-max`](coverage.md#min-and-max)). A `when` in front that leaves one
+An empty group skips its constraint (D68): a `when` in front that keeps no row generates
+nothing, a group in which a reducer reads no row has no instance, and an objective part
+that reads no row is dropped. `test_empty_groups.py` covers each shape once, judged by the
+scope oracle: the aggregate and per-row shapes, a bound-side reducer, one empty reducer of
+two in a `by` group, hard, easy and composed MIN/MAX, a flat and a composed MIN/MAX
+objective, a helper group with no member, and the continuous budget shapes direct solve
+takes (also run under `require`). A `when` in front that leaves one
 `per` class without a kept row generates nothing for that class
 (`test_per_multi_column.py::test_multi_column_per_when_eliminates_all_in_group`).
 
@@ -773,15 +770,12 @@ allocates one and pins both its sides.
 
 #### Empty row sets
 
-Both empty-set errors are raised before the solver runs, so an empty set never leaves
-a MIN/MAX auxiliary free (a vacuous constraint or a meaningless objective): a `when` in
-front that keeps no row ("when c matches no rows.", D4) and a reducer whose own `when`
-keeps no row ("max(when c: e) has no rows.", D8). The tests
-are in `test_edge_cases.py` and cover flat objectives in all four directions, hard and
-easy constraints, composed `sum(...) + max(when c: ...)`, mixed empty and populated
-reducers, SUM and AVG, and a `per` class the `when` in front leaves empty (no
-constraint for it) — see [`coverage.md#edge-cases-and-data-shapes`](coverage.md#edge-cases-and-data-shapes) → "Empty row
-sets".
+An empty set never leaves a MIN/MAX auxiliary free: a group whose MIN/MAX reads no row
+has no instance, so no auxiliary is built for it, and a flat MIN/MAX objective over no
+row is no objective (D68). `test_empty_groups.py` covers the hard, easy and composed
+constraints and the flat and composed objectives; `test_edge_cases.py` covers a `per`
+class the `when` in front leaves empty — see
+[`coverage.md#edge-cases-and-data-shapes`](coverage.md#edge-cases-and-data-shapes) → "Empty row sets".
 
 ### Feature interactions covered
 
@@ -1195,27 +1189,11 @@ constraints on different columns.
 
 ### Empty row sets
 
-`test_edge_cases.py` pins the two empty-set errors, each with its exact message
-(see also `../language/scopes.md`):
-
-- A `when` in front that keeps no row is "when c matches no rows." (D4): on
-  constraints over an easy or hard `min`/`max`, a `sum` and an `avg`
-  (`test_min_geq_constraint_when_empty` and its three mirrors,
-  `test_sum_when_empty_rejected`, `test_avg_when_empty_rejected`), and on a flat
-  MIN/MAX objective in both directions (`test_maximize_min_objective_when_empty` and
-  its three mirrors).
-- A reducer whose own `when` keeps no row is "agg(when c: e) has no rows." (D8): in
-  hard constraints (`test_max_when_empty_constraint_hard`,
-  `test_min_when_empty_constraint_hard`), beside a populated reducer
-  (`test_sum_plus_max_when_empty_silently_vacates_constraint`,
-  `test_composed_easy_min_when_empty_rejected`,
-  `test_mixed_empty_and_populated_when_terms_constraint` and `..._objective`), and
-  for AVG (`test_avg_constraint_when_filters_all_rows`).
-- A `when` in front that leaves one `per` class without rows generates nothing for
-  that class (`test_avg_per_constraint_with_empty_group`,
-  `test_maximize_sum_max_per_with_empty_when_group`), while a reducer's own `when`
-  that empties a group is "avg(when flag: x * val) has no rows for grp = 'B'."
-  (`test_avg_per_constraint_inner_when_with_empty_group_rejected`).
+An empty group skips its constraint (D68; see also `../language/scopes.md`), judged by the
+scope oracle in `test_empty_groups.py` (see "Empty row sets" under `when` above). A `when` in
+front that leaves one `per` class without rows generates nothing for that class
+(`test_edge_cases.py::test_avg_per_constraint_with_empty_group`,
+`test_maximize_sum_max_per_with_empty_when_group`).
 
 ### JOIN sources
 

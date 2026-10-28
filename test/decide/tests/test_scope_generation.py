@@ -574,32 +574,6 @@ def test_a_when_guards_a_function_that_fails_on_its_dropped_rows(decidb_cli, sco
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.error
-@pytest.mark.parametrize(
-    "clause, objective",
-    [
-        pytest.param("when S.status = 'lost': ship <= 1", "MAXIMIZE SUM(ship)", id="rows-clause"),
-        pytest.param(
-            "when S.status = 'lost' per D.depotID: sum(ship) by (D.depotID) <= 1",
-            "MAXIMIZE SUM(ship)",
-            id="aggregate-clause",
-        ),
-        pytest.param("ship <= 1", "MAXIMIZE when S.status = 'lost': sum(ship)", id="objective"),
-    ],
-)
-def test_a_when_that_keeps_no_row_is_an_error(decidb_cli, clause, objective):
-    """D4, with or without a reducer in the clause."""
-    result = decidb_cli.execute_raw(
-        f"""
-        SELECT shipmentID, ship {from_clause()}
-        DECIDE ship(INT)
-        SUCH THAT ship <= S.demand AND {clause}
-        {objective}"""
-    )
-    assert "DECIDE: when S.status = 'lost' matches no rows." in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a when that keeps no row")
-
-
 @pytest.mark.correctness
 def test_an_input_with_no_rows_is_not_an_error(decidb_cli):
     """S9: the result is empty, as today."""
@@ -753,7 +727,7 @@ def test_a_key_or_condition_ending_in_a_colon_is_quoted_in_the_echo(decidb_cli):
 @pytest.mark.correctness
 def test_scoped_plan_survives_a_serialization_round_trip(decidb_cli, tmp_path):
     """The `by` keys, the scope checks and the objective's mark are on the plan: the copy
-    builds the same model, gives the same answer, and still raises the same errors."""
+    builds the same model and gives the same answer, also when a reducer reads no row."""
     sql = f"""
         SELECT shipmentID, ship, reserve {from_clause()}
         DECIDE ship(INT), per D.depotID: reserve(INT)
@@ -765,8 +739,8 @@ def test_scoped_plan_survives_a_serialization_round_trip(decidb_cli, tmp_path):
     copied = decidb_cli.with_verify_serializer()
     assert copied.dump_model(sql, tmp_path / "copied.dump") == decidb_cli.dump_model(sql, tmp_path / "plain.dump")
     assert copied.execute(sql) == decidb_cli.execute(sql)
-    failing = sql.replace("S.status = 'active'", "S.status = 'lost'")
-    # No region keeps a row; the check names the first empty one it reads, and row order varies with the threads.
-    message = "DECIDE: sum(when S.status = 'lost' per D: D.capacity * reserve) has no rows for D.region = '{}'."
-    error = copied.execute_raw(failing).stderr
-    assert any(message.format(region) in error for region in ("East", "West")), error
+    # The reducer reads no row in any region, so its clause has no instance.
+    empty = sql.replace("S.status = 'active'", "S.status = 'lost'")
+    assert copied.dump_model(empty, tmp_path / "copied_empty.dump") == decidb_cli.dump_model(
+        empty, tmp_path / "plain_empty.dump"
+    )

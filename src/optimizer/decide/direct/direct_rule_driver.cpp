@@ -156,32 +156,14 @@ void AddRowChecks(Optimizer &optimizer, const DirectIR &ir, unique_ptr<LogicalOp
 	vector<idx_t> first_slots;
 	for (auto &check : ir.row_checks) {
 		first_slots.push_back(window->expressions.size());
-		if (check.invalid) {
-			window->expressions.push_back(DirectWindowExtremum(optimizer, "min", check.invalid->Copy()));
-			continue;
-		}
-		auto looked_at = check.rows ? check.rows->Copy() : calc.Out(calc.Bool(true));
-		auto read = calc.Out(calc.If(calc.Of(*looked_at), calc.Of(*check.filter), calc.Bool(false)));
-		window->expressions.push_back(DirectWindowMatchingCount(calc, std::move(looked_at)));
-		window->expressions.push_back(DirectWindowMatchingCount(calc, std::move(read)));
+		window->expressions.push_back(DirectWindowExtremum(optimizer, "min", check.invalid->Copy()));
 	}
 	window->children.push_back(std::move(source));
 	vector<unique_ptr<Expression>> checks;
 	for (idx_t i = 0; i < ir.row_checks.size(); i++) {
-		auto slot = first_slots[i];
-		if (ir.row_checks[i].invalid) {
-			auto message = calc.Col(LogicalType::VARCHAR, ColumnBinding(window_index, slot));
-			checks.push_back(DirectRaiseIf(calc,
-			                               calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
-			                               DirectErrorPredicate(optimizer, calc.Out(message))));
-			continue;
-		}
-		auto looked_at = calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, slot));
-		auto read = calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, slot + 1));
-		auto zero = calc.Constant(Value::BIGINT(0));
-		auto bad = calc.If(calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, looked_at, zero),
-		                   calc.Cmp(ExpressionType::COMPARE_EQUAL, read, zero), calc.Bool(false));
-		checks.push_back(DirectRaiseIf(calc, calc.Out(bad), DirectErrorPredicate(optimizer, ir.row_checks[i].message)));
+		auto message = calc.Col(LogicalType::VARCHAR, ColumnBinding(window_index, first_slots[i]));
+		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
+		                               DirectErrorPredicate(optimizer, calc.Out(message))));
 	}
 	auto filter = make_uniq<LogicalFilter>(DirectAllHold(calc, std::move(checks)));
 	for (idx_t i = 0; i < source_columns; i++) {

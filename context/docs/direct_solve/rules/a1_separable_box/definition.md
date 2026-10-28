@@ -119,6 +119,6 @@ What the implementation settles beyond the catalogue text:
 >
 > • **Errors.** An empty box on any row is infeasible; an improving direction with no finite limit on any row is unbounded;
 > an `INT` answer beyond 2^53 cannot be returned; NULL, NaN or infinite values raise on every row that reads them, and
-> nothing is computed on a row a `when` drops; a `when` that keeps no row is an error (D4).
+> nothing is computed on a row a `when` drops; a term whose `when` keeps no row is dropped, as on the solver (D68).
 >
 > • **Ties** go to the smaller value, and a decision with no objective term takes the lowest value its box allows.

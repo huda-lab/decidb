@@ -284,23 +284,6 @@ def _check_wrapped_between(decidb_cli, oracle_solver, data, sense, query_tail, b
 @pytest.mark.var_real
 @pytest.mark.cons_between
 @pytest.mark.when_perrow
-@pytest.mark.obj_maximize
-@pytest.mark.correctness
-@_TWO_SIDED_FORMS
-def test_between_when_perrow_matches_no_row(decidb_cli, form):
-    """`when id > 5: x BETWEEN 0 AND cap` where no row has id > 5 is an error (D4), for the whole two-sided clause."""
-    sql = (
-        f"SELECT id, x FROM {_WRAPPED_BETWEEN_ROWS} "
-        f"DECIDE x(REAL) SUCH THAT when id > 5: {_two_sided(form, 'x', 0, 'cap')} MAXIMIZE SUM(s * x)"
-    )
-    for mode in _WRAPPED_BETWEEN_MODES:
-        with pytest.raises(DecidBCliError, match=r"when id > 5 matches no rows\."):
-            _run_mode(decidb_cli, mode, sql)
-
-
-@pytest.mark.var_real
-@pytest.mark.cons_between
-@pytest.mark.when_perrow
 @pytest.mark.correctness
 @pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
 @_TWO_SIDED_FORMS

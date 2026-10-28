@@ -1483,11 +1483,6 @@ def _last_row(late, ordinary):
 
 # name -> (sql, error class the direct path must raise).
 R1_ERROR_CASES = {
-    # The sum's own `when` keeps none of the rows the clause's `when` keeps (D8).
-    "when_in_front_and_inside_keep_disjoint_rows": (
-        _scoped_sql(COVERED + OUTSIDE, "when f: SUM(when NOT f: w*amount) <= 6"),
-        "empty_aggregate",
-    ),
     "weight_nan": (_late(LATE_DECIDE, w_sql=_last_row("'NaN'::DOUBLE", "1.0")), "invalid_value"),
     "weight_infinite": (_late(LATE_DECIDE, w_sql=_last_row("'Infinity'::DOUBLE", "1.0")), "invalid_value"),
     "value_nan": (_late(LATE_DECIDE, v_sql=_last_row("'NaN'::DOUBLE", "1.0")), "invalid_value"),
@@ -1603,14 +1598,6 @@ R1_ERROR_CASES.update(
 # reach.
 R1_ERROR_CASES.update(
     {
-        # A `when` that keeps no row of a nonempty source is an error (D4).
-        "scoped_when_covers_no_row": (
-            _scoped_sql(
-                (_srow(1, "a", 4.0, 2.0, 10.0, f=False), _srow(2, "a", 3.0, 3.0, 9.0, f=False)),
-                "when f: SUM(w*amount) <= 6",
-            ),
-            "empty_aggregate",
-        ),
         # One group's minimum is beyond what its rows reach, though every other group's is met.
         "scoped_one_group_minimum_unreachable": (
             _scoped_sql(THREE_GROUPS[:3] + (_srow(4, "b", 1.0, 1.0, 2.0),), "SUM(w*amount) by (g) >= 7"),

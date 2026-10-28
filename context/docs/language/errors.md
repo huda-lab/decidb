@@ -8,7 +8,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 
 | Situation | Raised | Message |
 |---|---|---|
-| A `per` key does not determine a value; a `when` keeps no row; a reducer's own `when` empties a group | run, before solving | [guide.md §7.3](guide.md#73-data-checks) |
+| A `per` key does not determine a value | run, before solving | [guide.md §7.3](guide.md#73-data-checks) |
 | A reducer in a `when` | run, before solving | `DECIDE: an aggregate cannot be used here. ...` |
 | `per` other than `()` on the objective | parse | `an objective is produced once: write per (): or leave per out` |
 | A parenthesized key | parse | `write per a, b: without parentheses; parentheses are only for per ()` |

@@ -3,14 +3,12 @@
 Covers:
   - MAXIMIZE with WHEN filter
   - MINIMIZE with WHEN filter
-  - Boundary: no rows match (an error: the when matches no rows)
   - Boundary: all rows match (equivalent to no WHEN)
   - Same WHEN condition on both constraint and objective
   - Different WHEN conditions on constraint vs objective
   - Unconditional constraint + WHEN objective
 """
 
-import re
 import time
 
 import pytest
@@ -149,27 +147,6 @@ def test_when_objective_minimize(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         comparison_status=cmp.status,
         decide_vector=cmp.oracle_vector,
     )
-
-
-@pytest.mark.when_objective
-@pytest.mark.var_boolean
-@pytest.mark.cons_aggregate
-@pytest.mark.obj_maximize
-@pytest.mark.error_infeasible
-def test_when_objective_no_match(decidb_cli):
-    """Aggregate objective whose `when` matches no rows — rejected pre-solver:
-    the objective's front ``when`` that keeps no row is refused as
-    "when l_returnflag = 'Z' matches no rows." (D4)."""
-    sql = """
-        SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
-               l_returnflag, x
-        FROM lineitem
-        WHERE l_orderkey < 100
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 10
-        MAXIMIZE when l_returnflag = 'Z': SUM(x * l_extendedprice)
-    """
-    decidb_cli.assert_error(sql, match=re.escape("DECIDE: when l_returnflag = 'Z' matches no rows."))
 
 
 @pytest.mark.when_objective

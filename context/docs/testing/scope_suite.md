@@ -46,10 +46,12 @@ same thing.
 - **A NULL written key is no class.** A row whose written key column is NULL is in no class
   (`key_value`, `class_ids`, `_split`), in declarations, in `per` and in `by`; a keyed decision has no
   value there. `RelationColumns` stands for `per D`, whose columns compare NULL as a value.
-- **The three run-time errors.** `check` raises `ScopeError` before any model is built,
-  carrying the phrase DeciDB's message carries: `kept_no_rows` ("matches no rows"),
-  `not_determined` ("does not determine": every tuple term, factor and `by` value must
-  be one value over a class) and `reducer_empty` ("has no rows").
+- **An empty group has no clause.** A `when` that keeps no row generates nothing, and a group in which
+  a reducer reads no row has no instance (the reducer is NULL); an objective part that reads no row is
+  dropped. COUNT over no rows is 0.
+- **The run-time error.** `check` raises `ScopeError` before any model is built, carrying the phrase
+  DeciDB's message carries: `not_determined` ("does not determine": every tuple term, factor and `by`
+  value must be one value over a class).
 - **Solving and judging share one generator.** `solve_scoped` returns the optimum of the
   model; `judge_scoped` checks DeciDB's answer, row-aligned with the oracle's rows, and
   returns the objective it reaches: every row of a decision's class shows one value, a
@@ -106,8 +108,8 @@ one group at a time. No test asserts an answer its docstring derives.
   a class; classes and reducers read kept rows only; a NULL condition drops the row; a
   compound condition needs no parentheses; a subquery in the condition; nothing is
   computed on a row the `when` drops, so a NULL or a failing function there is no
-  error; a `when` that keeps no row is an error (D4) while an input with no rows is
-  not; the scope errors; the EXPLAIN echo, including a key or condition ending in a
+  error; a `when` that keeps no row generates nothing, as an input with no rows does;
+  the scope errors; the EXPLAIN echo, including a key or condition ending in a
   colon; a serialization round trip. Oracle, brute force (the dropped-row cases) and
   dump.
 - **`test_scope_reducer_by.py`** — `agg(e) by (G)`. No `by` is `by ()`; a reducer reads
@@ -121,8 +123,8 @@ one group at a time. No test asserts an answer its docstring derives.
   filters its own reducer only; an inner `per` counts each class once, from its first
   kept row; the colon form `SUM(D: e)` builds the model of `sum(per D: e)` and takes a
   `by`; inner `per ()`; AVG divides by the values it receives; MAX is unaffected by an
-  inner `per`; an inner key must determine its body; a reducer with no row for a group
-  is an error naming the group (D8, D18). Oracle, dump and pinned messages.
+  inner `per`; an inner key must determine its body; a `when` in front leaves out the groups
+  it keeps no row of. Oracle, dump and pinned messages.
 - **`test_scope_objective.py`** — `MAXIMIZE|MINIMIZE [when c] [per ()]: E`. An omitted
   `per` is `per ()`; the `when` in front builds the same model as a `when` inside each
   reducer; a query-wide decision, or a keyed decision with one instance, beside a
@@ -173,8 +175,8 @@ one group at a time. No test asserts an answer its docstring derives.
   the same model, the model has one row per generated class (plus one definition row per
   helper for examples 1, 5 and 8), the optimum is the oracle's, and the answer satisfies
   every generated clause. Example 1 is written bare. Example 7 also runs on data where a
-  depot has no priority shipment, which is the D8 error naming that class. Oracle and
-  dump.
+  depot has no priority shipment: that depot's instance is skipped, in both spellings.
+  Oracle and dump.
 - **`test_scope_explain_diagnose.py`** — what EXPLAIN and DIAGNOSE print. EXPLAIN shows
   a clause as written, its canonical reading when that differs, auxiliaries as the
   expression they stand for and one account line per rewrite, including the objective's

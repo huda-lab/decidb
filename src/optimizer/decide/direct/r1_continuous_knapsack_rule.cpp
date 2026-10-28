@@ -1323,7 +1323,7 @@ private:
 	//! MIN and MAX of the limits read from the data, and the check of every row's raw values and v: a NULL or NaN
 	//! raises here). The projection after it gives the group's limits L and U, and tests the verdicts: the data
 	//! checks, then infeasible, then unbounded; a source with no row
-	//! has no verdict. A `when` that keeps no row was raised before, by the row checks under the plan (D4).
+	//! has no verdict.
 	Stage<TotalColumns> GroupTotals() {
 		auto items = ReadItems();
 		auto inputs = TotalInputsOfRow(ItemsOf(items.columns));

@@ -97,27 +97,15 @@ private:
 
 	void ReadRowChecks(DirectIR &ir) const {
 		for (auto &check : decide.scope_checks) {
-			DirectRowCheck row_check;
-			if (check.kind == DecideScopeCheckKind::KEEPS_A_ROW) {
-				row_check.filter = check.rows->Copy();
-				row_check.message = DecideWhenMatchesNoRowsMessage(check.subject);
-			} else if (check.kind == DecideScopeCheckKind::READS_A_ROW && check.key == DConstants::INVALID_INDEX) {
-				row_check.rows = check.rows ? check.rows->Copy() : nullptr;
-				row_check.filter = check.filter->Copy();
-				row_check.message = DecideReducerHasNoRowsMessage(check.subject);
-			} else if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
-				// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
-				D_ASSERT(!check.rows && CheckablePredicate(check.value.get()));
-				row_check.invalid = check.value->Copy();
-				ir.row_checks.push_back(std::move(row_check));
-				continue;
-			} else {
+			if (check.kind != DecideScopeCheckKind::VALUE_IS_VALID) {
 				// No rule groups rows by a `by` key or a `per K:` class yet.
 				MarkNotProved(ir.status);
 				continue;
 			}
-			// A `when` names no decision and is planned over the DECIDE input, so it reads source columns only.
-			D_ASSERT(CheckablePredicate(row_check.rows.get()) && CheckablePredicate(row_check.filter.get()));
+			// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
+			D_ASSERT(!check.rows && CheckablePredicate(check.value.get()));
+			DirectRowCheck row_check;
+			row_check.invalid = check.value->Copy();
 			ir.row_checks.push_back(std::move(row_check));
 		}
 	}

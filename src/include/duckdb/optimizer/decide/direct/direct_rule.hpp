@@ -133,10 +133,8 @@ struct DirectIRObjective {
 //! `rows` (every row, when null) and none of those rows also passes `filter`. NULL drops a row. A clause's `when` (D4)
 //! is `filter` with no `rows`; a reducer's own `when` without a `by` key (D8) is `filter` under its clause's `when`.
 //! A value check (VALUE_IS_VALID) has `invalid` instead: the message a row raises, NULL on a valid row.
+//! A value check the plan makes on the source rows: `invalid` is the message a row raises, NULL on a valid row.
 struct DirectRowCheck {
-	unique_ptr<Expression> rows;
-	unique_ptr<Expression> filter;
-	string message;
 	unique_ptr<Expression> invalid;
 };
 

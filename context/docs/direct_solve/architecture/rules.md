@@ -62,8 +62,7 @@ has a `Summary()`, the fixed line `EXPLAIN` shows for it.
 - **Every input row is read.** A bad value on the last of 5,000 rows must raise even under `LIMIT 1` or
   `COUNT(*)`. A plan that could stream wraps its checks in `DirectValidationBreaker`; a rank window already reads
   everything. Only `LIMIT 0` may skip the read.
-- **An error on the same inputs.** Where the solver raises, direct solve raises: a `when` that keeps no row (D4) and a
-  reducer whose own `when` keeps no row (D8), which the driver's row checks raise; invalid data-valued bounds and fixed
+- **An error on the same inputs.** Where the solver raises, direct solve raises: invalid data-valued bounds and fixed
   values on the rows that read them; invalid objective coefficients (NULL, NaN, infinity); infeasibility. Nothing is
   computed on a row a `when` drops (syntax reference §6.3): a value there must not raise, on either path
   (`DirectOnKeptRows`, `DirectCheckOnKeptRows`; `test_direct_source_values.py` checks each place a rule masks). Silently answering where the solver refuses is a wrong answer. What

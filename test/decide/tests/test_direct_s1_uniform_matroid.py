@@ -116,12 +116,7 @@ TIES = [
     )
 ]
 
-# MAIN with row 6 flagged, so every group has a flagged row. A per-group sum with `when flag` inside it reads the
-# flagged rows of each group, and a group with none is an error (D8): the per-group cases with an inner `when` run over
-# these rows, and the error has a case of its own (`test_s1_an_inner_when_that_empties_a_group_is_an_error`).
-MAIN_LOCAL = [dict(row, flag=True) if row["id"] == 6 else row for row in MAIN]
-
-DATASETS = {"main": MAIN, "ties": TIES, "main_local": MAIN_LOCAL}
+DATASETS = {"main": MAIN, "ties": TIES}
 
 # Objective name -> (SQL, per-row coefficient of x). The oracle evaluates the Python function.
 OBJECTIVES = {
@@ -176,6 +171,7 @@ BOUND_EXPRS = {
     "COUNT(*) / 4 * 3": lambda r, n: Fraction(n, 4) * 3,
 }
 
+
 # A count bound read from a column through an aggregate (MIN, MAX, COUNT of any numeric column; SUM and AVG of the
 # TINYINT column `sm`): SQL text -> its value given the rows the bound's clause keeps in the group (every row of the
 # group under a `when` inside the sum, the flagged ones under a `when` in front of the clause).
@@ -195,31 +191,47 @@ _REDUCER_BASES = {
 _REDUCER_EXTRAS = {
     "AVG(sm) + 2": lambda rows: Fraction(sum(r["sm"] for r in rows), len(rows)) + 2,
 }
-# A reducer with a `when` of its own reads the rows of the clause's group that the `when` keeps. A count with a
-# condition is a sum of 1 (COUNT takes no `when`, D15).
+# A reducer with a `when` of its own reads the rows of the clause's group that the `when` keeps; over no row it is NULL
+# (None), which skips the group's instance. A count with a condition is a sum of 1 (COUNT takes no `when`, D15).
+def _kept_values(rows, keep, value):
+    return [value(r) for r in rows if keep(r)]
+
+
+def _or_null(reduce):
+    return lambda values: reduce(values) if values else None
+
+
+_sum, _min, _max = _or_null(sum), _or_null(min), _or_null(max)
+_avg = _or_null(lambda values: Fraction(sum(values), len(values)))
+
+
+def _minus(a, b):
+    return None if a is None or b is None else a - b
+
+
+def _half(a):
+    return None if a is None else Fraction(a, 2)
+
+
 _REDUCER_OWN_WHEN = {
-    "SUM(when cap > 1: 1)": lambda rows: sum(1 for r in rows if r["cap"] > 1),
-    "MIN(when cap > 1: cap)": lambda rows: min(r["cap"] for r in rows if r["cap"] > 1),
-    "MAX(when flag: cap)": lambda rows: max(r["cap"] for r in rows if r["flag"]),
-    "AVG(when cap > 1: sm)": lambda rows: Fraction(
-        sum(r["sm"] for r in rows if r["cap"] > 1), sum(1 for r in rows if r["cap"] > 1)
-    ),
-    "SUM(when id > 4: 1)": lambda rows: sum(1 for r in rows if r["id"] > 4),
+    "SUM(when cap > 1: 1)": lambda rows: _sum(_kept_values(rows, lambda r: r["cap"] > 1, lambda r: 1)),
+    "MIN(when cap > 1: cap)": lambda rows: _min(_kept_values(rows, lambda r: r["cap"] > 1, lambda r: r["cap"])),
+    "MAX(when flag: cap)": lambda rows: _max(_kept_values(rows, lambda r: r["flag"], lambda r: r["cap"])),
+    "AVG(when cap > 1: sm)": lambda rows: _avg(_kept_values(rows, lambda r: r["cap"] > 1, lambda r: r["sm"])),
+    "SUM(when id > 4: 1)": lambda rows: _sum(_kept_values(rows, lambda r: r["id"] > 4, lambda r: 1)),
     # Row 0 has id 0, so the `when` leaves it out of the count.
-    "SUM(when id > 0: 1) / 2": lambda rows: Fraction(sum(1 for r in rows if r["id"] > 0), 2),
+    "SUM(when id > 0: 1) / 2": lambda rows: _half(_sum(_kept_values(rows, lambda r: r["id"] > 0, lambda r: 1))),
     # Two sums that differ only in their `when` are two window columns.
-    "SUM(when cap > 1: 1) - SUM(when cap < 3: 1)": lambda rows: sum(1 for r in rows if r["cap"] > 1)
-    - sum(1 for r in rows if r["cap"] < 3),
+    "SUM(when cap > 1: 1) - SUM(when cap < 3: 1)": lambda rows: _minus(
+        _sum(_kept_values(rows, lambda r: r["cap"] > 1, lambda r: 1)),
+        _sum(_kept_values(rows, lambda r: r["cap"] < 3, lambda r: 1)),
+    ),
 }
 REDUCER_BOUND_EXPRS = {**_REDUCER_BASES, **_REDUCER_EXTRAS, **_REDUCER_OWN_WHEN}
 
 
 def _dataset(case):
-    name = case.get("data", "main")
-    inner_when = any((bound[2] if len(bound) > 2 else case.get("when")) == "local" for bound in case.get("bounds", ()))
-    if name == "main" and case.get("per") and inner_when:
-        return MAIN_LOCAL
-    return DATASETS[name]
+    return DATASETS[case.get("data", "main")]
 
 
 def _values(records, names=NAMES):
@@ -646,7 +658,8 @@ def _s1_constraints(case):
         if isinstance(bound, (int, float)):
             return float(bound)
         if bound in REDUCER_BOUND_EXPRS:
-            return float(REDUCER_BOUND_EXPRS[bound](group_rows))
+            value = REDUCER_BOUND_EXPRS[bound](group_rows)
+            return None if value is None else float(value)
         return float(BOUND_EXPRS[bound](row, covered))
 
     for bound in case.get("bounds", ()):
@@ -676,6 +689,8 @@ def _s1_constraints(case):
             # the flagged ones under a `when` in front of the clause.
             group_rows = [rows[j] for j in members]
             limits = {limit_of(limit, rows[i], len(members), group_rows) for i in members}
+            if None in limits:
+                continue  # a reducer over no row is NULL: the group's instance is skipped
             sum_op = op
             for rhs in sorted(limits):
                 sum_op, rhs = _inclusive(op, rhs)
@@ -823,28 +838,6 @@ def test_s1_applies_when_a_bound_always_holds_in_require_mode(decidb_cli, oracle
     assert _outcome(decidb_cli, sql, "require") == _outcome(decidb_cli, sql, "off")
 
 
-# A `when` inside a per-group sum that leaves a group with no row is an error (D8), where the old `SUM(x) WHEN flag
-# PER g` left the group free. Group c of MAIN has no flagged row; the error names it. The same holds for a bound's own
-# reducer. Direct solve reads no `by` key yet, so the solver path alone is checked.
-@pytest.mark.var_boolean
-@pytest.mark.error
-@pytest.mark.correctness
-@pytest.mark.parametrize(
-    "bounds",
-    [
-        pytest.param([("=", "geq")], id="sum"),
-        pytest.param([("<=", "MIN(when flag: cap)", "plain")], id="bound_reducer"),
-    ],
-)
-def test_s1_an_inner_when_that_empties_a_group_is_an_error(decidb_cli, bounds):
-    case = {"bounds": bounds, "per": True, "when": "local", "data": "main"}
-    sql = (
-        f"SELECT id, x FROM (FROM (VALUES {_values(MAIN)}) t({', '.join(NAMES)}) {_decide_clause(case)}) q ORDER BY id"
-    )
-    with pytest.raises(DecidBCliError, match=r"has no rows for g = 'c'\."):
-        _run(decidb_cli, sql, "off")
-
-
 # The same problem inside a parent query. The first base case meets every context; the others meet one each,
 # since a context does not interact with the kind of bound.
 CONTEXT_CASES = [
@@ -955,24 +948,7 @@ def _problem(values, columns, constraint, tail="", objective="SUM(score*x)"):
 # name -> (sql, expected error class on the direct path).
 # Both paths must raise; the message and the choice among several errors need not match.
 S1_ERROR_CASES = {
-    # --- a `when` that keeps no row (D4) ---
-    "empty_top_when": (
-        _problem("(1, 2.0, false)", "id, score, flag", "when flag: SUM(x) <= 1"),
-        "empty_aggregate",
-    ),
-    # A per-row bound under a `when` that keeps no row is the same error.
-    "empty_when_on_a_row_bound": (
-        _problem("(1, 2.0), (2, 3.0)", "id, score", "SUM(x) <= 1 AND when id = 99: x >= 1"),
-        "empty_aggregate",
-    ),
-    "empty_all_keys_null": (
-        _problem(
-            "(1, NULL::VARCHAR, 2.0), (2, NULL::VARCHAR, 3.0)",
-            "id, dept, score",
-            "when dept IS NOT NULL: SUM(x) by (dept) <= 1",
-        ),
-        "empty_aggregate",
-    ),
+    # --- a bound no count can hold ---
     "impossible_upper_bound_per_is_infeasible": (
         _problem(
             "(1, NULL::VARCHAR, TRUE, 9.0), (2, 'A', FALSE, 5.0)",
@@ -987,19 +963,6 @@ S1_ERROR_CASES = {
         _problem("(1, TRUE, 9.0), (2, FALSE, 5.0)", "id, flag, score", "SUM(x) >= 1 AND SUM(x) <= -1 AND x >= flag"),
         "infeasible",
     ),
-    "impossible_upper_bound_with_when_has_no_rows": (
-        _problem(
-            "(1, NULL::VARCHAR, TRUE, 9.0), (2, 'A', FALSE, 5.0)",
-            "id, dept, flag, score",
-            "when flag AND dept IS NOT NULL: SUM(x) by (dept) <= -1",
-        ),
-        "empty_aggregate",
-    ),
-    # The sum's own `when` keeps none of the rows the clause's `when` keeps (D8).
-    "inner_when_disjoint_from_the_front_when": (
-        _problem("(1, 2.0, true), (2, 3.0, false)", "id, score, flag", "when flag: SUM(when NOT flag: x) <= 1"),
-        "empty_aggregate",
-    ),
     # --- an equality bound has one value per group ---
     "equality_bound_varies_within_a_group": (
         _problem(
@@ -1008,11 +971,6 @@ S1_ERROR_CASES = {
             "SUM(x) by (dept) = eqcap",
         ),
         "equality_varies",
-    ),
-    # --- no objective: the bounds and fixed values are still read on every row and still decide feasibility ---
-    "no_objective_empty_top_when": (
-        "SELECT x FROM (FROM (VALUES (1, false)) t(id, flag) DECIDE x(BOOL) SUCH THAT when flag: SUM(x) >= 1) q",
-        "empty_aggregate",
     ),
     # A computed value raises direct solve's own NaN error.
     "fixed_computed_value_nan": (
@@ -1429,13 +1387,6 @@ _REDUCER_ROWS = (
 S1_REDUCER_ERROR_CASES = {
     # The NaN is on row 3, in group b, which the aggregate reads.
     "nan_float_column": ("FLOAT", ("1.0", "2.0", "'NaN'::FLOAT", "4.0"), "SUM(x) by (g) <= MAX(v) by (g)"),
-    # A `when` that keeps no row is an error (D4).
-    "empty_group_top_when": ("INTEGER", ("1", "2", "3", "4"), "when id > 100: SUM(x) <= MIN(v)"),
-    "empty_group_top_when_per": (
-        "SMALLINT",
-        ("1", "2", "3", "4"),
-        "when id > 100 AND g IS NOT NULL: SUM(x) by (g) <= AVG(v) by (g)",
-    ),
 }
 
 

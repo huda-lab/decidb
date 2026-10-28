@@ -1000,31 +1000,4 @@ TEST_CASE("S1 and R1 keyed plans answer as the solver does on the same `by` key"
 	}
 }
 
-//! A reducer row check that looks only at the rows `rows` keeps (`when flag: SUM(when id > bar: x)` in SQL, which no
-//! rule reads yet): the plan raises its message when none of those rows passes the filter.
-Edit RowCheckOverFlaggedRows(int32_t bar) {
-	return [bar](DirectIR &ir) {
-		DirectRowCheck check;
-		check.rows = make_uniq<BoundColumnRefExpression>(LogicalType::BOOLEAN, ir.source_bindings[KEYED_FLAG_SLOT]);
-		check.filter = make_uniq<BoundComparisonExpression>(
-		    ExpressionType::COMPARE_GREATERTHAN,
-		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ir.source_bindings[KEYED_ID_SLOT]),
-		    make_uniq<BoundConstantExpression>(Value::INTEGER(bar)));
-		check.message = "probe: the reducer reads no flagged row";
-		ir.row_checks.push_back(std::move(check));
-	};
-}
-
-TEST_CASE("A reducer row check reads only the rows its clause keeps", "[decidb]") {
-	DuckDB db(nullptr);
-	Connection con(db);
-	auto query = KeyedQuery("x(BOOL)", "SUM(x) <= 1", "MAXIMIZE SUM(w*x)", "x");
-	// Row 6 is flagged and has id > 5.
-	REQUIRE_NO_FAIL(*RunEdited(con, MakeS1UniformMatroidRule, RowCheckOverFlaggedRows(5), query));
-	// Rows 7 to 9 have id > 6 but are not flagged, so the check must not count them.
-	auto failed = RunEdited(con, MakeS1UniformMatroidRule, RowCheckOverFlaggedRows(6), query);
-	REQUIRE(failed->HasError());
-	CHECK(failed->GetError().find("probe: the reducer reads no flagged row") != string::npos);
-}
-
 } // namespace direct_decline_test

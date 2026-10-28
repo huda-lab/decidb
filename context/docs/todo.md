@@ -71,16 +71,16 @@ Rulings (architect review done):
 4. **Composite key:** NULL when any written column is NULL. **A relation key** (`per D:`) is unchanged (owner,
    2026-10-28, "Keep todays per D"; Anh: defer replacing `per D`): the columns it stands for compare NULL as a value
    (NOT DISTINCT). A column written on its own beside its relation (`per D, D.g`) is NULL in no group. Shipped.
-5. **An empty group skips its constraint** (deck: a reducer over no rows is NULL). This retires D4 and D8 together: a
+5. **An empty group skips its constraint** (deck: a reducer over no rows is NULL). It retires the errors for both: a
    `when` that keeps no rows yields no constraints, and a group a reducer's own `when` or NULL keys empty yields none
-   ([roadmap § the deck changes](language/roadmap.md#current-behavior-the-deck-changes)).
+   Shipped (D68).
 8. **A NULL data value follows the deck** (pp. 50, 56): shipped (guide §3, §7.2).
 6. **Collation:** keys group on the collated expression (`PushCollation`, as GROUP BY); a label quotes the group's
    least raw spelling.
 7. **Goldens:** the agent shows the diff entry by entry before re-capturing, once, after the numbering lands.
 
 Commits, in order: key table (shipped: `LogicalDecide::keys`) → one numbering (shipped: ids by key value) → NULL data
-values (shipped) → NULL key and keyed decision (shipped) → empty groups (D4, D8) → collation.
+values (shipped) → NULL key and keyed decision (shipped) → empty groups (shipped, D68) → collation.
 
 - [ ] Key grouping ignores collation (follow the collation) — [bugs § collation](issues/bugs.md#key-grouping-ignores-collation)
 

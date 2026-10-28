@@ -88,11 +88,10 @@ struct DecideVarScopeInfo {
 };
 
 //! What a run-time scope check (LogicalDecide::scope_checks) asks of the rows.
-//!   KEEPS_A_ROW    — a `when` keeps a row of a non-empty input
 //!   DETERMINES     — every class of a key shows one value, or one instance of a decision
-//!   READS_A_ROW    — every group of a reducer's `by` key has a row passing its own `when`
 //!   VALUE_IS_VALID — every row holds a value the model can read: a computed message, NULL on a valid row
-enum class DecideScopeCheckKind : uint8_t { KEEPS_A_ROW = 0, DETERMINES = 1, READS_A_ROW = 2, VALUE_IS_VALID = 3 };
+//! An empty group is no check: it skips its constraint (deck p. 56).
+enum class DecideScopeCheckKind : uint8_t { DETERMINES = 1, VALUE_IS_VALID = 3 };
 
 //! How one column of a key (LogicalDecide::keys) compares NULL.
 //!   NO_GROUP — a column the user wrote: rows group as SQL's `=` compares them, so a NULL

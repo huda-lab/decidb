@@ -15,7 +15,7 @@ needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,764 assertions in 6
   With the DECIDE optimizer off, every mode refuses the query (`../../pipeline/05_optimizer/done.md`).
 - **IR.** One read-only front end turns the bound tree into the IR: decision domains and scopes, each constraint with
   its reducer, the reducer's own `when`, qualifier, factor, the clause's `when`, right side, and the objective, and the
-  run-time scope checks the plan must run (`row_checks`: D4, and D8 without a key). Parts the binder admits and no rule
+  value checks the plan must run (`row_checks`: the bound-side window's `VALUE_IS_VALID` checks). Parts the binder admits and no rule
   models are *not proved*, and building the IR never throws: `norm(e, 0)` (it needs indicator variables), any norm tag
   the front end does not expect, a reducer's `by` key, a `per K:` in front of a clause, a clause whose reducer value
   became a helper decision and the two-level objective are not-proved parts; a
@@ -133,7 +133,7 @@ needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,764 assertions in 6
     reducer's argument (or a norm's written body: `SIGN(NaN)` is 0) on the rows the reducer reads, the bound on the
     kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row.
     `PhysicalDecide::RunScopeChecks` raises the first on the solver path, `AddRowChecks` turns them into row checks in a
-    direct plan, so a scope error (D4, D8, a `per K:` that does not determine a value) is always reported before a bad
+    direct plan, so a scope error (a `per K:` that does not determine a value) is always reported before a bad
     value, and both paths raise the same text.
   - A rule reads the reduced bound as a column, so it never reduces or checks a data bound itself. The cost is two
     windows under the rule for a data limit (framework todo H-03).

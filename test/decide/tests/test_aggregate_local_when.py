@@ -268,27 +268,6 @@ def test_expression_level_when_still_works(
     )
 
 
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.error
-@pytest.mark.error_infeasible
-def test_expression_level_when_applies_before_aggregate_local_when(decidb_cli):
-    """A front `when` with reducers' own `when`s inside: the front `when w1:`
-    keeps only the w1 rows, so `sum(when w2: ...)` reads none of them and is
-    refused pre-solver."""
-    decidb_cli.assert_error(
-        """
-        SELECT name, value, w1, w2, x FROM (
-            VALUES ('a', 6, true, false), ('b', 4, false, true)
-        ) t(name, value, w1, w2)
-        DECIDE x(BOOL)
-        SUCH THAT when w1: sum(when w1: x * value) + sum(when w2: x * value) <= 6
-        MAXIMIZE SUM(x * value)
-    """,
-        match=re.escape('DECIDE: sum(when w2: x * "value") has no rows.'),
-    )
-
-
 # ---------------------------------------------------------------------------
 # A. Composition with other features
 # ---------------------------------------------------------------------------
@@ -688,24 +667,6 @@ def test_aggregate_local_when_objective_mixed_filtered_unfiltered(
 # C. Edge conditions
 # ---------------------------------------------------------------------------
 
-@pytest.mark.when
-@pytest.mark.when_constraint
-@pytest.mark.edge_case
-@pytest.mark.error_infeasible
-def test_aggregate_local_when_all_filtered_out(decidb_cli):
-    """Mixed reducer `when`s with one term's mask all-false — refused
-    pre-solver: a reducer whose own `when` keeps no row is an error (D8), never a
-    term that contributes 0, and the refusal names the reducer ("... has no rows.")."""
-    decide_sql = """
-        SELECT name, value, flag, x FROM (
-            VALUES ('a', 10, false), ('b', 5, false), ('c', 8, false)
-        ) t(name, value, flag)
-        DECIDE x(BOOL)
-        SUCH THAT sum(when flag: x * value) + sum(x * value) <= 23
-        MAXIMIZE SUM(x * value)
-    """
-    decidb_cli.assert_error(decide_sql, match=re.escape('DECIDE: sum(when flag: x * "value") has no rows.'))
-
 
 @pytest.mark.when
 @pytest.mark.when_constraint
@@ -879,27 +840,6 @@ def test_aggregate_local_when_decide_var_in_condition_error(decidb_cli):
         MAXIMIZE SUM(x * value)
     """,
         match=re.escape("x is a decision; when, per and by may only use data"),
-    )
-
-
-@pytest.mark.when
-@pytest.mark.when_objective
-@pytest.mark.error
-@pytest.mark.error_infeasible
-def test_aggregate_local_when_mixed_expression_objective_error(decidb_cli):
-    """The objective's `when` and its reducers' own `when`s combine: the front
-    `when w1:` applies first, so on this data `sum(when w2: ...)` reads no row and
-    is refused."""
-    decidb_cli.assert_error(
-        """
-        SELECT name, value, w1, w2, x FROM (
-            VALUES ('a', 10, true, false), ('b', 5, false, true)
-        ) t(name, value, w1, w2)
-        DECIDE x(BOOL)
-        SUCH THAT SUM(x) <= 2
-        MAXIMIZE when w1: sum(when w1: x * value) + sum(when w2: x * value)
-    """,
-        match=re.escape('DECIDE: sum(when w2: x * "value") has no rows.'),
     )
 
 

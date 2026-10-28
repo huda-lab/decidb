@@ -1577,23 +1577,6 @@ def test_entity_scoped_var_in_when_condition_error(decidb_cli):
 # Test 24: WHEN filters out all rows for some entities
 # ---------------------------------------------------------------------------
 
-@pytest.mark.error_infeasible
-@pytest.mark.when_constraint
-def test_entity_scoped_when_entity_invisible(decidb_cli):
-    """Entity-scoped aggregate constraint with WHEN matching no rows on the
-    given data — now rejected pre-solver per the "reject all empty aggregate
-    sets" rule."""
-    sql = """
-        SELECT c.c_custkey, n.n_nationkey, c.c_acctbal, keepN
-        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
-        WHERE n.n_regionkey = 0
-        DECIDE per n: keepN(BOOL)
-        SUCH THAT when c.c_acctbal > 9998: SUM(keepN * c.c_acctbal) <= 50000
-          AND SUM(keepN) <= 10
-        MAXIMIZE SUM(keepN)
-    """
-    decidb_cli.assert_error(sql, match=r"when c\.c_acctbal > 9998 matches no rows")
-
 
 # ---------------------------------------------------------------------------
 # Test 25: Equality (=) constraint with entity-scoped variable
