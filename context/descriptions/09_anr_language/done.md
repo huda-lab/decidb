@@ -23,6 +23,28 @@ bind-time refusals a later change may lift), `../01_pipeline/03_logical_plan/tod
 `../05_performance/04_model_construction/todo.md` (a helper's box per instance) and
 `../06_issues/code_quality/todo.md` (the structural follow-ups).
 
+## The full algorithm — phase 0
+
+The rest of the deck's ANR proposal — variant signatures, reducers nested to any depth,
+frame selectors — is planned in
+[`anr_algorithm_and_frames_plan.md`](anr_algorithm_and_frames_plan.md), whose
+decisions D64–D79 were settled on 2026-10-28; each enters the table below when the phase
+that implements it ships. Phase 0 shipped the same day and changed no engine code:
+
+- `test/decide/tests/_anr_oracle.py`, a reference evaluator for the whole planned
+  language, and `_anr_cases.py`, the plan's fixtures with their hand-computed answers
+  ([`../04_testing/scope/done.md`](../04_testing/scope/done.md)).
+- `test_anr_oracle_selfcheck.py`: the evaluator reproduces the deck's constraints
+  (pp. 35, 36, 97, 108, 112, 115, 119), agrees with exhaustive enumeration, gives today's
+  answer on the 424 cells of the scope grid where today's rule holds and answers the 360
+  it refuses, reads the two-level objective as a nested reducer, and matches DeciDB's
+  feasibility on every fixed assignment of two small grids.
+- Baselines for later phases: the golden corpus identical on both solvers, and the
+  medium-tier timings in
+  [`../05_performance/04_model_construction/done.md`](../05_performance/04_model_construction/done.md).
+- Found on the way: a bound-side `count(e)` refuses a NULL instead of counting the
+  non-NULL values ([`../06_issues/bugs/todo.md`](../06_issues/bugs/todo.md)).
+
 ## Item 1 — the scope grammar
 
 - The grammar accepts `per K: x(TYPE)` in a declaration, `[when c] [per K]:` in front of a

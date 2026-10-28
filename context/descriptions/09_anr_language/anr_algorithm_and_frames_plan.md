@@ -117,8 +117,10 @@ implements it ships.
 ## 3. The semantic contract
 
 This is the text to fold into `00_project_overview/syntax_reference.md` (§5.5 nesting,
-§5.6 frames, §7.1 rewritten, §10 updated) and `03_expressivity/scope/done.md` in phase 0.
-Nothing here is implemented; the tests of §6 pin it.
+§5.6 frames, §7.1 rewritten, §10 updated) and `03_expressivity/scope/done.md` as each
+phase ships it. Nothing here is in the engine yet. The reference evaluator built in
+phase 0, `test/decide/tests/_anr_oracle.py`, encodes every rule below
+(`04_testing/scope/done.md`), and the tests of §6 pin them.
 
 ### 3.1 Scoped expressions, recursively
 
@@ -155,17 +157,23 @@ are a list, and `E`'s result is the concatenation over classes, multiplicity kep
 (p. 38). At the Boolean boundary every value is a constraint instance; inside a reducer
 every value is a member.
 
-- **A direct tuple term** is a maximal reducer-free, frame-free scalar subtree of the body
-  as written, compared by value: `per g: x <= a + b` over rows `(1, 2)` and `(2, 1)` has
-  one signature value 3. Constants are terms with one value.
+- **A direct tuple term** is a maximal reducer-free, frame-free scalar subtree of the body,
+  compared by value: `per g: x <= a + b` over rows `(1, 2)` and `(2, 1)` has one
+  signature value 3. Constants are terms with one value. It is read on the canonical
+  tree (D77), so the reducer-free terms of one additive context, read through `+`, `-`
+  and constant factors, form one field: `x + a <= b + sum(y)` has the one field
+  `x + a - b`, and written associativity never changes the count. A reducer-free term
+  under a row-varying factor or inside `abs` belongs to that factor's or that `abs`'s own
+  context.
 - **A decision** is compared by *instance*: a per-row decision is its row, a keyed one its
   class, a query-wide one itself. `per D.depotID: ship <= 10` with `ship` per row
   generates one instance per row.
 - **A frame term** contributes the frame's `within` key and, for a relative selector, the
   anchor's order key (deck p. 99; P13): two anchors in one class that look at different
   positions are two variants, two that look at the same position are one. `first` and
-  `last` contribute the `within` key only. Absence (§3.5) is not a field but a mask on
-  the rows.
+  `last` contribute the `within` key only. A fallback the anchor reaches is a field too,
+  compared by value; one it does not reach is neither a field nor evaluated. Absence
+  (§3.5) is not a field but a mask on the rows.
 - **`per row`** keeps every tuple occurrence, including two rows equal in every column.
 - **NULL** is one value in a signature; a NULL coefficient or bound is still the §3 error
   on the instance that reads it.
@@ -187,7 +195,7 @@ A reducer's members are the values its operand `E'` generates on the group it re
 | `SUM` | `Σ mi`; a linear expression over helpers, decisions and data |
 | `AVG` | `SUM / n`, `n` the number of non-NULL members — classes × signatures, not rows |
 | `MIN` / `MAX` | an extremum helper over the members; exact (P10) |
-| `COUNT` | data only at every depth: `count(*)` counts members, `count(e)` the non-NULL ones |
+| `COUNT` | data only at every depth: `count(*)` counts members, `count(e)` the non-NULL ones; no member at all is 0, as SQL counts an empty set |
 | `norm(e, p) by (Γ)` | as today at the root of a comparison or objective; refused inside a reducer (P11) |
 
 - An inner `when` filters the members' rows; an inner `per` picks the classes among
@@ -267,7 +275,7 @@ A frame that selects nothing is **absent** (deck p. 50). Absence is not a NULL v
 | Where the absent frame sits | Effect |
 |---|---|
 | directly in a comparison (non-reduced) | that instance is skipped; no error, not D4 |
-| in a reducer operand | that member is dropped; a reducer with no member left is absent |
+| in a reducer operand | that member is dropped; a reducer with no member left is absent, except `COUNT`, which is 0 |
 | in the objective, non-reduced | error: the objective cannot be skipped |
 | a range with some positions missing, no `all` | the present positions only |
 | `all` with a missing position | absent |
@@ -291,7 +299,8 @@ New or changed (fixed phrases in bold are what tests pin):
 |---|---|
 | objective with more than one signature | `DECIDE objective: 'w' takes more than one value over the kept rows (3, 5), so the objective **would be produced more than once**; move it inside a reducer or fix it with when` |
 | frame partition | `DECIDE: per <K> **does not determine the timeline** <P> of <frame>. <class> spans <P> = <a>, <b>.` |
-| ambiguous peer | `DECIDE: <frame> **finds** <n> **rows at** <partition>, <S> = <v>; a position must hold one row.` |
+| ambiguous peer | `DECIDE: <frame> finds <n> rows at <partition>, <S> = <v>; **a position must hold one row**.` |
+| objective with an absent frame | `DECIDE objective: <frame> **selects no position**; the objective is produced once and cannot be skipped. Write an else, or reduce the frame.` |
 | bad `k` / `d` | `DECIDE: in <frame>, <k> **must be a positive whole number**` |
 | reducer or frame in a payload | `DECIDE: a reducer **inside at(...)** is not supported; reduce outside the frame` (and the `over` form) |
 | frame in a key or condition | `DECIDE: a frame selector **is not allowed in** when, per, by, within or an order key` |
@@ -598,18 +607,16 @@ Each phase is one review unit, ships on the single path, and ends with the full
 verification list of §6.9 green. Phases 3–5 may start once phase 1's signature contract
 is merged; phase 2 and phase 3 are independent of each other.
 
-### Phase 0 — Contract, oracle, fixtures (no engine change)
+### Phase 0 — Contract, oracle, fixtures (shipped 2026-10-28)
 
-- The contract is §3 of this plan. `syntax_reference.md` and
-  `03_expressivity/scope/done.md` describe implemented behaviour only, so each phase
-  updates them as it ships (phase 1: §7.1 and §10; phase 2: §5.5; phases 3–5: §5.6).
-  Decisions D64–D79 are settled (§2).
-- Build `test/decide/tests/_anr_oracle.py` (§6.2) and `_anr_cases.py` (§6.3), and the
-  oracle's own tests (`test_anr_oracle_selfcheck.py`) reproducing the deck's hand-computed
-  results: pp. 35, 36, 97, 108, 115, 119.
-- Record baselines: the golden corpus on both solvers, `benchmark/decide` timings for the
-  existing flat workloads (`profile_pipeline.py`).
-- Exit: the oracle reproduces every deck value; the docs state every rule of §3.
+No engine change. Built: the reference evaluator `_anr_oracle.py`, every fixture of §6.3
+in `_anr_cases.py`, and `test_anr_oracle_selfcheck.py`, which checks the evaluator
+against the deck's hand computations, exhaustive enumeration, today's scope oracle on its
+784-cell grid, today's engine, and the engine's feasibility with every decision fixed
+(`04_testing/scope/done.md`). Baselines: the golden corpus identical on Gurobi and HiGHS,
+and the medium-tier timings in `05_performance/04_model_construction/done.md`. Found: a
+bound-side `count(e)` refuses a NULL instead of counting the non-NULL values
+(`06_issues/bugs/todo.md`), fixed in phase 2.
 
 ### Phase 1 — Variants (layers 3, 4, 8; no new syntax)
 
@@ -726,155 +733,27 @@ is merged; phase 2 and phase 3 are independent of each other.
 
 ### 6.2 The recursive oracle — `_anr_oracle.py`
 
-A reference evaluator for the full language, replacing `ScopedModel`'s special cases
-(`Nested`, `check`'s `not_determined`) once phase 2 ships; `ScopedModel` then delegates
-to it so the existing suites keep their statements.
-
-```python
-# expressions, as plain Python, no SQL
-Const(v) | Col(fn: Row -> value) | Var(name) | Add(a, b) | Mul(fn_or_const, e) | Abs(e)
-Agg(kind, operand: E, by: key | None)                 # SUM AVG MIN MAX COUNT
-At(frame: Frame, payload: Expr, fallback: Expr | None)
-Range(kind, frame: Frame, payload: Expr, every=1, fallback=None, all=False)
-Frame(order: fn, desc=False, cyclic=False, within: key | (), start: ('first'|'last'|'previous'|'next', k), end=None)
-E(when: fn | None, per: PER_ROW | GLOBAL | key, body: Expr | Cmp(lhs, sense, rhs))
-```
-
-`evaluate(E, rows)` returns a list of values, each a symbolic linear form over
-`(decision, instance)` plus `CONSTANT`, an `Extremum(kind, members)` node, `NULL`, or
-`ABSENT`, following §3.1–§3.5 literally: filter, classes, signatures as frozen tuples of
-*evaluated* direct terms (symbolic forms frozen by instance identity, never by solved
-value), reducer groups over the filtered relation, frames by partition/sort/peers/positions.
-`solve(model, clauses, objective, solver)` emits extrema as auxiliaries with pick
-indicators (as `ScopedModel.solve_scoped` does) and strict senses stepped (D60);
-`judge(answer, …)` checks DeciDB's rows against the same generated instances. The two
-share one generator. `errors`: `kept_no_rows`, `reducer_empty`, `objective_variants`,
-`frame_partition`, `ambiguous_peer`, with the phrases of §3.6.
-
-Two checks the first draft insisted on, kept: signatures are frozen on symbolic identity
-*before* any value is substituted, so two distinct instances that happen to solve to the
-same number never collapse; and for tiny whole-number fixtures `status_grid(model,
-domains)` fixes every native decision to each assignment of its domain, asks DeciDB for
-the feasibility status of the fixed model, and compares it with the oracle's — the check
-that catches de-duplication after substitution and lost multiplicity.
-
-Self-check (`test_anr_oracle_selfcheck.py`): the oracle's generated instances for F1
-equal the deck's three constraints (p. 97, p. 115 with the extremum nodes, p. 119 for the
-SUM variant), F2's four comparisons (p. 108), F3's three-plus-one variants (p. 35, 36).
-
-For nonlinear tiny cases (ABS over a frame, products) `_brute_force.py` enumerates.
+Built in phase 0; its statements, its readings (`instances`, `solve`, `judge`,
+`feasible`, `brute_force`) and its error kinds are described in
+`04_testing/scope/done.md`. What remains: once phase 2 ships, `_scope_oracle.ScopedModel`
+delegates to it, so the existing suites keep their statements and lose the special
+`Nested` form, and `ScopeError.not_determined` is retired with the last determination
+error (phase 1).
 
 ### 6.3 Fixtures — `_anr_cases.py`
 
-Hand-computed; each is also a self-check case of the oracle.
+Built in phase 0: F1–F21 with their variants, and the edge cases beside them, each with
+its SQL, its oracle statement and its hand-computed answer (`04_testing/scope/done.md`).
+`Case.phase` is the first phase whose engine runs a case through DeciDB:
 
-**F1 — the running example** (deck p. 80). One table `t(tid, id, rid, m, cid, p, d, c)`:
-
-```text
-1 d1 East Air    c1 T 20 30
-2 d1 East Air    c1 T 15 30
-3 d1 West Ground c2 T 10 50
-4 d1 West Ground c3 F  5 50
-5 d2 West Air    c4 T 25 45
-6 d2 West Air    c4 T 15 45
-DECIDE ship(INT) SUCH THAT ship <= 100 AND
-per t.id: sum(when t.p per t.cid: max(ship) by (t.cid)) by (t.rid) + 0.10 * sum(t.d) by (t.m) <= t.c
-MAXIMIZE sum(ship)
-```
-
-Generated: `max(x1,x2) + 7.5 <= 30`, `x3 + max(x5,x6) + 1.5 <= 50`,
-`x3 + max(x5,x6) + 7.5 <= 45` (3 instances: d1 has 2 variants, d2 has 1). Optimum 218
-(`x1 = x2 = 22, x3 = 0, x4 = 100, x5 = x6 = 37`). The `sum(…)` inner variant (p. 119):
-`x1 + x2 + 7.5 <= 30`, `x3 + x5 + x6 + 1.5 <= 50`, `x3 + x5 + x6 + 7.5 <= 45`; optimum
-159. Pins: EXPLAIN says 3 instances and names the two helpers; the dump has one
-extremum helper instance per `(rid, cid)` group that holds two members and none for the
-singleton `c2` after phase 7.
-
-**F2 — previous inventory** (deck p. 99). `t(tid, product, period, cap)` rows
-`(1,A,1,5) (2,A,2,3) (3,B,1,1) (4,B,2,4) (5,B,3,8) (6,B,4,2)`, `DECIDE inventory(INT)`,
-`inventory <= t.cap AND inventory >= at(previous: inventory) over (t.period within t.product)`,
-`MAXIMIZE sum(inventory)`. Generated: `x2 >= x1, x4 >= x3, x5 >= x4, x6 >= x5`; rows 1 and 3
-skipped. Optimum 13. With `cyclic`: adds `x1 >= x2, x3 >= x6`; optimum 10. With
-`at(next: …)` and `<=`: the same four rows; 13. With `desc`: `previous` under `desc` is
-`next` under `asc`.
-
-**F3 — variants** (deck p. 34). `P(depotID, region, shipment, lim)`: D1 East S1 100; D1
-East S2 90; D1 West S3 80; D1 West S4 80; D2 East S5 50; D2 East S6 50. `DECIDE ship(INT)`,
-`per P.depotID: sum(ship) by (P.region) <= P.lim`, `MAXIMIZE sum(ship)`: D1 → 3 variants
-(East ≤ 100, East ≤ 90, West ≤ 80), D2 → 1 (East ≤ 50); optimum 130. With
-`by (P.region, P.lim)`: `ship1 <= 100, ship2 <= 90, ship3 + ship4 <= 80, ship5 + ship6 <= 50`;
-320. Today both are the determination error.
-
-**F4 — cyclic ring** (deck p. 67). `s(loop, idx, cap)`: `(L,1,1) (L,2,10) (L,3,4)`,
-`DECIDE load(INT)`, `load <= s.cap AND abs(load - at(previous: load) over (s.idx cyclic
-within s.loop)) <= 2`, `MAXIMIZE sum(load)`: 7 (`1, 3, 3`); without `cyclic`: 8
-(`1, 3, 4`, station 1 skipped).
-
-**F5 — weekly step** (deck p. 67). 28 rows `d(contract, day)`, `DECIDE delivery(INT)`,
-`delivery <= 5 AND sum(from first to last every 7: delivery) over (d.day within
-d.contract) <= 10`, `MAXIMIZE sum(delivery)`: positions days 1, 8, 15, 22; every anchor
-generates the same row, which collapses to one; optimum 130. `from 2 next to last every 7`
-at day 1 samples days 3, 10, 17, 24.
-
-**F6 — rolling with policies** (deck pp. 45, 49, 68). `t(product, period)` A, periods
-1–4, `DECIDE produce(INT)`, `sum(from previous to next <policy>: produce) over (t.period
-within t.product) >= 6`, `MINIMIZE sum(produce)`: default (truncate) 12; `all` 6
-(ends skipped); `else 1` 10 (`x1 + x2 >= 5`, `x3 + x4 >= 5`).
-
-**F7 — duplicate peers.** Periods `(1, 1, 2)` in one product: `at(previous: x)` at
-period 2 is the P4 error; `sum(from previous to previous: x)` is `x1 + x2`.
-
-**F8 — NULL order key.** A NULL period sorts last (P5): `at(last: x)` selects it.
-
-**F9 — k > 1.** `at(2 previous else 0: x)` over five periods: rows 1, 2 take 0.
-
-**F10 — scalar field.** `DECIDE per t.g: x(INT)`, rows `(g=1, a=1, b=2), (g=1, a=2, b=1)`:
-`per t.g: x <= t.a + t.b` is one instance `x <= 3`; `per t.g: x <= t.a` is two
-(`x <= 1`, `x <= 2`).
-
-**F11 — join fan-out.** A join repeating a tuple twice: `per row` counts both; an inner
-`per D` counts once when the body is determined and twice when it varies (P2's trap,
-pinned both ways with EXPLAIN's variant line).
-
-**F12 — a per-row decision under a key.** `per D.depotID: ship <= 10` is one instance
-per row.
-
-**F13 — objective variants** (P3): `MAXIMIZE sum(x) - w * s` with a row-varying `w` is the
-reworded error.
-
-**F14 — nested data reducer on the bound side.** `sum(x) by (g) <= avg(per h: max(v) by
-(g, h)) by (g)` evaluated as values.
-
-**F15 — smoothing in the objective.** `x >= t.d AND MINIMIZE sum(abs(x - at(previous else
-0: x) over (t.period within t.product)))` with `d = (2, 5, 1, 4)`: optimum 5 (brute force
-over `0..5`).
-
-**F16 — three levels.** `per g: sum(per h: max(per k: sum(x) by (g, h, k)) by (g, h)) by (g)
-<= cap` over a 2×2×2 key grid; oracle-judged.
-
-**F17 — DIAGNOSE on a variant.** F3 with `lim` 50 made 0: the finding names
-`P.depotID = 'D2'` and the variant `P.region = 'East'`; expanded scope reports the
-representative row; DROP of the clause removes every variant and every helper
-definition it owns.
-
-**F18 — AND split.** `at(previous: x) over (…) >= 10 AND x <= 10`: the first period
-skips the first comparison and keeps `x <= 10` (a violated cap stays violated).
-
-**F19 — frame fields in a signature** (P13). `t(product, period, demand)` A, periods 1–4,
-demand `5, 5, 5, 5`; `DECIDE x(INT)`; `per (): sum(x) <= sum(per t.product: at(previous:
-t.demand) over (t.period within t.product))`, `MAXIMIZE sum(x)`. The inner `per product`
-class has one variant per period (the order key is a field): members 5, 5, 5 (period 1
-absent), bound 15, optimum 15. Comparing frames by resolved value would give one member
-and 5; the test pins 15.
-
-**F20 — field decomposition** (P14). F10's table: `per t.g: x <= t.a + t.b` is one
-instance (`x <= 3`); `per t.g: x <= t.a + sum(y) + t.b` and `per t.g: x <= t.a + t.b +
-sum(y)` generate the same number of instances (fields are read on the canonical tree).
-
-**F21 — absence under the tightest bound** (P16). `t(g, period, cap)` with one group of
-three periods, caps `9, 4, 7`; `sum(x) by (t.g) <= at(previous: t.cap) over (t.period
-within t.g)` with no `per`: period 1 is absent, periods 2 and 3 pair the group sum with
-caps 9 and 4; the group's row takes 4. `MAXIMIZE sum(x)` is 4.
+| Phase | Cases |
+|---|---|
+| 0 (today's engine) | F10_sum, F11_determined, F11_per_row, null_bound, kept_none |
+| 1 | F3_region, F3_region_limit, F10_split, F11_varying, F11_average, F12, F13, F20_split_terms, F20_joined_terms |
+| 2 | F1_max, F1_sum, F14, F16, F16_small, count_non_null, nested_d8 |
+| 4 | F2_previous, F2_cyclic, F2_next, F2_desc, F4_cyclic, F4_open, F7_point, F8_last, F8_last_desc, F8_first, F8_first_desc, F9, F15, F18, F18_cap_kept, F19, F21, lazy_unused, lazy_reached, partition_spanned, partition_held |
+| 5 | F5_weekly, F5_offset, F6_truncate, F6_all, F6_else, F7_range, objective_absent, cyclic_repeats, reversed, count_empty |
+| 6 | F17 |
 
 ### 6.4 `test_anr_variants.py` (phase 1)
 
@@ -907,7 +786,7 @@ the DeQL comparison query (pp. 73–75) as written; a keyed-decision payload; a 
 payload on the bound side; a query-wide fallback decision; `first`/`last` under `per
 T.productID` (one instance per product) and under `per P.category` (P6 error);
 `previous` under `per T.productID` (variants per period); an unused fallback that would
-fail (`1 / 0`) is no error.
+fail (`CAST(t.s AS INTEGER)` of a text; DuckDB reads `1 / 0` as infinity, not an error) is no error.
 `TestRange`: F5, F6; deck examples 2, 3, 6; every endpoint pair (`first`, `last`,
 `k previous`, `k next` on both ends); `every d` with a non-dividing span; a reversed range
 is empty (absent) under both policies; cyclic multi-wrap counts repeats (three peers,

@@ -24,6 +24,24 @@
   the query hang indefinitely on HiGHS once the model is large enough; there
   is no DeciDB-level safety net.
 
+## `count(e)` over a NULL value is refused, and counts NULLs otherwise
+
+- **Location:** `EvaluateRhsReducerPerGroup` in
+  `src/execution/operator/decide/physical_decide.cpp` (around line 1203, the argument read
+  through `ExtractDoubleColumn`, and line 1233, the `is_count` fold).
+- **Observed:** over `(VALUES (1, 5), (2, NULL), (3, 7)) t(id, v)`,
+  `x <= count(t.v)` stops with *"DECIDE: column "v" is NULL. Impute it with COALESCE(v,
+  0) ..."*. The argument of every bound-side reducer is read as a number, so a NULL is the
+  NULL-bound error even under `count`, and the fold adds one per row read whatever the
+  argument holds, so `count(e)` would equal `count(*)` if the read let the NULL through.
+- **Expected:** SQL's `COUNT(v)`: the non-NULL values, here 2. This is also the ANR
+  contract (`09_anr_language/anr_algorithm_and_frames_plan.md` §3.3).
+- **Impact:** a valid query is refused; no wrong answer, since the error stops it.
+- **Test:** `test/decide/tests/_anr_cases.py` `COUNT_NON_NULL`, run through DeciDB from
+  phase 2 of the ANR plan, which rebuilds the bound-side reducers.
+- **Discovered:** 2026-10-28, ANR phase 0, comparing the reference evaluator with today's
+  engine on the cases today's language runs.
+
 ## A decision named like a USING column is silently ignored
 
 - **Location:** the name-conflict check in `DecideDeclarationsBinder::BindDeclarations`

@@ -10,6 +10,9 @@ Tests live in:
 - `test/decide/tests/_scope_oracle.py` — the reference evaluator most suites below judge against
 - `test/decide/tests/_scope_cases.py` — the deck's data and shared helpers
 - `test/decide/tests/_brute_force.py` — enumeration for shapes the scope oracle cannot state
+- `test/decide/tests/_anr_oracle.py` — the reference evaluator for the full ANR language (variant signatures, nested reducers, frame selectors), ahead of the engine
+- `test/decide/tests/_anr_cases.py` — the ANR plan's fixtures, each as SQL and as oracle expressions with its hand-computed answer
+- `test/decide/tests/test_anr_oracle_selfcheck.py` — the checks that the ANR evaluator is right before any engine change relies on it
 - `test/decide/tests/test_scope_*.py` — twelve suites, one per part of the language
 - `test/decide/tests/test_no_old_spellings_remain.py` with `_old_spellings.py` — the scanner that keeps removed spellings out of every test surface
 - `test/decidb/test_scope_parser.test` — sqllogic: every spelling parses and binds (also inside a nested DECIDE; inside an ordinary subquery written in the clause it answers "not supported yet"), quoted keywords as names, the exact parse errors, and the removed spellings' messages
@@ -79,6 +82,58 @@ count, `<>` over an `AVG` — a test names each solver column with a small whole
 domain and writes the constraints and the objective as Python over one assignment.
 `optimum` enumerates every assignment; `judge` checks DeciDB's answer against the same
 statement and returns its objective.
+
+### `_anr_oracle.py` — the full ANR language
+
+The evaluator the ANR algorithm's phases judge against
+(`09_anr_language/anr_algorithm_and_frames_plan.md`, decisions D64–D79). It is written
+ahead of the engine: phase 0 built it, and each later phase runs its cases through DeciDB
+against it. Like `_scope_oracle` it reads no SQL.
+
+- **Statements.** Clauses and the objective are expression trees: `Col` (data), `Var`
+  (a decision, read through its class at the row), `Terms` (a row's linear form, the
+  shape `_scope_oracle` uses), arithmetic, `Abs`, and the scoped pieces `Scope`
+  (`[when c] [per K]: body`), `Agg` (`kind(scope) by (key)`, built by `reduce`), `At` and
+  `Range` (point and range frames over an `Over`). `clause` and `le`/`ge`/`eq`/`lt`/`gt`/
+  `ne` build a constraint; `Objective` is produced once.
+- **Generation follows the plan's §3 literally.** A scope keeps its rows, splits them into
+  classes, and produces one value per distinct signature in each class, at its first
+  row. A signature is the body's fields: the net value of its reducer-free, frame-free
+  terms (one field per additive context, constant factors distributed, so written
+  associativity does not change it, D77), each reducer's factor and `by` value, each
+  frame's `within` key, the anchor's order key for a relative selector (D76) and the
+  fallback where the anchor reaches it. A reducer reads the enclosing scope's kept rows
+  sharing the row's `by` value and combines its operand's values, multiplicity kept. A
+  frame builds peers per partition (NULL order keys last, D68) and navigates by
+  position; a missing position is absent, which skips a comparison and drops a member.
+- **Values are symbolic**: a linear form over decision instances (`Column`), extremum
+  helpers (`Extremum`, one per distinct member set, a singleton collapsing to its member)
+  and absolute values (`Absolute`). Signatures freeze forms by identity before any number
+  is substituted, so two instances that solve to the same value never collapse.
+- **One generator, four readings.** `instances` and `objective_form` generate;
+  `solve` states extrema and absolute values exactly (pick and sign indicators) and steps
+  strict senses onto whole numbers (D60); `judge` checks DeciDB's answer; `feasible`,
+  `assignments` and `brute_force` read the same instances numerically.
+- **Errors** are `ScopeError` kinds with the phrase DeciDB's message will carry:
+  `kept_no_rows`, `reducer_empty`, `objective_variants`, `objective_absent`,
+  `frame_partition`, `ambiguous_peer`, `null_value`. A construct the language refuses at
+  bind or plan time raises `Unsupported` (a reducer inside a frame, a product of
+  decisions, COUNT over a decision, a `k` or `every` that is not a positive whole number).
+- `render` spells an instance with its first term positive (`x1 - x2 <= 0`), a per-row
+  decision by its row from 1 (`x3`), a keyed one by its key (`open[D1]`); the cases pin
+  generated instances in that spelling.
+
+### `_anr_cases.py`
+
+Every fixture of the plan's §6.3 (F1–F21, with their variants) and the edge cases beside
+them — an unused fallback that would fail, a reached one that does, an absent objective,
+cyclic repeats, a reversed range, COUNT of nothing and of NULLs, a NULL bound, a
+spanned timeline, D8 inside a nested reducer, a `when` that keeps nothing. A `Case`
+holds the SQL in the language, the oracle statement, and what is computed by hand: the
+instances, the optimum, the error or the status, and small domains for enumeration.
+`Case.phase` is the first phase whose engine runs the SQL. `fixing_clauses` writes
+an assignment as `when t.id = 3: x = 2` clauses, and `decidb_feasible` reads DeciDB's
+verdict on the fixed query.
 
 ## The suites
 
@@ -192,6 +247,17 @@ docstring derives.
   a decision still binds. `scalar` is an ordinary name, the colon form stays, and a
   suggested spelling pastes back and runs. Pinned message fragments.
 
+- **`test_anr_oracle_selfcheck.py`** — the ANR evaluator against five independent
+  readings: the deck's and the plan's hand computations (every case's instances, optimum,
+  error and status; the shared extremum of deck p. 115 and the collapsed singleton of
+  p. 112); exhaustive enumeration over small domains against the solved model;
+  `_scope_oracle.ScopedModel` on the 784-cell grid of `test_scope_combinations.py` — 424
+  cells give today's answer exactly and the 360 that today refuses with "does not
+  determine" answer as variants — and on all 32 two-level objectives read as nested
+  reducers (D75); DeciDB on the cases today's language runs; and DeciDB's feasibility with
+  every decision fixed, assignment by assignment, over a helper-decision clause and a
+  keyed decision (the status grid). Oracle, hand-checked and brute force.
+
 ## Keeping removed spellings out
 
 - **The scanner.** `test_no_old_spellings_remain.py` runs `_old_spellings.scan_file`
@@ -224,6 +290,7 @@ docstring derives.
 |------|-------|
 | Oracle (`_scope_oracle`) | declare, generation, reducer_by, reducer_inner, objective, value_rewrite, bare_clauses, combinations, deck_examples |
 | Brute force (`_brute_force`) | bare_clauses, value_rewrite |
+| ANR oracle (`_anr_oracle`) | anr_oracle_selfcheck; from phase 1 of the ANR plan, every ANR suite |
 | Model dump | declare, generation, reducer_by, reducer_inner, objective, value_rewrite, deck_examples |
 | Hand-checked | listed under each suite above |
 | Error / message pins | determination, removed_syntax, and the error cases of every suite |
