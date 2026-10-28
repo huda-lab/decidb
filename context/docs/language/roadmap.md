@@ -147,9 +147,9 @@ Constraints of the form `‖Ax + b‖ ≤ cᵀx + d`, a true Euclidean norm boun
 
 ## Not from the deck
 
-- **An exact MIN or MAX over a squared or multiplied body.** `max(power(x, 2)) <= 16` is modelled exactly; the
-  other direction (`max(power(x, 2)) >= 49`), a MIN over such a body, and the objective forms are refused. Lifting them
-  needs an epigraph for the convex side and indicators for the hard side (`../issues/bugs.md`, "Wrong answers: MIN/MAX
-  bodies and solver tolerance").
+- **A backend that takes only convex quadratic rows.** Gurobi solves a non-convex quadratic row at its default
+  settings, so DECIDE does not classify row convexity; the model class records it for the objective only
+  (`decide_solver_capabilities.hpp`). A backend that refuses non-convex rows needs that classification, for
+  user-written rows and for the rows a lifted MIN/MAX body emits (`../pipeline/05_optimizer/todo.md` § 4).
 - **DIAGNOSE on a feasible query** returns one `feasible` row. A richer report (solve time, model size, gap), as a
   true `EXPLAIN ANALYZE` counterpart, is unscheduled.

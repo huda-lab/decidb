@@ -111,18 +111,22 @@
 
 Each reproduces on the current build.
 
-- **A MIN/MAX over a squared or multiplied body is modelled wrongly** (Gurobi; the user
-  chose to log it, 2026-10-18): over two INT rows with `x <= 7`, `max(power(x, 2)) >= 49`
-  is reported infeasible (x = 7 holds it); `min(power(x, 2)) <= 4` answers x = (7, 7) and
-  `sum(x) + max(power(x, 2)) <= 20` answers (6, 7), both violating the clause (the latter
-  on HiGHS too). In the objective, `MAXIMIZE max(power(x, 2))` and `sum(per g: max(power(x,
-  2)) by (g))` are solved as the sum of the squares: no auxiliary, no indicator, only the
-  Q matrix. Only the easy direction (`max(power(x, 2)) <= 16`) is right, in every scope.
-  `test_per_objective.py::test_maximize_sum_max_power_per` and
-  `test_minimize_sum_min_power_per` pass only because their rows are independent.
-  **Ruling (owner, 2026-10-27).** Refuse the directions modelled wrongly; keep the easy direction,
-  which is right in every scope. The exact formulation (an epigraph for the convex side,
-  indicators for the hard side) goes on the [roadmap](../language/roadmap.md).
+- **A MIN/MAX over a squared or multiplied body is modelled wrongly** (Gurobi): over two
+  INT rows with `x <= 7`, `max(power(x, 2)) >= 49` is reported infeasible (x = 7 holds it),
+  and so is `max(power(x, 2)) = 25`; `min(power(x, 2)) <= 4` answers x = (7, 7), violating
+  the clause. `sum(x) + max(power(x, 2)) <= 20` and `sum(power(x, 2)) + max(x) <= 30` stop
+  with an internal error on both backends ("not linear algebra"). In the objective,
+  `MAXIMIZE max(power(x, 2))`, `MINIMIZE min(power(x, 2))` (with `sum(x) >= 9` it answers
+  (3, 3, 3) where 0 is reachable) and `sum(per g: max(power(x, 2)) by (g))` are solved as
+  the sum of the squares; a mixed body `max(power(x, 2) + 10 * x)` is solved as `z + Σ x²`
+  with `z` over the linear part only. EXPLAIN still says the reducer "becomes an extremum
+  column pinned by indicator rows". Only the per-member direction (`max(power(x, 2)) <=
+  16`) is right, in every scope. `test_per_objective.py::test_maximize_sum_max_power_per`
+  and `test_minimize_sum_min_power_per` pass only because the sum-of-squares answer is
+  also optimal on their data. Cause: every extremum site reads its members as linear.
+  **Ruling (owner, 2026-10-28; reverses 2026-10-27's refusal).** Fix it: lift the body into a
+  row helper and let Gurobi's native MAX/MIN take the helper; HiGHS refuses, as it refuses
+  every quadratic row — [optimizer § 4](../pipeline/05_optimizer/todo.md#4-lift-a-quadratic-minmax-body-into-a-row-helper).
 - **Gurobi accepts a row violated by 1 when its coefficients are near 10⁹:** over three
   rows with `x <= cap` (3, 5, 7), `y <= 5`, `per row: y + sum(x * 1000000000::DECIMAL(18,0))
   >= 5000000001` (or `> 5000000000`), `MINIMIZE SUM(x) + SUM(y)` answers `sum(x) = 5`,

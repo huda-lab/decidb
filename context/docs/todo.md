@@ -30,6 +30,13 @@ coding, at the question written on the line. **Part C** the owner runs, or is no
 
 # Part A — Agent works alone
 
+## A4. Wrong answers the owner ruled (2026-10-28)
+
+It waits for B1: B1 is still editing `physical_decide.cpp`, and the build is shared.
+
+- [ ] Lift a quadratic MIN/MAX body into a row helper; Gurobi's native MAX/MIN takes it, HiGHS refuses (reverses the
+  2026-10-27 refusal) — [optimizer § 4](pipeline/05_optimizer/todo.md#4-lift-a-quadratic-minmax-body-into-a-row-helper) (needs: B1)
+
 ## A3. Direct solve reads the new language: grouping
 
 Every line waits for B1 (the NULL-key rule changes how a key becomes groups) and B5 (H-04).
@@ -81,9 +88,7 @@ values (shipped) → NULL key and keyed decision → empty groups (D4, D8) → c
 
 ## B2. Wrong answers whose fix has an open choice
 
-- [ ] MIN/MAX over a squared or multiplied body modelled wrongly (ruled: refuse the wrong directions) — owner approves the exact list of refused forms and the message — [bugs § MIN/MAX bodies](issues/bugs.md#wrong-answers-minmax-bodies-and-solver-tolerance)
 - [ ] Gurobi accepts a row violated by 1 near 10⁹ coefficients (ruled: warn) — owner sets the span threshold and where the warning shows — [bugs § solver tolerance](issues/bugs.md#wrong-answers-minmax-bodies-and-solver-tolerance)
-- [ ] HiGHS at gap 0 cannot finish an entity-scoped test MIP — owner approves the proposed `decide_mip_gap` setting (a new user setting) — [bugs § gap of 0](issues/bugs.md#with-a-gap-of-0-highs-cannot-finish-an-entity-scoped-mip-the-test-suite-runs)
 
 - [ ] Negative lower bound under a `when` stays non-negative (ruled: applies to the kept rows) — owner picks the
   representation. Only an unconditional constant bound replaces the default floor of 0 today (a data bound
