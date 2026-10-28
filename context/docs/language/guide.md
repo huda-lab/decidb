@@ -213,10 +213,11 @@ data and unaffected.
   or a scalar subquery in another query's select list), in any clause or its `WHERE`. The message names the column
   and points to joining that table into the FROM and writing the clause with `per`; when the column sits inside a
   reducer, it quotes the reducer.
-- **NULL**: a NULL in any value the solver reads — coefficient, bound, reducer input — is an error, never a zero. A
-  zero would silently optimize a different problem, and a NULL bound read as 0 (`SUM(x) <= 0`) would report the query
-  infeasible for a reason nobody can see. The message names the column and offers `COALESCE` or a `WHERE` filter;
-  `SUM(x * COALESCE(w, 0))` works inline. `COUNT(col)` skips a NULL and counts a NaN, as SQL does. A NULL beside a
+- **NULL**: a NULL in a coefficient or a bound is an error, never a zero. A zero would silently optimize a different
+  problem, and a NULL bound read as 0 (`SUM(x) <= 0`) would report the query infeasible for a reason nobody can see.
+  The message names the column and offers `COALESCE` or a `WHERE` filter; `SUM(x * COALESCE(w, 0))` works inline. A
+  reducer over data skips a NULL, as SQL does (`AVG(cap)` averages the caps that are not NULL); one whose every value
+  is NULL is NULL, an error as a bound. `COUNT(col)` also counts a NaN, as SQL does. A NULL beside a
   decision (`SUM(x + NULL)`) is refused where it is written. In a `when`, NULL is false; in a key, NULL is a class
   (§7.2).
 
@@ -529,6 +530,7 @@ Tests: `test/decide/tests/test_scope_determination.py`.
 | NULL in a declaration's, constraint's or `by` key | its own class or group (D5) |
 | NULL `when` condition | row dropped |
 | NULL in a coefficient or bound | error (§3) |
+| NULL in a reducer over data | skipped, as in SQL; a group of NULLs only gives a NULL bound, an error (§3) |
 | a `when` keeps no row | error (D4) |
 | a key value has no kept row | no class, no constraint, no error |
 | a reducer's own `when` empties a generated class's group | error naming the class (D8) |

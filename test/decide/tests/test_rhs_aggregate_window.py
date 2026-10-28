@@ -204,11 +204,33 @@ def test_rhs_sum_with_arithmetic_keeps_the_aggregate_type(decidb_cli, oracle_sol
         run(decidb_cli, _sql(ROWS, covered), "off")
 
 
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "bound, scope, value",
+    [
+        # AVG divides by the values it reads: group a's flagged caps 4, NULL, 6 average 5, not 10/3.
+        ("AVG(cap)", "when_by", lambda caps: Fraction(sum(caps), len(caps))),
+        # A norm's value check reads the body the user wrote; its definition skips the NULL as well.
+        ("norm(cap, 0)", "when", lambda caps: sum(1 for cap in caps if cap != 0)),
+    ],
+    ids=["avg", "norm"],
+)
+def test_rhs_aggregate_skips_a_null_argument_as_sql_does(decidb_cli, oracle_solver, bound, scope, value):
+    """A reducer over data reads its argument as the same SQL aggregate does: a NULL is skipped. Rows 1 and 7 are
+    flagged rows of groups a and b."""
+    rows = [row[:4] + (None if row[0] in (1, 7) else row[4], row[5]) for row in ROWS]
+    constraint, clause = _scoped(scope, bound)
+    reads = lambda members: value([row[4] for row in members if row[4] is not None])  # noqa: E731
+    _agree(decidb_cli, oracle_solver, rows, constraint, _clause_limits(rows, reads, **clause))
+
+
 @pytest.mark.error
-def test_rhs_aggregate_argument_that_is_null_raises_on_a_row_the_clause_keeps(decidb_cli):
-    """A NULL argument on a kept row raises, naming the column."""
-    rows = [row[:4] + (None if row[0] == 8 else row[4], row[5]) for row in ROWS]
-    with pytest.raises(DecidBCliError, match=r'column "cap" is NULL'):
+def test_rhs_aggregate_over_only_nulls_is_a_null_bound(decidb_cli):
+    """Every cap of group b is NULL, so its MAX is NULL, as in SQL; a NULL bound is an error, which quotes the reducer
+    as written rather than calling it a column."""
+    rows = [row[:4] + (None if row[1] == "b" else row[4], row[5]) for row in ROWS]
+    with pytest.raises(DecidBCliError, match=r"DECIDE: max\(cap\) by \(g\) is NULL\. Impute it with COALESCE\(\)"):
         run(decidb_cli, _sql(rows, "SUM(x * w) by (g) <= MAX(cap) by (g)"), "off")
 
 
@@ -233,16 +255,14 @@ def test_rhs_aggregate_argument_that_is_nan_raises_without_a_row_position(decidb
 
 @pytest.mark.error
 @pytest.mark.parametrize("mode", ["off", "require"])
-def test_rhs_l0_norm_reads_a_nan_or_null_body_as_invalid(decidb_cli, mode):
+def test_rhs_l0_norm_reads_a_nan_body_as_invalid(decidb_cli, mode):
     """`SIGN(NaN)` is 0, so a NaN row would count as a zero; the value check reads the body the user wrote instead."""
     sql = (
-        "SELECT id, x FROM (FROM (VALUES (0, 3, 1.0, 5.0), (1, 4, {cap}, 4.0)) t(id, w, cap, p) "
+        "SELECT id, x FROM (FROM (VALUES (0, 3, 1.0, 5.0), (1, 4, 'NaN'::DOUBLE, 4.0)) t(id, w, cap, p) "
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= norm(cap, 0) MAXIMIZE SUM(p*x)) q"
     )
     with pytest.raises(DecidBCliError, match=r"right-hand side aggregate contains invalid value \(NaN\)"):
-        run(decidb_cli, sql.format(cap="'NaN'::DOUBLE"), mode)
-    with pytest.raises(DecidBCliError, match=r'column "cap" is NULL'):
-        run(decidb_cli, sql.format(cap="NULL::DOUBLE"), mode)
+        run(decidb_cli, sql, mode)
 
 
 @pytest.mark.error

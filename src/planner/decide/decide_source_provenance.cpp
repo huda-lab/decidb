@@ -313,6 +313,9 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 	if (TryParseSourceFragmentTag(expr.GetAlias(), fragment_id) && fragment_id < ctx.fragments.size()) {
 		return ctx.fragments[fragment_id];
 	}
+	if (HasDecideTag(expr.GetAlias(), BOUND_REDUCER_TAG)) {
+		return StripDecideTags(expr.GetAlias()); // a bound's reducer, as written: SQL, not an identifier
+	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
 	    HasDecideTag(expr.GetAlias(), L0_AUTO_BOUND_TAG)) {
 		return "M"; // stage 06 derives it from the column box

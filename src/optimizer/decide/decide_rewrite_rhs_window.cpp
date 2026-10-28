@@ -143,12 +143,15 @@ private:
 		D_ASSERT(!reducer.IsDistinct() && !reducer.order_bys && !HasDecideTag(reducer.GetAlias(), AVG_REWRITE_TAG) &&
 		         !ExtractDecideTagPayload(reducer.GetAlias(), NORM_MARKER_TAG_PREFIX, payload));
 		auto reads = Reads(reducer);
-		// COUNT reads its argument as SQL's COUNT does: it skips a NULL and counts a NaN, so it has nothing to check.
+		// A reducer reads its argument as the same SQL aggregate does: it skips a NULL. A NaN is an error, except to
+		// COUNT, which counts it.
 		if (!reducer.children.empty() && name != "count") {
 			// A norm's definition can hide a NaN (an L0 count's SIGN reads it as 0), so the value checked is the body.
 			auto body = DecideWrittenNormBody(reducer);
-			AddValueCheck(InvalidValueMessage(body ? *body : *reducer.children[0],
-			                                  "constraint right-hand side aggregate", reads));
+			auto nan = NanMessage(body ? *body : *reducer.children[0], "constraint right-hand side aggregate");
+			if (nan) {
+				AddValueCheck(calc.Out(OnRows(reads, nan)));
+			}
 		}
 		auto keys = GroupKeyOf(reducer);
 		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
@@ -177,9 +180,11 @@ private:
 		auto column = Place(std::move(window));
 		reducer_columns.push_back({column->Cast<BoundColumnRefExpression>().binding, std::move(keys)});
 		// The column carries the reducer's written text as its name, so every place that quotes a bound still reads
-		// `sum(cap) by (g)`.
+		// `sum(cap) by (g)`; the tag keeps a NULL message from naming it as a column.
 		auto result = calc.Out(column);
-		result->SetAlias(Written(reducer));
+		auto alias = Written(reducer);
+		AddDecideTag(alias, BOUND_REDUCER_TAG);
+		result->SetAlias(std::move(alias));
 		return result;
 	}
 
@@ -269,15 +274,21 @@ private:
 	//! solver's text, the NULL one naming the columns that are NULL on the row. Infinity is a value.
 	unique_ptr<Expression> InvalidValueMessage(const Expression &value, const string &context,
 	                                           const ExprPtr &rows) const {
-		auto none = calc.Constant(Value(LogicalType::VARCHAR));
-		auto message = none;
-		if (value.return_type == LogicalType::FLOAT || value.return_type == LogicalType::DOUBLE) {
-			auto nan = calc.Constant(Value(DecideInvalidValueMessage(context, "NaN")));
-			message = calc.If(calc.Fn("isnan", calc.Cast(calc.Of(value), LogicalType::DOUBLE)), nan, none);
-		}
-		message = calc.If(calc.IsNull(calc.Of(value)),
-		                  calc.Wrap(DirectNullMessageOf(optimizer, value, decide.source_fragments)), message);
+		auto nan = NanMessage(value, context);
+		auto message = calc.If(calc.IsNull(calc.Of(value)),
+		                       calc.Wrap(DirectNullMessageOf(optimizer, value, decide.source_fragments)),
+		                       nan ? nan : calc.Constant(Value(LogicalType::VARCHAR)));
 		return calc.Out(OnRows(rows, message));
+	}
+
+	//! The message a row raises for a NaN `value`, and NULL elsewhere; null when `value` cannot be NaN.
+	ExprPtr NanMessage(const Expression &value, const string &context) const {
+		if (value.return_type != LogicalType::FLOAT && value.return_type != LogicalType::DOUBLE) {
+			return nullptr;
+		}
+		return calc.If(calc.Fn("isnan", calc.Cast(calc.Of(value), LogicalType::DOUBLE)),
+		               calc.Constant(Value(DecideInvalidValueMessage(context, "NaN"))),
+		               calc.Constant(Value(LogicalType::VARCHAR)));
 	}
 
 	void AddValueCheck(unique_ptr<Expression> message) {

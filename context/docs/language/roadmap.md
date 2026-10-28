@@ -31,17 +31,20 @@ until the deck's behavior is built; the move replaces it.
 - **Why today:** a typo in the condition would otherwise drop a constraint silently.
 - **Deck:** the clause yields one instance per class of `R_θ / κ`; an empty `R_θ` has no classes, so the clause yields
   no constraints.
+- **Scheduled** (owner, 2026-10-28): moves with the NULL-key batch, B1 in [../todo.md](../todo.md).
 
 ### An empty reducer group and a NULL value (pp. 45, 50, 56)
 
 - **Today:** `per D.depotID: sum(when S.priority: ship) by (D.depotID) <= D.priorityCapacity` raises when a depot has
   no priority shipment (deck example 7; `RunScopeChecks`, D8, D18). A NULL coefficient or bound raises, naming the
-  column (`ExtractDoubleColumn`).
+  column (`ExtractDoubleColumn`); a reducer over data skips a NULL, as the deck does.
 - **Why today:** a skipped NULL or an empty group can hide missing data; the error names the column to fix.
 - **Deck:** a reducer over no rows is NULL, a reducer skips NULL inputs as SQL does, and a NULL that reaches the
   comparison unreduced skips that constraint instance. The deck states this with frame selectors, as the general NULL
   rule. The owner's audit of SQL NULL behavior is
   [../pipeline/02_binder/todo.md §1](../pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql).
+- **Scheduled** (owner, 2026-10-28): the empty group moves with the NULL-key batch, B1 in [../todo.md](../todo.md),
+  and skips its constraint. A NULL coefficient or bound still raises; that part is not scheduled.
 
 ## Nested reducers (ANR, pp. 25, 28–32)
 

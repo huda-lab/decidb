@@ -74,13 +74,16 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   node, so `(0 - 3) + 0` still counts as constant. All links go through `EmitExtremumLink` (`linearization_minmax.cpp`).
 - **Subqueries.** Correlated subqueries are decorrelated by DuckDB (`PlanSubqueries`) into per-row values.
   `DecideBinder::BindExpression` refuses a subquery that references a decision (`ExpressionContainsDecideVariable`).
-- **NULL.** `ExtractDoubleColumn` is the one gate every evaluated coefficient and bound passes; on failure
+- **NULL.** A reducer over data reads its argument as the same SQL aggregate does: it skips a NULL, so `AVG(cap)`
+  divides by the caps that are not NULL. A group whose every value is NULL has a NULL reducer, and a NULL bound is an
+  error (`DECIDE: max(cap) by (g) is NULL. Impute it with COALESCE(), ...`). Every other NULL the model reads is an
+  error, a NULL that multiplies a decision (`sum(price * x)`) included: skipping it would change the model silently.
+  `ExtractDoubleColumn` is the one gate every evaluated coefficient and bound passes; on failure
   `CollectNullColumnsAtRow` / `DescribeNullSource` name the column by walking the expression's leaf references, so a
-  NULL inside `x * (weight / capacity)` names `weight`. No row number is given: the fix is to the column, and a scan
-  ordinal is not something a user can look up. `COALESCE`/`IFNULL` work inline when decision-free. SQL's `SUM` skips
-  NULLs, but DECIDE errors: matching SQL would not even be one rule (`AVG` would need its count adjusted per group),
-  and a silent zero changes the problem. Whether to keep this is open ([binder todo §1](../pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)).
-  Tests: `test_null_coalesce_reducer.py`.
+  NULL inside `x * (weight / capacity)` names `weight`. A bound's reducer is a column by then; it carries
+  `BOUND_REDUCER_TAG`, so a message quotes it as written instead of naming it as a column. No row number is given:
+  the fix is to the column, and a scan ordinal is not something a user can look up. `COALESCE`/`IFNULL` work inline
+  when decision-free. Tests: `test_null_coalesce_reducer.py`, `test_rhs_aggregate_window.py`.
 
 ## Objectives
 

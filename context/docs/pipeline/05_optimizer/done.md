@@ -153,7 +153,9 @@ Two steps run on each `LogicalDecide` before these passes (`OptimizeSubtree`). F
 `RewriteRhsAggregates` (`decide_rewrite_rhs_window.cpp`) replaces each data-only reducer on
 a bound's right side (`sum(x) <= sum(cap)`) with a window column over the source: the same
 DuckDB aggregate, partitioned by the reducer's `by` key (NULL a group of its own, D5), over
-the rows the clause's `when` keeps. A partitioned window hands its rows on in an order that
+the rows the clause's `when` keeps. It reads its argument as that SQL aggregate does: a NULL is
+skipped, and only a NaN is checked (`COUNT` counts one). The column carries the reducer as written
+and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls it a column. A partitioned window hands its rows on in an order that
 varies with the thread schedule. The DECIDE operator reads them in that order, so the model's
 row and column order and the group a scope check names first can differ between runs of
 one query. Neither changes the answer's optimum. Tests that compare models run on one thread

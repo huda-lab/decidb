@@ -249,7 +249,7 @@ the data checks of [`../../language/guide.md`](../../language/guide.md)
 | `KEEPS_A_ROW` | the `when` keeps no row | `DECIDE: when <c> matches no rows.` |
 | `DETERMINES` | a class of the key (over the kept rows, and a reducer's own `when`) shows two values, NULL equal to NULL, or two instances of the decision | `DECIDE: per <K> does not determine <value>[ (<context>)]. <class> has more than one value: <a>, <b>.` · `... the decision <x> (declared ...). <class> covers more than one <x>.` |
 | `READS_A_ROW` | a `by` group of the kept rows has no row the reducer's own `when` keeps | `DECIDE: <reducer> has no rows for <group>.` · `... has no rows.` for `by ()` |
-| `VALUE_IS_VALID` | a row holds a value the model cannot read: its `value` is the message the row raises, NULL on a valid row | the first non-NULL message: a bound's or a bound-side reducer argument's NULL or NaN, or an `=` bound that takes two values in its group (`` `<bound>` takes more than one value here (a and b) ... infeasible.``) |
+| `VALUE_IS_VALID` | a row holds a value the model cannot read: its `value` is the message the row raises, NULL on a valid row | the first non-NULL message: a bound's NULL or NaN, a NaN in a bound-side reducer's argument (the reducer skips a NULL, as SQL does), or an `=` bound that takes two values in its group (`` `<bound>` takes more than one value here (a and b) ... infeasible.``) |
 
 The first three come from the canonicalizer (stage 04). The bound-side window rewrite
 (`RewriteRhsAggregates`, stage 05) appends the `VALUE_IS_VALID` checks after them, so a

@@ -359,6 +359,11 @@ static constexpr const char *QUERY_WIDE_VALUE_TAG = "__query_wide_value__";
 //! `SUBQUERY` placeholder as if it were user SQL.
 static constexpr const char *ROW_VARYING_SUBQUERY_TAG = "__row_varying_subquery__";
 
+//! Provenance stamped on the column that stands for a reducer on a bound (the bound-side window rewrite): its alias
+//! is the reducer as written, so a render still prints `sum(cap) by (g)`, and the tag says that text names a
+//! computed value, not a column of the source.
+static constexpr const char *BOUND_REDUCER_TAG = "__bound_reducer__";
+
 //! Stable source-comparison identity. The payload indexes the per-DECIDE
 //! ConstraintSourceInfo registry; it survives canonical rebuilding and optimizer
 //! one-to-many rewrites but is never used to group elastic slacks.

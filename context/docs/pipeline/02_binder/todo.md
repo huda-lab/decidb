@@ -10,16 +10,29 @@ Language-surface work is owned by `../../language/` (the scopes:
 ## 1. Functions that behave unlike SQL
 
 **Rule (owner, 2026-10-27).** A function inside DECIDE behaves as the same SQL function does, NULL and NaN included,
-unless a strong reason that helps users says otherwise; each divergence is stated in the docs with that reason.
-`COUNT(col)` on a bound already follows it: it skips a NULL and counts a NaN (`MakeReducerColumn`,
-`decide_rewrite_rhs_window.cpp`; `test_s1_count_bound_skips_null_and_counts_nan_as_sql_does`).
+unless a strong reason that helps users says otherwise; each divergence is stated in the docs with that reason. A
+reducer over data already follows it for NULL and `COUNT` for NaN (`../../language/functions.md`, "Constraints", NULL).
 
-`SUM`, `MIN`, `MAX` and `AVG` raise on a NULL argument, where SQL skips it
-(`../../language/functions.md`, "Constraints", NULL). **Ruling (owner, 2026-10-27).** A NULL that multiplies
-a decision (`sum(price * x)` with a NULL `price`) keeps the error: it names the column, and skipping it would change
-the model silently. A reducer over data only skips the NULL, as SQL does. The deck also skips NULLs ([roadmap](../../language/roadmap.md#an-empty-reducer-group-and-a-null-value-pp-45-50-56)).
+**Audit (2026-10-27).** Each place DECIDE still reads a value differently from DuckDB, with the reason to keep it or
+the change. Each needs a ruling.
 
-**Work.** List every other place DECIDE reads a function differently from DuckDB (NaN and infinity in each reducer,
-`AVG` over no rows, integer overflow, empty groups) and bring each to the owner.
+1. **NaN in a bound or in a data reducer's argument** is an error (`... contains invalid value (NaN)`); SQL carries
+   the NaN through (`SUM` is NaN). Recommended: keep, and state the reason: no solver reads a NaN bound.
+2. **Infinity in a coefficient** is an error (`... (NaN or Infinity)`); SQL computes `inf * x`. In a bound it is a
+   value, as in SQL (`x <= 4 / 0` holds always). Recommended: keep, and state the reason: a model cannot hold an
+   infinite coefficient.
+3. **A reducer over no rows** (its own `when` keeps none: D8; a clause `when` keeps none: D4) is an error; SQL's
+   `SUM`, `AVG`, `MIN`, `MAX` over no rows are NULL. The deck makes it NULL and skips the constraint instance a NULL
+   reaches ([roadmap](../../language/roadmap.md#an-empty-reducer-group-and-a-null-value-pp-45-50-56)). Ruling needed:
+   follow SQL and the deck, or keep the guard (a typo in a `when` would otherwise drop a constraint silently).
+4. **A data group whose every value is NULL** gives a NULL reducer, as in SQL, and the NULL bound is an error. It is
+   the same question as 3: under the deck the instance is skipped.
+5. **The NaN and infinity message** lists "common causes" in a block, one of them a NULL that "propagated through
+   math", which DuckDB never turns into a NaN. Recommended: the NULL message's shape, naming the column and the
+   smallest edit (`../../language/errors.md`).
 
-**Update.** `../../language/functions.md`, `../../language/guide.md` §3 and §7.2.
+Integer arithmetic follows DuckDB: a bound is computed in DuckDB's types before the model reads it (2^60 + 1 - 2^60
+is 1; a `HUGEINT` overflow raises as in SQL), and division by zero gives DuckDB's `inf`, `nan` or NULL. The model reads
+every number as `DOUBLE`, so a coefficient or bound beyond 2^53 is rounded there.
+
+**Update.** `../../language/functions.md`, `../../language/guide.md` §3 and §7.2, `../../language/roadmap.md`.

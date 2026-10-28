@@ -44,12 +44,13 @@ inline void DecideCollectSubqueries(const Expression &expr, vector<const Express
 }
 
 //! The columns an expression names, in the order a NULL message reports them: a leaf that still carries the name the
-//! user wrote. A leaf with no name is skipped, so the caller quotes the expression instead of printing `#3`, and so is
-//! a flattened subquery, which DecideCollectSubqueries names.
+//! user wrote. A leaf with no name is skipped, so the caller quotes the expression instead of printing `#3`, and so are
+//! a flattened subquery, which DecideCollectSubqueries names, and a bound's reducer, which is no column.
 inline void DecideCollectNamedColumns(const Expression &expr, vector<const Expression *> &out) {
 	idx_t fragment_id;
 	if (DecideIsColumnLeaf(expr)) {
-		if (!expr.GetAlias().empty() && !TryParseSourceFragmentTag(expr.GetAlias(), fragment_id)) {
+		if (!expr.GetAlias().empty() && !TryParseSourceFragmentTag(expr.GetAlias(), fragment_id) &&
+		    !HasDecideTag(expr.GetAlias(), BOUND_REDUCER_TAG)) {
 			out.push_back(&expr);
 		}
 		return;

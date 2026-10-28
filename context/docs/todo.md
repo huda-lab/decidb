@@ -40,12 +40,6 @@ Every line waits for B1 (the NULL-key rule changes how a key becomes groups) and
 - [ ] H-06 Two-level objective `outer(per k: inner(e) by (k))` — [framework § H-06](direct_solve/framework/todo.md#h-06--the-two-level-objective-outerper-k-innere-by-k) (needs: B1)
 - [ ] H-07 `per K:` on a constraint — [framework § H-07](direct_solve/framework/todo.md#h-07--per-k-on-a-constraint-one-constraint-per-class) (needs: B5, B1)
 
-## A5. Language: refusals to lift
-
-Each is ruled; the nested section says which shapes lift and which stay refused.
-
-- [ ] Functions that behave unlike SQL: a data-only reducer skips NULL; audit the rest and bring each divergence to the owner — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
-
 ---
 
 # Part B — Owner checkpoint before coding
@@ -56,21 +50,34 @@ The agent may read code and investigate; it writes no fix until the owner answer
 
 - [ ] `w * x >= 1` on a Boolean: read the classifier's ends per row — [S1 § data coefficient](direct_solve/rules/s1_uniform_matroid/todo.md#a-fixed-value-with-a-data-coefficient)
 
-## B1. NULL keys and key grouping (one batch; blocks A3)
+## B1. NULL keys, key grouping and empty groups (one batch; blocks A3; owner answered 2026-10-28)
 
-Ruled: a NULL key is not a class, one numbering, keys follow collation. All four touch the same grouping code.
-Owner answers, before coding:
+The deck (`context/New_syntax.pdf`) defines a group as the rows whose key `=` this row's (p. 30) and skips a
+constraint instance a NULL reaches unreduced (pp. 50, 56). Read with SQL's `=`, that gives every ruling below.
+Rulings (architect review done):
 
-1. **Numbering.** Today a keyed decision's classes are numbered first-seen over every row (`BuildEntityMappings`), and
-   each `by`/`per K:` clause renumbers the groups it keeps densely, in first-kept-row order
-   (`LookupOrBuildPerGroupIds`). Recommended: one id per class, first-seen over every row, and each clause reads the
-   classes it keeps as a subsequence in that order, so equal keys get equal ids in every clause. A dump changes only
-   where a `when` drops a class's first row (its groups then come out in a different order).
-2. **NULL keyed-decision error.** A row whose key is NULL under `DECIDE per g: x(INT)` raises. Recommended text:
-   *"DECIDE: 'g' is NULL on some rows, so they have no 'x' (declared per g). Add WHERE g IS NOT NULL."*
-3. **Golden diff.** Expected to change: entries whose keys hold NULL (the NULL class leaves `by`, `per K:` and
-   `per`-in-reducer clauses) and entries where a `when` drops a class's first row (question 1). Entries 22, 23, 38,
-   39, 56, 61, 62, 65, 70 and 91–94 print ids. The agent shows the diff, entry by entry, before re-capturing.
+1. **Numbering.** One id per class over the whole query, ordered by the collated key value (NULL is no class); each
+   clause reads the classes it keeps as a subsequence, so equal keys get equal ids everywhere and nothing depends on
+   row order. The key is evaluated once per key-table entry, on the union of the rows its clauses read.
+2. **NULL key is no group** of that key only: no `by` group, no `per K:` class, no inner `per` entry. Every other
+   reducer in the clause still reads the row (`sum(x) by (g) <= 0.5 * sum(x)`: a NULL-`g` row has no limit and counts
+   in the total), so it is not a fold of `g IS NOT NULL` into the `when`. The bound-side window filters the NULL key
+   for that key only.
+3. **A keyed decision with a NULL key: no decision on that row** (deck p. 6), no error. The row's decision value is
+   absent: a reducer skips it, an unreduced use skips that instance (p. 50).
+4. **Composite key:** NULL when any column is NULL. **A relation key** (`per D:`) is NULL only when all its columns
+   are NULL (an outer-join miss); otherwise its columns compare NOT DISTINCT (p. 76: `per Depots` gives the classes
+   of `per depotID`).
+5. **An empty group skips its constraint** (deck: a reducer over no rows is NULL). This retires D4 and D8 together: a
+   `when` that keeps no rows yields no constraints, and a group a reducer's own `when` or NULL keys empty yields none
+   ([roadmap § the deck changes](language/roadmap.md#current-behavior-the-deck-changes), its first two guards only;
+   a NULL coefficient or bound still raises).
+6. **Collation:** keys group on the collated expression (`PushCollation`, as GROUP BY); a label quotes the group's
+   least raw spelling.
+7. **Goldens:** the agent shows the diff entry by entry before re-capturing, once, after the numbering lands.
+
+Commits, in order: key table → one numbering (goldens) → NULL key and keyed decision → empty groups (D4, D8) →
+collation. Starts after B0 commits (shared files).
 
 - [ ] A NULL key is not a class; its rows skip the keyed clause (reverses D5; closes infeasible § 2) — [execution § 2](pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)
 - [ ] One key table on `LogicalDecide` (one numbering; re-capture goldens) — [logical_plan § 1](pipeline/03_logical_plan/todo.md#1-one-key-table)
@@ -167,6 +174,12 @@ The agent finds the cause alone and stops with a proposed fix.
   (2) Apply (b) to linear helpers too, or only to quadratic ones? Recommended: all, one rule.
   — [bugs § Limitations](issues/bugs.md#limitations-not-bugs)
 
+## B9. Functions that behave unlike SQL: the audit's rulings
+
+- [ ] Five places still read a value differently from DuckDB, each with a recommendation: NaN in a bound (keep),
+  infinity in a coefficient (keep), a reducer over no rows and a data group of NULLs only (follow SQL and the deck, or
+  keep the guard), and the NaN message (reshape like the NULL one). — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
+
 ## B10. One helper for a reducer several clauses hold: the definition's provenance
 
 - [ ] Sharing a helper between clauses (`x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`) needs one rule for its definition
@@ -177,6 +190,17 @@ The agent finds the cause alone and stops with a proposed fix.
   last one is dropped: a set of ids on a row, where every other row has one. Recommended: (a), the standard reading of
   a defined auxiliary (it is not a constraint of any clause), with no new field.
   — [optimizer § 1](pipeline/05_optimizer/todo.md#1-one-helper-for-a-reducer-that-several-clauses-hold)
+
+## B11. Internal tags reach EXPLAIN through direct plans
+
+- [ ] A scalar subquery bound under `require` prints `__source_fragment_0__` in EXPLAIN. The direct builder's rule is
+  that a DECIDE expression enters a plan through `ExpressionBuilder::Of`, which strips tags; S1's values do
+  (`ValueIntoState`), but the `Wrap` callers of `DirectOverProjection` and `DirectNullMessageOf`'s subquery leaf
+  (`calc.Wrap(leaf.Copy())`) bypass it. Where should tags be stripped? (a) At the re-pointing step,
+  `DirectRemapSourceReferences`, which every rule uses to move a DECIDE expression into its plan, plus the one
+  `Wrap(leaf.Copy())`; (b) in `ExpressionBuilder::Out`, for every expression a plan receives (wider: the bound-side
+  window rewrite also uses `Out` for expressions that return to DECIDE's tree). Recommended: (a), with a test that
+  EXPLAIN under `require` of a scalar-subquery bound and of a data-reducer bound shows no tag.
 
 ## B12. A keyed decision beside a reducer: four design choices (architect review done)
 
