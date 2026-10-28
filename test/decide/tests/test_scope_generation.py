@@ -6,8 +6,8 @@
 rows where c is true -- NULL is false -- before anything else: classes form from kept
 rows only, every reducer of the clause reads kept rows only, and nothing is computed on
 a row the `when` drops, so a NULL there, or an expression that would fail there, is no
-error. A `when` that keeps no row of a non-empty input is an error (D4); NULL is a class
-of `per` like any other value (D5).
+error. A `when` that keeps no row of a non-empty input is an error (D4); a row whose `per`
+key is NULL is in no class.
 
 Model size is read from DECIDB_DUMP_MODEL; optima are judged against
 `_scope_oracle.ScopedModel`, which follows the ANR definition literally.
@@ -242,11 +242,11 @@ def test_a_scope_covers_both_halves_of_a_between(decidb_cli, scope_solver, tmp_p
 
 
 @pytest.mark.correctness
-def test_null_is_a_class_of_per(decidb_cli, scope_solver, tmp_path):
-    """D3's region is NULL: its rows form a class of `per D.region` and get a constraint."""
+def test_a_null_per_key_is_no_class(decidb_cli, scope_solver, tmp_path):
+    """D3's region is NULL: its rows are in no class of `per D.region` and get no constraint."""
     depots = DEPOTS[:2] + (("D3", None, "US", 20, 30, 0.3, 0.7, 60),)
     sql = _ship_query("per D.region: sum(ship) by (D.region) <= 12", depots=depots)
-    assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump"))["num_rows"] == 2
+    assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump"))["num_rows"] == 1
     model = ScopedModel(joined(depots=depots), SHIP)
     clauses = [
         SHIP_BOUND,
@@ -255,7 +255,7 @@ def test_null_is_a_class_of_per(decidb_cli, scope_solver, tmp_path):
         ),
     ]
     result = _check_optimum(decidb_cli, scope_solver, sql, model, clauses, MAXIMIZE_SHIP)
-    assert result[4]["ship"] == 12
+    assert result[4]["ship"] == joined(depots=depots)[4]["demand"]
 
 
 # ---------------------------------------------------------------------------

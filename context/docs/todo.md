@@ -65,12 +65,12 @@ Rulings (architect review done):
 2. **NULL key is no group** of that key only: no `by` group, no `per K:` class, no inner `per` entry. Every other
    reducer in the clause still reads the row (`sum(x) by (g) <= 0.5 * sum(x)`: a NULL-`g` row has no limit and counts
    in the total), so it is not a fold of `g IS NOT NULL` into the `when`. The bound-side window filters the NULL key
-   for that key only.
+   for that key only. Shipped (D5).
 3. **A keyed decision with a NULL key: no decision on that row** (deck p. 6), no error. The row's decision value is
-   absent: a reducer skips it, an unreduced use skips that instance (p. 50).
+   absent: a reducer skips it, an unreduced use skips that instance (p. 50). Shipped (guide §2.3).
 4. **Composite key:** NULL when any written column is NULL. **A relation key** (`per D:`) is unchanged (owner,
    2026-10-28, "Keep todays per D"; Anh: defer replacing `per D`): the columns it stands for compare NULL as a value
-   (NOT DISTINCT). A column written on its own beside its relation (`per D, D.g`) is NULL in no group.
+   (NOT DISTINCT). A column written on its own beside its relation (`per D, D.g`) is NULL in no group. Shipped.
 5. **An empty group skips its constraint** (deck: a reducer over no rows is NULL). This retires D4 and D8 together: a
    `when` that keeps no rows yields no constraints, and a group a reducer's own `when` or NULL keys empty yields none
    ([roadmap § the deck changes](language/roadmap.md#current-behavior-the-deck-changes)).
@@ -80,11 +80,9 @@ Rulings (architect review done):
 7. **Goldens:** the agent shows the diff entry by entry before re-capturing, once, after the numbering lands.
 
 Commits, in order: key table (shipped: `LogicalDecide::keys`) → one numbering (shipped: ids by key value) → NULL data
-values (shipped) → NULL key and keyed decision → empty groups (D4, D8) → collation.
+values (shipped) → NULL key and keyed decision (shipped) → empty groups (D4, D8) → collation.
 
-- [ ] A NULL key is not a class; its rows skip the keyed clause (reverses D5; closes infeasible § 2) — [execution § 2](pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)
 - [ ] Key grouping ignores collation (follow the collation) — [bugs § collation](issues/bugs.md#key-grouping-ignores-collation)
-- [ ] `group_indices` drops NULL keys (both oracle helpers drop a NULL key) — [testing § group_indices](testing/todo.md#group_indices-drops-null-keys)
 
 ## B2. Wrong answers whose fix has an open choice
 

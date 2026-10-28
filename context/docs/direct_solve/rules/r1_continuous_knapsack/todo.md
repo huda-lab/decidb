@@ -24,7 +24,7 @@ The per-group plan kept in the code does the following, which is the spec:
 
 Where the language differs from that plan:
 
-- A NULL key is its own group, with its own budget (D5). The owner has ruled that a NULL key skips instead (`../../../pipeline/08_execution/todo.md` §2); follow whichever rule is live when this task starts.
+- A NULL key is in no group, so it has no budget (D5); the row takes its own best end.
 - A group the sum's own `when` leaves empty is an error that quotes the group (D8), raised by keyed row checks (`AddRowChecks`; `../../framework/todo.md` § H-04).
 - `per g:` in front of a clause does not group its sum (D6); only a `by` key does.
 - Nothing is computed on a row a `when` drops (syntax reference §6.3).

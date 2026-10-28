@@ -351,9 +351,17 @@ double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
 
 //! Maps result rows to the classes of a key scope: a `per K:` decision's or a helper's
 //! value is shared by every result row of its class.
+//! A row in no class (a NULL written key column, or a row a helper's clause drops) maps
+//! to `absent_entity`: one spare entity fixed at 0 that no constraint reads, so the row
+//! has no decision (its output is NULL). INVALID_INDEX when every row has a class.
 struct EntityMapping {
     idx_t num_entities = 0;          //! Number of distinct entities in this table
     vector<idx_t> row_to_entity;     //! [row_idx] -> entity_id (0..num_entities-1)
+	idx_t absent_entity = DConstants::INVALID_INDEX;
+
+	bool IsAbsent(idx_t row) const {
+		return absent_entity != DConstants::INVALID_INDEX && row_to_entity[row] == absent_entity;
+	}
 };
 
 //! Links a McCormick auxiliary `w` to the pair it linearizes: `w = b * x`, with

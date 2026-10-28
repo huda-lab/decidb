@@ -148,6 +148,6 @@ equally optimal.
 >
 > • A group with L > U produces DECIDE's infeasible result.
 >
-> • Rows a `when` drops are in no group and still obey their fixed values; a NULL `by` key is a group of its own (D5).
+> • Rows a `when` drops are in no group and still obey their fixed values; a NULL `by` key is in no group (D5).
 >
 > • Empty input, ties, Boolean types, decision identity, and output mapping preserve DECIDE semantics.

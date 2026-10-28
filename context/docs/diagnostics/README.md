@@ -471,8 +471,9 @@ with its `per` key value in `group`:
 ```
 
 Each kept row of a clause with no `per` key is a class of its own, so in `expanded` mode
-such a clause reports once per kept row, with the row in `row`, as I5 does. A NULL key
-value is a class of its own too and prints as the text `NULL` in `group`.
+such a clause reports once per kept row, with the row in `row`, as I5 does. A NULL in a
+written key column is no class, so no finding names it; a relation key's NULL is a value and prints as the
+text `NULL` in `group`.
 
 Two edge behaviors worth knowing: if the proposed repair would leave the objective
 able to grow forever, a separate `unbounded_after_fix` finding says so instead of

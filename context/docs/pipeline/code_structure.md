@@ -331,7 +331,8 @@ The path:
    (over `by ()` it is query-wide). The other rewrites' auxiliaries are row-scoped; a
    MIN/MAX extremum is a global auxiliary stage 06 allocates.
 6. **Execution PHASE 1.5** — composite NULL-safe key → entity id → `row_to_entity`;
-   NULL is a value of the key.
+   a NULL in a written key column is no entity (the row maps to the absent entity, fixed at 0), and a
+   relation's columns compare NULL as a value.
 7. **Model building** — one solver column per entity; coefficients from rows sharing
    an entity **accumulate** through `SparseCoeffAccumulator`.
 8. **Readback** — `var_indexer.Get(var_idx, row)`, so every row of an entity gets the

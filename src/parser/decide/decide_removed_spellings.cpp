@@ -611,23 +611,6 @@ string ReducerWhenNote(const ParsedExpression &constraint) {
 // The postfix WHEN and PER after a constraint
 //===--------------------------------------------------------------------===//
 
-//! A NULL key value is a class of `per`, which the removed PER left out. `when` is the
-//! clause's own condition, kept beside the NULL test.
-string NullNote(const FunctionExpression &per, const string &key, const ParsedExpression *when) {
-	vector<string> conditions;
-	if (when) {
-		conditions.push_back(ConditionText(*when));
-	}
-	vector<string> columns;
-	for (idx_t i = 1; i < per.children.size(); i++) {
-		columns.push_back(per.children[i]->ToString());
-		conditions.push_back(columns.back() + " is not null");
-	}
-	string subject = "a NULL " + (columns.size() == 1 ? key : StringUtil::Join(columns, " or "));
-	return "; " + subject + " is now its own group, so write when " + JoinConditions(conditions) + " per " + key +
-	       ": to leave those rows out";
-}
-
 //! `C PER g` and `C WHEN c PER g` after a constraint.
 [[noreturn]] void RefusePostfixPer(const FunctionExpression &per) {
 	auto key = KeyText(per);
@@ -655,7 +638,7 @@ string NullNote(const FunctionExpression &per, const string &key, const ParsedEx
 	auto front = FrontScope(conditions, key);
 	front.pop_back(); // the space after its colon
 	message += "; write " + front + " in front of the constraint and by (" + key + ") after each of its reducers";
-	Refuse(per, message + NullNote(per, key, when) + ReducerWhenNote(*constraint));
+	Refuse(per, message + ReducerWhenNote(*constraint));
 }
 
 //! `C WHEN c` after a constraint. When C is not a constraint, the condition read on into the
@@ -779,13 +762,6 @@ const FunctionExpression *NestedReducer(const ParsedExpression &expr) {
 		front.push_back(after.AsCondition());
 	}
 	const string removed = "the postfix PER is removed; ";
-	auto with_keys = [&](vector<string> conditions) {
-		for (idx_t i = 1; i < marker.children.size(); i++) {
-			conditions.push_back(marker.children[i]->ToString() + " is not null");
-		}
-		return conditions;
-	};
-	string null_subject = "a NULL " + key + " is now its own group, so write ";
 	if (auto *outer = NestedReducer(*body)) {
 		Reducer inner;
 		bool two_level = &UnwrapReducerMarkers(*body) == outer && outer->children.size() == 1 &&
@@ -812,9 +788,7 @@ const FunctionExpression *NestedReducer(const ParsedExpression &expr) {
 			note = " (an average over the classes is not supported yet; a sum ranks the solutions the same way)";
 		}
 		auto two_level_text = outer_name + "(per " + key + ": " + ReducerSpelling(inner) + " by (" + key + "))";
-		Refuse(marker, removed + "write " + sense + " " + FrontScope(front, "") + two_level_text + note + "; " +
-		                   null_subject + sense + " " + FrontScope(with_keys(front), "") + two_level_text +
-		                   " to leave those rows out");
+		Refuse(marker, removed + "write " + sense + " " + FrontScope(front, "") + two_level_text + note);
 	}
 	auto once = sense + " " + FrontScope(front, "") + Converted(*body);
 	if (TakesReducerBy(UnwrapReducerMarkers(*body))) {
@@ -822,10 +796,9 @@ const FunctionExpression *NestedReducer(const ParsedExpression &expr) {
 		auto name = StringUtil::Lower(call.function_name);
 		auto per_class = "sum(per " + key + ": " + Converted(*body) + " by (" + key + "))";
 		if (name == "avg") {
-			// The removed form added up one average per class, NULL keys left out.
-			Refuse(marker, removed + "write " + sense + " " + FrontScope(with_keys(front), "") + per_class +
-			                   " to add up one average per class as before (a NULL " + key +
-			                   " is now its own group), or " + once + " for one average over all rows");
+			Refuse(marker, removed + "write " + sense + " " + FrontScope(front, "") + per_class +
+			                   " to add up one average per class as before, or " + once +
+			                   " for one average over all rows");
 		}
 		if (name == "min" || name == "max") {
 			Refuse(marker, removed + "an objective is produced once: write " + once + ", or " + sense + " " +

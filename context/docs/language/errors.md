@@ -88,7 +88,7 @@ plain syntax error, as does a removed form after a clause that already has a sco
 | `T.x` (no type) | `per T: x(INT)` / `(BOOL)` / `(REAL)` | `the declaration t.x is removed; write per t: x(INT), per t: x(BOOL) or per t: x(REAL) (per t keys on every column of t)` |
 | `scalar x(TYPE)`, `scalar T.x(TYPE)` | `per (): x(TYPE)` | `scalar s(INT) is removed; write per (): s(INT)` |
 | `scalar x` (no type) | `per (): x(INT)` / … | `scalar s is removed; write per (): s(INT), per (): s(BOOL) or per (): s(REAL)` |
-| `C PER g` · `C PER (g, h)` · `C PER g, h` | `per g, h: C`, with `by (g, h)` after each reducer | `the postfix PER is removed; write per g: in front of the constraint and by (g) after each of its reducers; a NULL g is now its own group, so write when g is not null per g: to leave those rows out` |
+| `C PER g` · `C PER (g, h)` · `C PER g, h` | `per g, h: C`, with `by (g, h)` after each reducer | `the postfix PER is removed; write per g: in front of the constraint and by (g) after each of its reducers` |
 | `C PER g`, `C` without a reducer | `C` | `the postfix PER is removed; a constraint with no reducer already holds on every row, so drop the PER` |
 | `C WHEN c` | `when c: C` | `the postfix WHEN is removed; write when g = 'A': in front of the constraint` |
 | `C WHEN c PER g` | `when c per g: C`, with `by (g)` | `the postfix PER is removed, as is the WHEN before it; write when g = 'A' per g: ...` (with the NULL note) |
@@ -96,11 +96,11 @@ plain syntax error, as does a removed form after a clause that already has a sco
 | `COUNT(*) WHEN c` · `norm(e, p) WHEN c` | `sum(when c: 1)` · `when c:` in front | `... write sum(when g = 'A': 1)` · `... norm takes no when inside it: write when g = 'A': in front of the constraint when the condition holds for all of it` |
 | `SUM(D: e) WHEN c` | `sum(when c per D: e)` | `the WHEN after sum(t: x) is removed; write sum(when g = 'A' per t: x)` |
 | `MAXIMIZE E WHEN c` | `MAXIMIZE when c: E` | `the postfix WHEN is removed; write MAXIMIZE when g = 'A': sum(x)` |
-| `MINIMIZE OUTER(INNER(e)) PER g` | `MINIMIZE outer(per g: inner(e) by (g))`; an outer `AVG` becomes `sum`; a `WHEN` inside goes in front | `the postfix PER is removed; write MINIMIZE sum(per g: max(x) by (g)); a NULL g is now its own group, ...` |
+| `MINIMIZE OUTER(INNER(e)) PER g` | `MINIMIZE outer(per g: inner(e) by (g))`; an outer `AVG` becomes `sum`; a `WHEN` inside goes in front | `the postfix PER is removed; write MINIMIZE sum(per g: max(x) by (g))` |
 | `MINIMIZE OUTER(INNER(D: e)) PER g` · `MINIMIZE c * OUTER(INNER(e)) PER g` | no spelling yet | `the postfix PER is removed; the two-level form ... takes no per inside its inner reducer yet` · `... takes one reducer call inside the outer one ... is not supported yet` |
 | `MAXIMIZE SUM(e) PER g` | `MAXIMIZE sum(e)` | `the postfix PER is removed; an objective is produced once: write MAXIMIZE sum(x)` |
 | `MAXIMIZE MAX(e) PER g` | `MAXIMIZE max(e)`, or `sum(per g: max(e) by (g))` | `... an objective is produced once: write MAXIMIZE max(x), or MAXIMIZE sum(per g: max(x) by (g)) to combine one value per class` |
-| `MAXIMIZE AVG(e) PER g` | `MAXIMIZE when g is not null: sum(per g: avg(e) by (g))`, or `MAXIMIZE avg(e)` | `the postfix PER is removed; write MAXIMIZE when g is not null: sum(per g: avg(x) by (g)) to add up one average per class as before (a NULL g is now its own group), or MAXIMIZE avg(x) for one average over all rows` |
+| `MAXIMIZE AVG(e) PER g` | `MAXIMIZE sum(per g: avg(e) by (g))`, or `MAXIMIZE avg(e)` | `the postfix PER is removed; write MAXIMIZE sum(per g: avg(x) by (g)) to add up one average per class as before, or MAXIMIZE avg(x) for one average over all rows` |
 | `D.x`, a decision with its relation | `x` | `DECIDE: write open, not t.open; a decision is referenced by its bare name` · in a `when`, `per` or `by`: `DECIDE: t.open is a decision; when, per and by may only use data` |
 
 - `D.x` is refused only when `D` is a relation of the `FROM` clause and `D.x` names none of its columns, so a struct

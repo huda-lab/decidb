@@ -2151,29 +2151,24 @@ def test_entity_scoped_subquery_per_three_way(
 
 
 # ---------------------------------------------------------------------------
-# Test E4: NULL in the entity-key column. Per `physical_decide.cpp:1578-1607`,
-# DecidB tags NULL vs non-NULL in the composite entity key; all NULL-keyed
-# rows share a single entity variable. Oracle mirrors this exactly — a
-# divergence (e.g., DecidB accidentally creating one entity per NULL row)
-# would surface as a vector mismatch.
+# Test E4: NULL in the entity-key column. A row whose written key column is NULL
+# is in no class, so it has no decision: its output is NULL, and the reducers
+# skip it. The oracle states only the classes that exist.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.correctness
 def test_entity_scoped_null_key(
     decidb_cli, duckdb_conn, oracle_solver
 ):
-    """NULL-keyed rows group into one entity variable (documented semantics).
+    """NULL-keyed rows have no decision.
 
-    The table has two NULL-key rows and one non-NULL row. Setting the
-    shared NULL-entity variable to 1 forces both NULL rows to show keep=1,
-    which means SUM(keep) = 2 across those two rows. A naive implementation
-    that gave each NULL row its own variable would pick the highest-value
-    NULL row (obj=200) under SUM(keep)=1; DecidB instead picks the non-NULL
-    row (obj=10) because the NULL entity cannot be turned on without
-    violating the count cap.
+    The table has two NULL-key rows and one non-NULL row. The NULL rows are in no
+    class of `per n.nk`, so `SUM(keep) = 1` counts the nk=1 row alone and the
+    objective reads only it (obj=10); the NULL rows show NULL.
 
     The key is written `per n.nk`, not `per n`: `per n` keys on every column of n,
-    `val` included, which would give each NULL row its own variable (obj=200).
+    `val` included, and compares NULL as a value, which would give each NULL row its
+    own variable (obj=200).
     """
     sql = """
         WITH t_null_entity(nk, val) AS (
@@ -2189,39 +2184,22 @@ def test_entity_scoped_null_key(
     """
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
-    # Oracle: two entities — NULL-entity (covers both NULL rows, combined
-    # coefficient 300 = 100 + 200) and entity nk=1 (coefficient 10).
-    # SUM(keep) counts one contribution per *row*, so the NULL entity
-    # contributes twice to SUM(keep) (= 2 * keep_NULL).
+    # Oracle: one entity, nk=1 (coefficient 10).
     oracle_solver.create_model("entity_scoped_null_key")
-    oracle_solver.add_variable("keep_NULL", VarType.BINARY)
     oracle_solver.add_variable("keep_1", VarType.BINARY)
-    oracle_solver.add_constraint(
-        {"keep_NULL": 2.0, "keep_1": 1.0}, "=", 1.0, name="sum_eq_1",
-    )
-    oracle_solver.set_objective(
-        {"keep_NULL": 300.0, "keep_1": 10.0}, ObjSense.MAXIMIZE,
-    )
+    oracle_solver.add_constraint({"keep_1": 1.0}, "=", 1.0, name="sum_eq_1")
+    oracle_solver.set_objective({"keep_1": 10.0}, ObjSense.MAXIMIZE)
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
-    assert res.objective_value == pytest.approx(10.0), (
-        f"Expected obj=10 (nk=1 row, NULL-entity forced to 0), got {res.objective_value}"
-    )
 
-    # Compute DecidB's objective from actual row values (order-independent).
     keep_idx = decidb_cols.index("keep")
     nk_idx = decidb_cols.index("nk")
     val_idx = decidb_cols.index("val")
-    decidb_obj = sum(
-        float(row[val_idx]) * int(row[keep_idx]) for row in decidb_rows
-    )
+    null_vals = [row[keep_idx] for row in decidb_rows if row[nk_idx] is None]
+    assert null_vals == [None, None], f"NULL-keyed rows should have no decision, got keep values: {null_vals}"
+    decidb_obj = sum(float(row[val_idx]) * int(row[keep_idx]) for row in decidb_rows if row[nk_idx] is not None)
     assert decidb_obj == pytest.approx(res.objective_value), (
         f"DecidB obj={decidb_obj}, oracle obj={res.objective_value}"
-    )
-    # Verify NULL-entity consistency: both NULL rows must have the same keep value.
-    null_vals = [int(row[keep_idx]) for row in decidb_rows if row[nk_idx] is None]
-    assert len(set(null_vals)) == 1, (
-        f"NULL-keyed rows should share an entity variable, got keep values: {null_vals}"
     )
 
 
@@ -2452,14 +2430,12 @@ def test_entity_scoped_over_cte_of_base_table(
 @pytest.mark.correctness
 @pytest.mark.per_clause
 def test_entity_scoped_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_solver, scope_solver):
-    """Side-by-side: NULLs collapse into one entity, and into one `per` group.
+    """Side-by-side: a NULL key is in no class, of a declaration or of a `per`.
 
-    Two queries over the same synthetic-NULL shape. The entity-scope form
-    shares a single variable across all NULL-key rows (so turning it on
-    costs `num_null_rows` against the count cap). The `per` form caps every
-    group at one picked row, the NULL group included: a NULL `per` key is its
-    own class (D5). Leaving the NULL rows out of every group would let them float
-    free (obj 138 rather than 104).
+    Two queries over the same synthetic-NULL shape. The entity-scope form gives
+    the NULL-key rows no decision (they show NULL and count nowhere). The `per`
+    form caps every group at one picked row; the NULL-key rows are in no group,
+    so no cap binds them.
     """
     base_cte = """
         WITH t(rk, val) AS (
@@ -2469,7 +2445,7 @@ def test_entity_scoped_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_sol
         )
     """
 
-    # --- (A) Entity-scope: one variable per distinct rk (NULLs share) ---
+    # --- (A) Entity-scope: one variable per distinct non-NULL rk ---
     # The key is written `per t.rk`: `per t` keys on every column of t, `val`
     # included, which would give every row its own variable.
     sql_entity = (
@@ -2489,14 +2465,14 @@ def test_entity_scoped_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_sol
                CAST(n_nationkey AS DOUBLE)
         FROM nation
     """).fetchall()
-    # Collapse NULL rk into one entity key
-    def _key(rk):
-        return "NULL" if rk is None else f"r{int(rk)}"
+    # A NULL rk is no entity.
     entities = {}
     counts = {}
     coeffs = {}
     for rk, val in data:
-        k = _key(rk)
+        if rk is None:
+            continue
+        k = f"r{int(rk)}"
         entities.setdefault(k, True)
         counts[k] = counts.get(k, 0) + 1
         coeffs[k] = coeffs.get(k, 0.0) + float(val)
@@ -2517,17 +2493,15 @@ def test_entity_scoped_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_sol
     keep_idx = cols_entity.index("keep")
     val_idx = cols_entity.index("val")
     rk_idx = cols_entity.index("rk")
-    obj_a = sum(int(r[keep_idx]) * float(r[val_idx]) for r in rows_entity)
+    obj_a = sum(int(r[keep_idx]) * float(r[val_idx]) for r in rows_entity if r[rk_idx] is not None)
     assert obj_a == pytest.approx(res_a.objective_value), (
         f"(A) entity-scope: DecidB obj={obj_a}, oracle={res_a.objective_value}"
     )
-    # NULL rows must all share the same keep value.
-    null_keeps = [int(r[keep_idx]) for r in rows_entity if r[rk_idx] is None]
-    assert null_keeps and len(set(null_keeps)) == 1, (
-        f"(A) NULL-keyed rows should share an entity, got: {null_keeps}"
-    )
+    # NULL rows have no decision.
+    null_keeps = [r[keep_idx] for r in rows_entity if r[rk_idx] is None]
+    assert null_keeps and set(null_keeps) == {None}, f"(A) NULL-keyed rows should have no decision, got: {null_keeps}"
 
-    # --- (B) Row-scope + per rk: one picked row per group, the NULL group included ---
+    # --- (B) Row-scope + per rk: one picked row per group; the NULL-key rows are in none ---
     sql_per = (
         base_cte
         + """
@@ -2541,7 +2515,7 @@ def test_entity_scoped_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_sol
     rows_per, cols_per = decidb_cli.execute(sql_per)
 
     # Oracle for (B): the scope oracle over DeciDB's result rows (the same rows as
-    # `data`), one variable per row, one cap per rk class with NULL a class of its own.
+    # `data`), one variable per row, one cap per non-NULL rk class.
     rk_idx_b, val_idx_b, keep_idx_b = (cols_per.index(c) for c in ("rk", "val", "keep"))
     assert Counter((r[rk_idx_b], float(r[val_idx_b])) for r in rows_per) == Counter(
         (rk, float(val)) for rk, val in data

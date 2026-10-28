@@ -11,7 +11,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D2 | The nested objective is written `outer(per k: inner(e) by (k))` |
 | D3 | The clause shapes support `SUM`, `AVG`, `MIN` and `MAX` |
 | D4 | A `when` that keeps no rows is an error, with or without a reducer in the clause |
-| D5 | NULL is its own class for a declaration's `per`, a constraint's `per` and `by`. Open: to be reversed ([execution todo §2](../pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)) |
+| D5 | A NULL in a written key column (a declaration's `per`, a constraint's `per`, `by`, a `per` inside a reducer) puts the row in no class or group of that key, as SQL's `=` has it (deck p. 30). The row keeps every other key's groups. A keyed decision has no value on that row: the output is NULL, a reducer skips it, an unreduced use skips the instance. A relation element (`per D`) compares NULL as a value. SQL's `GROUP BY` keeps NULL as one group; DECIDE does not, because a limit for an unknown group means nothing (owner, 2026-10-27/28) |
 | D6 | `per g: sum(x) <= 10` is accepted; no `by` means `by ()` |
 | D7 | Each declarator has its own key; a `per` does not carry over |
 | D8 | A reducer with no rows for some class is an error, not a skipped constraint |
@@ -45,7 +45,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D55 | The postfix `WHEN` after a constraint takes an `a_expr`, so `WHEN NOT f` and `WHEN g IN (...)` get the named message |
 | D56 | The `T.x` message names `per T:` and says that `per T` keys on every column of `T` |
 | D60 | The scope oracle steps a strict sense onto whole numbers (`> K` → `floor(K) + 1`, `< K` → `ceil(K) - 1`), the same as stepping by one for a whole `K` |
-| D62 | The removed-`PER` message adds the NULL note: *"a NULL g is now its own group, so write when g is not null per g: to leave those rows out"* |
+| D62 | The removed-`PER` message names the new spelling only: a NULL key is no group under both spellings (D5), so it needs no NULL note |
 | D63 | Determination and D8 messages print the colon form as written |
 | D64 | A bound on one decision admits what DuckDB admits: a whole-numbered decision takes `n` exactly when the written comparison, evaluated by DuckDB with `n` in place of the decision, is true (`0.1 * x <= 0.3` admits 3, since `0.1` is DECIMAL; `0.1::DOUBLE * x = 0.3::DOUBLE` admits nothing). Every such bound folds into the decision's box, a data coefficient (`cap * x <= 10`) included; only an unconditional literal bound replaces the default floor of 0 (D41) |
 | D65 | An infinite bound keeps its SQL meaning: `x <= inf` and `x >= -inf` are no bound; `x >= inf`, `x <= -inf` and `x = ±inf` make the query infeasible on every backend, and `DIAGNOSE` names the clause. A literal `x >= -'inf'` frees `x` below, as `x >= -1e30` does |

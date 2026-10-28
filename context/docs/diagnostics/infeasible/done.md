@@ -522,7 +522,7 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   filter keeps, in key-value order) reindexes the labels in lockstep (a
   new `mapped` id is pushed at exactly `out_group_labels.size()`, so labels stay aligned
   with the dense ordinals). `FormatPerGroupKey` joins composite columns with `, `; a NULL
-  key value — a class of its own (D5) — renders `NULL`, and an empty-string key renders
+  value of a relation key (`per D`, which compares NULL as a value) renders `NULL`, and an empty-string key renders
   `''` so it is not confused with "ungrouped" (a string `'NULL'` reads like a NULL, see
   `todo.md` §2). Threaded through `EvaluatedConstraint::group_labels` → stamped on
   `provenance.group_label` at **every** emission site in `ilp_model_builder.cpp`: the

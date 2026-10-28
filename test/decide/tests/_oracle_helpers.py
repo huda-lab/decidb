@@ -24,9 +24,8 @@ def group_indices(
 ) -> dict[Hashable, list[int]]:
     """Return {group_value: [row_index, ...]} in order of first appearance.
 
-    Rows where ``key_fn`` returns ``None`` are dropped, as
-    ``when k is not null per k:`` drops them; a bare ``per k:`` keeps NULL as
-    a group of its own (D5).
+    Rows where ``key_fn`` returns ``None`` are in no group, as a NULL written
+    key is.
     """
     groups: dict = defaultdict(list)
     for i, row in enumerate(data):

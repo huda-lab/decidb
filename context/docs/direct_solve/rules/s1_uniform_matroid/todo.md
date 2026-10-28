@@ -25,8 +25,8 @@ The per-group plan kept in the code does the following, which is the spec:
 
 Where the language differs from that plan:
 
-- A NULL key is its own group (D5). The kept plan lets a NULL-key row bypass every bound (it still obeyed its fixed
-  value), and read 0 for it, so a NULL-key group could not raise. The owner has ruled that a NULL key skips instead (`../../../pipeline/08_execution/todo.md` §2); follow whichever rule is live when this task starts.
+- A NULL key is in no group (D5), as in the kept plan: a NULL-key row bypasses every bound of that key and still obeys
+  its fixed value.
 - A group the reducer's own `when` leaves empty is an error that quotes the group (D8: `sum(when c: x) has no rows for
   g = 'c'.`), where the kept plan raises the empty-aggregate error. The keyed check belongs to the row checks
   (`AddRowChecks`; `../../framework/todo.md` § H-04).

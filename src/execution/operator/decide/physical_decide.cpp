@@ -301,7 +301,8 @@ static void NumberGroupsByValue(vector<vector<Value>> &rep_keys, idx_t num_group
 //!
 //!   key_exprs       — pre-transformed expressions for chunk evaluation, one per key column
 //!   row_filter      — return true to include row in grouping (empty function = include all)
-//!   (a NULL key value is a value: NULL-keyed rows form one group, D5)
+//!   null_no_group   — per key column: a NULL there puts the row in no group (a written
+//!                      column, NO_GROUP); else NULL is a value (a relation's column, VALUE)
 //!   out_row_to_group — sized num_rows; INVALID_INDEX for excluded rows, [0..K) otherwise
 //!   out_num_groups   — K, count of distinct groups, numbered in key-value order
 //!   read_rows        — the clause's kept rows: the key is computed on these only, and no
@@ -311,7 +312,8 @@ static void NumberGroupsByValue(vector<vector<Value>> &rep_keys, idx_t num_group
 static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientContext &context,
                           ColumnDataCollection &data, idx_t num_rows, const std::function<bool(idx_t)> &row_filter,
                           vector<idx_t> &out_row_to_group, idx_t &out_num_groups,
-                          vector<vector<Value>> *out_rep_keys = nullptr, const vector<bool> *read_rows = nullptr) {
+                          vector<vector<Value>> *out_rep_keys = nullptr, const vector<bool> *read_rows = nullptr,
+                          const vector<bool> &null_no_group = {}) {
 	DecideProfileScope profile("extraction.group_ids");
 	out_row_to_group.assign(num_rows, DConstants::INVALID_INDEX);
 	out_num_groups = 0;
@@ -382,6 +384,13 @@ static void BuildGroupIds(const vector<const Expression *> &key_exprs, ClientCon
 		for (idx_t i = 0; i < count; i++) {
 			idx_t row = row_offset + i;
 			if ((read_rows && !(*read_rows)[row]) || (row_filter && !row_filter(row))) {
+				continue;
+			}
+			bool no_group = false;
+			for (idx_t c = 0; c < null_no_group.size() && !no_group; c++) {
+				no_group = null_no_group[c] && !key_udatas[c].validity.RowIsValid(key_udatas[c].sel->get_index(i));
+			}
+			if (no_group) {
 				continue;
 			}
 			hash_t h = hashes_data[i];
@@ -496,11 +505,14 @@ static PerGroupCacheEntry &CachedKeyGroups(PerGroupCache &cache, const vector<De
 		}
 		auto &entry = found->second;
 		vector<const Expression *> key_exprs;
+		vector<bool> null_no_group;
 		for (auto &element : DecideKeyElements(keys, key)) {
 			key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *element.expression, context));
+			null_no_group.push_back(element.null_mode == DecideKeyNullMode::NO_GROUP);
 		}
 		BuildGroupIds(key_exprs, context, data, num_rows, std::function<bool(idx_t)> {}, entry.unfiltered_row_group_ids,
-		              entry.unfiltered_num_groups, &entry.unfiltered_rep_keys, rows.empty() ? nullptr : &rows);
+		              entry.unfiltered_num_groups, &entry.unfiltered_rep_keys, rows.empty() ? nullptr : &rows,
+		              null_no_group);
 		entry.evaluated_rows = std::move(rows);
 	}
 	return found->second;
@@ -653,8 +665,8 @@ static vector<bool> BuildQualifierKeepMask(const vector<EntityMapping> &mappings
         if (group == DConstants::INVALID_INDEX) {
 			continue; // excluded by `when` or in no group — never a surviving identity
 		}
-		if (eligible && !(*eligible)[row]) {
-			continue;
+		if ((eligible && !(*eligible)[row]) || mapping.IsAbsent(row)) {
+			continue; // a row in no class of the reducer's `per` is not read
 		}
 		idx_t slot = group * mapping.num_entities + mapping.row_to_entity[row];
 		if (!seen[slot]) {
@@ -1597,34 +1609,30 @@ vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context
 	vector<string> labels; // entities are not labelled
 	for (auto &scope : entity_scopes) {
 		EntityMapping mapping;
-		if (scope.value_link == DConstants::INVALID_INDEX) {
-			// A reducer's `per ()` has no key columns: one class, every row in it.
-			LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data, num_rows,
-			                         std::function<bool(idx_t)> {}, nullptr, mapping.row_to_entity,
-			                         mapping.num_entities, labels);
-			entity_mappings.push_back(std::move(mapping));
-			continue;
-		}
-		// A helper decision's scope: the groups of its link's `by` key among the rows the
-		// link's clause keeps, one entity per value the key takes there (NULL a value). The
-		// key is never evaluated on a row the clause drops; those rows are no group, and
-		// share one spare entity so that every row has an id.
-		auto &link = reducer_value_links[scope.value_link];
+		// A declaration's scope: the classes of its key over every row. A helper decision's
+		// scope: the groups of its link's `by` key among the rows the link's clause keeps;
+		// the key is never evaluated on a row the clause drops.
+		idx_t key = scope.key;
 		vector<bool> kept;
-		if (link.when) {
-			kept = KeptRows(*link.when, chunk_expr_cache, context, gstate.data, num_rows);
-		}
-		LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
-		                         num_rows, std::function<bool(idx_t)> {}, link.when ? &kept : nullptr,
-		                         mapping.row_to_entity, mapping.num_entities, labels);
-		bool dropped = false;
-		for (auto &entity : mapping.row_to_entity) {
-			if (entity == DConstants::INVALID_INDEX) {
-				entity = mapping.num_entities;
-				dropped = true;
+		if (scope.value_link != DConstants::INVALID_INDEX) {
+			auto &link = reducer_value_links[scope.value_link];
+			key = link.group_key;
+			if (link.when) {
+				kept = KeptRows(*link.when, chunk_expr_cache, context, gstate.data, num_rows);
 			}
 		}
-		if (dropped) {
+		LookupOrBuildPerGroupIds(per_group_cache, keys, key, chunk_expr_cache, context, gstate.data, num_rows,
+		                         std::function<bool(idx_t)> {}, kept.empty() ? nullptr : &kept, mapping.row_to_entity,
+		                         mapping.num_entities, labels);
+		// A row in no class (a NULL written key, a dropped row) has no decision: it maps to
+		// one spare entity, so that every row has an id (EntityMapping::absent_entity).
+		for (auto &entity : mapping.row_to_entity) {
+			if (entity == DConstants::INVALID_INDEX) {
+				mapping.absent_entity = mapping.num_entities;
+				entity = mapping.absent_entity;
+			}
+		}
+		if (mapping.absent_entity != DConstants::INVALID_INDEX) {
 			mapping.num_entities++;
 		}
 		entity_mappings.push_back(std::move(mapping));
@@ -1878,6 +1886,9 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 				if (group == DConstants::INVALID_INDEX) {
 					continue;
 				}
+				if (scope.IsEntity() && entity_mappings[scope.entity_scope_idx].IsAbsent(row)) {
+					continue; // no decision on this row: a reducer skips it
+				}
 				auto id = scope.IsEntity() ? entity_mappings[scope.entity_scope_idx].row_to_entity[row] : row;
 				if (instance[group] == DConstants::INVALID_INDEX) {
 					instance[group] = id;
@@ -1905,6 +1916,28 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 				                            describe(group, " has", "The kept rows have"),
 				                            SqlLiteral(values[first[group]]), SqlLiteral(values[row]));
 			}
+		}
+	}
+}
+
+//! A row in no class of a keyed decision's key has no decision there
+//! (EntityMapping::absent_entity), which reads like a NULL: a term that reads it on that row
+//! marks the row in `null_rows`, so its instance is skipped. A reducer over the decision never
+//! reads the row (DecideCanonicalizer::SkipNullData), and a row outside the clause's `when`
+//! is no instance.
+static void MarkAbsentDecisionReads(const vector<DecideVarScopeInfo> &scopes, const vector<EntityMapping> &mappings,
+                                    idx_t var, const vector<bool> &scoped_kept, const TermFilterState &filter,
+                                    vector<bool> &null_rows) {
+	if (var >= scopes.size() || !scopes[var].IsEntity()) {
+		return;
+	}
+	auto &mapping = mappings[scopes[var].entity_scope_idx];
+	if (mapping.absent_entity == DConstants::INVALID_INDEX) {
+		return;
+	}
+	for (idx_t row = 0; row < null_rows.size(); row++) {
+		if (scoped_kept[row] && (!filter.has_filter || filter.mask[row]) && mapping.IsAbsent(row)) {
+			null_rows[row] = true;
 		}
 	}
 }
@@ -2178,6 +2211,19 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 						kept_row_group_ids[row] = kept(row) ? 0 : DConstants::INVALID_INDEX;
 					}
 					eval_const.num_groups = 1;
+				}
+				// A `per K:` that names classes holds once per class; with every kept row's K
+				// NULL there is no class, so no instance.
+				if (constraint->per_key == DecideConstraint::PerKeyRole::NAMES_CLASSES) {
+					vector<idx_t> class_ids;
+					idx_t num_classes = 0;
+					vector<string> labels;
+					LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->class_key, chunk_expr_cache, context,
+					                         gstate.data, num_rows, kept, &scoped_kept, class_ids, num_classes, labels);
+					if (num_classes == 0) {
+						eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
+						eval_const.num_groups = 0;
+					}
 				}
 				// The classes each group's rows stand for -- the aggregate row of a group,
 				// or the easy MIN/MAX's member rows -- which an expanded diagnosis reports
@@ -2526,6 +2572,22 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
             }
         }
 
+		for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
+			MarkAbsentDecisionReads(variable_scopes, entity_mappings, constraint->lhs_terms[term_idx].variable_index,
+			                        scoped_kept, term_filters[term_idx], null_rows);
+		}
+		for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
+			for (auto var : {constraint->bilinear_terms[term_idx].var_a, constraint->bilinear_terms[term_idx].var_b}) {
+				MarkAbsentDecisionReads(variable_scopes, entity_mappings, var, scoped_kept, bilinear_filters[term_idx],
+				                        null_rows);
+			}
+		}
+		for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
+			for (auto &term : constraint->quadratic_groups[group_idx].inner_terms) {
+				MarkAbsentDecisionReads(variable_scopes, entity_mappings, term.variable_index, scoped_kept,
+				                        quadratic_filters[group_idx], null_rows);
+			}
+		}
 		SkipNullInstances(null_rows, constraint->lhs_is_aggregate || constraint->was_minmax_easy, num_rows,
 		                  eval_const.row_group_ids, eval_const.num_groups);
 		(c < num_constraints ? gstate.evaluated_constraints : gstate.evaluated_singleton_row_constraints)
@@ -4482,7 +4544,19 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
                 output_data[row_in_chunk] = static_cast<int64_t>(std::round(solution_value));
             }
         }
-    }
+
+		// A row in no class of a keyed decision's key has no decision: its value is NULL.
+		if (decide_var_idx < gstate.var_indexer.var_scope.size() &&
+		    gstate.var_indexer.var_scope[decide_var_idx] == DecideVarScope::ENTITY) {
+			auto &mapping =
+			    gstate.var_indexer.entity_mappings[gstate.var_indexer.var_entity_mapping_idx[decide_var_idx]];
+			for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
+				if (mapping.IsAbsent(source_state.current_row_offset + row_in_chunk)) {
+					FlatVector::SetNull(output_vector, row_in_chunk, true);
+				}
+			}
+		}
+	}
 
     // Update row offset for next chunk
     source_state.current_row_offset += chunk_size;

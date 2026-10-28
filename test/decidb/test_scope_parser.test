@@ -399,7 +399,7 @@ SELECT g, x FROM kw DECIDE x(INT) SUCH THAT x <= row AND x <= by MAXIMIZE SUM(x)
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT SUM(ship) <= 25 PER depotID MAXIMIZE SUM(ship);
 ----
-Parser Error: DECIDE: the postfix PER is removed; write per depotID: in front of the constraint and by (depotID) after each of its reducers; a NULL depotID is now its own group, so write when depotID is not null per depotID: to leave those rows out
+Parser Error: DECIDE: the postfix PER is removed; write per depotID: in front of the constraint and by (depotID) after each of its reducers
 
 # the postfix PER with a parenthesized key (removed spelling)
 statement error

@@ -193,7 +193,7 @@ def _two_level_query(outer, inner, sense, clause="x <= t.cap AND sum(x) >= 6", w
 @pytest.mark.parametrize("outer, inner", list(itertools.product(("sum", "min", "max"), repeat=2)))
 @pytest.mark.parametrize("sense", ["MINIMIZE", "MAXIMIZE"])
 def test_two_level_form(decidb_cli, scope_solver, outer, inner, sense):
-    """All nine combinations in both directions, the NULL group a class of its own."""
+    """All nine combinations in both directions; the NULL-key rows are in no group."""
     sql = _two_level_query(outer, inner, sense)
     model = ScopedModel(table_rows(GROUPS, GROUP_ROWS), [Decision("x")])
     clauses = [

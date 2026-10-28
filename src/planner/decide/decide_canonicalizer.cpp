@@ -250,8 +250,37 @@ static void CollectNullableData(const Expression &expr, idx_t decide_index, vect
 	    expr, [&](const Expression &child) { CollectNullableData(child, decide_index, out); });
 }
 
-void DecideCanonicalizer::SkipNullData(Expression &expr) const {
-	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { SkipNullData(child); });
+//! The written key columns of each keyed decision `expr` reads outside a nested reducer: a
+//! NULL there leaves the row with no decision (a relation's columns compare NULL as a value).
+static void CollectAbsentDecisionKeys(const Expression &expr, idx_t decide_index,
+                                      const vector<DecideVarScopeInfo> &variable_scopes,
+                                      const vector<EntityScopeInfo> &scopes, const vector<DecideKey> &keys,
+                                      vector<unique_ptr<Expression>> &out) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		return;
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &binding = expr.Cast<BoundColumnRefExpression>().binding;
+		auto var = binding.column_index;
+		if (binding.table_index != decide_index || var >= variable_scopes.size() ||
+		    variable_scopes[var].scope != DecideVarScope::ENTITY) {
+			return;
+		}
+		for (auto &element : DecideKeyElements(keys, scopes[variable_scopes[var].entity_scope_idx].key)) {
+			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
+				AddNullTest(*element.expression, out);
+			}
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		CollectAbsentDecisionKeys(child, decide_index, variable_scopes, scopes, keys, out);
+	});
+}
+
+void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<EntityScopeInfo> &scopes,
+                                       const vector<DecideKey> &keys) const {
+	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { SkipNullData(child, scopes, keys); });
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE || !ReferencesDecideVar(expr)) {
 		return;
 	}
@@ -259,6 +288,7 @@ void DecideCanonicalizer::SkipNullData(Expression &expr) const {
 	vector<unique_ptr<Expression>> data;
 	for (auto &child : reducer.children) {
 		CollectNullableData(*child, decide_index, data);
+		CollectAbsentDecisionKeys(*child, decide_index, variable_scopes, scopes, keys, data);
 	}
 	for (auto &value : data) {
 		auto test = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_IS_NOT_NULL, LogicalType::BOOLEAN);

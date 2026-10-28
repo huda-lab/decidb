@@ -121,7 +121,7 @@ needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,764 assertions in 6
   reducer) becomes a column of the DECIDE source: the same DuckDB aggregate, as a window partitioned by the rows the
   clause's `when` keeps and by the reducer's `by` key, with the reducer's own `when` as its `FILTER`. A keyed or colon
   reducer counts each class of its key once: the filter also asks for the first row of the class (a `ROW_NUMBER`
-  window over the same partitions and the key). A NULL key is a group of its own (D5). A `per K:` in front of the
+  window over the same partitions and the key). On a row whose written `by` column is NULL the column is NULL, so the instance is skipped (D5), and a NULL inner `per` key is never the first of a class. A `per K:` in front of the
   clause groups no reducer (D6). A window that reads another window's column is placed one level above it; equal windows
   are shared. The binder rejects `DISTINCT` and drops an `ORDER BY` inside these reducers, so neither reaches the
   rewrite. A data norm of order 0 is the count of its non-zero rows, `SUM(ABS(SIGN(e)))`.

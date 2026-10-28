@@ -1,7 +1,7 @@
 """`by (Γ)` after a reducer: which rows it reads (language/guide.md §5.2).
 
 `agg(e) by (Γ)` reads every kept row whose Γ equals the current class's Γ, including
-rows outside the class; Γ is columns or data expressions, NULL is a group (D5), and an
+rows outside the class; Γ is columns or data expressions, a NULL Γ is no group, and an
 omitted `by` is `by ()`, every kept row. A clause whose decision reducers share one `by`
 key is one model row per group of that key; its bound is the tightest one in the group
 (`=` refuses two values, `<>` keeps every value). A data-only reducer on the bound side is
@@ -143,8 +143,8 @@ def test_bound_side_reducers_each_read_their_own_group(decidb_cli, scope_solver)
 
 
 @pytest.mark.correctness
-def test_null_is_a_group_of_by(decidb_cli, scope_solver):
-    """Rows 4 and 5 have no region: they form one group of their own (D5)."""
+def test_a_null_by_key_is_no_group(decidb_cli, scope_solver):
+    """Rows 4 and 5 have no region: they are in no group, so no limit binds them."""
     rows = ((1, "a", 10), (2, "a", 20), (3, "b", 30), (4, None, 15), (5, None, 25))
     columns = ("id", "region", "demand")
     sql = f"""
@@ -159,18 +159,40 @@ def test_null_is_a_group_of_by(decidb_cli, scope_solver):
     assert (
         model.judge_scoped(result, clauses, MAXIMIZE_SHIP)
         == pytest.approx(model.solve_scoped(scope_solver, clauses, MAXIMIZE_SHIP))
-        == 22 + 22 + 22
+        == 22 + 22 + 15 + 25
     )
 
 
 @pytest.mark.correctness
-@pytest.mark.parametrize("key", ["1", "'all'", "NULL", "1 + 1"])
+@pytest.mark.parametrize("key", ["1", "'all'", "1 + 1"])
 def test_a_constant_by_key_is_one_group(decidb_cli, scope_solver, key):
     """A literal or folded key holds one value on every row: one group, as `by ()`."""
     sql = _ship_query(f"sum(ship) by ({key}) <= 30")
     model = ScopedModel(joined(), SHIP)
     clauses = [SHIP_BOUND, Scoped((_ship_sum(lambda r: (1,)),), "<=", (lambda r: {CONSTANT: 30},))]
     assert sum(_judged(decidb_cli, scope_solver, sql, model, clauses, MAXIMIZE_SHIP)) == 30
+
+
+@pytest.mark.correctness
+def test_a_nan_on_a_row_in_no_group_is_never_read(decidb_cli):
+    """Row 2's `g` is NULL, so no group of `max(t.v) by (t.g)` reads its NaN: no error, and
+    its bound is NULL, so only `x <= 20` holds there."""
+    rows, _ = decidb_cli.execute(
+        "SELECT id, x FROM (VALUES (1, 'a', 5.0::FLOAT), (2, NULL, 'NaN'::FLOAT)) t(id, g, v) "
+        "DECIDE x(INT) SUCH THAT x <= 20 AND x <= max(t.v) by (t.g) MAXIMIZE SUM(x) ORDER BY id"
+    )
+    assert [row[1] for row in rows] == [5, 20]
+
+
+@pytest.mark.correctness
+def test_a_null_constant_by_key_is_no_group(decidb_cli, scope_solver):
+    """`by (NULL)` puts no row in a group: the reducer has no value, so the clause holds nowhere."""
+    sql = _ship_query("sum(ship) by (NULL) <= 30")
+    model = ScopedModel(joined(), SHIP)
+    clauses = [SHIP_BOUND, Scoped((_ship_sum(lambda r: (None,)),), "<=", (lambda r: {CONSTANT: 30},))]
+    assert sum(_judged(decidb_cli, scope_solver, sql, model, clauses, MAXIMIZE_SHIP)) == sum(
+        row["demand"] for row in joined()
+    )
 
 
 @pytest.mark.correctness
@@ -194,8 +216,9 @@ def test_a_constant_by_key_beside_a_when_and_on_the_bound_side(decidb_cli, scope
 
 
 @pytest.mark.correctness
-def test_a_key_that_is_null_on_every_row_is_one_group(decidb_cli, scope_solver):
-    """`g` holds only NULL, so `g || h` is NULL on every row: one group, which row 2 is in."""
+def test_a_key_that_is_null_on_every_row_is_no_group(decidb_cli, scope_solver):
+    """`g` holds only NULL, so `g || h` is NULL on every row: no row is in a group, and the
+    bound is NULL on both rows, so only `x <= 20` holds."""
     columns = ("id", "g", "h", "v")
     rows = ((1, None, None, 7), (2, None, "q", 9))
     sql = f"""
@@ -218,7 +241,7 @@ def test_a_key_that_is_null_on_every_row_is_one_group(decidb_cli, scope_solver):
     assert (
         model.judge_scoped(result, clauses, objective)
         == pytest.approx(model.solve_scoped(scope_solver, clauses, objective))
-        == 18
+        == 40
     )
 
 
@@ -497,6 +520,7 @@ def test_easy_max_reduces_the_bound_over_every_kept_row(decidb_cli, scope_solver
 
 
 FACTOR_COLUMNS = ("id", "g", "v", "cap")
+# Rows 4 and 5 have a NULL g: they are in no group of `by (t.g)`, so a clause keyed on g leaves them free.
 FACTOR_ROWS = ((1, "a", 10, 5), (2, "a", 20, 5), (3, "b", 30, 8), (4, None, 40, 2), (5, None, 50, 2))
 
 
@@ -517,21 +541,21 @@ def _cap(scale=1):
             "per t.g: -2 * max(x) by (t.g) <= -2 * t.cap",
             "MINIMIZE",
             Scoped((_x("max", -2),), "<=", (_cap(-2),), per=("g",)),
-            15,
+            13,
             id="negative-factor-hard-max",
         ),
         pytest.param(
             "per t.g: -2 * max(x) by (t.g) = -2 * t.cap",
             "MINIMIZE",
             Scoped((_x("max", -2),), "=", (_cap(-2),), per=("g",)),
-            15,
+            13,
             id="negative-factor-equal",
         ),
         pytest.param(
             "per t.g: -2 * min(x) by (t.g) >= -2 * t.cap",
             "MAXIMIZE",
             Scoped((_x("min", -2),), ">=", (_cap(-2),), per=("g",)),
-            85,
+            123,
             id="negative-factor-hard-min",
         ),
         pytest.param(
@@ -545,49 +569,49 @@ def _cap(scale=1):
             "per t.g: max(x) by (t.g) > t.cap",
             "MINIMIZE",
             Scoped((_x("max"),), ">", (_cap(),), per=("g",)),
-            18,
+            15,
             id="strict-hard-max",
         ),
         pytest.param(
             "per t.g: min(x) by (t.g) < t.cap",
             "MAXIMIZE",
             Scoped((_x("min"),), "<", (_cap(),), per=("g",)),
-            82,
+            121,
             id="strict-hard-min",
         ),
         pytest.param(
             "per t.g: 2 * max(x) by (t.g) > 2 * t.cap",
             "MINIMIZE",
             Scoped((_x("max", 2),), ">", (_cap(2),), per=("g",)),
-            18,
+            15,
             id="strict-under-a-factor",
         ),
         pytest.param(
             "per t.g: -max(x) by (t.g) <= -t.cap",
             "MINIMIZE",
             Scoped((_x("max", -1),), "<=", (_cap(-1),), per=("g",)),
-            15,
+            13,
             id="negated-hard-max",
         ),
         pytest.param(
             "per t.g: t.cap - max(x) by (t.g) <= 0",
             "MINIMIZE",
             Scoped((_cap(), _x("max", -1)), "<=", (), per=("g",)),
-            15,
+            13,
             id="negated-beside-data",
         ),
         pytest.param(
             "per t.g: -max(x) by (t.g) >= -t.cap",
             "MAXIMIZE",
             Scoped((_x("max", -1),), ">=", (_cap(-1),), per=("g",)),
-            22,
+            108,
             id="negated-easy-max",
         ),
         pytest.param(
             "per t.g: -min(x) by (t.g) >= -t.cap",
             "MAXIMIZE",
             Scoped((_x("min", -1),), ">=", (_cap(-1),), per=("g",)),
-            85,
+            123,
             id="negated-hard-min",
         ),
         pytest.param(
@@ -601,7 +625,7 @@ def _cap(scale=1):
             "per t.g: -(-max(x) by (t.g)) >= t.cap",
             "MINIMIZE",
             Scoped((_x("max"),), ">=", (_cap(),), per=("g",)),
-            15,
+            13,
             id="negated-twice",
         ),
         pytest.param(
@@ -627,7 +651,7 @@ def _cap(scale=1):
                 (lambda r: {CONSTANT: 12},),
                 per=("g",),
             ),
-            24,
+            13,
             id="strict-with-a-whole-data-offset",
         ),
     ],

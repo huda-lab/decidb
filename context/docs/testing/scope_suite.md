@@ -43,8 +43,9 @@ same thing.
   key, generate the body once per class, and evaluate each reducer on the kept rows
   that share the class's `by` value, after its own `when` and one value per class of
   its own `per` (the first kept row stands for its class).
-- **NULL is a value like any other.** Rows whose key is NULL share one class
-  (`class_ids`, `_split`), in declarations, in `per` and in `by`.
+- **A NULL written key is no class.** A row whose written key column is NULL is in no class
+  (`key_value`, `class_ids`, `_split`), in declarations, in `per` and in `by`; a keyed decision has no
+  value there. `RelationColumns` stands for `per D`, whose columns compare NULL as a value.
 - **The three run-time errors.** `check` raises `ScopeError` before any model is built,
   carrying the phrase DeciDB's message carries: `kept_no_rows` ("matches no rows"),
   `not_determined` ("does not determine": every tuple term, factor and `by` value must

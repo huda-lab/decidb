@@ -41,10 +41,35 @@ _TOLERANCE = 1e-6
 
 
 @dataclass(frozen=True)
+class RelationColumns:
+    """A key element ``per D`` stands for: D's columns, which compare NULL as a value. A
+    plain column name in a key is written, and a NULL there puts the row in no class."""
+
+    columns: tuple[str, ...]
+
+
+def key_value(row: Row, key) -> tuple | None:
+    """The row's value of ``key`` (column names, ``RelationColumns`` or a function of the
+    row), or None when the row is in no class: a written element is NULL."""
+    if callable(key):
+        value = tuple(key(row))
+        return None if any(v is None for v in value) else value
+    value = []
+    for element in key:
+        if isinstance(element, RelationColumns):
+            value.extend(row[column] for column in element.columns)
+        elif row[element] is None:
+            return None
+        else:
+            value.append(row[element])
+    return tuple(value)
+
+
+@dataclass(frozen=True)
 class Decision:
     name: str
-    #: ``PER_ROW``, ``GLOBAL``, or the row columns the key names.
-    key: tuple[str, ...] | None = PER_ROW
+    #: ``PER_ROW``, ``GLOBAL``, or the key's elements (see ``key_value``).
+    key: tuple | None = PER_ROW
     var_type: VarType = VarType.INTEGER
     lb: float = 0.0
     ub: float | None = None
@@ -78,13 +103,18 @@ class Objective:
     once: Terms = field(default_factory=dict)
 
 
-def class_ids(rows: Sequence[Row], key: tuple[str, ...] | None) -> list[int]:
+def class_ids(rows: Sequence[Row], key) -> list[int | None]:
     """The class of every row under ``key``, numbered in first-seen order. Rows with
-    equal key values share a class, and NULL (``None``) is a value like any other."""
+    equal key values share a class; a row in no class (``key_value`` None) has no
+    decision, and its class is None."""
     if key is None:
         return list(range(len(rows)))
     ids: dict[tuple, int] = {}
-    return [ids.setdefault(tuple(row[column] for column in key), len(ids)) for row in rows]
+    classes = []
+    for row in rows:
+        value = key_value(row, key)
+        classes.append(None if value is None else ids.setdefault(value, len(ids)))
+    return classes
 
 
 def _holds(lhs: float, sense: str, rhs: float) -> bool:
@@ -107,15 +137,23 @@ class ScopeModel:
 
     def class_count(self, name: str) -> int:
         """How many decisions ``name`` stands for: one per class among the rows."""
-        return len(set(self.classes[name]))
+        return len(set(self.classes[name]) - {None})
 
     def column_count(self) -> int:
         return sum(self.class_count(name) for name in self.decisions)
 
-    def _row_coefficients(self, terms: Terms, row_index: int, into: dict[tuple[str, int], float]) -> None:
+    def _absent(self, terms: Terms, row_index: int) -> bool:
+        """Whether a decision ``terms`` reads has no value on the row: it reads like a NULL."""
+        return any(name in self.classes and self.classes[name][row_index] is None for name in terms)
+
+    def _row_coefficients(self, terms: Terms, row_index: int, into: dict[tuple[str, int], float]) -> bool:
+        """Add the row's terms; False (nothing added) when a decision they read is absent there."""
+        if self._absent(terms, row_index):
+            return False
         for name, coefficient in terms.items():
             column = (name, self.classes[name][row_index])
             into[column] = into.get(column, 0.0) + coefficient
+        return True
 
     def _once_coefficients(self, terms: Terms, into: dict[tuple[str, int], float]) -> None:
         for name, coefficient in terms.items():
@@ -131,13 +169,14 @@ class ScopeModel:
 
         solver.create_model("scope_oracle")
         for name, decision in self.decisions.items():
-            for class_id in sorted(set(self.classes[name])):
+            for class_id in sorted(set(self.classes[name]) - {None}):
                 solver.add_variable(label((name, class_id)), decision.var_type, decision.lb, decision.ub)
         for clause in clauses:
             if isinstance(clause, RowClause):
                 for row_index, row in enumerate(self.rows):
                     coefficients: dict[tuple[str, int], float] = {}
-                    self._row_coefficients(clause.terms(row), row_index, coefficients)
+                    if not self._row_coefficients(clause.terms(row), row_index, coefficients):
+                        continue  # an absent decision skips the instance
                     solver.add_constraint(
                         {label(c): v for c, v in coefficients.items()}, clause.sense, float(clause.rhs(row))
                     )
@@ -163,6 +202,9 @@ class ScopeModel:
         values: dict[tuple[str, int], float] = {}
         for name, decision in self.decisions.items():
             for row_index, row in enumerate(answer):
+                if self.classes[name][row_index] is None:
+                    assert row[name] is None, f"{name} = {row[name]} on row {row_index}, which has no decision"
+                    continue
                 value = float(row[name])
                 column = (name, self.classes[name][row_index])
                 seen = values.setdefault(column, value)
@@ -182,7 +224,8 @@ class ScopeModel:
             if isinstance(clause, RowClause):
                 for row_index, row in enumerate(self.rows):
                     coefficients: dict[tuple[str, int], float] = {}
-                    self._row_coefficients(clause.terms(row), row_index, coefficients)
+                    if not self._row_coefficients(clause.terms(row), row_index, coefficients):
+                        continue  # an absent decision skips the instance
                     lhs = evaluate(coefficients)
                     assert _holds(
                         lhs, clause.sense, float(clause.rhs(row))
@@ -288,18 +331,17 @@ def _kept(rows: Sequence[Row], when) -> list[int]:
     return [i for i, row in enumerate(rows) if when is None or when(row) is True]
 
 
-def _key_of(row: Row, key) -> tuple:
-    return tuple(key(row)) if callable(key) else tuple(row[column] for column in key)
-
-
 def _split(rows: Sequence[Row], indices: Sequence[int], key) -> list[list[int]]:
     """``indices`` split into classes of ``key`` in first-seen order; ``PER_ROW`` gives
-    one class per row and ``GLOBAL`` one class (none when there is no row)."""
+    one class per row and ``GLOBAL`` one class (none when there is no row). A row in no
+    class of ``key`` is in none of them."""
     if key is PER_ROW:
         return [[i] for i in indices]
     classes: dict[tuple, list[int]] = {}
     for i in indices:
-        classes.setdefault(_key_of(rows[i], key), []).append(i)
+        value = key_value(rows[i], key)
+        if value is not None:
+            classes.setdefault(value, []).append(i)
     return list(classes.values())
 
 
@@ -317,8 +359,8 @@ class ScopedModel(ScopeModel):
 
     def _linear(self, terms: Terms, row_index: int) -> Linear | None:
         """``terms`` on row ``row_index``, each decision replaced by its class column; None (SQL's NULL) when a
-        coefficient is None."""
-        if any(coefficient is None for coefficient in terms.values()):
+        coefficient is None or a decision has no value on the row."""
+        if any(coefficient is None for coefficient in terms.values()) or self._absent(terms, row_index):
             return None
         expr: Linear = {}
         for name, coefficient in terms.items():
@@ -341,8 +383,10 @@ class ScopedModel(ScopeModel):
         own ``per``, then the aggregate. A row whose body is NULL is skipped, as SQL's
         aggregates skip one, and a reducer left with no row is NULL (None). ``emit`` turns
         MIN/MAX over decisions into an auxiliary (``solve``) or a number (``judge``)."""
-        group = _key_of(self.rows[at], reduce.by)
-        read = [i for i in kept if _key_of(self.rows[i], reduce.by) == group]
+        group = key_value(self.rows[at], reduce.by)
+        if group is None:
+            return None  # the row is in no group of the `by` key: the reducer has no value there
+        read = [i for i in kept if key_value(self.rows[i], reduce.by) == group]
         read = [i for i in read if reduce.when is None or reduce.when(self.rows[i]) is True]
         if not read:
             raise ScopeError("reducer_empty", f"{reduce.agg} for by value {group}")
@@ -385,7 +429,7 @@ class ScopedModel(ScopeModel):
         for part in parts:
             if isinstance(part, Reduce):
                 self._require_determined(class_rows, key_name, lambda i: float(part.factor(self.rows[i])))
-                self._require_determined(class_rows, key_name, lambda i: _key_of(self.rows[i], part.by))
+                self._require_determined(class_rows, key_name, lambda i: key_value(self.rows[i], part.by))
             else:
                 self._require_determined(class_rows, key_name, lambda i: self._linear(part(self.rows[i]), i))
 
@@ -487,7 +531,7 @@ class ScopedModel(ScopeModel):
 
         solver.create_model("scoped_oracle")
         for name, decision in self.decisions.items():
-            for class_id in sorted(set(self.classes[name])):
+            for class_id in sorted(set(self.classes[name]) - {None}):
                 solver.add_variable(label((name, class_id)), decision.var_type, decision.lb, decision.ub)
         for clause in clauses:
             for expr, sense in self._generate(clause, emit):
@@ -523,6 +567,9 @@ class ScopedModel(ScopeModel):
         values: dict = {}
         for name, decision in self.decisions.items():
             for row_index, row in enumerate(answer):
+                if self.classes[name][row_index] is None:
+                    assert row[name] is None, f"{name} = {row[name]} on row {row_index}, which has no decision"
+                    continue
                 value = float(row[name])
                 column = (name, self.classes[name][row_index])
                 seen = values.setdefault(column, value)

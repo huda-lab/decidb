@@ -811,7 +811,7 @@ def test_r1_binder_rejects_strict_bounds_on_real_before_direct_solve_is_asked(de
 #
 # A budget may be written with `by (g)` after the sum, with `when f:` in front of the clause, or with `when f` inside
 # the sum (`SUM(when f: w*amount) <= 6`). A row whose `when` holds belongs to the budget of its `by` group (a NULL key
-# is a group of its own; `when g IS NOT NULL:` leaves those rows out), and each group has its own budget and its own price. Any other row is outside every budget: it takes its own
+# is in no group; the cases also write `when g IS NOT NULL:`), and each group has its own budget and its own price. Any other row is outside every budget: it takes its own
 # best end (the upper end for a positive value, the lower end for a negative one), as a row with no weight does. The
 # oracle holds one constraint per group, over the rows of that group, built here in Python from the raw rows and the
 # membership each case states, never from DeciDB's reading of the SQL. A group with no covered row has no constraint.

@@ -282,7 +282,7 @@ What DeciDB admits beyond, or in place of, the catalogue text. Where the two dif
 > the budget, rows move toward it in order of least value lost per unit of budget. `BETWEEN` binds on at most one side.
 > A required spend outside what the boxes can reach is infeasible.
 >
-> • **Budget scope.** A `by` key on the sum gives each group its own budget and price; a NULL key is a group of its own
+> • **Budget scope.** A `by` key on the sum gives each group its own budget and price; a NULL key is in no group
 > (D5). A `when` on the clause or inside the sum (the same meaning for a constant budget) leaves a row out of every
 > budget; such a row takes its own best end, as an A1 row does. A `when` that keeps no row of a nonempty source is an
 > error (D4), as on the solver. As built, R1 reads no `by` key yet (`done.md`).

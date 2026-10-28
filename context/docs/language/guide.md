@@ -172,8 +172,10 @@ DECIDE ship(INT), per D: open(BOOL), per (): cap(INT)   -- each declarator its o
   `rowid` and generated columns are not key elements; expressions belong in `by`.
 - **A key is a set**: `per a, b` and `per b, a` are one key, and declarators with equal keys share one grouping.
 - **Each declarator has its own key**: `per D: open(BOOL), ship(INT)` leaves `ship` per row.
-- **Count**: one decision per distinct key value among the result rows. Rows with a NULL key share one decision (D5).
-- **Output**: every row shows its class's value.
+- **Count**: one decision per distinct key value among the result rows. A row whose written key column is NULL is in
+  no class and has no decision (D5): it shows NULL, a reducer skips it, and an unreduced use skips that instance. A
+  relation element compares NULL as a value: `per D` gives a NULL in D's columns a class.
+- **Output**: every row shows its class's value; a row with no decision shows NULL.
 
 Tests: `test/decide/tests/test_scope_declare.py`.
 
@@ -220,7 +222,7 @@ data and unaffected.
   `SUM(x) <= cap` with a NULL `cap` has no constraint there. In the objective, a NULL term is dropped. `COALESCE`
   imputes a value instead: `SUM(x * COALESCE(w, 0))`. A NULL written in the query beside a decision
   (`SUM(x + NULL)`) is refused where it is written, and NaN is an error. `COUNT(col)` also counts a NaN, as SQL does.
-  In a `when`, NULL is false; in a key, NULL is a class (§7.2).
+  In a `when`, NULL is false; in a written key column, NULL is no class (§7.2).
 
 ### 3.1 Quadratic constraints
 
@@ -367,7 +369,8 @@ sum(ship) by (D.depotID, S.dispatchDay + S.transitDays)   -- an expression in th
 - `Γ` lists columns, relations and data expressions; never a decision. A key with one value everywhere (`by (1)`) is
   `by ()`.
 - Reads every kept row whose `Γ` equals the current row's, including rows outside the current class (§6.1).
-- NULL is a value of `Γ` (D5). `Γ` must be determined by the enclosing `per` key (§7.1).
+- A row whose `Γ` is NULL is in no group of it (D5): that reducer has no value there, and the NULL skips the instance;
+  the clause's other reducers still read the row. `Γ` must be determined by the enclosing `per` key (§7.1).
 - `by` belongs to the call right before it. A data-only reducer on the bound side reads its own groups:
   `count(*) by (g)` counts the current row's group.
 - A factor holds the reducer's value: `-2 * max(e) by (g)` is `min(-2 * e) by (g)`.
@@ -444,7 +447,8 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
   exactly one.
 - **One scope, one constraint**: in `per g: A AND B` only `A` is scoped.
 - Key elements are columns and relations, as in §2.3. Several columns are written without parentheses (`per a, b:`).
-- **NULL is a class** (D5); `when a is not null per a:` leaves those rows out.
+- **A NULL key is no class** (D5): a row whose written `per` column is NULL gets no constraint from the clause. A
+  relation's columns compare NULL as a value.
 - **`per` does not group reducers** (D6): `per g: sum(x) <= 10` bounds the total over all kept rows, once per `g`
   (identical rows collapse to one). Write `per g: sum(x) by (g) <= 10` for each group's own total.
 - **An explicit `per` must determine the body**; no `per` always does. So `sum(x) <= cap` takes the tightest `cap`
@@ -528,7 +532,8 @@ Tests: `test/decide/tests/test_scope_determination.py`.
 
 | Situation | Outcome |
 |---|---|
-| NULL in a declaration's, constraint's or `by` key | its own class or group (D5) |
+| NULL in a declaration's, constraint's or `by` key column | no class or group of that key (D5); a relation's columns compare NULL as a value |
+| a keyed decision on a NULL-key row | no decision: the row shows NULL, a reducer skips it, an unreduced use skips the instance |
 | NULL `when` condition | row dropped |
 | NULL in a reducer's summand | the row is skipped, as in SQL; AVG divides by the rows kept (§3) |
 | NULL bound, unreduced coefficient or factor on an aggregate | the instance is skipped (§3) |
@@ -539,7 +544,6 @@ Tests: `test/decide/tests/test_scope_determination.py`.
 | a reducer's own `when` empties a generated class's group | error naming the class (D8) |
 | the input has no rows | empty result |
 
-NULL as a class is under review ([execution todo §2](../pipeline/08_execution/todo.md#2-a-null-key-is-not-a-class-reverses-d5)).
 The two errors above are guards the deck replaces: there, a `when` that keeps no row yields no constraints, and an
 empty group is NULL ([roadmap](roadmap.md#current-behavior-the-deck-changes)).
 

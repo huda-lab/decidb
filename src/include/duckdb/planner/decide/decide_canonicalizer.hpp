@@ -267,8 +267,10 @@ public:
 	//! reducer over decisions, every data value its body reads where a NULL makes the summand
 	//! NULL is tested `IS NOT NULL` in the reducer's own `when`. A function that handles NULL
 	//! itself (`COALESCE`) is not looked into. Runs on the canonical tree, before any rewrite
-	//! copies a reducer's `when`, and after the clause's texts are recorded.
-	void SkipNullData(Expression &expr) const;
+	//! copies a reducer's `when`, and after the clause's texts are recorded. A keyed decision
+	//! the body reads has no value on a row whose written key column is NULL, so that column
+	//! is tested too (`scopes` and `keys` name each decision's key).
+	void SkipNullData(Expression &expr, const vector<EntityScopeInfo> &scopes, const vector<DecideKey> &keys) const;
 
 	//! Classify an already-canonical comparison using the same scope rules as
 	//! planning validation. Physical extraction uses this instead of re-deciding

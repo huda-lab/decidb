@@ -464,10 +464,9 @@ def test_a_helper_over_a_reducer_with_its_own_per(decidb_cli, scope_solver):
 
 
 @pytest.mark.correctness
-def test_null_is_a_group_of_the_helper_key(decidb_cli, scope_solver):
-    """Rows without a region form one group of their own (D5): the two of them share a
-    helper (25 would be more than 60% of 15 + 22), the lone 'b' row cannot be 60% of
-    itself."""
+def test_a_null_helper_key_is_no_group(decidb_cli, scope_solver):
+    """Rows without a region are in no group: their bound is NULL, so they take their
+    demand; the lone 'b' row cannot be 60% of itself."""
     rows = ((1, "a", 10), (2, "a", 20), (3, "b", 30), (4, None, 15), (5, None, 25))
     columns = ("id", "region", "demand")
     sql = f"""
@@ -482,7 +481,7 @@ def test_null_is_a_group_of_the_helper_key(decidb_cli, scope_solver):
     assert model.judge_scoped(result, clauses, MAXIMIZE_SHIP) == pytest.approx(
         model.solve_scoped(scope_solver, clauses, MAXIMIZE_SHIP)
     )
-    assert [row["ship"] for row in result] == [10, 15, 0, 15, 22]
+    assert [row["ship"] for row in result] == [10, 15, 0, 15, 25]
 
 
 @pytest.mark.correctness

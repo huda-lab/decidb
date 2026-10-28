@@ -151,7 +151,7 @@ private:
 			auto body = DecideWrittenNormBody(reducer);
 			auto nan = NanMessage(body ? *body : *reducer.children[0], "constraint right-hand side aggregate");
 			if (nan) {
-				AddValueCheck(calc.Out(OnRows(reads, nan)));
+				AddValueCheck(calc.Out(OnRows(reads, InGroup(reducer, nan))));
 			}
 		}
 		auto keys = GroupKeyOf(reducer);
@@ -168,6 +168,12 @@ private:
 		if (TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx)) {
 			auto first = calc.Cmp(ExpressionType::COMPARE_EQUAL, FirstOfClass(scope_idx, keys, reads),
 			                      calc.Constant(Value::BIGINT(1)));
+			// A row whose written `per` column is NULL is in no class, so it is not counted.
+			for (auto &element : DecideKeyElements(decide.keys, decide.entity_scopes[scope_idx].key)) {
+				if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
+					first = calc.If(calc.IsNull(calc.Of(*element.expression)), calc.Bool(false), first);
+				}
+			}
 			counted = reads ? calc.If(reads, first, calc.Bool(false)) : first;
 		}
 		if (counted) {
@@ -180,6 +186,9 @@ private:
 		}
 		auto column = Place(std::move(window));
 		reducer_columns.push_back({column->Cast<BoundColumnRefExpression>().binding, std::move(keys)});
+		// A row whose written `by` column is NULL is in no group: the reducer has no value there, and the NULL bound
+		// skips the row's instance (deck p. 50).
+		column = InGroup(reducer, column);
 		// The column carries the reducer's written text as its name, so every place that quotes a bound still reads
 		// `sum(cap) by (g)`; the tag keeps a NULL message from naming it as a column.
 		auto result = calc.Out(column);
@@ -187,6 +196,22 @@ private:
 		AddDecideTag(alias, BOUND_REDUCER_TAG);
 		result->SetAlias(std::move(alias));
 		return result;
+	}
+
+	//! `value` on a row in a group of the reducer's `by` key, NULL on a row whose written key column is NULL, which is
+	//! in no group. A relation's columns compare NULL as a value.
+	ExprPtr InGroup(const BoundAggregateExpression &reducer, ExprPtr value) const {
+		idx_t key_index;
+		if (!TryParseGroupKeyTag(reducer.GetAlias(), key_index)) {
+			return value;
+		}
+		for (auto &element : decide.keys[key_index].elements) {
+			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
+				value =
+				    calc.If(calc.IsNull(calc.Of(*element.expression)), calc.Constant(Value(value->return_type)), value);
+			}
+		}
+		return value;
 	}
 
 	//! 1 on the first row of each class of the reducer's `per` key (or relation, in the colon form) in its group, among
@@ -239,6 +264,10 @@ private:
 	//! Whether `bound` has one value in each group of `keys` among the kept rows: it reads data only through reducers
 	//! whose `by` key is part of `keys`.
 	bool OneValuePerGroup(const Expression &bound, const vector<const Expression *> &keys) const {
+		// A column of the group key is one value in each group.
+		if (std::any_of(keys.begin(), keys.end(), [&](const Expression *key) { return key->Equals(bound); })) {
+			return true;
+		}
 		if (bound.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			auto &binding = bound.Cast<BoundColumnRefExpression>().binding;
 			for (auto &reducer : reducer_columns) {
@@ -352,7 +381,8 @@ private:
 		}
 	}
 
-	//! A group of the clause: its kept rows (when it has a `when`), by the value of `keys`, NULL a value of its own.
+	//! A group of the clause: its kept rows (when it has a `when`), by the value of `keys`. The rows whose written key
+	//! column is NULL share a partition, whose value MakeReducerColumn replaces with NULL.
 	void AddGroupPartitions(BoundWindowExpression &window, const vector<const Expression *> &keys) const {
 		if (when) {
 			window.partitions.push_back(calc.Out(Kept()));

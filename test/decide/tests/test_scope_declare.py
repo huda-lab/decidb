@@ -335,8 +335,9 @@ def test_key_is_a_set(decidb_cli, tmp_path):
 
 
 @pytest.mark.correctness
-def test_null_key_value_is_one_class(decidb_cli, scope_solver, tmp_path):
-    """Two depots with no region share one decision: NULL is a key value."""
+def test_a_null_key_value_has_no_decision(decidb_cli, scope_solver):
+    """Two depots with no region have no decision: their rows show NULL, and their
+    `r <= D.capacity` instances are skipped."""
     depots = (("D1", "East", "US", 40), ("D2", None, "CA", 30), ("D3", None, "US", 20))
     sql = f"""
         SELECT shipmentID, r {_from(depots)}
@@ -348,7 +349,7 @@ def test_null_key_value_is_one_class(decidb_cli, scope_solver, tmp_path):
     clauses = [RowClause(lambda r: {"r": 1}, "<=", lambda r: r["capacity"])]
     objective = Objective(ObjSense.MAXIMIZE, rows=lambda r: {"r": 1})
 
-    assert _num_vars(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == model.class_count("r") == 2
+    assert model.class_count("r") == 1
     answer = _aligned(_answer(decidb_cli, sql), model, "shipmentID")
     assert model.judge(answer, clauses, objective) == pytest.approx(model.solve(scope_solver, clauses, objective))
 

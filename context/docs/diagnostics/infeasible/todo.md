@@ -25,24 +25,22 @@ solves.
 **done.md.** "What the reader is quoted: `DisplayRhs`" and "A hard MIN/MAX clause is
 loosenable on both arms".
 
-## 2. A NULL class reads like the string `'NULL'`
+## 2. A relation key's NULL reads like the string `'NULL'`
 
 **Why.** The `group` column labels a class by its `per` key value through
 `FormatPerGroupKey` (`physical_decide.cpp`): a NULL key value renders `NULL`, and a
-VARCHAR value that is the string `'NULL'` renders `NULL` as well, so the two classes
-read the same. Under the expanded scope, `per g: sum(x) by (g) >= 2` over
-`g IN (NULL, 'NULL', 'a', '')` reports four `expanded_group` findings labelled `a`,
-`NULL`, `NULL` and `''`. The empty string already has its own label (`''`), so it does
-not read as "no group". NULL is a class of its own (D5), so every `per` key over a
-nullable column meets this.
+VARCHAR value that is the string `'NULL'` renders `NULL` as well. A written key column
+that is NULL is no class (D5), so no finding names it; a relation key (`per D`) compares
+NULL as a value, so a class of `per D` whose column is NULL and one whose column is the
+string `'NULL'` read the same.
 
-**Ruling (owner, 2026-10-27).** No label change. A NULL key stops being a class
-(`../../pipeline/08_execution/todo.md` §2), so no finding names a NULL group and only the
-string `'NULL'` prints `NULL`. This section is deleted in that change.
+**Ruling (owner, 2026-10-27).** No label change for written keys. A relation key's label
+is open.
 
 **Test.** In `test_query_diagnostics_relation.py`, beside
-`test_infeasible_per_group_expanded_mode_preserves_empty_string_group`: a key holding
-both NULL and `'NULL'` reports two distinguishable `group` values, on both backends.
+`test_infeasible_per_group_expanded_mode_preserves_empty_string_group`: a `per D` key whose
+column holds both NULL and `'NULL'` reports two distinguishable `group` values, on both
+backends.
 
 **done.md.** "Group identity (group label + scope)"; `../../language/guide.md` §8.1's
 `group` row.

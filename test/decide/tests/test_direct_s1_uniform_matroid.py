@@ -18,7 +18,7 @@ Strict bounds follow the solver path (`ilp_model_builder.cpp`): on an integer-va
 side, `< K` is `<= ceil(K) - 1` and `> K` is `>= floor(K) + 1`.
 
 A per-group case writes `by (g)` after every reducer of its clause, the sum and the bound's, and keeps a NULL `g` out
-of every group with `when g IS NOT NULL` (a NULL key is its own group otherwise, D5). Direct solve reads no `by` key
+of every group with `when g IS NOT NULL` (a NULL key is in no group either way). Direct solve reads no `by` key
 yet, so on those cases the direct path is a strict xfail (`direct_path`); the solver path is checked as usual.
 
 A new class adds rows to the tables below. What a result comparison cannot see (which plan
@@ -526,7 +526,7 @@ def _decide_clause(case):
         total = f"SUM(when {inner}: {body})" if inner else f"SUM({body})"
         if per:
             total, limit = _by_group(total), _by_group(limit)
-        # A NULL key is a group of its own (D5); the cases leave those rows out, as the oracle does.
+        # A NULL key is in no group; the cases also leave those rows out with a `when`, as the oracle does.
         kept = (["flag"] if scope in ("top", "both") else []) + (["g IS NOT NULL"] if per else [])
         prefix = f"when {' AND '.join(kept)}: " if kept else ""
         clauses.append(f"{prefix}{total} {op} {limit}")
@@ -1427,8 +1427,8 @@ _REDUCER_ROWS = (
     "(1, 'a', true, 9.0, {v1}), (2, 'a', false, 8.0, {v2}), (3, 'b', true, 7.0, {v3}), (4, NULL, true, 6.0, {v4})"
 )
 S1_REDUCER_ERROR_CASES = {
-    # The NaN is on the NULL-key row, a group of its own (D5), which the aggregate reads.
-    "nan_float_column": ("FLOAT", ("1.0", "2.0", "3.0", "'NaN'::FLOAT"), "SUM(x) by (g) <= MAX(v) by (g)"),
+    # The NaN is on row 3, in group b, which the aggregate reads.
+    "nan_float_column": ("FLOAT", ("1.0", "2.0", "'NaN'::FLOAT", "4.0"), "SUM(x) by (g) <= MAX(v) by (g)"),
     # A `when` that keeps no row is an error (D4).
     "empty_group_top_when": ("INTEGER", ("1", "2", "3", "4"), "when id > 100: SUM(x) <= MIN(v)"),
     "empty_group_top_when_per": (

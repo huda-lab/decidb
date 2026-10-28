@@ -930,11 +930,11 @@ def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
 def test_per_null_group_with_when(decidb_cli, scope_solver):
-    """A NULL per key is a class of its own, also under a when.
+    """A NULL per key is in no class, also under a when.
 
-    The two active NULL-keyed rows share one `sum(x) <= 1`, so only one of them is
-    selected (leaving them out of every group would let both in: 31 rather than 24). Group 'B' has only an inactive row, so the when leaves it no
-    class and row 3 is unconstrained. Judged by the scope oracle.
+    The two active NULL-keyed rows get no `sum(x) <= 1`, so both are selected (31). Group
+    'B' has only an inactive row, so the when leaves it no class and row 3 is
+    unconstrained. Judged by the scope oracle.
     """
     sql = """
         SELECT id, grp, val, active, x FROM (

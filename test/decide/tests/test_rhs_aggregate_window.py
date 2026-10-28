@@ -7,7 +7,7 @@ path (`off`) is the one under test; the S1 suite (`test_direct_s1_uniform_matroi
 `require`.
 
 Each case builds the oracle model from the raw rows, as the language reads a clause: every kept row bounds its left
-side's `by` group by the right side's value over its own `by` group of the kept rows, NULL a group of its own; equal
+side's `by` group by the right side's value over its own `by` group of the kept rows, a NULL key in no group; equal
 rows collapse to one. The limit is evaluated in Python, in exact arithmetic. Rows the `when` drops carry an extreme
 `cap`, so a window that read them would change the limit.
 """
@@ -95,13 +95,17 @@ def _clause_limits(
     rows, value, keeps=lambda row: True, left_key=None, right_key=None, left=lambda row: True, right=lambda row: True
 ):
     """(member ids, limit) per distinct constraint of a clause `[when keeps:] SUM([when left:] x * w) [by left_key] <=
-    value([when right:] ...) [by right_key]`, over the rows `keeps` keeps. A key is a column index; None is `by ()`."""
+    value([when right:] ...) [by right_key]`, over the rows `keeps` keeps. A key is a column index; None is `by ()`. A
+    row whose key is NULL is in no group of it: no left-side group is generated from it, and its right side is NULL."""
     kept = [row for row in rows if keeps(row)]
     limits = []
     for row in kept:
+        if left_key is not None and row[left_key] is None:
+            continue
         members = [k[0] for k in kept if (left_key is None or k[left_key] == row[left_key]) and left(k)]
         reads = [k for k in kept if (right_key is None or k[right_key] == row[right_key]) and right(k)]
-        limit = (members, value(reads))
+        no_group = right_key is not None and row[right_key] is None
+        limit = (members, None if no_group else value(reads))
         if limit not in limits:
             limits.append(limit)
     return limits

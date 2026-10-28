@@ -218,18 +218,24 @@ coefficient evaluation:
 1. Read the scope's key from the one key cache (`LookupOrBuildPerGroupIds`, §5), which
    every reader of a key shares: the key's resolved elements
    (`PhysicalDecide::KeyElements`) are evaluated through
-   `CachedTransformToChunkExpression`, one `ExpressionExecutor` for them all, NULL a key
+   `CachedTransformToChunkExpression`, one `ExpressionExecutor` for them all. A row with
+   NULL in a written key column is in no class; a relation's columns compare NULL as a
    value. A key with no columns (a reducer's `per ()`) is one class, every row in it.
 2. A helper decision's scope (`EntityScopeInfo::value_link`, the value rewrite) reads its
    link's `by` key on the rows the link's clause `when` keeps only, one entity per value
-   they take together. A row the clause drops is no group; every such row maps to one
-   spare entity, so each row has an id and the key is never evaluated where the clause
-   never reads.
-3. Entity ids are the key's group ids: numbered by key value (below), so a keyed
+   they take together, so the key is never evaluated where the clause never reads.
+3. A row in no class (a NULL written key, or a row a helper's clause drops) has no
+   decision. It maps to one spare entity, `EntityMapping::absent_entity` (the Null Object
+   pattern), so every row has an id and `VarIndexer::Get` stays total. The model builder
+   fixes the absent column at 0, so an objective term that reads it is dropped; a reducer
+   over the decision never reads the row (`DecideCanonicalizer::SkipNullData` tests the
+   key's written columns for NULL), and an unreduced read skips its instance
+   (`MarkAbsentDecisionReads`, §5). The output shows NULL there.
+4. Entity ids are the key's group ids: numbered by key value (below), so a keyed
    decision's solver columns follow its key's values, not the rows' order.
-4. Fill a `row_to_entity` vector of size `num_rows`.
+5. Fill a `row_to_entity` vector of size `num_rows`.
 
-The result is an `EntityMapping { num_entities, row_to_entity }` on the
+The result is an `EntityMapping { num_entities, row_to_entity, absent_entity }` on the
 `SolverInput`, which is what makes several rows share one solver column.
 
 ---
@@ -253,8 +259,9 @@ The first three come from the canonicalizer (stage 04). The bound-side window re
 scope error is reported before a bad value, and a bad bound before a bad coefficient.
 
 A class or group is named by its key's values as SQL literals (`D.depotID = 'D1'`); over
-`()` the message says "The kept rows". Groups come from `LookupOrBuildPerGroupIds` with
-NULL a value. A key with no columns (`per ()`, `by ()`, a reducer's `per ()`) is one group
+`()` the message says "The kept rows". Groups come from `LookupOrBuildPerGroupIds`: a row
+with NULL in a written key column (`DecideKeyNullMode::NO_GROUP`) is in no group, and a relation's columns
+(`VALUE`) compare NULL as a value. A key with no columns (`per ()`, `by ()`, a reducer's `per ()`) is one group
 of every row the filter keeps: `BuildGroupIds` says so once, for every caller. A key that
 is the same on every row (`by (1)`) hashes to a constant vector, which `BuildGroupIds`
 flattens before each row reads its own hash. A check reads its `when` on every row
@@ -277,7 +284,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   failing expression there is no error. An empty set has already failed a check (D4,
   D8), so formulation asserts rather than refuses one.
 - **Grouping.** The aggregate shape groups the kept rows by its `by` key
-  (`keys[constraint->group_key]`), NULL a value: a group's members are the rows a
+  (`keys[constraint->group_key]`), a NULL written key in no group: a group's members are the rows a
   reducer's `when` keeps (all kept rows for `<>`, whose bound values are all excluded),
   its bound the tightest over all its kept rows. A row the reducer's own `per`
   de-duplication drops leaves the group when the clause is a hard MIN/MAX
@@ -379,8 +386,10 @@ stays data-backed.
 ### `when`, `by` and `per` → `row_group_ids`
 
 One per-row vector assigns each row to a row of the clause, or excludes it. The clause's
-`when` is read first (`KeptRows`); every map is built over the kept rows only, NULL a key
-value, with ids dense in key-value order:
+`when` is read first (`KeptRows`); every map is built over the kept rows only, with ids
+dense in key-value order. A row with NULL in a written key column is in no group of that
+key (`DecideKeyNullMode::NO_GROUP`, D5); it stays in the groups of every other key the
+clause reads:
 
 | Clause | `row_group_ids` | `num_groups` |
 |---|---|---|
@@ -393,7 +402,8 @@ value, with ids dense in key-value order:
 **One numbering per key** (`BuildGroupIds`, `LookupOrBuildPerGroupIds`). A key is
 computed once per query into a `PerGroupCache` entry, its index in the key table the
 cache key. `BuildGroupIds` hashes the distinct key tuples, then numbers them by value:
-columns compare in key order, NULL after every value, as `ORDER BY` places it. Each
+columns compare in key order, a relation column's NULL after every value, as `ORDER BY`
+places it. Each
 reader takes the groups its filters keep as a subsequence, renumbered `0..K'` in the same
 order, so a keyed decision's columns, a clause's group rows and a message's group labels
 never depend on row order. A key is computed only on rows some reader keeps: an entry
@@ -403,7 +413,14 @@ over both sets, so the numbering stays one.
 The bound side of the aggregate shape gets its own map with the same numbering over every
 kept row (a bound-side reducer reads its own `by` groups, §4a). A `per K:` over the
 aggregate shape or an easy MIN/MAX adds no row: it only names the classes each group's
-row stands for (D28, §4a).
+row stands for (D28, §4a); when its key leaves no class among the kept rows (every key
+NULL), the clause has no instance.
+
+**An absent decision reads like a NULL.** After the terms are read,
+`MarkAbsentDecisionReads` marks each row where a linear, bilinear or square term reads a
+decision on its absent entity (§4), and `SkipNullInstances` skips that row's instance as
+it skips one with a NULL coefficient. So `sum(x) by (g) <= 0.5 * sum(x)` gives a NULL-`g`
+row no limit (its `by (g)` helper is absent there) while the total still counts it.
 
 Keys use a `string`-keyed hash map with the same NULL-safe tagging as entity mapping.
 The ids a key takes over every row are cached (`PerGroupCache`) across every constraint,

@@ -381,7 +381,17 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                           input.variable_types[var] == LogicalType::FLOAT);
             model.is_binary[var_idx] = per_var_binary[var];
         }
-    }
+		// A row with no decision maps to the absent entity: fixed at 0, so an objective term
+		// that reads it is dropped (EntityMapping::absent_entity).
+		if (indexer.var_scope[var] == DecideVarScope::ENTITY) {
+			auto absent = indexer.entity_mappings[indexer.var_entity_mapping_idx[var]].absent_entity;
+			if (absent != DConstants::INVALID_INDEX) {
+				idx_t var_idx = indexer.InstanceColumn(var, absent);
+				model.col_lower[var_idx] = 0.0;
+				model.col_upper[var_idx] = 0.0;
+			}
+		}
+	}
 
     // Append global auxiliary variables after row+entity blocks.
     //

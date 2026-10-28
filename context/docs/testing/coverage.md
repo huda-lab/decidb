@@ -626,9 +626,9 @@ All oracle-verified:
   in front of a multi-column `per` (on another column and on a key column), `<>` per
   class, two `per` constraints on different columns, a `when` that leaves some classes
   without a kept row (those classes generate nothing).
-- **NULL keys** (`test_per_clause.py::test_per_null_group_key`): a NULL key value is a
-  class of its own; `when grp is not null per grp:` leaves those rows out. Both forms
-  are judged by the scope oracle.
+- **NULL keys** (`test_per_clause.py::test_per_null_group_key`, `test_null_keys.py`): a NULL key
+  value is no class, as `when grp is not null per grp:` has it; a keyed decision on a NULL-key row
+  is NULL, and a relation key compares NULL as a value. Judged by the scope oracle.
 - **Bounds that vary within a group** (`test_per_clause.py`): with no `per` key,
   `sum(x) by (grp) <> cap` is generated once per row, so every excluded value is kept;
   under `per grp:` a bound that varies within a class is the determination error
@@ -1187,7 +1187,7 @@ oracle-verified in `test_canonicalize_side_agnostic.py::test_aggregate_vs_aggreg
 
 All oracle-verified, in `test_when_constraint.py`, `test_per_clause.py`,
 `test_per_objective.py`, and `test_per_multi_column.py`: NULL in a `when`
-condition column (the row is dropped), NULL in a `per` key (a class of its own),
+condition column (the row is dropped), NULL in a `per` key (no class),
 a single `per` class, a `when` keeping every row, a `when` that leaves a `per`
 class without rows (that class generates nothing), mixed conditional +
 unconditional constraints, a different `when` on each constraint, several `per`

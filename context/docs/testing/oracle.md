@@ -222,7 +222,7 @@ mirrors — see §3.7 on independent semantics. A clause with a `when`, a
 
 | Helper | Purpose |
 |---|---|
-| `group_indices(data, key_fn)` | Group row indices by a key. Rows where `key_fn` returns `None` are dropped, which matches `when k is not null per k:`, not a bare `per k:`: DECIDE keeps a NULL key as its own class (D5). Use it only where the key is never NULL (open: [todo.md](todo.md)). |
+| `group_indices(data, key_fn)` | Group row indices by a key. Rows where `key_fn` returns `None` are in no group, as a NULL written key is (D5). |
 | `add_ne_indicator(oracle, coeffs, rhs, name)` | Encode `sum(coeffs) != rhs` over integer-valued terms via a native Gurobi indicator constraint (no Big-M). |
 | `add_in_domain(oracle, var_name, domain)` | Restrict `var_name` to a discrete set via SOS1-style indicator encoding (`SUM(z_k) = 1`, `var = SUM(v_k·z_k)`). |
 | `add_bool_and(oracle, x, y, z)` | Link binary `z = x ∧ y` with `z ≤ x`, `z ≤ y`, `z ≥ x + y − 1`. Used for Bool × Bool products before summation. |
@@ -321,7 +321,8 @@ same `OracleSolver` interface.
   `when` / `per`, its `by (G)`, the objective's `when` and the two-level objective. It
   filters the rows, splits the kept rows into classes, generates the body once per
   class and evaluates each reducer on the kept rows sharing the class's `by` value.
-  NULL is a value like any other (`class_ids`). A NULL data value is skipped: a
+  A NULL written key column is no class (`key_value`; a relation's columns compare NULL as a value). A
+  NULL data value is skipped: a
   reducer leaves out a NULL member, an instance with a NULL part is not generated, and
   the objective drops a NULL term. `check` raises `ScopeError` for the
   three run-time errors (a `when` that keeps no row, a key that does not determine a

@@ -883,13 +883,14 @@ private:
 	Edit edit;
 };
 
-//! Source columns: id, g (VARCHAR, never NULL: the keyed plans leave a NULL-key row ungrouped, framework todo H-05),
-//! w (DOUBLE), cap (INTEGER), flag (BOOLEAN). Within a group no two rows tie on w or on w / cap, so each optimum is
-//! unique.
+//! Source columns: id, g (VARCHAR; rows 8 and 9 have a NULL g, which is in no group, so the keyed plans and the solver
+//! both leave them ungrouped), w (DOUBLE), cap (INTEGER), flag (BOOLEAN). Within a group no two rows tie on w or on
+//! w / cap, so each optimum is unique.
 const char *KEYED_ROWS = "(VALUES (1, 'a', 5.0::DOUBLE, 2, TRUE), (2, 'a', 4.0::DOUBLE, 1, FALSE),"
                          " (3, 'a', 1.5::DOUBLE, 3, TRUE), (4, 'b', 3.0::DOUBLE, 2, FALSE),"
                          " (5, 'b', 6.0::DOUBLE, 1, TRUE), (6, 'c', 2.5::DOUBLE, 1, TRUE),"
-                         " (7, 'c', 7.0::DOUBLE, 2, FALSE)) t(id, g, w, cap, flag)";
+                         " (7, 'c', 7.0::DOUBLE, 2, FALSE), (8, NULL, 4.5::DOUBLE, 2, FALSE),"
+                         " (9, NULL, 3.5::DOUBLE, 1, FALSE)) t(id, g, w, cap, flag)";
 constexpr idx_t KEYED_ID_SLOT = 0;
 constexpr idx_t KEYED_G_SLOT = 1;
 constexpr idx_t KEYED_FLAG_SLOT = 4;
@@ -1020,7 +1021,7 @@ TEST_CASE("A reducer row check reads only the rows its clause keeps", "[decidb]"
 	auto query = KeyedQuery("x(BOOL)", "SUM(x) <= 1", "MAXIMIZE SUM(w*x)", "x");
 	// Row 6 is flagged and has id > 5.
 	REQUIRE_NO_FAIL(*RunEdited(con, MakeS1UniformMatroidRule, RowCheckOverFlaggedRows(5), query));
-	// Row 7 has id > 6 but is not flagged, so the check must not count it.
+	// Rows 7 to 9 have id > 6 but are not flagged, so the check must not count them.
 	auto failed = RunEdited(con, MakeS1UniformMatroidRule, RowCheckOverFlaggedRows(6), query);
 	REQUIRE(failed->HasError());
 	CHECK(failed->GetError().find("probe: the reducer reads no flagged row") != string::npos);

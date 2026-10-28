@@ -71,11 +71,11 @@ solver path answers those queries, so none of them is wrong, only slower.
   1. Keep the key on the clause scope (`per_key_slots`). Smallest change; the kept per-group plans read it.
   2. Move the key onto the part (`DirectPart`), where the language puts it. Larger change; matches the grammar.
 - **Ruling (owner, 2026-10-27).** Option 2: the key lives on the part, where `by` is written. It also fits the NULL-key
-  rule (`../../pipeline/08_execution/todo.md` §2).
+  rule (D5: a NULL key is no group of that key only).
 - **Change.** Read both spellings: `C` with `by (g)` after each reducer (one clause per row, each reading its
   row's group), which allows a limit that varies by row. The
   removed-spelling message suggests `per g: C` with `by (g)`: one clause per class, which needs `g` to determine the
-  limit. Honour the live NULL-key rule: D5 today (a NULL key is its own group; the kept plans drop it), which the owner has ruled to reverse (`../../pipeline/08_execution/todo.md` §2) and D8 (a group the reducer's own `when`
+  limit. Honour the NULL-key rule D5 (a NULL key is in no group, as the kept plans have it) and D8 (a group the reducer's own `when`
   empties is an error, from H-04).
 - **Plan shape (owner's direction).** A `by` key is a GROUP BY in the direct plan: the rule groups the covered rows by
   the key (a hash aggregate on the key columns, joined back to the rows on the key), as the per-group plans kept in the code do. It is not one clause per row and not a window per clause.

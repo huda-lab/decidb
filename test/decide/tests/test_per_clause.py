@@ -342,14 +342,13 @@ _NULL_KEY_ROWS = [
 @pytest.mark.parametrize(
     "scope, when",
     [
-        pytest.param("per grp:", None, id="null-is-a-class"),
+        pytest.param("per grp:", None, id="null-is-no-group"),
         pytest.param("when grp is not null per grp:", lambda r: r["grp"] is not None, id="null-left-out"),
     ],
 )
 def test_per_null_group_key(decidb_cli, scope_solver, scope, when):
-    """A NULL grp is a class of its own under `per grp:`: the two NULL rows share one
-    `sum(x) <= 1` (D5); `when grp is not null per grp:` leaves the NULL rows out of every
-    group (and unconstrained). Judged by the scope oracle."""
+    """A NULL grp is in no group: under `per grp:` the two NULL rows get no `sum(x) <= 1`,
+    as `when grp is not null per grp:` leaves them out. Judged by the scope oracle."""
     data_sql = """
         SELECT 1 AS id, 'A' AS grp, 10.0 AS val UNION ALL
         SELECT 2, NULL, 50.0 UNION ALL

@@ -2,8 +2,7 @@
 
 Every old spelling is refused with a message that carries the fixed phrase "is removed"
 and names its new spelling, built from the user's own expressions (D37), so the
-suggestion pastes back. The PER messages add that a NULL key is now its own group (D62);
-the `T.x` message warns that `per T` keys on every column of T (D56). `SUM(D: e)` stays
+suggestion pastes back. The `T.x` message warns that `per T` keys on every column of T (D56). `SUM(D: e)` stays
 (D1), `scalar` stays usable as a name, and a qualified name that is not a decision
 reference still binds (D43).
 """
@@ -89,15 +88,13 @@ def test_scalar_stays_a_name(decidb_cli):
 # Constraints
 # ---------------------------------------------------------------------------
 
-NULL_NOTE = "a NULL g is now its own group"
-
 
 @pytest.mark.parametrize(
     "clause, fragments",
     [
         pytest.param(
             "SUM(x) <= 4 PER g",
-            ("the postfix PER is removed", "per g:", "by (g)", NULL_NOTE, "when g is not null per g:"),
+            ("the postfix PER is removed", "per g:", "by (g)"),
             id="PER",
         ),
         pytest.param("x <= 2 PER g", ("the postfix PER is removed", "drop the PER"), id="PER-on-a-row-clause"),
@@ -106,7 +103,7 @@ NULL_NOTE = "a NULL g is now its own group"
         pytest.param("SUM(x) <= COUNT(*) PER g", ("per g:", "by (g)"), id="PER-over-count"),
         pytest.param("norm(x, 1) <= 4 PER g", ("per g:", "by (g)"), id="PER-over-norm"),
         pytest.param("SUM(x) <= 5 WHEN g = 'A'", ("the postfix WHEN is removed", "when g = 'A':"), id="WHEN"),
-        pytest.param("SUM(x) <= 5 WHEN g = 'A' PER g", ("when g = 'A' per g:", "by (g)", NULL_NOTE), id="WHEN-PER"),
+        pytest.param("SUM(x) <= 5 WHEN g = 'A' PER g", ("when g = 'A' per g:", "by (g)"), id="WHEN-PER"),
         pytest.param("SUM(x) WHEN (g = 'A') <= 5", ("sum(when g = 'A': x)",), id="reducer-WHEN"),
         pytest.param("SUM(x) <= SUM(cap) WHEN (g = 'A')", ("sum(when g = 'A': cap)",), id="bound-side-reducer-WHEN"),
         pytest.param("SUM(t: x) WHEN (g = 'A') <= 5", ("sum(when g = 'A' per t: x)",), id="colon-form-WHEN"),
@@ -146,8 +143,8 @@ NULL_NOTE = "a NULL g is now its own group"
         ),
         pytest.param(
             "SUM(x) <= 5 WHEN cap > 3 PER g",
-            ("when cap > 3 per g:", "when cap > 3 and g is not null per g:"),
-            id="WHEN-PER-keeps-the-WHEN-in-the-NULL-note",
+            ("when cap > 3 per g:",),
+            id="WHEN-PER-keeps-the-WHEN",
         ),
     ],
 )
@@ -181,11 +178,6 @@ def test_keyword_named_columns_are_quoted_in_the_suggestion(decidb_cli):
         pytest.param("MAXIMIZE SUM(x) WHEN g IN (SELECT 'A')", ("ANY(SELECT 'A')", ": sum(x)"), id="WHEN-IN-subquery"),
         pytest.param("MAXIMIZE 2 * SUM(x) WHEN g IN ('A')", ("sum(when g IN ('A'): x)",), id="WHEN-under-a-factor"),
         pytest.param(
-            "MINIMIZE SUM(MAX(x)) PER g",
-            ("MINIMIZE sum(per g: max(x) by (g))", "MINIMIZE when g is not null: sum(per g: max(x) by (g))"),
-            id="nested-NULL-note",
-        ),
-        pytest.param(
             "MINIMIZE SUM(MAX(x) WHEN (cap > 2)) PER g",
             ("MINIMIZE when cap > 2: sum(per g: max(x) by (g))",),
             id="nested-inner-WHEN",
@@ -198,7 +190,7 @@ def test_keyword_named_columns_are_quoted_in_the_suggestion(decidb_cli):
         pytest.param("MINIMIZE 2 * SUM(MAX(x)) PER g", ("is not supported yet",), id="nested-under-a-factor"),
         pytest.param(
             "MAXIMIZE AVG(x * cap) PER g",
-            ("MAXIMIZE when g is not null: sum(per g: avg(", "for one average over all rows"),
+            ("MAXIMIZE sum(per g: avg(", "for one average over all rows"),
             id="flat-avg",
         ),
     ],
@@ -345,7 +337,7 @@ def test_colon_form_stays(decidb_cli):
 @pytest.mark.parametrize(
     "old, suggested",
     [
-        pytest.param("SUM(x) <= 4 PER g", "when g is not null per g: sum(x) by (g) <= 4", id="PER"),
+        pytest.param("SUM(x) <= 4 PER g", "per g: sum(x) by (g) <= 4", id="PER"),
         pytest.param("SUM(x) <= 5 WHEN g = 'A'", "when g = 'A': sum(x) <= 5", id="WHEN"),
     ],
 )

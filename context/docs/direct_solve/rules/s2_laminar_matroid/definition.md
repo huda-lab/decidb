@@ -109,7 +109,7 @@ Region quotas and product quotas usually do not. Their memberships can overlap w
 | MINIMIZE | Negate the scores, then use the same procedure. |
 | Negative scores | Do not select them because every quota is an upper bound. |
 | Tied scores | Use stable decision identity to choose one optimal result. |
-| Rows a `when` drops | Pass them through to any applicable ancestor quota. A NULL `by` key is a group of its own, with its own quota (D5). |
+| Rows a `when` drops | Pass them through to any applicable ancestor quota. A NULL `by` key is in no group, so no quota of that key binds the row (D5). |
 
 Lower count requirements are not part of S2. They can force selections that the bottom-up upper-quota procedure would otherwise remove.
 
@@ -159,6 +159,6 @@ Each stage only removes rows, so quotas satisfied at lower levels remain satisfi
 >
 > • A negative remaining cap produces DECIDE's infeasible result.
 >
-> • Rows a `when` drops are in no quota of that clause; a NULL `by` key is a group of its own (D5).
+> • Rows a `when` drops are in no quota of that clause; a NULL `by` key is in no group (D5).
 >
 > • Empty input, zero caps, ties, Boolean types, decision identity, and output mapping preserve DECIDE semantics.
