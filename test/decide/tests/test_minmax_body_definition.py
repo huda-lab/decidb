@@ -3,8 +3,9 @@
 Every extremum DeciDB builds reads its members as linear. Stage 05 therefore names a
 non-linear body first (``DefineNonlinearReducerBodies``): one helper decision ``t`` per row
 and one quadratic row defining it by the body ``q``, on the side the clause pushes the
-reducer (pushed down ``t >= q``, up ``t <= q``, neither ``t = q``). Copies of one reducer in
-one clause share one helper, defined on every side a copy is pushed. The helper has no box,
+reducer (pushed down ``t >= q``, up ``t <= q``, neither ``t = q``). Every reader of one
+reducer (copies in a clause, other clauses, the objective) shares one helper, defined on
+every side a reader pushes it. The helper has no box,
 so only a backend that states MIN/MAX natively (Gurobi) takes it; any other is refused.
 
 Each correctness case is compared with an independent Gurobi model that states the
@@ -16,6 +17,7 @@ Covers:
   - test_defined_constraint_matches_oracle: the constraint shapes, one per branch
   - test_defined_objective_matches_oracle: the flat, composed and two-level objectives
   - test_member_row_follows_the_push: the side of each member row
+  - test_readers_of_one_reducer_share_one_helper: two clauses, a clause and the objective
   - test_helper_is_defined_on_the_rows_the_reducer_reads: the clause `when` and the reducer filter
   - test_explain_states_the_side_and_hides_the_row: the account line, one per side
   - test_cheap_lone_extremum_is_not_defined: `max(q) <= K` keeps one row per member
@@ -173,6 +175,14 @@ _CONSTRAINT_CASES = [
         lambda o, xs: _oracle_abs_at_least(o, xs, _oracle_max_sq(o, xs), 4.0, 1.0),
         lambda v: max(v) <= 2 and abs(max(x * x for x in v) - 4) >= 1,
     ),
+    # Two clauses read one helper, pushed both ways.
+    (
+        "two clauses",
+        "max(power(x, 2)) >= 49 AND sum(x) + max(power(x, 2)) <= 60",
+        ObjSense.MAXIMIZE,
+        lambda o, xs: _two_readers(o, xs, _oracle_max_sq(o, xs)),
+        lambda v: max(x * x for x in v) >= 49 and sum(v) + max(x * x for x in v) <= 60,
+    ),
     # The clause's `when` keeps row 2 only.
     (
         "clause when",
@@ -190,6 +200,11 @@ _CONSTRAINT_CASES = [
         lambda v: sum(v) + v[1] * v[1] <= 20,
     ),
 ]
+
+
+def _two_readers(o, xs, z):
+    o.add_constraint({z: 1.0}, ">=", 49.0)
+    o.add_constraint({**{x: 1.0 for x in xs}, z: 1.0}, "<=", 60.0)
 
 
 def _oracle_abs_at_least(o, xs, z, center, gap):
@@ -488,6 +503,24 @@ def test_member_row_follows_the_push(decidb_cli_gurobi, name, clause, relation):
     assert _member_relations(dump) == {relation}, dump
     # The helper has no floor of 0. (An easy half folds the clause's own bound into its ceiling: `= 25`.)
     assert re.search(r"^col \d+: lb=-1e\+30 ub=\S+ int=1 ", dump, re.MULTILINE), dump
+
+
+_SHARED_CASES = [
+    # One clause pushes the MAX up and the other down: the shared row is `t = q`.
+    ("two clauses", "max(power(x, 2)) >= 49 AND sum(x) + max(power(x, 2)) <= 60 MAXIMIZE sum(x)"),
+    # The objective pushes it up and the clause down.
+    ("a clause and the objective", "sum(x) + max(power(x, 2)) <= 20 MAXIMIZE max(power(x, 2))"),
+]
+
+
+@pytest.mark.min_max
+@pytest.mark.quadratic
+@pytest.mark.parametrize("name,clause", _SHARED_CASES, ids=[c[0] for c in _SHARED_CASES])
+def test_readers_of_one_reducer_share_one_helper(decidb_cli_gurobi, name, clause):
+    """One helper per row, defined on both sides, whoever reads it."""
+    dump = _dump(decidb_cli_gurobi, f"SELECT id, x FROM {_TWO_ROWS} DECIDE x(INT) SUCH THAT x <= 7 AND {clause}")
+    assert re.search(r"^num_qrows: 2$", dump, re.MULTILINE), dump
+    assert _member_relations(dump) == {"="}, dump
 
 
 _SCOPE_CASES = [

@@ -3253,8 +3253,6 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		ec.kind = ConstraintKind::STRUCTURAL;
 		ec.lhs_is_aggregate = true;
 		ec.comparison_type = ExpressionType::COMPARE_EQUAL;
-		ec.source_clause_id = link.source_clause_id;
-		ec.removal_group_id = link.removal_group_id;
 		ec.rhs_values.AssignScalar(num_rows, 0.0);
 		ec.rhs_is_shared_scalar = true;
 

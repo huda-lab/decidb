@@ -320,9 +320,12 @@ public:
     //! group for SUM/AVG, an extremum link per group for MIN/MAX. Produced by
     //! DecideOptimizer::RewriteScopedReducers; an optimized plan is never serialized.
     //!
-    //! One link per occurrence of a reducer in a clause, shared by every row the rewrites
-    //! before this one derived from that clause (an ABS envelope pair holds two copies):
-    //! the sides a shared MIN/MAX helper needs are the union of its rows' needs.
+    //! One link per reducer over one set of rows, shared by every row that reads it: the
+    //! copies an earlier rewrite made (an ABS envelope pair) and every clause holding the
+    //! same reducer. The sides a shared MIN/MAX helper needs are the union of its rows'
+    //! needs. Its definition belongs to no clause (owner ruling B10), so it carries no
+    //! clause provenance: a DROP of a reading clause leaves it, and DIAGNOSE reads it as
+    //! part of the fixed model.
     struct ReducerValueLink {
         idx_t value_var = DConstants::INVALID_INDEX;
         string agg_name;                   //!< "sum", "avg", "min" or "max"
@@ -340,8 +343,6 @@ public:
         //! runs or the comparison is `=` or `<>`. Unused for SUM/AVG, whose row is an equality.
         bool need_envelope = false;
         bool need_closing = false;
-        idx_t source_clause_id = DConstants::INVALID_INDEX;
-        idx_t removal_group_id = DConstants::INVALID_INDEX;
         //! `inner_expr` flattened by BuildDecidePreparedModel, like a composed term's.
         vector<DecideTerm> inner_terms;
     };

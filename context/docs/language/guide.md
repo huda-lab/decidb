@@ -484,7 +484,8 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
   keys, a reducer inside another expression (`abs(sum(ship) by (g) - 40) <= 5`). Each reducer becomes a **helper
   decision** with one instance per `by` group, defined once (an equality row for `SUM`/`AVG`, an extremum link for
   `MIN`/`MAX`), and the clause is one row per class. Example 1 costs N rows of two entries plus one definition row,
-  not N rows of N entries. The helper is whole-numbered when the reducer's value is, so `<`, `>`, `<>` follow §3. A
+  not N rows of N entries. Clauses holding the same reducer over the same rows share one helper and one definition,
+  which belongs to none of them: a `DIAGNOSE` that drops one leaves the definition the others read. The helper is whole-numbered when the reducer's value is, so `<`, `>`, `<>` follow §3. A
   product or square of decisions inside such a reducer is refused.
 
 `EXPLAIN` names a helper by its reducer; `DIAGNOSE` names the clause and never a definition row. Tests:

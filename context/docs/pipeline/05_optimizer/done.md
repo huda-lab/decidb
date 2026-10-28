@@ -452,16 +452,17 @@ factor of 0), `t = q`. A convex `q` pushed down stays convex. `t` is `INTEGER` w
 body is whole-numbered by declared types (`DecideValueIsWholeNumbered`), so a strict
 `max(power(x, 2)) > 48` over an `INT` `x` steps to 49.
 
-**One reducer is defined once per clause** (structural sharing, as the encoding names one
-subterm once). An earlier rewrite may have copied a reducer into several rows of one
-clause: `RewriteAbs` writes `abs(max(power(x, 2)) - 4) >= 1` as two envelope rows, one
-pushing the MAX up and one down. The copies must keep reading one value, so the pass
-collects every site first and groups the copies (the same clause, an equal reducer and
-alias, an equal `when`); a group shares one helper whose row is the union of the copies'
-sides, `t = q` when they are pushed both ways. A helper per copy, each one-sided, lets the
-two copies read different values and answers `x = 2` there, where the MAX is 4. Copies in
-different clauses keep their own helper, so each clause's rows stay its own under
-DIAGNOSE.
+**One reducer is defined once** (structural sharing, as the encoding names one subterm
+once). An earlier rewrite may have copied a reducer into several rows of one clause:
+`RewriteAbs` writes `abs(max(power(x, 2)) - 4) >= 1` as two envelope rows, one pushing the
+MAX up and one down. The copies must keep reading one value, so the pass collects every
+site first and groups the readers of one reducer (an equal reducer and alias, an equal
+`when`), across clauses and the objective; a group shares one helper whose row is the union
+of the readers' sides, `t = q` when they are pushed both ways. A helper per copy, each
+one-sided, lets the two copies read different values and answers `x = 2` there, where the
+MAX is 4. The definition belongs to no clause, as the value rewrite's does: it carries no
+clause provenance, a DROP of a reading clause leaves it (a row on a helper nothing else
+reads always holds), and each reading clause accounts for the helper in its own plan.
 
 **Which bodies.** Every MIN or MAX whose body is not linear (`DecideExpressionDegree`). In
 a constraint that holds a MIN or MAX, every SUM and AVG term too, since the composed row
@@ -474,8 +475,8 @@ which is one quadratic row per member with no helper. `IsCheapLoneExtremum` read
 shape as `RewriteMinMaxInConstraint` does.
 
 The row holds on the rows the reducer reads: the clause's `when` and the reducer's own
-filter (`max(when g = 'A': power(x, 2))`), through `ScopeHelperRow`. It is a formulation
-row (`MarkFormulationConstraint`), rigid under DIAGNOSE. A row whose body reads a NULL is
+filter (`max(when g = 'A': power(x, 2))`), through `ScopeHelperRow`. It is a structural
+row (`MarkFormulationConstraint` with no clause), rigid under DIAGNOSE. A row whose body reads a NULL is
 skipped by the reducer as before; its helper row is skipped too and leaves `t` free on a
 row nothing reads.
 
@@ -550,12 +551,18 @@ can take fractional values in this constraint ..."*). The aggregate shape accept
 reducer, because there its constant moves to the bound when the reducer is summed in place
 (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`).
 
-One helper per **occurrence** of a reducer in a clause: a second site holding the same
-reducer (`Equals`, alias included) under the same clause id and `when` reuses the first
-helper (`Helpers::Find`). The rows `RewriteAbs` derived from one clause each hold a copy
-of the reducer (`aux >= sum(e) by (g) - 40`, `aux >= 40 - sum(e) by (g)`), and two
-helpers pinned on different sides would let the pair drift apart; rows of different
-clauses never share one, since the definition carries one clause's provenance.
+One helper per **reducer over one set of rows**: a second site holding the same reducer
+(`Equals`, alias included) under the same `when` reuses the first helper
+(`Helpers::Find`), whichever clause it is in. The rows `RewriteAbs` derived from one clause
+each hold a copy of the reducer (`aux >= sum(e) by (g) - 40`, `aux >= 40 - sum(e) by (g)`),
+and two helpers pinned on different sides would let the pair drift apart; two clauses
+holding the same reducer (`x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`) would say the same
+thing twice. The definition belongs to no clause (owner ruling, 2026-10-28): it is the
+definition of an auxiliary, not a constraint any clause wrote, so it carries no
+`source_clause_id` or `removal_group_id`. A DROP of a clause that reads the helper leaves
+it, which is harmless, since an equality on a helper nothing else reads always holds, and
+DIAGNOSE reads it as part of the fixed model like every untagged structural row. Each
+clause that reads the helper still accounts for it in its own plan, once.
 
 A MIN/MAX helper records which side pins it (`need_envelope` / `need_closing`), from the
 sign its term carries once the side is read as a sum — through `+`, `-`, binder casts and

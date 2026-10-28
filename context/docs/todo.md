@@ -140,17 +140,6 @@ The agent finds the cause alone and stops with a proposed fix.
   infinity in a coefficient (keep), and the NaN message (name the column and the smallest edit). A reducer over no rows
   follows the deck (D68). — [binder § 1](pipeline/02_binder/todo.md#1-functions-that-behave-unlike-sql)
 
-## B10. One helper for a reducer several clauses hold: the definition's provenance
-
-- [ ] Sharing a helper between clauses (`x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`) needs one rule for its definition
-  row, which today carries one clause's `source_clause_id` and `removal_group_id`. (a) The definition belongs to no
-  clause: a DROP of either clause leaves it, which is harmless (an equality on a free helper always holds), and
-  DIAGNOSE reads it as part of the fixed model, like every untagged structural row
-  (`decide_diagnostic_engines.cpp`). (b) The definition carries every reader's removal group and is omitted when the
-  last one is dropped: a set of ids on a row, where every other row has one. Recommended: (a), the standard reading of
-  a defined auxiliary (it is not a constraint of any clause), with no new field.
-  — [optimizer § 1](pipeline/05_optimizer/todo.md#1-one-helper-for-a-reducer-that-several-clauses-hold)
-
 ## B12. A keyed decision beside a reducer: four design choices (architect review done)
 
 - [ ] The shape is the aggregate shape with a tuple term of one value per group; it does not wait for B6. Choices:
@@ -175,7 +164,7 @@ The agent finds the cause alone and stops with a proposed fix.
   one key table (`LogicalDecide::keys`), from which a scope can be made. (a) Key the indicators by `K`'s entry. (b) Now, for the case where `K` is the decision's own declared key: the
   indicators take the decision's scope and the rows keep the wrapper (as the MIN/MAX easy half keeps it); any other
   `K` keeps one set per row. Recommended: (a); (b) adds a special case that B1 removes.
-  — [optimizer § 3](pipeline/05_optimizer/todo.md#3-in-under-per-k-once-per-class)
+  — [optimizer § 2](pipeline/05_optimizer/todo.md#2-in-under-per-k-once-per-class)
 
 ## B14. `=` on MIN/MAX: which check proves the moved equality holds
 
@@ -298,7 +287,7 @@ The agent finds the cause alone and stops with a proposed fix.
 
 - [ ] Q10 on HiGHS large tier killed for memory, logged as timeout — [bugs § Q10](issues/bugs.md#q10-on-highs-at-the-large-tier-is-killed-for-memory-and-the-profiler-records-it-as-a-timeout)
 - [ ] No test sees a solver's optimality gap (needs a large dataset) — [testing § optimality gap](testing/todo.md#no-differential-test-is-large-enough-to-see-a-solvers-optimality-gap)
-- [ ] A box per helper instance (deferred until the helper-box measurement below shows it matters) — [optimizer § 2](pipeline/05_optimizer/todo.md#2-a-box-per-helper-instance)
+- [ ] A box per helper instance (deferred until the helper-box measurement below shows it matters) — [optimizer § 1](pipeline/05_optimizer/todo.md#1-a-box-per-helper-instance)
 
 Performance measurement (run last):
 

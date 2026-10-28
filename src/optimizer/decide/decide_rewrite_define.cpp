@@ -48,11 +48,13 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // reducer is (WalkPolarity): pushed down, `t >= q`; pushed up, `t <= q`; neither (`=`, a
 // factor whose sign only the rows decide), `t = q`. A convex `q` pushed down stays convex.
 //
-// One reducer is defined once per clause (structural sharing): an earlier rewrite may have
-// copied it into several rows of the clause (RewriteAbs's two envelope rows), and the copies
-// must keep reading one value, so they share one helper whose row holds in every direction
-// a copy is pushed. Copies in different clauses keep their own helper, so each clause's rows
-// stay its own.
+// One reducer over one set of rows is defined once (structural sharing): an earlier rewrite
+// may have copied it into several rows of a clause (RewriteAbs's two envelope rows), and the
+// copies must keep reading one value, so they share one helper whose row holds in every
+// direction a copy is pushed. Clauses and the objective holding the same reducer share it the
+// same way. The definition belongs to no clause (owner ruling B10, as for the value
+// rewrite's helpers): a DROP of a reading clause leaves it, which is harmless, since a row
+// on a helper nothing else reads always holds.
 //
 // Which bodies: every MIN or MAX's; in a constraint that holds a MIN or MAX, every SUM and
 // AVG term's too (the composed row reads them as linear); and the inner reducer's of a
@@ -171,19 +173,9 @@ bool IsCheapLoneExtremum(ClientContext &context, BoundComparisonExpression &comp
 	                      ExtremumPushOf(ExtremumPushOf(comparison.type), scale_sign));
 }
 
-//! The clause a site's rows belong to: its source clause, or the objective.
-string ClauseKey(const string &source_alias) {
-	idx_t source_id;
-	if (TryParseSourceClauseTag(source_alias, source_id)) {
-		return to_string(source_id);
-	}
-	return HasDecideTag(source_alias, OBJECTIVE_ROW_TAG) ? OBJECTIVE_ROW_TAG : source_alias;
-}
-
-//! Copies of one reducer in one clause, under one `when`: they share a helper.
+//! Copies of one reducer under one `when`: they share a helper.
 bool SameReducer(const BodySite &a, const BodySite &b) {
-	if (ClauseKey(a.source_alias) != ClauseKey(b.source_alias) || a.reducer->alias != b.reducer->alias ||
-	    !a.reducer->Equals(*b.reducer)) {
+	if (a.reducer->alias != b.reducer->alias || !a.reducer->Equals(*b.reducer)) {
 		return false;
 	}
 	if (!a.scope.when || !b.scope.when) {
@@ -321,11 +313,18 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		                                    whole ? LogicalType::INTEGER : LogicalType::DOUBLE, false,
 		                                    DecideVarScopeInfo::Row(), body_text);
 		decide.signed_helper_vars.push_back(helper);
-		AddRewriteAccount(decide, first.source_alias,
-		                  equal  ? Kind::BODY_EQUAL
-		                  : down ? Kind::BODY_AT_LEAST
-		                         : Kind::BODY_AT_MOST,
-		                  body_text);
+		// Each clause that reads the helper says so in its own plan, once.
+		const auto kind = equal ? Kind::BODY_EQUAL : down ? Kind::BODY_AT_LEAST : Kind::BODY_AT_MOST;
+		vector<string> told;
+		for (auto member : members) {
+			auto &alias = sites[member].source_alias;
+			idx_t clause = DConstants::INVALID_INDEX;
+			const string key = TryParseSourceClauseTag(alias, clause) ? to_string(clause) : alias;
+			if (std::find(told.begin(), told.end(), key) == told.end()) {
+				told.push_back(key);
+				AddRewriteAccount(decide, alias, kind, body_text);
+			}
+		}
 
 		const auto relation = equal  ? ExpressionType::COMPARE_EQUAL
 		                      : down ? ExpressionType::COMPARE_GREATERTHANOREQUALTO
@@ -333,7 +332,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		auto row = make_uniq<BoundComparisonExpression>(
 		    relation, BoundCastExpression::AddCastToType(context, MakeDecisionRef(decide, helper), body->return_type),
 		    body->Copy());
-		MarkFormulationConstraint(*row, first.source_alias);
+		MarkFormulationConstraint(*row, string());
 		auto alias = row->GetAlias();
 		AddDecideTag(alias, BODY_DEFINITION_TAG);
 		row->SetAlias(std::move(alias));

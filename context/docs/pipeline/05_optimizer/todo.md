@@ -1,28 +1,8 @@
 # Stage 05 — Optimizer: open work
 
-Items 1–3 make the model smaller or the language wider without changing an answer that runs now. Item 4 fixes wrong
-answers.
+Both items make the model smaller or the language wider without changing an answer that runs now.
 
-## 1. One helper for a reducer that several clauses hold
-
-**Why.** The value rewrite gives each occurrence of a reducer in a clause its own helper
-(`Helpers::Find` matches on the clause id and `when`). Two clauses holding the same
-reducer over the same rows, `x <= 0.5 * sum(x) AND x >= 0.1 * sum(x)`, get two helpers
-and two definition rows that say the same thing.
-
-**Ruling (owner, 2026-10-27).** Share one helper. A definition carries one clause's provenance
-(`source_clause_id`, `removal_group_id`), so the shared helper needs a rule for both: a DROP of one clause must not
-remove the definition the other still reads, and DIAGNOSE must keep naming the helper by
-its reducer.
-
-**Test.** A model dump of the query above shows one helper column and one definition
-row; DIAGNOSE and a DROP of either clause still name and keep the helper; the answer
-matches the oracle on both solvers.
-
-**done.md.** "The value rewrite — `RewriteScopedReducers`" (and the helper section of
-`../06_model_formulation/done.md`).
-
-## 2. A box per helper instance
+## 1. A box per helper instance
 
 **Why.** A helper keyed by a `by` key has one instance per group, but one column box: the
 cover of every group's reach (`DeriveReducerValueBounds`, stage 06), because the column box
@@ -42,7 +22,7 @@ solvers.
 
 **done.md.** `../06_model_formulation/done.md`, "Helper decisions of the value rewrite".
 
-## 3. `IN` under `per K:` once per class
+## 2. `IN` under `per K:` once per class
 
 **Why.** `RewriteInDomain` keeps the clause's `when` on the rows it emits but not its
 `per K:`, so `per g: x IN (1, 2)` over a keyed `x` emits one indicator set per kept row

@@ -113,6 +113,24 @@ def test_a_decision_beside_a_reducer(decidb_cli, scope_solver, tmp_path):
 
 
 @pytest.mark.correctness
+def test_two_clauses_share_one_helper(decidb_cli, scope_solver, tmp_path):
+    """Two clauses holding the same reducer read one helper with one definition row: one row
+    per shipment for each clause and one more for the definition."""
+    sql = _ship_query("ship <= 0.25 * sum(ship) AND ship >= 0.1 * sum(ship)")
+    assert dump_counts(decidb_cli.dump_model(sql, tmp_path / "model.dump")) == {
+        "num_vars": len(SHIPMENTS) + 1,
+        "num_rows": 2 * len(SHIPMENTS) + 1,
+    }
+    model = ScopedModel(joined(), SHIP)
+    clauses = [
+        SHIP_BOUND,
+        Scoped((X,), "<=", (_ship_reduce(factor=0.25),)),
+        Scoped((X,), ">=", (_ship_reduce(factor=0.1),)),
+    ]
+    _judged(decidb_cli, scope_solver, sql, model, clauses)
+
+
+@pytest.mark.correctness
 def test_a_row_varying_factor_on_a_reducer(decidb_cli, scope_solver, tmp_path):
     """Deck example 5: each shipment within its depot's share of the depot's total. The
     factor is read on the shipment's row; the helper is one per depot."""
@@ -817,6 +835,71 @@ def test_diagnose_names_the_clause_not_the_helper(decidb_cli):
     assert "infeasible" in result.stdout and "ship >= 5" in result.stdout, result.stdout
     assert "__value_" not in result.stdout + result.stderr
     assert_no_internal_leak(result, "DIAGNOSE over a value helper")
+
+
+@pytest.mark.diagnose
+def test_diagnose_relaxes_one_of_two_clauses_sharing_a_helper(decidb_cli):
+    """The shared definition belongs to no clause: the diagnosis relaxes a clause that reads
+    the helper, as written, and never offers the helper. Each of three rows takes at most 10
+    and the total at least 30, so every row is 10 and `x >= 0.4 * sum(x)` asks for 12."""
+    sql = """
+        SELECT id, x FROM (VALUES (1), (2), (3)) v(id)
+        DECIDE x(INT)
+        SUCH THAT x <= 10 AND sum(x) >= 30 AND x <= 0.5 * sum(x) AND x >= 0.4 * sum(x)
+        MAXIMIZE sum(x)"""
+    result = run_diagnose(decidb_cli, sql)
+    assert "infeasible,x >= 0.4 * sum(x),x >= 0.4 * sum(x) - 2,2.0," in result.stdout, result.stdout
+    assert "__value_" not in result.stdout + result.stderr
+    assert_no_internal_leak(result, "DIAGNOSE over a shared value helper")
+
+
+_DROP_CLAUSES = [
+    ("x <> sum(x) - 1", lambda xs: all(x != sum(xs) - 1 for x in xs)),
+    ("x <> sum(x)", lambda xs: all(x != sum(xs) for x in xs)),
+]
+
+
+def _best_single_drop(maximize):
+    """The clause a remove-only repair drops and the objective it reaches, by enumeration: each
+    single drop's best sum over every BOOL assignment of two rows, the best drop winning and the
+    earliest-written one on a tie."""
+    best = None
+    for dropped, _ in _DROP_CLAUSES:
+        kept = [holds for text, holds in _DROP_CLAUSES if text != dropped]
+        sums = [sum(xs) for xs in itertools.product((0, 1), repeat=2) if all(h(list(xs)) for h in kept)]
+        if not sums:
+            continue
+        value = max(sums) if maximize else min(sums)
+        if best is None or (value > best[1] if maximize else value < best[1]):
+            best = (dropped, value)
+    return best
+
+
+@pytest.mark.diagnose
+@pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
+def test_dropping_one_reader_keeps_the_shared_definition(decidb_cli, sense):
+    """Two `<>` clauses read one helper and no assignment meets both. The definition belongs to
+    neither, so the drop leaves it and the kept clause still reads `sum(x)`. Under MINIMIZE a
+    definition dropped with the first clause would free the helper, make (0, 0) feasible and
+    report the wrong clause."""
+    sql = f"""
+        SELECT id, x FROM (VALUES (1), (2)) v(id)
+        DECIDE x(BOOL)
+        SUCH THAT {" AND ".join(text for text, _ in _DROP_CLAUSES)}
+        {sense} sum(x)"""
+    dropped, objective = _best_single_drop(sense == "MAXIMIZE")
+    result = run_diagnose(decidb_cli, sql)
+    assert f"infeasible,{dropped},remove this clause," in result.stdout, result.stdout
+    assert f"infeasible,NULL,NULL,{float(objective)},NULL,NULL,achievable_objective," in result.stdout, result.stdout
+    assert_no_internal_leak(result, "DIAGNOSE dropping a reader of a shared helper")
+
+
+@pytest.mark.explain
+def test_each_clause_reading_a_shared_helper_accounts_for_it(decidb_cli):
+    """Both clauses say in their own plan that `sum(ship)` is a helper decision."""
+    out = decidb_cli.execute_raw(f"EXPLAIN {_ship_query('ship <= 0.25 * sum(ship) AND ship >= 0.1 * sum(ship)')}")
+    text = re.sub(r"[│\s]", "", out.stdout)
+    assert text.count("sum(ship)becomesahelperdecision") == 2, out.stdout
 
 
 @pytest.mark.explain

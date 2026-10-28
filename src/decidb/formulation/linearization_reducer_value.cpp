@@ -121,8 +121,6 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				rc.sense = '=';
 				rc.rhs = constants;
 				rc.kind = ConstraintKind::STRUCTURAL;
-				rc.source_clause_id = link.rows.source_clause_id;
-				rc.removal_group_id = link.rows.removal_group_id;
 				input.global_constraints.push_back(std::move(rc));
 				continue;
 			}
@@ -150,8 +148,6 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			spec.label = link.label;
 			spec.envelope_kind = ConstraintKind::STRUCTURAL;
 			spec.closing_kind = ConstraintKind::STRUCTURAL;
-			spec.source_clause_id = link.rows.source_clause_id;
-			spec.removal_group_id = link.rows.removal_group_id;
 			EmitExtremumLink(input, indexer, spec, group.members, var_names, policy);
 		}
 	}
