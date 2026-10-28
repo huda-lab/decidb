@@ -2031,6 +2031,60 @@ class TestHighsRejection:
             comparison_status="optimal",
         )
 
+    # A MIN/MAX held by indicator rows adds its binaries during execution, so the gate reads
+    # the mark each MIN/MAX rewrite leaves: a hard clause, and a value helper's link.
+    _MINMAX_INDICATOR_CASES = [
+        ("hard MIN clause", "min(y) <= 4"),
+        ("MAX value helper", "y >= 0.5 * max(y)"),
+    ]
+
+    @pytest.mark.parametrize("name,clause", _MINMAX_INDICATOR_CASES, ids=[c[0] for c in _MINMAX_INDICATOR_CASES])
+    def test_highs_miqp_from_minmax_indicators_rejected(self, decidb_cli_highs, name, clause):
+        """REAL decisions only, but the MIN/MAX's indicator binaries make the QP mixed-integer."""
+        sql = f"""
+            SELECT id, y FROM (VALUES (1, 5.0), (2, 9.0)) t(id, q)
+            DECIDE y(REAL)
+            SUCH THAT y <= 10 AND {clause}
+            MINIMIZE SUM(POWER(y - q, 2))
+        """
+        decidb_cli_highs.assert_error(
+            sql,
+            match=r"squares decision variables that are not continuous.*Gurobi",
+        )
+
+    def test_highs_solves_a_qp_beside_a_continuous_helper(self, decidb_cli_highs, oracle_solver):
+        """An ABS helper is a continuous column, so the QP it sits in stays continuous and HiGHS takes it."""
+        data = [(1, 5.0), (2, 9.0)]
+        sql = """
+            SELECT id, q, y FROM (VALUES (1, 5.0), (2, 9.0)) t(id, q)
+            DECIDE y(REAL)
+            SUCH THAT SUM(y) = 10
+            MINIMIZE SUM(ABS(y - q)) + 0.25 * SUM(POWER(y - q, 2))
+        """
+        rows, cols = decidb_cli_highs.execute(sql)
+
+        oracle_solver.create_model("highs_qp_beside_abs")
+        linear, quadratic, constant = {}, {}, 0.0
+        for i, (_, q) in enumerate(data):
+            y, t = f"y_{i}", f"t_{i}"
+            oracle_solver.add_variable(y, VarType.CONTINUOUS, lb=0.0)
+            oracle_solver.add_variable(t, VarType.CONTINUOUS, lb=0.0)
+            oracle_solver.add_constraint({t: 1.0, y: -1.0}, ">=", -q)
+            oracle_solver.add_constraint({t: 1.0, y: 1.0}, ">=", q)
+            linear[t] = 1.0
+            linear[y] = -0.5 * q
+            quadratic[(y, y)] = 0.25
+            constant += 0.25 * q * q
+        oracle_solver.add_constraint({f"y_{i}": 1.0 for i in range(len(data))}, "=", 10.0)
+        oracle_solver.set_quadratic_objective(linear, quadratic, ObjSense.MINIMIZE, constant)
+
+        yi, qi = cols.index("y"), cols.index("q")
+
+        def decidb_obj(rs, cs):
+            return sum(abs(float(r[yi]) - float(r[qi])) + 0.25 * (float(r[yi]) - float(r[qi])) ** 2 for r in rs)
+
+        _solve_and_compare(oracle_solver, rows, cols, decidb_obj)
+
 
 @pytest.mark.quadratic
 @pytest.mark.error

@@ -19,18 +19,17 @@ bool IsIntegralColumnType(const LogicalType &type) {
 }
 
 //! Could the built model contain an integral column? True for a declared `x(INT)` or
-//! `x(BOOL)`, and true whenever the query uses a construct that gets an auxiliary
-//! column, since every DeciDB auxiliary is either a Big-M indicator (binary) or a
-//! continuous partner of one.
+//! `x(BOOL)`, and for every helper stage 05 added to `decide_variables` the same way: a
+//! helper carries its own type (whole-numbered when the value it holds is, an indicator
+//! flagged in `is_boolean_var`), so the loop below reads it like any declared decision.
 //!
-//! The auxiliary half is deliberately coarse. Some auxiliaries are appended to
-//! `decide_variables` by stage 05 and counted in `num_auxiliary_vars`; others are
-//! added to the global block during execution, when the Big-M constants are known.
-//! Rather than enumerate the second group — a list that would silently rot as
-//! constructs are added — this treats *any* construct that reaches execution with
-//! work left to do as producing one. Over-reporting costs a refused query that a
-//! quadratic-capable solver would have run anyway; under-reporting would hand a
-//! backend a model it cannot load, which is the failure this gate exists to prevent.
+//! The rest are added to the global block during execution, once the Big-M constants are
+//! known, and only two lowerings add an integral one (`AddGlobalBinaryAux`): a `<>`, which
+//! the binder admits over whole-numbered decisions only, so the loop has already answered;
+//! and a MIN/MAX held by indicator rows, read here off the marks the MIN/MAX rewrites
+//! leave. A lowering that starts adding a binary without a mark is caught when the built
+//! model is checked (`AssertBackendAcceptsBuiltModel`), as an internal error rather than a
+//! wrong answer.
 bool MayHaveIntegralColumn(const LogicalDecide &op) {
 	for (idx_t var = 0; var < op.decide_variables.size(); var++) {
 		if (var < op.is_boolean_var.size() && op.is_boolean_var[var]) {
@@ -40,11 +39,16 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 			return true;
 		}
 	}
-	if (op.num_auxiliary_vars > 0) {
+	if (!op.minmax_clause_labels.empty()) {
 		return true;
 	}
 	if (!op.composed_minmax_constraints.empty() || !op.composed_minmax_objective_terms.empty()) {
 		return true;
+	}
+	for (auto &link : op.reducer_value_links) {
+		if (link.agg_name == "min" || link.agg_name == "max") {
+			return true;
+		}
 	}
 	auto is_minmax = [](ObjectiveAggregateType agg) {
 		return agg == ObjectiveAggregateType::MIN_AGG || agg == ObjectiveAggregateType::MAX_AGG;

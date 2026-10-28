@@ -137,10 +137,13 @@ different reasons:
 
 `DeriveDecideModelClass` is a *prediction* of what `SolverModel::ModelClass()` will
 report once the rows are in, and it must never predict less. Where it cannot be exact
-it over-reports: `MayHaveIntegralColumn` treats any construct that still owes work at
-execution as producing an auxiliary column, rather than enumerating which auxiliaries
-are binary — a list that would rot silently. `HasCoupledQuadraticTerms` over-reports
-the same way, counting a bilinear objective as coupled without checking whether the
+it over-reports. `MayHaveIntegralColumn` is exact: every helper this stage adds carries
+its own type, read like a declared decision, and of the two lowerings that add a binary
+during execution, a `<>` is admitted over whole-numbered decisions only and a MIN/MAX
+held by indicator rows leaves a mark (a hard clause label, a composed term, a MIN/MAX
+value link or objective). A continuous helper (an ABS envelope beside
+`SUM(POWER(...))`) therefore leaves the QP continuous, and HiGHS takes it.
+`HasCoupledQuadraticTerms` over-reports, counting a bilinear objective as coupled without checking whether the
 built Q ends up with a nonzero off-diagonal. `SolveModel` re-derives the class from
 the built model and asserts the backend covers it, so a prediction that ever comes up
 short fails loudly instead of handing a backend a model it cannot load.
