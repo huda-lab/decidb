@@ -136,6 +136,8 @@ enum class DecideScopeCheckKind : uint8_t;
 
 enum class DecideSense : uint8_t;
 
+enum class DecideSignatureFieldKind : uint8_t;
+
 enum class DecideVarScope : uint8_t;
 
 enum class DefaultOrderByNullType : uint8_t;
@@ -574,6 +576,9 @@ const char* EnumUtil::ToChars<DecideScopeCheckKind>(DecideScopeCheckKind value);
 
 template<>
 const char* EnumUtil::ToChars<DecideSense>(DecideSense value);
+
+template<>
+const char* EnumUtil::ToChars<DecideSignatureFieldKind>(DecideSignatureFieldKind value);
 
 template<>
 const char* EnumUtil::ToChars<DecideVarScope>(DecideVarScope value);
@@ -1154,6 +1159,9 @@ DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *valu
 
 template<>
 DecideSense EnumUtil::FromString<DecideSense>(const char *value);
+
+template<>
+DecideSignatureFieldKind EnumUtil::FromString<DecideSignatureFieldKind>(const char *value);
 
 template<>
 DecideVarScope EnumUtil::FromString<DecideVarScope>(const char *value);

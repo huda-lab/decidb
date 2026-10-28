@@ -182,9 +182,10 @@ class TestInfeasibleModels:
             MAXIMIZE SUM(x)
         """, match=r"(?i)cannot hold two different values.*infeasible")
 
-    def test_equal_bound_varying_within_a_per_class_does_not_determine(self, decidb_cli):
-        """The `per grp:` spelling of the clause above generates it once per class, so a
-        bound that varies within the class is refused before any model is built."""
+    def test_equal_bound_varying_within_a_per_class_is_two_instances(self, decidb_cli):
+        """The `per grp:` spelling of the clause above: the two caps are two variants of the
+        class (D64), two instances of `sum(x) by (grp) = cap` that cannot both hold, so the
+        same early diagnosis names the contradiction."""
         decidb_cli.assert_error("""
             SELECT id, grp, x FROM (
                 VALUES (1, 'a', 500), (2, 'a', 350)
@@ -192,7 +193,7 @@ class TestInfeasibleModels:
             DECIDE x(INT)
             SUCH THAT per grp: sum(x) by (grp) = cap
             MAXIMIZE SUM(x)
-        """, match=r"per grp does not determine cap\. grp = 'a' has more than one value: 500, 350\.")
+        """, match=r"(?i)cannot hold two different values.*infeasible")
 
     def test_user_overridden_negative_lower_is_feasible(self, decidb_cli):
         """Part C guard: `x <= -1 AND x >= -5` explicitly lowers the floor below 0, so

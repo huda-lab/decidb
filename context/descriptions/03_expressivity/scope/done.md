@@ -14,7 +14,7 @@ a result row (after joins and `WHERE`) that the enclosing `when` keeps.
 
 **Syntax**: `../../00_project_overview/syntax_reference.md` (SR below) §1.1 (the forms and their
 defaults), §2.3 (keyed declarations), §4 (objective), §5.1–§5.4 (reducers), §6
-(scoped constraints), §7 (determination, NULL, empty sets), §10.3 (the spellings that
+(scoped constraints), §7 (variants, NULL, empty sets), §10.3 (the spellings that
 are refused). This doc covers what each form means beyond the syntax, how the layers
 build it, and where the code is.
 
@@ -33,8 +33,7 @@ Every clause is a scoped clause; an omitted part takes its default.
 
 So `sum(x) <= cap` is `per row: sum(x) by () <= cap`: one constraint per row, each
 pairing the same total with that row's `cap`, which is the total against the tightest
-`cap`. `per row` always determines its clause (§5), which is why a clause with no `per`
-never raises a determination error for its own key.
+`cap`. Under `per row` each class is one row, so it has one variant (§5).
 
 ## 2. Declarations — `per K: x(TYPE)`
 
@@ -71,10 +70,10 @@ A scoped constraint is evaluated in four steps (SR §6.1):
 
 1. **Filter.** Keep the rows where `c` is true. NULL counts as false.
 2. **Generate.** Split the kept rows into classes by `K`; the body is produced once
-   per class. `per ()` is one class; no `per` is one class per kept row.
+   per variant of each class (§5). `per ()` is one class; no `per` is one class per kept
+   row.
 3. **Aggregate.** A reducer `agg(...) by (G)` reads every kept row whose `G` equals
-   the class's `G`, including rows outside the class.
-4. **Well-defined.** `K` must determine every tuple term and every `by` key (§5).
+   the variant's `G`, including rows outside the class.
 
 ```sql
 per D.depotID: sum(ship) by (D.depotID) <= D.capacity          -- one per depot, over its rows
@@ -106,8 +105,8 @@ ship <= D.share * sum(ship) by (D.depotID)                     -- one per row, o
   tightest value of the group (MIN for `<=`/`<`, MAX for `>=`/`>`); `=` refuses a group
   whose bounds differ, and `<>` keeps every value as its own exclusion
   (`ReduceAggregateRhsPerGroup`, `physical_decide.cpp`; see
-  `../sql_functions/done.md` → "Reducers as a Bound"). Under an explicit `per K:` the
-  same bound must instead be determined by `K`.
+  `../sql_functions/done.md` → "Reducers as a Bound"). Under an explicit `per K:` each
+  value it takes in a class is a variant, which bounds the group alike.
 
 ### How a constraint becomes model rows
 
@@ -116,7 +115,7 @@ side once and picks one of three shapes (SR §6.4):
 
 | Shape | When | Model rows |
 |---|---|---|
-| ROWS | no decision-bearing reducer | one row per class, from its first kept row (the key determines the clause) |
+| ROWS | no decision-bearing reducer | one row per variant of each class, from its first kept row (§5) |
 | AGGREGATE | decision reducers that share one `by` key, under whole-query factors, with only query-wide terms beside them | one row per `by` group of the kept rows, under the group's tightest bound |
 | VALUE | anything else: a per-row or keyed decision beside a reducer, a factor that varies by row, reducers with different `by` keys, a reducer inside another expression, a product of decisions beside a reducer, or a `MIN`/`MAX` beside another term (or under a factor of unknown sign) that has a `by`, a non-constant bound or a query-wide decision beside it | each decision reducer becomes a helper decision with one instance per `by` group, defined once; then one row per class |
 
@@ -141,7 +140,7 @@ supported yet"*): the two rows a `<>` becomes hold a linear left side only.
 
 - **A factor on a reducer** may be any decision-free term in a constraint:
   `D.share * sum(ship) by (D.depotID)` and a correlated subquery as the factor take the
-  VALUE shape, and the `per` key must determine the factor. In the objective a
+  VALUE shape, and under `per` each value of the factor is a variant. In the objective a
   row-varying factor is refused (*"DECIDE objective: 'w' varies per row, so it cannot
   multiply SUM(x). ..."*). A decision as the factor (`s * sum(x)`) is refused in both
   (`PeelScale`: *"'s' is a decision, so it cannot multiply SUM(x). ..."*).
@@ -164,48 +163,76 @@ supported yet"*): the two rows a `<>` becomes hold a linear left side only.
   either side; a data-only reducer on the bound side is evaluated over its own groups
   (`sum(x * v) by (grp) <= sum(v) by (grp)`).
 - **Order inside a reducer**: the rows `by` selects, then the reducer's own `when`,
-  then one value per class of its own `per` (each class read at its first row the
-  `when` keeps), then the aggregate. The inner `when` filters this reducer only;
+  then one value per variant of each class of its own `per` (each read at its first row
+  the `when` keeps, §5), then the aggregate. The inner `when` filters this reducer only;
   a `when` in front of the clause applies first.
-- **`AVG`** divides by the number of values it receives: kept rows, or classes under an
+- **`AVG`** divides by the number of values it receives: kept rows, or variants under an
   inner `per`. **`MIN`/`MAX`** are unaffected by an inner `per`.
 - **A `by` group that the reducer's own `when` empties is an error** (D8), naming the
   group: *"DECIDE: sum(when S.priority: ship) has no rows for D.depotID = 'D2'."*, or
   *"... has no rows."* under `by ()`. To leave such groups out, move the condition in
   front of the constraint.
 - **The colon form** `SUM(D: e)` / `SUM(D, T: e)` means `sum(per D: e)` /
-  `sum(per D, T: e)`: the same key scope, the same checks, and it may take a `by`. It
+  `sum(per D, T: e)`: the same classes and variants, and it may take a `by`. It
   is echoed as written (D38). Its semantics and implementation are in
   `../decide/done.md` → "The colon form".
 - **A reducer inside a reducer** is refused, except the two-level objective (§6).
 
-## 5. The determination rule
+## 5. Variant signatures
 
-A `per` key must determine everything its clause reads once per class: every tuple
-term (a column or expression outside reducers, the bound and any factor on a reducer
-included), every decision outside reducers, and every reducer's `by` key. An inner
-`per` key, and the `D` of the colon form, must determine the body of its reducer within
-each `by` group. A keyed decision is determined when every class of the `per` key lies
-in one class of its own key; a per-row decision only when every class is one row; a
-query-wide decision always. Literals, uncorrelated scalar subqueries and anything under
-`per row` are always determined.
+A `per` key splits the kept rows into classes, and each class is one instance per
+**variant** (D64): per distinct value of its **signature**, the tuple of what the body
+reads once per class (SR §7.1; deck pp. 34–40):
 
-The rule is **checked on the data**, on every run, before solving and over kept rows
-only, so the same query can pass on one dataset and fail on another. NULL counts as one
-value. The message names the key, the expression and one class holding two values:
+- every tuple term, by value — a column or expression outside reducers, the bound and
+  any factor on a reducer included; the data terms of one additive context, read
+  through `+`, `-` and constant factors, are one value (D77), so written associativity
+  never changes the count;
+- every decision outside reducers, by instance — its row if it is per row, its class
+  if it is keyed; a query-wide decision splits nothing;
+- every reducer's `by` key, by value.
+
+An inner `per` key, and the `D` of the colon form, hand their reducer one value per
+variant of each of its classes the same way (D65). Where the key fixes every field —
+what the determination rule used to demand — each class has one variant and the model
+is unchanged (deck p. 39). NULL is one value. The objective has one class, which must
+hold one variant (D66):
 
 ```
-DECIDE: per D.depotID does not determine S.demand. D.depotID = 'D1' has more than one value: 3, 2.
-DECIDE: per g does not determine the decision x (declared per row). g = 'A' covers more than one x.
-DECIDE: per () does not determine g (in by (g)). The kept rows have more than one value: 'A', 'B'.
+DECIDE objective: 'w' takes more than one value over the kept rows (3, 5), so the objective would be produced more than once; move it inside a reducer or fix it with when.
+DECIDE objective: the decision 'x' (declared per row) has more than one instance over the kept rows, so ...
+DECIDE objective: 'g' in by (g) takes more than one value over the kept rows ('A', 'B'), so ...
 ```
 
-The checks are built on the bound tree by the canonicalizer
-(`BuildConstraintScopeChecks`, `BuildClauseScopeChecks`, `BuildReducerScopeChecks`,
-`BuildObjectiveScopeChecks`) as `DecideScopeCheck`s of three kinds —
-`KEEPS_A_ROW` (D4), `DETERMINES`, `READS_A_ROW` (D8) — carried on
-`LogicalDecide::scope_checks`, and run by `PhysicalDecide::RunScopeChecks` before any
-clause is evaluated. They also run under `DIAGNOSE`.
+**The trap (D65).** `sum(per D: D.opening_cost + T.unit_cost * ship)` over a depot with
+two routes reads the depot twice, once per route: the per-row `ship` and the route's
+`unit_cost` make each route a variant. `EXPLAIN ANALYZE` prints, under the clause, how
+many values the reducer read from how many classes, and how many constraints a `per`
+clause generated, wherever a class held more than one variant (SR §9).
+
+**How the layers build it.** The canonicalizer reads each signature off the canonical
+tree, once, right after `CanonicalizeTree` and `CanonicalizeObjective`
+(`BuildConstraintSignatures`, `BuildObjectiveSignatures`, `CollectSignatureFields`,
+`decide_canonicalizer.cpp`), into `LogicalDecide::signatures` (a `DecideSignature`: the
+rows it reads, its key, its fields `VALUE | DECISION | BY_KEY`): a `per K:` clause's on
+its wrapper (`SIGNATURE_TAG_PREFIX`), a qualified reducer's through a scope of its own
+(`EntityScopeInfo::signature`, its tag repointed), the objective's as
+`LogicalDecide::objective_signature`. A field the key already holds — a column of the
+key, a decision keyed on its columns, a `by` key inside it — is left out, and an
+expression with no field left has no signature. Execution numbers the kept rows by
+variant (`BuildSignatureIds`, `physical_decide.cpp`): the rows shape emits one row per
+variant at its first row; a qualified reducer de-duplicates by its variant scope's
+entities, so every consumer of the qualifier reads one value per variant unchanged; the
+objective's check stops the query on a second variant (`RunScopeChecks`). The aggregate
+shape and the easy MIN/MAX already emit one row per `by` group under its tightest bound,
+which covers every variant of the group, so their signature only names classes.
+
+The remaining checks are `DecideScopeCheck`s of two kinds — `KEEPS_A_ROW` (D4) and
+`READS_A_ROW` (D8) — built on the bound tree (`BuildConstraintScopeChecks`,
+`BuildClauseScopeChecks`, `BuildReducerScopeChecks`, `BuildObjectiveScopeChecks`),
+carried on `LogicalDecide::scope_checks` and run by `PhysicalDecide::RunScopeChecks`
+before any clause is evaluated; the objective's variant check runs with them. They also
+run under `DIAGNOSE`.
 
 ## 6. Objective — `MAXIMIZE|MINIMIZE [when c] [per ()]: E`
 
@@ -214,8 +241,9 @@ clause is evaluated. They also run under `DIAGNOSE`.
 - **A decision outside the reducers** is legal when it has one instance over the kept
   rows, and counts once: `MAXIMIZE when id = 3: x` and `+ s` for a `per ()` decision,
   but not beside a `MIN` or `MAX` (*"DECIDE: 's' beside MIN or MAX is not supported
-  yet"*). `MAXIMIZE x` over several rows is the determination error
-  (*"DECIDE: per () does not determine the decision x (declared per row). ..."*).
+  yet"*). `MAXIMIZE x` over several rows would be produced more than once (§5, D66):
+  *"DECIDE objective: the decision 'x' (declared per row) has more than one instance
+  over the kept rows, so the objective would be produced more than once; ..."*.
 - **A top-level reducer's `by`** must be one group over the kept rows:
   `MAXIMIZE when g = 'B': sum(x) by (g)` runs, `MAXIMIZE sum(x) by (g)` over two
   values of `g` is refused.
@@ -376,7 +404,7 @@ constraint-to-bound conversion, skyband pruning, drop-solve-validate-refine — 
 
 The scope suites, the `_scope_oracle.py` reference model and the brute-force
 enumerator are described in `../../04_testing/scope/done.md`:
-`test/decide/tests/test_scope_{bare_clauses,combinations,deck_examples,declare,determination,explain_diagnose,generation,objective,reducer_by,reducer_inner,removed_syntax,value_rewrite}.py`,
+`test/decide/tests/test_scope_{bare_clauses,combinations,deck_examples,declare,explain_diagnose,generation,objective,reducer_by,reducer_inner,removed_syntax,value_rewrite,variants}.py`, `test_anr_variants.py`,
 with `test/decidb/test_scope_parser.test` for the parser cases.
 `test_no_old_spellings_remain.py` keeps the refused spellings out of every test surface
 except `test_scope_removed_syntax.py`.

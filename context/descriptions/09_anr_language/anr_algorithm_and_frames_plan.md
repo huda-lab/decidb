@@ -1,6 +1,7 @@
 # The full ANR algorithm and frame selectors — implementation plan
 
-Status: plan, nothing built. Baseline commit 38275dde6f (branch `Sami-Active`), reviewed
+Status: phases 0 and 1 shipped (2026-10-28); phases 2–7 to build. Baseline commit
+38275dde6f (branch `Sami-Active`), reviewed
 27 October 2026 against `~/Desktop/Capstone/ANR.pdf` (the "DeciQL proposals" deck, 119
 pages) and `ANR Implementation.pdf`. It supersedes the first draft, which was never
 committed and is no longer in the repo; the section "Why this plan differs from the
@@ -96,7 +97,7 @@ implements it ships.
 | # | Decision | Settled as |
 |---|---|---|
 | P1 (D64) | **Variants replace determination errors** for tuple terms, `by` keys and decisions outside reducers, at every scoped expression, in constraints and reducer operands (deck p. 40: "Variant Signature is the semantics of every scoped expression"). The messages *"per K does not determine …"* disappear except for the objective. | Yes. Deck p. 39 proves the old answers are kept wherever the old rule held. |
-| P2 (D65) | **The inner `per` and the colon form** `SUM(D: e)`: under P1, `sum(per D: D.opening_cost + T.unit_cost * ship)` over a depot with two routes stops being the D63 error and silently counts the depot twice (one member per distinct `(unit_cost, ship)`), which is the per-row answer the user wrote `per D` to avoid. Keep the error for an inner `per`, or follow the deck? | Follow the deck (one rule), and make EXPLAIN print the variant count of every scoped expression that produced more than one per class (§4.8), so the surprise is visible in the plan. Record the trap in `syntax_reference.md` §5.3. |
+| P2 (D65) | **The inner `per` and the colon form** `SUM(D: e)`: under P1, `sum(per D: D.opening_cost + T.unit_cost * ship)` over a depot with two routes stops being the D63 error and silently counts the depot twice (one member per distinct `(unit_cost, ship)`), which is the per-row answer the user wrote `per D` to avoid. Keep the error for an inner `per`, or follow the deck? | Follow the deck (one rule), and make EXPLAIN print the variant count of every scoped expression that produced more than one per class (§4.8), so the surprise is visible in the plan — EXPLAIN ANALYZE, as shipped: a plain EXPLAIN reads no data, so it has no count. Record the trap in `syntax_reference.md` §5.3. |
 | P3 (D66) | **The objective** is produced once (deck p. 62). A `per ()` signature with more than one value is an error. | Yes; reword the existing message to say the objective would be produced more than once (§3.6). |
 | P4 (D67) | **Point selection at a peer with several rows** (equal order key): `at(previous: x)` where the previous position holds two rows with distinct payloads. Error, variants, or first row? | Error now (§3.4), naming the peer; an error can be lifted to variants later without breaking an answer. A range selector takes every row of a selected peer. |
 | P5 (D68) | **NULL order keys** are ordered as `ORDER BY` orders them under the connection's `default_null_order` (DuckDB: NULLS LAST unless changed). | Yes. One rule the user already knows. |
@@ -118,8 +119,9 @@ implements it ships.
 
 This is the text to fold into `00_project_overview/syntax_reference.md` (§5.5 nesting,
 §5.6 frames, §7.1 rewritten, §10 updated) and `03_expressivity/scope/done.md` as each
-phase ships it. Nothing here is in the engine yet. The reference evaluator built in
-phase 0, `test/decide/tests/_anr_oracle.py`, encodes every rule below
+phase ships it. §3.2 is in the engine since phase 1 (`syntax_reference.md` §7.1); the
+rest is not yet. The reference evaluator built in phase 0,
+`test/decide/tests/_anr_oracle.py`, encodes every rule below
 (`04_testing/scope/done.md`), and the tests of §6 pin them.
 
 ### 3.1 Scoped expressions, recursively
@@ -157,17 +159,19 @@ are a list, and `E`'s result is the concatenation over classes, multiplicity kep
 (p. 38). At the Boolean boundary every value is a constraint instance; inside a reducer
 every value is a member.
 
-- **A direct tuple term** is a maximal reducer-free, frame-free scalar subtree of the body,
-  compared by value: `per g: x <= a + b` over rows `(1, 2)` and `(2, 1)` has one
-  signature value 3. Constants are terms with one value. It is read on the canonical
-  tree (D77), so the reducer-free terms of one additive context, read through `+`, `-`
-  and constant factors, form one field: `x + a <= b + sum(y)` has the one field
-  `x + a - b`, and written associativity never changes the count. A reducer-free term
-  under a row-varying factor or inside `abs` belongs to that factor's or that `abs`'s own
-  context.
-- **A decision** is compared by *instance*: a per-row decision is its row, a keyed one its
-  class, a query-wide one itself. `per D.depotID: ship <= 10` with `ship` per row
-  generates one instance per row.
+- **A direct tuple term** is a maximal subtree of the body with no decision, reducer or
+  frame (today's `CollectClauseParts` rule, D77), compared by value: `per g: x <= a + b`
+  over rows `(1, 2)` and `(2, 1)` has one signature value 3. Constants are terms with one
+  value. It is read on the canonical tree, so the data terms of one additive context,
+  read through `+`, `-` and constant factors, form one field: `x + a <= b + sum(y)` has
+  the one data field `b - a` beside the decision `x`, and written associativity never
+  changes the count. A data term under a row-varying factor or inside `abs` belongs to
+  that factor's or that `abs`'s own context.
+- **A decision** is compared by *instance*, whatever its coefficient: a per-row decision
+  is its row, a keyed one its class, a query-wide one itself. `per D.depotID: ship <= 10`
+  with `ship` per row generates one instance per row. (Phase 0's evaluator first read a
+  decision's terms into the data field as one linear form, which differs only where
+  coefficients cancel, `a * x + b * x`; phase 1 aligned it to this rule.)
 - **A frame term** contributes the frame's `within` key and, for a relative selector, the
   anchor's order key (deck p. 99; P13): two anchors in one class that look at different
   positions are two variants, two that look at the same position are one. `first` and
@@ -177,8 +181,8 @@ every value is a member.
 - **`per row`** keeps every tuple occurrence, including two rows equal in every column.
 - **NULL** is one value in a signature; a NULL coefficient or bound is still the §3 error
   on the instance that reads it.
-- Equal body values from different classes stay separate instances; identical model rows
-  collapse at formulation, as today.
+- Equal body values from different classes stay separate instances, two identical model
+  rows (formulation merges none, and none needs merging).
 - **The objective** has one class (`per ()`) and must have one signature, else an error
   names the differing terms (P3).
 
@@ -545,19 +549,18 @@ Quadratic objectives keep the single-group rule (`decide_linear_form.cpp:1402-14
    requested position count is checked against `decide_frame_limit` (a setting, default
    generous) before allocation; `context.interrupted` is polled per partition.
 3. **`RunScopeChecks`** (2239): `KEEPS_A_ROW`, `READS_A_ROW`, `FRAME_PARTITION` only.
-4. **Signature grouping** replaces the class loop of the rows shape and the inner-`per`
-   de-duplication: `LookupOrBuildPerGroupIds` over the key `per key ++ signature fields`.
-   Under P13 every field is a data expression the executor can evaluate — a `VALUE`
-   field's expression, a `BY_KEY` field's key expressions, a `FRAME` field's `within` and
-   order expressions, a keyed decision's entity-key expressions — or the row itself (a
-   per-row decision makes the class per row, no key needed; a query-wide decision adds no
-   field). So `BuildGroupIds` (436–470, 632–661) works unchanged on expression keys.
-   One model row (or member) per group at its first kept row. Absence is a row mask
-   applied after `when` (it does not feed D4): a row whose non-reduced frame is absent
-   joins no group. `EvaluatedConstraint::rows_stand_with_their_class`, today `!has_when`
-   (2610) and read by implied-bound soundness (`linearization_bigm.cpp:280-290`), is
-   false for a class that emits more than one variant row, since no single row then
-   stands for the class.
+4. **Signature grouping** (shipped in phase 1: `BuildSignatureIds`, `physical_decide.cpp`)
+   numbers the kept rows by `per key ++ signature fields` through `BuildGroupIds`, then
+   splits by each decision field's instance (a keyed decision's entity, the row for a
+   per-row one; a query-wide decision adds no field). The rows shape emits one model row
+   per variant at its first kept row; the inner-`per` de-duplication reads a reducer's own
+   variant scope (`EntityScopeInfo::signature`), so its consumers are unchanged. Phase 4
+   adds the `FRAME` field (its `within` and order expressions) and absence: a row mask
+   applied after `when` (it does not feed D4), a row whose non-reduced frame is absent
+   joining no group. `EvaluatedConstraint::rows_stand_with_their_class` stays `!has_when`:
+   a row it leaves out stands with its *variant's* first row, which carries the same
+   decisions and data, so implied-bound soundness (`linearization_bigm.cpp:280-290`)
+   holds.
 5. **Point frames in a Rows-shape clause** are not helpers (P9): the frame's term is a
    `DecideTerm` with a frame index, and its coefficient and instance are read at the
    selected row the map names (a per-term row redirection, the way a keyed decision is
@@ -593,9 +596,11 @@ definitions stay structural.
 - Accounts (`RenderDecideRewriteAccount`): "a helper decision per (D.rid, S.cid) group"
   for a path-keyed helper; "reads the previous period's inventory; a helper per row" for a
   point frame; "a sum over the frame from previous to next every 1; a helper per row" for
-  a range; "generates 3 constraints: d1 has 2 variants over (D.rid, S.m, D.c), d2 has 1"
-  under a clause whose classes produced more than one variant (P2); "skips 2 instances
-  with no previous position" for absence.
+  a range; under a clause whose classes produced more than one variant (P2), in EXPLAIN
+  ANALYZE only, since only the data can tell — shipped in phase 1 as
+  `Kind::VARIANTS`: *"per t.g: 2 constraints from 1 class, one per distinct (a) within a
+  class"*, *"sum(per D: ...): 3 values from 2 classes, one per distinct (T.unit, ship)
+  within a class"*; "skips 2 instances with no previous position" for absence.
 - DIAGNOSE: §4.7 labels; a frame-generated definition is structural; the unbounded
   remedy and the relaxed-bound re-formulation see helpers as today.
 
@@ -618,32 +623,19 @@ and the medium-tier timings in `05_performance/04_model_construction/done.md`. F
 bound-side `count(e)` refuses a NULL instead of counting the non-NULL values
 (`06_issues/bugs/todo.md`), fixed in phase 2.
 
-### Phase 1 — Variants (layers 3, 4, 8; no new syntax)
+### Phase 1 — Variants (shipped 2026-10-28)
 
-- `BuildClauseSignature` family (§4.4), `LogicalDecide::signatures` (221), the execution
-  grouping (§4.7 step 4), the objective singleton error (P3), EXPLAIN variant counts,
-  DIAGNOSE variant labels; delete the `DETERMINES` builders and the two determination
-  messages at `physical_decide.cpp:2310-2334`.
-- Keep the `=` contradiction check (*"cannot hold two different values at once"*,
-  `physical_decide.cpp:783-857`): with no `per` the clause is per row, so under the deck
-  `sum(x) by (g) = cap` with two `cap` values is two instances that cannot both hold, and
-  the check is an early diagnosis of that infeasibility, not a determination rule. Its
-  four pins stay (`test_error_binder.py:237, 610`, `test_error_infeasible.py:183`,
-  `test_scope_reducer_by.py:207`).
-- Tests: `test_anr_variants.py` (§6.4, F19–F21 included). Conversions, every file named:
-  `test_scope_determination.py` (every "does not determine" case becomes an answer
-  judged by the oracle; the objective ones keep an error), `test_scope_combinations.py`
-  (cells that expected `not_determined` now solve), `test_scope_reducer_inner.py` and
-  `test_qualified_reducer.py` (the inner-key and colon-form checks; P2's trap pinned),
-  `test_scope_deck_examples.py` (pp. 34–36), `test_error_infeasible.py:195`,
-  `test_per_clause.py:322`, `test_reduced_bound_data_column.py:71`,
-  `test_scope_value_rewrite.py`, `test_scope_bare_clauses.py`,
-  `test/decidb/test_scope_parser.test`, and `_scope_oracle.py` (retire
-  `ScopeError.not_determined` and the `check` at 219 and 323 once `ScopedModel`
-  delegates). The `rows_stand_with_their_class` rule of §4.7 step 4 is a phase-1 contract.
-- Exit: no "does not determine" outside the objective anywhere in the suites (a grep of
-  `test/` is part of the gate); golden corpus identical or re-captured with every diff
-  explained.
+Built as §4.3, §4.4 and §4.7 step 4 describe: `DecideSignature` (property 221, the
+objective's 222) built by `BuildConstraintSignatures` / `BuildObjectiveSignatures` on the
+canonical tree, the execution grouping (`BuildSignatureIds`), the objective's
+produced-once error (P3), EXPLAIN ANALYZE's variant line (P2), DIAGNOSE's variant label;
+the `DETERMINES` builders and both determination messages deleted, the `=` contradiction
+check kept. One choice beyond the text above: a relation-qualified reducer gets a scope of
+its own (`EntityScopeInfo::signature`) instead of a signature index on every term kind,
+so every stage that de-duplicates by a qualifier reads variants unchanged. Tests:
+`test_anr_variants.py`, and every conversion listed in the draft of this phase
+(`test_scope_determination.py` became `test_scope_variants.py`). Record:
+`09_anr_language/done.md`, "phase 1".
 
 ### Phase 2 — Nested reducers (layers 2, 3, 5, 6, 8)
 
@@ -737,8 +729,8 @@ Built in phase 0; its statements, its readings (`instances`, `solve`, `judge`,
 `feasible`, `brute_force`) and its error kinds are described in
 `04_testing/scope/done.md`. What remains: once phase 2 ships, `_scope_oracle.ScopedModel`
 delegates to it, so the existing suites keep their statements and lose the special
-`Nested` form, and `ScopeError.not_determined` is retired with the last determination
-error (phase 1).
+`Nested` form. (`ScopeError.not_determined` was retired in phase 1, when `ScopedModel`
+learned variants on its own statements.)
 
 ### 6.3 Fixtures — `_anr_cases.py`
 
@@ -755,14 +747,9 @@ its SQL, its oracle statement and its hand-computed answer (`04_testing/scope/do
 | 5 | F5_weekly, F5_offset, F6_truncate, F6_all, F6_else, F7_range, objective_absent, cyclic_repeats, reversed, count_empty |
 | 6 | F17 |
 
-### 6.4 `test_anr_variants.py` (phase 1)
+### 6.4 `test_anr_variants.py` (phase 1, shipped)
 
-F3 both forms; F10; F11; F12; F13; a NULL key value as its own variant; equal body values
-in two classes stay two instances; `=` with two bound values is two instances (the old
-"contradiction" message goes); `<>` keeps every exclusion; a keyed decision determined by
-the `per` key is one instance; a `per ()` clause over a per-row decision is one per row;
-EXPLAIN's variant line; DIAGNOSE's labels; `DECIDB_VERIFY_SERIALIZER=1` over the file.
-Conversions listed under phase 1.
+Described in `04_testing/scope/done.md`.
 
 ### 6.5 `test_anr_nested.py` (phase 2)
 

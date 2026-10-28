@@ -17,8 +17,6 @@ reducers), and a reducer's scope lives as tags on its own bound aggregate
 (`filter`, `__qualified_by_<i>__`, `__group_key_<i>__`), so depth is encoded nowhere else.
 Lifting the gate for a shape means the binder admits it and the value rewrite recurses —
 an inner helper per inner class, inside the outer group (`../05_optimizer/todo.md`).
-Variant signatures (deck pp. 34–40) would turn the "does not determine" error into one
-constraint per distinct combination; `LogicalDecide::scope_checks` already lists the parts.
 
 **Decision needed.** Which nested shapes enter the language, starting with deck
 example 9 (a reducer nested in a constraint).
@@ -40,7 +38,7 @@ is a wrong answer; each is a shape the later layers do not formulate.
 | Refused | Message | What lifting it needs |
 |---|---|---|
 | A `when` inside either reducer of the two-level objective | *"DECIDE: when inside the outer reducer of sum(per g: ...) is not supported yet; write it in front of the objective"* (and the inner-reducer twin) | a per-class filter in the two-level rewrite (stage 05) and in the per-class grouping at execution |
-| A `per` inside the inner reducer of the two-level objective | *"DECIDE: per inside the inner reducer of sum(per g: max(...) by (g)) is not supported yet"* | the inner reducer's own key scope inside each class, and its DETERMINES check within the class |
+| A `per` inside the inner reducer of the two-level objective | *"DECIDE: per inside the inner reducer of sum(per g: max(...) by (g)) is not supported yet"* | the inner reducer's own key scope inside each class, and its signature within the class |
 | A `by` key that is not the `per` key in the two-level objective | *"DECIDE: in sum(per g: max(...) by (id)) the by key must be the per key; any other is not supported yet"* | inner groups that differ from the outer classes in the two-level rewrite |
 | `avg` as the two-level objective's outer reducer | *"DECIDE: avg over the classes of avg(per g: sum(...) by (g)) is not supported yet; write sum, min or max over them"* | an average over classes, whose count is data, in the two-level rewrite |
 | A window function in a `when`, a key or a `by` | *"DECIDE: a window function such as 'row_number() OVER ()' is not supported in when, per or by"* | a window evaluated over the rows the scope keeps, before the scope reads it |

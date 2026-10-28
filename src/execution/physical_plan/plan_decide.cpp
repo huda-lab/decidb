@@ -202,6 +202,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // Resolved like every other expression the operator owns (EnumerateExpressions).
     decide_op->group_keys = std::move(op.group_keys);
     decide_op->scope_checks = std::move(op.scope_checks);
+    decide_op->signatures = std::move(op.signatures);
+    decide_op->objective_signature = op.objective_signature;
 
     // Resolve source column names for the surviving (post-pruning) child columns,
     // positionally aligned with the materialized data chunk. Used by the unbounded
@@ -248,13 +250,26 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         }
     }
     for (auto &check : decide_op->scope_checks) {
-        for (auto *expr : {check.rows.get(), check.value.get(), check.filter.get()}) {
+        for (auto *expr : {check.rows.get(), check.filter.get()}) {
             if (expr) {
                 harvest(*expr);
             }
         }
         for (auto &column : check.key) {
             harvest(*column);
+        }
+    }
+    for (auto &signature : decide_op->signatures) {
+        if (signature.rows) {
+            harvest(*signature.rows);
+        }
+        for (auto &column : signature.key) {
+            harvest(*column);
+        }
+        for (auto &field : signature.fields) {
+            if (field.value) {
+                harvest(*field.value);
+            }
         }
     }
     // A lifted reducer's expressions live beside the tree: a composed term's and a helper

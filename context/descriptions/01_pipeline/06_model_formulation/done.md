@@ -418,9 +418,9 @@ tightness on the table for chained implications.
 
 A row outside `row_group_ids` normally means "not constrained", which disqualifies the
 clause. `EvaluatedConstraint::rows_stand_with_their_class` says otherwise for a
-`per K:` clause with no `when`: it is emitted once per class, at the class's first row,
-and every other row carries the same decisions and data (a scope check), so it is
-skipped instead.
+`per K:` clause with no `when`: it is emitted once per variant of each class, at the
+variant's first row, and every other row of the variant carries the same decisions and
+data (its signature, D64), so it is skipped instead.
 
 ### The formulation box
 

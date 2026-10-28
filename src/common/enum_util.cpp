@@ -1211,6 +1211,25 @@ DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *valu
 	return static_cast<DecideScopeCheckKind>(StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 3, "DecideScopeCheckKind", value));
 }
 
+const StringUtil::EnumStringLiteral *GetDecideSignatureFieldKindValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideSignatureFieldKind::VALUE), "VALUE" },
+		{ static_cast<uint32_t>(DecideSignatureFieldKind::DECISION), "DECISION" },
+		{ static_cast<uint32_t>(DecideSignatureFieldKind::BY_KEY), "BY_KEY" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideSignatureFieldKind>(DecideSignatureFieldKind value) {
+	return StringUtil::EnumToString(GetDecideSignatureFieldKindValues(), 3, "DecideSignatureFieldKind", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideSignatureFieldKind EnumUtil::FromString<DecideSignatureFieldKind>(const char *value) {
+	return static_cast<DecideSignatureFieldKind>(StringUtil::StringToEnum(GetDecideSignatureFieldKindValues(), 3, "DecideSignatureFieldKind", value));
+}
+
 const StringUtil::EnumStringLiteral *GetDecideSenseValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideSense::MAXIMIZE), "MAXIMIZE" },

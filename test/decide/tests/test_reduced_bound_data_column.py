@@ -19,20 +19,22 @@ from solver.types import ObjSense, SolverStatus, VarType
 
 @pytest.mark.per_clause
 @pytest.mark.correctness
-def test_column_bound_reduces_to_tightest_per_group(decidb_cli, oracle_solver):
+@pytest.mark.parametrize("scope", ["", "per grp: "], ids=["per-row", "per-key"])
+def test_column_bound_reduces_to_tightest_per_group(decidb_cli, oracle_solver, scope):
     """`sum(x) by (grp) <= cap`: each group takes the tightest of its own rows' caps.
 
-    The clause has no per key, so every row bounds its group's sum by its own cap.
+    With no per key every row bounds its group's sum by its own cap; under `per grp:`
+    group 'a''s two caps are two variants of its class (D64), which bound it alike.
     Group 'a' has two rows (caps 10 and 15) so its bound is MIN(10, 15) = 10; group
     'b' has one row (cap 7) so its bound is just 7. Verified against an independently
-    built model carrying the same per-row conjunction, not a hand-computed MIN.
+    built model carrying the same conjunction, not a hand-computed MIN.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(f"""
         SELECT id, grp, x FROM (
             VALUES (1, 'a', 10), (2, 'a', 15), (3, 'b', 7)
         ) t(id, grp, cap)
         DECIDE x(INT)
-        SUCH THAT sum(x) by (grp) <= cap
+        SUCH THAT {scope}sum(x) by (grp) <= cap
         MAXIMIZE SUM(x)
     """)
     gi, xi = cols.index("grp"), cols.index("x")
@@ -54,21 +56,6 @@ def test_column_bound_reduces_to_tightest_per_group(decidb_cli, oracle_solver):
 
     assert by_group == {"a": 10, "b": 7}
     assert sum(by_group.values()) == pytest.approx(result.objective_value)
-
-
-@pytest.mark.per_clause
-@pytest.mark.error
-def test_column_bound_varying_within_a_per_class_does_not_determine(decidb_cli):
-    """The `per grp:` spelling of the clause above generates it once per class, so a
-    cap that varies within the class is refused rather than collapsed to the tightest."""
-    decidb_cli.assert_error("""
-        SELECT id, grp, x FROM (
-            VALUES (1, 'a', 10), (2, 'a', 15), (3, 'b', 7)
-        ) t(id, grp, cap)
-        DECIDE x(INT)
-        SUCH THAT per grp: sum(x) by (grp) <= cap
-        MAXIMIZE SUM(x)
-    """, match=r"per grp does not determine cap\. grp = 'a' has more than one value: 10, 15\.")
 
 
 @pytest.mark.per_clause

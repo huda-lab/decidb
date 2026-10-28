@@ -55,7 +55,7 @@ The bound side is reduced by its own evaluator rather than folded into the decis
 
 **Semantics.** The evaluator follows the construction order every reducer takes (paper §3.2.2): the rows its `by` selects among the clause's kept rows → its own `when` → one value per class of its own key, de-duplicated → aggregation. A reducer's own `when` scopes only that reducer, so the bound is *not* narrowed by a filter on the left side: in `sum(when a: x) <= min(b)`, `min(b)` still ranges over every kept row.
 
-**A row-varying bound** — a plain data column (C1) or a correlated subquery — with no `per` collapses to the single bound the per-tuple conjunction implies for `<=`/`<`/`>=`/`>`: MIN for `<=`/`<`, MAX for `>=`/`>`, per paper §3.2.1. Under an explicit `per K:` the bound must instead be determined by `K` (`../scope/done.md` §5). `=` has no such collapse and is refused as a contradiction when the values genuinely differ (two different single numbers can't both be *the* sum). `<>` also has no collapse, but for the opposite reason: nothing contradicts, so every excluded value is kept rather than reduced to one (C3) — `SUM(x) <> 500 AND SUM(x) <> 350` within one group, not just the tighter of the two. Both are Standing Decision 3.
+**A row-varying bound** — a plain data column (C1) or a correlated subquery — with no `per` collapses to the single bound the per-tuple conjunction implies for `<=`/`<`/`>=`/`>`: MIN for `<=`/`<`, MAX for `>=`/`>`, per paper §3.2.1. Under an explicit `per K:` each value of the bound in a class is a variant of its own (`../scope/done.md` §5, D64), which bounds the group alike. `=` has no such collapse and is refused as a contradiction when the values genuinely differ (two different single numbers can't both be *the* sum). `<>` also has no collapse, but for the opposite reason: nothing contradicts, so every excluded value is kept rather than reduced to one (C3) — `SUM(x) <> 500 AND SUM(x) <> 350` within one group, not just the tighter of the two. Both are Standing Decision 3.
 
 **AVG on the right** keeps its fractional value, including when mixed with other terms (`<= 2 * avg(col)`). The optimizer's AVG→SUM rewrite would redeclare the node with SUM's integral type while its value stays fractional, so `RewriteAvgInExpression` **skips any AVG with no decision variable** — there is nothing to linearize in one, and DuckDB's `AVG` already returns `DOUBLE`.
 
@@ -79,7 +79,7 @@ SUM(x + cap)                -- valid: x is per row, means SUM(x) + n·cap
 
 `SUM(opening_cost * cap)` varies per row and its reduction is unambiguous — a standard
 scalar-times-vector product. The colon form follows the same rule: a query-wide decision
-is row-invariant, so the key determines it and it contributes uniformly to every tuple,
+is row-invariant, so it splits no tuple and it contributes uniformly to every tuple,
 but a keyed reducer whose entire body is query-wide decisions and constants is rejected
 for the same "nothing to reduce over" reason.
 
@@ -134,7 +134,8 @@ scope already used, just for each relation in the list. A row is a duplicate onl
 it repeats on *every* named relation's key at once, so naming a relation removes the
 fan-out it would otherwise contribute, and a relation left unnamed still contributes
 its fan-out uncollapsed. `expr` may draw columns and decisions from any of the named
-relations — whatever their key determines (the DETERMINES check of `sum(per D, T: e)`) —
+relations — one value per variant of each tuple of the composite key (D65), as for
+`sum(per D, T: e)` —
 and the relation list is order-independent — `D, T` and `T, D` resolve to the same scope.
 
 One consequence of that identity rule is worth stating: with exactly two relations in

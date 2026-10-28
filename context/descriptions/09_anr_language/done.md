@@ -45,6 +45,51 @@ that implements it ships. Phase 0 shipped the same day and changed no engine cod
 - Found on the way: a bound-side `count(e)` refuses a NULL instead of counting the
   non-NULL values ([`../06_issues/bugs/todo.md`](../06_issues/bugs/todo.md)).
 
+## The full algorithm — phase 1: variant signatures
+
+Shipped 2026-10-28. A scoped expression is one instance per class of its key and distinct
+value of its **signature** — the tuple of what its body reads once per class — instead of
+the determination error (D64; deck pp. 34–40; `syntax_reference.md` §7.1):
+
+- **Fields** (D77): a maximal subtree with no decision and no reducer, by value, the data
+  terms of one additive context summed into one so written associativity never changes
+  the count; a decision by instance (its row, or its class); a reducer's `by` key.
+  `DecideCanonicalizer::BuildConstraintSignatures` / `BuildObjectiveSignatures` read them
+  off the canonical tree into `LogicalDecide::signatures` (`DecideSignature`, property
+  221; `objective_signature`, 222), leaving out a field the key already holds, so a clause
+  the old rule accepted keeps today's model.
+- **Clauses**: a `per K:` wrapper carries `__signature_<i>__`; execution numbers the kept
+  rows by variant (`BuildSignatureIds`) and the rows shape emits one row per variant at
+  its first row. The aggregate shape and the easy MIN/MAX already cover every variant of a
+  group with its tightest bound, `=` still naming two different values a contradiction.
+- **A reducer's own `per`, and the colon form** (D65): a reducer whose body reads a value
+  its key does not fix gets a scope of its own (`EntityScopeInfo::signature`) whose
+  entities are the variants, so the existing de-duplication keeps one value per variant
+  everywhere a qualifier is read. This is the trap P2 named: `sum(per D: D.cost * open +
+  T.unit * ship)` counts a depot once per route. EXPLAIN ANALYZE prints the count under
+  the clause (*"↳ sum(per D: ...): 3 values from 2 classes, one per distinct (T.unit,
+  ship) within a class"*), and a `per` clause's (*"per t.g: 2 constraints from 1 class,
+  ..."*). Plain EXPLAIN runs nothing, so it cannot count.
+- **The objective** is produced once (D66): a second variant over its kept rows stops the
+  query, naming the field — *"DECIDE objective: 'w' takes more than one value over the
+  kept rows (3, 5), so the objective would be produced more than once; move it inside a
+  reducer or fix it with when."*
+- **DIAGNOSE** labels a variant by its class and its own values where its class has more
+  than one (`a, 2`).
+- **Retired**: the `DETERMINES` builders and both determination messages (the enum value
+  stays, never built); `DecideScopeCheck`'s value, decision and texts. `_scope_oracle`
+  reads variants off its own statements, and `_anr_oracle`'s fields were aligned to the
+  engine's (a decision is a field by instance whatever its coefficient, D77).
+- Tests: `test_anr_variants.py` (the phase-1 fixtures, model size, NULL, `=`, `<>`,
+  EXPLAIN ANALYZE, DIAGNOSE); `test_scope_variants.py`, which replaced
+  `test_scope_determination.py`; the 360 grid cells the old rule refused now answer,
+  judged by the oracle; every pin of the old message became an answer or the objective's
+  error. No "does not determine" remains in `test/` but the frame partition phrase of
+  phase 4.
+- Corrected in the plan: two classes with equal bodies are two model rows (nothing merges
+  them, and nothing needs to); `rows_stand_with_their_class` stays sound, since a row
+  stands with its variant's first row, which carries the same decisions and data.
+
 ## Item 1 — the scope grammar
 
 - The grammar accepts `per K: x(TYPE)` in a declaration, `[when c] [per K]:` in front of a
@@ -164,7 +209,7 @@ Built together, under D3–D8, D15 and D18. What the user sees: `syntax_referenc
 - Tests: `test/decide/tests/test_scope_generation.py` (constraint `when` and `per`),
   `test_scope_reducer_by.py` (`by`, MIN/MAX, AVG, `<>`, refusals),
   `test_scope_reducer_inner.py` (a reducer's own `when` and `per`),
-  `test_scope_determination.py` (the determination rule), `test_scope_objective.py`
+  `test_scope_variants.py` (variant signatures, phase 1), `test_scope_objective.py`
   (the objective), `test_scope_deck_examples.py` (deck examples 2, 3, 4, 6, 7 as written
   and fully explicit; example 7's D8 error), against `_scope_oracle.ScopedModel`, which
   follows the ANR definition literally; `_scope_cases.py` holds the shared data. The
@@ -359,8 +404,8 @@ the user sees: `syntax_reference.md` §10.3 (every removed spelling and its mess
   tree stored before the removal (D54). The colon form follows S4 (D38):
   `BindQualifiedReducer` builds an exact key over the listed relations' stored columns
   (`AddRelationColumns`, `SortedKey`, `FindOrCreateExactScope`) and tags the reducer
-  `COLON_FORM_TAG`, so it echoes as written; its data check runs at run time
-  (*"per D does not determine ..."*, D63) and a keyed decision inside it answers. `by` is
+  `COLON_FORM_TAG`, so it echoes as written; a body that reads a value `D` does not fix
+  is one value per variant (phase 1, D65), and a keyed decision inside it answers. `by` is
   admitted on `norm(e, p)` and `count(*)` (D34, D35). The whole-number gate
   (`ValidateDecideIntegralComparisonOperands`) applies to every clause, and
   `DecideValueIsWholeNumbered` gives the binder and the value rewrite one test.
@@ -434,9 +479,9 @@ the user sees: `syntax_reference.md` §10.3 (every removed spelling and its mess
 - A `when` that keeps no row is an error (*"DECIDE: when g = 'z' matches no rows."*, D4),
   and so is a group a reducer's own `when` empties (*"... has no rows for g = 'a'."*,
   D8, D18); both were skipped silently.
-- Under an explicit `per`, a bound that varies within a class is the determination error
-  (*"per g does not determine cap. g = 'a' has more than one value: 3, 5."*); with no
-  `per`, `sum(x) <= cap` still takes the tightest bound (S3).
+- Under an explicit `per`, a bound that varies within a class was the determination
+  error until phase 1, which makes each value a variant (D64); with no `per`,
+  `sum(x) <= cap` still takes the tightest bound (S3).
 - A flat `SUM(e) PER g` objective is refused, naming `sum(e)` (*"an objective is produced
   once"*).
 - A strict bound steps onto whole numbers: `MAX(x) > 12` gives 13, `MIN(x) < 3` gives 2,
@@ -447,7 +492,8 @@ the user sees: `syntax_reference.md` §10.3 (every removed spelling and its mess
   60`) and a decision beside a reducer are answered (VALUE shape); an easy
   `min(x) >= -5` makes `x` signed under every scope (D41); a MIN/MAX objective counts a
   member whose coefficient is zero; `MAXIMIZE sum(x) - w * s` with a row-varying `w` is
-  the determination error (*"per () does not determine w"*); a query-wide decision
+  an error (since phase 1: the objective would be produced more than once, D66); a
+  query-wide decision
   squared in the objective, and a reducer inside a reducer, are refused.
 - Golden corpus entry 44 (`3 - MAX(x) <= 0`, a hard MAX with a negative factor) is
   re-captured on both solvers: 10 rows become 6, the optimum is the same and the tie
@@ -560,14 +606,18 @@ not the code.
 | D60 | The scope oracle steps a strict sense onto whole numbers (`> K` → `floor(K) + 1`, `< K` → `ceil(K) - 1`), identical to stepping by one for a whole `K` |
 | D61 | `syntax_reference.md` §10.3 keeps the NULL-key and `per T` bullets beside the table |
 | D62 | The removed-`PER` message adds the NULL note: *"a NULL g is now its own group, so write when g is not null per g: to leave those rows out"* |
-| D63 | Determination and D8 messages print the colon form as written |
+| D63 | D8 messages print the colon form as written (the determination message it also covered is retired, D64) |
+| D64 | Variant signatures replace the determination errors: a scoped expression is one instance per class and distinct value of its tuple terms, its decisions' instances and its reducers' `by` keys, in constraints and reducer operands |
+| D65 | An inner `per` and the colon form follow D64 too: a tuple whose body varies is one value per variant, which EXPLAIN ANALYZE counts |
+| D66 | The objective is produced once: a second variant is an error saying it would be produced more than once |
+| D77 | A signature's data field is a maximal decision- and reducer-free subtree, read on the canonical tree so the data terms of one additive context are one field; a decision is a field by instance |
 
 | # | Call |
 |---|---|
 | S1 | `per row` is accepted as the written-out default |
 | S2 | Decisions are referenced by bare name; `D.open` is refused (D43) |
-| S3 | With no `per`, a constraint is per row, so `sum(x) <= cap` takes the tightest `cap`; with an explicit `per`, a varying bound is the determination error |
-| S4 | `SUM(D: e)` uses the same data check as `sum(per D: e)` |
+| S3 | With no `per`, a constraint is per row, so `sum(x) <= cap` takes the tightest `cap`; with an explicit `per`, each value of a varying bound is a variant (D64), which binds alike |
+| S4 | `SUM(D: e)` reads the same classes and variants as `sum(per D: e)` |
 | S6 | `per (a, b):` is refused with a message; parentheses mean only `per ()` |
 | S7 | Inside a DECIDE clause `when`, `per`, and `by` after a `)` are keywords; a column with such a name is quoted there |
 | S8 | `per` keys are columns and relations; expressions are allowed only in `by` |

@@ -63,14 +63,16 @@ not one the aggregate shape holds. The value rewrite adds one helper decision pe
 group and its definition row, so EXPLAIN shows `sum(ship) by (D) becomes a helper
 decision per group`.
 
-**Design.** When the `by` key determines the keyed decision — one instance of `open` per
-group, which a DETERMINES scope check can state — the comparison is one row per group
-with `open`'s column for that group: the aggregate shape with a decision beside the
-reducers. `ClassifyScoped` would admit such a decision into AGGREGATE, and the linear
-form and execution would place the group's instance column in the group's row.
+**Design.** When the `by` key fixes the keyed decision — one instance of `open` per
+group, which holds at plan time when the `by` key holds the decision's key columns — the
+comparison is one row per group with `open`'s column for that group: the aggregate shape
+with a decision beside the reducers. `ClassifyScoped` would admit such a decision into
+AGGREGATE, and the linear form and execution would place the group's instance column in
+the group's row. A group whose rows span two instances of `open` is two variants (D64),
+so a run-time variant of the shape would emit one row per (group, instance).
 
-**Decision needed.** Whether to add the shape, and whether the determination is a
-plan-time key comparison (the `by` key is the decision's `per` key) or a run-time check.
+**Decision needed.** Whether to add the shape, and whether to admit it only by the
+plan-time key comparison or also, through the signature, at run time.
 
 **Test.** The facility-location query against its VALUE-shape answer (same optimum,
 fewer columns and rows in the dump), on both solvers; a golden entry for the smaller

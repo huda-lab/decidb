@@ -114,29 +114,31 @@ SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(when priori
 ----
 Invalid Input Error: DECIDE optimization is unbounded. Prefix the query with DIAGNOSE to see which decision needs a bound.
 
-# reducer: per inside, with a column key
-statement error
+# reducer: per inside, with a column key (each row's ship is a variant of its depot)
+query II rowsort
 SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE sum(per D.depotID: D.opening_cost * ship);
 ----
-Invalid Input Error: DECIDE: per D.depotID does not determine the decision ship (in sum(per D.depotID: D.opening_cost * ship)). D.depotID = 'D1' covers more than one ship.
+1	0
+2	0
+3	0
 
-# reducer: per () inside AVG
-statement error
-SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) <= avg(per (): demand) MAXIMIZE SUM(ship);
+# reducer: per () inside AVG (one value per distinct demand: 10, 20, 30)
+query I
+SELECT sum(ship) FROM (SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) <= avg(per (): demand) MAXIMIZE SUM(ship));
 ----
-Invalid Input Error: DECIDE: per () does not determine demand (in avg(per (): demand)). The kept rows have more than one value: 10.0, 20.0.
+20
 
-# reducer: when and per inside, by after
+# reducer: when and per inside, by after (the objective is produced once)
 statement error
 SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT ship <= 5 MINIMIZE max(when S.priority per D: ship - D.capacity) by (D.region);
 ----
-Invalid Input Error: DECIDE: per () does not determine D.region (in by (D.region)). The kept rows have more than one value: 'East', 'West'.
+Invalid Input Error: DECIDE objective: 'D.region' in by (D.region) takes more than one value over the kept rows ('East', 'West'), so the objective would be produced more than once; move it inside a reducer or fix it with when.
 
-# reducer: by on the kept colon form, which takes the data check of sum(per D: e) (S4)
-statement error
-SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT SUM(D: ship) by (D.region) <= 100 MAXIMIZE SUM(ship);
+# reducer: by on the kept colon form, which reads what sum(per D: e) reads (S4)
+query I
+SELECT sum(ship) FROM (SELECT shipmentID, ship FROM Shipment S JOIN Depot D USING (depotID) DECIDE ship(INT) SUCH THAT SUM(D: ship) by (D.region) <= 100 MAXIMIZE SUM(ship));
 ----
-Invalid Input Error: DECIDE: per D does not determine the decision ship (in sum(D: ship)).
+200
 
 # objective: when in front
 statement ok

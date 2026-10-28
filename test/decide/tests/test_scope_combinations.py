@@ -5,8 +5,9 @@ both, SUM / AVG / MIN / MAX, over a per-row decision and one keyed by `h` (the o
 reducer's `per t.h` can count once) -- every cell against `_scope_oracle.ScopedModel`.
 
 Two outcomes are allowed, and nothing else: the oracle's optimum, or the error the
-language defines for the data (the oracle raises it: a key that does not determine, a
-`when` that keeps no row, a reducer with no row for a group), with the same phrase.
+language defines for the data (the oracle raises it: a `when` that keeps no row, a
+reducer with no row for a group), with the same phrase. A class whose rows differ in
+what the body reads is one instance per variant (D64), never an error.
 Every cell is handled, so no cell is refused; never a wrong answer, never an internal
 error.
 """

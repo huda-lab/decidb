@@ -145,6 +145,18 @@ struct DecideScopeChecks {
 	vector<DecideScopeCheck> checks;
 };
 
+//! What building the variant signatures of the user's clauses reads and writes
+//! (LogicalDecide::signatures).
+struct DecideSignatures {
+	const vector<DecideGroupKey> &group_keys;
+	//! A relation-qualified reducer whose body has a field gets a scope of its own,
+	//! appended here (EntityScopeInfo::signature), and its tag names it.
+	vector<EntityScopeInfo> &entity_scopes;
+	vector<DecideSignature> signatures;
+	//! The objective's, or INVALID_INDEX.
+	idx_t objective = DConstants::INVALID_INDEX;
+};
+
 class DecideCanonicalizer {
 public:
 	//! Provenance-only form: no table-index evidence is available, so arbitrary column
@@ -180,18 +192,28 @@ public:
 	unique_ptr<Expression> CanonicalizeTree(const Expression &constraints) const;
 
 	//! The scope checks of every clause of the user's SUCH THAT tree, appended to `scope`
-	//! in clause order. Read-only, from the clauses as bound: before CanonicalizeTree,
-	//! which drops the `per K:` of a clause in the aggregate shape -- one model row per
-	//! `by` group already is one per class there -- while the checks are what that key
-	//! still requires of the data. Called once, by the planner; a rewrite's clause
-	//! (AddConstraint) never builds any.
+	//! in clause order: each `when` keeps a row (D4), and each reducer's own `when` a row of
+	//! every `by` group (D8). Read-only, from the clauses as bound. Called once, by the
+	//! planner; a rewrite's clause (AddConstraint) never builds any.
 	void BuildConstraintScopeChecks(const Expression &constraints, DecideScopeChecks &scope) const;
 
-	//! The scope checks of the objective, built from
-	//! the bound objective before CanonicalizeObjective: its `when` keeps a row, it is
-	//! one value over the kept rows (`per ()`), and each reducer reads a row and is
-	//! determined by its own `per`.
+	//! The scope checks of the objective, built from the bound objective before
+	//! CanonicalizeObjective: its `when` keeps a row, and each reducer reads a row.
 	void BuildObjectiveScopeChecks(const Expression &objective, DecideScopeChecks &scope) const;
+
+	//! The variant signature of every scoped expression of the canonical SUCH THAT tree
+	//! with a field (syntax_reference.md §7.1; D64): each `per K:` clause, its wrapper
+	//! tagged with it (SIGNATURE_TAG_PREFIX), and each relation-qualified reducer, given a
+	//! scope of its own (EntityScopeInfo::signature). Its fields are the tuple terms and
+	//! decisions outside reducers and the reducers' `by` keys, read on the canonical tree
+	//! so the data terms of one additive context are one field (D77). Called once, by the
+	//! planner, right after CanonicalizeTree.
+	void BuildConstraintSignatures(Expression &constraints, DecideSignatures &out) const;
+
+	//! The objective's signature, `out.objective` -- it is produced once (D66), so
+	//! execution refuses a field with a second value -- and its qualified reducers', after
+	//! CanonicalizeObjective. The two-level form has none.
+	void BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const;
 
 	//! Quote expressions in the scope refusals as the query writes them, from
 	//! these names, rather than through the bound tree's own names. Set by the planner,
@@ -391,10 +413,24 @@ private:
 	//! comparison (or other constraint) as bound.
 	void BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing,
 	                            DecideScopeChecks &scope) const;
-	//! The checks of one reducer: a row in every `by` group (D8), and its own `per`
-	//! determining its body. `rows` is the clause's `when`, null for every row.
+	//! The check of one reducer: a row in every `by` group (D8). `rows` is the clause's
+	//! `when`, null for every row.
 	void BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
 	                             DecideScopeChecks &scope) const;
+
+	//! The signature fields `expr` reads (D64, D77), appended to `fields` unless there or in
+	//! `key` already: a decision by instance, a reducer's `by` key, and data by value -- the
+	//! data terms of one additive context summed into one field.
+	void CollectSignatureFields(const Expression &expr, const DecideSignatures &out, Clause clause,
+	                            const vector<unique_ptr<Expression>> &key,
+	                            vector<DecideSignatureField> &fields) const;
+	idx_t AddSignature(DecideSignatures &out, const Expression *rows, vector<unique_ptr<Expression>> key,
+	                   vector<DecideSignatureField> fields, string text, idx_t source_clause_id) const;
+	//! Gives every relation-qualified reducer in `expr` whose body has a field its
+	//! signature and a scope of its own. `rows` is the clause's `when`.
+	void SignQualifiedReducers(Expression &expr, const Expression *rows, Clause clause, idx_t source_clause_id,
+	                           DecideSignatures &out) const;
+	void BuildConstraintSignatures(Expression &expr, const Expression *when, DecideSignatures &out) const;
 
 	//! Rebuild an additive chain from terms, negating every sign when `negate`
 	//! is set (used for the terms that crossed the relation).

@@ -86,9 +86,9 @@ decision-free expression, and the physical reduction (`ReduceAggregateRhsPerGrou
 not care where its per-row value came from. `=` refuses a bound that genuinely varies (a
 contradiction: two different single numbers can't both be *the* sum); `<>` instead
 keeps every value it took (C3) — see "Reducers as a Bound" in
-[`../sql_functions/done.md`](../sql_functions/done.md). Under an explicit `per K:` the
-bound must instead be determined by `K` (`per grp: price - ...` needs one `price` per
-`grp`). A query-wide (`per ()`) decision as the bound keeps the aggregate shape, because
+[`../sql_functions/done.md`](../sql_functions/done.md). Under an explicit `per K:` each
+value of the bound in a class is a variant of its own (D64; `per grp: price - ...` is one
+constraint per `grp` and `price`), which bounds the group alike. A query-wide (`per ()`) decision as the bound keeps the aggregate shape, because
 it is row-invariant; a per-row or keyed one (`sum(x) <= y`) takes the value shape — the
 reducer becomes a helper decision and each row bounds it by its own `y`.
 
@@ -147,7 +147,7 @@ Two stages are involved, and the split is deliberate. `DecideCanonicalizer` **pe
 
 Because the swap is what makes it exact, `MIN`/`MAX` fold only for a factor whose sign is known at plan time. `SUM` and `AVG` distribute over any factor and always fold.
 
-**A row-varying factor is a tuple term of the constraint.** `weight * sum(x) <= 4` is one constraint per kept row, each scaling the one total by that row's `weight`: the reducer becomes a helper decision (the value shape, `../scope/done.md` §3) and each row is `weight * helper <= 4`. A correlated subquery as the factor is the same (`(SELECT k FROM s WHERE s.sid = t.id) * sum(x) <= 12`). Under `per K:` the key must determine the factor (*"DECIDE: per grp does not determine w. ..."*). The per-row-coefficient reading is a different constraint, spelled `sum(weight * x)`.
+**A row-varying factor is a tuple term of the constraint.** `weight * sum(x) <= 4` is one constraint per kept row, each scaling the one total by that row's `weight`: the reducer becomes a helper decision (the value shape, `../scope/done.md` §3) and each row is `weight * helper <= 4`. A correlated subquery as the factor is the same (`(SELECT k FROM s WHERE s.sid = t.id) * sum(x) <= 12`). Under `per K:` each value of the factor in a class is a variant (D64), one row each. The per-row-coefficient reading is a different constraint, spelled `sum(weight * x)`.
 
 **In the objective a row-varying factor is refused**, since the objective is produced once and no row's value can scale it:
 
@@ -177,7 +177,7 @@ A term whose own `when` leaves a `by` group with no row is an error before solvi
 
 **Correlated scalar subqueries** are delegated to DuckDB's standard `ExpressionBinder`, which decorrelates them into joins via `PlanSubqueries`, producing per-row values:
 - **Per-row constraints**: each row gets its own RHS value from the join — `x <= (SELECT budget FROM Depts WHERE Depts.id = items.dept_id)`.
-- **Beside a reducer**: a correlated value is a row-varying bound like a column — with no `per`, the tightest value per `by` group (`sum(x) <= (SELECT k FROM s WHERE s.sid = t.id)`); under `per K:` it must be determined by `K`. As a factor on a reducer it takes the value shape (above).
+- **Beside a reducer**: a correlated value is a row-varying bound like a column — with no `per`, the tightest value per `by` group (`sum(x) <= (SELECT k FROM s WHERE s.sid = t.id)`); under `per K:` each of its values in a class is a variant (D64). As a factor on a reducer it takes the value shape (above).
 
 A data-only *aggregate* bound (`sum(x * val) <= sum(val)`, distinct from a subquery) stays on the right and is reduced to one value per group there — see "Data-Only Aggregate RHS in Aggregate Constraints" and "Reducers as a Bound" in [../sql_functions/done.md](../sql_functions/done.md).
 

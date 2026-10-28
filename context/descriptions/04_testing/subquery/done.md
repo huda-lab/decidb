@@ -16,9 +16,8 @@ All oracle-verified:
   `per ps_suppkey:`, where every class has one row, in
   `test_correlated_subquery_aggregate_per_rhs_tightest_per_group`); a reducer's own
   `when` does not narrow the rows the bound is read on
-  (`test_correlated_subquery_rhs_ignores_aggregate_local_when`). Under a `per` key a
-  bound that varies within a class is the determination error
-  (`test_scope_determination.py`).
+  (`test_correlated_subquery_rhs_ignores_aggregate_local_when`). Under a `per` key each
+  value a bound takes within a class is a variant of its own (`test_scope_variants.py`).
 
 ### Error cases
 

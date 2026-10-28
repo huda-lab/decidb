@@ -48,6 +48,13 @@ struct EntityScopeInfo {
     //! Deliberately absent from the serialization: the optimizer creates these scopes,
     //! and an optimized plan is never serialized.
     idx_t value_link = DConstants::INVALID_INDEX;
+    //! A relation-qualified reducer's scope of its own (DecideCanonicalizer::
+    //! BuildConstraintSignatures): the classes of the reducer's key, each split by the
+    //! values of its body's signature (D64, D65), an index into LogicalDecide::signatures.
+    //! Its entities are data expressions rather than key columns, so `entity_key_bindings`
+    //! is empty and execution builds the mapping from the signature. INVALID_INDEX for every
+    //! other scope.
+    idx_t signature = DConstants::INVALID_INDEX;
 
     //! Generated from `storage/serialization/nodes.json`. `entity_key_physical_indices`
     //! is deliberately absent: it is resolved at physical planning, after the only point
@@ -80,28 +87,63 @@ struct DecideScopeCheck {
 	DecideScopeCheckKind kind = DecideScopeCheckKind::KEEPS_A_ROW;
 	//! The rows considered: those `rows` keeps, NULL dropping a row; null for every row.
 	unique_ptr<Expression> rows;
-	//! DETERMINES: the classes. READS_A_ROW: the groups. Empty for one class or group.
+	//! READS_A_ROW: the groups. Empty for one group.
 	vector<unique_ptr<Expression>> key;
-	//! DETERMINES: the data value each class shows once; null when it is `decision`.
-	unique_ptr<Expression> value;
-	//! DETERMINES: the decision (index into decide_variables) each class holds once.
-	idx_t decision = DConstants::INVALID_INDEX;
-	//! DETERMINES inside a reducer's `per`, READS_A_ROW: the reducer's own `when`.
+	//! READS_A_ROW: the reducer's own `when`.
 	unique_ptr<Expression> filter;
-	//! What the message quotes, as written. KEEPS_A_ROW: `subject` is the condition.
-	//! DETERMINES: `subject` the key (`D.depotID`, `()`), `object` the value or the
-	//! decision, `context` where it stands (`in by (S.region)`, `declared per row`).
-	//! READS_A_ROW: `subject` the reducer (`sum(when S.priority: ship)`).
+	//! What the message quotes, as written. KEEPS_A_ROW: the condition. READS_A_ROW: the
+	//! reducer (`sum(when S.priority: ship)`).
 	string subject;
-	string object;
-	string context;
-	//! How a message names each key expression it describes a class or group by
+	//! How a message names each key expression it describes a group by
 	//! (`D.depotID` in `D.depotID = 'D1'`), in key order: a prefix of `key`.
 	vector<string> key_names;
 
 	//! Generated from `storage/serialization/nodes.json`.
 	void Serialize(Serializer &serializer) const;
 	static DecideScopeCheck Deserialize(Deserializer &deserializer);
+};
+
+//! One field of a variant signature: a value the scoped expression's body reads once per
+//! instance (syntax_reference.md §7.1; D64, D77).
+struct DecideSignatureField {
+	DecideSignatureFieldKind kind = DecideSignatureFieldKind::VALUE;
+	//! VALUE: the data expression, a maximal subtree with neither a decision nor a reducer
+	//! -- the data terms of one additive context summed into one (D77).
+	unique_ptr<Expression> value;
+	//! DECISION: the decision (index into decide_variables), per row or keyed.
+	idx_t decision = DConstants::INVALID_INDEX;
+	//! BY_KEY: the reducer's `by` key (index into group_keys).
+	idx_t group_key = DConstants::INVALID_INDEX;
+	//! The field as a message names it: `P.lim`, `ship`, `by (P.region)`.
+	string text;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideSignatureField Deserialize(Deserializer &deserializer);
+};
+
+//! The variant signature of one scoped expression -- a `per K:` clause, a reducer with its
+//! own `per` (or the colon form), or the objective (syntax_reference.md §7.1; D64): its
+//! rows split into classes by `key`, and each class into one instance per distinct value
+//! of `fields` over its rows. Built once by DecideCanonicalizer from the canonical clauses,
+//! in place of the determination checks; only an expression with a field has one.
+struct DecideSignature {
+	//! The rows it reads: its `when`, and a reducer's own; null for every row. A field is
+	//! never computed anywhere else.
+	unique_ptr<Expression> rows;
+	//! The `per` key's expressions; empty for `per ()`.
+	vector<unique_ptr<Expression>> key;
+	vector<DecideSignatureField> fields;
+	//! How a plan names the scoped expression: a clause's key as written (`per P.depotID`),
+	//! a reducer as written (`sum(per D: ...)`), `the objective`.
+	string text;
+	//! The clause it belongs to (LogicalDecide::constraint_sources); INVALID_INDEX for the
+	//! objective's.
+	idx_t source_clause_id = DConstants::INVALID_INDEX;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideSignature Deserialize(Deserializer &deserializer);
 };
 
 //! A source column's logical identity and the name the user wrote for it.
@@ -346,6 +388,10 @@ public:
             EXTREMUM_PER_GROUP,           //!< a two-level objective's inner MIN/MAX, per group
             EXTREMUM_PER_GROUP_PINNED,    //!< the same, pinned by indicator rows
             NOT_EQUAL,                    //!< `<>`, two conditional rows with an indicator
+            //! What the data made of a scoped expression's classes (D64): more instances
+            //! than classes. Recorded by execution, so only EXPLAIN ANALYZE prints it, and
+            //! `subject` is the whole line.
+            VARIANTS,
         };
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         Kind kind = Kind::ABS_AUXILIARY;
@@ -424,6 +470,13 @@ public:
     //! The run-time requirements of every clause, in
     //! clause order; PhysicalDecide runs them before it formulates anything.
     vector<DecideScopeCheck> scope_checks;
+    //! The variant signature of every scoped expression with a field (D64), indexed by
+    //! SIGNATURE_TAG_PREFIX on a `per K:` wrapper and by EntityScopeInfo::signature for a
+    //! reducer's own `per`. Built by the planner with the scope checks.
+    vector<DecideSignature> signatures;
+    //! The objective's signature: it is produced once, so execution refuses a second
+    //! instance (D66). INVALID_INDEX when the objective has no field.
+    idx_t objective_signature = DConstants::INVALID_INDEX;
 
     //! BoundColumnRefExpressions for every entity-key column (flattened in scope order).
     //! These live here so that DuckDB's binder initial column_id selection AND the

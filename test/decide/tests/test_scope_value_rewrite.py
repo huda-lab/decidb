@@ -585,13 +585,21 @@ def test_a_helper_that_can_be_fractional_takes_no_step(decidb_cli, op, why):
     assert decidb_cli.execute(_ship_query("ship + sum(ship + 0.5) by (D.region) >= 40"))[0]
 
 
+@pytest.mark.correctness
+def test_a_variant_of_the_rewritten_clause_reads_its_own_helper(decidb_cli, scope_solver):
+    """D64 on the clause as written: under `per D.region` the per-row `ship` and the
+    depot's helper make each row an instance of its own, each against its own depot's
+    total."""
+    sql = _ship_query("per D.region: ship <= 0.5 * sum(ship) by (D.depotID)")
+    clause = Scoped((X,), "<=", (_ship_reduce(by=("depotID",), factor=0.5),), per=("region",))
+    ships = _judged(decidb_cli, scope_solver, sql, ScopedModel(joined(), SHIP), [SHIP_BOUND, clause])
+    assert ships == [10, 10, 15, 15, 0]
+
+
 @pytest.mark.error
 def test_the_scope_checks_still_guard_the_rewritten_clause(decidb_cli):
-    """The checks run on the clause as written: a `per` that does not determine the
-    decision beside the reducer, and a reducer's `when` leaving a `by` group empty."""
-    assert ("DECIDE: per D.region does not determine the decision ship (declared per row). D.region = 'East' "
-            "covers more than one ship.") in error_of(decidb_cli,
-                                                     _ship_query("per D.region: ship <= 0.5 * sum(ship) by (D.depotID)"))
+    """The checks run on the clause as written: a reducer's `when` leaving a `by` group
+    empty."""
     shipments = SHIPMENTS[:4] + ((5, "D3", 25, False, 3, 1, "active"),)
     assert "DECIDE: sum(when S.priority: ship) has no rows for D.depotID = 'D3'." in error_of(
         decidb_cli, _ship_query("ship <= sum(when S.priority: ship) by (D.depotID)", shipments=shipments))

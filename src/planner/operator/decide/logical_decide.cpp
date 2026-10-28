@@ -136,13 +136,26 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 		}
 	}
 	for (auto &check : scope_checks) {
-		for (auto *expr : {&check.rows, &check.value, &check.filter}) {
+		for (auto *expr : {&check.rows, &check.filter}) {
 			if (*expr) {
 				callback(expr);
 			}
 		}
 		for (auto &expr : check.key) {
 			callback(&expr);
+		}
+	}
+	for (auto &signature : signatures) {
+		if (signature.rows) {
+			callback(&signature.rows);
+		}
+		for (auto &expr : signature.key) {
+			callback(&expr);
+		}
+		for (auto &field : signature.fields) {
+			if (field.value) {
+				callback(&field.value);
+			}
 		}
 	}
 }

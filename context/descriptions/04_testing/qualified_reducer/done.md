@@ -89,17 +89,15 @@ makes the row-weighted and identity-weighted optima diverge.
   inside a multi-relation list
   (`test_unknown_relation_in_multi_relation_qualifier_rejected`), and a row-invariant
   body, i.e. a query-wide decision standing alone inside the reducer
-  (`test_query_wide_decision_alone_inside_qualified_reducer_rejected`). At run time,
-  the data check `sum(per n: ...)` takes: a column from another relation ("per n does
-  not determine c.c_acctbal (in sum(n: c.c_acctbal * keepN))") and a per-row decision
-  ("per n does not determine the decision y (in sum(n: ...))").
+  (`test_query_wide_decision_alone_inside_qualified_reducer_rejected`).
+- **Variants** (D65, correctness tier): a column from another relation is one value per
+  distinct value within each nation, judged against DuckDB's `SUM(DISTINCT c_acctbal)`
+  (`test_foreign_column_inside_qualified_reducer_is_one_value_per_variant`); a per-row
+  decision makes every row a value of its own, so `SUM(n: ...)` answers row for row as
+  the unqualified form (`test_row_scoped_decision_inside_qualified_reducer_is_one_value_per_row`).
 
 ## Caveats
 
-- `test_row_scoped_decision_inside_qualified_reducer_rejected` pins settled
-  semantics: `n` does not determine a per-row decision, so de-duplicating a
-  repeated identity cannot pick one of its values. The message quotes the reducer
-  as written.
 - `test_query_wide_decision_alone_inside_qualified_reducer_rejected` pins the
   general row-invariance rule (a body with nothing to aggregate over), while the
   paper's §3.2.2 carve-out for a weighted query-wide decision is covered by the

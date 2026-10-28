@@ -4,9 +4,10 @@ omitted `per` is `per ()` -- `when` in front filters the rows for the whole obje
 `outer(per k: inner(e) by (k))` evaluates `inner` once per class of `k` (NULL a class)
 and `outer` over those values.
 
-A tuple term must be determined by the empty key: a decision outside the reducers counts
-once, which needs a single instance over the kept rows, and a data value beside it must
-be one value there. Optima are judged against `_scope_oracle.ScopedModel`.
+Its one class must hold one variant (D66): a decision outside the reducers counts once,
+which needs a single instance over the kept rows, and a data value beside it must be one
+value there, else the objective would be produced more than once. Optima are judged
+against `_scope_oracle.ScopedModel`.
 """
 
 import itertools
@@ -107,14 +108,14 @@ def test_a_keyed_decision_with_one_instance_counts_once(decidb_cli, scope_solver
 @pytest.mark.error
 @pytest.mark.parametrize("objective, message", [
     pytest.param("MAXIMIZE when S.priority: sum(ship) + D.capacity * s",
-                 "DECIDE: per () does not determine D.capacity. The kept rows have more than one value: 25, 40.",
-                 id="data-value"),
+                 "DECIDE objective: 'D.capacity' takes more than one value over the kept rows (25, 40), so the "
+                 "objective would be produced more than once", id="data-value"),
     pytest.param("MAXIMIZE when S.priority: ship",
-                 "DECIDE: per () does not determine the decision ship (declared per row). The kept rows cover more "
-                 "than one ship.", id="per-row-decision"),
+                 "DECIDE objective: the decision 'ship' (declared per row) has more than one instance over the kept "
+                 "rows, so the objective would be produced more than once", id="per-row-decision"),
     pytest.param("MAXIMIZE sum(ship) by (D.region)",
-                 "DECIDE: per () does not determine D.region (in by (D.region)). The kept rows have more than one "
-                 "value: 'East', 'West'.", id="top-level-by"),
+                 "DECIDE objective: 'D.region' in by (D.region) takes more than one value over the kept rows ('East', "
+                 "'West'), so the objective would be produced more than once", id="top-level-by"),
     pytest.param("MAXIMIZE when S.priority: sum(ship) + s * s",
                  "DECIDE objective: 's * s' multiplies decisions outside a reducer, which is not supported yet",
                  id="product-outside-a-reducer"),

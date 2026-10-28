@@ -167,6 +167,9 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                                         DecideRelationNames(bind_context, statement.decide_index)};
         DecideSourceNames message_names {scope_checks.source_fragments, scope_checks.entity_scopes,
                                          scope_checks.group_keys, scope_checks.relations};
+        // The variant signatures (D64), from the canonical clauses: one instance per class
+        // and distinct value of each scoped expression's fields.
+        DecideSignatures signatures {statement.decide_group_keys, statement.entity_scopes, {}};
         {
             DecideCanonicalizer canonicalizer(context, statement.decide_index,
                                                statement.variable_scopes,
@@ -176,6 +179,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
             if (statement.decide_constraints) {
                 canonicalizer.BuildConstraintScopeChecks(*statement.decide_constraints, scope_checks);
                 statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
+                canonicalizer.BuildConstraintSignatures(*statement.decide_constraints, signatures);
                 canonicalizer.VerifyCanonical(*statement.decide_constraints);
                 FinalizeConstraintSourceInfo(*statement.decide_constraints,
                                              statement.decide_constraint_sources,
@@ -197,6 +201,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
                 statement.decide_objective = canonicalizer.CanonicalizeObjective(
                     *statement.decide_objective, statement.objective_constant_offset);
+                canonicalizer.BuildObjectiveSignatures(*statement.decide_objective, signatures);
                 canonicalizer.VerifyCanonicalObjective(*statement.decide_objective);
                 canonical_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
                 if (canonical_objective == written_objective) {
@@ -235,6 +240,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         }
         decide_op->entity_key_expressions = std::move(statement.entity_key_expressions);
         decide_op->scope_checks = std::move(scope_checks.checks);
+        decide_op->signatures = std::move(signatures.signatures);
+        decide_op->objective_signature = signatures.objective;
         decide_op->group_keys = std::move(statement.decide_group_keys);
         // ne_clause_labels, ABS aux vars, and MIN/MAX indicator links +
         // objective types are created by DecideOptimizer (runs after plan creation)

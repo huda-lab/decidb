@@ -27,9 +27,9 @@ All oracle-verified:
   class of its own; `when grp is not null per grp:` leaves those rows out. Both forms
   are judged by the scope oracle.
 - **Bounds that vary within a group** (`test_per_clause.py`): with no `per` key,
-  `sum(x) by (grp) <> cap` is generated once per row, so every excluded value is kept;
-  under `per grp:` a bound that varies within a class is the determination error
-  (`test_per_not_equal_varying_bound_under_per_key_does_not_determine`).
+  `sum(x) by (grp) <> cap` is generated once per row, so every excluded value is kept,
+  and under `per grp:` each value is a variant of the class with the same answer
+  (`test_per_not_equal_varying_bound_keeps_every_exclusion`, both spellings).
 - **Qualified key columns** (`test_per_qualified.py`): one and several qualified
   columns, mixed qualified and bare, equivalence with the unqualified spelling, a
   table alias, a qualified column in a `when` and in the two-level objective, and an

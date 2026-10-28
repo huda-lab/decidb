@@ -235,6 +235,17 @@ No manual instrumentation. DuckDB's `PipelineExecutor` measures time in each
 operator's `Sink`, `Finalize` and `Source` phases automatically — which for DECIDE
 usefully separates materialization, model building plus solve, and readback.
 
+**What the data made of the classes.** Under a clause whose `per` classes held more than
+one variant (D64), or a reducer whose own `per` read more values than classes (D65), one
+more account line says so: `↳ per t.g: 2 constraints from 1 class, one per distinct (a)
+within a class`, `↳ sum(per D: ...): 3 values from 2 classes, one per distinct (T.unit,
+ship) within a class`. Only the data can tell, so execution records it
+(`PhysicalDecide::variant_accounts`, `RewriteAccount::Kind::VARIANTS`, written by
+`RecordVariants` during `Finalize`); the profiler reads `ParamsToString` again when the
+operator's result is read, after `Finalize`, which is what puts the line in `EXPLAIN
+ANALYZE` and keeps it out of a plain `EXPLAIN`, which runs nothing. A clause with one
+variant per class prints nothing new. Test: `test_anr_variants.py`.
+
 Row counts are **actual**, not estimates. DECIDE is an annotation operator — it
 assigns values to every input row and filters nothing — so the count is the same
 at every node in the plan.

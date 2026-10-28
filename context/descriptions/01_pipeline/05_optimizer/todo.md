@@ -46,7 +46,7 @@ solvers.
 **Why.** `RewriteInDomain` keeps the clause's `when` on the rows it emits but not its
 `per K:`, so `per g: x IN (1, 2)` over a keyed `x` emits one indicator set per kept row
 rather than per class: three rows in two classes give six indicators where four would
-do. It is exact, because the key determines the decision and the domain.
+do. It is exact, because the key fixes the decision and the domain.
 
 **Decision needed.** None in the language. The indicators are row-scoped auxiliaries;
 emitting them per class needs them keyed by `K` (a scope like a helper's) and the `per K:`
@@ -86,7 +86,7 @@ a formulation.
 |---|---|---|
 | A square or a product of two non-Boolean decisions inside a reducer the value rewrite replaces (`x <= 0.5 * sum(x * x)`): *"DECIDE: 'sum(x * x)' is not supported yet in this constraint: a product or square of decisions inside a reducer is accepted only where ..."* | `RewriteScopedReducers` (`decide_rewrite_scoped.cpp`) | a quadratic definition row for the helper (`v = Σ x²`), which stage 06 does not state; only the side the clause pushes `v` toward would be convex |
 | A decision beside a `MIN` or `MAX` in the objective (`MAXIMIZE max(x) + s`): *"DECIDE: 's' beside MIN or MAX is not supported yet"* | `RewriteComposedMinMaxObjectiveTop`, through `WalkComposedLhs` (`decide_rewrite_minmax.cpp`) | the composed objective's extremum column beside a once-counted term, as the constraint's VALUE shape already does with a helper |
-| A square, or a product of two decisions outside a reducer in the objective, other than two distinct query-wide decisions or a product with a `BOOL` (`MAXIMIZE sum(x) + x * y`, `+ s * s`): *"DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet"* | `ExtractAggregateObjectiveTerms` (`decide_linear_form.cpp`, the linear-form flattening) | a once-only reading of the product in the model: a per-row product needs the determination check to give it one instance over the kept rows, then a quadratic or McCormick term counted once |
+| A square, or a product of two decisions outside a reducer in the objective, other than two distinct query-wide decisions or a product with a `BOOL` (`MAXIMIZE sum(x) + x * y`, `+ s * s`): *"DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet"* | `ExtractAggregateObjectiveTerms` (`decide_linear_form.cpp`, the linear-form flattening) | a once-only reading of the product in the model: a per-row product needs the objective's signature (D66) to give it one instance over the kept rows, then a quadratic or McCormick term counted once |
 
 **Decision needed.** Which of these enter the language, and in what order.
 

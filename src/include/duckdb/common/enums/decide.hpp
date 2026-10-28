@@ -89,9 +89,17 @@ struct DecideVarScopeInfo {
 
 //! What a run-time scope check (LogicalDecide::scope_checks) asks of the rows.
 //!   KEEPS_A_ROW — a `when` keeps a row of a non-empty input
-//!   DETERMINES  — every class of a key shows one value, or one instance of a decision
+//!   DETERMINES  — retired (D64): a value that varies within a class is a variant, not an
+//!                 error (LogicalDecide::signatures). No builder emits it; the value stays
+//!                 so the numbering of the others is unchanged.
 //!   READS_A_ROW — every group of a reducer's `by` key has a row passing its own `when`
 enum class DecideScopeCheckKind : uint8_t { KEEPS_A_ROW = 0, DETERMINES = 1, READS_A_ROW = 2 };
+
+//! What one field of a variant signature (LogicalDecide::signatures) compares, at a row:
+//!   VALUE    — a data expression, by value (NULL a value)
+//!   DECISION — a decision, by instance: a per-row one by its row, a keyed one by its class
+//!   BY_KEY   — a reducer's `by` key, by the value of each of its expressions
+enum class DecideSignatureFieldKind : uint8_t { VALUE = 0, DECISION = 1, BY_KEY = 2 };
 
 //! Type of aggregate used in MIN/MAX objective linearization
 enum class ObjectiveAggregateType : uint8_t {
@@ -265,6 +273,27 @@ static constexpr const char *REDUCER_BY_TAG = "__reducer_by__";
 //! constraint is generated once per class of the key among the kept rows; it groups no
 //! reducer, and NULL is a class.
 static constexpr const char *PER_CLASS_TAG = "__per_class__";
+
+//! Tag prefix naming the variant signature of a `per K:` clause (on its PER_CLASS_TAG
+//! wrapper): "__signature_<i>__" indexes LogicalDecide::signatures. The clause is one
+//! instance per class of K and value of the signature's fields (D64); no tag means its
+//! fields are none, so one instance per class.
+static constexpr const char *SIGNATURE_TAG_PREFIX = "__signature_";
+
+inline string MakeSignatureTag(idx_t signature_idx) {
+	return string(SIGNATURE_TAG_PREFIX) + to_string(signature_idx) + "__";
+}
+
+//! Reads back the signature index from an alias written by MakeSignatureTag.
+inline bool TryParseSignatureTag(const string &alias, idx_t &signature_idx) {
+	string digits;
+	if (!ExtractDecideTagPayload(alias, SIGNATURE_TAG_PREFIX, digits) ||
+	    digits.find_first_not_of("0123456789") != string::npos) {
+		return false;
+	}
+	signature_idx = static_cast<idx_t>(std::stoull(digits));
+	return true;
+}
 
 //! Tag on a scoped comparison in the VALUE shape (CanonicalConstraintClass::VALUE): the
 //! canonicalizer stamps it once, and DecideOptimizer::RewriteScopedReducers replaces each

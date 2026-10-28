@@ -47,11 +47,13 @@ reading 2's relation output folded in:
   The labels of rewrite rows follow the same style (`max(ship)` for an extremum column,
   `sum(ship) by (D.region) <> 20` for a `<>` binary).
 - **`group`** holds the `per` key value of an expanded finding — one row per class
-  (`edit_source = expanded_group`); a NULL key value renders as the text `NULL`.
+  (`edit_source = expanded_group`); a NULL key value renders as the text `NULL`. A class
+  with more than one variant (D64) is one finding per variant, its label followed by the
+  variant's own values (`a, 2`).
 - **`scope`** says `row`, or `entity` for a keyed (`per K:`) decision's escape count; a
   query-wide (`per ()`) decision has one instance and reports no count.
-- **The data checks still raise.** A `when` that keeps no row, a `per` key that does not
-  determine its clause, and a reducer group its own `when` empties are errors before
+- **The data checks still raise.** A `when` that keeps no row, an objective that would be
+  produced more than once, and a reducer group its own `when` empties are errors before
   solving, so `DIAGNOSE` reports them as the bare query does (`../scope/done.md` §5).
 
 ## Where it lives

@@ -224,10 +224,10 @@ of the FROM clause, its stored columns form the key (`AddRelationColumns`,
 `SortedKey`), and `FindOrCreateExactScope` — shared with `FindOrCreateKeyScope` —
 finds or creates the exact key scope, so `SUM(D: e)` and `sum(per D: e)` share one
 scope and one tag (`__qualified_by_<i>__`, appended to the aggregate's alias). `COLON_FORM_TAG` keeps the
-spelling for the echo (D38). Nothing is checked against the body at bind time: that `D`
-determines it — every column, per-row and keyed decision in it — is the DETERMINES
-check of stage 04, on the data, as for `per` (*"DECIDE: per D does not determine the
-decision y (in sum(D: ...))"*). Refused at bind time: a qualifier that is not a relation
+spelling for the echo (D38). Nothing is checked against the body at bind time: a column,
+per-row or keyed decision in it that `D` does not fix makes each tuple one value per
+variant (D65), which stage 04's signature records and execution reads, as for `per`.
+Refused at bind time: a qualifier that is not a relation
 name, a relation not in the FROM clause, a qualifier on anything but `SUM`, `AVG`,
 `MIN` or `MAX` (on `norm` by the scope validator: *"DECIDE: norm(D: ...) is not
 supported yet; ..."*), and on the decision side a body of query-wide decisions alone
@@ -287,8 +287,8 @@ is the bound, and `IsAllowedDecisionFreeBoundExpression` decides which shapes it
 take: constants, data columns, operators and functions over allowed operands, casts,
 scalar subqueries, and data-only reducers with their own `when`, `per` and `by`. A data
 column is a bound like any other: a clause with no `per` is generated once per kept
-row, so the tightest row's value binds; under `per K:` the key must determine it, which
-is a run-time check (stage 04, "Scope checks"). Arithmetic composes freely, `-`
+row, so the tightest row's value binds; under `per K:` each value it takes in a class is
+a variant of its own (stage 04, "Variant signatures"), which binds the same way. Arithmetic composes freely, `-`
 included: a bound is evaluated as an expression over the row, so subtraction is no
 different from addition. (`-` alone was refused for a while, a leftover from the
 parsed-level symbolic layer that used to move terms across the comparison. It also

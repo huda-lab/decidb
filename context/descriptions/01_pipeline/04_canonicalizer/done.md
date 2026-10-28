@@ -412,8 +412,8 @@ is an internal error (the rewrite did not run).
 (`__group_key_<i>__`) — the one grouping carrier after this stage, since later rewrites
 rebuild the reducers. A `per K:` wrapper over it stays, as over every shape
 (`IsPerClassWrapper`, a wrapper for every walker): one row per `by` group already stands
-for every class, whose constraints differ only in a bound the class determines, so the
-wrapper adds no row; it names the classes each group's row stands for, which the linear
+for every class and every variant of it, whose constraints differ only in a bound the
+group's tightest covers (D64), so the wrapper adds no row; it names the classes each group's row stands for, which the linear
 form reads as the clause's class key and a diagnosis reports one by one (D28). A
 VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and removes.
 
@@ -470,19 +470,48 @@ pins both the debug-mode throwing behavior and the release-mode no-op via a
 `BuildConstraintScopeChecks` and `BuildObjectiveScopeChecks` are read-only passes over
 the clauses and objective as bound, called once by `Binder::CreatePlan`, after
 `PlanSubqueries` (a check's expressions must be copyable) and before `CanonicalizeTree`.
-A rewrite's clause entering through
-`AddConstraint` builds none. Per clause, in this order: its `when` keeps a row
-(`KEEPS_A_ROW`); its `per` key determines each maximal decision- and reducer-free
-subexpression, each decision outside reducers and each `by` key (`DETERMINES`); then each
-reducer in turn: it reads a row in every `by` group when it has its own `when`
-(`READS_A_ROW`), and its own `per` key determines its body within its `by` group
-(`DETERMINES`). The objective: its `when`, then `per ()` over its values and decisions,
-then each top-level reducer in turn, its `by` key (`DETERMINES`) before its own checks.
-The first check to fail stops the query, so this order picks the message. Literals and query-wide values need no check. The message texts are rendered
-here, through `RenderDecideSource`, from source fragments and relation aliases
-(`DecideScopeChecks`), since only planning still knows them.
+A rewrite's clause entering through `AddConstraint` builds none. Per clause, in this
+order: its `when` keeps a row (`KEEPS_A_ROW`), then each reducer in turn reads a row in
+every `by` group when it has its own `when` (`READS_A_ROW`). The objective: its `when`,
+then each top-level reducer. The first check to fail stops the query, so this order picks
+the message. The message texts are rendered here, through `RenderDecideSource`, from
+source fragments and relation aliases (`DecideScopeChecks`), since only planning still
+knows them. `DETERMINES` is retired (D64); no builder emits it.
 
----
+### Variant signatures
+
+`BuildConstraintSignatures` and `BuildObjectiveSignatures` read each scoped expression's
+signature (D64, `../../00_project_overview/syntax_reference.md` §7.1) off the **canonical**
+tree, once, called by `Binder::CreatePlan` right after `CanonicalizeTree` and
+`CanonicalizeObjective`, into `LogicalDecide::signatures` (`DecideSignatures` carries the
+group keys and the entity scopes it may extend). Reading the canonical tree is what
+makes D77 hold: canonicalization has moved every data term of the top-level context to
+the bound, so `x + a <= b + sum(y)` reads the one data field `b - a`.
+
+`CollectSignatureFields` walks a body: a reducer is a `BY_KEY` field (its body is a
+scoped expression of its own); a decision column a `DECISION` field (a query-wide one
+none); a maximal decision- and reducer-free subtree that is neither a literal nor
+query-wide a `VALUE` field; any other node is read additively through `Decompose`, its
+data atoms summed back into one `VALUE` field (`BuildAdditive`) and every other atom, and
+its peeled factor, walked in turn — a node that is not additive (`abs`, a product with a
+row-varying factor, a function) walks each child as a context of its own. A field the
+key already holds is left out: a column of the key, a `by` key all of whose expressions
+are in it, a decision keyed on columns the key holds. So a clause the old determination
+rule accepted has no field it does not fix, and only an expression with a field left
+gets a signature.
+
+- **A `per K:` clause**: the fields of every leaf under its wrapper, its rows the `when`
+  under the wrapper; the wrapper gets `__signature_<i>__` (`MakeSignatureTag`).
+- **A relation-qualified reducer** (`sum(per K': e)`, `SUM(D: e)`, D65): the fields of
+  its body, its rows the clause's `when` and its own; it gets a scope of its own — a copy
+  of its key scope's names with `EntityScopeInfo::signature` set and no key bindings —
+  and its qualified tag is repointed there, so every stage that de-duplicates by the
+  qualifier reads one value per variant without knowing about signatures.
+- **The objective**: the fields of its body outside reducers (`objective_signature`),
+  checked at execution to have one variant (D66); none for the two-level form.
+
+A signature also carries what EXPLAIN ANALYZE calls the expression (`per D.depotID`, the
+reducer as written) and its clause id.
 
 ## 5. What this stage does not do
 
@@ -490,7 +519,8 @@ here, through `RenderDecideSource`, from source fragments and relation aliases
 - combine like terms;
 - fold constants;
 - rewrite AVG, ABS, MIN/MAX, `<>`, bilinear products, `norm()` or `IN`;
-- look inside reducer bodies, except to read them, unchanged, for the scope checks;
+- look inside reducer bodies, except to read them, unchanged, for the scope checks and
+  the signatures;
 - evaluate data, reducers, `when` conditions, `per` classes or `by` groups;
 - choose a solver formulation.
 

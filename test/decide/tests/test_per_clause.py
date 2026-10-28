@@ -7,8 +7,8 @@ means a separate sum(x) <= 5 constraint for each distinct s_nationkey value.
 Also covers:
   - `per` with <> operator (Big-M disjunction per group)
   - <> with a bound that itself varies within a by group (C3): every
-    excluded value is kept, not collapsed to one; under `per grp:` such a
-    bound does not determine
+    excluded value is kept, not collapsed to one, and under `per grp:` each
+    value is a variant of its class (D64)
   - NULL values in the per key (a class of their own; `when grp is not null`
     leaves them out)
   - Two `per` constraints on different grouping columns
@@ -264,9 +264,11 @@ def test_per_not_equal(
 @pytest.mark.per_clause
 @pytest.mark.cons_comparison
 @pytest.mark.correctness
-def test_per_not_equal_varying_bound_keeps_every_exclusion(decidb_cli, oracle_solver):
+@pytest.mark.parametrize("scope", ["", "per grp: "], ids=["per-row", "per-key"])
+def test_per_not_equal_varying_bound_keeps_every_exclusion(decidb_cli, oracle_solver, scope):
     """C3: a `<>` bound that varies within a `by` group excludes every value it takes,
-    not just the tightest one (standing decision 3).
+    not just the tightest one (standing decision 3). Under `per grp:` the two values are
+    two variants of the class (D64), each its own exclusion.
 
     Group 'a' has two rows whose `cap` column reads 3 and 7. `sum(x) by (grp) <> cap`
     has no per key, so each row generates it with its own cap and both are excluded:
@@ -276,14 +278,14 @@ def test_per_not_equal_varying_bound_keeps_every_exclusion(decidb_cli, oracle_so
     bound to its tightest value (as `<=`/`>=` do) would keep only `<> 3` and answer 7;
     keeping both gives 6, the next value down from the excluded ceiling.
     """
-    rows, cols = decidb_cli.execute("""
+    rows, cols = decidb_cli.execute(f"""
         SELECT id, grp, x FROM (
             VALUES (1, 'a', 3), (2, 'a', 7)
         ) t(id, grp, cap)
         DECIDE x(INT)
         SUCH THAT x BETWEEN 0 AND 10
             AND SUM(x) >= 3 AND SUM(x) <= 7
-            AND sum(x) by (grp) <> cap
+            AND {scope}sum(x) by (grp) <> cap
         MAXIMIZE SUM(x)
     """)
     xi = cols.index("x")
@@ -302,24 +304,6 @@ def test_per_not_equal_varying_bound_keeps_every_exclusion(decidb_cli, oracle_so
 
     assert actual_sum == pytest.approx(result.objective_value)
     assert actual_sum == 6, f"expected the optimum strictly between 3 and 7, got {actual_sum}"
-
-
-@pytest.mark.per_clause
-@pytest.mark.cons_comparison
-@pytest.mark.error
-def test_per_not_equal_varying_bound_under_per_key_does_not_determine(decidb_cli):
-    """The `per grp:` spelling of the clause above generates it once per class, so a
-    bound that varies within the class is refused rather than read as two exclusions."""
-    decidb_cli.assert_error("""
-        SELECT id, grp, x FROM (
-            VALUES (1, 'a', 3), (2, 'a', 7)
-        ) t(id, grp, cap)
-        DECIDE x(INT)
-        SUCH THAT x BETWEEN 0 AND 10
-            AND SUM(x) >= 3 AND SUM(x) <= 7
-            AND per grp: sum(x) by (grp) <> cap
-        MAXIMIZE SUM(x)
-    """, match=r"per grp does not determine cap\. grp = 'a' has more than one value: 3, 7\.")
 
 
 _NULL_KEY_ROWS = [

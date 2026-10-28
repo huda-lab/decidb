@@ -131,14 +131,22 @@ column references. A scope the optimizer creates for a
 helper decision of the value rewrite names the link it holds instead of key columns
 (`EntityScopeInfo::value_link`; its `entity_key_bindings` are empty, and the field is
 deliberately absent from the serialization: an optimized plan is never serialized). Its
-entities are the link's `by` groups among the rows the link's clause keeps.
+entities are the link's `by` groups among the rows the link's clause keeps. A scope the
+canonicalizer creates for a relation-qualified reducer whose body reads a value its key
+does not fix names its signature instead (`EntityScopeInfo::signature`, serialized, id
+107): its entities are the variants of the key's classes (D65), and it too has no key
+bindings.
 
-**From the canonicalizer** — `objective_constant_offset`, and `scope_checks`: the
+**From the canonicalizer** — `objective_constant_offset`; `scope_checks`, the
 run-time checks of every clause and of the objective (`DecideScopeCheck`: kind, the
-rows it looks at, the key, the value or decision, a reducer's own `when`, and the texts
-its message quotes). `PlanSubqueries` runs on the
-`by` keys as on the trees, and `EnumerateExpressions` visits both lists, so binding
-resolution and column pruning see their columns.
+rows it looks at, the key, a reducer's own `when`, and the texts its message quotes);
+and `signatures` (id 221) with `objective_signature` (id 222), the variant signature of
+every scoped expression with a field (`DecideSignature`: the rows it reads, its key, its
+fields — `DecideSignatureField`, a `VALUE` expression, a `DECISION` index or a `BY_KEY`
+index — the text EXPLAIN ANALYZE names it by and its clause id; D64). A `per K:` wrapper
+names its signature with `__signature_<i>__`. `PlanSubqueries` runs on the `by` keys as
+on the trees, and `EnumerateExpressions` visits every list, so binding resolution and
+column pruning see their columns.
 
 **From the optimizer** — `solver_backend_name`, `use_native_constructs`,
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
@@ -206,7 +214,8 @@ expression-holding fields **explicitly** rather than calling
 resolution via `ignored_bindings`. Currently enumerated: `decide_variables`,
 `decide_constraints`, `decide_objective`, `composed_minmax_objective_terms`,
 `composed_minmax_constraints`, `reducer_value_links` (body, own `when`, clause `when`),
-`entity_key_expressions`, `group_keys`, `scope_checks`.
+`entity_key_expressions`, `group_keys`, `scope_checks`, `signatures` (rows, key, value
+fields).
 
 **Any new field holding expressions that execution will evaluate must be added to
 that enumeration.** An optimizer rewrite that moves subexpressions out of
@@ -257,7 +266,8 @@ binding fact, and the parser cannot see it (the clause may sit inside a subquery
 `LogicalDecide` and `LogicalDecideDiagnose` are serialized by DuckDB's generator.
 The field list lives in `storage/serialization/logical_operator.json`; the structs
 it names — `EntityScopeInfo`, `DecideVarScopeInfo`, `ConstraintSourceInfo`,
-`DecideSourceColumnName`, `DecideGroupKey`, `DecideScopeCheck` — have their own entries
+`DecideSourceColumnName`, `DecideGroupKey`, `DecideScopeCheck`, `DecideSignature`,
+`DecideSignatureField` — have their own entries
 in `nodes.json`, and both
 directions are generated into `src/storage/serialization/serialize_*.cpp`. There is
 no hand-written copy. Adding a field means adding one JSON entry, not two mirrored
@@ -301,7 +311,8 @@ renumbered freely: a serialized logical plan lives for microseconds inside one
 process and is never persisted, so there is no older layout to stay readable for. A
 retired field stays in the list as a `"deleted": true` entry, for which the generated
 serializer writes nothing and the deserializer reads past (`ReadDeletedProperty`):
-`LogicalDecide`'s id 219 and `EntityScopeInfo`'s id 105.
+`LogicalDecide`'s id 219, `EntityScopeInfo`'s id 105, and `DecideScopeCheck`'s ids 103,
+104, 107 and 108 (the value, decision and texts of the retired `DETERMINES` check).
 
 ### What exercises it
 

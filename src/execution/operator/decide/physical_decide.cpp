@@ -739,6 +739,83 @@ static void LookupOrBuildPerGroupIds(PerGroupCache &cache,
 }
 
 
+//! Each row `rows` keeps (null: every row) numbered by its variant (syntax_reference.md
+//! §7.1, D64): the class of `signature`'s key, split by the value of each of its fields --
+//! NULL a value, a decision by its instance. Numbered from 0 in first-seen row order;
+//! INVALID_INDEX on every other row, where no field is computed.
+static void BuildSignatureIds(const DecideSignature &signature, const vector<DecideGroupKey> &group_keys,
+                              const vector<DecideVarScopeInfo> &variable_scopes,
+                              const vector<EntityMapping> &entity_mappings, ChunkExprCache &chunk_expr_cache,
+                              ClientContext &context, ColumnDataCollection &data, idx_t num_rows,
+                              const vector<bool> *rows, vector<idx_t> &ids, idx_t &count) {
+	vector<const Expression *> keys;
+	auto add = [&](const Expression &expr) {
+		keys.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, expr, context));
+	};
+	for (auto &column : signature.key) {
+		add(*column);
+	}
+	vector<const vector<idx_t> *> classes;
+	bool per_row = false;
+	for (auto &field : signature.fields) {
+		switch (field.kind) {
+		case DecideSignatureFieldKind::VALUE:
+			add(*field.value);
+			break;
+		case DecideSignatureFieldKind::BY_KEY:
+			for (auto &expr : group_keys[field.group_key].expressions) {
+				add(*expr);
+			}
+			break;
+		case DecideSignatureFieldKind::DECISION: {
+			if (field.decision >= variable_scopes.size()) {
+				per_row = true; // no scope recorded: one instance per row
+				break;
+			}
+			auto &scope = variable_scopes[field.decision];
+			if (scope.IsEntity()) {
+				classes.push_back(&entity_mappings[scope.entity_scope_idx].row_to_entity);
+			} else if (!scope.IsScalar()) {
+				per_row = true;
+			}
+			break;
+		}
+		}
+	}
+	BuildGroupIds(keys, context, data, num_rows, std::function<bool(idx_t)> {}, ids, count, nullptr, rows);
+	if (per_row) {
+		// A per-row decision: every kept row is an instance of its own.
+		count = 0;
+		for (auto &id : ids) {
+			if (id != DConstants::INVALID_INDEX) {
+				id = count++;
+			}
+		}
+		return;
+	}
+	// A keyed decision splits each variant by the decision's class.
+	struct PairHash {
+		size_t operator()(const std::pair<idx_t, idx_t> &pair) const {
+			return std::hash<idx_t>()(pair.first) * 0x9e3779b97f4a7c15ULL ^ std::hash<idx_t>()(pair.second);
+		}
+	};
+	for (auto *row_class : classes) {
+		std::unordered_map<std::pair<idx_t, idx_t>, idx_t, PairHash> numbered;
+		idx_t next = 0;
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (ids[row] == DConstants::INVALID_INDEX) {
+				continue;
+			}
+			auto inserted = numbered.emplace(std::make_pair(ids[row], (*row_class)[row]), next);
+			if (inserted.second) {
+				next++;
+			}
+			ids[row] = inserted.first->second;
+		}
+		count = next;
+	}
+}
+
 //! True when a bound contains a flattened scalar-subquery value. Its bound alias is
 //! internal planning metadata (`SUBQUERY` plus a DECIDE tag), not SQL the user can edit.
 //! Mixed data/subquery bounds therefore use the evaluated numeric fallback instead of
@@ -890,13 +967,14 @@ static void ReduceAggregateRhsPerGroup(EvaluatedConstraint &ec,
 // EvaluatedClauses return value carries it across Finalize's phase methods).
 
 // Which rows a reducer with its own key (`sum(per D: ...)`, `sum(D: ...)`) actually
-// contributes. The join repeats each D tuple once per matching row; §3.2.2 asks for one
-// term per tuple identity, and the key's check on the data (DecideScopeCheckKind::
-// DETERMINES) guarantees that every row sharing an identity carries the same value — so
-// keeping the first row of each identity and
-// dropping the rest yields exactly one contribution per identity, whichever row is
-// kept. De-duplication runs inside the `per` partition, after `when` selection and
-// `per` partitioning, which is the construction order the paper pins.
+// contributes. The join repeats each D tuple once per matching row; §5.3 asks for one
+// term per instance -- per class of the key and value of its body's signature (D64,
+// D65), which the scope's identity is when the body has a field
+// (EntityScopeInfo::signature) -- and every row sharing an identity carries the same
+// value, so keeping the first row of each identity and dropping the rest yields exactly
+// one contribution per identity, whichever row is kept. De-duplication runs inside the
+// `per` partition, after `when` selection and `per` partitioning, which is the
+// construction order the paper pins.
 //! `eligible`, when given, is the rows the reducer reads (its own `when` included): the
 //! first row of each class among THEM is kept, so a class whose first joined row the
 //! `when` drops is still counted once.
@@ -1248,8 +1326,8 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
 
 //! A scoped objective's decision outside its reducers (`MAXIMIZE when c: sum(x) + w * s`)
 //! is counted once (syntax_reference.md §4): its coefficient stays on the first
-//! kept row and every other row is zeroed. The scope checks made sure that row stands for
-//! all of them -- one instance, one value of its data. The model reads a query-wide
+//! kept row and every other row is zeroed. The objective's signature has one variant
+//! (D66), so that row stands for all of them -- one instance, one value of its data. The model reads a query-wide
 //! decision's coefficient off row 0 and sums every other one over the rows, so a
 //! query-wide one is moved to row 0.
 static idx_t FirstKeptRow(const vector<bool> *kept, idx_t num_rows) {
@@ -1486,8 +1564,10 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	// What the optimizer made of the clauses: a column that stands for an expression
 	// prints it, and each rewrite's account follows its clause, the objective's its own.
 	auto names = DecidePlanNames(source_fragments, entity_scopes, group_keys, decide_index, aux_var_expressions);
+	auto accounts = rewrite_accounts;
+	accounts.insert(accounts.end(), variant_accounts.begin(), variant_accounts.end());
 	vector<string> objective_accounts;
-	for (auto &account : rewrite_accounts) {
+	for (auto &account : accounts) {
 		if (account.source_clause_id == DConstants::INVALID_INDEX) {
 			objective_accounts.push_back(RenderDecideRewriteAccount(account));
 		}
@@ -1498,7 +1578,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 	string constraints_text;
 	if (decide_constraints || !constraint_sources.empty()) {
 		auto layers = CollectDecideClauseLayers(decide_constraints.get(), names, constraint_sources, unattributed,
-		                                        objective_rows, rewrite_accounts);
+		                                        objective_rows, accounts);
 		constraints_text = RenderDecideClauseLayers(layers, unattributed);
 	}
 	if (decide_objective) {
@@ -2022,11 +2102,24 @@ vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context
 
         vector<unique_ptr<Expression>> key_exprs_owned;
         vector<const Expression *> key_exprs;
+        // The rows a scope's key is never evaluated on are no group, and share one spare
+        // entity so that every row has an id.
+        auto spare_entity_for_dropped_rows = [](EntityMapping &mapping) {
+            bool dropped = false;
+            for (auto &entity : mapping.row_to_entity) {
+                if (entity == DConstants::INVALID_INDEX) {
+                    entity = mapping.num_entities;
+                    dropped = true;
+                }
+            }
+            if (dropped) {
+                mapping.num_entities++;
+            }
+        };
         if (scope.value_link != DConstants::INVALID_INDEX) {
             // A helper decision's scope: the groups of its link's `by` key among the rows
             // the link's clause keeps, one entity per value the key takes there (NULL a
-            // value). The key is never evaluated on a row the clause drops; those rows
-            // are no group, and share one spare entity so that every row has an id.
+            // value).
             auto &link = reducer_value_links[scope.value_link];
             for (auto &expr : group_keys[link.group_key].expressions) {
                 key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *expr, context));
@@ -2038,16 +2131,36 @@ vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context
             BuildGroupIds(key_exprs, context, gstate.data, num_rows, std::function<bool(idx_t)> {},
                           mapping.row_to_entity, mapping.num_entities, nullptr,
                           link.when ? &kept : nullptr);
-            bool dropped = false;
-            for (auto &entity : mapping.row_to_entity) {
-                if (entity == DConstants::INVALID_INDEX) {
-                    entity = mapping.num_entities;
-                    dropped = true;
-                }
+            spare_entity_for_dropped_rows(mapping);
+            entity_mappings.push_back(std::move(mapping));
+            continue;
+        }
+        if (scope.signature != DConstants::INVALID_INDEX) {
+            // A relation-qualified reducer's scope: the classes of its key among the rows
+            // it reads, each split by its body's signature (D64, D65), so that one value
+            // per instance -- not per class -- reaches the reducer. The decisions' scopes
+            // come first, so their classes are built by now.
+            auto &signature = signatures[scope.signature];
+            vector<bool> kept;
+            if (signature.rows) {
+                kept = KeptRows(*signature.rows, chunk_expr_cache, context, gstate.data, num_rows);
             }
-            if (dropped) {
-                mapping.num_entities++;
+            BuildSignatureIds(signature, group_keys, variable_scopes, entity_mappings, chunk_expr_cache, context,
+                              gstate.data, num_rows, signature.rows ? &kept : nullptr, mapping.row_to_entity,
+                              mapping.num_entities);
+            // How many classes of the key those values come from, for EXPLAIN ANALYZE (D65).
+            vector<const Expression *> class_key;
+            for (auto &column : signature.key) {
+                class_key.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *column, context));
             }
+            vector<idx_t> class_ids;
+            idx_t num_classes = 0;
+            BuildGroupIds(class_key, context, gstate.data, num_rows, std::function<bool(idx_t)> {}, class_ids,
+                          num_classes, nullptr, signature.rows ? &kept : nullptr);
+            if (mapping.num_entities > num_classes) {
+                RecordVariants(signature, "values", mapping.num_entities, num_classes);
+            }
+            spare_entity_for_dropped_rows(mapping);
             entity_mappings.push_back(std::move(mapping));
             continue;
         }
@@ -2079,6 +2192,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     auto &gstate = input.global_state.Cast<DecideGlobalSinkState>();
     idx_t num_rows = gstate.data.Count();
+    variant_accounts.clear();
 
     if (bench) {
         model_timer.Start();
@@ -2210,8 +2324,8 @@ static string DescribeKeyValues(const vector<string> &names, const vector<Value>
 	return result;
 }
 
-//! `expr` on each of `rows`, as values (NULL on the others): what a determination check
-//! compares.
+//! `expr` on each of `rows`, as values (NULL on the others): what tells two variants
+//! apart in a message.
 static vector<Value> EvaluateRowValues(const Expression &expr, ChunkExprCache &chunk_expr_cache,
                                        ClientContext &context, ColumnDataCollection &data, idx_t num_rows,
                                        const vector<bool> &rows) {
@@ -2251,90 +2365,194 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 			}
 			continue;
 		}
-		vector<bool> filter;
-		if (check.filter) {
-			filter = KeptRows(*check.filter, chunk_expr_cache, context, gstate.data, num_rows, &rows);
+		if (check.kind != DecideScopeCheckKind::READS_A_ROW) {
+			throw InternalException("DECIDE: a scope check of a retired kind reached execution");
 		}
-		// The classes (DETERMINES, over the rows the reducer's own `when` keeps) or the
-		// groups (READS_A_ROW, over every kept row) of the check's key.
-		bool reads = check.kind == DecideScopeCheckKind::READS_A_ROW;
-		vector<bool> looked_at(num_rows);
-		for (idx_t row = 0; row < num_rows; row++) {
-			looked_at[row] = rows[row] && (reads || filter.empty() || filter[row]);
-		}
-		std::function<bool(idx_t)> looked_at_row = [&](idx_t row) {
-			return looked_at[row];
+		// The groups of the check's key over every kept row: each needs a row the
+		// reducer's own `when` keeps.
+		auto filter = KeptRows(*check.filter, chunk_expr_cache, context, gstate.data, num_rows, &rows);
+		std::function<bool(idx_t)> kept_row = [&](idx_t row) {
+			return rows[row];
 		};
 		vector<idx_t> ids;
 		idx_t count = 0;
 		vector<string> labels;
 		vector<vector<Value>> key_values;
 		LookupOrBuildPerGroupIds(per_group_cache, check.key, chunk_expr_cache, context, gstate.data, num_rows,
-		                         looked_at_row, &looked_at, ids, count, labels, nullptr,
-		                         nullptr, &key_values);
-		auto describe = [&](idx_t group, const char *one, const char *all) {
-			return check.key.empty() ? string(all) : DescribeKeyValues(check.key_names, key_values[group]) + one;
-		};
-		if (reads) {
-			vector<bool> read(count, false);
-			for (idx_t row = 0; row < num_rows; row++) {
-				if (ids[row] != DConstants::INVALID_INDEX && filter[row]) {
-					read[ids[row]] = true;
-				}
-			}
-			for (idx_t group = 0; group < count; group++) {
-				if (read[group]) {
-					continue;
-				}
-				if (check.key.empty()) {
-					throw InvalidInputException("DECIDE: %s has no rows.", check.subject);
-				}
-				throw InvalidInputException("DECIDE: %s has no rows for %s.", check.subject,
-				                            DescribeKeyValues(check.key_names, key_values[group]));
-			}
-			continue;
-		}
-		auto context_text = check.context.empty() ? string() : " (" + check.context + ")";
-		if (check.decision != DConstants::INVALID_INDEX) {
-			if (check.decision >= variable_scopes.size() || variable_scopes[check.decision].IsScalar()) {
-				continue; // one instance for the whole query
-			}
-			auto &scope = variable_scopes[check.decision];
-			vector<idx_t> instance(count, DConstants::INVALID_INDEX);
-			for (idx_t row = 0; row < num_rows; row++) {
-				auto group = ids[row];
-				if (group == DConstants::INVALID_INDEX) {
-					continue;
-				}
-				auto id = scope.IsEntity() ? entity_mappings[scope.entity_scope_idx].row_to_entity[row] : row;
-				if (instance[group] == DConstants::INVALID_INDEX) {
-					instance[group] = id;
-				} else if (instance[group] != id) {
-					throw InvalidInputException("DECIDE: per %s does not determine the decision %s%s. %s more than "
-					                            "one %s.",
-					                            check.subject, check.object, context_text,
-					                            describe(group, " covers", "The kept rows cover"), check.object);
-				}
-			}
-			continue;
-		}
-		auto values = EvaluateRowValues(*check.value, chunk_expr_cache, context, gstate.data, num_rows, looked_at);
-		vector<idx_t> first(count, DConstants::INVALID_INDEX);
+		                         kept_row, &rows, ids, count, labels, nullptr, nullptr, &key_values);
+		vector<bool> read(count, false);
 		for (idx_t row = 0; row < num_rows; row++) {
-			auto group = ids[row];
-			if (group == DConstants::INVALID_INDEX) {
+			if (ids[row] != DConstants::INVALID_INDEX && filter[row]) {
+				read[ids[row]] = true;
+			}
+		}
+		for (idx_t group = 0; group < count; group++) {
+			if (read[group]) {
 				continue;
 			}
-			if (first[group] == DConstants::INVALID_INDEX) {
-				first[group] = row;
-			} else if (!Value::NotDistinctFrom(values[first[group]], values[row])) {
-				throw InvalidInputException("DECIDE: per %s does not determine %s%s. %s more than one value: %s, %s.",
-				                            check.subject, check.object, context_text,
-				                            describe(group, " has", "The kept rows have"),
-				                            SqlLiteral(values[first[group]]), SqlLiteral(values[row]));
+			if (check.key.empty()) {
+				throw InvalidInputException("DECIDE: %s has no rows.", check.subject);
+			}
+			throw InvalidInputException("DECIDE: %s has no rows for %s.", check.subject,
+			                            DescribeKeyValues(check.key_names, key_values[group]));
+		}
+	}
+	// The objective is produced once (D66): a field with a second value over its kept rows
+	// would be a second objective.
+	if (objective_signature != DConstants::INVALID_INDEX) {
+		auto &signature = signatures[objective_signature];
+		vector<bool> rows(num_rows, true);
+		if (signature.rows) {
+			rows = KeptRows(*signature.rows, chunk_expr_cache, context, gstate.data, num_rows);
+		}
+		vector<idx_t> ids;
+		idx_t count = 0;
+		BuildSignatureIds(signature, group_keys, variable_scopes, entity_mappings, chunk_expr_cache, context,
+		                  gstate.data, num_rows, &rows, ids, count);
+		if (count > 1) {
+			throw InvalidInputException("DECIDE objective: %s, so the objective would be produced more than "
+			                            "once; move it inside a reducer or fix it with when.",
+			                            DescribeVariantDifference(signature, ids, chunk_expr_cache, context, gstate,
+			                                                      num_rows, rows, entity_mappings));
+		}
+	}
+}
+
+//! One line for EXPLAIN ANALYZE: a scoped expression whose classes held more than one
+//! variant (D64, D65), so the instances it generated -- or the values a reducer read --
+//! outnumber its classes: `per P.depotID: 4 constraints from 2 classes, one per distinct
+//! (P.lim, by (P.region)) within a class`.
+void PhysicalDecide::RecordVariants(const DecideSignature &signature, const char *unit, idx_t variants,
+                                    idx_t classes) const {
+	vector<string> fields;
+	for (auto &field : signature.fields) {
+		fields.push_back(field.text);
+	}
+	LogicalDecide::RewriteAccount account;
+	account.source_clause_id = signature.source_clause_id;
+	account.kind = LogicalDecide::RewriteAccount::Kind::VARIANTS;
+	account.subject = StringUtil::Format("%s: %llu %s from %llu %s, one per distinct (%s) within a class",
+	                                     signature.text, variants, unit, classes,
+	                                     classes == 1 ? "class" : "classes", StringUtil::Join(fields, ", "));
+	for (auto &recorded : variant_accounts) {
+		if (recorded.source_clause_id == account.source_clause_id && recorded.subject == account.subject) {
+			return; // a clause the rewrites made several rows of
+		}
+	}
+	variant_accounts.push_back(std::move(account));
+}
+
+//! Each variant's field values, as a diagnosis labels it beside its class: `100` for
+//! `P.lim`, `East` for `by (P.region)`, joined as a composite key is (`100, East`).
+//! `first_rows` holds each variant's id on its first row only, INVALID_INDEX elsewhere; a
+//! decision is the row's own and adds nothing.
+vector<string> PhysicalDecide::DescribeVariants(const DecideSignature &signature, const vector<idx_t> &first_rows,
+                                                ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                                DecideGlobalSinkState &gstate, idx_t num_rows) const {
+	vector<bool> firsts(num_rows, false);
+	idx_t count = 0;
+	for (idx_t row = 0; row < num_rows; row++) {
+		if (first_rows[row] != DConstants::INVALID_INDEX) {
+			firsts[row] = true;
+			count = MaxValue<idx_t>(count, first_rows[row] + 1);
+		}
+	}
+	vector<string> labels(count);
+	auto append = [&](const Expression &expr) {
+		auto values = EvaluateRowValues(expr, chunk_expr_cache, context, gstate.data, num_rows, firsts);
+		for (idx_t row = 0; row < num_rows; row++) {
+			if (!firsts[row]) {
+				continue;
+			}
+			auto &label = labels[first_rows[row]];
+			auto text = values[row].IsNull() ? string("NULL") : values[row].ToString();
+			label += (label.empty() ? "" : ", ") + (text.empty() ? string("''") : text);
+		}
+	};
+	for (auto &field : signature.fields) {
+		if (field.kind == DecideSignatureFieldKind::VALUE) {
+			append(*field.value);
+		} else if (field.kind == DecideSignatureFieldKind::BY_KEY) {
+			for (auto &expr : group_keys[field.group_key].expressions) {
+				append(*expr);
 			}
 		}
 	}
+	return labels;
+}
+
+//! What tells the first two variants of `ids` apart, as a message says it: `'w' takes
+//! more than one value over the kept rows (3, 5)`, `the decision 'x' (declared per row)
+//! has more than one instance over the kept rows`. `rows` is where the fields may be
+//! computed.
+string PhysicalDecide::DescribeVariantDifference(const DecideSignature &signature, const vector<idx_t> &ids,
+                                                 ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                                 DecideGlobalSinkState &gstate, idx_t num_rows,
+                                                 const vector<bool> &rows,
+                                                 const vector<EntityMapping> &entity_mappings) const {
+	idx_t first = DConstants::INVALID_INDEX;
+	idx_t second = DConstants::INVALID_INDEX;
+	for (idx_t row = 0; row < num_rows && second == DConstants::INVALID_INDEX; row++) {
+		if (ids[row] == DConstants::INVALID_INDEX) {
+			continue;
+		}
+		if (first == DConstants::INVALID_INDEX) {
+			first = row;
+		} else if (ids[row] != ids[first]) {
+			second = row;
+		}
+	}
+	if (second == DConstants::INVALID_INDEX) {
+		throw InternalException("DECIDE: a signature with one variant was described as two");
+	}
+	vector<bool> two(num_rows, false);
+	two[first] = two[second] = true;
+	auto differs = [&](const Expression &expr, string &values) {
+		auto at = EvaluateRowValues(expr, chunk_expr_cache, context, gstate.data, num_rows, two);
+		if (Value::NotDistinctFrom(at[first], at[second])) {
+			return false;
+		}
+		values = SqlLiteral(at[first]) + ", " + SqlLiteral(at[second]);
+		return true;
+	};
+	for (auto &field : signature.fields) {
+		string values;
+		switch (field.kind) {
+		case DecideSignatureFieldKind::VALUE:
+			if (differs(*field.value, values)) {
+				return StringUtil::Format("'%s' takes more than one value over the kept rows (%s)", field.text,
+				                          values);
+			}
+			break;
+		case DecideSignatureFieldKind::BY_KEY: {
+			auto &by = group_keys[field.group_key];
+			for (idx_t i = 0; i < by.expressions.size(); i++) {
+				if (differs(*by.expressions[i], values)) {
+					auto name = i < by.names.size() ? by.names[i] : by.expressions[i]->ToString();
+					return StringUtil::Format("'%s' in %s takes more than one value over the kept rows (%s)", name,
+					                          field.text, values);
+				}
+			}
+			break;
+		}
+		case DecideSignatureFieldKind::DECISION: {
+			auto &scope = field.decision < variable_scopes.size() ? variable_scopes[field.decision]
+			                                                       : DecideVarScopeInfo::Row();
+			bool split = !scope.IsEntity();
+			if (scope.IsEntity()) {
+				auto &row_class = entity_mappings[scope.entity_scope_idx].row_to_entity;
+				split = row_class[first] != row_class[second];
+			}
+			if (split) {
+				return StringUtil::Format("the decision '%s' (declared per %s) has more than one instance over the "
+				                          "kept rows",
+				                          field.text, scope.IsEntity() ? scope.declared_key : string("row"));
+			}
+			break;
+		}
+		}
+	}
+	throw InternalException("DECIDE: two variants of a signature agree on every field");
 }
 
 void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate,
@@ -2588,32 +2806,69 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                                             one_group ? 1 : eval_const.num_groups, gstate.class_sets);
                 }
             } else if (constraint->per_key == DecideConstraint::PerKeyRole::ONE_ROW_PER_CLASS) {
-                // One row per class of the `per` key among the kept rows: its first, which
-                // stands for the class because the key determines the whole clause.
+                // One row per variant of each class of the `per` key among the kept rows
+                // (D64): its first, which stands for the variant's rows because they agree
+                // on every field the clause reads -- its data, its decisions' instances, its
+                // reducers' `by` keys. Without a field, one row per class.
                 vector<idx_t> class_ids;
                 idx_t num_classes = 0;
                 vector<string> labels;
                 LookupOrBuildPerGroupIds(per_group_cache, constraint->class_key, chunk_expr_cache, context,
                                          gstate.data, num_rows, kept, &scoped_kept,
                                          class_ids, num_classes, labels);
+                vector<idx_t> variant_ids;
+                idx_t num_variants = num_classes;
+                if (constraint->signature != DConstants::INVALID_INDEX) {
+                    BuildSignatureIds(signatures[constraint->signature], group_keys, variable_scopes,
+                                      entity_mappings, chunk_expr_cache, context, gstate.data, num_rows,
+                                      &scoped_kept, variant_ids, num_variants);
+                }
+                const auto &instance_ids = variant_ids.empty() ? class_ids : variant_ids;
                 eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
-                vector<bool> seen(num_classes, false);
+                vector<idx_t> class_of(num_variants, DConstants::INVALID_INDEX);
+                vector<idx_t> variants_per_class(num_classes, 0);
                 for (idx_t row = 0; row < num_rows; row++) {
-                    auto class_id = class_ids[row];
-                    if (class_id != DConstants::INVALID_INDEX && !seen[class_id]) {
-                        seen[class_id] = true;
-                        eval_const.row_group_ids[row] = class_id;
+                    auto id = instance_ids[row];
+                    if (id != DConstants::INVALID_INDEX && class_of[id] == DConstants::INVALID_INDEX) {
+                        class_of[id] = class_ids[row];
+                        variants_per_class[class_ids[row]]++;
+                        eval_const.row_group_ids[row] = id;
                     }
                 }
-                eval_const.num_groups = num_classes;
-                eval_const.group_labels = std::move(labels);
+                eval_const.num_groups = num_variants;
+                if (num_variants > num_classes) {
+                    RecordVariants(signatures[constraint->signature], "constraints", num_variants, num_classes);
+                }
+                // A variant is labelled by its class, and by its own field values where its
+                // class has more than one.
+                eval_const.group_labels.resize(num_variants);
+                vector<string> variant_labels;
+                if (num_variants > num_classes) {
+                    variant_labels = DescribeVariants(signatures[constraint->signature], eval_const.row_group_ids,
+                                                      chunk_expr_cache, context, gstate, num_rows);
+                }
+                for (idx_t id = 0; id < num_variants; id++) {
+                    auto class_id = class_of[id];
+                    auto &label = eval_const.group_labels[id];
+                    label = class_id < labels.size() ? labels[class_id] : string();
+                    if (variants_per_class[class_id] > 1 && id < variant_labels.size() && !variant_labels[id].empty()) {
+                        label += label.empty() ? variant_labels[id] : ", " + variant_labels[id];
+                    }
+                }
                 eval_const.rows_stand_with_their_class = !has_when;
-                // Each class's row stands for its class (D28), under DIAGNOSE only.
+                // Each variant's row stands for its class (D28), under DIAGNOSE only, and is
+                // named as its label says where its class has more than one.
                 if (diagnose) {
                     eval_const.group_class_set =
                         CollectGroupClasses(constraint->per_key, constraint->class_key, per_group_cache,
                                             chunk_expr_cache, context, gstate.data, num_rows, scoped_kept,
-                                            eval_const.row_group_ids, num_classes, gstate.class_sets);
+                                            eval_const.row_group_ids, num_variants, gstate.class_sets);
+                    for (idx_t id = 0; id < num_variants; id++) {
+                        auto set = eval_const.group_class_set[id];
+                        if (variants_per_class[class_of[id]] > 1 && set != DConstants::INVALID_INDEX) {
+                            gstate.class_sets[set].labels = {eval_const.group_labels[id]};
+                        }
+                    }
                 }
             } else if (has_when) {
                 eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);

@@ -525,7 +525,7 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       ConstraintSourceInfo info;
 		                       // A scope written in front belongs to the clause as written:
 		                       // canonicalization drops the `per K:` of a clause in the
-		                       // aggregate shape, which still holds (its scope checks).
+		                       // aggregate shape, which still holds (its classes).
 		                       info.written_lhs = RenderSource(*cmp.left, fragments, entity_scopes, group_keys);
 		                       info.written_rhs = RenderSource(*cmp.right, fragments, entity_scopes, group_keys);
 		                       info.written_cmp = DecideComparisonOperator(cmp.type);
@@ -1011,6 +1011,8 @@ string RenderDecideRewriteAccount(const LogicalDecide::RewriteAccount &account) 
 	case Kind::NOT_EQUAL:
 		became = "two conditional rows with an indicator";
 		break;
+	case Kind::VARIANTS:
+		return account.subject;
 	}
 	return account.subject + " becomes " + became;
 }

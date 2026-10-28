@@ -50,7 +50,7 @@ The `DECIDE` clause declares **decision variables** of a COP query. Each variabl
   `DecideVarScopeInfo::Scalar()`.
   - **Column layout**: `VarIndexer` is four blocks — `[row | keyed | query-wide | global auxiliary]`. Query-wide columns sit *below* `global_block_start` so the "user decide-variable columns occupy `[0, global_block_start)`" invariant that the model builder and the column labeller rely on keeps holding. `Get()` ignores the row for a query-wide variable and `NumInstances()` returns 1; `InstanceColumn(var, inst)` walks a variable's own instances.
   - **Constraints**: a query-wide decision may be compared against row-varying data (`ship <= cap`). The constraint fans out per row, but every generated row references the same column — that is what makes the decision shared. The per-row fast path in the model builder (`CanUseRowScopedFastPath`) is skipped for it for the same reason it is skipped for keyed variables (many rows, one column).
-  - **As a term beside a reducer**: a query-wide decision is row-invariant, so it is a complete term of an aggregate constraint on its own — `sum(x) - cap <= 4`, the paper's `max_shortfall` shape (§3.1) — or its bound (`sum(x) <= cap`, `per g: demand - sum(x) by (g) <= cap` when `g` determines `demand`); canonicalization moves it to the left either way. The model-builder accumulators (ungrouped and grouped) add its coefficient **once per model row**, not once per member row, matching the objective path. A per-row or keyed decision beside a reducer (`sum(x) <= y`) takes the value shape instead: the reducer becomes a helper decision and the clause is one row per class (`../scope/done.md` §3). Tests: `test/decide/tests/test_scalar_var_in_aggregate.py`, `test_scalar_scope.py`, `test_canonicalize_side_agnostic.py`, golden corpus 55/56 and 75/76/77.
+  - **As a term beside a reducer**: a query-wide decision is row-invariant, so it is a complete term of an aggregate constraint on its own — `sum(x) - cap <= 4`, the paper's `max_shortfall` shape (§3.1) — or its bound (`sum(x) <= cap`, `per g: demand - sum(x) by (g) <= cap`, one row per variant of `demand` in a class); canonicalization moves it to the left either way. The model-builder accumulators (ungrouped and grouped) add its coefficient **once per model row**, not once per member row, matching the objective path. A per-row or keyed decision beside a reducer (`sum(x) <= y`) takes the value shape instead: the reducer becomes a helper decision and the clause is one row per class (`../scope/done.md` §3). Tests: `test/decide/tests/test_scalar_var_in_aggregate.py`, `test_scalar_scope.py`, `test_canonicalize_side_agnostic.py`, golden corpus 55/56 and 75/76/77.
   - **Objectives**: a query-wide decision contributes **bare**, not through a reducer — alone (`MINIMIZE cap`) or as an additive term beside reducers (`MINIMIZE cap - sum(x)`). `AnalyzeObjective` (`src/optimizer/decide/decide_linear_form.cpp`) recognises a purely query-wide objective (which carries no aggregate at all), and `ExtractAggregateObjectiveTerms` accepts a query-wide leaf. The model builder adds the coefficient **once** instead of once per row. Beside a `MIN` or `MAX` it is refused (*"DECIDE: 'cap' beside MIN or MAX is not supported yet"*).
   - **A reducer is rejected iff its body is row-invariant** on the decision side: `sum(cap)` / `avg(cap)` / `sum(cap1 + cap2)` raise a binder error naming the fix (*"cap is a query-wide decision, so SUM(cap) has nothing to aggregate over; use cap on its own"*). There is one column and nothing to reduce over, and the two plausible readings (coefficient 1 vs. coefficient `n`) are different optimization problems — so neither is chosen silently. A body that *mixes* a query-wide decision with row-varying data is an ordinary scalar-times-vector reduction: `sum(cost * cap)` means `(Σ cost)·cap`, and `sum(x + cap)` means `sum(x) + n·cap` over the counted rows. Enforced once, in `DecideBinder::ClassifyReducerCall` via `DecideBinder::IsRowInvariantExpression` (`decide_binder.cpp`), which knows the query-wide names because `BindDeclarations` passes them; the objective and constraint binders inherit it. The weighting the accepted case implies is carried to stage 06 by `DecideTerm::reduction` — see `../sql_functions/done.md` → "A Query-Wide Decision Multiplied by a Vector, Inside a Reducer".
   - **Output**: the value is repeated on every result row (paper §3.1), which falls out of `Get()` resolving every row to the same column.
@@ -73,10 +73,11 @@ is opt-in.
 - **One key scope for `SUM(D: e)` and `sum(per D: e)`.** The key is the listed relations' stored columns,
   found or created as the exact key scope `per D` uses (`FindOrCreateExactScope`,
   `decide_binder.cpp`), so the two share one `entity_scopes` entry, one set of
-  pinned key columns, one `EntityMapping`, and one check: `D` determines the body within
-  each `by` group, over the rows the reducer reads (the canonicalizer's `DETERMINES`
-  check, run on the data). A scope with no decision declared on it has empty
-  `scoped_variable_indices`.
+  pinned key columns and one `EntityMapping`. A body that reads a value `D` does not fix
+  — a column of another relation, a per-row decision, a decision keyed elsewhere — makes
+  each tuple one value per variant (D65): the canonicalizer gives that reducer a scope of
+  its own (`EntityScopeInfo::signature`, `../scope/done.md` §5) whose entities are the
+  variants. A scope with no decision declared on it has empty `scoped_variable_indices`.
 - **De-duplication is a row mask, not a new pipeline stage.** `BuildQualifierKeepMask`
   (`physical_decide.cpp`, Phase 2) keeps the first row of each class within each group,
   among the rows the reducer reads (its own `when` included), and drops the rest;
@@ -84,7 +85,7 @@ is opt-in.
   reducer's own `when` uses. Consequences that fall out rather than being coded: `AVG`'s
   denominator counts surviving rows and so becomes the distinct-identity count; the
   empty-group check and coefficient zeroing already respect the mask. Soundness rests on
-  the `DETERMINES` check: every row of an identity carries the same value, so *which*
+  the identity being the variant: every row of one carries the same value, so *which*
   row survives cannot matter.
 - **The mask is per term, not per clause**, so `SUM(D: a * open) + sum(b * ship)` in one
   objective de-duplicates only the first term.
@@ -120,11 +121,12 @@ is opt-in.
 - **EXPLAIN prints the colon form as written** (D38). `RenderReducer` prints `sum(D: e)`
   for an aggregate tagged `COLON_FORM_TAG` and `sum(per D: e)` otherwise; a shared scope
   keeps the key text of the spelling bound first.
-- **What `D` does not determine is refused when the query runs**, as for
-  `sum(per D: e)`: a column of another relation, a per-row decision (a different
-  variable on every joined row, so collapsing a depot's rows would keep an arbitrary
-  one), a keyed decision whose key `D` does not determine (*"DECIDE: per D does not
-  determine the decision y (in sum(D: ...)). ..."*, naming the class).
+- **What `D` does not fix is a variant**, as for `sum(per D: e)` (D65): a column of
+  another relation, a per-row decision (a different variable on every joined row, so
+  each row is its own value), a keyed decision whose key `D` does not hold. That is the
+  trap the colon form now carries: `SUM(D: opening_cost + unit_cost * ship)` counts a
+  depot once per route. `EXPLAIN ANALYZE` prints how many values it read from how many
+  tuples.
 - **Refused at bind time** (`BindQualifiedReducer`): a qualifier that is not a relation
   name, an unknown relation name, a qualifier on a non-`SUM`/`AVG`/`MIN`/`MAX` function
   (*"DECIDE: norm(D: ...) is not supported yet; a relation qualifier takes SUM, AVG, MIN

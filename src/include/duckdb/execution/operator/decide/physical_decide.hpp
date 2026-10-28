@@ -132,6 +132,12 @@ public:
     vector<LogicalDecide::ReducerValueLink> reducer_value_links;
     //! What each rewrite made of a clause, for EXPLAIN (LogicalDecide::rewrite_accounts).
     vector<LogicalDecide::RewriteAccount> rewrite_accounts;
+    //! What the data made of a scoped expression whose classes held more than one variant
+    //! (Kind::VARIANTS, D64): written by Finalize, read by ParamsToString, which the
+    //! profiler calls again once the result is read -- so EXPLAIN ANALYZE prints it, and
+    //! a plain EXPLAIN, which runs nothing, does not. Run-time facts of the one execution,
+    //! hence mutable.
+    mutable vector<LogicalDecide::RewriteAccount> variant_accounts;
 
     // --- Absorbed variable bounds (decided by DecideOptimizer::AbsorbVariableBounds) ---
     //
@@ -175,6 +181,10 @@ public:
 
     //! The run-time checks of the clauses, run first.
     vector<DecideScopeCheck> scope_checks;
+    //! The variant signatures (LogicalDecide::signatures), their expressions resolved
+    //! against the input chunk, and the objective's, INVALID_INDEX for none.
+    vector<DecideSignature> signatures;
+    idx_t objective_signature = DConstants::INVALID_INDEX;
 
     //! Source column name per physical child-output column (positionally aligned
     //! with gstate.data columns), resolved post-pruning in plan_decide.cpp. Used by
@@ -274,11 +284,26 @@ private:
 
     //! PHASE 1.6: the scope checks (syntax_reference.md §7.3), before any clause is
     //! evaluated, so every later phase may assume a well-defined clause. Raises the first
-    //! one the data fails: a `when` that keeps no row, a key that does not determine a
-    //! value or a decision, a reducer with no row in some `by` group.
+    //! one the data fails: a `when` that keeps no row, a reducer with no row in some `by`
+    //! group, an objective that would be produced more than once (D66).
     void RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                         ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                         const vector<EntityMapping> &entity_mappings) const;
+    //! What tells the first two variants of `ids` (a signature's numbering) apart, for a
+    //! message: the first field whose value, or instance, differs between them.
+    string DescribeVariantDifference(const DecideSignature &signature, const vector<idx_t> &ids,
+                                     ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                     DecideGlobalSinkState &gstate, idx_t num_rows, const vector<bool> &rows,
+                                     const vector<EntityMapping> &entity_mappings) const;
+    //! Records an EXPLAIN ANALYZE line (variant_accounts) for a scoped expression that
+    //! generated `variants` instances -- `unit`: constraints, or a reducer's values -- from
+    //! `classes` classes.
+    void RecordVariants(const DecideSignature &signature, const char *unit, idx_t variants, idx_t classes) const;
+    //! Each variant's data field values, for a diagnosis label; `first_rows` holds each
+    //! variant's id on its first row only.
+    vector<string> DescribeVariants(const DecideSignature &signature, const vector<idx_t> &first_rows,
+                                    ChunkExprCache &chunk_expr_cache, ClientContext &context,
+                                    DecideGlobalSinkState &gstate, idx_t num_rows) const;
 
     //! PHASE 2, sub-phase 1: evaluate every constraint's coefficients and append the
     //! result to gstate.evaluated_constraints.

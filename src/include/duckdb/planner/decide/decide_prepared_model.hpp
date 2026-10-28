@@ -97,6 +97,10 @@ struct DecideConstraint {
 	enum class PerKeyRole : uint8_t { NONE, ONE_ROW_PER_CLASS, NAMES_CLASSES };
 	PerKeyRole per_key = PerKeyRole::NONE;
 	vector<unique_ptr<Expression>> class_key;
+	//! ONE_ROW_PER_CLASS: the clause's variant signature (LogicalDecide::signatures), which
+	//! splits each class into one row per distinct value of its fields (D64); INVALID_INDEX
+	//! when it has none, so one row per class.
+	idx_t signature = DConstants::INVALID_INDEX;
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 	//! Stable origin in LogicalDecide::constraint_sources.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;

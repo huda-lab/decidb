@@ -320,10 +320,11 @@ same `OracleSolver` interface.
 - `ScopedModel` adds the clause scopes: `[when c] [per K]: C`, a reducer's own
   `when` / `per`, its `by (G)`, the objective's `when` and the two-level objective. It
   filters the rows, splits the kept rows into classes, generates the body once per
-  class and evaluates each reducer on the kept rows sharing the class's `by` value.
+  variant of each class (D64: per distinct value of its tuple terms, decisions and `by`
+  values) and evaluates each reducer on the kept rows sharing the variant's `by` value.
   NULL is a value like any other (`class_ids`). `check` raises `ScopeError` for the
-  three run-time errors (a `when` that keeps no row, a key that does not determine a
-  term, a reducer left with no rows) before any model is built.
+  run-time errors (a `when` that keeps no row, a reducer left with no rows, an
+  objective produced more than once) before any model is built.
 - `solve_scoped` returns the oracle's optimum; `judge_scoped` checks DeciDB's answer
   against the same generated clauses and returns the objective it reaches. A test
   asserts the two agree.

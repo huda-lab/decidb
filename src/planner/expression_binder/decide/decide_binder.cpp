@@ -1626,7 +1626,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		AddRelationColumns(*binding, key);
 	}
 	// `SUM(D, T: e)` is `sum(per D, T: e)` (syntax_reference.md §5.1): the same exact scope, so the same
-	// classes and the same check that the key determines the body.
+	// classes, each split by the body's signature (D65).
 	auto scope_idx = FindOrCreateExactScope(SortedKey(std::move(key)), relation_list, *ctx.entity_scopes);
 
 	auto aggregate_result = BindExpression(qualified_expr.children[0], depth);

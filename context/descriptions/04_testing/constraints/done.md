@@ -53,7 +53,7 @@ signed column and negative constant literal multiplier
 |-----------|-----------|--------|
 | Comparison operators | aggregate SUM | ✓ (all 6) |
 | Comparison operators | per-row | ✓ (all 6) |
-| `<>` | a bound varying within a `by` group | ✓ (`test_per_clause.py`: every exclusion kept without a `per` key; the determination error under one) |
+| `<>` | a bound varying within a `by` group | ✓ (`test_per_clause.py`: every exclusion kept, with no `per` key and under one, each value a variant) |
 | `<>` | keyed decision | ✓ |
 | `<>` | REAL LHS (rejected) | ✓ |
 | BETWEEN | keyed decision | ✓ |

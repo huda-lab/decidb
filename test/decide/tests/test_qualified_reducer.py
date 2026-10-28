@@ -15,9 +15,10 @@ Covers:
   - Mixed qualified and unqualified reducers in one objective
   - A scalar decision multiplied by the qualified relation's own data (batch D):
     weighted and de-duplicated the same as an entity-scoped term
+  - A foreign column or a row-scoped decision inside the reducer: one value per
+    variant of each tuple (D65), as `sum(per n: ...)` reads it (S4)
   - Errors: unknown relation (also in a multi-relation qualifier), a query-wide
-    decision standing alone (row-invariant); a foreign column or a row-scoped decision
-    inside the reducer fails the data check `sum(per n: ...)` takes (S4)
+    decision standing alone (row-invariant)
 """
 
 import pytest
@@ -573,26 +574,35 @@ def test_unknown_relation_in_multi_relation_qualifier_rejected(decidb_cli):
             objective="SUM(n,bogus: n.n_nationkey * keepN)"))
 
 
-@pytest.mark.error
-def test_foreign_column_inside_qualified_reducer_rejected(decidb_cli):
-    """§3.2.2: `n` must determine everything inside `SUM(n: ...)`, as it does inside
-    `sum(per n: ...)` (S4); a customer's balance varies within a nation."""
-    with pytest.raises(DecidBCliError, match=r"per n does not determine c\.c_acctbal \(in sum\(n: c\.c_acctbal \* keepN\)\)"):
-        decidb_cli.execute(_REJECT_BASE.format(
-            extra_decls="",
-            constraint="SUM(keepN) <= 5",
-            objective="SUM(n: c.c_acctbal * keepN)"))
+@pytest.mark.correctness
+def test_foreign_column_inside_qualified_reducer_is_one_value_per_variant(decidb_cli, duckdb_conn):
+    """D65: a customer's balance varies within a nation, so `SUM(n: c.c_acctbal * keepN)`
+    reads one value per distinct balance of each nation -- `SUM(DISTINCT c_acctbal)`, as
+    DuckDB computes it -- and the minimum keeps every nation whose sum is negative."""
+    weights = dict(duckdb_conn.execute("""
+        SELECT CAST(n.n_nationkey AS BIGINT), SUM(DISTINCT CAST(c.c_acctbal AS DOUBLE))
+        FROM customer c JOIN nation n ON c.c_nationkey = n.n_nationkey
+        WHERE n.n_regionkey = 0
+        GROUP BY n.n_nationkey""").fetchall())
+    result, _ = decidb_cli.execute(_REJECT_BASE.format(
+        extra_decls="",
+        constraint="SUM(keepN) <= 5",
+        objective="SUM(n: c.c_acctbal * keepN)"))
+    keep = _keep_by_nation(result, nation_col=1, keep_col=2)
+    reached = sum(weights[nation] * kept for nation, kept in keep.items())
+    assert reached == pytest.approx(sum(min(0.0, weight) for weight in weights.values()), abs=1e-6)
 
 
-@pytest.mark.error
-def test_row_scoped_decision_inside_qualified_reducer_rejected(decidb_cli):
-    """A row-scoped decision is one per joined row, so `n` does not determine it: the
-    data check of `sum(per n: ...)` refuses it (S4)."""
-    with pytest.raises(DecidBCliError, match=r"per n does not determine the decision y \(in sum\(n: "):
-        decidb_cli.execute(_REJECT_BASE.format(
-            extra_decls=", y(INT)",
-            constraint="y <= 5",
-            objective="SUM(n: n.n_nationkey * keepN + y)"))
+@pytest.mark.correctness
+def test_row_scoped_decision_inside_qualified_reducer_is_one_value_per_row(decidb_cli):
+    """A row-scoped decision is one instance per joined row, so each row of a nation is a
+    variant of its own (D65) and `SUM(n: ...)` reads what the unqualified form reads."""
+    query = _REJECT_BASE.replace("keepN\n", "keepN, y\n").format(
+        extra_decls=", y(INT)", constraint="y <= 5", objective="{objective}") + "ORDER BY c.c_custkey"
+    qualified, _ = decidb_cli.execute(query.format(objective="SUM(n: n.n_nationkey * keepN - y)"))
+    unqualified, _ = decidb_cli.execute(query.format(objective="SUM(n.n_nationkey * keepN - y)"))
+    assert qualified == unqualified
+    assert all(int(row[3]) == 5 for row in qualified)
 
 
 @pytest.mark.error_binder

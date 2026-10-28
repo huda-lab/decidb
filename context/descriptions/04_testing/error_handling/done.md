@@ -38,8 +38,8 @@ Categories covered in `test_error_binder.py` unless noted:
   (`test_correlated_subquery_aggregate_equality_rhs_rejected`).
 - `OR` between constraints, in every scope spelling, and data-only aggregates as
   divisors (`TestRefusalsInEverySpelling`).
-- The scope errors — a key that does not determine, a `when` that keeps no row, a
-  reducer with no row for a group, key errors — are in the `test_scope_*.py` suites
+- The scope errors — an objective produced more than once, a `when` that keeps no row,
+  a reducer with no row for a group, key errors — are in the `test_scope_*.py` suites
   ([`../scope/done.md`](../scope/done.md)).
 
 ## Infeasibility detection
@@ -50,9 +50,9 @@ bounds (`x >= 10 AND x <= 5`), impossible SUM constraint (`SUM(x) >= 1000`
 with too few rows), negative SUM upper bound, a `when` that forces every row to
 zero beside `SUM(x) >= 1` (`when l_quantity > 0: x <= 0`), and
 `sum(x) by (grp) = cap` with two caps in one group
-(`test_equal_bound_varying_per_group_is_infeasible`). Its `per grp:` form raises
-the determination error, "per grp does not determine cap", instead
-(`test_equal_bound_varying_within_a_per_class_does_not_determine`).
+(`test_equal_bound_varying_per_group_is_infeasible`). Its `per grp:` form is two
+variants of the class, which name the same contradiction
+(`test_equal_bound_varying_within_a_per_class_is_two_instances`).
 
 ## Unboundedness detection
 

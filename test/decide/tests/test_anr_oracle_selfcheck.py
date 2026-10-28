@@ -10,9 +10,9 @@ Five independent readings must agree with it:
    indicators, strict stepping) and the numeric reading of the same instances find the
    same optimum.
 3. **``_scope_oracle.ScopedModel``** on the 784-cell scope grid and the two-level
-   objective: wherever today's determination rule holds, variant signatures generate
-   today's model (D64; deck p. 39), and the two-level objective is an ordinary nested
-   reducer (D75).
+   objective: its variants, read off its own statements, are the ones this oracle's
+   signatures give (D64, D77), cell by cell, and the two-level objective is an ordinary
+   nested reducer (D75).
 4. **DeciDB**, on the cases today's language already runs (``Case.phase == 0``).
 5. **DeciDB's feasibility with every decision fixed**, against the oracle's, assignment
    by assignment (the status grid): a check no de-duplication after solving can pass.
@@ -178,7 +178,7 @@ def test_enumeration_agrees_with_the_solved_model(case, scope_solver):
 
 
 # ---------------------------------------------------------------------------
-# 3. Today's scope oracle: the conservative extension
+# 3. The scope oracle: the same variants on its own statements
 # ---------------------------------------------------------------------------
 
 
@@ -226,13 +226,8 @@ def test_agrees_with_the_scope_oracle_on_the_grid(scope_solver, declaration, fro
     clauses = [X_BOUND, scope.Scoped(lhs, sense, rhs, when=when, per=per)]
     old, new = _both(scope_solver, table_rows(COLUMNS, ROWS), [DECISIONS[declaration]], clauses, MAXIMIZE_X)
     if not isinstance(old, Exception):
-        assert not isinstance(new, Exception), f"today's rule holds, so the answer is today's: {new}"
+        assert not isinstance(new, Exception), f"the scope oracle answers, so this one does: {new}"
         assert new.status == SolverStatus.OPTIMAL and new.objective == pytest.approx(old, abs=1e-6)
-    elif old.kind == "not_determined":
-        # D64: variants answer where today's rule refused; a variant's reducer group may
-        # now be one its inner when empties (D8)
-        assert not isinstance(new, Exception) or new.kind == "reducer_empty", new
-        assert isinstance(new, Exception) or new.status == SolverStatus.OPTIMAL
     else:
         assert isinstance(new, ScopeError) and new.kind == old.kind, f"{old.kind} expected, got {new}"
 

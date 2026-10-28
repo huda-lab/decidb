@@ -284,9 +284,9 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 			}
 			return;
 		}
-		// A `per K:` over a composed clause names the classes its one row stands for (the
-		// checks hold K to it) and adds no row: the clause is rewritten as under no
-		// wrapper, which keeps the placeholder the rewrite leaves.
+		// A `per K:` over a composed clause names the classes its one row stands for (its
+		// bound is a constant, so each class has one variant) and adds no row: the clause
+		// is rewritten as under no wrapper, which keeps the placeholder the rewrite leaves.
 		if (IsPerClassWrapper(conj) && !conj.children.empty()) {
 			RewriteComposedMinMaxInConstraint(conj.children[0], decide, scoped_when, &conj);
 			return;

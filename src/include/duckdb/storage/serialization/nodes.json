@@ -1117,6 +1117,12 @@
         "id": 106,
         "name": "key_names",
         "type": "vector<string>"
+      },
+      {
+        "id": 107,
+        "name": "signature",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
       }
     ],
     "pointer_type": "none"
@@ -1169,12 +1175,14 @@
       {
         "id": 103,
         "name": "value",
-        "type": "Expression*"
+        "type": "Expression*",
+        "deleted": true
       },
       {
         "id": 104,
         "name": "decision",
-        "type": "idx_t"
+        "type": "idx_t",
+        "deleted": true
       },
       {
         "id": 105,
@@ -1189,17 +1197,90 @@
       {
         "id": 107,
         "name": "object",
-        "type": "string"
+        "type": "string",
+        "deleted": true
       },
       {
         "id": 108,
         "name": "context",
-        "type": "string"
+        "type": "string",
+        "deleted": true
       },
       {
         "id": 109,
         "name": "key_names",
         "type": "vector<string>"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "DecideSignatureField",
+    "includes": [
+      "duckdb/planner/operator/decide/logical_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "kind",
+        "type": "DecideSignatureFieldKind"
+      },
+      {
+        "id": 101,
+        "name": "value",
+        "type": "Expression*"
+      },
+      {
+        "id": 102,
+        "name": "decision",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 103,
+        "name": "group_key",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 104,
+        "name": "text",
+        "type": "string"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "DecideSignature",
+    "includes": [
+      "duckdb/planner/operator/decide/logical_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "rows",
+        "type": "Expression*"
+      },
+      {
+        "id": 101,
+        "name": "key",
+        "type": "vector<Expression*>"
+      },
+      {
+        "id": 102,
+        "name": "fields",
+        "type": "vector<DecideSignatureField>"
+      },
+      {
+        "id": 103,
+        "name": "text",
+        "type": "string"
+      },
+      {
+        "id": 104,
+        "name": "source_clause_id",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
       }
     ],
     "pointer_type": "none"

@@ -1,12 +1,13 @@
 """`when` and `per` inside a reducer: `agg([when c] [per K]: e) [by (Γ)]`
 (syntax_reference.md §5.3).
 
-Order: the rows `by` selects, then the inner `when`, then one value per class of the
-inner `per` -- the first row the `when` keeps stands for its class, since the key
-determines the body (a scope check) -- then the aggregate. The inner `when` filters its
+Order: the rows `by` selects, then the inner `when`, then one value per variant of each
+class of the inner `per` -- per distinct value of what the body reads, each read at its
+first row the `when` keeps (D64, D65) -- then the aggregate. The inner `when` filters its
 own reducer only; `AVG` divides by the values it receives; `MIN`/`MAX` are unaffected by
 an inner `per`. A reducer with no row for some group of the kept rows is an error naming
-the group (D8, D18). The colon form `SUM(D: e)` is `sum(per D: e)` and takes the same checks (S4).
+the group (D8, D18). The colon form `SUM(D: e)` is `sum(per D: e)` and reads the same
+values (S4).
 
 Optima are judged against `_scope_oracle.ScopedModel`; model shapes against
 DECIDB_DUMP_MODEL.
@@ -15,7 +16,8 @@ DECIDB_DUMP_MODEL.
 import pytest
 
 from ._output_helpers import assert_no_internal_leak
-from ._scope_cases import (DEPOTS, SHIPMENTS, aligned, answer, from_clause, joined, scope_solver)  # noqa: F401
+from ._scope_cases import (DEPOT_COLUMNS, DEPOTS, SHIPMENTS, aligned, answer, from_clause, joined,  # noqa: F401
+                           scope_solver)
 from ._scope_oracle import CONSTANT, GLOBAL, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense
 
@@ -197,14 +199,17 @@ def test_inner_per_in_the_objective_counts_a_class_from_its_first_kept_row(decid
 # Errors that depend on the data
 # ---------------------------------------------------------------------------
 
-@pytest.mark.error
-def test_an_inner_key_must_determine_the_body(decidb_cli, scope_solver):
-    """`per D.region` does not determine D.capacity (East has 25 and 40); `per D.depotID`
-    does, and the same reducer runs."""
-    result = decidb_cli.execute_raw(_open_query("sum(per D.region: D.capacity * open) <= 60"))
-    assert ("DECIDE: per D.region does not determine D.capacity (in sum(per D.region: D.capacity * open)). "
-            "D.region = 'East' has more than one value: 25, 40." in result.stderr), result.stderr
-    assert_no_internal_leak(result, "an inner key that does not determine the body")
+@pytest.mark.correctness
+def test_an_inner_key_takes_one_value_per_variant(decidb_cli, scope_solver):
+    """D65: East's two depots differ in capacity (25, 40) and in `open`, keyed by the
+    depot, so `per D.region` hands the sum both: 25 * open[D1] + 40 * open[D2] + 20 *
+    open[D3] <= 60, and opening D2 and D3 ships the most (45 + 25). Where every East
+    depot has one capacity and `open` is keyed by the region, East is one value."""
+    sql = _open_query("sum(per D.region: D.capacity * open) <= 60")
+    model = ScopedModel(joined(), SHIP_OPEN)
+    clauses = [SHIP_IF_OPEN, Scoped((_capacity_once(per=("region",)),), "<=", (lambda r: {CONSTANT: 60},))]
+    result = _judged(decidb_cli, scope_solver, sql, model, clauses, MAXIMIZE_SHIP)
+    assert sum(row["ship"] for row in result) == 45 + 25
 
     depots = (DEPOTS[0], ("D2", "East", "CA", 25, 12, 0.2, 0.6, 60), DEPOTS[2])
     rows, _ = decidb_cli.execute(f"""
@@ -260,11 +265,20 @@ def test_norm_takes_no_relation_qualifier(decidb_cli, clause, objective):
                  "constraint or inside a reducer", id="scope-in-norm"),
     pytest.param("sum(when ship > 1: ship) <= 5", "DECIDE: ship is a decision; when, per and by may only use data",
                  id="decision-in-inner-when"),
-    pytest.param("SUM(D: ship) by (D.region) <= 100",
-                 "DECIDE: per D does not determine the decision ship (in sum(D: ship))",
-                 id="colon-form-takes-the-data-check"),
 ])
 def test_inner_scope_errors(decidb_cli, clause, message):
     result = decidb_cli.execute_raw(_open_query(clause))
     assert message in result.stderr, result.stderr
     assert_no_internal_leak(result, "an inner scope error")
+
+
+@pytest.mark.correctness
+def test_the_colon_form_reads_a_per_row_decision_once_per_row(decidb_cli, scope_solver):
+    """D65: `ship` is per row, so each row of a D tuple is a variant of its own and `SUM(D:
+    ship)` is every row's ship, as without the qualifier: East ships 75 within 80."""
+    sql = _open_query("SUM(D: ship) by (D.region) <= 80")
+    model = ScopedModel(joined(), SHIP_OPEN)
+    total = Reduce("sum", lambda r: {"ship": 1}, per=DEPOT_COLUMNS, by=("region",))
+    clauses = [SHIP_IF_OPEN, Scoped((total,), "<=", (lambda r: {CONSTANT: 80},))]
+    result = _judged(decidb_cli, scope_solver, sql, model, clauses, MAXIMIZE_SHIP)
+    assert sum(row["ship"] for row in result) == 100

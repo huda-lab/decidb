@@ -1296,6 +1296,7 @@ private:
 				for (idx_t i = 1; i < per_class->children.size(); i++) {
 					constraint->class_key.push_back(per_class->children[i]->Copy());
 				}
+				TryParseSignatureTag(per_class->GetAlias(), constraint->signature);
 			}
 
 			// Extract terms from LHS
@@ -1566,7 +1567,7 @@ private:
 			}
 		}
 		// The objective reads a decision outside its reducers once, on the first kept row
-		// (a scope check made sure it has one instance there), a query-wide one included.
+		// (its signature has one variant there, D66), a query-wide one included.
 		// A product of decisions has no once-only reading in the model -- except a product
 		// of two query-wide decisions (`s * u`), one `NONE` term execution counts once
 		// (CountOnce in physical_decide.cpp).

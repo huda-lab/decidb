@@ -575,32 +575,32 @@ class AnrModel:
                 return _SKIP
             raise
 
-    def _collect(self, expr, scale: float, pure: list, impure: list) -> None:
+    def _collect(self, expr, scale: float, data: list, other: list) -> None:
         """Flatten one additive context through ``+``, ``-`` and constant factors, as the
-        canonical tree does (D77): ``x + a <= b + sum(y)`` has the one pure field
-        ``x + a - b``. A row-varying factor is a field of its own (``mul``)."""
+        canonical tree does (D77): its data terms are one field, so ``x + a <= b + sum(y)``
+        has the data field ``a - b`` beside the decision ``x`` and the reducer's ``by``."""
         if isinstance(expr, Add):
             for term in expr.terms:
-                self._collect(term, scale, pure, impure)
+                self._collect(term, scale, data, other)
         elif isinstance(expr, Mul) and isinstance(expr.left, Const):
-            self._collect(expr.right, scale * expr.left.value, pure, impure)
+            self._collect(expr.right, scale * expr.left.value, data, other)
         elif isinstance(expr, Mul) and isinstance(expr.right, Const):
-            self._collect(expr.left, scale * expr.right.value, pure, impure)
-        elif self._is_pure(expr):
-            pure.append((scale, expr))
+            self._collect(expr.left, scale * expr.right.value, data, other)
+        elif self._is_data(expr):
+            data.append((scale, expr))
         else:
-            impure.append(expr)
+            other.append(expr)
 
     def _fields(self, expr, t, kept, null_ok=False) -> tuple:
-        """The fields of one additive context: each impure term's fields, then the net
-        value of the pure terms as one field (D77)."""
-        pure, impure = [], []
-        self._collect(expr, 1.0, pure, impure)
-        fields = [self._impure_fields(node, t, kept) for node in impure]
-        if pure:
+        """The fields of one additive context: each other term's fields, then the net
+        value of the data terms as one field (D77)."""
+        data, other = [], []
+        self._collect(expr, 1.0, data, other)
+        fields = [self._term_fields(node, t, kept, null_ok) for node in other]
+        if data:
             total: dict = {}
             try:
-                for scale, node in pure:
+                for scale, node in data:
                     _add_into(total, self._form(node, t, kept), scale)
                 fields.append(("terms", _freeze(total)))
             except ScopeError as error:
@@ -609,15 +609,24 @@ class AnrModel:
                 fields.append(("terms", NULL))
         return tuple(fields)
 
-    def _impure_fields(self, node, t, kept) -> tuple:
+    def _term_fields(self, node, t, kept, null_ok) -> tuple:
+        """A term that is not data: a decision by its instance, whatever its coefficient
+        (D77); a linear form by its every coefficient; a reducer by its ``by`` value; a
+        frame by its keys (D76); and a product or an ``abs`` by the fields of each
+        context it holds."""
+        if isinstance(node, Var):
+            return ("decision", frozenset(self._form(node, t, kept)))
+        if isinstance(node, Terms):
+            form = self._form(node, t, kept)
+            return ("linear", frozenset((atom, round(float(c), _DIGITS)) for atom, c in form.items()))
         if isinstance(node, Agg):
             return ("by", _key_of(self.rows[t], node.by))
         if isinstance(node, (At, Range)):
             return ("frame",) + self._frame_fields(node, t, kept)
         if isinstance(node, Mul):
-            return ("mul", self._fields(node.left, t, kept), self._fields(node.right, t, kept))
+            return ("mul", self._fields(node.left, t, kept, null_ok), self._fields(node.right, t, kept, null_ok))
         if isinstance(node, Abs):
-            return ("abs", self._fields(node.operand, t, kept))
+            return ("abs", self._fields(node.operand, t, kept, null_ok))
         raise TypeError(f"unexpected node {node!r}")
 
     def _frame_fields(self, node, t, kept) -> tuple:
@@ -630,6 +639,18 @@ class AnrModel:
         if node.fallback is not None and self._missing(node, t, kept):
             fields.append(("fallback", _freeze(self._form(node.fallback, t, kept))))
         return tuple(fields)
+
+    def _is_data(self, expr) -> bool:
+        """Free of decisions, reducers and frames: a data term of its context (D77)."""
+        if isinstance(expr, (Const, Col)):
+            return True
+        if isinstance(expr, Add):
+            return all(self._is_data(term) for term in expr.terms)
+        if isinstance(expr, Mul):
+            return self._is_data(expr.left) and self._is_data(expr.right)
+        if isinstance(expr, Abs):
+            return self._is_data(expr.operand)
+        return False
 
     def _is_pure(self, expr) -> bool:
         """Free of reducers and frames (a maximal subtree of these is a field, D77)."""

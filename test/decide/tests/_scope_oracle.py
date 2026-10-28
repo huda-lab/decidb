@@ -14,9 +14,10 @@ either generated once per row or summed over all rows.
 ``ScopedModel`` adds the clause scopes (`when`, `per`, `by`, a scope inside a reducer,
 the objective's `when` and its two-level form) and follows `ANR Implementation.pdf`
 literally: filter the rows, split the kept rows into classes, generate the body once per
-class, and evaluate every reducer on the kept rows sharing the class's `by` value, after
-its own `when` and one value per class of its own `per`. It raises ``ScopeError`` for
-the three run-time errors of the language before any model is built.
+variant of each class (D64: per distinct value of the tuple terms, decisions and `by`
+values it reads), and evaluate every reducer on the kept rows sharing the variant's `by`
+value, after its own `when` and one value per variant of each class of its own `per`. It
+raises ``ScopeError`` for the run-time errors of the language before any model is built.
 """
 
 from __future__ import annotations
@@ -216,8 +217,8 @@ class ScopeError(Exception):
     #: The fixed phrase DeciDB's message carries for each kind.
     PHRASES = {
         "kept_no_rows": "matches no rows",
-        "not_determined": "does not determine",
         "reducer_empty": "has no rows",
+        "objective_variants": "would be produced more than once",
     }
 
     def __init__(self, kind: str, detail: str):
@@ -315,12 +316,27 @@ class ScopedModel(ScopeModel):
             expr[column] = expr.get(column, 0.0) + float(coefficient)
         return expr
 
-    def _require_determined(self, class_rows: Sequence[int], key_name: str, value) -> None:
-        """Every row of the class shows the same ``value(row_index)``."""
-        first = value(class_rows[0])
-        for i in class_rows[1:]:
-            if value(i) != first:
-                raise ScopeError("not_determined", f"per {key_name}, rows {class_rows[0]} and {i}")
+    def _variants(self, class_rows: Sequence[int], signature) -> list[list[int]]:
+        """``class_rows`` split by ``signature(row_index)`` in first-seen order: one
+        instance per distinct signature, generated from its first row (D64)."""
+        variants: dict = {}
+        for i in class_rows:
+            variants.setdefault(signature(i), []).append(i)
+        return list(variants.values())
+
+    def _signature(self, lhs, rhs, i: int):
+        """Row ``i``'s signature for a body of parts: the net value of its tuple terms --
+        their decisions by instance, their data summed (D77) -- and each reducer's factor
+        and ``by`` value."""
+        terms: Linear = {}
+        reducers = []
+        for parts, sign in ((lhs, 1.0), (rhs, -1.0)):
+            for part in parts:
+                if isinstance(part, Reduce):
+                    reducers.append((float(part.factor(self.rows[i])), _key_of(self.rows[i], part.by)))
+                else:
+                    _add(terms, self._linear(part(self.rows[i]), i), sign)
+        return frozenset(terms.items()), tuple(reducers)
 
     # -- reducers -----------------------------------------------------------
 
@@ -335,10 +351,11 @@ class ScopedModel(ScopeModel):
         if not read:
             raise ScopeError("reducer_empty", f"{reduce.agg} for by value {group}")
         members = []
+        body = lambda i: frozenset(self._linear(reduce.body(self.rows[i]), i).items())  # noqa: E731
         for inner in _split(self.rows, read, reduce.per):
-            self._require_determined(inner, f"{reduce.per} inside {reduce.agg}",
-                                     lambda i: self._linear(reduce.body(self.rows[i]), i))
-            members.append(self._linear(reduce.body(self.rows[inner[0]]), inner[0]))
+            # D65: one member per variant of each class of its own `per`.
+            for variant in self._variants(inner, body):
+                members.append(self._linear(reduce.body(self.rows[variant[0]]), variant[0]))
         if reduce.agg in ("sum", "avg"):
             total: Linear = {}
             for member in members:
@@ -358,16 +375,6 @@ class ScopedModel(ScopeModel):
             return value
         return self._linear(part(self.rows[at]), at)
 
-    def _determined_parts(self, parts, class_rows: Sequence[int], key_name: str) -> None:
-        """The determination rule for a generated class: every tuple term, every factor
-        and every ``by`` value is one value over the class."""
-        for part in parts:
-            if isinstance(part, Reduce):
-                self._require_determined(class_rows, key_name, lambda i: float(part.factor(self.rows[i])))
-                self._require_determined(class_rows, key_name, lambda i: _key_of(self.rows[i], part.by))
-            else:
-                self._require_determined(class_rows, key_name, lambda i: self._linear(part(self.rows[i]), i))
-
     # -- clauses ------------------------------------------------------------
 
     def _kept_rows(self, when) -> list[int]:
@@ -377,19 +384,19 @@ class ScopedModel(ScopeModel):
         return kept
 
     def _generate(self, clause: Scoped, emit) -> list[tuple[Linear, str]]:
-        """``clause`` as one ``lhs - rhs sense 0`` per class of its ``per`` key."""
+        """``clause`` as one ``lhs - rhs sense 0`` per variant of each class of its ``per``
+        key (D64)."""
         kept = self._kept_rows(clause.when)
         generated = []
         for class_rows in _split(self.rows, kept, clause.per):
-            if clause.per is not PER_ROW:
-                self._determined_parts(clause.lhs + clause.rhs, class_rows, str(clause.per))
-            at = class_rows[0]
-            expr: Linear = {}
-            for part in clause.lhs:
-                _add(expr, self._part(part, kept, at, emit))
-            for part in clause.rhs:
-                _add(expr, self._part(part, kept, at, emit), -1.0)
-            generated.append((expr, clause.sense))
+            for variant in self._variants(class_rows, lambda i: self._signature(clause.lhs, clause.rhs, i)):
+                at = variant[0]
+                expr: Linear = {}
+                for part in clause.lhs:
+                    _add(expr, self._part(part, kept, at, emit))
+                for part in clause.rhs:
+                    _add(expr, self._part(part, kept, at, emit), -1.0)
+                generated.append((expr, clause.sense))
         return generated
 
     def _objective(self, objective: ScopedObjective, emit) -> Linear:
@@ -397,7 +404,8 @@ class ScopedModel(ScopeModel):
         if not kept:
             return {}
         flat = tuple(part for part in objective.parts if not isinstance(part, Nested))
-        self._determined_parts(flat, kept, "()")
+        if len(self._variants(kept, lambda i: self._signature(flat, (), i))) > 1:
+            raise ScopeError("objective_variants", "the objective is produced once")  # D66
         expr: Linear = {}
         for part in objective.parts:
             if isinstance(part, Nested):

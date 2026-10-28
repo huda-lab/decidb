@@ -122,21 +122,23 @@ def test_old_refusal_now_answers(request, scope_solver, cli_fixture, clause_sql,
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("decisions, objective, message", [
-    pytest.param("x(INT), per (): s(INT)", "MAXIMIZE SUM(x) - w * s", "per () does not determine w.",
-                 id="row-varying-data"),  # not read off row 0's w
-    pytest.param("x(INT)", "MAXIMIZE x", "per () does not determine the decision x",
+    pytest.param("x(INT), per (): s(INT)", "MAXIMIZE SUM(x) - w * s",
+                 "'w' takes more than one value over the kept rows", id="row-varying-data"),  # not read off row 0's w
+    pytest.param("x(INT)", "MAXIMIZE x", "the decision 'x' (declared per row) has more than one instance",
                  id="per-row-decision"),  # not "does not support 'x'(ExpressionClass::COLUMN_REF)"
-    pytest.param("x(INT), y(INT)", "MAXIMIZE SUM(x) + y", "per () does not determine the decision y",
+    pytest.param("x(INT), y(INT)", "MAXIMIZE SUM(x) + y",
+                 "the decision 'y' (declared per row) has more than one instance",
                  id="per-row-decision-beside-a-reducer"),  # not "contains a non-aggregate term: y"
 ])
 def test_objective_term_must_be_one_value(decidb_cli, decisions, objective, message):
     result = decidb_cli.execute_raw(_query(decisions, "x <= cap AND s <= 4" if "s(" in decisions else "x <= cap",
                                            objective))
     assert message in result.stderr, result.stderr
+    assert "so the objective would be produced more than once" in result.stderr, result.stderr
 
 
 def test_a_per_row_objective_decision_on_one_row(decidb_cli, scope_solver):
-    """`MAXIMIZE x` over one row: `per ()` determines the decision."""
+    """`MAXIMIZE x` over one row: the objective has one instance of the decision."""
     sql = f"""SELECT id, x {table('t', COLUMNS, ROWS[:1])}
         DECIDE x(INT) SUCH THAT x <= cap MAXIMIZE x ORDER BY id"""
     model = ScopedModel(table_rows(COLUMNS, ROWS[:1]), [Decision("x")])

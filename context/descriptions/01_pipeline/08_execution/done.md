@@ -152,8 +152,8 @@ reason about soundly — any negative coefficient, bilinear or quadratic terms,
 MIN/MAX and `<>` indicator rows, and a clause with rows outside its row map, such as one
 under a `when` (whose bound would wrongly cap the excluded rows, since the derived bound
 is shared across all of a variable's rows). A `per K:` clause with no `when` is not
-skipped: each row it leaves out stands with its class's first row
-(`rows_stand_with_their_class`).
+skipped: each row it leaves out stands with its variant's first row, which carries the
+same decisions and data (`rows_stand_with_their_class`; D64).
 
 ---
 
@@ -208,7 +208,13 @@ coefficient evaluation:
    the rows the link's clause `when` keeps only (`BuildGroupIds`' `read_rows`), one
    entity per value they take together, NULL a value. A row the clause drops is no
    group; every such row maps to one spare entity, so each row has an id and the key is
-   never evaluated where the clause never reads.
+   never evaluated where the clause never reads. A relation-qualified reducer's own
+   scope (`EntityScopeInfo::signature`, the canonicalizer) has no key columns either:
+   `BuildSignatureIds` numbers the rows its signature reads (the clause's `when` and the
+   reducer's own) by variant — the key's class split by each field's value, a keyed
+   decision field by the entities of its own scope, which comes earlier — so the
+   reducer's de-duplication keeps one row per variant (D65). The same spare entity takes
+   the rows it does not read.
 2. Concatenate each row's key values into a composite string key with NULL-safe
    tagging, so a real NULL is distinguishable from the string `"NULL"` — the same
    pattern the `by`, class and check keys use (`BuildGroupIds` serves both). NULL is a
@@ -232,8 +238,16 @@ the data checks of [`syntax_reference.md`](../../00_project_overview/syntax_refe
 | Kind | Fails when | Message |
 |---|---|---|
 | `KEEPS_A_ROW` | the `when` keeps no row | `DECIDE: when <c> matches no rows.` |
-| `DETERMINES` | a class of the key (over the kept rows, and a reducer's own `when`) shows two values, NULL equal to NULL, or two instances of the decision | `DECIDE: per <K> does not determine <value>[ (<context>)]. <class> has more than one value: <a>, <b>.` · `... the decision <x> (declared ...). <class> covers more than one <x>.` |
+| `DETERMINES` | retired (D64): never built, and an internal error if it reaches execution | — |
 | `READS_A_ROW` | a `by` group of the kept rows has no row the reducer's own `when` keeps | `DECIDE: <reducer> has no rows for <group>.` · `... has no rows.` for `by ()` |
+
+After them, the objective's signature (`LogicalDecide::objective_signature`, D66): its kept
+rows numbered by variant (`BuildSignatureIds`) must be one variant, else
+`DescribeVariantDifference` names the first field that tells the first two apart —
+*"DECIDE objective: 'w' takes more than one value over the kept rows (3, 5), so the
+objective would be produced more than once; move it inside a reducer or fix it with
+when."*, *"... the decision 'x' (declared per row) has more than one instance ..."*,
+*"... 'g' in by (g) takes more than one value ..."*.
 
 A class or group is named by its key's values as SQL literals (`D.depotID = 'D1'`); over
 `()` the message says "The kept rows". Groups come from `LookupOrBuildPerGroupIds` with
@@ -265,14 +279,20 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   its bound the tightest over all its kept rows. A row the reducer's own `per`
   de-duplication drops leaves the group when the clause is a hard MIN/MAX
   (`minmax_agg_type`): the members are the rows the reducer reads, and a zeroed row
-  would be a member pinned at 0. The rows shape under `per K:` emits one row per class,
-  at its first kept row; under `when` alone, one per kept row.
+  would be a member pinned at 0. The rows shape under `per K:` emits one row per variant
+  of each class (D64; `BuildSignatureIds` over the clause's signature when it has one,
+  else the class key), at its first kept row; under `when` alone, one per kept row. A
+  variant is labelled by its class, then by its own field values where its class has
+  more than one (`DescribeVariants`: `a, 2`), which an expanded diagnosis reports
+  (D28); and a class with more than one variant leaves an EXPLAIN ANALYZE line
+  (`RecordVariants`).
 - **Bound-side reducers** are each evaluated over their own `by` groups of the kept rows
   (`EvaluateRhsReducerPerGroup`), whatever the clause's shape, and broadcast
   by each row's own group.
 - **De-duplication** for a reducer's own `per` keeps the first row of each class among
   the rows its `when` keeps (`BuildQualifierKeepMask`'s `eligible`), within each group:
-  a class whose first joined row the `when` drops is still counted.
+  a class whose first joined row the `when` drops is still counted. A class is a variant
+  where the reducer has a signature (its scope's entities, §4).
 - **The objective**: its `when` is folded into every
   term's filter, so reading, de-duplication and AVG denominators all follow it. A
   decision outside the reducers (`NONE`) keeps its coefficient on the first kept row only
@@ -291,8 +311,9 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   `class_key`) the key's values among the group's kept rows (`LookupOrBuildPerGroupIds`
   over the kept rows, first-seen order); with no `per` (`NONE`) every kept row of the
   group; `per ()` the whole clause (one `WHOLE_CLAUSE` set its groups share). A per-row
-  clause under `per K:` (`ONE_ROW_PER_CLASS`) calls it with its classes as the groups, so
-  each class's row gets a set naming that class. One `SolverInput::ClassSet` per group with
+  clause under `per K:` (`ONE_ROW_PER_CLASS`) calls it with its variants as the groups, so
+  each variant's row gets a set naming its class, or naming the variant itself (its
+  label) where its class has more than one. One `SolverInput::ClassSet` per group with
   kept rows, its `Kind` saying which, referenced from
   `EvaluatedConstraint::group_class_set` (a composed clause's from its
   evaluated `class_set`, over the rows its `when` keeps); the model keeps the table and an
@@ -376,7 +397,7 @@ value, with ids dense in the order their rows first appear:
 | no `when`, no reducer `when`, no `by`, no `per K:` over the rows shape | empty (fast path — all rows are one implicit group) | 0 |
 | aggregate shape or easy MIN/MAX, `by (G)` | each row's `by` group, on the rows its reducers read (a kept row some reducer's own `when` keeps; every kept row for `<>`); `INVALID_INDEX` elsewhere | number of groups |
 | aggregate shape or easy MIN/MAX, `by ()`, with a `when` or a reducer's own `when` | 0 on the rows its reducers read, `INVALID_INDEX` elsewhere | 1 |
-| rows shape under `per K:` | the class id on each class's first kept row, `INVALID_INDEX` elsewhere | number of classes |
+| rows shape under `per K:` | the variant id on each variant's first kept row, `INVALID_INDEX` elsewhere | number of variants (classes, without a signature) |
 | rows shape with a `when` only | 0 on kept rows, `INVALID_INDEX` on dropped rows | 1 |
 
 The bound side of the aggregate shape gets its own map with the same numbering over every
@@ -418,10 +439,10 @@ one row, over the rows either keeps. A group where `priority` keeps no row is re
 `SUM(D: e)` is `sum(per D: e)` with `K` every column of `D`; a join repeats each class
 once per matching row. De-duplication (`BuildQualifierKeepMask`) keeps the first row of
 each class among the rows the reducer reads — the kept rows its own `when` keeps — and
-zeroes the rest. That is sound because the scope checks have already proved that every
-row of a class carries the same value (`DETERMINES`, *"per D does not determine ..."*), so
-whichever row is kept gives the same answer. A class whose first joined row the `when`
-drops is still counted once.
+zeroes the rest. A class here is a variant of a class (D65): where the body reads a value
+the key does not fix, the reducer's scope is its own and its entities are the variants
+(§4), so every row of one carries the same value and whichever row is kept gives the
+same answer. A class whose first joined row the `when` drops is still counted once.
 
 De-duplication runs **inside** each `by` group, after the clause's `when`, the reducer's
 own `when` and the grouping. Group ids are dense in `[0, num_groups)` and class ids in
@@ -441,7 +462,7 @@ marked `avg_scale` are divided by the number of rows the reducer reads in the ro
 | `by ()` | the kept rows (every row with no `when`) |
 | `by (G)` | the kept rows of the row's `by` group |
 | a reducer's own `when` | further, only the rows it keeps |
-| a reducer's own `per` | further, one row per class (the de-duplication above) |
+| a reducer's own `per` | further, one row per variant of each class (the de-duplication above) |
 
 In the objective the two-level form's classes are the groups. The scope checks guarantee
 no denominator is zero.
