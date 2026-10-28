@@ -103,7 +103,7 @@ struct DecideConstraint {
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
 	//! Atomic DROP identity, independent of display and elastic grouping provenance.
 	idx_t removal_group_id = DConstants::INVALID_INDEX;
-	//! A per-row bound on one decision: the values of the decision it admits on each row (DecideOneDecisionBound), as
+	//! A per-row bound on one decision: the values of the decision it admits on each row (DecideSingletonRow), as
 	//! DOUBLE expressions over the row, ±infinity on an open side. Null for any other constraint. The model builder
 	//! folds them into the decision's column instead of adding the row; a data bound narrows the column and never
 	//! replaces its floor of 0 (D41).

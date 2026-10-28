@@ -50,14 +50,17 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
 
 //! The error for a NaN or infinite number, naming the kind of coefficient the user wrote it in.
 static unique_ptr<Expression> DirectInvalidNumberError(Optimizer &optimizer, DirectNumberKind kind) {
-	return DirectErrorPredicate(optimizer, DecideInvalidValueMessage(kind == DirectNumberKind::OBJECTIVE
-	                                                                     ? "objective coefficient"
-	                                                                     : "constraint coefficient",
-	                                                                 "NaN or Infinity"));
+	return DirectErrorPredicate(optimizer, kind == DirectNumberKind::OBJECTIVE
+	                                           ? DecideInvalidValueMessage("objective coefficient", "NaN or Infinity")
+	                                           : DirectCoefficientInvalidMessage());
 }
 
 string DirectBoundNaNMessage() {
 	return DecideInvalidValueMessage("constraint right-hand side", "NaN");
+}
+
+string DirectCoefficientInvalidMessage() {
+	return DecideInvalidValueMessage("constraint coefficient", "NaN or Infinity");
 }
 
 //! The column part of the NULL message, as a VARCHAR expression over the row it is evaluated on: it names the columns
@@ -156,7 +159,7 @@ unique_ptr<Expression> DirectNullMessageOf(Optimizer &optimizer, const Expressio
 		idx_t fragment_id;
 		TryParseSourceFragmentTag(leaf.GetAlias(), fragment_id);
 		D_ASSERT(fragment_id < fragments.size());
-		message = calc.If(calc.IsNull(calc.Wrap(leaf.Copy())),
+		message = calc.If(calc.IsNull(calc.Of(leaf)),
 		                  calc.Constant(Value(DecideNullSubqueryMessage(fragments[fragment_id]))), message);
 	}
 	return calc.Out(message);

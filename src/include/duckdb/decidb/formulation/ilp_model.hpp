@@ -119,18 +119,6 @@ struct VarIndexer {
     static VarIndexer Build(const SolverInput &input);
 };
 
-class DecideInfeasibleModelException : public Exception {
-public:
-	explicit DecideInfeasibleModelException(const string &message)
-	    : Exception(ExceptionType::INVALID_INPUT, message) {
-	}
-
-	template <typename... ARGS>
-	explicit DecideInfeasibleModelException(const string &message, ARGS... params)
-	    : DecideInfeasibleModelException(Exception::ConstructMessage(message, params...)) {
-	}
-};
-
 //! One summed decide variable of an aggregate LHS, paired with the coefficient the user
 //! wrote for it. `has_unit` is false when that coefficient is data-varying
 //! (`SUM(keepS * price)`): there is no literal to quote, and the render falls back to the
@@ -229,6 +217,10 @@ struct ModelConstraint {
     char sense;                //!< '<' (<=), '>' (>=), '=' (==)
     double rhs;                //!< Right-hand side value
     ConstraintProvenance provenance; //!< Row → clause origin (F2)
+    //! A row with no terms is the constant comparison `0 <sense> rhs`, judged once as the model is built
+    //! (ConstantRowFails, or DuckDB's own comparison for a bound on one decision): the builder keeps it only
+    //! when it fails, and SolverModel::ProvesInfeasible reads this verdict.
+    bool constant_fails = false;
 };
 
 //! Can any assignment meet this row's bound? A finite left-hand side never reaches
@@ -250,7 +242,8 @@ inline bool IsUnreachableBound(char sense, double rhs) {
 
 //! A row whose left-hand side reduced to no terms (`SUM(0 * x) <= -1`, `x - x <= -1`) is
 //! the constant comparison `0 <sense> rhs`. It fails when `rhs` is out of 0's reach by
-//! more than the builder's tolerance; one that holds is a tautology and is dropped.
+//! more than the builder's tolerance; one that holds is a tautology and is dropped. A
+//! bound on one decision whose coefficient is 0 on a row is judged by DuckDB instead.
 inline bool ConstantRowFails(char sense, double rhs) {
 	constexpr double EPS = 1e-9;
 	if (sense == '<') {

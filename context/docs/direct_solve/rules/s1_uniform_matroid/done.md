@@ -51,16 +51,19 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
   without a `when` is read the same way when it can hold: a lower bound below 0 (`x >= -3`, `x > -3`) allows both
   values, because the solver keeps a Boolean's box at [0, 1] and a written bound only narrows it. One that cannot hold
   is left to the solver (see the out-of-scope table). A bound on `x` allows the values in the interval the solver path's
-  classifier admits (`DecideReadOneDecisionBound`, D64), whatever its constant coefficient: `x > 0.5` and `2*x >= 1`
+  classifier admits (`DecideReadSingletonRow`, D64), whatever its constant coefficient: `x > 0.5` and `2*x >= 1`
   allow 1, `x < 1.5` allows 0 and 1, `2*x <= cap` allows 0 where `cap` is below 2. One expression says whether a row
   allows `x = v`, for 0 and for 1: folded once against a constant, evaluated per row against a column value, with or
   without a `when`, as the solver does. Whether a constant
   bound is one the solver folds into the variable's box is the IR's `variable_bound` flag (no `when`), the same flag A1
   reads. The rest of the reading stays S1's own and is not the shared bound reader's: S1 asks which of {0, 1} a row
   allows, A1 asks for an interval, and S1 alone admits `<>` and Boolean sources (`x = flag`), which the classifier does
-  not read; those require a coefficient of exactly 1. Every coefficient is a finite constant. Contradictory active bounds are infeasible. A NULL or NaN value raises the solver's error on
-  every row the bound's `when` keeps (`DirectCheckRowBounds`): it names the NULL column, or quotes a computed value as
-  written; a row the `when` drops is not read.
+  not read; those require a coefficient of exactly 1. A bound on `x` may also read its coefficient from the row (`w *
+  x >= 1`, `hi * x <= cap2`), as a deterministic nonthrowing source expression; the row allows the values the
+  classifier admits over that row's `w`, so a zero `w` allows what `0 >= 1` says. Any other coefficient is a finite
+  constant. Contradictory active bounds are infeasible. A NULL or NaN value raises the solver's error on every row the
+  bound's `when` keeps (`DirectCheckRowBounds`): it names the NULL column, or quotes a computed value as written; a
+  NULL, NaN or infinite coefficient raises the solver's coefficient error. A row the `when` drops is not read.
 - **Objective:** a signed sum of per-row coefficients times `x`, `MAXIMIZE` or `MINIMIZE`, plus an optional finite constant,
   or none. Without one every row scores 0, so the plan picks only the rows the lower limits and fixed values require.
   Coefficients are numeric, decision-free, deterministic; several terms must be non-throwing. Each `SUM(...)` may carry a
@@ -109,7 +112,7 @@ A query S1 does not apply to keeps its answer: it runs on the solver, and `requi
 | A count body with a constant or a column term (`SUM(x + 1)`, `SUM(x + bonus)`) | The class is a count of `x`; the solver answers these exactly | A rewrite to `SUM(x) <op> B - c*COUNT(*)` before both paths, which changes the solver's overflow, `DIAGNOSE` and error text |
 | A count body with a weight on `x` other than 1 or -1 (`SUM(2*x + 1)`) | A weighted constraint (S3, S4) | A weighted rule |
 | A factor on `SUM(...)` in the objective that is not a usable constant: a zero divisor, a NULL factor, or a subquery factor (`(SELECT 2) * SUM(...)`) | A zero divisor raises on the solver, which a plan built from a constant cannot reproduce. The solver reads a NULL factor as an objective of zeros, which is not a result worth copying. A subquery factor has no sign when the plan is built, and the sign decides whether the sense reverses | Admit a subquery factor once its value can be read before the plan is chosen. Low value |
-| A bound on `x` the solver folds (`variable_bound`) that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises `x >= 2 cannot hold for a BOOL variable.` before it reads a row, so an empty source raises it too, and skips that error under `DIAGNOSE`. A query that can only fail has no speed to win, so S1 declines it (`DecideBoxContradictsDomain`) and the solver answers. The same bound with a `when` is admitted and raises DECIDE's generic infeasible error from the plan, as the solver does. An affine spelling (`1*x >= 2`) folds too, and S1 declines it as any affine bound | Not planned |
+| A bound on `x` the solver folds (`variable_bound`) that cannot hold: an upper bound below 0 or a lower bound above 1 (`x >= 2`, `x <= -1`, `x < 0`, `x > 1.5`, `x = -1`; a strict bound counts after its shift to a whole number) | The solver raises `x >= 2 cannot hold for a BOOL variable.` before it reads a row, so an empty source raises it too, and under `DIAGNOSE` too. A query that can only fail has no speed to win, so S1 declines it (`DirectContradictsDomain`) and the solver answers. The same bound with a `when` is admitted and raises DECIDE's generic infeasible error from the plan, as the solver does. An affine spelling (`1*x >= 2`) folds too, and S1 declines it the same way | Not planned |
 
 **Belongs to another problem class or is intentional:** weighted constraints such as `SUM(w * x) <= B` (S3 and S4 cover two special cases of them); `INT` and
 `REAL` variables (A1 and the R classes); more than one decision, entity or scalar decisions (D1); lower and upper bounds with

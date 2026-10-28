@@ -1,11 +1,11 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-28 at `8f254312d7` or later, with the strict xfails on the direct path of pending cases: `make
+Verified on 2026-10-28 at `9852d3e4c9` or later, with the strict xfails on the direct path of pending cases: `make
 decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each
-4,672 outcomes and 327 strict expected failures (the direct path of keyed cases and other direct-solve follow-ups);
-`DECIDB_FORCE_SOLVER=highs make decide-test` 4,670 passed and two failures, `test_norm_combined_l1_l2_objective`, which
+4,684 outcomes and 327 strict expected failures (the direct path of keyed cases and other direct-solve follow-ups);
+`DECIDB_FORCE_SOLVER=highs make decide-test` 4,682 passed and two failures, `test_norm_combined_l1_l2_objective`, which
 needs Gurobi, and `test_entity_scoped_mixed_when_per`, which HiGHS cannot close at a gap of 0 in time
-(`../../issues/bugs.md`); C++ `build/release/test/unittest "[decidb]"` 2,686 assertions in 65 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
+(`../../issues/bugs.md`); C++ `build/release/test/unittest "[decidb]"` 2,696 assertions in 65 cases. `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per
 check). Design: `../architecture/`.
 
 ## What it does
@@ -55,8 +55,8 @@ check). Design: `../architecture/`.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
   every direct-solve file. A per-row bound is read by the solver path's own classifier
-  (`DecideReadOneDecisionBound`, stored on the IR node as `one_decision_bound` and `bound`), so direct solve admits the
-  values the solver admits, as DuckDB evaluates the comparison (D64). `DirectIsBoundOnOneDecision` is the shape a
+  (`DecideReadSingletonRow`, stored on the IR node as `singleton_row` and `bound`), so direct solve admits the
+  values the solver admits, as DuckDB evaluates the comparison (D64). `DirectIsSingletonRow` is the shape a
   per-row bound must have to be read: the classifier read it, on a declared decision. `DirectReadBounds` folds
   `variable_bound`s into each decision's static box (default `[0, inf)`, a BOOL kept in `{0, 1}`, ends of magnitude
   1e20 or more infinite): the written `(sense, k)` into a box the domain check reads, the admitted ends into the box the
@@ -179,15 +179,15 @@ check). Design: `../architecture/`.
   physical and profiled plans.
 - **The solver's domain check, once.** The solver raises, before it reads any row, for a decision whose box contradicts
   its built-in domain: an upper bound below the default floor of 0, any upper bound below 0 on a `BOOL` (its floor stays
-  0 whatever lower bound is written), or a `BOOL` lower bound above 1. That test is `DecideBoxContradictsDomain(box,
-  is_bool)` in `decide_singleton_row_folding.{hpp,cpp}`. For a non-negative `INT` or `REAL` the error quotes the clause;
-  for a `BOOL` it is DECIDE's usual infeasible error, and under `DIAGNOSE` the check skips a `BOOL` so the elastic
-  engine names the clause. The solver's pre-check (`DecideGlobalSinkState`), A1 (`ProveBounds`) and S1
-  (`ConstantFixedDomain`) call it. Direct solve only declines these queries and lets the solver raise the error.
+  0 whatever lower bound is written), or a `BOOL` lower bound above 1. The box is the bounds as written
+  (`DecideWrittenBox` in `decide_singleton_row_folding.{hpp,cpp}`), and the error quotes the clause, under `DIAGNOSE`
+  too. The solver's pre-check (`DecideGlobalSinkState`) raises it; direct solve reads the same box through
+  `DirectContradictsDomain`, which `DirectReadBounds` (A1, R1) and S1 call, and only declines these queries so the
+  solver raises the error.
 - **One box, one way to combine bounds.** A decision's unconditional bounds fold into a `DecideBoundBox`
   (`decide_numeric_policy.hpp`) through `DecideFoldSingletonRow`, which keeps the tightest value on each side. The
-  solver's folding pass, the elastic engine's retained box, A1 (`ProveBounds`) and S1 (`ConstantFixedDomain`) all call
-  it. The box keeps a `lower_written` flag apart from the value: a written lower bound of -1e30 or below is no bound,
+  solver's folding pass, the written box of the domain check (`DecideWrittenBox`) and `DirectReadBounds` (A1, R1) all
+  call it. The box keeps a `lower_written` flag apart from the value: a written lower bound of -1e30 or below is no bound,
   like any bound of magnitude 1e20 or more, and only a decision with no lower bound written takes the default floor of 0
   (`EffectiveLower`). No value is reserved to mean "unset".
 - **One test scaffold.** `test/decide/tests/_direct_oracle_common.py` holds what the oracle suites share: the autouse
@@ -208,8 +208,8 @@ A rule registers with one line in `direct_registry.cpp` and one in the folder's 
 (`direct_rule_driver.cpp`) and the result adapter (`direct_result_adapter.cpp`) hold no rule-specific code. S1 and A1
 are materially different rules (decision types, output types, a quadratic objective, aggregate constraints or none, a
 breaker or a streaming plan) and run on the same two central files. An IR flag a rule needs about the solver's own
-reading comes from the solver's code, not a copy: `DirectIRConstraint::one_decision_bound`, `bound` and
-`variable_bound` come from the classifier `DecideReadOneDecisionBound` (`decide_singleton_row_folding.cpp`), so a rule
+reading comes from the solver's code, not a copy: `DirectIRConstraint::singleton_row`, `bound` and
+`variable_bound` come from the classifier `DecideReadSingletonRow` (`decide_singleton_row_folding.cpp`), so a rule
 asks the solver's own question about which values a bound admits and which bounds replace a variable's default box.
 
 ## Verified by

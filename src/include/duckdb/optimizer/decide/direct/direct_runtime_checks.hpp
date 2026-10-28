@@ -58,6 +58,8 @@ unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBin
 
 //! The solver's error for a NaN bound, without the row position the solver adds.
 string DirectBoundNaNMessage();
+//! The solver's message for a coefficient that is NaN or infinite.
+string DirectCoefficientInvalidMessage();
 
 //! Which clause a number belongs to, so an error names the object the user wrote.
 enum class DirectNumberKind : uint8_t { OBJECTIVE, CONSTRAINT };

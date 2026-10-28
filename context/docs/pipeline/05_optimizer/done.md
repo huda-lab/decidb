@@ -657,7 +657,7 @@ before the query runs (a `BETWEEN` arrives as its two comparisons, split by the 
 into one `DecideBoundBox` per decision (`singleton_row_boxes` on `LogicalDecide`), and
 tags the comparison `SINGLETON_ROW_BOUND_TAG` so physical extraction skips it.
 
-**One classifier reads every bound on one decision** (`DecideReadOneDecisionBound`,
+**One classifier reads every bound on one decision** (`DecideReadSingletonRow`,
 `decide_singleton_row_folding.hpp`). This pass, the linear form (a data bound, stage 06)
 and direct solve all call it, so the paths cannot disagree about which values a bound
 admits. It follows MIP presolve: a row on one variable becomes a column bound, and an

@@ -291,9 +291,9 @@ private:
 			ir_node.rhs = comparison.right->Copy();
 			ir_node.degree = DecideExpressionDegree(*comparison.left, decide.decide_index).degree;
 			// Direct rules run before the MIN/MAX rewrite tags an easy extremum, so only a per-row bound reads here.
-			ir_node.one_decision_bound = DecideReadOneDecisionBound(context, decide, comparison, ir_node.bound);
+			ir_node.singleton_row = DecideReadSingletonRow(context, decide, comparison, ir_node.bound);
 			// Folding never reads a clause under a `when`: `when c: x <= 0` does not bound `x` everywhere.
-			ir_node.variable_bound = ir_node.one_decision_bound && ir_node.bound.folds && !wrappers.when;
+			ir_node.variable_bound = ir_node.singleton_row && ir_node.bound.folds && !wrappers.when;
 		}
 		for (auto &part : ir_node.lhs) {
 			if (part.status == DirectAnalysisStatus::NOT_PROVED) {

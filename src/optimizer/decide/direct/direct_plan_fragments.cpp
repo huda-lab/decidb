@@ -175,9 +175,12 @@ unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_pt
 	for (auto &bound : bounds) {
 		auto none = calc.Constant(Value(LogicalType::VARCHAR));
 		auto message = none;
-		if (bound.reject_nan) {
-			message = calc.If(calc.Fn("isnan", calc.Cast(calc.Of(*bound.value), LogicalType::DOUBLE)),
-			                  calc.Constant(Value(DirectBoundNaNMessage())), none);
+		auto as_double = calc.Cast(calc.Of(*bound.value), LogicalType::DOUBLE);
+		if (bound.coefficient) {
+			message =
+			    calc.If(calc.Fn("isfinite", as_double), none, calc.Constant(Value(DirectCoefficientInvalidMessage())));
+		} else if (bound.reject_nan) {
+			message = calc.If(calc.Fn("isnan", as_double), calc.Constant(Value(DirectBoundNaNMessage())), none);
 		}
 		message = calc.If(calc.IsNull(calc.Of(*bound.value)),
 		                  calc.Wrap(DirectNullMessageOf(optimizer, *bound.value, fragments)), message);

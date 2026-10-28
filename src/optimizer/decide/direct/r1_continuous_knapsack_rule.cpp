@@ -149,7 +149,7 @@ bool Rule::ProveConstraints(const DirectIR &ir, vector<const DirectIRConstraint 
 			budgets.push_back(&ir_node);
 			continue;
 		}
-		if (!ir_node.scope.per_key_slots.empty() || !DirectIsBoundOnOneDecision(ir, ir_node)) {
+		if (!ir_node.scope.per_key_slots.empty() || !DirectIsSingletonRow(ir, ir_node)) {
 			return false;
 		}
 	}

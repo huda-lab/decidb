@@ -406,20 +406,7 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
                         unique_ptr<SolverSession> *retained_session) {
 	DecideProfileScope profile("solver.facade");
 	DecideProfileScope phase("solver.build_neutral_model");
-	SolverModel model;
-	try {
-		model = SolverModel::Build(input, indexer);
-	} catch (const DecideInfeasibleModelException &) {
-		// Infeasibility proven during Build by a throw that abandoned the half-built
-		// model, so there is nothing to retain and diagnosis cannot run. Only the
-		// conflicting-column-bounds check still throws this way, and only when
-		// diagnosis is off (under diagnosis it keeps the inverted box instead, which
-		// ProvesInfeasible answers below). The operator must treat an unretained model
-		// as "no diagnosis".
-		SolverResult result;
-		result.status = SolverStatus::INFEASIBLE;
-		return result;
-	}
+	SolverModel model = SolverModel::Build(input, indexer);
 	phase.Next("solver.validate_and_dump");
 	AssertBackendAcceptsBuiltModel(model, backend);
 	if (DecideProfileScope::Enabled()) {

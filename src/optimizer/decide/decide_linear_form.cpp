@@ -767,8 +767,8 @@ private:
 			}
 			// A bound on one decision, a per-row one or an easy MIN/MAX on each member it reads, folds into the
 			// decision's column on each row it emits (stage 06).
-			DecideOneDecisionBound bound;
-			if (!folded && !constraint->lhs_is_aggregate && DecideReadOneDecisionBound(context, op, comp, bound)) {
+			DecideSingletonRow bound;
+			if (!folded && !constraint->lhs_is_aggregate && DecideReadSingletonRow(context, op, comp, bound)) {
 				constraint->admitted_lower = std::move(bound.lower);
 				constraint->admitted_upper = std::move(bound.upper);
 			}

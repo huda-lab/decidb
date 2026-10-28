@@ -680,11 +680,9 @@ struct SolverInput {
     //! For a keyed variable, entity_scope_idx indexes entity_mappings.
     vector<DecideVarScopeInfo> variable_scopes;
 
-    //! When set (infeasible diagnosis armed), SolverModel::Build does NOT throw on an
-    //! inverted column box (col_lower > col_upper). The model is built and retained so the
-    //! elastic engine can reset the box to the intrinsic domain and diagnose the conflict
-    //! as a least-change edit instead of dying with the static "conflicting bounds" error.
-    //! Off by default: the fast build-time infeasible throw is kept for non-diagnosis solves.
+    //! When set (infeasible diagnosis armed), SolverModel::Build keeps each data-valued bound on one
+    //! decision as a row instead of folding it into the column box, so the elastic engine can relax
+    //! the row and quote its clause. Off by default: the fold is faster to solve.
     bool tolerate_infeasible_bounds = false;
 };
 

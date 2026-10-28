@@ -46,10 +46,6 @@ Every line waits for B1 (the NULL-key rule changes how a key becomes groups) and
 
 The agent may read code and investigate; it writes no fix until the owner answers the question on the line.
 
-## A4. S1 reads a fixed value with a data coefficient
-
-- [ ] `w * x >= 1` on a Boolean: read the classifier's ends per row — [S1 § data coefficient](direct_solve/rules/s1_uniform_matroid/todo.md#a-fixed-value-with-a-data-coefficient)
-
 ## B1. NULL keys, key grouping and empty groups (one batch; blocks A3; owner answered 2026-10-28)
 
 The deck (`context/New_syntax.pdf`) defines a group as the rows whose key `=` this row's (p. 30) and skips a
@@ -191,17 +187,6 @@ The agent finds the cause alone and stops with a proposed fix.
   a defined auxiliary (it is not a constraint of any clause), with no new field.
   — [optimizer § 1](pipeline/05_optimizer/todo.md#1-one-helper-for-a-reducer-that-several-clauses-hold)
 
-## B11. Internal tags reach EXPLAIN through direct plans
-
-- [ ] A scalar subquery bound under `require` prints `__source_fragment_0__` in EXPLAIN. The direct builder's rule is
-  that a DECIDE expression enters a plan through `ExpressionBuilder::Of`, which strips tags; S1's values do
-  (`ValueIntoState`), but the `Wrap` callers of `DirectOverProjection` and `DirectNullMessageOf`'s subquery leaf
-  (`calc.Wrap(leaf.Copy())`) bypass it. Where should tags be stripped? (a) At the re-pointing step,
-  `DirectRemapSourceReferences`, which every rule uses to move a DECIDE expression into its plan, plus the one
-  `Wrap(leaf.Copy())`; (b) in `ExpressionBuilder::Out`, for every expression a plan receives (wider: the bound-side
-  window rewrite also uses `Out` for expressions that return to DECIDE's tree). Recommended: (a), with a test that
-  EXPLAIN under `require` of a scalar-subquery bound and of a data-reducer bound shows no tag.
-
 ## B12. A keyed decision beside a reducer: four design choices (architect review done)
 
 - [ ] The shape is the aggregate shape with a tuple term of one value per group; it does not wait for B6. Choices:
@@ -253,7 +238,7 @@ The agent finds the cause alone and stops with a proposed fix.
   data column reference its bare name plus a relation tag pointing into `source_fragments` (over two or more
   relations only), `RenderSource` prints `relation.name`, and every `relations`/`no_relations` parameter goes; a
   reducer's written key is recorded per occurrence the same way (a new tag kind; `__source_fragment_` would replace
-  the whole reducer). Needs B11 first: alias tags already leak into direct-plan EXPLAIN. Choices: (1) relation text in
+  the whole reducer). Choices: (1) relation text in
   `source_fragments`, in a new `relation_names` registry (serialized field), or in the tag payload? Recommended:
   `source_fragments`. (2) Tag where each reference is bound, or in one pass after binding? Recommended: where bound.
   (3) Land the per-occurrence key text with this change or with the one key table (B1)? Recommended: with this
@@ -288,8 +273,7 @@ The agent finds the cause alone and stops with a proposed fix.
   `DecidBCliError` (129 uses), the workflow file `.github/workflows/DecidBRelease.yml`, and CMake's
   `project(DecidB)` (the build's project name). Choices: (a) rename those too (`DeciDBCli`, `DeciDBRelease.yml`,
   `project(DeciDB)`), one mechanical change; (b) comments and prose only, and the acceptance test excludes the names.
-  Recommended: (a), since the test classes are internal and the spelling would otherwise stay. Do it after the held
-  NULL item (B11) commits: four of its files carry the old spelling.
+  Recommended: (a), since the test classes are internal and the spelling would otherwise stay.
   — [operations](operations/todo.md#normalize-the-decidb-spelling-in-internal-comments)
 
 ## B18. One step chooses how a query is answered: seven calls (architect review done)
@@ -310,8 +294,7 @@ The agent finds the cause alone and stops with a proposed fix.
   `formulated`? Recommended: keep the name, fix the doc. (5) Name and home: `ChooseDecideAnswer` in a new
   `decide_answer_choice.cpp`, or keep `decide_solver_gate.cpp`? Recommended: the new file. (6) Replace `phase.Next`
   with a `RunPass(name, fn)` helper in the same change? Two spans time the wrong passes today (`RewriteNorm` under
-  `optimizer.tag_groups`, `RewriteAbs` under `optimizer.abs` with `TagAbsForBigM`). Recommended: yes. (7) Land after
-  the held NULL item (B11): both rewrite `05_optimizer/done.md` § 1's "two steps run before these passes".
+  `optimizer.tag_groups`, `RewriteAbs` under `optimizer.abs` with `TagAbsForBigM`). Recommended: yes.
   — [code_quality § chosen in two places](issues/code_quality.md#how-a-query-is-answered-is-chosen-in-two-places)
 
 ## B19. One clause scope (D47): five calls (architect review done; the once-count part stays with B6/B12)
@@ -332,7 +315,7 @@ The agent finds the cause alone and stops with a proposed fix.
   Recommended: refuse in C0. (3) Field names: `per_key` holds a role, not a key; rename it `per`, `when_condition`
   becomes `scope.when`? Recommended: yes. (4) Convert the window rewrite and `RewriteInDomain` walkers now, direct
   solve's at H-07? Recommended: yes. (5) `DecideObjective` and `ReducerValueLink` stay outside D47 (D46 renames
-  `per_columns`)? Recommended: yes. Order: after B11 commits (two shared files), before D46 (B20) and before B12 if B12
+  `per_columns`)? Recommended: yes. Order: before D46 (B20) and before B12 if B12
   passes the wrapper to every site.
   — [code_quality § parallel copies](issues/code_quality.md#a-clauses-scope-is-carried-in-parallel-copies)
 
@@ -345,22 +328,8 @@ The agent finds the cause alone and stops with a proposed fix.
   `test_entity_scoped_*` tests → `test_keyed_scope.py` / `test_keyed_*`; `test_scalar_scope.py` →
   `test_global_scope.py`; `test_aggregate_local_when.py` → ? (3) The `per_clause` and `when*` markers in `pytest.ini`:
   which names and descriptions replace them? Order: after D47 (B19), which removes some renderer parameters D46
-  would otherwise rename, and after B11 (shares `enums/decide.hpp`).
+  would otherwise rename.
   — [code_quality § keyed](issues/code_quality.md#name-the-keyed-scope-keyed-everywhere), [testing § names](testing/todo.md#names-that-still-say-the-removed-spellings)
-
-## B21. A bound on one decision: three calls left by the one-classifier change (architect review done)
-
-- [ ] (1) An inverted column box is answered twice: the model builder throws `DecideInfeasibleModelException`
-  ("conflicting lower and upper bounds"), and `SolverModel::ProvesInfeasible` also reads an inverted box. Drop the throw
-  so one gate answers, which changes the message a user sees? Recommended: yes. (2) The box
-  of bounds as written is built in three places (stage 08's domain check, direct solve's `DirectReadBounds`, S1), and
-  the repair model loosens the written `k` while the solve reads the admitted end: on a BOOL,
-  `x <= 0.99999999999999999` (DECIMAL, admits only 0) is a bound DIAGNOSE cannot name. One builder, read by all
-  three, and the repair model loosening the admitted end? Recommended: yes. Does an `IN` lowering count as written?
-  (3) A coefficient-free row (`cap * x <= -1e-10` on a row where `cap` is 0) is judged with the 1e-9 tolerance
-  (`ConstantRowFails`), while the classifier's admitted ends say what DuckDB says. Which one decides? Recommended:
-  DuckDB. Also: the names `singleton row` and `one-decision bound` mean one thing; pick one.
-  — [code_quality § one-decision bound](issues/code_quality.md#a-bound-on-one-decision-three-loose-ends)
 
 ## C1. Long or memory-heavy runs (owner starts them)
 

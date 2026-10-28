@@ -729,7 +729,7 @@ SELECT id, x, open FROM items JOIN groups ON grp = g DECIDE x(INT), per grp: ope
 -- Per-row data bounds folded into the column box (ilp_model_builder.cpp, TryFoldPerRowBound)
 -- ---------------------------------------------------------------------------
 -- A bound on one decision against a data value becomes that column's bound, not a row: on each row, the values
--- the comparison admits as DuckDB evaluates it (DecideReadOneDecisionBound). It narrows the box, never replacing the
+-- the comparison admits as DuckDB evaluates it (DecideReadSingletonRow). It narrows the box, never replacing the
 -- default floor of 0 (D41).
 -- Every case carries `SUM(x) <= 100` over INT decisions so no direct-solve rule takes it and the solver builds it.
 

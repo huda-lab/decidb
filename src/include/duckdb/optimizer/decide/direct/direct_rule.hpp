@@ -101,9 +101,9 @@ struct DirectIRConstraint {
 	vector<DirectPart> lhs;
 	unique_ptr<Expression> rhs;
 	//! True when the comparison is a bound on one decision, read into `bound` by the solver path's own classifier
-	//! (DecideReadOneDecisionBound): the values it admits, on each row it keeps.
-	bool one_decision_bound = false;
-	DecideOneDecisionBound bound;
+	//! (DecideReadSingletonRow): the values it admits, on each row it keeps.
+	bool singleton_row = false;
+	DecideSingletonRow bound;
 	//! True when the solver path folds this clause into its decision's box: a bound known before the query runs, with
 	//! no `when`. Such a bound replaces the variable's default lower bound of 0, where every other bound only
 	//! intersects with it (D41).

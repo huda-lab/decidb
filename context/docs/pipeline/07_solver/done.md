@@ -230,12 +230,9 @@ the facade the operator calls. `backend` is passed in, not resolved here, so the
 solver that runs the model is provably the one the rewrites were selected against. In
 order:
 
-1. `SolverModel::Build(input, indexer)`. A `DecideInfeasibleModelException` here
-   means infeasibility was proven by a throw that abandoned the half-built model —
-   return `INFEASIBLE` with no model, and diagnosis cannot run. Only the
-   conflicting-column-bounds check still exits this way, and only with diagnosis
-   off. Because no model comes back, the operator must treat an unretained model
-   (`num_vars == 0`) as "no diagnosis available" rather than walk it.
+1. `SolverModel::Build(input, indexer)`. Build proves nothing infeasible itself: an
+   inverted column box, a coefficient-free row that fails and an unreachable infinite
+   bound all stay in the model, which step 4 answers.
 2. `AssertBackendAcceptsBuiltModel(model, backend)` — both halves of the capability
    contract, re-read off the model *as built*. The model class is checked against
    `Capabilities().model_classes` (stage 05 already refused the query if the backend
@@ -251,9 +248,8 @@ order:
 5. `model.ProvesInfeasible()`: the model has no solution and needs no solver to
    say so. That is a coefficient-free row against a bound it cannot meet
    (`SUM(0 * x) <= -1`, `x - x <= -1`), a row whose infinite right-hand side points
-   the way no value reaches (`x >= +inf`, `x = -inf`), or an inverted column box,
-   which `Build` keeps under `tolerate_infeasible_bounds` (diagnosis mode) rather than
-   throwing. `Build` keeps those rows — with their source provenance — so the model
+   the way no value reaches (`x >= +inf`, `x = -inf`), or an inverted column box.
+   `Build` keeps those rows — with their source provenance — so the model
    survives for the elastic engine to name and relax the clause. No backend is asked
    to load them, and no solver contract says one must accept them (HiGHS errors hard
    on an inverted box or an infinite row bound): this short-circuits to `INFEASIBLE`,

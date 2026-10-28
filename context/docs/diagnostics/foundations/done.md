@@ -76,24 +76,12 @@ so callers branch on the outcome. This gates the whole area.
     the ray signal: a present ray routes to the unbounded terminal and no ray routes
     to the infeasible terminal. Without the prefix it reports the ambiguous state and
     stops.
-- **Pre-solve model-builder infeasibility is normalized.** Both contradictory
-  accumulated bounds and a violated coefficient-free row are decided inside
-  `SolverModel::Build` and reported as `SolverResult{status = INFEASIBLE}`, so a
-  fast contradiction such as `x >= 5 AND x <= 1` reaches the same
-  `PhysicalDecide::Finalize` gate as backend-reported infeasibility instead of
-  bypassing diagnostics with a direct builder error. The two differ in whether a
-  model comes back. A violated coefficient-free row (`SUM(0 * x) <= -1`,
-  `x - x <= -1`) is **kept** in the model and answered by
-  `SolverModel::ProvesInfeasible`, so diagnosis runs normally and names the clause. Contradictory bounds still throw
-  `DecideInfeasibleModelException` for an unprefixed query, abandoning the half-built
-  model; under `DIAGNOSE` the inverted box is kept instead.
-- **An unretained model becomes an `undiagnosed` finding.** When
-  `SolveModel` returns INFEASIBLE from a throw, `retained_model` is left
-  default-constructed — no columns, no rows. The infeasible arm checks
-  `num_vars == 0` up front and reports one `edit_source='undiagnosed'` finding rather
-  than indexing an empty model. `SolverModel::num_vars` is default-initialized to 0
-  for exactly this reason: the check is only meaningful if "never populated" is
-  representable.
+- **Pre-solve model-builder infeasibility is normalized.** Contradictory bounds (`x >= 5
+  AND x <= 1`, an inverted column box) and a violated coefficient-free row (`SUM(0 * x) <=
+  -1`, `x - x <= -1`) stay in the built model, and `SolverModel::ProvesInfeasible` answers
+  it as `SolverResult{status = INFEASIBLE}` before any backend reads it. The model is
+  retained, so it reaches the same `PhysicalDecide::Finalize` gate as backend-reported
+  infeasibility, and diagnosis runs normally and names the clause.
 - **The status policy lives in the operator.** `PhysicalDecide::Finalize`
   (`physical_decide.cpp`) branches on status: optimal → store the solution
   (`SUBOPTIMAL` also stores it, with a "not proven best" caveat); other

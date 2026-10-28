@@ -78,7 +78,7 @@ unique_ptr<Expression> MakeDecisionRef(const LogicalDecide &decide, idx_t var_id
 
 //! The helper decision `var_idx` in place of the construct `replaced` it stands for (an ABS, a reducer's value), cast
 //! to that construct's type as the binder would cast it. The clause stays a tree DuckDB can evaluate: the bound
-//! classifier evaluates it with the decision replaced by a value (DecideReadOneDecisionBound).
+//! classifier evaluates it with the decision replaced by a value (DecideReadSingletonRow).
 void ReplaceWithDecision(ClientContext &context, const LogicalDecide &decide, idx_t var_idx,
                          unique_ptr<Expression> &replaced);
 

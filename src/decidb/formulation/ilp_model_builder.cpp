@@ -278,7 +278,7 @@ SolverModelClass SolverModel::ModelClass() const {
 
 bool SolverModel::ProvesInfeasible() const {
     for (const auto &row : constraints) {
-        if ((row.indices.empty() && ConstantRowFails(row.sense, row.rhs)) || IsUnreachableBound(row.sense, row.rhs)) {
+        if ((row.indices.empty() && row.constant_fails) || IsUnreachableBound(row.sense, row.rhs)) {
             return true;
         }
     }
@@ -689,7 +689,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     auto PushNormalizedConstraint = [&](ModelConstraint &&constr) {
         // A coefficient-free row that fails is kept, with its provenance, so ProvesInfeasible
         // answers the model and diagnosis can relax the row; one that holds is a tautology.
-        if (!constr.indices.empty() || ConstantRowFails(constr.sense, constr.rhs)) {
+        constr.constant_fails = constr.indices.empty() && ConstantRowFails(constr.sense, constr.rhs);
+        if (!constr.indices.empty() || constr.constant_fails) {
             model.constraints.push_back(std::move(constr));
         }
     };
@@ -700,18 +701,32 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // data-valued bound differs per row and is known only here, as the values it admits on each row (stage 08 reads
     // them from the classifier both paths share). The bound narrows the box it finds, as the row did: it never
     // replaces the default floor of 0 (D41). An infinite end on the side it binds (`x >= c` with c = +inf) admits
-    // no value and keeps the row, which ProvesInfeasible answers; a box the folds invert is caught by the sanity check
-    // below, which answers INFEASIBLE as the row would have.
+    // no value and keeps the row, and a box the folds invert stays inverted: ProvesInfeasible answers both, as it would
+    // the row.
     //
     // HiGHS's QP solver does not turn such rows back into bounds: a 9,600-row box-bounded QP ran past 60 s as rows
     // and solves in 0.4 s as bounds. Under diagnosis the rows stay, because the elastic engine relaxes rows and
     // quotes the clause from their provenance (`x <= cap_col + delta`).
-    auto TryFoldPerRowBound = [&](const EvaluatedConstraint &ec, idx_t row, const ModelConstraint &constr) -> bool {
-        if (input.tolerate_infeasible_bounds || ec.admitted_lower.logical_size == 0 || constr.indices.size() != 1) {
+    //
+    // A coefficient of 0 on a row (`cap * x <= -1e-10` where `cap` is 0) leaves the comparison of a constant, which
+    // holds for every value or for none. DuckDB's comparison says which (the admitted ends are all or nothing), not
+    // the builder's tolerance, under diagnosis too; a row that fails is kept for ProvesInfeasible.
+    auto TryFoldPerRowBound = [&](const EvaluatedConstraint &ec, idx_t row, ModelConstraint &constr) -> bool {
+        if (ec.admitted_lower.logical_size == 0) {
             return false;
         }
         double lower = ec.admitted_lower[row];
         double upper = ec.admitted_upper[row];
+        if (constr.indices.empty()) {
+            constr.constant_fails = lower > upper;
+            if (constr.constant_fails) {
+                model.constraints.push_back(std::move(constr));
+            }
+            return true;
+        }
+        if (input.tolerate_infeasible_bounds || constr.indices.size() != 1) {
+            return false;
+        }
         if (lower == std::numeric_limits<double>::infinity() || upper == -std::numeric_limits<double>::infinity()) {
             return false;
         }
@@ -1395,7 +1410,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         constr.provenance.rhs_label = raw.rhs_label;
         constr.provenance.strict = raw.strict;
         constr.provenance.typed_k = raw.typed_k;
-        model.constraints.push_back(std::move(constr));
+        PushNormalizedConstraint(std::move(constr));
     }
 
     // Conditional rows the chosen backend states itself. Whatever `LowerDecideConstructs`
@@ -1450,14 +1465,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         if (!std::isfinite(model.col_lower[i]) || !std::isfinite(model.col_upper[i])) {
             throw InternalException("Column bounds invalid at col %llu: [%f, %f]",
                                     i, model.col_lower[i], model.col_upper[i]);
-        }
-        if (model.col_lower[i] > model.col_upper[i] && !input.tolerate_infeasible_bounds) {
-            // Under infeasible diagnosis (tolerate_infeasible_bounds) we keep the inverted
-            // box and return the model so the elastic engine can reset it to the intrinsic
-            // domain and diagnose the conflict as a least-change edit. Otherwise the fast
-            // build-time infeasible throw stands.
-            throw DecideInfeasibleModelException(
-                "DECIDE optimization is infeasible: a decision variable has conflicting lower and upper bounds.");
         }
         if (!std::isfinite(model.obj_coeffs[i])) {
             throw InternalException("Objective coefficient not finite at col %llu: %f",

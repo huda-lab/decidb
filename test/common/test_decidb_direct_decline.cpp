@@ -231,6 +231,7 @@ duckdb::vector<Shape> S1AppliesShapes() {
 	shapes.push_back(S1("a fixed value from a Boolean expression", "SUM(x) <= 2 AND x <= CAST(NOT flag AS INTEGER)"));
 	shapes.push_back(S1("a fixed value from a DOUBLE column", "SUM(x) <= 2 AND x <= w"));
 	shapes.push_back(S1("a fixed value from a FLOAT column", "SUM(x) <= 2 AND x <= f"));
+	shapes.push_back(S1("a fixed value with a column coefficient", "SUM(x) <= 2 AND w * x = 1"));
 	shapes.push_back(S1("a fixed value through TRY_CAST", "SUM(x) <= 2 AND x <= TRY_CAST(cap AS TINYINT)"));
 	shapes.push_back(S1("a fixed value through a cast to the same type",
 	                    "SUM(x) <= 2 AND x <= CAST(CAST(cap AS DECIMAL(5,2)) AS DECIMAL(9,2))"));
@@ -305,7 +306,11 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	}));
 	// ProveFixedVariables.
 	shapes.push_back(S1("a fixed value under PER", "SUM(x) <= 2 AND x = 1", PerKeyOnConstraint(1)));
-	shapes.push_back(S1("a fixed value with a column coefficient", "SUM(x) <= 2 AND w * x = 1"));
+	shapes.push_back(
+	    S1("a fixed value with a coefficient that may raise", "SUM(x) <= 2 AND CAST(cap AS TINYINT) * x <= 1"));
+	shapes.push_back(
+	    S1("a fixed value with an infinite coefficient", "SUM(x) <= 2 AND CAST('inf' AS DOUBLE) * x <= 1"));
+	shapes.push_back(S1("a not-equal value with a column coefficient", "SUM(x) <= 2 AND cap * x <> 1"));
 	shapes.push_back(S1("a not-equal value with a coefficient other than 1", "SUM(x) <= 2 AND 2 * x <> 2"));
 	shapes.push_back(S1("a fixed value with no coefficient", "SUM(x) <= 2 AND x = 1",
 	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].coefficient.reset(); }));
@@ -430,7 +435,7 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	shapes.push_back(A1("a membership constraint", "x IN (1, 2)"));
 	shapes.push_back(A1("a not-equal constraint", "x <> 2", nullptr, A1_OBJECTIVE, "x(INT)"));
 	shapes.push_back(A1("a PER key", "x <= cap", PerKeyOnConstraint(0)));
-	// DirectIsBoundOnOneDecision.
+	// DirectIsSingletonRow.
 	shapes.push_back(A1("a product of two decisions", "x * y <= 4", nullptr, A1_OBJECTIVE, "x(REAL), y(REAL)"));
 	shapes.push_back(A1("a left part over two decisions", "x + y <= 3", nullptr, A1_OBJECTIVE, "x(REAL), y(REAL)"));
 	shapes.push_back(A1("a bound on a decision that is not declared", "x <= cap",
@@ -667,7 +672,7 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	// Two decisions share the budget; the clauses of one budget name the same decisions (SameBudgetTerms).
 	shapes.push_back(R1("two budgets with the same weights over different decisions",
 	                    "SUM(cap*x) >= 1 AND SUM(cap*y) <= 5", nullptr, "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
-	// A per-row constraint that reads two decisions links them (DirectIsBoundOnOneDecision).
+	// A per-row constraint that reads two decisions links them (DirectIsSingletonRow).
 	shapes.push_back(R1("a per-row constraint that links two decisions",
 	                    "x <= cap AND y <= cap AND x + y <= 4 AND SUM(cap*x + cap*y) <= 5", nullptr,
 	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));

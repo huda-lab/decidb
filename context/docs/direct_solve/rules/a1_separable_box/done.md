@@ -21,7 +21,7 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   clause may carry its own `when`. The value expressions may raise at run time (an overflowing cast, a division by
   zero): the plan evaluates them on every row the clause's `when` keeps, as the solver does, and computes nothing on a
   row the `when` drops (syntax reference §6.3). Each clause reads as the lower and upper end of the values it admits,
-  the two expressions the solver path's classifier builds (`DecideReadOneDecisionBound`), so an equality is one clause
+  the two expressions the solver path's classifier builds (`DecideReadSingletonRow`), so an equality is one clause
   with both ends set.
 - **Default box.** `BOOL` is [0, 1]; `INT` and `REAL` are [0, ∞). An unconditional constant lower bound replaces the
   default 0 on the solver, so it does here, in any spelling the classifier reads as a bound on one decision (`x >= -3`,
@@ -34,7 +34,7 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
 - **Whole-number rounding.** An `INT` or `BOOL` decision admits the whole numbers the written comparison admits as
   DuckDB evaluates it (D64), strict bounds included: `0.1*x <= 0.3` admits 3 (the DECIMAL product is exactly 0.3), and
   `x > 0.5`, `x < 2.5` admit 1 and 2 at their ends. The six strict cases are in `SOLVER_OFF_BY_ONE`
-  (`test_direct_a1_separable_box.py`), checked against the oracle on both paths; `test_one_decision_bound.py` checks the
+  (`test_direct_a1_separable_box.py`), checked against the oracle on both paths; `test_singleton_row.py` checks the
   DECIMAL and DOUBLE spellings against DuckDB on both paths and both backends. S1 reads the same interval on a `BOOL`.
 - **Objective.** `MINIMIZE`, `MAXIMIZE`, or none (the lowest allowed value). Signed `SUM` parts, each with an optional
   constant factor or divisor and an optional `when`, plus an optional objective-level `when`. A part's values are

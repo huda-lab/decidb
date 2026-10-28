@@ -1196,7 +1196,7 @@ public:
         // REAL/INTEGER's `>= 0` floor, or a BOOLEAN's `0/1` box) is a deterministic semantic
         // error, not a constraint conflict to diagnose — loosening can't help, the type can.
         // It is raised here (the main pipeline), before any row is read, so it never reaches the
-        // elastic engine and supersedes Build's generic "conflicting bounds" throw.
+        // elastic engine and supersedes the generic infeasible error.
         //   - `x <= -1` (REAL): upper below the non-negativity floor → infeasible. But
         //     `x = -1` or `x <= -1 AND x >= -5` explicitly lower the floor below 0, so the
         //     guard is `U < 0 AND L >= 0` (floor still at/above the intrinsic 0).
@@ -1208,35 +1208,24 @@ public:
         // least-change loosen.
         for (idx_t var = 0; var < num_decide_vars; var++) {
             bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
-            // The box of the bounds as written, over the intrinsic domain; an unwritten
-            // lower bound is the default floor of 0 to DecideBoxContradictsDomain. The
-            // folded box holds the admitted ends instead (`x = -0.5` admits no INT, which
-            // the solve reports as infeasible), so it is not the box the user wrote.
-            // A singleton/negative IN lowering (a removable bound) is not an independently
-            // written bound, and exact diagnosis may omit its whole source clause, so it
-            // must not trigger the pre-solve static bound error; the actual primary solve
-            // still receives the full box and therefore still proves the original query
-            // infeasible. The one removable bound kept is a negative floor: an IN with a
-            // negative value signs the decision down, so `x IN (-5, 0, 5) AND x <= -3` is
-            // not a bound below the default floor of 0.
-            DecideBoundBox box;
-            if (is_bool) {
-                DecideFoldSingletonRow(box, '=', 0.0);
-                box.upper = 1.0;
-            }
+            // The box of the bounds as written. The folded box holds the admitted ends instead
+            // (`x = -0.5` admits no INT, which the solve reports as infeasible), so it is not the
+            // box the user wrote.
+            DecideWrittenBox written;
             for (const auto &bound : user_singleton_row_bounds) {
                 if (bound.decide_var_idx != var) {
                     continue;
                 }
                 if (bound.removal_group_id == DConstants::INVALID_INDEX) {
-                    DecideFoldSingletonRow(box, bound.sense, bound.k);
-                } else if (bound.sense != '<' && bound.k < 0.0) {
-                    DecideFoldSingletonRow(box, '>', bound.k);
+                    written.Add(bound.sense, bound.k);
+                } else {
+                    written.AddLowered(bound.sense, bound.k);
                 }
             }
-            if (!DecideBoxContradictsDomain(box, is_bool)) {
+            if (!written.ContradictsDomain(is_bool)) {
                 continue;
             }
+            const auto &box = written.Box();
 			// An auxiliary decision (an ABS, a norm) is named by what it stands for.
 			const bool is_aux = var >= num_decide_vars - op.num_auxiliary_vars;
 			string vname = op.decide_variables[var]->GetName();
@@ -4181,16 +4170,6 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         SolverResult terminal_result = solve_result;
         if (terminal_result.status == SolverStatus::INF_OR_UNBD) {
             terminal_result.status = SolverStatus::INFEASIBLE;
-        }
-        // No model was retained: SolveModel returned INFEASIBLE from a Build that threw
-        // before it finished (conflicting column bounds on an unprefixed statement), so
-        // `retained_model` is still default-constructed — no columns, no rows. Every
-        // step below indexes it by column, so bail to the static error instead. Diagnosis
-        // has nothing to work from; saying so plainly beats walking an empty model.
-        if (retained_model.num_vars == 0) {
-            report(BuildUndiagnosedDiagnostic(
-                "infeasible", "the model could not be built, so there is nothing to diagnose."));
-            break;
         }
         vector<string> var_labels;
         vector<bool> var_is_aux;

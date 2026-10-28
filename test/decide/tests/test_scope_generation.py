@@ -92,7 +92,7 @@ def test_per_key_makes_one_constraint_per_class(decidb_cli, scope_solver, tmp_pa
 
 
 @pytest.mark.correctness
-def test_a_scaled_bound_on_one_decision_folds_like_the_plain_one(decidb_cli, tmp_path):
+def test_a_scaled_singleton_row_folds_like_the_plain_one(decidb_cli, tmp_path):
     """`2 * reserve <= 2 * (D.capacity - 5)` is `reserve <= D.capacity - 5`: the same column box, no row."""
 
     def query(clause):

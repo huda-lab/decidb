@@ -984,6 +984,7 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		ModelConstraint impossible;
 		impossible.sense = '<';
 		impossible.rhs = -1.0;
+		impossible.constant_fails = true;
 		impossible.provenance.source_clause_id = 0;
 		impossible.provenance.removal_group_id = 0;
 		model.constraints.push_back(std::move(impossible));
@@ -1010,6 +1011,11 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		vacuous.rhs = inf;
 		model.constraints.push_back(vacuous);
 		CHECK(!model.ProvesInfeasible());
+
+		SolverModel failing = model; // 0 <= -1, judged as it was built
+		failing.constraints[0].rhs = -1.0;
+		failing.constraints[0].constant_fails = true;
+		CHECK(failing.ProvesInfeasible());
 
 		SolverModel unreachable = model; // x >= +inf
 		unreachable.constraints[1].sense = '>';

@@ -101,11 +101,14 @@ struct DirectRowBound {
 	//! The rows the clause keeps, as a BOOLEAN over the plan's columns; null for every row.
 	unique_ptr<Expression> kept;
 	bool reject_nan = false;
+	//! A coefficient of a decision: a NaN or an infinity is the solver's coefficient error, where a bound may be
+	//! infinite.
+	bool coefficient = false;
 };
 
-//! Raises the solver's error when a per-row bound is NULL (DirectNullMessageOf, over `fragments`) or NaN on a row its
-//! clause keeps; nothing is read on a row a `when` drops. Which failing row is reported is not specified. Nothing is
-//! added when there is nothing to check.
+//! Raises the solver's error when a per-row bound is NULL (DirectNullMessageOf, over `fragments`), NaN, or, for a
+//! coefficient, infinite, on a row its clause keeps; nothing is read on a row a `when` drops. Which failing row is
+//! reported is not specified. Nothing is added when there is nothing to check.
 unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
                                                  const vector<DirectRowBound> &bounds, const vector<string> &fragments);
 

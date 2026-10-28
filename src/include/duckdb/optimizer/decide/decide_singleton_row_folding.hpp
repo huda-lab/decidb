@@ -21,7 +21,7 @@ class LogicalDecide;
 //! the interval of values it admits. The solver path folds a bound known before the query runs into the column box
 //! here, the linear form hands a data bound's interval to stage 08, and direct solve projects the same interval, so
 //! the paths cannot disagree about which values a bound admits.
-struct DecideOneDecisionBound {
+struct DecideSingletonRow {
 	//! The decision, an index into decide_variables.
 	idx_t var_idx = DConstants::INVALID_INDEX;
 	//! The admitted interval as DOUBLE expressions over the source row: ±infinity on a side the clause leaves open (on
@@ -46,15 +46,31 @@ struct DecideOneDecisionBound {
 //! Reads `comparison` as a bound on one decision. False when it is not one: its decision side is not linear terms of
 //! one decision over coefficients that hold no decision (nor an easy `min`/`max` over such terms), or the decision
 //! is not numeric. The caller owns the `when` question: a clause that carries one bounds only the rows it keeps.
-bool DecideReadOneDecisionBound(ClientContext &context, const LogicalDecide &decide,
-                                const BoundComparisonExpression &comparison, DecideOneDecisionBound &out);
+bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
+                                const BoundComparisonExpression &comparison, DecideSingletonRow &out);
 
-//! True when a decision's box, folded from its bounds as written, contradicts its built-in domain, which the solver
-//! rejects with an error before it reads any row (so on an empty table too). A box with no lower bound written has the
-//! default floor of 0. The box contradicts the domain when the upper bound is below 0 while the floor is still at or
-//! above 0 (a BOOL's floor is always 0, so for it any upper bound below 0), or when a BOOL's floor is above 1. A purely
-//! inverted box such as `x >= 5 AND x <= 1` is not a contradiction here; the elastic engine reports it. A rule that
-//! answers a query itself must decline when this is true, so that the solver raises the error.
-bool DecideBoxContradictsDomain(const DecideBoundBox &box, bool is_bool);
+//! The bounds on one decision as written (`DecideSingletonRow::written_k`, not the values they admit), and the
+//! check the solver makes on them before it reads any row, so on an empty table too. Stage 08 raises the error this
+//! check finds, and a direct rule that answers a query itself declines when it finds one, so the solver raises it.
+class DecideWrittenBox {
+public:
+	//! Folds a bound the user wrote.
+	void Add(char sense, double k);
+	//! Folds a bound an IN lowering wrote. Only a negative floor counts: an IN with a negative value signs the decision
+	//! down, so `x IN (-5, 0, 5) AND x <= -3` is no bound below the default floor of 0. The rest is not the user's
+	//! bound, and exact diagnosis may omit its whole clause; the solve still reads the lowering's rows.
+	void AddLowered(char sense, double k);
+	//! True when the box contradicts the decision's built-in domain. A box with no lower bound written has the default
+	//! floor of 0. It contradicts the domain when the upper bound is below 0 while the floor is still at or above 0 (a
+	//! BOOL's floor is always 0, so for it any upper bound below 0), or when a BOOL's floor is above 1. A purely
+	//! inverted box such as `x >= 5 AND x <= 1` is not a contradiction here; the elastic engine reports it.
+	bool ContradictsDomain(bool is_bool) const;
+	const DecideBoundBox &Box() const {
+		return box;
+	}
+
+private:
+	DecideBoundBox box;
+};
 
 } // namespace duckdb

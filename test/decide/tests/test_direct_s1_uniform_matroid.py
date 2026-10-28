@@ -236,6 +236,8 @@ def _values(records, names=NAMES):
 #   rowbounds [(op, number, ids|None[, a])]  a*x op number on the given ids (None: every row, no `when`); `x` alone
 #                                      when a is left out, so a = 1 spells the unit body `1*x`
 #   colscaled True                     2*x <= hi, the bound read from each row
+#   colcoefficient [(col, op, rhs[, when])]  col*x op rhs, the coefficient read from each row; rhs is a number or a
+#                                      column; `when` (SQL) keeps the rows the clause reads
 #   noop      [SQL]                    clauses that restate the BOOL domain and change nothing
 #   colfixed  True                     x >= lo AND x <= hi, the bounds read from each row
 #   objective key of OBJECTIVES (default "score"), or "none" for a query with no objective (every score is 0)
@@ -348,6 +350,16 @@ S1_CASES = {
     "scaled_column_bound": {"bounds": [("<=", 3)], "colscaled": True},
     # 2*x <= flag fixes every row to 0, where `x <= flag` leaves a flagged row free.
     "scaled_boolean_column": {"bounds": [("<=", 5)], "flagscaled_below": 5},
+    # A coefficient read from each row: `hi*x <= 1` fixes rows whose hi is above 1 to 0; `lo*x >= 0` fixes the row
+    # whose lo is negative to 0 and leaves a zero coefficient free; `hi*x <= cap2` reads both sides per row.
+    "column_coefficient": {"bounds": [("<=", 3)], "colcoefficient": [("hi", "<=", 1)]},
+    "column_coefficient_zero_and_negative": {"bounds": [("<=", 3)], "colcoefficient": [("lo", ">=", 0)]},
+    "column_coefficient_and_column_bound": {"bounds": [("<=", 3)], "colcoefficient": [("hi", "<=", "cap2")]},
+    # nlo is NULL on the rows the `when` drops, which are never read.
+    "column_coefficient_under_when": {
+        "bounds": [("<=", 3)],
+        "colcoefficient": [("nlo", "<=", 0.5, "nlo IS NOT NULL")],
+    },
     "domain_restatements": {
         "bounds": [("<=", 3)],
         "noop": ["x <= 1", "x >= 0", "x < 2", "x > -1", "x <> 2", "x BETWEEN 0 AND 1"],
@@ -517,6 +529,8 @@ def _decide_clause(case):
         clauses.extend(["x >= lo", "x <= hi"])
     if case.get("colscaled"):
         clauses.append("2*x <= hi")
+    for column, op, rhs, *when in case.get("colcoefficient", ()):
+        clauses.append(f"{'when ' + when[0] + ': ' if when else ''}{column}*x {op} {rhs}")
     objective = case.get("objective", "score")
     tail = "" if objective == "none" else f" {case.get('sense', 'MAXIMIZE')} {OBJECTIVES[objective][0]}"
     return f"DECIDE x(BOOL) SUCH THAT {' AND '.join(clauses)}{tail}"
@@ -591,6 +605,10 @@ def _row_bound(name, op, constant, coefficient=1):
         # x <> c removes c from {0, 1}.
         return {0.0: [({name: 1.0}, ">=", 1.0)], 1.0: [({name: 1.0}, "<=", 0.0)]}.get(constant, [])
     return [({name: 1.0}, op, constant)]
+
+
+# The right sides `colcoefficient` reads from the row, as SQL and as the oracle computes them.
+_COLUMN_RHS = {"cap2": lambda row: float(row["cap2"])}
 
 
 def _s1_constraints(case):
@@ -669,6 +687,12 @@ def _s1_constraints(case):
             constraints.append(({names[i]: 1.0}, "<=", float(row["hi"])))
     if case.get("colscaled"):
         constraints.extend(({names[i]: 2.0}, "<=", float(row["hi"])) for i, row in enumerate(rows))
+    for column, op, rhs, *when in case.get("colcoefficient", ()):
+        for i, row in enumerate(rows):
+            if when and row[column] is None:  # the cases' `when` is `<column> IS NOT NULL`
+                continue
+            limit = float(rhs) if isinstance(rhs, (int, float)) else _COLUMN_RHS[rhs](row)
+            constraints.append(({names[i]: float(row[column])}, op, limit))
     return names, constraints
 
 
@@ -978,6 +1002,29 @@ S1_ERROR_CASES = {
         "null_bound",
     ),
 }
+
+
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "rows",
+    [
+        pytest.param("(1, 9.0, NULL::DOUBLE), (2, 5.0, 2.0)", id="null"),
+        pytest.param("(1, 9.0, 'inf'::DOUBLE), (2, 5.0, 2.0)", id="infinite"),
+        pytest.param("(1, 9.0, 'nan'::DOUBLE), (2, 5.0, 2.0)", id="nan"),
+    ],
+)
+def test_s1_column_coefficient_raises_the_solver_error(decidb_cli, rows):
+    """A coefficient read from the row (`w*x <= 1`) is checked on every row the clause keeps, with the solver's own
+    message: S1 applies and raises it word for word."""
+    sql = _problem(rows, "id, score, w", "SUM(x) <= 2 AND w*x <= 1")
+    with pytest.raises(DecidBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    with pytest.raises(DecidBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert str(direct_error.value) == str(solver_error.value)
 
 
 @pytest.mark.var_boolean

@@ -7,21 +7,6 @@ ordinary optimization result. Solve-correctness bugs belong in [bugs.md](bugs.md
 Each entry: short title, location (`file:line`), what's wrong, why it matters,
 and when/during which task it was discovered.
 
-## A bound on one decision: three loose ends
-
-- **Location:** `src/decidb/formulation/ilp_model_builder.cpp` (the inverted-box throw in `SolverModel::Build`,
-  `PushNormalizedConstraint`, `TryFoldPerRowBound`); `src/execution/operator/decide/physical_decide.cpp` (the
-  domain-check box); `src/optimizer/decide/direct/direct_bound_reader.cpp` (`DirectReadBounds`);
-  `src/optimizer/decide/direct/s1_uniform_matroid_rule.cpp` (`ProveFixedVariables`).
-- **What's wrong:** an inverted column box is answered by a build-time throw and again by
-  `SolverModel::ProvesInfeasible`; the box of bounds as written is folded in three places, and the repair model
-  loosens the written `k` where the solve reads the admitted end (a BOOL `x <= 0.99999999999999999` admits only 0,
-  and DIAGNOSE cannot name it); a coefficient-free row is judged with a 1e-9 tolerance where the classifier reads
-  DuckDB's answer. "Singleton row" and "one-decision bound" name the same thing.
-- **Why it matters:** each is a second reading of a fact the classifier already gives, which can drift from it.
-- **Work:** B21 in the queue holds the calls. Behaviour that does not change: every answer on the golden corpus.
-- **Discovered:** 2026-10-28, the architect review of the one-classifier change (B0).
-
 ## A clause's scope is carried in parallel copies
 
 - **Location:** `src/include/duckdb/planner/decide/decide_prepared_model.hpp`

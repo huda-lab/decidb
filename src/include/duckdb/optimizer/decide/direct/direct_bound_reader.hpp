@@ -21,7 +21,7 @@ constexpr double NEGATIVE_INFINITY = -std::numeric_limits<double>::infinity();
 //===--------------------------------------------------------------------===//
 //
 // A bound on one decision reads, on each row, as the lower and upper end of the values it admits: the solver path's
-// own classifier (DecideReadOneDecisionBound) builds both ends. The reader has two halves that a rule composes. At plan
+// own classifier (DecideReadSingletonRow) builds both ends. The reader has two halves that a rule composes. At plan
 // time, DirectReadBounds separates what the solver folds into the decision's static box from the clauses the plan
 // evaluates per row. In the plan, DirectClauseBounds reads one clause's two ends and DirectRowBox intersects them with
 // the box.
@@ -39,7 +39,7 @@ struct DirectBoundClause {
 	//! The clause's coefficient and right side, which the plan checks as the solver path checks them.
 	vector<DirectSignedValue> coefficient;
 	unique_ptr<Expression> rhs;
-	//! The values of the decision the clause admits (DecideOneDecisionBound): DOUBLE, ±infinity on an open side.
+	//! The values of the decision the clause admits (DecideSingletonRow): DOUBLE, ±infinity on an open side.
 	unique_ptr<Expression> lower;
 	unique_ptr<Expression> upper;
 	unique_ptr<Expression> when;
@@ -61,14 +61,18 @@ struct DirectBoundReading {
 
 //! Reads every per-row constraint of `ir` as a bound on one decision. An aggregate constraint is not a bound and is
 //! skipped: the rule reads it, and A1, which has none, declines it. The rule's CheckCondition has checked each per-row
-//! constraint with DirectIsBoundOnOneDecision. A bound the solver folds into the variable (`variable_bound`) replaces
+//! constraint with DirectIsSingletonRow. A bound the solver folds into the variable (`variable_bound`) replaces
 //! the default lower bound of 0 and tightens the upper one; every other bound is a clause. Returns false when a value
 //! cannot be proved or the box as written contradicts the decision's built-in domain, which the solver reports.
 bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading);
 
-//! A per-row constraint the solver's classifier reads as a bound on one declared decision (DecideReadOneDecisionBound):
+//! True when the bounds the solver folds into a decision (`variable_bound`), as written, contradict its built-in domain
+//! (DecideWrittenBox): the solver raises that error before it reads a row, so a rule that answers the query declines.
+bool DirectContradictsDomain(const DirectIR &ir);
+
+//! A per-row constraint the solver's classifier reads as a bound on one declared decision (DecideReadSingletonRow):
 //! the shape a per-row bound must have for DirectReadBounds to read it.
-bool DirectIsBoundOnOneDecision(const DirectIR &ir, const DirectIRConstraint &ir_node);
+bool DirectIsSingletonRow(const DirectIR &ir, const DirectIRConstraint &ir_node);
 
 //! The columns of one clause's values, evaluated on every row.
 struct DirectBoundColumns {

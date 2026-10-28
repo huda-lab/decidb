@@ -271,7 +271,7 @@ failing class, same clause text, with the key value in `group`.
 **An easy MIN/MAX over one decision is a column bound.** `max(x) <= K` (and
 `min(x) >= K`) with no `when` and no reducer filter means `x <= K` on every row it reads
 (D41), whatever its `per` key or `by`, so bound absorption folds it into the column box
-like `x <= K` (`DecideReadOneDecisionBound`, `decide_singleton_row_folding.cpp`) and it
+like `x <= K` (`DecideReadSingletonRow`, `decide_singleton_row_folding.cpp`) and it
 reaches the repair model through its own clause's rows. A member scaled or shifted by
 constants is read by value (`max(2 * x) <= -10` is `x <= -5`). The `query` scope reports
 one edit on the clause as written, by the max overshoot

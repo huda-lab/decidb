@@ -31,7 +31,7 @@ mark it not proved.
 
 ## Things worth knowing
 
-- A per-row comparison carries the solver path's own reading of it (`DecideReadOneDecisionBound`): `one_decision_bound`
+- A per-row comparison carries the solver path's own reading of it (`DecideReadSingletonRow`): `singleton_row`
   when it is a bound on one decision, and `bound`, the interval of values it admits as DuckDB evaluates the comparison
   (D64). `variable_bound` is set when the solver path folds it into its decision's box instead of emitting a model row
   (an unconditional bound whose ends fold at plan time, in any spelling, D41). Such a bound replaces the variable's

@@ -187,7 +187,7 @@ static bool ReadAffine(const ExpressionBuilder &calc, const DecideTermSplitter &
 //! Fills the fields a bound known before the query runs carries (D41): everything folds to a number, which a column,
 //! a subquery or a parameter does not.
 static void FoldKnownBound(ClientContext &context, const ExpressionBuilder &calc, ExpressionType type, const ExprPtr &a,
-                           const ExprPtr &r, DecideOneDecisionBound &out) {
+                           const ExprPtr &r, DecideSingletonRow &out) {
 	double a_value, r_value;
 	out.folds = TryEvaluateFoldableDouble(context, *calc.Out(a), a_value, FOLD_CATCH_ALL) && a_value != 0.0 &&
 	            !std::isnan(a_value) && TryEvaluateFoldableDouble(context, *calc.Out(r), r_value, FOLD_CATCH_ALL) &&
@@ -208,8 +208,8 @@ static void FoldKnownBound(ClientContext &context, const ExpressionBuilder &calc
 	out.folds = (out.sense == '<' || out.lower_value != INF) && (out.sense == '>' || out.upper_value != -INF);
 }
 
-bool DecideReadOneDecisionBound(ClientContext &context, const LogicalDecide &decide,
-                                const BoundComparisonExpression &comparison, DecideOneDecisionBound &out) {
+bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
+                                const BoundComparisonExpression &comparison, DecideSingletonRow &out) {
 	auto type = comparison.type;
 	if (type != ExpressionType::COMPARE_LESSTHAN && type != ExpressionType::COMPARE_GREATERTHAN &&
 	    type != ExpressionType::COMPARE_LESSTHANOREQUALTO && type != ExpressionType::COMPARE_GREATERTHANOREQUALTO &&
@@ -273,7 +273,17 @@ bool DecideReadOneDecisionBound(ClientContext &context, const LogicalDecide &dec
 	return true;
 }
 
-bool DecideBoxContradictsDomain(const DecideBoundBox &box, bool is_bool) {
+void DecideWrittenBox::Add(char sense, double k) {
+	DecideFoldSingletonRow(box, sense, k);
+}
+
+void DecideWrittenBox::AddLowered(char sense, double k) {
+	if (sense != '<' && k < 0.0) {
+		DecideFoldSingletonRow(box, '>', k);
+	}
+}
+
+bool DecideWrittenBox::ContradictsDomain(bool is_bool) const {
 	double floor = box.EffectiveLower();
 	// A BOOLEAN's floor is 0 whatever lower bound was written (a lower bound below 0 changes nothing), so an upper
 	// bound below 0 contradicts it even when the written lower bound is negative (`x = -1`).
@@ -304,8 +314,8 @@ void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDec
 		idx_t removal_group_id = DConstants::INVALID_INDEX;
 		TryParseRemovalGroupTag(comp.GetAlias(), removal_group_id);
 
-		DecideOneDecisionBound bound;
-		if (!DecideReadOneDecisionBound(optimizer.context, decide, comp, bound) || !bound.folds) {
+		DecideSingletonRow bound;
+		if (!DecideReadSingletonRow(optimizer.context, decide, comp, bound) || !bound.folds) {
 			break;
 		}
 		// The comparison stays in the tree so EXPLAIN keeps rendering what the user

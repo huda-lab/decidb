@@ -193,7 +193,7 @@ skipped. RHS is `rhs_values[row]`; fixed LHS terms are subtracted one row at a t
 When the clause is a bound on one decision (`x <= cap`, `2 * x >= lo`, `cap * x <= 10`,
 `0.1 * x = c`), stage 08 has already evaluated, on each row, the values of `x` the comparison
 admits (`EvaluatedConstraint::admitted_lower` / `admitted_upper`, from the classifier
-`DecideReadOneDecisionBound`, `../05_optimizer/done.md`). The builder intersects that column's
+`DecideReadSingletonRow`, `../05_optimizer/done.md`). The builder intersects that column's
 `col_lower` / `col_upper` with them and emits no row. This is the per-row counterpart of
 singleton-row folding, which folds a literal bound once per decision in the optimizer; a
 data-valued bound differs per row and is known only here. The fold:
@@ -243,7 +243,12 @@ Every path pushes through `PushNormalizedConstraint()` rather than
 
 A *violated* empty-LHS row — `0 <= -1` after bounds folding and term
 cancellation, as written by `SUM(0 * x) <= -1` or `x - x <= -1` — is **kept**
-(`ConstantRowFails`). The row stays coefficient-free and keeps its own
+(`ConstantRowFails`, which allows 1e-9 for the cancellation). A singleton row whose
+coefficient is 0 on a data row (`cap * x <= -1e-10` where `cap` is 0) is judged by
+DuckDB's own comparison instead, through the values the classifier admits (all or
+none), so `-1e-10` fails as SQL says. The verdict is stored on the row
+(`ModelConstraint::constant_fails`) and read by `ProvesInfeasible`. The row stays
+coefficient-free and keeps its own
 `source_clause_id`, which is what lets the infeasible-diagnosis engine name the
 clause and report a least-change repair (`SUM(0 * x) <= 0`) instead of a bare
 status. The infeasibility is decided by DeciDB, not by a solver:

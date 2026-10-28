@@ -12,7 +12,8 @@ literal floor, so the default floor of 0 (which is not SQL) never decides the an
 Covers:
   - test_answer_is_the_value_duckdb_admits: literal and data bounds, DECIMAL and DOUBLE coefficients, `=`, a negative
     data coefficient, a quotient just below a whole number, a right side past the INTEGER range, an `ABS` helper,
-    an easy MAX whose member is scaled by data or shifted
+    an easy MAX whose member is scaled by data or shifted, a data coefficient of 0 against a right side within the
+    model builder's tolerance of 0 (DuckDB decides, not the tolerance)
 """
 
 import re
@@ -37,6 +38,8 @@ _CASES = [
     ("box_between_whole_numbers", "(1, 0)", "x >= -0.7 AND x <= -0.2", "MAXIMIZE"),
     ("negative_data_coefficient", "(1, -2.5)", "c * x <= 10 AND x >= -10 AND x <= 6", "MINIMIZE"),
     ("tiny_coefficient", "(1, 1.0)", "1e-300 * x >= c AND x >= -10 AND x <= 5", "MAXIMIZE"),
+    ("zero_data_coefficient_fails", "(1, 0.0)", "c * x <= -1e-10 AND x >= -10 AND x <= 5", "MAXIMIZE"),
+    ("zero_data_coefficient_holds", "(1, 0.0)", "c * x <= 1e-10 AND x >= -10 AND x <= 5", "MAXIMIZE"),
     ("data_past_the_integer_range", "(1, 3e9)", "x <= c AND x >= -10 AND x <= 5", "MAXIMIZE"),
     ("negative_infinite_floor_frees", "(1, 0)", "x >= -'inf'::DOUBLE AND x >= -5", "MINIMIZE"),
     ("abs_helper_keeps_its_type", "(1, 0)", "abs(x - 0.5) <= 2 AND x >= -10", "MAXIMIZE"),

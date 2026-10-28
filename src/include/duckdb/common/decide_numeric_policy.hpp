@@ -70,7 +70,7 @@ inline double DecideStrictBound(bool is_lower, double k) {
 }
 
 //! The box the solver path folds a decision's unconditional bounds into: the values each bound admits for the column
-//! box, or the bounds as written for the domain check (DecideBoxContradictsDomain). `lower_written` records that some
+//! box, or the bounds as written for the domain check (DecideWrittenBox). `lower_written` records that some
 //! lower bound was written, so a written bound of -1e30 or below ("no bound") is told apart from no bound written at
 //! all, which leaves the decision at its default floor of 0. The unset upper side starts at the solver sentinel, which
 //! reads as infinite.
@@ -87,7 +87,7 @@ struct DecideBoundBox {
 
 //! Folds one bound into a decision's box: `sense` is '<' (an upper bound), '>' (a lower bound) or '=' (both), `k` the
 //! raw value. Each side keeps the tightest value written. This is the one place that says how bounds combine; the
-//! solver's folding pass, the elastic engine's retained box and direct solve's A1 rule all call it.
+//! solver's folding pass, the domain check's written box and direct solve's bound reader all call it.
 inline void DecideFoldSingletonRow(DecideBoundBox &box, char sense, double k) {
 	if (sense != '>') {
 		box.upper = std::min(box.upper, k);

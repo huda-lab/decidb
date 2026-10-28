@@ -261,6 +261,27 @@ def test_null_error_of_a_wide_value_is_the_solvers_error_word_for_word(decidb_cl
     assert named == _wide_null_columns(width, _WIDE_NULL_SUBSETS[subset]), direct
 
 
+# A plan prints an expression by its alias, so a pipeline tag left on a value a direct plan computes reaches EXPLAIN
+# (`__source_fragment_0__`). A scalar subquery's NULL check is built by S1's row-bound check and by A1's value check; a
+# data reducer's bound carries the bound-side window's tags.
+_TAGGED_BOUNDS = {
+    "s1_scalar_subquery": "x(BOOL) SUCH THAT SUM(x) <= 1 AND x <= (SELECT max(v) FROM range(2) r(v))",
+    "a1_scalar_subquery": "x(REAL) SUCH THAT x <= (SELECT max(v) FROM range(2) r(v))",
+    "a1_data_reducer": "x(REAL) SUCH THAT x <= SUM(c) / 4",
+}
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("shape", sorted(_TAGGED_BOUNDS))
+def test_explain_of_a_direct_plan_shows_no_pipeline_tag(decidb_cli, shape):
+    sql = (
+        "SELECT id, x FROM (VALUES (1, 2.0, 1.0), (2, 3.0, 2.0)) t(id, c, s) "
+        f"DECIDE {_TAGGED_BOUNDS[shape]} MAXIMIZE SUM(s * x)"
+    )
+    plan = _raw(decidb_cli, f"EXPLAIN {sql}").stdout
+    assert "Direct solve" in plan and "__" not in plan, plan
+
+
 @pytest.mark.correctness
 @pytest.mark.parametrize("shape", ["s1", "a1"])
 def test_wide_value_is_proved_by_direct_solve_and_answers_like_the_solver(decidb_cli, shape):

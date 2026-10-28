@@ -23,15 +23,34 @@ static bool DirectProveValues(const DirectIR &ir, const vector<DecideSplitTerm> 
 	return true;
 }
 
-bool DirectIsBoundOnOneDecision(const DirectIR &ir, const DirectIRConstraint &ir_node) {
-	return ir_node.one_decision_bound && ir_node.bound.var_idx < ir.decisions.size();
+bool DirectIsSingletonRow(const DirectIR &ir, const DirectIRConstraint &ir_node) {
+	return ir_node.singleton_row && ir_node.bound.var_idx < ir.decisions.size();
+}
+
+bool DirectContradictsDomain(const DirectIR &ir) {
+	vector<DecideWrittenBox> written(ir.decisions.size());
+	for (auto &ir_node : ir.constraints) {
+		if (ir_node.variable_bound && DirectIsSingletonRow(ir, ir_node)) {
+			written[ir_node.bound.var_idx].Add(ir_node.bound.sense, ir_node.bound.written_k);
+		}
+	}
+	for (idx_t decision = 0; decision < written.size(); decision++) {
+		if (written[decision].ContradictsDomain(ir.decisions[decision].domain == DirectDomain::BOOL)) {
+			return true;
+		}
+	}
+	return false;
 }
 
 bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundReading &reading) {
+	// The solver rejects, before it reads any row, a box that contradicts the variable's built-in domain. It says so on
+	// an empty source too, so the query is left to the solver, which reports it, rather than proved here and answered
+	// with no rows.
+	if (DirectContradictsDomain(ir)) {
+		return false;
+	}
 	idx_t decision_count = ir.decisions.size();
-	// Two boxes per decision, each folded by the function the solver's own folding pass calls: the bounds as written,
-	// which the domain check reads, and the values they admit, which the answer reads.
-	vector<DecideBoundBox> written(decision_count);
+	// The values the bounds the solver folds admit, folded by the function the solver's own folding pass calls.
 	vector<DecideBoundBox> admitted(decision_count);
 	for (auto &ir_node : ir.constraints) {
 		if (ir_node.aggregate) {
@@ -41,7 +60,7 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 		idx_t decision = bound.var_idx;
 		// The classifier and the IR read the comparison with the same term splitter: one part of linear terms in the
 		// decision.
-		D_ASSERT(DirectIsBoundOnOneDecision(ir, ir_node) && ir_node.lhs.size() == 1);
+		D_ASSERT(DirectIsSingletonRow(ir, ir_node) && ir_node.lhs.size() == 1);
 		if (!DirectIsSourceOnlyValue(*ir_node.rhs, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
@@ -50,7 +69,6 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 			return false;
 		}
 		if (ir_node.variable_bound) {
-			DecideFoldSingletonRow(written[decision], bound.sense, bound.written_k);
 			if (bound.sense != '>') {
 				DecideFoldSingletonRow(admitted[decision], '<', bound.upper_value);
 			}
@@ -71,14 +89,6 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 			clause.when = ir_node.scope.when->Copy();
 		}
 		reading.clauses.push_back(std::move(clause));
-	}
-	for (idx_t decision = 0; decision < decision_count; decision++) {
-		// The solver rejects, before it reads any row, a box that contradicts the variable's built-in domain
-		// (DecideBoxContradictsDomain). It says so on an empty source too, so the query is left to the solver, which
-		// reports it, rather than proved here and answered with no rows.
-		if (DecideBoxContradictsDomain(written[decision], ir.decisions[decision].domain == DirectDomain::BOOL)) {
-			return false;
-		}
 	}
 	reading.boxes.resize(decision_count);
 	for (idx_t decision = 0; decision < decision_count; decision++) {

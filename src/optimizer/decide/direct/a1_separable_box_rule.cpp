@@ -144,7 +144,7 @@ public:
 			if (ir_node.aggregate) {
 				return nullptr;
 			}
-			if (!ir_node.scope.per_key_slots.empty() || !DirectIsBoundOnOneDecision(ir, ir_node)) {
+			if (!ir_node.scope.per_key_slots.empty() || !DirectIsSingletonRow(ir, ir_node)) {
 				return nullptr;
 			}
 		}
