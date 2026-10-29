@@ -235,8 +235,11 @@ static constexpr const char *QUALIFIED_REDUCER_SCOPE_TAG_PREFIX = "__qualified_b
 static constexpr const char *COLON_FORM_TAG = "__colon_form__";
 
 //! Builds the alias tag naming the entity scope a reducer is qualified by.
-inline string MakeQualifiedReducerTag(idx_t entity_scope_idx) {
-	return string(QUALIFIED_REDUCER_SCOPE_TAG_PREFIX) + to_string(entity_scope_idx) + "__";
+//! `text_fragment`, when given, is the fragment holding the key as this reducer wrote it
+//! ("__qualified_by_<i>_<fragment>__").
+inline string MakeQualifiedReducerTag(idx_t entity_scope_idx, idx_t text_fragment = DConstants::INVALID_INDEX) {
+	return string(QUALIFIED_REDUCER_SCOPE_TAG_PREFIX) + to_string(entity_scope_idx) +
+	       (text_fragment == DConstants::INVALID_INDEX ? string() : "_" + to_string(text_fragment)) + "__";
 }
 
 //! Reads back the entity scope index from an alias written by MakeQualifiedReducerTag.
@@ -246,10 +249,22 @@ inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
 	if (!ExtractDecideTagPayload(alias, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, digits)) {
 		return false;
 	}
-	if (digits.find_first_not_of("0123456789") != string::npos) {
+	digits = digits.substr(0, digits.find('_'));
+	if (digits.empty() || digits.find_first_not_of("0123456789") != string::npos) {
 		return false;
 	}
 	scope_idx = static_cast<idx_t>(std::stoull(digits));
+	return true;
+}
+
+//! The fragment holding the key as a qualified reducer wrote it, when its tag carries one.
+inline bool TryParseQualifiedReducerTextTag(const string &alias, idx_t &text_fragment) {
+	string payload;
+	if (!ExtractDecideTagPayload(alias, QUALIFIED_REDUCER_SCOPE_TAG_PREFIX, payload) ||
+	    payload.find('_') == string::npos) {
+		return false;
+	}
+	text_fragment = static_cast<idx_t>(std::stoull(payload.substr(payload.find('_') + 1)));
 	return true;
 }
 
@@ -285,8 +300,11 @@ static constexpr const char *VALUE_REWRITE_TAG = "__value_rewrite__";
 //! is the comparison's grouping. No tag means `BY ()`: every kept row.
 static constexpr const char *GROUP_KEY_TAG_PREFIX = "__group_key_";
 
-inline string MakeGroupKeyTag(idx_t group_key_idx) {
-	return string(GROUP_KEY_TAG_PREFIX) + to_string(group_key_idx) + "__";
+//! `text_fragment`, when given, is the fragment holding this reducer's own `by` text as the user wrote it
+//! ("__group_key_<i>_<fragment>__"): two reducers over one key keep their own spelling of it.
+inline string MakeGroupKeyTag(idx_t group_key_idx, idx_t text_fragment = DConstants::INVALID_INDEX) {
+	return string(GROUP_KEY_TAG_PREFIX) + to_string(group_key_idx) +
+	       (text_fragment == DConstants::INVALID_INDEX ? string() : "_" + to_string(text_fragment)) + "__";
 }
 
 //! Tag prefix naming the key of a `per K:` wrapper (PER_CLASS_TAG, PER_CONSTRAINT_TAG):
@@ -431,12 +449,42 @@ inline bool TryParseRemovalGroupTag(const string &alias, idx_t &removal_group_id
 	return TryParseDecideIndexTag(alias, REMOVAL_GROUP_TAG_PREFIX, removal_group_id);
 }
 
+//! `alias` without its source fragment tags: a column's spelling as written is metadata for a message, not part of the
+//! name a plan displays. The other tags are kept; DECIDE reads them off the same alias.
+inline string StripSourceFragmentTags(string alias) {
+	idx_t pos;
+	while ((pos = alias.find(SOURCE_FRAGMENT_TAG_PREFIX)) != string::npos) {
+		auto end = alias.find("__", pos + strlen(SOURCE_FRAGMENT_TAG_PREFIX));
+		alias.erase(pos, end == string::npos ? string::npos : end + 2 - pos);
+	}
+	return alias;
+}
+
 inline bool TryParseSourceFragmentTag(const string &alias, idx_t &fragment_id) {
 	return TryParseDecideIndexTag(alias, SOURCE_FRAGMENT_TAG_PREFIX, fragment_id);
 }
 
 inline bool TryParseGroupKeyTag(const string &alias, idx_t &group_key_idx) {
-	return TryParseDecideIndexTag(alias, GROUP_KEY_TAG_PREFIX, group_key_idx);
+	string payload;
+	if (!ExtractDecideTagPayload(alias, GROUP_KEY_TAG_PREFIX, payload)) {
+		return false;
+	}
+	auto digits = payload.substr(0, payload.find('_'));
+	if (digits.empty() || digits.find_first_not_of("0123456789") != string::npos) {
+		return false;
+	}
+	group_key_idx = static_cast<idx_t>(std::stoull(digits));
+	return true;
+}
+
+//! The fragment holding a reducer's own `by` text, when its group key tag carries one.
+inline bool TryParseGroupKeyTextTag(const string &alias, idx_t &text_fragment) {
+	string payload;
+	if (!ExtractDecideTagPayload(alias, GROUP_KEY_TAG_PREFIX, payload) || payload.find('_') == string::npos) {
+		return false;
+	}
+	text_fragment = static_cast<idx_t>(std::stoull(payload.substr(payload.find('_') + 1)));
+	return true;
 }
 
 inline bool TryParsePerKeyTag(const string &alias, idx_t &key_idx) {

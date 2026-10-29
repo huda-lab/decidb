@@ -66,7 +66,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "when S.priority: abs(ship - 20) <= 3",
             "abs(ship-20)becomesanauxiliaryvariable",
-            "whenpriority:abs(ship-20)-ship>=-20",
+            "whenS.priority:abs(ship-20)-ship>=-20",
             "__abs_aux",
             id="abs",
         ),
@@ -114,7 +114,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "when S.priority: ship IN (0, 5, 10)",
             "whenS.priority:shipIN(0,5,10)",
-            "whenpriority:(ship=0)+(ship=5)+(ship=10)=1",
+            "whenS.priority:(ship=0)+(ship=5)+(ship=10)=1",
             None,
             id="scoped-in-keeps-its-when",
         ),
@@ -171,7 +171,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
             "ship(INT)",
             "when S.priority: norm(ship, 0) <= 2",
             "norm(ship,0)becomesoneindicatorperrow",
-            "whenpriority:M*(ship<>0)-ship>=0.0",
+            "whenS.priority:M*(ship<>0)-ship>=0.0",
             "1.0*",
             id="l0-bound-is-derived",
         ),
@@ -244,7 +244,7 @@ def test_explain_accounts_for_the_objectives_rewrites_too(decidb_cli):
     text = _plan(decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE when S.priority: sum(abs(ship - 10))"))
     assert (
         "Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable"
-        "↳whenpriority:abs(ship-10)-ship>=-10"
+        "↳whenS.priority:abs(ship-10)-ship>=-10"
     ) in text, text
     assert "addedbyformulation" not in text, text
     text = _plan(decidb_cli, _ship_query("ship(INT), per D: open(BOOL)", "ship >= 1", "MAXIMIZE sum(open * ship)"))
@@ -366,15 +366,15 @@ def test_a_hard_min_or_max_reports_once_per_class_too(decidb_cli):
         pytest.param(
             "per t.depot: max(t.cap * x) by (t.region) <= -10",
             [
-                ("D1", "NULL", 10, "expanded_group", "per t.depot: max(cap * x) by (t.region) <= 0"),
-                ("D2", "NULL", 10, "expanded_group", "per t.depot: max(cap * x) by (t.region) <= 0"),
-                ("D3", "NULL", 10, "expanded_group", "per t.depot: max(cap * x) by (t.region) <= 0"),
+                ("D1", "NULL", 10, "expanded_group", "per t.depot: max(t.cap * x) by (t.region) <= 0"),
+                ("D2", "NULL", 10, "expanded_group", "per t.depot: max(t.cap * x) by (t.region) <= 0"),
+                ("D3", "NULL", 10, "expanded_group", "per t.depot: max(t.cap * x) by (t.region) <= 0"),
             ],
             id="easy-max-per-key",
         ),
         pytest.param(
             "max(t.cap * x) by (t.region) <= -10",
-            [("NULL", str(row), 10, "expanded_row", "max(cap * x) by (t.region) <= 0") for row in range(4)],
+            [("NULL", str(row), 10, "expanded_row", "max(t.cap * x) by (t.region) <= 0") for row in range(4)],
             id="easy-max-no-per",
         ),
         pytest.param(
@@ -385,14 +385,14 @@ def test_a_hard_min_or_max_reports_once_per_class_too(decidb_cli):
                     "NULL",
                     20,
                     "expanded_group",
-                    "per t.region: max(x) by (t.region) <= min(cap) by (t.region) - 30 + 20",
+                    "per t.region: max(x) by (t.region) <= min(t.cap) by (t.region) - 30 + 20",
                 ),
                 (
                     "W",
                     "NULL",
                     15,
                     "expanded_group",
-                    "per t.region: max(x) by (t.region) <= min(cap) by (t.region) - 30 + 15",
+                    "per t.region: max(x) by (t.region) <= min(t.cap) by (t.region) - 30 + 15",
                 ),
             ],
             id="easy-max-group-bound",

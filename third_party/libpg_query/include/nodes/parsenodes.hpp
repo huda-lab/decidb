@@ -1265,7 +1265,8 @@ typedef enum PGDecideSpanRole {
 	PG_DECIDE_SPAN_CMP_RHS, /* the right side of a comparison */
 	PG_DECIDE_SPAN_WHEN,    /* a `when` condition */
 	PG_DECIDE_SPAN_PER,     /* a `per` key */
-	PG_DECIDE_SPAN_BY       /* a reducer's `by` key */
+	PG_DECIDE_SPAN_BY,      /* a reducer's `by` key */
+	PG_DECIDE_SPAN_COLUMN   /* a column reference, as written (`S.cap`) */
 } PGDecideSpanRole;
 
 typedef struct PGDecideSpan {

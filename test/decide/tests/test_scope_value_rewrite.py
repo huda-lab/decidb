@@ -910,7 +910,7 @@ def test_explain_echoes_the_clause_as_written(decidb_cli):
     # The plan box breaks lines inside tokens, so compare without any whitespace.
     text = re.sub(r"[│\s]", "", out.stdout)
     assert "ship<=D.maxShipmentShare*sum(ship)by(D.depotID)" in text, out.stdout
-    assert "≡ship-maxShipmentShare*sum(ship)by(D.depotID)<=0.0" in text, out.stdout
+    assert "≡ship-D.maxShipmentShare*sum(ship)by(D.depotID)<=0.0" in text, out.stdout
     assert "sum(ship)by(D.depotID)becomesahelperdecisionpergroup" in text, out.stdout
     assert "__value_" not in text, out.stdout
     assert out.returncode == 0 and not out.stderr.strip(), out.stderr

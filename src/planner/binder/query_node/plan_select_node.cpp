@@ -169,14 +169,11 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         string written_objective;
         string canonical_objective;
 		// The run-time checks of the clauses, built by the
-		// canonicalizer from each clause as bound, before it is canonicalized. When the
-		// FROM clause joins relations, their messages name a column by its relation, which
-		// only the BindContext still knows; over one relation the name alone is clear.
+		// canonicalizer from each clause as bound, before it is canonicalized.
 		DecideScopeChecks scope_checks {statement.decide_keys, statement.entity_scopes,
-		                                statement.decide_source_fragments,
-		                                DecideRelationNames(bind_context, statement.decide_index)};
-		DecideSourceNames message_names {scope_checks.source_fragments, scope_checks.entity_scopes, scope_checks.keys,
-		                                 scope_checks.relations};
+		                                statement.decide_source_fragments};
+		DecideSourceNames message_names {scope_checks.source_fragments, scope_checks.entity_scopes,
+		                                 scope_checks.keys};
 		{
 			DecideCanonicalizer canonicalizer(context, statement.decide_index, statement.variable_scopes,
 			                                  std::move(query_wide_table_indexes),
@@ -200,9 +197,8 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 // FinalizeConstraintSourceInfo: written on the way in, canonical on the
                 // way out, captured around the one call that can change it. There is
                 // exactly one objective, so these are two strings rather than a registry.
-				unordered_map<idx_t, string> no_relations;
 				DecideSourceNames objective_names {statement.decide_source_fragments, statement.entity_scopes,
-				                                   statement.decide_keys, no_relations};
+				                                   statement.decide_keys};
 				written_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
 				canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
 				statement.decide_objective = canonicalizer.CanonicalizeObjective(*statement.decide_objective,

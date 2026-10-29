@@ -165,8 +165,10 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 
 BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
 	auto location = expr_ptr->GetQueryLocation();
-	return ThrowClauseError(PreserveQueryLocation(location, BindExpressionInternal(expr_ptr, depth, root_expression)),
-	                        root_expression);
+	return ThrowClauseError(
+	    PreserveQueryLocation(location,
+	                          TagWrittenColumn(location, BindExpressionInternal(expr_ptr, depth, root_expression))),
+	    root_expression);
 }
 
 BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,

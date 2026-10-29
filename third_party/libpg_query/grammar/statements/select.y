@@ -4324,10 +4324,12 @@ columnref: ColId
 columnref_opt_indirection:	ColId
 				{
 					$$ = makeColumnRef($1, NIL, @1, yyscanner);
+					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_COLUMN, @$);
 				}
 			| ColId indirection
 				{
 					$$ = makeColumnRef($1, $2, @1, yyscanner);
+					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_COLUMN, @$);
 				}
 		;
 

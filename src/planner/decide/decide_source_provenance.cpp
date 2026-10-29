@@ -68,9 +68,6 @@ struct RenderContext {
 	const vector<EntityScopeInfo> &entity_scopes;
 	//! The keys, so a reducer prints its `per K` and `by (...)`; null prints neither.
 	const vector<DecideKey> *keys = nullptr;
-	//! A relation's alias by table index, so a column prints as `D.depotID`; null
-	//! prints its name alone.
-	const unordered_map<idx_t, string> *relations = nullptr;
 	//! The decision columns that stand for an expression (DecideSourceNames::aux_labels),
 	//! which print as that expression; null prints a column's name.
 	idx_t decide_index = DConstants::INVALID_INDEX;
@@ -82,7 +79,7 @@ struct RenderContext {
 
 //! The context `names` describes.
 static RenderContext ContextOf(const DecideSourceNames &names) {
-	RenderContext ctx {names.fragments, names.entity_scopes, &names.keys, &names.relations};
+	RenderContext ctx {names.fragments, names.entity_scopes, &names.keys};
 	ctx.decide_index = names.decide_index;
 	ctx.aux_labels = names.aux_labels;
 	return ctx;
@@ -233,6 +230,15 @@ static string RenderWrittenWhen(const Expression &filter, const RenderContext &c
 	return written;
 }
 
+//! A reducer's `by` key as it wrote it, else as the key it shares was first written.
+static string ByText(const BoundAggregateExpression &agg, const RenderContext &ctx, idx_t group_key) {
+	idx_t fragment_id;
+	if (TryParseGroupKeyTextTag(agg.GetAlias(), fragment_id) && fragment_id < ctx.fragments.size()) {
+		return ctx.fragments[fragment_id];
+	}
+	return (*ctx.keys)[group_key].text;
+}
+
 //! A reducer as the query writes it: `sum(when c per K: e) by (g)`. The colon form
 //! (`SUM(D: e)`) prints as written.
 static string RenderReducer(const BoundAggregateExpression &agg, const string &body, const RenderContext &ctx) {
@@ -252,7 +258,7 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 		bool has_by =
 		    ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.keys->size();
 		return (scope.empty() ? "count(*)" : "sum(" + scope + ": 1)") +
-		       (has_by ? " by (" + (*ctx.keys)[group_key].text + ")" : string());
+		       (has_by ? " by (" + ByText(agg, ctx, group_key) + ")" : string());
 	}
 	string result = (!carrier.empty() ? carrier
 	                 : order.empty()  ? StringUtil::Lower(agg.function.name)
@@ -261,6 +267,10 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	idx_t scope_idx;
 	if (ctx.keys && TryParseQualifiedReducerTag(agg.GetAlias(), scope_idx) && scope_idx < ctx.entity_scopes.size()) {
 		auto key_text = DecideKeyText(*ctx.keys, ctx.entity_scopes[scope_idx].key);
+		idx_t text_fragment;
+		if (TryParseQualifiedReducerTextTag(agg.GetAlias(), text_fragment) && text_fragment < ctx.fragments.size()) {
+			key_text = ctx.fragments[text_fragment]; // the key as this reducer wrote it
+		}
 		if (HasDecideTag(agg.GetAlias(), COLON_FORM_TAG)) {
 			result += key_text + ": ";
 		} else {
@@ -270,7 +280,7 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	result += (scope.empty() ? "" : scope + ": ") + body + (order.empty() ? "" : ", " + order) + ")";
 	idx_t group_key;
 	if (ctx.print_by && ctx.keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.keys->size()) {
-		result += " by (" + (*ctx.keys)[group_key].text + ")";
+		result += " by (" + ByText(agg, ctx, group_key) + ")";
 	}
 	return result;
 }
@@ -375,12 +385,6 @@ static string RenderSource(const Expression &expr, const RenderContext &ctx, int
 			}
 		}
 		auto name = StripDecideTags(colref.GetName());
-		if (ctx.relations) {
-			auto relation = ctx.relations->find(colref.binding.table_index);
-			if (relation != ctx.relations->end()) {
-				return relation->second + "." + QuoteDecideIdentifier(name);
-			}
-		}
 		if (!name.empty()) {
 			return QuoteDecideIdentifier(name);
 		}
@@ -715,24 +719,10 @@ string RenderDecideSource(const Expression &expr, const DecideSourceNames &names
 DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
                                   const vector<DecideKey> &keys, idx_t decide_index,
                                   const vector<pair<idx_t, string>> &aux_labels) {
-	static const unordered_map<idx_t, string> no_relations;
-	DecideSourceNames names {fragments, entity_scopes, keys, no_relations};
+	DecideSourceNames names {fragments, entity_scopes, keys};
 	names.decide_index = decide_index;
 	names.aux_labels = &aux_labels;
 	return names;
-}
-
-unordered_map<idx_t, string> DecideRelationNames(BindContext &bind_context, idx_t decide_index) {
-	unordered_map<idx_t, string> relations;
-	for (auto &binding : bind_context.GetBindingsList()) {
-		if (binding->index != decide_index) {
-			relations.emplace(binding->index, KeywordHelper::WriteOptionallyQuoted(binding->GetAlias()));
-		}
-	}
-	if (relations.size() < 2) {
-		relations.clear();
-	}
-	return relations;
 }
 
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names) {

@@ -226,16 +226,14 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->input_column_names.assign(child_bindings.size(), string());
     decide_op->input_column_in_clause.assign(child_bindings.size(), false);
     // Names are kept as SQL, quoted where they need it, so a remedy that prints one is
-    // pasteable. A reference is named either by its bare column name, or, for a key
-    // column, by its SQL spelling (`t.depot`, `D."cost"`). The binder's source name is the
-    // bare one, so a reference named otherwise already carries SQL and is taken as it is.
+    // pasteable. Every reference carries its bare column name (a key column's SQL spelling,
+    // `t.depot`, `D."cost"`, is kept beside it in DecideKeyElement::name).
     std::function<void(const Expression &)> harvest;
-    // A `per` key names a column as the key was written (`t.depot`), whichever clause
-    // added the key first; a `by` key as its expression binds.
-    auto harvest_key = [&](idx_t key, bool as_written) {
+    // A key names a column as the key was written (`t.depot`), whichever clause added the key first.
+    auto harvest_key = [&](idx_t key) {
         for (auto &element : DecideKeyElements(decide_op->keys, key)) {
             auto &expr = *element.expression;
-            if (!as_written || expr.GetExpressionClass() != ExpressionClass::BOUND_REF) {
+            if (expr.GetExpressionClass() != ExpressionClass::BOUND_REF) {
                 harvest(expr);
                 continue;
             }
@@ -256,10 +254,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
                 // — recorded even when an earlier reference already supplied the name.
                 decide_op->input_column_in_clause[r.index] = true;
                 if (decide_op->input_column_names[r.index].empty()) {
-                    auto name = r.GetName();
-                    auto &source_name = child_userwritten_names[r.index];
-                    decide_op->input_column_names[r.index] =
-                        source_name.empty() || name == source_name ? QuoteColumnName(name) : name;
+                    decide_op->input_column_names[r.index] = QuoteColumnName(StripDecideTags(r.GetName()));
                 }
             }
         }
@@ -268,7 +263,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         if (e.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
             auto &conjunction = e.Cast<BoundConjunctionExpression>();
             if (IsPerClassWrapper(conjunction) || IsPerConstraintWrapper(conjunction)) {
-                harvest_key(PerWrapperKey(conjunction), true);
+                harvest_key(PerWrapperKey(conjunction));
             }
         }
     };
@@ -283,7 +278,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // column: a column the clauses never name stays unnamed.
     for (idx_t key = 0; key < decide_op->keys.size(); key++) {
         if (decide_op->keys[key].written_as_by) {
-            harvest_key(key, false);
+            harvest_key(key);
         }
     }
     for (auto &check : decide_op->scope_checks) {
@@ -292,7 +287,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
                 harvest(*expr);
             }
         }
-        harvest_key(check.key, true);
+        harvest_key(check.key);
     }
     // A lifted reducer's expressions live beside the tree: a composed term's and a helper
     // decision's (reducer_value_links). The columns they read explain the answer too.
@@ -313,7 +308,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         if (spec.when) {
             harvest(*spec.when);
         }
-        harvest_key(spec.class_key, true);
+        harvest_key(spec.class_key);
     }
     for (auto &term : decide_op->composed_minmax_objective_terms) {
         harvest_composed_term(term);

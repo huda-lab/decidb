@@ -202,6 +202,10 @@ protected:
     //! marker replaces `expr_ptr` in place, so by the time the result comes back the
     //! node the caller held is no longer the one the user wrote.
     static BindResult PreserveQueryLocation(optional_idx location, BindResult result);
+    //! A data column that bound at `location` carries its spelling as written (`S.cap`) as a source fragment, which
+    //! RenderDecideSource prints in any message and at any stage. A column the parser kept no text for, a decision
+    //! and anything that is not a plain column reference are left alone.
+    BindResult TagWrittenColumn(optional_idx location, BindResult result) const;
     //! Throws a clause's error at its root unless a column or table was not found. DuckDB
     //! retries a failed expression in each outer query, in case it refers to one, and reports
     //! that retry's error; only a missing name can be such a reference, so any other error is

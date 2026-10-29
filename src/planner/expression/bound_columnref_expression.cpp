@@ -1,5 +1,6 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/types/hash.hpp"
 #include "duckdb/main/config.hpp"
 
@@ -40,7 +41,8 @@ string BoundColumnRefExpression::GetName() const {
 		return binding.ToString();
 	}
 #endif
-	return Expression::GetName();
+	auto name = StripSourceFragmentTags(alias);
+	return name.empty() ? ToString() : name;
 }
 
 string BoundColumnRefExpression::ToString() const {
@@ -49,8 +51,9 @@ string BoundColumnRefExpression::ToString() const {
 		return binding.ToString();
 	}
 #endif
-	if (!alias.empty()) {
-		return alias;
+	auto name = StripSourceFragmentTags(alias);
+	if (!name.empty()) {
+		return name;
 	}
 	return binding.ToString();
 }

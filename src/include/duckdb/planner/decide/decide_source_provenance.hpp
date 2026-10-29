@@ -53,14 +53,12 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
                           const vector<EntityScopeInfo> &entity_scopes, const vector<DecideKey> *keys = nullptr);
 
-//! What a message about a clause renders with: the
-//! registries above, and each relation's alias by table index, so a column reads
-//! `D.depotID` in a query that joins several relations.
+//! What a message about a clause renders with: the registries above. A column reads as the user wrote it
+//! (`D.depotID`): its bound reference carries that spelling as a source fragment.
 struct DecideSourceNames {
     const vector<string> &fragments;
     const vector<EntityScopeInfo> &entity_scopes;
 	const vector<DecideKey> &keys;
-	const unordered_map<idx_t, string> &relations;
     //! The decision columns that stand for an expression (`LogicalDecide::aux_var_expressions`:
     //! an ABS auxiliary `abs(e)`, a product `(b * x)`, an indicator `(x = v)`, a helper
     //! `sum(e) by (g)`), which print as that expression rather than by their internal
@@ -69,8 +67,7 @@ struct DecideSourceNames {
     const vector<pair<idx_t, string>> *aux_labels = nullptr;
 };
 
-//! The names a plan and the rewrites render with: the clause registries, no relation
-//! aliases (a column prints its name alone), and the auxiliary labels.
+//! The names a plan and the rewrites render with: the clause registries and the auxiliary labels.
 DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
                                   const vector<DecideKey> &keys, idx_t decide_index,
                                   const vector<pair<idx_t, string>> &aux_labels);
@@ -78,10 +75,6 @@ DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<
 //! An expression as the query writes it (lower-case names, a reducer's `when`,
 //! `per` and `by`), every column qualified by its relation when `relations` lists any.
 string RenderDecideSource(const Expression &expr, const DecideSourceNames &names);
-
-//! The relations of a DECIDE query's FROM clause by table index, so a message names a
-//! column `D.depotID`; empty over one relation, where the column's name alone is clear.
-unordered_map<idx_t, string> DecideRelationNames(BindContext &bind_context, idx_t decide_index);
 
 //! A reducer as the query writes it, without its `by`: `sum(when S.priority:
 //! ship)`, for a message that names its `by` group separately.

@@ -325,8 +325,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 // read the decision's declared type off the DECIDE clause; every other
                 // operand's type is only known now that binding has resolved it. Together
                 // they are the whole refusal, so the model builder no longer raises one.
-                auto relations = DecideRelationNames(bind_context, result.decide_index);
-			    DecideSourceNames names {decide_source_fragments, entity_scopes, keys, relations};
+			    DecideSourceNames names {decide_source_fragments, entity_scopes, keys};
 			    ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, &names);
                 // Degree has one owner, and this is it. Running on the bound tree makes the
                 // rule total: a reducer argument and a bare per-row constraint are judged

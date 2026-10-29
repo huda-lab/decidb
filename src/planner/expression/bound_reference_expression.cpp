@@ -1,5 +1,6 @@
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
 
+#include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/to_string.hpp"
 #include "duckdb/common/types/hash.hpp"
 #include "duckdb/main/config.hpp"
@@ -14,14 +15,20 @@ BoundReferenceExpression::BoundReferenceExpression(LogicalType type, idx_t index
     : BoundReferenceExpression(string(), std::move(type), index) {
 }
 
+string BoundReferenceExpression::GetName() const {
+	auto name = StripSourceFragmentTags(alias);
+	return name.empty() ? ToString() : name;
+}
+
 string BoundReferenceExpression::ToString() const {
 #ifdef DEBUG
 	if (DBConfigOptions::debug_print_bindings) {
 		return "#" + to_string(index);
 	}
 #endif
-	if (!alias.empty()) {
-		return alias;
+	auto name = StripSourceFragmentTags(alias);
+	if (!name.empty()) {
+		return name;
 	}
 	return "#" + to_string(index);
 }

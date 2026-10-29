@@ -16,7 +16,7 @@ class Serializer;
 class Deserializer;
 
 //! What a span of the DECIDE tail is. The values are the parser's PGDecideSpanRole.
-enum class DecideSpanRole : uint8_t { CMP_LHS = 0, CMP_RHS = 1, WHEN = 2, PER = 3, BY = 4 };
+enum class DecideSpanRole : uint8_t { CMP_LHS = 0, CMP_RHS = 1, WHEN = 2, PER = 3, BY = 4, COLUMN = 5 };
 
 //! The text of a DECIDE clause as the user wrote it (the Clang SourceManager / `CreateInfo::sql` pattern): the tail,
 //! `SUCH THAT` through the objective, and where the parser found each construct in it. A construct is named by the

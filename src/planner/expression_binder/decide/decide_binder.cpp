@@ -357,6 +357,8 @@ static bool IsStoredColumn(Binding &binding, column_t column_index) {
 struct KeyColumn {
 	ColumnBinding binding;
 	LogicalType type;
+	//! The column's own name, which its bound reference carries; `name` is the SQL spelling beside it.
+	string column_name;
 	string name;
 	DecideKeyNullMode null_mode;
 };
@@ -366,6 +368,7 @@ using KeyColumns = vector<KeyColumn>;
 //! registered with the scan.
 static KeyColumn MakeKeyColumn(Binding &binding, column_t column_index) {
 	return KeyColumn {RegisterKeyColumn(binding, column_index), binding.types[column_index],
+	                  binding.names[column_index],
 	                  KeywordHelper::WriteOptionallyQuoted(binding.GetAlias()) + "." +
 	                      KeywordHelper::WriteOptionallyQuoted(binding.names[column_index]),
 	                  DecideKeyNullMode::VALUE};
@@ -483,7 +486,7 @@ static vector<DecideKeyElement> KeyElements(const KeyColumns &columns) {
 	vector<DecideKeyElement> elements;
 	for (auto &column : columns) {
 		DecideKeyElement element;
-		element.expression = make_uniq<BoundColumnRefExpression>(column.name, column.type, column.binding);
+		element.expression = make_uniq<BoundColumnRefExpression>(column.column_name, column.type, column.binding);
 		element.name = column.name;
 		element.null_mode = column.null_mode;
 		elements.push_back(std::move(element));
@@ -1441,6 +1444,22 @@ DecideBinder::DecideBinder(Binder &binder, ClientContext &context, const case_in
     is_top_expression = true;
 }
 
+BindResult DecideBinder::TagWrittenColumn(optional_idx location, BindResult result) const {
+	string spelling;
+	if (result.HasError() || !result.expression || !qualifier_context || !qualifier_context->source_fragments ||
+	    result.expression->GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF ||
+	    result.expression->Cast<BoundColumnRefExpression>().binding.table_index == qualifier_context->decide_index ||
+	    !qualifier_context->source_text ||
+	    !qualifier_context->source_text->Cut(location, DecideSpanRole::COLUMN, spelling)) {
+		return result;
+	}
+	qualifier_context->source_fragments->push_back(std::move(spelling));
+	auto alias = result.expression->GetAlias();
+	AddDecideTag(alias, MakeSourceFragmentTag(qualifier_context->source_fragments->size() - 1));
+	result.expression->SetAlias(std::move(alias));
+	return result;
+}
+
 BindResult DecideBinder::PreserveQueryLocation(optional_idx location, BindResult result) {
 	// Only fill an empty location: a nested bind that already recorded a more precise
 	// node should keep it rather than be widened to its parent's span.
@@ -1623,6 +1642,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		                    "sum(D: ...) or sum(D, T: ...)."));
 	}
 	vector<string> relations;
+	vector<string> written_relations;
 	for (idx_t i = 1; i < qualified_expr.children.size(); i++) {
 		auto &qualifier = *qualified_expr.children[i];
 		if (qualifier.GetExpressionClass() != ExpressionClass::COLUMN_REF ||
@@ -1632,6 +1652,11 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 			    "The qualifier of a reducer must be a relation name or alias, as in sum(D: ...)."));
 		}
 		relations.push_back(qualifier.Cast<ColumnRefExpression>().GetColumnName());
+		string written;
+		if (qualifier_context && qualifier_context->source_text &&
+		    qualifier_context->source_text->Cut(qualifier.GetQueryLocation(), DecideSpanRole::COLUMN, written)) {
+			written_relations.push_back(std::move(written));
+		}
 	}
 	auto relation_list = StringUtil::Join(relations, ", ");
 
@@ -1677,7 +1702,12 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 		    StringUtil::Format("'%s' cannot be qualified by a relation; only SUM, AVG, MIN and MAX can.",
 		                       StringUtil::Upper(agg_name))));
 	}
-	AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
+	idx_t text_fragment = DConstants::INVALID_INDEX;
+	if (written_relations.size() == relations.size() && ctx.source_fragments) {
+		ctx.source_fragments->push_back(StringUtil::Join(written_relations, ", "));
+		text_fragment = ctx.source_fragments->size() - 1;
+	}
+	AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx, text_fragment));
 	AddDecideTag(aggregate->alias, COLON_FORM_TAG);
 	return BindResult(std::move(aggregate_expr));
 }
@@ -1748,7 +1778,8 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 		auto scope_idx =
 		    FindOrCreateKeyScope(binder.bind_context, marker, DecisionNames(variables), DecideKeyToString(marker),
 		                         *qualifier_context->keys, *qualifier_context->entity_scopes);
-		AddDecideTag(aggregate->alias, MakeQualifiedReducerTag(scope_idx));
+		AddDecideTag(aggregate->alias,
+		             MakeQualifiedReducerTag(scope_idx, qualifier_context->WrittenFragment(marker, DecideSpanRole::PER)));
 	}
 	return result;
 }
@@ -1801,15 +1832,14 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 		key.push_back(std::move(key_element));
 	}
 	// The key as the user wrote it, when the parser kept it.
-	string written_key;
-	if (qualifier_context->source_text &&
-	    qualifier_context->source_text->Cut(by.GetQueryLocation(), DecideSpanRole::BY, written_key)) {
-		key_text = std::move(written_key);
+	auto text_fragment = qualifier_context->WrittenFragment(by, DecideSpanRole::BY);
+	if (text_fragment != DConstants::INVALID_INDEX) {
+		key_text = (*qualifier_context->source_fragments)[text_fragment];
 	}
 	auto group_key = FindOrCreateDecideKey(std::move(key), key_text, *qualifier_context->keys);
 	if (group_key != DConstants::INVALID_INDEX) {
 		(*qualifier_context->keys)[group_key].written_as_by = true;
-		AddDecideTag(aggregate->alias, MakeGroupKeyTag(group_key));
+		AddDecideTag(aggregate->alias, MakeGroupKeyTag(group_key, text_fragment));
 	}
 	return result;
 }
@@ -1922,7 +1952,8 @@ BindResult DecideBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, 
     // Read the location before dispatching: BindFunction rewrites `expr_ptr` in place
     // for the norm marker, so the node it names afterwards is not the one the user wrote.
     auto location = expr_ptr->GetQueryLocation();
-    return PreserveQueryLocation(location, BindExpressionInternal(expr_ptr, depth, root_expression));
+    return PreserveQueryLocation(location,
+                                 TagWrittenColumn(location, BindExpressionInternal(expr_ptr, depth, root_expression)));
 }
 
 BindResult DecideBinder::BindExpressionInternal(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth,

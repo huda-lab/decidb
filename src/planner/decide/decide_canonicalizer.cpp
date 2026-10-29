@@ -1655,7 +1655,7 @@ static string DeclaredScope(const DecideVarScopeInfo &scope) {
 
 void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
                                                   DecideScopeChecks &scope) const {
-	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys, scope.relations};
+	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys};
 	auto reducer_text = RenderDecideReducer(reducer, names);
 	idx_t by = DConstants::INVALID_INDEX;
 	TryParseGroupKeyTag(reducer.GetAlias(), by);
@@ -1701,7 +1701,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 
 void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing,
                                                  DecideScopeChecks &scope) const {
-	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys, scope.relations};
+	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys};
 	ClauseParts parts;
 	CollectClauseParts(
 	    leaf, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
@@ -1775,7 +1775,7 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 		}
 		body = conj.children[0].get();
 	}
-	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys, scope.relations};
+	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys};
 	if (two_level) {
 		return; // its classes are the inner reducer's own `by` groups, its key's
 	}

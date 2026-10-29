@@ -179,8 +179,6 @@ struct DecideScopeChecks {
 	vector<DecideKey> &keys;
 	const vector<EntityScopeInfo> &entity_scopes;
 	const vector<string> &source_fragments;
-	//! A relation's alias by table index, so a message names a column `D.depotID`.
-	unordered_map<idx_t, string> relations;
 	vector<DecideScopeCheck> checks;
 };
 
