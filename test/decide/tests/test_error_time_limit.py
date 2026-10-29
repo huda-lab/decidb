@@ -54,6 +54,18 @@ _FAST_QUERY_SQL = """
 """
 
 
+# Each row's ``IN`` domain is a clique of binaries that all sit in the objective, so HiGHS's MIP setup
+# (``HighsCliqueTable::cliquePartition``) spends about a minute querying every pair of the 270,000 binaries.
+_CLIQUE_PARTITION_SQL = """
+    SELECT i, x
+    FROM (SELECT i, (i * 7919) % 1000 + 1 AS w, (i * 104729) % 97 + 1 AS c FROM range(90000) t(i))
+    DECIDE x(INT)
+    SUCH THAT x IN (0, 1, 3)
+        AND SUM(x * c) <= 1000000
+    MAXIMIZE SUM(x * w)
+"""
+
+
 def _run_decidb(cli, sql, *, time_limit=None, subprocess_timeout=30):
     """Run ``sql`` on the Gurobi CLI with optional DECIDB_TIME_LIMIT in the env.
 
@@ -125,21 +137,25 @@ class TestTimeLimit:
         clock again. Without the time-limit check in that loop (third_party patch SOL-1) this solve runs past
         30 s; with it, HiGHS returns TIME_LIMIT about 1 s in and the subprocess timeout is never reached.
         """
-        sql = """
-            SELECT i, x
-            FROM (SELECT i, (i * 7919) % 1000 + 1 AS w, (i * 104729) % 97 + 1 AS c FROM range(90000) t(i))
-            DECIDE x(INT)
-            SUCH THAT x IN (0, 1, 3)
-                AND SUM(x * c) <= 1000000
-            MAXIMIZE SUM(x * w)
-        """
-        result = _run_decidb(decidb_cli_highs, sql, time_limit=1, subprocess_timeout=15)
+        result = _run_decidb(decidb_cli_highs, _CLIQUE_PARTITION_SQL, time_limit=1, subprocess_timeout=15)
         combined = result.stderr + result.stdout
         assert re.search(r"(?i)hit the time limit", combined), (
             f"Expected 'hit the time limit' message but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )
+
+    def test_highs_interrupt_reaches_clique_partition(self, decidb_cli_highs):
+        """Ctrl-C stops HiGHS inside its objective clique partition, not after it.
+
+        The SOL-1 check in that loop asks HiGHS's MIP limits, which include the interrupt callback, so a Ctrl-C ~3 s
+        in stops the solve at once. A clock-only check there would sit out the whole loop (about a minute) under the
+        60 s limit, and the subprocess timeout would kill it.
+        """
+        cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": "60"})
+        result, latency = cli.execute_interrupted(_CLIQUE_PARTITION_SQL, after=3.0, timeout=15)
+        assert "stopped at your request" in result.stderr.lower(), result.stderr[:800]
+        assert latency < 10.0, f"interrupt took {latency:.2f}s — expected a stop inside the clique partition"
 
     @pytest.mark.parametrize("garbage", ["abc", "-5", "0", ""])
     def test_invalid_env_var_falls_back_to_default(self, decidb_cli_gurobi, garbage):

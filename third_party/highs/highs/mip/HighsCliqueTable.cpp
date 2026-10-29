@@ -1001,7 +1001,7 @@ void HighsCliqueTable::cliquePartition(std::vector<CliqueVar>& clqVars,
   partitionStart.push_back(numClqVars);
 }
 
-// DeciDB patch (SOL-1): mipsolver supplies the time limit checked below
+// DeciDB patch (SOL-1): mipsolver supplies the limits checked below
 void HighsCliqueTable::cliquePartition(const HighsMipSolver& mipsolver,
                                        const std::vector<double>& objective,
                                        std::vector<CliqueVar>& clqVars,
@@ -1023,15 +1023,16 @@ void HighsCliqueTable::cliquePartition(const HighsMipSolver& mipsolver,
   HighsInt extensionEnd = numClqVars;
   partitionStart.push_back(0);
   HighsInt lastSwappedIndex = 0;
-  // DeciDB patch (SOL-1): read the clock once per kQueriesPerTimeCheck queries
+  // DeciDB patch (SOL-1): check the MIP limits once per kQueriesPerTimeCheck
+  // queries
   const int64_t kQueriesPerTimeCheck = 100000;
   int64_t nextTimeCheck = numNeighbourhoodQueries;
   for (HighsInt i = 0; i < numClqVars; ++i) {
-    // DeciDB patch (SOL-1): past the time limit, the rest become singletons
+    // DeciDB patch (SOL-1): past a limit (the time limit or a user interrupt),
+    // the rest become singletons
     if (numNeighbourhoodQueries >= nextTimeCheck) {
       nextTimeCheck = numNeighbourhoodQueries + kQueriesPerTimeCheck;
-      if (mipsolver.options_mip_->time_limit < kHighsInf &&
-          mipsolver.timer_.read() >= mipsolver.options_mip_->time_limit) {
+      if (mipsolver.mipdata_->checkLimits()) {
         if (partitionStart.back() != i) partitionStart.push_back(i);
         for (HighsInt j = i + 1; j < numClqVars; ++j)
           partitionStart.push_back(j);
