@@ -903,12 +903,11 @@ static vector<vector<bool>> KeptRowsOfEach(const vector<const Expression *> &con
 	return masks;
 }
 
-//! A scoped objective's decision outside its reducers (`MAXIMIZE when c: sum(x) + w * s`)
-//! is counted once (language/guide.md §4): its coefficient stays on the first
-//! kept row and every other row is zeroed. The scope checks made sure that row stands for
-//! all of them -- one instance, one value of its data. The model reads a query-wide
-//! decision's coefficient off row 0 and sums every other one over the rows, so a
-//! query-wide one is moved to row 0.
+//! A decision outside the reducers (`MAXIMIZE when c: sum(x) + w * s`, `sum(x) by (g) + s <= 8`) is counted once
+//! (language/guide.md §4): once in the objective, once in each group's row of a clause in the aggregate shape. Its
+//! coefficient stays on one row -- the first kept row, the group's first row -- and every other row is zeroed; the
+//! scope checks made sure that row stands for all of them (one instance, one value of its data). This is the one
+//! place the rule is applied: the model sums every row of every term (ilp_model_builder.cpp).
 static idx_t FirstKeptRow(const vector<bool> *kept, idx_t num_rows) {
 	for (idx_t row = 0; row < num_rows; row++) {
 		if (!kept || (*kept)[row]) {
@@ -918,30 +917,85 @@ static idx_t FirstKeptRow(const vector<bool> *kept, idx_t num_rows) {
 	return DConstants::INVALID_INDEX;
 }
 
-//! Keeps the coefficient a term has on `first_kept` at `target`, and zeroes every other row.
-static void CountOnce(CoefficientColumn &coefficients, idx_t first_kept, idx_t target) {
+//! Keeps the coefficient a term has on each row of `counted`, and zeroes every other row.
+static void CountOnce(CoefficientColumn &coefficients, const vector<idx_t> &counted) {
 	auto &values = coefficients.MutableDense();
-	double value = first_kept < values.size() ? values[first_kept] : 0.0;
-	std::fill(values.begin(), values.end(), 0.0);
-	if (first_kept < values.size()) {
-		values[target] = value;
+	vector<double> kept(values.size(), 0.0);
+	for (auto row : counted) {
+		if (row < values.size()) {
+			kept[row] = values[row];
+		}
 	}
+	values = std::move(kept);
 	coefficients.SyncSize();
 }
 
-static void CountTupleTermsOnce(const vector<DecideTerm> &terms, const vector<DecideVarScopeInfo> &variable_scopes,
-                                vector<CoefficientColumn> &coefficients, const vector<bool> *kept, idx_t num_rows) {
+//! Whether a term stands outside every reducer, which counts once.
+static bool CountsOnce(const DecideTerm &term) {
+	return term.reduction == LinearTermReduction::NONE;
+}
+
+//! The objective's terms outside its reducers, counted on its first kept row.
+static void CountTupleTermsOnce(const vector<DecideTerm> &terms, vector<CoefficientColumn> &coefficients,
+                                const vector<bool> *kept, idx_t num_rows) {
 	idx_t first_kept = FirstKeptRow(kept, num_rows);
+	vector<idx_t> counted;
+	if (first_kept != DConstants::INVALID_INDEX) {
+		counted.push_back(first_kept);
+	}
 	for (idx_t term_idx = 0; term_idx < terms.size() && term_idx < coefficients.size(); term_idx++) {
-		auto &term = terms[term_idx];
-		if (term.reduction != LinearTermReduction::NONE || term.variable_index == DConstants::INVALID_INDEX) {
-			continue;
+		if (CountsOnce(terms[term_idx])) {
+			CountOnce(coefficients[term_idx], counted);
 		}
-		bool query_wide =
-		    term.variable_index < variable_scopes.size() && variable_scopes[term.variable_index].IsScalar();
-		CountOnce(coefficients[term_idx], first_kept, query_wide ? 0 : first_kept);
 	}
 }
+
+//! The first row of each group of a clause in the aggregate shape: every row for `row_group_ids` empty (one group),
+//! none for a group with no row.
+static vector<idx_t> FirstRowOfEachGroup(const vector<idx_t> &row_group_ids, idx_t num_groups, idx_t num_rows) {
+	if (row_group_ids.empty()) {
+		return num_rows > 0 ? vector<idx_t> {0} : vector<idx_t>();
+	}
+	vector<idx_t> first(num_groups, DConstants::INVALID_INDEX);
+	for (idx_t row = 0; row < row_group_ids.size(); row++) {
+		auto group = row_group_ids[row];
+		if (group < num_groups && first[group] == DConstants::INVALID_INDEX) {
+			first[group] = row;
+		}
+	}
+	vector<idx_t> rows;
+	for (auto row : first) {
+		if (row != DConstants::INVALID_INDEX) {
+			rows.push_back(row);
+		}
+	}
+	return rows;
+}
+
+#ifdef DEBUG
+//! Verify (DuckDB's Verify() style): no writer left a term outside the reducers with its coefficient on more than one
+//! row of a group, which the model would count once per row.
+static void VerifyCountedOnce(const vector<DecideTerm> &terms, const vector<CoefficientColumn> &coefficients,
+                              const vector<idx_t> &row_group_ids) {
+	for (idx_t term_idx = 0; term_idx < terms.size() && term_idx < coefficients.size(); term_idx++) {
+		if (!CountsOnce(terms[term_idx])) {
+			continue;
+		}
+		auto &column = coefficients[term_idx];
+		unordered_set<idx_t> counted_groups;
+		for (idx_t row = 0; row < column.Size(); row++) {
+			if (column.Get(row) == 0.0) {
+				continue;
+			}
+			auto group = row_group_ids.empty() ? idx_t(0) : row_group_ids[row];
+			if (group != DConstants::INVALID_INDEX && !counted_groups.insert(group).second) {
+				throw InternalException("DECIDE: a term outside the reducers is counted on more than one row of a "
+				                        "group");
+			}
+		}
+	}
+}
+#endif
 
 // Evaluate every bilinear term's coefficient expression (constraint or objective side:
 // the two are the same shape, differing only in which prepared-model term type feeds
@@ -1335,7 +1389,6 @@ public:
     vector<ReducerValueLinkSpec> evaluated_value_links;
     vector<CoefficientColumn> evaluated_objective_coefficients; // [term_idx]
     vector<idx_t> objective_variable_indices;
-    vector<LinearTermReduction> objective_term_reductions;       // [term_idx]
 
     // Quadratic objective: evaluated inner linear expression coefficients
     vector<CoefficientColumn> evaluated_quadratic_coefficients;  // [term_idx]
@@ -2046,7 +2099,6 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // dumping the per-row numeric fan-out.
         for (auto &term : constraint->lhs_terms) {
             eval_const.variable_indices.push_back(term.variable_index);
-            eval_const.linear_term_reductions.push_back(term.reduction);
             eval_const.coefficient_labels.push_back(term.coefficient ? term.coefficient->GetName()
                                                                       : string());
         }
@@ -2351,6 +2403,18 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				}
 			}
 			SkipGroupsWithAnEmptyReducer(filters, num_rows, eval_const.row_group_ids, eval_const.num_groups);
+		}
+		// A decision beside the reducers counts once in each group's row.
+		if (constraint->lhs_is_aggregate) {
+			auto counted = FirstRowOfEachGroup(eval_const.row_group_ids, eval_const.num_groups, num_rows);
+			for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
+				if (CountsOnce(constraint->lhs_terms[term_idx])) {
+					CountOnce(eval_const.row_coefficients[term_idx], counted);
+				}
+			}
+#ifdef DEBUG
+			VerifyCountedOnce(constraint->lhs_terms, eval_const.row_coefficients, eval_const.row_group_ids);
+#endif
 		}
 
 		// Evaluate RHS: a constant, or a value of each row.
@@ -2693,10 +2757,8 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
             vector<CoefficientColumn> *out_coeffs;
             vector<idx_t> *out_var_indices;
             vector<TermFilterState> *out_term_filters;
-            //! Only set for the linear bucket: the model builder's scalar-once shortcut
-            //! needs to tell a reducer-summed term from a row-invariant sibling term.
-            //! Quadratic terms have no such shortcut, so this stays null there.
-            vector<LinearTermReduction> *out_reductions = nullptr;
+            //! The linear bucket: a term outside the reducers counts once. Every squared term sits in a reducer.
+            bool counts_once = false;
         };
         vector<ObjBucket> buckets;
         if (!gstate.objective->terms.empty()) {
@@ -2704,7 +2766,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                                &gstate.evaluated_objective_coefficients,
                                &gstate.objective_variable_indices,
                                &obj_linear_term_filters,
-                               &gstate.objective_term_reductions});
+                               true});
         }
         if (gstate.objective->has_quadratic) {
             buckets.push_back({&gstate.objective->squared_terms,
@@ -2730,9 +2792,6 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                         obj_filter_slots.push_back({term.filter.get(), &(*b.out_term_filters)[term_idx]});
                     }
                     b.out_var_indices->push_back(term.variable_index);
-                    if (b.out_reductions) {
-                        b.out_reductions->push_back(term.reduction);
-                    }
                 }
             }
 
@@ -2830,8 +2889,8 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                         }
                     }
 				}
-				if (b.out_reductions) {
-					CountTupleTermsOnce(*b.src_terms, variable_scopes, *b.out_coeffs,
+				if (b.counts_once) {
+					CountTupleTermsOnce(*b.src_terms, *b.out_coeffs,
 					                    objective_has_when ? &objective_when_mask : nullptr, num_rows);
 				}
 			}
@@ -2882,9 +2941,13 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 			// A product outside every reducer (`MAXIMIZE sum(x) + s * u`) counts once, as a
 			// linear term there does; one inside a reducer sums over its rows.
 			idx_t first_kept = FirstKeptRow(objective_has_when ? &objective_when_mask : nullptr, num_rows);
+			vector<idx_t> counted;
+			if (first_kept != DConstants::INVALID_INDEX) {
+				counted.push_back(first_kept);
+			}
 			for (idx_t i = 0; i < gstate.evaluated_bilinear_terms.size(); i++) {
 				if (gstate.objective->bilinear_terms[i].reduction == LinearTermReduction::NONE) {
-					CountOnce(gstate.evaluated_bilinear_terms[i].row_coefficients, first_kept, first_kept);
+					CountOnce(gstate.evaluated_bilinear_terms[i].row_coefficients, counted);
 				}
 			}
 		}
@@ -3257,7 +3320,6 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		                    ec.row_coefficients);
 		for (auto &term : link.inner_terms) {
 			ec.variable_indices.push_back(term.variable_index);
-			ec.linear_term_reductions.push_back(LinearTermReduction::SUM);
 			ec.coefficient_labels.push_back(term.coefficient->GetName());
 		}
 		// Its own `per`: one member per class of that key within each group. A row the
@@ -3400,13 +3462,17 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
     // knapsack/budget pattern), so the downstream Big-M can be finite and tight.
     // Only provably-implied bounds are applied; the feasible region is unchanged.
-    DecidePropagateImpliedBounds(solver_input.constraints, solver_input.lower_bounds,
+    DecidePropagateImpliedBounds(solver_input.constraints, out_var_indexer, solver_input.lower_bounds,
                                  solver_input.upper_bounds, num_rows);
     phase.Next("assembly.objective_and_avg");
     // Objective (linear part)
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
     solver_input.objective_variable_indices = std::move(gstate.objective_variable_indices);
-    solver_input.objective_term_reductions = std::move(gstate.objective_term_reductions);
+#ifdef DEBUG
+    if (gstate.objective) {
+        VerifyCountedOnce(gstate.objective->terms, solver_input.objective_coefficients, vector<idx_t>());
+    }
+#endif
     solver_input.sense = decide_sense;
 
     // Quadratic objective (if present)

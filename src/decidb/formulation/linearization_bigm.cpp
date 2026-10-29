@@ -256,9 +256,18 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
     return M + 1.0;
 }
 
-void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints,
+void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints, const VarIndexer &indexer,
                                   vector<double> &lower_bounds,
                                   vector<double> &upper_bounds, idx_t num_rows) {
+    // The bound each solver column gets from the clause at hand, NaN for none; `touched` resets it per clause.
+    vector<double> column_bound(indexer.global_block_start, std::numeric_limits<double>::quiet_NaN());
+    vector<int> touched;
+    SparseCoeffAccumulator accum;
+    accum.BeginForDecisions(indexer, num_rows);
+    vector<idx_t> group_offsets;
+    vector<idx_t> group_rows;
+    vector<int> indices;
+    vector<double> coefficients;
     for (auto &ec : constraints) {
         if (ec.comparison_type != ExpressionType::COMPARE_LESSTHANOREQUALTO &&
             ec.comparison_type != ExpressionType::COMPARE_EQUAL) {
@@ -314,99 +323,98 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
                 break;
             }
         }
-        for (idx_t t = 0; nonneg && t < ec.row_coefficients.size(); t++) {
-            const auto &col = ec.row_coefficients[t];
-            if (col.IsUniform()) {
-                // Scalar column: one value covers every row.
-                if (col.UniformValue() < -1e-15) {
-                    nonneg = false;
-                }
-                continue;
-            }
-            for (idx_t r = 0; r < num_rows; r++) {
-                if (!ec.row_group_ids.empty() &&
-                    ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
-                    continue;
-                }
-                if (col.Get(r) < -1e-15) {
-                    nonneg = false;
-                    break;
-                }
-            }
-        }
         if (!nonneg) {
             continue;
         }
+        // The rows the clause emits, read as the model builder emits them (AccumulateClauseRow): one per group of an
+        // aggregate (all rows for no groups), one per kept row otherwise. A solver column's coefficient is the sum of
+        // its terms over the row's data rows, so a decision that stands in several rows of a group, or one counted
+        // once beside the reducers, is bounded by what the row says about its instance. The row's bound is the
+        // clause's less its fixed terms, as the builder states it.
+        group_offsets.clear();
+        group_rows.clear();
+        if (ec.lhs_is_aggregate && !ec.row_group_ids.empty()) {
+            BuildGroupCSR(ec.row_group_ids, ec.num_groups, group_offsets, group_rows);
+        } else {
+            group_offsets.push_back(0);
+            for (idx_t r = 0; r < num_rows; r++) {
+                if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
+                    continue; // its class's first row bounds the same instance
+                }
+                group_rows.push_back(r);
+                if (!ec.lhs_is_aggregate) {
+                    group_offsets.push_back(group_rows.size());
+                }
+            }
+            if (ec.lhs_is_aggregate) {
+                group_offsets.push_back(group_rows.size());
+            }
+        }
         bool uniform_rhs = ec.rhs_values.IsUniform();
-        for (idx_t t = 0; t < ec.variable_indices.size(); t++) {
+        for (idx_t g = 0; nonneg && g + 1 < group_offsets.size(); g++) {
+            idx_t begin = group_offsets[g];
+            idx_t end = group_offsets[g + 1];
+            if (begin == end) {
+                continue;
+            }
+            idx_t first_row = group_rows[begin];
+            indices.clear();
+            coefficients.clear();
+            AccumulateClauseRow(ec, indexer, &group_rows, begin, end, accum);
+            accum.Flush(indices, coefficients);
+            double k = (uniform_rhs ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(first_row)) -
+                       SumFixedAggregateLhsOffset(ec, &group_rows, begin, end, "fixed LHS term");
+            for (idx_t i = 0; i < indices.size(); i++) {
+                double a = coefficients[i];
+                if (a < -1e-15) {
+                    nonneg = false;
+                    break;
+                }
+                if (a <= 1e-15 || (k < 0.0 && !single_variable)) {
+                    continue;
+                }
+                // A bound on one decision caps it at the greatest value it admits (stage 08), which the quotient
+                // may miss: `0.1 * x <= 0.3` admits 3, while 0.3 / 0.1 is just below 3.
+                double bound = ec.admitted_upper.logical_size ? ec.admitted_upper.Get(first_row) : k / a;
+                auto column = indices[i];
+                if (std::isnan(column_bound[column])) {
+                    touched.push_back(column);
+                    column_bound[column] = bound;
+                } else {
+                    column_bound[column] = std::min(column_bound[column], bound);
+                }
+            }
+        }
+        // The shared bound ub_x applies to EVERY instance of x, so the clause bounds x only when one of its rows
+        // bounds each instance, and then by the loosest of their bounds. With no data rows the loop never runs and
+        // the bound stays at its start: harmless, there is no instance of x to bind.
+        for (idx_t t = 0; nonneg && t < ec.variable_indices.size(); t++) {
             idx_t v = ec.variable_indices[t];
             if (v == DConstants::INVALID_INDEX) {
                 continue;
             }
-            // A variable can occupy several additive terms of the SAME constraint
-            // (`2*ship + 3*ship <= 10`, or two reducers over the same decision), and
-            // every one of them names the same solver column. The implied bound
-            // follows from their combined coefficient (10/5 = 2), never from one
-            // term's alone (10/3 = 3.33, sound but 1.67x looser) — reading a single
-            // term silently drops the others' contribution. So handle each variable
-            // once, at its first term, and sum every term that names it. The
-            // coefficients are evaluated numbers by now, which is why the addition
-            // belongs here and not in canonicalization, where they are still
-            // unevaluated expressions over data columns.
             bool already_handled = false;
             for (idx_t prev = 0; prev < t; prev++) {
-                if (ec.variable_indices[prev] == v) {
-                    already_handled = true;
-                    break;
-                }
+                already_handled = already_handled || ec.variable_indices[prev] == v;
             }
             if (already_handled) {
                 continue;
             }
             double bound = single_variable ? -std::numeric_limits<double>::infinity() : 0.0;
-            // The shared bound ub_x applies to EVERY row instance of x. A row
-            // bounds x only if it is active (not WHEN-excluded) AND x has a
-            // non-zero coefficient there. WHEN-excluded rows show up as a zero
-            // coefficient (not always as a row_group_ids marker), so if ANY row
-            // leaves x_r unconstrained we cannot use this constraint to bound the
-            // shared variable — doing so would cap the unconstrained rows.
-            // Two benign degenerate edges, both sound and intentionally left as-is:
-            //  - num_rows == 0: the loop never runs, every_row_constrained stays
-            //    true and bound stays 0, so ub may be pinned to 0 — harmless,
-            //    because with no rows there are no instances of x to bind.
-            //  - a tiny positive coefficient (a just above 1e-15): K/a is a huge
-            //    but still-VALID upper bound; it merely re-inflates M and loosens
-            //    the relaxation. Degenerate input, sound, not worth special-casing.
-            bool every_row_constrained = true;
-            for (idx_t r = 0; r < num_rows; r++) {
-                bool excluded = !ec.row_group_ids.empty() &&
-                                ec.row_group_ids[r] == DConstants::INVALID_INDEX;
-                if (excluded && ec.rows_stand_with_their_class) {
-                    continue; // its class's first row bounds the same instance
-                }
-                double a = 0.0;
-                for (idx_t t2 = t; t2 < ec.variable_indices.size(); t2++) {
-                    if (ec.variable_indices[t2] == v) {
-                        a += ec.row_coefficients[t2].Get(r);
-                    }
-                }
-                if (excluded || a <= 1e-15) {
-                    every_row_constrained = false;
-                    break;
-                }
-                double k = uniform_rhs ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(r);
-                if (k < 0.0 && !single_variable) {
-                    every_row_constrained = false;
-                    break;
-                }
-                // A bound on one decision caps it at the greatest value it admits (stage 08), which the quotient
-                // may miss: `0.1 * x <= 0.3` admits 3, while 0.3 / 0.1 is just below 3.
-                bound = std::max(bound, ec.admitted_upper.logical_size ? ec.admitted_upper.Get(r) : k / a);
+            bool every_instance_bounded = true;
+            for (idx_t r = 0; r < num_rows && every_instance_bounded; r++) {
+                double instance_bound = column_bound[indexer.Get(v, r)];
+                every_instance_bounded = !std::isnan(instance_bound);
+                bound = std::max(bound, instance_bound);
             }
-            if (every_row_constrained && bound < upper_bounds[v] && bound >= lower_bounds[v]) {
+            if (every_instance_bounded && bound < upper_bounds[v] && bound >= lower_bounds[v]) {
                 upper_bounds[v] = bound;
             }
         }
+        for (auto column : touched) {
+            column_bound[column] = std::numeric_limits<double>::quiet_NaN();
+        }
+        touched.clear();
     }
 }
 

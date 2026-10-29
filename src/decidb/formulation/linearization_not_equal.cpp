@@ -351,15 +351,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
     // var_indexer.global_block_start, so the dense accumulator is sized to that —
     // tighter than total_vars and unaffected by the globals appended as we go.
     SparseCoeffAccumulator accum;
-    {
-        constexpr idx_t DENSE_CAP = 1u << 20;
-        idx_t decide_var_index_span = var_indexer.global_block_start;
-        if (decide_var_index_span <= DENSE_CAP) {
-            accum.BeginDense(decide_var_index_span);
-        } else {
-            accum.BeginSparse(num_rows); // hint; per-group merging keeps actual size small
-        }
-    }
+    accum.BeginForDecisions(var_indexer, num_rows); // hint; per-group merging keeps actual size small
 
     const InstanceBox floors {input, var_indexer};
     for (auto &ec : deferred_aggregate) {
@@ -430,21 +422,9 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
             // earns. Neither the range nor the LHS accumulation below depends on which
             // excluded value is being tested, so both are computed once per group and
             // reused for every value in `distinct_rhs`.
-            // A query-wide decision beside the reducers (SCALAR, not SUM-reduced) enters the
-            // group's row once, as in the linear builder: `SUM(x) + s <> 5` is not
-            // `... + n*s`. The per-row ranges would count it once per row, so a clause with
-            // one takes no collapse: emitting the disjunction is exact either way.
-            auto counted_once = [&](idx_t term_idx) {
-                idx_t v = ec.variable_indices[term_idx];
-                return v != DConstants::INVALID_INDEX && var_indexer.var_scope[v] == DecideVarScope::SCALAR &&
-                       !(term_idx < ec.linear_term_reductions.size() &&
-                         ec.linear_term_reductions[term_idx] == LinearTermReduction::SUM);
-            };
-            bool any_counted_once = false;
-            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
-                any_counted_once = any_counted_once || counted_once(term_idx);
-            }
-            const bool has_linear_range = ec.bilinear_terms.empty() && ec.quadratic_groups.empty() && !any_counted_once;
+            // A term beside the reducers enters the group's row once: execution kept its coefficient on one row of
+            // the group (CountOnce), so the per-row ranges count it once too.
+            const bool has_linear_range = ec.bilinear_terms.empty() && ec.quadratic_groups.empty();
             double grp_lo = 0.0;
             double grp_hi = 0.0;
             if (has_linear_range) {
@@ -460,26 +440,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
             }
 
             // Accumulate LHS coefficients for active rows in this group.
-            for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
-                idx_t decide_var_idx = ec.variable_indices[term_idx];
-                if (decide_var_idx == DConstants::INVALID_INDEX) {
-                    continue;
-                }
-                auto &col = ec.row_coefficients[term_idx];
-                if (counted_once(term_idx)) {
-                    accum.Add(static_cast<int>(var_indexer.Get(decide_var_idx, 0)), col.Get(flat_rows[g_begin]));
-                    continue;
-                }
-                for (idx_t k = g_begin; k < g_end; k++) {
-                    idx_t row = flat_rows[k];
-                    double coeff = col.Get(row);
-                    if (std::abs(coeff) < 1e-15) {
-                        continue;
-                    }
-                    int var_idx = static_cast<int>(var_indexer.Get(decide_var_idx, row));
-                    accum.Add(var_idx, coeff);
-                }
-            }
+            AccumulateClauseRow(ec, var_indexer, &flat_rows, g_begin, g_end, accum);
 
             // Flush once into a deduped (idx, coeff) snapshot, copied for every
             // excluded value's disjunction below (only the last consumes it by move).

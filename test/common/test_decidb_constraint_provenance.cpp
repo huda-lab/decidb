@@ -160,23 +160,14 @@ TEST_CASE("DeciDB F2 constraint provenance", "[decidb][query_diagnostics][proven
 		CHECK(model.constraints[0].provenance.shape == ElasticShape::SHARED_SCALAR);
 	}
 
-	SECTION("fixed aggregate LHS offsets require an explicit SUM owner") {
+	SECTION("a fixed aggregate LHS offset sums every row") {
 		SolverInput valid = MakeBaseInput(2, 1);
 		EvaluatedConstraint ec = MakeAggregate({0, DConstants::INVALID_INDEX}, 2, 10.0);
 		ec.row_coefficients[1] = CoefficientColumn::MakeScalar(3.0, 2);
-		ec.linear_term_reductions = {LinearTermReduction::SUM, LinearTermReduction::SUM};
 		valid.constraints.push_back(std::move(ec));
 
 		SolverModel model = BuildModel(valid);
 		REQUIRE(model.constraints.size() == 1);
 		CHECK(model.constraints[0].rhs == 4.0);
-
-		SolverInput invalid = MakeBaseInput(2, 1);
-		EvaluatedConstraint malformed = MakeAggregate({0, DConstants::INVALID_INDEX}, 2, 10.0);
-		malformed.row_coefficients[1] = CoefficientColumn::MakeScalar(3.0, 2);
-		malformed.linear_term_reductions = {LinearTermReduction::SUM, LinearTermReduction::NONE};
-		invalid.constraints.push_back(std::move(malformed));
-		CHECK_THROWS_AS(BuildModel(invalid), InternalException);
 	}
-
 }

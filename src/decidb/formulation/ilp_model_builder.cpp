@@ -21,10 +21,6 @@ double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
         if (constraint.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
             continue;
         }
-        if (term_idx >= constraint.linear_term_reductions.size() ||
-            constraint.linear_term_reductions[term_idx] != LinearTermReduction::SUM) {
-            throw InternalException("DECIDE %s has no SUM reduction owner", error_context);
-        }
         auto &column = constraint.row_coefficients[term_idx];
         for (idx_t k = begin; k < end; k++) {
             idx_t row = rows ? (*rows)[k] : k;
@@ -446,19 +442,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             if (term_idx >= input.objective_coefficients.size()) {
                 continue;
             }
+            // Every row's coefficient counts. A term beside the reducers counts once: execution kept its
+            // coefficient on one row and zeroed the others (CountOnce, physical_decide.cpp).
             auto &col = input.objective_coefficients[term_idx];
-            bool is_reduced_scalar = term_idx < input.objective_term_reductions.size() &&
-                                     input.objective_term_reductions[term_idx] == LinearTermReduction::SUM;
-            if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
-                // A query-wide decision standing beside a reducer (not inside one) has one
-                // column and does not vary by row, so its term contributes once rather than
-                // once per row — otherwise the coefficient would be silently multiplied by
-                // the input cardinality. A scalar *inside* a reducer body (`SUM(cost * cap)`)
-                // is marked SUM-reduced and falls through to the per-row loop below instead,
-                // so its coefficient is the sum of every counted row's data.
-                model.obj_coeffs[indexer.Get(decide_var_idx, 0)] += col.Size() > 0 ? col.Get(0) : 1.0;
-                continue;
-            }
             for (idx_t row = 0; row < num_rows; row++) {
                 if (row >= col.Size()) break;
                 idx_t var_idx = indexer.Get(decide_var_idx, row);
@@ -769,6 +755,9 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         model.constraints.reserve(model.constraints.size() + est_rows);
     }
 
+    // Scratch for the rows that sum several (term, row) pairs per column, reused across clauses: the dense strategy
+    // allocates once.
+    SparseCoeffAccumulator accum;
     for (auto &eval_const : input.constraints) {
         // Skip constraints with quadratic/bilinear terms — handled in quadratic section below
         if (!eval_const.bilinear_terms.empty() || eval_const.has_quadratic) {
@@ -894,42 +883,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 } else {
                     // Entity-scoped vars or repeated decide vars — need to
                     // accumulate because multiple (term, row) pairs can map
-                    // to the same flat solver index.
-                    std::unordered_map<int, double> coeff_accum;
-                    for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                        idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-
-                        if (decide_var_idx != DConstants::INVALID_INDEX) {
-                            bool is_reduced_scalar =
-                                term_idx < eval_const.linear_term_reductions.size() &&
-                                eval_const.linear_term_reductions[term_idx] == LinearTermReduction::SUM;
-                            if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
-                                // A query-wide decision standing beside a reducer (not inside
-                                // one) has one column and does not vary by row, so its term
-                                // contributes once rather than once per row — otherwise
-                                // `SUM(x) + s <= 8` would silently build `... + n*s`. A scalar
-                                // *inside* a reducer body (`SUM(cost * cap)`) is marked
-                                // SUM-reduced and falls through to the per-row loop below
-                                // instead. The objective accumulator makes the same distinction.
-                                auto &col = eval_const.row_coefficients[term_idx];
-                                coeff_accum[static_cast<int>(indexer.Get(decide_var_idx, 0))] +=
-                                    col.Size() > 0 ? col.Get(0) : 1.0;
-                                continue;
-                            }
-                            for (idx_t row = 0; row < num_rows; row++) {
-                                double coeff = eval_const.row_coefficients[term_idx][row];
-                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                                coeff_accum[var_idx] += coeff;
-                            }
-                        }
-                    }
-
-                    for (auto &pair : coeff_accum) {
-                        if (pair.second != 0.0) {
-                            constr.indices.push_back(pair.first);
-                            constr.coefficients.push_back(pair.second);
-                        }
-                    }
+                    // to the same flat solver index. A term beside the reducers counts
+                    // once: execution kept its coefficient on one row (CountOnce).
+                    accum.BeginForDecisions(indexer, eval_const.variable_indices.size() * num_rows);
+                    AccumulateClauseRow(eval_const, indexer, nullptr, 0, num_rows, accum);
+                    accum.Flush(constr.indices, constr.coefficients);
                 }
 
                 // One value for the whole constraint: the optimizer's bound-side
@@ -966,19 +924,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
                 // For the slow (accumulating) path, pick a strategy once per constraint
                 // and reuse the scratch storage across all groups.
-                // The decide-variable flat indices span [0, global_block_start),
-                // so size the dense accumulator to that — tighter than total_vars.
-                SparseCoeffAccumulator accum;
                 if (!row_scoped_fast) {
-                    constexpr idx_t DENSE_CAP = 1u << 20; // ~8MB scratch ceiling
-                    idx_t decide_var_index_span = indexer.global_block_start;
-                    if (decide_var_index_span <= DENSE_CAP) {
-                        accum.BeginDense(decide_var_index_span);
-                    } else {
-                        idx_t expected = eval_const.variable_indices.size() *
-                                         (eval_const.num_groups > 0 ? num_rows / eval_const.num_groups : num_rows);
-                        accum.BeginSparse(expected);
-                    }
+                    accum.BeginForDecisions(indexer, eval_const.variable_indices.size() *
+                                                         (eval_const.num_groups > 0 ? num_rows / eval_const.num_groups
+                                                                                    : num_rows));
                 }
 
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
@@ -1011,31 +960,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                             }
                         }
                     } else {
-                        for (idx_t term_idx = 0; term_idx < eval_const.variable_indices.size(); term_idx++) {
-                            idx_t decide_var_idx = eval_const.variable_indices[term_idx];
-                            if (decide_var_idx == DConstants::INVALID_INDEX) continue;
-                            auto &col = eval_const.row_coefficients[term_idx];
-                            bool is_reduced_scalar =
-                                term_idx < eval_const.linear_term_reductions.size() &&
-                                eval_const.linear_term_reductions[term_idx] == LinearTermReduction::SUM;
-                            if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
-                                // One column for the whole query, so a scalar beside a reducer
-                                // (not inside one) enters each group's row once — not once per
-                                // row of that group. Same rule the ungrouped path above applies;
-                                // a grouped constraint just has more rows to get it wrong in. A
-                                // scalar *inside* a reducer body is SUM-reduced and falls
-                                // through to the per-row loop below, summing the whole group.
-                                accum.Add(static_cast<int>(indexer.Get(decide_var_idx, 0)),
-                                          col.Size() > 0 ? col.Get(flat_rows[g_begin]) : 1.0);
-                                continue;
-                            }
-                            for (idx_t k = g_begin; k < g_end; k++) {
-                                idx_t row = flat_rows[k];
-                                double coeff = col.Get(row);
-                                int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                                accum.Add(var_idx, coeff);
-                            }
-                        }
+                        AccumulateClauseRow(eval_const, indexer, &flat_rows, g_begin, g_end, accum);
                         accum.Flush(constr.indices, constr.coefficients);
                     }
 
@@ -1165,17 +1090,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
             idx_t decide_var_idx = ec.variable_indices[term_idx];
             if (decide_var_idx != DConstants::INVALID_INDEX) {
-                bool is_reduced_scalar = term_idx < ec.linear_term_reductions.size() &&
-                                         ec.linear_term_reductions[term_idx] == LinearTermReduction::SUM;
-                if (indexer.var_scope[decide_var_idx] == DecideVarScope::SCALAR && !is_reduced_scalar) {
-                    // A query-wide decision beside the reducers contributes once, as in a
-                    // linear row: `SUM(POWER(x, 2)) + s <= 30` is not `... + n*s`.
-                    if (!row_set.empty()) {
-                        linear_accum[static_cast<int>(indexer.Get(decide_var_idx, 0))] +=
-                            ec.row_coefficients[term_idx][row_set[0]];
-                    }
-                    continue;
-                }
                 for (idx_t row : row_set) {
                     double coeff = ec.row_coefficients[term_idx][row];
                     int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
@@ -1603,6 +1517,33 @@ void SparseCoeffAccumulator::BeginSparse(idx_t expected_size) {
         pairs.reserve(expected_size);
     }
     touched.clear();
+}
+
+void SparseCoeffAccumulator::BeginForDecisions(const VarIndexer &indexer, idx_t expected_size) {
+    constexpr idx_t DENSE_CAP = 1u << 20;
+    if (indexer.global_block_start <= DENSE_CAP) {
+        BeginDense(indexer.global_block_start);
+    } else {
+        BeginSparse(expected_size);
+    }
+}
+
+void AccumulateClauseRow(const EvaluatedConstraint &ec, const VarIndexer &indexer, const vector<idx_t> *rows,
+                         idx_t begin, idx_t end, SparseCoeffAccumulator &accum) {
+    for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
+        idx_t decide_var_idx = ec.variable_indices[term_idx];
+        if (decide_var_idx == DConstants::INVALID_INDEX) {
+            continue;
+        }
+        auto &col = ec.row_coefficients[term_idx];
+        for (idx_t k = begin; k < end; k++) {
+            idx_t row = rows ? (*rows)[k] : k;
+            double coeff = col.Get(row);
+            if (coeff != 0.0) {
+                accum.Add(static_cast<int>(indexer.Get(decide_var_idx, row)), coeff);
+            }
+        }
+    }
 }
 
 void SparseCoeffAccumulator::Flush(vector<int> &out_indices, vector<double> &out_coefficients) {

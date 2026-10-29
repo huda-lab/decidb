@@ -520,6 +520,10 @@ struct SparseCoeffAccumulator {
     //! Configure for sorted-pairs accumulation. `expected_size` is a hint for reserve().
     void BeginSparse(idx_t expected_size);
 
+    //! Configure for the decision columns of `indexer`, [0, global_block_start): dense while that span is small
+    //! enough to keep as scratch (about 8MB), sorted pairs past it.
+    void BeginForDecisions(const VarIndexer &indexer, idx_t expected_size);
+
     //! Add a contribution. Branchless on use_dense via the pre-set mode.
     inline void Add(int idx, double coeff) {
         if (use_dense) {
@@ -537,5 +541,12 @@ struct SparseCoeffAccumulator {
     //! path sorts+merges pairs.
     void Flush(vector<int> &out_indices, vector<double> &out_coefficients);
 };
+
+//! Adds the decision terms of one row a clause emits to `accum`: each term's coefficient on the rows [begin, end) of
+//! `rows` (row k itself when `rows` is null), summed per solver column. An aggregate clause emits one such row per
+//! group, a per-row clause one per row. The model builder, the aggregate `<>` expansion and implied-bound propagation
+//! read a clause's rows through this one sum.
+void AccumulateClauseRow(const EvaluatedConstraint &ec, const VarIndexer &indexer, const vector<idx_t> *rows,
+                         idx_t begin, idx_t end, SparseCoeffAccumulator &accum);
 
 } // namespace duckdb

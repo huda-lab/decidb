@@ -79,12 +79,13 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
 //! implied bounds are derived, and needs the VarIndexer for the row to instance map.
 void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const vector<DecideBoundBox> &boxes);
 
-//! Data-driven implied-bound propagation. For a non-negative `<=`/`=` constraint
-//! Sum_t a_t x_t (<=|=) K with a_t >= 0 and x_t >= 0, each variable instance
-//! satisfies x <= K / a (the other non-negative terms only help), so a sound
-//! shared upper bound is max over the variable's positive-coefficient rows of
-//! K_r / a_r, where a_r is the variable's COMBINED coefficient at that row --
-//! see the per-variable loop in the implementation. This converts many
+//! Data-driven implied-bound propagation. For a non-negative `<=`/`=` row the model
+//! emits, Sum_j a_j x_j (<=|=) K with a_j >= 0 and x_j >= 0, each instance satisfies
+//! x_j <= K / a_j (the other non-negative terms only help), where a_j is the
+//! instance's coefficient summed over the row's data rows (AccumulateClauseRow) and K
+//! the row's bound less its fixed terms. A sound shared upper bound on a decision is
+//! the max over its instances of the tightest such bound, when every instance has
+//! one. This converts many
 //! declared-unbounded variables into bounded ones, enabling a finite, correct,
 //! tighter Big-M. Only provably-implied bounds are applied, so the feasible
 //! region — and the optimum — are unchanged.
@@ -93,7 +94,7 @@ void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const ve
 //! to tighten others in the same sweep. This is sound — it only leaves some
 //! tightness on the table for chained implications — and avoids iterating to
 //! convergence over potentially many constraints.
-void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints,
+void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints, const VarIndexer &indexer,
                                   vector<double> &lower_bounds,
                                   vector<double> &upper_bounds, idx_t num_rows);
 

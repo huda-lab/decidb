@@ -11,6 +11,9 @@ import re
 
 import pytest
 
+from ._brute_force import judge_rows
+from ._scope_cases import answer
+
 
 @pytest.fixture
 def decidb_cli(decidb_cli):
@@ -117,7 +120,7 @@ def test_propagation_multivar_knapsack(decidb_cli):
 def test_propagation_skips_zero_coefficient_row(decidb_cli):
     """A per-row constraint `x*w <= 10` with w=0 on one row leaves that row's x
     unconstrained, so propagation must NOT derive a shared bound from the w>0 row
-    (the `every_row_constrained` guard). The zero-coef row's x must still reach
+    (the `every_instance_bounded` guard). The zero-coef row's x must still reach
     its declared bound. row1: 2x<=10 -> x<=5; row2: unconstrained -> x=100."""
     sql = """
         WITH data AS (SELECT 1 AS id, 2.0 AS w UNION ALL SELECT 2 AS id, 0.0 AS w)
@@ -191,3 +194,53 @@ def test_propagation_skips_when_excluded_constraint(decidb_cli):
     ci = {n: i for i, n in enumerate(cols)}
     total = sum(float(r[ci["x"]]) for r in rows)
     assert abs(total - 105.0) <= 1e-6, f"expected 105, got {total}"
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+def test_query_wide_decision_beside_a_reducer_is_bounded_by_the_row_it_counts_once_in(request, cli_fixture, tmp_path):
+    """`SUM(x) + s <= 8` implies s <= 8. Execution keeps a query-wide decision's coefficient
+    on one row of the group (it counts once), so propagation must read the row the model
+    emits, where s's column has coefficient 1, not demand a coefficient on every data row.
+    Without the bound, HiGHS cannot rewrite `s <> 3` and refuses the query."""
+    cli = request.getfixturevalue(cli_fixture).with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    sql = """
+        SELECT id, x, s FROM (VALUES (1), (2), (3)) t(id)
+        DECIDE x(INT), per (): s(INT)
+        SUCH THAT x <= 3 AND SUM(x) + s <= 8 AND s <> 3
+        MAXIMIZE SUM(x) + 2 * s ORDER BY id
+    """
+    # Columns: x on each of the three rows, then s.
+    assert _column_upper_bounds(cli.dump_model(sql, tmp_path / "beside.dump"))[:4] == [3.0, 3.0, 3.0, 8.0]
+    judge_rows(
+        answer(cli, sql),
+        {"x0": range(4), "x1": range(4), "x2": range(4), "s": range(12)},
+        lambda a: a["x0"] + a["x1"] + a["x2"] + a["s"] <= 8 and a["s"] != 3,
+        lambda a: a["x0"] + a["x1"] + a["x2"] + 2 * a["s"],
+    )
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+def test_keyed_decision_is_bounded_by_its_coefficient_summed_over_its_rows(request, cli_fixture, tmp_path):
+    """`SUM(w * y) <= 12` with `per g: y` emits 3*y_A + 6*y_B <= 12: each instance stands in
+    two rows of the group, so its coefficient is their sum, and y_A <= 4, y_B <= 2. The
+    shared bound is the looser, 4; read one data row at a time it would be 12 / 1."""
+    cli = request.getfixturevalue(cli_fixture).with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    sql = """
+        SELECT id, g, y FROM (VALUES (1, 'A', 1), (2, 'A', 2), (3, 'B', 3), (4, 'B', 3)) t(id, g, w)
+        DECIDE per g: y(INT)
+        SUCH THAT SUM(w * y) <= 12 AND y <> 1
+        MAXIMIZE SUM(y) ORDER BY id
+    """
+    # Columns: y_A, y_B.
+    assert _column_upper_bounds(cli.dump_model(sql, tmp_path / "keyed.dump"))[:2] == [4.0, 4.0]
+    judge_rows(
+        answer(cli, sql),
+        {f"y{i}": range(13) for i in range(4)},
+        lambda a: a["y0"] == a["y1"]
+        and a["y2"] == a["y3"]
+        and a["y0"] + 2 * a["y1"] + 3 * a["y2"] + 3 * a["y3"] <= 12
+        and all(a[f"y{i}"] != 1 for i in range(4)),
+        lambda a: sum(a[f"y{i}"] for i in range(4)),
+    )
