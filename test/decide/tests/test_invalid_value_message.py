@@ -54,6 +54,8 @@ BOTH_PATHS_COEFFICIENT = [
     ("a1_factor_on_the_sum", "x(REAL) SUCH THAT x <= 5 MAXIMIZE 2 * SUM(b * x)", "b"),
     ("a1_divisor_of_the_sum", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x) / 2", "b"),
     ("a1_constant_term", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x + b)", "b"),
+    # Each constant term is checked on its own: the first that is not finite is named.
+    ("a1_two_constant_terms", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x + b + b)", "b"),
     ("a1_inside_a_square", "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(x - b, 2))", "b"),
     ("a1_under_a_when", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(when a > 0: b * x)", "b"),
     (
@@ -549,6 +551,18 @@ def test_a_coefficient_the_solver_derives_names_its_value_or_its_clause(
 def test_a_factor_on_a_product_names_its_value_or_its_clause(decidb_cli_gurobi, mode, outcome, name, decide, written):
     stderr = _stderr(decidb_cli_gurobi, _derived_query(decide, outcome), mode)
     assert _derived_message(outcome, written) in stderr, stderr
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("cli_fixture,mode", EVERY_PATH)
+def test_the_constant_terms_of_the_objective_are_never_summed(request, cli_fixture, mode):
+    # Each `b` is finite and `b + b` is not. A constant adds nothing to the answer, so every path reads each term on
+    # its own and none adds them up: the query answers as the solver path does (A1's per-term check, BUG-24).
+    decide = "x(REAL) SUCH THAT x <= 5 AND x >= 0 MAXIMIZE SUM(a * x + b + b)"
+    sql = _huge_query(decide).replace("SELECT id FROM", "SELECT id, x FROM", 1) + " ORDER BY id"
+    expected = request.getfixturevalue("decidb_cli_gurobi").execute(f"SET decide_direct_solve='off'; {sql}")[0]
+    cli = request.getfixturevalue(cli_fixture)
+    assert cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")[0] == expected
 
 
 # A model whose numbers are each finite, which the solver then reads its own way: the warning stays (the CLI wrapper

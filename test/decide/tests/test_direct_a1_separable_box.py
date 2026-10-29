@@ -690,7 +690,7 @@ A1_CASES["decision_unused_in_objective"] = Case(
 )
 
 # An objective with a `when` over a sum of parts: every part shares the one membership mask. And a part with two terms
-# that read no decision: their sum is validated once.
+# that read no decision: each is validated on its own.
 A1_CASES["real_objective_parenthesized_sums_when"] = Case(
     (LOWER_ZERO_BOX,),
     Objective(

@@ -39,8 +39,9 @@ struct Term {
 	//! SQUARE: the decision the inner expression is linear in.
 	idx_t decision = 0;
 	int sign = 1;
-	//! CONSTANT: the value.
+	//! CONSTANT: the value, and what a message names for it (DirectNamesOf).
 	unique_ptr<Expression> value;
+	DirectNumberNames value_names;
 	//! SQUARE: `square_scale * (inner)^2`, where the inner expression is linear in one decision.
 	double square_scale = 1.0;
 	vector<DirectSignedValue> inner_linear;
@@ -56,8 +57,6 @@ struct Part {
 	unique_ptr<Expression> filter;
 	//! The constant and square terms, in the order they came.
 	vector<Term> terms;
-	//! What a message names for the sum of the constant terms (DirectNamesOf).
-	DirectNumberNames constant_names;
 };
 
 struct Decision {
@@ -223,7 +222,6 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	idx_t decision_count = ir.decisions.size();
 	for (auto &part : objective.parts) {
 		Part prepared;
-		vector<DirectSignedValue> constants;
 		if (!DirectReadLinearPart(ir, context, part, objective.written, prepared.linear)) {
 			return false;
 		}
@@ -250,7 +248,9 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 					return false;
 				}
 				built.value = term.coefficient->Copy();
-				constants.push_back({term.sign, term.coefficient->Copy()});
+				vector<DirectSignedValue> value;
+				value.push_back({term.sign, term.coefficient->Copy()});
+				built.value_names = DirectNamesOf(ir, value, objective.written);
 			} else {
 				built.kind = Term::Kind::SQUARE;
 				built.square_scale = term.square_scale;
@@ -291,7 +291,6 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 			}
 			prepared.terms.push_back(std::move(built));
 		}
-		prepared.constant_names = DirectNamesOf(ir, constants, objective.written);
 		condition.parts.push_back(std::move(prepared));
 	}
 	return true;
@@ -563,12 +562,12 @@ private:
 		auto on_kept = [&](ExprPtr value) {
 			return kept ? DirectOnKeptRows(calc, kept, value) : value;
 		};
-		// Linear coefficients add up per decision; a constant adds nothing to the answer but must still be valid.
+		// Linear coefficients add up per decision. A constant adds nothing to the answer, so like the solver path it
+		// is read one term at a time and never added up; each must still be valid, and is checked after the sums.
 		vector<ExprPtr> linear_sums(condition.decisions.size());
+		vector<unique_ptr<Expression>> constant_checks;
 		// The values each sum is made of, so a NULL in P2's check names the column it came from.
 		vector<vector<DirectSignedValue>> linear_terms(condition.decisions.size());
-		ExprPtr constant_sum;
-		vector<DirectSignedValue> constant_terms;
 		for (auto &term : part.linear.terms) {
 			auto value = calc.Wrap(DirectScaledTerm(optimizer, term.coefficient->Copy(), term.sign, false, 1.0, false));
 			auto &sum = linear_sums[term.decision];
@@ -578,8 +577,7 @@ private:
 		for (auto &term : part.terms) {
 			if (term.kind == Term::Kind::CONSTANT) {
 				auto value = calc.Wrap(DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false));
-				constant_sum = constant_sum ? calc.Add(constant_sum, value) : value;
-				constant_terms.push_back({term.sign, term.value->Copy()});
+				constant_checks.push_back(ValidNumber(p1, p1.Add(calc.Out(on_kept(value))), term.value_names));
 			} else {
 				Raw::SquareColumns square;
 				square.decision = term.decision;
@@ -604,9 +602,8 @@ private:
 			columns.linear_decision.push_back(d);
 			columns.linear.push_back(binding);
 		}
-		if (constant_sum) {
-			auto binding = p1.Add(calc.Out(on_kept(constant_sum)));
-			checks.push_back(ValidNumber(p1, binding, part.constant_names));
+		for (auto &check : constant_checks) {
+			checks.push_back(std::move(check));
 		}
 		for (auto &check : checks) {
 			all_checks.push_back(
