@@ -29,7 +29,6 @@ at a time. Lanes: F4, then F5 and F8's BUG-14; F6; F8. F9 runs alone.
 
 ## 9. F8 Solver runtime
 
-- [ ] SOL-1 Confirm the HiGHS time limit on Q2 at large (owner runs) — pipeline/07_solver/todo.md § SOL-1
 - [ ] BUG-3 Q10 on HiGHS at large is killed for memory (owner runs) — issues/bugs.md § BUG-3
 - [ ] BUG-14 Like coefficients that merge past DOUBLE raise an internal error — issues/bugs.md § BUG-14 (needs: F4)
 
