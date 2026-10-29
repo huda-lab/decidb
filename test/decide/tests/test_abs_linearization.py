@@ -20,7 +20,7 @@ import time
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DecidBCliError, _last_complete_model_dump
 from solver.types import VarType, ObjSense, SolverStatus
 from ._brute_force import judge_rows
 from ._scope_cases import answer, error_of
@@ -1875,7 +1875,7 @@ def test_abs_sign_rows_cover_a_demand_beyond_the_box(decidb_cli_highs, tmp_path)
             "SELECT x FROM (SELECT 1 AS id) t DECIDE x(INT) SUCH THAT x >= -1 AND x <= 1 AND abs(x) >= 5 MINIMIZE SUM(x)",
             path,
         )
-    assert _abs_sign_rows(path.read_text(), 1) == (5, 10, 10)
+    assert _abs_sign_rows(_last_complete_model_dump(path.read_text()), 1) == (5, 10, 10)
 
 
 @_HARD_SOLVERS

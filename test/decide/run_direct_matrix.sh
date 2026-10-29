@@ -8,15 +8,14 @@
 #   auto        make decide-test
 #   off         DECIDB_TEST_DIRECT_SOLVE=off make decide-test
 #   serializer  DECIDB_VERIFY_SERIALIZER=1 make decide-test
-#   highs       DECIDB_FORCE_SOLVER=highs make decide-test (one failure that needs Gurobi is expected:
-#               test_norm_combined_l1_l2_objective)
+#   highs       DECIDB_FORCE_SOLVER=highs make decide-test
 #   C++         build/release/test/unittest "[decidb]"
 #
 # Each pytest line reads `auto: 2322 passed, 0 xfailed, 0 failed (2322 outcomes)`; the outcome totals of the
 # modes should agree. A golden-model difference or a run that prints no pytest summary shows as `FAILED TO RUN`
 # with the log path. Full logs go to $MATRIX_LOG_DIR (default: a new test/decide/results/matrix_<time> folder,
-# which git ignores); the last line prints the path. The exit code is 0 only when every pytest check has no failure
-# except the expected highs one, and the C++ run passes.
+# which git ignores); the last line prints the path. The exit code is 0 only when no pytest check has a failure and the
+# C++ run passes.
 
 set -uo pipefail
 
@@ -51,11 +50,7 @@ run_pytest() {
     failed="$(( $(count "${log}" failed) + $(count "${log}" errors?) ))"
     skipped="$(count "${log}" skipped)"
     echo "${label}: ${passed} passed, ${xfailed} xfailed, ${failed} failed ($(( passed + xfailed + failed + skipped )) outcomes)"
-    local expected=0
-    if [[ "${label}" == "highs" ]]; then
-        expected=1
-    fi
-    if [[ "${failed}" -ne "${expected}" ]]; then
+    if [[ "${failed}" -ne 0 ]]; then
         status=1
     fi
 }
