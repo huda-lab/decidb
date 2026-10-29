@@ -7,17 +7,12 @@ Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
-at a time. Lanes: F1 then F5; F6; F7 then F8. F4 never beside F2 or F5. F9 runs alone. F10 runs first.
+at a time. Lanes: F1 then F5; F6; F7 then F8. F4 never beside F2 or F5. F9 runs alone.
 
 ## 1. Owner decisions (independent of each other; ask all first)
 
 - [ ] F4: CQ-1 five calls, CQ-3 names, CQ-4 encoding, CAN-2 four choices, OPT-2 indicator scope
 - [ ] F9: OPS-2 rename the names too, or not
-
-## 2. F10 Wrong answers
-
-- [ ] BUG-12 A NULL-key row's bound limits a `per K:` clause — issues/bugs.md § BUG-12
-- [ ] BUG-13 A `per D:` clause groups a relation by its first column — issues/bugs.md § BUG-13
 
 ## 4. F3 Diagnosis output (needs: 1)
 

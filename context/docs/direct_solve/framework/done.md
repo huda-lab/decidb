@@ -137,8 +137,8 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   are shared. The binder rejects `DISTINCT` and drops an `ORDER BY` inside these reducers, so neither reaches the
   rewrite. A data norm of order 0 is the count of its non-zero rows, `SUM(ABS(SIGN(e)))`.
   - The bound of a clause in the aggregate shape holds when its group's tightest value does: the MIN of an upper
-    bound, the MAX of a lower one, over the kept rows of the comparison's group. An `=` bound must take one value per
-    group. A bound with one value per group already (a constant, a query-wide value, or reducers whose `by` keys are in
+    bound, the MAX of a lower one, over the kept rows of the comparison's group; a row in no class of the clause's `per K:` (D5) gives no bound. An `=`
+    bound must take one value per group. A bound with one value per group already (a constant, a query-wide value, or reducers whose `by` keys are in
     the group's) is left alone, and so is a `<>` bound, which excludes each value it takes. The rewrite records
     such a bound as a value object (`DecideReducedBound`); a rule reduces it in its own group aggregate and raises its
     checks, and only the solver path builds the windows (`InstallReducedBounds`). A sum with its own `when` asks the

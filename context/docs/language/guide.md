@@ -169,7 +169,8 @@ DECIDE ship(INT), per D: open(BOOL), per (): cap(INT)   -- each declarator its o
 ```
 
 - **Key elements** are columns and relations of the `FROM` clause, spelled as anywhere in the query (`region`,
-  `D.region`, `D`). An unqualified `USING` column is the kept side's. A relation stands for all its stored columns;
+  `D.region`, `D`). A name that is both a column and a relation is the column, as in SQL; alias the relation to key
+  on it. An unqualified `USING` column is the kept side's. A relation stands for all its stored columns;
   generated columns are left out, since they only repeat the columns they are computed from. Expressions, decisions,
   `rowid` and generated columns are not key elements; expressions belong in `by`.
 - **A key is a set**: `per a, b` and `per b, a` are one key, and declarators with equal keys share one grouping.

@@ -69,25 +69,6 @@
   `<= 0`; the edit over-repairs by 1e-5. Reproduces on the current build.
 - **Needs.** The agent finds the cause and stops with a proposed fix before coding.
 
-## BUG-12 — Wrong answer: a NULL-key row's bound limits a `per K:` clause
-
-- **Observed:** over rows `(id, g, cap)` = `(1,'a',5)`, `(2,NULL,1)`, `(3,'a',5)`,
-  `DECIDE x(INT) SUCH THAT x <= 3 AND per g: SUM(x) <= cap MAXIMIZE SUM(x)` answers a total of 1. D5 puts the NULL
-  row in no class and D6 bounds the whole total once per class of `g`, so the one instance is class `'a'`,
-  `SUM(x) <= 5`, and the optimum is 5. The NULL row's `cap` is read as a limit of its own. Reproduces on the current
-  build, solver path; the direct rules (F6) copy the solver, so both paths agree and no test pins it.
-- **Impact:** a wrong optimum, silently, whenever a `per K:` key is NULL on a row whose bound is tighter.
-- **Needs.** The agent finds where the solver path instantiates a class for a NULL key and stops with a proposed fix
-  before coding; the fix covers both paths.
-
-## BUG-13 — A `per D:` clause groups a relation by its first column
-
-- **Observed:** over `D(d, region, cost, cap)` = `(1,'a',3,10)`, `(1,'b',5,25)`, `(2,'b',4,30)`,
-  `DECIDE open(BOOL) SUCH THAT per D: SUM(open) <= cap` raises *"per D does not determine cap. D = 1 has more than
-  one value: 10, 25."* A relation stands for all its stored columns (`../language/guide.md` §3), so each row is its own
-  class and `cap` is determined. A declaration `per D: open(BOOL)` groups correctly. Reproduces before F6.
-- **Impact:** a valid query is refused; the class label quotes one column.
-
 ## Limitations (not bugs)
 
 - **A decision as a factor on a reducer is refused:** `b * sum(x) <= 5` with
