@@ -88,6 +88,23 @@ const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer)
 //! The key of a `per` wrapper, as written (`D.region`, `()`).
 string RenderDecidePerKey(const BoundConjunctionExpression &per, const vector<string> &fragments);
 
+//! The two-level objective `outer(per k: inner(e) by (k))` (language/guide.md), which binds to the nested
+//! `outer(inner(e))` under a PER_CONSTRAINT_TAG wrapper keyed on k, taken apart: the `when` in front of the body
+//! (empty for none), the key as the query writes it, and the body under both. Every text of the form is built from
+//! these parts by the two formatters below: the written objective, the rows the solver receives after the rewrite
+//! (`per k: inner(e) by (k)`) and the rewrite's accounts.
+struct DecideTwoLevelParts {
+	string when; //!< the condition as written, empty for none
+	string key;
+	const Expression *body = nullptr;
+};
+DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const vector<string> &fragments,
+                                        const vector<EntityScopeInfo> &entity_scopes);
+//! The inner level, `inner(e) by (k)`, from the inner reducer as rendered (`inner(e)`).
+string RenderDecideTwoLevelInner(const string &inner, const string &key);
+//! The whole form, `outer(per k: inner(e) by (k))`, from the inner level as RenderDecideTwoLevelInner renders it.
+string RenderDecideTwoLevelOuter(const string &outer_name, const string &key, const string &inner);
+
 //! Split a DECIDE constraint or objective tree into one rendered string per clause,
 //! turning the wrappers the binder stamps back into the syntax the user wrote: `when c
 //! per K:` in front, and the two-level objective. Leaves are rendered by

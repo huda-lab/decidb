@@ -37,26 +37,16 @@ namespace duckdb {
 
 using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 
-static bool IsWhenWrapper(const Expression &expr) {
-	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
-		return false;
-	}
-	auto &conj = expr.Cast<const BoundConjunctionExpression>();
-	return IsWhenConstraintWrapper(conj) && conj.children.size() == 2;
-}
-
 void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> links;
 	idx_t l0_counter = 0;
 
-	std::function<void(unique_ptr<Expression> &, const string &, ClauseScope)> rewrite = [&](unique_ptr<Expression>
-	                                                                                             &expr,
-	                                                                                         const string &source_alias,
-	                                                                                         ClauseScope scope) {
+	std::function<void(unique_ptr<Expression> &, const string &, DecideEnclosingScope)> rewrite =
+	    [&](unique_ptr<Expression> &expr, const string &source_alias, DecideEnclosingScope scope) {
 		if (!expr)
 			return;
 		auto clause_alias = DescendSourceAlias(*expr, source_alias);
-		scope = EnterClauseScope(*expr, scope);
+		scope = EnterDecideScope(*expr, scope);
 		string payload;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE &&
 		    ExtractDecideTagPayload(expr->GetAlias(), WRITTEN_NORM_TAG_PREFIX, payload)) {
@@ -137,7 +127,7 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 			auto link = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 			                                                  std::move(lhs), std::move(rhs));
 			MarkFormulationConstraint(*link, clause_alias);
-			links.push_back(ScopeHelperRow(std::move(link), scope));
+			links.push_back(ScopeHelperRow(std::move(link), scope.Condition()));
 		};
 		add_link(make_mz(), aggregate.children[0]->Copy());
 		add_link(make_mz(), optimizer.BindScalarFunction("-", make_uniq<BoundConstantExpression>(Value::DOUBLE(0.0)),
@@ -150,10 +140,10 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 	// Lowering swaps a marker for a `SUM` of indicators under the factor the canonicalizer peeled, so each clause is
 	// detached, lowered, and reinstalled through the canonicalizing boundary rather than left as it was edited.
 	auto objective = std::move(decide.decide_objective);
-	rewrite(objective, OBJECTIVE_ROW_TAG, ClauseScope());
+	rewrite(objective, OBJECTIVE_ROW_TAG, DecideEnclosingScope());
 	decide.SetObjective(optimizer.context, std::move(objective));
 	auto constraints = std::move(decide.decide_constraints);
-	rewrite(constraints, string(), ClauseScope());
+	rewrite(constraints, string(), DecideEnclosingScope());
 	if (constraints) AppendConstraint(decide, std::move(constraints));
 	for (auto &link : links) AppendConstraint(decide, std::move(link));
 }
@@ -164,24 +154,26 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	// Every row an IN generates keeps its clause's `when`.
 	auto emit = [&](unique_ptr<Expression> constraint, const Expression *when, const string &source_alias) {
 		MarkFormulationConstraint(*constraint, source_alias);
-		generated.push_back(ScopeHelperRow(std::move(constraint), ClauseScope {when}));
+		generated.push_back(ScopeHelperRow(std::move(constraint), when));
 	};
-	std::function<void(unique_ptr<Expression> &, const Expression *, const string &)> rewrite =
-	    [&](unique_ptr<Expression> &expr, const Expression *when, const string &source_alias) {
+	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope, const string &)> rewrite =
+	    [&](unique_ptr<Expression> &expr, DecideEnclosingScope scope, const string &source_alias) {
 		if (!expr) return;
 		auto clause_alias = DescendSourceAlias(*expr, source_alias);
-		if (IsWhenWrapper(*expr)) {
-			auto &wrapper = expr->Cast<BoundConjunctionExpression>();
-			rewrite(wrapper.children[0], wrapper.children[1].get(), clause_alias);
-			if (wrapper.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
-			    wrapper.children[0]->Cast<BoundConstantExpression>().value.GetValue<bool>())
-				expr = MakeTrueExpression(wrapper.children[0]->GetAlias());
-			return;
-		}
+		scope = EnterDecideScope(*expr, scope);
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-			for (auto &child : expr->Cast<BoundConjunctionExpression>().children) rewrite(child, when, clause_alias);
+			auto &conj = expr->Cast<BoundConjunctionExpression>();
+			for (idx_t i = 0; i < conj.children.size(); i++) {
+				if (IsConstraintChild(conj, i)) rewrite(conj.children[i], scope, clause_alias);
+			}
+			// A `when c:` goes with the clause it held: the placeholder stands in for both.
+			if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2 &&
+			    conj.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
+			    conj.children[0]->Cast<BoundConstantExpression>().value.GetValue<bool>())
+				expr = MakeTrueExpression(conj.children[0]->GetAlias());
 			return;
 		}
+		auto when = scope.Condition();
 		if (expr->GetExpressionClass() != ExpressionClass::BOUND_OPERATOR || expr->type != ExpressionType::COMPARE_IN) return;
 		auto &in = expr->Cast<BoundOperatorExpression>();
 		if (in.children.size() < 2) throw InternalException("DECIDE IN marker has no domain values");
@@ -239,7 +231,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		}
 		expr = MakeTrueExpression(clause_alias);
 	};
-	rewrite(decide.decide_constraints, nullptr, string());
+	rewrite(decide.decide_constraints, DecideEnclosingScope(), string());
 	for (auto &constraint : generated) AppendConstraint(decide, std::move(constraint));
 }
 

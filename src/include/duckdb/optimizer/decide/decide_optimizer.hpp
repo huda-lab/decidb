@@ -148,13 +148,11 @@ private:
 	//! Must run before RewriteMinMax (which handles single top-level MIN/MAX).
 	void RewriteComposedMinMax(LogicalDecide &decide);
 
-	//! Helper: walk the constraint tree looking for composed MIN/MAX comparisons.
-	//! `scoped_when` is the `when` enclosing `expr`, folded into a composed clause's terms.
-	//! `per_class` is the `per K:` wrapper enclosing it, whose classes a composed clause's
-	//! one row stands for (D28).
+	//! Helper: walk the constraint tree looking for composed MIN/MAX comparisons. `scope` encloses `expr`: its `when`
+	//! is folded into a composed clause's terms, and its `per K:` names the classes the clause's one row stands for
+	//! (D28).
 	void RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
-	                                       const Expression *scoped_when = nullptr,
-	                                       const BoundConjunctionExpression *per_class = nullptr);
+	                                       DecideEnclosingScope scope = DecideEnclosingScope());
 
 	//! Detect a composed MIN/MAX objective (MIN/MAX terms beside other terms, or one under a factor).
 	//! Extracts the MIN/MAX terms into decide.composed_minmax_objective_terms and leaves the
@@ -171,13 +169,11 @@ private:
 	//! Top-level constraint-side MIN/MAX rewrite
 	void RewriteMinMaxConstraints(LogicalDecide &decide);
 
-	//! Helper: recursively walk bound constraint tree, classifying and rewriting MIN/MAX.
-	//! `scoped_when` and `per_class` are the `when` and `per K:` around `expr`, which a row
-	//! this rewrite adds for the clause (an equality's easy half) keeps.
+	//! Helper: recursively walk bound constraint tree, classifying and rewriting MIN/MAX. `scope` encloses `expr`; a
+	//! row this rewrite adds for the clause (an equality's easy half) keeps its `when` and `per K:`.
 	void RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                               vector<unique_ptr<Expression>> &new_constraints,
-	                               optional_ptr<const Expression> scoped_when = nullptr,
-	                               optional_ptr<const BoundConjunctionExpression> per_class = nullptr);
+	                               DecideEnclosingScope scope = DecideEnclosingScope());
 
 	//! Objective-side MIN/MAX detection and rewriting.
 	//! Handles the flat and the two-level objective.
@@ -239,7 +235,7 @@ private:
 	//! innermost first. Whether an auxiliary is pinned exactly is read off the tag
 	//! TagAbsForBigM left on the node; this pass decides nothing about it.
 	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide, vector<AbsPairInfo> &abs_pairs,
-	                       const string &source_alias, const Expression *when);
+	                       const string &source_alias, DecideEnclosingScope scope);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
 	//! aggregate tagged with MINMAX_CLAUSE_TAG_PREFIX. Records the clause's diagnosis

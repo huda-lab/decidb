@@ -339,14 +339,11 @@ public:
         ExpressionType outer_cmp;             // Outer comparison (<=, >=, <, >, =)
         idx_t source_clause_id = DConstants::INVALID_INDEX;
         idx_t removal_group_id = DConstants::INVALID_INDEX;
-        //! The classes its one row stands for, which an expanded diagnosis reports one by
-        //! one (D28) -- the values of its `per K:` key among the rows its `when` keeps
-        //! (`per_key` NAMES_CLASSES; `per ()` names none), or those rows themselves with
-        //! no `per` (NONE). `when` is the clause's own, also folded into each term's filter.
-        DecideConstraint::PerKeyRole per_key = DecideConstraint::PerKeyRole::NONE;
-        //! Index into `keys`; INVALID_INDEX with NONE.
-        idx_t class_key = DConstants::INVALID_INDEX;
-        unique_ptr<Expression> when;
+        //! The clause's `when`, also folded into each term's filter, and the classes its one
+        //! row stands for, which an expanded diagnosis reports one by one (D28) -- the values
+        //! of its `per K:` key among the rows its `when` keeps (NAMES_CLASSES; `per ()` names
+        //! none), or those rows themselves with no `per` (NONE).
+        DecideClauseScope scope;
     };
     vector<ComposedMinMaxConstraint> composed_minmax_constraints;
 

@@ -9,6 +9,7 @@
 #pragma once
 
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/expression.hpp"
 
 namespace duckdb {
@@ -69,6 +70,37 @@ struct BilinearConstraintTerm {
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 };
 
+//! The scope of a clause that has left the constraint tree, owned: the rows its `when` keeps and what its `per K:`
+//! does. Built from the borrowed DecideEnclosingScope (decide_constraint_walk.hpp) the clause sat under, and carried
+//! by every holder of such a clause (DecideConstraint, LogicalDecide::ComposedMinMaxConstraint) as this one parameter
+//! object. A clause reads only the rows its `when` keeps (a NULL on another row is never evaluated), and
+//! LogicalDecide::scope_checks have passed before it is evaluated.
+struct DecideClauseScope {
+	//! The clause's `when`, or null for every row.
+	unique_ptr<Expression> when;
+	//! What the clause's `per K:` / `per ()` does. ONE_ROW_PER_CLASS: the per-row shape emits one row per class of
+	//! `class_key` among the kept rows, the class's first (`per ()` is one class). NAMES_CLASSES: the aggregate shape,
+	//! the scoped easy MIN/MAX and the composed MIN/MAX emit their own rows, and the key only names the classes each
+	//! row stands for, which a diagnosis reports one by one (D28). NONE: no `per` written, so every kept row of a
+	//! group is a class of its own.
+	enum class PerRole : uint8_t { NONE, ONE_ROW_PER_CLASS, NAMES_CLASSES };
+	PerRole per = PerRole::NONE;
+	//! The `per` key (index into LogicalDecide::keys); INVALID_INDEX with NONE and for `per ()`.
+	idx_t class_key = DConstants::INVALID_INDEX;
+
+	DecideClauseScope() = default;
+	//! The scope of a clause under `enclosing`: its `when`, and its `per` naming the classes its rows stand for.
+	explicit DecideClauseScope(const DecideEnclosingScope &enclosing) {
+		if (enclosing.Condition()) {
+			when = enclosing.Condition()->Copy();
+		}
+		if (enclosing.per_wrapper) {
+			per = PerRole::NAMES_CLASSES;
+			class_key = enclosing.PerKey();
+		}
+	}
+};
+
 //! One canonical comparison, flattened into terms.
 struct DecideConstraint {
 	vector<DecideTerm> lhs_terms;    // All additive terms from LHS
@@ -82,23 +114,12 @@ struct DecideConstraint {
 	idx_t ne_clause_idx = DConstants::INVALID_INDEX;        // index into LogicalDecide::ne_clause_sources
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX;          // ABS auxiliary this envelope row bounds
 	bool abs_is_pos_bound = false;                          // true=C1 (aux >= inner), false=C2 (aux >= -inner)
-	unique_ptr<Expression> when_condition;                  // the clause's `when` (nullptr = every row)
-	//! A clause reads only the rows its `when` keeps (a NULL on another row is never
-	//! evaluated), every bound-side reducer reads its own `by` group of the kept rows, and
-	//! LogicalDecide::scope_checks have passed before it is evaluated.
-	//! Scoped, aggregate shape: the `by` key its decision reducers share, which groups its
-	//! rows (index into LogicalDecide::keys); INVALID_INDEX for `by ()`.
+	//! The clause's `when` and `per`.
+	DecideClauseScope scope;
+	//! Aggregate shape: the `by` key its decision reducers share, which groups its rows (index into
+	//! LogicalDecide::keys); INVALID_INDEX for `by ()`. Read off the comparison, not its scope. Every bound-side
+	//! reducer reads its own `by` group of the kept rows.
 	idx_t group_key = DConstants::INVALID_INDEX;
-	//! What a scoped clause's `per K:` / `per ()` does. ONE_ROW_PER_CLASS: the per-row
-	//! shape emits one row per class of `class_key` among the kept rows, the class's
-	//! first (`per ()` is one class). NAMES_CLASSES: the aggregate shape and the scoped
-	//! easy MIN/MAX emit their own rows, and the key only names the classes each `by`
-	//! group's row stands for, which a diagnosis reports one by one. NONE: no `per`
-	//! written, so every kept row of a group is a class of its own.
-	enum class PerKeyRole : uint8_t { NONE, ONE_ROW_PER_CLASS, NAMES_CLASSES };
-	PerKeyRole per_key = PerKeyRole::NONE;
-	//! The `per` key (index into LogicalDecide::keys); INVALID_INDEX with NONE.
-	idx_t class_key = DConstants::INVALID_INDEX;
 	ConstraintKind kind = ConstraintKind::USER_PARAMETER;
 	//! Stable origin in LogicalDecide::constraint_sources.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;

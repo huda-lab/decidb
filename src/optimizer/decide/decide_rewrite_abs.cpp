@@ -274,11 +274,11 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// the ABS node was written in (the objective's rows carry OBJECTIVE_ROW_TAG).
 	vector<AbsPairInfo> abs_pairs;
 	if (decide.decide_constraints) {
-		FindAndReplaceAbs(decide.decide_constraints, decide, abs_pairs, string(), nullptr);
+		FindAndReplaceAbs(decide.decide_constraints, decide, abs_pairs, string(), DecideEnclosingScope());
 	}
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceAbs(objective, decide, abs_pairs, OBJECTIVE_ROW_TAG, nullptr);
+		FindAndReplaceAbs(objective, decide, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope());
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 
@@ -374,20 +374,19 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			MarkFormulationConstraint(*c2, pair.source_alias);
 		}
 
-		ClauseScope scope {pair.when.get()};
-		AppendConstraint(decide, ScopeHelperRow(std::move(c1), scope));
-		AppendConstraint(decide, ScopeHelperRow(std::move(c2), scope));
+		AppendConstraint(decide, ScopeHelperRow(std::move(c1), pair.when.get()));
+		AppendConstraint(decide, ScopeHelperRow(std::move(c2), pair.when.get()));
 	}
 }
 
 void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                         vector<AbsPairInfo> &abs_pairs, const string &source_alias,
-                                        const Expression *when) {
+                                        DecideEnclosingScope scope) {
 	if (!expr) {
 		return;
 	}
 	auto clause_alias = DescendSourceAlias(*expr, source_alias);
-	auto scope = EnterClauseScope(*expr, ClauseScope {when});
+	scope = EnterDecideScope(*expr, scope);
 
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
 		auto &func = expr->Cast<BoundFunctionExpression>();
@@ -414,7 +413,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				// ABS no later pass would lower (term extraction read `abs(h)` as `h`). Its
 				// pair is appended before this one, which is the order the auxiliary-bound
 				// derivation boxes them in: the outer range needs the inner box.
-				FindAndReplaceAbs(func.children[0], decide, abs_pairs, clause_alias, scope.when);
+				FindAndReplaceAbs(func.children[0], decide, abs_pairs, clause_alias, scope);
 
 				idx_t aux_idx = AddAuxiliaryDecision(decide, "__abs_aux_" + to_string(abs_pairs.size()) + "__",
 				                                     aux_type, false, DecideVarScopeInfo::Row(), label);
@@ -427,7 +426,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 				// Stash the bound inner expression for constraint generation
 				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm,
-				                     scope.when ? scope.when->Copy() : nullptr, std::move(label)});
+				                     scope.Condition() ? scope.Condition()->Copy() : nullptr, std::move(label)});
 
 				// Replace ABS(inner) with aux var reference
 				ReplaceWithDecision(optimizer.context, decide, aux_idx, expr);
@@ -438,7 +437,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAndReplaceAbs(child, decide, abs_pairs, clause_alias, scope.when);
+		FindAndReplaceAbs(child, decide, abs_pairs, clause_alias, scope);
 	});
 }
 

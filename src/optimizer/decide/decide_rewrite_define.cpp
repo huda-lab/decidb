@@ -116,7 +116,7 @@ struct BodySite {
 	//! inside one, or sits in a constraint that holds one.
 	bool needs_native_extremum;
 	string source_alias;
-	ClauseScope scope;
+	DecideEnclosingScope scope;
 };
 
 //! The sign every reducer in `side` carries (WalkPolarity), keyed by node.
@@ -139,7 +139,7 @@ void CollectReducerSigns(ClientContext &context, Expression &side, int sign, idx
 //! the polarity walk did not reach (`signs`) is pushed neither way.
 void CollectBodySites(Expression &expr, idx_t decide_index, bool sums, bool extremum_clause, bool under_extremum,
                       ExtremumPush outer, const unordered_map<const Expression *, int> &signs,
-                      const string &source_alias, const ClauseScope &scope, vector<BodySite> &sites) {
+                      const string &source_alias, const DecideEnclosingScope &scope, vector<BodySite> &sites) {
 	if (!AsDecisionReducer(expr, decide_index)) {
 		ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) {
 			CollectBodySites(child, decide_index, sums, extremum_clause, under_extremum, outer, signs, source_alias,
@@ -188,20 +188,21 @@ bool SameReducer(const BodySite &a, const BodySite &b) {
 	if (a.reducer->alias != b.reducer->alias || !a.reducer->Equals(*b.reducer)) {
 		return false;
 	}
-	if (!a.scope.when || !b.scope.when) {
-		return !a.scope.when && !b.scope.when;
+	auto a_when = a.scope.Condition();
+	auto b_when = b.scope.Condition();
+	if (!a_when || !b_when) {
+		return !a_when && !b_when;
 	}
-	return a.scope.when->Equals(*b.scope.when);
+	return a_when->Equals(*b_when);
 }
 
 //! The clause's `when` and the reducer's own filter: the rows a helper is defined on.
 unique_ptr<Expression> HelperCondition(const BodySite &site) {
-	if (!site.scope.when || !site.reducer->filter) {
-		return site.scope.when        ? site.scope.when->Copy()
-		       : site.reducer->filter ? site.reducer->filter->Copy()
-		                              : nullptr;
+	auto when = site.scope.Condition();
+	if (!when || !site.reducer->filter) {
+		return when ? when->Copy() : site.reducer->filter ? site.reducer->filter->Copy() : nullptr;
 	}
-	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, site.scope.when->Copy(),
+	return make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND, when->Copy(),
 	                                             site.reducer->filter->Copy());
 }
 
@@ -228,11 +229,11 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 	vector<BodySite> sites;
 
 	if (decide.decide_constraints) {
-		std::function<void(Expression &, const string &, ClauseScope)> walk = [&](Expression &expr,
-		                                                                          const string &inherited,
-		                                                                          ClauseScope scope) {
+		std::function<void(Expression &, const string &, DecideEnclosingScope)> walk = [&](Expression &expr,
+		                                                                                   const string &inherited,
+		                                                                                   DecideEnclosingScope scope) {
 			auto source_alias = DescendSourceAlias(expr, inherited);
-			scope = EnterClauseScope(expr, scope);
+			scope = EnterDecideScope(expr, scope);
 			if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 				auto &conj = expr.Cast<BoundConjunctionExpression>();
 				for (idx_t i = 0; i < conj.children.size(); i++) {
@@ -265,7 +266,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 			CollectBodySites(*comparison.right, decide_index, true, extremum_clause, false, outer, signs, source_alias,
 			                 scope, sites);
 		};
-		walk(*decide.decide_constraints, string(), ClauseScope());
+		walk(*decide.decide_constraints, string(), DecideEnclosingScope());
 	}
 
 	// The objective reads as one expression under its sense; a two-level `per` wrapper and a `when` carry no sign,
@@ -275,13 +276,13 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 	if (decide.decide_objective && HoldsReducer(*decide.decide_objective, decide_index, true)) {
 		objective = std::move(decide.decide_objective);
 		Expression *body = objective.get();
-		ClauseScope scope;
+		DecideEnclosingScope scope;
 		while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conjunction = body->Cast<BoundConjunctionExpression>();
 			if (!IsConstraintWrapper(conjunction) || conjunction.children.empty()) {
 				break;
 			}
-			scope = EnterClauseScope(conjunction, scope);
+			scope = EnterDecideScope(conjunction, scope);
 			body = conjunction.children[0].get();
 		}
 		unordered_map<const Expression *, int> signs;
@@ -358,9 +359,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		AddDecideTag(alias, BODY_DEFINITION_TAG);
 		row->SetAlias(std::move(alias));
 		auto condition = HelperCondition(first);
-		ClauseScope helper_scope;
-		helper_scope.when = condition.get();
-		rows.push_back(ScopeHelperRow(std::move(row), helper_scope));
+		rows.push_back(ScopeHelperRow(std::move(row), condition.get()));
 
 		for (auto member : members) {
 			auto &reducer = *sites[member].reducer;

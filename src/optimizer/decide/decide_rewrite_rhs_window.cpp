@@ -65,7 +65,9 @@ public:
 	void Run() {
 		// The parser requires a SUCH THAT clause with at least one constraint.
 		D_ASSERT(decide.decide_constraints);
-		Walk(*decide.decide_constraints);
+		Walk(*decide.decide_constraints, DecideEnclosingScope());
+		when = nullptr;
+		class_key = DConstants::INVALID_INDEX;
 		Install();
 	}
 
@@ -105,30 +107,21 @@ private:
 		vector<const Expression *> keys;
 	};
 
-	void Walk(Expression &expr) {
+	//! A `per K:` wrapper groups no reducer: its clause is read like any other. Its key says which rows are in a class.
+	void Walk(Expression &expr, DecideEnclosingScope scope) {
+		scope = EnterDecideScope(expr, scope);
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conjunction = expr.Cast<BoundConjunctionExpression>();
-			auto saved_when = when;
-			auto saved_class_key = class_key;
-			if (IsWhenConstraintWrapper(conjunction)) {
-				D_ASSERT(conjunction.children.size() == 2);
-				when = conjunction.children[1].get();
-			}
-			// A `per K:` wrapper groups no reducer: its child is read like any other clause. Its key says which rows
-			// are in a class.
-			if (IsPerClassWrapper(conjunction)) {
-				class_key = PerWrapperKey(conjunction);
-			}
 			for (idx_t i = 0; i < conjunction.children.size(); i++) {
 				if (IsConstraintChild(conjunction, i)) {
-					Walk(*conjunction.children[i]);
+					Walk(*conjunction.children[i], scope);
 				}
 			}
-			when = saved_when;
-			class_key = saved_class_key;
 			return;
 		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
+			when = scope.Condition();
+			class_key = scope.PerKey();
 			RewriteBound(expr.Cast<BoundComparisonExpression>());
 		}
 	}
@@ -486,8 +479,9 @@ private:
 	LogicalDecide &decide;
 	ExpressionBuilder calc;
 	DecideCanonicalizer canonicalizer;
+	//! The clause being rewritten: its `when` condition, null for none, and the key of its `per K:`, INVALID_INDEX for
+	//! none or `per ()`.
 	const Expression *when = nullptr;
-	//! The key of the enclosing `per K:`, INVALID_INDEX for none or `per ()`.
 	idx_t class_key = DConstants::INVALID_INDEX;
 	vector<Level> levels;
 	vector<ReducerColumn> reducer_columns;

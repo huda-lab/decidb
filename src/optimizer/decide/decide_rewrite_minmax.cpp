@@ -280,37 +280,31 @@ static void AssertComposable(const BoundComparisonExpression &comparison) {
 }
 
 void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                                        const Expression *scoped_when,
-                                                        const BoundConjunctionExpression *per_class) {
+                                                        DecideEnclosingScope scope) {
 	if (!expr) {
 		return;
 	}
 
 	// Walk through AND conjunctions and the `when` / `per K:` wrappers. Inside `when c:` a
-	// composed clause's terms read the rows `c` keeps.
+	// composed clause's terms read the rows `c` keeps; a `per K:` over a composed clause
+	// names the classes its one row stands for (the checks hold K to it) and adds no row,
+	// so it keeps the placeholder the rewrite leaves.
+	scope = EnterDecideScope(*expr, scope);
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr->Cast<BoundConjunctionExpression>();
+		for (idx_t i = 0; i < conj.children.size(); i++) {
+			if (IsConstraintChild(conj, i)) {
+				RewriteComposedMinMaxInConstraint(conj.children[i], decide, scope);
+			}
+		}
 		// The `when c:` folds into the terms, which then read only the rows it keeps; the
 		// wrapper goes with the clause it held.
 		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-			RewriteComposedMinMaxInConstraint(conj.children[0], decide, conj.children[1].get(), per_class);
 			auto &inner = *conj.children[0];
 			if (inner.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
 			    inner.return_type == LogicalType::BOOLEAN) {
 				expr = std::move(conj.children[0]); // the placeholder of a composed clause
 			}
-			return;
-		}
-		// A `per K:` over a composed clause names the classes its one row stands for (the
-		// checks hold K to it) and adds no row: the clause is rewritten as under no
-		// wrapper, which keeps the placeholder the rewrite leaves.
-		if (IsPerClassWrapper(conj) && !conj.children.empty()) {
-			RewriteComposedMinMaxInConstraint(conj.children[0], decide, scoped_when, &conj);
-			return;
-		}
-		// Regular AND conjunction — recurse into all children
-		for (auto &child : conj.children) {
-			RewriteComposedMinMaxInConstraint(child, decide);
 		}
 		return;
 	}
@@ -386,16 +380,10 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 
 	WalkComposedLhs(optimizer.context, decide, spec.source_clause_id, *comp.left, /*sign=*/1, decide.decide_index,
 	                outer_push, spec.terms, names);
-	ScopeComposedTerms(spec.terms, scoped_when);
+	ScopeComposedTerms(spec.terms, scope.Condition());
 	// The classes its one row stands for (D28): its `per` key's values, or with no `per`
 	// every row its `when` keeps.
-	if (per_class) {
-		spec.per_key = DecideConstraint::PerKeyRole::NAMES_CLASSES;
-		spec.class_key = PerWrapperKey(*per_class);
-	}
-	if (scoped_when) {
-		spec.when = scoped_when->Copy();
-	}
+	spec.scope = DecideClauseScope(scope);
 
 	decide.composed_minmax_constraints.push_back(std::move(spec));
 
@@ -515,36 +503,21 @@ void DecideOptimizer::RewriteMinMaxConstraints(LogicalDecide &decide) {
 
 void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                                 vector<unique_ptr<Expression>> &new_constraints,
-                                                optional_ptr<const Expression> scoped_when,
-                                                optional_ptr<const BoundConjunctionExpression> per_class) {
+                                                DecideEnclosingScope scope) {
 	if (!expr) {
 		return;
 	}
 
-	// Handle the `when` / `per K:` wrappers
+	// The `when` and `per K:` travel with the clause they hold, so a row this rewrite adds
+	// for the clause keeps the clause's rows and classes. A wrapper's key or condition
+	// children are data (decide_constraint_walk.hpp).
+	scope = EnterDecideScope(*expr, scope);
 	if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr->Cast<BoundConjunctionExpression>();
-		if (IsWhenConstraintWrapper(conj)) {
-			// Recurse into the wrapped constraint (child[0]). The `when` travels with it,
-			// so a row this rewrite adds for the clause keeps the clause's rows.
-			if (!conj.children.empty()) {
-				auto when = conj.children.size() == 2 ? conj.children[1].get() : nullptr;
-				RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, when, per_class);
-			}
-			return;
-		}
-		// `per K:`: its clause is rewritten under it, and a row added for the clause keeps it.
-		if (IsPerClassWrapper(conj) && !conj.children.empty()) {
-			RewriteMinMaxInConstraint(conj.children[0], decide, new_constraints, scoped_when, &conj);
-			return;
-		}
-		// Regular AND conjunction -- recurse into the constraint children; a wrapper's
-		// key or condition children are data (decide_constraint_walk.hpp).
 		for (idx_t i = 0; i < conj.children.size(); i++) {
-			if (!IsConstraintChild(conj, i)) {
-				continue;
+			if (IsConstraintChild(conj, i)) {
+				RewriteMinMaxInConstraint(conj.children[i], decide, new_constraints, scope);
 			}
-			RewriteMinMaxInConstraint(conj.children[i], decide, new_constraints);
 		}
 		return;
 	}
@@ -686,14 +659,9 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 		    make_uniq<BoundComparisonExpression>(easy_cmp_type, comp.left->Copy(), comp.right->Copy());
 		easy->alias = comp.alias;
 		AddDecideTag(easy->alias, MINMAX_EASY_REWRITE_TAG);
-		if (scoped_when) {
-			auto when_wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-			when_wrapper->children.push_back(std::move(easy));
-			when_wrapper->children.push_back(scoped_when->Copy());
-			when_wrapper->alias = WHEN_CONSTRAINT_TAG;
-			easy = std::move(when_wrapper);
-		}
-		if (per_class) {
+		easy = ScopeHelperRow(std::move(easy), scope.Condition());
+		if (scope.per_wrapper) {
+			auto per_class = scope.per_wrapper;
 			// The clause's own `per K:`, outermost as the binder nests it: the easy half
 			// stands for the same classes (D28) and prints in front as written.
 			auto per_wrapper = make_uniq<BoundConjunctionExpression>(per_class->type);
@@ -870,8 +838,9 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 				// subjects spell it out as written.
 				{
 					using Kind = LogicalDecide::RewriteAccount::Kind;
-					const string key = RenderDecidePerKey(*per_wrapper, decide.source_fragments);
-					auto inner_text = RenderForPlan(inner_agg, decide) + " by (" + key + ")";
+					const string key =
+					    SplitDecideTwoLevel(*per_wrapper, decide.source_fragments, decide.entity_scopes).key;
+					auto inner_text = RenderDecideTwoLevelInner(RenderForPlan(inner_agg, decide), key);
 					// Defined members have no box, so every extremum over them, the outer one's
 					// included, is stated natively.
 					const bool defined = HasDecideTag(inner_agg.alias, BODY_DEFINITION_TAG);
@@ -890,7 +859,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 						                  decide.per_outer_is_easy ? Kind::EXTREMUM
 						                  : defined                ? Kind::EXTREMUM_NATIVE
 						                                           : Kind::EXTREMUM_PINNED,
-						                  outer_name + "(per " + key + ": " + inner_text + ")");
+						                  RenderDecideTwoLevelOuter(outer_name, key, inner_text));
 					}
 				}
 

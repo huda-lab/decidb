@@ -127,14 +127,15 @@ struct Helpers {
 	vector<unique_ptr<Expression>> reducers; //!< parallel to decide.reducer_value_links
 
 	//! The link holding `agg` over the rows `scope` keeps, or INVALID_INDEX.
-	idx_t Find(const BoundAggregateExpression &agg, const ClauseScope &scope) const {
+	idx_t Find(const BoundAggregateExpression &agg, const DecideEnclosingScope &scope) const {
+		auto when = scope.Condition();
 		for (idx_t i = 0; i < reducers.size(); i++) {
 			auto &link = decide.reducer_value_links[i];
 			if (!reducers[i]->Equals(agg) || reducers[i]->GetAlias() != agg.GetAlias()) {
 				continue;
 			}
 			// A clause's rows carry copies of its `when`: the same condition.
-			const bool same_when = scope.when ? link.when && link.when->Equals(*scope.when) : !link.when;
+			const bool same_when = when ? link.when && link.when->Equals(*when) : !link.when;
 			if (same_when) {
 				return i;
 			}
@@ -173,7 +174,7 @@ void RefuseFractionalStep(const BoundAggregateExpression &agg, const DecideSourc
 //! Replace the reducer at `site` by its helper decision: the clause's existing one for a
 //! repeated occurrence, else a new one, recording what it holds. `outer` is the push of the side the reducer
 //! stands in: the comparison's, or the objective's sense.
-void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const ClauseScope &scope,
+void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const DecideEnclosingScope &scope,
                     ExtremumPush outer, idx_t source_clause_id, const ReducerSite &site) {
 	auto &decide = helpers.decide;
 	auto &agg = (*site.slot)->Cast<BoundAggregateExpression>();
@@ -228,8 +229,8 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	if (agg.filter) {
 		link.filter = agg.filter->Copy();
 	}
-	if (scope.when) {
-		link.when = scope.when->Copy();
+	if (scope.Condition()) {
+		link.when = scope.Condition()->Copy();
 	}
 	link.need_envelope = need_envelope;
 	link.need_closing = need_closing;
@@ -283,9 +284,9 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		}
 	};
 
-	std::function<void(unique_ptr<Expression> &, ClauseScope)> rewrite = [&](unique_ptr<Expression> &expr,
-	                                                                         ClauseScope scope) {
-		scope = EnterClauseScope(*expr, scope);
+	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope)> rewrite = [&](unique_ptr<Expression> &expr,
+	                                                                                  DecideEnclosingScope scope) {
+		scope = EnterDecideScope(*expr, scope);
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
 			for (idx_t i = 0; i < conj.children.size(); i++) {
@@ -317,7 +318,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		cmp.SetAlias(std::move(alias));
 	};
 	if (decide.decide_constraints) {
-		rewrite(decide.decide_constraints, ClauseScope());
+		rewrite(decide.decide_constraints, DecideEnclosingScope());
 	}
 
 	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
@@ -326,13 +327,13 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
 		auto *body = &objective;
-		ClauseScope scope;
+		DecideEnclosingScope scope;
 		while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conjunction = (*body)->Cast<BoundConjunctionExpression>();
 			if (!IsConstraintWrapper(conjunction) || conjunction.children.empty()) {
 				break;
 			}
-			scope = EnterClauseScope(conjunction, scope);
+			scope = EnterDecideScope(conjunction, scope);
 			body = &conjunction.children[0];
 		}
 		if (HasDecideTag((*body)->GetAlias(), VALUE_REWRITE_TAG)) {

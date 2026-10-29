@@ -86,7 +86,9 @@ public:
 
 	void Build() {
 		if (op.decide_constraints) {
-			AnalyzeConstraint(op.decide_constraints);
+			ForEachScopedConstraintLeaf(
+			    *op.decide_constraints,
+			    [&](const Expression &leaf, const DecideEnclosingScope &scope) { AnalyzeConstraint(leaf, scope); });
 		}
 		if (op.decide_objective) {
 			AnalyzeObjective(op.decide_objective);
@@ -638,30 +640,9 @@ private:
 		}
 	}
 
-	void AnalyzeConstraint(const unique_ptr<Expression> &expr_ptr, unique_ptr<Expression> when_condition = nullptr,
-	                       optional_ptr<const BoundConjunctionExpression> per_class = nullptr) {
-		auto &expr = *expr_ptr;
+	//! One clause of the constraint tree, under the `when` and `per K:` that enclose it.
+	void AnalyzeConstraint(const Expression &expr, const DecideEnclosingScope &scope) {
 		switch (expr.GetExpressionClass()) {
-		case ExpressionClass::BOUND_CONJUNCTION: {
-			auto &conj = expr.Cast<BoundConjunctionExpression>();
-			// `per K:`; canonicalization kept it only over a per-row clause, which it makes
-			// one row per class.
-			if (IsPerClassWrapper(conj) && !conj.children.empty()) {
-				AnalyzeConstraint(conj.children[0], std::move(when_condition), &conj);
-				break;
-			}
-			// `when c:`: child[0] = the constraint, child[1] = the condition
-			if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-				AnalyzeConstraint(conj.children[0], conj.children[1]->Copy(), per_class);
-				break;
-			}
-			// Regular conjunction: recursively analyze each child
-			for (auto &child : conj.children) {
-				AnalyzeConstraint(child);
-			}
-			break;
-		}
-
 		case ExpressionClass::BOUND_COMPARISON: {
 			auto &comp = expr.Cast<BoundComparisonExpression>();
 
@@ -709,14 +690,8 @@ private:
 				constraint->was_minmax_easy = true;
 			}
 
-			if (when_condition) {
-				constraint->when_condition = std::move(when_condition);
-			}
+			constraint->scope = DecideClauseScope(scope);
 			TryParseGroupKeyTag(comp.alias, constraint->group_key);
-			if (per_class) {
-				constraint->per_key = DecideConstraint::PerKeyRole::NAMES_CLASSES;
-				constraint->class_key = PerWrapperKey(*per_class);
-			}
 
 			// Extract terms from LHS
 			// Only binder-generated wrappers over decision algebra are transparent.
@@ -738,9 +713,9 @@ private:
 			// `per K:` makes a per-row clause one row per class. Over the aggregate shape, and
 			// over the easy MIN/MAX whose rows are its members, the key only names the
 			// classes a group's row stands for.
-			if (constraint->per_key != DecideConstraint::PerKeyRole::NONE && !constraint->was_minmax_easy &&
+			if (constraint->scope.per != DecideClauseScope::PerRole::NONE && !constraint->was_minmax_easy &&
 			    constraint_class != CanonicalConstraintClass::AGGREGATE) {
-				constraint->per_key = DecideConstraint::PerKeyRole::ONE_ROW_PER_CLASS;
+				constraint->scope.per = DecideClauseScope::PerRole::ONE_ROW_PER_CLASS;
 			}
 
 			if (constraint->was_minmax_easy) {

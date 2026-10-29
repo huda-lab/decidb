@@ -776,14 +776,14 @@ static void MaskCoefficientColumn(CoefficientColumn &column, const vector<bool> 
 //! one set its groups share. One `SolverInput::ClassSet` per group with kept rows,
 //! referenced from `ec.group_class_set`. `kept_row_group` maps each kept row to its group;
 //! empty when the clause has one implicit group, which then holds every kept row.
-static vector<idx_t> CollectGroupClasses(DecideConstraint::PerKeyRole role, const vector<DecideKey> &keys,
-                                         idx_t class_key, PerGroupCache &per_group_cache,
-                                         ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                         ColumnDataCollection &data, idx_t num_rows, const vector<bool> &kept_rows,
-                                         const vector<idx_t> &kept_row_group, idx_t groups,
-                                         vector<SolverInput::ClassSet> &class_sets) {
+static vector<idx_t> CollectGroupClasses(const DecideClauseScope &scope, const vector<DecideKey> &keys,
+                                         PerGroupCache &per_group_cache, ChunkExprCache &chunk_expr_cache,
+                                         ClientContext &context, ColumnDataCollection &data, idx_t num_rows,
+                                         const vector<bool> &kept_rows, const vector<idx_t> &kept_row_group,
+                                         idx_t groups, vector<SolverInput::ClassSet> &class_sets) {
 	using Kind = SolverInput::ClassSet::Kind;
-	const bool keyed = role != DecideConstraint::PerKeyRole::NONE;
+	const bool keyed = scope.per != DecideClauseScope::PerRole::NONE;
+	const idx_t class_key = scope.class_key;
 	vector<idx_t> group_class_set(groups, DConstants::INVALID_INDEX);
 	if (keyed && class_key == DConstants::INVALID_INDEX) {
 		group_class_set.assign(groups, class_sets.size());
@@ -2060,8 +2060,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		// A clause reads only the rows its `when` keeps, and a term only those its own
 		// `when` keeps too: nothing is computed anywhere else.
 		vector<bool> scoped_kept(num_rows, true);
-		if (constraint->when_condition) {
-			scoped_kept = KeptRows(*constraint->when_condition, chunk_expr_cache, context, gstate.data, num_rows);
+		if (constraint->scope.when) {
+			scoped_kept = KeptRows(*constraint->scope.when, chunk_expr_cache, context, gstate.data, num_rows);
 		}
 
 		{
@@ -2208,7 +2208,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		// Row -> group assignment: row_group_ids and num_groups for the evaluated
 		// constraint. Empty means "every row, one group".
 		clause_phase.Next("extraction.when_per_and_qualifiers");
-		bool has_when = (constraint->when_condition != nullptr);
+		bool has_when = (constraint->scope.when != nullptr);
 
 		// Each kept row's group in the aggregate shape: the clause's kept rows by its `by`
 		// key, without the reducers' own `when` filters -- the rows whose classes a
@@ -2245,12 +2245,13 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				}
 				// A `per K:` that names classes holds once per class; with every kept row's K
 				// NULL there is no class, so no instance.
-				if (constraint->per_key == DecideConstraint::PerKeyRole::NAMES_CLASSES) {
+				if (constraint->scope.per == DecideClauseScope::PerRole::NAMES_CLASSES) {
 					vector<idx_t> class_ids;
 					idx_t num_classes = 0;
 					vector<string> labels;
-					LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->class_key, chunk_expr_cache, context,
-					                         gstate.data, num_rows, kept, &scoped_kept, class_ids, num_classes, labels);
+					LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->scope.class_key, chunk_expr_cache,
+					                         context, gstate.data, num_rows, kept, &scoped_kept, class_ids, num_classes,
+					                         labels);
 					if (num_classes == 0) {
 						eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 						eval_const.num_groups = 0;
@@ -2262,17 +2263,17 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				if (diagnose) {
 					const bool one_group = eval_const.row_group_ids.empty();
 					eval_const.group_class_set = CollectGroupClasses(
-					    constraint->per_key, keys, constraint->class_key, per_group_cache, chunk_expr_cache, context,
-					    gstate.data, num_rows, scoped_kept, one_group ? vector<idx_t>() : kept_row_group_ids,
+					    constraint->scope, keys, per_group_cache, chunk_expr_cache, context, gstate.data, num_rows,
+					    scoped_kept, one_group ? vector<idx_t>() : kept_row_group_ids,
 					    one_group ? 1 : eval_const.num_groups, gstate.class_sets);
 				}
-			} else if (constraint->per_key == DecideConstraint::PerKeyRole::ONE_ROW_PER_CLASS) {
+			} else if (constraint->scope.per == DecideClauseScope::PerRole::ONE_ROW_PER_CLASS) {
 				// One row per class of the `per` key among the kept rows: its first, which
 				// stands for the class because the key determines the whole clause.
 				vector<idx_t> class_ids;
 				idx_t num_classes = 0;
 				vector<string> labels;
-				LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->class_key, chunk_expr_cache, context,
+				LookupOrBuildPerGroupIds(per_group_cache, keys, constraint->scope.class_key, chunk_expr_cache, context,
 				                         gstate.data, num_rows, kept, &scoped_kept, class_ids, num_classes, labels);
 				eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
 				vector<bool> seen(num_classes, false);
@@ -2289,8 +2290,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				// Each class's row stands for its class (D28), under DIAGNOSE only.
 				if (diagnose) {
 					eval_const.group_class_set = CollectGroupClasses(
-					    constraint->per_key, keys, constraint->class_key, per_group_cache, chunk_expr_cache, context,
-					    gstate.data, num_rows, scoped_kept, eval_const.row_group_ids, num_classes, gstate.class_sets);
+					    constraint->scope, keys, per_group_cache, chunk_expr_cache, context, gstate.data, num_rows,
+					    scoped_kept, eval_const.row_group_ids, num_classes, gstate.class_sets);
 				}
 			} else if (has_when) {
 				eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
@@ -3157,12 +3158,11 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 		// among the rows its `when` keeps, or those rows with no `per`.
 		if (diagnose) {
 			vector<bool> kept_rows(num_rows, true);
-			if (spec.when) {
-				kept_rows = KeptRows(*spec.when, chunk_expr_cache, context, gstate.data, num_rows);
+			if (spec.scope.when) {
+				kept_rows = KeptRows(*spec.scope.when, chunk_expr_cache, context, gstate.data, num_rows);
 			}
-			clause.class_set =
-			    CollectGroupClasses(spec.per_key, keys, spec.class_key, per_group_cache, chunk_expr_cache, context,
-			                        gstate.data, num_rows, kept_rows, {}, 1, gstate.class_sets)[0];
+			clause.class_set = CollectGroupClasses(spec.scope, keys, per_group_cache, chunk_expr_cache, context,
+			                                       gstate.data, num_rows, kept_rows, {}, 1, gstate.class_sets)[0];
 		}
 		evaluated.composed_constraints.push_back(std::move(clause));
 	}

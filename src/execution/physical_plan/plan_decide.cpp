@@ -305,10 +305,10 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         if (spec.rhs_expr) {
             harvest(*spec.rhs_expr);
         }
-        if (spec.when) {
-            harvest(*spec.when);
+        if (spec.scope.when) {
+            harvest(*spec.scope.when);
         }
-        harvest_key(spec.class_key);
+        harvest_key(spec.scope.class_key);
     }
     for (auto &term : decide_op->composed_minmax_objective_terms) {
         harvest_composed_term(term);

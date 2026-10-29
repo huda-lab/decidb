@@ -216,8 +216,8 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 				callback(&term.scale);
 			}
 		}
-		if (spec.when) {
-			callback(&spec.when);
+		if (spec.scope.when) {
+			callback(&spec.scope.when);
 		}
 		if (spec.rhs_expr) {
 			callback(&spec.rhs_expr);

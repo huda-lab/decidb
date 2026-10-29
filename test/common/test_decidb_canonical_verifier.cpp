@@ -94,6 +94,41 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*canonical));
 	}
 
+	// C0's scope rule: every walk that carries a clause's enclosing scope reads one `when` and one `per` per clause.
+	auto when_wrapper = [&](duckdb::unique_ptr<Expression> constraint) {
+		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		wrapper->SetAlias(WHEN_CONSTRAINT_TAG);
+		wrapper->children.push_back(std::move(constraint));
+		wrapper->children.push_back(make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
+		return wrapper;
+	};
+	auto bound_on_x = [&]() {
+		return canonicalizer.CanonicalizeTree(
+		    *Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO, DecideRef(0), DoubleConstant(5)));
+	};
+
+	SECTION("a plain AND under a wrapper violates C0") {
+		auto both = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		both->children.push_back(bound_on_x());
+		both->children.push_back(bound_on_x());
+		auto per = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		per->SetAlias(PER_CLASS_TAG);
+		per->children.push_back(std::move(both));
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*per));
+	}
+
+	SECTION("a WHEN inside a WHEN violates C0") {
+		auto nested = when_wrapper(when_wrapper(bound_on_x()));
+		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*nested));
+	}
+
+	SECTION("a WHEN inside a per wrapper is one scope") {
+		auto per = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+		per->SetAlias(PER_CLASS_TAG);
+		per->children.push_back(when_wrapper(bound_on_x()));
+		REQUIRE_NOTHROW(canonicalizer.VerifyCanonical(*per));
+	}
+
 	SECTION("missing query-wide bound provenance breaks the fixed point") {
 		auto written = Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO,
 		                          DecideRef(0), DoubleConstant(5));

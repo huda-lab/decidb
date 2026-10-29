@@ -449,23 +449,13 @@ unique_ptr<Expression> decide_rewrite::MakeTrueExpression(const string &source_a
 	return placeholder;
 }
 
-ClauseScope decide_rewrite::EnterClauseScope(const Expression &node, ClauseScope scope) {
-	if (node.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = node.Cast<BoundConjunctionExpression>();
-		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-			scope.when = conj.children[1].get();
-		}
-	}
-	return scope;
-}
-
-unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row, const ClauseScope &scope) {
-	if (!scope.when) {
+unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row, const Expression *when) {
+	if (!when) {
 		return row;
 	}
 	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 	wrapper->children.push_back(std::move(row));
-	wrapper->children.push_back(scope.when->Copy());
+	wrapper->children.push_back(when->Copy());
 	wrapper->alias = WHEN_CONSTRAINT_TAG;
 	return std::move(wrapper);
 }

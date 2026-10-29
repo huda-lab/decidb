@@ -512,61 +512,45 @@ static string FrontQualifier(const string &qualifier) {
 	return qualifier.empty() ? qualifier : qualifier + ":";
 }
 
+//! The `when c per K` qualifier of a clause's scope, as written in front of it.
+static string ScopeQualifier(const DecideEnclosingScope &scope, const vector<string> &fragments,
+                             const vector<EntityScopeInfo> &entity_scopes) {
+	return AppendQualifier(scope.when_wrapper ? WhenQualifier(*scope.when_wrapper, fragments, entity_scopes) : string(),
+	                       scope.per_wrapper ? PerClassQualifier(*scope.per_wrapper, fragments) : string());
+}
+
 //! Every comparison of a constraint tree with the `when c per K:` qualifier of the
 //! wrappers it sits under.
 template <class CALLBACK>
 static void VisitSourceComparisons(Expression &expr, const vector<string> &fragments,
-                                   const vector<EntityScopeInfo> &entity_scopes, string qualifier,
+                                   const vector<EntityScopeInfo> &entity_scopes, DecideEnclosingScope scope,
                                    CALLBACK &&callback) {
+	scope = EnterDecideScope(expr, scope);
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (IsPerClassWrapper(conj) && !conj.children.empty()) {
-			VisitSourceComparisons(*conj.children[0], fragments, entity_scopes,
-			                       AppendQualifier(std::move(qualifier), PerClassQualifier(conj, fragments)), callback);
-			return;
-		}
-		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-			VisitSourceComparisons(*conj.children[0], fragments, entity_scopes,
-			                       AppendQualifier(WhenQualifier(conj, fragments, entity_scopes), qualifier), callback);
-			return;
-		}
-		for (auto &child : conj.children) {
-			VisitSourceComparisons(*child, fragments, entity_scopes, qualifier, callback);
+		for (idx_t i = 0; i < conj.children.size(); i++) {
+			if (IsConstraintChild(conj, i)) {
+				VisitSourceComparisons(*conj.children[i], fragments, entity_scopes, scope, callback);
+			}
 		}
 		return;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-		callback(expr.Cast<BoundComparisonExpression>(), FrontQualifier(qualifier));
+		callback(expr.Cast<BoundComparisonExpression>(),
+		         FrontQualifier(ScopeQualifier(scope, fragments, entity_scopes)));
 	}
 }
 
 //! The qualifier of an IN marker, which VisitSourceComparisons passes over: the front
 //! qualifier of the wrappers it sits under.
-static string ScopedInQualifier(Expression &constraints, const Expression &in, const vector<string> &fragments,
+static string ScopedInQualifier(const Expression &constraints, const Expression &in, const vector<string> &fragments,
                                 const vector<EntityScopeInfo> &entity_scopes) {
 	string found;
-	std::function<void(Expression &, string)> visit = [&](Expression &expr, string qualifier) {
-		if (&expr == &in) {
-			found = FrontQualifier(qualifier);
-			return;
+	ForEachScopedConstraintLeaf(constraints, [&](const Expression &leaf, const DecideEnclosingScope &scope) {
+		if (&leaf == &in) {
+			found = FrontQualifier(ScopeQualifier(scope, fragments, entity_scopes));
 		}
-		if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
-			return;
-		}
-		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		if (IsPerClassWrapper(conj) && !conj.children.empty()) {
-			visit(*conj.children[0], AppendQualifier(std::move(qualifier), PerClassQualifier(conj, fragments)));
-			return;
-		}
-		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-			visit(*conj.children[0], AppendQualifier(WhenQualifier(conj, fragments, entity_scopes), qualifier));
-			return;
-		}
-		for (auto &child : conj.children) {
-			visit(*child, qualifier);
-		}
-	};
-	visit(constraints, string());
+	});
 	return found;
 }
 
@@ -611,7 +595,7 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 	vector<ConstraintSourceInfo> result;
 	// The `>=` half of the BETWEEN being visited: its `<=` half is the next comparison the walk reaches.
 	idx_t lower_half = DConstants::INVALID_INDEX;
-	VisitSourceComparisons(constraints, fragments, entity_scopes, string(),
+	VisitSourceComparisons(constraints, fragments, entity_scopes, DecideEnclosingScope(),
 	                       [&](BoundComparisonExpression &cmp, const string &qualifier) {
 		                       idx_t source_id = result.size();
 		                       bool between_lower = HasDecideTag(cmp.GetAlias(), BETWEEN_LOWER_TAG);
@@ -709,7 +693,7 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
                                   const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
                                   const vector<DecideKey> *keys) {
 	auto &mutable_constraints = const_cast<Expression &>(constraints);
-	VisitSourceComparisons(mutable_constraints, fragments, entity_scopes, string(),
+	VisitSourceComparisons(mutable_constraints, fragments, entity_scopes, DecideEnclosingScope(),
 	                       [&](BoundComparisonExpression &cmp, const string &) {
 		                       idx_t source_id;
 		                       if (!TryParseSourceClauseTag(cmp.GetAlias(), source_id) || source_id >= sources.size()) {
@@ -798,17 +782,9 @@ static bool IsTruePlaceholder(const Expression &expr) {
 	return value.type().id() == LogicalTypeId::BOOLEAN && !value.IsNull() && value.GetValue<bool>();
 }
 
-//! A two-level objective's `per` wrapper, taken apart: the `when` in front of it (empty
-//! for none), its key as the query writes it, and the body under both.
-struct TwoLevelParts {
-	string when; //!< the condition, empty for none
-	string key;
-	const Expression *body = nullptr;
-};
-
-static TwoLevelParts SplitTwoLevel(const BoundConjunctionExpression &per, const vector<string> &fragments,
-                                   const vector<EntityScopeInfo> &entity_scopes) {
-	TwoLevelParts parts;
+DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const vector<string> &fragments,
+                                        const vector<EntityScopeInfo> &entity_scopes) {
+	DecideTwoLevelParts parts;
 	parts.body = per.children[0].get();
 	if (parts.body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
 	    IsWhenConstraintWrapper(parts.body->Cast<BoundConjunctionExpression>())) {
@@ -820,13 +796,21 @@ static TwoLevelParts SplitTwoLevel(const BoundConjunctionExpression &per, const 
 	return parts;
 }
 
+string RenderDecideTwoLevelInner(const string &inner, const string &key) {
+	return inner + " by (" + key + ")";
+}
+
+string RenderDecideTwoLevelOuter(const string &outer_name, const string &key, const string &inner) {
+	return outer_name + "(per " + key + ": " + inner + ")";
+}
+
 //! The two-level objective `outer(per k: inner(e) by (k))`, which binds to the nested
 //! `outer(inner(e))` under a PER_CONSTRAINT_TAG wrapper keyed on k: rendered as written
 //! when the wrapper still holds the nested reducer, else null.
 static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpression &per,
                                                   const vector<string> &fragments,
                                                   const vector<EntityScopeInfo> &entity_scopes) {
-	auto parts = SplitTwoLevel(per, fragments, entity_scopes);
+	auto parts = SplitDecideTwoLevel(per, fragments, entity_scopes);
 	if (parts.body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return nullptr;
 	}
@@ -836,16 +820,17 @@ static unique_ptr<string> RenderTwoLevelObjective(const BoundConjunctionExpressi
 	}
 	auto &inner = outer.children[0]->Cast<BoundAggregateExpression>();
 	string inner_body = inner.children.empty() ? string() : RenderSource(*inner.children[0], fragments, entity_scopes);
+	auto inner_text =
+	    RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key);
 	return make_uniq<string>((parts.when.empty() ? string() : "when " + parts.when + ": ") +
-	                         StringUtil::Lower(outer.function.name) + "(per " + parts.key + ": " +
-	                         StringUtil::Lower(inner.function.name) + "(" + inner_body + ") by (" + parts.key + "))");
+	                         RenderDecideTwoLevelOuter(StringUtil::Lower(outer.function.name), parts.key, inner_text));
 }
 
 //! The same wrapper once the objective rewrite has replaced `outer(inner(e))` by the inner
 //! reducer alone: `[when c ]per k: inner(e) by (k)`, the rows the solver receives (one
 //! inner value per class); null when the body is not a single reducer.
 static unique_ptr<string> RenderTwoLevelInner(const BoundConjunctionExpression &per, const DecideSourceNames &names) {
-	auto parts = SplitTwoLevel(per, names.fragments, names.entity_scopes);
+	auto parts = SplitDecideTwoLevel(per, names.fragments, names.entity_scopes);
 	if (parts.body->GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
 		return nullptr;
 	}
@@ -853,26 +838,21 @@ static unique_ptr<string> RenderTwoLevelInner(const BoundConjunctionExpression &
 	auto ctx = ContextOf(names);
 	ctx.print_by = false; // the `by` is the per key, written once below
 	string inner_body = inner.children.empty() ? string() : RenderSource(*inner.children[0], ctx);
-	return make_uniq<string>((parts.when.empty() ? string() : "when " + parts.when + " ") + "per " + parts.key + ": " +
-	                         StringUtil::Lower(inner.function.name) + "(" + inner_body + ") by (" + parts.key + ")");
+	return make_uniq<string>(
+	    (parts.when.empty() ? string() : "when " + parts.when + " ") + "per " + parts.key + ": " +
+	    RenderDecideTwoLevelInner(StringUtil::Lower(inner.function.name) + "(" + inner_body + ")", parts.key));
 }
 
 //! `CollectDecideExpressionStrings` with the pending `when c per K:` front qualifier.
 static void CollectExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
                                      const vector<ConstraintSourceInfo> *sources, vector<idx_t> *out_source_ids,
-                                     const string &front) {
+                                     DecideEnclosingScope scope) {
 	auto &fragments = names.fragments;
 	auto &entity_scopes = names.entity_scopes;
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
-		// A clause's `per K:` prints in front, like the `when` it encloses.
-		if (IsPerClassWrapper(conj) && !conj.children.empty()) {
-			auto per = PerClassQualifier(conj, fragments);
-			CollectExpressionStrings(*conj.children[0], names, out, sources, out_source_ids,
-			                         AppendQualifier(front, per));
-			return;
-		}
 		if (IsPerConstraintWrapper(conj)) {
+			const auto front = ScopeQualifier(scope, fragments, entity_scopes);
 			auto two_level = RenderTwoLevelObjective(conj, fragments, entity_scopes);
 			if (two_level) {
 				PushClause(out, out_source_ids, *two_level, DConstants::INVALID_INDEX);
@@ -886,19 +866,18 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 				           DConstants::INVALID_INDEX);
 				return;
 			}
-			CollectExpressionStrings(*conj.children[0], names, out, sources, out_source_ids,
-			                         AppendQualifier(front, PerClassQualifier(conj, fragments)));
+			auto keyed = scope;
+			keyed.per_wrapper = &conj;
+			CollectExpressionStrings(*conj.children[0], names, out, sources, out_source_ids, keyed);
 			return;
 		}
-		// `when c:`: child[0] is the constraint, child[1] the condition; in front.
-		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-			CollectExpressionStrings(*conj.children[0], names, out, sources, out_source_ids,
-			                         AppendQualifier(WhenQualifier(conj, fragments, entity_scopes), front));
-			return;
-		}
-		// A plain AND is the constraint list itself, so each child is its own clause.
-		for (auto &child : conj.children) {
-			CollectExpressionStrings(*child, names, out, sources, out_source_ids, front);
+		// A clause's `when c per K:` prints in front. A plain AND is the constraint list itself, so each child is its
+		// own clause.
+		auto inner = EnterDecideScope(conj, scope);
+		for (idx_t i = 0; i < conj.children.size(); i++) {
+			if (IsConstraintChild(conj, i)) {
+				CollectExpressionStrings(*conj.children[i], names, out, sources, out_source_ids, inner);
+			}
 		}
 		return;
 	}
@@ -917,7 +896,7 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 		PushClause(out, out_source_ids, string(), leaf_source_id);
 		return;
 	}
-	auto front_qualifier = FrontQualifier(front);
+	auto front_qualifier = FrontQualifier(ScopeQualifier(scope, fragments, entity_scopes));
 	if (sources && expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 		if (leaf_source_id != DConstants::INVALID_INDEX && leaf_source_id < sources->size()) {
 			auto &info = (*sources)[leaf_source_id];
@@ -937,7 +916,7 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 
 void CollectDecideExpressionStrings(const Expression &expr, const DecideSourceNames &names, vector<string> &out,
                                     const vector<ConstraintSourceInfo> *sources, vector<idx_t> *out_source_ids) {
-	CollectExpressionStrings(expr, names, out, sources, out_source_ids, string());
+	CollectExpressionStrings(expr, names, out, sources, out_source_ids, DecideEnclosingScope());
 }
 
 string RenderDecideObjective(const Expression &expr, const DecideSourceNames &names) {

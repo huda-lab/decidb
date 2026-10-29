@@ -1435,7 +1435,30 @@ void DecideCanonicalizer::VerifyCanonicalComparison(const BoundComparisonExpress
 	}
 }
 
+//! C0's scope rule: under a wrapper there is one clause, and a `when` holds no other `when`, so every walk that
+//! carries the enclosing scope (DecideEnclosingScope) reads one scope per clause.
+static void VerifyOneScopePerClause(const Expression &expression, bool under_wrapper, bool under_when) {
+	if (expression.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
+		return;
+	}
+	auto &conjunction = expression.Cast<BoundConjunctionExpression>();
+	if (!IsConstraintWrapper(conjunction) && under_wrapper) {
+		CanonicalInvariantFailure("C0", "a plain AND under a WHEN or per wrapper", expression);
+	}
+	if (IsWhenConstraintWrapper(conjunction) && under_when) {
+		CanonicalInvariantFailure("C0", "a WHEN wrapper inside another WHEN wrapper", expression);
+	}
+	const bool wrapper = IsConstraintWrapper(conjunction);
+	const bool when = under_when || IsWhenConstraintWrapper(conjunction);
+	for (idx_t i = 0; i < conjunction.children.size(); i++) {
+		if (IsConstraintChild(conjunction, i)) {
+			VerifyOneScopePerClause(*conjunction.children[i], under_wrapper || wrapper, when);
+		}
+	}
+}
+
 void DecideCanonicalizer::VerifyCanonicalTree(const Expression &constraints) const {
+	VerifyOneScopePerClause(constraints, false, false);
 	auto verify = [&](const Expression &expression) {
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			VerifyCanonicalComparison(expression.Cast<BoundComparisonExpression>());
@@ -1601,29 +1624,9 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTree(const Expression &c
 }
 
 void DecideCanonicalizer::BuildConstraintScopeChecks(const Expression &constraints, DecideScopeChecks &scope) const {
-	BuildConstraintScopeChecks(constraints, DecideEnclosingScope(), scope);
-}
-
-void DecideCanonicalizer::BuildConstraintScopeChecks(const Expression &constraints, DecideEnclosingScope enclosing,
-                                                     DecideScopeChecks &scope) const {
-	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = constraints.Cast<BoundConjunctionExpression>();
-		auto inner = enclosing;
-		if (IsPerClassWrapper(conj)) {
-			inner.per = &conj;
-		} else if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-			inner.when = conj.children[1].get();
-		} else if (!IsConstraintWrapper(conj)) {
-			inner = DecideEnclosingScope(); // a plain AND: each child is its own clause
-		}
-		for (idx_t i = 0; i < conj.children.size(); i++) {
-			if (IsConstraintChild(conj, i)) {
-				BuildConstraintScopeChecks(*conj.children[i], inner, scope);
-			}
-		}
-		return;
-	}
-	BuildClauseScopeChecks(constraints, enclosing, scope);
+	ForEachScopedConstraintLeaf(constraints, [&](const Expression &leaf, const DecideEnclosingScope &enclosing) {
+		BuildClauseScopeChecks(leaf, enclosing, scope);
+	});
 }
 
 //===--------------------------------------------------------------------===//
@@ -1743,16 +1746,16 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	}
 }
 
-void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing,
+void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const DecideEnclosingScope &enclosing,
                                                  DecideScopeChecks &scope) const {
 	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys};
 	ClauseParts parts;
 	CollectClauseParts(
 	    leaf, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
 	// The `per` key determines every tuple term, decision and `by` key of the clause.
-	if (enclosing.per) {
-		auto &per = *enclosing.per;
-		auto key = PerWrapperKey(per);
+	if (enclosing.per_wrapper) {
+		auto &per = *enclosing.per_wrapper;
+		auto key = enclosing.PerKey();
 		idx_t fragment;
 		auto key_text = TryParseSourceFragmentTag(per.GetAlias(), fragment) && fragment < scope.source_fragments.size()
 		                    ? scope.source_fragments[fragment]
@@ -1760,7 +1763,7 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideE
 		auto make_check = [&]() {
 			DecideScopeCheck check;
 			check.kind = DecideScopeCheckKind::DETERMINES;
-			check.rows = enclosing.when ? enclosing.when->Copy() : nullptr;
+			check.rows = enclosing.Condition() ? enclosing.Condition()->Copy() : nullptr;
 			check.key = key;
 			check.subject = key_text;
 			return check;
@@ -1799,7 +1802,7 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideE
 		}
 	}
 	for (auto *reducer : parts.reducers) {
-		BuildReducerScopeChecks(*reducer, enclosing.when, scope);
+		BuildReducerScopeChecks(*reducer, enclosing.Condition(), scope);
 	}
 }
 
@@ -1810,13 +1813,11 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 	bool two_level = false;
 	while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = body->Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
-			two_level = true;
-		} else if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
-			enclosing.when = conj.children[1].get();
-		} else {
+		if (!IsConstraintWrapper(conj) || conj.children.empty()) {
 			break;
 		}
+		two_level = two_level || IsPerConstraintWrapper(conj);
+		enclosing = EnterDecideScope(conj, enclosing);
 		body = conj.children[0].get();
 	}
 	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys};
@@ -1829,7 +1830,7 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 	auto make_check = [&]() {
 		DecideScopeCheck check;
 		check.kind = DecideScopeCheckKind::DETERMINES;
-		check.rows = enclosing.when ? enclosing.when->Copy() : nullptr;
+		check.rows = enclosing.Condition() ? enclosing.Condition()->Copy() : nullptr;
 		check.subject = "()";
 		return check;
 	};
@@ -1865,7 +1866,7 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 				scope.checks.push_back(std::move(check));
 			}
 		}
-		BuildReducerScopeChecks(*reducer, enclosing.when, scope);
+		BuildReducerScopeChecks(*reducer, enclosing.Condition(), scope);
 	}
 }
 

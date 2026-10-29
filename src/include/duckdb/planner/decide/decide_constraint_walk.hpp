@@ -80,6 +80,43 @@ inline bool IsConstraintChild(const BoundConjunctionExpression &conjunction, idx
 	return !IsConstraintWrapper(conjunction) || child_index == 0;
 }
 
+//! The scope a clause is written under, borrowed from the tree: the `when c:` wrapper and the `per K:` wrapper
+//! (PER_CLASS_TAG) that enclose it, null for none. The canonical tree holds at most one of each above a clause and no
+//! plain AND below either (C0, DecideCanonicalizer::VerifyCanonicalTree), so a walk carries its scope through a plain
+//! AND: above every wrapper it is the empty scope, and below one there is none. A rewrite that replaces nodes keeps
+//! its own recursion and takes each step with EnterDecideScope; a pass that only reads the clauses takes
+//! ForEachScopedConstraintLeaf. A clause that leaves the tree owns its scope as a DecideClauseScope
+//! (decide_prepared_model.hpp).
+struct DecideEnclosingScope {
+	const BoundConjunctionExpression *when_wrapper = nullptr;
+	const BoundConjunctionExpression *per_wrapper = nullptr;
+
+	//! The `when` condition, or null for every row.
+	const Expression *Condition() const {
+		return when_wrapper ? when_wrapper->children[1].get() : nullptr;
+	}
+	//! The `per` key (an index into LogicalDecide::keys); INVALID_INDEX for `per ()` or no `per`.
+	idx_t PerKey() const {
+		return per_wrapper ? PerWrapperKey(*per_wrapper) : DConstants::INVALID_INDEX;
+	}
+};
+
+//! The scope in force below `node`, given the one above it: a `when c:` wrapper supplies the condition, a `per K:`
+//! wrapper the key, and any other node passes `scope` on. The two-level objective's PER wrapper is not a clause's
+//! `per`: it passes the scope on.
+inline DecideEnclosingScope EnterDecideScope(const Expression &node, DecideEnclosingScope scope) {
+	if (node.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
+		return scope;
+	}
+	auto &conjunction = node.Cast<BoundConjunctionExpression>();
+	if (IsWhenConstraintWrapper(conjunction) && conjunction.children.size() == 2) {
+		scope.when_wrapper = &conjunction;
+	} else if (IsPerClassWrapper(conjunction) && !conjunction.children.empty()) {
+		scope.per_wrapper = &conjunction;
+	}
+	return scope;
+}
+
 //! Visit every node that belongs to the constraint tree, parents before children,
 //! skipping wrapper metadata. `visitor` returns false to stop the walk; the return
 //! value is false iff it did.
@@ -153,6 +190,23 @@ void ForEachConstraintLeaf(Expression &expression, CALLBACK &&callback) {
 		}
 		return true;
 	});
+}
+
+//! ForEachConstraintLeaf with the scope each leaf is written under: `callback(leaf, scope)`.
+template <class CALLBACK>
+void ForEachScopedConstraintLeaf(const Expression &expression, CALLBACK &&callback,
+                                 DecideEnclosingScope scope = DecideEnclosingScope()) {
+	scope = EnterDecideScope(expression, scope);
+	if (expression.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
+		callback(expression, scope);
+		return;
+	}
+	auto &conjunction = expression.Cast<const BoundConjunctionExpression>();
+	for (idx_t i = 0; i < conjunction.children.size(); i++) {
+		if (IsConstraintChild(conjunction, i)) {
+			ForEachScopedConstraintLeaf(*conjunction.children[i], callback, scope);
+		}
+	}
 }
 
 } // namespace duckdb

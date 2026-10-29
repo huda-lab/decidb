@@ -165,13 +165,6 @@ ExtremumBody SplitExtremumBody(const Expression &body, idx_t decide_index);
 //! the shape.
 enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, VALUE, INVALID };
 
-//! The scope a clause is written under: the WHEN condition and the `per K:` wrapper
-//! (PER_CLASS_TAG) that enclose it, if any.
-struct DecideEnclosingScope {
-	const Expression *when = nullptr;
-	const BoundConjunctionExpression *per = nullptr;
-};
-
 //! What building the scope checks of the user's clauses reads besides the bound tree,
 //! and the checks it builds (LogicalDecide::scope_checks), in clause order.
 struct DecideScopeChecks {
@@ -445,8 +438,6 @@ private:
 	void VerifyCanonicalComparison(const BoundComparisonExpression &comparison) const;
 
 	unique_ptr<Expression> CanonicalizeTreeInternal(const Expression &constraints) const;
-	void BuildConstraintScopeChecks(const Expression &constraints, DecideEnclosingScope enclosing,
-	                                DecideScopeChecks &scope) const;
 
 	//! The shape of a comparison's decision side (language/guide.md §6.4): ROWS has no
 	//! decision reducer; AGGREGATE has decision reducers sharing one `by` key under
@@ -462,7 +453,8 @@ private:
 
 	//! The scope checks of one clause, `leaf` its
 	//! comparison (or other constraint) as bound.
-	void BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing, DecideScopeChecks &scope) const;
+	void BuildClauseScopeChecks(const Expression &leaf, const DecideEnclosingScope &enclosing,
+	                            DecideScopeChecks &scope) const;
 	//! The checks of one reducer: a row in every `by` group (D8), and its own `per`
 	//! determining its body. `rows` is the clause's `when`, null for every row.
 	void BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,

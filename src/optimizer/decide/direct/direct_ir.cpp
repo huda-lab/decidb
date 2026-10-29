@@ -22,11 +22,6 @@ namespace duckdb {
 
 namespace {
 
-//! The `when` wrapper above a constraint, collected on the way down.
-struct WrapperScope {
-	const Expression *when = nullptr;
-};
-
 //! Whether any term is unknown, including terms nested in a square or an absolute value.
 bool HasUnknownTerm(const vector<DecideSplitTerm> &terms) {
 	for (auto &term : terms) {
@@ -426,7 +421,7 @@ private:
 		}
 	}
 
-	DirectIRConstraint ReadConstraint(const Expression &leaf, const WrapperScope &wrappers) const {
+	DirectIRConstraint ReadConstraint(const Expression &leaf, const DecideEnclosingScope &wrappers) const {
 		DirectIRConstraint ir_node;
 		idx_t source_id;
 		if (TryParseSourceClauseTag(leaf.GetAlias(), source_id)) {
@@ -435,7 +430,7 @@ private:
 		} else {
 			MarkNotProved(ir_node.status);
 		}
-		ReadScope(wrappers.when, ir_node.scope);
+		ReadScope(wrappers.Condition(), ir_node.scope);
 		if (HasDecideTag(leaf.GetAlias(), VALUE_REWRITE_TAG)) {
 			// No rule models the helper decision a reducer's value becomes.
 			MarkNotProved(ir_node.status);
@@ -467,7 +462,7 @@ private:
 			// Direct rules run before the MIN/MAX rewrite tags an easy extremum, so only a per-row bound reads here.
 			ir_node.singleton_row = DecideReadSingletonRow(context, decide, comparison, ir_node.bound);
 			// Folding never reads a clause under a `when`: `when c: x <= 0` does not bound `x` everywhere.
-			ir_node.variable_bound = ir_node.singleton_row && ir_node.bound.folds && !wrappers.when;
+			ir_node.variable_bound = ir_node.singleton_row && ir_node.bound.folds && !wrappers.when_wrapper;
 		}
 		for (auto &part : ir_node.lhs) {
 			if (part.status == DirectAnalysisStatus::NOT_PROVED) {
@@ -477,49 +472,28 @@ private:
 		return ir_node;
 	}
 
-	void CollectConstraints(const Expression &expression, const WrapperScope &wrappers,
-	                        vector<DirectIRConstraint> &out) const {
-		if (expression.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
-			out.push_back(ReadConstraint(expression, wrappers));
-			return;
-		}
-		auto &conjunction = expression.Cast<BoundConjunctionExpression>();
-		// The binder rejects a user-written OR between constraints; nothing else builds one before the IR.
-		D_ASSERT(conjunction.type == ExpressionType::CONJUNCTION_AND);
-		D_ASSERT(!conjunction.children.empty());
-		if (IsWhenConstraintWrapper(conjunction)) {
-			D_ASSERT(!wrappers.when && conjunction.children.size() == 2);
-			WrapperScope nested = wrappers;
-			nested.when = conjunction.children[1].get();
-			CollectConstraints(*conjunction.children[0], nested, out);
-			return;
-		}
-		if (IsPerClassWrapper(conjunction)) {
-			// `per K: C` is one constraint per class of K (D6). An aggregate clause bounds the whole total in each
-			// class, with a bound the class determines: the solver reads it as the clause beside the scope checks
-			// that say K determines what the clause reads (row_checks), which every rule's plan makes. A clause per
-			// row would hold in a class alone, which no rule models.
-			D_ASSERT(!conjunction.children.empty());
-			auto first = out.size();
-			CollectConstraints(*conjunction.children[0], wrappers, out);
-			auto key = PerWrapperKey(conjunction);
-			for (idx_t i = first; i < out.size(); i++) {
-				out[i].per_class = true;
-				if (!out[i].aggregate || (key != DConstants::INVALID_INDEX && !ReadKey(key, out[i].classes))) {
-					MarkNotProved(out[i].status);
-				}
-			}
-			return;
-		}
-		for (auto &child : conjunction.children) {
-			CollectConstraints(*child, wrappers, out);
-		}
-	}
-
 	void ReadConstraints(DirectIR &ir) const {
 		// The parser requires a SUCH THAT clause.
 		D_ASSERT(decide.decide_constraints);
-		CollectConstraints(*decide.decide_constraints, {}, ir.constraints);
+		ForEachScopedConstraintLeaf(*decide.decide_constraints,
+		                            [&](const Expression &leaf, const DecideEnclosingScope &scope) {
+			                            auto constraint = ReadConstraint(leaf, scope);
+			                            if (scope.per_wrapper) {
+				                            ReadPerClass(scope.PerKey(), constraint);
+			                            }
+			                            ir.constraints.push_back(std::move(constraint));
+		                            });
+	}
+
+	//! `per K: C` is one constraint per class of K (D6). An aggregate clause bounds the whole total in each class, with
+	//! a bound the class determines: the solver reads it as the clause beside the scope checks that say K determines
+	//! what the clause reads (row_checks), which every rule's plan makes. A clause per row would hold in a class alone,
+	//! which no rule models.
+	void ReadPerClass(idx_t key, DirectIRConstraint &constraint) const {
+		constraint.per_class = true;
+		if (!constraint.aggregate || (key != DConstants::INVALID_INDEX && !ReadKey(key, constraint.classes))) {
+			MarkNotProved(constraint.status);
+		}
 	}
 
 	//===--------------------------------------------------------------------===//

@@ -48,19 +48,9 @@ string DescendSourceAlias(const Expression &expr, const string &inherited);
 //! A TRUE placeholder standing in for a clause a rewrite has consumed.
 unique_ptr<Expression> MakeTrueExpression(const string &source_alias = string());
 
-//! The clause a rewrite stands in. A row the rewrite adds for it keeps the clause's
-//! `when`, so it reads only the rows the clause keeps. `when` is null for none.
-struct ClauseScope {
-	const Expression *when = nullptr;
-};
-
-//! The clause scope in force below `node`, given the one above it: a `when` wrapper
-//! supplies its condition.
-ClauseScope EnterClauseScope(const Expression &node, ClauseScope scope);
-
-//! `row`, which a rewrite adds for a clause in `scope`: wrapped in a copy of the clause's
-//! `when` when it has one.
-unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const ClauseScope &scope);
+//! `row`, which a rewrite adds for a clause, wrapped in a copy of the clause's `when` condition when it has one, so
+//! it reads only the rows the clause keeps.
+unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const Expression *when);
 
 //! Polarity analysis: the sign each subterm carries once a clause is read as one expression `E` under `E <op> 0`
 //! (`LHS - RHS`), or the objective as `E` under its sense. Walking `expr` with `sign`, a node keeps its parent's sign
