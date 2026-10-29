@@ -545,7 +545,7 @@ static vector<ClauseEdit> ReadElasticEdits(const vector<BlockSlackRef> &slacks,
 		edits.push_back(std::move(e));
 	}
 
-	return edits;
+	return SpellRangeEdits(std::move(edits), orig_model);
 }
 
 //! True iff the model carries a real objective to re-solve. With no objective there is

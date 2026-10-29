@@ -202,6 +202,14 @@ enum class ClauseEditKind : uint8_t { LOOSEN, DROP };
 //! (other fields unused). All fields are pre-formatted strings so the builder is pure
 //! layout.
 struct ClauseEdit {
+	//! The edit of one end of a range clause (a BETWEEN half), as the
+	//! row it was read from states it. `SpellRangeEdits` turns the ends of one clause into one edit of the whole.
+	struct MovedEnd {
+		idx_t source_clause_id = DConstants::INVALID_INDEX; //!< INVALID_INDEX => an edit of a whole clause
+		char sense = '=';                                   //!< the row's sense: '>' moves a lower end, '<' an upper
+		string lhs;                                         //!< the clause's left side
+		string bound;                                       //!< the end's bound after the move
+	};
 	ClauseEditKind kind = ClauseEditKind::LOOSEN;
 	string label;      //!< the constraint as the user wrote it
 	string suggestion; //!< the constraint after the minimal loosening (LOOSEN only)
@@ -218,6 +226,7 @@ struct ClauseEdit {
 	//! `expanded_group` (an expanded-mode per-row / per-group profile entry). A DROP
 	//! reports `remove_only`. Empty => the column is NULL.
 	string edit_source;
+	MovedEnd moved;
 };
 
 //! Build the infeasible diagnosis from the minimal edit list the elastic engine

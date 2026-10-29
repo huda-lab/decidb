@@ -52,6 +52,16 @@ const ConstraintSourceInfo *FindConstraintSource(const SolverModel &model, const
 //! Render a row's RHS from its source spelling, falling back to `fallback`.
 string SourceAwareRhs(const SolverModel &model, const ConstraintProvenance &provenance, double fallback);
 
+//! Whether a row of `source` is one end of a range clause the user wrote as one: a half of a BETWEEN. A message quotes
+//! the whole clause (QuoteWrittenClause), and an edit spells it back as a BETWEEN with the end moved (SpellRangeEdits).
+//! A BETWEEN whose halves do not read as one range (a canonicalization that turned one half around) is not.
+bool IsRangeEnd(const SolverModel &model, idx_t source_clause_id, char sense);
+
+//! Replace the edits of a range clause's ends by one edit of the clause: `x BETWEEN lo AND hi` with the moved ends
+//! spelled and the other end as written; both ends moved make one edit with the summed amount. Other edits pass
+//! through. Ends merge when they share a group and a row.
+vector<ClauseEdit> SpellRangeEdits(vector<ClauseEdit> edits, const SolverModel &model);
+
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
 //! solved slack `amount` (signed; for `=` it is the net s⁺−s⁻).
 ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const ConstraintSourceInfo *source, const string &lhs,

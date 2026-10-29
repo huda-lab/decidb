@@ -1339,6 +1339,8 @@ static PGNode *makeDecideScope(PGDecidePer per, PGList *key, int location,
 static PGNode *applyDecideScope(PGNode *scope, PGNode *body);
 static void noteDecideSpan(core_yyscan_t yyscanner, int anchor, PGDecideSpanRole role, YYLTYPE span);
 static PGNode *noteDecideSides(PGNode *comparison, YYLTYPE op, YYLTYPE lhs, YYLTYPE rhs, core_yyscan_t yyscanner);
+static PGNode *noteDecideBetween(PGNode *between, YYLTYPE op, YYLTYPE input, YYLTYPE lower, YYLTYPE upper,
+								 core_yyscan_t yyscanner);
 static PGNode *makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
 									int location, int qualifier_location,
 									int colon_location, core_yyscan_t yyscanner);
@@ -1432,7 +1434,7 @@ typedef union YYSTYPE
 	PGTransactionStmtType transactiontype;
 }
 /* Line 193 of yacc.c.  */
-#line 1436 "third_party/libpg_query/grammar/grammar_out.cpp"
+#line 1438 "third_party/libpg_query/grammar/grammar_out.cpp"
 	YYSTYPE;
 # define yystype YYSTYPE /* obsolescent; will be withdrawn */
 # define YYSTYPE_IS_DECLARED 1
@@ -1457,7 +1459,7 @@ typedef struct YYLTYPE
 
 
 /* Line 216 of yacc.c.  */
-#line 1461 "third_party/libpg_query/grammar/grammar_out.cpp"
+#line 1463 "third_party/libpg_query/grammar/grammar_out.cpp"
 
 #ifdef short
 # undef short
@@ -29330,11 +29332,11 @@ yyreduce:
   case 1051:
 #line 2957 "third_party/libpg_query/grammar/statements/select.y"
     {
-					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_BETWEEN,
+					(yyval.node) = noteDecideBetween((PGNode *) makeSimpleAExpr(PG_AEXPR_BETWEEN,
 												   "BETWEEN",
 												   (yyvsp[(1) - (6)].node),
 												   (PGNode *) list_make2((yyvsp[(4) - (6)].node), (yyvsp[(6) - (6)].node)),
-												   (yylsp[(2) - (6)]));
+												   (yylsp[(2) - (6)])), (yylsp[(2) - (6)]), (yylsp[(1) - (6)]), (yylsp[(4) - (6)]), (yylsp[(6) - (6)]), yyscanner);
 				;}
     break;
 
@@ -33403,7 +33405,7 @@ yyreduce:
 
 
 /* Line 1267 of yacc.c.  */
-#line 33407 "third_party/libpg_query/grammar/grammar_out.cpp"
+#line 33409 "third_party/libpg_query/grammar/grammar_out.cpp"
       default: break;
     }
   YY_SYMBOL_PRINT ("-> $$ =", yyr1[yyn], &yyval, &yyloc);
@@ -34346,6 +34348,19 @@ noteDecideSides(PGNode *comparison, YYLTYPE op, YYLTYPE lhs, YYLTYPE rhs, core_y
 	noteDecideSpan(yyscanner, op.start, PG_DECIDE_SPAN_CMP_LHS, lhs);
 	noteDecideSpan(yyscanner, op.start, PG_DECIDE_SPAN_CMP_RHS, rhs);
 	return comparison;
+}
+
+/*
+ * DecidB: the sides of a BETWEEN, anchored at its keyword: the input, and the text from the lower bound through the
+ * upper one (`lo AND hi`). A message quotes the clause as `input BETWEEN lo AND hi`.
+ */
+static PGNode *
+noteDecideBetween(PGNode *between, YYLTYPE op, YYLTYPE input, YYLTYPE lower, YYLTYPE upper, core_yyscan_t yyscanner)
+{
+	YYLTYPE bounds = lower;
+
+	bounds.end = upper.end;
+	return noteDecideSides(between, op, input, bounds, yyscanner);
 }
 
 /*

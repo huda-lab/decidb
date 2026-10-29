@@ -508,6 +508,77 @@ static string MakeClauseLabel(const ConstraintProvenance &prov, const Constraint
 	return QuoteEditedClause(source, lhs, sense_str, FormatNum(base_rhs));
 }
 
+//! The left side a half is edited and quoted with.
+static const string &HalfLhs(const ConstraintSourceInfo &source) {
+	return source.source_lhs.empty() ? source.canonical_lhs : source.source_lhs;
+}
+
+//! The bound of a half as the clause states it, for the end of a range an edit leaves where it is.
+static const string &HalfBound(const ConstraintSourceInfo &source) {
+	return source.source_rhs.empty() ? source.canonical_rhs : source.source_rhs;
+}
+
+bool IsRangeEnd(const SolverModel &model, idx_t source_clause_id, char sense) {
+	if (source_clause_id >= model.constraint_sources.size()) {
+		return false;
+	}
+	auto &source = model.constraint_sources[source_clause_id];
+	if (source.between_partner == DConstants::INVALID_INDEX) {
+		return false;
+	}
+	// The halves read as one range when they share a left side and each bounds the side its half names.
+	return HalfLhs(source) == HalfLhs(model.constraint_sources[source.between_partner]) &&
+	       sense == (source.between_upper ? '<' : '>');
+}
+
+vector<ClauseEdit> SpellRangeEdits(vector<ClauseEdit> edits, const SolverModel &model) {
+	//! A range clause's edits so far: where the merged edit sits, the clause, and the text of each end.
+	struct Range {
+		idx_t at;
+		idx_t root;
+		string lhs;
+		string lower;
+		string upper;
+	};
+	vector<ClauseEdit> out;
+	vector<Range> ranges;
+	for (auto &edit : edits) {
+		auto id = edit.moved.source_clause_id;
+		if (edit.kind != ClauseEditKind::LOOSEN || id == DConstants::INVALID_INDEX ||
+		    !IsRangeEnd(model, id, edit.moved.sense)) {
+			out.push_back(std::move(edit));
+			continue;
+		}
+		auto moved = edit.moved;
+		auto &source = model.constraint_sources[id];
+		// The clause is named by its lower half.
+		idx_t root = source.between_upper ? source.between_partner : id;
+		idx_t found = DConstants::INVALID_INDEX;
+		for (idx_t r = 0; r < ranges.size(); r++) {
+			if (ranges[r].root == root && out[ranges[r].at].group == edit.group && out[ranges[r].at].row == edit.row) {
+				found = r;
+			}
+		}
+		if (found == DConstants::INVALID_INDEX) {
+			auto &lower = model.constraint_sources[root];
+			auto &upper = model.constraint_sources[lower.between_partner];
+			ranges.push_back({out.size(), root, edit.moved.lhs, HalfBound(lower), HalfBound(upper)});
+			found = ranges.size() - 1;
+			edit.label = QuoteWrittenClause(source);
+			out.push_back(std::move(edit));
+		} else {
+			out[ranges[found].at].amount += edit.amount;
+		}
+		(moved.sense == '<' ? ranges[found].upper : ranges[found].lower) = moved.bound;
+	}
+	for (auto &range : ranges) {
+		auto &edit = out[range.at];
+		edit.suggestion = QuoteEditedClause(&model.constraint_sources[range.root], range.lhs, "BETWEEN",
+		                                    range.lower + " AND " + range.upper);
+	}
+	return out;
+}
+
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
 //! solved slack `amount` (signed; for `=` it is the net s⁺−s⁻). For a strict `<` /
 //! `>` the δ offset was baked into `rhs` at build time, so re-quote the suggestion
@@ -529,6 +600,7 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const ConstraintSour
 	e.has_amount = true;
 	e.amount = std::fabs(amount);
 	e.group = prov.group_label;
+	e.moved = {prov.source_clause_id, sense, lhs, FormatNum(new_rhs)};
 	return e;
 }
 
@@ -595,7 +667,9 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 	std::set<std::tuple<string, string, idx_t>> seen;
 	auto record = [&](const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
 		ClauseEdit base;
-		base.label = MakeClauseLabel(prov, FindConstraintSource(model, prov), lhs, rhs, sense);
+		base.label = IsRangeEnd(model, prov.source_clause_id, sense)
+		                 ? QuoteWrittenClause(*FindConstraintSource(model, prov))
+		                 : MakeClauseLabel(prov, FindConstraintSource(model, prov), lhs, rhs, sense);
 		base.group = prov.group_label;
 		for (auto &finding : FanOutByClass(std::move(base), prov, model, expanded)) {
 			UnreachableClause c;
@@ -648,6 +722,7 @@ ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const Constra
 	e.has_amount = true;
 	e.amount = std::fabs(delta);
 	e.group = prov.group_label;
+	e.moved = {prov.source_clause_id, sense, lhs, rhs_text + op + mag};
 	return e;
 }
 

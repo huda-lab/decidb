@@ -502,10 +502,10 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_infeasible_between_bound_is_loosened(self, request, cli_fixture):
-        """BETWEEN is now tracked for re-emission too (it was folded but untracked).
-        `x BETWEEN 0 AND 5` against `2*x >= 30` loosens the upper side to 15; the
-        lower side (0) takes no slack, so only the cap edit is reported."""
+    def test_infeasible_between_is_quoted_whole_when_its_upper_end_moves(self, request, cli_fixture):
+        """INF-3: `x BETWEEN 0 AND 5` is one clause with two halves. `2*x >= 30` loosens the upper
+        end to 15; the lower end (0) takes no slack. The finding quotes the clause as written and
+        its suggestion spells the whole BETWEEN, so pasting it back replaces the clause."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT x FROM (VALUES (1)) t(id) "
@@ -515,10 +515,66 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        attrs = _attrs(rows, "clause", "x <= 5")
-        assert attrs["suggested_change"] == "x <= 15"
-        assert attrs["amount"] == "10"
-        _apply_reported_fix(cli, sql, rows, {"x <= 5": "x BETWEEN 0 AND 5"})
+        edits = _clause_edits(rows)
+        assert [e["subject"] for e in edits] == ["x BETWEEN 0 AND 5"], rows
+        assert edits[0]["suggested_change"] == "x BETWEEN 0 AND 15"
+        assert edits[0]["amount"] == "10"
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_between_keeps_its_upper_end_when_its_lower_end_moves(self, request, cli_fixture):
+        """INF-3: two rows must sum to at most 20 while each is at least 18. The lower end moves to
+        10 and the suggestion keeps the 25 the user wrote, where it used to lose the upper half."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x(REAL) SUCH THAT x BETWEEN 18 AND 25 AND SUM(x) <= 20 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+
+        rows = _rows(result)
+        edits = _clause_edits(rows)
+        assert [e["subject"] for e in edits] == ["x BETWEEN 18 AND 25"], rows
+        assert edits[0]["suggested_change"] == "x BETWEEN 10 AND 25"
+        assert edits[0]["amount"] == "8"
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_between_keeps_its_scope_in_front(self, request, cli_fixture):
+        """INF-3: a `when c:` in front of the BETWEEN stays in front of the quoted clause and of its edit."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x(REAL) SUCH THAT x <= 100 AND when id = 1: x BETWEEN 0 AND 5 AND when id = 1: 2 * x >= 30 "
+            "MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+
+        rows = _rows(result)
+        edits = _clause_edits(rows)
+        assert [e["subject"] for e in edits] == ["when id = 1: x BETWEEN 0 AND 5"], rows
+        assert edits[0]["suggested_change"] == "when id = 1: x BETWEEN 0 AND 15"
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_between_with_a_removable_half_is_dropped_as_one_clause(self, request, cli_fixture):
+        """INF-3: `norm(x, 0) by (g) BETWEEN 1 AND 2` is removed or kept whole, so one removal fixes a
+        conflict that one half alone cannot (group a needs more than 2 nonzero values, group b needs
+        fewer than 1). Counted as two halves it would cost two removals."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, g, x FROM (VALUES (1, 'a'), (2, 'a'), (3, 'a'), (4, 'b')) t(id, g) "
+            "DECIDE x(BOOL) SUCH THAT when g = 'a': x <> 0 AND when g = 'b': x <> 1 "
+            "AND per g: norm(x, 0) by (g) BETWEEN 1 AND 2 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+
+        rows = _rows(result)
+        edits = _clause_edits(rows)
+        assert [(e["subject"], e["edit_kind"]) for e in edits] == [
+            ("per g: norm(x, 0) by (g) BETWEEN 1 AND 2", "drop")
+        ], rows
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_easy_max_shares_one_slack_max_overshoot(self, request, cli_fixture):

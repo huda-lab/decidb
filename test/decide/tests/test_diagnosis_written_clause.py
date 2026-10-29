@@ -53,14 +53,15 @@ def test_decision_bearing_bound_is_quoted_as_written(decidb_cli):
         MINIMIZE SUM(ship)
     """,
     )
-    assert "ship <= capacity * open" in message, message
+    # The clause is the BETWEEN the user wrote, not either half of it.
+    assert "ship BETWEEN 0 AND capacity * open" in message, message
     # The algebra stage 04 produced must not reach the user at all.
     assert "ship - capacity * open" not in message, message
 
-    clause = attrs.get("ship <= capacity * open")
+    clause = attrs.get("ship BETWEEN 0 AND capacity * open")
     assert clause is not None, attrs
     suggestion = clause["suggested_change"]
-    assert suggestion.startswith("ship <= capacity * open +"), suggestion
+    assert suggestion.startswith("ship BETWEEN 0 AND capacity * open +"), suggestion
     # A bound with no number in the query to retype is a virtual offset, not a literal.
     assert clause["edit_source"] == "virtual_offset", clause
 
@@ -108,9 +109,10 @@ def test_explain_leads_with_the_written_clause(decidb_cli):
     """EXPLAIN reads the same registry, so the written clause is what it leads with.
 
     A plan shows the layers a clause passed through, so unlike a diagnosis it does not
-    suppress the canonical algebra — it subordinates it. ``ship <= capacity * open`` is
-    the clause; ``ship - capacity * open <= 0`` is an indented ``≡`` continuation of it.
-    What must never happen is the algebra standing alone as though the user wrote it.
+    suppress the canonical algebra — it subordinates it. ``ship BETWEEN 0 AND capacity *
+    open`` is the clause; its two halves, ``ship >= 0`` and ``ship - capacity * open <= 0``,
+    are indented ``≡`` continuations of it. What must never happen is the algebra standing
+    alone as though the user wrote it.
     """
     plan = decidb_cli.execute_raw(
         f"""
@@ -122,10 +124,12 @@ def test_explain_leads_with_the_written_clause(decidb_cli):
     """
     ).stdout
     # The box wraps mid-token at a fixed column, so no assertion may depend on where
-    # the line breaks fall.
-    packed = "".join(plan.split())
-    assert "ship<=capacity*open" in packed, plan
+    # the line breaks fall: drop the box's own edges and the whitespace.
+    packed = "".join(plan.replace("│", "").split())
+    assert "shipBETWEEN0ANDcapacity*open" in packed, plan
     # The algebra appears, but only ever under the canonical marker.
     assert "ship-capacity*open" in packed, plan
     assert "≡ship-capacity*open" in packed, plan
+    # Both halves are listed under the clause, in written order.
+    assert packed.index("≡ship>=0") < packed.index("≡ship-capacity*open"), plan
     assert packed.count("ship-capacity*open") == packed.count("≡ship-capacity*open"), plan

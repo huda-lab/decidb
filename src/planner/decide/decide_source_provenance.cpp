@@ -587,14 +587,35 @@ static bool ReferencesDecideVariable(const Expression &expr, idx_t decide_index)
 	return found;
 }
 
+//! Link the two halves of `input BETWEEN lo AND hi` into the clause the user wrote: each points at the other, and both
+//! carry the whole clause as their written sides. The sides come from the text the parser kept (`input`, `lo AND hi`);
+//! without it, from the halves' own rendered sides.
+static void LinkBetweenHalves(ConstraintSourceInfo &lower, ConstraintSourceInfo &upper, idx_t lower_id, idx_t upper_id,
+                              const string *input, const string *bounds) {
+	string whole_input = input ? *input : lower.written_lhs;
+	string whole_bounds = bounds ? *bounds : lower.written_rhs + " AND " + upper.written_rhs;
+	for (auto *half : {&lower, &upper}) {
+		half->written_lhs = whole_input;
+		half->written_cmp = "BETWEEN";
+		half->written_rhs = whole_bounds;
+	}
+	lower.between_partner = upper_id;
+	upper.between_partner = lower_id;
+	upper.between_upper = true;
+}
+
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const vector<string> &fragments,
                                                             const vector<EntityScopeInfo> &entity_scopes,
                                                             idx_t decide_index, const vector<DecideKey> *keys,
                                                             const DecideSourceText *text) {
 	vector<ConstraintSourceInfo> result;
+	// The `>=` half of the BETWEEN being visited: its `<=` half is the next comparison the walk reaches.
+	idx_t lower_half = DConstants::INVALID_INDEX;
 	VisitSourceComparisons(constraints, fragments, entity_scopes, string(),
 	                       [&](BoundComparisonExpression &cmp, const string &qualifier) {
 		                       idx_t source_id = result.size();
+		                       bool between_lower = HasDecideTag(cmp.GetAlias(), BETWEEN_LOWER_TAG);
+		                       bool between_upper = HasDecideTag(cmp.GetAlias(), BETWEEN_UPPER_TAG);
 		                       auto alias = cmp.GetAlias();
 		                       AddDecideTag(alias, MakeSourceClauseTag(source_id));
 		                       cmp.SetAlias(std::move(alias));
@@ -638,8 +659,16 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       // is the text the user wrote, cut from the query (a clause with no cut keeps the
 		                       // render).
 		                       string left, right;
-		                       if (text && text->Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_LHS, left) &&
-		                           text->Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_RHS, right)) {
+		                       bool cut = text && text->Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_LHS, left) &&
+		                                  text->Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_RHS, right);
+		                       if (between_lower) {
+			                       lower_half = source_id;
+		                       } else if (between_upper && lower_half != DConstants::INVALID_INDEX) {
+			                       // The location is the BETWEEN's, so what was cut is the whole clause's sides.
+			                       LinkBetweenHalves(result[lower_half], info, lower_half, source_id,
+			                                         cut ? &left : nullptr, cut ? &right : nullptr);
+			                       lower_half = DConstants::INVALID_INDEX;
+		                       } else if (cut) {
 			                       info.written_lhs = std::move(left);
 			                       info.written_rhs = std::move(right);
 		                       }
@@ -983,24 +1012,41 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expressi
 	}
 
 	vector<DecideClauseLayers> result;
+	vector<bool> printed(sources.size(), false);
 	for (auto i : clause_order) {
-		auto &info = sources[i];
+		if (printed[i]) {
+			continue;
+		}
+		// A BETWEEN is one clause: its two halves print together, the lower one first.
+		vector<idx_t> halves {i};
+		bool between = sources[i].between_partner != DConstants::INVALID_INDEX;
+		if (between) {
+			halves.push_back(sources[i].between_partner);
+			if (sources[i].between_upper) {
+				std::swap(halves[0], halves[1]);
+			}
+		}
 		DecideClauseLayers layers;
-		string canonical = info.canonical_lhs;
-		if (!info.canonical_cmp.empty()) {
-			canonical += " " + info.canonical_cmp + " " + info.canonical_rhs;
-		}
-		layers.written = QuoteWrittenClause(info);
-		if (info.canonical_differs) {
-			layers.canonical = AppendQualifier(info.qualifier, canonical);
-		}
-		// The solver form is worth printing only where it says something the layer above
-		// did not: a row that reads as that layer is left out, whatever the rewrite put
-		// beside it (an ABS leaves the clause's own row next to its envelope rows).
-		const string above = AppendQualifier(info.qualifier, canonical);
-		for (auto &row : by_clause[i]) {
-			if (row != above) {
-				layers.rewritten.push_back(std::move(row));
+		layers.written = QuoteWrittenClause(sources[i]);
+		for (auto half : halves) {
+			printed[half] = true;
+			auto &info = sources[half];
+			string canonical = info.canonical_lhs;
+			if (!info.canonical_cmp.empty()) {
+				canonical += " " + info.canonical_cmp + " " + info.canonical_rhs;
+			}
+			// The halves are the canonical reading of a BETWEEN, whether or not canonicalization moved anything.
+			if (between || info.canonical_differs) {
+				layers.canonical.push_back(AppendQualifier(info.qualifier, canonical));
+			}
+			// The solver form is worth printing only where it says something the layer above
+			// did not: a row that reads as that layer is left out, whatever the rewrite put
+			// beside it (an ABS leaves the clause's own row next to its envelope rows).
+			const string above = AppendQualifier(info.qualifier, canonical);
+			for (auto &row : by_clause[half]) {
+				if (row != above) {
+					layers.rewritten.push_back(std::move(row));
+				}
 			}
 		}
 		result.push_back(std::move(layers));
@@ -1024,8 +1070,8 @@ string RenderDecideClauseLayers(const vector<DecideClauseLayers> &layers,
 	};
 	for (auto &clause : layers) {
 		append_line(clause.written);
-		if (!clause.canonical.empty()) {
-			append_line(LAYER_CANONICAL_PREFIX + clause.canonical);
+		for (auto &canonical : clause.canonical) {
+			append_line(LAYER_CANONICAL_PREFIX + canonical);
 		}
 		for (auto &row : clause.rewritten) {
 			append_line(LAYER_REWRITTEN_PREFIX + row);

@@ -3,6 +3,8 @@
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 
 #include <cstdlib>
+#include <map>
+#include <set>
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/common/decide_profile.hpp"
@@ -377,19 +379,44 @@ void DecideOptimizer::TagAtomicRemovalGroups(LogicalDecide &decide) {
 	if (!decide.decide_constraints) {
 		return;
 	}
-	idx_t next_group = 0;
-	ForEachConstraintLeaf(*decide.decide_constraints, [&](Expression &node) {
-		bool removable = false;
+	auto is_removable = [](const Expression &node) {
 		if (node.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
-			removable = node.type == ExpressionType::COMPARE_NOTEQUAL || ContainsNormMarker(node, true);
-		} else if (node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
-			removable = node.type == ExpressionType::COMPARE_IN;
+			return node.type == ExpressionType::COMPARE_NOTEQUAL || ContainsNormMarker(node, true);
 		}
-		if (removable) {
-			auto alias = node.GetAlias();
-			AddDecideTag(alias, MakeRemovalGroupTag(next_group++));
-			node.SetAlias(std::move(alias));
+		return node.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR && node.type == ExpressionType::COMPARE_IN;
+	};
+	// The clause a leaf belongs to, named by its first source id: a BETWEEN is one clause of two leaves, which
+	// diagnosis removes together or not at all. INVALID_INDEX for a leaf with no source clause.
+	auto clause_of = [&](const Expression &node) {
+		idx_t source_id;
+		if (!TryParseSourceClauseTag(node.GetAlias(), source_id) || source_id >= decide.constraint_sources.size()) {
+			return DConstants::INVALID_INDEX;
 		}
+		auto &source = decide.constraint_sources[source_id];
+		return source.between_upper ? source.between_partner : source_id;
+	};
+	std::set<idx_t> removable_clauses;
+	ForEachConstraintLeaf(*decide.decide_constraints, [&](Expression &node) {
+		if (is_removable(node) && clause_of(node) != DConstants::INVALID_INDEX) {
+			removable_clauses.insert(clause_of(node));
+		}
+	});
+	idx_t next_group = 0;
+	std::map<idx_t, idx_t> group_of_clause;
+	ForEachConstraintLeaf(*decide.decide_constraints, [&](Expression &node) {
+		auto clause = clause_of(node);
+		bool removable = clause == DConstants::INVALID_INDEX ? is_removable(node) : removable_clauses.count(clause) > 0;
+		if (!removable) {
+			return;
+		}
+		idx_t group = next_group;
+		if (clause != DConstants::INVALID_INDEX) {
+			group = group_of_clause.emplace(clause, next_group).first->second;
+		}
+		next_group = std::max(next_group, group + 1);
+		auto alias = node.GetAlias();
+		AddDecideTag(alias, MakeRemovalGroupTag(group));
+		node.SetAlias(std::move(alias));
 	});
 }
 

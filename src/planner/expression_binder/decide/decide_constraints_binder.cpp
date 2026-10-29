@@ -252,12 +252,17 @@ BindResult DecideConstraintsBinder::BindOperator(unique_ptr<ParsedExpression> &e
 	}
 }
 
-//! `input BETWEEN lower AND upper` as the conjunction `input >= lower AND input <= upper`.
+//! `input BETWEEN lower AND upper` as the conjunction `input >= lower AND input <= upper`. Both halves take the
+//! BETWEEN's location, where the parser kept the text of the clause, and a tag saying which half they are.
 static unique_ptr<ConjunctionExpression> ExpandBetween(const BetweenExpression &between) {
 	auto lower_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
 	                                                   between.input->Copy(), between.lower->Copy());
 	auto upper_bound = make_uniq<ComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, between.input->Copy(),
 	                                                   between.upper->Copy());
+	lower_bound->query_location = between.query_location;
+	upper_bound->query_location = between.query_location;
+	AddDecideTag(lower_bound->alias, BETWEEN_LOWER_TAG);
+	AddDecideTag(upper_bound->alias, BETWEEN_UPPER_TAG);
 	return make_uniq<ConjunctionExpression>(ExpressionType::CONJUNCTION_AND, std::move(lower_bound),
 	                                        std::move(upper_bound));
 }

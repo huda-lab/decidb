@@ -2,6 +2,7 @@
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp"
+#include "duckdb/decidb/diagnostics/decide_diagnostic_render.hpp"
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb.hpp"
 
@@ -1138,5 +1139,102 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(diag.state == "infeasible");
 		// Without the label channel this subject would be empty (nameless drop).
 		CHECK(Find(diag, "SUM(x) <> 3").edit_source == "remove_only");
+	}
+}
+
+namespace {
+
+//! One source clause of a model, as the binder registers it: `lhs cmp rhs`.
+ConstraintSourceInfo MakeSource(const string &lhs, const string &cmp, const string &rhs) {
+	ConstraintSourceInfo source;
+	source.canonical_lhs = lhs;
+	source.canonical_cmp = cmp;
+	source.canonical_rhs = rhs;
+	source.written_lhs = lhs;
+	source.written_cmp = cmp;
+	source.written_rhs = rhs;
+	return source;
+}
+
+//! `x BETWEEN 18 AND 25` as two sources: the `>=` half at id 0, the `<=` half at id 1, both quoting the whole clause.
+SolverModel MakeBetweenModel() {
+	SolverModel model;
+	model.constraint_sources.push_back(MakeSource("x", ">=", "18"));
+	model.constraint_sources.push_back(MakeSource("x", "<=", "25"));
+	for (idx_t id = 0; id < 2; id++) {
+		auto &half = model.constraint_sources[id];
+		half.written_cmp = "BETWEEN";
+		half.written_rhs = "18 AND 25";
+		half.between_partner = 1 - id;
+		half.between_upper = id == 1;
+	}
+	return model;
+}
+
+//! The loosening of one end of the clause at `source_id`, as the elastic readback builds it.
+ClauseEdit MakeEndEdit(const SolverModel &model, idx_t source_id, char sense, double bound, double amount) {
+	ConstraintProvenance prov;
+	prov.source_clause_id = source_id;
+	return decide_render::MakeLoosenEdit(prov, &model.constraint_sources[source_id],
+	                                     model.constraint_sources[source_id].canonical_lhs, bound, sense, amount);
+}
+
+} // namespace
+
+TEST_CASE("DeciDB range-clause edits", "[decidb][query_diagnostics][range]") {
+	SECTION("one moved end of a BETWEEN is spelled with the other end as written") {
+		SolverModel model = MakeBetweenModel();
+		auto edits = decide_render::SpellRangeEdits({MakeEndEdit(model, 0, '>', 18, 8)}, model);
+		REQUIRE(edits.size() == 1);
+		CHECK(edits[0].label == "x BETWEEN 18 AND 25");
+		CHECK(edits[0].suggestion == "x BETWEEN 10 AND 25");
+		CHECK(edits[0].amount == 8);
+		edits = decide_render::SpellRangeEdits({MakeEndEdit(model, 1, '<', 25, 10)}, model);
+		REQUIRE(edits.size() == 1);
+		CHECK(edits[0].suggestion == "x BETWEEN 18 AND 35");
+	}
+
+	SECTION("both ends moved make one edit with the summed amount") {
+		SolverModel model = MakeBetweenModel();
+		auto edits = decide_render::SpellRangeEdits(
+		    {MakeEndEdit(model, 0, '>', 18, 8), MakeEndEdit(model, 1, '<', 25, 10)}, model);
+		REQUIRE(edits.size() == 1);
+		CHECK(edits[0].label == "x BETWEEN 18 AND 25");
+		CHECK(edits[0].suggestion == "x BETWEEN 10 AND 35");
+		CHECK(edits[0].amount == 18);
+	}
+
+	SECTION("ends in different rows or groups are different edits") {
+		SolverModel model = MakeBetweenModel();
+		auto lower = MakeEndEdit(model, 0, '>', 18, 8);
+		auto upper = MakeEndEdit(model, 1, '<', 25, 10);
+		lower.row = 0;
+		upper.row = 1;
+		auto edits = decide_render::SpellRangeEdits({lower, upper}, model);
+		REQUIRE(edits.size() == 2);
+		CHECK(edits[0].suggestion == "x BETWEEN 10 AND 25");
+		CHECK(edits[1].suggestion == "x BETWEEN 18 AND 35");
+		upper.row = 0;
+		upper.group = "a";
+		edits = decide_render::SpellRangeEdits({lower, upper}, model);
+		CHECK(edits.size() == 2);
+	}
+
+	SECTION("only a range end is spelled as a range") {
+		SolverModel model = MakeBetweenModel();
+		model.constraint_sources.push_back(MakeSource("x", "<=", "5"));
+		// A plain comparison is edited as it is.
+		CHECK(!decide_render::IsRangeEnd(model, 2, '<'));
+		auto plain = MakeEndEdit(model, 2, '<', 5, 2);
+		auto edits = decide_render::SpellRangeEdits({plain}, model);
+		REQUIRE(edits.size() == 1);
+		CHECK(edits[0].suggestion == "x <= 7");
+		// A BETWEEN whose halves read differently (one turned around by canonicalization) is not one range.
+		CHECK(decide_render::IsRangeEnd(model, 0, '>'));
+		CHECK(!decide_render::IsRangeEnd(model, 0, '<'));
+		CHECK(!decide_render::IsRangeEnd(model, 1, '>'));
+		model.constraint_sources[1].canonical_lhs = "y";
+		CHECK(!decide_render::IsRangeEnd(model, 0, '>'));
+		CHECK(!decide_render::IsRangeEnd(model, 1, '<'));
 	}
 }

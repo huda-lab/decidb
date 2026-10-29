@@ -125,8 +125,8 @@ struct DecideClauseLayers {
 	string written;
 	//! The canonical form. Empty when it reads the same as `written`, which is the
 	//! common case -- canonicalization only shows up when it had to move a decision
-	//! across the comparison.
-	string canonical;
+	//! across the comparison. A BETWEEN lists its two halves.
+	vector<string> canonical;
 	//! The rows the solver actually receives. Empty when they read the same as the
 	//! layer above; more than one entry when a formulation expanded one clause into
 	//! several rows.

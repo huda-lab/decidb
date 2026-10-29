@@ -109,6 +109,14 @@ struct ConstraintSourceInfo {
 	//! The comparison operator as written (`<=`, `>=`, `=`, `<>`). Kept beside the
 	//! two sides because canonicalization may flip it along with them.
 	string written_cmp;
+	//! The other half of a BETWEEN (the Composite pattern: one written clause, two comparisons). The binder splits
+	//! `x BETWEEN lo AND hi` into `x >= lo` and `x <= hi`. Each half keeps its own source id, because the canonical
+	//! text, the bound kind and the source spelling above are written once per id and the halves differ in them.
+	//! Both halves link to each other, `between_upper` tells them apart, and their `written_*` hold the whole clause
+	//! (`x`, `BETWEEN`, `lo AND hi`), so a message that quotes either quotes what the user wrote. INVALID_INDEX for a
+	//! clause that is not a BETWEEN half.
+	idx_t between_partner = DConstants::INVALID_INDEX;
+	bool between_upper = false;
 
 	//! Generated from `storage/serialization/nodes.json`.
 	void Serialize(Serializer &serializer) const;

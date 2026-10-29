@@ -415,6 +415,11 @@ static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
 //! one-to-many rewrites but is never used to group elastic slacks.
 static constexpr const char *SOURCE_CLAUSE_TAG_PREFIX = "__source_clause_";
 
+//! Tags on the two comparisons `x BETWEEN lo AND hi` binds to (`DecideConstraintsBinder::BindBetween`), `>=` first.
+//! InitializeConstraintSourceInfo reads them to link the halves into the one clause the user wrote.
+static constexpr const char *BETWEEN_LOWER_TAG = "__between_lower__";
+static constexpr const char *BETWEEN_UPPER_TAG = "__between_upper__";
+
 //! Source-level identity for clauses that diagnostics may only remove atomically.
 //! Unlike source_clause_id (display provenance) and repair_group_id (elastic slack
 //! grouping), this id means every generated row carrying it is one indivisible DROP.

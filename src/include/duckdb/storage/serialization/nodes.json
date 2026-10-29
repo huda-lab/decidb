@@ -1331,6 +1331,18 @@
         "name": "canonical_differs",
         "type": "bool",
         "default": "false"
+      },
+      {
+        "id": 111,
+        "name": "between_partner",
+        "type": "idx_t",
+        "default": "DConstants::INVALID_INDEX"
+      },
+      {
+        "id": 112,
+        "name": "between_upper",
+        "type": "bool",
+        "default": "false"
       }
     ],
     "pointer_type": "none"

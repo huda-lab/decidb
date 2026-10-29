@@ -2955,11 +2955,11 @@ a_expr:		c_expr									{ $$ = $1; }
 				}
 			| a_expr BETWEEN opt_asymmetric b_expr AND a_expr		%prec BETWEEN
 				{
-					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_BETWEEN,
+					$$ = noteDecideBetween((PGNode *) makeSimpleAExpr(PG_AEXPR_BETWEEN,
 												   "BETWEEN",
 												   $1,
 												   (PGNode *) list_make2($4, $6),
-												   @2);
+												   @2), @2, @1, @4, @6, yyscanner);
 				}
 			| a_expr NOT_LA BETWEEN opt_asymmetric b_expr AND a_expr %prec NOT_LA
 				{

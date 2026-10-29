@@ -287,7 +287,7 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	// CONTAINS a decision -- so it is the only thing that populates source_lhs/source_rhs.
 	auto plan = con.ExtractPlan("SELECT s_key, ship FROM site JOIN region USING (r_key) "
 	                            "DECIDE per region: ship(INT), open(BOOL) "
-	                            "SUCH THAT ship <= cap * open AND SUM(ship) <= 100 "
+	                            "SUCH THAT ship <= cap * open AND SUM(ship) <= 100 AND ship BETWEEN 1 AND 50 "
 	                            "MAXIMIZE SUM(ship) + 5");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
@@ -318,6 +318,7 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	REQUIRE(after->constraint_sources.size() == before->constraint_sources.size());
 	REQUIRE(!after->constraint_sources.empty());
 	bool saw_written_form = false;
+	bool saw_between_halves = false;
 	for (idx_t i = 0; i < before->constraint_sources.size(); i++) {
 		auto &b = before->constraint_sources[i];
 		auto &a = after->constraint_sources[i];
@@ -331,9 +332,14 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 		REQUIRE(a.written_lhs == b.written_lhs);
 		REQUIRE(a.written_rhs == b.written_rhs);
 		REQUIRE(a.written_cmp == b.written_cmp);
+		REQUIRE(a.between_partner == b.between_partner);
+		REQUIRE(a.between_upper == b.between_upper);
 		saw_written_form = saw_written_form || !b.source_rhs.empty();
+		saw_between_halves = saw_between_halves || b.between_partner != DConstants::INVALID_INDEX;
 	}
 	REQUIRE(saw_written_form);
+	// The two halves of the BETWEEN link to each other.
+	REQUIRE(saw_between_halves);
 
 	REQUIRE(after->written_objective == before->written_objective);
 	REQUIRE(after->canonical_objective == before->canonical_objective);
