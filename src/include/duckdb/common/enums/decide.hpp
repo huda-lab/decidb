@@ -101,6 +101,10 @@ enum class DecideScopeCheckKind : uint8_t { KEEPS_A_ROW = 0, DETERMINES = 1, REA
 //!   BY_KEY   — a reducer's `by` key, by the value of each of its expressions
 enum class DecideSignatureFieldKind : uint8_t { VALUE = 0, DECISION = 1, BY_KEY = 2 };
 
+//! A frame selector's position on the anchor row's timeline (syntax_reference.md §5.6):
+//! the first or last peer, or k peers before or after the anchor's.
+enum class DecideFrameAnchor : uint8_t { FIRST = 0, LAST = 1, PREVIOUS = 2, NEXT = 3 };
+
 //! Type of aggregate used in MIN/MAX objective linearization
 enum class ObjectiveAggregateType : uint8_t {
     NONE = 0,   //! No MIN/MAX objective (pure SUM or no objective)
@@ -305,6 +309,16 @@ inline string MakeGroupKeyTag(idx_t group_key_idx) {
 	return string(GROUP_KEY_TAG_PREFIX) + to_string(group_key_idx) + "__";
 }
 
+//! Tag prefix naming a frame selector: "__frame_<i>__" indexes LogicalDecide::frames. It
+//! stands on the aggregate a frame binds to -- `first(e)` for a point frame, its reducer
+//! for a range -- whose rows at an anchor row are the ones the frame selects there
+//! (syntax_reference.md §5.6).
+static constexpr const char *FRAME_TAG_PREFIX = "__frame_";
+
+inline string MakeFrameTag(idx_t frame_idx) {
+	return string(FRAME_TAG_PREFIX) + to_string(frame_idx) + "__";
+}
+
 //! Tag used to identify AVG→SUM rewritten aggregates (terms need coefficient scaling at execution)
 static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 
@@ -423,6 +437,10 @@ inline bool TryParseSourceFragmentTag(const string &alias, idx_t &fragment_id) {
 
 inline bool TryParseGroupKeyTag(const string &alias, idx_t &group_key_idx) {
 	return TryParseDecideIndexTag(alias, GROUP_KEY_TAG_PREFIX, group_key_idx);
+}
+
+inline bool TryParseFrameTag(const string &alias, idx_t &frame_idx) {
+	return TryParseDecideIndexTag(alias, FRAME_TAG_PREFIX, frame_idx);
 }
 
 //! Classification stamped by DecideCanonicalizer on the complete canonical RHS when

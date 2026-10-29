@@ -81,6 +81,8 @@ public:
     vector<unique_ptr<Expression>> entity_key_expressions;
     //! Every `by (key)` of the clause; transferred to LogicalDecide::group_keys.
     vector<DecideGroupKey> decide_group_keys;
+    //! Every frame selector of the clause; transferred to LogicalDecide::frames.
+    vector<DecideFrameSpec> decide_frames;
     //! MIN/MAX indicator links, objective type, and the two-level objective's types are populated by
     //! DecideOptimizer::RewriteMinMax directly on LogicalDecide (post-binding)
 	//! list of groups

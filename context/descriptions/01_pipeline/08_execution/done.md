@@ -133,7 +133,11 @@ pipeline, before the elastic engine ever sees it, quoting the bound as written
 - `x >= 2` or `x = 2` on a BOOLEAN.
 
 A purely user-vs-user inverted box such as `x >= 5 AND x <= 1` does **not** match
-and proceeds to the elastic engine, which reports a least-change loosen.
+and proceeds to the elastic engine, which reports a least-change loosen. A helper
+decision of the value rewrite (stage 05) is skipped: it holds a reducer's value, which
+`sum(t.w * x)` makes negative wherever `t.w` is, so no bound on it contradicts a type.
+A nest leaves such a bound on a helper alone (`per t.g: sum(sum(t.w * x) by (t.g, t.h))
+by (t.g) <= -4`), which this check once refused as infeasible although it had answers.
 
 ### Implied bounds from constraint data
 
@@ -284,7 +288,9 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
   of each class (D64; `BuildSignatureIds` over the clause's signature when it has one,
   else the class key), at its first kept row; under `when` alone, one per kept row. A
   variant is labelled by its class, then by its own field values where its class has
-  more than one (`DescribeVariants`: `a, 2`), which an expanded diagnosis reports
+  more than one (`DescribeVariants`: `a, 2`), and by the row it is read at where two
+  variants of one class would still share a label (they differ only by the decision
+  instance they read: `a, -2, row 1`, `a, -2, row 2`), which an expanded diagnosis reports
   (D28); and a class with more than one variant leaves an EXPLAIN ANALYZE line
   (`RecordVariants`).
 - **Bound-side reducers** are each evaluated over their own `by` groups of the kept rows

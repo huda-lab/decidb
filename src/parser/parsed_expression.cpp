@@ -71,6 +71,8 @@ bool ParsedExpression::Equals(const BaseExpression &other) const {
 		return ConstantExpression::Equal(Cast<ConstantExpression>(), other.Cast<ConstantExpression>());
 	case ExpressionClass::DEFAULT:
 		return true;
+	case ExpressionClass::DECIDE_FRAME:
+		return DecideFrameExpression::Equal(Cast<DecideFrameExpression>(), other.Cast<DecideFrameExpression>());
 	case ExpressionClass::FUNCTION:
 		return FunctionExpression::Equal(Cast<FunctionExpression>(), other.Cast<FunctionExpression>());
 	case ExpressionClass::LAMBDA:

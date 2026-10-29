@@ -750,8 +750,10 @@ private:
 		if (a.variable_index == DConstants::INVALID_INDEX || a.variable_index != b.variable_index) {
 			return false;
 		}
+		// `avg_group_key` too: an inlined `sum(per K: avg(e) by (G))` divides by each G
+		// group's size, another AVG of the same decision by the whole relation's.
 		if (a.reduction != b.reduction || a.avg_scale != b.avg_scale ||
-		    a.qualifier_scope_idx != b.qualifier_scope_idx) {
+		    a.qualifier_scope_idx != b.qualifier_scope_idx || a.avg_group_key != b.avg_group_key) {
 			return false;
 		}
 		if ((a.filter == nullptr) != (b.filter == nullptr)) {

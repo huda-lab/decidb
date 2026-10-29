@@ -1211,6 +1211,26 @@ DecideScopeCheckKind EnumUtil::FromString<DecideScopeCheckKind>(const char *valu
 	return static_cast<DecideScopeCheckKind>(StringUtil::StringToEnum(GetDecideScopeCheckKindValues(), 3, "DecideScopeCheckKind", value));
 }
 
+const StringUtil::EnumStringLiteral *GetDecideFrameAnchorValues() {
+	static constexpr StringUtil::EnumStringLiteral values[] {
+		{ static_cast<uint32_t>(DecideFrameAnchor::FIRST), "FIRST" },
+		{ static_cast<uint32_t>(DecideFrameAnchor::LAST), "LAST" },
+		{ static_cast<uint32_t>(DecideFrameAnchor::PREVIOUS), "PREVIOUS" },
+		{ static_cast<uint32_t>(DecideFrameAnchor::NEXT), "NEXT" }
+	};
+	return values;
+}
+
+template<>
+const char* EnumUtil::ToChars<DecideFrameAnchor>(DecideFrameAnchor value) {
+	return StringUtil::EnumToString(GetDecideFrameAnchorValues(), 4, "DecideFrameAnchor", static_cast<uint32_t>(value));
+}
+
+template<>
+DecideFrameAnchor EnumUtil::FromString<DecideFrameAnchor>(const char *value) {
+	return static_cast<DecideFrameAnchor>(StringUtil::StringToEnum(GetDecideFrameAnchorValues(), 4, "DecideFrameAnchor", value));
+}
+
 const StringUtil::EnumStringLiteral *GetDecideSignatureFieldKindValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideSignatureFieldKind::VALUE), "VALUE" },
@@ -1598,6 +1618,7 @@ const StringUtil::EnumStringLiteral *GetExpressionClassValues() {
 		{ static_cast<uint32_t>(ExpressionClass::POSITIONAL_REFERENCE), "POSITIONAL_REFERENCE" },
 		{ static_cast<uint32_t>(ExpressionClass::BETWEEN), "BETWEEN" },
 		{ static_cast<uint32_t>(ExpressionClass::LAMBDA_REF), "LAMBDA_REF" },
+		{ static_cast<uint32_t>(ExpressionClass::DECIDE_FRAME), "DECIDE_FRAME" },
 		{ static_cast<uint32_t>(ExpressionClass::BOUND_AGGREGATE), "BOUND_AGGREGATE" },
 		{ static_cast<uint32_t>(ExpressionClass::BOUND_CASE), "BOUND_CASE" },
 		{ static_cast<uint32_t>(ExpressionClass::BOUND_CAST), "BOUND_CAST" },
@@ -1624,12 +1645,12 @@ const StringUtil::EnumStringLiteral *GetExpressionClassValues() {
 
 template<>
 const char* EnumUtil::ToChars<ExpressionClass>(ExpressionClass value) {
-	return StringUtil::EnumToString(GetExpressionClassValues(), 40, "ExpressionClass", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetExpressionClassValues(), 41, "ExpressionClass", static_cast<uint32_t>(value));
 }
 
 template<>
 ExpressionClass EnumUtil::FromString<ExpressionClass>(const char *value) {
-	return static_cast<ExpressionClass>(StringUtil::StringToEnum(GetExpressionClassValues(), 40, "ExpressionClass", value));
+	return static_cast<ExpressionClass>(StringUtil::StringToEnum(GetExpressionClassValues(), 41, "ExpressionClass", value));
 }
 
 const StringUtil::EnumStringLiteral *GetExpressionTypeValues() {
@@ -1694,6 +1715,7 @@ const StringUtil::EnumStringLiteral *GetExpressionTypeValues() {
 		{ static_cast<uint32_t>(ExpressionType::FUNCTION_REF), "FUNCTION_REF" },
 		{ static_cast<uint32_t>(ExpressionType::TABLE_REF), "TABLE_REF" },
 		{ static_cast<uint32_t>(ExpressionType::LAMBDA_REF), "LAMBDA_REF" },
+		{ static_cast<uint32_t>(ExpressionType::DECIDE_FRAME), "DECIDE_FRAME" },
 		{ static_cast<uint32_t>(ExpressionType::CAST), "CAST" },
 		{ static_cast<uint32_t>(ExpressionType::BOUND_REF), "BOUND_REF" },
 		{ static_cast<uint32_t>(ExpressionType::BOUND_COLUMN_REF), "BOUND_COLUMN_REF" },
@@ -1709,12 +1731,12 @@ const StringUtil::EnumStringLiteral *GetExpressionTypeValues() {
 
 template<>
 const char* EnumUtil::ToChars<ExpressionType>(ExpressionType value) {
-	return StringUtil::EnumToString(GetExpressionTypeValues(), 69, "ExpressionType", static_cast<uint32_t>(value));
+	return StringUtil::EnumToString(GetExpressionTypeValues(), 70, "ExpressionType", static_cast<uint32_t>(value));
 }
 
 template<>
 ExpressionType EnumUtil::FromString<ExpressionType>(const char *value) {
-	return static_cast<ExpressionType>(StringUtil::StringToEnum(GetExpressionTypeValues(), 69, "ExpressionType", value));
+	return static_cast<ExpressionType>(StringUtil::StringToEnum(GetExpressionTypeValues(), 70, "ExpressionType", value));
 }
 
 const StringUtil::EnumStringLiteral *GetExtensionABITypeValues() {

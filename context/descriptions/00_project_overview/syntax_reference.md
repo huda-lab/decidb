@@ -119,6 +119,13 @@ including the `SELECT` list and `FROM` of a DECIDE query, nothing changes, and
 untouched. `scalar` is an ordinary name: `DECIDE scalar(INT)` declares a decision
 called `scalar`.
 
+A frame selector's words (§5.6) are keywords only at the clause's own level, outside
+every subquery written in it: `at` directly before `(`, `over` directly after `)`, and
+`within` directly inside that `over (...)`. A function named `at` is written `"at"(...)`
+there; `AT TIME ZONE` keeps its meaning, and a SQL window inside a subquery of the clause
+keeps its `OVER`. `previous`, `every` and `cyclic` are no keywords anywhere: a frame reads
+them by their text, so they stay ordinary names.
+
 A scope inside an ordinary SQL subquery written in the clause is refused
 (*"DECIDE: 'WHEN condition:' is not supported yet"*).
 
@@ -147,6 +154,7 @@ A scope inside an ordinary SQL subquery written in the clause is refused
   or an aggregate row that bounds no single variable — so a 32-bit column would
   truncate a legitimate optimum. A whole-number answer beyond a double's exact
   range ($2^{53}$) is refused by name rather than rounded.
+- **A `BOOL` is 0 or 1** whatever is written on it: `x >= -1` widens nothing.
 - **Default lower bound is 0** for `INT` and `REAL`. This is a
   *default*, not a floor: a variable becomes **signed** (may take negative
   values) when the query bounds it alone below zero. The bound is read by value, not
@@ -568,9 +576,11 @@ it three times.
   Binder Error (*"Relation 'X' is not in the FROM clause, so a reducer cannot be
   qualified by it."*).
 - **Construction order** is the rows `by` selects → one value per class of the named
-  relations → aggregation; the scoped spelling `sum(when c per D: e)` adds its `when`
-  before the classes form.
-- **`AVG(D: expr)` divides by the number of classes**, not the number of rows.
+  relations and distinct value of the body there (its variants, D65) → aggregation; the
+  scoped spelling `sum(when c per D: e)` adds its `when` before the classes form.
+- **`AVG(D: expr)` divides by the number of values it receives** — one per class where
+  the body is fixed by the class, one per variant where it is not — not by the number of
+  rows.
 - **`MIN`/`MAX` are unaffected by de-duplication** — every row of a tuple identity carries
   the same value, so dropping repeats cannot move an extremum. The qualifier is accepted
   and is a no-op for them.
@@ -704,13 +714,67 @@ per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by 
   an inner `MIN`/`MAX` that needs its closing side: in `per t.g: sum(max(x) by (t.g,
   t.h)) by (t.g) = 10`, with no other bound on `x`, the inner helper's Big-M is read off
   the outer one's box. One box covers every instance of a helper.
-- **Refused** (D74, §10.2): `norm` inside a reducer; a square or a product of decisions
-  inside nested reducers, whose helpers would have no linear definition (but the
-  objective's direct sums of §4); a reducer over data alone inside one over decisions,
-  as an added term (as a factor, the coefficient rule of §5 refuses it).
+- **Refused** (D74, §10.2): `norm` inside a reducer, and a reducer inside `norm`; a
+  square or a product of decisions inside nested reducers, whose helpers would have no
+  linear definition (but the objective's direct sums of §4); a reducer over data alone,
+  `count` among them, inside one over decisions, as an added term (as a factor, the
+  coefficient rule of §5 refuses it); inside a reducer, a reducer multiplied by a decision
+  (only data scales a reducer, as at the root) and `abs` over a reducer where an enclosing
+  reducer has its own `when` or `per`, or a `by` (`sum(abs(x - avg(x)))` answers). Those
+  three were rewritten before the path rule was read, losing the enclosing `when` and `by`.
 
 Tests: `test/decide/tests/test_anr_nested.py` (the fixtures, a 768-cell grid of nests at
 depth 2 and 3, the bounds through a nest), `test_scope_objective.py` (the objective).
+
+### 5.6 Frame selectors — `at(...) over (...)`
+
+A frame reads a value at another row of the anchor row's **timeline**: the rows that share
+its `within` key, ordered by `S`.
+
+```sql
+at(F [else v]: e) over (S [asc | desc] [cyclic] [within K])
+agg(from F1 to F2 [every d] [else v | all]: e) over (S [asc | desc] [cyclic] [within K])
+F ::= first | last | [k] previous | [k] next
+
+-- inventory carries over from the previous period of the same product
+inventory = at(previous else 0: inventory) over (t.period within t.product) + produce - t.demand
+-- deliveries over the current and the next two periods
+sum(from first to 2 next: delivery) over (d.dayno within d.contract) <= 10
+```
+
+- **Defaults**: `asc`, not cyclic, `within ()` (one timeline over the rows), `k` = 1,
+  `every 1`, no `else`. Printed back, a frame leaves them out:
+  `sum(from 1 previous to 1 next every 1: x) over (t.period asc within ())` reads
+  `sum(from previous to next: x) over (t.period)`.
+- **Positions** count peers (rows with equal `S`), not distances: `first` and `last` are
+  the timeline's ends, `k previous` / `k next` the k-th peer before or after the anchor's.
+  A range takes every `d`-th position from `F1` to `F2`, inclusive. `cyclic` wraps a
+  position around the timeline.
+- **The parts**: `agg` is `sum`, `avg`, `min`, `max` or `count` (over data). `k` and `d`
+  are positive whole numbers. `S` takes data and no reducer; `K` lists columns and
+  relations, as a `per` key does. `e` is read at the selected row, `v` at the anchor row;
+  `v` is a number (`else true`, `else 0.5`, `else c` all are), and keeps its own type.
+- **A frame's term is linear**: its payload and fallback square or multiply no decision.
+- **A missing position** (before the first row, after the last): `else v` supplies `v`;
+  `all` makes the whole range select nothing; otherwise a range keeps the positions that
+  exist, and a point frame that selects nothing is absent: its comparison skips that
+  instance, a reducer drops that member.
+  The full contract — peers, cyclic repeats, absence, NULL — is
+  `09_anr_language/anr_algorithm_and_frames_plan.md` §3.4–3.5.
+- **Refused** (D74, §10.2): a frame in a `when`, a `per`, a `by`, a `within` or an order
+  key; a reducer or another frame inside a frame's payload or fallback; a frame term
+  multiplied or divided by a decision (a data factor on a frame over decisions is linear).
+
+**Status.** Every spelling parses and binds, and its subqueries are planned; a query that
+holds a frame then stops, from one place, before canonicalization reads a frame, with
+*"DECIDE: frame selectors are not supported yet: at(previous: x) over (t.period)"* —
+`EXPLAIN`, `DIAGNOSE` and `CREATE VIEW` included, since each plans the query, and before
+any later layer could refuse the clause for a reason of its own. Formulating frames is
+phase 4 (point frames) and phase 5 (ranges) of the plan above.
+
+Tests: `test/decidb/test_frame_parser.test` (parse and bind errors, the echo, ordinary SQL
+windows), `test/decide/tests/test_anr_frames.py` (`TestSyntax`: every frame fixture binds),
+`test/common/test_decidb_plan_serialization.cpp` (round trips).
 
 ## 6. Scoped constraints — `[when c] [per K]: C`
 
@@ -1179,12 +1243,23 @@ Each shape below is refused with a message, never answered wrongly.
 | A decision beside a `MIN` or `MAX` in the objective | `DECIDE: 's' beside MIN or MAX is not supported yet` |
 | A square, or a product of two decisions, outside a reducer in the objective, unless the two are distinct query-wide decisions or one is `BOOL` | `DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet` |
 | A scope inside an ordinary SQL subquery written in the clause | `DECIDE: 'WHEN condition:' is not supported yet` |
+| A frame selector anywhere (§5.6), until phase 4 formulates it | `DECIDE: frame selectors are not supported yet: at(previous: x) over (t.period)` |
+| A frame in a `when`, a `by` or an order key (a `per` key and `within` take names only: a parse error) | `DECIDE: a frame selector is not allowed in when, per, by, within or an order key` |
+| A reducer in a frame's order key | `DECIDE: a reducer such as 'count_star()' is not allowed in a frame's order key` |
+| A square or a product of decisions in a frame's payload or fallback | `DECIDE: '(x * x)' squares or multiplies decisions inside at(...), which is not supported yet` |
+| A fallback that is not a number | `DECIDE: in at(previous else 'none': x) over (t.period), else 'none' is not a number` |
+| A frame alone as a constraint | `'at(previous: x) over (t.period)' is not a valid SUCH THAT constraint on its own; compare it with a value` |
+| A reducer inside `norm` | `DECIDE: a reducer inside norm is not supported yet` |
+| Inside a reducer, `abs` over a reducer an enclosing `when`, `per` or `by` chooses the rows of | `DECIDE: abs over a reducer inside another reducer is not supported yet: abs(max(x) BY (t.g, t.h))` |
+| Inside a reducer, a reducer times a decision | `DECIDE: '(b * max(x) BY (t.g))' multiplies a reducer by a decision; only data can scale a reducer` |
+| A `BOOL` decision times a factor that is no multiple of one decision | `DECIDE: 'b * (y - 1)' multiplies a BOOL decision by an expression that is not a multiple of one decision, which is not supported yet; write the product out term by term, as b * y - b for b * (y - 1)` |
+| A decision in a frame's order key or `within` | `DECIDE: x is a decision; a frame's order key and within may only use data` |
+| A reducer, or another frame, inside a frame's payload or fallback | `DECIDE: a reducer inside at(...) is not supported; reduce outside the frame` · `DECIDE: a frame selector inside at(...) is not supported` |
+| A frame term multiplied or divided by a decision, or squared over one | `DECIDE: '(x * at(previous: t.demand) over (t.period))' multiplies a decision by a value from another row, which is not supported yet` |
 
 A reducer over data only stays on the bound side of a comparison (§5).
 
-**Not in the language yet** (shown in the ANR deck): frame selectors (`at`, `over`,
-`within`), planned in `09_anr_language/anr_algorithm_and_frames_plan.md`. **Not in the
-language** (deliberately left out): `if` guards, bounds in a declaration, the `SEMIREAL` /
+**Not in the language** (deliberately left out): `if` guards, bounds in a declaration, the `SEMIREAL` /
 `SEMIINT` / `TEXT` types, `then` and `satisfy`.
 
 ### 10.3 Removed spellings

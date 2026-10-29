@@ -486,3 +486,14 @@ def test_a_negative_bound_on_an_absolute_value_names_it(decidb_cli):
     """The bound check before solving names an auxiliary decision by what it stands for."""
     stderr = decidb_cli.execute_raw(_query("x(INT)", "abs(x) <= -1", "MAXIMIZE SUM(x)")).stderr
     assert "abs(x) <= -1 cannot hold because abs(x) is never negative" in stderr, stderr
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("bound", ["x >= -1", "min(x) >= -1", "x BETWEEN -1 AND 5"])
+def test_a_negative_floor_does_not_widen_a_bool(request, cli_fixture, bound):
+    """A BOOLEAN is 0 or 1 whatever is written on it: D41 lowers a numeric decision's
+    floor, not a BOOLEAN's. `x >= -1` was once sent as an integer in [-1, 1], answering -1."""
+    cli = request.getfixturevalue(cli_fixture)
+    rows = answer(cli, _query("x(BOOL)", bound, "MINIMIZE SUM(x)"))
+    assert {row["x"] for row in rows} == {0}, rows

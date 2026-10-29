@@ -39,6 +39,8 @@ typedef struct PGDecideLexState {
 	bool in_decide_objective;
 	int decide_case_depth;
 	bool decide_declared_before_from;
+	int decide_subquery_depth;
+	bool decide_in_body;
 } PGDecideLexState;
 
 /* Nesting deeper than this keeps parsing; only the innermost levels' state is
@@ -101,6 +103,31 @@ typedef struct base_yy_extra_type {
 	bool decide_after_rparen;
 
 	/*
+	 * DeciDB: what a frame selector's tokens need (at(...) over (... within K)).
+	 * `decide_paren_depth` counts open parentheses over the whole statement. An
+	 * ordinary SQL subquery written in a clause opens at `decide_subquery_depth`
+	 * (-1 for none) and lasts until the parenthesis that holds it closes; inside it
+	 * AT, OVER and WITHIN stay SQL's, so a window function there still parses. A
+	 * subquery opens at a SELECT, or at a WITH, VALUES, TABLE, PIVOT or UNPIVOT
+	 * directly after '(', or at a FROM there unless a name comes before the '(' --
+	 * `sum(from first ...)` is a range frame, `(FROM t ...)` a query.
+	 * `decide_over_parens` has bit d set while the parenthesis at depth d (1..63)
+	 * is a frame's OVER_DECIDE parenthesis, where WITHIN is the frame's; a nested
+	 * one keeps the outer's bit. `decide_after_over` marks the token after
+	 * OVER_DECIDE; `decide_last_token` and `decide_token_before_last` are the raw
+	 * tokens before the current one. `decide_in_body` is false in a declaration list
+	 * and true from SUCH THAT on: the frame words are the body's, so a decision may
+	 * still be called `at`.
+	 */
+	int decide_paren_depth;
+	int decide_subquery_depth;
+	uint64_t decide_over_parens;
+	bool decide_after_over;
+	int decide_last_token;
+	int decide_token_before_last;
+	bool decide_in_body;
+
+	/*
 	 * DecidB: saved copies of the four clause fields above, one per DECIDE clause
 	 * currently open. Pushed by base_yylex() when it arms a clause on DECIDE
 	 * or SUCH; popped by the decide_clause, decide_declaration and decide_tail
@@ -132,8 +159,12 @@ static inline void PGDecidePushLexState(base_yy_extra_type *yyextra) {
 		slot->in_decide_objective = yyextra->in_decide_objective;
 		slot->decide_case_depth = yyextra->decide_case_depth;
 		slot->decide_declared_before_from = yyextra->decide_declared_before_from;
+		slot->decide_subquery_depth = yyextra->decide_subquery_depth;
+		slot->decide_in_body = yyextra->decide_in_body;
 	}
 	yyextra->decide_state_depth++;
+	/* A clause nested in a subquery lexes its own frames. */
+	yyextra->decide_subquery_depth = -1;
 }
 
 /* DecidB: restore the enclosing DECIDE clause's lexer state as this one closes.
@@ -145,6 +176,8 @@ static inline void PGDecidePopLexState(base_yy_extra_type *yyextra) {
 		yyextra->in_decide_clause = false;
 		yyextra->in_decide_objective = false;
 		yyextra->decide_case_depth = 0;
+		yyextra->decide_subquery_depth = -1;
+		yyextra->decide_in_body = false;
 		return;
 	}
 	yyextra->decide_state_depth--;
@@ -154,6 +187,8 @@ static inline void PGDecidePopLexState(base_yy_extra_type *yyextra) {
 		yyextra->in_decide_objective = slot->in_decide_objective;
 		yyextra->decide_case_depth = slot->decide_case_depth;
 		yyextra->decide_declared_before_from = slot->decide_declared_before_from;
+		yyextra->decide_subquery_depth = slot->decide_subquery_depth;
+		yyextra->decide_in_body = slot->decide_in_body;
 	}
 }
 

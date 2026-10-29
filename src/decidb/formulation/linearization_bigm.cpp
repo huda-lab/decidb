@@ -400,7 +400,12 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
                 }
                 bound = std::max(bound, k / a);
             }
-            if (every_row_constrained && bound < upper_bounds[v] && bound >= lower_bounds[v]) {
+            // A bound below the column's floor is kept too: the box is empty, which proves
+            // the model infeasible, and the solver says so. Dropping it instead left the
+            // column open, and a Big-M over it refused for a want of bounds the clauses had.
+            // (One under the floor by rounding alone is not empty: the model builder
+            // closes it onto the floor.)
+            if (every_row_constrained && bound < upper_bounds[v]) {
                 upper_bounds[v] = bound;
             }
         }

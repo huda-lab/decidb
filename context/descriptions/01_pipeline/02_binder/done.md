@@ -434,6 +434,15 @@ a reducer with no `by` is `by ()` (syntax_reference.md §1.1).
   yet; compute it in a subquery, or reduce it outside"*). One under a `*` or `/` that
   holds a decision (`sum(avg(cap) * x)`) is a coefficient, refused by
   `ValidateDecideNoNonLinearScalar` with its remedy. A nest over data alone binds.
+  Refused too, as each is rewritten by stage 05 before the value rewrite reads the path
+  rule, so the inner reducer would lose the enclosing `when` and `by` (they were answered
+  wrongly): a reducer inside `norm` (*"DECIDE: a reducer inside norm is not supported
+  yet"*); inside a reducer, a reducer times a decision (*"... multiplies a reducer by a
+  decision; only data can scale a reducer"*, the rule the canonicalizer states at the
+  root), and `abs` over a reducer where an enclosing reducer has its own `when` or `per`,
+  or a `by` (`ScopePlacement::path_keeps_rows`; over a trivial path the rewrite reads the
+  same rows and `sum(abs(x - avg(x)))` answers). `count` is a reducer for the "over data
+  alone" refusal as the others are (`TakesReducerBy`).
 
 | Written | Bound |
 |---|---|
@@ -446,6 +455,7 @@ a reducer with no `by` is `by ()` (syntax_reference.md §1.1).
 | `agg(per K': e)`, `SUM(D: e)` | a `__qualified_by_<i>__` tag on an exact key scope; the colon form adds `COLON_FORM_TAG` (§3) |
 | `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
 | `outer(per k: inner(e) by (k))` | the aggregates nested as written: `outer` tagged `__qualified_by_<i>__` on k's scope, `inner` `__group_key_<j>__` (D75) |
+| `at(F: e) over (...)`, `agg(from F1 to F2: e) over (...)` | `first(e)` or `agg(e)` tagged `__frame_<i>__`, naming `BoundSelectNode::decide_frames[i]` (§4a, "Frame selectors") |
 
 - `BindScopedConstraint` binds the body, the condition as data, the key through
   `BindKeyColumns` (a declaration key's resolution; a column element keeps its written
@@ -482,6 +492,54 @@ a reducer with no `by` is `by ()` (syntax_reference.md §1.1).
 - A `SUM`, `AVG`, `MIN`, `MAX` or `norm` with no argument is refused: *"SUM needs one
   argument, found 'sum()'"*, *"NORM needs an expression and an order, as in norm(e, 1),
   found 'norm()'"*.
+
+### Frame selectors
+
+A frame selector (syntax_reference.md §5.6) is checked on the parsed tree with the
+scopes, then bound like a reducer whose rows are the ones the frame selects.
+
+- **Where it may stand** (`ValidateDecideScopeSpellings`; D74). `ValidateScopeData` — the
+  rule of a `when`, a key and a `by` — refuses a frame there: *"DECIDE: a frame selector
+  is not allowed in when, per, by, within or an order key"*. `ValidateFrame` holds the
+  frame's order key and `within` key to data (*"DECIDE: x is a decision; a frame's order
+  key and within may only use data"*; a frame, a window or a reducer there is refused
+  too) and its payload and fallback to one row, linear in the decisions (*"DECIDE: '(x *
+  x)' squares or multiplies decisions inside at(...), which is not supported yet"*) (*"DECIDE: a reducer inside at(...) is not supported;
+  reduce outside the frame"*, *"DECIDE: a frame selector inside at(...) is not
+  supported"*; a range names itself `sum(from ...)`). `ValidateFrameProduct` refuses a
+  `*` or `/` with a frame in one factor and a decision in another, and a square of a frame
+  over decisions (`power`, `pow`, `**` or `^` with an exponent other than 1): *"DECIDE:
+  '(x * at(previous: t.demand) over (t.period))' multiplies a decision by a value from
+  another row, which is not supported yet"*. A data factor on a frame over decisions
+  (`t.price * at(previous: x) over (...)`) is a linear term and binds.
+- **Its place in a clause.** A frame over a decision is a decision side
+  (`DecideExpression::VARIABLE` in `GetExpressionType`: one value per anchor row); one
+  over data is a bound (`IsAllowedDecisionFreeBoundExpression`). Alone, it is no
+  constraint, as a bare decision is none. A frame that reaches a binder of plain SQL (an
+  outer query re-binding a correlated DECIDE subquery) is *"DECIDE: a frame selector is
+  not supported here: ..."* (`ExpressionBinder::BindExpression`). Inside a reducer,
+  `ValidateSumArgumentInternal` holds its payload and fallback to the reducer's rule. In
+  the objective a frame over decisions is an objective on its own, as a decision is.
+- **The bound form** (`DecideBinder::BindDecideFrame`). The payload binds under the
+  aggregate that reads it at the selected rows: a range's reducer (`sum`, `avg`, `min`,
+  `max`, or `count` over data, through `BindAggregate`; any other name is *"DECIDE: a
+  range frame reduces with sum, avg, min, max or count, found abs"*), and `first` for a
+  point frame, which reads one row. The aggregate is tagged `__frame_<i>__`, naming
+  `BoundSelectNode::decide_frames[i]` (`DecideFrameSpec`, `../03_logical_plan/done.md`),
+  which holds the rest: the positions, `every`, `all`, the order key bound as data, the
+  `within` key resolved as a `per` key is (`ResolveKey`: columns, and relations standing
+  for their stored columns), and the fallback. The fallback binds like the payload, as a
+  number of any numeric or boolean type, kept in its own type: `else 0.5` over a
+  whole-numbered payload is 0.5 there, and a model reads both as numbers (*"DECIDE: in
+  at(previous else 'none': x) over (t.period), else 'none' is not a number"*). The frame's text is a source
+  fragment on the aggregate, so every message and plan prints it as written; the fragment
+  is recorded while binding, not by `TagDecideSourceFragments`, for the reason the `per`
+  key's is (§4a above).
+- An aggregate-shaped marker, rather than a wrapper around the payload, keeps every later
+  layer from reading the payload as a term of the anchor row: a reducer is already an
+  opaque unit to the canonicalizer. Nothing past the plan's inputs reads a frame yet: the
+  planner refuses one just before canonicalization (*"DECIDE: frame selectors are not
+  supported yet: <frame>"*, `plan_select_node.cpp`) until phase 4 formulates it.
 
 ---
 
@@ -523,7 +581,7 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 | Concern | Location |
 |---|---|
 | Declarations, scopes, types, the parsed-tree validators (`BindDeclarations`, `RefuseQualifiedDecisionReferences`) | `src/planner/expression_binder/decide/decide_declarations_binder.cpp` |
-| Shared DECIDE expression rules, reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateExactScope`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
+| Shared DECIDE expression rules, reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateExactScope`), where scopes and frames may stand (`ValidateDecideScopeSpellings`, `ValidateFrame`), frame binding (`BindDecideFrame`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
 | `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
 | Objective binding and its scope | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |

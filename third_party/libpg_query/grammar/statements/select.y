@@ -377,6 +377,51 @@ decide_by:
 			| BY_DECIDE '(' expr_list ')'			{ $$ = $3; }
 		;
 
+/*
+ * DeciDB: a frame selector's position, as (anchor, k). `previous`, `every` and
+ * `cyclic` are no keywords: an identifier with that text, checked here, so no
+ * column or alias anywhere else in SQL loses the name.
+ */
+decide_frame_point:
+			FIRST_P				{ $$ = list_make2(makeInteger(PG_DECIDE_FRAME_FIRST), makeInteger(1)); }
+			| LAST_P			{ $$ = list_make2(makeInteger(PG_DECIDE_FRAME_LAST), makeInteger(1)); }
+			| NEXT				{ $$ = list_make2(makeInteger(PG_DECIDE_FRAME_NEXT), makeInteger(1)); }
+			| IDENT				{ $$ = makeDecideFramePrevious($1, 1, @1, yyscanner); }
+			| Iconst NEXT		{ $$ = list_make2(makeInteger(PG_DECIDE_FRAME_NEXT), makeInteger($1)); }
+			| Iconst IDENT		{ $$ = makeDecideFramePrevious($2, $1, @2, yyscanner); }
+		;
+
+opt_decide_frame_every:
+			/*EMPTY*/			{ $$ = 1; }
+			| IDENT Iconst
+				{
+					decideFrameWord($1, "every", "every d", @1, yyscanner);
+					$$ = $2;
+				}
+		;
+
+decide_frame_over:
+			OVER_DECIDE '(' a_expr opt_asc_desc opt_decide_frame_cyclic opt_decide_frame_within ')'
+				{
+					$$ = makeDecideFrameOver($3, $4 == PG_SORTBY_DESC, $5, $6, @1, yyscanner);
+				}
+		;
+
+opt_decide_frame_cyclic:
+			/*EMPTY*/			{ $$ = false; }
+			| IDENT
+				{
+					decideFrameWord($1, "cyclic", "cyclic or within", @1, yyscanner);
+					$$ = true;
+				}
+		;
+
+opt_decide_frame_within:
+			/*EMPTY*/						{ $$ = NIL; }
+			| WITHIN_DECIDE '(' ')'			{ $$ = NIL; }
+			| WITHIN_DECIDE expr_list		{ $$ = $2; }
+		;
+
 /* One DECIDE item body. DECIDE_ITEM sits above AND but below the DECIDE WHEN
  * tokens and comparison operators: a top-level AND belongs to
  * decide_constraint_list, while the item's own comparisons stay intact. */
@@ -3216,6 +3261,31 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by",
 						makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner), (PGNode *) $7, @7);
 				}
+			| AT_DECIDE '(' decide_frame_point ':' a_expr ')' decide_frame_over
+				{
+					/* DeciDB: a point frame, at(F: e) over (S ...) */
+					$$ = makeDecideFramePoint($3, NULL, $5, $7, @1);
+				}
+			| AT_DECIDE '(' decide_frame_point ELSE a_expr ':' a_expr ')' decide_frame_over
+				{
+					$$ = makeDecideFramePoint($3, $5, $7, $9, @1);
+				}
+			| func_name '(' FROM decide_frame_point TO decide_frame_point opt_decide_frame_every ':' func_arg_list ')'
+			  decide_frame_over
+				{
+					/* DeciDB: a range frame, agg(from F1 to F2 [every d]: e) over (S ...) */
+					$$ = makeDecideFrameRange($1, $4, $6, $7, NULL, false, $9, $11, @1);
+				}
+			| func_name '(' FROM decide_frame_point TO decide_frame_point opt_decide_frame_every ELSE a_expr ':'
+			  func_arg_list ')' decide_frame_over
+				{
+					$$ = makeDecideFrameRange($1, $4, $6, $7, $9, false, $11, $13, @1);
+				}
+			| func_name '(' FROM decide_frame_point TO decide_frame_point opt_decide_frame_every ALL ':' func_arg_list ')'
+			  decide_frame_over
+				{
+					$$ = makeDecideFrameRange($1, $4, $6, $7, NULL, true, $10, $12, @1);
+				}
 			| indirection_expr_or_a_expr opt_extended_indirection
 				{
 					if ($2)
@@ -3668,7 +3738,24 @@ window_definition:
 
 over_clause: OVER window_specification
 				{ $$ = $2; }
+			/* DeciDB: a window written in a DECIDE clause, whose OVER the lexer reads as a
+			 * frame's; it parses as SQL's, and the DECIDE binder says where it may stand. */
+			| OVER_DECIDE window_specification
+				{ $$ = $2; }
 			| OVER ColId
+				{
+					PGWindowDef *n = makeNode(PGWindowDef);
+					n->name = $2;
+					n->refname = NULL;
+					n->partitionClause = NIL;
+					n->orderClause = NIL;
+					n->frameOptions = FRAMEOPTION_DEFAULTS;
+					n->startOffset = NULL;
+					n->endOffset = NULL;
+					n->location = @2;
+					$$ = n;
+				}
+			| OVER_DECIDE ColId
 				{
 					PGWindowDef *n = makeNode(PGWindowDef);
 					n->name = $2;

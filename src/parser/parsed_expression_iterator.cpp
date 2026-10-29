@@ -114,6 +114,18 @@ void ParsedExpressionIterator::EnumerateChildren(
 		}
 		break;
 	}
+	case ExpressionClass::DECIDE_FRAME: {
+		auto &frame_expr = expr.Cast<DecideFrameExpression>();
+		callback(frame_expr.payload);
+		if (frame_expr.fallback) {
+			callback(frame_expr.fallback);
+		}
+		callback(frame_expr.order);
+		for (auto &key : frame_expr.within) {
+			callback(key);
+		}
+		break;
+	}
 	case ExpressionClass::WINDOW: {
 		auto &window_expr = expr.Cast<WindowExpression>();
 		for (auto &partition : window_expr.partitions) {

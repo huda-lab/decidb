@@ -201,3 +201,13 @@ def test_diagnose_names_the_variant_it_loosens(decidb_cli):
     assert_no_internal_leak(result, "a diagnosed variant")
     findings = [row for row in diagnose_rows(result) if row["edit_source"] == "expanded_group"]
     assert [row["group"] for row in findings] == ["a, 2"], result.stdout
+
+
+def test_diagnose_tells_variants_of_one_value_apart(decidb_cli):
+    """`per t.g: x <= t.v` with `v` -2 on both rows of class 'a': two variants, one per
+    instance of `x`, with the same value -- each is named by the row it reads as well."""
+    rows = ((1, "a", "p", -2, 0), (2, "a", "q", -2, 0), (3, "b", "p", 9, 0))
+    result = run_diagnose(decidb_cli, _query("x(INT)", "per t.g: x <= t.b", rows), scope="expanded")
+    assert_no_internal_leak(result, "two variants of one value")
+    findings = [row for row in diagnose_rows(result) if row["edit_source"] == "expanded_group"]
+    assert sorted(row["group"] for row in findings) == ["a, -2, row 1", "a, -2, row 2"], result.stdout

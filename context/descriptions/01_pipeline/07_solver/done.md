@@ -453,6 +453,17 @@ bound pair left in place so the solve can deduce infeasibility from it. Treating
 fatal turned an ordinary query into an `InternalException` with a stack trace, and made a
 query's success depend on which solver happened to be installed.
 
+One `kError` from `run()` is retried rather than thrown. HiGHS searches a MIP to
+`mip_feasibility_tolerance` (1e-6), the distance at which it calls a value integral, then
+checks the optimum's rows against the tighter `primal_feasibility_tolerance` (1e-7). A
+binary that far from 1 under a Big-M row misses the row by M times as much, so the check
+fails ("MIP solver claims optimality, but with ... infeasibilities") and the model status
+is a solve error: `MAXIMIZE max(avg(t.w * x) by (t.g))`, whose closing rows carry 1/3
+coefficients, did this. The session solves once more with integrality held to 1e-9, which
+keeps such a row within the check, and restores the tolerance. A solve error that
+survives the retry is a failed solve (`SolverStatus::OTHER`), not an internal error; any
+other `kError` still is one.
+
 Logging is off (`log_to_console = false`). The session sets `time_limit` per chunk
 rather than once at load, which is what makes `Continue()` work: HiGHS resumes its
 MIP search on a repeat `run()`.

@@ -135,6 +135,16 @@ void LogicalDecide::EnumerateExpressions(const std::function<void(unique_ptr<Exp
 			callback(&expr);
 		}
 	}
+	for (auto &frame : frames) {
+		for (auto *expr : {&frame.fallback, &frame.order}) {
+			if (*expr) {
+				callback(expr);
+			}
+		}
+		for (auto &expr : frame.within) {
+			callback(&expr);
+		}
+	}
 	for (auto &check : scope_checks) {
 		for (auto *expr : {&check.rows, &check.filter}) {
 			if (*expr) {

@@ -15,9 +15,11 @@ Tests live in:
 - `test/decide/tests/test_anr_oracle_selfcheck.py` — the checks that the ANR evaluator is right before any engine change relies on it
 - `test/decide/tests/test_anr_variants.py` — phase 1 of the ANR plan (variant signatures) through the engine
 - `test/decide/tests/test_anr_nested.py` — phase 2 of the ANR plan (nested reducers) through the engine
+- `test/decide/tests/test_anr_frames.py` — the ANR plan's frame selectors; phase 3's `TestSyntax`: every frame fixture binds and stops at the one "not supported yet" gate, and each refusal names its construct
 - `test/decide/tests/test_scope_*.py` — twelve suites, one per part of the language
 - `test/decide/tests/test_no_old_spellings_remain.py` with `_old_spellings.py` — the scanner that keeps removed spellings out of every test surface
 - `test/decidb/test_scope_parser.test` — sqllogic: every spelling parses and binds (also inside a nested DECIDE; inside an ordinary subquery written in the clause it answers "not supported yet"), quoted keywords as names, the exact parse errors, and the removed spellings' messages
+- `test/decidb/test_frame_parser.test` — sqllogic: every frame spelling parses and binds, prints back with its defaults left out, the exact parse and bind errors, and ordinary SQL windows around the new tokens
 
 The feature suites written in the same language are tracked by feature:
 [`../per/`](../per/done.md) (`test_per_*.py`), [`../when/`](../when/done.md)

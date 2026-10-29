@@ -2003,3 +2003,28 @@ def test_composed_minmax_entity_scoped_multi_row(decidb_cli, perf_tracker):
     assert decidb_obj == best, (
         f"composed MIN/MAX is suboptimal: DeciDB={decidb_obj} (chose {chosen}), "
         f"optimal={best}")
+
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture, native", [
+    pytest.param("decidb_cli_gurobi", "on", id="gurobi"),
+    pytest.param("decidb_cli_highs", "on", id="highs"),
+    pytest.param("decidb_cli_highs", "off", id="highs-lowered"),
+])
+@pytest.mark.parametrize("clause", [
+    pytest.param("min(x) by (t.h) = 24", id="min-equal"),
+    pytest.param("max(x) by (t.h) >= 24", id="max-hard"),
+])
+def test_an_extremum_past_every_row_bound_is_infeasible(request, cli_fixture, native, clause):
+    """`x <= t.v` caps each x at most 5 and the extremum asks for 24: the cap the rows
+    imply is below the floor the clause puts on x, an empty box, so the query is
+    infeasible. The implied cap used to be dropped there, leaving x open, and the Big-M
+    rewrite then refused for a missing bound (HiGHS, and Gurobi lowered)."""
+    cli = request.getfixturevalue(cli_fixture).with_env({"DECIDB_NATIVE_CONSTRUCTS": native})
+    sql = ("SELECT t.id, x FROM (VALUES (1, 'p', 4), (2, 'p', 3), (3, 'q', 5)) t(id, h, v) "
+           f"DECIDE x(INT) SUCH THAT x <= t.v AND {clause} MAXIMIZE sum(x)")
+    result = cli.execute_raw(sql)
+    assert "DECIDE optimization is infeasible" in result.stderr, result.stderr
+    diagnosis = cli.execute_raw("DIAGNOSE " + sql)
+    assert diagnosis.returncode == 0 and "infeasible" in diagnosis.stdout, diagnosis.stderr

@@ -436,6 +436,40 @@ ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserialize
 	return result;
 }
 
+void DecideFrameSpec::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<bool>(100, "range", range);
+	serializer.WriteProperty<DecideFrameAnchor>(101, "from", from);
+	serializer.WritePropertyWithDefault<int64_t>(102, "from_k", from_k);
+	serializer.WriteProperty<DecideFrameAnchor>(103, "to", to);
+	serializer.WritePropertyWithDefault<int64_t>(104, "to_k", to_k);
+	serializer.WritePropertyWithDefault<int64_t>(105, "every", every);
+	serializer.WritePropertyWithDefault<bool>(106, "all", all);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(107, "fallback", fallback);
+	serializer.WritePropertyWithDefault<unique_ptr<Expression>>(108, "order", order);
+	serializer.WritePropertyWithDefault<bool>(109, "descending", descending);
+	serializer.WritePropertyWithDefault<bool>(110, "cyclic", cyclic);
+	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(111, "within", within);
+	serializer.WritePropertyWithDefault<string>(112, "text", text);
+}
+
+DecideFrameSpec DecideFrameSpec::Deserialize(Deserializer &deserializer) {
+	DecideFrameSpec result;
+	deserializer.ReadPropertyWithDefault<bool>(100, "range", result.range);
+	deserializer.ReadProperty<DecideFrameAnchor>(101, "from", result.from);
+	deserializer.ReadPropertyWithDefault<int64_t>(102, "from_k", result.from_k);
+	deserializer.ReadProperty<DecideFrameAnchor>(103, "to", result.to);
+	deserializer.ReadPropertyWithDefault<int64_t>(104, "to_k", result.to_k);
+	deserializer.ReadPropertyWithDefault<int64_t>(105, "every", result.every);
+	deserializer.ReadPropertyWithDefault<bool>(106, "all", result.all);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(107, "fallback", result.fallback);
+	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(108, "order", result.order);
+	deserializer.ReadPropertyWithDefault<bool>(109, "descending", result.descending);
+	deserializer.ReadPropertyWithDefault<bool>(110, "cyclic", result.cyclic);
+	deserializer.ReadPropertyWithDefault<vector<unique_ptr<Expression>>>(111, "within", result.within);
+	deserializer.ReadPropertyWithDefault<string>(112, "text", result.text);
+	return result;
+}
+
 void DecideGroupKey::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<unique_ptr<Expression>>>(100, "expressions", expressions);
 	serializer.WritePropertyWithDefault<string>(101, "text", text);

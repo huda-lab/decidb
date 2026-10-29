@@ -100,6 +100,13 @@ BindResult ExpressionBinder::BindExpression(unique_ptr<ParsedExpression> &expr, 
 		return BindPositionalReference(expr, depth, root_expression);
 	case ExpressionClass::STAR:
 		return BindResult(BinderException::Unsupported(expr_ref, "STAR expression is not supported here"));
+	case ExpressionClass::DECIDE_FRAME:
+		// DeciDB: only a DECIDE clause's own binders read a frame selector.
+		// Its parts may be bound already (an outer query re-binding a correlated clause),
+		// so the message quotes none of them.
+		return BindResult(BinderException::Unsupported(
+		    expr_ref, "DECIDE: a frame selector is not supported here: it reads the rows of the DECIDE query whose "
+		              "constraints or objective it stands in, and only those"));
 	default:
 		throw NotImplementedException("Unimplemented expression class");
 	}

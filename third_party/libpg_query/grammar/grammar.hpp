@@ -208,6 +208,14 @@ static PGNode *makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 static PGNode *makeDecideScope(PGDecidePer per, PGList *key, int location,
 							   core_yyscan_t yyscanner);
 static PGNode *applyDecideScope(PGNode *scope, PGNode *body);
+static PGList *makeDecideFramePrevious(char *word, int k, int location, core_yyscan_t yyscanner);
+static void decideFrameWord(char *word, const char *expected, const char *what, int location,
+							core_yyscan_t yyscanner);
+static PGNode *makeDecideFrameOver(PGNode *order, bool descending, bool cyclic, PGList *within, int location,
+								   core_yyscan_t yyscanner);
+static PGNode *makeDecideFramePoint(PGList *point, PGNode *fallback, PGNode *payload, PGNode *over, int location);
+static PGNode *makeDecideFrameRange(PGList *funcname, PGList *from, PGList *to, int every, PGNode *fallback,
+									bool all, PGList *args, PGNode *over, int location);
 static PGNode *makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
 									int location, int qualifier_location,
 									int colon_location, core_yyscan_t yyscanner);

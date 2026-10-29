@@ -57,6 +57,13 @@ PGList *raw_parser(const char *str) {
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
 	yyextra.decide_after_rparen = false;
+	yyextra.decide_paren_depth = 0;
+	yyextra.decide_subquery_depth = -1;
+	yyextra.decide_over_parens = 0;
+	yyextra.decide_after_over = false;
+	yyextra.decide_last_token = 0;
+	yyextra.decide_token_before_last = 0;
+	yyextra.decide_in_body = false;
 	yyextra.decide_state_depth = 0;
 
 	/* initialize the bison parser */
@@ -118,6 +125,13 @@ std::vector<PGSimplifiedToken> tokenize(const char *str) {
 	yyextra.decide_case_depth = 0;
 	yyextra.decide_declared_before_from = false;
 	yyextra.decide_after_rparen = false;
+	yyextra.decide_paren_depth = 0;
+	yyextra.decide_subquery_depth = -1;
+	yyextra.decide_over_parens = 0;
+	yyextra.decide_after_over = false;
+	yyextra.decide_last_token = 0;
+	yyextra.decide_token_before_last = 0;
+	yyextra.decide_in_body = false;
 	yyextra.decide_state_depth = 0;
 
 	while(true) {
@@ -214,6 +228,44 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 	yyextra->decide_after_rparen = cur_token == ')';
 
 	/*
+	 * DeciDB: the parenthesis depth, and the SQL subquery or frame OVER the current
+	 * token is inside. A subquery ends with the parenthesis that holds it, which may
+	 * be read as the lookahead of a nested DECIDE clause; the depth is counted over
+	 * every token, so it is right whichever clause's state is current.
+	 */
+	bool after_over = yyextra->decide_after_over;
+	yyextra->decide_after_over = false;
+	const int last_token = yyextra->decide_last_token;
+	const int token_before_last = yyextra->decide_token_before_last;
+	yyextra->decide_token_before_last = last_token;
+	yyextra->decide_last_token = cur_token;
+	if (cur_token == '(') {
+		yyextra->decide_paren_depth++;
+		const int depth = yyextra->decide_paren_depth;
+		if (after_over && depth > 0 && depth < 64)
+			yyextra->decide_over_parens |= (uint64_t)1 << depth;
+	} else if (cur_token == ')') {
+		const int depth = yyextra->decide_paren_depth;
+		if (depth > 0 && depth < 64)
+			yyextra->decide_over_parens &= ~((uint64_t)1 << depth);
+		yyextra->decide_paren_depth--;
+	}
+	if (yyextra->decide_subquery_depth >= 0 && yyextra->decide_paren_depth < yyextra->decide_subquery_depth)
+		yyextra->decide_subquery_depth = -1;
+	if (yyextra->in_decide_clause && yyextra->decide_subquery_depth < 0) {
+		const bool after_lparen = last_token == '(';
+		const bool opens_query = cur_token == SELECT ||
+		                         (after_lparen && (cur_token == WITH || cur_token == VALUES || cur_token == TABLE ||
+		                                           cur_token == PIVOT || cur_token == UNPIVOT ||
+		                                           (cur_token == FROM && token_before_last != IDENT)));
+		if (opens_query)
+			yyextra->decide_subquery_depth = yyextra->decide_paren_depth;
+	}
+	/* In a clause's body, outside every SQL subquery written in it. */
+	bool decide_level =
+	    yyextra->in_decide_clause && yyextra->decide_in_body && yyextra->decide_subquery_depth < 0;
+
+	/*
 	 * DecidB: track whether we are lexing inside a DECIDE clause, and while we
 	 * are, emit the clause's WHEN as a DECIDE-specific token. The objective gets
 	 * its own variant because it has no trailing comparison bound. This keeps
@@ -243,6 +295,8 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 		yyextra->in_decide_clause = true;
 		yyextra->in_decide_objective = false;
 		yyextra->decide_case_depth = 0;
+		/* DeciDB: a declaration list after DECIDE, the clause's body after SUCH */
+		yyextra->decide_in_body = cur_token == SUCH;
 	} else if (yyextra->in_decide_clause) {
 		/*
 		 * Keep WHENs that belong to a CASE...END as ordinary WHEN so the CASE
@@ -260,6 +314,19 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 			return yyextra->in_decide_objective ? WHEN_DECIDE_OBJECTIVE : WHEN_DECIDE;
 		else if (cur_token == BY && after_rparen)
 			return BY_DECIDE;
+		/*
+		 * A frame's OVER follows its ')' (at(...) over (S), sum(from ...: e) over
+		 * (S)); a SQL window has none at the clause's own level, where it is
+		 * refused anyway. Inside the frame's parentheses WITHIN names its timeline,
+		 * not WITHIN GROUP.
+		 */
+		else if (decide_level && cur_token == OVER && after_rparen) {
+			yyextra->decide_after_over = true;
+			return OVER_DECIDE;
+		} else if (decide_level && cur_token == WITHIN && yyextra->decide_paren_depth > 0 &&
+		           yyextra->decide_paren_depth < 64 &&
+		           (yyextra->decide_over_parens >> yyextra->decide_paren_depth & 1))
+			return WITHIN_DECIDE;
 	}
 
 	/*
@@ -283,6 +350,12 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 		if (!yyextra->in_decide_clause)
 			return cur_token;
 		cur_token_length = 3;
+		break;
+	case AT:
+		/* DeciDB: at( opens a frame selector at a DECIDE clause's own level */
+		if (!decide_level)
+			return cur_token;
+		cur_token_length = 2;
 		break;
 	default:
 		return cur_token;
@@ -351,6 +424,12 @@ int base_yylex(YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner) {
 			cur_token = WITH_LA;
 			break;
 		}
+		break;
+
+	case AT:
+		/* DeciDB: AT TIME ZONE keeps AT; at(...) is a frame selector */
+		if (next_token == '(')
+			cur_token = AT_DECIDE;
 		break;
 
 	case PER:

@@ -331,6 +331,20 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     }
 
+    // A box inverted by rounding alone is one point. Boxes are derived in floating point
+    // from several sources -- a bound divided by its coefficient (`3 * x <= 0.3` is
+    // `x <= 0.0999...` beside `x >= 0.1`), a helper's box through an AVG's 1/n -- and a
+    // floor above its top by no more than one part in 1e9 is, in exact arithmetic, equal
+    // to it. Left inverted it reads as an infeasible model; a wider inversion still is one.
+    auto close_rounded_box = [](double &lower, double &upper) {
+        if (lower > upper && lower - upper <= 1e-9 * MaxValue<double>(1.0, std::abs(upper))) {
+            lower = upper;
+        }
+    };
+    for (idx_t var = 0; var < num_decide_vars; var++) {
+        close_rounded_box(per_var_lower[var], per_var_upper[var]);
+    }
+
     // A BOOLEAN-domain variable's bounds are normally exactly [0,1] (the merge above
     // is a no-op for it — its lower default is already the resolved-absorbed 0, and
     // its upper is capped by the type default). But an explicit, unusual user pin that
@@ -338,9 +352,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // paired with an out-of-[0,1] bound, which solver backends don't accept. Downgrade
     // to a plain bounded integer in that case rather than sending a contradictory
     // (binary, out-of-range) column — same solve result, just not flagged binary.
+    // A BOOLEAN's domain is {0, 1} whatever is written on it: `x >= -1` widens nothing
+    // (D41 lowers a numeric decision's floor, not a BOOLEAN's), and was once sent as a
+    // plain integer in [-1, 1], answering x = -1.
     for (idx_t var = 0; var < num_decide_vars; var++) {
-        if (per_var_binary[var] && (per_var_lower[var] < 0.0 || per_var_upper[var] > 1.0)) {
-            per_var_binary[var] = false;
+        if (per_var_binary[var]) {
+            per_var_lower[var] = MaxValue<double>(per_var_lower[var], 0.0);
+            per_var_upper[var] = MinValue<double>(per_var_upper[var], 1.0);
         }
     }
 
@@ -377,6 +395,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                  (input.global_lower_bounds[g] > -1e20 && input.global_upper_bounds[g] < 1e20));
         model.col_lower[var_idx] = input.global_lower_bounds[g];
         model.col_upper[var_idx] = input.global_upper_bounds[g];
+        close_rounded_box(model.col_lower[var_idx], model.col_upper[var_idx]);
         model.is_integer[var_idx] = !(gtype == LogicalType::DOUBLE || gtype == LogicalType::FLOAT);
         model.is_binary[var_idx] = (gtype == LogicalType::BOOLEAN);
     }

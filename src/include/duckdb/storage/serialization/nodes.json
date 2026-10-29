@@ -1152,6 +1152,80 @@
     "pointer_type": "none"
   },
   {
+    "class": "DecideFrameSpec",
+    "includes": [
+      "duckdb/planner/operator/decide/logical_decide.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "range",
+        "type": "bool"
+      },
+      {
+        "id": 101,
+        "name": "from",
+        "type": "DecideFrameAnchor"
+      },
+      {
+        "id": 102,
+        "name": "from_k",
+        "type": "int64_t"
+      },
+      {
+        "id": 103,
+        "name": "to",
+        "type": "DecideFrameAnchor"
+      },
+      {
+        "id": 104,
+        "name": "to_k",
+        "type": "int64_t"
+      },
+      {
+        "id": 105,
+        "name": "every",
+        "type": "int64_t"
+      },
+      {
+        "id": 106,
+        "name": "all",
+        "type": "bool"
+      },
+      {
+        "id": 107,
+        "name": "fallback",
+        "type": "Expression*"
+      },
+      {
+        "id": 108,
+        "name": "order",
+        "type": "Expression*"
+      },
+      {
+        "id": 109,
+        "name": "descending",
+        "type": "bool"
+      },
+      {
+        "id": 110,
+        "name": "cyclic",
+        "type": "bool"
+      },
+      {
+        "id": 111,
+        "name": "within",
+        "type": "vector<Expression*>"
+      },
+      {
+        "id": 112,
+        "name": "text",
+        "type": "string"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
     "class": "DecideScopeCheck",
     "includes": [
       "duckdb/planner/operator/decide/logical_decide.hpp"

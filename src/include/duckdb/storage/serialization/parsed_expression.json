@@ -124,6 +124,78 @@
     ]
   },
   {
+    "class": "DecideFrameExpression",
+    "base": "ParsedExpression",
+    "enum": "DECIDE_FRAME",
+    "members": [
+      {
+        "id": 200,
+        "name": "reducer",
+        "type": "string"
+      },
+      {
+        "id": 201,
+        "name": "from",
+        "type": "DecideFrameAnchor"
+      },
+      {
+        "id": 202,
+        "name": "from_k",
+        "type": "int64_t"
+      },
+      {
+        "id": 203,
+        "name": "to",
+        "type": "DecideFrameAnchor"
+      },
+      {
+        "id": 204,
+        "name": "to_k",
+        "type": "int64_t"
+      },
+      {
+        "id": 205,
+        "name": "every",
+        "type": "int64_t"
+      },
+      {
+        "id": 206,
+        "name": "all",
+        "type": "bool"
+      },
+      {
+        "id": 207,
+        "name": "payload",
+        "type": "ParsedExpression*"
+      },
+      {
+        "id": 208,
+        "name": "fallback",
+        "type": "ParsedExpression*"
+      },
+      {
+        "id": 209,
+        "name": "order",
+        "type": "ParsedExpression*"
+      },
+      {
+        "id": 210,
+        "name": "descending",
+        "type": "bool"
+      },
+      {
+        "id": 211,
+        "name": "cyclic",
+        "type": "bool"
+      },
+      {
+        "id": 212,
+        "name": "within",
+        "type": "vector<ParsedExpression*>"
+      }
+    ]
+  },
+  {
     "class": "LambdaRefExpression",
     "base": "ParsedExpression",
     "enum": "LAMBDA_REF",

@@ -1730,7 +1730,19 @@ public:
         //   - `x >= 2` / `x = 2` (BOOLEAN): lower above the 0/1 ceiling → infeasible.
         // A purely user-vs-user inverted box (e.g. `x >= 5 AND x <= 1`, both >= 0) does NOT
         // match and proceeds to the elastic engine, which reports a least-change loosen.
+        // A helper decision of the value rewrite has no intrinsic domain: it holds a
+        // reducer's value, `sum(w * x)` negative wherever `w` is, so no bound on it
+        // contradicts a type (BuildSolverInput frees its floor).
+        vector<bool> is_helper(num_decide_vars, false);
+        for (auto &link : op.reducer_value_links) {
+            if (link.value_var < num_decide_vars) {
+                is_helper[link.value_var] = true;
+            }
+        }
         for (idx_t var = 0; var < num_decide_vars; var++) {
+            if (is_helper[var]) {
+                continue;
+            }
             bool is_bool = var < op.is_boolean_var.size() && op.is_boolean_var[var];
             double L = (absorbed_lower_bounds[var] <= ABSORBED_LOWER_UNSET)
                            ? 0.0
@@ -2911,11 +2923,13 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 const auto &instance_ids = variant_ids.empty() ? class_ids : variant_ids;
                 eval_const.row_group_ids.assign(num_rows, DConstants::INVALID_INDEX);
                 vector<idx_t> class_of(num_variants, DConstants::INVALID_INDEX);
+                vector<idx_t> first_row(num_variants, DConstants::INVALID_INDEX);
                 vector<idx_t> variants_per_class(num_classes, 0);
                 for (idx_t row = 0; row < num_rows; row++) {
                     auto id = instance_ids[row];
                     if (id != DConstants::INVALID_INDEX && class_of[id] == DConstants::INVALID_INDEX) {
                         class_of[id] = class_ids[row];
+                        first_row[id] = row;
                         variants_per_class[class_ids[row]]++;
                         eval_const.row_group_ids[row] = id;
                     }
@@ -2938,6 +2952,19 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                     label = class_id < labels.size() ? labels[class_id] : string();
                     if (variants_per_class[class_id] > 1 && id < variant_labels.size() && !variant_labels[id].empty()) {
                         label += label.empty() ? variant_labels[id] : ", " + variant_labels[id];
+                    }
+                }
+                // Variants that differ only by the decision instance they read (`per t.g: x
+                // <= t.v` over two rows of one class with one `v`) share their values: each
+                // is named by the row it is read at as well.
+                unordered_map<string, idx_t> label_uses;
+                for (idx_t id = 0; id < num_variants; id++) {
+                    label_uses[eval_const.group_labels[id]]++;
+                }
+                for (idx_t id = 0; id < num_variants; id++) {
+                    auto &label = eval_const.group_labels[id];
+                    if (variants_per_class[class_of[id]] > 1 && label_uses[label] > 1) {
+                        label += StringUtil::Format("%srow %llu", label.empty() ? "" : ", ", first_row[id] + 1);
                     }
                 }
                 eval_const.rows_stand_with_their_class = !has_when;
@@ -4333,8 +4360,24 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
             if (lower == solver_input.lower_bounds && upper == solver_input.upper_bounds) {
                 break;
             }
+            // Clauses that contradict each other make a box cross, and from there each pass
+            // pushes its ends further apart, forever. A crossed box is the proof that the
+            // model is infeasible: stop at the first one, whose ends are still finite, and
+            // the solver reports it as for any empty box (DIAGNOSE formulates its own).
+            bool crossed = false;
+            for (idx_t var = 0; var < solver_input.lower_bounds.size() && !crossed; var++) {
+                const double lo = solver_input.lower_bounds[var];
+                const double hi = solver_input.upper_bounds[var];
+                crossed = lo > hi + 1e-9 * MaxValue<double>(1.0, std::abs(hi));
+            }
+            if (crossed) {
+                break;
+            }
+            // Each pass leaves valid boxes, only tighter ones: one that still moves after as
+            // many passes as the constructs nest is closing in by ever smaller steps (an
+            // AVG over a group whose members repeat a helper), so the boxes stand as they are.
             if (pass == max_passes) {
-                throw InternalException("DECIDE: the ABS and helper decision boxes did not settle");
+                break;
             }
         }
         DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, !native_abs);

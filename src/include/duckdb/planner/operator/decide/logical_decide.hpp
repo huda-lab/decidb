@@ -80,6 +80,39 @@ struct DecideGroupKey {
 	static DecideGroupKey Deserialize(Deserializer &deserializer);
 };
 
+//! A frame selector (syntax_reference.md §5.6), named by a FRAME_TAG_PREFIX tag on the
+//! aggregate it binds to: `first(e)` for a point frame, the frame's reducer for a range.
+//! At an anchor row it reads the anchor's timeline -- the rows sharing its `within` key,
+//! ordered by `order` -- at the positions it selects.
+struct DecideFrameSpec {
+	//! A range, agg(from F1 to F2 ...: e); else a point, at(F: e)
+	bool range = false;
+	//! The point, or the range's first end, and its k
+	DecideFrameAnchor from = DecideFrameAnchor::FIRST;
+	int64_t from_k = 1;
+	//! The range's last end
+	DecideFrameAnchor to = DecideFrameAnchor::FIRST;
+	int64_t to_k = 1;
+	int64_t every = 1;
+	//! `all`: a range with a missing position selects nothing
+	bool all = false;
+	//! `else v`, read at the anchor row for a missing position, a number; null when
+	//! unwritten
+	unique_ptr<Expression> fallback;
+	//! The timeline's order key, and its direction
+	unique_ptr<Expression> order;
+	bool descending = false;
+	bool cyclic = false;
+	//! The timeline's partition: the `within` key's columns; empty for one timeline
+	vector<unique_ptr<Expression>> within;
+	//! The frame as written, for messages
+	string text;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideFrameSpec Deserialize(Deserializer &deserializer);
+};
+
 //! One run-time requirement of a clause
 //! (syntax_reference.md §7.3): built by DecideCanonicalizer from the user's
 //! clause, before any rewrite, and run by PhysicalDecide before any model is built.
@@ -456,6 +489,8 @@ public:
 
     //! Every `by (key)` written in the clause, indexed by GROUP_KEY_TAG_PREFIX tags.
     vector<DecideGroupKey> group_keys;
+    //! Every frame selector written in the clause, indexed by FRAME_TAG_PREFIX tags.
+    vector<DecideFrameSpec> frames;
 
     //! The run-time requirements of every clause, in
     //! clause order; PhysicalDecide runs them before it formulates anything.

@@ -389,6 +389,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<DecideGroupKey>>(217, "group_keys", group_keys);
 	serializer.WritePropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", scope_checks);
 	/* [Deleted] (bool) "scoped_objective" */
+	serializer.WritePropertyWithDefault<vector<DecideFrameSpec>>(220, "frames", frames);
 	serializer.WritePropertyWithDefault<vector<DecideSignature>>(221, "signatures", signatures);
 	serializer.WritePropertyWithDefault<idx_t>(222, "objective_signature", objective_signature, DConstants::INVALID_INDEX);
 }
@@ -415,6 +416,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<vector<DecideGroupKey>>(217, "group_keys", result->group_keys);
 	deserializer.ReadPropertyWithDefault<vector<DecideScopeCheck>>(218, "scope_checks", result->scope_checks);
 	deserializer.ReadDeletedProperty<bool>(219, "scoped_objective");
+	deserializer.ReadPropertyWithDefault<vector<DecideFrameSpec>>(220, "frames", result->frames);
 	deserializer.ReadPropertyWithDefault<vector<DecideSignature>>(221, "signatures", result->signatures);
 	deserializer.ReadPropertyWithExplicitDefault<idx_t>(222, "objective_signature", result->objective_signature, DConstants::INVALID_INDEX);
 	return std::move(result);

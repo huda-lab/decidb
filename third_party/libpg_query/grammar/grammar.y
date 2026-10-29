@@ -132,6 +132,11 @@
  * name. BY is BY_DECIDE only directly after ')', which is never where GROUP BY,
  * ORDER BY or PARTITION BY put theirs. */
 %token		PER_DECIDE PER_DECIDE_PAREN PER_DECIDE_ROW BY_DECIDE
+/* DeciDB: a frame selector's tokens, emitted only at a DECIDE clause's own level
+ * (outside every SQL subquery written in it): AT before '(', OVER directly after
+ * ')', and WITHIN directly inside the parentheses of that OVER. A SQL window
+ * function keeps OVER and WITHIN GROUP wherever it may stand. */
+%token		AT_DECIDE OVER_DECIDE WITHIN_DECIDE
 
 
 /* Precedence: lowest to highest */

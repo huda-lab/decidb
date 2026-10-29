@@ -75,6 +75,9 @@ struct RenderContext {
 	//! which print as that expression; null prints a column's name.
 	idx_t decide_index = DConstants::INVALID_INDEX;
 	const vector<pair<idx_t, string>> *aux_labels = nullptr;
+	//! The one reducer whose `by` is left out, for a message that names its group apart
+	//! (RenderDecideReducer); the reducers inside it keep theirs.
+	const BoundAggregateExpression *without_by = nullptr;
 };
 } // namespace
 
@@ -205,7 +208,7 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	    StringUtil::CIEquals(agg.function.name, "count_star")) {
 		// `count(*)` binds as `count_star()`; it takes no scope inside it.
 		idx_t group_key;
-		bool has_by = ctx.group_keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) &&
+		bool has_by = ctx.group_keys && &agg != ctx.without_by && TryParseGroupKeyTag(agg.GetAlias(), group_key) &&
 		              group_key < ctx.group_keys->size();
 		return (scope.empty() ? "count(*)" : "sum(" + scope + ": 1)") +
 		       (has_by ? " by (" + (*ctx.group_keys)[group_key].text + ")" : string());
@@ -223,7 +226,8 @@ static string RenderReducer(const BoundAggregateExpression &agg, const string &b
 	}
 	result += (scope.empty() ? "" : scope + ": ") + body + (order.empty() ? "" : ", " + order) + ")";
 	idx_t group_key;
-	if (ctx.group_keys && TryParseGroupKeyTag(agg.GetAlias(), group_key) && group_key < ctx.group_keys->size()) {
+	if (ctx.group_keys && &agg != ctx.without_by && TryParseGroupKeyTag(agg.GetAlias(), group_key) &&
+	    group_key < ctx.group_keys->size()) {
 		result += " by (" + (*ctx.group_keys)[group_key].text + ")";
 	}
 	return result;
@@ -643,7 +647,7 @@ unordered_map<idx_t, string> DecideRelationNames(BindContext &bind_context, idx_
 
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names) {
 	auto ctx = ContextOf(names);
-	ctx.group_keys = nullptr;
+	ctx.without_by = &reducer;
 	return RenderSource(reducer, ctx);
 }
 

@@ -17,6 +17,7 @@
 namespace duckdb {
 
 class BindContext;
+class DecideFrameExpression;
 class FunctionExpression;
 struct DecideSourceNames;
 
@@ -46,6 +47,8 @@ struct DecideQualifierContext {
     vector<EntityScopeInfo> *entity_scopes = nullptr;
     //! Every `by (key)` bound so far; a reducer's GROUP_KEY_TAG_PREFIX tag indexes it.
     vector<DecideGroupKey> *group_keys = nullptr;
+    //! Every frame selector bound so far; a frame's FRAME_TAG_PREFIX tag indexes it.
+    vector<DecideFrameSpec> *frames = nullptr;
     //! The query's source fragments (TagDecideSourceFragments): a `per K:` in front of a
     //! constraint adds its key as written, which binding expands past recognition.
     vector<string> *source_fragments = nullptr;
@@ -206,6 +209,11 @@ protected:
     //! Binds `agg(...) BY (key)`: the reducer, then the key into LogicalDecide::group_keys,
     //! named on the aggregate by a GROUP_KEY_TAG_PREFIX tag (none for `BY ()`).
     BindResult BindReducerBy(FunctionExpression &by, idx_t depth);
+    //! Binds a frame selector (syntax_reference.md §5.6) to an aggregate over its payload
+    //! -- `first(e)` for a point frame, its reducer for a range -- tagged by
+    //! FRAME_TAG_PREFIX with the frame's entry in LogicalDecide::frames, which holds the
+    //! order key, the `within` key's columns, the positions and the fallback.
+    BindResult BindDecideFrame(DecideFrameExpression &frame, idx_t depth);
     BindResult BindFunction(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
     BindResult BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression = false) override;
     //! The dispatch itself. `BindExpression` wraps it so every bound node this binder

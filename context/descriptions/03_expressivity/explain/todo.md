@@ -22,3 +22,21 @@ answer.
 **Update.** `done.md` (the rendering layers),
 `../../00_project_overview/syntax_reference.md` §9 ("Echo"),
 `../../07_query_diagnostics/infeasible/done.md`.
+
+## The variant line of EXPLAIN ANALYZE
+
+Found by the review of 2026-10-29; every answer below is right, only the account is off.
+
+- **A reducer with its own `per` counts over every row it reads, not per `by` group.**
+  `per t.h: sum(per t.k: t.c * y) by (t.h) <= 10` prints *"3 values from 2 classes, one
+  per distinct (c) within a class"* although each `h` group reads each `k` once: the line
+  suggests the D65 double count where none happens (`BuildEntityMappings`, the
+  qualified-scope branch). Count the variants per (group, class) for the comparison.
+- **Most clause shapes print no line.** Only the rows shape and the helper shape record
+  their variants; the aggregate shape (`per t.g: sum(x) by (t.h) <= t.v`), an easy
+  MIN/MAX, ABS and `IN` under a `per` whose classes hold several variants do not.
+
+**Test.** Both shapes in `test_anr_variants.py`, beside
+`test_explain_analyze_counts_the_variants`.
+
+**Update.** `done.md`, `../../00_project_overview/syntax_reference.md` §9.

@@ -36,7 +36,15 @@ the numeric reading cannot drift apart.
 
 The run-time errors of the language are ``ScopeError`` with the fixed phrase DeciDB's
 message carries. A construct the language refuses at bind or plan time (§3.7) raises
-``Unsupported``: the oracle has no answer for it.
+``Unsupported``: the oracle has no answer for it. Only some refusals are modelled (a
+strict comparison or ``<>`` over a fractional side or a REAL decision); a case must not
+state a shape DeciDB refuses for other reasons (a query-wide decision alone in a reducer,
+a decision beside MIN/MAX in the objective, a data reducer times a decision, the ``=``
+contradiction).
+
+Bounds are a decision's own (``Decision.lb``, ``ub``): the rule that a negative lower
+bound written on a bare decision replaces the default floor 0 (D41) is not derived from
+the clauses, so a case with one sets ``lb`` itself.
 """
 
 from __future__ import annotations
@@ -1011,10 +1019,13 @@ class AnrModel:
         form = self.objective_form(objective)
         solver.create_model("anr_oracle")
         names: dict = {}
+        continuous: set = set()
         for column in self.columns():
             decision = self.decisions[column.name]
             names[column] = f"{column.name}#{column.instance}"
             solver.add_variable(names[column], decision.var_type, decision.lb, decision.ub)
+            if decision.var_type == VarType.CONTINUOUS:
+                continuous.add(names[column])
         counter = itertools.count()
 
         def coefficients(form: Mapping) -> tuple[dict, float]:
@@ -1067,6 +1078,8 @@ class AnrModel:
         for instance in instances:
             row, constant = coefficients(instance.form)
             rhs = -constant
+            if instance.sense in ("<", ">", "<>"):
+                row, rhs = self._stepped_side(row, rhs, instance.sense, continuous)
             below = math.ceil(rhs - _TOLERANCE) - 1
             above = math.floor(rhs + _TOLERANCE) + 1
             if instance.sense in ("<=", ">=", "="):
@@ -1087,6 +1100,23 @@ class AnrModel:
             return Solution(result.status)
         values = {column: result.variable_values[names[column]] for column in self.columns()}
         return Solution(SolverStatus.OPTIMAL, result.objective_value + objective_constant, values)
+
+    @staticmethod
+    def _stepped_side(row: dict, rhs: float, sense: str, continuous: set) -> tuple[dict, float]:
+        """A strict comparison or ``<>`` stepped onto whole numbers needs a whole-numbered
+        side. ``<>`` over AVG's 1/n coefficients is the SUM with the bound times n (the
+        spec's hoist, syntax_reference.md §3); a strict comparison over a fractional side,
+        or any of the three over a REAL decision, the language refuses."""
+        if any(name in continuous for name in row):
+            raise Unsupported(f"{sense} over a REAL decision")
+        for scale in range(1, 1001):
+            if all(abs(c * scale - round(c * scale)) <= _TOLERANCE for c in row.values()):
+                break
+        else:
+            raise Unsupported(f"{sense} over a side no scaling makes whole")
+        if scale != 1 and sense != "<>":
+            raise Unsupported(f"{sense} over a fractional side")
+        return {name: c * scale for name, c in row.items()}, rhs * scale
 
     # -- rendering ------------------------------------------------------------------
 

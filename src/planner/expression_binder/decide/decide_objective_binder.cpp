@@ -98,6 +98,15 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	}
     case ExpressionClass::SUBQUERY:
         return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+	case ExpressionClass::DECIDE_FRAME:
+		// A frame over decisions is an objective on its own, as a decision is.
+		if (is_top_expression && !ExpressionContainsDecideVariable(expr, variables)) {
+			return BindResult(BinderException::Unsupported(
+			    expr, StringUtil::Format("[MAXIMIZE|MINIMIZE] clause: '%s' reads no DECIDE variable",
+			                             expr.ToString())));
+		}
+		is_top_expression = false;
+		return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
 	case ExpressionClass::CAST:
 		// Explicit decision-bearing casts were rejected from the parsed objective
 		// before rewrites. A surviving nested cast is therefore a data computation

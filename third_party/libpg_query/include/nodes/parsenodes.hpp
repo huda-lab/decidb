@@ -1283,6 +1283,36 @@ typedef struct PGDecideScope {
 	int location;    /* of PER, or -1 without one */
 } PGDecideScope;
 
+/*
+ * DeciDB: a frame selector inside a DECIDE clause -- at(F [else v]: e) over (S ...),
+ * or agg(from F1 to F2 [every d] [else v | all]: e) over (S ...) -- which reads the
+ * row at a position of the anchor row's timeline (ANR plan §3.4).
+ */
+typedef enum PGDecideFrameAnchor {
+	PG_DECIDE_FRAME_FIRST,
+	PG_DECIDE_FRAME_LAST,
+	PG_DECIDE_FRAME_PREVIOUS, /* k positions before the anchor */
+	PG_DECIDE_FRAME_NEXT      /* k positions after the anchor */
+} PGDecideFrameAnchor;
+
+typedef struct PGDecideFrame {
+	PGNodeTag type;
+	bool is_range;                   /* agg(from F1 to F2 ...: e), else at(F: e) */
+	PGDecideFrameAnchor from_anchor; /* the point, or the range's first end */
+	int from_k;                      /* the k of k previous / k next; 1 when unwritten */
+	PGDecideFrameAnchor to_anchor;   /* the range's last end */
+	int to_k;
+	int every;                       /* every d; 1 when unwritten */
+	bool all;                        /* all: the frame is absent when a position is missing */
+	PGNode *fallback;                /* else v, or NULL */
+	PGNode *body;                    /* the payload, or the range's reducer call */
+	PGNode *order;                   /* over (S ...) */
+	bool descending;
+	bool cyclic;
+	PGList *within;                  /* within key elements; NIL for one timeline */
+	int location;
+} PGDecideFrame;
+
 typedef struct PGSelectStmt {
 	PGNodeTag type;
 

@@ -716,6 +716,112 @@ applyDecideScope(PGNode *scope_node, PGNode *body)
 }
 
 /*
+ * DeciDB: a frame selector (ANR plan §3.4). Its position words other than first,
+ * last and next are identifiers whose text is checked here, so they stay names
+ * everywhere else.
+ */
+/* A frame word, which like every keyword is read whatever its case. */
+static bool
+decideFrameWordIs(const char *word, const char *expected)
+{
+	for (; *word && *expected; word++, expected++)
+	{
+		char c = *word >= 'A' && *word <= 'Z' ? *word - 'A' + 'a' : *word;
+		if (c != *expected)
+			return false;
+	}
+	return *word == *expected;
+}
+
+static void
+decideFrameWord(char *word, const char *expected, const char *what, int location, core_yyscan_t yyscanner)
+{
+	if (!decideFrameWordIs(word, expected))
+		ereport(ERROR,
+				(errcode(PG_ERRCODE_SYNTAX_ERROR),
+				 errmsg("DECIDE: expected %s in a frame selector, found %s", what, word),
+				 parser_errposition(location)));
+}
+
+static PGList *
+makeDecideFramePrevious(char *word, int k, int location, core_yyscan_t yyscanner)
+{
+	if (!decideFrameWordIs(word, "previous"))
+		ereport(ERROR,
+				(errcode(PG_ERRCODE_SYNTAX_ERROR),
+				 errmsg("DECIDE: a frame position is first, last, [k] previous or [k] next, found %s", word),
+				 parser_errposition(location)));
+	return list_make2(makeInteger(PG_DECIDE_FRAME_PREVIOUS), makeInteger(k));
+}
+
+static PGNode *
+makeDecideFrameOver(PGNode *order, bool descending, bool cyclic, PGList *within, int location,
+					core_yyscan_t yyscanner)
+{
+	PGDecideFrame *frame = makeNode(PGDecideFrame);
+	PGListCell *element;
+	PGListCell *field;
+
+	/* within takes a key like per's: columns and relations */
+	foreach(element, within)
+	{
+		PGNode *name = (PGNode *) lfirst(element);
+		bool is_name = IsA(name, PGColumnRef);
+
+		if (is_name)
+			foreach(field, ((PGColumnRef *) name)->fields)
+				is_name = is_name && IsA((PGNode *) lfirst(field), PGString);
+		if (!is_name)
+			ereport(ERROR,
+					(errcode(PG_ERRCODE_SYNTAX_ERROR),
+					 errmsg("DECIDE: within lists columns or relations, as a per key does"),
+					 parser_errposition(location)));
+	}
+	frame->order = order;
+	frame->descending = descending;
+	frame->cyclic = cyclic;
+	frame->within = within;
+	frame->location = location;
+	frame->every = 1;
+	return (PGNode *) frame;
+}
+
+static void
+setDecideFramePosition(PGList *point, PGDecideFrameAnchor *anchor, int *k)
+{
+	*anchor = (PGDecideFrameAnchor) intVal((PGValue *) linitial(point));
+	*k = intVal((PGValue *) lsecond(point));
+}
+
+static PGNode *
+makeDecideFramePoint(PGList *point, PGNode *fallback, PGNode *payload, PGNode *over, int location)
+{
+	PGDecideFrame *frame = (PGDecideFrame *) over;
+	frame->is_range = false;
+	setDecideFramePosition(point, &frame->from_anchor, &frame->from_k);
+	frame->fallback = fallback;
+	frame->body = payload;
+	frame->location = location;
+	return over;
+}
+
+static PGNode *
+makeDecideFrameRange(PGList *funcname, PGList *from, PGList *to, int every, PGNode *fallback, bool all,
+					 PGList *args, PGNode *over, int location)
+{
+	PGDecideFrame *frame = (PGDecideFrame *) over;
+	frame->is_range = true;
+	setDecideFramePosition(from, &frame->from_anchor, &frame->from_k);
+	setDecideFramePosition(to, &frame->to_anchor, &frame->to_k);
+	frame->every = every;
+	frame->all = all;
+	frame->fallback = fallback;
+	frame->body = (PGNode *) makeFuncCall(funcname, args, location);
+	frame->location = location;
+	return over;
+}
+
+/*
  * DecidB: a relation-qualified reducer, sum(D: expr) or sum(D, T: expr). Every
  * item of the qualifier must be a bare relation name; the binder resolves them.
  */

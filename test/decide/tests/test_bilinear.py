@@ -1884,3 +1884,24 @@ def test_bilinear_bool_real_constraint(decidb_cli, duckdb_conn, oracle_solver, p
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("clause, written", [
+    pytest.param("b * (y - 1) >= 2", "b * (y - 1)", id="shifted"),
+    pytest.param("b * (y + 3) <= 5", "b * (y + 3)", id="shifted-up"),
+])
+def test_a_bool_times_a_shifted_decision_is_refused(decidb_cli, clause, written):
+    """A BOOL product is replaced by `coefficient * w`, `w` standing for the two decisions:
+    a factor that is no multiple of its decision (`y - 1`) was read as the decision alone,
+    dropping the `- b` -- a violated constraint, answered as optimal. It is refused, with
+    the spelling that works."""
+    result = decidb_cli.execute_raw(
+        "SELECT b, y FROM (VALUES (1)) t(id) DECIDE b(BOOL), y(INT) "
+        f"SUCH THAT y <= 5 AND {clause} MINIMIZE sum(b) + sum(y)")
+    assert f"'{written}' multiplies a BOOL decision by an expression that is not a multiple of one decision" \
+        in result.stderr, result.stderr
+    rows, _ = decidb_cli.execute(
+        "SELECT b, y FROM (VALUES (1)) t(id) DECIDE b(BOOL), y(INT) "
+        "SUCH THAT y <= 5 AND b * y - b >= 2 MINIMIZE sum(b) + sum(y)")
+    assert rows == [(1, 3)]

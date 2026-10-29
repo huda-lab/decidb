@@ -48,3 +48,19 @@ reducer and the scope words in lower case.
 side still accepted (`test_scope_bare_clauses.py`).
 
 **Update.** `done.md` §4a (the `when`, `per` and `by` data rule).
+
+## 3. Messages the review of 2026-10-29 found off
+
+- `MAXIMIZE t.w * max(per t.g: sum(x) by (t.g))` renders the nest `MAX(SUM(x))`, its
+  `per` and `by` dropped, and suggests `SUM(x * w)`, which does not apply to a nest.
+- `MINIMIZE max(x) + max(per t.g: sum(x) by (t.g))` is refused as *"... beside MIN or MAX
+  is not supported yet"*, against §4's "a nest ... beside other terms" (§10.2 lists only a
+  decision beside a MIN/MAX).
+- `MAXIMIZE -max(power(x - t.v, 2))` says "beside another term" where there is none.
+- A quoted `"previous"`, `"every"` or `"cyclic"` is read as the frame word: the lexer
+  does not tell a quoted identifier from a bare one.
+- `MAXIMIZE when t.id = 1: w * sum(x)` and `... : x + w` are refused for `w` varying per
+  row although the `when` keeps one row, which §4 and §5 accept ("one value over the kept
+  rows").
+
+**Update.** `done.md`, `../../00_project_overview/syntax_reference.md` §4, §10.2.

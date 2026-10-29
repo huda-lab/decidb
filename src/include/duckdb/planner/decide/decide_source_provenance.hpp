@@ -19,7 +19,8 @@ class BindContext;
 class BoundAggregateExpression;
 class BoundConjunctionExpression;
 
-//! Tag source-only casts and subqueries before binding obscures their spelling.
+//! Tag source-only casts and subqueries before binding obscures their spelling. (A frame
+//! selector records its own as it binds: DecideBinder::BindDecideFrame.)
 void TagDecideSourceFragments(ParsedExpression &expr, vector<string> &fragments);
 
 //! Preserve a source-fragment tag when a DECIDE binder replaces a parsed node.
@@ -86,8 +87,9 @@ string RenderDecideSource(const Expression &expr, const DecideSourceNames &names
 //! column `D.depotID`; empty over one relation, where the column's name alone is clear.
 unordered_map<idx_t, string> DecideRelationNames(BindContext &bind_context, idx_t decide_index);
 
-//! A reducer as the query writes it, without its `by`: `sum(when S.priority:
-//! ship)`, for a message that names its `by` group separately.
+//! A reducer as the query writes it, without its own `by`: `sum(when S.priority:
+//! ship)`, for a message that names its `by` group separately. A reducer nested in it
+//! keeps its `by`: `sum(when c: max(x) by (t.h))`.
 string RenderDecideReducer(const BoundAggregateExpression &reducer, const DecideSourceNames &names);
 
 //! The key of a `per` wrapper: as written, else its columns, which

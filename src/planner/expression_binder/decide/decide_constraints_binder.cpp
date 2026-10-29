@@ -142,6 +142,9 @@ static bool IsAllowedDecisionFreeBoundExpression(const ParsedExpression &expr,
             }
             return true;
         }
+        case ExpressionClass::DECIDE_FRAME:
+            // A frame over data is a value read at another row of the timeline.
+            return !ExpressionContainsDecideVariable(expr, variables);
         default:
             return false;
     }
@@ -467,6 +470,14 @@ BindResult DecideConstraintsBinder::BindExpressionInternal(unique_ptr<ParsedExpr
         return BindConjunction(expr_ptr, depth);
     case ExpressionClass::SUBQUERY:
         return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+    case ExpressionClass::DECIDE_FRAME:
+        if (!is_top_expression) {
+            return DecideBinder::BindExpression(expr_ptr, depth, root_expression);
+        }
+        // A frame alone, like a bare decision, says nothing to hold.
+        return BindResult(BinderException::Unsupported(
+            expr, StringUtil::Format("'%s' is not a valid SUCH THAT constraint on its own; compare it with a value",
+                                     expr.ToString())));
     case ExpressionClass::CASE:
         // Same answer as a CASE inside a reducer, which ValidateSumArgument rejects
         // with this text: without this branch the generic message below leaks
@@ -516,6 +527,15 @@ DecideExpression DecideConstraintsBinder::GetExpressionType(ParsedExpression &ex
         // exact-cast classifier or atomic preimage lowering can consume it.
         auto &cast = expr.Cast<CastExpression>();
         return GetExpressionType(*cast.child, error_msg);
+    }
+    case ExpressionClass::DECIDE_FRAME: {
+        // A frame term is one value per anchor row: its payload read at the rows it selects.
+        if (ExpressionContainsDecideVariable(expr, variables)) {
+            return DecideExpression::VARIABLE;
+        }
+        error_msg = StringUtil::Format("SUCH THAT clause: '%s' reads no DECIDE variable; compare a decision with it",
+                                       expr.ToString());
+        return DecideExpression::INVALID;
     }
     default: {
         error_msg = StringUtil::Format("The left-hand side of a SUCH THAT constraint must be a DECIDE variable or a SUM expression over a DECIDE variable (e.g., SUM(x * a) / SUM(x)). Found '%s' instead.", expr.ToString());

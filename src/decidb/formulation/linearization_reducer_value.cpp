@@ -126,13 +126,38 @@ struct MemberTerm {
 	double hi; //!< its top, `+inf` when open
 };
 
-MemberTerm MakeMemberTerm(const SolverInput &input, const VarIndexer &indexer, idx_t var, idx_t row, double c) {
+MemberTerm MakeMemberTerm(const SolverInput &input, idx_t var, idx_t column, double c) {
 	constexpr double INF = std::numeric_limits<double>::infinity();
 	const double lb = input.lower_bounds[var] <= -1e20 ? -INF : input.lower_bounds[var];
 	const double ub = input.upper_bounds[var] >= 1e20 ? INF : input.upper_bounds[var];
 	const double a = c * (c > 0 ? lb : ub);
 	const double b = c * (c > 0 ? ub : lb);
-	return MemberTerm {var, indexer.Get(var, row), c, a, b};
+	return MemberTerm {var, column, c, a, b};
+}
+
+//! `terms` with each column once, its coefficients summed: an AVG's members may read one
+//! helper column from several rows (`sum(t.w * max(x))` is `2m + m`), and read apart, each
+//! occurrence bounds the column by the others' ends, closing in on its value by ever
+//! smaller steps instead of in one.
+vector<MemberTerm> CombineColumns(const SolverInput &input, const vector<MemberTerm> &terms) {
+	vector<MemberTerm> combined;
+	unordered_map<idx_t, idx_t> position;
+	for (auto &term : terms) {
+		auto entry = position.find(term.column);
+		if (entry == position.end()) {
+			position[term.column] = combined.size();
+			combined.push_back(term);
+		} else {
+			combined[entry->second].coefficient += term.coefficient;
+		}
+	}
+	vector<MemberTerm> result;
+	for (auto &term : combined) {
+		if (std::abs(term.coefficient) >= 1e-15) {
+			result.push_back(MakeMemberTerm(input, term.var, term.column, term.coefficient));
+		}
+	}
+	return result;
 }
 
 //! The bounds `terms` puts on each helper column among them, given that their sum plus
@@ -216,14 +241,14 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 					constant += c;
 					continue;
 				}
-				member.push_back(MakeMemberTerm(input, indexer, var, row, c));
+				member.push_back(MakeMemberTerm(input, var, indexer.Get(var, row), c));
 			}
 			if (extremum) {
 				// A MAX's envelope keeps every member at or under the helper's top, a
 				// MIN's at or over its floor.
 				const bool is_max = link.agg_name == "max";
-				BoundTermsOfASum(member, constant, is_max ? -INF : value_lo, is_max ? value_hi : INF, is_helper,
-				                 column_lo, column_hi);
+				BoundTermsOfASum(CombineColumns(input, member), constant, is_max ? -INF : value_lo,
+				                 is_max ? value_hi : INF, is_helper, column_lo, column_hi);
 				continue;
 			}
 			for (auto &term : member) {
@@ -237,8 +262,8 @@ void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer) {
 		// A SUM or AVG helper equals its group's members, every instance in the box.
 		for (idx_t group = 0; group < num_groups; group++) {
 			if (!group_terms[group].empty()) {
-				BoundTermsOfASum(group_terms[group], group_constant[group], value_lo, value_hi, is_helper, column_lo,
-				                 column_hi);
+				BoundTermsOfASum(CombineColumns(input, group_terms[group]), group_constant[group], value_lo, value_hi,
+				                 is_helper, column_lo, column_hi);
 			}
 		}
 	}

@@ -92,11 +92,10 @@ one type-driven path.
 - **Upper** — intersected with `min`, because the type default is a true ceiling
   (`1.0` for BOOLEAN).
 
-Afterwards, a `binary` column whose bounds ended up outside `[0,1]` — an unusual
-explicit user pin such as `x >= -1` on a declared `BOOL` — is **downgraded to a
-plain bounded integer**. Backends do not accept a binary paired with an
-out-of-range bound; the solve result is the same, the column is just not flagged
-binary.
+Afterwards, a `binary` column keeps its domain `[0, 1]` whatever was written on it: an
+explicit user pin such as `x >= -1` on a declared `BOOL` widens nothing (D41 lowers a
+numeric decision's floor, not a BOOLEAN's). It used to downgrade the column to a plain
+integer in `[-1, 1]`, which answered `x = -1`.
 
 Bounds and type flags then expand across `NumInstances(var)` for each variable.
 Global auxiliaries take their own bounds and types from
@@ -367,6 +366,12 @@ non-contiguous 1/2/3/5/6/7 before this consolidation, from a since-removed site
 After building:
 
 1. **Bounds** — every variable must have finite bounds with `lower <= upper`.
+   A box inverted by rounding alone — its floor above its top by no more than one part
+   in 1e9 — is first closed onto its top: boxes are derived in floating point from
+   several sources (a bound divided by its coefficient, `3 * x <= 0.3` beside `x >=
+   0.1`; a helper's box through an AVG's 1/n), and in exact arithmetic its two ends are
+   equal. Left inverted, a feasible query read as infeasible. A wider inversion is an
+   empty box, and the model infeasible.
    Under `tolerate_infeasible_bounds` (diagnosis mode) an inverted box is kept
    rather than thrown, so the model survives for the elastic engine; stage 07
    short-circuits to `INFEASIBLE` without handing it to a backend.
@@ -401,7 +406,10 @@ negative; an aggregate one (`lhs_is_aggregate`, `SUM(x) = -3`) sums every row's
 instance and keeps the sign condition. This turns declared-unbounded variables
 into bounded ones, which is what makes a finite and tight Big-M possible. Only
 provably-implied bounds are applied, so the feasible region and the optimum are
-unchanged.
+unchanged. A bound below the column's floor is applied too: the box is then empty, which
+proves the model infeasible, and the solver says so (`x <= t.v` with `min(x) by (t.h) =
+24`, whose easy half floors `x` at 24). Dropping it left the column open, and a Big-M over
+it refused for a missing bound instead.
 
 `a_r` is the variable's **combined** coefficient at that row. A variable can hold
 several additive terms of one constraint (`2*ship + 3*ship <= 10`, or two reducers
@@ -637,13 +645,23 @@ every instance a helper defines is bounded, by the loosest of those bounds (the 
 rows its path drops are read by no row). The outermost link goes first, so a bound written
 only at the root reaches a nest in one sweep: in `per t.g: sum(max(x) by (t.g, t.h)) by
 (t.g) = 10`, with no other bound on `x`, the root row boxes the outer helper, which boxes
-the inner one, whose MAX closing side then has a Big-M. A tightening smaller than rounding
+the inner one, whose MAX closing side then has a Big-M. A group's terms naming one helper
+column are summed into one first (`CombineColumns`): `sum(t.w * max(x)) = 9` over weights
+2 and 1 is `3m = 9`, while read apart each occurrence bounded the column by the other's
+ends and closed in on `m = 3` by halves. A tightening smaller than rounding
 does not count, so the fixed point settles.
 
 A member may be an ABS auxiliary and an ABS may hold a helper, so when a model has
 helpers `FormulateModel` names them first and alternates `DeriveAbsAuxiliaryBounds` (not
 refusing) with the two derivations until no box moves — each only tightens, and nests
-are finite — and only then runs the ABS derivation that refuses on the lowering arm. Each ABS derivation starts afresh
+are finite — and only then runs the ABS derivation that refuses on the lowering arm. A
+box still moving after as many passes as the constructs nest is closing in by ever
+smaller steps; every pass leaves valid boxes, so the alternation stops there.
+Clauses that contradict each other (`per t.g: sum(max(x) by (t.g, t.h)) by (t.g) >= 50`
+with every `x <= 3`) make a box cross, and from there each pass would push its ends
+further apart forever: the alternation stops at the first crossed box, whose ends are
+still finite, and the solver reports the model infeasible as for any empty box
+(DIAGNOSE formulates its own model). Each ABS derivation starts afresh
 (`range_unbounded` is reset), so a range open on one pass may close on the next.
 
 `LinearizeReducerValueLinks` then states each definition over the groups

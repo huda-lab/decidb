@@ -198,6 +198,30 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 				// For Bool×Bool: special AND-linearization (simpler, no Big-M)
 				bool both_bool = left_is_bool && right_is_bool;
 
+				// Each factor must be a multiple of its one decision: the product becomes
+				// `coefficient * w`, so `b * (y - 1)` read as `b * y` dropped the `- b`, and a
+				// reducer in a factor (`max(x) by (g)` read as `x`) dropped the reducer.
+				{
+					idx_t other_idx = other_var_idx;
+					if (other_idx == DConstants::INVALID_INDEX) {
+						vector<idx_t> other_vars;
+						CollectDecideVarIndices(*other_expr, decide.decide_index, other_vars);
+						other_idx = other_vars.size() == 1 ? other_vars[0] : DConstants::INVALID_INDEX;
+					}
+					unique_ptr<Expression> probe;
+					const bool multiples =
+					    ExtractMultiplicativeCoefficient(*bool_expr, decide.decide_index, bool_var_idx, probe) &&
+					    other_idx != DConstants::INVALID_INDEX &&
+					    ExtractMultiplicativeCoefficient(*other_expr, decide.decide_index, other_idx, probe);
+					if (!multiples && (other_idx != DConstants::INVALID_INDEX || both_bool)) {
+						throw BinderException(
+						    "DECIDE: '%s' multiplies a BOOL decision by an expression that is not a multiple of one "
+						    "decision, which is not supported yet; write the product out term by term, as b * y - b "
+						    "for b * (y - 1)",
+						    decide_rewrite::RenderForPlan(*expr, decide));
+					}
+				}
+
 				// Resolve the non-bool factor's variable index up-front so the aux type
 				// decision below can consult it. This mirrors the fallback resolution
 				// done in the non-both-bool branch (lines below), hoisted earlier.

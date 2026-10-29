@@ -57,3 +57,13 @@ they echo (`DecideVarScope::ENTITY`, `EntityScopeInfo`, the DIAGNOSE scope label
 vocabulary.
 
 - Update: the README's area table and every done.md that names these files.
+
+## What `_anr_oracle` does not model
+
+Found by the audit of 2026-10-29 (none lets a test pass wrongly; each makes one fail):
+the rule that a negative lower bound written on a bare decision replaces the floor 0
+(D41) is not derived from the clauses, so a case with one sets `Decision.lb`; and most
+bind-time refusals are not modelled (a query-wide decision alone in a reducer, a decision
+beside a MIN/MAX in the objective, a data reducer times a decision, the `=` contradiction),
+so a case must not state one. Strict comparisons and `<>` are (the AVG hoist, and a
+fractional or REAL side refused).

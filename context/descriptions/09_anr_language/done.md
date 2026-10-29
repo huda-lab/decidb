@@ -155,9 +155,45 @@ at every level, on either side of a constraint and in the objective
   nest was dropped and answered wrongly (all zeros under MINIMIZE). Found by probing
   after the first report; `BuildSolverInput` now frees a helper's floor only where none
   was written.
+- **Found by the review of 2026-10-29** (a random differential test of 6,000 queries —
+  nests, variants, keyed and query-wide decisions, joins, both solvers and the lowered
+  path — against `_anr_oracle`):
+  - A feasible nest over negative terms read as infeasible: `per t.g: sum(sum(t.w * x)
+    by (t.g, t.h)) by (t.g) <= -4` was refused with *"cannot hold because ... is never
+    negative"*. The static domain check of execution, meant for an ABS auxiliary, took a
+    helper's default floor 0 for its domain; a helper is skipped now
+    (`../01_pipeline/08_execution/done.md`).
+  - A feasible nest read as infeasible by rounding: through an AVG's 1/n the backward pass
+    put a helper's floor at 8.000000000000002 under a top of 8, and the model builder took
+    the box for empty. A box inverted by rounding alone is closed onto its top there,
+    whatever derived it (`../01_pipeline/06_model_formulation/done.md` §8).
+  - An infeasible nest was an internal error (*"the ABS and helper decision boxes did not
+    settle"*): contradicting clauses make a helper box cross, and each pass pushed its
+    ends further apart. The alternation stops at the first crossing, and the query is
+    infeasible, DIAGNOSE included.
+  - `MAXIMIZE max(avg(t.w * x) by (t.g))` was an internal error on HiGHS, which rejected
+    its own optimum over the helpers' Big-M rows; it is solved again with integrality
+    held tighter (`../01_pipeline/07_solver/done.md`).
+  - A D8 message dropped the `by` of a reducer nested in the one it names: it reads
+    `sum(when c: max(x) by (t.h)) has no rows for ...` now.
+  - Three wrong answers where a rewrite run before the value rewrite met a nest, each
+    refused now (D74): `abs` over a reducer inside a reducer whose `when`, `per` or `by`
+    chooses its rows (the ABS rows lost them; `sum(abs(x - avg(x)))` still answers), a
+    reducer inside `norm` (which becomes ABS, or an L0 link whose Big-M preceded the
+    helper's box), and a reducer times a decision inside a reducer (the BOOL product read
+    `max(x) by (g)` as `x`).
+  - The objective summed an inlined `sum(per K: avg(e) by (G))` and another AVG of the
+    same decision into one like term with one divisor (`TermsAreLike` reads
+    `avg_group_key` now).
+  - `sum(t.w * max(x)) = 9` over weights 2 and 1 never settled its helper's box (an
+    internal error): the backward pass sums a group's occurrences of one column first, and
+    a box still closing in after the pass budget stands as it is.
+  - `count` added inside a reducer over decisions escaped the D74 refusal.
 - Tests: `test_anr_nested.py` (the phase-2 fixtures on both solvers, F1's model, a
   768-cell grid at depth 2 and 3, a constant bound on a nest under each sense, members,
-  bounds through a nest, the refusals);
+  bounds through a nest, the refusals, and the review's cases: an infeasible nest, a
+  negative bound over negative terms, a MAX objective over averages on HiGHS, the inner
+  `by` in a D8 message);
   `test_scope_objective.py`'s refusals, the nesting pins of `test_scope_bare_clauses.py`
   and `test_scope_reducer_by.py`, and deck example 9 in a constraint became answers
   judged by `_anr_oracle`; the two-level EXPLAIN, box and quadratic tests follow the
@@ -633,6 +669,60 @@ and HiGHS):
 - The renames (D46) and the structural follow-ups (D47) are a separate change; the
   two key-grouping paths stay unmerged (`../01_pipeline/08_execution/todo.md` §1).
 
+## The full algorithm — phase 3: frame syntax
+
+Shipped 2026-10-29. Every frame selector of `syntax_reference.md` §5.6 (deck pp. 43–56)
+parses, binds, plans, round-trips and prints; a query holding one stops before
+formulation, from one place, with *"DECIDE: frame selectors are not supported yet:
+at(previous: x) over (t.period)"*.
+
+- **Parser** (`../01_pipeline/01_parser/done.md` §1–§3, §5). Three DECIDE-only tokens,
+  `AT_DECIDE`, `OVER_DECIDE` and `WITHIN_DECIDE`, emitted only at the clause's own level:
+  new lexer state counts parentheses and the SQL subqueries written in the clause, so a
+  window inside one keeps its `OVER`. A window at the clause's level parses as before
+  (`over_clause` takes `OVER_DECIDE`). `previous`, `every` and `cyclic` are identifiers
+  checked by their text, not keywords. No new grammar conflict. A frame is a parsed
+  class of its own, `DecideFrameExpression`, printed with its defaults left out (D32);
+  `k` and `d` of 0 are parse errors (D71).
+- **Binder** (`../01_pipeline/02_binder/done.md` §4a, "Frame selectors"). A frame binds to
+  an aggregate over its payload, `first(e)` for a point and its reducer for a range,
+  tagged `__frame_<i>__`; its settings, order key, `within` columns and fallback are
+  `LogicalDecide::frames[i]`. Refused by name (D74): a frame in a `when`, `per`, `by`,
+  `within` or order key; a decision in a frame's keys; a reducer or a frame in a payload
+  or fallback; a frame term times or over a decision, or a square of one over decisions;
+  a range reducer other than SUM, AVG, MIN, MAX and COUNT; a fallback with no implicit
+  cast to the payload's type.
+- **Logical plan** (`../01_pipeline/03_logical_plan/done.md` §2, §4). `frames` is
+  property 220. Subqueries in a frame's order key and fallback are planned, and — closing
+  the gap the plan named — the subqueries of the `by` keys and frames carry the same
+  correlation tags as the clause's.
+- **Choices beyond the plan's text.** A point frame binds to `first(e)`, not a
+  `FRAME_TAG` wrapper over the payload: a wrapper's payload would read as a term of the
+  anchor row to every layer that opens a sum, while an aggregate is already opaque to
+  them. The gate stands in `CreatePlan` just before canonicalization, the first layer
+  that would read a frame, so `EXPLAIN`, `DIAGNOSE` and `CREATE VIEW` (each plans) refuse
+  too, no plan holds a frame yet, and the plan's "EXPLAIN of the plan before execution"
+  and the bound plan's round trip of `frames` wait for phase 4. The `FRAME_PARTITION`
+  check (D69) moved to phase 4: it is a run-time check the canonicalizer builds and
+  execution runs, and nothing past the gate runs yet. No keyword is added for
+  `previous`, `cyclic` or `every`; they are read whatever their case. A fallback is any
+  number (`else true`, `else 0.5`, `else c`), in its own type. A frame's payload and
+  fallback are linear in the decisions.
+- **Found by the review of 2026-10-29** and fixed: subqueries written in a clause that
+  start with `FROM`, `VALUES`, `TABLE`, `WITH` or `PIVOT` lexed `at`, `over` and `within`
+  as a frame's (they keep their SQL meaning now); a decision named `at` could not be
+  declared (the frame words are the body's); a named window in a clause, upper-case frame
+  words, and a window or frame in an order key before a `within` were syntax errors; a
+  range over `construct_array` or `if` was an internal error, and a frame re-bound by an
+  outer query an unnamed one; a frame alone as a constraint named an internal class; and
+  the gate's first place let the canonicalizer refuse some frame clauses first, in
+  reducer wording.
+- Tests: `test/decidb/test_frame_parser.test` (every spelling to the gate, the echo
+  through a view, the exact parse and bind errors, ordinary windows),
+  `test_decidb_plan_serialization.cpp` (parsed and bound round trips of every form),
+  `test_anr_frames.py::TestSyntax` (every frame fixture of `_anr_cases` binds and stops at
+  the gate; the refusals; a window in a subquery of the clause answers).
+
 ## Decisions
 
 Settled while the language was built; the code and the tests cite them by number. A
@@ -691,8 +781,9 @@ not the code.
 | D64 | Variant signatures replace the determination errors: a scoped expression is one instance per class and distinct value of its tuple terms, its decisions' instances and its reducers' `by` keys, in constraints and reducer operands |
 | D65 | An inner `per` and the colon form follow D64 too: a tuple whose body varies is one value per variant, which EXPLAIN ANALYZE counts |
 | D66 | The objective is produced once: a second variant is an error saying it would be produced more than once |
+| D71 | A frame's `k` and `every` are positive whole-number constants; 0 is a parse error |
 | D73 | A nested MIN/MAX is pinned on the side its readers push it through SUM and AVG levels, and on both sides under any other reader |
-| D74 | Stays refused, each by name: `norm` inside a reducer, a square or product of decisions inside nested reducers (the objective's direct sums of group sums aside), a reducer over data alone added inside one over decisions; frames' refusals come with phases 3–5 |
+| D74 | Stays refused, each by name: `norm` inside a reducer and a reducer inside `norm`, a square or product of decisions inside nested reducers (the objective's direct sums of group sums aside), a reducer over data alone (`count` included) added inside one over decisions, inside a reducer a reducer times a decision and `abs` over a reducer on a path that keeps rows; a frame in `when`/`per`/`by`/`within`/an order key, a reducer or frame inside a frame's payload, a square or product of decisions in it, a frame term times a decision |
 | D75 | The two-level objective keeps its spelling and loses its special path: it is a nested reducer, its four refusals lifted |
 | D77 | A signature's data field is a maximal decision- and reducer-free subtree, read on the canonical tree so the data terms of one additive context are one field; a decision is a field by instance |
 

@@ -235,6 +235,109 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 	rejects("SELECT SUM(when a: x) FROM t", "syntax error at or near", "when");
 }
 
+TEST_CASE("Parsed frame selectors survive ToString and binary round trips", "[decidb]") {
+	// Every spelling of syntax_reference.md §5.6, in a clause, a reducer and the objective.
+	const duckdb::vector<string> queries = {
+	    "SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(previous: x) over (t.period within t.product) "
+	    "AND at(first: t.cap) over (t.period desc) >= x AND x <= at(2 next else 0: x) over (t.period cyclic) "
+	    "MINIMIZE sum(abs(x - at(last else x: x) over (t.period within t, t.product)))",
+	    "SELECT a FROM t DECIDE x(INT) SUCH THAT sum(from 3 previous to previous every 2: x) over (t.period) <= 5 "
+	    "AND avg(from first to last else 1: x) over (t.period desc cyclic within t.product) >= 1 "
+	    "AND sum(when t.a > 0: count(from previous to next all: t.cap) over (t.period)) <= 9",
+	};
+	for (auto &query : queries) {
+		INFO(query);
+		auto original = ParseSelect(query);
+		auto rendered = original->ToString();
+		INFO(rendered);
+
+		auto reparsed = ParseSelect(rendered);
+		REQUIRE(original->Equals(*reparsed));
+		REQUIRE(reparsed->ToString() == rendered);
+
+		auto deserialized = RoundTripStatement(*original);
+		REQUIRE(original->Equals(*deserialized));
+		REQUIRE(deserialized->ToString() == rendered);
+	}
+
+	// A frame prints as written, the defaults left out (asc, k = 1, every 1, one timeline).
+	REQUIRE(ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from 1 previous to 1 next every 1: x) "
+	                    "over (t.period asc within ())")
+	            ->ToString() ==
+	        "SELECT a FROM t DECIDE x(INT) SUCH THAT (x >= sum(from previous to next: x) over (t.period))");
+	// Frames that differ in one setting are different expressions.
+	auto frame_of = [](const string &frame) {
+		return ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= " + frame);
+	};
+	const string base = "sum(from previous to next: x) over (t.period)";
+	for (auto &other :
+	     {"sum(from 2 previous to next: x) over (t.period)", "sum(from previous to last: x) over (t.period)",
+	      "sum(from previous to next every 2: x) over (t.period)", "sum(from previous to next all: x) over (t.period)",
+	      "sum(from previous to next else 0: x) over (t.period)", "avg(from previous to next: x) over (t.period)",
+	      "sum(from previous to next: x) over (t.period desc)", "sum(from previous to next: x) over (t.period cyclic)",
+	      "sum(from previous to next: x) over (t.period within t.a)", "sum(from previous to next: x) over (t.other)"}) {
+		INFO(other);
+		REQUIRE(!frame_of(base)->Equals(*frame_of(other)));
+	}
+	REQUIRE(frame_of(base)->Equals(*frame_of(base)));
+
+	// Outside a frame nothing changed: a window in a subquery of the clause, a window, AT TIME
+	// ZONE and an ordered-set aggregate in the clause, a function named "at", and OVER in SQL.
+	for (auto &sql : {"SELECT a FROM t DECIDE x(INT) SUCH THAT x <= (SELECT sum(v) OVER (ORDER BY v) FROM s LIMIT 1)",
+	                  "SELECT a FROM t DECIDE x(INT) SUCH THAT when row_number() OVER () > 1: x <= 1",
+	                  "SELECT a FROM t DECIDE x(INT) SUCH THAT when t.ts AT TIME ZONE 'UTC' > t.ts: x <= 1",
+	                  "SELECT a FROM t DECIDE x(INT) SUCH THAT x <= (SELECT percentile_cont(0.5) WITHIN GROUP "
+	                  "(ORDER BY v) FROM s)",
+	                  "SELECT a FROM t DECIDE x(INT) SUCH THAT x <= \"at\"(t.a)",
+	                  "SELECT sum(v) OVER (PARTITION BY a ORDER BY b), t.ts AT TIME ZONE 'UTC' FROM t"}) {
+		INFO(sql);
+		auto parsed = ParseSelect(sql);
+		REQUIRE(ParseSelect(parsed->ToString())->Equals(*parsed));
+	}
+
+	auto rejects = [](const string &sql, const string &message, const string &token = "") {
+		INFO(sql);
+		Parser parser;
+		REQUIRE_THROWS_WITH(parser.ParseQuery(sql), Catch::Contains(message) && Catch::Contains(token));
+	};
+	const string positive = "must be a positive whole number";
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(0 previous: x) over (t.p)", positive);
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from 0 next to last: x) over (t.p)", positive);
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from first to last every 0: x) over (t.p)", positive);
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(prev: x) over (t.p)",
+	        "a frame position is first, last, [k] previous or [k] next, found prev");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from first to last evry 2: x) over (t.p)",
+	        "expected every d in a frame selector, found evry");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(first: x) over (t.p cyclc)",
+	        "expected cyclic or within in a frame selector, found cyclc");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(first: x) over (t.p within t.a + 1)",
+	        "within lists columns or relations, as a per key does");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= sum(from first to last: x, x) over (t.p)",
+	        "sum(from first to last: e) reduces one expression, found 2");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(3 first: x) over (t.p)", "syntax error at or near",
+	        "first");
+	rejects("SELECT a FROM t DECIDE x(INT) SUCH THAT x >= at(previous else 0 else 1: x) over (t.p)",
+	        "syntax error at or near", "else");
+	// A frame is DECIDE syntax: outside a clause at(...) over (...) is no frame.
+	rejects("SELECT at(previous: a) over (b) FROM t", "syntax error at or near");
+}
+
+TEST_CASE("A frame selector stops before canonicalization in phase 3", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	SetUp(con);
+
+	// Frames bind into LogicalDecide::frames (property 220); canonicalization would be the
+	// first layer to read one, and does not until phase 4, so no plan holding a frame is
+	// built yet: the bound-plan round trip of `frames` waits for that phase.
+	REQUIRE_THROWS_WITH(
+	    con.ExtractPlan("SELECT s_key FROM site JOIN region USING (r_key) DECIDE x(INT) "
+	                    "SUCH THAT x >= at(2 previous else 1: x) over (site.cap desc within region) "
+	                    "MAXIMIZE sum(x)"),
+	    Catch::Contains("frame selectors are not supported yet: at(2 previous else 1: x) over (site.cap "
+	                    "desc within region)"));
+}
+
 TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);

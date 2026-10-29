@@ -295,6 +295,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         qualifier_context.entity_scopes = &entity_scopes;
         vector<DecideGroupKey> group_keys;
         qualifier_context.group_keys = &group_keys;
+        vector<DecideFrameSpec> frames;
+        qualifier_context.frames = &frames;
         qualifier_context.source_fragments = &decide_source_fragments;
         // Isolate with brackets to avoid multiple active binders.
         {
@@ -362,6 +364,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         }
 
         result.decide_group_keys = std::move(group_keys);
+        result.decide_frames = std::move(frames);
 
         result.entity_scopes = std::move(entity_scopes);
         result.variable_scopes = variable_scopes;

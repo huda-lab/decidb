@@ -42,9 +42,10 @@ flattened subquery is even literally named `SUBQUERY`. Correlation is visible on
 
 So the operator is built in this order:
 
-1. **Collect**, from constraints **and the objective**, every `BOUND_SUBQUERY` of
-   `SubqueryType::SCALAR`, partitioned by `IsCorrelated()`. The owning *slot* is
-   held, not the node — `PlanSubqueries` replaces the node in place.
+1. **Collect**, from constraints **and the objective** — and the `by` keys, and each
+   frame's order key and fallback, data read beside the clause — every
+   `BOUND_SUBQUERY` of `SubqueryType::SCALAR`, partitioned by `IsCorrelated()`. The
+   owning *slot* is held, not the node — `PlanSubqueries` replaces the node in place.
 2. **Flatten** with `PlanSubqueries`.
 3. **Read back** what each slot became, peeling casts for identity
    (`StripCastsForIdentity`), and record the resulting table index in
@@ -125,7 +126,15 @@ Grouped by who writes it:
 message names them. `variable_scopes` points each keyed decision at one, with its key as
 written (`declared_key`). `group_keys` holds every `by (G)` key of the clauses
 (`DecideGroupKey`: the bound expressions, the key as written, each element's name); a
-reducer's `__group_key_<i>__` tag names entry `i`. A constraint's `per K:` key lives in
+reducer's `__group_key_<i>__` tag names entry `i`. `frames` (id 220) holds every frame
+selector (`DecideFrameSpec`: point or range, the positions and their `k`, `every`, `all`,
+the fallback, the order key and its direction, `cyclic`, the `within` key's columns, the
+frame as written); the aggregate a frame binds to carries `__frame_<i>__` naming entry `i`
+(`../02_binder/done.md` §4a). In phase 3 no plan holds one: `CreatePlan` plans a frame's
+subqueries, then refuses the query (*"DECIDE: frame selectors are not supported yet:
+<frame>"*) before canonicalization, the first layer that would read a frame, so no layer
+after it can refuse the clause for a reason of its own first. The property's round trip
+is tested once frames reach the plan (phase 4). A constraint's `per K:` key lives in
 its `PER_CLASS_TAG` wrapper, as bound column references. A scope the optimizer creates for a
 helper decision of the value rewrite names the link it holds instead of key columns
 (`EntityScopeInfo::value_link`; its `entity_key_bindings` are empty, and the field is
@@ -143,9 +152,9 @@ and `signatures` (id 221) with `objective_signature` (id 222), the variant signa
 every scoped expression with a field (`DecideSignature`: the rows it reads, its key, its
 fields — `DecideSignatureField`, a `VALUE` expression, a `DECISION` index or a `BY_KEY`
 index — the text EXPLAIN ANALYZE names it by and its clause id; D64). A `per K:` wrapper
-names its signature with `__signature_<i>__`. `PlanSubqueries` runs on the `by` keys as
-on the trees, and `EnumerateExpressions` visits every list, so binding resolution and
-column pruning see their columns.
+names its signature with `__signature_<i>__`. `PlanSubqueries` runs on the `by` keys and
+on each frame's order key and fallback as on the trees, and `EnumerateExpressions` visits
+every list, so binding resolution and column pruning see their columns.
 
 **From the optimizer** — `solver_backend_name`, `use_native_constructs`,
 `force_native_constructs`, `ne_clause_labels`, `minmax_clause_labels`, `bilinear_links`,
@@ -268,8 +277,8 @@ binding fact, and the parser cannot see it (the clause may sit inside a subquery
 `LogicalDecide` and `LogicalDecideDiagnose` are serialized by DuckDB's generator.
 The field list lives in `storage/serialization/logical_operator.json`; the structs
 it names — `EntityScopeInfo`, `DecideVarScopeInfo`, `ConstraintSourceInfo`,
-`DecideSourceColumnName`, `DecideGroupKey`, `DecideScopeCheck`, `DecideSignature`,
-`DecideSignatureField` — have their own entries
+`DecideSourceColumnName`, `DecideGroupKey`, `DecideFrameSpec`, `DecideScopeCheck`,
+`DecideSignature`, `DecideSignatureField` — have their own entries
 in `nodes.json`, and both
 directions are generated into `src/storage/serialization/serialize_*.cpp`. There is
 no hand-written copy. Adding a field means adding one JSON entry, not two mirrored

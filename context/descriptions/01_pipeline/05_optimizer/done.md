@@ -251,6 +251,7 @@ across any of that:
 | `filter` | The reducer's own `when`. `sum(when a: x)` and `sum(when b: x)` are one column over two row sets |
 | `avg_scale` | AVG divides by the group's row count; merging before that scaling applies the division to both |
 | `qualifier_scope_idx` | Selects a de-duplication mask (the reducer's own `per`, or `SUM(D: ...)`) — again a statement about which rows contribute |
+| `avg_group_key` | An inlined `sum(per K: avg(e) by (G))` divides each term by its G group's size, another AVG of the same decision by the relation's: merged, one divisor stood for both (`sum(per t.g: avg(x) by (t.g)) - avg(x)` cancelled to 0) |
 
 Constants (`INVALID_INDEX`) are left alone: a fixed offset folded into the RHS is
 not a repeated column. Quadratic and bilinear terms are left alone too — they feed
@@ -401,7 +402,12 @@ DROP removes them with their clause, whose `removal_group_id` they carry.
 | Non-Boolean × non-Boolean | Left in place for the Q-matrix path in the physical operator |
 
 `ExtractMultiplicativeCoefficient` walks a chain shaped
-`coeff * ... * decide_var * ... * coeff` and combines the non-variable factors.
+`coeff * ... * decide_var * ... * coeff` and combines the non-variable factors. Each
+factor must be such a chain: the product becomes `coefficient * w`, so a factor that is no
+multiple of its one decision is refused (*"DECIDE: 'b * (y - 1)' multiplies a BOOL
+decision by an expression that is not a multiple of one decision, which is not supported
+yet; write the product out term by term, as b * y - b for b * (y - 1)"*). It was read as
+the decision alone, dropping the `- b`, and answered with the clause violated.
 
 ### The value rewrite — `RewriteScopedReducers`
 

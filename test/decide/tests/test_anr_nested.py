@@ -19,7 +19,7 @@ from ._anr_cases import CASES, F1_MAX, F1_SUM
 from ._anr_oracle import PER_ROW, AnrModel, Col, Decision, Objective, ScopeError, Var, clause, eq, ge, le, reduce
 from ._output_helpers import assert_no_internal_leak
 from ._scope_cases import answer, dump_counts, scope_solver, table, table_rows  # noqa: F401 -- fixture
-from solver.types import ObjSense, SolverStatus
+from solver.types import ObjSense, SolverStatus, VarType
 
 X = Var("x")
 MAXIMIZE_X = Objective(ObjSense.MAXIMIZE, reduce("sum", X))
@@ -87,6 +87,18 @@ def test_d8_names_the_path_group(decidb_cli):
     case = next(c for c in CASES if c.name == "nested_d8")
     result = decidb_cli.execute_raw(case.sql)
     assert "has no rows for t.g = 'a', t.h = 'q'" in result.stderr, result.stderr
+
+
+@pytest.mark.error
+def test_d8_quotes_the_inner_by_as_written(decidb_cli):
+    """The D8 message leaves out the empty reducer's own `by` -- it names the group apart --
+    but keeps every reducer nested in it as written, `by` included."""
+    result = decidb_cli.execute_raw("""
+        SELECT id, x FROM (VALUES (1, 'a', 'p', true), (2, 'a', 'q', false)) t(id, g, h, c)
+        DECIDE x(INT)
+        SUCH THAT x <= 3 AND per t.g: sum(when t.c: max(x) by (t.h)) by (t.g, t.h) <= 5
+        MAXIMIZE sum(x)""")
+    assert "DECIDE: sum(when c: max(x) by (t.h)) has no rows for t.g = 'a', t.h = 'q'." in result.stderr, result.stderr
 
 
 # ---------------------------------------------------------------------------
@@ -211,6 +223,98 @@ def test_a_constant_bound_on_a_nest(decidb_cli, scope_solver, sense, outer, inne
         return
     assert result.returncode == 0 and not result.stderr.strip(), result.stderr
     assert model.judge(answer(decidb_cli, sql), clauses, goal) == pytest.approx(solved.objective, abs=1e-4)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture, native", [
+    pytest.param("decidb_cli_gurobi", "on", id="gurobi"),
+    pytest.param("decidb_cli_highs", "on", id="highs"),
+    pytest.param("decidb_cli_highs", "off", id="highs-lowered"),
+])
+@pytest.mark.parametrize("nest_sql, sense, bound", [
+    pytest.param("sum(max(x) by (t.g, t.h)) by (t.g)", ">=", 50, id="sum-max-above-reach"),
+    pytest.param("sum(max(x) by (t.g, t.h)) by (t.g)", "=", 50, id="sum-max-equal-above-reach"),
+    pytest.param("avg(min(x) by (t.g, t.h)) by (t.g)", ">=", 50, id="avg-min-above-reach"),
+    pytest.param("max(sum(x) by (t.g, t.h)) by (t.g)", ">=", 50, id="max-sum-above-reach"),
+    pytest.param("min(avg(x) by (t.g, t.h)) by (t.g)", "=", 50, id="min-avg-equal-above-reach"),
+])
+def test_a_nest_no_value_can_meet_is_infeasible(request, cli_fixture, native, nest_sql, sense, bound):
+    """A bound past a nest's reach makes the boxes its helpers derive from each other
+    cross, and each pass pushed their ends further apart: the query is infeasible, as for
+    any empty box -- once an internal error -- and DIAGNOSE still names the clause."""
+    cli = request.getfixturevalue(cli_fixture).with_env({"DECIDB_NATIVE_CONSTRUCTS": native})
+    sql = f"""
+        SELECT id, x {table('t', COLUMNS, ROWS)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.v AND per t.g: {nest_sql} {sense} {bound}
+        MAXIMIZE SUM(x)"""
+    result = cli.execute_raw(sql)
+    assert_no_internal_leak(result, nest_sql)
+    assert "DECIDE optimization is infeasible" in result.stderr, result.stderr
+    diagnosis = cli.execute_raw("DIAGNOSE " + sql)
+    assert_no_internal_leak(diagnosis, "DIAGNOSE " + nest_sql)
+    assert diagnosis.returncode == 0 and "infeasible" in diagnosis.stdout, diagnosis.stderr
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("outer, inner, sense, bound", [
+    pytest.param("sum", "sum", "<=", -4, id="sum-sum"),
+    pytest.param("max", "sum", "<=", -4, id="max-sum"),
+    pytest.param("sum", "min", "<=", -4, id="sum-min"),
+    pytest.param("avg", "min", "=", -5, id="avg-min-equal"),
+])
+def test_a_negative_bound_on_a_nest_over_negative_terms(request, scope_solver, cli_fixture, outer, inner, sense,
+                                                        bound):
+    """A helper holds a reducer's value, negative where its terms are: `sum(sum(t.w * x)
+    ...) <= -4` over a negative `w` is a bound to meet, not one that contradicts a
+    non-negative decision (the static check an ABS auxiliary takes once refused it as
+    infeasible)."""
+    cli = request.getfixturevalue(cli_fixture)
+    columns = ("id", "g", "h", "w", "v")
+    rows = ((1, "a", "p", -2, 5), (2, "a", "q", -2, 5), (3, "b", "p", -1, 6), (4, "b", "q", -3, 6))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.v AND per t.g: {outer}({inner}(t.w * x) by (t.g, t.h)) by (t.g) {sense} {bound}
+        MINIMIZE SUM(x)
+        ORDER BY id"""
+    nest = reduce(outer, reduce(inner, Col("w") * X, by=("g", "h")), by=("g",))
+    clauses = [clause(le(X, Col("v"))), clause(SENSES[sense](nest, bound), per=("g",))]
+    goal = Objective(ObjSense.MINIMIZE, reduce("sum", X))
+    model = AnrModel(table_rows(columns, rows), [Decision("x")])
+    expected = model.solve(scope_solver, clauses, goal)
+    assert expected.status == SolverStatus.OPTIMAL, expected.status
+    result = cli.execute_raw(sql)
+    assert_no_internal_leak(result, "a negative bound on a nest")
+    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+    assert model.judge(answer(cli, sql), clauses, goal) == pytest.approx(expected.objective, abs=1e-6)
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_a_max_objective_over_group_averages(request, scope_solver, cli_fixture):
+    """`MAXIMIZE max(avg(t.w * x) by (t.g))`: a helper per group average and one over them,
+    whose Big-M closing rows (1/3 coefficients) left HiGHS's optimum 1e-6 off a row: HiGHS
+    then called it a solve error, which leaked as an internal one. It is solved again
+    with integrality held tighter, and answers on both backends."""
+    cli = request.getfixturevalue(cli_fixture)
+    columns = ("id", "g", "v", "w")
+    rows = ((1, "b", 3, 1), (2, "a", 1, 1), (3, "b", 8, 4), (4, "a", 6, 4), (5, "a", 3, -2), (6, "b", 3, 0))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(REAL)
+        SUCH THAT x <= t.v
+        MAXIMIZE max(avg(t.w * x) by (t.g))
+        ORDER BY id"""
+    goal = Objective(ObjSense.MAXIMIZE, reduce("max", reduce("avg", Col("w") * X, by=("g",))))
+    clauses = [clause(le(X, Col("v")))]
+    model = AnrModel(table_rows(columns, rows), [Decision("x", var_type=VarType.CONTINUOUS)])
+    result = cli.execute_raw(sql)
+    assert_no_internal_leak(result, "a MAX objective over group averages")
+    assert result.returncode == 0 and not result.stderr.strip(), result.stderr
+    # group b: (3 + 4 * 8 + 0) / 3, above group a's (1 + 4 * 6 - 2 * 0) / 3
+    assert model.judge(answer(cli, sql), clauses, goal) == pytest.approx(35 / 3, abs=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -354,6 +458,72 @@ def test_a_bound_through_two_helper_levels(request, scope_solver, cli_fixture):
     assert _judged(cli, scope_solver, sql, table_rows(BOUND_COLUMNS, BOUND_ROWS), [Decision("x", ub=50)], clauses) == 40
 
 
+@pytest.mark.correctness
+def test_abs_around_a_reducer_on_a_trivial_path_answers(decidb_cli, scope_solver):
+    """`sum(abs(x - avg(x)))`: no enclosing `when`, `per` or `by` chooses the inner AVG's
+    rows, so the ABS rewrite reads them as the path rule does, and it answers."""
+    columns = ("id", "v")
+    rows = ((1, 3), (2, 5), (3, 4))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.v AND sum(abs(x - avg(x))) <= 4
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    from ._anr_oracle import Abs
+    clauses = [clause(le(X, Col("v"))), clause(le(reduce("sum", Abs(X - reduce("avg", X))), 4))]
+    assert _judged(decidb_cli, scope_solver, sql, table_rows(columns, rows), [Decision("x")], clauses) == 12
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+def test_a_weighted_sum_of_one_helper_settles(request, scope_solver, cli_fixture):
+    """`sum(t.w * max(x)) = 9` over weights 2 and 1 reads one helper twice: the backward pass
+    sums its occurrences (3m = 9) rather than bounding each by the other's ends, which
+    closed in on m = 3 by halves and never settled (an internal error)."""
+    cli = request.getfixturevalue(cli_fixture)
+    columns = ("id", "w", "v")
+    rows = ((1, 2, 9), (2, 1, 9))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.v AND sum(t.w * max(x)) = 9
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    clauses = [clause(le(X, Col("v"))), clause(eq(reduce("sum", Col("w") * reduce("max", X)), 9))]
+    assert _judged(cli, scope_solver, sql, table_rows(columns, rows), [Decision("x")], clauses) == 6
+
+
+@BOTH_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize("objective_sql, objective, optimum", [
+    pytest.param("sum(per t.g: avg(x) by (t.g)) - avg(x)",
+                 reduce("sum", reduce("avg", X, by=("g",)), per=("g",)) - reduce("avg", X), 10 - 10 / 3,
+                 id="minus-a-whole-average"),
+    pytest.param("avg(x) + sum(per t.g: avg(x) by (t.g))",
+                 reduce("avg", X) + reduce("sum", reduce("avg", X, by=("g",)), per=("g",)), 10 / 3 + 10,
+                 id="plus-a-whole-average"),
+])
+def test_an_inlined_group_average_stays_apart_from_another(request, scope_solver, cli_fixture, objective_sql,
+                                                           objective, optimum):
+    """The inlined `sum(per K: avg(e) by (G))` divides by each group's size, another AVG of
+    the same decision by the relation's: two terms, not one like term (they were summed
+    into one with the first's divisor, and answered x = 0, or one solver's guess)."""
+    cli = request.getfixturevalue(cli_fixture)
+    columns = ("id", "g", "v")
+    rows = ((1, "a", 10), (2, "a", 10), (3, "b", 10))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.v AND sum(x) <= 10
+        MAXIMIZE {objective_sql}
+        ORDER BY id"""
+    goal = Objective(ObjSense.MAXIMIZE, objective)
+    clauses = [clause(le(X, Col("v"))), clause(le(reduce("sum", X), 10))]
+    model = AnrModel(table_rows(columns, rows), [Decision("x")])
+    assert model.judge(answer(cli, sql), clauses, goal) == pytest.approx(optimum, abs=1e-6)
+
+
 # ---------------------------------------------------------------------------
 # What stays refused (D74)
 # ---------------------------------------------------------------------------
@@ -375,6 +545,33 @@ def test_a_bound_through_two_helper_levels(request, scope_solver, cli_fixture):
             "sum(x + max(t.id) by (t.g)) <= 50",
             "DECIDE: max(...) over data alone inside a reducer over decisions is not supported yet",
             id="data",
+        ),
+        pytest.param(
+            "sum(x + count(*) by (t.g)) <= 50",
+            "DECIDE: count(...) over data alone inside a reducer over decisions is not supported yet",
+            id="data-count",
+        ),
+        # Each is rewritten before the value rewrite reads the path rule, so the inner
+        # reducer would lose the enclosing reducer's `when` and `by`: once answered wrongly.
+        pytest.param(
+            "per t.g: sum(abs(max(x) by (t.h))) by (t.g) <= 5",
+            "DECIDE: abs over a reducer inside another reducer is not supported yet",
+            id="abs-over-a-nested-reducer",
+        ),
+        pytest.param(
+            "per t.g: norm(max(x) by (t.h), 1) by (t.g) <= 5",
+            "DECIDE: a reducer inside norm is not supported yet",
+            id="reducer-in-norm",
+        ),
+        pytest.param(
+            "norm(max(x) by (t.g), 0) <= 1",
+            "DECIDE: a reducer inside norm is not supported yet",
+            id="reducer-in-l0-norm",
+        ),
+        pytest.param(
+            "sum((x - 1) * max(x) by (t.g)) <= 50",
+            "multiplies a reducer by a decision; only data can scale a reducer",
+            id="decision-times-a-nested-reducer",
         ),
     ],
 )

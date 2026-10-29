@@ -660,23 +660,30 @@ reducers is refused (D74), where the deleted path answered it wrongly. Tests:
 `test_anr_nested.py` (§6.5) and the conversions listed in `done.md`, "phase 2". Record:
 `done.md`, "phase 2".
 
-### Phase 3 — Frame syntax (layers 1, 2, 3; execution refuses at one gate)
+### Phase 3 — Frame syntax (shipped 2026-10-29)
 
-- Lexer tokens and the new parenthesis-depth state (§4.1), productions,
-  `DecideFrameExpression`, binding to `FRAME_TAG` and `LogicalDecide::frames` (220),
-  `FRAME_PARTITION` checks, `EnumerateExpressions`, subquery planning, serialization,
-  echo. Execution throws *"DECIDE: frame selectors are not supported yet"* from one
-  place.
-- Tests: `test_frame_parser.test`, the C++ round trips, `test_anr_frames.py::TestSyntax`
-  (bind errors, echo, EXPLAIN of the plan before execution).
-- Exit: every form parses, binds, round-trips and prints; ordinary SQL unchanged
-  (`test/sql` windows and the sqllogic suite).
+Built as §4.1–§4.3 describe: the lexer tokens with the new parenthesis and subquery
+state, the productions, `DecideFrameExpression`, `LogicalDecide::frames` (220),
+`EnumerateExpressions`, subquery planning, serialization and the echo; one gate refuses
+*"DECIDE: frame selectors are not supported yet: <frame>"*. Choices beyond the text above:
+a point frame binds to `first(e)` tagged `__frame_<i>__` rather than a `FRAME_TAG`
+wrapper (an aggregate is opaque to every layer that opens a sum); the gate stands in
+`CreatePlan` just before canonicalization, the first layer that would read a frame, so
+`EXPLAIN`, `DIAGNOSE` and `CREATE VIEW` refuse too, no plan holds a frame and the bound
+plan's round trip of `frames` waits for phase 4 (first at the optimizer's entry, the
+review of 2026-10-29 moved it: the canonicalizer refused some frame clauses first, for
+reasons of its own); the `FRAME_PARTITION` check moved to phase 4, since nothing past the
+gate runs; `previous`, `cyclic` and `every` are identifiers read by their text, whatever
+its case, not keywords; a fallback is any number, in its own type; a frame's payload is
+linear in the decisions. Tests: `test_frame_parser.test`, the C++ round trips,
+`test_anr_frames.py::TestSyntax`. Record: `done.md`, "phase 3".
 
 ### Phase 4 — Point selectors (layers 4, 5, 6, 8)
 
 - Frame maps; data-only point frames as values; decision point frames as redirected
   terms in a Rows-shape clause and as per-row helpers inside a reducer operand (P9);
-  absence propagation; `else`; `cyclic`; `desc`; `k`; peer error (P4); the objective.
+  absence propagation; `else`; `cyclic`; `desc`; `k`; peer error (P4); the objective;
+  the `FRAME_PARTITION` check (P6, moved from phase 3) and the gate lifted for points.
 - Tests: `test_anr_frames.py::TestPoint` (§6.6): F2, F4, F7–F9, F15, F19, deck examples 1,
   4, 5, the DeQL comparison (pp. 73–75); F2's model-size pin (6 columns, 4 rows).
 - Exit: F2's four comparisons and two skips, hand-pinned, at the pinned model size; both

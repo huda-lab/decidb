@@ -1051,6 +1051,11 @@
         "deleted": true
       },
       {
+        "id": 220,
+        "name": "frames",
+        "type": "vector<DecideFrameSpec>"
+      },
+      {
         "id": 221,
         "name": "signatures",
         "type": "vector<DecideSignature>"
