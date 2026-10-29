@@ -9,9 +9,9 @@
   `MAXIMIZE SUM(2e308*y)` says COEFFICIENT "1e1000" under direct auto and require, TOO_LARGE with direct solve off:
   `DirectCoefficientText` returns text only, so the direct objective, score and value-text sites cannot pick the role.
 - **Fix (owner, 2026-10-29):** classify on the failure path only. A derived coefficient's check stays one `isfinite`
-  on its result; a row where it fails reads the inputs, and the first non-finite one raises COEFFICIENT quoting that
-  input, else TOO_LARGE naming the clause. One helper builds the check for every derivation site. The direct text
-  helper returns the role with the text.
+  on its result; a row where it fails reads the inputs, and the first non-finite one a column holds raises COEFFICIENT
+  quoting that input, else TOO_LARGE naming the clause. One helper builds the check for every derivation site. The
+  direct text helper returns the role with the text.
 
 ## Limitations (not bugs)
 
