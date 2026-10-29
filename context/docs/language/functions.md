@@ -84,8 +84,12 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   NULL factor is skipped (`clause.skipped`). In the objective, `DropNullObjectiveTerms` (stage 05) reads a NULL
   coefficient as 0 before like terms merge, so `NULL*SUM(x) + SUM(x)` keeps the second term; objective extraction
   then treats a NULL as an internal error. The direct-solve rules read the same filter tests (`part.filter`), guard
-  their coefficients with a CASE, and open a box or limit whose value is NULL. NaN stays an error, named by
-  `DirectInvalidNumberError` and `DecideInvalidValueMessage`. A bound's reducer carries `BOUND_REDUCER_TAG`, so a
+  their coefficients with a CASE, and open a box or limit whose value is NULL. NaN in a bound or a coefficient is an
+  error, unlike SQL, because no solver reads a NaN; an infinite coefficient is an error because a model cannot hold
+  one, and an infinite bound keeps its SQL meaning (D65). Both paths raise `DecideInvalidValueMessage`, which names the
+  value as written and the `when` that skips its rows. Integer arithmetic is DuckDB's: a bound is computed in DuckDB's
+  types before the model reads it as `DOUBLE`, so a `HUGEINT` overflow raises as in SQL and division by zero gives
+  DuckDB's `inf`, `nan` or NULL. A bound's reducer carries `BOUND_REDUCER_TAG`, so a
   render quotes it as written. `COALESCE`/`IFNULL` work inline when decision-free. Tests: `test_null_values.py`,
   `test_null_coalesce_reducer.py`, `test_rhs_aggregate_window.py`, the R1/S1/A1 rule files.
 

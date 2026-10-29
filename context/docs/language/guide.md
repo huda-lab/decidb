@@ -224,7 +224,9 @@ data and unaffected.
   constraint unreduced (a bound, a coefficient outside a reducer, a factor on an aggregate) skips that instance, so
   `SUM(x) <= cap` with a NULL `cap` has no constraint there. In the objective, a NULL term is dropped. `COALESCE`
   imputes a value instead: `SUM(x * COALESCE(w, 0))`. A NULL written in the query beside a decision
-  (`SUM(x + NULL)`) is refused where it is written, and NaN is an error. `COUNT(col)` also counts a NaN, as SQL does.
+  (`SUM(x + NULL)`) is refused where it is written. NaN is an error, as is an infinite coefficient; an infinite bound
+  is a value, as in SQL (`x <= 4 / 0` always holds). The error names the value and the `when` that skips its rows.
+  `COUNT(col)` also counts a NaN, as SQL does.
   In a `when`, NULL is false; in a written key column, NULL is no class (§7.2).
 
 ### 3.1 Quadratic constraints
@@ -552,7 +554,7 @@ Tests: `test/decide/tests/test_scope_determination.py`.
 | NULL in a reducer's summand | the row is skipped, as in SQL; AVG divides by the rows kept (§3) |
 | NULL bound, unreduced coefficient or factor on an aggregate | the instance is skipped (§3) |
 | NULL in an objective term | the term is dropped (§3) |
-| NULL or NaN written in the query beside a decision; NaN in data | error (§3) |
+| NULL or NaN written in the query beside a decision; NaN in data; an infinite coefficient | error (§3) |
 | a `when` keeps no row | no constraint (D68) |
 | a key value has no kept row | no class, no constraint |
 | a reducer reads no row of a group (its own `when`, NULL data, an absent decision) | the reducer is NULL: that group's instance is skipped (D68) |

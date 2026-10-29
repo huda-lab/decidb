@@ -162,11 +162,10 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   over it through `MIN`/`MAX`/`LEAST`/`GREATEST`, and `DirectCheckRowBounds` and the singleton-row box
   (`AdmittedInterval`) give the instance no bound. The driver strips every tag from the operators above the source
   (`StripTagsAbove`), so EXPLAIN never prints one.
-- **Number messages.** The NaN texts have one author for both paths, `DecideInvalidValueMessage` in
-  `decide_value_messages.hpp`.
-  - A NaN or infinite number raises the solver's message, whose first words name the clause: `objective coefficient`,
-    `constraint coefficient` or `constraint right-hand side`, without the solver's ` at row N`. The rule passes the
-    `DirectNumberKind` (S1 and A1's objective values: objective; A1's coefficient on the left of a bound: constraint).
+- **Number messages.** Both paths raise one text, `DecideInvalidValueMessage` (`decide_value_messages.hpp`), from the
+  value's `DecideValueRole` and its text as written: the cut query text, or `DirectIR::render` where none was cut
+  (`DirectCoefficientText` merges like coefficients first; `NULL_GUARD_TAG` keeps a NULL guard out of the text). It
+  names no row: a row's place in the input depends on the scan.
   - A source value read as a coefficient must be finite; one read as a bound (a count limit, a fixed value, a per-row
     lower or upper bound) only has to be a number, because an infinite bound means "no bound" or "nothing satisfies it".
     NaN raises in every slot.
@@ -175,8 +174,9 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
     means "no bound" or "nothing satisfies it", and asserts the same error or rows on `require`, `off` and forced
     HiGHS. NaN reaches the same checks through each rule's error grid, and NULL through each rule's skip cases. Message
     tests are in `test_direct_user_facing.py`: `test_invalid_score_error_matches_solver_wording` and
-    `test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in` compare `require` with `off` for a NaN or
-    infinite score and coefficient. The cost on clean data is not measured.
+    `test_a1_invalid_coefficient_names_the_value_the_user_wrote` and
+    `test_r1_invalid_number_names_the_value_the_user_wrote` compare `require` with `off`. The cost on clean data is
+    not measured.
 - **`EXPLAIN` annotation.** When a rule applies, mode, rule and one fixed condition line per rule appear in logical and
   physical `EXPLAIN` and profiling: S1 `min/max SUM(s*x), x in {0,1}, lo <= SUM(x) <= hi`, A1 `min/max SUM(c*x), l <= x
   <= u, each row independent`. There is no number from the query. `require` explains why no rule applied; under `auto`

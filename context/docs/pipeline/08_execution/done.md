@@ -516,8 +516,8 @@ Every coefficient and RHS value is checked after evaluation:
   summand: `SkipNullData` tested it in the reducer's filter. The objective never meets
   one: `DropNullObjectiveTerms` read it as 0 in stage 05, so a NULL there is an
   internal error.
-- **NaN / Infinity** → `InvalidInputException` naming the common causes (division
-  by zero, arithmetic overflow).
+- **NaN / Infinity** → `InvalidInputException` with `DecideInvalidValueMessage`: the
+  value as written and the `when` that skips its rows.
 
 **Infinity is admitted on one path only: the values that become a row's `rhs`.** An
 infinite bound is not an error there — it is the absence of a constraint (`<= +inf`)

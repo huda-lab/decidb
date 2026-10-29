@@ -7,7 +7,7 @@ Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
-at a time. Lanes: F1 then F5; F6; F7 then F8. F4 never beside F2 or F5. F9 runs alone.
+at a time. Lanes: F1 then F5; F6; F8. F4 never beside F2 or F5. F9 runs alone.
 
 ## 1. Owner decisions (independent of each other; ask all first)
 
@@ -41,14 +41,11 @@ at a time. Lanes: F1 then F5; F6; F7 then F8. F4 never beside F2 or F5. F9 runs 
 
 - [ ] H-09 Reducer windows a rule could compute itself — direct_solve/framework/todo.md § H-09
 
-## 8. F7 SQL semantics (needs: 1)
-
-- [ ] BIN-1 The NaN and infinity message, one text on both paths — pipeline/02_binder/todo.md § BIN-1
-
-## 9. F8 Solver runtime (needs: F7)
+## 9. F8 Solver runtime (needs: 1)
 
 - [ ] SOL-1 Bound a HiGHS solve by `DECIDB_TIME_LIMIT` — pipeline/07_solver/todo.md § SOL-1
 - [ ] BUG-3 Q10 on HiGHS at large is killed for memory (owner runs) — issues/bugs.md § BUG-3
+- [ ] BUG-14 Like coefficients that merge past DOUBLE raise an internal error — issues/bugs.md § BUG-14 (needs: F5)
 
 ## 10. F9 Housekeeping (needs: 1; runs alone)
 

@@ -69,6 +69,14 @@
   `<= 0`; the edit over-repairs by 1e-5. Reproduces on the current build.
 - **Needs.** The agent finds the cause and stops with a proposed fix before coding.
 
+## BUG-14 — Like coefficients that merge past DOUBLE raise an internal error
+
+- **Observed:** the model builder adds like coefficients after each was checked finite, so `SUM(b*x) + SUM(c*x)` with
+  b = c = 1e308, or `SUM(POWER(b*x, 2))` with b = 1e200, overflows to infinity and reaches the builder's
+  InternalException or a Gurobi API error instead of `DecideInvalidValueMessage`.
+- **Fix:** one `AddCoefficient(target, value, written)` helper in the builder checks each sum and raises the message.
+  After F5, which edits the builder.
+
 ## Limitations (not bugs)
 
 - **A decision as a factor on a reducer is refused:** `b * sum(x) <= 5` with

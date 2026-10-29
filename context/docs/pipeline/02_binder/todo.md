@@ -5,46 +5,4 @@ Language-surface work is owned by `../../language/` (the scopes:
 `../../language/errors.md` §2, and the scope suites in
 `../../testing/scope_suite.md`.
 
----
-
-## BIN-1 — Functions that behave unlike SQL
-
-**Rule (owner, 2026-10-27).** A function inside DECIDE behaves as the same SQL function does, NULL and NaN included,
-unless a strong reason that helps users says otherwise; each divergence is stated in the docs with that reason. A
-reducer over data already follows it for NULL, a NULL data value is skipped (deck pp. 50, 56), a reducer over no rows
-is NULL (D68), and `COUNT` follows it for NaN (`../../language/functions.md`, "Constraints", NULL).
-
-**Audit (2026-10-27).** Each place DECIDE still reads a value differently from DuckDB, with the reason to keep it or
-the change. Each needs a ruling.
-
-1. **NaN in a bound or in a data reducer's argument** is an error (`... contains invalid value (NaN)`); SQL carries
-   the NaN through (`SUM` is NaN). Recommended: keep, and state the reason: no solver reads a NaN bound.
-2. **Infinity in a coefficient** is an error (`... (NaN or Infinity)`); SQL computes `inf * x`. In a bound it is a
-   value, as in SQL (`x <= 4 / 0` holds always). Recommended: keep, and state the reason: a model cannot hold an
-   infinite coefficient.
-3. **The NaN and infinity message** lists "common causes" in a block. Recommended: name the column and the smallest
-   edit (`../../language/errors.md`).
-
-**Ruling (owner, 2026-10-29).** All three as recommended: NaN in a bound or a data reducer's argument stays an error;
-infinity in a coefficient stays an error and in a bound stays a value; the message names the column and the smallest
-edit instead of the "common causes" block.
-
-**Ruling (owner, 2026-10-29), item 3.** Items 1 and 2 need only docs. The message waits for F6: the direct path holds
-only computed numbers, and the bound's value object (`DecideReducedBound`, `../../direct_solve/framework/done.md`) is where a check carries
-its rendered expression, so both paths print one text from one place. `DecideInvalidValueMessage`
-(`decide_value_messages.hpp`) takes the expression as written. `NULLIF` and `CASE` are refused inside DECIDE and
-`COALESCE` does not touch a NaN; `when` is the smallest edit:
-- coefficient: `DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.`
-- bound: `DECIDE: the bound v is NaN on some rows. Skip those rows with 'when NOT isnan(v):'.`
-- making the value NULL before the DECIDE is named in `decide_diagnostics()`, not in the error.
-"contains invalid value" goes; the tests that pin it (`test_direct_user_facing.py`, `test_rhs_aggregate_window.py`,
-`test_direct_a1_separable_box.py`, `test_direct_r1_continuous_knapsack.py`, `_direct_rule_fixtures.py`, the
-`_direct_differential.py` classifier) assert the new text and the named expression. The other non-finite messages
-join it: `physical_decide.cpp` "factor ... not finite (NaN/Inf)" (three sites) and `linearization_bigm.cpp`'s "row N";
-`ilp_model_builder.cpp`'s InternalException stays. `../../language/errors.md` §1 gets the row.
-
-Integer arithmetic follows DuckDB: a bound is computed in DuckDB's types before the model reads it (2^60 + 1 - 2^60
-is 1; a `HUGEINT` overflow raises as in SQL), and division by zero gives DuckDB's `inf`, `nan` or NULL. The model reads
-every number as `DOUBLE`, so a coefficient or bound beyond 2^53 is rounded there.
-
-**Update.** `../../language/functions.md`, `../../language/guide.md` §3 and §7.2, `../../language/roadmap.md`.
+Nothing is open.
