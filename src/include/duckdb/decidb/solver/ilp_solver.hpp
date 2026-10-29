@@ -57,6 +57,10 @@ struct SolveModelOptions {
 	LargeNumberWarning *large_number_warning = nullptr;
 };
 
+//! The backend the test override DECIDB_FORCE_SOLVER pins; empty when it is unset or empty. Every reader of the
+//! override asks here, so an empty value means the same thing to all of them: no override.
+string ForcedSolverName();
+
 //! Resolve the backend DeciDB should use for a DECIDE query, honoring the
 //! DECIDB_FORCE_SOLVER test override and otherwise taking the first available
 //! entry in registry order (SolverRegistry::Backends).
@@ -66,7 +70,7 @@ struct SolveModelOptions {
 //! anything that pins the backend is asking for one specific solver, so silently
 //! running the host default under that name would be a lie.
 //!
-//! Called ONCE per query, by stage 05's ChooseDecideSolver before any rewrite runs.
+//! Called ONCE per query, by stage 05's ChooseDecideSolver before any formulation rewrite runs.
 //! The answer rides the plan from there as a NAME (LogicalDecide::solver_backend_name
 //! → PhysicalDecide::solver_backend_name), alongside the formulation it implies
 //! (::use_native_constructs); stage 08 turns the name back into a backend only where a

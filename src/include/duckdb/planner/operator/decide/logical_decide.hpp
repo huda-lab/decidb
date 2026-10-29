@@ -522,19 +522,20 @@ public:
     //! final pass fills it, and moved into PhysicalDecide at physical planning.
     DecidePreparedModel prepared;
 
-    //! True once DecideOptimizer has started rewriting this node.
-    //!
-    //! It is what makes the serialization contract enforceable: the wire format carries
-    //! the BOUND plan — what the binder and the canonicalizer produced — and nothing
-    //! this flag guards. Stage 05's output is a formulation chosen from the constructs
-    //! THIS HOST's solver declares, which is the same reason `solver_backend_name` and
-    //! `use_native_constructs` below are not serialized either. An optimized DECIDE plan
-    //! is not portable by construction, so it declines to be copied rather than
-    //! arriving somewhere else as a formulation that host cannot honor.
-    //!
-    //! Not serialized: anything deserialized is a bound plan, so false is the only
-    //! value a fresh node can have.
-    bool optimized = false;
+	//! True once the solver formulation has begun (ChooseDecideSolver): the rewrites after it express the query for the
+	//! backend chosen. The bound-side rewrite (RewriteRhsAggregates) and the direct-solve rules run before it.
+	//!
+	//! It is what makes the serialization contract enforceable: the wire format carries
+	//! the BOUND plan — what the binder and the canonicalizer produced — and nothing
+	//! this flag guards. Stage 05's output is a formulation chosen from the constructs
+	//! THIS HOST's solver declares, which is the same reason `solver_backend_name` and
+	//! `use_native_constructs` below are not serialized either. An optimized DECIDE plan
+	//! is not portable by construction, so it declines to be copied rather than
+	//! arriving somewhere else as a formulation that host cannot honor.
+	//!
+	//! Not serialized: anything deserialized is a bound plan, so false is the only
+	//! value a fresh node can have.
+	bool optimized = false;
 
 public:
     //! Add a constraint to the SUCH THAT tree, canonicalizing it on the way in.

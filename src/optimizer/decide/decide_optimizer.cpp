@@ -8,8 +8,7 @@
 #include "duckdb/common/decide_profile.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
-#include "duckdb/optimizer/decide/decide_solver_gate.hpp"
-#include "duckdb/optimizer/decide/direct/direct_solve.hpp"
+#include "duckdb/optimizer/decide/decide_answer_choice.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
@@ -62,74 +61,80 @@ void DecideOptimizer::OptimizeSubtree(unique_ptr<LogicalOperator> &op, unique_pt
 
 	// If this is a LogicalDecide node, apply DECIDE-specific optimizations
 	if (op->type == LogicalOperatorType::LOGICAL_DECIDE) {
-		RewriteRhsAggregates(op->Cast<LogicalDecide>());
-		ApplyDirectSolveRules(op, root, optimizer, GetDirectSolveMode(optimizer.context));
-		if (op->type == LogicalOperatorType::LOGICAL_DECIDE) {
-			InstallReducedBounds(op->Cast<LogicalDecide>());
-			OptimizeDecide(op->Cast<LogicalDecide>());
-		}
+		OptimizeDecide(op, root);
 	}
 }
 
-void DecideOptimizer::OptimizeDecide(LogicalDecide &decide) {
+namespace {
+
+//! One optimizer pass under a profile span of its own, so a span times the pass it names.
+template <class PASS>
+void RunPass(const char *name, PASS &&pass) {
+	DecideProfileScope profile(name);
+	pass();
+}
+
+} // namespace
+
+void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root) {
 	DecideProfileScope profile("optimizer.decide");
 	bool bench = std::getenv("DECIDB_BENCH") != nullptr;
 	Profiler timer;
 	if (bench) {
 		timer.Start();
 	}
+	auto &decide = op->Cast<LogicalDecide>();
 
-	// From here on this plan carries formulation state chosen for THIS host's solver,
-	// which is not portable and so is not serialized. Setting the flag before the first
-	// rewrite is what makes LogicalDecide::SupportSerialization() stop reporting true,
-	// so the post-optimizer PRAGMA verify_serializer round trip skips the node instead
-	// of silently replacing the plan with a copy missing everything below.
-	decide.optimized = true;
+	// Pass 0, on every path: the bound-side evaluator, whose output both the direct-solve rules and the solver read.
+	RunPass("optimizer.rhs_aggregates", [&] { RewriteRhsAggregates(decide); });
 
-	// Choose the solver, and with it the formulation, BEFORE any rewrite runs. Every
-	// pass below decides how to express a construct, and the right answer depends on
-	// what the backend can take natively — so both have to be settled first, and settled
-	// only once. From here they ride the plan (LogicalDecide::solver_backend_name and
-	// ::use_native_constructs → PhysicalDecide) all the way to the solve and to any
-	// diagnostic re-solve, so nothing downstream ever decides a second time.
-	DecideProfileScope phase("optimizer.choose_backend");
-	ChooseDecideSolver(decide);
-	phase.Next("optimizer.tag_groups");
-	TagAtomicRemovalGroups(decide);
-
-	RewriteNorm(decide);
-	phase.Next("optimizer.in_domain");
-	RewriteInDomain(decide);
-	phase.Next("optimizer.abs");
-	TagAbsForBigM(optimizer.context, decide); // Must run before RewriteAbs: marks ABS nodes that need Big-M
-	RewriteAbs(decide);          // Must run first: creates aux vars replacing ABS nodes
-	phase.Next("optimizer.bilinear");
-	RewriteBilinear(decide);     // McCormick linearization for Boolean × anything bilinear products
-	phase.Next("optimizer.define_bodies");
-	DefineNonlinearReducerBodies(decide); // A non-linear reducer body a MIN/MAX reads becomes a helper per row
-	phase.Next("optimizer.scoped_reducers");
-	RewriteScopedReducers(decide); // The value rewrite: a VALUE-shape clause's reducers become helper decisions
-	phase.Next("optimizer.composed_minmax");
-	RewriteComposedMinMax(decide); // Detect composed MIN/MAX before single-term MIN/MAX rewrite
-	phase.Next("optimizer.minmax");
-	RewriteMinMax(decide);       // Classify + rewrite min/max (creates indicators and SUM nodes)
-	VerifyExtremumBodiesLinear(decide);
-	phase.Next("optimizer.not_equal");
-	RewriteNotEqual(decide);
-	phase.Next("optimizer.avg");
-	RewriteAvgToSum(decide);
-	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
-	// that is itself a singleton-row bound, and every auxiliary variable must exist before the
-	// box is sized.
-	phase.Next("optimizer.fold_singleton_rows");
-	FoldSingletonRows(decide);
-
-	VerifyNormMarkersLowered(decide);
+	// How the query is answered is settled here and nowhere else: a direct-solve rule replaces the node, else a solver
+	// is chosen, and with it the formulation. Every pass below decides how to express a construct, and the right
+	// answer depends on what the backend can take natively, so the backend is settled first, and settled only once.
+	// From here it rides the plan (LogicalDecide::solver_backend_name and ::use_native_constructs → PhysicalDecide)
+	// all the way to the solve and to any diagnostic re-solve, so nothing downstream ever decides a second time.
+	bool replaced = false;
+	RunPass("optimizer.choose_answer", [&] { replaced = ChooseDecideAnswer(op, root, optimizer); });
+	if (!replaced) {
+		RewriteForSolver(decide);
+	}
 
 	if (bench) {
 		timer.End();
 		fprintf(stderr, "DECIDB_BENCH: optimizer_ms=%.2f\n", timer.Elapsed() * 1000.0);
 	}
+}
+
+void DecideOptimizer::RewriteForSolver(LogicalDecide &decide) {
+	RunPass("optimizer.install_bound_windows", [&] { InstallReducedBounds(decide); });
+	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
+	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
+	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
+	// Must run before RewriteAbs: marks ABS nodes that need Big-M
+	RunPass("optimizer.tag_abs", [&] { TagAbsForBigM(optimizer.context, decide); });
+	// Creates aux vars replacing ABS nodes
+	RunPass("optimizer.abs", [&] { RewriteAbs(decide); });
+	// McCormick linearization for Boolean × anything bilinear products
+	RunPass("optimizer.bilinear", [&] { RewriteBilinear(decide); });
+	// A non-linear reducer body a MIN/MAX reads becomes a helper per row
+	RunPass("optimizer.define_bodies", [&] { DefineNonlinearReducerBodies(decide); });
+	// The value rewrite: a VALUE-shape clause's reducers become helper decisions
+	RunPass("optimizer.scoped_reducers", [&] { RewriteScopedReducers(decide); });
+	// Detect composed MIN/MAX before single-term MIN/MAX rewrite
+	RunPass("optimizer.composed_minmax", [&] { RewriteComposedMinMax(decide); });
+	// Classify + rewrite min/max (creates indicators and SUM nodes)
+	RunPass("optimizer.minmax", [&] {
+		RewriteMinMax(decide);
+		VerifyExtremumBodiesLinear(decide);
+	});
+	RunPass("optimizer.not_equal", [&] { RewriteNotEqual(decide); });
+	RunPass("optimizer.avg", [&] { RewriteAvgToSum(decide); });
+	// Must stay last among the rewrites: RewriteInDomain emits a floor-lowering bound
+	// that is itself a singleton-row bound, and every auxiliary variable must exist before the
+	// box is sized.
+	RunPass("optimizer.fold_singleton_rows", [&] { FoldSingletonRows(decide); });
+
+	VerifyNormMarkersLowered(decide);
 }
 
 // ---------------------------------------------------------------------------

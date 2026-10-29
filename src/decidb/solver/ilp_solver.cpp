@@ -292,6 +292,11 @@ void LargeNumberWarning::Check(const SolverModel &model) {
 	fprintf(stderr, "very large number detected in model - numerical precision may make the solution unstable\n");
 }
 
+string ForcedSolverName() {
+	const char *force = std::getenv("DECIDB_FORCE_SOLVER");
+	return force ? string(force) : string();
+}
+
 SolverBackend SelectSolverBackend() {
 	// Test-only override: DECIDB_FORCE_SOLVER=<registered backend name> pins the
 	// backend. Used by the DECIDE test suite (see test/decide/conftest.py fixtures
@@ -303,7 +308,8 @@ SolverBackend SelectSolverBackend() {
 	// falling through to auto-selection would run the host default under a name
 	// promising otherwise, and a typo in a fixture would then look like a passing test
 	// of a backend that never ran.
-	if (const char *force = std::getenv("DECIDB_FORCE_SOLVER")) {
+	auto force = ForcedSolverName();
+	if (!force.empty()) {
 		SolverBackend forced = SolverRegistry::Find(force);
 		if (!forced.IsValid()) {
 			vector<string> names;

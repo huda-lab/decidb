@@ -3,9 +3,8 @@
 //
 // duckdb/optimizer/decide/decide_solver_gate.hpp
 //
-// Stage 05's solver decisions, in the order they are made: which backend runs
-// this query, which constructs are left for it to state natively, and — once the
-// shape of the model is settled — whether it can take that model at all.
+// Stage 05's gate on the solver chosen for a query (decide_answer_choice.hpp): which model class the query demands of
+// it, and whether it can take that model at all.
 //
 //===----------------------------------------------------------------------===//
 
@@ -16,22 +15,6 @@
 namespace duckdb {
 
 class LogicalDecide;
-
-//! Choose the backend for this query and record what that choice implies, on the plan.
-//!
-//! Two things are settled here and nowhere else:
-//!
-//!   - WHICH backend (`solver_backend_name`), resolved once via SelectSolverBackend so
-//!     every later stage reads one answer instead of asking again;
-//!   - WHICH CONSTRUCTS are left native (`use_native_constructs`), which is a
-//!     FORMULATION choice and therefore stage 05's to make. Every rewrite below runs
-//!     against it, and stage 08 later reads the recorded decision rather than
-//!     re-deriving it from a backend.
-//!
-//! Called once, first thing in DecideOptimizer::OptimizeDecide, before any rewrite. A plan
-//! the DECIDE optimizer never saw is refused at physical planning (`plan_decide.cpp`), so
-//! no other stage chooses a backend.
-void ChooseDecideSolver(LogicalDecide &op);
 
 //! What model class this query will demand of its solver, read off the prepared
 //! linear form. A *prediction* of what `SolverModel::ModelClass()` will report once

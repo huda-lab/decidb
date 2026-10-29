@@ -20,8 +20,11 @@ class Optimizer;
 //! This centralizes all DECIDE-specific transformations that were previously
 //! scattered across the binder and physical operator.
 //!
-//! RewriteRhsAggregates runs first, from Optimize, before the direct-solve rules.
-//! Current passes, in the order OptimizeDecide runs them:
+//! OptimizeDecide runs, per DECIDE node:
+//!   - RewriteRhsAggregates (pass 0, every path): the bound-side evaluator, whose output the rules and the solver read
+//!   - ChooseDecideAnswer (decide_answer_choice.hpp): a direct-solve rule replaces the node, else a solver is chosen
+//! and, when a solver is, the formulation passes of RewriteForSolver, in this order:
+//!   - InstallReducedBounds: the windows of the bounds pass 0 left raw
 //!   - RewriteNorm: lowers the bound NORM marker, including L0 indicators/links
 //!   - RewriteInDomain: lowers DECIDE variable IN lists to indicator formulations
 //!   - TagAbsForBigM: marks the ABS nodes needing a Big-M envelope, in the constraints and the objective.
@@ -56,8 +59,8 @@ private:
 	//! The bound-side evaluator: replaces each reducer on a bound by a window column of the DECIDE source (the same
 	//! aggregate over its groups), reduces the bound of an aggregate-shape clause to its group's tightest value, and
 	//! appends the VALUE_IS_VALID checks of what those windows read. The solver and the direct-solve rules then read
-	//! one number that DuckDB computed. Runs before the direct-solve rules, in every mode, because both paths must see
-	//! it.
+	//! one number that DuckDB computed. Runs first, in every mode, because both paths must see it. A bound a
+	//! direct-solve rule can reduce itself is left raw and recorded (LogicalDecide::reduced_bounds).
 	void RewriteRhsAggregates(LogicalDecide &decide);
 
 	//! Builds the windows of the bounds RewriteRhsAggregates left raw (LogicalDecide::reduced_bounds): the tightest
@@ -65,8 +68,12 @@ private:
 	//! column.
 	void InstallReducedBounds(LogicalDecide &decide);
 
-	//! Apply all DECIDE optimization passes to a LogicalDecide node
-	void OptimizeDecide(LogicalDecide &decide);
+	//! Optimize the DECIDE node held by `op`, which sits inside the plan held by `root`: pass 0, the choice of how it
+	//! is answered, and for the solver the formulation passes. A rule that answers the query replaces `op`. The whole
+	//! stage is one profile span and one DECIDB_BENCH timer, whichever way the query is answered.
+	void OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root);
+	//! The passes that formulate the query for the solver chosen, in order.
+	void RewriteForSolver(LogicalDecide &decide);
 	//! Before any one-to-many rewrite, assign written-order identities to source clauses
 	//! whose formulations may only be removed as an atomic diagnostic repair.
 	void TagAtomicRemovalGroups(LogicalDecide &decide);

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <cstdlib>
 
 #include "duckdb/common/decide_profile.hpp"
 #include "duckdb/common/exception.hpp"
@@ -172,22 +171,11 @@ void RegisterDirectSolve(DBConfig &config) {
 	config.operator_extensions.push_back(MakeDirectResultAdapterExtension());
 }
 
-void ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root, Optimizer &optimizer,
+bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root, Optimizer &optimizer,
                            DirectSolveMode mode) {
-	if (mode == DirectSolveMode::OFF) {
-		return;
-	}
+	D_ASSERT(mode != DirectSolveMode::OFF);
 	DecideProfileScope direct_profile("optimizer.direct.analyze");
 	auto &decide = op->Cast<LogicalDecide>();
-	auto forced_solver = std::getenv("DECIDB_FORCE_SOLVER");
-	if (decide.diagnose || (forced_solver && *forced_solver)) {
-		if (mode == DirectSolveMode::REQUIRE) {
-			throw InvalidInputException("decide_direct_solve=require conflicts with %s: the solver is required",
-			                            decide.diagnose ? "DIAGNOSE" : "DECIDB_FORCE_SOLVER");
-		}
-		// A DIAGNOSE query or a forced backend keeps the solver path; there is nothing to report.
-		return;
-	}
 	D_ASSERT(decide.children.size() == 1 && decide.children[0]);
 	auto &source = *decide.children[0];
 	auto ir = DirectIR::Read(optimizer.context, decide);
@@ -206,12 +194,8 @@ void ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 		applied.push_back({rule.get(), std::move(condition)});
 	}
 	if (applied.empty()) {
-		if (mode == DirectSolveMode::REQUIRE) {
-			throw InvalidInputException("decide_direct_solve=require: direct solve did not apply; the solver is required");
-		}
-		// A query no rule applies to under auto leaves the DECIDE node, and its EXPLAIN output, exactly as the solver
-		// path has it.
-		return;
+		// A query no rule applies to leaves the DECIDE node, and its EXPLAIN output, exactly as the solver path has it.
+		return false;
 	}
 	// Every rule ran, so a second rule that applies is seen. Rules tell queries apart by the IR they require; two rules
 	// that apply to one query mean the rules overlap, which no ordering or cost can settle safely.
@@ -272,6 +256,7 @@ void ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	op = std::move(adapter);
 	// The operators above read the DECIDE node's bindings; from here they read the adapter's own.
 	RebindAboveAdapter(*root, installed, output_bindings);
+	return true;
 }
 
 } // namespace duckdb

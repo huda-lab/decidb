@@ -26,10 +26,12 @@ struct DirectExplainAnnotation {
 DirectSolveMode GetDirectSolveMode(ClientContext &context);
 void RegisterDirectSolve(DBConfig &config);
 
-//! Leaves the original DECIDE node in `op` when no rule applies. When one does, `op` becomes a complete relational
-//! replacement with its runtime obligations, under bindings of its own, and every reference above it in the plan
-//! `root` (which holds `op`) is rewritten to them.
-void ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root, Optimizer &optimizer,
+//! Offers the DECIDE node in `op` to every rule. Returns false and leaves the node when no rule applies. When one does,
+//! `op` becomes a complete relational replacement with its runtime obligations, under bindings of its own, every
+//! reference above it in the plan `root` (which holds `op`) is rewritten to them, and it returns true. `mode` is
+//! `auto` or `require`, the setting EXPLAIN shows; whether to try the rules at all, and what a query no rule applies to
+//! gets under `require`, are ChooseDecideAnswer's.
+bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOperator> &root, Optimizer &optimizer,
                            DirectSolveMode mode);
 
 } // namespace duckdb

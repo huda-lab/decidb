@@ -123,4 +123,23 @@ TEST_CASE("DeciDB solver registry", "[decidb][solver][registry]") {
 			UnsetEnvVar("DECIDB_FORCE_SOLVER");
 		}
 	}
+
+	SECTION("an empty DECIDB_FORCE_SOLVER pins nothing") {
+		const char *saved = std::getenv("DECIDB_FORCE_SOLVER");
+		std::string saved_value = saved ? saved : std::string();
+		bool had_value = saved != nullptr;
+
+		UnsetEnvVar("DECIDB_FORCE_SOLVER");
+		auto unset_choice = SelectSolverBackend();
+		CHECK(ForcedSolverName().empty());
+		SetEnvVar("DECIDB_FORCE_SOLVER", "");
+		CHECK(ForcedSolverName().empty());
+		CHECK(SelectSolverBackend() == unset_choice);
+
+		if (had_value) {
+			SetEnvVar("DECIDB_FORCE_SOLVER", saved_value.c_str());
+		} else {
+			UnsetEnvVar("DECIDB_FORCE_SOLVER");
+		}
+	}
 }

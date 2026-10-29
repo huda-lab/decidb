@@ -549,6 +549,35 @@ def test_an_empty_forced_solver_name_forces_nothing(decidb_cli):
 
 
 @pytest.mark.correctness
+def test_an_empty_forced_solver_name_is_no_solver_override_on_the_solver_path_too(decidb_cli):
+    # One reader of DECIDB_FORCE_SOLVER (ForcedSolverName): the solver path picks its backend as it does without the
+    # variable, where it once refused the empty name as "not a solver DeciDB knows".
+    sql = _source_query((2.0, 9.0, -1.0), 1)
+    unforced = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": ""})
+    result = _raw(unforced, sql, mode="off")
+    assert "is not a solver DeciDB knows" not in result.stderr, result.stderr
+    assert _run(unforced, sql, mode="off")[0] == _run(decidb_cli, sql, mode="off")[0]
+
+
+@pytest.mark.correctness
+def test_require_reports_the_conflict_before_it_looks_at_the_forced_backend(decidb_cli):
+    # The solver is chosen lazily, after the policy: `require` beside a backend no solver answers to is the conflict,
+    # not the unknown name, and a query a rule answers never asks for a backend.
+    sql = _source_query((2.0, 9.0), 1)
+    invalid = decidb_cli.with_env({"DECIDB_FORCE_SOLVER": "unknown_backend"})
+    error = _raw(invalid, sql, mode="require").stderr
+    assert "conflicts with DECIDB_FORCE_SOLVER" in error and "is not a solver DeciDB knows" not in error, error
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("mode", ["require", "off"])
+def test_the_optimizer_timer_covers_the_stage_on_both_paths(decidb_cli, mode):
+    # A direct query prints the stage's time as a solver query does (DECIDB_BENCH).
+    timed = decidb_cli.with_env({"DECIDB_BENCH": "1"})
+    assert "DECIDB_BENCH: optimizer_ms=" in _raw(timed, _source_query((2.0, 9.0), 1), mode=mode).stderr
+
+
+@pytest.mark.correctness
 def test_extension_registration_preserves_binder_errors(decidb_cli):
     sql = """
         SELECT x FROM (
