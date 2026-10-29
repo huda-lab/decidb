@@ -211,9 +211,21 @@ clique-sharing objective binaries (Q2) ran past any limit. The vendored `HighsCl
 weaker but valid partition. Each hunk is marked `DeciDB patch (SOL-1)`; `third_party/highs/README.md` says how to
 find every DeciDB patch to carry over on an upgrade (upstream has the same loop). Ctrl-C reaches the same checkpoints: `HighsSession::SetInterruptPoll` sets HiGHS's MIP, simplex and IPM interrupt
 callbacks, and `kInterrupt` maps as Gurobi's `GRB_INTERRUPTED` does. Tests: `test_error_time_limit.py`
-(`test_highs_limit_bounds_clique_partition`, `test_highs_interrupt_reaches_clique_partition`). Phases the checks
-still do not reach, none seen to stall: the root analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task
-group), symmetry detection (`HighsSymmetry.cpp`), and presolve between its checks every 1,024 reductions.
+(`test_highs_limit_bounds_clique_partition`, `test_highs_interrupt_reaches_clique_partition`).
+
+HiGHS's symmetry detection (`presolve/HighsSymmetry.cpp`) had no check: its search compares the whole model graph at
+each leaf, so its cost grows with leaves times edges, and Q10 at `large` (18M edges) stopped 380 s past a 300 s limit.
+Neither the data's repeated quantities nor ABS's two-sided rows cause it: Q10 with distinct quantities stalls the same
+way, and dropping the rows slows the solve. The vendored detection (`DeciDB patch (BUG-3)`) stops at the time limit or
+a Ctrl-C, checked once per 100 refined cells and once per search node, and keeps the generators already found, as its
+own generator cap does. The check reads only: the search runs on a worker thread beside the root LP, so it reads the
+clock and calls the interrupt callback with local data instead of calling `checkLimits`, which writes the MIP's
+status. Each node also checks the task's cancellation, so a MIP solved during the search no longer waits for it.
+Tests: `test_decidb_highs_symmetry.cpp` (each stop, with a stop already due) and `test_error_time_limit.py`
+(`test_highs_limit_bounds_symmetry_detection`, `test_highs_interrupt_reaches_symmetry_detection`,
+`test_highs_solved_mip_does_not_wait_for_symmetry_search`). Phases the checks still do not reach, none seen to stall:
+the root analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task group) and presolve between its checks
+every 1,024 reductions.
 
 Diagnostic follow-up solves are budgeted separately
 (`ResolveDecideDiagnosticTimeLimit`), capped at the smaller of the primary budget

@@ -6,3 +6,5 @@ each exists: `context/docs/pipeline/07_solver/done.md`.
 
 - SOL-1 (`mip/HighsCliqueTable.*`, `mip/HighsObjectiveFunction.*`): the objective clique partition stops at the time
   limit. SOL-2 changed the same hunk to call `checkLimits`, so Ctrl-C stops it too (marked SOL-1).
+- BUG-3 (`presolve/HighsSymmetry.*`, `mip/HighsMipSolverData.cpp`): symmetry detection stops at the time limit, a
+  Ctrl-C, or the MIP finishing without it.

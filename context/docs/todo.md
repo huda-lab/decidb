@@ -7,11 +7,7 @@ Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
-at a time. Lanes: F8; F11.
-
-## 9. F8 Solver runtime
-
-- [ ] BUG-3 HiGHS's symmetry detection ignores the time limit (cause found) — issues/bugs.md § BUG-3
+at a time. Lanes: F11.
 
 ## 10. F11 Derived-number overflow (one lane; the owner decides CQ-5's four questions first)
 

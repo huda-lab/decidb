@@ -20,7 +20,6 @@ It takes no options. Its constants sit at the top of the file:
 | `REPEATS` | 3 | passes over the whole query set |
 | `SOLVER_SECONDS` | 300 | the solver's own time limit (`DECIDB_TIME_LIMIT`); reaching it is a result |
 | `PROCESS_SECONDS` | 420 | hard stop for one process, so one query cannot hang the sweep |
-| `SKIP` | `(Q10, highs)` | Q10 on HiGHS at `large` runs out of memory and is killed from outside, so it is recorded as `skipped_memory` instead of run |
 
 The databases come from `make decide-bench-setup` ([tpch_suite.md](tpch_suite.md)). The profiler resumes: rows already
 in the CSV are kept and their runs are not repeated. Delete the CSV to start over.
@@ -88,7 +87,7 @@ Counter columns: `variables`, `linear_rows`, `linear_nonzeros`, `quadratic_rows`
 on: there is no memory guard, cap or early stop.
 
 `status` is one of `ok`; `unsupported` (the backend refused the model, matched on the error text); `solver_limit`
-(the solver hit its time limit); `error`; `process_timeout`; `skipped_memory` (listed in `SKIP`).
+(the solver hit its time limit); `error`; `process_timeout`.
 
 ## Correctness signal
 

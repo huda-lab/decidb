@@ -8,22 +8,6 @@
 - **Next step:** the matrix now keeps its logs (`test/decide/results/matrix_<time>/`) and prints each mode's outcome
   total; when the totals differ again, find the missing test from the logs.
 
-## BUG-3 — HiGHS's symmetry detection ignores the time limit: Q10 at large stops 386 s late
-
-- **Location:** `HighsSymmetryDetection::partitionRefinement` (`third_party/highs/highs/mip/HighsSymmetry.cpp`), run
-  at the root node (`HighsMipSolverData::evaluateRootNode` → `startSymmetryDetection`) with no limit check; the
-  profiler skips the cell (`SKIP = {("Q10", "highs")}`, `benchmark/decide/profile_pipeline.py`).
-- **Observed (2026-10-29, `q10_maximize_abs.sql` at `large`: 5M columns, 8M rows; solver limit 300 s):** presolve ends
-  at 26 s, the root LP by 90 s, and the solve stops with "Time limit reached" at 681.7 s, 0 nodes. Two stack samples
-  of the overrun (330 s, 480 s) are all in `partitionRefinement`. Peak memory 4.6 GiB, so it is not a memory kill: the
-  2026-09-09 sweep's `process_timeout` is the profiler's own 420 s stop firing during the overrun. DeciDB then ends
-  with its ordinary time-limit error, late. Ctrl-C waits the same way (SOL-2 polls only at HiGHS's limit checks).
-- **Fix options:** (A) a vendored check, as SOL-1's: `partitionRefinement` calls `mipsolver.mipdata_->checkLimits()`
-  every N refinements and stops detection when it fires (recommended: limits and Ctrl-C both reach it); (B) turn off
-  `mip_detect_symmetry`, which loses symmetry handling on every model. Then drop the profiler's `SKIP`.
-- **Reproduce:** run Q10 with `${Q10_ROW_LIMIT}` = 1000000 on `large.db`,
-  `DECIDB_FORCE_SOLVER=highs DECIDB_TIME_LIMIT=300 DECIDB_PROFILE_SOLVER_LOG=1`; about 11 minutes, 4.6 GiB.
-
 ## BUG-16 — A row's range over its variables' boxes overflows: internal errors and wrong refusals
 
 Found by the overflow review (2026-10-29). The fix for this entry and BUG-18 to BUG-22 is one design,
