@@ -232,7 +232,7 @@ class TestInfeasibleModels:
             SUCH THAT per grp: sum(x) by (grp) = cap
             MAXIMIZE SUM(x)
         """,
-            match=r"per grp does not determine cap\. grp = 'a' has more than one value: 500, 350\.",
+            match=r"per grp does not determine cap\. grp = 'a' has more than one value: 350, 500\.",
         )
 
     def test_user_overridden_negative_lower_is_feasible(self, decidb_cli):

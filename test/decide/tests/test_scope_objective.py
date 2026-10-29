@@ -137,7 +137,7 @@ def test_a_keyed_decision_with_one_instance_counts_once(decidb_cli, scope_solver
     [
         pytest.param(
             "MAXIMIZE when S.priority: sum(ship) + D.capacity * s",
-            "DECIDE: per () does not determine D.capacity. The kept rows have more than one value: 25, 40.",
+            "DECIDE: per () does not determine D.capacity. The kept rows have more than one value: 20, 40.",
             id="data-value",
         ),
         pytest.param(

@@ -13,6 +13,7 @@
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
+#include "duckdb/optimizer/decide/direct/direct_row_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
@@ -127,11 +128,6 @@ bool DirectCanSkipSourceOutput(LogicalOperator &source, ColumnBinding binding) {
 	}
 }
 
-//! Puts the IR's row checks under the rule's plan, where the solver makes them: before it reads a value. A window
-//! counts, over the whole source, the rows each check looks at and the rows it reads (for a value check, takes the
-//! least message a row raises, so that every row reads the same one), and a filter above it raises the first check
-//! that fails. The filter passes on exactly the source's columns, so the source keeps its bindings. Filter
-//! pullup leaves a filter with a projection map in place, and pushdown moves nothing below an unpartitioned window.
 //! Strips the pipeline's tags from every expression of the operators above `source`. The row checks and the rule copy
 //! tagged expressions into those operators; nothing reads the tags there, and a plan prints an expression by its
 //! alias, so a tag left there would reach EXPLAIN. The source keeps its own aliases.
@@ -143,35 +139,6 @@ void StripTagsAbove(LogicalOperator &op, const LogicalOperator &source) {
 	for (auto &child : op.children) {
 		StripTagsAbove(*child, source);
 	}
-}
-
-void AddRowChecks(Optimizer &optimizer, const DirectIR &ir, unique_ptr<LogicalOperator> &source) {
-	if (ir.row_checks.empty()) {
-		return;
-	}
-	ExpressionBuilder calc(optimizer.context);
-	auto source_columns = source->GetColumnBindings().size();
-	auto window_index = optimizer.binder.GenerateTableIndex();
-	auto window = make_uniq<LogicalWindow>(window_index);
-	vector<idx_t> first_slots;
-	for (auto &check : ir.row_checks) {
-		first_slots.push_back(window->expressions.size());
-		window->expressions.push_back(DirectWindowExtremum(optimizer, "min", check.invalid->Copy()));
-	}
-	window->children.push_back(std::move(source));
-	vector<unique_ptr<Expression>> checks;
-	for (idx_t i = 0; i < ir.row_checks.size(); i++) {
-		auto message = calc.Col(LogicalType::VARCHAR, ColumnBinding(window_index, first_slots[i]));
-		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
-		                               DirectErrorPredicate(optimizer, calc.Out(message))));
-	}
-	auto filter = make_uniq<LogicalFilter>(DirectAllHold(calc, std::move(checks)));
-	for (idx_t i = 0; i < source_columns; i++) {
-		filter->projection_map.push_back(i);
-	}
-	filter->children.push_back(std::move(window));
-	filter->ResolveOperatorTypes();
-	source = std::move(filter);
 }
 
 } // namespace
@@ -284,7 +251,7 @@ void ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	if (carries_rowid) {
 		source.ResolveOperatorTypes();
 	}
-	AddRowChecks(optimizer, ir, decide.children[0]);
+	decide.children[0] = DirectAddRowChecks(optimizer, ir.row_checks, std::move(decide.children[0]));
 	auto substitute = selected.rule->Apply(std::move(decide.children[0]), optimizer, *selected.condition);
 	if (carries_rowid) {
 		if (substitute.slot_map.size() != output_bindings.size() + 1) {

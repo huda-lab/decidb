@@ -124,7 +124,7 @@ Invalid Input Error: DECIDE: per D.depotID does not determine the decision ship 
 statement error
 SELECT shipmentID, ship FROM Shipment DECIDE ship(INT) SUCH THAT sum(ship) <= avg(per (): demand) MAXIMIZE SUM(ship);
 ----
-Invalid Input Error: DECIDE: per () does not determine demand (in avg(per (): demand)). The kept rows have more than one value: 10.0, 20.0.
+Invalid Input Error: DECIDE: per () does not determine demand (in avg(per (): demand)). The kept rows have more than one value: 10.0, 30.0.
 
 # reducer: when and per inside, by after
 statement error

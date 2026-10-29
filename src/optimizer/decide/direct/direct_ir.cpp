@@ -95,17 +95,66 @@ private:
 		return !predicate || DirectReferencesOnlySource(*predicate, source_bindings);
 	}
 
+	//! A determination check read as the plan makes it; false when the plan cannot make it: an expression that reads
+	//! more than the source, or a decision that is not one per row.
+	bool ReadDetermination(const DecideScopeCheck &check, DirectRowCheck &row_check) const {
+		row_check.kind = DirectRowCheckKind::DETERMINES;
+		bool decision = check.decision != DConstants::INVALID_INDEX;
+		D_ASSERT(decision == !check.value);
+		if (decision && decide.variable_scopes[check.decision].scope != DecideVarScope::ROW) {
+			return false;
+		}
+		if (!CheckablePredicate(check.rows.get()) || !CheckablePredicate(check.filter.get()) ||
+		    !CheckablePredicate(check.value.get())) {
+			return false;
+		}
+		if (check.rows) {
+			row_check.rows = check.rows->Copy();
+		}
+		if (check.filter) {
+			row_check.filter = check.filter->Copy();
+		}
+		if (check.value) {
+			row_check.value = check.value->Copy();
+		}
+		if (check.key != DConstants::INVALID_INDEX) {
+			for (auto &element : DecideKeyElements(decide.keys, check.key)) {
+				if (!CheckablePredicate(&element.Grouping()) || !CheckablePredicate(element.expression.get())) {
+					return false;
+				}
+				DirectKeyElement key_element;
+				key_element.grouping = element.Grouping().Copy();
+				key_element.label = element.expression->Copy();
+				key_element.name = element.name;
+				key_element.no_group = element.null_mode == DecideKeyNullMode::NO_GROUP;
+				row_check.key.push_back(std::move(key_element));
+			}
+		}
+		row_check.text.subject = check.subject;
+		row_check.text.object = check.object;
+		row_check.text.context = check.context;
+		row_check.text.one_class = check.key == DConstants::INVALID_INDEX;
+		row_check.text.decision = decision;
+		return true;
+	}
+
 	void ReadRowChecks(DirectIR &ir) const {
 		for (auto &check : decide.scope_checks) {
-			if (check.kind != DecideScopeCheckKind::VALUE_IS_VALID) {
-				// No rule groups rows by a `by` key or a `per K:` class yet.
-				MarkNotProved(ir.status);
-				continue;
-			}
-			// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
-			D_ASSERT(!check.rows && CheckablePredicate(check.value.get()));
 			DirectRowCheck row_check;
-			row_check.invalid = check.value->Copy();
+			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
+				// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
+				D_ASSERT(!check.rows && CheckablePredicate(check.value.get()));
+				row_check.invalid = check.value->Copy();
+			} else {
+				// One instance for the whole query: nothing to determine.
+				if (check.decision != DConstants::INVALID_INDEX && decide.variable_scopes[check.decision].IsScalar()) {
+					continue;
+				}
+				if (!ReadDetermination(check, row_check)) {
+					MarkNotProved(ir.status);
+					continue;
+				}
+			}
 			ir.row_checks.push_back(std::move(row_check));
 		}
 	}

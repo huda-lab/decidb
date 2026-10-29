@@ -70,7 +70,7 @@ PAIRS = [
         "per (): sum(ship) <= D.capacity",
         (DEPOTS[0], ("D2", "East", "CA", 25, 12, 0.2, 0.6, 60), ("D3", "West", "US", 25, 30, 0.3, 0.7, 60)),
         DEPOTS,
-        "DECIDE: per () does not determine D.capacity. The kept rows have more than one value: 25, 40.",
+        "DECIDE: per () does not determine D.capacity. The kept rows have more than one value: 20, 40.",
         id="per-empty",
     ),
 ]
@@ -183,7 +183,7 @@ def test_null_is_one_value(decidb_cli, scope_solver):
     _stops(
         decidb_cli,
         _query("per D.region: sum(ship) by (D.region) <= D.capacity", depots),
-        "DECIDE: per D.region does not determine D.capacity. D.region = 'East' has more than one value: " "NULL, 40.",
+        "DECIDE: per D.region does not determine D.capacity. D.region = 'East' has more than one value: " "40, NULL.",
     )
 
 

@@ -642,3 +642,70 @@ TEST_CASE("The late materialization happens only for a stored table and a column
 	REQUIRE(late_materialization->RowCount() == 100);
 	REQUIRE(late_materialization->ToString() == solver->ToString());
 }
+
+// The determination checks are made under a rule's plan, with the message the solver raises. Each case reaches a branch
+// of DirectAddRowChecks that removing it would break: the least failing group by key value (not the first row), the
+// least and greatest value (not the first two), NULL as a value after every other, a NULL key that is in no class
+// (a column key) and one that is a class of its own (a relation key), the empty key, and the decision determination.
+TEST_CASE("Direct rule driver raises a determination check as the solver does", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	InstallRules(con, [] {
+		RuleList rules;
+		rules.push_back(make_uniq<StubRule>("STUB_ONE", true, 1));
+		return rules;
+	});
+	struct Case {
+		const char *source;
+		const char *decide;
+		const char *clause;
+		const char *objective;
+		//! The message both paths raise, or null when the check passes.
+		const char *expected;
+	};
+	// The greater failing group and the greater value come first in the rows.
+	const Case cases[] = {
+	    // The least failing group, and its least and greatest value rather than the first two.
+	    {"(VALUES (1,'b',20.0),(2,'b',10.0),(3,'a',7.0),(4,'a',5.0),(5,'a',6.0),(6,'c',1.0)) t(id,g,cap)", "x(BOOL)",
+	     "SUM(per g: cap * x) <= 100", "SUM(x)", "g = 'a' has more than one value: 5.0, 7.0."},
+	    // The same rows in the opposite order.
+	    {"(VALUES (6,'c',1.0),(5,'a',6.0),(4,'a',5.0),(3,'a',7.0),(2,'b',10.0),(1,'b',20.0)) t(id,g,cap)", "x(BOOL)",
+	     "SUM(per g: cap * x) <= 100", "SUM(x)", "g = 'a' has more than one value: 5.0, 7.0."},
+	    // NULL is a value of its own, after every other.
+	    {"(VALUES (1,'b',CAST(NULL AS DOUBLE)),(2,'b',20.0),(3,'a',5.0),(4,'a',5.0)) t(id,g,cap)", "x(BOOL)",
+	     "SUM(per g: cap * x) <= 100", "SUM(x)", "g = 'b' has more than one value: 20.0, NULL."},
+	    // A NULL in a column key is in no class.
+	    {"(VALUES (1,CAST(NULL AS VARCHAR),1.0),(2,CAST(NULL AS VARCHAR),2.0),(3,'a',5.0)) t(id,g,cap)", "x(BOOL)",
+	     "SUM(per g: cap * x) <= 100", "SUM(x)", nullptr},
+	    // A NULL in a relation key is a class of its own.
+	    {"(SELECT * FROM (VALUES (CAST(NULL AS INT)),(CAST(NULL AS INT))) t(g)) t, (VALUES (1),(2)) u(v)", "x(BOOL)",
+	     "SUM(per t: v * x) <= 100", "SUM(x)", "t.g = NULL has more than one value: 1, 2."},
+	    // The empty key is one class, which names no group.
+	    {"(VALUES (1, 4.0, 3.0),(2, 4.0, 2.0)) t(id,a,b)", "per (): s(BOOL)", "s <= 1", "b * s",
+	     "The kept rows have more than one value: 2.0, 3.0."},
+	    // A row-scoped decision is held by one row of a class.
+	    {"(VALUES (1,'b'),(2,'b'),(3,'a'),(4,'a')) t(id,g)", "x(BOOL)", "SUM(per g: x) <= 1", "SUM(x)",
+	     "g = 'a' covers more than one x."},
+	    {"(VALUES (1,'b'),(2,'a'),(3,'c')) t(id,g)", "x(BOOL)", "SUM(per g: x) <= 1", "SUM(x)", nullptr},
+	    {"(VALUES (1,'b'),(2,'b')) t(id,g)", "x(BOOL)", "SUM(per (): x) <= 1", "SUM(x)",
+	     "The kept rows cover more than one x."},
+	};
+	for (auto &test : cases) {
+		string query = string("SELECT * FROM ") + test.source + " DECIDE " + test.decide + " SUCH THAT " + test.clause +
+		               " MAXIMIZE " + test.objective;
+		INFO(query);
+		REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='off'"));
+		auto solver = con.Query(query);
+		REQUIRE_NO_FAIL(con.Query("SET decide_direct_solve='require'"));
+		auto direct = con.Query(query);
+		if (!test.expected) {
+			REQUIRE(!direct->HasError());
+			REQUIRE(!solver->HasError());
+			continue;
+		}
+		REQUIRE(solver->HasError());
+		REQUIRE(direct->HasError());
+		REQUIRE(solver->GetError().find(test.expected) != string::npos);
+		REQUIRE(direct->GetError() == solver->GetError());
+	}
+}

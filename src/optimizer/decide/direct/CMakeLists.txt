@@ -4,6 +4,7 @@ add_library_unity(
   a1_separable_box_rule.cpp
   direct_bound_reader.cpp
   direct_plan_fragments.cpp
+  direct_row_checks.cpp
   direct_runtime_checks.cpp
   direct_rule_driver.cpp
   direct_expression.cpp

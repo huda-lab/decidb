@@ -1816,7 +1816,7 @@ static string SqlLiteral(const Value &value) {
 	if (value.IsNull()) {
 		return "NULL";
 	}
-	if (value.type().IsNumeric() || value.type().id() == LogicalTypeId::BOOLEAN) {
+	if (DecideLiteralIsBare(value.type())) {
 		return value.ToString();
 	}
 	return "'" + StringUtil::Replace(value.ToString(), "'", "''") + "'";
@@ -1894,16 +1894,24 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 		auto one_class = check.key == DConstants::INVALID_INDEX;
 		LookupOrBuildPerGroupIds(per_group_cache, keys, check.key, chunk_expr_cache, context, gstate.data, num_rows,
 		                         looked_at_row, &looked_at, ids, count, labels, nullptr, nullptr, &key_values);
-		auto describe = [&](idx_t group, const char *one, const char *all) {
-			return one_class ? string(all) : DescribeKeyValues(keys[check.key].Names(), key_values[group]) + one;
+		DecideDeterminesText text;
+		text.subject = check.subject;
+		text.object = check.object;
+		text.context = check.context;
+		text.one_class = one_class;
+		text.decision = check.decision != DConstants::INVALID_INDEX;
+		// A class fails when it shows more than one value or decision. Several can; the message names the least one by
+		// key value (the groups are numbered in that order), so it never depends on the order rows arrive in.
+		auto describe_group = [&](idx_t group) {
+			return one_class ? string() : DescribeKeyValues(keys[check.key].Names(), key_values[group]);
 		};
-		auto context_text = check.context.empty() ? string() : " (" + check.context + ")";
-		if (check.decision != DConstants::INVALID_INDEX) {
+		if (text.decision) {
 			if (check.decision >= variable_scopes.size() || variable_scopes[check.decision].IsScalar()) {
 				continue; // one instance for the whole query
 			}
 			auto &scope = variable_scopes[check.decision];
 			vector<idx_t> instance(count, DConstants::INVALID_INDEX);
+			idx_t failing = DConstants::INVALID_INDEX;
 			for (idx_t row = 0; row < num_rows; row++) {
 				auto group = ids[row];
 				if (group == DConstants::INVALID_INDEX) {
@@ -1916,29 +1924,53 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 				if (instance[group] == DConstants::INVALID_INDEX) {
 					instance[group] = id;
 				} else if (instance[group] != id) {
-					throw InvalidInputException("DECIDE: per %s does not determine the decision %s%s. %s more than "
-					                            "one %s.",
-					                            check.subject, check.object, context_text,
-					                            describe(group, " covers", "The kept rows cover"), check.object);
+					failing = MinValue(failing, group);
 				}
+			}
+			if (failing != DConstants::INVALID_INDEX) {
+				throw InvalidInputException(one_class ? StringUtil::Format(text.Format())
+				                                      : StringUtil::Format(text.Format(), describe_group(failing)));
 			}
 			continue;
 		}
 		auto values = EvaluateRowValues(*check.value, chunk_expr_cache, context, gstate.data, num_rows, looked_at);
-		vector<idx_t> first(count, DConstants::INVALID_INDEX);
+		// Per group: the rows read, the non-NULL ones, and the least and greatest of those.
+		vector<idx_t> read(count, 0), non_null(count, 0);
+		vector<Value> least(count), greatest(count);
 		for (idx_t row = 0; row < num_rows; row++) {
 			auto group = ids[row];
 			if (group == DConstants::INVALID_INDEX) {
 				continue;
 			}
-			if (first[group] == DConstants::INVALID_INDEX) {
-				first[group] = row;
-			} else if (!Value::NotDistinctFrom(values[first[group]], values[row])) {
-				throw InvalidInputException("DECIDE: per %s does not determine %s%s. %s more than one value: %s, %s.",
-				                            check.subject, check.object, context_text,
-				                            describe(group, " has", "The kept rows have"),
-				                            SqlLiteral(values[first[group]]), SqlLiteral(values[row]));
+			read[group]++;
+			auto &value = values[row];
+			if (value.IsNull()) {
+				continue;
 			}
+			if (non_null[group]++ == 0) {
+				least[group] = value;
+				greatest[group] = value;
+			} else if (value < least[group]) {
+				least[group] = value;
+			} else if (greatest[group] < value) {
+				greatest[group] = value;
+			}
+		}
+		for (idx_t group = 0; group < count; group++) {
+			if (non_null[group] == 0) {
+				continue;
+			}
+			// NULL is a value of its own, after every other.
+			bool has_null = non_null[group] < read[group];
+			if (!has_null && Value::NotDistinctFrom(least[group], greatest[group])) {
+				continue;
+			}
+			auto high = has_null ? string("NULL") : SqlLiteral(greatest[group]);
+			if (one_class) {
+				throw InvalidInputException(StringUtil::Format(text.Format(), SqlLiteral(least[group]), high));
+			}
+			throw InvalidInputException(
+			    StringUtil::Format(text.Format(), describe_group(group), SqlLiteral(least[group]), high));
 		}
 	}
 }

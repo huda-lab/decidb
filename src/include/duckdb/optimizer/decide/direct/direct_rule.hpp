@@ -4,6 +4,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/main/client_context_state.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/column_binding.hpp"
@@ -130,13 +131,41 @@ struct DirectIRObjective {
 	DirectIRScope scope;
 };
 
-//! A run-time scope check the solver makes before it reads a value: the input raises `message` when some row passes
-//! `rows` (every row, when null) and none of those rows also passes `filter`. NULL drops a row. A clause's `when` (D4)
-//! is `filter` with no `rows`; a reducer's own `when` without a `by` key (D8) is `filter` under its clause's `when`.
-//! A value check (VALUE_IS_VALID) has `invalid` instead: the message a row raises, NULL on a valid row.
-//! A value check the plan makes on the source rows: `invalid` is the message a row raises, NULL on a valid row.
+//! One element of a check's key: the expression rows group on (`DecideKeyElement::Grouping()`, the collated one) and
+//! the expression a message quotes (`DecideKeyElement::expression`).
+struct DirectKeyElement {
+	unique_ptr<Expression> grouping;
+	unique_ptr<Expression> label;
+	//! How a message names it (`D.region`).
+	string name;
+	//! A row whose element is NULL is in no class (D5).
+	bool no_group = true;
+};
+
+enum class DirectRowCheckKind : uint8_t {
+	//! The input raises `invalid`, a per-row message that is NULL on a valid row.
+	VALUE_IS_VALID,
+	//! The input raises when a class of `key` shows more than one `value`, or, with no `value`, holds more than one row
+	//! of a row-scoped decision. The classes are the groups of the rows that pass `rows` and then `filter` (NULL drops
+	//! a row), among rows whose key has no NULL in a NO_GROUP element. The message names the least failing group and
+	//! quotes the least and greatest value (DecideDeterminesText), as PhysicalDecide::RunScopeChecks does.
+	DETERMINES
+};
+
+//! A run-time scope check the solver makes before it reads a value, which the plan makes on the source rows. Every
+//! expression reads source columns only.
 struct DirectRowCheck {
+	DirectRowCheckKind kind = DirectRowCheckKind::VALUE_IS_VALID;
+	//! VALUE_IS_VALID: the message a row raises, NULL on a valid row.
 	unique_ptr<Expression> invalid;
+	//! DETERMINES: the rows considered (a clause's `when`, D4) and the reducer's own `when`; null for every row.
+	unique_ptr<Expression> rows;
+	unique_ptr<Expression> filter;
+	//! DETERMINES: the classes; empty for one class.
+	vector<DirectKeyElement> key;
+	//! DETERMINES: the data value each class shows once; null for a decision, which a class holds in one row.
+	unique_ptr<Expression> value;
+	DecideDeterminesText text;
 };
 
 struct DirectIR {
@@ -152,8 +181,8 @@ struct DirectIR {
 	DirectIRObjective objective;
 	//! The scope checks the plan makes on the source rows, which the rule driver adds above every rule's plan.
 	vector<DirectRowCheck> row_checks;
-	//! NOT_PROVED when the DECIDE operator owes the rows a scope check that is not a row check: one per `by` group or
-	//! per class of a key.
+	//! NOT_PROVED when the DECIDE operator owes the rows a scope check the plan cannot make: a determination of an
+	//! entity-scoped decision.
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 };
 
