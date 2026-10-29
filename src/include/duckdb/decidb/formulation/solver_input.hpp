@@ -348,10 +348,10 @@ struct EvaluatedConstraint {
     mutable vector<idx_t> group_row_ids;
 };
 
-//! Sum decision-free LHS terms over a row range: the fixed part of the row a clause emits for those rows.
-double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
-                                  const vector<idx_t> *rows, idx_t begin, idx_t end,
-                                  const char *error_context);
+//! Sum decision-free LHS terms over a row range: the fixed part of the row a clause emits for those rows. `written`
+//! names the clause when the sum grows past a DOUBLE (AddCoefficient).
+double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint, const vector<idx_t> *rows, idx_t begin,
+                                  idx_t end, const string &written);
 
 //! Maps result rows to the classes of a key scope: a `per K:` decision's or a helper's
 //! value is shared by every result row of its class.
@@ -577,6 +577,9 @@ struct SolverInput {
     // Constraints
     vector<EvaluatedConstraint> constraints;
     vector<ConstraintSourceInfo> constraint_sources;
+    //! The objective as the user wrote it, sense in front (`MAXIMIZE sum(a * x)`): what a message about a number the
+    //! objective, or a row a rewrite added for it, computes names (DecideWrittenClause). Empty for no objective.
+    string objective_written;
 
     // Formulations stage 05 chose and stage 06 encodes. Each is a tag pointing at
     // auxiliary variables the optimizer already created; the rows that realize
@@ -745,6 +748,11 @@ struct SolverInput {
     //! the row and quote its clause. Off by default: the fold is faster to solve.
     bool keep_singleton_rows = false;
 };
+
+//! The clause a row of `source_clause_id` comes from, as the user wrote it (QuoteWrittenClause), for a message about a
+//! number the model computes from it. A row no clause claims is one a rewrite added for the objective
+//! (OBJECTIVE_ROW_TAG leaves no source id), so it names the objective.
+string DecideWrittenClause(const SolverInput &input, idx_t source_clause_id);
 
 //! The column box a derived constant is valid against.
 //!

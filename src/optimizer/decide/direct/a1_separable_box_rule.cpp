@@ -69,14 +69,14 @@ struct Decision {
 	//! into the variable.
 	double lower = 0.0;
 	double upper = POSITIVE_INFINITY;
-	//! The decision's terms of the objective as written, which name its quadratic and linear coefficients in a message
-	//! when their arithmetic overflows.
-	string objective_text;
 };
 
 struct Condition final : DirectApplicabilityCondition {
 	idx_t decide_index = 0;
 	DecideSense sense = DecideSense::FEASIBILITY;
+	//! The objective as written, which a message names when a decision's quadratic or linear coefficient, computed from
+	//! finite values, is too large for a DOUBLE (TOO_LARGE), as the solver path names it.
+	string objective_written;
 	vector<Decision> decisions;
 	vector<DirectBoundClause> clauses;
 	unique_ptr<Expression> objective_when;
@@ -171,6 +171,7 @@ public:
 		auto condition = make_uniq<Condition>();
 		condition->decide_index = ir.decide_index;
 		condition->sense = ir.objective.sense;
+		condition->objective_written = ir.objective.written;
 		for (auto &decision : ir.decisions) {
 			Decision prepared;
 			prepared.name = decision.name;
@@ -296,22 +297,6 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 			prepared.constant_text = DirectCoefficientText(ir, context, constants);
 		}
 		condition.parts.push_back(std::move(prepared));
-	}
-	for (idx_t d = 0; d < decision_count; d++) {
-		vector<string> pieces;
-		for (auto &part : condition.parts) {
-			if (!part.linear.text[d].empty()) {
-				pieces.push_back(part.linear.text[d]);
-			}
-			for (auto &term : part.terms) {
-				if (term.kind == Term::Kind::SQUARE && term.decision == d) {
-					pieces.push_back("power(" + term.inner_linear_text +
-					                 (term.inner_constant_text.empty() ? "" : " + " + term.inner_constant_text) +
-					                 ", 2)");
-				}
-			}
-		}
-		condition.decisions[d].objective_text = StringUtil::Join(pieces, " + ");
 	}
 	return true;
 }
@@ -648,15 +633,20 @@ private:
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			ExprPtr a_total = calc.Num(0.0);
 			ExprPtr b_total = calc.Num(0.0);
+			// The linear coefficient the parts' like terms merge into, `b + b` for SUM(b * x) + SUM(b * x): a value of
+			// the row, as the solver path reads it, so it is named as written and a `when` skips it.
+			ExprPtr linear_total = calc.Num(0.0);
+			vector<string> linear_text;
 			for (idx_t p = 0; p < condition.parts.size(); p++) {
 				auto &part = condition.parts[p];
 				auto &columns = raw.parts[p];
 				ExprPtr a_part = calc.Num(0.0);
-				ExprPtr b_part = calc.Num(0.0);
+				ExprPtr linear_part = calc.Num(0.0);
+				ExprPtr cross_part = calc.Num(0.0);
 				bool touched = false;
 				for (idx_t i = 0; i < columns.linear.size(); i++) {
 					if (columns.linear_decision[i] == d) {
-						b_part = calc.Add(b_part, calc.Col(LogicalType::DOUBLE, columns.linear[i]));
+						linear_part = calc.Add(linear_part, calc.Col(LogicalType::DOUBLE, columns.linear[i]));
 						touched = true;
 					}
 				}
@@ -668,23 +658,31 @@ private:
 					auto w = calc.Col(LogicalType::DOUBLE, square.linear);
 					auto t = calc.Col(LogicalType::DOUBLE, square.constant);
 					a_part = calc.Add(a_part, calc.Mul(k, calc.Mul(w, w)));
-					b_part = calc.Add(b_part, calc.Mul(calc.Num(2.0), calc.Mul(k, calc.Mul(w, t))));
+					cross_part = calc.Add(cross_part, calc.Mul(calc.Num(2.0), calc.Mul(k, calc.Mul(w, t))));
 					touched = true;
 				}
 				if (!touched) {
 					continue;
 				}
-				auto a_scaled = calc.Wrap(DirectScaledTerm(optimizer, calc.Out(a_part), part.linear.sign,
-				                                           part.linear.scaled, part.linear.scale, part.linear.divides));
-				auto b_scaled = calc.Wrap(DirectScaledTerm(optimizer, calc.Out(b_part), part.linear.sign,
-				                                           part.linear.scaled, part.linear.scale, part.linear.divides));
-				if (columns.has_mask) {
-					auto mask = calc.Col(LogicalType::BOOLEAN, columns.mask);
-					a_scaled = calc.If(mask, a_scaled, calc.Num(0.0));
-					b_scaled = calc.If(mask, b_scaled, calc.Num(0.0));
+				auto scaled = [&](ExprPtr value) {
+					auto result =
+					    calc.Wrap(DirectScaledTerm(optimizer, calc.Out(value), part.linear.sign, part.linear.scaled,
+					                               part.linear.scale, part.linear.divides));
+					return columns.has_mask
+					           ? calc.If(calc.Col(LogicalType::BOOLEAN, columns.mask), result, calc.Num(0.0))
+					           : result;
+				};
+				auto linear_scaled = scaled(linear_part);
+				a_total = calc.Add(a_total, scaled(a_part));
+				b_total = calc.Add(b_total, calc.Add(linear_scaled, scaled(cross_part)));
+				linear_total = calc.Add(linear_total, linear_scaled);
+				if (!part.linear.text[d].empty()) {
+					linear_text.push_back(part.linear.text[d]);
 				}
-				a_total = calc.Add(a_total, a_scaled);
-				b_total = calc.Add(b_total, b_scaled);
+			}
+			if (!linear_text.empty()) {
+				checks.push_back(DirectRaiseMessage(
+				    optimizer, calc, DirectNumberMessage(calc, linear_total, StringUtil::Join(linear_text, " + "))));
 			}
 			bounds.a.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), a_total))));
 			bounds.b.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), b_total))));
@@ -793,9 +791,9 @@ private:
 				return calc.Col(LogicalType::DOUBLE, answers.value[d]);
 			};
 			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.a[d],
-			                                            condition.decisions[d].objective_text));
+			                                            condition.objective_written, DecideValueRole::TOO_LARGE));
 			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.b[d],
-			                                            condition.decisions[d].objective_text));
+			                                            condition.objective_written, DecideValueRole::TOO_LARGE));
 			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, answers.infeasible[d])),
 			                               DirectInfeasibleErrorPredicate(optimizer)));
 			checks.push_back(DirectRaiseUnless(calc, calc.Out(calc.Fn("isfinite", value())),

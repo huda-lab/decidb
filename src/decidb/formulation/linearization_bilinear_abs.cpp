@@ -195,6 +195,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
         bool pushes_down = ec.comparison_type == ExpressionType::COMPARE_LESSTHANOREQUALTO ||
                            ec.comparison_type == ExpressionType::COMPARE_LESSTHAN ||
                            ec.comparison_type == ExpressionType::COMPARE_EQUAL;
+        const string written = DecideWrittenClause(input, ec.source_clause_id);
         for (idx_t r = 0; r < num_rows; r++) {
             if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
                 continue; // row excluded by `when` or its group: this clause asks nothing here
@@ -203,7 +204,7 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
             if (std::abs(a) < 1e-15) {
                 continue;
             }
-            double k = DecideRowEffectiveBound(ec, r);
+            double k = DecideRowEffectiveBound(ec, r, written);
             if (!std::isfinite(k)) {
                 continue;
             }

@@ -38,7 +38,8 @@ AuxRange GroupReach(const ReducerValueLinkSpec &link, const SolverInput &input, 
 	for (auto row : rows) {
 		double lo, hi;
 		DecideRowSignedRange(link.rows, row, input.lower_bounds, input.upper_bounds, lo, hi);
-		double constant = DecideRowFixedLhsOffset(link.rows.variable_indices, link.rows.row_coefficients, row);
+		double constant =
+		    DecideRowFixedLhsOffset(link.rows.variable_indices, link.rows.row_coefficients, row, link.label);
 		if (extremum) {
 			reach.CoverRowSided(lo + constant, hi + constant, DConstants::INVALID_INDEX);
 			continue;
@@ -129,7 +130,8 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 		const idx_t value_var = link.value_var;
 		// A member is a row's expression negated with its constant apart, the shape the
 		// extremum link takes; the equality reads it the same way.
-		auto groups = BuildMinMaxGroups(input, indexer, link.rows);
+		// A helper serves every clause that reads its reducer, so a sum past a DOUBLE names the reducer as written.
+		auto groups = BuildMinMaxGroups(input, indexer, link.rows, link.label);
 		for (auto &group : groups) {
 			if (group.members.empty()) {
 				continue;
@@ -144,9 +146,9 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				double constants = 0.0;
 				for (auto &member : group.members) {
 					for (idx_t i = 0; i < member.link.indices.size(); i++) {
-						sum.AddColumn(member.link.indices[i], member.link.coefficients[i]);
+						sum.AddColumn(member.link.indices[i], member.link.coefficients[i], link.label);
 					}
-					constants += member.link.constant;
+					AddCoefficient(constants, member.link.constant, link.label);
 				}
 				SolverInput::RawConstraint rc;
 				rc.indices.push_back(static_cast<int>(indexer.Get(value_var, group.first_row)));

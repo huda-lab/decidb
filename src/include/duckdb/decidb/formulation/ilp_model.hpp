@@ -13,6 +13,7 @@
 
 #include "duckdb/common/exception.hpp"
 #include "duckdb/common/decide_solver_capabilities.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/decidb/formulation/solver_input.hpp"
 
 #include <cmath>
@@ -497,6 +498,17 @@ void BuildGroupCSR(const vector<idx_t> &row_group_ids,
                    vector<idx_t> &offsets,
                    vector<idx_t> &flat_rows);
 
+//! Adds `value` into `target`, a number the model merges from several: like coefficients on one solver column, a
+//! square's products, the fixed terms moved to the bound side. The one place such a sum grows. Every value it adds was
+//! read finite, so a sum that is not finite has grown past a DOUBLE, and the user error names `written`, the clause the
+//! sum belongs to (DecideWrittenClause).
+inline void AddCoefficient(double &target, double value, const string &written) {
+    target += value;
+    if (!std::isfinite(target)) {
+        throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, written));
+    }
+}
+
 //! Reusable scratch storage for accumulating sparse coefficients keyed by flat
 //! variable index. Two strategies, picked once per constraint via Begin*():
 //!   - Dense:  vector<double> indexed by flat var idx, with a `touched` list
@@ -513,16 +525,20 @@ struct SparseCoeffAccumulator {
     //! Sparse path
     vector<std::pair<int, double>> pairs;
 
+    //! The clause the sums belong to, for the error of one past a DOUBLE (AddCoefficient). Set by Begin*; the string
+    //! outlives the rows the clause emits.
+    const string *written = nullptr;
+
     //! Configure for dense accumulation. Allocates `total_vars` doubles
     //! (zero-initialized) on first use; subsequent calls only clear `touched`.
-    void BeginDense(idx_t total_vars);
+    void BeginDense(idx_t total_vars, const string &written);
 
     //! Configure for sorted-pairs accumulation. `expected_size` is a hint for reserve().
-    void BeginSparse(idx_t expected_size);
+    void BeginSparse(idx_t expected_size, const string &written);
 
     //! Configure for the decision columns of `indexer`, [0, global_block_start): dense while that span is small
     //! enough to keep as scratch (about 8MB), sorted pairs past it.
-    void BeginForDecisions(const VarIndexer &indexer, idx_t expected_size);
+    void BeginForDecisions(const VarIndexer &indexer, idx_t expected_size, const string &written);
 
     //! Add a contribution. Branchless on use_dense via the pre-set mode.
     inline void Add(int idx, double coeff) {
@@ -530,7 +546,7 @@ struct SparseCoeffAccumulator {
             if (dense[idx] == 0.0) {
                 touched.push_back(idx);
             }
-            dense[idx] += coeff;
+            AddCoefficient(dense[idx], coeff, *written);
         } else {
             pairs.emplace_back(idx, coeff);
         }

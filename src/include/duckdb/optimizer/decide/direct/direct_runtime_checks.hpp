@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/expression.hpp"
@@ -59,7 +60,10 @@ unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBin
 
 //! Evaluates to true for a finite number and raises an error for a non-finite one, naming the coefficient as the user
 //! `written` it. A NULL number skips what it reaches (a SUM reads a skipped row's terms as 0, DirectIR), so it passes.
+//! TOO_LARGE is for a number the plan computes from values already checked finite: `written` is then the clause or
+//! the objective it belongs to, as the solver path names it (AddCoefficient).
 unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
-                                                  ColumnBinding number_binding, const string &written);
+                                                  ColumnBinding number_binding, const string &written,
+                                                  DecideValueRole role = DecideValueRole::COEFFICIENT);
 
 } // namespace duckdb

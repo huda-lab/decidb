@@ -162,6 +162,8 @@ struct DirectIRObjective {
 	DecideSense sense = DecideSense::FEASIBILITY;
 	//! Decision-free additive constant canonicalization folded out of the objective.
 	double offset = 0;
+	//! The objective as a message names it, sense in front (DecideWrittenObjective), as the solver path names it.
+	string written;
 	vector<DirectPart> parts;
 	DirectIRScope scope;
 };

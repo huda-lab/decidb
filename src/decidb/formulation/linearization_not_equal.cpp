@@ -84,13 +84,12 @@ enum class NECollapse : uint8_t {
 //! Classify one row of a `<>` constraint. Only called once both integrality guards have
 //! passed, so the LHS and `K` are both on the integer lattice and a half-unit tolerance
 //! cleanly separates "can reach K" from "cannot".
-static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row,
-                                const vector<double> &lower_bounds,
-                                const vector<double> &upper_bounds, const InstanceBox &floors) {
+static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row, const vector<double> &lower_bounds,
+                                const vector<double> &upper_bounds, const InstanceBox &floors, const string &written) {
     double lo;
     double hi;
     DecideRowSignedRange(ec, row, lower_bounds, upper_bounds, lo, hi, DConstants::INVALID_INDEX, &floors);
-    double k = DecideRowEffectiveBound(ec, row);
+    double k = DecideRowEffectiveBound(ec, row, written);
     if (!std::isfinite(k)) {
         return NECollapse::DISJUNCTION;
     }
@@ -115,15 +114,15 @@ static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row,
 //! shape the collapse exists to serve — a uniform `x <> 0` or `SUM(x) <> 0` yields one
 //! verdict for every row. So a mixed constraint keeps the Big-M pair, unsplit.
 static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_rows,
-                                       const vector<double> &lower_bounds,
-                                       const vector<double> &upper_bounds, const InstanceBox &floors) {
+                                       const vector<double> &lower_bounds, const vector<double> &upper_bounds,
+                                       const InstanceBox &floors, const string &written) {
     bool seen = false;
     NECollapse verdict = NECollapse::DISJUNCTION;
     for (idx_t r = 0; r < num_rows; r++) {
         if (!ec.row_group_ids.empty() && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
             continue;
         }
-        NECollapse row_verdict = ClassifyNERow(ec, r, lower_bounds, upper_bounds, floors);
+        NECollapse row_verdict = ClassifyNERow(ec, r, lower_bounds, upper_bounds, floors, written);
         if (!seen) {
             verdict = row_verdict;
             seen = true;
@@ -162,6 +161,7 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer,
                              const string &label) {
     const idx_t num_rows = input.num_rows;
     bool has_groups = !ec.row_group_ids.empty();
+    const string written = DecideWrittenClause(input, ec.source_clause_id);
     for (idx_t r = 0; r < num_rows; r++) {
         if (has_groups && ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
             continue; // masked out by `when` or its group, or a non-integer bound on this row
@@ -175,7 +175,7 @@ static void EmitNotEqualRows(SolverInput &input, const VarIndexer &indexer,
             idx_t v = ec.variable_indices[t];
             double coef = ec.row_coefficients[t].Get(r);
             if (v == DConstants::INVALID_INDEX) {
-                constant += coef; // constant LHS part folds into the bound
+                AddCoefficient(constant, coef, written); // constant LHS part folds into the bound
                 continue;
             }
             if (coef == 0.0) {
@@ -320,8 +320,9 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
 
         // Range collapse, decided before anything is emitted. When the LHS cannot reach
         // the far side of K, one disjunct is dead and the clause is a plain inequality.
-        NECollapse collapse = ClassifyNEConstraint(ec, num_rows, input.rigid_lower_bounds,
-                                                   input.rigid_upper_bounds, InstanceBox {input, indexer});
+        NECollapse collapse =
+            ClassifyNEConstraint(ec, num_rows, input.rigid_lower_bounds, input.rigid_upper_bounds,
+                                 InstanceBox {input, indexer}, DecideWrittenClause(input, ec.source_clause_id));
         if (collapse == NECollapse::ALWAYS_TRUE) {
             continue; // excludes nothing reachable — drop, like the tautology case
         }
@@ -351,11 +352,12 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
     // var_indexer.global_block_start, so the dense accumulator is sized to that —
     // tighter than total_vars and unaffected by the globals appended as we go.
     SparseCoeffAccumulator accum;
-    accum.BeginForDecisions(var_indexer, num_rows); // hint; per-group merging keeps actual size small
 
     const InstanceBox floors {input, var_indexer};
     for (auto &ec : deferred_aggregate) {
         bool has_groups = !ec.row_group_ids.empty();
+        const string written = DecideWrittenClause(input, ec.source_clause_id);
+        accum.BeginForDecisions(var_indexer, num_rows, written); // hint; per-group merging keeps actual size small
 
         // I4 (aggregate `<>`): clause text used to name a dropped aggregate `<>`, carried
         // onto every global z this `ec` allocates so the removal dial can label the edit.
@@ -396,8 +398,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
 
             // The fixed (decision-free) part of the LHS does not depend on which
             // excluded value is being stated, so it is computed once per group.
-            double fixed_offset = SumFixedAggregateLhsOffset(
-                ec, &flat_rows, g_begin, g_end, "fixed aggregate <> term");
+            double fixed_offset = SumFixedAggregateLhsOffset(ec, &flat_rows, g_begin, g_end, written);
 
             // Every value this group's bound takes, deduplicated. `ReduceAggregate-
             // RhsPerGroup` (physical_decide.cpp) leaves a `<>` bound exactly as it

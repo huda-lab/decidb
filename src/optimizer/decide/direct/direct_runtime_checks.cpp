@@ -66,13 +66,13 @@ unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, uniq
 }
 
 unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
-                                                  ColumnBinding number_binding, const string &written) {
+                                                  ColumnBinding number_binding, const string &written,
+                                                  DecideValueRole role) {
 	ExpressionBuilder calc(optimizer.context);
 	auto number = calc.Col(number_type, number_binding);
 	auto finite = calc.If(calc.IsNull(number), calc.Bool(true), calc.Fn("isfinite", number));
-	return DirectRaiseUnless(
-	    calc, calc.Out(finite),
-	    DirectErrorPredicate(optimizer, DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, written)));
+	return DirectRaiseUnless(calc, calc.Out(finite),
+	                         DirectErrorPredicate(optimizer, DecideInvalidValueMessage(role, written)));
 }
 
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,

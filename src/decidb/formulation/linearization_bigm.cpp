@@ -58,11 +58,11 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
 
 double decide_linearize::DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices,
                                       const vector<CoefficientColumn> &row_coefficients,
-                                      idx_t row) {
+                                      idx_t row, const string &written) {
     double offset = 0.0;
     for (idx_t t = 0; t < variable_indices.size(); t++) {
         if (variable_indices[t] == DConstants::INVALID_INDEX) {
-            offset += row_coefficients[t].Get(row);
+            AddCoefficient(offset, row_coefficients[t].Get(row), written);
         }
     }
     return offset;
@@ -71,9 +71,9 @@ double decide_linearize::DecideRowFixedLhsOffset(const vector<idx_t> &variable_i
 //! The bound a row actually imposes: its right-hand side less the constant part of
 //! its left-hand side. This is the value a Big-M has to dominate, so it is also the
 //! value a caller must classify before asking for an M over it.
-double decide_linearize::DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row) {
+double decide_linearize::DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row, const string &written) {
     double rhs = ec.rhs_values.IsUniform() ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(row);
-    return rhs - DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row);
+    return rhs - DecideRowFixedLhsOffset(ec.variable_indices, ec.row_coefficients, row, written);
 }
 
 //! Signed reachable interval of the variable part of `ec`'s LHS on `row`, as opposed to
@@ -218,9 +218,8 @@ static const char *DescribeBigMConstruct(const EvaluatedConstraint &ec) {
     return "MIN/MAX";
 }
 
-double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box,
-                             idx_t num_rows,
-                             const vector<string> &var_names, const InstanceBox &instances) {
+double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box, idx_t num_rows,
+                             const vector<string> &var_names, const InstanceBox &instances, const string &written) {
     const vector<double> &lower_bounds = box.lower;
     const vector<double> &upper_bounds = box.upper;
     bool has_unbounded = false;
@@ -230,7 +229,7 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
             ec.row_group_ids[r] == DConstants::INVALID_INDEX) {
             continue;
         }
-        double rhs = DecideRowEffectiveBound(ec, r);
+        double rhs = DecideRowEffectiveBound(ec, r, written);
         // An infinite bound reaches the model unchanged everywhere else — it is
         // simply "no constraint" or "no solution" — but it cannot be linearized:
         // M has to dominate the row's slack, and nothing finite dominates
@@ -256,14 +255,14 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
     return M + 1.0;
 }
 
-void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints, const VarIndexer &indexer,
-                                  vector<double> &lower_bounds,
-                                  vector<double> &upper_bounds, idx_t num_rows) {
+void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer, idx_t num_rows) {
+    const auto &constraints = input.constraints;
+    const auto &lower_bounds = input.lower_bounds;
+    auto &upper_bounds = input.upper_bounds;
     // The bound each solver column gets from the clause at hand, NaN for none; `touched` resets it per clause.
     vector<double> column_bound(indexer.global_block_start, std::numeric_limits<double>::quiet_NaN());
     vector<int> touched;
     SparseCoeffAccumulator accum;
-    accum.BeginForDecisions(indexer, num_rows);
     vector<idx_t> group_offsets;
     vector<idx_t> group_rows;
     vector<int> indices;
@@ -326,6 +325,8 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
         if (!nonneg) {
             continue;
         }
+        const string written = DecideWrittenClause(input, ec.source_clause_id);
+        accum.BeginForDecisions(indexer, num_rows, written);
         // The rows the clause emits, read as the model builder emits them (AccumulateClauseRow): one per group of an
         // aggregate (all rows for no groups), one per kept row otherwise. A solver column's coefficient is the sum of
         // its terms over the row's data rows, so a decision that stands in several rows of a group, or one counted
@@ -363,7 +364,7 @@ void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints
             AccumulateClauseRow(ec, indexer, &group_rows, begin, end, accum);
             accum.Flush(indices, coefficients);
             double k = (uniform_rhs ? ec.rhs_values.UniformValue() : ec.rhs_values.Get(first_row)) -
-                       SumFixedAggregateLhsOffset(ec, &group_rows, begin, end, "fixed LHS term");
+                       SumFixedAggregateLhsOffset(ec, &group_rows, begin, end, written);
             for (idx_t i = 0; i < indices.size(); i++) {
                 double a = coefficients[i];
                 if (a < -1e-15) {

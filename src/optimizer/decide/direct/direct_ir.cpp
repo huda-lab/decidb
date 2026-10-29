@@ -502,6 +502,7 @@ private:
 	void ReadObjective(DirectIRObjective &objective) const {
 		objective.sense = decide.decide_sense;
 		objective.offset = decide.objective_constant_offset;
+		objective.written = DecideWrittenObjective(decide.decide_sense, decide.written_objective);
 		if (!decide.decide_objective) {
 			return;
 		}

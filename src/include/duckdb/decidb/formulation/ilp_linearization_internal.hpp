@@ -30,12 +30,13 @@ idx_t AddGlobalBinaryAux(SolverInput &input, const VarIndexer &indexer, double o
 //! Fix a global auxiliary to a constant by collapsing its box onto `value`.
 void PinGlobalAux(SolverInput &input, const VarIndexer &indexer, idx_t aux_idx, double value);
 
-//! The constant part of one row's LHS: the terms whose variable index is fixed.
+//! The constant part of one row's LHS: the terms whose variable index is fixed. `written` names the clause when the
+//! sum grows past a DOUBLE (AddCoefficient).
 double DecideRowFixedLhsOffset(const vector<idx_t> &variable_indices,
-                               const vector<CoefficientColumn> &row_coefficients, idx_t row);
+                               const vector<CoefficientColumn> &row_coefficients, idx_t row, const string &written);
 
 //! One row's RHS with its fixed LHS offset already moved across.
-double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row);
+double DecideRowEffectiveBound(const EvaluatedConstraint &ec, idx_t row, const string &written);
 
 //! Signed reachable interval of the variable part of `ec`'s LHS on `row`, as opposed to
 //! `DecideRowTermRange`, which returns an unsigned magnitude because a Big-M only has to
@@ -83,9 +84,9 @@ struct MinMaxGroup {
 };
 
 //! Split one grouped row into its groups' families. An ungrouped row is the single
-//! group 0.
+//! group 0. `written` names what the row comes from, for a member's sum past a DOUBLE (AddCoefficient).
 vector<MinMaxGroup> BuildMinMaxGroups(const SolverInput &input, const VarIndexer &indexer,
-                                      const EvaluatedConstraint &ec);
+                                      const EvaluatedConstraint &ec, const string &written);
 
 } // namespace decide_linearize
 } // namespace duckdb

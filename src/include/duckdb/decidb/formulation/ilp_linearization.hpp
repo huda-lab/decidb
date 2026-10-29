@@ -61,9 +61,8 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
 //! column after this returns does not make the constant conservative; it makes it a cap.
 //! `instances` gives each row's instance its own box (InstanceBox), so an instance the default floor of 0 holds on is
 //! sized from 0 and not from a lowered instance's floor.
-double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box,
-                             idx_t num_rows,
-                             const vector<string> &var_names, const InstanceBox &instances);
+double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box, idx_t num_rows,
+                             const vector<string> &var_names, const InstanceBox &instances, const string &written);
 
 //! The instances of a decision whose default floor of 0 a constant lower bound under a `when` replaces (a constraint's
 //! `lifted_floor`). A constant lower bound replaces the default floor on the instances whose rows it keeps; a decision
@@ -94,9 +93,10 @@ void ResolveLiftedFloors(SolverInput &input, const VarIndexer &indexer, const ve
 //! to tighten others in the same sweep. This is sound — it only leaves some
 //! tightness on the table for chained implications — and avoids iterating to
 //! convergence over potentially many constraints.
-void DecidePropagateImpliedBounds(const vector<EvaluatedConstraint> &constraints, const VarIndexer &indexer,
-                                  vector<double> &lower_bounds,
-                                  vector<double> &upper_bounds, idx_t num_rows);
+//!
+//! Reads `input.constraints` and tightens `input.upper_bounds`. A merged coefficient past a DOUBLE raises the error
+//! that names its clause here, before the model builder, as no bound can be read from it.
+void DecidePropagateImpliedBounds(SolverInput &input, const VarIndexer &indexer, idx_t num_rows);
 
 //! Encode every constraint stage 05 tagged with a hard MIN/MAX indicator:
 //!   MAX(expr) >= K: for each row i, expr_i - M*y_i >= K - M, and SUM(y) >= 1
@@ -438,21 +438,25 @@ private:
 //!
 //! Columns keep first-appearance order — emitting straight from the hash map
 //! would hand the solver a different matrix ordering run to run.
+//!
+//! Both sums grow through AddCoefficient: `written` names the clause (or the objective) the row comes from.
 struct MinMaxLinkRow {
     vector<int> indices;
     vector<double> coefficients;
     double constant = 0.0;
     std::unordered_map<int, idx_t> column_slot;
 
-    void AddColumn(int column, double coefficient) {
-        auto entry = column_slot.find(column);
-        if (entry == column_slot.end()) {
-            column_slot.emplace(column, indices.size());
+    void AddColumn(int column, double coefficient, const string &written) {
+        auto entry = column_slot.emplace(column, indices.size());
+        if (entry.second) {
             indices.push_back(column);
-            coefficients.push_back(coefficient);
-        } else {
-            coefficients[entry->second] += coefficient;
+            coefficients.push_back(0.0);
         }
+        AddCoefficient(coefficients[entry.first->second], coefficient, written);
+    }
+
+    void AddConstant(double value, const string &written) {
+        AddCoefficient(constant, value, written);
     }
 
     void AppendTo(SolverInput::RawConstraint &rc) const {

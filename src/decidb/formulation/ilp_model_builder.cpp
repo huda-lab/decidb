@@ -13,9 +13,8 @@
 
 namespace duckdb {
 
-double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
-                                  const vector<idx_t> *rows, idx_t begin, idx_t end,
-                                  const char *error_context) {
+double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint, const vector<idx_t> *rows, idx_t begin,
+                                  idx_t end, const string &written) {
     double offset = 0.0;
     for (idx_t term_idx = 0; term_idx < constraint.variable_indices.size(); term_idx++) {
         if (constraint.variable_indices[term_idx] != DConstants::INVALID_INDEX) {
@@ -24,10 +23,17 @@ double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
         auto &column = constraint.row_coefficients[term_idx];
         for (idx_t k = begin; k < end; k++) {
             idx_t row = rows ? (*rows)[k] : k;
-            offset += column.Get(row);
+            AddCoefficient(offset, column.Get(row), written);
         }
     }
     return offset;
+}
+
+string DecideWrittenClause(const SolverInput &input, idx_t source_clause_id) {
+    if (source_clause_id < input.constraint_sources.size()) {
+        return QuoteWrittenClause(input.constraint_sources[source_clause_id]);
+    }
+    return input.objective_written;
 }
 
 static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
@@ -296,7 +302,6 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     DecideProfileScope phase("model.variables_and_bounds");
     SolverModel model;
     model.class_sets = std::move(input.class_sets);
-    model.constraint_sources = std::move(input.constraint_sources);
 
     idx_t num_rows = input.num_rows;
     idx_t num_decide_vars = input.num_decide_vars;
@@ -449,7 +454,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 if (row >= col.Size()) break;
                 idx_t var_idx = indexer.Get(decide_var_idx, row);
                 // Use += because keyed vars: multiple rows map to same solver var
-                model.obj_coeffs[var_idx] += col.Get(row);
+                AddCoefficient(model.obj_coeffs[var_idx], col.Get(row), input.objective_written);
             }
         }
     }
@@ -516,7 +521,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         // appears twice in the expansion, and we keep one triangle).
                         double val = q_sign * row_terms[i].coeff * row_terms[j].coeff;
                         if (i != j) val *= 2.0;
-                        q_map[pack_q_key(q_row, q_col)] += val;
+                        AddCoefficient(q_map[pack_q_key(q_row, q_col)], val, input.objective_written);
                     }
                 }
 
@@ -526,12 +531,13 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     if (t < input.quadratic_inner_coefficients.size() &&
                         row < input.quadratic_inner_coefficients[t].Size() &&
                         input.quadratic_inner_variable_indices[t] == DConstants::INVALID_INDEX) {
-                        c_row += input.quadratic_inner_coefficients[t].Get(row);
+                        AddCoefficient(c_row, input.quadratic_inner_coefficients[t].Get(row), input.objective_written);
                     }
                 }
                 if (c_row != 0.0) {
                     for (auto &vt : row_terms) {
-                        model.obj_coeffs[vt.flat_idx] += q_sign * 2.0 * c_row * vt.coeff;
+                        AddCoefficient(model.obj_coeffs[vt.flat_idx], q_sign * 2.0 * c_row * vt.coeff,
+                                       input.objective_written);
                     }
                 }
             }
@@ -553,7 +559,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
                     int q_row = std::max(flat_a, flat_b);
                     int q_col = std::min(flat_a, flat_b);
-                    q_map[pack_q_key(q_row, q_col)] += coeff;
+                    AddCoefficient(q_map[pack_q_key(q_row, q_col)], coeff, input.objective_written);
                 }
             }
         }
@@ -771,6 +777,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
         LhsIntegrality lhs_integrality = IsEvalConstraintLhsIntegerValued(eval_const);
+        const string written = DecideWrittenClause(input, eval_const.source_clause_id);
 
         // Detect whether this constraint can bypass the hash-map accumulator:
         // * every non-fixed term must reference a row-scoped decide variable
@@ -885,7 +892,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     // accumulate because multiple (term, row) pairs can map
                     // to the same flat solver index. A term beside the reducers counts
                     // once: execution kept its coefficient on one row (CountOnce).
-                    accum.BeginForDecisions(indexer, eval_const.variable_indices.size() * num_rows);
+                    accum.BeginForDecisions(indexer, eval_const.variable_indices.size() * num_rows, written);
                     AccumulateClauseRow(eval_const, indexer, nullptr, 0, num_rows, accum);
                     accum.Flush(constr.indices, constr.coefficients);
                 }
@@ -895,8 +902,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 // every kept row (RewriteRhsAggregates). No per-row check is needed here.
                 D_ASSERT(RhsIsConstantWithinGroups(eval_const));
                 double rhs = eval_const.rhs_values.Get(0);
-                double lhs_offset = SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows,
-                                                               "fixed aggregate LHS term");
+                double lhs_offset = SumFixedAggregateLhsOffset(eval_const, nullptr, 0, num_rows, written);
                 rhs -= lhs_offset;
                 ApplyComparisonSense(constr, eval_const.comparison_type, rhs, lhs_integrality, lhs_offset);
                 // F2 site 1: aggregate, ungrouped.
@@ -927,7 +933,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 if (!row_scoped_fast) {
                     accum.BeginForDecisions(indexer, eval_const.variable_indices.size() *
                                                          (eval_const.num_groups > 0 ? num_rows / eval_const.num_groups
-                                                                                    : num_rows));
+                                                                                    : num_rows),
+                                             written);
                 }
 
                 for (idx_t g = 0; g < eval_const.num_groups; g++) {
@@ -970,8 +977,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     // Row 0 would be wrong twice over: it may belong to another group,
                     // and it may be excluded by WHEN.
                     double group_lhs_offset =
-                        SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end,
-                                                   "fixed aggregate LHS term");
+                        SumFixedAggregateLhsOffset(eval_const, &flat_rows, g_begin, g_end, written);
                     double group_rhs = eval_const.rhs_values.Get(flat_rows[g_begin]) - group_lhs_offset;
                     ApplyComparisonSense(constr, eval_const.comparison_type, group_rhs, lhs_integrality,
                                          group_lhs_offset);
@@ -1024,11 +1030,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     if (decide_var_idx != DConstants::INVALID_INDEX) {
                         if (coeff != 0.0) {
                             int var_idx = (int)indexer.Get(decide_var_idx, row);
-                            coeff_by_var[var_idx] += coeff;
+                            AddCoefficient(coeff_by_var[var_idx], coeff, written);
                         }
                     } else {
                         // Constant / row-data LHS term: subtract from RHS.
-                        rhs_adjustment += coeff;
+                        AddCoefficient(rhs_adjustment, coeff, written);
                     }
                 }
                 for (auto &kv : coeff_by_var) {
@@ -1075,12 +1081,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
     // lhs_integrality: precomputed from the user's EvaluatedConstraint; gates the
     // strict-inequality rewrite (`< K → <= K-1`) in the same way as the linear path.
     // lhs_constant: out, the constant part of the LHS folded into the bound (the linear
-    // path's `lhs_offset`), for the stamp call.
-    auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec,
-                                        const vector<idx_t> &row_set,
-                                        double rhs,
-                                        LhsIntegrality lhs_integrality,
-                                        double &lhs_constant) -> SolverModel::QuadraticConstraint {
+    // path's `lhs_offset`), for the stamp call. written: the clause, for a sum past a DOUBLE.
+    auto BuildQuadraticConstraint = [&](const EvaluatedConstraint &ec, const vector<idx_t> &row_set, double rhs,
+                                        LhsIntegrality lhs_integrality, double &lhs_constant,
+                                        const string &written) -> SolverModel::QuadraticConstraint {
         SolverModel::QuadraticConstraint qc;
         std::unordered_map<int, double> linear_accum;
         std::unordered_map<uint64_t, double> q_accum;
@@ -1093,11 +1097,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 for (idx_t row : row_set) {
                     double coeff = ec.row_coefficients[term_idx][row];
                     int var_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
-                    linear_accum[var_idx] += coeff;
+                    AddCoefficient(linear_accum[var_idx], coeff, written);
                 }
             } else {
                 for (idx_t row : row_set) {
-                    rhs_adjustment += ec.row_coefficients[term_idx].Get(row);
+                    AddCoefficient(rhs_adjustment, ec.row_coefficients[term_idx].Get(row), written);
                 }
             }
         }
@@ -1111,7 +1115,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 int flat_b = static_cast<int>(indexer.Get(bt.var_b, row));
                 int q_row = std::max(flat_a, flat_b);
                 int q_col = std::min(flat_a, flat_b);
-                q_accum[pack_q_key(q_row, q_col)] += coeff;
+                AddCoefficient(q_accum[pack_q_key(q_row, q_col)], coeff, written);
             }
         }
 
@@ -1136,7 +1140,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                     if (a == 0.0) continue;
                     idx_t decide_var_idx = qg.variable_indices[t];
                     if (decide_var_idx == DConstants::INVALID_INDEX) {
-                        c_row += a;
+                        AddCoefficient(c_row, a, written);
                         continue;
                     }
                     int flat_idx = static_cast<int>(indexer.Get(decide_var_idx, row));
@@ -1152,19 +1156,19 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         int q_c = std::min(ri, rj);
                         double val = q_sign * row_terms[i].coeff * row_terms[j].coeff;
                         if (i != j) val *= 2.0;  // Off-diagonal: 2*a_i*a_j
-                        q_accum[pack_q_key(q_r, q_c)] += val;
+                        AddCoefficient(q_accum[pack_q_key(q_r, q_c)], val, written);
                     }
                 }
 
                 // Variable × constant → linear terms (cross-product from expansion)
                 if (c_row != 0.0) {
                     for (auto &vt : row_terms) {
-                        linear_accum[vt.flat_idx] += q_sign * 2.0 * c_row * vt.coeff;
+                        AddCoefficient(linear_accum[vt.flat_idx], q_sign * 2.0 * c_row * vt.coeff, written);
                     }
                 }
 
                 // Constant × constant → adjusts RHS
-                rhs_adjustment += q_sign * c_row * c_row;
+                AddCoefficient(rhs_adjustment, q_sign * c_row * c_row, written);
             }
         }
 
@@ -1235,6 +1239,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         bool is_aggregate = eval_const.lhs_is_aggregate;
         bool has_groups = !eval_const.row_group_ids.empty();
         LhsIntegrality lhs_integrality = IsEvalConstraintLhsIntegerValued(eval_const);
+        const string written = DecideWrittenClause(input, eval_const.source_clause_id);
 
         if (is_aggregate) {
             double rhs = eval_const.rhs_values.Empty() ? 0.0 : eval_const.rhs_values.Get(0);
@@ -1249,7 +1254,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 vector<idx_t> all_rows(num_rows);
                 std::iota(all_rows.begin(), all_rows.end(), 0);
                 double lhs_constant;
-                auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_integrality, lhs_constant);
+                auto qc = BuildQuadraticConstraint(eval_const, all_rows, rhs, lhs_integrality, lhs_constant, written);
                 // F2 site 4: quadratic aggregate, ungrouped.
                 StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, DConstants::INVALID_INDEX, string(),
                                           lhs_constant);
@@ -1276,7 +1281,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         eval_const.rhs_values.Empty() ? 0.0 : eval_const.rhs_values.Get(flat_rows[g_begin]);
                     double lhs_constant;
                     auto qc = BuildQuadraticConstraint(eval_const, group_rows_slice, group_rhs, lhs_integrality,
-                                                       lhs_constant);
+                                                       lhs_constant, written);
                     // F2 site 5: grouped quadratic aggregate.
                     string group_label = g < eval_const.group_labels.size() ? eval_const.group_labels[g] : string();
                     StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, g, group_label, lhs_constant);
@@ -1294,7 +1299,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                 vector<idx_t> single_row{row};
                 double rhs = eval_const.rhs_values.Get(row);
                 double lhs_constant;
-                auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_integrality, lhs_constant);
+                auto qc = BuildQuadraticConstraint(eval_const, single_row, rhs, lhs_integrality, lhs_constant, written);
                 // F2 site 6: quadratic per-row.
                 idx_t row_group_key = has_groups ? eval_const.row_group_ids[row] : DConstants::INVALID_INDEX;
                 StampConstraintProvenance(qc.provenance, eval_const, repair_group_id, row_group_key, string(),
@@ -1435,6 +1440,8 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
     }
 
+    // Moved last: every row above names its clause from them (DecideWrittenClause).
+    model.constraint_sources = std::move(input.constraint_sources);
     return model;
 }
 
@@ -1500,7 +1507,8 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
 // SparseCoeffAccumulator
 //===----------------------------------------------------------------------===//
 
-void SparseCoeffAccumulator::BeginDense(idx_t total_vars) {
+void SparseCoeffAccumulator::BeginDense(idx_t total_vars, const string &written_p) {
+    written = &written_p;
     use_dense = true;
     if (dense.size() < total_vars) {
         dense.assign(total_vars, 0.0);
@@ -1510,7 +1518,8 @@ void SparseCoeffAccumulator::BeginDense(idx_t total_vars) {
     pairs.clear();
 }
 
-void SparseCoeffAccumulator::BeginSparse(idx_t expected_size) {
+void SparseCoeffAccumulator::BeginSparse(idx_t expected_size, const string &written_p) {
+    written = &written_p;
     use_dense = false;
     pairs.clear();
     if (expected_size > pairs.capacity()) {
@@ -1519,12 +1528,13 @@ void SparseCoeffAccumulator::BeginSparse(idx_t expected_size) {
     touched.clear();
 }
 
-void SparseCoeffAccumulator::BeginForDecisions(const VarIndexer &indexer, idx_t expected_size) {
+void SparseCoeffAccumulator::BeginForDecisions(const VarIndexer &indexer, idx_t expected_size,
+                                               const string &written_p) {
     constexpr idx_t DENSE_CAP = 1u << 20;
     if (indexer.global_block_start <= DENSE_CAP) {
-        BeginDense(indexer.global_block_start);
+        BeginDense(indexer.global_block_start, written_p);
     } else {
-        BeginSparse(expected_size);
+        BeginSparse(expected_size, written_p);
     }
 }
 
@@ -1575,7 +1585,7 @@ void SparseCoeffAccumulator::Flush(vector<int> &out_indices, vector<double> &out
             double sum = pairs[i].second;
             idx_t j = i + 1;
             while (j < n && pairs[j].first == idx) {
-                sum += pairs[j].second;
+                AddCoefficient(sum, pairs[j].second, *written);
                 j++;
             }
             if (sum != 0.0) {

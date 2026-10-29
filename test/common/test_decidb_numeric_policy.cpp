@@ -1,6 +1,7 @@
 #include "catch.hpp"
 
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/decidb/formulation/ilp_model.hpp"
 
 #include <cmath>
 #include <cstdint>
@@ -92,4 +93,27 @@ TEST_CASE("DECIDE exact finite double needs a finite double that converts back",
 	REQUIRE_FALSE(DecideIsExactFiniteDouble(std::numeric_limits<double>::infinity(), int64_t(0), never));
 	REQUIRE_FALSE(DecideIsExactFiniteDouble(std::numeric_limits<double>::quiet_NaN(), int64_t(0), never));
 	REQUIRE_FALSE(converted_back);
+}
+
+TEST_CASE("DECIDE sparse merge of like terms past a DOUBLE names the clause", "[decidb][numeric_policy]") {
+	// Past about a million decision columns the builder sums like terms as sorted pairs merged at Flush, not in a dense
+	// row. The SQL tests never build that many, so the merge is checked here.
+	const string written = "'SUM(b * x) <= 10'";
+	SparseCoeffAccumulator accum;
+	duckdb::vector<int> indices;
+	duckdb::vector<double> coefficients;
+
+	accum.BeginSparse(4, written);
+	accum.Add(2, 1.5);
+	accum.Add(0, 1.0);
+	accum.Add(2, 2.5);
+	accum.Flush(indices, coefficients);
+	REQUIRE(indices == duckdb::vector<int> {0, 2});
+	REQUIRE(coefficients == duckdb::vector<double> {1.0, 4.0});
+
+	accum.BeginSparse(4, written);
+	accum.Add(1, 1e308);
+	accum.Add(1, 1e308);
+	REQUIRE_THROWS_WITH(accum.Flush(indices, coefficients),
+	                    Catch::Contains(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, written)));
 }

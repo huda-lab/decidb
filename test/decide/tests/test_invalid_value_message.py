@@ -3,7 +3,9 @@ the smallest edit, and the solver path and the direct-solve plans print the same
 
 A coefficient must be finite (`v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'`); a bound
 may be infinite and must not be NaN (`the bound v is NaN on some rows. ...'when NOT isnan(v):'`). A NULL value is
-skipped, not refused. The wording lives in `DecideInvalidValueMessage` (`decide_value_messages.hpp`).
+skipped, not refused. A number the model computes from finite ones (a sum over rows, a square) that is too large for a
+DOUBLE names its clause or the objective and asks to scale its data. The wording lives in `DecideInvalidValueMessage`
+(`decide_value_messages.hpp`).
 """
 
 import pytest
@@ -121,27 +123,136 @@ def test_a_coefficient_that_is_not_finite_is_named_as_written_on_both_paths(deci
     assert direct == solver
 
 
-# Values the solver finds finite and the direct plan finds too large: each is a sum or a square it computes before it
-# answers. The solver path reaches the same numbers as an internal error or a model it warns about.
+def _too_large(written):
+    return f"DECIDE: {written} computes a number too large for a DOUBLE. Scale its data down."
+
+
+# Values each finite whose sum or square is not, on the middle row. Both paths print one text.
 DIRECT_OVERFLOW = [
-    # The squared coefficient of a decision, `b * b`, is beyond a double: the message names the objective's terms of it.
-    ("a1_square_overflows", "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(b * x, 2))", "power(b, 2)", "1e200"),
+    # The squared coefficient of a decision, `b * b`, is beyond a double. No value of a row is, so the message names
+    # the objective and asks to scale its data.
+    (
+        "a1_square_overflows",
+        "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(b * x, 2))",
+        _too_large("MINIMIZE sum(power(b * x, 2))"),
+        "1e200",
+    ),
     (
         "a1_square_and_linear_overflow",
         "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(b * x, 2) + a * x)",
-        "a + power(b, 2)",
+        _too_large("MINIMIZE sum(power(b * x, 2) + a * x)"),
         "1e200",
     ),
-    # Two reducers whose coefficients are each finite and whose score is not: the message names the score.
-    ("s1_score_overflows", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(b * x) + SUM(b * x)", "b + b", "1e308"),
-    ("a1_coefficient_overflows", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x) + SUM(b * x)", "b + b", "1e308"),
+    # Like terms on one row merge into that row's value, `b + b`, which a `when` can skip: the message names it.
+    (
+        "s1_score_overflows",
+        "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(b * x) + SUM(b * x)",
+        _coefficient("b + b"),
+        "1e308",
+    ),
+    (
+        "a1_coefficient_overflows",
+        "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x) + SUM(b * x)",
+        _coefficient("b + b"),
+        "1e308",
+    ),
 ]
 
 
 @pytest.mark.error
-@pytest.mark.parametrize("name,decide,value,big", DIRECT_OVERFLOW, ids=[case[0] for case in DIRECT_OVERFLOW])
-def test_a_sum_the_plan_computes_that_overflows_is_named_as_written(decidb_cli, name, decide, value, big):
-    assert _coefficient(value) in _stderr(decidb_cli, _query(decide, big), "require")
+@pytest.mark.parametrize("name,decide,message,big", DIRECT_OVERFLOW, ids=[case[0] for case in DIRECT_OVERFLOW])
+def test_a_sum_the_plan_computes_that_overflows_is_named_as_written(decidb_cli, name, decide, message, big):
+    direct = _stderr(decidb_cli, _query(decide, big), "require")
+    solver = _stderr(decidb_cli, _query(decide, big), "off")
+    assert message in direct, direct
+    assert direct == solver
+
+
+def _big_query(decide, big):
+    # Every row holds the big value in `b`: a sum over rows, or a square of one, is past a DOUBLE.
+    rows = f"(1, 1.0, {big}, 'g'), (2, 2.0, {big}, 'g'), (3, 3.0, {big}, 'h')"
+    return f"SELECT id FROM (FROM (VALUES {rows}) t(id, a, b, g) DECIDE {decide}) q"
+
+
+# (name, DECIDE clauses, what the message names, the big value). Each merges finite numbers past a DOUBLE at a
+# different place the model builds: like coefficients on one column (a query-wide or keyed decision over the rows),
+# the square of a coefficient, the fixed terms moved to the bound side (summed over the rows, or within one row), a
+# composed MIN/MAX's outer row, and a two-level objective's group sums.
+TOO_LARGE = [
+    (
+        "constraint_on_a_query_wide_decision",
+        "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 5 AND SUM(b * y) <= 10 MAXIMIZE SUM(a * x)",
+        "SUM(b * y) <= 10",
+        "1e308",
+    ),
+    (
+        "constraint_on_a_keyed_decision_by_group",
+        "x(REAL), per g: y(REAL) SUCH THAT x <= 5 AND y <= 5 AND SUM(b * y) by (g) <= 10 MAXIMIZE SUM(a * x)",
+        "SUM(b * y) by (g) <= 10",
+        "1e308",
+    ),
+    (
+        "objective_on_a_query_wide_decision",
+        "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 5 MAXIMIZE SUM(a * x + b * y)",
+        "MAXIMIZE sum(a * x + b * y)",
+        "1e308",
+    ),
+    (
+        "square_in_the_objective",
+        "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(b * x, 2))",
+        "MINIMIZE sum(power(b * x, 2))",
+        "1e200",
+    ),
+    (
+        "fixed_terms_of_a_sum",
+        "x(REAL) SUCH THAT x <= 5 AND SUM(x + b) <= 10 MAXIMIZE SUM(a * x)",
+        "SUM(x + b) <= 10",
+        "1e308",
+    ),
+    (
+        "fixed_terms_of_one_row",
+        "x(INT) SUCH THAT x <= 5 AND MAX(x + b + b) >= 3 MAXIMIZE SUM(a * x)",
+        "MAX(x + b + b) >= 3",
+        "1e308",
+    ),
+    (
+        "outer_row_of_a_composed_extremum",
+        "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 1 AND SUM(b * y) + MAX(x) <= 10 MAXIMIZE SUM(a * x)",
+        "SUM(b * y) + MAX(x) <= 10",
+        "1e308",
+    ),
+    # A row a rewrite adds for the objective belongs to no clause: it names the objective.
+    (
+        "member_of_an_extremum_in_the_objective",
+        "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(x) + MAX(x + b + b)",
+        "MINIMIZE sum(x) + max(x + b + b)",
+        "1e308",
+    ),
+    (
+        "group_sums_of_a_two_level_objective",
+        "x(REAL), per (): y(REAL) SUCH THAT x <= 5 AND y <= 1 MINIMIZE max(per g: sum(b * y) by (g))",
+        "MINIMIZE max(per g: sum(b * y) by (g))",
+        "1e308",
+    ),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize("name,decide,written,big", TOO_LARGE, ids=[case[0] for case in TOO_LARGE])
+def test_a_sum_past_a_double_names_its_clause(request, cli_fixture, mode, name, decide, written, big):
+    cli = request.getfixturevalue(cli_fixture)
+    assert _too_large(written) in _stderr(cli, _big_query(decide, big), mode)
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+def test_a_square_past_a_double_in_a_constraint_names_its_clause(decidb_cli_gurobi, mode):
+    # Gurobi only: HiGHS refuses a quadratic constraint when the query is planned, whatever its numbers.
+    decide = "x(REAL) SUCH THAT x <= 5 AND SUM(POWER(b * x, 2)) <= 10 MAXIMIZE SUM(a * x)"
+    stderr = _stderr(decidb_cli_gurobi, _big_query(decide, "1e200"), mode)
+    assert _too_large("SUM(POWER(b * x, 2)) <= 10") in stderr
 
 
 @pytest.mark.error

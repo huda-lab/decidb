@@ -3400,6 +3400,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // `x OP const` / BETWEEN constraints; those comparisons were skipped in
     // AnalyzeConstraint so we don't re-emit them as per-row model rows.
     solver_input.constraint_sources = constraint_sources;
+    solver_input.objective_written = DecideWrittenObjective(decide_sense, written_objective);
     // A variable the query never explicitly lowered gets the default lower bound 0 and
     // stays non-negative. A variable with an explicit (possibly negative) lower bound
     // keeps it, and a written bound of -1e30 or below is no bound, as -1e29 is. Must
@@ -3460,8 +3461,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // otherwise-unbounded variables from non-negative `<=`/`=` constraints (the
     // knapsack/budget pattern), so the downstream Big-M can be finite and tight.
     // Only provably-implied bounds are applied; the feasible region is unchanged.
-    DecidePropagateImpliedBounds(solver_input.constraints, out_var_indexer, solver_input.lower_bounds,
-                                 solver_input.upper_bounds, num_rows);
+    DecidePropagateImpliedBounds(solver_input, out_var_indexer, num_rows);
     phase.Next("assembly.objective_and_avg");
     // Objective (linear part)
     solver_input.objective_coefficients = std::move(gstate.evaluated_objective_coefficients);
@@ -3642,8 +3642,9 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
                 // The link is normalized to `M*z - inner >= rhs`, so the indicator
                 // coefficient is positive.
                 ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
-                double M = DecideTightPerRowBigM(
-                    ec, box, num_rows, decide_var_names, InstanceBox {solver_input, var_indexer});
+                double M = DecideTightPerRowBigM(ec, box, num_rows, decide_var_names,
+                                                 InstanceBox {solver_input, var_indexer},
+                                                 DecideWrittenClause(solver_input, ec.source_clause_id));
                 ec.row_coefficients[z_term].AssignScalar(num_rows, M);
             }
         }
