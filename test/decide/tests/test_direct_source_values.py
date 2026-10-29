@@ -1,7 +1,7 @@
 """Both paths read an infinite source value the same way, in every bound slot a rule reads, and neither reads a value on
 a row a `when` drops.
 
-The direct path rejects bad values in SQL (`DirectValidNumberPredicate` for coefficients, `DirectValidBoundPredicate`
+The direct path rejects bad values in SQL (`DirectNumberMessage` for coefficients, `DirectValidBoundPredicate`
 for bounds, `direct_runtime_checks.cpp`); the solver path rejects them in C++ (`ExtractDoubleColumn`,
 `physical_decide.cpp`). The two cannot share code, and they do not apply the same test: a coefficient must be finite,
 while a bound only has to be a number, because an infinite bound means "no bound" or "nothing satisfies it". This file

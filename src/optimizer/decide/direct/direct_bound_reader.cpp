@@ -89,10 +89,7 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 			return false;
 		}
 		clause.rhs = ir_node.rhs->Copy();
-		bool computed = std::all_of(clause.coefficient.begin(), clause.coefficient.end(),
-		                            [](const DirectSignedValue &term) { return term.expr->IsFoldable(); });
-		clause.coefficient_role = computed ? DecideValueRole::TOO_LARGE : DecideValueRole::COEFFICIENT;
-		clause.coefficient_text = computed ? ir_node.written : DirectCoefficientText(ir, context, clause.coefficient);
+		clause.coefficient_names = DirectNamesOf(ir, clause.coefficient, ir_node.written);
 		clause.rhs_text = ir.render(*clause.rhs);
 		clause.lower = bound.lower->Copy();
 		clause.upper = bound.upper->Copy();
@@ -166,35 +163,20 @@ ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, co
 	                 calc.Cmp(ExpressionType::COMPARE_EQUAL, upper, calc.Num(NEGATIVE_INFINITY))});
 }
 
-string DirectCoefficientText(const DirectIR &ir, ClientContext &context, const vector<DirectSignedValue> &terms) {
-	D_ASSERT(!terms.empty());
-	auto merged = terms[0].expr->Copy();
-	for (idx_t i = 1; i < terms.size(); i++) {
-		merged = DecideMergeLikeCoefficients(context, terms[0].sign, std::move(merged), terms[i].sign,
-		                                     terms[i].expr->Copy());
+DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values, const string &clause) {
+	DirectNumberNames names;
+	for (auto &value : values) {
+		if (!value.expr->IsFoldable()) {
+			names.inputs.push_back(value.expr->Copy());
+			names.texts.push_back(ir.render(*value.expr));
+		}
 	}
-	return ir.render(*merged);
+	names.clause = clause;
+	return names;
 }
 
-//! A coefficient once the part's constant factor is applied, as the solver path applies it (`scale * coefficient`,
-//! `coefficient / scale`).
-static unique_ptr<Expression> ScaledCoefficient(ClientContext &context, const DirectPart &part,
-                                                const Expression &coefficient) {
-	if (!part.scale) {
-		return coefficient.Copy();
-	}
-	vector<unique_ptr<Expression>> children;
-	if (part.scale_divides) {
-		children.push_back(coefficient.Copy());
-		children.push_back(part.scale->Copy());
-	} else {
-		children.push_back(part.scale->Copy());
-		children.push_back(coefficient.Copy());
-	}
-	return DecideRebindOperator(context, part.scale_divides ? "/" : "*", std::move(children));
-}
-
-bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, DirectLinearPart &out) {
+bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
+                          DirectLinearPart &out) {
 	out.sign = part.sign;
 	out.scaled = part.scale != nullptr;
 	out.divides = part.scale_divides;
@@ -208,20 +190,17 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 		if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
 			return false;
 		}
-		out.terms.push_back(
-		    {term.var_a, term.sign, term.coefficient->Copy(), ScaledCoefficient(context, part, *term.coefficient)});
+		out.terms.push_back({term.var_a, term.sign, term.coefficient->Copy()});
 	}
-	out.text.resize(ir.decisions.size());
-	for (idx_t decision = 0; decision < out.text.size(); decision++) {
+	// The part's factor is a literal, which no column holds: a message names the terms' own values.
+	for (idx_t decision = 0; decision < ir.decisions.size(); decision++) {
 		vector<DirectSignedValue> like;
 		for (auto &term : out.terms) {
 			if (term.decision == decision) {
-				like.push_back({term.sign, term.scaled->Copy()});
+				like.push_back({term.sign, term.coefficient->Copy()});
 			}
 		}
-		if (!like.empty()) {
-			out.text[decision] = DirectCoefficientText(ir, context, like);
-		}
+		out.names.push_back(DirectNamesOf(ir, like, clause));
 	}
 	return true;
 }

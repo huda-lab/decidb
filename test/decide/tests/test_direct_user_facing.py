@@ -231,7 +231,8 @@ def test_r1_invalid_number_names_the_value_the_user_wrote(decidb_cli, bad):
 
 
 @pytest.mark.correctness
-def test_r1_objective_factor_that_overflows_names_the_scaled_value_like_the_solvers(decidb_cli):
+def test_r1_objective_factor_that_overflows_names_the_objective_like_the_solvers(decidb_cli):
+    # Every value is finite: the factor DeciDB applies leaves the DOUBLE range, so the message names the objective.
     sql = """
         SELECT id, x FROM (
             FROM (VALUES (1, 4.0, 2.0, 10.0), (2, 3.0, 3.0, 9.0)) t(id, cap, w, v)
@@ -240,7 +241,9 @@ def test_r1_objective_factor_that_overflows_names_the_scaled_value_like_the_solv
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
     solver = _raw(decidb_cli, sql, mode="off").stderr
-    assert "1e+308 * v is NaN or infinite on some rows. Skip those rows with 'when isfinite(1e+308 * v):'." in direct
+    assert (
+        "DECIDE: MAXIMIZE 1e+308 * sum(v * x) computes a number too large for a DOUBLE. Scale its data down." in direct
+    )
     assert solver == direct
 
 

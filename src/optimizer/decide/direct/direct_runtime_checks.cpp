@@ -48,12 +48,24 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
 	                                       "which decision needs a bound.");
 }
 
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &written,
-                            DecideValueRole role) {
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names,
+                            const std::function<ExprPtr(const Expression &)> &into) {
+	auto message = calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, names.clause)));
+	// Built from the last input back, so the first that is not finite is the one named. A NULL input is no answer.
+	for (idx_t i = names.inputs.size(); i > 0; i--) {
+		auto input = calc.Cast(into(*names.inputs[i - 1]), LogicalType::DOUBLE);
+		auto not_finite = calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Fn("isfinite", input), calc.Bool(false));
+		auto named = DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, names.texts[i - 1]);
+		message = calc.If(not_finite, calc.Constant(Value(named)), message);
+	}
 	auto none = calc.Constant(Value(LogicalType::VARCHAR));
-	return calc.If(
-	    calc.IsNull(number), none,
-	    calc.If(calc.Fn("isfinite", number), none, calc.Constant(Value(DecideInvalidValueMessage(role, written)))));
+	return calc.If(calc.IsNull(number), none, calc.If(calc.Fn("isfinite", number), none, message));
+}
+
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &clause) {
+	DirectNumberNames names;
+	names.clause = clause;
+	return DirectNumberMessage(calc, number, names, nullptr);
 }
 
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message) {
@@ -64,16 +76,6 @@ unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const Expression
 unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, unique_ptr<Expression> kept,
                                              unique_ptr<Expression> check) {
 	return calc.Out(calc.If(calc.Wrap(std::move(kept)), calc.Wrap(std::move(check)), calc.Bool(true)));
-}
-
-unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
-                                                  ColumnBinding number_binding, const string &written,
-                                                  DecideValueRole role) {
-	ExpressionBuilder calc(optimizer.context);
-	auto number = calc.Col(number_type, number_binding);
-	auto finite = calc.If(calc.IsNull(number), calc.Bool(true), calc.Fn("isfinite", number));
-	return DirectRaiseUnless(calc, calc.Out(finite),
-	                         DirectErrorPredicate(optimizer, DecideInvalidValueMessage(role, written)));
 }
 
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,

@@ -45,9 +45,9 @@ struct Term {
 	double square_scale = 1.0;
 	vector<DirectSignedValue> inner_linear;
 	vector<DirectSignedValue> inner_constant;
-	//! What a message calls the sums of the two, as the user wrote them (DirectCoefficientText).
-	string inner_linear_text;
-	string inner_constant_text;
+	//! What a message names for the sums of the two (DirectNamesOf).
+	DirectNumberNames inner_linear_names;
+	DirectNumberNames inner_constant_names;
 };
 
 struct Part {
@@ -56,8 +56,8 @@ struct Part {
 	unique_ptr<Expression> filter;
 	//! The constant and square terms, in the order they came.
 	vector<Term> terms;
-	//! What a message calls the sum of the constant terms, as the user wrote it.
-	string constant_text;
+	//! What a message names for the sum of the constant terms (DirectNamesOf).
+	DirectNumberNames constant_names;
 };
 
 struct Decision {
@@ -224,7 +224,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	for (auto &part : objective.parts) {
 		Part prepared;
 		vector<DirectSignedValue> constants;
-		if (!DirectReadLinearPart(ir, context, part, prepared.linear)) {
+		if (!DirectReadLinearPart(ir, context, part, objective.written, prepared.linear)) {
 			return false;
 		}
 		for (auto &term : prepared.linear.terms) {
@@ -286,16 +286,12 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 					(inner.kind == DecideTermKind::LINEAR ? built.inner_linear : built.inner_constant)
 					    .push_back(std::move(value));
 				}
-				built.inner_linear_text = DirectCoefficientText(ir, context, built.inner_linear);
-				if (!built.inner_constant.empty()) {
-					built.inner_constant_text = DirectCoefficientText(ir, context, built.inner_constant);
-				}
+				built.inner_linear_names = DirectNamesOf(ir, built.inner_linear, objective.written);
+				built.inner_constant_names = DirectNamesOf(ir, built.inner_constant, objective.written);
 			}
 			prepared.terms.push_back(std::move(built));
 		}
-		if (!constants.empty()) {
-			prepared.constant_text = DirectCoefficientText(ir, context, constants);
-		}
+		prepared.constant_names = DirectNamesOf(ir, constants, objective.written);
 		condition.parts.push_back(std::move(prepared));
 	}
 	return true;
@@ -483,6 +479,23 @@ private:
 		return total;
 	}
 
+	//! The check of a raw value of P1, evaluated over P1: it raises what DirectNumberMessage names, reading the values
+	//! the number is computed from in the source columns P1 carries first.
+	unique_ptr<Expression> ValidNumber(const Stage &p1, ColumnBinding number, const DirectNumberNames &names) const {
+		auto message =
+		    DirectNumberMessage(calc, calc.Col(LogicalType::DOUBLE, number), names, [&](const Expression &input) {
+			    return calc.Wrap(DirectOverProjection(input, source_bindings, p1.index));
+		    });
+		return DirectRaiseMessage(optimizer, calc, message);
+	}
+
+	//! The check of a number computed from values checked before it: past a DOUBLE it names the objective.
+	unique_ptr<Expression> TooLarge(ColumnBinding number) const {
+		return DirectRaiseMessage(
+		    optimizer, calc,
+		    DirectNumberMessage(calc, calc.Col(LogicalType::DOUBLE, number), condition.objective_written));
+	}
+
 	//===------------------------------------------------------------------===//
 	// P1: raw values
 	//===------------------------------------------------------------------===//
@@ -512,8 +525,7 @@ private:
 				                                   std::move(check))
 				           : std::move(check);
 			};
-			checks.push_back(read_on(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, coefficient,
-			                                                    clause.coefficient_text, clause.coefficient_role)));
+			checks.push_back(read_on(ValidNumber(p1, coefficient, clause.coefficient_names)));
 			checks.push_back(read_on(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text)));
 			raw.clauses.push_back(columns);
 		}
@@ -573,12 +585,10 @@ private:
 				square.decision = term.decision;
 				square.scale = term.sign * term.square_scale;
 				square.linear = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(term.inner_linear)))));
-				checks.push_back(
-				    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.linear, term.inner_linear_text));
+				checks.push_back(ValidNumber(p1, square.linear, term.inner_linear_names));
 				if (!term.inner_constant.empty()) {
 					square.constant = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(term.inner_constant)))));
-					checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, square.constant,
-					                                            term.inner_constant_text));
+					checks.push_back(ValidNumber(p1, square.constant, term.inner_constant_names));
 				} else {
 					square.constant = p1.Add(calc.Out(calc.Num(0.0)));
 				}
@@ -590,13 +600,13 @@ private:
 				continue;
 			}
 			auto binding = p1.Add(calc.Out(on_kept(linear_sums[d])));
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding, part.linear.text[d]));
+			checks.push_back(ValidNumber(p1, binding, part.linear.names[d]));
 			columns.linear_decision.push_back(d);
 			columns.linear.push_back(binding);
 		}
 		if (constant_sum) {
 			auto binding = p1.Add(calc.Out(on_kept(constant_sum)));
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, binding, part.constant_text));
+			checks.push_back(ValidNumber(p1, binding, part.constant_names));
 		}
 		for (auto &check : checks) {
 			all_checks.push_back(
@@ -633,10 +643,10 @@ private:
 		for (idx_t d = 0; d < condition.decisions.size(); d++) {
 			ExprPtr a_total = calc.Num(0.0);
 			ExprPtr b_total = calc.Num(0.0);
-			// The linear coefficient the parts' like terms merge into, `b + b` for SUM(b * x) + SUM(b * x): a value of
-			// the row, as the solver path reads it, so it is named as written and a `when` skips it.
+			// The linear coefficient the parts' like terms merge into, `b + b` for SUM(b * x) + SUM(b * x), as the
+			// solver path reads it. P1 checked each value, so a total past a DOUBLE names the objective.
 			ExprPtr linear_total = calc.Num(0.0);
-			vector<string> linear_text;
+			bool has_linear = false;
 			for (idx_t p = 0; p < condition.parts.size(); p++) {
 				auto &part = condition.parts[p];
 				auto &columns = raw.parts[p];
@@ -648,6 +658,7 @@ private:
 					if (columns.linear_decision[i] == d) {
 						linear_part = calc.Add(linear_part, calc.Col(LogicalType::DOUBLE, columns.linear[i]));
 						touched = true;
+						has_linear = true;
 					}
 				}
 				for (auto &square : columns.squares) {
@@ -676,13 +687,10 @@ private:
 				a_total = calc.Add(a_total, scaled(a_part));
 				b_total = calc.Add(b_total, calc.Add(linear_scaled, scaled(cross_part)));
 				linear_total = calc.Add(linear_total, linear_scaled);
-				if (!part.linear.text[d].empty()) {
-					linear_text.push_back(part.linear.text[d]);
-				}
 			}
-			if (!linear_text.empty()) {
+			if (has_linear) {
 				checks.push_back(DirectRaiseMessage(
-				    optimizer, calc, DirectNumberMessage(calc, linear_total, StringUtil::Join(linear_text, " + "))));
+				    optimizer, calc, DirectNumberMessage(calc, linear_total, condition.objective_written)));
 			}
 			bounds.a.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), a_total))));
 			bounds.b.push_back(p2.Add(calc.Out(calc.Mul(calc.Num(sense), b_total))));
@@ -790,10 +798,8 @@ private:
 			auto value = [&]() {
 				return calc.Col(LogicalType::DOUBLE, answers.value[d]);
 			};
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.a[d],
-			                                            condition.objective_written, DecideValueRole::TOO_LARGE));
-			checks.push_back(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, answers.b[d],
-			                                            condition.objective_written, DecideValueRole::TOO_LARGE));
+			checks.push_back(TooLarge(answers.a[d]));
+			checks.push_back(TooLarge(answers.b[d]));
 			checks.push_back(DirectRaiseIf(calc, calc.Out(calc.Col(LogicalType::BOOLEAN, answers.infeasible[d])),
 			                               DirectInfeasibleErrorPredicate(optimizer)));
 			checks.push_back(DirectRaiseUnless(calc, calc.Out(calc.Fn("isfinite", value())),

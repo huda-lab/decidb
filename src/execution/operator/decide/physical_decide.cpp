@@ -192,23 +192,65 @@ static void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, id
 	ExecuteOnReadRows(executor, chunk, row_offset, vector<const vector<bool> *>(results.ColumnCount(), rows), results);
 }
 
+//! What a coefficient DeciDB computed is computed from (DecideTerm::inputs), and the chunk the coefficient was computed
+//! over, whose failing row reads them.
+struct ValueInputs {
+	const vector<unique_ptr<Expression>> &values;
+	DataChunk &chunk;
+	ClientContext &context;
+};
+
 //! A number read from the source, and what the message that refuses it calls it: `value` is the expression the number
 //! comes from, printed as the user wrote it (DecideInvalidValueMessage). `clause` is the clause (or the objective) it
-//! belongs to: a coefficient with no column in it (a literal, like literals merged, a reciprocal) is a number DeciDB
-//! computed rather than one read from a row, so past a DOUBLE it names the clause (TOO_LARGE), as AddCoefficient does.
+//! belongs to, which a coefficient past a DOUBLE that no column's value made so names (TOO_LARGE), as AddCoefficient
+//! does. `inputs` are what a coefficient DeciDB computed is computed from; none for one as written.
 struct ValueSource {
 	DecideValueRole role;
 	const Expression &value;
 	const DecideSourceNames &names;
 	string clause = string();
+	const ValueInputs *inputs = nullptr;
 };
 
-//! Refuses a number the model cannot read (NaN, or infinite where a bound is not allowed to be), naming `source`.
-[[noreturn]] static void ThrowInvalidValue(const ValueSource &source) {
-	if (source.role == DecideValueRole::COEFFICIENT && source.value.IsFoldable()) {
-		throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, source.clause));
+//! Whether `input` is a finite number or NULL on row `row` of the chunk: the one row a failing coefficient reads it on.
+static bool IsFiniteOnRow(const ValueInputs &inputs, const Expression &input, idx_t row) {
+	auto transformed = TransformToChunkExpression(input, inputs.context);
+	SelectionVector one_row(1);
+	one_row.set_index(0, row);
+	DataChunk slice;
+	slice.InitializeEmpty(inputs.chunk.GetTypes());
+	slice.Slice(inputs.chunk, one_row, 1);
+	ExpressionExecutor executor(inputs.context, *transformed);
+	Vector result(transformed->return_type);
+	executor.ExecuteExpression(slice, result);
+	auto value = result.GetValue(0);
+	return value.IsNull() || std::isfinite(value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>());
+}
+
+//! Refuses a number the model cannot read (NaN, or infinite where a bound is not allowed to be), naming `source`. A
+//! coefficient names the first value it is computed from that a column holds and that is not finite on `row`, the row
+//! it fails on; with none, DeciDB's own arithmetic (or a literal) left the DOUBLE range, and it names its clause. A
+//! coefficient as written is the one value it is computed from.
+[[noreturn]] static void ThrowInvalidValue(const ValueSource &source, idx_t row = 0) {
+	auto refuse = [&](DecideValueRole role, const Expression &value) {
+		return InvalidInputException(DecideInvalidValueMessage(role, RenderDecideSource(value, source.names)));
+	};
+	auto too_large = InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, source.clause));
+	if (source.role != DecideValueRole::COEFFICIENT) {
+		throw refuse(source.role, source.value);
 	}
-	throw InvalidInputException(DecideInvalidValueMessage(source.role, RenderDecideSource(source.value, source.names)));
+	if (!source.inputs || source.inputs->values.empty()) {
+		if (source.value.IsFoldable()) {
+			throw too_large;
+		}
+		throw refuse(DecideValueRole::COEFFICIENT, source.value);
+	}
+	for (auto &input : source.inputs->values) {
+		if (!input->IsFoldable() && !IsFiniteOnRow(*source.inputs, *input, row)) {
+			throw refuse(DecideValueRole::COEFFICIENT, *input);
+		}
+	}
+	throw too_large;
 }
 
 //! Vectorized extraction of a chunk-result column into a vector<double>, multiplied by `sign`.
@@ -263,7 +305,7 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, ve
 		}
 		double dv = data[idx];
 		if (allow_infinite ? std::isnan(dv) : !std::isfinite(dv)) {
-			ThrowInvalidValue(source);
+			ThrowInvalidValue(source, i);
 		}
 		out.push_back(dv * sign);
 	}
@@ -1079,9 +1121,11 @@ EvaluateBilinearTerms(const vector<BilinearTermSource> &terms, const vector<Term
 			for (idx_t j = 0; j < bl_route.size(); j++) {
 				idx_t term_idx = bl_route[j];
 				auto &col = ebts[term_idx].row_coefficients.MutableDense();
-				ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(), terms[term_idx].sign, col,
-				                    {DecideValueRole::COEFFICIENT, *terms[term_idx].coefficient, names, clause},
-				                    null_rows, &term_reads[term_idx], row_offset);
+				ValueInputs inputs {terms[term_idx].inputs, bl_chunk, context};
+				ExtractDoubleColumn(
+				    bl_results.data[j], bl_chunk.size(), terms[term_idx].sign, col,
+				    {DecideValueRole::COEFFICIENT, *terms[term_idx].coefficient, names, clause, &inputs}, null_rows,
+				    &term_reads[term_idx], row_offset);
 				ebts[term_idx].row_coefficients.SyncSize();
 			}
 			row_offset += bl_chunk.size();
@@ -2250,10 +2294,11 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			ExecuteOnReadRows(coef_executor, chunk, coefficient_row_base, term_read_ptrs, coef_results);
 			for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
 				auto &col = eval_const.row_coefficients[term_idx].MutableDense();
-				ExtractDoubleColumn(
-				    coef_results.data[term_idx], chunk.size(), constraint->lhs_terms[term_idx].sign, col,
-				    {DecideValueRole::COEFFICIENT, *constraint->lhs_terms[term_idx].coefficient, names, clause},
-				    &null_rows, &term_reads[term_idx], coefficient_row_base);
+				auto &term = constraint->lhs_terms[term_idx];
+				ValueInputs inputs {term.inputs, chunk, context};
+				ExtractDoubleColumn(coef_results.data[term_idx], chunk.size(), term.sign, col,
+				                    {DecideValueRole::COEFFICIENT, *term.coefficient, names, clause, &inputs},
+				                    &null_rows, &term_reads[term_idx], coefficient_row_base);
 				eval_const.row_coefficients[term_idx].SyncSize();
 			}
 			coefficient_row_base += chunk.size();
@@ -2666,10 +2711,12 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 						ExecuteOnReadRows(q_executor, qchunk, q_offset, &q_reads, q_results);
 						for (idx_t inner_idx = 0; inner_idx < qg.inner_terms.size(); inner_idx++) {
 							auto &col = eqg.row_coefficients[inner_idx].MutableDense();
+							auto &term = qg.inner_terms[inner_idx];
+							ValueInputs inputs {term.inputs, qchunk, context};
 							ExtractDoubleColumn(
-							    q_results.data[inner_idx], qchunk.size(), qg.inner_terms[inner_idx].sign, col,
-							    {DecideValueRole::COEFFICIENT, *qg.inner_terms[inner_idx].coefficient, names, clause},
-							    &null_rows, &q_reads, q_offset);
+							    q_results.data[inner_idx], qchunk.size(), term.sign, col,
+							    {DecideValueRole::COEFFICIENT, *term.coefficient, names, clause, &inputs}, &null_rows,
+							    &q_reads, q_offset);
 							eqg.row_coefficients[inner_idx].SyncSize();
 						}
 						q_offset += qchunk.size();
@@ -2886,10 +2933,11 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                     int term_sign = (*b.src_terms)[term_idx].sign;
 					auto &filter = (*b.out_term_filters)[term_idx];
 					// A NULL term was read as 0 before like terms merged (DropNullObjectiveTerms).
-					ExtractDoubleColumn(
-					    obj_results.data[j], obj_chunk.size(), static_cast<double>(term_sign), out,
-					    {DecideValueRole::COEFFICIENT, *(*b.src_terms)[term_idx].coefficient, names, objective},
-					    nullptr, filter.has_filter ? &filter.mask : nullptr, obj_row_offset);
+					auto &term = (*b.src_terms)[term_idx];
+					ValueInputs inputs {term.inputs, obj_chunk, context};
+					ExtractDoubleColumn(obj_results.data[j], obj_chunk.size(), static_cast<double>(term_sign), out,
+					                    {DecideValueRole::COEFFICIENT, *term.coefficient, names, objective, &inputs},
+					                    nullptr, filter.has_filter ? &filter.mask : nullptr, obj_row_offset);
 					(*b.out_coeffs)[term_idx].SyncSize();
 				}
 				obj_row_offset += obj_chunk.size();
@@ -3088,7 +3136,8 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 				}
 				double d = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
                 if (!std::isfinite(d)) {
-					ThrowInvalidValue({DecideValueRole::COEFFICIENT, *term.coefficient, Names(), clause});
+					ValueInputs inputs {term.inputs, chunk, context};
+					ThrowInvalidValue({DecideValueRole::COEFFICIENT, *term.coefficient, Names(), clause, &inputs}, r);
 				}
                 coefs.push_back(d * term.sign);
 			}
@@ -3293,9 +3342,10 @@ static void EvaluateTermColumns(ClientContext &context, ColumnDataCollection &da
 		results.Reset();
 		ExecuteOnReadRows(executor, chunk, row_base, &read, results);
 		for (idx_t t = 0; t < terms.size(); t++) {
+			ValueInputs inputs {terms[t].inputs, chunk, context};
 			ExtractDoubleColumn(results.data[t], chunk.size(), terms[t].sign, columns[t].MutableDense(),
-			                    {DecideValueRole::COEFFICIENT, *terms[t].coefficient, names, clause}, nullptr, &read,
-			                    row_base);
+			                    {DecideValueRole::COEFFICIENT, *terms[t].coefficient, names, clause, &inputs}, nullptr,
+			                    &read, row_base);
 			columns[t].SyncSize();
 		}
 		row_base += chunk.size();

@@ -49,6 +49,11 @@ struct DecideTerm {
 	//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+	//! The values the user wrote that `coefficient` is computed from when DeciDB computed it (like terms merged, a
+	//! reducer's factor applied), in reading order; empty when `coefficient` is as written. A coefficient that is not
+	//! finite names the first of them a column holds that is not finite, and its clause when there is none: DeciDB's
+	//! own arithmetic left the DOUBLE range (DecideInvalidValueMessage). Only a row where it fails reads them.
+	vector<unique_ptr<Expression>> inputs;
 
 	DecideTerm(idx_t var_idx, unique_ptr<Expression> coef, int s = 1)
 	    : variable_index(var_idx), coefficient(std::move(coef)), sign(s) {
@@ -68,6 +73,8 @@ struct BilinearConstraintTerm {
 	//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
+	//! The values `coefficient` is computed from (DecideTerm::inputs).
+	vector<unique_ptr<Expression>> inputs;
 };
 
 //! The scope of a clause that has left the constraint tree, owned: the rows its `when` keeps and what its `per K:`
@@ -204,6 +211,8 @@ struct DecideObjective {
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 		//! SUM inside a reducer, NONE outside every reducer (counted once), as for DecideTerm.
 		LinearTermReduction reduction = LinearTermReduction::NONE;
+		//! The values `coefficient` is computed from (DecideTerm::inputs).
+		vector<unique_ptr<Expression>> inputs;
 	};
 	vector<BilinearTerm> bilinear_terms;
 	bool has_bilinear = false;

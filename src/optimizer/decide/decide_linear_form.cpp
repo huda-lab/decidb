@@ -48,6 +48,21 @@ static void EnumerateChildrenConst(const Expression &expr,
 	throw InternalException(term.reason);
 }
 
+//! Takes what a coefficient is computed from out of its term (DecideTerm::inputs): the values recorded when DeciDB
+//! computed it, else the coefficient itself, as written.
+static vector<unique_ptr<Expression>> TakeInputs(vector<unique_ptr<Expression>> &inputs,
+                                                 const Expression &coefficient) {
+	vector<unique_ptr<Expression>> taken;
+	if (inputs.empty()) {
+		taken.push_back(coefficient.Copy());
+	}
+	for (auto &input : inputs) {
+		taken.push_back(std::move(input));
+	}
+	inputs.clear();
+	return taken;
+}
+
 //! Terms of an expression that must be linear, as prepared terms.
 static void AppendLinearTerms(vector<DecideSplitTerm> &split, vector<DecideTerm> &out) {
 	for (auto &term : split) {
@@ -310,8 +325,14 @@ private:
 				out.push_back(std::move(term));
 				continue;
 			}
-			out[target].coefficient = DecideMergeLikeCoefficients(
-			    context, out[target].sign, std::move(out[target].coefficient), term.sign, std::move(term.coefficient));
+			auto &merged = out[target];
+			auto inputs = TakeInputs(merged.inputs, *merged.coefficient);
+			for (auto &input : TakeInputs(term.inputs, *term.coefficient)) {
+				inputs.push_back(std::move(input));
+			}
+			merged.coefficient = DecideMergeLikeCoefficients(context, merged.sign, std::move(merged.coefficient),
+			                                                 term.sign, std::move(term.coefficient));
+			merged.inputs = std::move(inputs);
 		}
 		terms = std::move(out);
 	}
@@ -371,9 +392,16 @@ private:
 	//! operand types the original `*` / `/` node was bound for and then binding the
 	//! rebuilt node through `FunctionBinder`. Casting first preserves the division
 	//! semantics the user's expression was bound with; binding after is what removes
-	//! the need to reuse another node's `FunctionData`.
-	unique_ptr<Expression> ScaleCoefficient(const BoundFunctionExpression &scale_func, const Expression &scale,
-	                                        bool divides, unique_ptr<Expression> coef) const {
+	//! the need to reuse another node's `FunctionData`. A missing coefficient is 1.
+	//!
+	//! The product is a number DeciDB computes: `inputs` (DecideTerm::inputs) records the factor and what the
+	//! coefficient is computed from, in the order the operands stand.
+	void ScaleCoefficient(const BoundFunctionExpression &scale_func, const Expression &scale, bool divides,
+	                      unique_ptr<Expression> &coef, vector<unique_ptr<Expression>> &inputs) const {
+		if (!coef) {
+			coef = make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1));
+		}
+		auto written = TakeInputs(inputs, *coef);
 		const auto &coef_type = scale_func.function.arguments[divides ? 0 : 1];
 		const auto &scale_type = scale_func.function.arguments[divides ? 1 : 0];
 		vector<unique_ptr<Expression>> children;
@@ -385,8 +413,15 @@ private:
 		} else {
 			children.push_back(BoundCastExpression::AddDefaultCastToType(scale.Copy(), scale_type));
 			children.push_back(BoundCastExpression::AddDefaultCastToType(std::move(coef), coef_type));
+			inputs.push_back(scale.Copy());
 		}
-		return DecideRebindOperator(context, divides ? "/" : "*", std::move(children));
+		for (auto &input : written) {
+			inputs.push_back(std::move(input));
+		}
+		if (divides) {
+			inputs.push_back(scale.Copy());
+		}
+		coef = DecideRebindOperator(context, divides ? "/" : "*", std::move(children));
 	}
 
 	//! Multiply everything the aggregate under a peeled scale just produced by that
@@ -398,18 +433,14 @@ private:
 	void ApplyScaleToExtracted(const BoundFunctionExpression &scale_func, const Expression &scale, bool divides,
 	                           DecideConstraint &constraint, idx_t linear_before, idx_t bilinear_before,
 	                           idx_t quadratic_before) {
-		auto scaled = [&](unique_ptr<Expression> coef) {
-			return ScaleCoefficient(scale_func, scale, divides, std::move(coef));
-		};
 		for (idx_t i = linear_before; i < constraint.lhs_terms.size(); i++) {
-			constraint.lhs_terms[i].coefficient = scaled(std::move(constraint.lhs_terms[i].coefficient));
+			auto &term = constraint.lhs_terms[i];
+			ScaleCoefficient(scale_func, scale, divides, term.coefficient, term.inputs);
 		}
 		for (idx_t i = bilinear_before; i < constraint.bilinear_terms.size(); i++) {
-			auto &bt = constraint.bilinear_terms[i];
 			// A null coefficient means 1.0; the scale becomes the whole coefficient.
-			bt.coefficient = bt.coefficient
-			                     ? scaled(std::move(bt.coefficient))
-			                     : scaled(make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1)));
+			auto &bt = constraint.bilinear_terms[i];
+			ScaleCoefficient(scale_func, scale, divides, bt.coefficient, bt.inputs);
 		}
 		if (quadratic_before == constraint.quadratic_groups.size()) {
 			return;
@@ -438,17 +469,12 @@ private:
 	//! rather than an expression, so a squared term needs the factor's value here.
 	void ApplyScaleToObjective(const BoundFunctionExpression &scale_func, const Expression &scale, bool divides,
 	                           DecideObjective &obj, idx_t linear_before, idx_t bilinear_before, idx_t squared_before) {
-		auto scaled = [&](unique_ptr<Expression> coef) {
-			return ScaleCoefficient(scale_func, scale, divides, std::move(coef));
-		};
 		for (idx_t i = linear_before; i < obj.terms.size(); i++) {
-			obj.terms[i].coefficient = scaled(std::move(obj.terms[i].coefficient));
+			ScaleCoefficient(scale_func, scale, divides, obj.terms[i].coefficient, obj.terms[i].inputs);
 		}
 		for (idx_t i = bilinear_before; i < obj.bilinear_terms.size(); i++) {
 			auto &bt = obj.bilinear_terms[i];
-			bt.coefficient = bt.coefficient
-			                     ? scaled(std::move(bt.coefficient))
-			                     : scaled(make_uniq_base<Expression, BoundConstantExpression>(Value::INTEGER(1)));
+			ScaleCoefficient(scale_func, scale, divides, bt.coefficient, bt.inputs);
 		}
 		if (squared_before == obj.squared_terms.size()) {
 			return;

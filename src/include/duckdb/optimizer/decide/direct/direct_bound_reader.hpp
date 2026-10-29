@@ -6,6 +6,7 @@
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
+#include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/expression.hpp"
 
@@ -40,11 +41,9 @@ struct DirectBoundClause {
 	//! The clause's coefficient and right side, which the plan checks as the solver path checks them.
 	vector<DirectSignedValue> coefficient;
 	unique_ptr<Expression> rhs;
-	//! What a message calls them, as the user wrote them (DirectCoefficientText, DirectIR::render). A coefficient with
-	//! no column in it (a literal, like literals merged) is a number DeciDB computes rather than one it reads from a
-	//! row: its message is TOO_LARGE and names the clause, as the solver path names it.
-	DecideValueRole coefficient_role = DecideValueRole::COEFFICIENT;
-	string coefficient_text;
+	//! What a message calls them: the coefficient's values and its clause (DirectNamesOf), and the right side as the
+	//! user wrote it (DirectIR::render).
+	DirectNumberNames coefficient_names;
 	string rhs_text;
 	//! The values of the decision the clause admits (DecideSingletonRow): DOUBLE, ±infinity on an open side.
 	unique_ptr<Expression> lower;
@@ -124,9 +123,6 @@ struct DirectLinearTerm {
 	idx_t decision = 0;
 	int sign = 1;
 	unique_ptr<Expression> coefficient;
-	//! The coefficient as the solver path reads it, with the part's constant factor applied (`2 * w`, `w / 2`): what a
-	//! message names.
-	unique_ptr<Expression> scaled;
 };
 
 //! One part `sign * scale * SUM(...)` of an objective or of a constraint's left side, with the part's constant factor
@@ -138,20 +134,22 @@ struct DirectLinearPart {
 	double scale = 1.0;
 	bool divides = false;
 	vector<DirectLinearTerm> terms;
-	//! For each decision, the coefficient a message names: the part's terms on it, merged as the solver merges like
-	//! terms and scaled. Empty for a decision with no term.
-	vector<string> text;
+	//! For each decision, what a message names for the part's like terms on it (DirectNamesOf): the values of the
+	//! solver path's one coefficient of the decision, and the part's clause.
+	vector<DirectNumberNames> names;
 };
 
-//! The coefficient a message names for `terms`, the like terms of one decision: merged as the solver path merges them
-//! (DecideMergeLikeCoefficients, in reading order, the first term's sign kept), printed as the user wrote it. A single
-//! term prints as itself.
-string DirectCoefficientText(const DirectIR &ir, ClientContext &context, const vector<DirectSignedValue> &terms);
+//! What a message names for a number computed from `values` (DirectNumberNames): each value a column holds, printed as
+//! the user wrote it, in reading order, and `clause`. A literal is no column's value: a number made of literals names
+//! the clause, as the solver path names it.
+DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values, const string &clause);
 
 //! Reads the sign and constant factor of one part and each of its linear terms. Returns false when the factor is not a
 //! finite constant (or divides by zero) or when a linear term's coefficient is not a numeric value of the source row.
 //! A term that is not linear is skipped, and so are the part's reducer, filter and qualifier: the rule checks those,
-//! and which decision a term names.
-bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, DirectLinearPart &out);
+//! and which decision a term names. `clause` is the clause (or the objective) the part belongs to, which a message
+//! names.
+bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,
+                          DirectLinearPart &out);
 
 } // namespace duckdb

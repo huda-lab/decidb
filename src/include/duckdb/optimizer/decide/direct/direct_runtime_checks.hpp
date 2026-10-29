@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
@@ -32,11 +34,26 @@ unique_ptr<Expression> DirectRaiseIf(const ExpressionBuilder &calc, unique_ptr<E
 //! A check that raises `message` as an error on a row where it is not NULL, and is true otherwise.
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message);
 
-//! The message of a coefficient the solver refuses (NaN or infinite), naming it as the user `written` it (the text of
-//! DecideInvalidValueMessage); NULL for a valid number. A NULL number skips what it reaches, so it is valid.
-//! TOO_LARGE is for a number the plan computes, as in DirectValidNumberPredicate.
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &written,
-                            DecideValueRole role = DecideValueRole::COEFFICIENT);
+//! What a message names for a number a plan checks, as the solver path names it (ValueSource): the values it is
+//! computed from that a column holds, each over the source with the text the user wrote it as, in reading order, and
+//! the clause (or the objective) it belongs to. A literal is no column's value, so it is not among them.
+struct DirectNumberNames {
+	vector<unique_ptr<Expression>> inputs;
+	vector<string> texts;
+	string clause;
+};
+
+//! The message of a number the solver refuses (NaN or infinite), NULL for a valid number; a NULL number skips what it
+//! reaches, so it is valid. It names the first of `names.inputs` that is not finite (DecideValueRole::COEFFICIENT),
+//! and the clause when each is: the arithmetic left the DOUBLE range (TOO_LARGE). Only a row whose number is not finite
+//! reads the inputs, as a CASE evaluates a branch only on the rows that reach it. `into` re-points an input at the
+//! operator the message is evaluated in.
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const DirectNumberNames &names,
+                            const std::function<ExprPtr(const Expression &)> &into);
+
+//! The message of a number the plan computes from values it checked before: past a DOUBLE it names `clause`
+//! (TOO_LARGE), as the solver path names a number it computes (AddCoefficient).
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &clause);
 
 //! The check, evaluated only on a row where `kept` is true. A value on a row a `when` drops is never read, so it raises
 //! nothing there, as on the solver path.
@@ -59,13 +76,5 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer);
 //! reaches, which the plan reads as no bound.
 unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
                                                  const string &written);
-
-//! Evaluates to true for a finite number and raises an error for a non-finite one, naming the coefficient as the user
-//! `written` it. A NULL number skips what it reaches (a SUM reads a skipped row's terms as 0, DirectIR), so it passes.
-//! TOO_LARGE is for a number the plan computes from values already checked finite: `written` is then the clause or
-//! the objective it belongs to, as the solver path names it (AddCoefficient).
-unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
-                                                  ColumnBinding number_binding, const string &written,
-                                                  DecideValueRole role = DecideValueRole::COEFFICIENT);
 
 } // namespace duckdb

@@ -61,7 +61,7 @@ struct Condition final : DirectApplicabilityCondition {
 		string written;
 	};
 	struct ObjectivePart {
-		//! The reducer the term is of, an index into `part_text`.
+		//! The reducer the term is of, an index into `part_names`.
 		idx_t part;
 		int sign;
 		unique_ptr<Expression> coefficient;
@@ -82,12 +82,10 @@ struct Condition final : DirectApplicabilityCondition {
 	bool impossible = false;
 	DecideSense sense;
 	vector<ObjectivePart> objective_parts;
-	//! What a message calls the score, the objective's coefficient of `x` as the user wrote it, and each reducer's
-	//! share of it. The solver merges like terms within one reducer and checks each reducer's coefficient apart, so a
-	//! message names the reducer whose coefficient fails, and the whole score only when each is fine and their sum is
-	//! not.
-	string score_text;
-	vector<string> part_text;
+	//! What a message names for each reducer's share of the score (DirectNamesOf), and the objective, which the score
+	//! names once every share is fine and their sum is not.
+	vector<DirectNumberNames> part_names;
+	string objective_written;
 	//! The `by` key every bound shares: the groups whose rows the count bounds, each its own interval. Empty for one
 	//! group of all the rows the bounds cover. A row with a NULL in a NO_GROUP element is in no group (D5).
 	vector<DirectKeyElement> group_keys;
@@ -542,8 +540,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	// adds the signed coefficients in order, as the solver's like-term collection does.
 	auto &parts = ir.objective.parts;
 	idx_t term_count = 0;
-	//! The terms of the score as the solver reads them, scaled and signed, which the message names.
-	vector<DirectSignedValue> scored;
+	condition.objective_written = ir.objective.written;
 	for (auto &part : parts) {
 		if (part.reducer != DirectReducer::SUM || part.filter || part.inner ||
 		    part.qualifier != DConstants::INVALID_INDEX || !part.by.empty()) {
@@ -560,23 +557,18 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		// A query-wide factor on the reducer (`2 * SUM(...)`, `SUM(...) / 2`) scales every term of that part and no
 		// other. It must be a finite constant, and a divisor must not be zero. Anything else stays on the solver.
 		DirectLinearPart read;
-		if (!DirectReadLinearPart(ir, context, part, read)) {
+		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read)) {
 			return false;
 		}
-		vector<DirectSignedValue> like;
 		for (auto &term : read.terms) {
 			if (term_count > 1 && DirectMayThrow(*term.coefficient)) {
 				return false;
 			}
-			scored.push_back({read.sign * term.sign, term.scaled->Copy()});
-			like.push_back({term.sign, term.scaled->Copy()});
-			condition.objective_parts.push_back({condition.part_text.size(), read.sign * term.sign,
+			condition.objective_parts.push_back({condition.part_names.size(), read.sign * term.sign,
 			                                     std::move(term.coefficient), read.scaled, read.scale, read.divides});
 		}
-		condition.part_text.push_back(like.empty() ? string() : DirectCoefficientText(ir, context, like));
-	}
-	if (!scored.empty()) {
-		condition.score_text = DirectCoefficientText(ir, context, scored);
+		// Every term is in `x`, the one decision.
+		condition.part_names.push_back(std::move(read.names[0]));
 	}
 	return true;
 }
@@ -784,7 +776,7 @@ private:
 		if (condition.objective_parts.size() != 1 || condition.objective_parts[0].sign < 0) {
 			combined_score = calc.Num(0.0);
 		}
-		vector<ExprPtr> part_scores(condition.part_text.size());
+		vector<ExprPtr> part_scores(condition.part_names.size());
 		for (auto &part : condition.objective_parts) {
 			auto coefficient = CopyIntoState(*part.coefficient, scope);
 			auto term = calc.Wrap(
@@ -793,18 +785,18 @@ private:
 			part_scores[part.part] = part_scores[part.part] ? calc.Add(part_scores[part.part], term) : term;
 		}
 		append_at(score_binding, calc.Out(combined_score));
-		// A reducer whose coefficient fails is named before the score they make together.
-		auto score_message = DirectNumberMessage(calc, combined_score, condition.score_text);
+		// A reducer whose coefficient fails is named before the score they make together, which names the objective.
+		auto into_score = [&](const Expression &input) {
+			return calc.Wrap(CopyIntoState(input, scope));
+		};
 		vector<ExprPtr> candidates;
 		for (idx_t p = 0; p < part_scores.size(); p++) {
 			if (part_scores[p]) {
-				candidates.push_back(DirectNumberMessage(calc, part_scores[p], condition.part_text[p]));
+				candidates.push_back(DirectNumberMessage(calc, part_scores[p], condition.part_names[p], into_score));
 			}
 		}
-		if (candidates.size() > 1) {
-			candidates.push_back(score_message);
-			score_message = calc.Coalesce(candidates);
-		}
+		candidates.push_back(DirectNumberMessage(calc, combined_score, condition.objective_written));
+		auto score_message = candidates.size() > 1 ? calc.Coalesce(candidates) : candidates[0];
 		append_at(score_message_binding, calc.Out(score_message));
 		if (condition.scoped) {
 			append_at(eligible_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.eligible_binding)));

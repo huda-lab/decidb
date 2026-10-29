@@ -44,14 +44,15 @@ def _stderr(cli, sql, mode):
     return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}").stderr
 
 
-# (name, DECIDE clauses, the value the message names). Both paths take each one.
+# (name, DECIDE clauses, the value the message names). Both paths take each one. A coefficient DeciDB computes (like
+# terms merged, a reducer's factor applied) names the value it is computed from that is not finite.
 BOTH_PATHS_COEFFICIENT = [
     ("a1_constraint", "x(REAL) SUCH THAT b * x <= 5 MAXIMIZE SUM(a * x)", "b"),
     ("a1_objective", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x)", "b"),
-    ("a1_like_terms_merge", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x + a * x)", "b + a"),
-    ("a1_like_terms_subtract", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x - b * x)", "a - b"),
-    ("a1_factor_on_the_sum", "x(REAL) SUCH THAT x <= 5 MAXIMIZE 2 * SUM(b * x)", "2 * b"),
-    ("a1_divisor_of_the_sum", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x) / 2", "b / 2"),
+    ("a1_like_terms_merge", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x + a * x)", "b"),
+    ("a1_like_terms_subtract", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x - b * x)", "b"),
+    ("a1_factor_on_the_sum", "x(REAL) SUCH THAT x <= 5 MAXIMIZE 2 * SUM(b * x)", "b"),
+    ("a1_divisor_of_the_sum", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x) / 2", "b"),
     ("a1_constant_term", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(a * x + b)", "b"),
     ("a1_inside_a_square", "x(REAL) SUCH THAT x <= 5 MINIMIZE SUM(POWER(x - b, 2))", "b"),
     ("a1_under_a_when", "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(when a > 0: b * x)", "b"),
@@ -62,12 +63,12 @@ BOTH_PATHS_COEFFICIENT = [
     ),
     ("r1_budget_weight", "x(REAL) SUCH THAT x <= 4 AND SUM(b * x) <= 9 MAXIMIZE SUM(a * x)", "b"),
     ("r1_objective_value", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= 9 MAXIMIZE SUM(b * x)", "b"),
-    ("r1_factor_on_the_value", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= 9 MAXIMIZE 2 * SUM(b * x)", "2 * b"),
-    ("r1_like_terms_merge", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x + b * x) <= 9 MAXIMIZE SUM(c * x)", "a + b"),
+    ("r1_factor_on_the_value", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= 9 MAXIMIZE 2 * SUM(b * x)", "b"),
+    ("r1_like_terms_merge", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x + b * x) <= 9 MAXIMIZE SUM(c * x)", "b"),
     ("r1_one_of_two_reducers", "x(REAL) SUCH THAT x <= 4 AND SUM(a * x) <= 9 MAXIMIZE SUM(a * x) + SUM(b * x)", "b"),
     ("r1_per_row_clause", "x(REAL) SUCH THAT b * x <= 4 AND SUM(a * x) <= 9 MAXIMIZE SUM(c * x)", "b"),
     ("s1_score", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(b * x)", "b"),
-    ("s1_factor_on_the_score", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE 2 * SUM(b * x)", "2 * b"),
+    ("s1_factor_on_the_score", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE 2 * SUM(b * x)", "b"),
     ("s1_one_of_two_reducers", "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(a * x) + SUM(b * x)", "b"),
     ("s1_fixing_coefficient", "x(BOOL) SUCH THAT SUM(x) <= 2 AND b * x >= 1 MAXIMIZE SUM(a * x)", "b"),
 ]
@@ -143,17 +144,18 @@ DIRECT_OVERFLOW = [
         _too_large("MINIMIZE sum(power(b * x, 2) + a * x)"),
         "1e200",
     ),
-    # Like terms on one row merge into that row's value, `b + b`, which a `when` can skip: the message names it.
+    # Like terms on one row merge into that row's coefficient, `b + b`. Each value is finite, so DeciDB's own sum left
+    # the DOUBLE range: the message names the objective.
     (
         "s1_score_overflows",
         "x(BOOL) SUCH THAT SUM(x) <= 2 MAXIMIZE SUM(b * x) + SUM(b * x)",
-        _coefficient("b + b"),
+        _too_large("MAXIMIZE sum(b * x) + sum(b * x)"),
         "1e308",
     ),
     (
         "a1_coefficient_overflows",
         "x(REAL) SUCH THAT x <= 5 MAXIMIZE SUM(b * x) + SUM(b * x)",
-        _coefficient("b + b"),
+        _too_large("MAXIMIZE sum(b * x) + sum(b * x)"),
         "1e308",
     ),
 ]
@@ -388,6 +390,165 @@ R1_TOO_LARGE = [
 @pytest.mark.parametrize("name,decide,written", R1_TOO_LARGE, ids=[case[0] for case in R1_TOO_LARGE])
 def test_a_number_the_knapsack_plan_computes_past_a_double_names_the_budget(decidb_cli, mode, name, decide, written):
     assert _too_large(written) in _stderr(decidb_cli, _huge_query(decide), mode)
+
+
+def _derived_query(decide, outcome):
+    # `b` is near the largest DOUBLE on both rows, so DeciDB's own arithmetic on it leaves the DOUBLE range, or it is
+    # infinite on the second row, which the message then names.
+    second = "1e308" if outcome == "too_large" else "'Infinity'"
+    first = "1e308" if outcome == "too_large" else "1.0"
+    rows = f"(1, 1.0, {first}::DOUBLE, 1.0), (2, 2.0, {second}::DOUBLE, 2.0)"
+    return f"SELECT id FROM (FROM (VALUES {rows}) t(id, a, b, c) DECIDE {decide}) q"
+
+
+# (name, DECIDE clauses, the clause the message names). Each derives a coefficient from the values it reads at a
+# different place: like terms merged or a reducer's factor applied on the solver path (DecideTerm::inputs, read where
+# the coefficient is checked), and the sum the direct plan checks (DirectNumberMessage). The same query names the
+# clause when every value is finite and `b` when it is not, on every path that takes it.
+DERIVED_BOTH_PATHS = [
+    # Solver: like terms merged on a row of a constraint. A1: the clause's coefficient.
+    (
+        "a1_like_terms_on_one_row",
+        "y(REAL) SUCH THAT y <= 5 AND b * y + b * y <= 1 MAXIMIZE SUM(y)",
+        "b * y + b * y <= 1",
+    ),
+    # Solver: like terms merged in the objective. A1: one reducer's sum of a decision's terms.
+    (
+        "a1_like_terms_in_a_reducer",
+        "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(b * y + b * y)",
+        "MAXIMIZE sum(b * y + b * y)",
+    ),
+    # Solver: the objective's factor applied. A1: the parts' sum, scaled, after each part's values were checked.
+    ("a1_factor_on_a_reducer", "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(b * y)", "MAXIMIZE 2 * sum(b * y)"),
+    # Solver: a scaled coefficient merged with a like term, whose values it already holds.
+    (
+        "a1_factor_then_like_terms",
+        "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(b * y) + SUM(b * y)",
+        "MAXIMIZE 2 * sum(b * y) + sum(b * y)",
+    ),
+    # A1: the sums inside a square, of its decision's terms and of its constants.
+    (
+        "a1_square_of_like_terms",
+        "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(POWER(b * y + b * y, 2))",
+        "MINIMIZE sum(power(b * y + b * y, 2))",
+    ),
+    (
+        "a1_square_of_constants",
+        "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(POWER(y - b - b, 2))",
+        "MINIMIZE sum(power(y - b - b, 2))",
+    ),
+    # S1: one reducer's share of the score.
+    (
+        "s1_like_terms_in_a_reducer",
+        "y(BOOL) SUCH THAT SUM(y) <= 1 MAXIMIZE SUM(b * y + b * y)",
+        "MAXIMIZE sum(b * y + b * y)",
+    ),
+    # R1: a per-row clause's coefficient, the budget's weight, an objective part's value, and the item's value.
+    (
+        "r1_like_terms_on_one_row",
+        "y(REAL) SUCH THAT y <= 5 AND b * y + b * y <= 1 AND SUM(a * y) <= 9 MAXIMIZE SUM(a * y)",
+        "b * y + b * y <= 1",
+    ),
+    (
+        "r1_like_terms_in_the_budget",
+        "y(REAL) SUCH THAT y <= 5 AND SUM(b * y + b * y) <= 9 MAXIMIZE SUM(a * y)",
+        "SUM(b * y + b * y) <= 9",
+    ),
+    (
+        "r1_like_terms_in_the_objective",
+        "y(REAL) SUCH THAT y <= 5 AND SUM(a * y) <= 9 MAXIMIZE SUM(b * y + b * y)",
+        "MAXIMIZE sum(b * y + b * y)",
+    ),
+    (
+        "r1_factor_on_the_objective",
+        "y(REAL) SUCH THAT y <= 5 AND SUM(a * y) <= 9 MAXIMIZE 2 * SUM(b * y)",
+        "MAXIMIZE 2 * sum(b * y)",
+    ),
+]
+
+# Sites only the solver path reads.
+DERIVED_SOLVER = [
+    # A divisor known when the query runs, applied to a constraint's coefficient.
+    (
+        "divisor_known_at_run_time",
+        "y(REAL) SUCH THAT y <= 5 AND SUM(b * y) / (SELECT 0.5) <= 10 MAXIMIZE SUM(y)",
+        "SUM(b * y) / (SELECT 0.5) <= 10",
+    ),
+    # Like terms merged inside a composed MIN or MAX, in a constraint and in the objective.
+    (
+        "composed_extremum_in_a_constraint",
+        "y(REAL) SUCH THAT y <= 5 AND SUM(y) + MAX(b * y + b * y) <= 10 MAXIMIZE SUM(y)",
+        "SUM(y) + MAX(b * y + b * y) <= 10",
+    ),
+    (
+        "composed_extremum_in_the_objective",
+        "y(REAL) SUCH THAT y <= 5 MINIMIZE SUM(y) + MAX(b * y + b * y)",
+        "MINIMIZE sum(y) + max(b * y + b * y)",
+    ),
+    # Like terms merged in a reducer a row-varying factor scales, which a helper decision holds: it names the reducer.
+    (
+        "reducer_under_a_row_factor",
+        "y(REAL) SUCH THAT y <= 5 AND c * SUM(b * y + b * y) <= 10 MAXIMIZE SUM(y)",
+        "sum(b * y + b * y)",
+    ),
+]
+
+# Gurobi only: HiGHS refuses a product of decisions when the query is planned. The factor is applied to the product's
+# coefficient in the objective and in a constraint.
+DERIVED_PRODUCT = [
+    (
+        "factor_on_a_product_in_the_objective",
+        "x(REAL), y(REAL) SUCH THAT x <= 4 AND y <= 4 MAXIMIZE 2 * SUM(b * x * y)",
+        "MAXIMIZE 2 * sum(b * x * y)",
+    ),
+    (
+        "factor_on_a_product_in_a_constraint",
+        "x(REAL), y(REAL) SUCH THAT x <= 4 AND y <= 4 AND 2 * SUM(b * x * y) <= 20 MAXIMIZE SUM(x)",
+        "2 * SUM(b * x * y) <= 20",
+    ),
+]
+
+
+def _derived_message(outcome, written):
+    return _too_large(written) if outcome == "too_large" else _coefficient("b")
+
+
+# (CLI, direct-solve mode): the solver path on each backend, and direct solve, which a forced backend turns off.
+SOLVER_PATHS = [("decidb_cli_gurobi", "off"), ("decidb_cli_highs", "off"), ("decidb_cli", "auto")]
+EVERY_PATH = SOLVER_PATHS + [("decidb_cli", "require")]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("outcome", ["too_large", "infinite_value"])
+@pytest.mark.parametrize("cli_fixture,mode", EVERY_PATH)
+@pytest.mark.parametrize("name,decide,written", DERIVED_BOTH_PATHS, ids=[case[0] for case in DERIVED_BOTH_PATHS])
+def test_a_derived_coefficient_names_its_value_or_its_clause_on_every_path(
+    request, cli_fixture, mode, outcome, name, decide, written
+):
+    cli = request.getfixturevalue(cli_fixture)
+    stderr = _stderr(cli, _derived_query(decide, outcome), mode)
+    assert _derived_message(outcome, written) in stderr, stderr
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("outcome", ["too_large", "infinite_value"])
+@pytest.mark.parametrize("cli_fixture,mode", SOLVER_PATHS)
+@pytest.mark.parametrize("name,decide,written", DERIVED_SOLVER, ids=[case[0] for case in DERIVED_SOLVER])
+def test_a_coefficient_the_solver_derives_names_its_value_or_its_clause(
+    request, cli_fixture, mode, outcome, name, decide, written
+):
+    cli = request.getfixturevalue(cli_fixture)
+    stderr = _stderr(cli, _derived_query(decide, outcome), mode)
+    assert _derived_message(outcome, written) in stderr, stderr
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("outcome", ["too_large", "infinite_value"])
+@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("name,decide,written", DERIVED_PRODUCT, ids=[case[0] for case in DERIVED_PRODUCT])
+def test_a_factor_on_a_product_names_its_value_or_its_clause(decidb_cli_gurobi, mode, outcome, name, decide, written):
+    stderr = _stderr(decidb_cli_gurobi, _derived_query(decide, outcome), mode)
+    assert _derived_message(outcome, written) in stderr, stderr
 
 
 # A model whose numbers are each finite, which the solver then reads its own way: the warning stays (the CLI wrapper

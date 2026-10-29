@@ -75,9 +75,9 @@ struct Condition final : DirectApplicabilityCondition {
 	vector<DataLimit> data_limits;
 	//! The objective's parts, each a signed, scaled sum of linear terms. None for no objective.
 	vector<DirectLinearPart> objective;
-	//! For each decision, what a message calls its value, the objective's coefficient of it over all the parts as the
-	//! user wrote it. Empty for a decision the objective does not name.
-	vector<string> value_text;
+	//! The objective as a message names it: an item's value, its parts' values summed and scaled, past a DOUBLE names
+	//! it, as the solver path names the coefficient it merges.
+	string objective_written;
 };
 
 //! The terms are linear in the declared decisions and none is missing its coefficient.
@@ -206,7 +206,7 @@ bool Rule::ProveBudgetClause(const DirectIR &ir, ClientContext &context, const D
 		return false;
 	}
 	DirectLinearPart weights;
-	if (!DirectReadLinearPart(ir, context, *sum, weights)) {
+	if (!DirectReadLinearPart(ir, context, *sum, ir_node.written, weights)) {
 		return false;
 	}
 	if (first) {
@@ -302,25 +302,12 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 			return false;
 		}
 		DirectLinearPart read;
-		if (!DirectReadLinearPart(ir, context, part, read)) {
+		if (!DirectReadLinearPart(ir, context, part, ir.objective.written, read)) {
 			return false;
 		}
 		condition.objective.push_back(std::move(read));
 	}
-	condition.value_text.resize(ir.decisions.size());
-	for (idx_t decision = 0; decision < ir.decisions.size(); decision++) {
-		vector<DirectSignedValue> like;
-		for (auto &part : condition.objective) {
-			for (auto &term : part.terms) {
-				if (term.decision == decision) {
-					like.push_back({part.sign * term.sign, term.scaled->Copy()});
-				}
-			}
-		}
-		if (!like.empty()) {
-			condition.value_text[decision] = DirectCoefficientText(ir, context, like);
-		}
-	}
+	condition.objective_written = ir.objective.written;
 	return true;
 }
 
@@ -825,8 +812,7 @@ private:
 	//! Adds, beside `value`, the message of it past a DOUBLE: TOO_LARGE, naming the budget. NULL passes.
 	void AddComputed(Named &added, const string &name, const ExprPtr &value) {
 		computed_message_names.push_back("too_large_" + name);
-		added.emplace_back(computed_message_names.back(),
-		                   DirectNumberMessage(calc, value, condition.budget_written, DecideValueRole::TOO_LARGE));
+		added.emplace_back(computed_message_names.back(), DirectNumberMessage(calc, value, condition.budget_written));
 	}
 
 	static string SourceName(idx_t i) {
@@ -875,6 +861,15 @@ private:
 	ExprPtr C(const string &name) const {
 		auto &column = columns.at(name);
 		return calc.Col(column.type, column.binding);
+	}
+
+	//! A copy of a proved expression re-pointed at the source columns the last projection carries first (SourceName).
+	ExprPtr OverSource(const Expression &expr) const {
+		auto table_index = columns.at(SourceName(0)).binding.table_index;
+		for (idx_t i = 0; i < proved_bindings.size(); i++) {
+			D_ASSERT(columns.at(SourceName(i)).binding == ColumnBinding(table_index, i));
+		}
+		return calc.Wrap(DirectOverProjection(expr, proved_bindings, table_index));
 	}
 
 	//! One projection that forwards every column and appends the new ones, in order. Returns its table index.
@@ -1001,9 +996,9 @@ private:
 		auto p1 = Project(added);
 
 		vector<ExprPtr> messages;
-		auto number = [&](const string &name, const string &written,
-		                  DecideValueRole role = DecideValueRole::COEFFICIENT) {
-			return DirectNumberMessage(calc, C(name), written, role);
+		auto number = [&](const string &name, const DirectNumberNames &names) {
+			return DirectNumberMessage(calc, C(name), names,
+			                           [&](const Expression &input) { return OverSource(input); });
 		};
 		// The bound-side rewrite's checks of what a limit reads come before any other, as its scope checks did.
 		for (idx_t j = 0; j < limit_bounds.size(); j++) {
@@ -1020,7 +1015,7 @@ private:
 			auto read_on = [&](ExprPtr message) {
 				return clause.when ? DirectOnKeptRows(calc, C("wh" + suffix), message) : message;
 			};
-			messages.push_back(read_on(number("c" + suffix, clause.coefficient_text, clause.coefficient_role)));
+			messages.push_back(read_on(number("c" + suffix, clause.coefficient_names)));
 			messages.push_back(read_on(
 			    calc.If(calc.Fn("isnan", C("r" + suffix)),
 			            calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, clause.rhs_text))),
@@ -1029,13 +1024,13 @@ private:
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = SignedValues(condition.budget, k);
 			if (!weights.empty()) {
-				auto message = number(Dec("w", k), condition.budget.text[k]);
+				auto message = number(Dec("w", k), condition.budget.names[k]);
 				messages.push_back(condition.scoped ? DirectOnKeptRows(calc, C(ELIGIBLE), message) : message);
 			}
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
 				if (!values.empty()) {
-					messages.push_back(number(Dec("o" + std::to_string(p), k), condition.objective[p].text[k]));
+					messages.push_back(number(Dec("o" + std::to_string(p), k), condition.objective[p].names[k]));
 				}
 			}
 		}
@@ -1464,11 +1459,12 @@ private:
 		for (auto message : items.columns.messages) {
 			messages.push_back(aggregate.Add(Aggregate("min", calc.Col(LogicalType::VARCHAR, message))));
 		}
+		// An item's value sums its parts' values, each checked before: past a DOUBLE it names the objective.
 		vector<ColumnBinding> value_messages;
 		for (idx_t k = 0; k < items.columns.decisions.size(); k++) {
 			value_messages.push_back(
 			    aggregate.Add(Aggregate("min", DirectNumberMessage(calc, DoubleColumn(items.columns.decisions[k].v),
-			                                                       condition.value_text[k]))));
+			                                                       condition.objective_written))));
 		}
 		for (auto message : items.columns.computed_messages) {
 			value_messages.push_back(aggregate.Add(Aggregate("min", calc.Col(LogicalType::VARCHAR, message))));
@@ -1518,9 +1514,8 @@ private:
 		// a DOUBLE makes its sum so. The sums of the rooms at price zero are parts of these, and the running sums of
 		// stage 3 parts of the rooms.
 		for (auto slot : {TOTAL_S, TOTAL_SUP, TOTAL_SDN}) {
-			checks.push_back(DirectRaiseMessage(
-			    optimizer, calc,
-			    DirectNumberMessage(calc, totals[slot], condition.budget_written, DecideValueRole::TOO_LARGE)));
+			checks.push_back(
+			    DirectRaiseMessage(optimizer, calc, DirectNumberMessage(calc, totals[slot], condition.budget_written)));
 		}
 		checks.push_back(DirectRaiseIf(calc, calc.Out(And(has_rows, verdict.infeasible)),
 		                               DirectInfeasibleErrorPredicate(optimizer)));
