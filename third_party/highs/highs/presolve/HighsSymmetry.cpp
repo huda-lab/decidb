@@ -884,8 +884,22 @@ HighsSymmetryDetection::u32 HighsSymmetryDetection::getVertexHash(HighsInt v) {
   return 0;
 }
 
+// DeciDB patch (BUG-3): checkLimits's time test, which only reads
+bool HighsSymmetryDetection::checkTimeLimit() {
+  if (timeLimit < kHighsInf && timer->read() >= timeLimit)
+    timeLimitReached = true;
+  return timeLimitReached;
+}
+
 bool HighsSymmetryDetection::partitionRefinement() {
+  // DeciDB patch (BUG-3): check the time limit once per
+  // kRefinementsPerTimeCheck cells; past it, stop with the partition partial
+  // (the callers leave at once)
+  const HighsInt kRefinementsPerTimeCheck = 100;
+  HighsInt numRefinements = 0;
   while (!refinementQueue.empty()) {
+    if (++numRefinements % kRefinementsPerTimeCheck == 0 && checkTimeLimit())
+      return true;
     std::pop_heap(refinementQueue.begin(), refinementQueue.end(),
                   std::greater<HighsInt>());
 
@@ -1674,9 +1688,15 @@ bool HighsSymmetryDetection::isFullOrbitope(const ComponentData& componentData,
   return true;
 }
 
-bool HighsSymmetryDetection::initializeDetection() {
+// DeciDB patch (BUG-3): mipTimer and mipTimeLimit bound the detection
+bool HighsSymmetryDetection::initializeDetection(const HighsTimer& mipTimer,
+                                                 double mipTimeLimit) {
+  timer = &mipTimer;
+  timeLimit = mipTimeLimit;
   initializeHashValues();
   partitionRefinement();
+  // DeciDB patch (BUG-3): a partition cut short at the time limit detects none
+  if (timeLimitReached) return false;
   removeFixPoints();
   if (numActiveCols == 0) return false;
   return true;
@@ -1691,6 +1711,9 @@ void HighsSymmetryDetection::run(HighsSymmetries& symmetries) {
   HighsInt maxPerms = 64000000 / numActiveCols;
   HighsSplitDeque* workerDeque = HighsTaskExecutor::getThisWorkerDeque();
   while (!nodeStack.empty()) {
+    // DeciDB patch (BUG-3): past the time limit, keep the generators found, as
+    // the maxPerms break does
+    if (checkTimeLimit()) break;
     HighsInt targetCell = selectTargetCell();
     if (targetCell == -1) {
       if (firstLeavePartition.empty()) {

@@ -21,6 +21,7 @@
 #include "util/HighsDisjointSets.h"
 #include "util/HighsHash.h"
 #include "util/HighsInt.h"
+#include "util/HighsTimer.h"  // DeciDB patch (BUG-3): for the time limit
 
 /// class that is responsible for assigning distinct colors for each distinct
 /// double value
@@ -187,6 +188,13 @@ class HighsSymmetryDetection {
   HighsInt numVertices;
   HighsInt numActiveCols;
 
+  // DeciDB patch (BUG-3): the time limit, read only: run() works off the main
+  // thread, where checkLimits would race with it
+  const HighsTimer* timer = nullptr;
+  double timeLimit = kHighsInf;
+  bool timeLimitReached = false;
+  bool checkTimeLimit();
+
   // node in the search tree for finding automorphisms
   struct Node {
     HighsInt stackStart;
@@ -273,7 +281,8 @@ class HighsSymmetryDetection {
  public:
   void loadModelAsGraph(const HighsLp& model, double epsilon);
 
-  bool initializeDetection();
+  // DeciDB patch (BUG-3): detection stops at the time limit
+  bool initializeDetection(const HighsTimer& mipTimer, double mipTimeLimit);
 
   void run(HighsSymmetries& symmetries);
 };

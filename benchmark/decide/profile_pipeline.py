@@ -31,11 +31,6 @@ RESULTS = HERE / "results"
 CSV_PATH = RESULTS / f"pipeline_profile_{DATABASE}.csv"
 RAW = RESULTS / f"pipeline_profile_raw_{DATABASE}"
 
-# Reproduced twice: Q10/HiGHS at large OOM-kills the whole process from outside (no python
-# exception to catch -- the OS/harness kills it), so it can't be handled in run_one. Recorded
-# as a bug (issues/bugs.md); skipped here so the rest of the sweep can finish.
-SKIP = {("Q10", "highs")}
-
 # Each stage names parent spans only, so no time is counted twice.
 STAGES = {
     "parse_bind": ["frontend.parse", "frontend.bind_select"],
@@ -184,13 +179,9 @@ def main() -> None:
             for backend in BACKENDS:
                 if (name, backend, repeat) in done:
                     continue
-                if (name, backend) in SKIP:
-                    row = {"query": name, "backend": backend, "repeat": repeat, "status": "skipped_memory"}
-                    print(f"  pass{repeat} {name:4} {backend:7} skipped_memory (see SKIP)")
-                else:
-                    print(f"  pass{repeat} {name:4} {backend:7}", end=" ", flush=True)
-                    row = run_one(name, path, backend, repeat)
-                    print(f"{row['status']:15} {row['query_s'] or 0:8.3f}s  solve={row['solve_ms'] or 0:10.1f}ms")
+                print(f"  pass{repeat} {name:4} {backend:7}", end=" ", flush=True)
+                row = run_one(name, path, backend, repeat)
+                print(f"{row['status']:15} {row['query_s'] or 0:8.3f}s  solve={row['solve_ms'] or 0:10.1f}ms")
                 rows.append(row)
                 with CSV_PATH.open("w", newline="") as handle:
                     writer = csv.DictWriter(handle, fieldnames=COLUMNS)

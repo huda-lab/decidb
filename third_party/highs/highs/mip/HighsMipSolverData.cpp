@@ -433,7 +433,9 @@ void HighsMipSolverData::startSymmetryDetection(
   symData->symDetection.loadModelAsGraph(
       mipsolver.mipdata_->presolvedModel,
       mipsolver.options_mip_->small_matrix_value);
-  detectSymmetries = symData->symDetection.initializeDetection();
+  // DeciDB patch (BUG-3): detection stops at the solver's time limit
+  detectSymmetries = symData->symDetection.initializeDetection(
+      mipsolver.timer_, mipsolver.options_mip_->time_limit);
 
   if (detectSymmetries) {
     taskGroup.spawn([&]() {
