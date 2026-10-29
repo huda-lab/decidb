@@ -369,7 +369,7 @@ def test_real_fractional_readback(
         f"Readback lost fractional precision: SUM(x)={decidb_sum}, expected 10.5"
     )
     assert abs(decidb_sum - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_sum}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_sum}, Oracle={result.objective_value}"
     )
     # Structural check: at least one value must be genuinely fractional.
     has_fractional = any(

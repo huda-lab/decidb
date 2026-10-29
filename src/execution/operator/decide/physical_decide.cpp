@@ -2745,7 +2745,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 			}
 		}
 
-		// DecidB: evaluate both the linear and quadratic-inner term lists so that
+		// DeciDB: evaluate both the linear and quadratic-inner term lists so that
         // mixed objectives (e.g. SUM(POWER(x-t, 2) + penalty * x)) emit coefficients
         // into both solver-input arrays. The two buckets are processed together
         // inside a single scan over gstate.data — doubling coefficient evaluators

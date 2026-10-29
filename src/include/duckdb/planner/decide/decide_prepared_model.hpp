@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-//                         DecidB
+//                         DeciDB
 //
 // duckdb/planner/decide/decide_prepared_model.hpp
 //

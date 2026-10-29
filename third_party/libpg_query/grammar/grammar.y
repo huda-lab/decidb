@@ -120,13 +120,13 @@
  * NULLS_LA and WITH_LA are needed to make the grammar LALR(1).
  */
 %token		NOT_LA NULLS_LA WITH_LA
-/* DecidB: context-sensitive WHEN tokens emitted only inside DECIDE. The
+/* DeciDB: context-sensitive WHEN tokens emitted only inside DECIDE. The
  * objective variant lets the removed postfix "E WHEN c" name a comparison
  * condition as written: an objective has no trailing comparison bound that
  * the condition could take. Never produced by keywords. */
 %token		WHEN_DECIDE
 %token		WHEN_DECIDE_OBJECTIVE
-/* DecidB: PER and a reducer's BY, emitted only inside DECIDE. PER is split by
+/* DeciDB: PER and a reducer's BY, emitted only inside DECIDE. PER is split by
  * what follows it, because PER (), PER ROW and PER <key> are not LALR(1)-
  * separable otherwise: '(' also opens an expression, and ROW is also a column
  * name. BY is BY_DECIDE only directly after ')', which is never where GROUP BY,
@@ -141,7 +141,7 @@
 %left		LAMBDA_ARROW DOUBLE_ARROW
 %left		OR
 %left		AND
-/* DecidB: DECIDE_ITEM closes one constraint before a separating AND, while
+/* DeciDB: DECIDE_ITEM closes one constraint before a separating AND, while
  * either DECIDE WHEN token still shifts onto that item. Comparisons bind more
  * tightly than the tokens; the two condition nonterminals decide whether that
  * comparison belongs to WHEN or is the constraint bound. */

@@ -36,7 +36,7 @@ from fractions import Fraction
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
@@ -857,7 +857,7 @@ def test_a1_empty_source_returns_no_rows_whatever_the_bounds_say(decidb_cli):
 @pytest.mark.correctness
 def test_a1_binder_rejects_strict_bounds_on_real_before_direct_solve_is_asked(decidb_cli):
     for mode in ("off", "require"):
-        with pytest.raises(DecidBCliError, match="Strict inequality"):
+        with pytest.raises(DeciDBCliError, match="Strict inequality"):
             _run(decidb_cli, "SELECT x FROM (SELECT 1 AS id) DECIDE x(REAL) SUCH THAT x < 3 MAXIMIZE SUM(x)", mode)
 
 
@@ -925,9 +925,9 @@ A1_ERROR_CASES = {
 def test_a1_error_cases_fail_on_both_paths(decidb_cli, name):
     sql, expected = A1_ERROR_CASES[name]
     # An answer beyond the whole-number range is raised after the solve, so the solver's model held the bound.
-    with pytest.raises(DecidBCliError) as solver_error:
+    with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off", expected == "int_range")
-    with pytest.raises(DecidBCliError) as direct_error:
+    with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
@@ -941,7 +941,7 @@ def test_a1_late_bad_row_raises_under_count_and_where(decidb_cli):
         t_sql="CASE WHEN i = 4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
     )
     for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
-        with pytest.raises(DecidBCliError, match=r"t is NaN or infinite on some rows"):
+        with pytest.raises(DeciDBCliError, match=r"t is NaN or infinite on some rows"):
             _run(decidb_cli, outer, "require")
     assert _run(decidb_cli, f"SELECT i FROM ({inner}) q LIMIT 0", "require")[0] == []
 
@@ -952,7 +952,7 @@ def test_a1_an_unused_decision_still_raises(decidb_cli):
     # The solver reads the whole problem even when no column of x is selected.
     sql = f"SELECT id FROM ({_problem(ROWS, bounds='x >= 0', obj='MAXIMIZE SUM(x)', tail='')}) q"
     for mode in ("off", "require"):
-        with pytest.raises(DecidBCliError, match="unbounded"):
+        with pytest.raises(DeciDBCliError, match="unbounded"):
             _run(decidb_cli, sql, mode)
 
 
@@ -1158,7 +1158,7 @@ def test_a1_a_constant_problem_raises_however_little_of_the_result_is_read(decid
         "SELECT id FROM ({}) q WHERE id = 2",
         "SELECT id, x FROM ({}) q ORDER BY id",
     ):
-        with pytest.raises(DecidBCliError, match=message):
+        with pytest.raises(DeciDBCliError, match=message):
             _run(decidb_cli, _constant_query(decision, problem, parent), "require")
     assert _run(decidb_cli, _constant_query(decision, problem, "SELECT id FROM ({}) q LIMIT 0"), "require")[0] == []
     empty = "SELECT id, x FROM (SELECT 1 AS id WHERE false) DECIDE " + decision + " SUCH THAT " + problem

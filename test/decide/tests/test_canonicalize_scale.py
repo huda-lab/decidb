@@ -142,7 +142,7 @@ def test_scaled_max_constraint(decidb_cli, oracle_solver, perf_tracker):
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) for r in rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
     # And the constraint the user wrote actually holds.
     for r in rows:
@@ -197,7 +197,7 @@ def test_scaled_max_in_composed_constraint(decidb_cli, oracle_solver, perf_track
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) for r in rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
     xs = {int(r[ci["id"]]): int(r[ci["x"]]) for r in rows}
     vs = dict(data)

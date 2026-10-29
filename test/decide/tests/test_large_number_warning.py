@@ -12,7 +12,7 @@ The check reads the finished solver-neutral model, the one DECIDB_DUMP_MODEL dum
 number came from. A query answered by a direct-solve rule builds no model and prints nothing. An open bound
 (DECIDE_SOLVER_INFINITY, the default of a variable with no written bound) is not a number.
 
-`DecidBCli.execute(..., expect_large_numbers=...)` is how a test declares the warning: an undeclared line fails the
+`DeciDBCli.execute(..., expect_large_numbers=...)` is how a test declares the warning: an undeclared line fails the
 test, and so does a declared one that is not printed exactly once per query run. Every case below runs on both
 backends through the forced-backend fixtures, which also keep a query on the solver path.
 
@@ -39,7 +39,7 @@ import itertools
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, SolverStatus, VarType
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)

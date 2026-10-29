@@ -1,6 +1,6 @@
 """CASE-expression rejection inside DECIDE.
 
-DecidB does not support SQL CASE expressions inside DECIDE constraints or
+DeciDB does not support SQL CASE expressions inside DECIDE constraints or
 objectives. Historically `CASE WHEN ... THEN ... ELSE ... END` fell through
 the symbolic translator's default arm and surfaced as an InternalException
 with a C++ stack trace — making the rejection look like a decidb bug rather

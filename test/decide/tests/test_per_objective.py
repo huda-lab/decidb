@@ -1,6 +1,6 @@
 """Tests for the two-level objective, `outer(per k: inner(e) by (k))`.
 
-The two-level ILP formulation (per DecidB docs):
+The two-level ILP formulation (per DeciDB docs):
   INNER creates per-group auxiliary variables; OUTER creates a global
   auxiliary. Easy / hard classification applies at each level independently.
 
@@ -16,7 +16,7 @@ The two-level ILP formulation (per DecidB docs):
     to SUM when groups differ in size.
 
 Every correctness case below builds the same two-level model in gurobipy and
-compares DecidB's nested-aggregate objective (evaluated on its own output)
+compares DeciDB's nested-aggregate objective (evaluated on its own output)
 against the oracle's ``objective_value``.
 """
 
@@ -35,7 +35,7 @@ from ._oracle_helpers import (
 
 
 # ---------------------------------------------------------------------------
-# Utilities for evaluating nested-aggregate objectives on DecidB output
+# Utilities for evaluating nested-aggregate objectives on DeciDB output
 # ---------------------------------------------------------------------------
 
 def _per_group_selected(rows, cols, per_col, expr_fn, x_col="x"):
@@ -981,7 +981,7 @@ def test_sum_avg_when_per(
 
 
 # ===========================================================================
-# Error cases — no oracle (DecidB is expected to reject these)
+# Error cases — no oracle (DeciDB is expected to reject these)
 # ===========================================================================
 
 @pytest.mark.per_clause

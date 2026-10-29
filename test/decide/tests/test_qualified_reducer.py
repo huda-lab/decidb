@@ -21,7 +21,7 @@ Covers:
 """
 
 import pytest
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import VarType, ObjSense
 
 
@@ -145,7 +145,7 @@ def test_qualified_sum_charges_each_entity_once(decidb_cli, duckdb_conn, oracle_
 
     decidb_obj = sum((n + 1) * keep.get(n, 0) for n in nation_ids)
     assert abs(decidb_obj - oracle.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle.objective_value}"
 
 
 # ---------------------------------------------------------------------------
@@ -329,7 +329,7 @@ def test_qualified_avg_denominator_is_distinct_entities(decidb_cli, duckdb_conn,
 
     decidb_obj = sum((n + 1) * keep.get(n, 0) for n in nation_ids) / denominator
     assert abs(decidb_obj - oracle.objective_value) < 1e-4, \
-        f"AVG objective mismatch: DecidB={decidb_obj}, Oracle={oracle.objective_value}"
+        f"AVG objective mismatch: DeciDB={decidb_obj}, Oracle={oracle.objective_value}"
 
 
 # ---------------------------------------------------------------------------
@@ -416,7 +416,7 @@ def test_qualified_reducer_in_constraint(decidb_cli, duckdb_conn, oracle_solver,
 
     decidb_obj = sum(acctbal_total[n] * keep.get(n, 0) for n in nation_ids)
     assert abs(decidb_obj - oracle.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle.objective_value}"
 
 
 # ---------------------------------------------------------------------------
@@ -485,7 +485,7 @@ def test_mixed_qualified_and_unqualified_objective(decidb_cli, duckdb_conn,
 
     decidb_obj = sum((1000.0 + acctbal_total[n]) * keep.get(n, 0) for n in nation_ids)
     assert abs(decidb_obj - oracle.objective_value) < 1e-4, \
-        f"Mixed objective mismatch: DecidB={decidb_obj}, Oracle={oracle.objective_value}"
+        f"Mixed objective mismatch: DeciDB={decidb_obj}, Oracle={oracle.objective_value}"
 
 
 # ---------------------------------------------------------------------------
@@ -527,7 +527,7 @@ def test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated
     oracle_cap = oracle_solver.solve().objective_value
 
     assert abs(cap_value - oracle_cap) < 1e-4, \
-        f"cap mismatch: DecidB={cap_value}, Oracle={oracle_cap}"
+        f"cap mismatch: DeciDB={cap_value}, Oracle={oracle_cap}"
 
 
 # ---------------------------------------------------------------------------
@@ -574,7 +574,7 @@ def test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only
 def test_unknown_relation_in_multi_relation_qualifier_rejected(decidb_cli):
     """`sum(n,bogus: ...)`: the same "not in the FROM clause" rejection as the
     single-relation case, naming the unresolvable relation."""
-    with pytest.raises(DecidBCliError, match="not in the FROM clause"):
+    with pytest.raises(DeciDBCliError, match="not in the FROM clause"):
         decidb_cli.execute(_REJECT_BASE.format(
             extra_decls="",
             constraint="SUM(keepN) <= 5",
@@ -586,7 +586,7 @@ def test_foreign_column_inside_qualified_reducer_rejected(decidb_cli):
     """§3.2.2: `n` must determine everything inside `SUM(n: ...)`, as it does inside
     `sum(per n: ...)` (S4); a customer's balance varies within a nation."""
     with pytest.raises(
-        DecidBCliError, match=r"per n does not determine c\.c_acctbal \(in sum\(n: c\.c_acctbal \* keepN\)\)"
+        DeciDBCliError, match=r"per n does not determine c\.c_acctbal \(in sum\(n: c\.c_acctbal \* keepN\)\)"
     ):
         decidb_cli.execute(_REJECT_BASE.format(
             extra_decls="",
@@ -598,7 +598,7 @@ def test_foreign_column_inside_qualified_reducer_rejected(decidb_cli):
 def test_row_scoped_decision_inside_qualified_reducer_rejected(decidb_cli):
     """A row-scoped decision is one per joined row, so `n` does not determine it: the
     data check of `sum(per n: ...)` refuses it (S4)."""
-    with pytest.raises(DecidBCliError, match=r"per n does not determine the decision y \(in sum\(n: "):
+    with pytest.raises(DeciDBCliError, match=r"per n does not determine the decision y \(in sum\(n: "):
         decidb_cli.execute(_REJECT_BASE.format(
             extra_decls=", y(INT)",
             constraint="y <= 5",
@@ -612,7 +612,7 @@ def test_query_wide_decision_alone_inside_qualified_reducer_rejected(decidb_cli)
     de-duplicate or sum over (batch D: "row-invariant", not "contains a scalar" --
     a scalar *combined with* the qualified relation's own data is legal instead,
     see test_qualified_reducer_scalar_times_entity_data_is_weighted_and_deduplicated)."""
-    with pytest.raises(DecidBCliError, match="query-wide decision"):
+    with pytest.raises(DeciDBCliError, match="query-wide decision"):
         decidb_cli.execute(
             _REJECT_BASE.format(extra_decls=", per (): cap(INT)", constraint="cap <= 5", objective="SUM(n: cap)")
         )
@@ -620,7 +620,7 @@ def test_query_wide_decision_alone_inside_qualified_reducer_rejected(decidb_cli)
 
 @pytest.mark.error_binder
 def test_unknown_relation_qualifier_rejected(decidb_cli):
-    with pytest.raises(DecidBCliError, match="not in the FROM clause"):
+    with pytest.raises(DeciDBCliError, match="not in the FROM clause"):
         decidb_cli.execute(_REJECT_BASE.format(
             extra_decls="",
             constraint="SUM(keepN) <= 5",
@@ -942,6 +942,6 @@ def test_qualified_reducer_as_a_bound(decidb_cli, duckdb_conn, oracle_solver):
 
     decidb_obj = sum(n * keep.get(n, 0) for n in nation_ids)
     assert abs(decidb_obj - oracle.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle.objective_value}"
     assert sum(keep.values()) == 2, \
         f"row-weighted bound would admit all four nations, got {keep}"

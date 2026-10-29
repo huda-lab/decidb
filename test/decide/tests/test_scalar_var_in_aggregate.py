@@ -116,7 +116,7 @@ def test_scalar_slack_oracle_verified(decidb_cli, oracle_solver, perf_tracker):
     sval = int(rows[0][ci["s"]])
     decidb_obj = 10.0 * sval - sum(int(r[ci["x"]]) for r in rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
     # `s` is one decision for the whole query, so every output row repeats it.
     assert len({int(r[ci["s"]]) for r in rows}) == 1

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-//                         DecidB
+//                         DeciDB
 //
 // duckdb/decidb/diagnostics/decide_router.hpp
 //

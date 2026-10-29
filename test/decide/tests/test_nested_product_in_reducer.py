@@ -127,7 +127,7 @@ def test_nested_product_oracle(decidb_cli, oracle_solver, perf_tracker):
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) * float(r[ci["q"]]) for r in rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
     # And the constraint as the user wrote it actually holds.
     lhs = sum(
@@ -184,7 +184,7 @@ def test_nested_product_subtraction(decidb_cli, oracle_solver, perf_tracker):
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) * float(r[ci["q"]]) for r in rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
     lhs = sum(
         float(r[ci["q"]]) * (price - int(r[ci["x"]]))

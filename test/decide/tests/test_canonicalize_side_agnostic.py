@@ -26,7 +26,7 @@ excluded value instead of collapsing. See `test_reduced_bound_data_column.py` fo
 side-agnostic case.
 
 Every positive case is checked against an independent oracle model. "It no longer
-errors" is not the claim; the claim is that the model DecidB builds for a reversed
+errors" is not the claim; the claim is that the model DeciDB builds for a reversed
 constraint is the model the written-forward one describes.
 
 Covers:
@@ -103,7 +103,7 @@ def test_aggregate_vs_aggregate(decidb_cli, duckdb_conn, oracle_solver):
     rhs = sum(int(r[yi]) * float(r[qi]) for r in rows)
     assert lhs <= rhs + 1e-6, f"constraint violated: {lhs} > {rhs}"
     assert abs(lhs - result.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={lhs}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={lhs}, Oracle={result.objective_value}"
 
 
 @pytest.mark.cons_aggregate
@@ -191,7 +191,7 @@ def test_data_term_left_of_reducer(decidb_cli, duckdb_conn, oracle_solver):
         assert data[i][0] - total_x <= cap_value + 1e-6, \
             f"tuple {i} violated: {data[i][0]} - {total_x} > {cap_value}"
     assert abs(cap_value - result.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={cap_value}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={cap_value}, Oracle={result.objective_value}"
 
 
 @pytest.mark.cons_aggregate
@@ -245,7 +245,7 @@ def test_composed_reducer_as_bound(decidb_cli, duckdb_conn, oracle_solver):
     assert total <= (max(picked) if picked else 0.0) + 30.0 + 1e-6, \
         f"constraint violated: SUM={total}"
     assert abs(total - result.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={total}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={total}, Oracle={result.objective_value}"
 
 
 @pytest.mark.cons_perrow

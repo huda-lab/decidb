@@ -923,7 +923,7 @@ private:
 	void AnalyzeObjective(const unique_ptr<Expression> &expr_ptr) {
 		auto *expr = UnwrapDecideCasts(*expr_ptr, decide_index);
 
-		// DecidB: Check for PER wrapper on objective (outermost layer)
+		// DeciDB: Check for PER wrapper on objective (outermost layer)
 		idx_t two_level_key = DConstants::INVALID_INDEX;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
@@ -934,7 +934,7 @@ private:
 			}
 		}
 
-		// DecidB: Check for WHEN wrapper on objective (inside PER, if present)
+		// DeciDB: Check for WHEN wrapper on objective (inside PER, if present)
 		unique_ptr<Expression> when_cond;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();

@@ -39,7 +39,7 @@ import io
 
 import pytest
 
-from decidb_cli import DecidBCli
+from decidb_cli import DeciDBCli
 
 
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
@@ -49,7 +49,7 @@ def _slow_cli(base_cli, seconds):
     """A CLI wrapper pinned to the base fixture's solver plus a short time limit."""
     env = dict(base_cli.env or {})
     env["DECIDB_TIME_LIMIT"] = str(seconds)
-    return DecidBCli(base_cli.exe, base_cli.db, env=env)
+    return DeciDBCli(base_cli.exe, base_cli.db, env=env)
 
 
 def _knapsack_sql():

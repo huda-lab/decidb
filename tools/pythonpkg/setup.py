@@ -504,12 +504,12 @@ try:
     with open('README.md', encoding='utf-8') as f:
         long_description_text = f.read()
 except FileNotFoundError:
-    long_description_text = 'DecidB - Optimization-enabled SQL queries with the DECIDE clause'
+    long_description_text = 'DeciDB - Optimization-enabled SQL queries with the DECIDE clause'
 
 setup(
     name=lib_name,
-    description='DecidB - Optimization-enabled SQL queries with the DECIDE clause',
-    keywords='DecidB SQL Optimization ILP Integer-Linear-Programming DECIDE Package-Queries',
+    description='DeciDB - Optimization-enabled SQL queries with the DECIDE clause',
+    keywords='DeciDB SQL Optimization ILP Integer-Linear-Programming DECIDE Package-Queries',
     url="https://huda-lab.github.io/decidb",
     long_description=long_description_text,
     long_description_content_type='text/markdown',

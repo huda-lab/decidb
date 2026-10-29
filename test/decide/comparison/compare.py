@@ -1,4 +1,4 @@
-"""Comparison logic for DecidB DECIDE results vs oracle solver results.
+"""Comparison logic for DeciDB DECIDE results vs oracle solver results.
 
 Two levels of comparison:
   1. Objective value comparison (always performed).
@@ -36,7 +36,7 @@ def compute_decidb_objective(
     decide_var_names: list[str],
     coeff_fn: Callable[[tuple], dict[str, float]],
 ) -> float:
-    """Compute the achieved objective from DecidB output rows.
+    """Compute the achieved objective from DeciDB output rows.
 
     Args:
         decidb_rows: Rows returned by decidb_conn.execute(...).fetchall().
@@ -65,7 +65,7 @@ def compute_decidb_objective(
 
 @dataclass
 class ComparisonResult:
-    """Result of comparing DecidB output against the oracle solution."""
+    """Result of comparing DeciDB output against the oracle solution."""
     status: str                  # "identical" or "optimal"
     decidb_objective: float
     oracle_objective: float
@@ -83,21 +83,21 @@ def compare_solutions(
     tolerance: float = 1e-4,
     decidb_objective_fn: Callable[[list[tuple], list[str]], float] | None = None,
 ) -> ComparisonResult:
-    """Compare DecidB output against the oracle solution.
+    """Compare DeciDB output against the oracle solution.
 
     1. Asserts that objectives match (raises on mismatch).
     2. Sorts both sides by non-decision columns and compares variable
        assignments element-wise.
 
     Args:
-        decidb_rows: Rows from DecidB query.
-        decidb_cols: Column names from DecidB result description.
+        decidb_rows: Rows from DeciDB query.
+        decidb_cols: Column names from DeciDB result description.
         oracle_result: Result from the oracle solver (must include
             variable_values for vector comparison).
         oracle_data: Raw data rows from duckdb_conn — same rows the oracle
             model was built from, in original query order.
         decide_var_names: DECIDE variable column names (e.g. ["x"]).
-        coeff_fn: Maps a DecidB row to objective coefficients per variable.
+        coeff_fn: Maps a DeciDB row to objective coefficients per variable.
         tolerance: Acceptable absolute difference.
 
     Returns:
@@ -125,11 +125,11 @@ def compare_solutions(
 
     obj_diff = abs(decidb_obj - oracle_obj)
     assert obj_diff <= tolerance, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
         f"Oracle={oracle_obj:.6f}, diff={obj_diff:.6f} (tolerance={tolerance})"
     )
 
-    # Sort key: all non-decision columns in DecidB
+    # Sort key: all non-decision columns in DeciDB
     var_set = set(decide_var_names)
     key_indices = [i for i, c in enumerate(decidb_cols) if c not in var_set]
     var_indices = [decidb_cols.index(v) for v in decide_var_names]
@@ -187,7 +187,7 @@ def assert_optimal_match(
     coeff_fn: Callable[[tuple], dict[str, float]],
     tolerance: float = 1e-4,
 ) -> None:
-    """Assert that DecidB's objective matches the oracle's optimal value.
+    """Assert that DeciDB's objective matches the oracle's optimal value.
 
     Objective-only comparison — kept for backward compatibility.
     Prefer compare_solutions() for new tests.
@@ -204,7 +204,7 @@ def assert_optimal_match(
 
     diff = abs(decidb_obj - oracle_obj)
     assert diff <= tolerance, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
         f"Oracle={oracle_obj:.6f}, diff={diff:.6f} (tolerance={tolerance})"
     )
 

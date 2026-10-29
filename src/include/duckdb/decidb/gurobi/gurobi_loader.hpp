@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-//                         DecidB
+//                         DeciDB
 //
 // gurobi_loader.hpp — Runtime dynamic loading of the Gurobi C API
 //
@@ -60,7 +60,7 @@ static constexpr const char *GRB_DBL_ATTR_OBJBOUND = "ObjBound";
 static constexpr const char *GRB_DBL_ATTR_MIPGAP = "MIPGap";
 
 //===----------------------------------------------------------------------===//
-// Function pointer table for the Gurobi C API functions DecidB uses
+// Function pointer table for the Gurobi C API functions DeciDB uses
 //===----------------------------------------------------------------------===//
 
 struct GurobiAPI {

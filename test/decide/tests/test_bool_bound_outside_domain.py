@@ -17,7 +17,7 @@ Covers:
 import re
 
 import pytest
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 
 from solver.types import ObjSense, SolverStatus, VarType
 
@@ -130,7 +130,7 @@ def test_bool_bound_outside_domain_with_when_matches_oracle(decidb_cli, oracle_s
 def test_bool_bound_outside_domain_diagnose_raises_the_same_error(decidb_cli):
     # A bound against the type's own range is not a clause to loosen: DIAGNOSE raises it as the plain query does.
     sql = f"DIAGNOSE SELECT id, x FROM {_SOURCE} DECIDE x(BOOL) SUCH THAT x >= 2 MINIMIZE SUM(v * x)"
-    with pytest.raises(DecidBCliError, match=_cannot_hold("x >= 2")):
+    with pytest.raises(DeciDBCliError, match=_cannot_hold("x >= 2")):
         decidb_cli.execute(sql)
 
 
@@ -149,7 +149,7 @@ def test_bool_bound_outside_domain_over_empty_source_raises(decidb_cli, bound):
     """
     messages = {}
     for mode in ("off", "auto"):
-        with pytest.raises(DecidBCliError, match=_cannot_hold(bound)) as error:
+        with pytest.raises(DeciDBCliError, match=_cannot_hold(bound)) as error:
             decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
         messages[mode] = str(error.value)
     assert messages["off"] == messages["auto"]
@@ -174,7 +174,7 @@ def test_bool_bound_outside_domain_unfolded_spelling_is_read_per_row(decidb_cli,
     """
     messages = {}
     for mode in ("off", "require"):
-        with pytest.raises(DecidBCliError, match=_INFEASIBLE) as error:
+        with pytest.raises(DeciDBCliError, match=_INFEASIBLE) as error:
             decidb_cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
         messages[mode] = str(error.value)
     assert messages["off"] == messages["require"]

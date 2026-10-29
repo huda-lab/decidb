@@ -17,7 +17,7 @@ parsing will trip these.
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 
 
 @pytest.mark.error_parser
@@ -56,7 +56,7 @@ class TestNoGlobalGrammarPollution:
         """An unknown function name must PARSE (then fail at bind), not error at
         parse time. The bug produced a `syntax error`; the correct behavior is a
         Catalog/binder error proving the call parsed."""
-        with pytest.raises(DecidBCliError) as excinfo:
+        with pytest.raises(DeciDBCliError) as excinfo:
             decidb_cli.execute(call_sql)
         msg = str(excinfo.value).lower()
         assert "syntax error" not in msg, (
@@ -82,7 +82,7 @@ class TestNoGlobalGrammarPollution:
                 "GROUP BY l_orderkey "
                 "HAVING max(l_quantity) > CASE WHEN l_orderkey > 0 THEN 0 ELSE 1 END"
             )
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert "syntax error" not in str(e).lower(), (
                 f"CASE WHEN after DECIDE clause regressed to a parse error: {e}"
             )

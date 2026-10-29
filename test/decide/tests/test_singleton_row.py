@@ -20,7 +20,7 @@ import re
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 
 _WINDOW = range(-50, 51)
 _INFEASIBLE = r"DECIDE optimization is infeasible\. Prefix the query with DIAGNOSE"
@@ -79,7 +79,7 @@ def test_answer_is_the_value_duckdb_admits(
         for mode in ("off", "auto"):
             full = f"SET decide_direct_solve='{mode}'; {sql}"
             if expected is None:
-                with pytest.raises(DecidBCliError, match=_INFEASIBLE):
+                with pytest.raises(DeciDBCliError, match=_INFEASIBLE):
                     cli.execute(full, expect_large_numbers=large)
             else:
                 rows, _ = cli.execute(full, expect_large_numbers=large)

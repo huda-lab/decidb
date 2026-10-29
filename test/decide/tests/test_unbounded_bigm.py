@@ -41,7 +41,7 @@ import tempfile
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 
 # Three rows is enough for every shape here; the point is the model, not the data.
 _ROWS = "(VALUES (1),(2),(3)) t(id)"
@@ -53,7 +53,7 @@ _ROWS = "(VALUES (1),(2),(3)) t(id)"
 def test_hard_minmax_over_unbounded_variable_is_refused(decidb_cli):
     """``MAX(x) >= 5`` lowered needs an indicator, and an indicator needs a finite M."""
     lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
-    with pytest.raises(DecidBCliError) as excinfo:
+    with pytest.raises(DeciDBCliError) as excinfo:
         lowering.execute(f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(REAL)
@@ -76,7 +76,7 @@ def test_not_equal_over_unbounded_variable_is_refused(decidb_cli, constraint):
     exist. They took the same 1e6 floor and now take the same refusal.
     """
     lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
-    with pytest.raises(DecidBCliError) as excinfo:
+    with pytest.raises(DeciDBCliError) as excinfo:
         lowering.execute(f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(INT)
@@ -97,7 +97,7 @@ def test_composed_minmax_over_unbounded_variable_is_refused(decidb_cli):
     Big-M at all.
     """
     lowering = decidb_cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
-    with pytest.raises(DecidBCliError) as excinfo:
+    with pytest.raises(DeciDBCliError) as excinfo:
         lowering.execute(f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(REAL)
@@ -127,9 +127,9 @@ def test_refusal_is_identical_on_both_backends(decidb_cli_highs, decidb_cli_guro
         MINIMIZE SUM(x)
     """
     lowering = {"DECIDB_NATIVE_CONSTRUCTS": "off"}
-    with pytest.raises(DecidBCliError) as highs_error:
+    with pytest.raises(DeciDBCliError) as highs_error:
         decidb_cli_highs.with_env(lowering).execute(sql)
-    with pytest.raises(DecidBCliError) as gurobi_error:
+    with pytest.raises(DeciDBCliError) as gurobi_error:
         decidb_cli_gurobi.with_env(lowering).execute(sql)
     assert highs_error.value.message == gurobi_error.value.message
 
@@ -228,7 +228,7 @@ def test_native_path_reports_unbounded_rather_than_the_integer_ceiling(decidb_cl
     the Big-M refusal above — correct behaviour, and a different test.
     """
     native = decidb_cli_gurobi.with_env({"DECIDB_NATIVE_CONSTRUCTS": "force"})
-    with pytest.raises(DecidBCliError) as excinfo:
+    with pytest.raises(DeciDBCliError) as excinfo:
         native.execute(f"""
             SELECT id, x FROM {_ROWS}
             DECIDE x(INT)

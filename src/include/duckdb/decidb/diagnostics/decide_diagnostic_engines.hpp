@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-//                         DecidB
+//                         DeciDB
 //
 // duckdb/decidb/diagnostics/decide_diagnostic_engines.hpp
 //

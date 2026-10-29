@@ -30,7 +30,7 @@ from dataclasses import dataclass
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
@@ -809,7 +809,7 @@ def test_r1_empty_source_returns_no_rows_under_a_minimum_an_exact_fill_or_a_rang
 @pytest.mark.correctness
 def test_r1_binder_rejects_strict_bounds_on_real_before_direct_solve_is_asked(decidb_cli):
     for mode in ("off", "require"):
-        with pytest.raises(DecidBCliError, match="Strict inequality"):
+        with pytest.raises(DeciDBCliError, match="Strict inequality"):
             _run(
                 decidb_cli,
                 "SELECT amount FROM (SELECT 1 AS id, 1.0 AS w) DECIDE amount(REAL) "
@@ -1778,10 +1778,10 @@ R1_ERROR_CASES.update(
 @pytest.mark.parametrize("name", sorted(R1_ERROR_CASES))
 def test_r1_error_cases_fail_on_both_paths(decidb_cli, name):
     sql, expected = R1_ERROR_CASES[name]
-    with pytest.raises(DecidBCliError) as solver_error:
+    with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
     assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
-    with pytest.raises(DecidBCliError) as direct_error:
+    with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
@@ -1805,12 +1805,12 @@ def test_r1_an_equality_limit_that_differs_only_among_rows_outside_the_when_is_n
 def test_r1_late_bad_row_raises_under_count_and_where(decidb_cli):
     inner = _late(LATE_DECIDE, w_sql=_last_row("'NaN'::DOUBLE", "1.0"))
     for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
-        with pytest.raises(DecidBCliError, match=r"w is NaN or infinite on some rows"):
+        with pytest.raises(DeciDBCliError, match=r"w is NaN or infinite on some rows"):
             _run(decidb_cli, outer, "require")
     assert _run(decidb_cli, f"SELECT i FROM ({inner}) q LIMIT 0", "require")[0] == []
     # LIMIT 1 reads the whole problem too: the last row is the unbounded one.
     unbounded = _late(LATE_DECIDE, w_sql=_last_row("-1.0", "1.0"), cap_sql=_last_row("1e30", "10.0"), tail="LIMIT 1")
-    with pytest.raises(DecidBCliError, match="unbounded"):
+    with pytest.raises(DeciDBCliError, match="unbounded"):
         _run(decidb_cli, unbounded, "require")
 
 
@@ -1824,7 +1824,7 @@ def test_r1_an_unused_decision_still_raises(decidb_cli):
         "DECIDE amount(REAL) SUCH THAT amount >= 0 AND SUM(w*amount) <= 5 MAXIMIZE SUM(v*amount)) q"
     )
     for mode in ("off", "require"):
-        with pytest.raises(DecidBCliError, match="unbounded"):
+        with pytest.raises(DeciDBCliError, match="unbounded"):
             _run(decidb_cli, sql, mode)
 
 
@@ -2121,9 +2121,9 @@ def test_r1_a_nan_limit_of_reducers_raises_the_solver_error(decidb_cli, budget, 
         assert _run_all(decidb_cli, sql, "require")[0] == "ok"
         assert _run_all(decidb_cli, sql, "require") == _run_all(decidb_cli, sql, "off")
         return
-    with pytest.raises(DecidBCliError) as solver_error:
+    with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
-    with pytest.raises(DecidBCliError) as direct_error:
+    with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
     assert str(direct_error.value) == str(solver_error.value)
@@ -2815,9 +2815,9 @@ PIECE_ERROR_CASES = {
 @pytest.mark.parametrize("name", sorted(PIECE_ERROR_CASES))
 def test_r1_several_decisions_error_cases_fail_on_both_paths(decidb_cli, name):
     sql, expected = PIECE_ERROR_CASES[name]
-    with pytest.raises(DecidBCliError) as solver_error:
+    with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
-    with pytest.raises(DecidBCliError) as direct_error:
+    with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
     assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
@@ -2838,7 +2838,7 @@ def test_r1_several_decisions_unread_decisions_still_raise(decidb_cli):
     )
     for select in ("SELECT id", "SELECT id, a", "SELECT COUNT(*)"):
         for mode in ("off", "require"):
-            with pytest.raises(DecidBCliError, match="infeasible"):
+            with pytest.raises(DeciDBCliError, match="infeasible"):
                 _run(decidb_cli, f"{select} FROM ({source} {decide}) q", mode)
 
 
@@ -3072,7 +3072,7 @@ def test_r1_a_limit_the_class_does_not_determine_raises_the_same_message_on_both
     )
     messages = []
     for mode in ("off", "require"):
-        with pytest.raises(DecidBCliError) as error:
+        with pytest.raises(DeciDBCliError) as error:
             _run(decidb_cli, sql, mode)
         messages.append(str(error.value))
     assert "per g does not determine cap. g = 'a' has more than one value: 4.0, 6.0." in messages[0], messages[0]

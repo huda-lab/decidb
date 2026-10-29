@@ -1,5 +1,5 @@
 # name: test/decidb/test_binder.test
-# description: Test DecidB's Binder
+# description: Test DeciDB's Binder
 # group: [decidb]
 
 statement ok

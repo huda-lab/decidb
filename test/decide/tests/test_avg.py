@@ -16,7 +16,7 @@ from collections import defaultdict
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
 from ._oracle_helpers import add_bool_and, add_ne_indicator, group_indices
@@ -647,7 +647,7 @@ def test_avg_no_decide_var(decidb_cli):
     """AVG(col) without decide variables must pass through to normal DuckDB.
 
     This is a pass-through test — no decision problem means no oracle to
-    compare against. Kept as DecidB-only behavior verification.
+    compare against. Kept as DeciDB-only behavior verification.
     """
     rows, cols = decidb_cli.execute("""
         SELECT AVG(value) as avg_val FROM (

@@ -12,7 +12,7 @@ its hand-written equivalent (robust to alternate optima), plus the error paths.
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from ._brute_force import judge_rows
 from ._scope_cases import answer, dump_counts
 
@@ -108,12 +108,12 @@ def test_norm_l0_auto_m_matches_explicit(decidb_cli):
 
 
 def test_norm_l0_negative_bound_rejected(decidb_cli):
-    with pytest.raises(DecidBCliError, match=r"positive"):
+    with pytest.raises(DeciDBCliError, match=r"positive"):
         decidb_cli.execute(_BASE.format(obj="norm(new_qty - l_quantity, 0, -5)"))
 
 
 def test_norm_unsupported_order(decidb_cli):
-    with pytest.raises(DecidBCliError, match=r"[Uu]nsupported norm order|Supported"):
+    with pytest.raises(DeciDBCliError, match=r"[Uu]nsupported norm order|Supported"):
         decidb_cli.execute(_BASE.format(obj="norm(new_qty - l_quantity, 3)"))
 
 

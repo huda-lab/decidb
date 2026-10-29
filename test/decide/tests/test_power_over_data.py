@@ -82,7 +82,7 @@ def test_power_over_data_is_a_coefficient(decidb_cli, oracle_solver, perf_tracke
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) * float(r[ci["w"]]) for r in rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
     # The constraint as written actually holds, with POWER applied.
     lhs = sum(
@@ -128,7 +128,7 @@ def test_power_over_data_exponent_three(decidb_cli, oracle_solver):
     """``POWER(qty, 3)`` over data — the exponent gate does not apply to a data base.
 
     qty^3 = 1, 8, 27, 64. With a budget of 30 the best subset is {1, 8, 27}? No —
-    1+8+27 = 36 exceeds it; the oracle decides. The point is only that DecidB and the
+    1+8+27 = 36 exceeds it; the oracle decides. The point is only that DeciDB and the
     oracle agree, using coefficients that differ sharply from both qty and qty^2.
     """
     cap = 30.0
@@ -145,7 +145,7 @@ def test_power_over_data_exponent_three(decidb_cli, oracle_solver):
     ci = {c: i for i, c in enumerate(cols)}
     decidb_obj = sum(int(r[ci["x"]]) * float(r[ci["w"]]) for r in rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
 
 

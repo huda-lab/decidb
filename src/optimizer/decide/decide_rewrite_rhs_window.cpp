@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-//                         DecidB
+//                         DeciDB
 //
 // src/optimizer/decide/decide_rewrite_rhs_window.cpp
 //

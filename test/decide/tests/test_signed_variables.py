@@ -26,7 +26,7 @@ import time
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, SolverStatus, VarType
 from comparison.compare import compare_solutions
 from ._oracle_helpers import add_in_domain
@@ -719,7 +719,7 @@ def _lift_check(cli, scope_solver, case):
         sql = f"SET decide_direct_solve='{mode}'; {case.sql}"
         if result.status == SolverStatus.INFEASIBLE:
             with pytest.raises(
-                DecidBCliError, match=r"DECIDE optimization is infeasible\. Prefix the query with DIAGNOSE"
+                DeciDBCliError, match=r"DECIDE optimization is infeasible\. Prefix the query with DIAGNOSE"
             ):
                 cli.execute(sql)
             continue

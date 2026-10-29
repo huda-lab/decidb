@@ -40,7 +40,7 @@ typedef union core_YYSTYPE {
  * We track token locations in terms of byte offsets from the start of the
  * source string, not the column number/line number representation that
  * bison uses by default.  A location is the offset where a construct starts
- * and the offset just past where it ends (DecidB reads the end to cut a DECIDE
+ * and the offset just past where it ends (DeciDB reads the end to cut a DECIDE
  * clause's text out of the query).  It converts to an int, its start, so
  * every `@n` that stands for a position (error positions, node locations)
  * reads as it always did.

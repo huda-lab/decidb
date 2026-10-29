@@ -111,7 +111,7 @@ def test_per_max_geq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DecidB={decidb_obj:.2f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.2f}, "
         f"Oracle={result.objective_value:.2f}"
     )
 
@@ -219,7 +219,7 @@ def test_per_min_leq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DecidB={decidb_obj:.2f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.2f}, "
         f"Oracle={result.objective_value:.2f}"
     )
 
@@ -332,7 +332,7 @@ def test_per_max_eq_constraint(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DecidB={decidb_obj:.2f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.2f}, "
         f"Oracle={result.objective_value:.2f}"
     )
 
@@ -437,7 +437,7 @@ def test_per_abs_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_obj = sum(float(row[ci["x"]]) for row in decidb_result)
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}"
     )
 
@@ -545,7 +545,7 @@ def test_per_multi_variable(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DecidB={decidb_obj}, "
+        f"Objective mismatch: DeciDB={decidb_obj}, "
         f"Oracle={result.objective_value:.0f}"
     )
 
@@ -660,7 +660,7 @@ def test_when_per_multi_variable(decidb_cli, oracle_solver, perf_tracker):
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DecidB={decidb_obj}, "
+        f"Objective mismatch: DeciDB={decidb_obj}, "
         f"Oracle={result.objective_value:.0f}"
     )
 
@@ -724,7 +724,7 @@ def test_qp_objective_per_constraint(
 
     # Oracle: mirror the SQL with row-indexed continuous vars, a `per`-group
     # SUM(x) >= 5 constraint, and the expanded POWER quadratic. Expansion of
-    # (x_i - t_i)^2 drops the constant t_i^2 term (DecidB's reported
+    # (x_i - t_i)^2 drops the constant t_i^2 term (DeciDB's reported
     # objective does the same), leaving linear = -2*t_i * x_i and
     # quadratic = x_i^2.
     data = [
@@ -761,7 +761,7 @@ def test_qp_objective_per_constraint(
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-3, (
-        f"QP+PER objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"QP+PER objective mismatch: DeciDB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}"
     )
 
@@ -840,7 +840,7 @@ def test_per_single_row_groups(decidb_cli, oracle_solver, perf_tracker):
     x_idx = decidb_cols.index("x")
     decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
 
     perf_tracker.record(
@@ -896,7 +896,7 @@ def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
     for g, idxs in groups.items():
         coeffs = {vnames[i]: data[i][2] for i in idxs}
         # Emit only if not trivially zero (structural equivalent of the
-        # "vacuous" group that DecidB may or may not emit; the solver
+        # "vacuous" group that DeciDB may or may not emit; the solver
         # behaves identically either way).
         if any(abs(c) > 0.0 for c in coeffs.values()):
             oracle_solver.add_constraint(
@@ -912,7 +912,7 @@ def test_per_zero_coefficient_group(decidb_cli, oracle_solver, perf_tracker):
     x_idx = decidb_cols.index("x")
     decidb_obj = sum(int(r[x_idx]) for r in decidb_rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
 
     perf_tracker.record(

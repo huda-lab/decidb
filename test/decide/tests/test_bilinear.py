@@ -27,7 +27,7 @@ import time
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 
 from ._brute_force import judge_rows
@@ -82,7 +82,7 @@ class TestBilinearBooleanObjectives:
         b2_col = cols.index("b2")
         decidb_obj = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
         assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
         perf_tracker.record(
             "bool_times_bool_objective", decidb_time, build_time,
@@ -130,7 +130,7 @@ class TestBilinearBooleanObjectives:
         b2_col = cols.index("b2")
         decidb_obj = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
         assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
         perf_tracker.record(
             "bool_times_bool_constrained", decidb_time, build_time,
@@ -182,7 +182,7 @@ class TestBilinearBooleanObjectives:
         x_col = cols.index("x")
         decidb_obj = sum(int(row[b_col]) * float(row[x_col]) for row in result)
         assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
         perf_tracker.record(
             "bool_times_real_objective", decidb_time, build_time,
@@ -234,7 +234,7 @@ class TestBilinearBooleanObjectives:
         ncol = cols.index("n")
         decidb_obj = sum(int(row[b_col]) * int(row[ncol]) for row in result)
         assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
         perf_tracker.record(
             "bool_times_integer_objective", decidb_time, build_time,
@@ -296,7 +296,7 @@ class TestBilinearBooleanObjectives:
             for row in result
         )
         assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
         perf_tracker.record(
             "bool_times_real_with_data_coefficient", decidb_time, build_time,
@@ -319,7 +319,7 @@ class TestBilinearNonConvexObjectives:
         """MAXIMIZE SUM(x * y) with x, y ∈ [0, 10] — non-convex QP.
 
         Oracle uses off-diagonal Q entry (x, y) = 1.0; Gurobi's NonConvex=2
-        is activated automatically. If DecidB's solver is HiGHS, the query
+        is activated automatically. If DeciDB's solver is HiGHS, the query
         is rejected and we exit without running the oracle.
         """
         sql = """
@@ -334,7 +334,7 @@ class TestBilinearNonConvexObjectives:
             t0 = time.perf_counter()
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert re.search(r"needs Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
             return
@@ -354,7 +354,7 @@ class TestBilinearNonConvexObjectives:
         y_val = float(result[0][cols.index("y")])
         decidb_obj = x_val * y_val
         assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
         perf_tracker.record(
             "real_times_real_objective", decidb_time, build_time,
@@ -377,7 +377,7 @@ class TestBilinearNonConvexObjectives:
             t0 = time.perf_counter()
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert re.search(r"needs Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
             return
@@ -397,7 +397,7 @@ class TestBilinearNonConvexObjectives:
         y_val = int(result[0][cols.index("y")])
         decidb_obj = x_val * y_val
         assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
         perf_tracker.record(
             "int_times_int_objective", decidb_time, build_time,
@@ -420,7 +420,7 @@ class TestBilinearNonConvexObjectives:
             t0 = time.perf_counter()
             result, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert re.search(r"needs Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
             return
@@ -440,7 +440,7 @@ class TestBilinearNonConvexObjectives:
         x_val = float(result[0][cols.index("x")])
         decidb_obj = n_val * x_val
         assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
         perf_tracker.record(
             "int_times_real_objective", decidb_time, build_time,
@@ -503,7 +503,7 @@ class TestBilinearMixedObjectives:
         x_col = cols.index("x")
         decidb_obj = sum(int(row[b_col]) * float(row[x_col]) for row in result)
         assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch (bilinear part): DecidB={decidb_obj}, "
+            f"Objective mismatch (bilinear part): DeciDB={decidb_obj}, "
             f"Oracle={res.objective_value}"
         )
         perf_tracker.record(
@@ -577,7 +577,7 @@ class TestBilinearFeatureInteractions:
             for row in result if row[cat_col] == "A"
         )
         assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
         perf_tracker.record(
             "bilinear_with_when", decidb_time, build_time,
@@ -755,7 +755,7 @@ class TestBilinearConstraints:
         b2_col = cols.index("b2")
         decidb_sum = sum(int(row[b1_col]) + int(row[b2_col]) for row in result)
         assert abs(decidb_sum - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DecidB={decidb_sum}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_sum}, Oracle={res.objective_value}"
         )
 
         total_product = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
@@ -819,7 +819,7 @@ class TestBilinearConstraints:
         b3_col = cols.index("b3")
         decidb_obj = sum(int(row[b2_col]) * int(row[b3_col]) for row in result)
         assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
 
         total_product = sum(int(row[b1_col]) * int(row[b2_col]) for row in result)
@@ -1019,7 +1019,7 @@ class TestBilinearErrors:
             result, cols = decidb_cli.execute(sql)
             # If Gurobi is available, this is fine (non-convex QP)
             pass  # Gurobi handled it
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             # HiGHS: non-convex rejection expected
             assert re.search(r"needs Gurobi", e.message), \
                 f"Unexpected error: {e.message}"
@@ -1037,7 +1037,7 @@ class TestBilinearBackwardCompat:
     def test_power_still_works(self, decidb_cli, oracle_solver, perf_tracker):
         """MINIMIZE SUM(POWER(x - target, 2)) — oracle mirrors the expanded QP.
 
-        Expansion of (x_i - t_i)^2 drops the constant t_i^2 term (DecidB's
+        Expansion of (x_i - t_i)^2 drops the constant t_i^2 term (DeciDB's
         reported objective does the same), leaving linear=-2*t_i*x_i and
         quadratic=x_i^2. The decidb-side objective subtracts t_i^2 to match.
         """
@@ -1079,7 +1079,7 @@ class TestBilinearBackwardCompat:
             for row in result
         )
         assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={res.objective_value:.4f}"
+            f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={res.objective_value:.4f}"
         )
         perf_tracker.record(
             "power_still_works", decidb_time, build_time,
@@ -1131,7 +1131,7 @@ class TestBilinearBackwardCompat:
             float(row[profit_col]) * int(row[x_col]) for row in result
         )
         assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+            f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
         )
         perf_tracker.record(
             "linear_objective_still_works", decidb_time, build_time,
@@ -1183,7 +1183,7 @@ class TestBilinearBackwardCompat:
             for row in result
         )
         assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-            f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={res.objective_value:.4f}"
+            f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={res.objective_value:.4f}"
         )
         perf_tracker.record(
             "identical_multiplication_still_qp", decidb_time, build_time,
@@ -1197,7 +1197,7 @@ class TestBilinearBackwardCompat:
 # Cross-feature interactions (oracle-compared, module-level)
 # ===================================================================
 #
-# Each test mirrors DecidB's McCormick linearization in the oracle:
+# Each test mirrors DeciDB's McCormick linearization in the oracle:
 #   For Bool b ∈ {0,1} and Real x ∈ [0, U]:
 #     w = b*x  ⇒  w ∈ [0, U],  w <= U*b,  w <= x,  w >= x - U*(1-b)
 # A scoping bug (e.g., aux variable shared across `per` groups) would relax
@@ -1279,7 +1279,7 @@ def test_bilinear_per_group(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DecidB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
     )
 
     by_grp: dict[str, float] = {}
@@ -1373,7 +1373,7 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
         if str(row[ci["l_shipmode"]]) in ("AIR", "RAIL")
     )
     assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DecidB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
     )
 
     by_grp: dict[str, float] = {}
@@ -1472,7 +1472,7 @@ def test_bilinear_keyed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     )
     assert total_w <= K + 1e-6, f"SUM(keepN*x)={total_w} > {K}"
     assert abs(decidb_obj - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DecidB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.2f}, Oracle={result.objective_value:.2f}"
     )
 
     perf_tracker.record(
@@ -1525,7 +1525,7 @@ def test_bilinear_minimize_objective(decidb_cli, duckdb_conn, oracle_solver, per
     for vn in wnames:
         oracle_solver.add_variable(vn, VarType.CONTINUOUS, lb=0.0, ub=U)
     # McCormick using x's effective upper bound U=10. With x in [L, U] and
-    # DecidB's structural w<=x bound, w can fall below L*b only when b=0
+    # DeciDB's structural w<=x bound, w can fall below L*b only when b=0
     # (then w=0). When b=1, w>=x-U*0=x>=L. So the link below is exact.
     for i in range(n):
         _mccormick_link(oracle_solver, wnames[i], bnames[i], xnames[i], U, f"mc_{i}")
@@ -1546,7 +1546,7 @@ def test_bilinear_minimize_objective(decidb_cli, duckdb_conn, oracle_solver, per
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-3, (
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={result.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={result.objective_value:.4f}"
     )
 
     n_picked = sum(int(row[ci["b"]]) for row in decidb_result)
@@ -1631,7 +1631,7 @@ def test_bilinear_objective_multiplies_both_side_coeffs(decidb_cli_gurobi, oracl
 
     decidb_obj = _decidb_split_coefficient_objective(decidb_rows, decidb_cols)
     assert abs(decidb_obj - oracle_result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, "
+        f"Objective mismatch: DeciDB={decidb_obj}, "
         f"Oracle={oracle_result.objective_value}"
     )
     assert _selected_ids_xy(decidb_rows, decidb_cols) == {1}
@@ -1655,11 +1655,11 @@ def test_bilinear_objective_split_shape_matches_flat_product(decidb_cli_gurobi, 
     split_obj = _decidb_split_coefficient_objective(split_rows, split_cols)
     flat_obj = _decidb_split_coefficient_objective(flat_rows, flat_cols)
     assert abs(split_obj - oracle_result.objective_value) <= 1e-6, (
-        f"Split-shape objective mismatch: DecidB={split_obj}, "
+        f"Split-shape objective mismatch: DeciDB={split_obj}, "
         f"Oracle={oracle_result.objective_value}"
     )
     assert abs(flat_obj - oracle_result.objective_value) <= 1e-6, (
-        f"Flat-shape objective mismatch: DecidB={flat_obj}, "
+        f"Flat-shape objective mismatch: DeciDB={flat_obj}, "
         f"Oracle={oracle_result.objective_value}"
     )
     assert abs(split_obj - flat_obj) <= 1e-6, (
@@ -1808,7 +1808,7 @@ def test_bilinear_bool_bool_coeff_minimize(decidb_cli, oracle_solver):
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, "
+        f"Objective mismatch: DeciDB={decidb_obj}, "
         f"Oracle={result.objective_value}"
     )
 
@@ -1876,7 +1876,7 @@ def test_bilinear_bool_real_constraint(decidb_cli, duckdb_conn, oracle_solver, p
     )
     assert decidb_bx_sum <= K + 1e-6, f"SUM(b*x)={decidb_bx_sum} > {K}"
     assert abs(decidb_x_sum - result.objective_value) <= 1e-3, (
-        f"Objective mismatch: DecidB={decidb_x_sum:.4f}, Oracle={result.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_x_sum:.4f}, Oracle={result.objective_value:.4f}"
     )
 
     perf_tracker.record(

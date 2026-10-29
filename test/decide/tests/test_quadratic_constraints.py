@@ -21,7 +21,7 @@ import time
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, SolverStatus, VarType
 
 
@@ -33,13 +33,13 @@ def _expect_gurobi(func, _retries=3):
     here are non-convex knife-edge surfaces. Gurobi intermittently returns
     status 13 (SUBOPTIMAL) — a feasible incumbent it could not *prove* optimal.
     DeciDB returns those rows with a caveat on stderr rather than relabelling the
-    termination as OPTIMAL, and ``DecidBCli.execute`` surfaces any stderr as an
-    error, so the caveat reaches us as a ``DecidBCliError``. That is a legitimate
+    termination as OPTIMAL, and ``DeciDBCli.execute`` surfaces any stderr as an
+    error, so the caveat reaches us as a ``DeciDBCliError``. That is a legitimate
     transient outcome, not a correctness bug: we retry for a proven-OPTIMAL solve
     (so the oracle assertion still runs in the common case) and only ``skip`` if
     every attempt hits SUBOPTIMAL.
 
-    The SUBOPTIMAL case is recognised by ``DecidBCliError.status``, set from the
+    The SUBOPTIMAL case is recognised by ``DeciDBCliError.status``, set from the
     ``DECIDB_STATUS:`` marker line. Do **not** match the caveat's prose here: that
     text is owned by the user-facing-output principle and is reworded freely. It was
     reworded once already, which silently disabled this retry and turned the file
@@ -51,7 +51,7 @@ def _expect_gurobi(func, _retries=3):
         for _ in range(_retries):
             try:
                 return func(*args, **kwargs)
-            except DecidBCliError as e:
+            except DeciDBCliError as e:
                 if e.status == "SUBOPTIMAL":
                     last_suboptimal = str(e)
                     continue  # Gurobi nondeterminism — retry for a proven optimum
@@ -81,7 +81,7 @@ def _assert_oracle_obj(oracle_solver, decidb_obj, tol=5e-2):
     )
     diff = abs(decidb_obj - result.objective_value)
     assert diff <= tol, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}, diff={diff:.6f}"
     )
     return result
@@ -1079,7 +1079,7 @@ class TestQuadraticConstraintInteractions:
             sense="<=", rhs=adj_rhs, name="required_budget",
         )
         # Objective: minimize SUM(POWER(x_i - preferred_i, 2)), dropping
-        # constant Σ preferred_i^2 to match DecidB's reported objective.
+        # constant Σ preferred_i^2 to match DeciDB's reported objective.
         obj_linear = {f"x_{i}": -2.0 * data[i][1] for i in range(n)}
         obj_quadratic = {(f"x_{i}", f"x_{i}"): 1.0 for i in range(n)}
         oracle_solver.set_quadratic_objective(

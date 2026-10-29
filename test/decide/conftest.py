@@ -7,12 +7,12 @@ tracking.
 
 Architecture
 ------------
-- **DecidB (DECIDE queries)**: native ``build/release/decidb`` executable
-  invoked via subprocess (``DecidBCli``).  Reads ``decidb.db``.
+- **DeciDB (DECIDE queries)**: native ``build/release/decidb`` executable
+  invoked via subprocess (``DeciDBCli``).  Reads ``decidb.db``.
 - **Oracle (data fetching)**: vanilla ``duckdb`` Python package reading a
   separately generated TPC-H database (``_tpch_oracle.duckdb``).  The oracle
   database is created once per session via ``CALL dbgen(sf=0.01)`` and cached
-  on disk.  This keeps the oracle completely independent of DecidB.
+  on disk.  This keeps the oracle completely independent of DeciDB.
 """
 
 from __future__ import annotations
@@ -27,7 +27,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from decidb_cli import DecidBCli
+from decidb_cli import DeciDBCli
 from solver.factory import get_solver
 from oracle_cache import OracleCache, CachedOracleSolver
 from oracle_cache import merge_worker_reports as merge_oracle_reports
@@ -119,35 +119,35 @@ def decidb_cli(decidb_exe_path, decidb_db_path):
 
     Queries are executed via subprocess, allowing multi-core execution.
     """
-    return DecidBCli(decidb_exe_path, decidb_db_path)
+    return DeciDBCli(decidb_exe_path, decidb_db_path)
 
 
 @pytest.fixture(scope="session")
 def decidb_cli_highs(decidb_exe_path, decidb_db_path):
-    """CLI wrapper that forces DecidB to use the HiGHS backend.
+    """CLI wrapper that forces DeciDB to use the HiGHS backend.
 
     Backed by the ``DECIDB_FORCE_SOLVER=highs`` env var read in
     ``src/decidb/utility/ilp_solver.cpp``. Use in tests that must verify
     HiGHS-specific error paths (e.g. non-convex QP rejection) on hosts
     where Gurobi is also linked.
     """
-    return DecidBCli(
+    return DeciDBCli(
         decidb_exe_path, decidb_db_path, env={"DECIDB_FORCE_SOLVER": "highs"},
     )
 
 
 @pytest.fixture(scope="session")
 def decidb_cli_gurobi(decidb_exe_path, decidb_db_path, _raw_oracle_solver):
-    """CLI wrapper that forces DecidB to use the Gurobi backend.
+    """CLI wrapper that forces DeciDB to use the Gurobi backend.
 
     Skips the test if Gurobi is not available on this host. Availability
     is probed indirectly via ``_raw_oracle_solver``: the oracle factory
     requires gurobipy, which in turn requires a working Gurobi install,
-    the same dependency DecidB's Gurobi backend has.
+    the same dependency DeciDB's Gurobi backend has.
     """
     if _raw_oracle_solver is None:
         pytest.skip("Gurobi not available — decidb_cli_gurobi requires it")
-    return DecidBCli(
+    return DeciDBCli(
         decidb_exe_path, decidb_db_path, env={"DECIDB_FORCE_SOLVER": "gurobi"},
     )
 
@@ -243,7 +243,7 @@ def _worker_id(config) -> str | None:
 # that lost a test.  Each pattern below is a skip we accept, with the reason it
 # is allowed to vary between runs.  Anything else fails the run.
 #
-# Note what is *not* here: a skip taken because DecidB refused a query.  That
+# Note what is *not* here: a skip taken because DeciDB refused a query.  That
 # is a property of the run, not of the host, and it hides expressivity
 # regressions — see test_per_objective.py, which pins its backend instead.
 

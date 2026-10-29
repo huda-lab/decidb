@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-//                         DecidB
+//                         DeciDB
 //
 // gurobi_loader.cpp — Runtime dynamic loading of the Gurobi C API
 //

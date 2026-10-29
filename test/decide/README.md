@@ -304,8 +304,8 @@ To recognize a **solver terminal**, use the marker channel instead of the prose:
 - DeciDB emits `DECIDB_STATUS: <TERMINAL>` on stderr when `DECIDB_STATUS_MARKERS` is set
   (currently `SUBOPTIMAL` only; `physical_decide.cpp`, SOLVED arm). Gated on the env var so
   user-facing output is byte-identical without it.
-- `DecidBCli.execute` sets that env var, strips marker lines before classifying stderr, and
-  exposes the terminal as `DecidBCliError.status`. Branch on `e.status == "SUBOPTIMAL"`, never
+- `DeciDBCli.execute` sets that env var, strips marker lines before classifying stderr, and
+  exposes the terminal as `DeciDBCliError.status`. Branch on `e.status == "SUBOPTIMAL"`, never
   on `str(e)`.
 - `execute_raw` / `execute_script` / `execute_interactive` deliberately do **not** request
   markers: their callers classify raw stderr themselves and would read a marker line as an

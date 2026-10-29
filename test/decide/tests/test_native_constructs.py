@@ -52,7 +52,7 @@ import tempfile
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 
 _FIXTURE = "(VALUES (1, 3.0), (2, 7.0), (3, 5.0)) v(id, target)"
 
@@ -158,7 +158,7 @@ def test_native_abs_needs_no_bound(decidb_cli_gurobi):
     clause = "SUCH THAT ABS(x - target) >= 2 MINIMIZE SUM(x)"
     assert _solve(decidb_cli_gurobi, clause) == [0.0, 0.0, 0.0]
 
-    with pytest.raises(DecidBCliError) as excinfo:
+    with pytest.raises(DeciDBCliError) as excinfo:
         _solve(decidb_cli_gurobi, clause, {"DECIDB_NATIVE_CONSTRUCTS": "off"})
     assert "finite bound on 'x'" in excinfo.value.message, excinfo.value.message
 
@@ -326,7 +326,7 @@ def test_native_minmax_needs_no_bound(decidb_cli_gurobi):
     # The cheapest way to reach MAX(x) = 5 is to put it on the smallest coefficient.
     assert _sum_xc(rows) == 10.0, rows
 
-    with pytest.raises(DecidBCliError) as excinfo:
+    with pytest.raises(DeciDBCliError) as excinfo:
         _solve_grouped(decidb_cli_gurobi, clause, {"DECIDB_NATIVE_CONSTRUCTS": "off"})
     assert "finite bound on 'x'" in excinfo.value.message, excinfo.value.message
 
@@ -365,7 +365,7 @@ def test_native_not_equal_needs_no_bound(decidb_cli_gurobi):
     clause = "SUCH THAT x <> 5 MINIMIZE SUM(x * c)"
     assert _sum_xc(_solve_grouped(decidb_cli_gurobi, clause)) == 0.0
 
-    with pytest.raises(DecidBCliError) as excinfo:
+    with pytest.raises(DeciDBCliError) as excinfo:
         _solve_grouped(decidb_cli_gurobi, clause, {"DECIDB_NATIVE_CONSTRUCTS": "off"})
     assert "finite bound on 'x'" in excinfo.value.message, excinfo.value.message
 

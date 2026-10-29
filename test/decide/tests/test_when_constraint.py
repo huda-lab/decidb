@@ -618,7 +618,7 @@ def test_when_is_not_null_predicate(decidb_cli, oracle_solver, perf_tracker):
     x_idx = decidb_cols.index("x")
     decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
 
     perf_tracker.record(

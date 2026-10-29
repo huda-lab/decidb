@@ -22,7 +22,7 @@ def run(cli, decide_sql, *, setup="", pragmas="", scope=None, timeout=120, expec
     A single statement now: the prefix runs the query and returns the diagnosis, so
     there is no failing statement to recover from and no second read-back. `scope` sets
     the infeasible slack-scope tuning pragma (query | expanded) when given. `expect_large_numbers`
-    declares the large-number warning, as `DecidBCli.execute` takes it.
+    declares the large-number warning, as `DeciDBCli.execute` takes it.
     """
     scope_pragma = (
         f"PRAGMA diagnose_decide_infeasible_slack_scope='{scope}';\n" if scope else ""

@@ -29,7 +29,7 @@ def _run_oracle_test(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker,
     *, test_id, decide_sql, data_sql, build_oracle, decidb_obj_fn,
 ):
-    """Boilerplate: execute DecidB, build oracle, compare.
+    """Boilerplate: execute DeciDB, build oracle, compare.
 
     Mirrors `test_reducer_filter._run_constraint_test`. Inlined here
     rather than imported to avoid cross-test-file coupling.

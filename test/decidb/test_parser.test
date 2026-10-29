@@ -1,5 +1,5 @@
 # name: test/decidb/test_parser.test
-# description: Test DecidB's Parser
+# description: Test DeciDB's Parser
 # group: [decidb]
 
 statement ok

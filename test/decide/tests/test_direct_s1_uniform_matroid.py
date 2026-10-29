@@ -38,7 +38,7 @@ from fractions import Fraction
 import pytest
 
 from comparison.compare import compare_solutions
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
@@ -812,7 +812,7 @@ def test_s1_strict_bound_against_a_fraction_agrees_under_every_mode(
     def outcome(mode):
         try:
             return "ok", _run(decidb_cli, sql, mode)
-        except DecidBCliError as error:
+        except DeciDBCliError as error:
             return "error", error_class(str(error))
 
     assert outcome("auto") == outcome("require")
@@ -1009,9 +1009,9 @@ def test_s1_column_coefficient_raises_the_solver_error(decidb_cli, rows):
     """A coefficient read from the row (`w*x <= 1`) is checked on every row the clause keeps, with the solver's own
     message: S1 applies and raises it word for word."""
     sql = _problem(rows, "id, score, w", "SUM(x) <= 2 AND w*x <= 1")
-    with pytest.raises(DecidBCliError) as solver_error:
+    with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
-    with pytest.raises(DecidBCliError) as direct_error:
+    with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
     assert str(direct_error.value) == str(solver_error.value)
@@ -1023,10 +1023,10 @@ def test_s1_column_coefficient_raises_the_solver_error(decidb_cli, rows):
 @pytest.mark.parametrize("name", sorted(S1_ERROR_CASES))
 def test_s1_error_cases_fail_on_both_paths(decidb_cli, name):
     sql, expected = S1_ERROR_CASES[name]
-    with pytest.raises(DecidBCliError) as solver_error:
+    with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
     assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
-    with pytest.raises(DecidBCliError) as direct_error:
+    with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     message = str(direct_error.value)
     assert "decide_direct_solve=require" not in message, f"direct solve declined:\n{message}"
@@ -1412,9 +1412,9 @@ def test_s1_reducer_bound_errors_fail_on_both_paths(decidb_cli, name):
         f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, g, flag, score, v) "
         f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
     )
-    with pytest.raises(DecidBCliError) as solver_error:
+    with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
-    with pytest.raises(DecidBCliError) as direct_error:
+    with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     message = str(direct_error.value)
     assert "decide_direct_solve=require" not in message, f"direct solve declined:\n{message}"
@@ -1504,7 +1504,7 @@ def test_s1_reducer_bound_declines_what_it_cannot_read_exactly(decidb_cli, name)
         f"SELECT id FROM (FROM (VALUES {rows}) t(id, score, v) "
         f"DECIDE x(BOOL) SUCH THAT SUM(x) <= {reducer} MAXIMIZE SUM(score*x)) q ORDER BY id"
     )
-    with pytest.raises(DecidBCliError) as declined:
+    with pytest.raises(DeciDBCliError) as declined:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" in str(declined.value), declined.value
     assert _outcome(decidb_cli, sql, "auto") == _outcome(decidb_cli, sql, "off")
@@ -1781,9 +1781,9 @@ def test_s1_a_nan_bound_of_reducers_raises_the_solver_error(decidb_cli, constrai
         assert _outcome(decidb_cli, sql, "require")[0] == "ok"
         assert _outcome(decidb_cli, sql, "require") == _outcome(decidb_cli, sql, "off")
         return
-    with pytest.raises(DecidBCliError) as solver_error:
+    with pytest.raises(DeciDBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
-    with pytest.raises(DecidBCliError) as direct_error:
+    with pytest.raises(DeciDBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
     assert str(direct_error.value) == str(solver_error.value)
@@ -1868,7 +1868,7 @@ def test_s1_a_bound_the_class_does_not_determine_raises_the_same_message_on_both
     )
     messages = []
     for mode in ("off", "require"):
-        with pytest.raises(DecidBCliError) as error:
+        with pytest.raises(DeciDBCliError) as error:
             _run(decidb_cli, sql, mode)
         messages.append(str(error.value))
     assert "per g does not determine cap. g = 'a' has more than one value: 4, 6." in messages[0], messages[0]

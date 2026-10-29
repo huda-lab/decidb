@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-//                         DecidB
+//                         DeciDB
 //
 // src/optimizer/decide/decide_singleton_row_folding.cpp
 //

@@ -75,7 +75,7 @@ def test_scalar_shared_bound(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
 
     decidb_obj = sum(int(row[1]) for row in decidb_result) - 20.0 * cap_value
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +123,7 @@ def test_scalar_objective_coefficient_applied_once(decidb_cli, duckdb_conn,
     cap_value = int(decidb_result[0][2])
     decidb_obj = 2.0 * cap_value - sum(int(row[1]) for row in decidb_result)
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +279,7 @@ def test_scalar_times_data_inside_reducer_is_weighted_by_row_data(decidb_cli, du
     oracle_cap = oracle_solver.solve().objective_value
 
     assert abs(cap_value - oracle_cap) < 1e-4, \
-        f"cap mismatch: DecidB={cap_value}, Oracle={oracle_cap}"
+        f"cap mismatch: DeciDB={cap_value}, Oracle={oracle_cap}"
 
 
 @pytest.mark.correctness
@@ -421,7 +421,7 @@ def test_scalar_with_abs_per_row_constraint(decidb_cli, duckdb_conn,
 
     decidb_obj = sum(int(r[x_idx]) for r in rows) - 5.0 * cap_value
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 @pytest.mark.correctness
@@ -466,7 +466,7 @@ def test_scalar_with_quadratic_constraint(decidb_cli_gurobi, oracle_solver,
         assert (int(r[x_idx]) - cap_value) ** 2 <= 4, "quadratic constraint violated"
     decidb_obj = sum(int(r[x_idx]) for r in rows) - 5.0 * cap_value
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 @pytest.mark.bilinear
@@ -518,7 +518,7 @@ def test_scalar_with_bilinear_per_row_constraint(decidb_cli, oracle_solver,
         assert int(r[b_idx]) * cap_value <= 4, "bilinear constraint violated"
     decidb_obj = sum(int(r[b_idx]) for r in rows) + cap_value
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 @pytest.mark.correctness
@@ -603,7 +603,7 @@ def test_scalar_as_aggregate_rhs(decidb_cli, oracle_solver):
         f"expected the interior optimum cap=12, SUM(x)=12; got cap={cap_value}, SUM(x)={total_x}"
     decidb_obj = 3.0 * total_x - 2.0 * cap_value
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 @pytest.mark.cons_aggregate
@@ -659,7 +659,7 @@ def test_scalar_as_aggregate_rhs_with_per(decidb_cli, duckdb_conn, oracle_solver
     assert cap_value == 12, f"expected the interior optimum cap=12, got {cap_value}"
     decidb_obj = 3.0 * sum(int(r[x_idx]) for r in rows) - 2.0 * cap_value
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
@@ -715,7 +715,7 @@ def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn,
       - the data multiplier dropped           -> cap = 6  (n*|cap - 3|)
 
     The oracle rebuilds the L1 norm row by row from the same input data, with one
-    ABS auxiliary per row, so nothing about DecidB's desugaring is assumed.
+    ABS auxiliary per row, so nothing about DeciDB's desugaring is assumed.
     """
     sql = """
         SELECT l_orderkey, l_linenumber, cap
@@ -733,7 +733,7 @@ def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn,
     data = [r[0] for r in duckdb_conn.execute("""
         SELECT CAST(l_linenumber AS BIGINT) FROM lineitem WHERE l_orderkey <= 20
     """).fetchall()]
-    assert len(data) == len(rows), "oracle and DecidB must see the same rows"
+    assert len(data) == len(rows), "oracle and DeciDB must see the same rows"
 
     oracle_solver.create_model("scalar_in_norm_l1")
     oracle_solver.add_variable("cap", VarType.INTEGER, lb=0.0, ub=100.0)
@@ -759,7 +759,7 @@ def test_scalar_inside_norm_is_weighted_per_row(decidb_cli, duckdb_conn,
         "fixture no longer separates the correct weighting from the misreadings"
 
     assert abs(cap_value - oracle_cap) < 1e-4, \
-        f"cap mismatch: DecidB={cap_value}, Oracle={oracle_cap}"
+        f"cap mismatch: DeciDB={cap_value}, Oracle={oracle_cap}"
     assert sum(abs(d * cap_value - 3) for d in data) <= 85, "L1 norm bound violated"
 
 
@@ -796,7 +796,7 @@ def test_scalar_inside_quadratic_objective_is_weighted_per_row(decidb_cli, duckd
     data = [r[0] for r in duckdb_conn.execute("""
         SELECT CAST(l_linenumber AS BIGINT) FROM lineitem WHERE l_orderkey <= 20
     """).fetchall()]
-    assert len(data) == len(rows), "oracle and DecidB must see the same rows"
+    assert len(data) == len(rows), "oracle and DeciDB must see the same rows"
 
     oracle_solver.create_model("scalar_in_quadratic_objective")
     oracle_solver.add_variable("cap", VarType.CONTINUOUS, lb=0.0, ub=10.0)
@@ -814,8 +814,8 @@ def test_scalar_inside_quadratic_objective_is_weighted_per_row(decidb_cli, duckd
 
     oracle_cap = oracle_result.variable_values["cap"]
     assert abs(cap_value - oracle_cap) < 1e-4, \
-        f"cap mismatch: DecidB={cap_value}, Oracle={oracle_cap}"
+        f"cap mismatch: DeciDB={cap_value}, Oracle={oracle_cap}"
 
     decidb_obj = sum((float(d) * cap_value - 4.0) ** 2 for d in data)
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-3, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_result.objective_value}"

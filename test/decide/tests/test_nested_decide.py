@@ -97,7 +97,7 @@ def test_nested_decide_then_outer_when_oracle(decidb_cli, oracle_solver, perf_tr
     assert len(rows) == 2
     expected = _oracle_objective(oracle_solver, trailing_when=True)
     assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DecidB={_objective(rows)}, Oracle={expected}"
+        f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 @pytest.mark.correctness
@@ -113,7 +113,7 @@ def test_nested_split_order_inner_then_outer_when(decidb_cli, oracle_solver, per
     assert len(rows) == 2
     expected = _oracle_objective(oracle_solver, trailing_when=True)
     assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DecidB={_objective(rows)}, Oracle={expected}"
+        f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 @pytest.mark.correctness
@@ -124,7 +124,7 @@ def test_nested_decide_without_outer_when(decidb_cli, oracle_solver, perf_tracke
     assert len(rows) == 2
     expected = _oracle_objective(oracle_solver, trailing_when=False)
     assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DecidB={_objective(rows)}, Oracle={expected}"
+        f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 @pytest.mark.sql_subquery
@@ -236,7 +236,7 @@ def test_three_levels_of_decide_nesting(decidb_cli, oracle_solver, perf_tracker)
         [(4.0, None, -3.0), (1e6, "budget", 0.0), (9.0, "budget", 0.0)],
     )
     assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DecidB={_objective(rows)}, Oracle={expected}"
+        f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 @pytest.mark.correctness
@@ -252,7 +252,7 @@ def test_plain_subquery_inside_a_nested_decide_constraint(decidb_cli, oracle_sol
     assert len(rows) == 2
     expected = _oracle_chain(oracle_solver, [(1e6, 7.0, 0.0), (9.0, "budget", 0.0)])
     assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DecidB={_objective(rows)}, Oracle={expected}"
+        f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 @pytest.mark.correctness
@@ -270,7 +270,7 @@ def test_plain_subquery_inside_a_nested_decide_objective(decidb_cli, oracle_solv
     # the inner clause still reports 6 and budgets the outer one at 6.
     expected = _oracle_chain(oracle_solver, [(3.0, None, 0.0), (9.0, "budget", 0.0)])
     assert abs(_objective(rows) - expected) < 1e-6, \
-        f"DecidB={_objective(rows)}, Oracle={expected}"
+        f"DeciDB={_objective(rows)}, Oracle={expected}"
 
 
 # A refusal of the inner clause used to reach the user as the outer query's error: DuckDB

@@ -101,7 +101,7 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 				result.from_table = TransformFrom(stmt.fromClause);
 			}
 		}
-        // DecidB's decide
+        // DeciDB's decide
         if (stmt.decideClause) {
             auto &decide_clause = PGCast<duckdb_libpgquery::PGDecideClause>(*stmt.decideClause);
             TransformExpressionList(*decide_clause.variables, result.decide_variables);
@@ -148,7 +148,7 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
 		result.qualify = TransformExpression(stmt.qualifyClause);
 		// sample
 		result.sample = TransformSampleOptions(stmt.sampleOptions);
-		// DecidB: the removed spellings still parse so that the error can name the new one.
+		// DeciDB: the removed spellings still parse so that the error can name the new one.
 		// A subquery inside a DECIDE clause is read with its spellings too, so every node
 		// is checked, not only the one that holds the clause.
 		RefuseRemovedDecideSpellings(result);

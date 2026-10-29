@@ -16,7 +16,7 @@ import math
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import SolverStatus
 
 from ._direct_differential import error_class
@@ -34,7 +34,7 @@ def _allow_direct_path(monkeypatch):
 def run(cli, sql, mode, expect_large_numbers=False):
     """Runs `sql` with `decide_direct_solve` set to `mode`; returns `(rows, columns)`.
 
-    `expect_large_numbers` declares the large-number warning, as `DecidBCli.execute` takes it. Only a query the solver
+    `expect_large_numbers` declares the large-number warning, as `DeciDBCli.execute` takes it. Only a query the solver
     answers builds a model, so `off` warns when the model holds a number of 1e6 or more, `require` never does, and
     `auto` does when the rule declines the query.
     """
@@ -45,7 +45,7 @@ def outcome(cli, sql, mode, expect_large_numbers=False):
     """`("ok", rows)` or `("error", error class)`, so two paths can be compared as values."""
     try:
         return "ok", run(cli, sql, mode, expect_large_numbers)[0]
-    except DecidBCliError as error:
+    except DeciDBCliError as error:
         return "error", error_class(str(error))
 
 
@@ -83,7 +83,7 @@ def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require
     if oracle.status in (SolverStatus.INFEASIBLE, SolverStatus.UNBOUNDED):
         pattern = r"(?i)infeasible" if oracle.status == SolverStatus.INFEASIBLE else r"(?i)unbounded"
         for mode in modes:
-            with pytest.raises(DecidBCliError, match=pattern):
+            with pytest.raises(DeciDBCliError, match=pattern):
                 run(cli, sql, mode, large_numbers and mode == "off")
         return
     assert oracle.status == SolverStatus.OPTIMAL, oracle.status

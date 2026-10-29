@@ -1184,7 +1184,7 @@ namespace duckdb_libpgquery {
 /*
  * Location tracking support --- simpler than bison's default: a nonterminal starts where its first
  * component starts (-1 when that component is empty) and ends where its last component ends. An empty
- * nonterminal ends where the symbol before it ends. DecidB cuts a DECIDE clause's text between the two.
+ * nonterminal ends where the symbol before it ends. DeciDB cuts a DECIDE clause's text between the two.
  */
 #define YYLLOC_DEFAULT(Current, Rhs, N) \
 	do { \
@@ -26009,7 +26009,7 @@ yyreduce:
   case 581:
 #line 403 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* DecidB: an objective is produced once, so PER () is the only PER it takes */
+					/* DeciDB: an objective is produced once, so PER () is the only PER it takes */
 					PGDecideScope *scope = (PGDecideScope *) (yyvsp[(1) - (3)].node);
 					if (scope->per == PG_DECIDE_PER_ROW || scope->per == PG_DECIDE_PER_KEY)
 						ereport(ERROR,
@@ -29646,7 +29646,7 @@ yyreduce:
   case 1090:
 #line 3179 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* DecidB: the removed SUM(e) WHEN c, kept as a marker the transformer
+					/* DeciDB: the removed SUM(e) WHEN c, kept as a marker the transformer
 					 * refuses so the error names sum(when c: e). */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", (yyvsp[(1) - (2)].node), (yyvsp[(2) - (2)].node), (yylsp[(2) - (2)]));
 				;}
@@ -29655,7 +29655,7 @@ yyreduce:
   case 1091:
 #line 3185 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* DecidB: reducer BY (key). The binder validates that it is a reducer. */
+					/* DeciDB: reducer BY (key). The binder validates that it is a reducer. */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by", (yyvsp[(1) - (2)].node), (PGNode *) (yyvsp[(2) - (2)].list), (yylsp[(2) - (2)]));
 				;}
     break;
@@ -29663,7 +29663,7 @@ yyreduce:
   case 1092:
 #line 3190 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* DecidB: a scope inside a reducer, sum(WHEN c PER k: expr). It scopes
+					/* DeciDB: a scope inside a reducer, sum(WHEN c PER k: expr). It scopes
 					 * the first argument, the expression being reduced. */
 					linitial((yyvsp[(5) - (6)].list)) = applyDecideScope((yyvsp[(3) - (6)].node), (PGNode *) linitial((yyvsp[(5) - (6)].list)));
 					(yyval.node) = (PGNode *) makeFuncCall((yyvsp[(1) - (6)].list), (yyvsp[(5) - (6)].list), (yylsp[(1) - (6)]));
@@ -29682,7 +29682,7 @@ yyreduce:
   case 1094:
 #line 3203 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* DecidB: relation-qualified reducer, sum(D: expr) or, qualified by
+					/* DeciDB: relation-qualified reducer, sum(D: expr) or, qualified by
 					 * several relations at once, sum(D, T: expr).
 					 *
 					 * The qualifier is parsed as a func_arg_list rather than as a
@@ -29703,7 +29703,7 @@ yyreduce:
   case 1095:
 #line 3221 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* DecidB: the removed sum(D: expr) WHEN cond, a marker the transformer
+					/* DeciDB: the removed sum(D: expr) WHEN cond, a marker the transformer
 					 * refuses so the error names sum(when cond per D: expr).
 					 *
 					 * Without this production, `sum(D: expr) WHEN cond` never matches
@@ -29721,7 +29721,7 @@ yyreduce:
   case 1096:
 #line 3236 "third_party/libpg_query/grammar/statements/select.y"
     {
-					/* DecidB: the colon form with BY, sum(D: expr) BY (key) */
+					/* DeciDB: the colon form with BY, sum(D: expr) BY (key) */
 					(yyval.node) = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by",
 						makeQualifiedReducer((yyvsp[(1) - (7)].list), (yyvsp[(3) - (7)].list), (yyvsp[(5) - (7)].list), (yylsp[(1) - (7)]), (yylsp[(3) - (7)]), (yylsp[(4) - (7)]), yyscanner), (PGNode *) (yyvsp[(7) - (7)].list), (yylsp[(7) - (7)]));
 				;}
@@ -34139,7 +34139,7 @@ doNegateFloat(PGValue *v)
 }
 
 /*
- * DecidB: combine the two DECIDE slots into the single PGDecideClause the rest
+ * DeciDB: combine the two DECIDE slots into the single PGDecideClause the rest
  * of the system consumes. The declaration may sit before FROM (the paper's
  * order) or inline in the body block (the original order), but not both, and
  * neither half stands alone. The both-slots case is caught earlier, in
@@ -34179,7 +34179,7 @@ makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 }
 
 /*
- * DecidB: the PER half of a scope written in front of a body. A key names
+ * DeciDB: the PER half of a scope written in front of a body. A key names
  * columns or relations and nothing else; an expression there is meant for BY,
  * which is where expressions go.
  */
@@ -34211,7 +34211,7 @@ makeDecideScope(PGDecidePer per, PGList *key, int location, core_yyscan_t yyscan
 }
 
 /*
- * DecidB: the type word of a declaration's type marker, so a message can quote
+ * DeciDB: the type word of a declaration's type marker, so a message can quote
  * the declaration as written.
  */
 static const char *
@@ -34227,7 +34227,7 @@ decideTypeWord(PGTypeName *type)
 }
 
 /*
- * DecidB: a name as a message quotes it, so the declaration it suggests parses: in double
+ * DeciDB: a name as a message quotes it, so the declaration it suggests parses: in double
  * quotes when it is a keyword or holds anything but letters, digits and underscores, the
  * rule DuckDB prints names by (KeywordHelper::WriteOptionallyQuoted).
  */
@@ -34266,7 +34266,7 @@ decideName(const char *name)
 }
 
 /*
- * DecidB: a declaration's scope as written -- per (), per row, per a, D.b -- so a
+ * DeciDB: a declaration's scope as written -- per (), per row, per a, D.b -- so a
  * message can name the declaration.
  */
 static char *
@@ -34296,7 +34296,7 @@ decideScopeText(PGNode *scope_node)
 }
 
 /*
- * DecidB: the removed "C PER g, h" wrote a multi-column key with a comma, so its
+ * DeciDB: the removed "C PER g, h" wrote a multi-column key with a comma, so its
  * columns reach the constraint list one by one. Fold such a column into the PER
  * marker that ends the list, so the error names the whole key; false for any
  * other comma.
@@ -34322,7 +34322,7 @@ absorbRemovedPerKey(PGNode *constraints, PGNode *item)
 }
 
 /*
- * DecidB: remember where a DECIDE construct sits in the query text. Only inside a DECIDE clause, so
+ * DeciDB: remember where a DECIDE construct sits in the query text. Only inside a DECIDE clause, so
  * ordinary SQL pays nothing for it.
  */
 static void
@@ -34341,7 +34341,7 @@ noteDecideSpan(core_yyscan_t yyscanner, int anchor, PGDecideSpanRole role, YYLTY
 	extra->decide_spans = lappend(extra->decide_spans, entry);
 }
 
-/* DecidB: the two sides of a comparison, anchored at its operator. */
+/* DeciDB: the two sides of a comparison, anchored at its operator. */
 static PGNode *
 noteDecideSides(PGNode *comparison, YYLTYPE op, YYLTYPE lhs, YYLTYPE rhs, core_yyscan_t yyscanner)
 {
@@ -34351,7 +34351,7 @@ noteDecideSides(PGNode *comparison, YYLTYPE op, YYLTYPE lhs, YYLTYPE rhs, core_y
 }
 
 /*
- * DecidB: the sides of a BETWEEN, anchored at its keyword: the input, and the text from the lower bound through the
+ * DeciDB: the sides of a BETWEEN, anchored at its keyword: the input, and the text from the lower bound through the
  * upper one (`lo AND hi`). A message quotes the clause as `input BETWEEN lo AND hi`.
  */
 static PGNode *
@@ -34364,7 +34364,7 @@ noteDecideBetween(PGNode *between, YYLTYPE op, YYLTYPE input, YYLTYPE lower, YYL
 }
 
 /*
- * DecidB: fold a scope around the body it governs. WHEN applies first and PER
+ * DeciDB: fold a scope around the body it governs. WHEN applies first and PER
  * second, so PER is the outer node. PER ROW is the default written out: it names
  * no key, but it keeps a node of its own, so the clause follows the scoping
  * language like every other spelling.
@@ -34389,7 +34389,7 @@ applyDecideScope(PGNode *scope_node, PGNode *body)
 }
 
 /*
- * DecidB: a relation-qualified reducer, sum(D: expr) or sum(D, T: expr). Every
+ * DeciDB: a relation-qualified reducer, sum(D: expr) or sum(D, T: expr). Every
  * item of the qualifier must be a bare relation name; the binder resolves them.
  */
 static PGNode *

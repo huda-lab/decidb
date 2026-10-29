@@ -1,4 +1,4 @@
-"""Shared assertions about what DecidB's user-facing output must never contain.
+"""Shared assertions about what DeciDB's user-facing output must never contain.
 
 A rejection, a diagnostic and an EXPLAIN are all read by a SQL user, so none of
 them may expose the machinery underneath: a C++ trace, an assertion, or one of

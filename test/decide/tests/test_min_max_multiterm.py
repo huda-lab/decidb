@@ -58,7 +58,7 @@ def _fetch_lineitem(conn):
 
 
 def _row_max(rows, cols, value_fn):
-    """MAX over rows of a per-row expression built from DecidB's output."""
+    """MAX over rows of a per-row expression built from DeciDB's output."""
     return max(value_fn(row, cols) for row in rows)
 
 
@@ -78,7 +78,7 @@ def _fetch_lineitem_with_flag(conn):
 
 
 def _per_group_extreme(rows, cols, pick):
-    """`pick` (min/max) applied within each l_returnflag group of DecidB's output."""
+    """`pick` (min/max) applied within each l_returnflag group of DeciDB's output."""
     flag_i = cols.index("l_returnflag")
     qty_i = cols.index("l_quantity")
     x_i = cols.index("x")
@@ -565,7 +565,7 @@ def test_per_outer_min_entity_scoped(decidb_cli, duckdb_conn, oracle_solver):
     decidb_obj = min(group_sums.values())
 
     assert abs(decidb_obj - result.objective_value) < 1e-3, (
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, "
         f"Oracle={result.objective_value:.4f}"
     )
 

@@ -376,7 +376,7 @@ test/automated-old/highs.log
 gurobi.log
 test/automated-old/gurobi.log
 
-# DecidB test results
+# DeciDB test results
 test/automated-old/results/
 
 
@@ -394,7 +394,7 @@ test/automated-old/=
 # Removed duplicate highs.log entry (consolidated above)
 
 
-# Inherited upstream files (not used by DecidB)
+# Inherited upstream files (not used by DeciDB)
 CITATION.cff
 .codecov.yml
 .sanitizer-leak-suppressions.txt

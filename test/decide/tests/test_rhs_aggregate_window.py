@@ -17,7 +17,7 @@ from fractions import Fraction
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
@@ -263,7 +263,7 @@ def test_rhs_aggregate_argument_that_is_nan_raises_without_a_row_position(decidb
         "DECIDE x(BOOL) SUCH THAT SUM(x * w) <= MIN(cap) MAXIMIZE SUM(p*x)) q"
     )
     with pytest.raises(
-        DecidBCliError, match=r"the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\."
+        DeciDBCliError, match=r"the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\."
     ):
         run(decidb_cli, sql, "off")
 
@@ -277,7 +277,7 @@ def test_rhs_l0_norm_reads_a_nan_body_as_invalid(decidb_cli, mode):
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= norm(cap, 0) MAXIMIZE SUM(p*x)) q"
     )
     with pytest.raises(
-        DecidBCliError, match=r"the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\."
+        DeciDBCliError, match=r"the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\."
     ):
         run(decidb_cli, sql, mode)
 
@@ -427,5 +427,5 @@ def test_rhs_aggregate_whose_own_when_empties_a_group_skips_it(decidb_cli, oracl
 @pytest.mark.error
 def test_rhs_aggregate_shapes_the_binder_rejects(decidb_cli):
     # The binder admits no DISTINCT reducer, so a window never has to copy one.
-    with pytest.raises(DecidBCliError, match=r"does not support 'sum\(DISTINCT cap\)'"):
+    with pytest.raises(DeciDBCliError, match=r"does not support 'sum\(DISTINCT cap\)'"):
         run(decidb_cli, _sql(PLAIN, "SUM(x * w) <= SUM(DISTINCT cap)"), "off")

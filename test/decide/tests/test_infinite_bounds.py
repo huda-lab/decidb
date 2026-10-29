@@ -113,7 +113,7 @@ def test_infinite_bound_survives_the_rebuilt_rhs(decidb_cli, duckdb_conn, oracle
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
     assert abs(rebuilt_obj - result.objective_value) < 1e-6, \
-        f"Objective mismatch: DecidB={rebuilt_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={rebuilt_obj}, Oracle={result.objective_value}"
 
 
 @pytest.mark.cons_perrow
@@ -215,7 +215,7 @@ def test_vacuous_minmax_bound_drops(decidb_cli, oracle_solver):
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
     assert abs(unconstrained - result.objective_value) < 1e-6, \
-        f"Objective mismatch: DecidB={unconstrained}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={unconstrained}, Oracle={result.objective_value}"
 
 
 @pytest.mark.min_max
@@ -396,7 +396,7 @@ def test_data_reducer_bound_is_classified_per_group(decidb_cli, oracle_solver):
     assert result.status == SolverStatus.OPTIMAL
     total = sum(sum(v) for v in mixed.values())
     assert abs(total - result.objective_value) < 1e-6, \
-        f"Objective mismatch: DecidB={total}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={total}, Oracle={result.objective_value}"
 
 
 @pytest.mark.min_max

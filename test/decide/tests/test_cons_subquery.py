@@ -133,7 +133,7 @@ def test_per_constraint_with_subquery_rhs(
     x_idx = decidb_cols.index("x")
     decidb_obj = sum(int(r[x_idx]) for r in decidb_rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={result.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={result.objective_value}"
     )
 
     perf_tracker.record(

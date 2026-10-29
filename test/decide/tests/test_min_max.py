@@ -144,11 +144,11 @@ def test_max_leq_with_expr(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
     result = oracle_solver.solve()
 
     assert result.status == SolverStatus.OPTIMAL
-    # Count selected items in DecidB result
+    # Count selected items in DeciDB result
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_count = sum(1 for row in decidb_result if int(row[ci["x"]]) == 1)
     assert abs(decidb_count - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DecidB selected {decidb_count}, Oracle={result.objective_value:.0f}"
+        f"Objective mismatch: DeciDB selected {decidb_count}, Oracle={result.objective_value:.0f}"
     )
 
     perf_tracker.record(
@@ -312,14 +312,14 @@ def test_minimize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 
     assert result.status == SolverStatus.OPTIMAL
 
-    # Compute DecidB's MAX(x * qty)
+    # Compute DeciDB's MAX(x * qty)
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_max = max(
         int(row[ci["x"]]) * float(row[ci["l_quantity"]])
         for row in decidb_result
     )
     assert abs(decidb_max - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DecidB MAX={decidb_max:.2f}, Oracle={result.objective_value:.2f}"
+        f"Objective mismatch: DeciDB MAX={decidb_max:.2f}, Oracle={result.objective_value:.2f}"
     )
 
     perf_tracker.record(
@@ -384,7 +384,7 @@ def test_maximize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         for row in decidb_result
     )
     assert abs(decidb_min - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DecidB MIN={decidb_min:.2f}, Oracle={result.objective_value:.2f}"
+        f"Objective mismatch: DeciDB MIN={decidb_min:.2f}, Oracle={result.objective_value:.2f}"
     )
 
     perf_tracker.record(
@@ -464,7 +464,7 @@ def test_maximize_max_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         for row in decidb_result
     )
     assert abs(decidb_max - result.objective_value) <= 1.0, (
-        f"Objective mismatch: DecidB MAX={decidb_max:.2f}, Oracle={result.objective_value:.2f}"
+        f"Objective mismatch: DeciDB MAX={decidb_max:.2f}, Oracle={result.objective_value:.2f}"
     )
 
     perf_tracker.record(
@@ -551,7 +551,7 @@ def test_maximize_max_mixed_sign_coefficient(decidb_cli):
 # Both shapes below are feasible and have an optimum of 110. Before the fix the
 # objective path silently returned 100 and the composed path reported the query
 # INFEASIBLE. Oracle-checked, with a deliberately generous M so the reference
-# model shares nothing with DecidB's derivation.
+# model shares nothing with DeciDB's derivation.
 # ----------------------------------------------------------------------------
 
 _ROW_CONSTANT_DATA = [(1, 0.0), (2, 100.0)]  # (id, c)
@@ -621,7 +621,7 @@ def test_maximize_max_row_varying_constant(decidb_cli, oracle_solver):
 
     expected = _oracle_max_x_plus_c(oracle_solver, "max_row_constant", 0.0)
     assert abs(obj - expected.objective_value) <= 1e-6, (
-        f"objective mismatch: DecidB MAX(x+c)={obj}, oracle={expected.objective_value}"
+        f"objective mismatch: DeciDB MAX(x+c)={obj}, oracle={expected.objective_value}"
     )
 
 
@@ -644,7 +644,7 @@ def test_maximize_composed_max_row_varying_constant(decidb_cli, oracle_solver):
 
     expected = _oracle_max_x_plus_c(oracle_solver, "composed_max_row_constant", 0.001)
     assert abs(obj - expected.objective_value) <= 1e-6, (
-        f"objective mismatch: DecidB={obj}, oracle={expected.objective_value}"
+        f"objective mismatch: DeciDB={obj}, oracle={expected.objective_value}"
     )
 
 
@@ -687,7 +687,7 @@ def test_min_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     Per CLAUDE.md MIN/MAX rules: MAXIMIZE MIN is an easy case — introduce a
     global `z` with ``z <= expr_i`` for each WHEN-qualifying row, then
     MAXIMIZE z (no indicators, no Big-M). This test oracle-verifies that
-    DecidB's flat-MIN-with-WHEN formulation is correctly routed to the easy
+    DeciDB's flat-MIN-with-WHEN formulation is correctly routed to the easy
     linearization.
     """
     sql = """
@@ -738,7 +738,7 @@ def test_min_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL
 
-    # MIN(x * l_quantity) over WHEN-qualifying rows gives DecidB's objective.
+    # MIN(x * l_quantity) over WHEN-qualifying rows gives DeciDB's objective.
     def _decidb_min(rows, cols):
         x_idx = cols.index("x")
         q_idx = cols.index("l_quantity")
@@ -773,7 +773,7 @@ def test_max_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     Mirror of ``test_min_objective_with_when``. Per CLAUDE.md, MINIMIZE MAX is
     an easy case — introduce a global ``z`` with ``z >= expr_i`` for each
     WHEN-qualifying row, then MINIMIZE z (no indicators, no Big-M). Confirms
-    DecidB's flat-MAX-with-WHEN formulation is routed to the easy
+    DeciDB's flat-MAX-with-WHEN formulation is routed to the easy
     linearization.
     """
     sql = """
@@ -909,7 +909,7 @@ def test_minimize_min_objective(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_min_val = min(int(row[ci["x"]]) for row in decidb_result)
     assert abs(decidb_min_val - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DecidB MIN={decidb_min_val}, Oracle={result.objective_value:.0f}"
+        f"Objective mismatch: DeciDB MIN={decidb_min_val}, Oracle={result.objective_value:.0f}"
     )
 
     perf_tracker.record(
@@ -1056,7 +1056,7 @@ def test_minimize_max_integer(decidb_cli, duckdb_conn, oracle_solver, perf_track
     ci = {name: i for i, name in enumerate(decidb_cols)}
     decidb_max = max(int(row[ci["x"]]) for row in decidb_result)
     assert abs(decidb_max - result.objective_value) <= 0.5, (
-        f"Objective mismatch: DecidB MAX={decidb_max}, Oracle={result.objective_value:.0f}"
+        f"Objective mismatch: DeciDB MAX={decidb_max}, Oracle={result.objective_value:.0f}"
     )
 
     perf_tracker.record(

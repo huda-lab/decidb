@@ -29,7 +29,7 @@ namespace duckdb_libpgquery {
  * state needed for raw parsing/lexing goes here.
  */
 /*
- * DecidB: the lexer state a DECIDE clause owns. A DECIDE query may appear as a
+ * DeciDB: the lexer state a DECIDE clause owns. A DECIDE query may appear as a
  * subquery inside an outer DECIDE clause; the inner clause must restore this
  * state on its way out rather than clear it, or the outer clause's remaining
  * WHENs lex as ordinary SQL WHEN and fail to parse.
@@ -62,7 +62,7 @@ typedef struct base_yy_extra_type {
 	char lookahead_hold_char;      /* to be put back at *lookahead_end */
 
 	/*
-	 * DecidB: true while lexing inside a DECIDE clause. Set when base_yylex()
+	 * DeciDB: true while lexing inside a DECIDE clause. Set when base_yylex()
 	 * returns the DECIDE or SUCH token; restored to the enclosing clause's value
 	 * by the decide_clause / decide_declaration / decide_tail grammar actions.
 	 * While set, base_yylex() rewrites depth-0 WHEN to a DECIDE-specific token
@@ -71,13 +71,13 @@ typedef struct base_yy_extra_type {
 	 */
 	bool in_decide_clause;
 
-	/* DecidB: true after MAXIMIZE/MINIMIZE in a DECIDE clause. Objective WHEN
+	/* DeciDB: true after MAXIMIZE/MINIMIZE in a DECIDE clause. Objective WHEN
 	 * gets a distinct token because its condition cannot steal a trailing
 	 * constraint bound. */
 	bool in_decide_objective;
 
 	/*
-	 * DecidB: CASE...END nesting depth while inside a DECIDE clause. WHEN is
+	 * DeciDB: CASE...END nesting depth while inside a DECIDE clause. WHEN is
 	 * only rewritten to a DECIDE token at depth 0; a WHEN belonging to a CASE
 	 * inside a DECIDE expression must stay a normal WHEN so the CASE parses
 	 * (and is then rejected by the binder with a friendly error).
@@ -85,7 +85,7 @@ typedef struct base_yy_extra_type {
 	int decide_case_depth;
 
 	/*
-	 * DecidB: true once a pre-FROM DECIDE declaration (decide_declaration)
+	 * DeciDB: true once a pre-FROM DECIDE declaration (decide_declaration)
 	 * has been consumed. Lets decide_clause's action recognize a second
 	 * DECIDE reached through decide_body and report "DECIDE appears twice"
 	 * directly, instead of whatever error its own opt_decide_tail
@@ -94,14 +94,14 @@ typedef struct base_yy_extra_type {
 	bool decide_declared_before_from;
 
 	/*
-	 * DecidB: true when the previous token was ')'. Inside a DECIDE clause that
+	 * DeciDB: true when the previous token was ')'. Inside a DECIDE clause that
 	 * is what tells a reducer's BY -- sum(x) BY (g) -- from GROUP BY, ORDER BY
 	 * and PARTITION BY, whose BY always follows a keyword.
 	 */
 	bool decide_after_rparen;
 
 	/*
-	 * DecidB: saved copies of the four clause fields above, one per DECIDE clause
+	 * DeciDB: saved copies of the four clause fields above, one per DECIDE clause
 	 * currently open. Pushed by base_yylex() when it arms a clause on DECIDE
 	 * or SUCH; popped by the decide_clause, decide_declaration and decide_tail
 	 * grammar actions, which is what makes a nested DECIDE restore its parent
@@ -110,7 +110,7 @@ typedef struct base_yy_extra_type {
 	PGDecideLexState decide_state_stack[PG_DECIDE_STATE_STACK_MAX];
 	int decide_state_depth;
 
-	/* DecidB: PGDecideSpan of every DECIDE construct parsed so far; each clause carries the list. */
+	/* DeciDB: PGDecideSpan of every DECIDE construct parsed so far; each clause carries the list. */
 	PGList *decide_spans;
 
 	/*
@@ -127,7 +127,7 @@ typedef struct base_yy_extra_type {
  */
 #define pg_yyget_extra(yyscanner) (*((base_yy_extra_type **)(yyscanner)))
 
-/* DecidB: save the enclosing DECIDE clause's lexer state before arming a new one. */
+/* DeciDB: save the enclosing DECIDE clause's lexer state before arming a new one. */
 static inline void PGDecidePushLexState(base_yy_extra_type *yyextra) {
 	if (yyextra->decide_state_depth >= 0 && yyextra->decide_state_depth < PG_DECIDE_STATE_STACK_MAX) {
 		PGDecideLexState *slot = &yyextra->decide_state_stack[yyextra->decide_state_depth];
@@ -139,7 +139,7 @@ static inline void PGDecidePushLexState(base_yy_extra_type *yyextra) {
 	yyextra->decide_state_depth++;
 }
 
-/* DecidB: restore the enclosing DECIDE clause's lexer state as this one closes.
+/* DeciDB: restore the enclosing DECIDE clause's lexer state as this one closes.
  * With nothing pushed this leaves the clause disarmed, matching the plain
  * assignment these call sites used before nesting was supported. */
 static inline void PGDecidePopLexState(base_yy_extra_type *yyextra) {

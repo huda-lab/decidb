@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-//                         DecidB
+//                         DeciDB
 //
 // src/optimizer/decide/decide_rewrite_abs.cpp
 //
@@ -41,7 +41,7 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // ABS soundness handling (must run BEFORE RewriteAbs)
 // ---------------------------------------------------------------------------
 //
-// DecidB's ABS linearization replaces `ABS(e)` with an auxiliary `aux` and
+// DeciDB's ABS linearization replaces `ABS(e)` with an auxiliary `aux` and
 // adds the lower-envelope constraints `aux >= e` and `aux >= -e`. That alone
 // only forces `aux >= |e|`. Soundness then requires that aux be pinned to
 // exactly |e|, not free above it. There are three pinning mechanisms:

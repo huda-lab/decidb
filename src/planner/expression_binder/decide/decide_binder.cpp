@@ -597,7 +597,7 @@ static bool IsAllowedNameOverDecideVar(const string &name) {
 	if (lname == "sum" || lname == "avg" || lname == "min" || lname == "max") return true;
 	if (lname == "count" || lname == "count_star") return true;
 	if (lname == "+" || lname == "-" || lname == "*" || lname == "/" || lname == "**") return true;
-	// DecidB-internal tag operators (__when_constraint__, __per_constraint__, ...)
+	// DeciDB-internal tag operators (__when_constraint__, __per_constraint__, ...)
 	// are synthesized as FunctionExpression and handled by dedicated binders.
 	if (name.size() >= 4 && name.substr(0, 2) == "__" && name.substr(name.size() - 2) == "__") return true;
 	return false;

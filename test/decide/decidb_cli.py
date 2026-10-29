@@ -1,10 +1,10 @@
-"""CLI wrapper for invoking the DecidB executable via subprocess.
+"""CLI wrapper for invoking the DeciDB executable via subprocess.
 
 Instead of using the Python ``decidb`` package (which forces single-threaded
 execution), this module shells out to the native ``build/release/decidb``
 binary so that DECIDE queries can leverage all available cores.
 
-Error detection relies on stderr: the DecidB CLI writes error messages to
+Error detection relies on stderr: the DeciDB CLI writes error messages to
 stderr (exit code is always 0).  Successful JSON results go to stdout,
 possibly preceded by solver-license preamble lines (e.g. Gurobi).
 """
@@ -37,7 +37,7 @@ _LARGE_NUMBER_WARNING = "very large number detected in model - numerical precisi
 
 class LargeNumberWarningMismatch(Exception):
     """The large-number warning was printed when the test did not declare it, or not printed (exactly once per query
-    run) when it did. Deliberately not a ``DecidBCliError`` or an ``AssertionError``: a test that expects a query to
+    run) when it did. Deliberately not a ``DeciDBCliError`` or an ``AssertionError``: a test that expects a query to
     fail, or a helper that compares two queries' outcomes, catches those, and would pass over the mismatch."""
 
 
@@ -305,8 +305,8 @@ def _last_complete_model_dump(text: str) -> str:
     return text[begin:end] + ("\n" if text.endswith("\n") else "")
 
 
-class DecidBCliError(Exception):
-    """Raised when the DecidB CLI reports an error via stderr.
+class DeciDBCliError(Exception):
+    """Raised when the DeciDB CLI reports an error via stderr.
 
     ``status`` carries the machine-readable terminal from a ``DECIDB_STATUS:`` marker
     line when the CLI emitted one (currently only ``"SUBOPTIMAL"``), else ``None``.
@@ -317,11 +317,11 @@ class DecidBCliError(Exception):
     def __init__(self, message: str, status: str | None = None) -> None:
         self.message = message
         self.status = status
-        super().__init__(f"DecidB CLI error: {message}")
+        super().__init__(f"DeciDB CLI error: {message}")
 
 
-class DecidBCli:
-    """Stateless wrapper around the DecidB CLI executable.
+class DeciDBCli:
+    """Stateless wrapper around the DeciDB CLI executable.
 
     Parameters
     ----------
@@ -353,31 +353,31 @@ class DecidBCli:
             else verify_serializer
         )
 
-    def with_env(self, extra: dict[str, str]) -> "DecidBCli":
+    def with_env(self, extra: dict[str, str]) -> "DeciDBCli":
         """A copy of this wrapper with ``extra`` overlaid on its env.
 
         Lets a test add a one-off variable (e.g. ``DECIDB_DUMP_MODEL``) to a
         session-scoped fixture without mutating the fixture other tests share.
         """
-        return DecidBCli(self.exe, self.db, env={**(self.env or {}), **extra},
+        return DeciDBCli(self.exe, self.db, env={**(self.env or {}), **extra},
                          verify_serializer=self.verify_serializer)
 
-    def with_verify_serializer(self) -> "DecidBCli":
+    def with_verify_serializer(self) -> "DeciDBCli":
         """A copy of this wrapper that round-trips every bound plan through
         serialization, whatever the environment says.
 
         Used by tests asserting that a plan field survives the round trip, so they
         hold with the suite-wide switch off.
         """
-        return DecidBCli(self.exe, self.db, env=self.env, verify_serializer=True)
+        return DeciDBCli(self.exe, self.db, env=self.env, verify_serializer=True)
 
-    def without_verify_serializer(self) -> "DecidBCli":
+    def without_verify_serializer(self) -> "DeciDBCli":
         """A copy of this wrapper that never round-trips plans, whatever the environment says.
 
         For a script DuckDB's round trip cannot replay: it re-runs a ``CREATE TEMP MACRO``
         against the read-only database and fails there, with or without DECIDE.
         """
-        return DecidBCli(self.exe, self.db, env=self.env, verify_serializer=False)
+        return DeciDBCli(self.exe, self.db, env=self.env, verify_serializer=False)
 
     def _settle_large_number_warning(self, stderr: str, expect_large_numbers, direct_solve: bool | None = None) -> str:
         if direct_solve is None:
@@ -435,7 +435,7 @@ class DecidBCli:
 
         Raises
         ------
-        DecidBCliError
+        DeciDBCliError
             If the CLI writes anything to stderr (error messages), including the large-number warning
             when the test did not declare it with ``expect_large_numbers``; a declared one must be printed.
         """
@@ -456,7 +456,7 @@ class DecidBCli:
                 and not line.startswith(_STATUS_MARKER_PREFIX)
             ]
             if error_lines:
-                raise DecidBCliError("\n".join(error_lines), status=status)
+                raise DeciDBCliError("\n".join(error_lines), status=status)
 
         stdout = proc.stdout
         # Find the JSON array start — skip any solver preamble on stdout
@@ -504,7 +504,7 @@ class DecidBCli:
             if line and not line.startswith("Warning:")
         ]
         if errors:
-            raise DecidBCliError("\n".join(errors))
+            raise DeciDBCliError("\n".join(errors))
         if not Path(path).exists():
             raise AssertionError(f"query emitted no model:\n{sql}")
         return _last_complete_model_dump(Path(path).read_text())

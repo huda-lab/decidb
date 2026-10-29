@@ -12,7 +12,7 @@ import re
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, SolverStatus, VarType
 
 from ._direct_differential import error_class
@@ -44,7 +44,7 @@ def _outcome(cli, sql, mode):
     """("ok", rows) or ("error", class of the message). The rows may be empty."""
     try:
         return "ok", _run(cli, sql, mode)[0]
-    except DecidBCliError as error:
+    except DeciDBCliError as error:
         return "error", error_class(str(error))
 
 

@@ -1,5 +1,5 @@
 //===----------------------------------------------------------------------===//
-//                         DecidB
+//                         DeciDB
 //
 // src/decidb/formulation/linearization_bilinear_abs.cpp
 //

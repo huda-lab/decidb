@@ -16,7 +16,7 @@ Covers:
 from collections import Counter
 
 import pytest
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 
 from ._oracle_helpers import add_ne_indicator
@@ -94,7 +94,7 @@ def test_keyed_nation_selection(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     result = oracle_solver.solve()
     oracle_obj = result.objective_value
 
-    # Compute DecidB objective
+    # Compute DeciDB objective
     decidb_obj = 0.0
     for row in data:
         nkey = int(row[1])
@@ -102,7 +102,7 @@ def test_keyed_nation_selection(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         decidb_obj += nation_values.get(nkey, 0) * acctbal
 
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +181,7 @@ def test_keyed_consistency(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         for nkey in nation_ids
     )
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -254,7 +254,7 @@ def test_keyed_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         for nkey in nation_ids
     )
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -341,7 +341,7 @@ def test_keyed_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_solver, per
     decidb_obj = sum(int(row[2]) * cust_acctbal.get(int(row[0]), 0.0)
                      for row in decidb_result)
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +404,7 @@ def test_keyed_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     oracle_result = oracle_solver.solve()
     decidb_obj = float(sum(int(row[2]) for row in decidb_result))
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +421,7 @@ def test_keyed_nonexistent_table(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         SUCH THAT SUM(x) <= 5
         MAXIMIZE SUM(x * c.c_acctbal)
     """
-    with pytest.raises(DecidBCliError, match="nonexistent is neither a column nor a relation of the FROM clause"):
+    with pytest.raises(DeciDBCliError, match="nonexistent is neither a column nor a relation of the FROM clause"):
         decidb_cli.execute(sql)
 
 
@@ -520,7 +520,7 @@ def test_keyed_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         for nkey in nation_ids
     )
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -593,7 +593,7 @@ def test_keyed_with_max(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     oracle_result9 = oracle_solver.solve()
     decidb_obj9 = float(sum(int(row[3]) for row in decidb_result))
     assert abs(decidb_obj9 - oracle_result9.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj9:.4f}, Oracle={oracle_result9.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj9:.4f}, Oracle={oracle_result9.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -674,7 +674,7 @@ def test_keyed_with_avg(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     oracle_result = oracle_solver.solve()
     decidb_obj = float(sum(int(row[2]) for row in decidb_result))
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -777,7 +777,7 @@ def test_keyed_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         for nkey in nation_ids
     )
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_obj:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -824,7 +824,7 @@ def test_keyed_ne_constraint(decidb_cli, duckdb_conn, oracle_solver):
     keepN_idx = cols.index("keepN")
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -901,7 +901,7 @@ def test_keyed_max_hard_case(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result14 = oracle_solver.solve()
     decidb_obj14 = float(sum(int(row[keepN_idx]) for row in result))
     assert abs(decidb_obj14 - oracle_result14.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj14:.4f}, Oracle={oracle_result14.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj14:.4f}, Oracle={oracle_result14.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -995,7 +995,7 @@ def test_keyed_mixed_when_per(
     # optimum, so the two incumbents can differ by up to ~2*MIPGap of obj.
     tol = max(1e-3, 2e-4 * abs(res.objective_value))
     assert abs(decidb_obj - res.objective_value) <= tol, (
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, "
         f"Oracle={res.objective_value:.4f}, tol={tol:.4f}"
     )
 
@@ -1099,7 +1099,7 @@ def test_keyed_when_on_objective(decidb_cli, duckdb_conn, oracle_solver):
         for nkey in nation_ids
     )
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1189,7 +1189,7 @@ def test_keyed_multi_column_per(decidb_cli, duckdb_conn, oracle_solver):
         for nkey in nation_ids
     )
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1268,7 +1268,7 @@ def test_keyed_min_easy_case(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result19 = oracle_solver.solve()
     decidb_obj19 = float(sum(int(row[keepN_idx]) for row in result))
     assert abs(decidb_obj19 - oracle_result19.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj19:.4f}, Oracle={oracle_result19.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj19:.4f}, Oracle={oracle_result19.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1345,7 +1345,7 @@ def test_keyed_avg_per(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result20 = oracle_solver.solve()
     decidb_obj20 = float(sum(int(row[keepN_idx]) for row in result))
     assert abs(decidb_obj20 - oracle_result20.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj20:.4f}, Oracle={oracle_result20.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj20:.4f}, Oracle={oracle_result20.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1401,7 +1401,7 @@ def test_keyed_ne_per(decidb_cli, duckdb_conn, oracle_solver):
     keepN_idx = cols.index("keepN")
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -1446,7 +1446,7 @@ def test_keyed_between_constraint(decidb_cli, duckdb_conn, oracle_solver):
     keepN_idx = cols.index("keepN")
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -1551,7 +1551,7 @@ def test_keyed_two_tables(decidb_cli, duckdb_conn, oracle_solver):
     oracle_result22 = oracle_solver.solve()
     decidb_obj22 = float(sum(int(row[keepN_idx]) for row in result))
     assert abs(decidb_obj22 - oracle_result22.objective_value) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj22:.4f}, Oracle={oracle_result22.objective_value:.4f}"
+        f"Objective mismatch: DeciDB={decidb_obj22:.4f}, Oracle={oracle_result22.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -1561,7 +1561,7 @@ def test_keyed_two_tables(decidb_cli, duckdb_conn, oracle_solver):
 @pytest.mark.error_binder
 def test_keyed_var_in_when_condition_error(decidb_cli):
     """WHEN condition must not reference DECIDE variables (including entity-scoped)."""
-    with pytest.raises(DecidBCliError, match="keepN is a decision; when, per and by may only use data"):
+    with pytest.raises(DeciDBCliError, match="keepN is a decision; when, per and by may only use data"):
         decidb_cli.execute(
             """
             SELECT n.n_nationkey, keepN
@@ -1617,7 +1617,7 @@ def test_keyed_equality_constraint(
     keepN_idx = cols.index("keepN")
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -1688,7 +1688,7 @@ def test_keyed_is_real(decidb_cli, duckdb_conn, oracle_solver):
 
     decidb_obj = sum(float(row[nkey_idx]) * float(row[budget_idx]) for row in result)
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-3, \
-        f"DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
@@ -1769,7 +1769,7 @@ def test_keyed_hard_min_max(decidb_cli, duckdb_conn, oracle_solver):
 
     decidb_obj = sum(int(row[qty_idx]) for row in result)
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
@@ -1855,7 +1855,7 @@ def test_keyed_abs(decidb_cli, duckdb_conn, oracle_solver):
 
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
@@ -1925,7 +1925,7 @@ def test_keyed_when_min_max_triple(decidb_cli, duckdb_conn, oracle_solver):
 
     decidb_obj = sum(int(row[keepN_idx]) for row in result)
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 @pytest.mark.correctness
@@ -1991,7 +1991,7 @@ def test_keyed_ne_oracle(decidb_cli, duckdb_conn, oracle_solver):
 
     decidb_obj = sum(int(row[nkey_idx]) * int(row[qty_idx]) for row in result)
     assert abs(decidb_obj - oracle_result.objective_value) < 1e-4, \
-        f"DecidB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
+        f"DeciDB={decidb_obj:.4f}, Oracle={oracle_result.objective_value:.4f}"
 
 
 # ---------------------------------------------------------------------------
@@ -2129,7 +2129,7 @@ def test_keyed_subquery_per_three_way(
             nation_to_keep[nkey] = k
     decidb_obj = sum(nation_to_keep.values())
     assert abs(decidb_obj - res.objective_value) < 1e-6, (
-        f"DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -2182,7 +2182,7 @@ def test_keyed_null_key(
     assert null_vals == [None, None], f"NULL-keyed rows should have no decision, got keep values: {null_vals}"
     decidb_obj = sum(float(row[val_idx]) * int(row[keep_idx]) for row in decidb_rows if row[nk_idx] is not None)
     assert decidb_obj == pytest.approx(res.objective_value), (
-        f"DecidB obj={decidb_obj}, oracle obj={res.objective_value}"
+        f"DeciDB obj={decidb_obj}, oracle obj={res.objective_value}"
     )
 
 
@@ -2280,13 +2280,13 @@ def test_keyed_three_way_join_per_region(
     res = oracle_solver.solve()
     assert res.status == SolverStatus.OPTIMAL
 
-    # DecidB objective from actual row values.
+    # DeciDB objective from actual row values.
     ac_idx = decidb_cols.index("c_acctbal")
     decidb_obj = sum(
         int(row[keep_idx]) * float(row[ac_idx]) for row in decidb_rows
     )
     assert abs(decidb_obj - res.objective_value) < 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -2347,7 +2347,7 @@ def test_keyed_over_subquery_of_base_table(
         int(row[keep_idx]) * float(row[val_idx]) for row in decidb_rows
     )
     assert decidb_obj == pytest.approx(res.objective_value), (
-        f"DecidB obj={decidb_obj}, oracle obj={res.objective_value}"
+        f"DeciDB obj={decidb_obj}, oracle obj={res.objective_value}"
     )
     # Entity consistency: rows with the same rk share the same keep value.
     per_rk = {}
@@ -2401,7 +2401,7 @@ def test_keyed_over_cte_of_base_table(
         int(row[keep_idx]) * float(row[val_idx]) for row in decidb_rows
     )
     assert decidb_obj == pytest.approx(res.objective_value), (
-        f"DecidB obj={decidb_obj}, oracle obj={res.objective_value}"
+        f"DeciDB obj={decidb_obj}, oracle obj={res.objective_value}"
     )
 
 
@@ -2478,7 +2478,7 @@ def test_keyed_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_solver, sco
     rk_idx = cols_entity.index("rk")
     obj_a = sum(int(r[keep_idx]) * float(r[val_idx]) for r in rows_entity if r[rk_idx] is not None)
     assert obj_a == pytest.approx(res_a.objective_value), (
-        f"(A) entity-scope: DecidB obj={obj_a}, oracle={res_a.objective_value}"
+        f"(A) entity-scope: DeciDB obj={obj_a}, oracle={res_a.objective_value}"
     )
     # NULL rows have no decision.
     null_keeps = [r[keep_idx] for r in rows_entity if r[rk_idx] is None]
@@ -2512,7 +2512,7 @@ def test_keyed_vs_per_null_semantics(decidb_cli, duckdb_conn, oracle_solver, sco
     objective_b = ScopedObjective(ObjSense.MAXIMIZE, (Reduce("sum", lambda r: {"keep": r["val"]}),))
     obj_b = model_b.judge_scoped([{"keep": r[keep_idx_b]} for r in rows_per], clauses_b, objective_b)
     oracle_b = model_b.solve_scoped(scope_solver, clauses_b, objective_b)
-    assert obj_b == pytest.approx(oracle_b), f"(B) PER: DecidB obj={obj_b}, oracle={oracle_b}"
+    assert obj_b == pytest.approx(oracle_b), f"(B) PER: DeciDB obj={obj_b}, oracle={oracle_b}"
 
     # Divergence check: the two forms still give different optima on this shape
     # (each rk group keeps its best row under `per`; the entity scope keeps every
@@ -2586,5 +2586,5 @@ def test_keyed_perrow_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_tr
     for r in data:
         decidb_obj += nation_values.get(int(r[1]), 0) * float(r[2])
     assert abs(decidb_obj - result.objective_value) < 1e-4, (
-        f"Entity-scoped per-row linear LHS: DecidB={decidb_obj}, oracle={result.objective_value}"
+        f"Entity-scoped per-row linear LHS: DeciDB={decidb_obj}, oracle={result.objective_value}"
     )

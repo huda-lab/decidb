@@ -142,7 +142,7 @@ def test_cast_lid_mixed_placement(decidb_cli, duckdb_conn, oracle_solver, perf_t
     ci = {c: i for i, c in enumerate(decidb_cols)}
     decidb_obj = sum(float(r[ci["x"]]) for r in decidb_rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
     # The bound migrated across the relation, so check it holds as written.
     filtered = sum(
@@ -212,7 +212,7 @@ def test_cast_lid_negated_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_t
     ci = {c: i for i, c in enumerate(decidb_cols)}
     decidb_obj = sum(float(r[ci["x"]]) for r in decidb_rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(

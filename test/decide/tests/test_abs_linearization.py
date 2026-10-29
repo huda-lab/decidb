@@ -22,14 +22,14 @@ import time
 
 import pytest
 
-from decidb_cli import DecidBCliError, _last_complete_model_dump
+from decidb_cli import DeciDBCliError, _last_complete_model_dump
 from solver.types import VarType, ObjSense, SolverStatus
 from ._brute_force import judge_rows
 from ._scope_cases import answer, dump_counts, error_of
 
 
 def _compute_abs_objective(decidb_rows, decidb_cols, var_name, ref_col):
-    """Compute SUM(ABS(var - ref_col)) from DecidB output."""
+    """Compute SUM(ABS(var - ref_col)) from DeciDB output."""
     ci = {name: i for i, name in enumerate(decidb_cols)}
     return sum(
         abs(float(row[ci[var_name]]) - float(row[ci[ref_col]]))
@@ -94,7 +94,7 @@ def test_abs_objective_basic(decidb_cli, duckdb_conn, oracle_solver, perf_tracke
     assert result.status == SolverStatus.OPTIMAL
     decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "new_qty", "l_quantity")
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
@@ -170,7 +170,7 @@ def test_abs_objective_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tr
         if row[ci["l_returnflag"]] == 'R'
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
@@ -244,7 +244,7 @@ def test_abs_objective_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     assert result.status == SolverStatus.OPTIMAL
     decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "new_qty", "l_quantity")
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
@@ -323,7 +323,7 @@ def test_abs_constraint_per_row(decidb_cli, duckdb_conn, oracle_solver, perf_tra
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
@@ -403,7 +403,7 @@ def test_abs_constraint_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf_t
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
@@ -485,7 +485,7 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
     assert result.status == SolverStatus.OPTIMAL
     ci = {name: i for i, name in enumerate(decidb_cols)}
 
-    # Sanity check: DecidB actually respected the WHEN-filtered ABS bound
+    # Sanity check: DeciDB actually respected the WHEN-filtered ABS bound
     r_total_dev = sum(
         abs(float(row[ci["new_qty"]]) - float(row[ci["l_quantity"]]))
         for row in decidb_result
@@ -500,7 +500,7 @@ def test_abs_constraint_aggregate_with_when(decidb_cli, duckdb_conn, oracle_solv
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
@@ -592,7 +592,7 @@ def test_abs_multiple_terms(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
@@ -695,7 +695,7 @@ def test_abs_mixed_vars(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         for row in decidb_result
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
     # Check boolean constraint
     s_sum = sum(1 for row in decidb_result if float(row[ci["s"]]) >= 0.5)
@@ -779,7 +779,7 @@ def test_real_abs_fractional_target_oracle(
         float(row[ci["x"]]) * float(row[ci["l_extendedprice"]]) for row in decidb_rows
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
@@ -872,7 +872,7 @@ def test_abs_maximize_objective_basic(decidb_cli, duckdb_conn, oracle_solver, pe
     assert result.status == SolverStatus.OPTIMAL
     decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "x", "l_quantity")
     assert abs(decidb_obj - result.objective_value) <= 1e-3, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
@@ -919,7 +919,7 @@ def test_abs_maximize_bound_inferred_from_sum(decidb_cli, duckdb_conn):
 
     decidb_obj = _compute_abs_objective(decidb_result, decidb_cols, "x", "l_quantity")
     assert abs(decidb_obj - expected) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, expected={expected:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, expected={expected:.6f}"
     )
 
 
@@ -1081,7 +1081,7 @@ def test_abs_constraint_aggregate_hard_ge(decidb_cli, duckdb_conn, oracle_solver
 
     assert result.status == SolverStatus.OPTIMAL
     ci = {name: i for i, name in enumerate(decidb_cols)}
-    # DecidB must respect the aggregate hard bound
+    # DeciDB must respect the aggregate hard bound
     total_dev = sum(
         abs(float(row[ci["x"]]) - float(row[ci["l_quantity"]])) for row in decidb_rows
     )
@@ -1089,7 +1089,7 @@ def test_abs_constraint_aggregate_hard_ge(decidb_cli, duckdb_conn, oracle_solver
 
     decidb_obj = sum(float(row[ci["x"]]) for row in decidb_rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(
@@ -1219,7 +1219,7 @@ def test_abs_data_column_coefficient_may_be_negative(decidb_cli, oracle_solver):
     auxiliary needs the Big-M encoding that pins d to the exact absolute value.
 
     Regression pin: while the sign walk assumed an unknown factor was positive,
-    DecidB answered x = 0 on every row here — the constraint was satisfied
+    DeciDB answered x = 0 on every row here — the constraint was satisfied
     entirely by letting the auxiliary float, without moving x at all.
     """
     rows_data = [(-1.0, 3.0), (2.0, 1.0)]  # (w, t) per row
@@ -1263,7 +1263,7 @@ def test_abs_data_column_coefficient_may_be_negative(decidb_cli, oracle_solver):
 
     assert result.status == SolverStatus.OPTIMAL
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}"
     )
 
@@ -1339,7 +1339,7 @@ def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
     t0 = time.perf_counter()
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
     decidb_time = time.perf_counter() - t0
-    assert len(decidb_rows) == n, "oracle and DecidB must see the same rows"
+    assert len(decidb_rows) == n, "oracle and DeciDB must see the same rows"
 
     t_build = time.perf_counter()
     oracle_solver.create_model("abs_agg_hard_ge_when")
@@ -1369,7 +1369,7 @@ def test_abs_constraint_aggregate_hard_ge_with_when(decidb_cli, duckdb_conn,
     assert decidb_obj > 1e-3, \
         "every x stayed at 0 — the aggregate summed the unmasked auxiliaries too"
     assert abs(decidb_obj - result.objective_value) <= 1e-2, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}"
     )
 
@@ -1455,7 +1455,7 @@ def test_abs_constraint_aggregate_hard_ge_with_per(decidb_cli, oracle_solver,
 
     decidb_obj = sum(float(row[ci["x"]]) for row in decidb_rows)
     assert abs(decidb_obj - result.objective_value) <= 1e-3, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}"
     )
 
@@ -1872,7 +1872,7 @@ def test_abs_sign_rows_are_sized_by_the_signed_interval(decidb_cli_highs, tmp_pa
 def test_abs_sign_rows_cover_a_demand_beyond_the_box(decidb_cli_highs, tmp_path):
     """`ABS(x) >= 5` over x in [-1, 1] cannot be met, and the interval grows to [-5, 5] so that widening x stays representable."""
     path = tmp_path / "demand.dump"
-    with pytest.raises(DecidBCliError):
+    with pytest.raises(DeciDBCliError):
         _abs_lowering(decidb_cli_highs).dump_model(
             "SELECT x FROM (SELECT 1 AS id) t DECIDE x(INT) SUCH THAT x >= -1 AND x <= 1 AND abs(x) >= 5 MINIMIZE SUM(x)",
             path,

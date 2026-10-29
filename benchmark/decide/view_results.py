@@ -220,7 +220,7 @@ def render_results(data: dict) -> str:
     sizes = data.get("sizes", [])
 
     lines.append("")
-    lines.append(f"{BOLD}DecidB Benchmark Results{RESET}")
+    lines.append(f"{BOLD}DeciDB Benchmark Results{RESET}")
     lines.append(f"  Commit: {commit}  |  {timestamp[:19]}  |  Sizes: {', '.join(sizes)}")
     lines.append("")
 

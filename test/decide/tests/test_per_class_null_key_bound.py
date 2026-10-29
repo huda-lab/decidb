@@ -13,7 +13,7 @@ import math
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
@@ -111,7 +111,7 @@ def test_a_nan_bound_on_a_class_row_still_raises(decidb_cli, shape, mode):
     """Class b's one row has a NaN bound: the class determines it, and the message is the same on both paths."""
     rows = [row[:4] + (NAN if row[0] == 4 else row[4],) for row in ROWS if row[1] != "b" or row[0] == 4]
     with pytest.raises(
-        DecidBCliError,
+        DeciDBCliError,
         match=r"DECIDE: the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\.",
     ):
         run(decidb_cli, _sql(rows, shape), mode)

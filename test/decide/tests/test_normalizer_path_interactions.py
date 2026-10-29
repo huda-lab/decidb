@@ -28,7 +28,7 @@ import time
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, SolverStatus, VarType
 
 
@@ -41,14 +41,14 @@ def _expect_gurobi(func):
     def wrapper(*args, **kwargs):
         try:
             return func(*args, **kwargs)
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert re.search(r"[Qq]uadratic|[Gg]urobi|McCormick|bilinear|non-convex", str(e)), \
                 f"Unexpected error (expected QP/bilinear backend rejection): {e}"
     return wrapper
 
 
 def _solve_and_compare(oracle_solver, decidb_obj, tol=5e-2):
-    """Solve the oracle, assert its objective matches DecidB's within tol.
+    """Solve the oracle, assert its objective matches DeciDB's within tol.
     Looser tolerance than the linear suite because QP/QCQP solutions sit
     on the solver's feasibility boundary and can drift by ~1e-6 in
     constraint slack, which propagates into the objective."""
@@ -58,7 +58,7 @@ def _solve_and_compare(oracle_solver, decidb_obj, tol=5e-2):
     )
     diff = abs(decidb_obj - result.objective_value)
     assert diff <= tol, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}, diff={diff:.6f}"
     )
     return result

@@ -1,7 +1,7 @@
 """Tests for IN (...) constraints on decision variables.
 
 ``x IN (v1, ..., vK)`` restricts the variable's domain to a discrete set.
-DecidB rewrites this at bind time into K binary indicator variables z_k with
+DeciDB rewrites this at bind time into K binary indicator variables z_k with
 ``SUM(z_k) = 1`` (cardinality) and ``x = SUM(v_k * z_k)`` (linking). The oracle
 mirrors the same construction via ``add_in_domain``.
 """
@@ -31,7 +31,7 @@ def _build_in_domain_model(oracle, test_id, data, domain, big_M,
                            when_mask=None, explicit_bool=False, lb=0.0):
     """Create vars for each row, apply IN (domain), return var name list.
 
-    `lb` mirrors DecidB's own floor: a decision variable is non-negative unless
+    `lb` mirrors DeciDB's own floor: a decision variable is non-negative unless
     something lowers it, and a domain containing a negative value is what lowers
     it (see the negative-minimum branch of the IN rewrite).
     """
@@ -596,7 +596,7 @@ def test_in_boolean_explicit(
 def test_real_in_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """x IN (non-integer values) on a REAL variable.
 
-    Regression test for the integer-step rewrite sweep. DecidB rewrites IN into
+    Regression test for the integer-step rewrite sweep. DeciDB rewrites IN into
     binary-indicator cardinality + linking `=` (no discretization of `x`), so
     REAL variables with fractional domain values must solve correctly. Also
     verifies each row's ``x`` is exactly one of the allowed values.

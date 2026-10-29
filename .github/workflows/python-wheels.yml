@@ -195,7 +195,7 @@ jobs:
           packages-dir: dist/
 
   # On a published release, attach the wheels + sdist to the GitHub release page
-  # (alongside the CLI binaries that DecidBRelease.yml already attached).
+  # (alongside the CLI binaries that DeciDBRelease.yml already attached).
   attach_to_release:
     name: Attach wheels to GitHub release
     needs: [build_wheels, build_sdist]

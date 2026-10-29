@@ -59,7 +59,7 @@ namespace duckdb_libpgquery {
 /*
  * Location tracking support --- simpler than bison's default: a nonterminal starts where its first
  * component starts (-1 when that component is empty) and ends where its last component ends. An empty
- * nonterminal ends where the symbol before it ends. DecidB cuts a DECIDE clause's text between the two.
+ * nonterminal ends where the symbol before it ends. DeciDB cuts a DECIDE clause's text between the two.
  */
 #define YYLLOC_DEFAULT(Current, Rhs, N) \
 	do { \

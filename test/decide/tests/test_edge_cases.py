@@ -349,7 +349,7 @@ def test_maximize_sum_max_per_with_empty_when_group(
     from solver.types import SolverStatus
     assert result.status == SolverStatus.OPTIMAL, (
         f"Oracle expected OPTIMAL; got {result.status}. "
-        f"DecidB returned {len(decidb_rows)} rows."
+        f"DeciDB returned {len(decidb_rows)} rows."
     )
 
     def decidb_obj(rs, cs):
@@ -468,10 +468,10 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 
     Oracle role: build the same feasibility problem in gurobipy and assert
     OPTIMAL — this is independent verification that the constraints are
-    satisfiable. Then structurally validate DecidB's chosen feasible
+    satisfiable. Then structurally validate DeciDB's chosen feasible
     point (per-group cardinality + global budget). Cannot compare
     variable values directly because feasibility problems admit multiple
-    optima and DecidB / Gurobi may pick different ones.
+    optima and DeciDB / Gurobi may pick different ones.
     """
     data_sql = """
         SELECT 1 AS id, 'A' AS grp, 10.0 AS val UNION ALL
@@ -524,11 +524,11 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     result = oracle_solver.solve()
     assert result.status == SolverStatus.OPTIMAL, (
         f"Oracle reports infeasible/error for feasibility+PER: status={result.status}. "
-        f"DecidB returned {len(rows)} rows, so DecidB thinks it is feasible — divergence."
+        f"DeciDB returned {len(rows)} rows, so DeciDB thinks it is feasible — divergence."
     )
 
-    # Structural validation of DecidB's chosen point.
-    assert len(rows) == n, f"row count mismatch: DecidB returned {len(rows)}, expected {n}"
+    # Structural validation of DeciDB's chosen point.
+    assert len(rows) == n, f"row count mismatch: DeciDB returned {len(rows)}, expected {n}"
     x_idx, grp_idx, val_idx = cols.index("x"), cols.index("grp"), cols.index("val")
     by_grp: dict = defaultdict(int)
     for r in rows:
@@ -539,7 +539,7 @@ def test_feasibility_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         )
     weighted = sum(int(r[x_idx]) * float(r[val_idx]) for r in rows)
     assert weighted <= 35 + 1e-4, (
-        f"DecidB violates global budget: SUM(x*val)={weighted} > 35"
+        f"DeciDB violates global budget: SUM(x*val)={weighted} > 35"
     )
 
     perf_tracker.record(
@@ -622,7 +622,7 @@ def test_null_coefficients(decidb_cli, oracle_solver, perf_tracker):
 def test_all_zero_objective(decidb_cli, oracle_solver, perf_tracker):
     """``MAXIMIZE SUM(x * 0)`` — objective is identically zero.
 
-    With a zero objective, the solver returns any feasible solution. DecidB
+    With a zero objective, the solver returns any feasible solution. DeciDB
     must still report OPTIMAL with objective value 0.0 and must honour the
     feasibility constraint. A status-handling or objective-builder bug
     (e.g., treating the all-zero coefficient vector as "no objective set")
@@ -663,7 +663,7 @@ def test_all_zero_objective(decidb_cli, oracle_solver, perf_tracker):
     x_idx = decidb_cols.index("x")
     decidb_obj = sum(int(r[x_idx]) * float(r[val_idx]) for r in decidb_rows)
     assert abs(decidb_obj) <= 1e-9, (
-        f"DecidB objective should be 0, got {decidb_obj}"
+        f"DeciDB objective should be 0, got {decidb_obj}"
     )
     # Feasibility: at least one row picked (per SUM(x) >= 1).
     total_x = sum(int(r[x_idx]) for r in decidb_rows)
@@ -696,7 +696,7 @@ def test_many_terms_objective(
 
     Stresses the symbolic normalizer / expression evaluator on a much wider
     term list than typical TPC-H queries (which use 2-3 columns). Coefficient
-    mismatches between DecidB's extraction and the oracle would surface as an
+    mismatches between DeciDB's extraction and the oracle would surface as an
     x-vector or objective divergence.
     """
     data_sql = (

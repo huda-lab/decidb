@@ -89,7 +89,7 @@ unique_ptr<ParsedExpression> Transformer::TransformInExpression(const string &na
 unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgquery::PGAExpr &root) {
 	auto name = string(PGPointerCast<duckdb_libpgquery::PGValue>(root.name->head->data.ptr_value)->val.str);
 
-	// DecidB: a DECIDE marker is `tag(lexpr, rexpr...)`, rexpr being absent, one node, or a list.
+	// DeciDB: a DECIDE marker is `tag(lexpr, rexpr...)`, rexpr being absent, one node, or a list.
 	auto decide_marker = [&](const char *tag) -> unique_ptr<ParsedExpression> {
 		vector<unique_ptr<ParsedExpression>> children;
 		children.push_back(TransformExpression(root.lexpr));
@@ -219,7 +219,7 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 		return make_uniq<ComparisonExpression>(ExpressionType::COMPARE_DISTINCT_FROM, std::move(left_expr),
 		                                       std::move(right_expr));
 	}
-	// DecidB: the constraint or reducer in children[0], its WHEN condition, PER columns
+	// DeciDB: the constraint or reducer in children[0], its WHEN condition, PER columns
 	// or qualifying relations after it (see common/enums/decide.hpp for each tag). The
 	// postfix WHEN and PER are removed spellings: they still parse so that
 	// RefuseRemovedDecideSpellings can name the new spelling once the clause is built.

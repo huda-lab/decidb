@@ -234,13 +234,13 @@ typedef enum PGAExpr_Kind {
 	PG_AEXPR_BETWEEN_SYM,     /* name must be "BETWEEN SYMMETRIC" */
 	PG_AEXPR_NOT_BETWEEN_SYM, /* name must be "NOT BETWEEN SYMMETRIC" */
 	AEXPR_PAREN,              /* nameless dummy node for parentheses */
-	PG_AEXPR_WHEN_CONSTRAINT,   /* DecidB: the removed postfix WHEN; the transformer refuses it */
-	PG_AEXPR_PER_CONSTRAINT,    /* DecidB: the removed postfix PER; the transformer refuses it */
-	PG_AEXPR_QUALIFIED_REDUCER, /* DecidB: relation-qualified reducer sum(D: expr) */
-	PG_AEXPR_SCOPE_WHEN,        /* DecidB: scope filter, WHEN condition: body */
-	PG_AEXPR_SCOPE_PER,         /* DecidB: scope key, PER key: body */
-	PG_AEXPR_SCOPE_PER_ROW,     /* DecidB: the default scope written out, PER ROW: body */
-	PG_AEXPR_REDUCER_BY         /* DecidB: reducer rows, agg(...) BY (key) */
+	PG_AEXPR_WHEN_CONSTRAINT,   /* DeciDB: the removed postfix WHEN; the transformer refuses it */
+	PG_AEXPR_PER_CONSTRAINT,    /* DeciDB: the removed postfix PER; the transformer refuses it */
+	PG_AEXPR_QUALIFIED_REDUCER, /* DeciDB: relation-qualified reducer sum(D: expr) */
+	PG_AEXPR_SCOPE_WHEN,        /* DeciDB: scope filter, WHEN condition: body */
+	PG_AEXPR_SCOPE_PER,         /* DeciDB: scope key, PER key: body */
+	PG_AEXPR_SCOPE_PER_ROW,     /* DeciDB: the default scope written out, PER ROW: body */
+	PG_AEXPR_REDUCER_BY         /* DeciDB: reducer rows, agg(...) BY (key) */
 } PGAExpr_Kind;
 
 typedef struct PGAExpr {
@@ -1256,7 +1256,7 @@ typedef enum PGObjectiveSense {
 } PGObjectiveSense;
 
 /*
- * DecidB: where a DECIDE construct sits in the query text, so the transformer can keep the text the user wrote.
+ * DeciDB: where a DECIDE construct sits in the query text, so the transformer can keep the text the user wrote.
  * `anchor` is the location of the construct's own token (a comparison's operator, WHEN, PER, BY), the same offset
  * the transformer gives the parsed node as its query location; start/end bound the text (end is just past it).
  */
@@ -1287,7 +1287,7 @@ typedef struct PGDecideClause {
 } PGDecideClause;
 
 /*
- * DecidB: the scope written in front of a constraint, an objective, a declared
+ * DeciDB: the scope written in front of a constraint, an objective, a declared
  * variable or a reducer's argument -- [WHEN condition] [PER key]. It never leaves
  * the grammar: the production owning the scoped body folds it into
  * PG_AEXPR_SCOPE_* nodes (applyDecideScope).
@@ -1319,7 +1319,7 @@ typedef struct PGSelectStmt {
 	PGList *targetList;       /* the target list (of PGResTarget) */
 	PGList *fromClause;       /* the FROM clause */
 	PGNode *whereClause;      /* WHERE qualification */
-    PGNode *decideClause;     /* DecidB's DECIDE...SUCH THAT... clause */
+    PGNode *decideClause;     /* DeciDB's DECIDE...SUCH THAT... clause */
 	PGList *groupClause;      /* GROUP BY clauses */
 	PGNode *havingClause;     /* HAVING conditional-expression */
 	PGList *windowClause;     /* WINDOW window_name AS (...), ... */

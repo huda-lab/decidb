@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 from comparison.compare import compare_solutions
 
@@ -263,7 +263,7 @@ def _check_wrapped_between(decidb_cli, oracle_solver, data, sense, query_tail, b
     result = oracle_solver.solve()
     if result.status == SolverStatus.UNBOUNDED:
         for mode in _WRAPPED_BETWEEN_MODES:
-            with pytest.raises(DecidBCliError, match=r"(?i)unbounded"):
+            with pytest.raises(DeciDBCliError, match=r"(?i)unbounded"):
                 _run_mode(decidb_cli, mode, sql)
         return
     for mode in _WRAPPED_BETWEEN_MODES:

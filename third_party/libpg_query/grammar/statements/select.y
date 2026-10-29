@@ -330,7 +330,7 @@ decide_aggregate_when_condition:
 				{ $$ = $2; }
 		;
 
-/* DecidB: the scope written in front of a constraint, an objective, a declared
+/* DeciDB: the scope written in front of a constraint, an objective, a declared
  * variable or a reducer's argument -- [WHEN condition] [PER key]. A ':' always
  * ends it, so the condition is a full a_expr and needs no parentheses. */
 decide_when:
@@ -380,7 +380,7 @@ decide_scope:
 			| decide_per							{ $$ = $1; }
 		;
 
-/* DecidB: BY (key) directly after a reducer names the rows it reads. */
+/* DeciDB: BY (key) directly after a reducer names the rows it reads. */
 decide_by:
 			BY_DECIDE '(' ')'						{ $$ = NIL; }
 			| BY_DECIDE '(' expr_list ')'
@@ -401,7 +401,7 @@ decide_item_expr:
 decide_objective_item:
 			decide_scope ':' decide_item_expr
 				{
-					/* DecidB: an objective is produced once, so PER () is the only PER it takes */
+					/* DeciDB: an objective is produced once, so PER () is the only PER it takes */
 					PGDecideScope *scope = (PGDecideScope *) $1;
 					if (scope->per == PG_DECIDE_PER_ROW || scope->per == PG_DECIDE_PER_KEY)
 						ereport(ERROR,
@@ -446,7 +446,7 @@ decide_objective_item:
 				{ $$ = $1; }
 		;
 
-/* DecidB: the constraints and optional objective. Shared by both clause
+/* DeciDB: the constraints and optional objective. Shared by both clause
  * orders -- the single-block order reaches it through decide_clause, the
  * paper's split order uses it directly as the body slot. Leaves variables
  * NULL; whoever has the declaration attaches it.
@@ -501,7 +501,7 @@ opt_decide_tail:
 			| /*EMPTY*/								{ $$ = NULL; }
 		;
 
-/* DecidB: the single-block order, DECIDE ... SUCH THAT ... after where_clause. */
+/* DeciDB: the single-block order, DECIDE ... SUCH THAT ... after where_clause. */
 decide_clause:
 			DECIDE typed_decide_variable_list opt_decide_tail
                 {
@@ -523,7 +523,7 @@ decide_clause:
                 }
 		;
 
-/* DecidB: declaration slot. Sits between the target list and FROM, giving the
+/* DeciDB: declaration slot. Sits between the target list and FROM, giving the
  * paper's clause order (SELECT ... DECIDE ... FROM ... SUCH THAT ...). The
  * action pops the clause's lexer state so FROM / JOIN ... ON / WHERE lex as ordinary
  * SQL -- otherwise a CASE WHEN in a join condition would lex as WHEN_DECIDE.
@@ -548,7 +548,7 @@ decide_declaration:
 				}
 		;
 
-/* DecidB: body slot, after where_clause. Carries either the whole single-block
+/* DeciDB: body slot, after where_clause. Carries either the whole single-block
  * DECIDE ... SUCH THAT ... clause (declaration slot empty), or just the
  * constraints and objective (declaration slot supplies the variables).
  */
@@ -3177,18 +3177,18 @@ b_expr:		c_expr
 c_expr:		d_expr									%prec DECIDE_ITEM
 			| func_application decide_aggregate_when_condition	%prec POSTFIXOP
 				{
-					/* DecidB: the removed SUM(e) WHEN c, kept as a marker the transformer
+					/* DeciDB: the removed SUM(e) WHEN c, kept as a marker the transformer
 					 * refuses so the error names sum(when c: e). */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_WHEN_CONSTRAINT, "when_constraint", $1, $2, @2);
 				}
 			| func_application decide_by
 				{
-					/* DecidB: reducer BY (key). The binder validates that it is a reducer. */
+					/* DeciDB: reducer BY (key). The binder validates that it is a reducer. */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by", $1, (PGNode *) $2, @2);
 				}
 			| func_name '(' decide_scope ':' func_arg_list ')'
 				{
-					/* DecidB: a scope inside a reducer, sum(WHEN c PER k: expr). It scopes
+					/* DeciDB: a scope inside a reducer, sum(WHEN c PER k: expr). It scopes
 					 * the first argument, the expression being reduced. */
 					linitial($5) = applyDecideScope($3, (PGNode *) linitial($5));
 					$$ = (PGNode *) makeFuncCall($1, $5, @1);
@@ -3201,7 +3201,7 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 				}
 			| func_name '(' func_arg_list ':' func_arg_list ')'		%prec DECIDE_ITEM
 				{
-					/* DecidB: relation-qualified reducer, sum(D: expr) or, qualified by
+					/* DeciDB: relation-qualified reducer, sum(D: expr) or, qualified by
 					 * several relations at once, sum(D, T: expr).
 					 *
 					 * The qualifier is parsed as a func_arg_list rather than as a
@@ -3219,7 +3219,7 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 				}
 			| func_name '(' func_arg_list ':' func_arg_list ')' decide_aggregate_when_condition	%prec POSTFIXOP
 				{
-					/* DecidB: the removed sum(D: expr) WHEN cond, a marker the transformer
+					/* DeciDB: the removed sum(D: expr) WHEN cond, a marker the transformer
 					 * refuses so the error names sum(when cond per D: expr).
 					 *
 					 * Without this production, `sum(D: expr) WHEN cond` never matches
@@ -3234,7 +3234,7 @@ c_expr:		d_expr									%prec DECIDE_ITEM
 				}
 			| func_name '(' func_arg_list ':' func_arg_list ')' decide_by
 				{
-					/* DecidB: the colon form with BY, sum(D: expr) BY (key) */
+					/* DeciDB: the colon form with BY, sum(D: expr) BY (key) */
 					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_REDUCER_BY, "reducer_by",
 						makeQualifiedReducer($1, $3, $5, @1, @3, @4, yyscanner), (PGNode *) $7, @7);
 				}

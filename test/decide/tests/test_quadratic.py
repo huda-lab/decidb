@@ -2,7 +2,7 @@
 
 Every correctness test formulates the same QP independently via
 ``oracle_solver.set_quadratic_objective(linear, quadratic, sense)`` and
-compares objective values. DecidB's reported objective drops the constant
+compares objective values. DeciDB's reported objective drops the constant
 ``t^2`` term from ``POWER(x - t, 2)`` expansion, so the oracle also omits
 that constant and the test's decidb-side evaluator strips it on the fly.
 
@@ -25,7 +25,7 @@ import time
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, SolverStatus, VarType
 
 
@@ -43,7 +43,7 @@ def _solve_and_compare(
     decidb_obj = decidb_obj_fn(decidb_rows, decidb_cols)
     diff = abs(decidb_obj - result.objective_value)
     assert diff <= 1e-3, (
-        f"QP objective mismatch: DecidB={decidb_obj:.6f}, "
+        f"QP objective mismatch: DeciDB={decidb_obj:.6f}, "
         f"Oracle={result.objective_value:.6f}, diff={diff:.6f}"
     )
     return result
@@ -51,7 +51,7 @@ def _solve_and_compare(
 
 def _qp_target_obj(decidb_rows, decidb_cols, *, x_col="x", target_col="target",
                    scale=1.0, mask_fn=None, linear_coeff=None):
-    """DecidB-side evaluator for SUM(scale * POWER(x - target, 2)
+    """DeciDB-side evaluator for SUM(scale * POWER(x - target, 2)
        (+ linear_coeff * x)), with the t^2 constant stripped to match
        the oracle's ``set_quadratic_objective`` (no constant offset)."""
     xi = decidb_cols.index(x_col)
@@ -68,7 +68,7 @@ def _qp_target_obj(decidb_rows, decidb_cols, *, x_col="x", target_col="target",
 
 
 def _qp_simple_obj(decidb_rows, decidb_cols, *, x_col="x", scale=1.0):
-    """DecidB-side evaluator for SUM(scale * POWER(x, 2)) (no target)."""
+    """DeciDB-side evaluator for SUM(scale * POWER(x, 2)) (no target)."""
     xi = decidb_cols.index(x_col)
     return sum(scale * float(row[xi]) ** 2 for row in decidb_rows)
 
@@ -686,7 +686,7 @@ class TestQuadraticMaximize:
             t0 = time.perf_counter()
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert re.search(r"needs Gurobi", e.message)
             return
 
@@ -728,7 +728,7 @@ class TestQuadraticMaximize:
             t0 = time.perf_counter()
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert re.search(r"needs Gurobi", e.message)
             return
 
@@ -934,7 +934,7 @@ class TestQuadraticMaximize:
             t0 = time.perf_counter()
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert re.search(
                 r"not continuous.*needs Gurobi",
                 e.message, re.IGNORECASE,
@@ -1038,7 +1038,7 @@ class TestQuadraticErrors:
             t0 = time.perf_counter()
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert re.search(r"needs Gurobi", e.message)
             return
 
@@ -1081,7 +1081,7 @@ class TestQuadraticErrors:
             t0 = time.perf_counter()
             rows, cols = decidb_cli.execute(sql)
             decidb_time = time.perf_counter() - t0
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert re.search(r"needs Gurobi", e.message)
             return
 
@@ -1284,7 +1284,7 @@ def test_qp_with_sum_constraint_tpch(
 # Mixed linear + quadratic objective — already oracle-verified, unchanged
 # ===========================================================================
 #
-# DecidB extracts a mixed objective SUM(POWER(x-t, 2) + c*x) into
+# DeciDB extracts a mixed objective SUM(POWER(x-t, 2) + c*x) into
 # ``squared_terms`` (Q matrix) and ``terms`` (linear c vector) simultaneously.
 # The oracle mirrors this via ``set_quadratic_objective(linear, quadratic)``.
 
@@ -1555,7 +1555,7 @@ def test_qp_nested_sum_sum_per_unconstrained(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Unconstrained nested-`per` QP: each x_i = target_i, objective = -Σ t²
-    (after DecidB's constant-stripping convention). Sanity test confirming
+    (after DeciDB's constant-stripping convention). Sanity test confirming
     the nested form degenerates to flat SUM(POWER(x-t,2)) semantically.
     """
     data_sql = """
@@ -1666,7 +1666,7 @@ def test_qp_nested_sum_avg_per_binding(
     target_col = cols.index("target")
 
     def decidb_obj(rs, cs):
-        # Mirror DecidB's per-group 1/n_g weighting with constant t² stripped.
+        # Mirror DeciDB's per-group 1/n_g weighting with constant t² stripped.
         counts = Counter(r[grp_col] for r in rs)
         total = 0.0
         for r in rs:
@@ -2006,7 +2006,7 @@ class TestHighsRejection:
         oracle_solver.create_model("gurobi_coupled_quadratic")
         oracle_solver.add_variable("x", VarType.CONTINUOUS, lb=0.0, ub=4.0)
         oracle_solver.add_variable("y", VarType.CONTINUOUS, lb=0.0, ub=4.0)
-        # (x + 2y - 6)^2 - 3x, constant 36 dropped to match DecidB's reported objective.
+        # (x + 2y - 6)^2 - 3x, constant 36 dropped to match DeciDB's reported objective.
         oracle_solver.set_quadratic_objective(
             {"x": -12.0 - 3.0, "y": -24.0},
             {("x", "x"): 1.0, ("y", "y"): 4.0, ("x", "y"): 4.0},

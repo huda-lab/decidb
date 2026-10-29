@@ -121,7 +121,7 @@ def _apply_reported_fix(cli, sql, rows, subject_to_sql=None, expect_large_number
     literal SQL fragment when the two differ (BETWEEN sides, reversed bounds,
     MAX(x) composition, subquery/foldable RHS, whitespace). Returns the edited SQL
     so callers can oracle-check the achievable objective against it. `expect_large_numbers` declares the
-    large-number warning of the edited query, as `DecidBCli.execute` takes it; a function of the edited
+    large-number warning of the edited query, as `DeciDBCli.execute` takes it; a function of the edited
     SQL is called on it, for a caller that cannot know the edit before it is made."""
     subject_to_sql = subject_to_sql or {}
     edits = _clause_edits(rows)

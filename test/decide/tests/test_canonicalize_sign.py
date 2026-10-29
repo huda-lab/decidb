@@ -103,7 +103,7 @@ def test_abs_negated_term_needs_bigm(decidb_cli, duckdb_conn, oracle_solver, per
         float(r[ci["a"]]) + float(r[ci["b"]]) for r in decidb_rows
     )
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
     # The sign-blind formulation is feasible-but-wrong rather than an error, so
     # assert the constraint actually holds row by row.
@@ -173,7 +173,7 @@ def test_composed_minmax_negated_reducer(decidb_cli, duckdb_conn, oracle_solver,
     sum_x = sum(float(r[ci["x"]]) for r in decidb_rows)
     max_y = max(float(r[ci["y"]]) for r in decidb_rows)
     assert abs(sum_x - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={sum_x:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={sum_x:.6f}, Oracle={result.objective_value:.6f}"
     )
     assert sum_x <= max_y + 1e-4, f"constraint violated: SUM(x)={sum_x} > MAX(y)={max_y}"
 
@@ -233,7 +233,7 @@ def test_leading_negative_reducer(decidb_cli, duckdb_conn, oracle_solver, perf_t
     sum_x = sum(float(r[ci["x"]]) for r in decidb_rows)
     max_x = max(float(r[ci["x"]]) for r in decidb_rows)
     assert abs(sum_x - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={sum_x:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={sum_x:.6f}, Oracle={result.objective_value:.6f}"
     )
     assert max_x >= 3.0 - 1e-4, f"constraint violated: MAX(x)={max_x} < 3"
 
@@ -291,7 +291,7 @@ def test_composed_minmax_objective_subtraction(decidb_cli, oracle_solver, perf_t
     picked = [float(r[ci["v"]]) * int(r[ci["x"]]) for r in decidb_rows]
     decidb_obj = max(picked) - min(picked)
     assert abs(decidb_obj - result.objective_value) <= 1e-4, (
-        f"Objective mismatch: DecidB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
+        f"Objective mismatch: DeciDB={decidb_obj:.6f}, Oracle={result.objective_value:.6f}"
     )
 
     perf_tracker.record(

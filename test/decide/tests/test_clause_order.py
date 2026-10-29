@@ -84,7 +84,7 @@ def test_split_order_oracle(decidb_cli, duckdb_conn, oracle_solver, perf_tracker
     acctbal_by_key = {int(k): float(v) for k, v in data}
     decidb_obj = sum(acctbal_by_key[int(row[0])] * int(row[1]) for row in decidb_result)
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------
@@ -378,7 +378,7 @@ def test_split_order_three_table_fanout_join(decidb_cli, duckdb_conn,
     ok, ln_i, x_i = cols.index("o_orderkey"), cols.index("l_linenumber"), cols.index("x")
     decidb_obj = sum(price_by_key[(int(r[ok]), int(r[ln_i]))] * int(r[x_i]) for r in rows)
     assert abs(decidb_obj - oracle_obj) < 1e-4, \
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={oracle_obj}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={oracle_obj}"
 
 
 # ---------------------------------------------------------------------------

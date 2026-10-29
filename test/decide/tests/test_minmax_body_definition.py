@@ -33,7 +33,7 @@ from collections import defaultdict
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import ObjSense, VarType
 from comparison.compare import compare_solutions
 from ._brute_force import judge_rows
@@ -624,7 +624,7 @@ _REFUSAL_CASES = [
 )
 def test_defined_body_refused_without_native_minmax(decidb_cli, name, env, decision, constraints, objective, cause):
     sql = f"SELECT id, x FROM {_TWO_ROWS} DECIDE {decision} SUCH THAT {constraints} {objective}"
-    with pytest.raises(DecidBCliError) as error:
+    with pytest.raises(DeciDBCliError) as error:
         decidb_cli.with_env(env).execute(sql)
     message = str(error.value)
     assert cause in message, message

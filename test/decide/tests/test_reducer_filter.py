@@ -492,7 +492,7 @@ def test_aggregate_local_when_with_hard_max(
     """max(when active: x*value) >= 6 (hard-case MAX with its own `when`).
 
     Hard MAX(>=) is disjunctive: at least one WHEN-matching row must satisfy the
-    bound. DecidB must emit Big-M indicators *only* for active rows — a bug that
+    bound. DeciDB must emit Big-M indicators *only* for active rows — a bug that
     ignores the WHEN mask would let non-active row c (value=20) trivially satisfy
     the constraint, relaxing the selection and changing the optimum.
 
@@ -820,7 +820,7 @@ def test_aggregate_local_when_three_terms(
 
 
 # ---------------------------------------------------------------------------
-# D. Error cases (DecidB-only; no oracle can help)
+# D. Error cases (DeciDB-only; no oracle can help)
 # ---------------------------------------------------------------------------
 
 @pytest.mark.when
@@ -1293,7 +1293,7 @@ def test_keyed_aggregate_local_when(
         if r[3] > 5000:
             _accumulate(coeffs, f"keepN_{r[1]}", r[3])
     oracle_solver.add_constraint(coeffs, "<=", 50000.0, name="high_bal")
-    # Objective: SUM(keepN) — but in DecidB this sums per row (not per entity).
+    # Objective: SUM(keepN) — but in DeciDB this sums per row (not per entity).
     # So the oracle objective equals (# rows per entity) * keepN per entity.
     obj: dict = defaultdict(float)
     for r in data:

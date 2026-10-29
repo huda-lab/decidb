@@ -1,8 +1,8 @@
 """Infeasibility and unboundedness error tests — now cross-verified by gurobipy.
 
-For each problem that DecidB must reject as infeasible / unbounded, the
+For each problem that DeciDB must reject as infeasible / unbounded, the
 oracle builds the same model in gurobipy and asserts the corresponding
-``SolverStatus``. This guards against DecidB falsely reporting infeasibility
+``SolverStatus``. This guards against DeciDB falsely reporting infeasibility
 on a feasible problem (or vice versa).
 """
 
@@ -13,7 +13,7 @@ from solver.types import ObjSense, SolverStatus, VarType
 @pytest.mark.error_infeasible
 @pytest.mark.error
 class TestInfeasibleModels:
-    """DecidB should raise InvalidInputException for infeasible problems,
+    """DeciDB should raise InvalidInputException for infeasible problems,
     and the oracle should independently report INFEASIBLE."""
 
     def test_contradictory_per_row_bounds(
@@ -324,7 +324,7 @@ class TestDegenerateConstraintRows:
 @pytest.mark.error_infeasible
 @pytest.mark.error
 class TestUnboundedModels:
-    """DecidB should detect unbounded models (as opposed to infeasible ones).
+    """DeciDB should detect unbounded models (as opposed to infeasible ones).
     The oracle cross-verifies by independently returning UNBOUNDED. Gurobi's
     ambiguous INF_OR_UNBD status is disambiguated on both sides via a
     DualReductions=0 re-solve, so exact statuses are asserted here."""
@@ -400,7 +400,7 @@ class TestUnboundedModels:
         oracle_solver.create_model("mixed_unbounded_int")
         for i in range(n):
             oracle_solver.add_variable(f"x_{i}", VarType.BINARY)
-            # INTEGER y with no upper bound mirrors DecidB's default.
+            # INTEGER y with no upper bound mirrors DeciDB's default.
             oracle_solver.add_variable(f"y_{i}", VarType.INTEGER, lb=0.0)
         oracle_solver.add_constraint(
             {f"x_{i}": 1.0 for i in range(n)}, "<=", 5.0, name="sum_x_cap",

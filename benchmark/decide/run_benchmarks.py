@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""DecidB DECIDE performance benchmark runner.
+"""DeciDB DECIDE performance benchmark runner.
 
 Runs a set of DECIDE queries against pre-generated TPC-H databases of different
 sizes (medium/large), measuring wall-clock time, peak memory (RSS), and
@@ -461,7 +461,7 @@ def print_comparison(current: list[dict], previous: dict) -> None:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="DecidB DECIDE benchmark runner")
+    parser = argparse.ArgumentParser(description="DeciDB DECIDE benchmark runner")
     parser.add_argument(
         "--queries", type=str, default=None,
         help="Comma-separated list of queries to run (e.g., Q1,Q3). Default: all",
@@ -523,7 +523,7 @@ def main() -> None:
         sql = manual_path.read_text()
         all_results: list[dict] = []
 
-        print(f"DecidB Manual Benchmark (commit: {commit}{'*' if dirty else ''})")
+        print(f"DeciDB Manual Benchmark (commit: {commit}{'*' if dirty else ''})")
         print(f"Sizes: {', '.join(sizes)}")
         print(f"Iterations: {args.iterations}")
         if os.environ.get("DECIDB_BENCH"):
@@ -588,7 +588,7 @@ def main() -> None:
     else:
         query_names = sorted(available_queries.keys())
 
-    print(f"DecidB DECIDE Benchmark (commit: {commit}{'*' if dirty else ''})")
+    print(f"DeciDB DECIDE Benchmark (commit: {commit}{'*' if dirty else ''})")
     print(f"Queries: {', '.join(query_names)}")
     print(f"Sizes: {', '.join(sizes)}")
     print(f"Iterations: {args.iterations}")

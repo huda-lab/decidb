@@ -535,7 +535,7 @@ gather-libs: release
 	cp third_party/*/libduckdb_*.a libs/. && \
 	cp extension/*/lib*_extension.a libs/.
 
-# ── DecidB-specific targets ──────────────────────────────────────────────
+# ── DeciDB-specific targets ──────────────────────────────────────────────
 
 decide-setup:
 	test/decide/run_tests.sh --setup-only

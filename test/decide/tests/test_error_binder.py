@@ -1,7 +1,7 @@
 """Binder-level semantic error tests.
 
 These mirror the error cases from test/decidb/test_binder.test, updated to
-match current DecidB behavior.  Some older error cases (SUM(x+x), strict <)
+match current DeciDB behavior.  Some older error cases (SUM(x+x), strict <)
 now succeed and are omitted.
 """
 
@@ -9,7 +9,7 @@ import re
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 
 from ._output_helpers import assert_no_internal_leak
 
@@ -266,7 +266,7 @@ class TestBinderErrors:
     def test_subquery_rhs_non_scalar(self, decidb_cli):
         """Subquery RHS that references DECIDE variables.
 
-        DecidB surfaces this via the same "not a scalar or aggregate without
+        DeciDB surfaces this via the same "not a scalar or aggregate without
         DECIDE variables" binder path; the tightened match anchors to that
         wording so a regression (e.g. a less-informative generic scalar
         check) would fail.
@@ -535,7 +535,7 @@ class TestBinderErrors:
             """
         try:
             rows, _ = decidb_cli.execute(sql)
-        except DecidBCliError as e:
+        except DeciDBCliError as e:
             assert "needs Gurobi" in e.message, \
                 f"degree 2 was rejected before reaching a backend: {e.message}"
             return

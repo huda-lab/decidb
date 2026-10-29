@@ -11,7 +11,7 @@ import re
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 
 # (pattern, class). The first match wins; anything unmatched compares by text.
 ERROR_CLASSES = [
@@ -40,7 +40,7 @@ def error_class(message):
 def outcome(cli, mode, sql):
     try:
         rows, _ = cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
-    except DecidBCliError as error:
+    except DeciDBCliError as error:
         return "error", error_class(str(error))
     return "ok", rows[0]
 

@@ -18,7 +18,7 @@ def print_perf_table(tracker: PerfTracker) -> None:
 
     header = (
         f"  {'Test Name':<{name_w}}  {'Rows':>7}  {'Vars':>7}  "
-        f"{'DecidB(s)':>10}  {'Oracle(s)':>10}  {'Obj Value':>14}  "
+        f"{'DeciDB(s)':>10}  {'Oracle(s)':>10}  {'Obj Value':>14}  "
         f"{'Match':>10}  {'Solver':<8}"
     )
     sep = "  " + "-" * (len(header) - 2)

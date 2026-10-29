@@ -14,7 +14,7 @@ import time
 
 import pytest
 
-from decidb_cli import DecidBCliError
+from decidb_cli import DeciDBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 from comparison.compare import compare_solutions
 
@@ -498,7 +498,7 @@ def test_sum_not_equal_with_when_binding(decidb_cli, oracle_solver):
         int(r[ci["x"]]) * int(r[ci["value"]]) for r in rows
     )
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -548,14 +548,14 @@ def test_sum_not_equal_no_when_binding(decidb_cli, oracle_solver):
         int(r[ci["x"]]) * int(r[ci["value"]]) for r in rows
     )
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
 # ---------------------------------------------------------------------------
 # Strict `<` / `>` on non-integer-valued LHS: must be rejected.
 # The LHS of `SUM(x) < K` with REAL x is continuous, so the integer-step
-# rewrite (`< K → <= K-1`) would silently change the feasible set. DecidB
+# rewrite (`< K → <= K-1`) would silently change the feasible set. DeciDB
 # must raise InvalidInputException rather than produce a wrong answer.
 # ---------------------------------------------------------------------------
 
@@ -572,7 +572,7 @@ def test_real_sum_strict_lt_rejected(decidb_cli):
         SUCH THAT SUM(x) < 5
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
@@ -592,7 +592,7 @@ def test_real_sum_strict_gt_rejected(decidb_cli):
             AND SUM(x * l_extendedprice) <= 50000
         MAXIMIZE SUM(x * l_extendedprice)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     assert _STRICT_GT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
@@ -610,7 +610,7 @@ def test_real_perrow_strict_rejected(decidb_cli):
         SUCH THAT x < 5
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
@@ -634,7 +634,7 @@ def test_real_strict_rejection_names_variable_and_clause(decidb_cli):
         SUCH THAT qty < 5
         MAXIMIZE SUM(qty)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     message = exc_info.value.message
     assert _STRICT_LT_REAL_MSG.search(message), f"Unexpected error: {message}"
@@ -698,7 +698,7 @@ def test_real_strict_rejected_when_term_stays_continuous(decidb_cli):
             AND norm(new_qty - l_quantity, 1) < 3
         MAXIMIZE SUM(new_qty)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
@@ -723,7 +723,7 @@ def test_integer_fractional_coeff_strict_rejected(decidb_cli):
             AND SUM(0.5 * x) < 5
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     assert _STRICT_LT_COEFF_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
@@ -799,7 +799,7 @@ def test_strict_rejected_on_fractional_column_type(decidb_cli):
         SUCH THAT SUM(x * l_quantity) < 100
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     message = exc_info.value.message
     assert "l_quantity" in message, f"Message must name the column: {message}"
@@ -842,7 +842,7 @@ def test_mixed_bool_real_strict_rejected(decidb_cli):
             AND SUM(x + y) < 20
         MAXIMIZE SUM(x + y)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
@@ -860,7 +860,7 @@ def test_bilinear_bool_int_strict_oracle(decidb_cli, oracle_solver):
 
     The product b*n with b∈{0,1} and n∈ℤ takes integer values, so `< 5` is
     semantically equivalent to `<= 4`. Oracle formulates the McCormick
-    linearization directly and uses the `<= 4` form; DecidB must produce the
+    linearization directly and uses the `<= 4` form; DeciDB must produce the
     same objective.
     """
     sql = """
@@ -901,9 +901,9 @@ def test_bilinear_bool_int_strict_oracle(decidb_cli, oracle_solver):
     n_col = cols.index("n")
     decidb_obj = sum(int(r[b_col]) * int(r[n_col]) for r in rows)
     # Integer-valued objective — no tolerance slack needed.
-    assert decidb_obj < 5, f"strict `< 5` violated: DecidB SUM(b*n) = {decidb_obj}"
+    assert decidb_obj < 5, f"strict `< 5` violated: DeciDB SUM(b*n) = {decidb_obj}"
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -931,7 +931,7 @@ def test_bilinear_int_int_strict_oracle(decidb_cli, oracle_solver):
     """
     try:
         rows, cols = decidb_cli.execute(sql)
-    except DecidBCliError as e:
+    except DeciDBCliError as e:
         # HiGHS rejects quadratic constraints with a clear message — treat as pass.
         assert re.search(r"[Qq]uadratic|[Gg]urobi|HiGHS", e.message), (
             f"Unexpected error on int×int quadratic constraint: {e.message}"
@@ -964,9 +964,9 @@ def test_bilinear_int_int_strict_oracle(decidb_cli, oracle_solver):
     x_col = cols.index("x")
     y_col = cols.index("y")
     decidb_obj = sum(int(r[x_col]) * int(r[y_col]) for r in rows)
-    assert decidb_obj < 10, f"strict `< 10` violated: DecidB SUM(x*y) = {decidb_obj}"
+    assert decidb_obj < 10, f"strict `< 10` violated: DeciDB SUM(x*y) = {decidb_obj}"
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -1016,7 +1016,7 @@ def test_integer_sum_strict_lt_oracle(decidb_cli, duckdb_conn, oracle_solver):
     price_col = cols.index("l_extendedprice")
     decidb_obj = sum(int(r[x_col]) * float(r[price_col]) for r in rows)
     assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -1068,7 +1068,7 @@ def test_abs_integer_strict_oracle(decidb_cli, oracle_solver):
     decidb_sum_abs = sum(abs(int(r[x_col]) - 2) for r in rows)
     assert decidb_sum_abs < 4, f"strict `< 4` violated: SUM(|x-2|) = {decidb_sum_abs}"
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -1116,7 +1116,7 @@ def test_integer_perrow_strict_oracle(decidb_cli, duckdb_conn, oracle_solver):
     price_col = cols.index("l_extendedprice")
     decidb_obj = sum(int(r[x_col]) * float(r[price_col]) for r in rows)
     assert abs(decidb_obj - res.objective_value) <= 1e-3, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
 
 
@@ -1204,7 +1204,7 @@ def test_real_sum_not_equal_rejected(decidb_cli):
         SUCH THAT x <= 3.33 AND SUM(x) <> 10
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     message = exc_info.value.message
     assert _NE_REAL_MSG.search(message), f"Unexpected error: {message}"
@@ -1242,7 +1242,7 @@ def test_strict_lt_rejection_quadratic_real(decidb_cli):
             AND SUM(POWER(x, 2)) < 5
         MAXIMIZE SUM(x)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
@@ -1267,7 +1267,7 @@ def test_strict_lt_rejection_bilinear_bool_real(decidb_cli):
             AND SUM(b * y) < 5
         MAXIMIZE SUM(b * y)
     """
-    with pytest.raises(DecidBCliError) as exc_info:
+    with pytest.raises(DeciDBCliError) as exc_info:
         decidb_cli.execute(sql)
     assert _STRICT_LT_REAL_MSG.search(exc_info.value.message), (
         f"Unexpected error: {exc_info.value.message}"
@@ -1323,11 +1323,11 @@ def test_sum_not_equal_mixed_sign_coeffs(decidb_cli, oracle_solver):
         int(r[ci["x"]]) * int(r[ci["cost"]]) for r in rows
     )
     assert decidb_signed_sum != 0, (
-        f"NE constraint violated: DecidB SUM(x*cost) = 0"
+        f"NE constraint violated: DeciDB SUM(x*cost) = 0"
     )
     decidb_obj = sum(
         int(r[ci["x"]]) * int(r[ci["val"]]) for r in rows
     )
     assert abs(decidb_obj - res.objective_value) <= 1e-6, (
-        f"Objective mismatch: DecidB={decidb_obj}, Oracle={res.objective_value}"
+        f"Objective mismatch: DeciDB={decidb_obj}, Oracle={res.objective_value}"
     )
