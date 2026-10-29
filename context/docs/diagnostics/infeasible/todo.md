@@ -17,18 +17,8 @@ equality (`max(2 * x) = 6`), which holds the other half too; when the check belo
 fall back to naming the half and saying which half moved. A moved equality is a valid repair only when the other half still
 holds at the new value, so the first choice needs a check that it does.
 
-**Decision needed.** Which check proves the moved equality holds. The clause's written comparison is in reach
-(`ConstraintSourceInfo::canonical_cmp`).
-(a) Read the repair's own solution (`ReadElasticEdits` holds it): the equality holds when every instance's extremum
-over its members equals `K'`. The members are the easy half's rows (`2 * x_i <= 20`), which carry no instance identity
-under `by (g)` or `per g:` (the hard half is an extremum column per group), so the rows need a new instance id, and
-the check is conservative: it falls back whenever the solution does not happen to sit at `K'`.
-(b) Verify by one more solve, the original model with both halves (and the other findings' edits) moved, feasible or
-not: exact, the same for the lowered rows and Gurobi's native MAX, one solve per diagnosis that reports an `=` MIN/MAX.
-(c) Suggest a range instead, `max(2 * x) BETWEEN 6 AND 20`, which always repairs and needs no check; it is INF-3's
-mechanism.
-Recommended: (c) if INF-3 lands, else (b). The fallback is the current output, which names the half
-(`max(2 * x) >= 20` → `max(2 * x) >= 6`).
+**Ruling (owner's delegate, 2026-10-29).** (c): suggest the range `max(2 * x) BETWEEN 6 AND 20` through INF-3's
+mechanism. It always repairs, so it needs no check and no second solve.
 
 **Test.** In `test_query_diagnostics_relation.py`, both backends: an infeasible
 `max(...) = K` and `min(...) = K`, with and without `per g:` and `by (g)`, report the
@@ -50,7 +40,8 @@ string `'NULL'` read the same.
 **Ruling (owner, 2026-10-27).** No label change for written keys. A relation key's label
 is open.
 
-**Decision needed.** The relation key's label. No options are recorded.
+**Ruling (owner's delegate, 2026-10-29).** A relation key's label writes each value as an SQL literal with the
+formatter the determination message uses (`'NULL'` quoted, NULL bare), so labels and messages share one value form.
 
 **Test.** In `test_query_diagnostics_relation.py`, beside
 `test_infeasible_per_group_expanded_mode_preserves_empty_string_group`: a `per D` key whose
@@ -73,16 +64,9 @@ halves, `written_*` holds the whole clause, one pass after `ReadElasticEdits` sp
 moved end and the partner's text, merging two moved ends into one edit (the paste-back cannot find the clause after the
 first). EXPLAIN groups the halves.
 
-**Decision needed.** Six design calls, each with a recommendation.
-1. The link as fields on each half, or a separate written-clause vector? Recommended: fields.
-2. When canonicalization moved a term (`x + 2 BETWEEN 18 AND 25`), quote the canonical `x BETWEEN 16 AND 23` or the
-   written text with an offset? Recommended: as the comparisons are quoted (canonical).
-3. Both ends moved: `amount` is the sum, or one row per end? Recommended: one row, the sum.
-4. The same mechanism serves INF-1 (c).
-5. EXPLAIN's canonical line for a BETWEEN: one line `x >= 18 AND x <= 25`, or two rows under the clause? Recommended:
-   two rows, as a split MIN/MAX shows.
-6. DROP of one half of a `norm(...) BETWEEN`: drop the clause, or keep the other half? Recommended: drop the clause,
-   as written.
+**Ruling (owner's delegate, 2026-10-29).** The six calls as recommended: link fields on each half; a moved term is
+quoted as comparisons are (canonical); both ends moved make one row with the summed amount; INF-1 uses this mechanism;
+EXPLAIN prints two rows under the clause; DROP of one half drops the clause.
 
 **Test.** The test at `test_query_diagnostics_relation.py` mapping `x <= 5` to `x BETWEEN 0 AND 5` hides this bug and
 goes with the fix.

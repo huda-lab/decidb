@@ -11,7 +11,6 @@ at a time. Lanes: F1 then F5; F6; F7 then F8. F4 never beside F2 or F5. F9 runs 
 
 ## 1. Owner decisions (independent of each other; ask all first)
 
-- [ ] F3: INF-3 six calls, INF-1 which check, INF-2 relation key label
 - [ ] F4: CQ-1 five calls, CQ-3 names, CQ-4 encoding, CAN-2 four choices, OPT-2 indicator scope
 - [ ] F9: OPS-2 rename the names too, or not
 
