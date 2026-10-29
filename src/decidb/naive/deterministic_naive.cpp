@@ -249,8 +249,22 @@ public:
         return RunAndReadback(time_limit_seconds);
     }
 
+	//! HiGHS asks its interrupt callbacks beside its `time_limit` checks in the MIP search, simplex and IPM. One
+	//! callback answers all three from the poll, so a Ctrl-C stops the solve at the next check with status kInterrupt. The poll is read on every call, so an empty one (set at a continuation
+	//! prompt) leaves the solve to run to its limit.
+	void SetInterruptPoll(std::function<bool()> poll) override {
+		should_interrupt = std::move(poll);
+		highs.setCallback([this](int, const std::string &, const HighsCallbackOutput *, HighsCallbackInput *data_in,
+		                         void *) { data_in->user_interrupt = should_interrupt && should_interrupt(); });
+		highs.startCallback(kCallbackMipInterrupt);
+		highs.startCallback(kCallbackSimplexInterrupt);
+		highs.startCallback(kCallbackIpmInterrupt);
+	}
+
 private:
     Highs highs;
+	//! Polled by the interrupt callback during run(); true stops the solve.
+	std::function<bool()> should_interrupt;
     idx_t total_vars = 0;
     //! Whether the loaded model has any integer variable. HiGHS only populates
     //! `mip_dual_bound` / `mip_gap` for MIP solves; on an LP/QP timeout they hold
@@ -555,6 +569,10 @@ SolverResult HighsSession::RunAndReadback(double time_limit_seconds) {
             // (obj=0 probe) later disambiguates it to UNBOUNDED / INFEASIBLE.
             result.status = SolverStatus::INF_OR_UNBD;
             break;
+		case HighsModelStatus::kInterrupt: // Ctrl-C: a stop-with-best-so-far like a time-limit stop, flagged as the
+		                                   // user's, the same mapping as Gurobi's GRB_INTERRUPTED.
+			result.user_interrupted = true;
+			// fall through
         case HighsModelStatus::kTimeLimit: {
             result.status = SolverStatus::TIME_LIMIT;
             const HighsInfo& info = highs.getInfo();

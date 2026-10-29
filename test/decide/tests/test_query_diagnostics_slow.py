@@ -274,8 +274,7 @@ class TestSlowContinuation:
     ):
         """Ctrl-C is not a question. The user has already said stop, so the best-so-far
         comes back with its caveat — no prompt, no terminal needed, no error."""
-        # Short chunk so the HiGHS boundary-only path (no thread-safe terminate) still
-        # notices the interrupt promptly; Gurobi cuts the solve short mid-search.
+        # Both backends cut the solve short mid-search; the short chunk only bounds the run.
         cli = _slow_cli(request.getfixturevalue(cli_fixture), 3)
         proc, _ = cli.execute_interrupted(_KNAPSACK_SQL, after=1.0, timeout=40)
         assert _STOP_CAVEAT in proc.stderr.lower(), proc.stderr[:1200]
@@ -285,8 +284,8 @@ class TestSlowContinuation:
     def test_interrupt_is_mid_solve_gurobi(self, decidb_cli_gurobi):
         """Gurobi: Ctrl-C cuts the solve short MID-chunk, not at the next boundary. With a
         6s limit, an interrupt ~1.5s in returns almost immediately (GRBterminate) — far
-        short of the ~4.5s a boundary-only stop would wait out. HiGHS is boundary-only (no
-        mid-solve interrupt) and is intentionally not asserted."""
+        short of the ~4.5s a boundary-only stop would wait out. HiGHS's mid-solve stop is
+        test_first_solve_interrupt_without_an_incumbent_errors_highs."""
         cli = _slow_cli(decidb_cli_gurobi, 6)
         proc, latency = cli.execute_interrupted(_KNAPSACK_SQL, after=1.5)
         assert proc.returncode == 0, proc.stderr[:800]
@@ -306,8 +305,7 @@ class TestSlowFirstSolveInterrupt:
     user interrupt on the first solve cuts it short and hands back the best-so-far —
     instead of aborting the query — even when the wall-clock limit is nowhere near. On Gurobi the stop is attributed to the user (`GRBterminate` →
     `GRB_INTERRUPTED`), so the report says "stopped at your request", not "hit the … time
-    limit". HiGHS has no thread-safe terminate, so its first-solve interrupt is boundary-only
-    (the documented solver-agnostic fallback) and is reported as a time-limit stop.
+    limit". HiGHS stops the same way through its interrupt callbacks (`kInterrupt`).
 
     A generous DECIDB_TIME_LIMIT (20s) keeps the first chunk boundary far away, so a fast
     stop after the ~1s signal proves the *first solve itself* was interrupted mid-solve —
@@ -342,19 +340,18 @@ class TestSlowFirstSolveInterrupt:
         assert _STOP_CAVEAT not in low, "nothing was found, so nothing is delivered"
         assert not out.strip(), "no incumbent means no rows"
 
-    def test_first_solve_interrupt_highs_boundary_only(self, decidb_cli_highs):
-        """HiGHS has no thread-safe terminate, so a mid-first-solve SIGINT is *not* seen
-        until the chunk boundary: the stop is attributed to the time limit (not the user),
-        yet the incumbent is still delivered at the boundary — the solver-agnostic fallback.
-        Probed 2026-07-04: a 0.7s signal into a 2s chunk waits out the chunk, then returns
-        rows with the "time limit" wording."""
-        cli = _slow_cli(decidb_cli_highs, 2)
-        proc, _ = cli.execute_interrupted(_KNAPSACK_SQL, after=0.7)
+    def test_first_solve_interrupt_without_an_incumbent_errors_highs(self, decidb_cli_highs):
+        """HiGHS: Ctrl-C stops the solve at HiGHS's next interrupt checkpoint (its MIP, simplex
+        and IPM interrupt callbacks), attributed to the user. With nothing found yet there is no
+        best-so-far, so it reports and errors, as on Gurobi. Without the callbacks HiGHS would
+        run to the far 20s boundary; without the `kInterrupt` mapping the stop would not read as
+        the user's."""
+        cli = _slow_cli(decidb_cli_highs, 20)
+        proc, latency = cli.execute_interrupted(_MARKET_SPLIT_SQL, after=1.0, timeout=8)
         out, err = proc.stdout, proc.stderr
         low = err.lower()
-        assert proc.returncode == 0, err[:1000]
-        assert out.strip(), "fallback still delivers the incumbent at the boundary"
-        assert _STOP_CAVEAT in low, err[:1000]
-        # HiGHS cannot attribute the stop to the user → reported as a time-limit stop.
-        assert "time limit" in low, err[:1000]
-        assert _STOP_REQUEST not in low, err[:1000]
+        assert _STOP_REQUEST in low, err[:1000]
+        assert _STOP_CAVEAT not in low, "nothing was found, so nothing is delivered"
+        assert not out.strip(), "no incumbent means no rows"
+        # A stop at the far 20s boundary would take ~19s; 5s leaves margin for a loaded machine.
+        assert latency < 5.0, f"interrupt took {latency:.2f}s — expected a stop well before the 20s limit"

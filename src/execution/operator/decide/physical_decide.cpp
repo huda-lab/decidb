@@ -3990,7 +3990,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
 	solve_options.mip_gap = GetDecideMipGap(context);
 	// Ctrl-C cuts the solve short and returns the best-so-far instead of aborting the
 	// query — also ordinary execution behaviour, so the poll is installed unconditionally.
-	// Gurobi honors it mid-solve; HiGHS stays boundary-only.
+	// Both backends honor it mid-solve.
 	solve_options.interrupt_poll = [&context]() {
 		return context.interrupted.load();
 	};
@@ -4086,10 +4086,9 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         double cum_budget = chunk;
 
         // Did the user stop this, or the clock? `user_interrupted` is the backend's own
-        // attribution (Gurobi cuts the solve short mid-search and says so); HiGHS has no
-        // thread-safe terminate, so its Ctrl-C is only noticed at the chunk boundary and
-        // arrives indistinguishable from a timeout. The query interrupt is set either
-        // way, so read it too — a user who pressed Ctrl-C gets the same answer on both.
+        // attribution (both backends cut the solve short mid-search and say so); a Ctrl-C
+        // that lands after the solver's last check arrives indistinguishable from a
+        // timeout. The query interrupt is set either way, so read it too.
         bool stopped_by_user = solve_result.user_interrupted || context.interrupted.load();
         if (stopped_by_user) {
             // Ctrl-C is not a question. The user has already said stop, so there is
@@ -4117,7 +4116,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
             // user at each boundary, and a watcher thread contending with the interactive
             // getline destabilizes the prompt (found empirically) — so reset it to
             // boundary-only here. The entry interrupt already fired *before* this loop, so a
-            // first-solve Ctrl-C still routed us in. HiGHS ignores the poll either way.
+            // first-solve Ctrl-C still routed us in.
             if (retained_session) {
                 retained_session->SetInterruptPoll({});
             }
