@@ -2105,6 +2105,66 @@ def test_the_auxiliary_of_a_product_takes_the_join_of_its_factors_scopes(
         judge_rows([dict(zip(columns, row)) for row in rows], domains, feasible, value, False)
 
 
+#: The AND of two Booleans is linked like a McCormick product: one block of three rows per column of the auxiliary.
+AND_CASES = [
+    pytest.param(
+        "per (): b(BOOL), per (): c(BOOL)",
+        "b * c <= 0",
+        "SUM(b) + 2 * SUM(c)",
+        {"b": range(2), "c": range(2)},
+        lambda a: a["b"] * a["c"] <= 0,
+        lambda a: 4 * a["b"] + 8 * a["c"],
+        3,
+        1,
+        id="query-wide-pair-is-one-block",
+    ),
+    pytest.param(
+        "per t.g: b(BOOL), per (): c(BOOL)",
+        "b * c <= 0",
+        "SUM(b) + 2 * SUM(c)",
+        {**{f"b{i}": range(2) for i in range(4)}, "c": range(2)},
+        lambda a: _alike_within(a, "b", _GROUP_OF_ROW) and all(a[f"b{i}"] * a["c"] <= 0 for i in range(4)),
+        lambda a: sum(_rows_of(a, "b")) + 8 * a["c"],
+        5,
+        2,
+        id="keyed-times-query-wide-is-a-block-per-key",
+    ),
+    pytest.param(
+        "b(BOOL), c(BOOL)",
+        "b * c <= 0",
+        "SUM(b) + 2 * SUM(c)",
+        {**{f"b{i}": range(2) for i in range(4)}, **{f"c{i}": range(2) for i in range(4)}},
+        lambda a: all(a[f"b{i}"] * a[f"c{i}"] <= 0 for i in range(4)),
+        lambda a: sum(_rows_of(a, "b")) + 2 * sum(_rows_of(a, "c")),
+        12,
+        4,
+        id="row-pair-is-a-block-per-row",
+    ),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+@pytest.mark.parametrize("decide, clause, objective, domains, feasible, value, num_vars, blocks", AND_CASES)
+def test_the_and_of_two_booleans_is_one_block_per_instance(
+    decidb_cli_gurobi, decidb_cli_highs, tmp_path, decide, clause, objective, domains, feasible, value, num_vars, blocks
+):
+    """`b * c` for two Booleans: w <= b, w <= c, w >= b + c - 1, once per column of the auxiliary (one for a
+    query-wide pair, not a copy per row). Judged against every assignment on both solvers."""
+    sql = f"""
+        SELECT * FROM {_SCOPE_ROWS}
+        DECIDE {decide}
+        SUCH THAT {clause}
+        MAXIMIZE {objective}
+        ORDER BY id"""
+    dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
+    assert re.search(rf"^num_vars: {num_vars}$", dump, re.M), dump
+    assert len(re.findall(r"^row \d+: sense=< rhs=1 nnz=3 ", dump, re.M)) == blocks, dump
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        rows, columns = cli.execute(sql)
+        judge_rows([dict(zip(columns, row)) for row in rows], domains, feasible, value)
+
+
 _GROUPED_ROWS = "(VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)"
 
 

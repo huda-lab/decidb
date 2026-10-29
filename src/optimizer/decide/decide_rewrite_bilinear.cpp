@@ -125,10 +125,6 @@ unique_ptr<Expression> AddCoefficients(Optimizer &optimizer, unique_ptr<Expressi
 	return optimizer.BindScalarFunction("+", std::move(a), std::move(b));
 }
 
-unique_ptr<Expression> NegateCoefficient(Optimizer &optimizer, unique_ptr<Expression> a) {
-	return a ? optimizer.BindScalarFunction("-", std::move(a)) : make_uniq<BoundConstantExpression>(Value::INTEGER(-1));
-}
-
 //! `into += other`. A decision may stand in several terms: the product merges them by pair.
 void AddAffine(Optimizer &optimizer, Affine &into, Affine other) {
 	for (auto &term : other.terms) {
@@ -225,7 +221,7 @@ bool ReadAffine(Optimizer &optimizer, const Expression &expr, idx_t decide_index
 //! The auxiliary `w = first * second` for two decisions, one of them Boolean (`first` and `second` are in the order
 //! the user wrote them): AND for two Booleans, else the McCormick link whose rows stage 06 emits against the other
 //! factor's box. Returns the auxiliary's decision index.
-idx_t AddBooleanProduct(Optimizer &optimizer, LogicalDecide &decide, vector<LogicalDecide::BilinearLink> &links,
+idx_t AddBooleanProduct(LogicalDecide &decide, vector<LogicalDecide::BilinearLink> &links,
                         const string &clause_alias, idx_t first, idx_t second) {
 	auto is_bool = [&](idx_t var) { return var < decide.is_boolean_var.size() && decide.is_boolean_var[var]; };
 	const bool both_bool = is_bool(first) && is_bool(second);
@@ -264,54 +260,17 @@ idx_t AddBooleanProduct(Optimizer &optimizer, LogicalDecide &decide, vector<Logi
 	                            : LogicalDecide::RewriteAccount::Kind::PRODUCT_MCCORMICK,
 	                  label);
 
-	if (both_bool) {
-		// AND-linearization: w <= b1, w <= b2, w >= b1 + b2 - 1
-		auto &b1_ref = decide.decide_variables[bool_var_idx]->Cast<BoundColumnRefExpression>();
-		auto &b2_ref = decide.decide_variables[other_var_idx]->Cast<BoundColumnRefExpression>();
-		auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
-		auto ref = [](const BoundColumnRefExpression &source) {
-			return make_uniq<BoundColumnRefExpression>(source.alias, source.return_type, source.binding);
-		};
-
-		// w <= b1
-		auto c1 = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, ref(w_ref),
-		                                               ref(b1_ref));
-		MarkFormulationConstraint(*c1, clause_alias);
-		decide.AddConstraint(optimizer.context, std::move(c1));
-
-		// w <= b2
-		auto c2 = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, ref(w_ref),
-		                                               ref(b2_ref));
-		MarkFormulationConstraint(*c2, clause_alias);
-		decide.AddConstraint(optimizer.context, std::move(c2));
-
-		// w >= b1 + b2 - 1  (i.e., b1 + b2 - w <= 1)
-		auto b1_plus_b2 = optimizer.BindScalarFunction("+", ref(b1_ref), ref(b2_ref));
-		auto b1_plus_b2_minus_w = optimizer.BindScalarFunction("-", std::move(b1_plus_b2), ref(w_ref));
-		auto c3 = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
-		                                               std::move(b1_plus_b2_minus_w),
-		                                               make_uniq<BoundConstantExpression>(Value::INTEGER(1)));
-		MarkFormulationConstraint(*c3, clause_alias);
-		decide.AddConstraint(optimizer.context, std::move(c3));
-	} else {
-		// Bool × Non-Bool McCormick: w <= x (structural, at plan time)
-		// w <= U*b and w >= x - U*(1-b) generated at execution time via BilinearLink
-		//
-		// The McCormick linking constraints (including the upper corner
-		// w <= x - L*(1-b), which for L>=0 is the plain structural w <= x)
-		// are emitted at execution time in physical_decide.cpp, where the
-		// resolved bounds L and U of the other variable are known. Emitting
-		// the structural w <= x here would be unconditional and therefore
-		// wrong for a negative-domain x (it forces x >= 0 when b=0). We only
-		// record the link; execution adds all four corners.
-		LogicalDecide::BilinearLink link;
-		link.aux_idx = aux_idx;
-		link.bool_var_idx = bool_var_idx;
-		link.other_var_idx = other_var_idx;
-		TryParseSourceClauseTag(clause_alias, link.source_clause_id);
-		TryParseRemovalGroupTag(clause_alias, link.removal_group_id);
-		links.push_back(link);
-	}
+	// Both kinds are linked per instance of the auxiliary by LinearizeBilinear, which reads the factors' boxes
+	// there: the McCormick rows against the other factor's box (the structural `w <= x` is not emitted here, being
+	// wrong for a negative-domain x: it would force x >= 0 when b = 0), and for two Booleans the AND (`w <= b1`,
+	// `w <= b2`, `w >= b1 + b2 - 1`).
+	LogicalDecide::BilinearLink link;
+	link.aux_idx = aux_idx;
+	link.bool_var_idx = bool_var_idx;
+	link.other_var_idx = other_var_idx;
+	TryParseSourceClauseTag(clause_alias, link.source_clause_id);
+	TryParseRemovalGroupTag(clause_alias, link.removal_group_id);
+	links.push_back(link);
 	return aux_idx;
 }
 
@@ -411,7 +370,7 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 						} else if (term.second == DConstants::INVALID_INDEX) {
 							factor = column(term.first);
 						} else if (is_bool(term.first) || is_bool(term.second)) {
-							factor = column(AddBooleanProduct(optimizer, decide, links, clause_alias, term.first,
+							factor = column(AddBooleanProduct(decide, links, clause_alias, term.first,
 							                                  term.second));
 						} else {
 							// Two decisions, neither Boolean: the Q matrix's.

@@ -65,7 +65,7 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 	//
 	// One block per INSTANCE of w, in flat columns, from the box of the instance of x it reads (the way a helper
 	// decision of the value rewrite is defined): a query-wide product is one block, a keyed one a block per key,
-	// a row-scoped one a block per row.
+	// a row-scoped one a block per row. A product of two Booleans is the AND, the same block of three rows.
 	for (auto &link : input.bilinear_links) {
 		const auto &mapping_scope = indexer.var_scope[link.aux_idx];
 		const idx_t absent = mapping_scope == DecideVarScope::ENTITY
@@ -77,9 +77,6 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 			}
 			const idx_t bool_instance = indexer.InstanceUnder(link.bool_var_idx, link.aux_idx, instance);
 			const idx_t other_instance = indexer.InstanceUnder(link.other_var_idx, link.aux_idx, instance);
-			const double U = box.InstanceUpper(link.other_var_idx, other_instance);
-			const double L = box.InstanceLower(input, link.other_var_idx, other_instance);
-			D_ASSERT(U < DECIDE_EFFECTIVE_INFINITY); // derived and validated before ABS descendants read the aux box
 			const int w = static_cast<int>(indexer.InstanceColumn(link.aux_idx, instance));
 			const int b = static_cast<int>(indexer.InstanceColumn(link.bool_var_idx, bool_instance));
 			const int x = static_cast<int>(indexer.InstanceColumn(link.other_var_idx, other_instance));
@@ -95,6 +92,16 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 				row.removal_group_id = link.removal_group_id;
 				input.global_constraints.push_back(std::move(row));
 			};
+			if (input.variable_types[link.other_var_idx] == LogicalType::BOOLEAN) {
+				// Two Booleans: the AND, w <= b, w <= x, w >= b + x - 1.
+				emit({w, b}, {1.0, -1.0}, '<', 0.0);
+				emit({w, x}, {1.0, -1.0}, '<', 0.0);
+				emit({b, x, w}, {1.0, 1.0, -1.0}, '<', 1.0);
+				continue;
+			}
+			const double U = box.InstanceUpper(link.other_var_idx, other_instance);
+			const double L = box.InstanceLower(input, link.other_var_idx, other_instance);
+			D_ASSERT(U < DECIDE_EFFECTIVE_INFINITY); // derived and validated before ABS descendants read the aux box
 			emit({w, b}, {1.0, -U}, '<', 0.0);        // (1) w - U*b <= 0
 			emit({w, x, b}, {1.0, -1.0, -U}, '>', -U); // (2) w - x - U*b >= -U
 			if (L < 0.0) {
