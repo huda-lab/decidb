@@ -1,5 +1,7 @@
 #pragma once
 
+#include <functional>
+
 #include "duckdb/common/common.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
@@ -7,6 +9,7 @@
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
 #include "duckdb/planner/logical_operator.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 
 namespace duckdb {
 
@@ -74,6 +77,82 @@ ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &tex
 //! A one-argument aggregate (MIN, MAX or SUM, by function name) of the value over the whole partition.
 unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, const char *name,
                                                        unique_ptr<Expression> value);
+
+//===--------------------------------------------------------------------===//
+// Group bounds (DecideGroupBound): a bound computed from the aggregates of its group
+//===--------------------------------------------------------------------===//
+
+//! The group bound of a raw `rhs`, which may differ between the rows of a group: the group's tightest value. `<=` reads
+//! the MIN of `rhs`, `>=` its MAX, `=` both and owes the check that they agree. `invalid` is the message a row raises
+//! for a NaN `rhs` (null for none), `text` the bound as written.
+unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, ExpressionType comparison,
+                                                 unique_ptr<Expression> rhs, const string &text,
+                                                 unique_ptr<Expression> invalid);
+
+//! Whether a rule can compute the bound: its inputs and the filters of its aggregates are deterministic values of the
+//! source row, and the limits it gives are numbers.
+bool DirectGroupBoundIsReadable(const DirectIR &ir, const DecideGroupBound &bound);
+
+//! What the rule projects before its group aggregate for one input of the bound: whether the row is one the aggregate
+//! reads (the row is eligible and passes the input's own `when`), its argument on those rows, and the message it
+//! raises. A member is null when the input has none.
+struct DirectGroupInput {
+	ExprPtr reads;
+	ExprPtr argument;
+	ExprPtr invalid;
+};
+
+//! Which members of an input are present, so a rule can lay out its columns before it has the expressions. `scoped`
+//! says whether the rule has an eligible flag for the row.
+struct DirectGroupInputLayout {
+	bool reads;
+	bool argument;
+	bool invalid;
+};
+DirectGroupInputLayout DirectGroupLayout(const DecideGroupBound::Input &input, bool scoped);
+
+//! The inputs of the bound as expressions over the rule's rows. `over` re-points an expression over the source at those
+//! rows; `eligible` says whether the row is in a group (null for a rule with no scope).
+vector<DirectGroupInput> DirectGroupInputs(const ExpressionBuilder &calc, const DecideGroupBound &bound,
+                                           const ExprPtr &eligible,
+                                           const std::function<unique_ptr<Expression>(const Expression &)> &over);
+
+//! `function` (a BoundAggregateExpression of a group bound) as a window over the whole partition reading `argument`
+//! (null for COUNT(*)) on the rows where `reads` holds (null for every row), or as the aggregate itself.
+unique_ptr<BoundWindowExpression> DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argument,
+                                                          unique_ptr<Expression> reads);
+unique_ptr<Expression> DirectAggregateOf(const Expression &function, unique_ptr<Expression> argument,
+                                         unique_ptr<Expression> reads);
+
+//! The aggregate of a rule that groups its rows, which takes the bound's aggregates: a window over the group, or a hash
+//! aggregate.
+class DirectGroupSink {
+public:
+	virtual ~DirectGroupSink() = default;
+	//! Adds `function` (a BoundAggregateExpression with no argument or filter) reading `argument` (null for COUNT(*))
+	//! on the rows where `reads` holds (null for every row), and returns the column that holds its result per group.
+	virtual ColumnBinding Add(const Expression &function, unique_ptr<Expression> argument,
+	                          unique_ptr<Expression> reads) = 0;
+};
+
+//! What the rule reads of the bound once its group is computed, over the results: the limit as an upper and as a lower
+//! one (null for a side the bound does not give), and the messages that group raises, in the order the solver checks
+//! them (a NaN limit, then an `=` bound that takes two values). Each is NULL outside a group (`eligible`).
+struct DirectGroupValues {
+	ExprPtr upper;
+	ExprPtr lower;
+	vector<ExprPtr> messages;
+};
+
+//! Adds the bound's aggregates to the rule's group aggregate. `inputs` says where the rule projected each input's reads
+//! and argument (a binding is unset for a member the input has not); `eligible` is over the group aggregate's output.
+struct DirectGroupInputColumns {
+	ColumnBinding reads;
+	ColumnBinding argument;
+};
+DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const DecideGroupBound &bound,
+                                      const vector<DirectGroupInputColumns> &inputs, DirectGroupSink &sink,
+                                      const ExprPtr &eligible);
 
 //! The rows and groups the clauses of one rule's aggregate share (S1's count bounds, R1's budget): a rule reads them
 //! as one scope or declines.

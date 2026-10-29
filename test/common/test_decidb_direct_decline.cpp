@@ -344,8 +344,12 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	}));
 	shapes.push_back(S1("a count bound that is a column outside the source", "SUM(x) <= 2",
 	                    [](DirectIR &ir) { ir.constraints[0].rhs = ForeignColumn(LogicalType::INTEGER); }));
-	shapes.push_back(S1("a count bound that is a cast to a type that is not a number", "SUM(x) <= cap",
-	                    [](DirectIR &ir) { ir.constraints[0].rhs->return_type = LogicalType::BOOLEAN; }));
+	shapes.push_back(
+	    S1("a count bound that is a cast to a type that is not a number", "SUM(x) <= cap", [](DirectIR &ir) {
+		    // `cap` varies in its group, so the plan reads the limit its group bound gives.
+		    auto &bound = ir.constraints[0];
+		    (bound.group_bound ? *bound.group_bound->upper : *bound.rhs).return_type = LogicalType::BOOLEAN;
+	    }));
 	// ProveObjective.
 	shapes.push_back(S1("an average objective", "SUM(x) <= 2", nullptr, "MAXIMIZE AVG(w*x)"));
 	shapes.push_back(S1("an objective part with a WHEN", "SUM(x) <= 2",

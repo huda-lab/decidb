@@ -1643,6 +1643,152 @@ def test_s1_a_data_bound_is_read_over_the_rows_the_clause_keeps(decidb_cli, cons
     assert direct == _outcome(decidb_cli, sql, "off")
 
 
+# A bound that is a function of reducers over exactly the clause's group (`SUM(x) by (g) <= SUM(cap) by (g) / 2`) is
+# computed by S1 in the window it already runs over the group, so no window stands under the plan. A bound that reads
+# other rows than the group's, or a column beside its reducer, is a window column of the source, as is a reducer under a
+# sum with a `when` of its own (S1 sums fewer rows than the reducer reads).
+_GROUP_BOUND_ROWS = (
+    "(1,'a',3.0,9.0,true),(2,'a',3.0,8.0,false),(3,'a',3.0,7.0,true),(4,'b',1.0,6.0,true),(5,'b',1.0,5.0,true),"
+    "(6,'b',2.0,4.0,false),(7,'c',2.0,3.0,true),(8,NULL,2.0,2.0,true)"
+)
+
+
+def _group_bound_sql(constraint):
+    return (
+        f"SELECT id, x FROM (FROM (VALUES {_GROUP_BOUND_ROWS}) t(id, g, cap, score, keep) "
+        f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+
+
+def _window_count(decidb_cli, constraint):
+    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; EXPLAIN {_group_bound_sql(constraint)}").stdout
+    assert "S1_UNIFORM_MATROID" in plan, plan
+    return len(re.findall(r"│\s+WINDOW\s+│", plan))
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        pytest.param("when g IS NOT NULL: SUM(x) by (g) <= SUM(cap) by (g) / 2", id="sum"),
+        pytest.param("when g IS NOT NULL: SUM(x) by (g) >= COUNT(*) by (g) / 2", id="count"),
+        pytest.param("SUM(x) <= MIN(when keep: cap) + MAX(cap)", id="two-reducers-no-key"),
+    ],
+)
+def test_s1_a_bound_of_the_groups_own_reducers_adds_no_window(decidb_cli, constraint):
+    assert _window_count(decidb_cli, constraint) == _window_count(decidb_cli, "SUM(x) <= 2")
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        pytest.param("when g IS NOT NULL: SUM(x) <= SUM(cap) by (g) / 2", id="reducer-by-another-key"),
+        pytest.param("when g IS NOT NULL: SUM(x) by (g) <= SUM(cap) by (g) / 2 + cap", id="column-beside-the-reducer"),
+        pytest.param("when g IS NOT NULL: SUM(when keep: x) by (g) <= SUM(cap) by (g) / 2", id="sum-with-its-own-when"),
+    ],
+)
+def test_s1_a_bound_that_is_not_the_groups_own_leaves_its_window(decidb_cli, constraint):
+    assert _window_count(decidb_cli, constraint) > _window_count(decidb_cli, "SUM(x) <= 2")
+
+
+# Every bound above and the bounds that are not the group's own, answered as the solver answers them.
+GROUP_BOUND_CASES = {
+    "upper": "when g IS NOT NULL: SUM(x) by (g) <= SUM(cap) by (g) / 2",
+    "lower": "when g IS NOT NULL: SUM(x) by (g) >= COUNT(*) by (g) / 2",
+    "equality": "when g IS NOT NULL: SUM(x) by (g) = AVG(cap) by (g) - 1",
+    "negated_count": "when g IS NOT NULL: SUM(-x) by (g) >= -SUM(cap) by (g) / 2",
+    "two_reducers_beside_a_constant": "when g IS NOT NULL: SUM(x) by (g) <= MAX(cap) by (g) - MIN(cap) by (g) + 1",
+    "no_key": "SUM(x) <= SUM(cap) / 3",
+    "reducer_own_when": "when g IS NOT NULL: SUM(x) by (g) <= SUM(when keep: cap) by (g) / 2",
+    "clause_when": "when keep AND g IS NOT NULL: SUM(x) by (g) <= SUM(cap) by (g) / 2",
+    "null_key_rows_left_out": "SUM(x) by (g) <= SUM(cap) by (g) / 2",
+    "reducer_by_another_key": "when g IS NOT NULL: SUM(x) <= SUM(cap) by (g) / 2",
+    "column_beside_the_reducer": "when g IS NOT NULL: SUM(x) by (g) <= SUM(cap) by (g) / 2 + cap",
+    "sum_with_its_own_when": "when g IS NOT NULL: SUM(when keep: x) by (g) <= SUM(cap) by (g) / 2",
+    "not_equal": "when g IS NOT NULL: SUM(x) by (g) <> SUM(cap) by (g) / 2",
+}
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize("name", sorted(GROUP_BOUND_CASES))
+def test_s1_a_bound_of_reducers_is_answered_as_the_solver_answers_it(decidb_cli, name):
+    sql = _group_bound_sql(GROUP_BOUND_CASES[name])
+    solver = _outcome(decidb_cli, sql, "off")
+    assert _outcome(decidb_cli, sql, "auto") == solver
+    if name != "not_equal":
+        assert _outcome(decidb_cli, sql, "require") == solver
+
+
+# A reducer computes its argument on the rows it reads alone: row 2 would overflow `n * 2`, and the reducer's own `when`,
+# or the clause's, leaves it out.
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        pytest.param("SUM(x) by (g) <= SUM(when keep: n * 2) by (g)", id="reducer-own-when"),
+        pytest.param("when keep: SUM(x) by (g) <= SUM(n * 2) by (g)", id="clause-when"),
+    ],
+)
+def test_s1_a_reducer_computes_its_argument_on_the_rows_it_reads_alone(decidb_cli, constraint):
+    sql = (
+        "SELECT id, x FROM (FROM (VALUES (1,'a',1::BIGINT,9.0,true),(2,'a',4611686018427387904::BIGINT,8.0,false),"
+        "(3,'a',2::BIGINT,7.0,true)) t(id, g, n, score, keep) "
+        f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    assert _outcome(decidb_cli, sql, "require")[0] == "ok"
+    assert _outcome(decidb_cli, sql, "require") == _outcome(decidb_cli, sql, "off")
+
+
+# A group's bound is NaN when its reducers give it (infinity less infinity), or when what they read is. The solver checks
+# the bound on the rows the clause keeps only, so a group the `when` drops raises nothing even when its reducers, over no
+# row, would give NaN (0.0 / 0), and S1 raises the solver's own message where it raises.
+_NAN_BOUND_ROWS = "(1,'a',1.0,9.0,true),(2,'a',{cap},8.0,true),(3,'b',1.0,7.0,true),(4,'b',2.0,6.0,true)"
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "constraint, cap, raises",
+    [
+        pytest.param("SUM(x) by (g) <= SUM(cap) by (g) - SUM(cap) by (g)", "'Infinity'::DOUBLE", True, id="nan-bound"),
+        pytest.param("SUM(x) by (g) <= SUM(cap * 1.0) by (g) / 2", "'NaN'::DOUBLE", True, id="nan-argument"),
+        pytest.param("SUM(x) by (g) <= SUM(cap) by (g)", "'Infinity'::DOUBLE", False, id="infinite-bound"),
+        pytest.param(
+            "when g = 'b': SUM(x) by (g) <= 2.0 * COUNT(*) by (g) / COUNT(*) by (g)",
+            "1.0",
+            False,
+            id="nan-bound-of-a-dropped-group",
+        ),
+    ],
+)
+def test_s1_a_nan_bound_of_reducers_raises_the_solver_error(decidb_cli, constraint, cap, raises):
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {_NAN_BOUND_ROWS.format(cap=cap)}) t(id, g, cap, score, keep) "
+        f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    if not raises:
+        assert _outcome(decidb_cli, sql, "require")[0] == "ok"
+        assert _outcome(decidb_cli, sql, "require") == _outcome(decidb_cli, sql, "off")
+        return
+    with pytest.raises(DecidBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    with pytest.raises(DecidBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert str(direct_error.value) == str(solver_error.value)
+
+
 # `per g: C` is one constraint per class of g (D6): a count bounds the whole total in each class, with a bound the class
 # determines, so the count takes the tightest class's. The scope check that g determines the bound runs under the plan.
 _PER_CLASS_ROWS = "(1, 'a', 9.0, 4), (2, 'a', 8.0, 4), (3, 'b', 7.0, 2), (4, 'b', 6.0, 2), (5, 'c', 5.0, 3)"

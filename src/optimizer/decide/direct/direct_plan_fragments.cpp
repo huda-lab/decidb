@@ -106,6 +106,34 @@ ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &tex
 	               calc.Constant(Value(LogicalType::VARCHAR)));
 }
 
+unique_ptr<BoundWindowExpression> DirectWindowOfAggregate(const Expression &function, unique_ptr<Expression> argument,
+                                                          unique_ptr<Expression> reads) {
+	auto &aggregate = function.Cast<BoundAggregateExpression>();
+	// Hand-built, as in DirectWindowExtremum.
+	auto result = make_uniq<BoundWindowExpression>(ExpressionType::WINDOW_AGGREGATE, aggregate.return_type,
+	                                               make_uniq<AggregateFunction>(aggregate.function),
+	                                               aggregate.bind_info ? aggregate.bind_info->Copy() : nullptr);
+	if (argument) {
+		result->children.push_back(std::move(argument));
+	}
+	result->filter_expr = std::move(reads);
+	result->start = WindowBoundary::UNBOUNDED_PRECEDING;
+	result->end = WindowBoundary::UNBOUNDED_FOLLOWING;
+	return result;
+}
+
+unique_ptr<Expression> DirectAggregateOf(const Expression &function, unique_ptr<Expression> argument,
+                                         unique_ptr<Expression> reads) {
+	auto result = function.Copy();
+	auto &aggregate = result->Cast<BoundAggregateExpression>();
+	D_ASSERT(aggregate.children.empty() && !aggregate.filter);
+	if (argument) {
+		aggregate.children.push_back(std::move(argument));
+	}
+	aggregate.filter = std::move(reads);
+	return result;
+}
+
 unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, const char *name,
                                                        unique_ptr<Expression> value) {
 	vector<unique_ptr<Expression>> children;
@@ -280,6 +308,135 @@ unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_pt
 	auto guard = make_uniq<LogicalFilter>(DirectAllHold(calc, std::move(checks)));
 	guard->children.push_back(std::move(window));
 	return std::move(guard);
+}
+
+//===--------------------------------------------------------------------===//
+// Group bounds
+//===--------------------------------------------------------------------===//
+
+unique_ptr<DecideGroupBound> DirectTightestBound(Optimizer &optimizer, ExpressionType comparison,
+                                                 unique_ptr<Expression> rhs, const string &text,
+                                                 unique_ptr<Expression> invalid) {
+	ExpressionBuilder calc(optimizer.context);
+	auto bound = make_uniq<DecideGroupBound>();
+	bound->text = text;
+	auto type = rhs->return_type;
+	auto table_index = optimizer.binder.GenerateTableIndex();
+	auto add = [&](const char *name) {
+		vector<unique_ptr<Expression>> children;
+		children.push_back(rhs->Copy());
+		auto function = optimizer.BindAggregateFunction(name, std::move(children));
+		function->Cast<BoundAggregateExpression>().children.clear();
+		bound->aggregates.push_back({ColumnBinding(table_index, bound->aggregates.size()), std::move(function), 0});
+		return bound->aggregates.size() - 1;
+	};
+	idx_t smallest = DConstants::INVALID_INDEX, largest = DConstants::INVALID_INDEX;
+	if (DirectIsUpperBound(comparison)) {
+		smallest = add("min");
+		bound->upper = calc.Out(calc.Col(type, bound->aggregates[smallest].column));
+	}
+	if (DirectIsLowerBound(comparison)) {
+		largest = add("max");
+		bound->lower = calc.Out(calc.Col(type, bound->aggregates[largest].column));
+	}
+	if (comparison == ExpressionType::COMPARE_EQUAL) {
+		bound->low = smallest;
+		bound->high = largest;
+	}
+	bound->inputs.push_back({std::move(rhs), nullptr, std::move(invalid)});
+	return bound;
+}
+
+bool DirectGroupBoundIsReadable(const DirectIR &ir, const DecideGroupBound &bound) {
+	auto readable = ir.source_bindings;
+	for (auto &aggregate : bound.aggregates) {
+		readable.push_back(aggregate.column);
+	}
+	auto of_the_row = [&](const unique_ptr<Expression> &expr) {
+		return !expr || (DirectIsDecisionFreeDeterministic(*expr, ir.decide_index) &&
+		                 DirectReferencesOnlySource(*expr, ir.source_bindings));
+	};
+	for (auto &input : bound.inputs) {
+		if (!of_the_row(input.argument) || !of_the_row(input.filter)) {
+			return false;
+		}
+	}
+	for (auto &limit : {&bound.upper, &bound.lower}) {
+		if (*limit && !DirectIsSourceOnlyNumericMayRaise(**limit, ir.decide_index, readable)) {
+			return false;
+		}
+	}
+	return true;
+}
+
+DirectGroupInputLayout DirectGroupLayout(const DecideGroupBound::Input &input, bool scoped) {
+	return {scoped || input.filter, input.argument != nullptr, input.invalid != nullptr};
+}
+
+vector<DirectGroupInput> DirectGroupInputs(const ExpressionBuilder &calc, const DecideGroupBound &bound,
+                                           const ExprPtr &eligible,
+                                           const std::function<unique_ptr<Expression>(const Expression &)> &over) {
+	vector<DirectGroupInput> inputs;
+	for (auto &input : bound.inputs) {
+		DirectGroupInput columns;
+		columns.reads = eligible;
+		if (input.filter) {
+			auto own = calc.Wrap(DirectActiveWhen(calc, over(*input.filter).get()));
+			columns.reads = eligible ? calc.If(eligible, own, calc.Bool(false)) : own;
+		}
+		// A reducer reads its argument on the rows it reads alone: nothing is computed on any other.
+		if (input.argument) {
+			auto argument = calc.Wrap(over(*input.argument));
+			columns.argument = columns.reads ? DirectOnKeptRows(calc, columns.reads, argument) : argument;
+		}
+		if (input.invalid) {
+			columns.invalid = calc.Wrap(over(*input.invalid));
+		}
+		inputs.push_back(std::move(columns));
+	}
+	return inputs;
+}
+
+DirectGroupValues DirectAddGroupBound(const ExpressionBuilder &calc, const DecideGroupBound &bound,
+                                      const vector<DirectGroupInputColumns> &inputs, DirectGroupSink &sink,
+                                      const ExprPtr &eligible) {
+	vector<ColumnBinding> placeholders;
+	vector<unique_ptr<Expression>> results;
+	for (auto &aggregate : bound.aggregates) {
+		auto &input = bound.inputs[aggregate.input];
+		auto &columns = inputs[aggregate.input];
+		auto argument = input.argument ? calc.Out(calc.Col(input.argument->return_type, columns.argument)) : nullptr;
+		auto reads = columns.reads.table_index != DConstants::INVALID_INDEX
+		                 ? calc.Out(calc.Col(LogicalType::BOOLEAN, columns.reads))
+		                 : nullptr;
+		auto result = sink.Add(*aggregate.function, std::move(argument), std::move(reads));
+		placeholders.push_back(aggregate.column);
+		results.push_back(calc.Out(calc.Col(aggregate.function->return_type, result)));
+	}
+	// Outside a group the aggregates read nothing, and nothing computed from them is read.
+	auto in_group = [&](ExprPtr value) {
+		return eligible ? calc.If(eligible, value, calc.Constant(Value(value->return_type))) : value;
+	};
+	auto over_results = [&](const Expression &expr) {
+		auto copy = expr.Copy();
+		DirectReplaceColumns(copy, placeholders, results);
+		return in_group(calc.Wrap(std::move(copy)));
+	};
+	DirectGroupValues values;
+	if (bound.upper) {
+		values.upper = over_results(*bound.upper);
+	}
+	if (bound.lower) {
+		values.lower = over_results(*bound.lower);
+	}
+	if (bound.invalid) {
+		values.messages.push_back(over_results(*bound.invalid));
+	}
+	if (bound.low != DConstants::INVALID_INDEX) {
+		values.messages.push_back(in_group(
+		    DirectBoundDisagreement(calc, bound.text, calc.Of(*results[bound.low]), calc.Of(*results[bound.high]))));
+	}
+	return values;
 }
 
 } // namespace duckdb

@@ -36,17 +36,15 @@ constexpr const char *RULE_NAME = "R1_CONTINUOUS_KNAPSACK";
 //! <= SUM(w0*x0 + w1*x1 + ...) <= upper` over the rows the budget covers, and a linear objective. Nothing links two
 //! decisions of a row: every per-row bound reads one decision, and no objective term multiplies two.
 struct Condition final : DirectApplicabilityCondition {
-	//! A limit of the budget read from the data: a source column or an expression over source columns. The bound-side
-	//! rewrite (RewriteRhsAggregates) leaves it raw when no `when` of the sum's own narrows the budget, and the plan
-	//! reduces it to the group's tightest value in its group aggregate (LimitOf) and makes the checks the rewrite
-	//! would have made; otherwise it is one value on every kept row of a group already. A NULL skips its instance:
-	//! the group's MIN or MAX passes over it.
+	//! A limit of the budget read from the data: a source column or an expression over source columns, or the
+	//! bound-side rewrite's aggregates of the group (DecideGroupBound). The plan takes the group's tightest value of a
+	//! `value` (DirectTightestBound) and computes a `group`'s aggregates in its group aggregate, and makes the checks
+	//! the rewrite would have made. A NULL skips its instance: the group's MIN or MAX passes over it.
 	struct DataLimit {
 		ExpressionType comparison = ExpressionType::INVALID;
+		//! The limit, one value on every kept row of a group already. Null with a `group`.
 		unique_ptr<Expression> value;
-		//! The bound-side rewrite left `value` raw (DirectBoundReduction): the plan checks it for NaN and, for an `=`
-		//! limit, that a group shows one value. Null when `value` is one value per group already.
-		unique_ptr<DirectBoundReduction> reduction;
+		unique_ptr<DecideGroupBound> group;
 	};
 	DecideSense sense = DecideSense::FEASIBILITY;
 	//! Which rows the budget covers, and in which groups: a row whose `when` holds and whose `by` key has no NULL in a
@@ -244,19 +242,21 @@ bool Rule::ProveLimit(const DirectIR &ir, ClientContext &context, const DirectIR
 }
 
 //! A limit read from the data: a numeric, deterministic expression over source columns that mentions at least one, and
-//! may raise (the plan evaluates it on the rows that read it, as the solver does, so both raise on the same inputs).
-//! The bound-side window rewrite has made an aggregate on the right a source column; one it left is not a value of
-//! the row.
+//! may raise (the plan evaluates it on the rows that read it, as the solver does, so both raise on the same inputs), or
+//! the aggregates of its group that the bound-side rewrite left to the plan.
 bool Rule::ProveDataLimit(const DirectIR &ir, const DirectIRConstraint &ir_node, Condition &condition) const {
-	auto &rhs = *ir_node.rhs;
-	if (!DirectIsSourceOnlyNumericMayRaise(rhs, ir.decide_index, ir.source_bindings)) {
-		return false;
-	}
 	Condition::DataLimit limit;
 	limit.comparison = ir_node.comparison;
-	limit.value = rhs.Copy();
-	if (ir_node.reduction) {
-		limit.reduction = ir_node.reduction->Copy();
+	if (ir_node.group_bound) {
+		if (!DirectGroupBoundIsReadable(ir, *ir_node.group_bound)) {
+			return false;
+		}
+		limit.group = ir_node.group_bound->Copy();
+	} else {
+		if (!DirectIsSourceOnlyNumericMayRaise(*ir_node.rhs, ir.decide_index, ir.source_bindings)) {
+			return false;
+		}
+		limit.value = ir_node.rhs->Copy();
 	}
 	condition.data_limits.push_back(std::move(limit));
 	return true;
@@ -633,12 +633,12 @@ struct ItemColumns {
 	//! The group key: whether the row belongs to a budget (BOOLEAN), then the group keys. Empty without a scope.
 	vector<ColumnBinding> keys;
 	//! The message each check of a raw value or of a limit read from the data raises on the row (VARCHAR, NULL when it
-	//! passes), in the order the solver checks them: the NaN checks of the raw limits (`limit_messages` of them), then
-	//! the others.
+	//! passes), in the order the solver checks them: the NaN checks of what the limits read (`limit_messages` of them),
+	//! then the others.
 	vector<ColumnBinding> messages;
 	idx_t limit_messages = 0;
-	//! The value of each limit read from the data on the row, as DOUBLE, in the order of the condition's data limits.
-	vector<ColumnBinding> limits;
+	//! What the aggregates of each limit read from the data read on the row, per data limit and per input.
+	vector<vector<DirectGroupInputColumns>> limits;
 	//! The items of the row, one per decision.
 	vector<DecisionColumns> decisions;
 };
@@ -669,9 +669,9 @@ public:
 	//! `proved_bindings` are the bindings the proved expressions of the condition refer to, and `source_types` the
 	//! types of the source columns in the same order. The plan reads the source through a fresh set of bindings each
 	//! time, and the expressions are re-pointed at it (Build).
-	ItemStages(const Condition &condition_p, Optimizer &optimizer_p, vector<ColumnBinding> proved_bindings_p,
-	           vector<LogicalType> source_types_p)
-	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder),
+	ItemStages(const Condition &condition_p, const vector<unique_ptr<DecideGroupBound>> &limit_bounds_p,
+	           Optimizer &optimizer_p, vector<ColumnBinding> proved_bindings_p, vector<LogicalType> source_types_p)
+	    : ItemAlgebra(optimizer_p), condition(condition_p), limit_bounds(limit_bounds_p), binder(optimizer_p.binder),
 	      proved_bindings(std::move(proved_bindings_p)), source_types(std::move(source_types_p)) {
 		// The source reader hands the input over with its types resolved.
 		D_ASSERT(proved_bindings.size() == source_types.size());
@@ -740,8 +740,19 @@ public:
 			items.messages.push_back(columns.at(name).binding);
 		}
 		items.limit_messages = limit_message_count;
-		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
-			items.limits.push_back(columns.at(LimitName(j)).binding);
+		for (idx_t j = 0; j < limit_bounds.size(); j++) {
+			items.limits.emplace_back();
+			for (idx_t i = 0; i < limit_bounds[j]->inputs.size(); i++) {
+				auto layout = DirectGroupLayout(limit_bounds[j]->inputs[i], condition.scoped);
+				DirectGroupInputColumns inputs;
+				if (layout.reads) {
+					inputs.reads = columns.at(LimitReadsName(j, i)).binding;
+				}
+				if (layout.argument) {
+					inputs.argument = columns.at(LimitArgumentName(j, i)).binding;
+				}
+				items.limits.back().push_back(inputs);
+			}
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto binding = [&](const char *name) {
@@ -779,6 +790,8 @@ private:
 	using Named = vector<std::pair<string, ExprPtr>>;
 
 	const Condition &condition;
+	//! The group bound of each data limit of the condition (AggregatePlanBuilder::LimitBounds).
+	const vector<unique_ptr<DecideGroupBound>> &limit_bounds;
 	Binder &binder;
 	//! The bindings the proved expressions refer to, and the types of the source columns.
 	vector<ColumnBinding> proved_bindings;
@@ -793,7 +806,7 @@ private:
 	unique_ptr<LogicalOperator> plan;
 	vector<string> names;
 	std::map<string, Column> columns;
-	//! The columns of the checks' messages, and how many are the raw limits' NaN checks.
+	//! The columns of the checks' messages, and how many are the NaN checks of what the limits read.
 	vector<string> message_names;
 	idx_t limit_message_count = 0;
 
@@ -812,13 +825,16 @@ private:
 	static string Dec(const string &base, idx_t decision) {
 		return base + "_" + std::to_string(decision);
 	}
-	//! The name of the column that holds data limit `j`.
-	static string LimitName(idx_t j) {
-		return "limit_" + std::to_string(j);
+	//! The names of the columns of input `i` of data limit `j`: whether the row is one its aggregates read, its
+	//! argument there, and its NaN message.
+	static string LimitReadsName(idx_t j, idx_t i) {
+		return "limit_reads_" + std::to_string(j) + "_" + std::to_string(i);
 	}
-	//! The name of the column that holds the NaN message of data limit `j`.
-	static string LimitMessageName(idx_t j) {
-		return "limit_message_" + std::to_string(j);
+	static string LimitArgumentName(idx_t j, idx_t i) {
+		return "limit_argument_" + std::to_string(j) + "_" + std::to_string(i);
+	}
+	static string LimitMessageName(idx_t j, idx_t i) {
+		return "limit_message_" + std::to_string(j) + "_" + std::to_string(i);
 	}
 
 	//! The column that says whether a row belongs to a budget; only a scoped budget has one.
@@ -895,19 +911,25 @@ private:
 	// P1 and P2: raw values, limits from the data, per-clause bounds, the objective value
 	//===------------------------------------------------------------------===//
 
-	//! The value of each limit read from the data, in its own type, on the rows of the budget (NULL on the others).
-	//! Stage 2 takes its group MIN or MAX, which is the limit itself when the value is one per group already.
+	//! What the aggregates of each limit read from the data read, on the rows of the budget alone (NULL on the others),
+	//! and the message each raises. Stage 2 computes the aggregates over the group.
 	void AddLimitValues(Named &added) const {
-		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
-			auto &limit = condition.data_limits[j];
-			// In its own type: a MIN and a MAX of two values that become one double still differ (an `=` limit).
-			auto value = calc.Of(*OverState(*limit.value));
-			if (condition.scoped) {
-				value = DirectOnKeptRows(calc, C(ELIGIBLE), value);
-			}
-			added.emplace_back(LimitName(j), value);
-			if (limit.reduction && limit.reduction->invalid) {
-				added.emplace_back(LimitMessageName(j), calc.Of(*OverState(*limit.reduction->invalid)));
+		auto eligible = condition.scoped ? C(ELIGIBLE) : nullptr;
+		auto over_state = [&](const Expression &expression) {
+			return OverState(expression);
+		};
+		for (idx_t j = 0; j < limit_bounds.size(); j++) {
+			auto inputs = DirectGroupInputs(calc, *limit_bounds[j], eligible, over_state);
+			for (idx_t i = 0; i < inputs.size(); i++) {
+				if (inputs[i].reads) {
+					added.emplace_back(LimitReadsName(j, i), inputs[i].reads);
+				}
+				if (inputs[i].argument) {
+					added.emplace_back(LimitArgumentName(j, i), inputs[i].argument);
+				}
+				if (inputs[i].invalid) {
+					added.emplace_back(LimitMessageName(j, i), inputs[i].invalid);
+				}
 			}
 		}
 	}
@@ -924,7 +946,7 @@ private:
 	//! path. A clause's values are NULL on the rows its `when` drops, where its bounds are not read; a row outside the
 	//! budget has the weight 0, as an item outside every budget. Returns the check on each, built over P1, which raises
 	//! only where the value is read. A decision the budget does not name has the weight 0, which needs no check; an
-	//! objective part has a raw value for each decision it names. A limit's group MIN and MAX are stage 2's.
+	//! objective part has a raw value for each decision it names. A limit's group aggregates are stage 2's.
 	vector<ExprPtr> LayoutRawValues() {
 		Named added;
 		AddLimitValues(added);
@@ -963,11 +985,12 @@ private:
 		auto number = [&](const string &name, const string &written) {
 			return DirectNumberMessage(calc, C(name), written);
 		};
-		// The bound-side rewrite's checks of a raw limit come before any other, as its scope checks did.
-		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
-			auto &reduction = condition.data_limits[j].reduction;
-			if (reduction && reduction->invalid) {
-				messages.push_back(C(LimitMessageName(j)));
+		// The bound-side rewrite's checks of what a limit reads come before any other, as its scope checks did.
+		for (idx_t j = 0; j < limit_bounds.size(); j++) {
+			for (idx_t i = 0; i < limit_bounds[j]->inputs.size(); i++) {
+				if (limit_bounds[j]->inputs[i].invalid) {
+					messages.push_back(C(LimitMessageName(j, i)));
+				}
 			}
 		}
 		limit_message_count = messages.size();
@@ -1210,6 +1233,13 @@ class AggregatePlanBuilder : public ItemAlgebra {
 public:
 	AggregatePlanBuilder(const Condition &condition_p, Optimizer &optimizer_p, DirectSourceReader &reader_p)
 	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder), reader(reader_p) {
+		// A limit the rewrite left as a group bound is one already; any other is one value per group, whose group
+		// extremum is the limit.
+		for (auto &limit : condition.data_limits) {
+			limit_bounds.push_back(
+			    limit.group ? limit.group->Copy()
+			                : DirectTightestBound(optimizer, limit.comparison, limit.value->Copy(), string(), nullptr));
+		}
 		if (condition.scoped) {
 			key_types.push_back(LogicalType::BOOLEAN);
 			for (auto &key : condition.group_keys) {
@@ -1251,12 +1281,6 @@ private:
 		ColumnBinding price, anchors, over, under, ok;
 		vector<ColumnBinding> limits;
 	};
-	//! The group MIN of a limit read from the data that bounds the budget from above (an upper limit or an equality)
-	//! and the group MAX of one that bounds it from below (a lower limit or an equality). The limit is one value on the
-	//! group's rows, so the aggregate only carries it to the group.
-	struct LimitExtremes {
-		ColumnBinding minimum, maximum;
-	};
 	//! Stage 4: the group's key, its price, whether the tied items move up, and the two shares of step 6: the fraction
 	//! of its room that each tied item with a finite room moves, and what each tied item with an infinite room moves.
 	struct ShareColumns {
@@ -1270,6 +1294,8 @@ private:
 	};
 
 	const Condition &condition;
+	//! The group bound of each data limit of the condition.
+	vector<unique_ptr<DecideGroupBound>> limit_bounds;
 	Binder &binder;
 	DirectSourceReader &reader;
 	idx_t reads_made = 0;
@@ -1288,10 +1314,6 @@ private:
 	bool HasDataLimits() const {
 		return !condition.data_limits.empty();
 	}
-	//! The group extremum of data limit `j` as a DOUBLE.
-	ExprPtr LimitExtreme(idx_t j, ColumnBinding binding) const {
-		return calc.Cast(calc.Col(condition.data_limits[j].value->return_type, binding), LogicalType::DOUBLE);
-	}
 	//! The budget's limits L and U in a group: the constants, or with a limit read from the data the group columns
 	//! stage 2 computes.
 	ExprPtr LowerOf(const vector<ColumnBinding> &limits) const {
@@ -1305,7 +1327,7 @@ private:
 	Items ReadItems() {
 		reads_made++;
 		auto read = reader.ReadSource();
-		ItemStages stages(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
+		ItemStages stages(condition, limit_bounds, optimizer, reader.SourceBindings(), reader.SourceTypes());
 		Items items;
 		items.plan = stages.Build(std::move(read.plan), read.table_index);
 		items.columns = stages.Columns();
@@ -1372,38 +1394,30 @@ private:
 		return std::move(join);
 	}
 
-	//! The MIN of each limit read from the data that bounds the budget from above and the MAX of each that bounds it
-	//! from below, as aggregates over stage 1's value of the limit.
-	vector<LimitExtremes> AddLimitExtremes(AggregateStage &aggregate, const vector<ColumnBinding> &values) const {
-		vector<LimitExtremes> extremes;
-		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
-			LimitExtremes extreme;
-			auto type = condition.data_limits[j].value->return_type;
-			if (DirectIsUpperBound(condition.data_limits[j].comparison)) {
-				extreme.minimum = aggregate.Add(Aggregate("min", calc.Col(type, values[j])));
-			}
-			if (DirectIsLowerBound(condition.data_limits[j].comparison)) {
-				extreme.maximum = aggregate.Add(Aggregate("max", calc.Col(type, values[j])));
-			}
-			extremes.push_back(extreme);
+	//! Takes the aggregates of the limits' group bounds into stage 2's hash aggregate.
+	class AggregateSink final : public DirectGroupSink {
+	public:
+		explicit AggregateSink(AggregateStage &aggregate_p) : aggregate(aggregate_p) {
 		}
-		return extremes;
-	}
+		ColumnBinding Add(const Expression &function, unique_ptr<Expression> argument,
+		                  unique_ptr<Expression> reads) override {
+			return aggregate.Add(DirectAggregateOf(function, std::move(argument), std::move(reads)));
+		}
 
-	//! One side of the budget in a group: the constant limit and the group extremum of each limit read from the data on
-	//! that side. An upper limit takes the group's MIN, a lower one its MAX (an equality both). A value is the number
-	//! it is, however large (the solver loads a right side of 1e25 as that number), and an infinite one is infinite: an
-	//! upper limit of +infinity is no bound, a lower limit of +infinity cannot be met. A group with no value (the
-	//! aggregate over no row) takes the constant alone, as LEAST and GREATEST skip a NULL.
-	ExprPtr LimitOf(bool upper, const vector<LimitExtremes> &extremes) const {
+	private:
+		AggregateStage &aggregate;
+	};
+
+	//! One side of the budget in a group: the constant limit and the limit each data limit gives on that side (the
+	//! group's MIN of an upper limit, its MAX of a lower one, an equality both). A value is the number it is, however
+	//! large (the solver loads a right side of 1e25 as that number), and an infinite one is infinite: an upper limit of
+	//! +infinity is no bound, a lower limit of +infinity cannot be met. A group with no value (the aggregate over no
+	//! row) takes the constant alone, as LEAST and GREATEST skip a NULL.
+	ExprPtr LimitOf(bool upper, const vector<DirectGroupValues> &limits) const {
 		vector<ExprPtr> sides {calc.Num(upper ? condition.upper : condition.lower)};
-		for (idx_t j = 0; j < extremes.size(); j++) {
-			auto comparison = condition.data_limits[j].comparison;
-			if (upper && DirectIsUpperBound(comparison)) {
-				sides.push_back(LimitExtreme(j, extremes[j].minimum));
-			}
-			if (!upper && DirectIsLowerBound(comparison)) {
-				sides.push_back(LimitExtreme(j, extremes[j].maximum));
+		for (auto &limit : limits) {
+			if (auto &value = upper ? limit.upper : limit.lower) {
+				sides.push_back(calc.Cast(value, LogicalType::DOUBLE));
 			}
 		}
 		return upper ? calc.Min(sides) : calc.Max(sides);
@@ -1438,19 +1452,25 @@ private:
 		for (idx_t slot = 0; slot < TOTAL_COUNT; slot++) {
 			sums.push_back(aggregate.Add(Aggregate(TotalFunction(slot), inputs[slot])));
 		}
-		auto extremes = AddLimitExtremes(aggregate, items.columns.limits);
+		AggregateSink sink(aggregate);
+		auto limit_eligible = condition.scoped ? BoolColumn(key[0]) : nullptr;
+		vector<DirectGroupValues> limits;
+		for (idx_t j = 0; j < limit_bounds.size(); j++) {
+			limits.push_back(
+			    DirectAddGroupBound(calc, *limit_bounds[j], items.columns.limits[j], sink, limit_eligible));
+		}
 		auto plan = aggregate.Finish(std::move(items.plan));
 
 		vector<ExprPtr> totals;
 		for (auto &sum : sums) {
 			totals.push_back(DoubleColumn(sum));
 		}
-		auto lower = LimitOf(false, extremes), upper = LimitOf(true, extremes);
+		auto lower = LimitOf(false, limits), upper = LimitOf(true, limits);
 		auto verdict = VerdictOf(totals, lower, upper, condition.scoped ? BoolColumn(key[0]) : nullptr);
 		auto has_rows = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Col(LogicalType::BIGINT, rows),
 		                         calc.Constant(Value::BIGINT(0)));
-		// The solver's order: the NaN checks of the raw limits, an `=` limit that takes two values in a group, the row
-		// messages, then infeasible and unbounded.
+		// The solver's order: the NaN checks of what the limits read, what the limits give (a NaN limit, an `=` limit
+		// that takes two values in a group), the row messages, then infeasible and unbounded.
 		vector<unique_ptr<Expression>> checks;
 		auto raise = [&](ColumnBinding message) {
 			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, message)));
@@ -1458,12 +1478,8 @@ private:
 		for (idx_t i = 0; i < items.columns.limit_messages; i++) {
 			raise(messages[i]);
 		}
-		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
-			auto &limit = condition.data_limits[j];
-			if (limit.reduction && limit.comparison == ExpressionType::COMPARE_EQUAL) {
-				auto message = DirectBoundDisagreement(calc, limit.reduction->text,
-				                                       calc.Col(limit.value->return_type, extremes[j].minimum),
-				                                       calc.Col(limit.value->return_type, extremes[j].maximum));
+		for (auto &limit : limits) {
+			for (auto &message : limit.messages) {
 				checks.push_back(DirectRaiseMessage(optimizer, calc, message));
 			}
 		}

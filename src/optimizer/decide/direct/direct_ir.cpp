@@ -398,27 +398,25 @@ private:
 	// Constraints
 	//===--------------------------------------------------------------------===//
 
-	//! The reduction the bound-side rewrite left to the rule, if it left one for this comparison.
-	void ReadReduction(const Expression &comparison, DirectIRConstraint &ir_node) const {
+	//! The group bound the bound-side rewrite left to the rule, if it left one for this comparison.
+	void ReadGroupBound(const Expression &comparison, DirectIRConstraint &ir_node) const {
 		for (auto &bound : decide.reduced_bounds) {
 			if (bound.comparison != &comparison) {
 				continue;
 			}
 			// A rule sums the rows the sum reads. With a `when` of its own those are fewer than the rows the bound is
-			// read over, so the rule cannot reduce the bound: the windows are built and the IR is read again.
+			// read over, so the rule cannot compute the bound: the windows are built and the IR is read again.
 			for (auto &part : ir_node.lhs) {
 				if (part.filter) {
 					bound_windows_needed = true;
 					return;
 				}
 			}
-			ir_node.reduction = make_uniq<DirectBoundReduction>();
-			ir_node.reduction->text = bound.text;
-			if (bound.invalid) {
-				// The rewrite built it over the source and its own windows.
-				D_ASSERT(CheckablePredicate(bound.invalid.get()));
-				ir_node.reduction->invalid = bound.invalid->Copy();
+			// What the aggregates read is over the source and the windows the rewrite built.
+			for (auto &input : bound.group->inputs) {
+				D_ASSERT(!input.invalid || CheckablePredicate(input.invalid.get()));
 			}
+			ir_node.group_bound = bound.group->Copy();
 		}
 	}
 
@@ -458,7 +456,7 @@ private:
 				ir_node.lhs.push_back(ReadRowPart(*comparison.left));
 			}
 			ir_node.rhs = comparison.right->Copy();
-			ReadReduction(leaf, ir_node);
+			ReadGroupBound(leaf, ir_node);
 			ir_node.degree = DecideExpressionDegree(*comparison.left, decide.decide_index).degree;
 			// Direct rules run before the MIN/MAX rewrite tags an easy extremum, so only a per-row bound reads here.
 			ir_node.singleton_row = DecideReadSingletonRow(context, decide, comparison, ir_node.bound);

@@ -9,6 +9,7 @@
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
+#include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/expression.hpp"
 
 namespace duckdb {
@@ -115,27 +116,6 @@ struct DirectIRScope {
 	unique_ptr<Expression> when;
 };
 
-//! A bound the bound-side rewrite left raw (DecideReducedBound): `rhs` is one value per row, and the constraint holds
-//! when the group's tightest value does. A rule that reads the bound reduces it in its own group aggregate: the MIN of
-//! an upper bound, the MAX of a lower one, both for `=`, over the rows the clause keeps in the group, and checks what
-//! the rewrite would have checked.
-struct DirectBoundReduction {
-	//! The bound as the user wrote it.
-	string text;
-	//! The message a row raises for a NaN `rhs`, NULL on a valid row (an `=` bound whose group shows two values raises
-	//! DirectBoundDisagreement from its MIN and MAX); null when `rhs` cannot be NaN.
-	unique_ptr<Expression> invalid;
-
-	unique_ptr<DirectBoundReduction> Copy() const {
-		auto copy = make_uniq<DirectBoundReduction>();
-		copy->text = text;
-		if (invalid) {
-			copy->invalid = invalid->Copy();
-		}
-		return copy;
-	}
-};
-
 struct DirectIRConstraint {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 	//! Index into the source-clause registry: the user's clause this constraint came from, shared by the constraints
@@ -147,8 +127,10 @@ struct DirectIRConstraint {
 	ExpressionType comparison = ExpressionType::INVALID;
 	vector<DirectPart> lhs;
 	unique_ptr<Expression> rhs;
-	//! Set when `rhs` is raw: the rule reduces it to the group's tightest value. Null when it is one value per group.
-	unique_ptr<DirectBoundReduction> reduction;
+	//! Set when the bound-side rewrite left the bound to the rule (DecideReducedBound): the rule computes its
+	//! aggregates in its own group aggregate, with `rhs` as the rewrite saw it. Null when `rhs` is one value per group
+	//! already.
+	unique_ptr<DecideGroupBound> group_bound;
 	//! True when the comparison is a bound on one decision, read into `bound` by the solver path's own classifier
 	//! (DecideReadSingletonRow): the values it admits, on each row it keeps.
 	bool singleton_row = false;
@@ -226,7 +208,7 @@ struct DirectIR {
 	DirectIRObjective objective;
 	//! The scope checks the plan makes on the source rows, which the rule driver adds above every rule's plan.
 	vector<DirectRowCheck> row_checks;
-	//! A bound the bound-side rewrite left raw cannot be reduced by a rule (its sum has a `when` of its own): the
+	//! A bound the bound-side rewrite left to the rule cannot be computed by it (its sum has a `when` of its own): the
 	//! driver builds the windows (InstallReducedBoundWindows) and reads the IR again.
 	bool bound_windows_needed = false;
 	//! NOT_PROVED when the DECIDE operator owes the rows a scope check the plan cannot make: a determination of an

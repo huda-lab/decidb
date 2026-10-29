@@ -40,14 +40,14 @@ constexpr const char *RULE_NAME = "S1_UNIFORM_MATROID";
 struct Condition final : DirectApplicabilityCondition {
 	struct SourceBound {
 		ExpressionType comparison;
-		//! One value on every row the clause keeps: the group's tightest value already, or, with a `reduction`, the raw
-		//! value the plan reduces (DecideOptimizer::RewriteRhsAggregates).
+		//! One value on every row the clause keeps already: read per row. Null with a `group`.
 		unique_ptr<Expression> value;
 		//! The count body is `-x`, so `comparison` is already flipped and the value to compare against is `-B`.
 		bool negated = false;
-		//! The bound-side rewrite left `value` raw (DirectBoundReduction): the plan reduces it to its group's tightest
-		//! value and makes the checks the rewrite would have made. Null when `value` is one value per group already.
-		unique_ptr<DirectBoundReduction> reduction;
+		//! The bound-side rewrite left the bound to the plan (DecideGroupBound): the plan computes its aggregates in
+		//! the rank window, over the group, and makes the checks the rewrite would have made. Null when `value` is
+		//! read.
+		unique_ptr<DecideGroupBound> group;
 	};
 	//! A value from the row that fixes `x`: it must be neither NULL nor, for a floating point value, NaN; a coefficient
 	//! must also be finite.
@@ -496,12 +496,18 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 		auto &bound = *factor->rhs;
 		bool negated = body.direction < 0;
 		auto type = negated ? FlipComparison(factor->comparison) : factor->comparison;
+		if (factor->group_bound) {
+			if (!DirectGroupBoundIsReadable(ir, *factor->group_bound)) {
+				return false;
+			}
+			condition.source_bounds.push_back({type, nullptr, negated, factor->group_bound->Copy()});
+			continue;
+		}
 		// A source-valued bound has one value per group already. The plan evaluates it on the rows of the groups, as
 		// the solver does, so an expression that can raise (an overflow in `COUNT(*) * k` over a window column) raises
 		// on both paths or on neither.
 		if (!bound.IsFoldable() && DirectIsSourceOnlyNumericMayRaise(bound, ir.decide_index, ir.source_bindings)) {
-			condition.source_bounds.push_back(
-			    {type, bound.Copy(), negated, factor->reduction ? factor->reduction->Copy() : nullptr});
+			condition.source_bounds.push_back({type, bound.Copy(), negated, nullptr});
 			continue;
 		}
 		if (DirectIsLowerBound(type)) {
@@ -614,14 +620,21 @@ public:
 			fixed_one_binding = ColumnBinding(score_index, next_slot++);
 			fixed_zero_binding = ColumnBinding(score_index, next_slot++);
 		}
-		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
-			bound_bindings.push_back(ColumnBinding(score_index, next_slot++));
-		}
-		// The messages of the checks the plan owes, in the solver's order: the NaN check of each raw bound, then each
-		// value the row fixes.
 		for (auto &bound : condition.source_bounds) {
-			limit_message_count += bound.reduction && bound.reduction->invalid ? 1 : 0;
+			// A bound of the group's aggregates is computed above the rank window, not per row.
+			bound_bindings.push_back(bound.group ? ColumnBinding() : ColumnBinding(score_index, next_slot++));
+			group_inputs.emplace_back();
+			for (idx_t r = 0; bound.group && r < bound.group->inputs.size(); r++) {
+				auto layout = DirectGroupLayout(bound.group->inputs[r], condition.scoped);
+				DirectGroupInputColumns columns;
+				columns.reads = layout.reads ? ColumnBinding(score_index, next_slot++) : ColumnBinding();
+				columns.argument = layout.argument ? ColumnBinding(score_index, next_slot++) : ColumnBinding();
+				group_inputs.back().push_back(columns);
+				limit_message_count += layout.invalid ? 1 : 0;
+			}
 		}
+		// The messages of the checks the plan owes, in the solver's order: the NaN check of what each group bound
+		// reads, then each value the row fixes.
 		for (idx_t i = 0; i < limit_message_count + condition.source_fixed_values.size(); i++) {
 			message_bindings.push_back(ColumnBinding(score_index, next_slot++));
 		}
@@ -686,19 +699,20 @@ private:
 	vector<ColumnBinding> key_bindings;
 	ColumnBinding fixed_one_binding;
 	ColumnBinding fixed_zero_binding;
-	//! Each source-valued count bound's value, in the score projection.
+	//! Each source-valued count bound's value, in the score projection; unset for a bound of the group's aggregates.
 	vector<ColumnBinding> bound_bindings;
+	//! What the aggregates of each group bound read, in the score projection (DirectGroupInputs).
+	vector<vector<DirectGroupInputColumns>> group_inputs;
+	//! What each group bound gives once the rank window has computed its aggregates.
+	mutable vector<DirectGroupValues> group_values;
 	//! The message each check raises on the row (VARCHAR, NULL when it passes), in the score projection: the first
-	//! `limit_message_count` are the NaN checks of the raw bounds, the rest the values the row fixes.
+	//! `limit_message_count` are the NaN checks of what the group bounds read, the rest the values the row fixes.
 	vector<ColumnBinding> message_bindings;
 	idx_t limit_message_count = 0;
 	//! The least of each message in the row's group, and of the score's, in the rank window: the group raises them in
 	//! the order the solver checks them (FeasiblePredicate).
 	mutable vector<ColumnBinding> message_minimum;
 	mutable ColumnBinding score_message_minimum;
-	//! The MIN and the MAX of a raw bound over its group, in the rank window (RankAndFilterFeasibility): the MIN of an
-	//! upper bound and an `=` bound, the MAX of a lower bound and an `=` bound.
-	mutable vector<ColumnBinding> bound_minimum, bound_maximum;
 
 	//! The type of group key element `i`.
 	const LogicalType &KeyType(idx_t i) const {
@@ -804,30 +818,39 @@ private:
 		}
 		// A bound is read on the eligible rows only. On a row its clause's `when` drops, the windows it reads hold NULL
 		// or a count of 0, so computing it there raises nothing.
+		auto eligible = condition.scoped ? calc.Col(LogicalType::BOOLEAN, scope.eligible_binding) : nullptr;
+		auto into_state = [&](const Expression &expression) {
+			return CopyIntoState(expression, scope);
+		};
+		vector<vector<DirectGroupInput>> group_columns;
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
 			auto &bound = condition.source_bounds[i];
-			auto value = CopyIntoState(*bound.value, scope);
-			if (bound.reduction) {
-				// A raw bound stays in its own type, whose MIN and MAX the rank window takes, and is computed on the
-				// rows the clause keeps alone.
-				auto raw = calc.Wrap(std::move(value));
-				append_at(
-				    bound_bindings[i],
-				    calc.Out(condition.scoped
-				                 ? DirectOnKeptRows(calc, calc.Col(LogicalType::BOOLEAN, scope.eligible_binding), raw)
-				                 : raw));
+			group_columns.emplace_back();
+			if (bound.group) {
+				group_columns.back() = DirectGroupInputs(calc, *bound.group, eligible, into_state);
+				for (idx_t r = 0; r < group_columns.back().size(); r++) {
+					auto &columns = group_columns.back()[r];
+					if (columns.reads) {
+						append_at(group_inputs[i][r].reads, calc.Out(columns.reads));
+					}
+					if (columns.argument) {
+						append_at(group_inputs[i][r].argument, calc.Out(columns.argument));
+					}
+				}
 				continue;
 			}
+			auto value = CopyIntoState(*bound.value, scope);
 			if (bound.negated) {
 				value = DirectScaledTerm(optimizer, std::move(value), -1, false, 1.0, false);
 			}
 			append_at(bound_bindings[i], calc.Out(calc.Cast(calc.Wrap(std::move(value)), LogicalType::DOUBLE)));
 		}
 		idx_t message = 0;
-		for (auto &bound : condition.source_bounds) {
-			if (bound.reduction && bound.reduction->invalid) {
-				append_at(message_bindings[message++],
-				          calc.Out(calc.Of(*CopyIntoState(*bound.reduction->invalid, scope))));
+		for (auto &columns : group_columns) {
+			for (auto &input : columns) {
+				if (input.invalid) {
+					append_at(message_bindings[message++], calc.Out(input.invalid));
+				}
 			}
 		}
 		for (auto &fixed : condition.source_fixed_values) {
@@ -846,42 +869,48 @@ private:
 		return std::move(score);
 	}
 
-	//! The value of source-valued bound `index` on a side, as DOUBLE: the group's tightest value when the plan reduces
-	//! it, else the bound's own column. A negated bound (`SUM(-x) <= B` is `SUM(x) >= -B`) holds B, whose tightest
-	//! value on the flipped side is the other extremum, negated.
+	//! The value of source-valued bound `index` on a side, as DOUBLE: the group's value when the plan computes its
+	//! aggregates, else the bound's own column. A negated bound (`SUM(-x) <= B` is `SUM(x) >= -B`) holds B, which is
+	//! the limit the bound gives on the other side as written, negated.
 	ExprPtr BoundValue(idx_t index, bool upper) const {
 		auto &bound = condition.source_bounds[index];
-		if (!bound.reduction) {
+		if (!bound.group) {
 			return calc.Col(LogicalType::DOUBLE, bound_bindings[index]);
 		}
-		auto type = bound.value->return_type;
-		auto extremum = calc.Cast(calc.Col(type, upper != bound.negated ? bound_minimum[index] : bound_maximum[index]),
-		                          LogicalType::DOUBLE);
-		return bound.negated ? calc.Neg(extremum) : extremum;
+		auto &limit = upper != bound.negated ? group_values[index].upper : group_values[index].lower;
+		D_ASSERT(limit);
+		if (bound.negated) {
+			return calc.Wrap(DirectScaledTerm(optimizer, calc.Out(limit), -1, false, 1.0, false));
+		}
+		return calc.Cast(limit, LogicalType::DOUBLE);
 	}
 
-	//! Adds the group MIN and MAX of each raw bound to `window`, which is partitioned like the rank: the MIN where the
-	//! bound as written is an upper bound or an `=` bound, the MAX where it is a lower bound or an `=` bound.
-	void AddBoundReductions(LogicalWindow &window) const {
-		bound_minimum.assign(condition.source_bounds.size(), ColumnBinding());
-		bound_maximum.assign(condition.source_bounds.size(), ColumnBinding());
+	//! Takes the aggregates of the group bounds into `window`, which is partitioned like the rank.
+	class RankWindowSink final : public DirectGroupSink {
+	public:
+		RankWindowSink(const PlanBuilder &builder_p, LogicalWindow &window_p) : builder(builder_p), window(window_p) {
+		}
+		ColumnBinding Add(const Expression &function, unique_ptr<Expression> argument,
+		                  unique_ptr<Expression> reads) override {
+			auto aggregate = DirectWindowOfAggregate(function, std::move(argument), std::move(reads));
+			builder.AddScope(*aggregate);
+			window.expressions.push_back(std::move(aggregate));
+			return ColumnBinding(builder.window_index, window.expressions.size() - 1);
+		}
+
+	private:
+		const PlanBuilder &builder;
+		LogicalWindow &window;
+	};
+
+	void AddGroupBounds(LogicalWindow &window) const {
+		RankWindowSink sink(*this, window);
+		auto eligible = condition.scoped ? calc.Col(LogicalType::BOOLEAN, eligible_binding) : nullptr;
+		group_values.assign(condition.source_bounds.size(), DirectGroupValues());
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
 			auto &bound = condition.source_bounds[i];
-			if (!bound.reduction) {
-				continue;
-			}
-			auto add = [&](const char *function, ColumnBinding &slot) {
-				auto extremum = DirectWindowExtremum(optimizer, function,
-				                                     calc.Out(calc.Col(bound.value->return_type, bound_bindings[i])));
-				AddScope(*extremum);
-				slot = ColumnBinding(window_index, window.expressions.size());
-				window.expressions.push_back(std::move(extremum));
-			};
-			if (bound.negated ? DirectIsLowerBound(bound.comparison) : DirectIsUpperBound(bound.comparison)) {
-				add("min", bound_minimum[i]);
-			}
-			if (bound.negated ? DirectIsUpperBound(bound.comparison) : DirectIsLowerBound(bound.comparison)) {
-				add("max", bound_maximum[i]);
+			if (bound.group) {
+				group_values[i] = DirectAddGroupBound(calc, *bound.group, group_inputs[i], sink, eligible);
 			}
 		}
 	}
@@ -899,22 +928,6 @@ private:
 			message_minimum.push_back(add(calc.Col(LogicalType::VARCHAR, binding)));
 		}
 		score_message_minimum = add(calc.Col(LogicalType::VARCHAR, score_message_binding));
-	}
-
-	//! The error of each raw `=` bound whose group shows two values, NULL where it shows one.
-	vector<unique_ptr<Expression>> BoundDisagreements() const {
-		vector<unique_ptr<Expression>> checks;
-		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
-			auto &bound = condition.source_bounds[i];
-			if (!bound.reduction || bound.comparison != ExpressionType::COMPARE_EQUAL) {
-				continue;
-			}
-			auto type = bound.value->return_type;
-			auto message = DirectBoundDisagreement(calc, bound.reduction->text, calc.Col(type, bound_minimum[i]),
-			                                       calc.Col(type, bound_maximum[i]));
-			checks.push_back(DirectRaiseMessage(optimizer, calc, message));
-		}
-		return checks;
 	}
 
 	//! Inclusive count limit of one source-valued bound, as BIGINT: its value rounded, clamped to the BIGINT range,
@@ -1000,9 +1013,9 @@ private:
 		    OrderByNullType::NULLS_LAST, calc.Out(calc.Col(LogicalType::DOUBLE, score_binding)));
 	}
 
-	//! Stage 4: rank rows within their scope, raise the errors of the checks in the solver's order (the raw bounds, the
-	//! values the row fixes, the score), and the infeasibility error when the bounds, fixed values, and row counts
-	//! cannot all hold.
+	//! Stage 4: rank rows within their scope, raise the errors of the checks in the solver's order (what the group
+	//! bounds read and give, the values the row fixes, the score), and the infeasibility error when the bounds, fixed
+	//! values, and row counts cannot all hold.
 	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score) const {
 		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
 		// for.
@@ -1040,7 +1053,7 @@ private:
 			AddScope(*count);
 			window->expressions.push_back(std::move(count));
 		}
-		AddBoundReductions(*window);
+		AddGroupBounds(*window);
 		AddRowMessages(*window);
 		window->children.push_back(std::move(score));
 		result.rank_binding = ColumnBinding(window_index, 0);
@@ -1107,8 +1120,9 @@ private:
 			                                           calc.Wrap(std::move(group)), calc.Bool(true)))
 			                        : std::move(group);
 		};
-		// The solver's order: the NaN checks of the raw bounds, a raw `=` bound that takes two values in a group, the
-		// row messages (the values the row fixes, then the score), then infeasible.
+		// The solver's order: the NaN checks of what the group bounds read, what the group bounds give (a NaN limit, an
+		// `=` bound that takes two values in a group), the row messages (the values the row fixes, then the score),
+		// then infeasible.
 		vector<unique_ptr<Expression>> checks;
 		auto raise = [&](const ColumnBinding &least) {
 			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, least)));
@@ -1116,9 +1130,10 @@ private:
 		for (idx_t i = 0; i < limit_message_count; i++) {
 			raise(message_minimum[i]);
 		}
-		auto disagreements = BoundDisagreements();
-		if (!disagreements.empty()) {
-			checks.push_back(in_group(std::move(disagreements)));
+		for (auto &values : group_values) {
+			for (auto &message : values.messages) {
+				checks.push_back(DirectRaiseMessage(optimizer, calc, message));
+			}
 		}
 		for (idx_t i = limit_message_count; i < message_minimum.size(); i++) {
 			raise(message_minimum[i]);

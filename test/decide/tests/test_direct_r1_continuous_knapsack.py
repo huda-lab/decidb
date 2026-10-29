@@ -1389,6 +1389,66 @@ data_budget(
     [("<=", _half_the_costs)],
     per=("g",),
 )
+# A limit that is a function of reducers over exactly the budget's group is one value per group; the plan computes the
+# reducers in its group aggregate (DirectGroupBound). Each case below changes what the reducer reads or how it combines.
+# A count has no argument.
+data_budget(
+    "reducer_count_per_group",
+    DATA_ROWS,
+    "SUM(w*amount) by (g) <= 2 * COUNT(*) by (g)",
+    [("<=", lambda r, rows: 2.0 * len(rows))],
+    per=("g",),
+)
+# A lower limit that is an average, and a range between a group's smallest and largest limit.
+data_budget(
+    "reducer_avg_lower_per_group",
+    DATA_ROWS,
+    "SUM(w*amount) by (g) >= AVG(cost) by (g)",
+    [(">=", lambda r, rows: sum(m["cost"] for m in rows) / len(rows))],
+    per=("g",),
+    objective="min",
+)
+data_budget(
+    "reducer_min_max_range_per_group",
+    DATA_ROWS,
+    "SUM(w*amount) by (g) >= MIN(b) by (g) AND SUM(w*amount) by (g) <= MAX(b) by (g)",
+    [(">=", lambda r, rows: min(m["b"] for m in rows)), ("<=", lambda r, rows: max(m["b"] for m in rows))],
+    per=("g",),
+    objective="min",
+)
+# The reducer's own `when` keeps the rows of the group it reads; row 3 and 6 are left out of the group's cost.
+data_budget(
+    "reducer_own_when_per_group",
+    WHEN_ROWS,
+    "SUM(w*amount) by (g) <= SUM(when f: cost) by (g)",
+    [("<=", lambda r, rows: sum(m["cost"] for m in rows if m["f"]))],
+    per=("g",),
+)
+# The clause's `when` narrows the group the reducer reads, so rows 3 and 6 are left out of its cost.
+data_budget(
+    "reducer_under_a_clause_when_per_group",
+    WHEN_ROWS,
+    "when f: SUM(w*amount) by (g) <= 0.5*SUM(cost) by (g)",
+    [("<=", _half_the_costs)],
+    per=("g",),
+    when=lambda r: r["f"],
+)
+# A reducer over other rows than the budget's group is a window column the plan reduces to the group's tightest value:
+# the budget over all rows takes the smallest of the groups' limits.
+data_budget(
+    "reducer_by_another_key",
+    DATA_ROWS,
+    "SUM(w*amount) <= 0.5*SUM(cost) by (g)",
+    [("<=", lambda r, rows: 0.5 * sum(m["cost"] for m in rows if m["g"] == r["g"]))],
+)
+# A column beside the reducer makes the limit differ between the rows of a group.
+data_budget(
+    "reducer_beside_a_column_per_group",
+    DATA_ROWS,
+    "SUM(w*amount) by (g) <= 0.5*SUM(cost) by (g) + b",
+    [("<=", lambda r, rows: 0.5 * sum(m["cost"] for m in rows) + r["b"])],
+    per=("g",),
+)
 # A `when` on the clause: the limit is read over the covered rows only, so the small limits of rows 3 and 6 are ignored.
 # Both scopes: the whole input, and per group.
 data_budget("clause_when_global", WHEN_ROWS, "when f: SUM(w*amount) <= b", [("<=", _limit)], when=lambda r: r["f"])
@@ -2006,6 +2066,91 @@ def test_r1_plan_reads_a_stored_table_four_times_and_sorts_narrow_columns(decidb
     # The sort carries the price, the rooms and their running sum, never a source column.
     ((ordered, rows, width),) = _profiled_windows(decidb_cli, tmp_path, query)
     assert ordered and rows == 2000 and width <= 5 * 8, (rows, width)
+
+
+# A reducer computes its argument on the rows it reads alone: row 2 would overflow `n * 2`, and the reducer's own `when`,
+# or the budget's, leaves it out.
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "budget",
+    [
+        pytest.param("SUM(w*amount) by (g) <= SUM(when keep: n * 2) by (g)", id="reducer-own-when"),
+        pytest.param("when keep: SUM(w*amount) by (g) <= SUM(n * 2) by (g)", id="budget-when"),
+    ],
+)
+def test_r1_a_reducer_computes_its_argument_on_the_rows_it_reads_alone(decidb_cli, budget):
+    sql = (
+        "SELECT id, amount FROM (FROM (VALUES (1,'a',1::BIGINT,1.0,5.0,true),"
+        "(2,'a',4611686018427387904::BIGINT,1.0,4.0,false),(3,'a',2::BIGINT,1.0,3.0,true)) t(id,g,n,w,v,keep) "
+        f"DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND 2.0 AND {budget} MAXIMIZE SUM(v*amount)) q ORDER BY id"
+    )
+    assert _run_all(decidb_cli, sql, "require")[0] == "ok"
+    assert _run_all(decidb_cli, sql, "require") == _run_all(decidb_cli, sql, "off")
+
+
+# A limit of the group's own reducers is NaN when they give it (infinity less infinity, or 0.0 / 0 over no row) or when
+# what they read is. The solver checks the limit on the rows the budget covers, so a group the `when` drops raises
+# nothing, and R1 raises the solver's own message where it raises.
+@pytest.mark.cons_aggregate
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "budget, cap, raises",
+    [
+        pytest.param(
+            "SUM(w*amount) by (g) <= SUM(cap) by (g) - SUM(cap) by (g)", "'Infinity'::DOUBLE", True, id="nan-limit"
+        ),
+        pytest.param("SUM(w*amount) by (g) <= SUM(cap * 1.0) by (g) / 2", "'NaN'::DOUBLE", True, id="nan-argument"),
+        pytest.param("SUM(w*amount) by (g) <= SUM(cap) by (g)", "'Infinity'::DOUBLE", False, id="infinite-limit"),
+        pytest.param(
+            "when f: SUM(w*amount) by (g) <= 2.0 * COUNT(*) by (g) / COUNT(*) by (g)",
+            "2.0",
+            False,
+            id="nan-limit-of-a-dropped-group",
+        ),
+    ],
+)
+def test_r1_a_nan_limit_of_reducers_raises_the_solver_error(decidb_cli, budget, cap, raises):
+    sql = (
+        f"SELECT id, amount FROM (FROM (VALUES (1,'a',2.0,1.0,5.0,true),(2,'a',{cap},1.0,4.0,true),"
+        f"(3,'b',2.0,1.0,3.0,false),(4,'b',2.0,2.0,2.0,false)) t(id,g,cap,w,v,f) "
+        f"DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND 2.0 AND {budget} MAXIMIZE SUM(v*amount)) q ORDER BY id"
+    )
+    if not raises:
+        assert _run_all(decidb_cli, sql, "require")[0] == "ok"
+        assert _run_all(decidb_cli, sql, "require") == _run_all(decidb_cli, sql, "off")
+        return
+    with pytest.raises(DecidBCliError) as solver_error:
+        _run(decidb_cli, sql, "off")
+    with pytest.raises(DecidBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), str(direct_error.value)
+    assert str(direct_error.value) == str(solver_error.value)
+
+
+# A budget limit that is a function of reducers over exactly the budget's group is computed in the aggregate of the group
+# totals (stage 2): the source stays a chain of scans, with no window under the plan. A reducer over other rows than the
+# group's is a window column of the source, which the plan materializes and reads four times.
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "budget, source_window",
+    [
+        pytest.param("SUM(w*x) by (g) <= 0.5 * SUM(pad_0) by (g)", False, id="reducer-of-the-group"),
+        pytest.param("when f: SUM(w*x) by (g) <= 0.5 * COUNT(*) by (g)", False, id="count-of-the-group-under-a-when"),
+        pytest.param("SUM(w*x) <= 0.5 * SUM(pad_0)", False, id="reducer-of-all-rows"),
+        pytest.param("SUM(w*x) <= 0.5 * SUM(pad_0) by (g)", True, id="reducer-by-another-key"),
+        pytest.param("SUM(w*x) by (g) <= 0.5 * SUM(pad_0) by (g) + pad_1", True, id="column-beside-the-reducer"),
+    ],
+)
+def test_r1_plan_has_no_window_under_a_bound_of_the_groups_own_reducers(decidb_cli, budget, source_window):
+    plan = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {_wide_query(budget)}").stdout
+    assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
+    # The one window is the sort of the items; every other is under the source.
+    assert (_count(plan, "WINDOW") > 1) == source_window and _count(plan, "WINDOW") >= 1, plan
+    assert _count(plan, "CTE_SCAN") == (4 if source_window else 0), plan
+    assert _count(plan, "SEQ_SCAN") == (1 if source_window else 4), plan
 
 
 # The source is a chain over one table scan, which the plan can re-scan once per stage or read from one copy. It takes the

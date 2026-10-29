@@ -24,7 +24,7 @@ class Optimizer;
 //!   - RewriteRhsAggregates (pass 0, every path): the bound-side evaluator, whose output the rules and the solver read
 //!   - ChooseDecideAnswer (decide_answer_choice.hpp): a direct-solve rule replaces the node, else a solver is chosen
 //! and, when a solver is, the formulation passes of RewriteForSolver, in this order:
-//!   - InstallReducedBounds: the windows of the bounds pass 0 left raw
+//!   - InstallReducedBounds: the windows of the bounds pass 0 left to a rule (DecideGroupBound)
 //!   - RewriteNorm: lowers the bound NORM marker, including L0 indicators/links
 //!   - RewriteInDomain: lowers DECIDE variable IN lists to indicator formulations
 //!   - TagAbsForBigM: marks the ABS nodes needing a Big-M envelope, in the constraints and the objective.
@@ -44,9 +44,9 @@ class Optimizer;
 //!   - FoldSingletonRows: folds simple `x OP const` bounds into the column box.
 //!     Must run LAST — see its declaration.
 //!
-//! Builds the windows of the bounds the bound-side rewrite left raw (LogicalDecide::reduced_bounds) and puts their
-//! checks in the scope checks. The solver path needs them; so does a direct-solve IR whose rules cannot reduce a bound
-//! themselves (DirectIR::bound_windows_needed).
+//! Builds the windows of the bounds the bound-side rewrite left to a rule (LogicalDecide::reduced_bounds) and puts
+//! their checks in the scope checks. The solver path needs them; so does a direct-solve IR whose rules cannot compute a
+//! bound themselves (DirectIR::bound_windows_needed).
 void InstallReducedBoundWindows(Optimizer &optimizer, LogicalDecide &decide);
 
 class DecideOptimizer {
@@ -65,12 +65,12 @@ private:
 	//! aggregate over its groups), reduces the bound of an aggregate-shape clause to its group's tightest value, and
 	//! appends the VALUE_IS_VALID checks of what those windows read. The solver and the direct-solve rules then read
 	//! one number that DuckDB computed. Runs first, in every mode, because both paths must see it. A bound a
-	//! direct-solve rule can reduce itself is left raw and recorded (LogicalDecide::reduced_bounds).
+	//! direct-solve rule can compute in its own group aggregate is left to it, recorded as the aggregates of its group
+	//! (LogicalDecide::reduced_bounds).
 	void RewriteRhsAggregates(LogicalDecide &decide);
 
-	//! Builds the windows of the bounds RewriteRhsAggregates left raw (LogicalDecide::reduced_bounds): the tightest
-	//! value of each. Runs when no direct-solve rule took the query, because only the solver path reads the reduced
-	//! column.
+	//! Builds the windows of the bounds RewriteRhsAggregates left to a rule (LogicalDecide::reduced_bounds). Runs when
+	//! no direct-solve rule took the query, because only the solver path reads their columns.
 	void InstallReducedBounds(LogicalDecide &decide);
 
 	//! Optimize the DECIDE node held by `op`, which sits inside the plan held by `root`: pass 0, the choice of how it

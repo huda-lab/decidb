@@ -11,6 +11,7 @@
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
 #include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
+#include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -725,4 +726,106 @@ TEST_CASE("The source reader copies a source only when reads and memory favor th
 	REQUIRE(!DirectSourceCopyIsCheaper(4, 101, 10, memory));
 	// No rows, or no estimate.
 	REQUIRE(!DirectSourceCopyIsCheaper(4, 0, 10, memory));
+}
+
+namespace {
+
+//! A rule that applies to nothing and records how the bound of the query's one aggregate clause reaches it: `columns`
+//! when the rule reads it as one value per group, else the functions of the aggregates of its group bound.
+class BoundShapeRule final : public DirectSolveRule {
+public:
+	explicit BoundShapeRule(std::shared_ptr<string> shape_p) : shape(std::move(shape_p)) {
+	}
+	const char *Name() const override {
+		return "STUB_BOUND_SHAPE";
+	}
+	duckdb::unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir,
+	                                                                ClientContext &) const override {
+		auto &group = ir.constraints[0].group_bound;
+		if (!group) {
+			*shape = "columns";
+			return nullptr;
+		}
+		// The limits the bound gives read the placeholders of its aggregates, not columns of the source.
+		REQUIRE(!DirectReferencesOnlySource(group->upper ? *group->upper : *group->lower, ir.source_bindings));
+		shape->clear();
+		for (auto &aggregate : group->aggregates) {
+			*shape += (shape->empty() ? "" : ",") + aggregate.function->Cast<BoundAggregateExpression>().function.name;
+			*shape += group->inputs[aggregate.input].filter ? "(when)" : "";
+		}
+		return nullptr;
+	}
+	string Summary() const override {
+		return "stub";
+	}
+	DirectSubstitute Apply(duckdb::unique_ptr<LogicalOperator>, Optimizer &,
+	                       const DirectApplicabilityCondition &) const override {
+		throw InternalException("never applies");
+	}
+
+private:
+	std::shared_ptr<string> shape;
+};
+
+} // namespace
+
+// The bound-side rewrite leaves a bound to the rule as the aggregates of its group: the reducers it is a function of,
+// when each reads exactly the clause's group and the bound reads no data but through them, else the MIN and/or MAX of
+// its raw value. A bound with one value per group already is a column, as is a bound whose sum has a `when` of its own
+// (the windows are built). Each case below leaves one of those conditions out.
+TEST_CASE("The bound-side rewrite hands a rule the aggregates of a bound's group", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	auto shape = std::make_shared<string>();
+	InstallRules(con, [&] {
+		RuleList rules;
+		rules.push_back(make_uniq<BoundShapeRule>(shape));
+		return rules;
+	});
+	struct Case {
+		const char *clause;
+		const char *expected;
+		//! The source of the query: three rows, or two rows of a relation joined to the nation each belongs to.
+		bool joined = false;
+	};
+	const Case cases[] = {
+	    // Every reducer reads the clause's group: the key is the clause's, or neither has one.
+	    {"SUM(x) by (g) <= SUM(cap) by (g)", "sum"},
+	    {"SUM(x) by (g) <= SUM(cap) by (g) - COUNT(*) by (g) / 2", "sum,count_star"},
+	    {"SUM(x) <= MIN(when flag: cap)", "min(when)"},
+	    {"when flag: SUM(x) by (g) >= AVG(cap) by (g)", "avg"},
+	    // A reducer over other rows than the group's: the windows give the bound per row and the rule takes its
+	    // tightest
+	    // value, or the bound is one value in the group already.
+	    {"SUM(x) <= SUM(cap) by (g)", "min"},
+	    {"SUM(x) by (g) <= SUM(cap)", "columns"},
+	    // The bound reads a column beside its reducer.
+	    {"SUM(x) by (g) <= SUM(cap) by (g) + cap", "min"},
+	    // `<>` excludes each value its bound takes.
+	    {"SUM(x) by (g) <> SUM(cap) by (g)", "columns"},
+	    // The sum has a `when` of its own, so the rule sums fewer rows than the group the reducer reads.
+	    {"SUM(when flag: x) by (g) <= SUM(cap) by (g)", "columns"},
+	    // No reducer: a column, read at its tightest in each side the comparison reads.
+	    {"SUM(x) by (g) <= cap", "min"},
+	    {"SUM(x) by (g) >= cap", "max"},
+	    {"SUM(x) by (g) = cap", "min,max"},
+	    // A reducer that counts each nation once is no plain aggregate over the group.
+	    {"SUM(x) <= SUM(n: n.ncap)", "columns", true},
+	    {"SUM(x) <= SUM(n.ncap)", "sum", true},
+	};
+	for (auto &test : cases) {
+		string source =
+		    "(VALUES (1,'a',3.0::DOUBLE,TRUE,9.0),(2,'a',3.0::DOUBLE,FALSE,8.0),(3,'b',1.0::DOUBLE,TRUE,7.0)) "
+		    "t(id,g,cap,flag,score)";
+		if (test.joined) {
+			source = "(VALUES (1,1,9.0),(2,1,8.0),(3,2,7.0)) c(id,k,score) JOIN (VALUES (1,2.0),(2,1.0)) n(k,ncap) "
+			         "ON c.k = n.k";
+		}
+		string query = "SELECT id, x FROM (FROM " + source + " DECIDE x(BOOL) SUCH THAT " + test.clause +
+		               " MAXIMIZE SUM(score*x)) q";
+		INFO(query);
+		shape->clear();
+		ExplainText(con, query);
+		REQUIRE(*shape == test.expected);
+	}
 }

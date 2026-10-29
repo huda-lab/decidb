@@ -137,26 +137,88 @@ struct DecideScopeCheck {
     static DecideScopeCheck Deserialize(Deserializer &deserializer);
 };
 
-//! A bound the bound-side rewrite (DecideOptimizer::RewriteRhsAggregates) left raw instead of reducing it: a clause in
-//! the aggregate shape is one constraint per group, which holds when the group's tightest bound does (`<=` takes its
-//! MIN, `>=` its MAX, `=` needs one value), so the bound is one value per group once reduced. The rewrite records
-//! what it would reduce. A direct-solve rule that applies reduces it in its own group aggregate; when none does, the
-//! solver path builds the windows (DecideOptimizer::InstallReducedBounds) and the bound's checks join `scope_checks`
-//! where they would have stood. Neither is serialized: the optimizer makes them, and an optimized plan is never
+//! A bound computed from the aggregates of its group: the group's aggregates, an expression over their results, and the
+//! checks of what they read and give. Every bound the aggregate shape reads from the data is one, or has one value per
+//! group already:
+//!  - a clause in the aggregate shape is one constraint per group, which holds when the group's tightest bound does
+//!    (`<=` takes its MIN, `>=` its MAX, `=` needs one value), so a bound that may differ between the kept rows of a
+//!    group is the MIN and/or MAX of its raw value (DirectTightestBound);
+//!  - a bound that reads data only through reducers over exactly the clause's group (`SUM(x) BY (g) <= SUM(cap) BY
+//!  (g)`)
+//!    is an expression over those reducers' aggregates.
+//! The aggregates read their inputs on the rows of the group. A rule that applies computes them in the group aggregate
+//! it already runs (DirectAddGroupBound), and the solver path builds their windows
+//! (DecideOptimizer::InstallReducedBounds). Not serialized: the optimizer makes it, and an optimized plan is never
 //! serialized.
+struct DecideGroupBound {
+	//! What an aggregate reads, per row, over the source (and the windows of the eager bounds).
+	struct Input {
+		//! The value aggregated; null for COUNT(*).
+		unique_ptr<Expression> argument;
+		//! The reducer's own `when`: only the rows it keeps are read; null for every row of the group.
+		unique_ptr<Expression> filter;
+		//! The message a row raises for a NaN argument on the rows the aggregate reads, NULL on any other row; null
+		//! when the argument cannot be NaN.
+		unique_ptr<Expression> invalid;
+	};
+	//! One aggregate of the group, read by the placeholder `column`, which no operator produces.
+	struct Aggregate {
+		ColumnBinding column;
+		//! The BoundAggregateExpression with its function and result type bound; its argument and filter are the
+		//! input's.
+		unique_ptr<Expression> function;
+		idx_t input = 0;
+	};
+	vector<Input> inputs;
+	vector<Aggregate> aggregates;
+	//! The bound as an upper and as a lower limit, over the placeholders; null for a side the comparison does not read.
+	//! A tightest bound reads the MIN as an upper limit and the MAX as a lower one, an expression of reducers reads the
+	//! same value on both.
+	unique_ptr<Expression> upper;
+	unique_ptr<Expression> lower;
+	//! The message for a NaN limit, over the placeholders, on any row of the group; null when it cannot be NaN.
+	unique_ptr<Expression> invalid;
+	//! An `=` bound owes one more check: its group takes one value, that of its MIN and of its MAX aggregate.
+	//! INVALID_INDEX for any other bound.
+	idx_t low = DConstants::INVALID_INDEX;
+	idx_t high = DConstants::INVALID_INDEX;
+	//! The bound as the user wrote it, for a message.
+	string text;
+
+	unique_ptr<DecideGroupBound> Copy() const {
+		auto copy = make_uniq<DecideGroupBound>();
+		for (auto &input : inputs) {
+			copy->inputs.push_back({CopyOrNull(input.argument), CopyOrNull(input.filter), CopyOrNull(input.invalid)});
+		}
+		for (auto &aggregate : aggregates) {
+			copy->aggregates.push_back({aggregate.column, aggregate.function->Copy(), aggregate.input});
+		}
+		copy->upper = CopyOrNull(upper);
+		copy->lower = CopyOrNull(lower);
+		copy->invalid = CopyOrNull(invalid);
+		copy->low = low;
+		copy->high = high;
+		copy->text = text;
+		return copy;
+	}
+
+private:
+	static unique_ptr<Expression> CopyOrNull(const unique_ptr<Expression> &expression) {
+		return expression ? expression->Copy() : nullptr;
+	}
+};
+
+//! A bound the bound-side rewrite (DecideOptimizer::RewriteRhsAggregates) left unevaluated, because a direct-solve rule
+//! computes it in its own group aggregate. When none does, the solver path builds the windows of its aggregates and the
+//! bound's checks join `scope_checks` where they would have stood.
 struct DecideReducedBound {
-	//! The comparison whose right-hand side is the raw value. It points into `decide_constraints`, which nothing
-	//! rewrites between the bound-side rewrite and the choice of how the query is answered; the windows are built, or
-	//! the node replaced, before the first formulation rewrite touches the tree.
+	//! The comparison whose right-hand side is the bound. It points into `decide_constraints`, which nothing rewrites
+	//! between the bound-side rewrite and the choice of how the query is answered; the windows are built, or the node
+	//! replaced, before the first formulation rewrite touches the tree.
 	Expression *comparison = nullptr;
 	//! The clause's `when` (it is in the constraint tree), or null.
 	const Expression *when = nullptr;
-	//! The bound as the user wrote it, for a message.
-	string text;
-	//! The message a row raises for a NaN raw value, NULL on a valid row; null when the value cannot be NaN.
-	unique_ptr<Expression> invalid;
-	//! An `=` bound owes one more check: its group takes one value. Its message needs the windows (or the rule).
-	bool equality = false;
+	unique_ptr<DecideGroupBound> group;
 	//! Where the bound's checks go in `scope_checks`: its size when the bound was recorded.
 	idx_t check_position = 0;
 };
@@ -488,8 +550,8 @@ public:
 	//! check has passed, as when the bound was read in the operator.
 	vector<DecideScopeCheck> scope_checks;
 
-	//! The bounds RewriteRhsAggregates left raw, in clause order; see DecideReducedBound. Empty once the solver path
-	//! has built their windows.
+	//! The bounds RewriteRhsAggregates left to a rule, in clause order; see DecideReducedBound. Empty once the solver
+	//! path has built their windows.
 	vector<DecideReducedBound> reduced_bounds;
 
 	//! The registered name ("gurobi", "highs") of the solver this query will run on,

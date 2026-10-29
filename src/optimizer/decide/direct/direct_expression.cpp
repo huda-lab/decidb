@@ -82,6 +82,20 @@ bool DirectRemapSourceReferences(Expression &expr, const vector<ColumnBinding> &
 	return valid;
 }
 
+void DirectReplaceColumns(unique_ptr<Expression> &expr, const vector<ColumnBinding> &columns,
+                          const vector<unique_ptr<Expression>> &values) {
+	D_ASSERT(columns.size() == values.size());
+	if (expr->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto found = std::find(columns.begin(), columns.end(), expr->Cast<BoundColumnRefExpression>().binding);
+		if (found != columns.end()) {
+			expr = values[NumericCast<idx_t>(found - columns.begin())]->Copy();
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(
+	    *expr, [&](unique_ptr<Expression> &child) { DirectReplaceColumns(child, columns, values); });
+}
+
 bool DirectCastMayThrow(const BoundCastExpression &cast) {
 	// TRY_CAST turns conversion failures into NULL; the solver validates that result on every row.
 	// BoundCastExpression::CanThrow conservatively treats it like a regular narrowing cast.
