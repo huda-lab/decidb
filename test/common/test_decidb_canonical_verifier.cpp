@@ -51,9 +51,9 @@ duckdb::unique_ptr<Expression> Comparison(ExpressionType type, duckdb::unique_pt
 TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifier]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	DecideCanonicalizer canonicalizer(
-	    *con.context, DECIDE_INDEX,
-	    {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()}, duckdb::vector<bool> {false, false});
+	DecideCanonicalizer canonicalizer(*con.context, DECIDE_INDEX,
+	                                  {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()},
+	                                  duckdb::vector<EntityScopeInfo>(), duckdb::vector<bool> {false, false});
 
 	SECTION("canonical reversed comparison is a fixed point") {
 		auto written = Comparison(ExpressionType::COMPARE_GREATERTHANOREQUALTO,

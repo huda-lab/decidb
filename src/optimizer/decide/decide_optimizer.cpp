@@ -208,16 +208,14 @@ idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &
 }
 
 DecideVarScopeInfo decide_rewrite::JoinScopes(const DecideVarScopeInfo &a, const DecideVarScopeInfo &b) {
-	if (a.IsScalar()) {
-		return b;
-	}
-	if (b.IsScalar()) {
-		return a;
-	}
-	if (a.IsEntity() && b.IsEntity() && a.entity_scope_idx == b.entity_scope_idx) {
-		return a;
-	}
-	return DecideVarScopeInfo::Row();
+	// The key lattice (JoinDecideKeys) over the scopes themselves: a keyed scope stands for its key.
+	auto key_of = [](const DecideVarScopeInfo &scope) {
+		return scope.IsScalar()   ? DConstants::INVALID_INDEX
+		       : scope.IsEntity() ? scope.entity_scope_idx
+		                          : DECIDE_ROW_KEY;
+	};
+	auto joined = JoinDecideKeys(key_of(a), key_of(b));
+	return joined == key_of(a) ? a : joined == key_of(b) ? b : DecideVarScopeInfo::Row();
 }
 
 unique_ptr<Expression> decide_rewrite::MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx) {

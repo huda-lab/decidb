@@ -45,7 +45,8 @@ class DirectFrontEnd {
 public:
 	DirectFrontEnd(ClientContext &context_p, LogicalDecide &decide_p)
 	    : context(context_p), decide(decide_p), splitter(context_p, decide_p.decide_index, decide_p.decide_variables),
-	      canonicalizer(context_p, decide_p.decide_index, decide_p.variable_scopes, decide_p.is_boolean_var) {
+	      canonicalizer(context_p, decide_p.decide_index, decide_p.variable_scopes, decide_p.entity_scopes,
+	                    decide_p.is_boolean_var) {
 	}
 
 	DirectIR Read() {

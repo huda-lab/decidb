@@ -186,8 +186,10 @@ public:
 	//! multiply a reducer by one: `b * SUM(x)` is a product the value rewrite hands to the Boolean linearization. It
 	//! is required by every constructor: a canonicalizer built without it would refuse `b * SUM(x)` as a product of
 	//! decisions, wherever it classifies a user's clause.
+	//! `entity_scopes` gives each keyed decision's key (EntityScopeInfo::key), which decides whether a keyed decision
+	//! beside a reducer is one value per group (ClassifyScoped).
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
-	                    const vector<bool> &is_boolean);
+	                    const vector<EntityScopeInfo> &entity_scopes, const vector<bool> &is_boolean);
 
 	//! Strict form: `query_wide_table_indexes` are the table indexes that UNCORRELATED
 	//! scalar subqueries flattened into, collected in plan_select_node.cpp at the only
@@ -205,7 +207,8 @@ public:
 	//! named "SUBQUERY", and reporting that -- or suggesting `SUM(x * SUBQUERY)` --
 	//! would name an object the user never typed.
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
-	                    const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes,
+	                    const vector<EntityScopeInfo> &entity_scopes, const vector<bool> &is_boolean,
+	                    unordered_set<idx_t> query_wide_table_indexes,
 	                    unordered_set<idx_t> correlated_subquery_table_indexes = {});
 
 	//! Canonicalize a whole SUCH THAT tree: AND-conjunctions plus the `when` and `per K:`
@@ -267,9 +270,9 @@ public:
 	//! is tested too (`scopes` and `keys` name each decision's key).
 	void SkipNullData(Expression &expr, const vector<EntityScopeInfo> &scopes, const vector<DecideKey> &keys) const;
 
-	//! Classify an already-canonical comparison using the same scope rules as
-	//! planning validation. Physical extraction uses this instead of re-deciding
-	//! aggregate-versus-per-row shape from the mere presence of an aggregate.
+	//! The shape of an already-canonical comparison, as CanonicalizeTree decided it with the clause's enclosing
+	//! scope and stamped it: VALUE_REWRITE_TAG for the VALUE shape, else AGGREGATE for a reducer on the decision side
+	//! and PER_ROW for none. INVALID for a decision on the bound side.
 	CanonicalConstraintClass ClassifyCanonicalComparison(const Expression &comparison) const;
 
 	//! Assert the structural invariant owned by this boundary. This is deliberately
@@ -398,10 +401,10 @@ private:
 	//! True when `expr` is one decision declared BOOL, under the binder's casts, a sign, and factors known before the
 	//! query runs: `b`, `-b`, `2 * b`. A reducer under such a factor takes the VALUE shape.
 	bool IsBooleanFactor(const Expression &expr) const;
-	//! Query-wide counterpart used for top-level aggregate terms. Unlike
-	//! IsQueryWideConstant, this admits scalar DECIDE variables while rejecting
-	//! row/entity decisions and ordinary row-varying columns.
-	bool IsQueryWideExpression(const Expression &expr) const;
+	//! The scope of a tuple term, as a key of the key lattice (JoinDecideKeys): the join of its factors' scopes. A
+	//! decision has its own key (decision_keys), data `data_key` -- the enclosing `per` key, whose scope check makes
+	//! it one value per class, or DECIDE_ROW_KEY with no `per` -- and a value known for the whole query the empty key.
+	idx_t ScopeKeyOf(const Expression &expr, idx_t data_key) const;
 
 	//! Recompute semantic provenance for the complete canonical bound. A stale root
 	//! classification is removed before inspecting the rebuilt tree; only an RHS whose
@@ -438,7 +441,8 @@ private:
 	void VerifyCanonicalObjectiveBody(const Expression &objective) const;
 	void VerifyCanonicalComparison(const BoundComparisonExpression &comparison) const;
 
-	unique_ptr<Expression> CanonicalizeTreeInternal(const Expression &constraints) const;
+	unique_ptr<Expression> CanonicalizeTreeInternal(const Expression &constraints,
+	                                                DecideEnclosingScope scope = DecideEnclosingScope()) const;
 
 	//! The shape of a comparison's decision side (language/guide.md §6.4): ROWS has no
 	//! decision reducer; AGGREGATE has decision reducers sharing one `by` key under
@@ -446,7 +450,9 @@ private:
 	//! VALUE needs the value rewrite; UNSUPPORTED is refused with `refusal`. `group_key` is
 	//! the AGGREGATE shape's shared key, INVALID for `by ()`.
 	enum class ScopedShape : uint8_t { ROWS, AGGREGATE, VALUE, UNSUPPORTED };
-	ScopedShape ClassifyScoped(const BoundComparisonExpression &comparison, idx_t &group_key, string &refusal) const;
+	//! `data_key` is the scope of the clause's data (ScopeKeyOf).
+	ScopedShape ClassifyScoped(const BoundComparisonExpression &comparison, idx_t data_key, idx_t &group_key,
+	                           string &refusal) const;
 	//! Whether a comparison's decision side takes the composed MIN/MAX formulation
 	//! (RewriteComposedMinMaxInConstraint): a MIN or MAX over decisions beside another
 	//! term, or alone under a factor whose sign is not known before the query runs.
@@ -483,6 +489,9 @@ private:
 	//! Scope assignment indexed by decide-column index. Missing entries fail safe
 	//! as row-scoped, which is also the historical default for old plans.
 	vector<DecideVarScopeInfo> variable_scopes;
+	//! The key of each decision column's scope (JoinDecideKeys): the empty key for a query-wide decision, its key for
+	//! a keyed one, DECIDE_ROW_KEY for one per row. Missing entries are per row.
+	vector<idx_t> decision_keys;
 	//! Table indexes that uncorrelated scalar subqueries flattened into. Meaningful
 	//! only when `judge_column_refs` is set.
 	unordered_set<idx_t> query_wide_table_indexes;

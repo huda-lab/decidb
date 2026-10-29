@@ -155,20 +155,42 @@ vector<CanonicalAtom> ReadCanonicalAtoms(const Expression &side, idx_t decide_in
 	                        expr.ToString());
 }
 
-DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
-                                         vector<DecideVarScopeInfo> variable_scopes, const vector<bool> &is_boolean)
-    : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes)),
-      boolean_decisions(is_boolean), judge_column_refs(false) {
+//! The key of each decision's scope: the empty key for a query-wide decision, its key for a keyed one, one per row
+//! for every other.
+static vector<idx_t> DecisionKeys(const vector<DecideVarScopeInfo> &variable_scopes,
+                                  const vector<EntityScopeInfo> &entity_scopes) {
+	vector<idx_t> keys;
+	for (auto &scope : variable_scopes) {
+		idx_t key = DECIDE_ROW_KEY;
+		if (scope.IsScalar()) {
+			key = DConstants::INVALID_INDEX;
+		} else if (scope.IsEntity() && scope.entity_scope_idx < entity_scopes.size() &&
+		           entity_scopes[scope.entity_scope_idx].key != DConstants::INVALID_INDEX) {
+			key = entity_scopes[scope.entity_scope_idx].key;
+		}
+		keys.push_back(key);
+	}
+	return keys;
 }
 
 DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
-                                         vector<DecideVarScopeInfo> variable_scopes, const vector<bool> &is_boolean,
+                                         vector<DecideVarScopeInfo> variable_scopes_p,
+                                         const vector<EntityScopeInfo> &entity_scopes, const vector<bool> &is_boolean)
+    : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
+      decision_keys(DecisionKeys(variable_scopes, entity_scopes)), boolean_decisions(is_boolean),
+      judge_column_refs(false) {
+}
+
+DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
+                                         vector<DecideVarScopeInfo> variable_scopes_p,
+                                         const vector<EntityScopeInfo> &entity_scopes, const vector<bool> &is_boolean,
                                          unordered_set<idx_t> query_wide_table_indexes,
                                          unordered_set<idx_t> correlated_subquery_table_indexes)
-    : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes)),
-      boolean_decisions(is_boolean), query_wide_table_indexes(std::move(query_wide_table_indexes)),
-      correlated_subquery_table_indexes(std::move(correlated_subquery_table_indexes)),
-      judge_column_refs(true) {
+    : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
+      decision_keys(DecisionKeys(variable_scopes, entity_scopes)),
+      query_wide_table_indexes(std::move(query_wide_table_indexes)),
+      correlated_subquery_table_indexes(std::move(correlated_subquery_table_indexes)), judge_column_refs(true),
+      boolean_decisions(is_boolean) {
 }
 
 bool DecideCanonicalizer::ReferencesDecideVar(const Expression &expr) const {
@@ -408,40 +430,40 @@ bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	return false;
 }
 
-bool DecideCanonicalizer::IsQueryWideExpression(const Expression &expr) const {
+idx_t DecideCanonicalizer::ScopeKeyOf(const Expression &expr, idx_t data_key) const {
 	if (IsQueryWideValueTag(expr.GetAlias())) {
-		return true;
+		return DConstants::INVALID_INDEX;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
 		if (colref.binding.table_index == decide_index) {
 			auto var_idx = colref.binding.column_index;
-			return var_idx < variable_scopes.size() && variable_scopes[var_idx].IsScalar();
+			return var_idx < decision_keys.size() ? decision_keys[var_idx] : DECIDE_ROW_KEY;
 		}
 		return judge_column_refs &&
-		       query_wide_table_indexes.find(colref.binding.table_index) != query_wide_table_indexes.end();
+		               query_wide_table_indexes.find(colref.binding.table_index) != query_wide_table_indexes.end()
+		           ? DConstants::INVALID_INDEX
+		           : data_key;
 	}
-	// Reducers are group-wide rather than query-wide: their legality is decided as
-	// reducer terms by ClassifyCanonicalComparison, not recursively here.
+	// A reducer is one value per group of its own `by`: ClassifyScoped reads it as a reducer term, not here.
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-		return false;
+		return DECIDE_ROW_KEY;
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_SUBQUERY) {
 		auto &subq = expr.Cast<BoundSubqueryExpression>();
-		return subq.subquery_type == SubqueryType::SCALAR && !subq.IsCorrelated();
+		return subq.subquery_type == SubqueryType::SCALAR && !subq.IsCorrelated() ? DConstants::INVALID_INDEX
+		                                                                          : data_key;
 	}
 	if (expr.IsFoldable()) {
-		return true;
+		return DConstants::INVALID_INDEX;
 	}
 	bool saw_child = false;
-	bool all_query_wide = true;
+	idx_t key = DConstants::INVALID_INDEX;
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
 		saw_child = true;
-		if (all_query_wide && !IsQueryWideExpression(child)) {
-			all_query_wide = false;
-		}
+		key = JoinDecideKeys(key, ScopeKeyOf(child, data_key));
 	});
-	return saw_child && all_query_wide;
+	return saw_child ? key : DECIDE_ROW_KEY;
 }
 
 unique_ptr<Expression>
@@ -1253,7 +1275,8 @@ string DecideCanonicalizer::QuoteAsWritten(const Expression &expr) const {
 }
 
 DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const BoundComparisonExpression &cmp,
-                                                                     idx_t &group_key, string &refusal) const {
+                                                                     idx_t data_key, idx_t &group_key,
+                                                                     string &refusal) const {
 	group_key = DConstants::INVALID_INDEX;
 	vector<Atom> lhs_atoms;
 	Decompose(*cmp.left, 1, lhs_atoms, Clause::CONSTRAINT);
@@ -1265,17 +1288,18 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 		// A data-only reducer sits on the right, as a bound.
 		return ScopedShape::ROWS;
 	}
-	// The aggregate shape is today's grouped row: decision reducers sharing one `by` key,
-	// under whole-query factors, with only query-wide terms beside them. Anything else on
-	// the decision side takes the value rewrite (VALUE): a per-row or keyed decision, a
-	// factor that varies by row, a second `by` key, a reducer inside another expression,
-	// a product of decisions beside a reducer.
+	// The aggregate shape is one row per group: decision reducers sharing one `by` key,
+	// under whole-query factors, with terms beside them that are one value per group.
+	// Anything else on the decision side takes the value rewrite (VALUE): a term finer than
+	// the `by` key, a factor that varies by row, a second `by` key, a reducer inside another
+	// expression, a product of decisions beside a reducer.
 	bool value = false;
 	bool first_reducer = true;
-	// A query-wide decision beside the reducers counts once per group, in a linear,
-	// bilinear or quadratic row alike.
-	const Expression *query_wide_decision = nullptr;
-	bool nonlinear_beside = false;
+	// A decision beside the reducers counts once per group, in a linear, bilinear or
+	// quadratic row alike (CountOnce).
+	bool decision_beside = false;
+	// The join of the scopes of the terms beside the reducers (ScopeKeyOf).
+	idx_t beside_key = DConstants::INVALID_INDEX;
 	// `<>` excludes an AVG's value by scaling the bound with the number of rows in the
 	// group, which is exact only when every term is an AVG reading all of them.
 	bool has_avg = false;
@@ -1283,14 +1307,11 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 	for (auto &atom : lhs_atoms) {
 		if (!ContainsReducer(*atom.expr)) {
 			only_plain_avgs = false;
-			nonlinear_beside = nonlinear_beside || !DecideExpressionDegree(*atom.expr, decide_index).IsLinear();
-			if (IsQueryWideExpression(*atom.expr)) {
-				if (ReferencesDecideVar(*atom.expr)) {
-					query_wide_decision = atom.expr;
-				}
-				continue;
+			if (!DecideExpressionDegree(*atom.expr, decide_index).IsLinear()) {
+				value = true; // `sum(x) + b * s`: the product beside the reducer is a term of each row
 			}
-			value = true; // a per-row or keyed decision, or row data, beside a reducer
+			decision_beside = decision_beside || ReferencesDecideVar(*atom.expr);
+			beside_key = JoinDecideKeys(beside_key, ScopeKeyOf(*atom.expr, data_key));
 			continue;
 		}
 		auto *root = UnwrapDecideCasts(*atom.expr, decide_index);
@@ -1318,10 +1339,13 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 			value = true; // reducers with different `by` keys
 		}
 	}
-	if (query_wide_decision && nonlinear_beside) {
-		value = true; // `sum(x) + b * s`: the product beside the reducer is a term of each row
+	// A term beside the reducers is one value per group when its scope is no finer than the `by` key: a query-wide
+	// one, or one whose decision and data are keyed by the `by` key itself (`per D: sum(ship) by (D) <= cap * open`
+	// with `open` declared `per D:`). The group's row holds it once (CountOnce). A finer one is a term of each row.
+	if (JoinDecideKeys(beside_key, group_key) != group_key) {
+		value = true;
 	}
-	if (cmp.type == ExpressionType::COMPARE_NOTEQUAL && has_avg && (!only_plain_avgs || nonlinear_beside)) {
+	if (cmp.type == ExpressionType::COMPARE_NOTEQUAL && has_avg && !only_plain_avgs) {
 		refusal = "DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when "
 		          "or per";
 		return ScopedShape::UNSUPPORTED;
@@ -1331,7 +1355,7 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 	// under one bound, with nothing but reducers in it. With a `by`, a bound that is not
 	// a constant, or a decision beside it, the value rewrite pins the extremum per group.
 	if (!value && TakesComposedMinMax(lhs_atoms) &&
-	    (group_key != DConstants::INVALID_INDEX || !cmp.right->IsFoldable() || query_wide_decision)) {
+	    (group_key != DConstants::INVALID_INDEX || !cmp.right->IsFoldable() || decision_beside)) {
 		value = true;
 	}
 	return value ? ScopedShape::VALUE : ScopedShape::AGGREGATE;
@@ -1355,31 +1379,16 @@ CanonicalConstraintClass DecideCanonicalizer::ClassifyCanonicalComparison(const 
 	if (ReferencesDecideVar(*cmp.right)) {
 		return CanonicalConstraintClass::INVALID;
 	}
-	idx_t group_key;
-	string refusal;
-	switch (ClassifyScoped(cmp, group_key, refusal)) {
-	case ScopedShape::ROWS:
-		return CanonicalConstraintClass::PER_ROW;
-	case ScopedShape::AGGREGATE:
-		return CanonicalConstraintClass::AGGREGATE;
-	case ScopedShape::VALUE:
+	if (HasDecideTag(cmp.GetAlias(), VALUE_REWRITE_TAG)) {
 		return CanonicalConstraintClass::VALUE;
-	default:
-		return CanonicalConstraintClass::INVALID;
 	}
+	return ContainsReducer(*cmp.left) ? CanonicalConstraintClass::AGGREGATE : CanonicalConstraintClass::PER_ROW;
 }
 
 void DecideCanonicalizer::ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const {
-	auto classification = ClassifyCanonicalComparison(comparison);
-	if (classification == CanonicalConstraintClass::INVALID) {
-		if (ReferencesDecideVar(*comparison.right)) {
-			throw InternalException("DECIDE canonicalizer: a decision survived on the bound side of '%s'",
-			                        comparison.ToString());
-		}
-		idx_t group_key;
-		string refusal;
-		ClassifyScoped(comparison, group_key, refusal);
-		throw BinderException(refusal);
+	if (ClassifyCanonicalComparison(comparison) == CanonicalConstraintClass::INVALID) {
+		throw InternalException("DECIDE canonicalizer: a decision survived on the bound side of '%s'",
+		                        comparison.ToString());
 	}
 	// A foldable bound is the one case whose NULL result is knowable at planning
 	// time. Do not execute subqueries or speculate about nullable data columns here;
@@ -1570,16 +1579,18 @@ void DecideCanonicalizer::VerifyCanonical(const Expression &constraints) const {
 #endif
 }
 
-unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expression &constraints) const {
+unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expression &constraints,
+                                                                     DecideEnclosingScope scope) const {
 	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = constraints.Cast<BoundConjunctionExpression>();
+		scope = EnterDecideScope(conj, scope);
 
 		auto result = make_uniq<BoundConjunctionExpression>(conj.type);
 		result->SetAlias(conj.GetAlias());
 		for (idx_t i = 0; i < conj.children.size(); i++) {
 			// A `when` or `per` wrapper holds the constraint in child 0; the remaining
 			// children are its condition / key columns and are not constraints.
-			result->children.push_back(IsConstraintChild(conj, i) ? CanonicalizeTreeInternal(*conj.children[i])
+			result->children.push_back(IsConstraintChild(conj, i) ? CanonicalizeTreeInternal(*conj.children[i], scope)
 			                                                      : conj.children[i]->Copy());
 		}
 		// `per K:` over a clause in the aggregate shape adds no row to the model: its rows
@@ -1592,12 +1603,17 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 	}
 	if (constraints.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 		auto result = CanonicalizeComparisonInternal(constraints);
-		// A clause in the aggregate shape is grouped by the `by` key its decision reducers
-		// share; the comparison carries it, as later rewrites rebuild the reducers.
+		// The shape is decided here, once, with the clause's enclosing scope, and stamped on the comparison: a clause
+		// in the aggregate shape carries the `by` key its decision reducers share, as later rewrites rebuild the
+		// reducers, and one in the VALUE shape VALUE_REWRITE_TAG (ClassifyCanonicalComparison reads the stamp).
 		if (!ReferencesDecideVar(*result->Cast<BoundComparisonExpression>().right)) {
 			idx_t group_key;
 			string refusal;
-			auto shape = ClassifyScoped(result->Cast<BoundComparisonExpression>(), group_key, refusal);
+			auto shape = ClassifyScoped(result->Cast<BoundComparisonExpression>(),
+			                            scope.per_wrapper ? scope.PerKey() : DECIDE_ROW_KEY, group_key, refusal);
+			if (shape == ScopedShape::UNSUPPORTED) {
+				throw BinderException(refusal);
+			}
 			idx_t stamped;
 			if (shape == ScopedShape::AGGREGATE && group_key != DConstants::INVALID_INDEX &&
 			    !TryParseGroupKeyTag(result->GetAlias(), stamped)) {
@@ -1605,7 +1621,6 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeTreeInternal(const Expre
 				AddDecideTag(alias, MakeGroupKeyTag(group_key));
 				result->SetAlias(std::move(alias));
 			}
-			// The VALUE shape is decided here, once: the value rewrite reads the tag.
 			if (shape == ScopedShape::VALUE && !HasDecideTag(result->GetAlias(), VALUE_REWRITE_TAG)) {
 				auto alias = result->GetAlias();
 				AddDecideTag(alias, VALUE_REWRITE_TAG);

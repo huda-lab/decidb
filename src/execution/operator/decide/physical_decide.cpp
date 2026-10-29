@@ -1259,7 +1259,7 @@ class DecideGlobalSinkState : public GlobalSinkState {
 public:
 	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
-	      canonicalizer(context, op.decide_index, op.variable_scopes, op.is_boolean_var) {
+	      canonicalizer(context, op.decide_index, op.variable_scopes, op.entity_scopes, op.is_boolean_var) {
         // The decision column box was resolved by DecideOptimizer::FoldSingletonRows.
         // A variable whose box never had a lower bound written is one the query never
         // lowered, and Finalize resolves it to the default 0 floor.

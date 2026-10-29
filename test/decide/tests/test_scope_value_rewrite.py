@@ -35,7 +35,7 @@ from ._scope_cases import (
     table,
     table_rows,
 )
-from ._scope_oracle import CONSTANT, GLOBAL, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
+from ._scope_oracle import CONSTANT, GLOBAL, PER_ROW, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense, VarType
 
 SHIP = [Decision("ship")]
@@ -168,8 +168,8 @@ def test_an_expression_key(decidb_cli, scope_solver):
 
 @pytest.mark.correctness
 def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
-    """The facility-location link: a depot ships only when open, and two may open. The
-    helper holds each depot's total; `open` is the depot's own decision."""
+    """The facility-location link: a depot ships only when open, and two may open. `open`
+    is the depot's own decision, so the link is one row per depot (the aggregate shape)."""
     sql = f"""
         SELECT shipmentID, ship, open {from_clause()}
         DECIDE ship(INT), per D.depotID: open(BOOL)
@@ -192,6 +192,68 @@ def test_a_keyed_decision_beside_a_reducer(decidb_cli, scope_solver):
         == 65
     )
     assert [row["open"] for row in result] == [True, True, True, True, False]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize(
+    "link, by, factor, per, helpers",
+    [
+        pytest.param(
+            "per D.depotID: sum(ship) by (D.depotID) <= D.capacity * open",
+            ("depotID",),
+            lambda r: r["capacity"],
+            ("depotID",),
+            0,
+            id="data-under-the-by-key",
+        ),
+        pytest.param("sum(ship) by (D.depotID) <= 30 * open", ("depotID",), lambda r: 30, PER_ROW, 0, id="constant"),
+        pytest.param(
+            "sum(ship) by (D.depotID) <= D.capacity * open",
+            ("depotID",),
+            lambda r: r["capacity"],
+            PER_ROW,
+            len(DEPOTS),
+            id="data-per-row",
+        ),
+        pytest.param(
+            "per S.shipmentID: sum(ship) by (D.depotID) <= D.capacity * open",
+            ("depotID",),
+            lambda r: r["capacity"],
+            ("shipmentID",),
+            len(DEPOTS),
+            id="data-under-a-finer-key",
+        ),
+        pytest.param("sum(ship) <= 60 * open", (), lambda r: 60, PER_ROW, 1, id="by-nothing"),
+    ],
+)
+def test_a_term_beside_a_reducer_is_one_row_per_group_when_the_by_key_determines_it(
+    request, cli_fixture, scope_solver, tmp_path, link, by, factor, per, helpers
+):
+    """A term beside the reducers stays in the group's row when it is one value per `by`
+    group: its decision is keyed by the `by` key and its data is a constant or is keyed by
+    it through the clause's `per`. Data read per row, a `per` finer than the `by` key, or a
+    `by` the decision's key does not determine take a helper decision per group. The answer
+    is the same either way."""
+    cli = request.getfixturevalue(cli_fixture).with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    sql = f"""
+        SELECT shipmentID, ship, open {from_clause()}
+        DECIDE ship(INT), per D.depotID: open(BOOL)
+        SUCH THAT ship <= S.demand AND {link} AND per (): sum(per D.depotID: open) <= 2
+        MAXIMIZE SUM(ship)
+        ORDER BY shipmentID"""
+    counts = dump_counts(cli.dump_model(sql, tmp_path / "model.dump"))
+    assert counts["num_vars"] == len(SHIPMENTS) + len(DEPOTS) + helpers
+    model = ScopedModel(joined(), [Decision("ship"), Decision("open", ("depotID",), VarType.BINARY, ub=1.0)])
+    clauses = [
+        SHIP_BOUND,
+        Scoped((_ship_reduce(by=by), lambda r: {"open": -factor(r)}), "<=", (), per=per),
+        Scoped((Reduce("sum", lambda r: {"open": 1}, per=("depotID",)),), "<=", (_const(2),), per=GLOBAL),
+    ]
+    result = aligned(answer(cli, sql), model)
+    assert model.judge_scoped(result, clauses, MAXIMIZE_SHIP) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, MAXIMIZE_SHIP), abs=1e-4
+    )
 
 
 @pytest.mark.correctness

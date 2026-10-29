@@ -87,6 +87,23 @@ struct DecideVarScopeInfo {
 	static DecideVarScopeInfo Deserialize(Deserializer &deserializer);
 };
 
+//! A scope as a key of LogicalDecide::keys, ordered by how many values it has: one for the whole query (the empty
+//! key, INVALID_INDEX), one per class of a key, one per row (DECIDE_ROW_KEY).
+static constexpr idx_t DECIDE_ROW_KEY = DConstants::INVALID_INDEX - 1;
+
+//! The scope of a value computed from two others: their least upper bound, as DuckDB promotes the type of a binary
+//! operator. A query-wide scope joins to the other, a key to itself, and two different keys to one per row (a key that
+//! neither names is not looked for).
+inline idx_t JoinDecideKeys(idx_t a, idx_t b) {
+	if (a == DConstants::INVALID_INDEX) {
+		return b;
+	}
+	if (b == DConstants::INVALID_INDEX) {
+		return a;
+	}
+	return a == b ? a : DECIDE_ROW_KEY;
+}
+
 //! What a run-time scope check (LogicalDecide::scope_checks) asks of the rows.
 //!   DETERMINES     — every class of a key shows one value, or one instance of a decision
 //!   VALUE_IS_VALID — every row holds a value the model can read: a computed message, NULL on a valid row

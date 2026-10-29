@@ -80,7 +80,7 @@ class DecideLinearFormBuilder {
 public:
 	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op)
 	    : context(context), op(op), decide_index(op.decide_index),
-	      canonicalizer(context, op.decide_index, op.variable_scopes, op.is_boolean_var),
+	      canonicalizer(context, op.decide_index, op.variable_scopes, op.entity_scopes, op.is_boolean_var),
 	      splitter(context, op.decide_index, op.decide_variables) {
 	}
 
@@ -467,15 +467,6 @@ private:
 		obj.quadratic_sign *= divides ? 1.0 / factor : factor;
 	}
 
-	//! True when the decision referenced by `expr` is query-wide (`per ()`).
-	//! Such a term is a complete objective contribution on its own: it maps to a
-	//! single solver column, so there is no reducer to collapse it.
-	bool IsScalarDecideTerm(const Expression &expr) const {
-		idx_t var_idx = FindDecideVariable(expr);
-		return var_idx != DConstants::INVALID_INDEX && var_idx < op.variable_scopes.size() &&
-		       op.variable_scopes[var_idx].IsScalar();
-	}
-
 	//! Every decision `expr` reads is query-wide: one column each, whichever row reads it.
 	bool ReadsOnlyQueryWideDecisions(const Expression &expr) const {
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
@@ -494,7 +485,7 @@ private:
 	//===------------------------------------------------------------------===//
 
 	//! The left side of an aggregate constraint, one canonical atom at a time: a reducer, a reducer with the
-	//! factor canonicalization left on it, a query-wide decision, or a data cast kept as a typed fixed term.
+	//! factor canonicalization left on it, or a tuple term beside the reducers.
 	void ExtractAggregateConstraintTerms(const Expression &lhs, DecideConstraint &constraint) {
 		for (auto &atom : ReadCanonicalAtoms(lhs, decide_index)) {
 			auto &expr = *atom.term;
@@ -517,26 +508,12 @@ private:
 				                      bilinear_before, quadratic_before);
 				continue;
 			}
-			if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST &&
-			    FindDecideVariable(expr) == DConstants::INVALID_INDEX) {
-				ExtractConstraintTerms(expr, constraint, atom.sign);
-				continue;
-			}
-			// A query-wide (`per ()`) decision standing alone (not inside a reducer) is
-			// row-invariant, so it is a complete term of an aggregate constraint on its own --
-			// there is nothing for a reducer to collapse. This is K3's "reducer or
-			// row-invariant" rule. The BOUND_AGGREGATE exclusion matters: a scalar may also
-			// sit *inside* a reducer body (`SUM(cost * cap)`), and that case must reach the
-			// SUM extraction below so the coefficient is evaluated per row instead of being
-			// read as a bare `cap` with coefficient 1.
-			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE && IsScalarDecideTerm(expr)) {
-				ExtractConstraintTerms(expr, constraint, atom.sign);
-				continue;
-			}
+			// A tuple term beside the reducers: the canonicalizer admitted it as one value per group
+			// (ClassifyScoped), and execution counts it once in each group's row (CountOnce). A decision inside a
+			// reducer body (`SUM(cost * cap)`) is the reducer's, read below with the coefficient of each row.
 			if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
-				throw InternalException("DECIDE aggregate constraint LHS contains a non-reducer term after canonical "
-				                        "verification: %s",
-				                        expr.ToString());
+				ExtractConstraintTerms(expr, constraint, atom.sign);
+				continue;
 			}
 			ExtractReducerConstraintTerms(expr.Cast<BoundAggregateExpression>(), constraint, atom.sign);
 		}
