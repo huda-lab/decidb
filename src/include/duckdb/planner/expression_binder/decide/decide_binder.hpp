@@ -51,6 +51,19 @@ struct DecideQualifierContext {
     //! The query's source fragments (TagDecideSourceFragments): a `per K:` in front of a
     //! constraint adds its key as written, which binding expands past recognition.
     vector<string> *source_fragments = nullptr;
+    //! The text the user wrote for the DECIDE tail (SelectNode::decide_text); null when the statement has none.
+    const DecideSourceText *source_text = nullptr;
+
+    //! The text written for the scope or `by` marker `marker`, added to source_fragments for a bound node to carry as
+    //! a fragment tag; INVALID_INDEX when the parser kept none.
+    idx_t WrittenFragment(const ParsedExpression &marker, DecideSpanRole role) const {
+        string text;
+        if (!source_text || !source_fragments || !source_text->Cut(marker.GetQueryLocation(), role, text)) {
+            return DConstants::INVALID_INDEX;
+        }
+        source_fragments->push_back(std::move(text));
+        return source_fragments->size() - 1;
+    }
 };
 
 bool IsVariableExpression(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables);

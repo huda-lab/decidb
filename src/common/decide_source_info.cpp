@@ -15,6 +15,24 @@ static string WrittenDecideComparison(const ConstraintSourceInfo &source) {
 	return cmp.empty() || rhs.empty() ? lhs : lhs + " " + cmp + " " + rhs;
 }
 
+bool DecideSourceText::Cut(optional_idx location, DecideSpanRole role, string &text) const {
+	if (!location.IsValid() || location.GetIndex() < tail_start) {
+		return false;
+	}
+	if (!indexed) {
+		for (idx_t i = 0; i + 3 < spans.size(); i += 4) {
+			index.emplace(std::make_pair(spans[i], spans[i + 1]), i);
+		}
+		indexed = true;
+	}
+	auto entry = index.find(std::make_pair(location.GetIndex() - tail_start, static_cast<idx_t>(role)));
+	if (entry == index.end()) {
+		return false;
+	}
+	text = tail.substr(spans[entry->second + 2], spans[entry->second + 3] - spans[entry->second + 2]);
+	return true;
+}
+
 string QuoteWrittenClause(const ConstraintSourceInfo &source) {
 	return AttachDecideQualifier(WrittenDecideComparison(source), source.qualifier);
 }

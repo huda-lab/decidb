@@ -8,11 +8,45 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include <map>
 
 namespace duckdb {
 
 class Serializer;
 class Deserializer;
+
+//! What a span of the DECIDE tail is. The values are the parser's PGDecideSpanRole.
+enum class DecideSpanRole : uint8_t { CMP_LHS = 0, CMP_RHS = 1, WHEN = 2, PER = 3, BY = 4 };
+
+//! The text of a DECIDE clause as the user wrote it (the Clang SourceManager / `CreateInfo::sql` pattern): the tail,
+//! `SUCH THAT` through the objective, and where the parser found each construct in it. A construct is named by the
+//! location of its own token, which the transformer also gives the parsed node as its query location, so a binder
+//! cuts the text of a node it holds without the node carrying any. Not compared by `SelectNode::Equals`, as the query
+//! location is not.
+struct DecideSourceText {
+	//! The tail, verbatim. Empty for a statement built without the parser's text.
+	string tail;
+	//! Where the tail starts in the string that was parsed; a location is relative to it.
+	idx_t tail_start = 0;
+	//! Four entries per construct: the anchor, its role, and its start and end, all relative to `tail_start`.
+	vector<idx_t> spans;
+
+	bool HasText() const {
+		return !tail.empty();
+	}
+	//! The text written for the construct of `role` whose token is at `location` (a query location); false when the
+	//! parser kept none.
+	bool Cut(optional_idx location, DecideSpanRole role, string &text) const;
+
+	//! Generated from `storage/serialization/nodes.json`.
+	void Serialize(Serializer &serializer) const;
+	static DecideSourceText Deserialize(Deserializer &deserializer);
+
+private:
+	//! (anchor, role) to the construct's entry in `spans`, built on first use.
+	mutable std::map<std::pair<idx_t, idx_t>, idx_t> index;
+	mutable bool indexed = false;
+};
 
 //! How diagnostics should render the right-hand side of a source constraint.
 enum class ConstraintSourceRhsKind : uint8_t {
@@ -63,6 +97,15 @@ struct ConstraintSourceInfo {
 	//! spelling serving two readers rather than two concepts.
 	string written_lhs;
 	string written_rhs;
+	//! Whether canonicalization changed the clause, so a plan shows the canonical layer under the written one. The
+	//! written text is what the user typed (`SUM(x)`, `x::INT`), which DeciDB's rendering of the canonical clause
+	//! spells differently, so the two cannot be compared as strings: FinalizeConstraintSourceInfo compares the
+	//! renderings of the clause before and after canonicalization instead.
+	bool canonical_differs = false;
+	//! DeciDB's rendering of the two sides before canonicalization: scratch between InitializeConstraintSourceInfo and
+	//! FinalizeConstraintSourceInfo, empty after it and not serialized.
+	string rendered_lhs;
+	string rendered_rhs;
 	//! The comparison operator as written (`<=`, `>=`, `=`, `<>`). Kept beside the
 	//! two sides because canonicalization may flip it along with them.
 	string written_cmp;

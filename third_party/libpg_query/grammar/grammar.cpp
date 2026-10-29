@@ -691,6 +691,35 @@ absorbRemovedPerKey(PGNode *constraints, PGNode *item)
 }
 
 /*
+ * DecidB: remember where a DECIDE construct sits in the query text. Only inside a DECIDE clause, so
+ * ordinary SQL pays nothing for it.
+ */
+static void
+noteDecideSpan(core_yyscan_t yyscanner, int anchor, PGDecideSpanRole role, YYLTYPE span)
+{
+	base_yy_extra_type *extra = pg_yyget_extra(yyscanner);
+	PGDecideSpan *entry;
+
+	if (!extra->in_decide_clause || anchor < 0 || span.start < 0)
+		return;
+	entry = (PGDecideSpan *) palloc(sizeof(PGDecideSpan));
+	entry->anchor = anchor;
+	entry->role = role;
+	entry->start = span.start;
+	entry->end = span.end;
+	extra->decide_spans = lappend(extra->decide_spans, entry);
+}
+
+/* DecidB: the two sides of a comparison, anchored at its operator. */
+static PGNode *
+noteDecideSides(PGNode *comparison, YYLTYPE op, YYLTYPE lhs, YYLTYPE rhs, core_yyscan_t yyscanner)
+{
+	noteDecideSpan(yyscanner, op.start, PG_DECIDE_SPAN_CMP_LHS, lhs);
+	noteDecideSpan(yyscanner, op.start, PG_DECIDE_SPAN_CMP_RHS, rhs);
+	return comparison;
+}
+
+/*
  * DecidB: fold a scope around the body it governs. WHEN applies first and PER
  * second, so PER is the outer node. PER ROW is the default written out: it names
  * no key, but it keeps a node of its own, so the clause follows the scoping

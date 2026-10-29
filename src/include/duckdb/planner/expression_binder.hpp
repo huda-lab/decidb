@@ -144,6 +144,12 @@ public:
 	//! FIXME: Generalise this for extensibility.
 	//! Recursively replaces macro parameters with the provided input parameters.
 	void ReplaceMacroParameters(unique_ptr<ParsedExpression> &expr, vector<unordered_set<string>> &lambda_params);
+	//! ReplaceMacroParameters over every expression of a query node. A DECIDE tail whose expressions took an argument
+	//! loses its source text (SelectNode::decide_text): the text describes the query it was cut from, and the
+	//! argument comes from another one.
+	void ReplaceMacroParametersInQueryNode(QueryNode &node, vector<unordered_set<string>> &lambda_params);
+	//! How many parameters ReplaceMacroParameters has replaced.
+	idx_t macro_substitutions = 0;
 	//! Enables special-handling of lambda parameters during macro replacement by tracking them in the lambda_params
 	//! vector.
 	void ReplaceMacroParametersInLambda(FunctionExpression &function, vector<unordered_set<string>> &lambda_params);

@@ -701,9 +701,9 @@ class TestDiagnosticsRelation:
     def test_infeasible_single_row_when_group_keeps_sum_wrapper(self, request, cli_fixture):
         """Facet B/C: a single-row aggregate group keeps its `sum(...)` wrapper and the
         when scope in the label. `when grp='a': sum(x) >= 99` matches one BOOLEAN row
-        (max 1), so it is infeasible and must render `when grp = 'a': sum(x) >= 99` — not a
+        (max 1), so it is infeasible and must render `when grp='a': sum(x) >= 99` — not a
         bare `x >= 99` — even though there is no per-row fan-out to fold. The when
-        predicate is rendered cleanly (no implicit CAST / extra parens)."""
+        predicate is echoed as typed (no implicit CAST / extra parens)."""
         cli = request.getfixturevalue(cli_fixture)
         sql = (
             "SELECT id, x FROM (VALUES (1,'a'),(2,'b')) t(id, grp) "
@@ -713,10 +713,10 @@ class TestDiagnosticsRelation:
 
         rows = _rows(result)
         assert {r["state"] for r in rows} == {"infeasible"}
-        edit = _attrs(rows, "clause", "when grp = 'a': sum(x) >= 99")
+        edit = _attrs(rows, "clause", "when grp='a': sum(x) >= 99")
         assert edit["edit_kind"] == "loosen"
-        assert edit["suggested_change"] == "when grp = 'a': sum(x) >= 1"
-        _apply_reported_fix(cli, sql, rows, {"when grp = 'a': sum(x) >= 99": "when grp='a': sum(x) >= 99"})
+        assert edit["suggested_change"] == "when grp='a': sum(x) >= 1"
+        _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_boolean_loosens_constraint_not_domain(self, request, cli_fixture):
@@ -1439,8 +1439,12 @@ class TestDiagnosticsRelation:
     @pytest.mark.parametrize(
         "objective, expected_drop, drop_sql, expected_objective",
         [
-            ("MINIMIZE SUM(x)", "sum(x) <> 0", "SUM(x) <> 0", "0"),
-            ("MAXIMIZE SUM(x)", "sum(x) <> 1", "SUM(x) <> 1", "1"),
+            pytest.param(
+                "MINIMIZE SUM(x)", "SUM(x) <> 0", "SUM(x) <> 0", "0", id="MINIMIZE SUM(x)-sum(x) <> 0-SUM(x) <> 0-0"
+            ),
+            pytest.param(
+                "MAXIMIZE SUM(x)", "SUM(x) <> 1", "SUM(x) <> 1", "1", id="MAXIMIZE SUM(x)-sum(x) <> 1-SUM(x) <> 1-1"
+            ),
         ],
     )
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)

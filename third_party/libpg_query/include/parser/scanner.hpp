@@ -39,12 +39,28 @@ typedef union core_YYSTYPE {
 /*
  * We track token locations in terms of byte offsets from the start of the
  * source string, not the column number/line number representation that
- * bison uses by default.  Also, to minimize overhead we track only one
- * location (usually the first token location) for each construct, not
- * the beginning and ending locations as bison does by default.  It's
- * therefore sufficient to make YYLTYPE an int.
+ * bison uses by default.  A location is the offset where a construct starts
+ * and the offset just past where it ends (DecidB reads the end to cut a DECIDE
+ * clause's text out of the query).  It converts to an int, its start, so
+ * every `@n` that stands for a position (error positions, node locations)
+ * reads as it always did.
  */
-#define YYLTYPE int
+struct PGLocation {
+	int start = 0;
+	int end = 0;
+
+	PGLocation() = default;
+	PGLocation(int position) : start(position), end(position) {
+	}
+	operator int() const {
+		return start;
+	}
+	PGLocation &operator+=(int delta) {
+		start += delta;
+		return *this;
+	}
+};
+#define YYLTYPE PGLocation
 
 /*
  * Another important component of the scanner's API is the token code numbers.

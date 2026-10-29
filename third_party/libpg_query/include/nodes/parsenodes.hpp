@@ -1255,11 +1255,34 @@ typedef enum PGObjectiveSense {
 	PG_OBJ_FEASIBILITY       /* no objective (feasibility only) */
 } PGObjectiveSense;
 
+/*
+ * DecidB: where a DECIDE construct sits in the query text, so the transformer can keep the text the user wrote.
+ * `anchor` is the location of the construct's own token (a comparison's operator, WHEN, PER, BY), the same offset
+ * the transformer gives the parsed node as its query location; start/end bound the text (end is just past it).
+ */
+typedef enum PGDecideSpanRole {
+	PG_DECIDE_SPAN_CMP_LHS, /* the left side of a comparison */
+	PG_DECIDE_SPAN_CMP_RHS, /* the right side of a comparison */
+	PG_DECIDE_SPAN_WHEN,    /* a `when` condition */
+	PG_DECIDE_SPAN_PER,     /* a `per` key */
+	PG_DECIDE_SPAN_BY       /* a reducer's `by` key */
+} PGDecideSpanRole;
+
+typedef struct PGDecideSpan {
+	int anchor;
+	PGDecideSpanRole role;
+	int start;
+	int end;
+} PGDecideSpan;
+
 typedef struct PGDecideClause {
     PGList *variables;      /* DECIDE <variables> */
     PGNode *constraints;    /* SUCH THAT <constraints> */
     PGObjectiveSense sense; /* [MAXIMIZE|MINIMIZE] <objective> */
     PGNode *objective;
+    int tail_start;         /* the text from SUCH THAT through the objective */
+    int tail_end;
+    PGList *spans;          /* PGDecideSpan of every DECIDE construct parsed so far in the query */
 } PGDecideClause;
 
 /*

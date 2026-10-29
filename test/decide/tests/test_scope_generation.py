@@ -679,10 +679,10 @@ def test_explain_echoes_the_scope_as_written(decidb_cli):
     )
     plan = "".join(line.strip("│ ") for line in result.stdout.splitlines())
     for text in (
-        "per D.depotID: reserve <= capacity",
-        "when priority per D.depotID: sum(ship) by (D.depotID) <= priorityCapacity",
+        "per D.depotID: reserve <= D.capacity",
+        "when S.priority per D.depotID: sum(ship) by (D.depotID) <= D.priorityCapacity",
         "per (): sum(ship) <= 50",
-        "MAXIMIZE when priority: sum(ship)",
+        "MAXIMIZE when S.priority: sum(ship)",
     ):
         assert text.replace(" ", "") in plan.replace(" ", ""), f"{text!r} not in:\n{result.stdout}"
     assert_no_internal_leak(result, "EXPLAIN of the scope spellings")

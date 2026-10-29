@@ -1800,6 +1800,12 @@ BindResult DecideBinder::BindReducerBy(FunctionExpression &by, idx_t depth) {
 		key_element.expression = std::move(BoundExpression::GetExpression(*element));
 		key.push_back(std::move(key_element));
 	}
+	// The key as the user wrote it, when the parser kept it.
+	string written_key;
+	if (qualifier_context->source_text &&
+	    qualifier_context->source_text->Cut(by.GetQueryLocation(), DecideSpanRole::BY, written_key)) {
+		key_text = std::move(written_key);
+	}
 	auto group_key = FindOrCreateDecideKey(std::move(key), key_text, *qualifier_context->keys);
 	if (group_key != DConstants::INVALID_INDEX) {
 		(*qualifier_context->keys)[group_key].written_as_by = true;

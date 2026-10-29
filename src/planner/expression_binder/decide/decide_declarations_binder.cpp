@@ -313,6 +313,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         qualifier_context.entity_scopes = &entity_scopes;
 	    qualifier_context.keys = &keys;
 	    qualifier_context.source_fragments = &decide_source_fragments;
+	    qualifier_context.source_text = &statement.decide_text;
         // Isolate with brackets to avoid multiple active binders.
         {
             DecideConstraintsBinder decide_constraints_binder (binder, context, decide_variable_names, scalar_variable_names, &qualifier_context);
@@ -332,8 +333,9 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 // the same way, which the parsed-tree gate could not do because it was only
                 // ever called for SUM/AVG/MIN/MAX arguments.
                 ValidateDecideConstraintDegree(*result.decide_constraints, result.decide_index);
-			    result.decide_constraint_sources = InitializeConstraintSourceInfo(
-			        *result.decide_constraints, decide_source_fragments, entity_scopes, result.decide_index, &keys);
+			    result.decide_constraint_sources =
+			        InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, entity_scopes,
+			                                       result.decide_index, &keys, &statement.decide_text);
 		    }
             // Types are now determined from the DECIDE clause, not from constraint binding
         }

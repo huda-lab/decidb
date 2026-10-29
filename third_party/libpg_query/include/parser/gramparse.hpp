@@ -110,6 +110,9 @@ typedef struct base_yy_extra_type {
 	PGDecideLexState decide_state_stack[PG_DECIDE_STATE_STACK_MAX];
 	int decide_state_depth;
 
+	/* DecidB: PGDecideSpan of every DECIDE construct parsed so far; each clause carries the list. */
+	PGList *decide_spans;
+
 	/*
 	 * State variables that belong to the grammar.
 	 */

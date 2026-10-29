@@ -419,6 +419,7 @@ void ConstraintSourceInfo::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<string>(107, "written_lhs", written_lhs);
 	serializer.WritePropertyWithDefault<string>(108, "written_rhs", written_rhs);
 	serializer.WritePropertyWithDefault<string>(109, "written_cmp", written_cmp);
+	serializer.WritePropertyWithDefault<bool>(110, "canonical_differs", canonical_differs, false);
 }
 
 ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserializer) {
@@ -433,6 +434,7 @@ ConstraintSourceInfo ConstraintSourceInfo::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<string>(107, "written_lhs", result.written_lhs);
 	deserializer.ReadPropertyWithDefault<string>(108, "written_rhs", result.written_rhs);
 	deserializer.ReadPropertyWithDefault<string>(109, "written_cmp", result.written_cmp);
+	deserializer.ReadPropertyWithExplicitDefault<bool>(110, "canonical_differs", result.canonical_differs, false);
 	return result;
 }
 
@@ -505,6 +507,20 @@ DecideSourceColumnName DecideSourceColumnName::Deserialize(Deserializer &deseria
 	DecideSourceColumnName result;
 	deserializer.ReadProperty<ColumnBinding>(100, "binding", result.binding);
 	deserializer.ReadPropertyWithDefault<string>(101, "name", result.name);
+	return result;
+}
+
+void DecideSourceText::Serialize(Serializer &serializer) const {
+	serializer.WritePropertyWithDefault<string>(100, "tail", tail);
+	serializer.WritePropertyWithDefault<idx_t>(101, "tail_start", tail_start);
+	serializer.WritePropertyWithDefault<vector<idx_t>>(102, "spans", spans);
+}
+
+DecideSourceText DecideSourceText::Deserialize(Deserializer &deserializer) {
+	DecideSourceText result;
+	deserializer.ReadPropertyWithDefault<string>(100, "tail", result.tail);
+	deserializer.ReadPropertyWithDefault<idx_t>(101, "tail_start", result.tail_start);
+	deserializer.ReadPropertyWithDefault<vector<idx_t>>(102, "spans", result.spans);
 	return result;
 }
 

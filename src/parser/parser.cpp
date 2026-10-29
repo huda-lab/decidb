@@ -220,6 +220,7 @@ void Parser::ParseQuery(const string &query) {
 
 				// if it succeeded, we transform the Postgres parse tree into a list of
 				// SQLStatements
+				transformer.SetParsedQuery(query);
 				transformer.TransformParseTree(parser.parse_tree, statements);
 				parsing_succeed = true;
 			} else {
@@ -254,6 +255,7 @@ void Parser::ParseQuery(const string &query) {
 							// empty statement
 							continue;
 						}
+						transformer.SetParsedQuery(query_statement);
 						transformer.TransformParseTree(another_parser.parse_tree, statements);
 						// important to set in the case of a mixture of DDB and parser ext statements
 						statements.back()->stmt_length = query_statement.size() - 1;

@@ -105,7 +105,7 @@ def test_explain_basic_knapsack(decidb_cli):
     assert "DECIDE" in out, f"DECIDE node missing from EXPLAIN:\n{out}"
     assert _shows(out, "Variables:", "x"), _plan_text(out)
     assert _shows(out, "Objective:", "MAXIMIZE", "sum(", "l_extendedprice"), _plan_text(out)
-    assert _shows(out, "Constraints:", "sum(", "l_quantity", "<=", "100"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
 
 
 @pytest.mark.explain
@@ -160,7 +160,7 @@ def test_explain_multi_variable(decidb_cli):
     # All three constraints render, each carrying its own variable and bound.
     assert _shows(out, "Constraints:", "l_quantity", "<=", "50"), _plan_text(out)
     assert _shows(out, "Constraints:", "(y", "<=", "3"), _plan_text(out)
-    assert _shows(out, "Constraints:", "sum(y)", "<=", "10"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(y)", "<=", "10"), _plan_text(out)
 
 
 # ===================================================================
@@ -220,7 +220,7 @@ def test_explain_when_mixed_constraints(decidb_cli):
     # The when belongs to the first constraint only; the second must render
     # unconditionally rather than inheriting the scope.
     assert _shows(out, "Constraints:", "when", "l_returnflag", "'R'", ":", "l_quantity", "<=", "50"), _plan_text(out)
-    assert _shows(out, "Constraints:", "sum(x)", "<=", "20"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(x)", "<=", "20"), _plan_text(out)
 
 
 # ===================================================================
@@ -365,7 +365,7 @@ def test_explain_renders_user_casts_only(decidb_cli):
         MAXIMIZE SUM(x * l_extendedprice)
     """))
     assert (
-        "sum(x * CAST(l_quantity AS INTEGER)) <= 100" in with_cast
+        "SUM(x * CAST(l_quantity AS INTEGER)) <= 100" in with_cast
     ), f"the user's own cast was dropped from EXPLAIN:\n{with_cast}"
 
 
@@ -411,7 +411,7 @@ def test_explain_when_and_per(decidb_cli):
     assert _shows(
         out, "Constraints:", "per", "l_returnflag", ":", "l_quantity", "by", "(l_returnflag)", "<=", "50"
     ), f"per scope missing from the constraint row:\n{_plan_text(out)}"
-    assert _shows(out, "Constraints:", "sum(x)", "<=", "30"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(x)", "<=", "30"), _plan_text(out)
     # The objective carries the only when here; it must render as the scope in
     # front of the Objective row's expression. Before the objective/constraint
     # rendering was unified, an objective WHEN leaked out as "(... AND ...)" and
@@ -447,7 +447,7 @@ def test_explain_objective_when_postfix(decidb_cli):
     assert _shows(
         out, "Objective:", "MAXIMIZE", "when", "l_returnflag", "'R'", ":", "l_extendedprice"
     ), f"objective when missing from EXPLAIN:\n{_plan_text(out)}"
-    assert _shows(out, "Constraints:", "sum(x)", "<=", "20"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(x)", "<=", "20"), _plan_text(out)
     assert " AND " not in out, (
         "objective when leaked as a conjunction '(... AND ...)' instead of a " f"'when ...:' scope in front:\n{out}"
     )
@@ -471,7 +471,7 @@ def test_explain_json_structure(decidb_cli):
     assert '"DECIDE"' in out or '"name": "DECIDE"' in out or "DECIDE" in out
     assert _shows(out, '"Variables"', '"x"'), out
     assert _shows(out, '"Objective"', "MAXIMIZE", "sum(", "l_extendedprice"), out
-    assert _shows(out, '"Constraints"', "sum(", "l_quantity", "<=", "100"), out
+    assert _shows(out, '"Constraints"', "SUM(", "l_quantity", "<=", "100"), out
 
 
 @pytest.mark.explain
@@ -515,7 +515,7 @@ def test_explain_json_logical_plan(decidb_cli):
     """
     out = _explain_json(decidb_cli, sql, logical=True)
     assert "DECIDE" in out
-    assert _shows(out, '"Constraints"', "sum(", "l_quantity", "<=", "100"), out
+    assert _shows(out, '"Constraints"', "SUM(", "l_quantity", "<=", "100"), out
 
 
 # ===================================================================
@@ -534,7 +534,7 @@ def test_explain_analyze_basic(decidb_cli):
     """
     out = _explain_analyze(decidb_cli, sql)
     assert "DECIDE" in out, f"DECIDE missing from EXPLAIN ANALYZE:\n{out}"
-    assert _shows(out, "Constraints:", "sum(", "l_quantity", "<=", "100"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
 
 
 @pytest.mark.explain
@@ -588,7 +588,7 @@ def test_explain_analyze_multiple_constraints(decidb_cli):
     out = _explain_analyze(decidb_cli, sql)
     assert "DECIDE" in out
     assert _shows(out, "Constraints:", "when", "l_returnflag", "'R'", ":", "l_quantity", "<=", "50"), _plan_text(out)
-    assert _shows(out, "Constraints:", "sum(x)", "<=", "20"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(x)", "<=", "20"), _plan_text(out)
 
 
 # ===================================================================
@@ -610,7 +610,7 @@ def test_explain_logical_plan(decidb_cli):
     assert "DECIDE" in out
     assert _shows(out, "Variables:", "x"), _plan_text(out)
     assert _shows(out, "Objective:", "MAXIMIZE", "sum(", "l_extendedprice"), _plan_text(out)
-    assert _shows(out, "Constraints:", "sum(", "l_quantity", "<=", "100"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
 
 
 @pytest.mark.explain
@@ -684,7 +684,7 @@ def test_untouched_clause_stays_one_line(decidb_cli):
         MAXIMIZE SUM(x)
     """
     out = _explain(decidb_cli, sql)
-    assert _shows(out, "Constraints:", "sum(", "l_quantity", "<=", "100"), _plan_text(out)
+    assert _shows(out, "Constraints:", "SUM(", "l_quantity", "<=", "100"), _plan_text(out)
     packed = _packed(out)
     assert _CANONICAL_MARK not in packed, _plan_text(out)
     assert _REWRITTEN_MARK not in packed, _plan_text(out)
@@ -709,12 +709,12 @@ def test_abs_clause_shows_the_rows_it_became(decidb_cli):
     out = _explain(decidb_cli, sql)
     packed = _packed(out)
     # The clause the user wrote heads the group.
-    assert "abs(x-20)<=5" in packed, _plan_text(out)
+    assert "ABS(x-20)<=5" in packed, _plan_text(out)
     # Every generated row is subordinated, and the auxiliary never floats free: it
     # prints as the ABS it stands for, in the account line and in each envelope row.
     assert "__abs_aux_0__" not in packed, _plan_text(out)
     assert "abs(x-20)becomesanauxiliaryvariable" in packed, _plan_text(out)
-    assert packed.count("abs(x-20)") >= 4, _plan_text(out)
+    assert packed.count("abs(x-20)") + packed.count("ABS(x-20)") >= 4, _plan_text(out)
     assert packed.count(_REWRITTEN_MARK) >= 3, _plan_text(out)
     # Nothing was attributed to no clause at all.
     assert "addedbyformulation" not in packed, _plan_text(out)
@@ -736,7 +736,7 @@ def test_avg_rewrite_is_shown_not_substituted(decidb_cli):
     """
     out = _explain(decidb_cli, sql)
     packed = _packed(out)
-    assert "avg(x)>=10" in packed, _plan_text(out)
+    assert "AVG(x)>=10" in packed, _plan_text(out)
     assert _REWRITTEN_MARK + "sum(x)>=10" in packed, _plan_text(out)
 
 
@@ -757,7 +757,7 @@ def test_composed_minmax_clause_does_not_vanish(decidb_cli):
     """
     out = _explain(decidb_cli, sql)
     packed = _packed(out)
-    assert "max(x)+sum(x)<=100" in packed, _plan_text(out)
+    assert "MAX(x)+SUM(x)<=100" in packed, _plan_text(out)
     assert "true" not in packed.lower().replace("truncated", ""), _plan_text(out)
     assert "max(x)becomesanextremumcolumn" in packed, _plan_text(out)
 
@@ -793,7 +793,7 @@ def test_layers_survive_a_prepared_statement(decidb_cli):
         "EXPLAIN EXECUTE lp;\n"
     ).stdout
     packed = _packed(out)
-    assert "avg(x)>=10" in packed, _plan_text(out)
+    assert "AVG(x)>=10" in packed, _plan_text(out)
     assert _REWRITTEN_MARK + "sum(x)>=10" in packed, _plan_text(out)
 
 
@@ -839,7 +839,7 @@ def test_a_lifted_clause_keeps_its_written_position(decidb_cli):
     packed = _packed(out)
     positions = [
         packed.index("xIN(10,20,30)"),
-        packed.index("max(x)+sum(x)<=500"),
-        packed.index("sum(x)>=30"),
+        packed.index("MAX(x)+SUM(x)<=500"),
+        packed.index("SUM(x)>=30"),
     ]
     assert positions == sorted(positions), _plan_text(out)

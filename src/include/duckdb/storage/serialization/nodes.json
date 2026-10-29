@@ -1325,6 +1325,36 @@
         "id": 109,
         "name": "written_cmp",
         "type": "string"
+      },
+      {
+        "id": 110,
+        "name": "canonical_differs",
+        "type": "bool",
+        "default": "false"
+      }
+    ],
+    "pointer_type": "none"
+  },
+  {
+    "class": "DecideSourceText",
+    "includes": [
+      "duckdb/common/decide_source_info.hpp"
+    ],
+    "members": [
+      {
+        "id": 100,
+        "name": "tail",
+        "type": "string"
+      },
+      {
+        "id": 101,
+        "name": "tail_start",
+        "type": "idx_t"
+      },
+      {
+        "id": 102,
+        "name": "spans",
+        "type": "vector<idx_t>"
       }
     ],
     "pointer_type": "none"

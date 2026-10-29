@@ -335,14 +335,23 @@ decide_aggregate_when_condition:
  * ends it, so the condition is a full a_expr and needs no parentheses. */
 decide_when:
 			WHEN_DECIDE a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1); }
+				{
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1);
+					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_WHEN, @2);
+				}
 			| WHEN_DECIDE_OBJECTIVE a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1); }
+				{
+					$$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_SCOPE_WHEN, "scope_when", NULL, $2, @1);
+					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_WHEN, @2);
+				}
 		;
 
 decide_per:
 			PER_DECIDE expr_list
-				{ $$ = makeDecideScope(PG_DECIDE_PER_KEY, $2, @1, yyscanner); }
+				{
+					$$ = makeDecideScope(PG_DECIDE_PER_KEY, $2, @1, yyscanner);
+					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_PER, @2);
+				}
 			| PER_DECIDE_PAREN '(' ')'
 				{ $$ = makeDecideScope(PG_DECIDE_PER_ALL, NIL, @1, yyscanner); }
 			| PER_DECIDE_PAREN '(' expr_list ')'
@@ -374,7 +383,11 @@ decide_scope:
 /* DecidB: BY (key) directly after a reducer names the rows it reads. */
 decide_by:
 			BY_DECIDE '(' ')'						{ $$ = NIL; }
-			| BY_DECIDE '(' expr_list ')'			{ $$ = $3; }
+			| BY_DECIDE '(' expr_list ')'
+				{
+					$$ = $3;
+					noteDecideSpan(yyscanner, @1.start, PG_DECIDE_SPAN_BY, @3);
+				}
 		;
 
 /* One DECIDE item body. DECIDE_ITEM sits above AND but below the DECIDE WHEN
@@ -444,6 +457,9 @@ decide_tail:
                     PGDecideClause *n = makeNode(PGDecideClause);
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
+                    n->tail_start = @$.start;
+                    n->tail_end = @$.end;
+                    n->spans = pg_yyget_extra(yyscanner)->decide_spans;
                     n->constraints = $3;
                     n->sense = PG_OBJ_MAXIMIZE;
                     n->objective = $5;
@@ -454,6 +470,9 @@ decide_tail:
                     PGDecideClause *n = makeNode(PGDecideClause);
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
+                    n->tail_start = @$.start;
+                    n->tail_end = @$.end;
+                    n->spans = pg_yyget_extra(yyscanner)->decide_spans;
                     n->constraints = $3;
                     n->sense = PG_OBJ_MINIMIZE;
                     n->objective = $5;
@@ -464,6 +483,9 @@ decide_tail:
                     PGDecideClause *n = makeNode(PGDecideClause);
                     PGDecidePopLexState(pg_yyget_extra(yyscanner));
                     n->variables = NULL;
+                    n->tail_start = @$.start;
+                    n->tail_end = @$.end;
+                    n->spans = pg_yyget_extra(yyscanner)->decide_spans;
                     n->constraints = $3;
                     n->sense = PG_OBJ_FEASIBILITY;
                     n->objective = NULL;
@@ -2671,17 +2693,17 @@ a_expr:		c_expr									{ $$ = $1; }
 			| a_expr POWER_OF a_expr
 				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "**", $1, $3, @2); }
 			| a_expr '<' a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<", $1, $3, @2); }
+				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<", $1, $3, @2), @2, @1, @3, yyscanner); }
 			| a_expr '>' a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">", $1, $3, @2); }
+				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">", $1, $3, @2), @2, @1, @3, yyscanner); }
 			| a_expr '=' a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "=", $1, $3, @2); }
+				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "=", $1, $3, @2), @2, @1, @3, yyscanner); }
 			| a_expr LESS_EQUALS a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<=", $1, $3, @2); }
+				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<=", $1, $3, @2), @2, @1, @3, yyscanner); }
 			| a_expr GREATER_EQUALS a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">=", $1, $3, @2); }
+				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, ">=", $1, $3, @2), @2, @1, @3, yyscanner); }
 			| a_expr NOT_EQUALS a_expr
-				{ $$ = (PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<>", $1, $3, @2); }
+				{ $$ = noteDecideSides((PGNode *) makeSimpleAExpr(PG_AEXPR_OP, "<>", $1, $3, @2), @2, @1, @3, yyscanner); }
 
 			| a_expr qual_Op a_expr				%prec Op
 				{ $$ = (PGNode *) makeAExpr(PG_AEXPR_OP, $2, $1, $3, @2); }

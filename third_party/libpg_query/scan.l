@@ -78,6 +78,12 @@ bool		standard_conforming_strings = true;
 #define SET_YYLLOC()  (*(yylloc) = yytext - yyextra->scanbuf)
 
 /*
+ * The scanner proper (core_yylex_token) returns each token with its location start set; core_yylex, defined
+ * after the rules, sets where the token ends: the end of the text the last rule matched, as yyless left it.
+ */
+#define YY_DECL int core_yylex_token(YYSTYPE *yylval_param, YYLTYPE *yylloc_param, yyscan_t yyscanner)
+
+/*
  * Advance yylloc by the given number of bytes.
  */
 #define ADVANCE_YYLLOC(delta)  ( *(yylloc) += (delta) )
@@ -1640,6 +1646,15 @@ core_yyfree(void *ptr, core_yyscan_t yyscanner)
 {
 	if (ptr)
 		pfree(ptr);
+}
+
+int
+core_yylex(core_YYSTYPE *lvalp, YYLTYPE *llocp, core_yyscan_t yyscanner)
+{
+	int			token = core_yylex_token(lvalp, llocp, yyscanner);
+
+	llocp->end = (int) (yyget_text(yyscanner) + yyget_leng(yyscanner) - yyextra->scanbuf);
+	return token;
 }
 
 #undef yyerror

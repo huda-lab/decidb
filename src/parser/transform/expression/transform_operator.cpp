@@ -258,6 +258,11 @@ unique_ptr<ParsedExpression> Transformer::TransformAExpr(duckdb_libpgquery::PGAE
 	auto result = TransformAExprInternal(root);
 	if (result) {
 		SetQueryLocation(*result, root.location);
+		// `per row:` binds to its body alone, and the expression binder gives that bound body the marker's location.
+		// The marker takes the body's, so the clause text the parser kept for the body is still found by it.
+		if (root.kind == duckdb_libpgquery::PG_AEXPR_SCOPE_PER_ROW) {
+			result->query_location = result->Cast<FunctionExpression>().children[0]->query_location;
+		}
 	}
 	return result;
 }

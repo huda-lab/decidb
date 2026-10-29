@@ -28,10 +28,11 @@ void PreserveDecideSourceFragment(const ParsedExpression &source, Expression &bo
 //! Assign stable source ids to bound comparisons before planning rewrites them.
 //! `keys` lets a reducer print its
 //! `per K` and `by (...)`; every renderer below takes it for the same reason.
+//! `text`, when given, supplies each comparison's two sides as the user wrote them.
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const vector<string> &fragments,
                                                             const vector<EntityScopeInfo> &entity_scopes,
-                                                            idx_t decide_index,
-                                                            const vector<DecideKey> *keys = nullptr);
+                                                            idx_t decide_index, const vector<DecideKey> *keys = nullptr,
+                                                            const DecideSourceText *text = nullptr);
 
 //! Rebuild canonical display templates after PlanSubqueries and canonicalization.
 void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,

@@ -57,15 +57,19 @@ namespace duckdb_libpgquery {
 #define DEFAULT_SCHEMA "main"
 
 /*
- * Location tracking support --- simpler than bison's default, since we only
- * want to track the start position not the end position of each nonterminal.
+ * Location tracking support --- simpler than bison's default: a nonterminal starts where its first
+ * component starts (-1 when that component is empty) and ends where its last component ends. An empty
+ * nonterminal ends where the symbol before it ends. DecidB cuts a DECIDE clause's text between the two.
  */
 #define YYLLOC_DEFAULT(Current, Rhs, N) \
 	do { \
-		if ((N) > 0) \
-			(Current) = (Rhs)[1]; \
-		else \
-			(Current) = (-1); \
+		if ((N) > 0) { \
+			(Current).start = (Rhs)[1].start; \
+			(Current).end = (Rhs)[N].end; \
+		} else { \
+			(Current).start = -1; \
+			(Current).end = (Rhs)[0].end; \
+		} \
 	} while (0)
 
 /*
@@ -208,6 +212,8 @@ static PGNode *makeDecideClause(PGList *decl, PGNode *body, int decl_location,
 static PGNode *makeDecideScope(PGDecidePer per, PGList *key, int location,
 							   core_yyscan_t yyscanner);
 static PGNode *applyDecideScope(PGNode *scope, PGNode *body);
+static void noteDecideSpan(core_yyscan_t yyscanner, int anchor, PGDecideSpanRole role, YYLTYPE span);
+static PGNode *noteDecideSides(PGNode *comparison, YYLTYPE op, YYLTYPE lhs, YYLTYPE rhs, core_yyscan_t yyscanner);
 static PGNode *makeQualifiedReducer(PGList *funcname, PGList *qualifier, PGList *args,
 									int location, int qualifier_location,
 									int colon_location, core_yyscan_t yyscanner);

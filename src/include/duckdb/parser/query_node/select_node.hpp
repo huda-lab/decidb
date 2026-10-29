@@ -15,6 +15,7 @@
 #include "duckdb/parser/parsed_data/sample_options.hpp"
 #include "duckdb/parser/group_by_node.hpp"
 #include "duckdb/common/enums/aggregate_handling.hpp"
+#include "duckdb/common/decide_source_info.hpp"
 #include "duckdb/common/enums/decide.hpp"
 
 namespace duckdb {
@@ -48,6 +49,8 @@ public:
 	unique_ptr<ParsedExpression> decide_constraints;
 	DecideSense decide_sense = DecideSense::FEASIBILITY;
 	unique_ptr<ParsedExpression> decide_objective;
+	//! The text of the DECIDE tail as the user wrote it, with the spans the binders cut from it
+	DecideSourceText decide_text;
 
 	const vector<unique_ptr<ParsedExpression>> &GetSelectList() const override {
 		return select_list;

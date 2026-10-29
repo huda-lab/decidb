@@ -64,8 +64,13 @@ public:
 	string NodetypeToString(duckdb_libpgquery::PGNodeTag type);
 
 	idx_t ParamCount() const;
+	//! The string the Postgres parser was given: the offsets of a DECIDE clause's spans index into it.
+	void SetParsedQuery(const string &query) {
+		parsed_query = &query;
+	}
 
 private:
+	const string *parsed_query = nullptr;
 	optional_ptr<Transformer> parent;
 	//! Parser options
 	ParserOptions &options;

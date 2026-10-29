@@ -116,6 +116,27 @@ unique_ptr<QueryNode> Transformer::TransformSelectInternal(duckdb_libpgquery::PG
             if (decide_clause.objective) {
                 result.decide_objective = TransformExpression(decide_clause.objective);
             }
+            // The text the user wrote for the tail, with where the parser found each construct in it.
+            auto &query = RootTransformer().parsed_query;
+            if (query && decide_clause.tail_start >= 0 && decide_clause.tail_end <= NumericCast<int>(query->size())) {
+                auto &text = result.decide_text;
+                text.tail_start = NumericCast<idx_t>(decide_clause.tail_start);
+                text.tail = query->substr(text.tail_start, NumericCast<idx_t>(decide_clause.tail_end) - text.tail_start);
+                for (auto cell = decide_clause.spans ? decide_clause.spans->head : nullptr; cell; cell = cell->next) {
+                    auto &span = *reinterpret_cast<duckdb_libpgquery::PGDecideSpan *>(cell->data.ptr_value);
+                    if (span.anchor < decide_clause.tail_start || span.end > decide_clause.tail_end) {
+                        continue;
+                    }
+                    for (auto value : {span.anchor, static_cast<int>(span.role), span.start, span.end}) {
+                        text.spans.push_back(NumericCast<idx_t>(value));
+                    }
+                    for (idx_t i = 0; i < 4; i++) {
+                        if (i != 1) {
+                            text.spans[text.spans.size() - 4 + i] -= text.tail_start;
+                        }
+                    }
+                }
+            }
         }
 		// where
 		result.where_clause = TransformExpression(stmt.whereClause);

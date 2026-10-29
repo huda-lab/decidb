@@ -47,12 +47,17 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 	if (condition_error.HasError()) {
 		return BindResult(std::move(condition_error));
 	}
+	idx_t when_text = qualifier_context ? qualifier_context->WrittenFragment(*when, DecideSpanRole::WHEN)
+	                                    : DConstants::INVALID_INDEX;
 	auto wrap = [&](unique_ptr<Expression> objective) -> unique_ptr<Expression> {
 		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 		wrapper->children.push_back(std::move(objective));
 		wrapper->children.push_back(BoundCastExpression::AddCastToType(
 		    context, std::move(BoundExpression::GetExpression(*when->children[1])), LogicalType::BOOLEAN));
 		wrapper->alias = WHEN_CONSTRAINT_TAG;
+		if (when_text != DConstants::INVALID_INDEX) {
+			AddDecideTag(wrapper->alias, MakeSourceFragmentTag(when_text));
+		}
 		return std::move(wrapper);
 	};
 	// The two-level form's PER wrapper stays outermost, as the nested objective's rewrite
@@ -148,8 +153,12 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	}
 	// The plan prints the key as written rather than its columns (RenderDecidePerKey).
 	if (qualifier_context && qualifier_context->source_fragments) {
-		AddDecideTag(wrapper->alias, MakeSourceFragmentTag(qualifier_context->source_fragments->size()));
-		qualifier_context->source_fragments->push_back(key_text);
+		auto key_fragment = qualifier_context->WrittenFragment(per, DecideSpanRole::PER);
+		if (key_fragment == DConstants::INVALID_INDEX) {
+			key_fragment = qualifier_context->source_fragments->size();
+			qualifier_context->source_fragments->push_back(key_text);
+		}
+		AddDecideTag(wrapper->alias, MakeSourceFragmentTag(key_fragment));
 	}
 	return BindResult(std::move(wrapper));
 }

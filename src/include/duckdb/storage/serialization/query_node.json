@@ -94,6 +94,11 @@
         "id": 212,
         "name": "decide_objective",
         "type": "ParsedExpression*"
+      },
+      {
+        "id": 213,
+        "name": "decide_text",
+        "type": "DecideSourceText"
       }
     ]
   },

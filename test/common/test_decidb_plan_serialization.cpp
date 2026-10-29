@@ -5,6 +5,7 @@
 #include "duckdb/common/serializer/binary_serializer.hpp"
 #include "duckdb/common/serializer/memory_stream.hpp"
 #include "duckdb/parser/parser.hpp"
+#include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/statement/select_statement.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
@@ -219,15 +220,24 @@ TEST_CASE("Parsed DECIDE scope spellings survive ToString and binary round trips
 		REQUIRE(deserialized->ToString() == rendered);
 	}
 
-	// A scope covers exactly one constraint: x >= 0 stays outside the WHEN.
+	// ToString prints the tail as the user wrote it; the tree renderer is what these pins check, so they clear the
+	// source text (a statement built without the parser's text renders its tree).
+	auto without_text = [](duckdb::unique_ptr<SelectStatement> statement) {
+		statement->node->Cast<SelectNode>().decide_text = DecideSourceText();
+		return statement;
+	};
 	REQUIRE(ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT when a = 1: x <= 1 AND x >= 0")->ToString() ==
-	        "SELECT a FROM t DECIDE x(INT) SUCH THAT WHEN (a = 1): (x <= 1) AND (x >= 0)");
+	        "SELECT a FROM t DECIDE x(INT) SUCH THAT when a = 1: x <= 1 AND x >= 0");
+
+	// A scope covers exactly one constraint: x >= 0 stays outside the WHEN.
+	REQUIRE(without_text(ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT when a = 1: x <= 1 AND x >= 0"))
+	            ->ToString() == "SELECT a FROM t DECIDE x(INT) SUCH THAT WHEN (a = 1): (x <= 1) AND (x >= 0)");
 
 	// per row is the default written out, and a spelling of the scoping language like the
 	// others (D19): it keeps a node of its own, prints back as written, and is not the
 	// statement with the scope left out.
-	auto spelled_out = ParseSelect("SELECT a FROM t DECIDE per row: x(INT) "
-	                               "SUCH THAT per row: SUM(per row: x) <= 1 AND per row: x <= 1");
+	auto spelled_out = without_text(ParseSelect("SELECT a FROM t DECIDE per row: x(INT) "
+	                                            "SUCH THAT per row: SUM(per row: x) <= 1 AND per row: x <= 1"));
 	auto implied = ParseSelect("SELECT a FROM t DECIDE x(INT) SUCH THAT SUM(x) <= 1 AND x <= 1");
 	auto spelled_rendered = spelled_out->ToString();
 	INFO(spelled_rendered);

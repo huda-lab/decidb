@@ -909,7 +909,7 @@ def test_explain_echoes_the_clause_as_written(decidb_cli):
     out = decidb_cli.execute_raw(f"EXPLAIN {_ship_query('ship <= D.maxShipmentShare * sum(ship) by (D.depotID)')}")
     # The plan box breaks lines inside tokens, so compare without any whitespace.
     text = re.sub(r"[│\s]", "", out.stdout)
-    assert "ship<=maxShipmentShare*sum(ship)by(D.depotID)" in text, out.stdout
+    assert "ship<=D.maxShipmentShare*sum(ship)by(D.depotID)" in text, out.stdout
     assert "≡ship-maxShipmentShare*sum(ship)by(D.depotID)<=0.0" in text, out.stdout
     assert "sum(ship)by(D.depotID)becomesahelperdecisionpergroup" in text, out.stdout
     assert "__value_" not in text, out.stdout

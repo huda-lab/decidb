@@ -130,14 +130,19 @@ string SelectNode::ToString() const {
 			}
 			result += DecideVariableToString(*decide_variables[i]);
 		}
-		result += " SUCH THAT " + DecideConstraintsToString(*decide_constraints);
-		if (decide_objective) {
-			if (decide_sense == DecideSense::MAXIMIZE) {
-				result += " MAXIMIZE ";
-			} else if (decide_sense == DecideSense::MINIMIZE) {
-				result += " MINIMIZE ";
+		if (decide_text.HasText()) {
+			// the tail as written, so a statement parsed from this string keeps the text the user wrote
+			result += " " + decide_text.tail;
+		} else {
+			result += " SUCH THAT " + DecideConstraintsToString(*decide_constraints);
+			if (decide_objective) {
+				if (decide_sense == DecideSense::MAXIMIZE) {
+					result += " MAXIMIZE ";
+				} else if (decide_sense == DecideSense::MINIMIZE) {
+					result += " MINIMIZE ";
+				}
+				result += decide_objective->ToString();
 			}
-			result += decide_objective->ToString();
 		}
 	}
 	if (!groups.grouping_sets.empty()) {
@@ -270,6 +275,7 @@ unique_ptr<QueryNode> SelectNode::Copy() const {
 		result->decide_sense = decide_sense;
 	}
 	result->decide_objective = decide_objective ? decide_objective->Copy() : nullptr;
+	result->decide_text = decide_text;
 	result->where_clause = where_clause ? where_clause->Copy() : nullptr;
 	// groups
 	for (auto &group : groups.group_expressions) {

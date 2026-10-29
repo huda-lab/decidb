@@ -472,10 +472,21 @@ static string PerClassQualifier(const BoundConjunctionExpression &conj, const ve
 	return "per " + RenderDecidePerKey(conj, fragments);
 }
 
+//! The condition of a `when` wrapper as the user wrote it; a wrapper whose text the parser did not keep renders its
+//! condition.
+static string WrittenWhen(const BoundConjunctionExpression &conj, const vector<string> &fragments,
+                          const vector<EntityScopeInfo> &entity_scopes) {
+	idx_t fragment_id;
+	if (TryParseSourceFragmentTag(conj.GetAlias(), fragment_id) && fragment_id < fragments.size()) {
+		return fragments[fragment_id];
+	}
+	return RenderSource(*conj.children[1], fragments, entity_scopes);
+}
+
 //! The qualifier of a `when` wrapper: `when c`, in front of its clause.
 static string WhenQualifier(const BoundConjunctionExpression &conj, const vector<string> &fragments,
                             const vector<EntityScopeInfo> &entity_scopes) {
-	return "when " + RenderSource(*conj.children[1], fragments, entity_scopes);
+	return "when " + WrittenWhen(conj, fragments, entity_scopes);
 }
 
 //! A qualifier (`when c per K`) is written in front of its clause and ends in a colon.
@@ -560,7 +571,8 @@ static bool ReferencesDecideVariable(const Expression &expr, idx_t decide_index)
 
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const vector<string> &fragments,
                                                             const vector<EntityScopeInfo> &entity_scopes,
-                                                            idx_t decide_index, const vector<DecideKey> *keys) {
+                                                            idx_t decide_index, const vector<DecideKey> *keys,
+                                                            const DecideSourceText *text) {
 	vector<ConstraintSourceInfo> result;
 	VisitSourceComparisons(constraints, fragments, entity_scopes, string(),
 	                       [&](BoundComparisonExpression &cmp, const string &qualifier) {
@@ -596,11 +608,22 @@ vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constrai
 		                       info.written_lhs = RenderSource(*cmp.left, fragments, entity_scopes, keys);
 		                       info.written_rhs = RenderSource(*cmp.right, fragments, entity_scopes, keys);
 		                       info.written_cmp = DecideComparisonOperator(cmp.type);
+		                       info.rendered_lhs = info.written_lhs;
+		                       info.rendered_rhs = info.written_rhs;
 		                       info.qualifier = qualifier;
 		                       if (ReferencesDecideVariable(*cmp.left, decide_index) &&
 		                           ReferencesDecideVariable(*cmp.right, decide_index)) {
 			                       info.source_lhs = info.written_lhs;
 			                       info.source_rhs = info.written_rhs;
+		                       }
+		                       // What an edit quotes stays DeciDB's own rendering; what a message quotes as the clause
+		                       // is the text the user wrote, cut from the query (a clause with no cut keeps the
+		                       // render).
+		                       string left, right;
+		                       if (text && text->Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_LHS, left) &&
+		                           text->Cut(cmp.GetQueryLocation(), DecideSpanRole::CMP_RHS, right)) {
+			                       info.written_lhs = std::move(left);
+			                       info.written_rhs = std::move(right);
 		                       }
 		                       result.push_back(std::move(info));
 	                       });
@@ -649,6 +672,11 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 		                       info.canonical_lhs = RenderSource(*cmp.left, fragments, entity_scopes, keys);
 		                       info.canonical_rhs = RenderSource(*cmp.right, fragments, entity_scopes, keys);
 		                       info.canonical_cmp = DecideComparisonOperator(cmp.type);
+		                       info.canonical_differs = info.rendered_lhs != info.canonical_lhs ||
+		                                                info.rendered_rhs != info.canonical_rhs ||
+		                                                info.written_cmp != info.canonical_cmp;
+		                       info.rendered_lhs.clear();
+		                       info.rendered_rhs.clear();
 		                       // The written spelling is only worth carrying when it differs
 		                       // from the canonical one. Two cases retire it here. When both
 		                       // sides render identically nothing moved, so the canonical text
@@ -752,7 +780,7 @@ static TwoLevelParts SplitTwoLevel(const BoundConjunctionExpression &per, const 
 	if (parts.body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
 	    IsWhenConstraintWrapper(parts.body->Cast<BoundConjunctionExpression>())) {
 		auto &wrapper = parts.body->Cast<BoundConjunctionExpression>();
-		parts.when = RenderSource(*wrapper.children[1], fragments, entity_scopes);
+		parts.when = WrittenWhen(wrapper, fragments, entity_scopes);
 		parts.body = wrapper.children[0].get();
 	}
 	parts.key = RenderDecidePerKey(per, fragments);
@@ -958,20 +986,14 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expressi
 		if (!info.canonical_cmp.empty()) {
 			canonical += " " + info.canonical_cmp + " " + info.canonical_rhs;
 		}
-		// A clause with no written spelling is either a DECIDE-variable IN -- an opaque
-		// marker the binder registers rather than a comparison -- or a plan serialized
-		// before the written layer existed. Both read as canonical-only.
-		string written = info.written_lhs.empty() && info.written_cmp.empty()
-		                     ? canonical
-		                     : info.written_lhs + " " + info.written_cmp + " " + info.written_rhs;
 		layers.written = QuoteWrittenClause(info);
-		if (canonical != written) {
+		if (info.canonical_differs) {
 			layers.canonical = AppendQualifier(info.qualifier, canonical);
 		}
 		// The solver form is worth printing only where it says something the layer above
 		// did not: a row that reads as that layer is left out, whatever the rewrite put
 		// beside it (an ABS leaves the clause's own row next to its envelope rows).
-		const string &above = layers.canonical.empty() ? layers.written : layers.canonical;
+		const string above = AppendQualifier(info.qualifier, canonical);
 		for (auto &row : by_clause[i]) {
 			if (row != above) {
 				layers.rewritten.push_back(std::move(row));

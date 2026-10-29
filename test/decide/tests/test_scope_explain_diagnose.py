@@ -113,7 +113,7 @@ def _ship_query(decide: str, clause: str, objective: str = "MAXIMIZE SUM(ship)")
         pytest.param(
             "ship(INT)",
             "when S.priority: ship IN (0, 5, 10)",
-            "whenpriority:shipIN(0,5,10)",
+            "whenS.priority:shipIN(0,5,10)",
             "whenpriority:(ship=0)+(ship=5)+(ship=10)=1",
             None,
             id="scoped-in-keeps-its-when",
@@ -214,7 +214,7 @@ def test_explain_names_functions_as_the_scope_spellings_write_them(decidb_cli):
     """A function prints lower-case, as the docs write it; the
     written layer and the solver rows agree."""
     text = _plan(decidb_cli, _ship_query("ship(INT)", "when S.priority: abs(ship - 20) <= 3"))
-    assert "whenpriority:abs(ship-20)<=3" in text, text
+    assert "whenS.priority:abs(ship-20)<=3" in text, text
     assert "ABS(" not in text, text
 
 
@@ -243,7 +243,7 @@ def test_explain_accounts_for_the_objectives_rewrites_too(decidb_cli):
     and the rows a rewrite added for it are printed there too, not as rows no clause owns."""
     text = _plan(decidb_cli, _ship_query("ship(INT)", "ship >= 1", "MINIMIZE when S.priority: sum(abs(ship - 10))"))
     assert (
-        "Objective:MINIMIZEwhenpriority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable"
+        "Objective:MINIMIZEwhenS.priority:sum(abs(ship-10))↳abs(ship-10)becomesanauxiliaryvariable"
         "↳whenpriority:abs(ship-10)-ship>=-10"
     ) in text, text
     assert "addedbyformulation" not in text, text
@@ -281,7 +281,7 @@ def test_explain_prints_no_row_that_repeats_a_per_row_clause(decidb_cli):
         SUCH THAT x <= t.cap AND per row: x >= 3 AND per row: x <= t.cap - 1
         MAXIMIZE SUM(x)""",
     )
-    assert "x>=3" in text and "x<=cap-1" in text and "perrow:" not in text, text
+    assert "x>=3" in text and "x<=t.cap-1" in text and "perrow:" not in text, text
     assert "↳" not in text, text
 
 
@@ -408,7 +408,7 @@ def test_a_hard_min_or_max_reports_once_per_class_too(decidb_cli):
         ),
         pytest.param(
             "when t.id > 0: sum(x) + max(x) <= -5",
-            [("NULL", str(row), 5, "expanded_row", "when id > 0: sum(x) + max(x) <= 0") for row in range(4)],
+            [("NULL", str(row), 5, "expanded_row", "when t.id > 0: sum(x) + max(x) <= 0") for row in range(4)],
             id="composed-no-per",
         ),
     ],
@@ -473,7 +473,7 @@ def test_a_when_in_front_limits_the_classes_to_the_kept_rows(decidb_cli):
     """`when t.id <> 2 per t.depot: ...`: row 2 is dropped, D1 still stands for region E
     through row 1; the shortfall counts the kept rows only (E: 10 + 30 = 40 reach)."""
     findings = _findings(_diagnose(decidb_cli, "when t.id <> 2 per t.depot: sum(x) by (t.region) >= 100"))
-    change = "when id <> 2 per t.depot: sum(x) by (t.region) >= {}"
+    change = "when t.id <> 2 per t.depot: sum(x) by (t.region) >= {}"
     assert findings == [
         ("D1", "NULL", 60, "expanded_group", change.format(40)),
         ("D2", "NULL", 60, "expanded_group", change.format(40)),
@@ -777,15 +777,15 @@ def test_diagnose_echo_of_a_decision_beside_its_reducer_pastes_back(decidb_cli):
 def test_diagnose_names_functions_as_the_scope_spellings_write_them(decidb_cli):
     """A clause's echo prints its functions lower-case."""
     rows = _diagnose(decidb_cli, "when t.id = 1: abs(x - 50) <= 3", scope="query")
-    assert rows[0]["clause"] == "when id = 1: abs(x - 50) <= 3", rows
-    assert rows[0]["suggested_change"].startswith("when id = 1: abs(x - 50) <= "), rows
+    assert rows[0]["clause"] == "when t.id = 1: abs(x - 50) <= 3", rows
+    assert rows[0]["suggested_change"].startswith("when t.id = 1: abs(x - 50) <= "), rows
 
 
 @pytest.mark.parametrize(
     "clause, quoted",
     [
         pytest.param("per row: x >= 'inf'::DOUBLE", "x >= inf", id="per-row"),
-        pytest.param("when t.id > 1: x >= 'inf'::DOUBLE", "when id > 1: x >= inf", id="when"),
+        pytest.param("when t.id > 1: x >= 'inf'::DOUBLE", "when t.id > 1: x >= inf", id="when"),
     ],
 )
 def test_an_unreachable_bound_quotes_the_scope_in_front(decidb_cli_highs, clause, quoted):

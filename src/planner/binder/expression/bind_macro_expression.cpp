@@ -4,6 +4,7 @@
 #include "duckdb/parser/expression/function_expression.hpp"
 #include "duckdb/parser/expression/subquery_expression.hpp"
 #include "duckdb/parser/expression/window_expression.hpp"
+#include "duckdb/parser/query_node/select_node.hpp"
 #include "duckdb/parser/parsed_expression_iterator.hpp"
 #include "duckdb/planner/expression_binder.hpp"
 
@@ -45,6 +46,28 @@ void ExpressionBinder::ReplaceMacroParametersInLambda(FunctionExpression &functi
 	}
 }
 
+void ExpressionBinder::ReplaceMacroParametersInQueryNode(QueryNode &node,
+                                                         vector<unordered_set<string>> &lambda_params) {
+	optional_ptr<SelectNode> select;
+	if (node.type == QueryNodeType::SELECT_NODE) {
+		select = optional_ptr<SelectNode>(node.Cast<SelectNode>());
+	}
+	ParsedExpressionIterator::EnumerateQueryNodeChildren(node, [&](unique_ptr<ParsedExpression> &child) {
+		bool in_decide_tail = false;
+		if (select) {
+			in_decide_tail = &child == &select->decide_constraints || &child == &select->decide_objective;
+			for (auto &variable : select->decide_variables) {
+				in_decide_tail = in_decide_tail || &child == &variable;
+			}
+		}
+		auto before = macro_substitutions;
+		ReplaceMacroParameters(child, lambda_params);
+		if (in_decide_tail && macro_substitutions != before) {
+			select->decide_text = DecideSourceText();
+		}
+	});
+}
+
 void ExpressionBinder::ReplaceMacroParameters(unique_ptr<ParsedExpression> &expr,
                                               vector<unordered_set<string>> &lambda_params) {
 
@@ -68,6 +91,7 @@ void ExpressionBinder::ReplaceMacroParameters(unique_ptr<ParsedExpression> &expr
 		if (bind_macro_parameter) {
 			D_ASSERT(macro_binding->HasMatchingBinding(col_ref.GetColumnName()));
 			expr = macro_binding->ParamToArg(col_ref);
+			macro_substitutions++;
 		}
 		return;
 	}
@@ -81,8 +105,7 @@ void ExpressionBinder::ReplaceMacroParameters(unique_ptr<ParsedExpression> &expr
 	}
 	case ExpressionClass::SUBQUERY: {
 		auto &sq = (expr->Cast<SubqueryExpression>()).subquery;
-		ParsedExpressionIterator::EnumerateQueryNodeChildren(
-		    *sq->node, [&](unique_ptr<ParsedExpression> &child) { ReplaceMacroParameters(child, lambda_params); });
+		ReplaceMacroParametersInQueryNode(*sq->node, lambda_params);
 		break;
 	}
 	default:

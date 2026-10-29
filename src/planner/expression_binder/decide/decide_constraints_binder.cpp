@@ -345,6 +345,8 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 	// other half) binds the condition afresh from it as written.
 	unique_ptr<ParsedExpression> condition_text;
 	unique_ptr<Expression> condition;
+	idx_t when_text = when && qualifier_context ? qualifier_context->WrittenFragment(*when, DecideSpanRole::WHEN)
+	                                            : DConstants::INVALID_INDEX;
 	if (when) {
 		condition_text = when->children[1]->Copy();
 		auto error = bind_condition(when->children[1], condition);
@@ -362,8 +364,12 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 		// the marker's alias: the expression binder gives the bound wrapper that alias.
 		auto key_text = DecideKeyToString(*per);
 		if (qualifier_context->source_fragments) {
-			key_fragment = qualifier_context->source_fragments->size();
-			qualifier_context->source_fragments->push_back(key_text.empty() ? string("()") : key_text);
+			// the key as the user wrote it, when the parser kept it
+			key_fragment = qualifier_context->WrittenFragment(*per, DecideSpanRole::PER);
+			if (key_fragment == DConstants::INVALID_INDEX) {
+				key_fragment = qualifier_context->source_fragments->size();
+				qualifier_context->source_fragments->push_back(key_text.empty() ? string("()") : key_text);
+			}
 		}
 		case_insensitive_set_t decision_names;
 		for (auto &variable : variables) {
@@ -388,6 +394,9 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 			wrapper->children.push_back(std::move(constraint));
 			wrapper->children.push_back(std::move(this_condition));
 			wrapper->alias = WHEN_CONSTRAINT_TAG;
+			if (when_text != DConstants::INVALID_INDEX) {
+				AddDecideTag(wrapper->alias, MakeSourceFragmentTag(when_text));
+			}
 			constraint = std::move(wrapper);
 		}
 		if (per) {
