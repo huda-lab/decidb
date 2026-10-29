@@ -7,8 +7,12 @@
   with DeciDB's time-limit error at 639 s. Peak memory 1.9 GiB, one core busy, so it is not a memory kill. HiGHS
   checks the clock in presolve once per 1,024 reductions (`../pipeline/07_solver/done.md`), and this presolve makes
   none. The 2026-09-09 sweep's three `process_timeout` rows for Q3 on HiGHS are this overrun.
-- **Next step:** one run with a stack sample at about 200 s names the presolve routine; then a vendored check there,
-  marked `DeciDB patch (BUG-23)`, as SOL-1's and BUG-3's are.
+- **Cause:** stack samples at 120 s and 240 s are all in `HPresolve::dominatedColumns`
+  (`third_party/highs/highs/presolve/HPresolve.cpp:~956`). Its loop over columns scans each column's rows in full,
+  and Q3 has rows over all 120,000 columns (`SUM(ABS(adj)) <= cap`), so the work is about columns × row length, with no
+  reduction to trigger `checkTimeLimit()` (`:~4584`).
+- **Fix:** the column loop calls `checkTimeLimit()` once per 1,024 columns, marked `DeciDB patch (BUG-23)`, as SOL-1's
+  and BUG-3's checks are; presolve then stops as it does at any other limit.
 - **Reproduce:** Q3 with `${Q3_ROW_LIMIT}` = 120000 and `${Q3_ABS_CAP}` = 900000 on `large.db`,
   `DECIDB_FORCE_SOLVER=highs DECIDB_TIME_LIMIT=300 DECIDB_PROFILE_SOLVER_LOG=1`; about 11 minutes, 1.9 GiB.
 
