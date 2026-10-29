@@ -87,6 +87,17 @@ _SYMMETRY_PAIRS_SQL = """
         MINIMIZE SUM(x))
 """
 
+# Benchmark Q3's shape at 30,000 rows: ``SUM(ABS(adj)) <= cap`` is a row over all the rows' columns, and the L0 norm
+# adds one binary per row. HiGHS's dominated-columns presolve (``HPresolve::dominatedColumns``) scans that row for
+# each column and makes no reduction, so it runs about 25 s.
+_DOMINATED_COLUMNS_SQL = """
+    SELECT count(*) AS n FROM (
+        SELECT i, adj FROM (SELECT i, (i * 7919) % 50 + 1 AS q FROM range(30000) t(i))
+        DECIDE adj(REAL)
+        SUCH THAT adj BETWEEN -20 AND 20 AND SUM(ABS(adj)) <= 225000 AND norm(adj, 'inf') <= 15
+        MINIMIZE SUM(ABS(adj - 0.01 * q)) + 0.5 * norm(adj, 1) + 0.3 * norm(adj, 0, 40))
+"""
+
 
 def _run_decidb(cli, sql, *, time_limit=None, subprocess_timeout=30):
     """Run ``sql`` on the Gurobi CLI with optional DECIDB_TIME_LIMIT in the env.
@@ -187,6 +198,21 @@ class TestTimeLimit:
         in; without it the subprocess timeout kills the solve.
         """
         result = _run_decidb(decidb_cli_highs, _SYMMETRY_PATH_SQL, time_limit=1.5, subprocess_timeout=5)
+        combined = result.stderr + result.stdout
+        assert re.search(r"(?i)hit the time limit", combined), (
+            f"Expected 'hit the time limit' message but got:\n"
+            f"  stdout: {result.stdout[:400]}\n"
+            f"  stderr: {result.stderr[:400]}"
+        )
+
+    def test_highs_limit_bounds_dominated_columns(self, decidb_cli_highs):
+        """HiGHS stops its dominated-columns presolve at DECIDB_TIME_LIMIT.
+
+        Presolve checks the clock once per 1,024 reductions, and this pass makes none for about 25 s. Third_party
+        patch BUG-23 checks it once per 1,024 columns, so the solve ends with the time-limit error about 1 s in;
+        without it the subprocess timeout kills the solve.
+        """
+        result = _run_decidb(decidb_cli_highs, _DOMINATED_COLUMNS_SQL, time_limit=1, subprocess_timeout=5)
         combined = result.stderr + result.stdout
         assert re.search(r"(?i)hit the time limit", combined), (
             f"Expected 'hit the time limit' message but got:\n"
