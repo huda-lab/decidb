@@ -31,6 +31,13 @@ def _bound(value):
     return f"DECIDE: the bound {value} is NaN on some rows. Skip those rows with 'when NOT isnan({value}):'."
 
 
+def _finite_bound(value):
+    return (
+        f"DECIDE: the bound {value} is infinite on some rows, and this clause needs a finite one. "
+        f"Skip those rows with 'when isfinite({value}):'."
+    )
+
+
 def _stderr(cli, sql, mode):
     return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}").stderr
 
@@ -192,3 +199,26 @@ def test_a_null_value_is_still_skipped_not_refused(decidb_cli, decide):
     sql = _query(decide, "NULL::DOUBLE")
     for mode in ("require", "off"):
         assert _stderr(decidb_cli, sql, mode) == "", mode
+
+
+@pytest.mark.error
+def test_a_rewrite_that_needs_a_finite_bound_names_the_infinite_one_as_written(decidb_cli):
+    # `norm(e, 0)` states its links with a Big-M, which no infinite bound can dominate; a NaN there keeps the bound text.
+    decide = "x(REAL) SUCH THAT x <= 10 AND norm(x + b, 0) <= 2 MAXIMIZE SUM(a * x)"
+    assert _finite_bound("b") in _stderr(decidb_cli, _query(decide, INFINITY), "off")
+    assert _bound("b") in _stderr(decidb_cli, _query(decide, NAN), "off")
+
+
+@pytest.mark.error
+@pytest.mark.parametrize(
+    "decide",
+    [
+        "x(REAL) SUCH THAT x <= 'NaN'::DOUBLE MAXIMIZE SUM(a * x)",
+        "x(REAL) SUCH THAT x <= 5 AND x >= 0.0 / 0.0 MAXIMIZE SUM(a * x)",
+        "x(INT) SUCH THAT x <= 5 AND 2 * x <= 'NaN'::DOUBLE MAXIMIZE SUM(a * x)",
+    ],
+)
+def test_a_constant_bound_that_is_nan_is_named(decidb_cli, decide):
+    # Nothing reads a constant bound per row, so the check on the values it admits is the only one that sees it.
+    stderr = _stderr(decidb_cli, _query(decide, "1.0"), "off")
+    assert "is NaN on some rows. Skip those rows with 'when NOT isnan(" in stderr, stderr

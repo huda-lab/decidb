@@ -308,6 +308,10 @@ struct EvaluatedConstraint {
     //! scalar RHS. Stamped onto ConstraintProvenance::rhs_label at the per-row builder site.
     string rhs_label;
 
+    //! The right side as the user wrote it, for a message that names it (DecideInvalidValueMessage). Set for every
+    //! right side, a constant included, where the row is evaluated.
+    string rhs_written;
+
     //! True when this is a pure-linear AVG aggregate whose row coefficients were
     //! pre-scaled by 1/N_g for the AVG→SUM rewrite. Propagated to the row provenance
     //! so infeasible diagnosis renders the clause as `AVG(...)` (and the slack is

@@ -19,13 +19,19 @@
 namespace duckdb {
 
 //! What a number the model reads is: a coefficient must be finite, a bound only has to be a number (an infinite bound
-//! means "no bound" or "nothing satisfies it").
-enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND };
+//! means "no bound" or "nothing satisfies it"), and a bound a rewrite needs (ABS, MIN, MAX, `<>`) must be finite.
+enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND, FINITE_BOUND };
 
 //! The error for a NaN or infinite value, the one text every site that refuses one raises. `written` is the value as
 //! the user wrote it (the cut text of the query, or the tree rendered where no text was cut). The message gives the
 //! smallest edit, a `when` that skips the rows, and names no row: a row's position in the input depends on the scan.
 inline string DecideInvalidValueMessage(DecideValueRole role, const string &written) {
+	if (role == DecideValueRole::FINITE_BOUND) {
+		return "DECIDE: the bound " + written +
+		       " is infinite on some rows, and this clause needs a finite one. "
+		       "Skip those rows with 'when isfinite(" +
+		       written + "):'.";
+	}
 	if (role == DecideValueRole::BOUND) {
 		return "DECIDE: the bound " + written + " is NaN on some rows. Skip those rows with 'when NOT isnan(" +
 		       written + "):'.";

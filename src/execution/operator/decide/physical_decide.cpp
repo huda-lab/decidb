@@ -2349,6 +2349,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		// Evaluate RHS: a constant, or a value of each row.
 
 		clause_phase.Next("extraction.rhs");
+		eval_const.rhs_written = RenderDecideSource(*constraint->rhs_expr, names);
 		if (constraint->rhs_expr->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT) {
 			auto &const_expr = constraint->rhs_expr->Cast<BoundConstantExpression>();
             double rhs_constant = const_expr.value.GetValue<double>();

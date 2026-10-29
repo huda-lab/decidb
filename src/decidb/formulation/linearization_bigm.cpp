@@ -8,6 +8,7 @@
 //===----------------------------------------------------------------------===//
 #include "duckdb/decidb/formulation/ilp_linearization.hpp"
 #include "duckdb/common/decide_numeric_policy.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/exception.hpp"
 
 #include <algorithm>
@@ -238,11 +239,8 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
         // can read an infinity by direction (`<>`, MIN/MAX) classify it before
         // getting here, so what still arrives is a bound with no reading at all.
         if (!std::isfinite(rhs)) {
-            throw InvalidInputException(
-                "DECIDE cannot rewrite this constraint: its bound is %s at "
-                "row %llu, and rewriting ABS, MIN, MAX or <> needs a finite bound. "
-                "Compare against a finite value instead.",
-                std::isnan(rhs) ? "NaN" : "Infinity", r);
+            throw InvalidInputException(DecideInvalidValueMessage(
+                std::isnan(rhs) ? DecideValueRole::BOUND : DecideValueRole::FINITE_BOUND, ec.rhs_written));
         }
         double rhs_mag = std::abs(rhs);
         double range = rhs_mag + DecideRowTermRange(ec.variable_indices, ec.row_coefficients,
