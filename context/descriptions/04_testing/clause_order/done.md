@@ -46,7 +46,7 @@ orders" and `00_project_overview/syntax_reference.md` §1.
 - **`when` and `per` in the split order**: a `when` in front of a constraint
   (`test_split_order_with_when`), `per K: ... by (K)` on a constraint
   (`test_split_order_with_per`, which also asserts the group cap holds), and the
-  two-level objective `min(per k: sum(...) by (k))`
+  nested objective `min(per k: sum(...) by (k))`
   (`test_split_order_with_nested_per_objective`). Each is compared against the
   single-block spelling of the same query rather than asserted in isolation,
   since the claim under test is equivalence.
@@ -70,4 +70,4 @@ declare variables either before `FROM` or with `SUCH THAT`, not in both slots.
 | split order | three-table fan-out join | ✓ |
 | split order | `when` in front of a constraint | ✓ |
 | split order | `per` on a constraint | ✓ |
-| split order | two-level objective | ✓ |
+| split order | nested objective | ✓ |

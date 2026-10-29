@@ -496,10 +496,10 @@ rather than answering a comparison.
 
 Every MIN/MAX in the model is the same statement: some auxiliary column equals the
 extremum of a family of linear expressions. `EmitExtremumLink()` is the only thing
-that writes one, and `ExtremumLinkSpec` is the only description of one. Six sites
-feed it — a hard MIN/MAX *constraint*'s `z` per group, the flat objective's `z`, the
-two-level objective's `z_g` per class, the outer `w` over those or over group sums, each
-composed term's `z_k`, and a MIN/MAX helper of the value rewrite per group. Each used to
+that writes one, and `ExtremumLinkSpec` is the only description of one. Four sites
+feed it — a hard MIN/MAX *constraint*'s `z` per group, the flat objective's `z`, each
+composed term's `z_k`, and a MIN/MAX helper of the value rewrite per group, nested ones
+and a nested objective's included. Each used to
 write the three formulations out by hand.
 
 A link has **two independent sides**, and which of them the surrounding model already
@@ -613,21 +613,37 @@ members it actually writes, so the native arm allocates none at all.
 ### Helper decisions of the value rewrite
 
 Stage 05 replaced each decision reducer of a VALUE-shape clause by a helper
-decision (`05_optimizer/done.md`); stage 08 evaluated that reducer's members per `by`
-group into a `ReducerValueLinkSpec` (`solver_input.hpp`): an `EvaluatedConstraint` whose
-terms are the body's, nonzero only on the rows the clause and the reducer keep, grouped
-by the `by` key over the kept rows, with the link's label and provenance. The helper's
-own column enters only here (`linearization_reducer_value.cpp`).
+decision, and every reducer nested in one, or in a nested objective, by one keyed by its
+path (`05_optimizer/done.md`); stage 08 evaluated that reducer's members per group
+of its path key into a `ReducerValueLinkSpec` (`solver_input.hpp`): an
+`EvaluatedConstraint` whose terms are the body's -- an inner helper among them, read at
+the member's row through its own entity mapping -- nonzero only on the rows the path and
+the reducer keep, grouped by the path key over the rows the path keeps, with the link's
+label (the reducer with its `by`) and provenance. Links arrive innermost first. The
+helper's own column enters only here (`linearization_reducer_value.cpp`).
 
 `DeriveReducerValueBounds` brackets, per group, the reducer's value — the sum of the
 members' signed brackets for SUM/AVG (an AVG's coefficients already carry the 1/n), their
 cover for MIN/MAX — and boxes the helper by the cover of every group's reach, each end on
 its own, only ever tightening; an end no member bounds stays open. One box per decision,
-so an instance may be boxed wider than its own group. A member may be an ABS auxiliary
-and an ABS may hold a helper, so when a model has helpers `FormulateModel` names them
-first and alternates `DeriveAbsAuxiliaryBounds` (not refusing) with this derivation until
-no box moves — a reducer holds no reducer, so the chain is finite — and only then runs
-the ABS derivation that refuses on the lowering arm. Each ABS derivation starts afresh
+so an instance may be boxed wider than its own group (`05_optimizer/todo.md` §2).
+
+`DeriveReducerMemberBounds` is its backward half (`syntax_reference.md` §5.5): a helper's box bounds the helpers
+it is defined from. Through a SUM/AVG equality each term is at most the helper's top less
+every other term's floor, and at least its floor less every other term's top; through a
+MAX's envelope every member is at or under its top, a MIN's at or over its floor; a
+closing side alone bounds no member. Only helper columns are tightened, and only when
+every instance a helper defines is bounded, by the loosest of those bounds (the columns of
+rows its path drops are read by no row). The outermost link goes first, so a bound written
+only at the root reaches a nest in one sweep: in `per t.g: sum(max(x) by (t.g, t.h)) by
+(t.g) = 10`, with no other bound on `x`, the root row boxes the outer helper, which boxes
+the inner one, whose MAX closing side then has a Big-M. A tightening smaller than rounding
+does not count, so the fixed point settles.
+
+A member may be an ABS auxiliary and an ABS may hold a helper, so when a model has
+helpers `FormulateModel` names them first and alternates `DeriveAbsAuxiliaryBounds` (not
+refusing) with the two derivations until no box moves — each only tightens, and nests
+are finite — and only then runs the ABS derivation that refuses on the lowering arm. Each ABS derivation starts afresh
 (`range_unbounded` is reset), so a range open on one pass may close on the next.
 
 `LinearizeReducerValueLinks` then states each definition over the groups
@@ -647,9 +663,9 @@ for every other MIN/MAX.
 
 `LinearizeMinMaxObjective()` is the objective-side counterpart. A MIN/MAX
 objective cannot be a coefficient vector, so it becomes a global auxiliary the
-rows pin: `z` for the flat `MAXIMIZE max(e)`, and for the two-level
-`outer(per k: inner(e) by (k))` a `z_g` per class of `k` plus an outer `w` over
-them. The objective is then just that auxiliary.
+rows pin: `z` for the flat `MAXIMIZE max(e)`. The objective is then just that
+auxiliary. A nested one, `outer(per k: inner(e) by (k))`, is helper decisions instead,
+each defined above (D75), and the objective reads the outer one.
 
 Each level is *easy* or *hard*, and that classification is exactly which of the two
 sides of an extremum link the objective supplies for free. Easy (`MINIMIZE`+`MAX`,
@@ -660,20 +676,16 @@ envelope is free and the closing side is emitted instead. `M` is the global span
 the objective expression over the rows (`max_r exprmax - min_r exprmin`, constants
 included), which dominates `|z - expr_r|` at every row.
 
-This function builds members and specs; it emits nothing itself. All four of its links
-go through `EmitExtremumLink`, so which formulation each takes is decided once, in one
-place, by the rule described above — and a query cannot take the native arm for its
-inner aggregate and the lowered arm for its outer one, because all four read the same
-row family's derivability.
+This function builds members and specs; it emits nothing itself. Its link goes through
+`EmitExtremumLink`, so which formulation it takes is decided once, in one place, by the
+rule described above.
 
 The members are the rows the objective's reducer reads, `MinMaxObjectiveSpec::member_rows`
 (stage 08 folds the objective's `when` into the terms' filters), whatever their
-coefficients: a row whose data is 0 is the member 0, not an absent one, and every class of
-the two-level form, an all-zero one included, is a member of the outer link. An objective
+coefficients: a row whose data is 0 is the member 0, not an absent one. An objective
 with no member row is an `InternalException`, since the scope checks refuse an objective
-reducer that reads no row (D4, D8). The shape flags (`flat_agg`, `per_inner_agg`,
-easy/hard per level, the inner-AVG rewrite) arrive from stage 05 as `MinMaxObjectiveSpec`;
-the coefficients arrive evaluated.
+reducer that reads no row (D4, D8). The shape flags (`flat_agg`, easy or hard) arrive
+from stage 05 as `MinMaxObjectiveSpec`; the coefficients arrive evaluated.
 
 ### Composed MIN/MAX
 

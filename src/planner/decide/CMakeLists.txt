@@ -3,6 +3,7 @@ add_library_unity(
   OBJECT
   decide_canonicalizer.cpp
   decide_cast_policy.cpp
+  decide_reducer_path.cpp
   decide_source_provenance.cpp)
 set(ALL_OBJECT_FILES
     ${ALL_OBJECT_FILES} $<TARGET_OBJECTS:duckdb_planner_decide>

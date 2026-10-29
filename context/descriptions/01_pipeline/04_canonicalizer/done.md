@@ -114,7 +114,7 @@ a rendering job rather than a re-plumbing job.
 
 | ID | Rule |
 |---|---|
-| **C0** | Ordinary `AND` conjunctions recurse into every child. A `when` wrapper, a `per K:` wrapper (`PER_CLASS_TAG`) or the two-level objective's wrapper (`PER_CONSTRAINT_TAG`) recurses into child 0 only; its condition or key columns are copied unchanged. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
+| **C0** | Ordinary `AND` conjunctions recurse into every child. A `when` wrapper or a `per K:` wrapper (`PER_CLASS_TAG`) recurses into child 0 only; its condition or key columns are copied unchanged. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
 | **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
@@ -355,7 +355,7 @@ reason objectives get a boundary instead of their own normalizer.
 
 | ID | Rule | Shared with |
 |---|---|---|
-| **O0** | A `when` wrapper or the two-level objective's wrapper (`PER_CONSTRAINT_TAG`) recurses into child 0 only. | C0, same predicate |
+| **O0** | A `when` wrapper recurses into child 0 only. | C0, same predicate |
 | **O1** | The body is an additive spine whose every term references a decision. | — |
 | **O2** | A decision-free additive term is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. One that does not fold to a constant is rejected here. | — |
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
@@ -386,7 +386,7 @@ syntax_reference.md §6.4:
 |---|---|---|
 | no reducer (a data-only reducer may sit on the bound side) | `ROWS` | one per kept row, or per class of an enclosing `per K:` |
 | decision reducers sharing one `by` key, under whole-query factors, beside query-wide terms only | `AGGREGATE` | one per `by` group of the kept rows |
-| anything else: a per-row or keyed decision beside a reducer, a factor that varies by row, a second `by` key, a reducer inside another expression, a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group, then one row per class |
+| anything else: a per-row or keyed decision beside a reducer, a factor that varies by row, a second `by` key, a reducer inside another expression, a decision reducer holding a reducer (`syntax_reference.md` §5.5), a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group -- a nested one per path group -- then one row per class |
 | `AVG` under `<>` unless every term is a plain `AVG` | refused | *"DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per"* |
 
 The refusal: an `AVG`'s exclusion under `<>` scales the bound by the group's row count,
@@ -416,6 +416,11 @@ for every class and every variant of it, whose constraints differ only in a boun
 group's tightest covers (D64), so the wrapper adds no row; it names the classes each group's row stands for, which the linear
 form reads as the clause's class key and a diagnosis reports one by one (D28). A
 VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and removes.
+
+In the objective, `CanonicalizeObjective` stamps `VALUE_REWRITE_TAG` on the reducer
+itself: each decision reducer that holds a reducer, the outermost of each nest
+(`TagNestedObjectiveReducers`, D75). The value rewrite makes it and every reducer inside
+it a helper decision, which the objective then reads once (stage 05).
 
 ---
 
@@ -472,8 +477,13 @@ the clauses and objective as bound, called once by `Binder::CreatePlan`, after
 `PlanSubqueries` (a check's expressions must be copyable) and before `CanonicalizeTree`.
 A rewrite's clause entering through `AddConstraint` builds none. Per clause, in this
 order: its `when` keeps a row (`KEEPS_A_ROW`), then each reducer in turn reads a row in
-every `by` group when it has its own `when` (`READS_A_ROW`). The objective: its `when`,
-then each top-level reducer. The first check to fail stops the query, so this order picks
+every `by` group when it has its own `when` (`READS_A_ROW`), and each reducer nested in
+it after it, along its path: a row its own `when` keeps in every group of its path
+key -- every enclosing `by` key and its own -- among the rows its path keeps -- the
+clause's `when` and every enclosing reducer's (`DecideReducerPath`,
+`planner/decide/decide_reducer_path.hpp`, the one statement of the path rule, which the
+value rewrite reads too). The objective: its `when`, then each top-level reducer and its
+nest. The first check to fail stops the query, so this order picks
 the message. The message texts are rendered here, through `RenderDecideSource`, from
 source fragments and relation aliases (`DecideScopeChecks`), since only planning still
 knows them. `DETERMINES` is retired (D64); no builder emits it.
@@ -502,13 +512,15 @@ gets a signature.
 
 - **A `per K:` clause**: the fields of every leaf under its wrapper, its rows the `when`
   under the wrapper; the wrapper gets `__signature_<i>__` (`MakeSignatureTag`).
-- **A relation-qualified reducer** (`sum(per K': e)`, `SUM(D: e)`, D65): the fields of
-  its body, its rows the clause's `when` and its own; it gets a scope of its own — a copy
+- **A relation-qualified reducer** (`sum(per K': e)`, `SUM(D: e)`, D65), at any depth:
+  the fields of its body, its rows the ones its path keeps and its own `when`'s (a
+  reducer nested in its body is a `BY_KEY` field of its own `by`, which within the
+  enclosing group names its path group); it gets a scope of its own — a copy
   of its key scope's names with `EntityScopeInfo::signature` set and no key bindings —
   and its qualified tag is repointed there, so every stage that de-duplicates by the
   qualifier reads one value per variant without knowing about signatures.
 - **The objective**: the fields of its body outside reducers (`objective_signature`),
-  checked at execution to have one variant (D66); none for the two-level form.
+  checked at execution to have one variant (D66).
 
 A signature also carries what EXPLAIN ANALYZE calls the expression (`per D.depotID`, the
 reducer as written) and its clause id.

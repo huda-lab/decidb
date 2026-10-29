@@ -795,6 +795,25 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeComparison(const Express
 	return FinalizeBoundProvenance(std::move(result));
 }
 
+//! Tags every reducer over decisions in `expr` that holds another reducer -- the outermost
+//! of each nest -- for the value rewrite: in the objective it is a helper decision, and so
+//! is every reducer inside it (D75).
+static void TagNestedObjectiveReducers(Expression &expr, idx_t decide_index) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		auto &reducer = expr.Cast<BoundAggregateExpression>();
+		if (!reducer.children.empty() && BoundExpressionReferencesDecide(reducer, decide_index) &&
+		    DecideCanonicalizer::ContainsReducer(*reducer.children[0]) &&
+		    !HasDecideTag(reducer.GetAlias(), VALUE_REWRITE_TAG)) {
+			auto alias = reducer.GetAlias();
+			AddDecideTag(alias, VALUE_REWRITE_TAG);
+			reducer.SetAlias(std::move(alias));
+		}
+		return;
+	}
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](Expression &child) { TagNestedObjectiveReducers(child, decide_index); });
+}
+
 unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expression &objective,
                                                                   double &out_constant_offset) const {
 	DecideProfileScope profile("canonicalize.objective");
@@ -861,7 +880,11 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjective(const Expressi
 		    "DECIDE canonicalizer: objective references a decision but decomposed into no "
 		    "decision-bearing term");
 	}
-	return BuildAdditive(decision_atoms, false);
+	auto result = BuildAdditive(decision_atoms, false);
+	// A reducer holding a reducer takes the value rewrite, as in a constraint: the shape is
+	// decided here, once, and the rewrite reads the tag.
+	TagNestedObjectiveReducers(*result, decide_index);
+	return result;
 }
 
 string DecideCanonicalizer::Quote(const Expression &expr) const {
@@ -928,6 +951,9 @@ DecideCanonicalizer::ScopedShape DecideCanonicalizer::ClassifyScoped(const Bound
 			continue;
 		}
 		auto &reducer = root->Cast<BoundAggregateExpression>();
+		if (!reducer.children.empty() && ContainsReducer(*reducer.children[0])) {
+			value = true; // a reducer inside it: a helper at every level (syntax_reference.md §5.5)
+		}
 		idx_t qualifier;
 		bool is_avg =
 		    StringUtil::CIEquals(reducer.function.name, "avg") || HasDecideTag(reducer.GetAlias(), AVG_REWRITE_TAG);
@@ -1260,27 +1286,32 @@ static void CollectOuterReducers(const Expression &expr, vector<const BoundAggre
 	                                      [&](const Expression &child) { CollectOuterReducers(child, reducers); });
 }
 
-void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
-                                                  DecideScopeChecks &scope) const {
-	// D8: every `by` group of the kept rows has a row the reducer's own `when` keeps.
-	if (!reducer.filter) {
+void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer,
+                                                  const DecideReducerPath &path, DecideScopeChecks &scope) const {
+	// D8: every group of the path key among the rows the path keeps has a row the
+	// reducer's own `when` keeps -- for a reducer at the top, its `by` groups of the kept
+	// rows.
+	if (reducer.filter) {
+		DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.group_keys, scope.relations};
+		DecideScopeCheck check;
+		check.kind = DecideScopeCheckKind::READS_A_ROW;
+		check.rows = path.Rows();
+		check.key = DecidePathKeyExpressions(path.KeysOf(DecideReducerGroupKey(reducer)), scope.group_keys,
+		                                     &check.key_names);
+		check.filter = reducer.filter->Copy();
+		check.subject = RenderDecideReducer(reducer, names);
+		scope.checks.push_back(std::move(check));
+	}
+	// The reducers in its argument read along its path.
+	if (reducer.children.empty()) {
 		return;
 	}
-	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.group_keys, scope.relations};
-	DecideScopeCheck check;
-	check.kind = DecideScopeCheckKind::READS_A_ROW;
-	check.rows = rows ? rows->Copy() : nullptr;
-	idx_t group_key;
-	if (TryParseGroupKeyTag(reducer.GetAlias(), group_key) && group_key < scope.group_keys.size()) {
-		auto &by = scope.group_keys[group_key];
-		for (idx_t i = 0; i < by.expressions.size(); i++) {
-			check.key.push_back(by.expressions[i]->Copy());
-			check.key_names.push_back(i < by.names.size() ? by.names[i] : by.expressions[i]->ToString());
-		}
+	vector<const BoundAggregateExpression *> nested;
+	CollectOuterReducers(*reducer.children[0], nested);
+	auto below = path.Below(reducer);
+	for (auto *inner : nested) {
+		BuildReducerScopeChecks(*inner, below, scope);
 	}
-	check.filter = reducer.filter->Copy();
-	check.subject = RenderDecideReducer(reducer, names);
-	scope.checks.push_back(std::move(check));
 }
 
 void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing,
@@ -1294,28 +1325,27 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, DecideE
 		check.subject = RenderDecideSource(*enclosing.when, names);
 		scope.checks.push_back(std::move(check));
 	}
+	DecideReducerPath path;
+	if (enclosing.when) {
+		path.conditions.push_back(enclosing.when);
+	}
 	vector<const BoundAggregateExpression *> reducers;
 	CollectOuterReducers(leaf, reducers);
 	for (auto *reducer : reducers) {
-		BuildReducerScopeChecks(*reducer, enclosing.when, scope);
+		BuildReducerScopeChecks(*reducer, path, scope);
 	}
 }
 
 void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective, DecideScopeChecks &scope) const {
-	// The two-level form's PER wrapper and a `when` in front.
+	// A `when` in front.
 	const Expression *body = &objective;
 	DecideEnclosingScope enclosing;
-	bool two_level = false;
-	while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+	if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = body->Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
-			two_level = true;
-		} else if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
 			enclosing.when = conj.children[1].get();
-		} else {
-			break;
+			body = conj.children[0].get();
 		}
-		body = conj.children[0].get();
 	}
 	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.group_keys, scope.relations};
 	if (enclosing.when) {
@@ -1325,13 +1355,14 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 		check.subject = RenderDecideSource(*enclosing.when, names);
 		scope.checks.push_back(std::move(check));
 	}
-	if (two_level) {
-		return; // its classes are the inner reducer's own `by` groups, its key's
+	DecideReducerPath path;
+	if (enclosing.when) {
+		path.conditions.push_back(enclosing.when);
 	}
 	vector<const BoundAggregateExpression *> reducers;
 	CollectOuterReducers(*body, reducers);
 	for (auto *reducer : reducers) {
-		BuildReducerScopeChecks(*reducer, enclosing.when, scope);
+		BuildReducerScopeChecks(*reducer, path, scope);
 	}
 }
 
@@ -1493,14 +1524,19 @@ idx_t DecideCanonicalizer::AddSignature(DecideSignatures &out, const Expression 
 	return out.signatures.size() - 1;
 }
 
-void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const Expression *rows, Clause clause,
+void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const DecideReducerPath &path, Clause clause,
                                                 idx_t source_clause_id, DecideSignatures &out) const {
-	ExpressionIterator::EnumerateChildren(
-	    expr, [&](Expression &child) { SignQualifiedReducers(child, rows, clause, source_clause_id, out); });
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE) {
+		ExpressionIterator::EnumerateChildren(
+		    expr, [&](Expression &child) { SignQualifiedReducers(child, path, clause, source_clause_id, out); });
 		return;
 	}
 	auto &reducer = expr.Cast<BoundAggregateExpression>();
+	// The reducers in its argument first, along its path (syntax_reference.md §5.5).
+	auto below = path.Below(reducer);
+	for (auto &child : reducer.children) {
+		SignQualifiedReducers(*child, below, clause, source_clause_id, out);
+	}
 	idx_t scope_idx;
 	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= out.entity_scopes.size() ||
 	    reducer.children.empty()) {
@@ -1522,15 +1558,8 @@ void DecideCanonicalizer::SignQualifiedReducers(Expression &expr, const Expressi
 	if (fields.empty()) {
 		return; // the key's classes are its values already
 	}
-	unique_ptr<Expression> reducer_rows;
-	if (rows && reducer.filter) {
-		auto both = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		both->children.push_back(rows->Copy());
-		both->children.push_back(reducer.filter->Copy());
-		reducer_rows = std::move(both);
-	} else if (rows || reducer.filter) {
-		reducer_rows = (rows ? *rows : *reducer.filter).Copy();
-	}
+	// The rows it reads: its path's, then its own `when`'s.
+	auto reducer_rows = below.Rows();
 	auto text = message_names ? RenderDecideReducer(reducer, *message_names) : reducer.ToString();
 	auto signature =
 	    AddSignature(out, reducer_rows.get(), std::move(key), std::move(fields), std::move(text), source_clause_id);
@@ -1557,7 +1586,11 @@ void DecideCanonicalizer::BuildConstraintSignatures(Expression &expr, const Expr
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_CONJUNCTION) {
 		idx_t source_clause_id = DConstants::INVALID_INDEX;
 		TryParseSourceClauseTag(expr.GetAlias(), source_clause_id);
-		SignQualifiedReducers(expr, when, Clause::CONSTRAINT, source_clause_id, out);
+		DecideReducerPath path;
+		if (when) {
+			path.conditions.push_back(when);
+		}
+		SignQualifiedReducers(expr, path, Clause::CONSTRAINT, source_clause_id, out);
 		return;
 	}
 	auto &conj = expr.Cast<BoundConjunctionExpression>();
@@ -1617,18 +1650,18 @@ void DecideCanonicalizer::BuildConstraintSignatures(Expression &expr, const Expr
 void DecideCanonicalizer::BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const {
 	Expression *body = &objective;
 	const Expression *when = nullptr;
-	while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+	if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = body->Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
-			return; // the two-level form: its classes are its inner reducer's `by` groups
+		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+			when = conj.children[1].get();
+			body = conj.children[0].get();
 		}
-		if (!IsWhenConstraintWrapper(conj) || conj.children.size() != 2) {
-			break;
-		}
-		when = conj.children[1].get();
-		body = conj.children[0].get();
 	}
-	SignQualifiedReducers(*body, when, Clause::OBJECTIVE, DConstants::INVALID_INDEX, out);
+	DecideReducerPath path;
+	if (when) {
+		path.conditions.push_back(when);
+	}
+	SignQualifiedReducers(*body, path, Clause::OBJECTIVE, DConstants::INVALID_INDEX, out);
 	// Produced once (`per ()`, D66): a field with a second value over the kept rows would
 	// be a second objective, which execution refuses.
 	vector<DecideSignatureField> fields;

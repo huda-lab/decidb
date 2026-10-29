@@ -182,7 +182,7 @@ field 101).
 
 **Objectives (flat)**: `MAXIMIZE/MINIMIZE AVG(expr)` uses the same optimal assignment as `SUM(expr)` when there is one global denominator. In mixed additive aggregate expressions, DeciDB preserves AVG scaling per term so `AVG(a) + SUM(b)` is not treated as `SUM(a) + SUM(b)`.
 
-**Objectives (two-level form)**: in `outer(per k: avg(e) by (k))` the inner AVG scales each row's coefficient by `1/n_g` (group size), producing true per-group averages. An outer `avg` over the classes is refused; `sum` over them ranks the solutions the same way. See [`../scope/done.md`](../scope/done.md) §6.
+**Objectives (nested)**: in `outer(per k: avg(e) by (k))` the inner AVG is one value per group of `k`, its rows divided by the group's size; under an outer `sum` the objective sums `e` itself with that `1/n_g` per row, so a coupled budget across groups of different sizes is weighted right. An outer `avg` divides by the classes it receives (D75). See [`../scope/done.md`](../scope/done.md) §6.
 
 ```sql
 SUCH THAT avg(x * weight) <= 10                       -- sum(x * weight) <= 10*N
@@ -227,7 +227,7 @@ When the aggregate must be tight (equality or the "wrong" direction), a global a
 all.** Gurobi states `z = MAX(t..)` as a general constraint, so there is no Big-M, no
 indicator binaries, and no requirement that any contributing variable be bounded —
 `SUCH THAT MAX(x) >= 5` answers there with an unbounded `x`. All four hard forms
-(constraint, flat objective, two-level objective, composed term) take that path. The
+(constraint, flat objective, composed term, a MIN/MAX helper of the value rewrite, nested ones included) take that path. The
 choice is made once, at execution, from the backend's capability table, and both paths
 reach the same optimum wherever both can run.
 
@@ -250,7 +250,7 @@ derived from `x`'s. Easy cases never ask for a Big-M and are unaffected.
 
 #### Row Expression Shape
 
-The inner expression is any linear combination of decision variables plus a constant — it is not restricted to a single product term. `MIN((cost + 1) * x)`, `MIN(cost * x + x)`, and `MIN(cost * x + 5)` are all accepted, in constraints and objectives, flat, two-level and composed alike — including `sum(per k: min(e) by (k))`.
+The inner expression is any linear combination of decision variables plus a constant — it is not restricted to a single product term. `MIN((cost + 1) * x)`, `MIN(cost * x + x)`, and `MIN(cost * x + 5)` are all accepted, in constraints and objectives, flat, nested and composed alike — including `sum(per k: min(e) by (k))`.
 
 Each linking row is accumulated **per solver column** before emission (`MinMaxLinkRow` in `physical_decide.cpp`). This matters because the term arrays are indexed by term, not by variable, so one column can reach a row more than once: `(cost + 1) * x` distributes into `cost*x + 1*x`, and a keyed or query-wide variable resolves to a single column across every row of a group. A repeated column index is rejected outright by both Gurobi and HiGHS, so coefficients are summed and columns whose terms cancel are dropped. Constant terms carry no column and fold into the row's bound: `z <= expr + k` is emitted as `z - expr <= k`.
 

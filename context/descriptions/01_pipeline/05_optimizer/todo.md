@@ -30,6 +30,12 @@ is per decision, not per instance. A small group's instance is boxed as wide as 
 largest group's, which loosens the LP and the closing Big-M of a MIN/MAX helper, read off
 that box.
 
+A nest widens it with depth: an outer helper's members are the inner one's instances, each
+read off the one box (`DeriveReducerValueBounds`), and the bound a helper passes down to
+the helpers inside it (`DeriveReducerMemberBounds`) is the loosest over its instances,
+taken only when every instance it defines has one. F1's spare inner column, which no
+row reads, carries the same box (`test_anr_nested.py`'s model pin).
+
 **Decision needed.** Where per-instance bounds live: `SolverInput` carries one
 `lower_bounds` / `upper_bounds` entry per decision and stage 06 expands it across
 `NumInstances`, so this needs a per-instance box in the stage 06/08 contract, or a box per
@@ -58,33 +64,17 @@ DIAGNOSE still names the clause.
 
 **done.md.** "NORM and IN — `RewriteNorm` / `RewriteInDomain`".
 
-## 4. A reducer inside a reducer
+## 4. Refusals a later change may lift
 
-**Why.** The binder refuses one reducer inside another (*"DECIDE: an aggregate inside an
-aggregate is not supported yet"*, stage 02). The scopes already leave room for it: a
-reducer's argument may hold reducers in the grammar, and each bound aggregate carries its
-own scope as tags. Lifting the refusal for a shape means letting the value rewrite recurse:
-an inner helper per class of the inner `by`, inside the outer group, defined before the
-outer reducer that reads it.
-
-**Decision needed.** Which shapes to admit first, and whether an inner helper's definition
-belongs to the outer clause's provenance.
-
-**Test.** `sum(x - avg(x) by (g)) <= 5` answers as the oracle does, with one inner helper
-per `g`; the binder refusal stays for the shapes not admitted.
-
-**done.md.** "The value rewrite — `RewriteScopedReducers`", and the binder's reducer
-section (`02_binder/done.md`).
-
-## 5. Refusals a later change may lift
-
-**Why.** Three shapes reach this stage and are refused here, each with a message that
+**Why.** Five shapes reach this stage and are refused here, each with a message that
 says "not supported yet" (syntax_reference.md §10.2). None is a wrong answer; each lacks
 a formulation.
 
 | Refused | Where | What lifting it needs |
 |---|---|---|
 | A square or a product of two non-Boolean decisions inside a reducer the value rewrite replaces (`x <= 0.5 * sum(x * x)`): *"DECIDE: 'sum(x * x)' is not supported yet in this constraint: a product or square of decisions inside a reducer is accepted only where ..."* | `RewriteScopedReducers` (`decide_rewrite_scoped.cpp`) | a quadratic definition row for the helper (`v = Σ x²`), which stage 06 does not state; only the side the clause pushes `v` toward would be convex |
+| A square or a product of decisions inside nested reducers (`sum(max(x * x) by (g)) <= 5`, `MAXIMIZE sum(per g: max(power(x - t, 2)) by (g))`), but the objective's direct `sum(per k: sum(e) by (k))`: *"DECIDE: 'max(x * x)' squares or multiplies decisions inside nested reducers, which is not supported yet"* (D74) | `RewriteScopedReducers` | a quadratic member of an extremum link (convex on the side the readers push the helper toward: `value >= q` for a MAX pushed down), and for SUM a quadratic equality, or the SUM inlined into a reader that sums it (phase 7 of `09_anr_language/anr_algorithm_and_frames_plan.md`) |
+| A square or a product of decisions inside a flat MIN or MAX that is not a bound every member meets (`max(power(x, 2)) >= 49`, `MAXIMIZE max(power(x, 2))`, `sum(x) + max(power(x, 2)) <= 20`), or in a term beside one: *"DECIDE: 'max(power(x, 2))' squares or multiplies decisions inside MIN or MAX, which is not supported yet; ..."* | `RefuseNonlinearReducer` (`decide_rewrite_minmax.cpp`) | an extremum link over quadratic members (an epigraph `z >= q` on the convex side, indicators with quadratic rows on the other, Gurobi only), and the composed path stating a SUM term's square in its row or the objective's Q matrix |
 | A decision beside a `MIN` or `MAX` in the objective (`MAXIMIZE max(x) + s`): *"DECIDE: 's' beside MIN or MAX is not supported yet"* | `RewriteComposedMinMaxObjectiveTop`, through `WalkComposedLhs` (`decide_rewrite_minmax.cpp`) | the composed objective's extremum column beside a once-counted term, as the constraint's VALUE shape already does with a helper |
 | A square, or a product of two decisions outside a reducer in the objective, other than two distinct query-wide decisions or a product with a `BOOL` (`MAXIMIZE sum(x) + x * y`, `+ s * s`): *"DECIDE objective: 'x * y' multiplies decisions outside a reducer, which is not supported yet"* | `ExtractAggregateObjectiveTerms` (`decide_linear_form.cpp`, the linear-form flattening) | a once-only reading of the product in the model: a per-row product needs the objective's signature (D66) to give it one instance over the kept rows, then a quadratic or McCormick term counted once |
 
@@ -93,7 +83,9 @@ a formulation.
 **Test.** For each lifted shape, an oracle- or brute-force-judged test on both solvers
 (`test_scope_value_rewrite.py`, `test_scope_objective.py`); the pinned refusals
 (`test_scope_value_rewrite.py::test_a_product_of_decisions_inside_a_rewritten_reducer_is_refused`,
-`test_scope_reducer_by.py`'s decision-beside-max case,
+`test_scope_reducer_by.py`'s decision-beside-max case, `test_anr_nested.py::test_refused_nests`,
+`test_min_max.py::test_a_min_or_max_over_a_square_is_refused`,
+`test_per_objective.py::test_an_extremum_of_a_square_inside_a_nested_objective_is_refused`,
 `test_scope_objective.py::test_objective_tuple_term_errors`) become answer tests.
 
 **done.md.** "The value rewrite — `RewriteScopedReducers`", "Composed MIN/MAX —

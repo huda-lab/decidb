@@ -3,13 +3,15 @@
 A clause with no `when`, `per` or `by` means its fully explicit form: `per row:` in front,
 `by ()` on each reducer, and an objective produced once (`per ()`) --
 syntax_reference.md §1.1. Each test here states a query whose answer or refusal follows
-from that reading, judged by the scope oracle (`_scope_oracle.ScopedModel`) or, for a
-shape the oracle cannot state, by enumerating every assignment (`_brute_force`). A test
+from that reading, judged by the scope oracle (`_scope_oracle.ScopedModel`), by
+`_anr_oracle` where reducers nest, or, for a shape no oracle states, by enumerating every
+assignment (`_brute_force`). A test
 runs on both solvers; where one cannot load the model, its refusal is asserted instead.
 """
 
 import pytest
 
+from . import _anr_oracle as anr
 from ._brute_force import judge_rows
 from ._scope_cases import answer, scope_solver, table, table_rows  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
@@ -147,10 +149,17 @@ def test_a_per_row_objective_decision_on_one_row(decidb_cli, scope_solver):
         model.solve_scoped(scope_solver, [CAP_BOUND], objective), abs=1e-4)
 
 
-def test_reducer_inside_a_reducer_is_refused(decidb_cli):
-    """`SUM(MAX(x))` is refused, never modelled as one reducer."""
-    result = decidb_cli.execute_raw(_query("x(INT)", "x <= cap AND SUM(MAX(x)) <= 5", "MAXIMIZE SUM(x)"))
-    assert "an aggregate inside an aggregate is not supported yet" in result.stderr, result.stderr
+def test_a_reducer_inside_a_reducer_is_read_at_every_row(decidb_cli, scope_solver):
+    """`SUM(MAX(x)) <= 5` is `sum(per row: max(x) by ()) by ()` (syntax_reference.md §5.5): each of the three
+    rows reads the one maximum, so 3 * max(x) <= 5 and no x exceeds 1. Judged by
+    `_anr_oracle`, which states nesting."""
+    x = anr.Var("x")
+    clauses = [anr.clause(anr.le(x, anr.Col("cap"))), anr.clause(anr.le(anr.reduce("sum", anr.reduce("max", x)), 5))]
+    objective = anr.Objective(ObjSense.MAXIMIZE, anr.reduce("sum", x))
+    model = anr.AnrModel(table_rows(COLUMNS, ROWS), [anr.Decision("x")])
+    sql = _query("x(INT)", "x <= cap AND SUM(MAX(x)) <= 5", "MAXIMIZE SUM(x)")
+    assert model.judge(answer(decidb_cli, sql), clauses, objective) == pytest.approx(
+        model.solve(scope_solver, clauses, objective).objective) == 3
 
 
 # ---------------------------------------------------------------------------

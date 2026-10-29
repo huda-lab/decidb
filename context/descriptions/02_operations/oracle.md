@@ -226,7 +226,7 @@ mirrors — see §3.7 on independent semantics. A clause with a `when`, a
 | `add_ne_indicator(oracle, coeffs, rhs, name)` | Encode `sum(coeffs) != rhs` over integer-valued terms via a native Gurobi indicator constraint (no Big-M). |
 | `add_in_domain(oracle, var_name, domain)` | Restrict `var_name` to a discrete set via SOS1-style indicator encoding (`SUM(z_k) = 1`, `var = SUM(v_k·z_k)`). |
 | `add_bool_and(oracle, x, y, z)` | Link binary `z = x ∧ y` with `z ≤ x`, `z ≤ y`, `z ≥ x + y − 1`. Used for Bool × Bool products before summation. |
-| `emit_inner_max` / `emit_inner_min` | Per-group auxiliary variable for the *easy* inner-MAX / inner-MIN case of the two-level objective `sum(per col: max(expr) by (col))` / `sum(per col: min(expr) by (col))`. |
+| `emit_inner_max` / `emit_inner_min` | Per-group auxiliary variable for the *easy* inner-MAX / inner-MIN case of the nested objective `sum(per col: max(expr) by (col))` / `sum(per col: min(expr) by (col))`. |
 | `emit_hard_inner_max` / `emit_hard_inner_min` | Same for the *hard* case — uses per-row Gurobi indicators to tightly pin the auxiliary to one row's value. |
 
 ### 3.6 Cross-verifying infeasibility
@@ -318,7 +318,8 @@ same `OracleSolver` interface.
 - `ScopeModel` covers keyed declarations: one solver column per class of each
   decision's key (`PER_ROW`, a tuple of row columns, or `GLOBAL` for `per ()`).
 - `ScopedModel` adds the clause scopes: `[when c] [per K]: C`, a reducer's own
-  `when` / `per`, its `by (G)`, the objective's `when` and the two-level objective. It
+  `when` / `per`, its `by (G)`, the objective's `when` and the nested objective
+  `outer(per k: inner(e) by (k))` (its `Nested` form; deeper nests are `_anr_oracle`'s). It
   filters the rows, splits the kept rows into classes, generates the body once per
   variant of each class (D64: per distinct value of its tuple terms, decisions and `by`
   values) and evaluates each reducer on the kept rows sharing the variant's `by` value.
@@ -488,7 +489,7 @@ def test_my_new_query(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
 ```
 
 For aggregate operators with non-trivial semantics (`per` / `by` groups, `<>`,
-bilinear, MIN/MAX hard cases, the two-level objective), import helpers from
+bilinear, MIN/MAX hard cases, a nested objective), import helpers from
 `tests/_oracle_helpers.py` rather than re-rolling the logic. See §3.5. A
 clause with a `when`, a `per` key or a `by` key is easier to state to
 `_scope_oracle.ScopedModel` (§3.10).

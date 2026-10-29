@@ -202,8 +202,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 		// extremum, or the composed objective's 0.0 placeholder -- that its accounts
 		// describe and a row would misread. An AVG's sum stays, under its account, as in a
 		// constraint.
-		if (flat_objective_agg != ObjectiveAggregateType::NONE || !composed_minmax_objective_terms.empty() ||
-		    per_inner_agg == ObjectiveAggregateType::MIN_AGG || per_inner_agg == ObjectiveAggregateType::MAX_AGG) {
+		if (flat_objective_agg != ObjectiveAggregateType::NONE || !composed_minmax_objective_terms.empty()) {
 			objective_strs.clear();
 		}
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,

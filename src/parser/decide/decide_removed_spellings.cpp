@@ -768,7 +768,7 @@ const FunctionExpression *NestedReducer(const ParsedExpression &expr) {
 	return found;
 }
 
-//! `MINIMIZE SUM(MAX(e)) PER g` (the two-level form), `MAXIMIZE SUM(e) PER g` (an objective
+//! `MINIMIZE SUM(MAX(e)) PER g` (a nested objective), `MAXIMIZE SUM(e) PER g` (an objective
 //! is produced once), with a WHEN after the objective or inside it.
 [[noreturn]] void RefuseObjectivePer(const FunctionExpression &marker, const string &sense) {
 	auto key = KeyText(marker);
@@ -788,16 +788,13 @@ const FunctionExpression *NestedReducer(const ParsedExpression &expr) {
 	string null_subject = "a NULL " + key + " is now its own group, so write ";
 	if (auto *outer = NestedReducer(*body)) {
 		Reducer inner;
-		bool two_level = &UnwrapReducerMarkers(*body) == outer && outer->children.size() == 1 &&
+		bool whole_body = &UnwrapReducerMarkers(*body) == outer && outer->children.size() == 1 &&
 		                 ReadReducer(*outer->children[0], inner);
-		if (!two_level) {
-			Refuse(marker, removed + "the two-level form takes one reducer call inside the outer one, as in " + sense +
-			                   " sum(per " + key + ": max(e) by (" + key + ")), and nothing beside it; " +
-			                   Written(*body) + " is not supported yet");
-		}
-		if (!inner.per.empty()) {
-			Refuse(marker, removed + "the two-level form " + StringUtil::Lower(outer->function_name) + "(per " + key +
-			                   ": inner(e) by (" + key + ")) takes no per inside its inner reducer yet");
+		if (!whole_body) {
+			// A reducer nests where it stands (syntax_reference.md §5.5): the hint is the rule, not the whole body.
+			Refuse(marker, removed + "write the nested reducer in " + Written(*body) + " where it stands as outer(per " +
+			                   key + ": inner(e) by (" + key + ")), as in " + sense + " sum(per " + key + ": max(e) by (" +
+			                   key + "))");
 		}
 		// A when inside the inner reducer goes in front of the objective.
 		front.insert(front.end(), inner.conditions.begin(), inner.conditions.end());
@@ -806,14 +803,9 @@ const FunctionExpression *NestedReducer(const ParsedExpression &expr) {
 		inner.removed.clear();
 		inner.by.clear();
 		auto outer_name = StringUtil::Lower(outer->function_name);
-		string note;
-		if (outer_name == "avg") {
-			outer_name = "sum";
-			note = " (an average over the classes is not supported yet; a sum ranks the solutions the same way)";
-		}
-		auto two_level_text = outer_name + "(per " + key + ": " + ReducerSpelling(inner) + " by (" + key + "))";
-		Refuse(marker, removed + "write " + sense + " " + FrontScope(front, "") + two_level_text + note + "; " +
-		                   null_subject + sense + " " + FrontScope(with_keys(front), "") + two_level_text +
+		auto nested_text = outer_name + "(per " + key + ": " + ReducerSpelling(inner) + " by (" + key + "))";
+		Refuse(marker, removed + "write " + sense + " " + FrontScope(front, "") + nested_text + "; " +
+		                   null_subject + sense + " " + FrontScope(with_keys(front), "") + nested_text +
 		                   " to leave those rows out");
 	}
 	auto once = sense + " " + FrontScope(front, "") + Converted(*body);

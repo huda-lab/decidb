@@ -42,6 +42,10 @@ struct DecideTerm {
 	int sign = 1;                       // +1 or -1, applied at coefficient evaluation time
 	unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
 	bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
+	//! An objective AVG's `by` key, into LogicalDecide::group_keys: it divides each row by
+	//! its group's count, not the objective's (a nested `sum(per k: avg(e) by (k))`, D75).
+	//! INVALID_INDEX for one group.
+	idx_t avg_group_key = DConstants::INVALID_INDEX;
 	LinearTermReduction reduction = LinearTermReduction::NONE;
 	//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
 	//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
@@ -143,10 +147,8 @@ struct DecideConstraint {
 struct DecideObjective {
 	vector<DecideTerm> terms;              // Linear objective terms
 	unique_ptr<Expression> when_condition; // the objective's `when` (nullptr = every row)
-	vector<unique_ptr<Expression>> per_columns; // the two-level form's key (empty = none)
-	//! The objective reads only the rows its `when` keeps, its two-level form's key has
-	//! NULL as a class, and a term beside its reducers counts once, read on the first
-	//! kept row.
+	//! The objective reads only the rows its `when` keeps, and a term beside its reducers
+	//! counts once, read on the first kept row.
 
 	//! Quadratic objective: the inner linear expression of each SUM(POWER(expr, 2)) term.
 	//! When non-empty, the objective includes a quadratic component: sign * SUM((inner_expr)^2).
@@ -165,6 +167,7 @@ struct DecideObjective {
 		int sign = 1;                       // +1 or -1
 		unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
 		bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
+		idx_t avg_group_key = DConstants::INVALID_INDEX; //!< as DecideTerm's
 		//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
 		//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
 		//! entity_mappings; coefficient evaluation keeps one row per tuple identity

@@ -2,13 +2,13 @@
 
 The `MAXIMIZE` or `MINIMIZE` keyword specifies the **optimization objective** — the quantity the solver should optimize while satisfying all constraints.
 
-**Syntax** (objective forms, QP forms, bilinear, feasibility): see `../../00_project_overview/syntax_reference.md` §4. **Per-aggregate linearization** (SUM/AVG/MIN/MAX/ABS): see `../sql_functions/done.md`. **`when` in front of the objective, decisions outside reducers, `by` and the two-level form `outer(per k: inner(e) by (k))`**: see `../scope/done.md` §6. This doc covers objective-specific semantics not in those files.
+**Syntax** (objective forms, QP forms, bilinear, feasibility): see `../../00_project_overview/syntax_reference.md` §4. **Per-aggregate linearization** (SUM/AVG/MIN/MAX/ABS): see `../sql_functions/done.md`. **`when` in front of the objective, decisions outside reducers, `by` and nested reducers `outer(per k: inner(e) by (k))`**: see `../scope/done.md` §6. This doc covers objective-specific semantics not in those files.
 
 ---
 
 ## Requirements
 
-1. Must be produced once: reducers (`SUM()`, `AVG()`, `MIN()`, `MAX()`, `norm()`), decisions with one instance over the kept rows (a `per ()` decision, or any decision where the `when` keeps one instance), and sums of those. A top-level reducer's `by` must be one group over the kept rows. The two-level form is the whole objective.
+1. Must be produced once: reducers (`SUM()`, `AVG()`, `MIN()`, `MAX()`, `norm()`), decisions with one instance over the kept rows (a `per ()` decision, or any decision where the `when` keeps one instance), and sums of those. A top-level reducer's `by` must be one group over the kept rows. A reducer nests in another as in a constraint, beside other terms or under a factor (D75).
 2. Must be **linear**, **quadratic** (`POWER(expr, 2)`), or **bilinear** (`x * y`) in the decision variables — see [problem_types/done.md](../problem_types/done.md) and [bilinear/done.md](../bilinear/done.md).
 3. Must involve at least one decision variable.
 
@@ -35,7 +35,7 @@ Each `MIN`/`MAX` term becomes a continuous auxiliary `z_k` pinned per-row to the
 
 **A `when` in front applies to every term**: `MAXIMIZE when critical: min(x * v) + sum(x * v)` runs. A decision beside a `MIN` or `MAX` is refused (*"DECIDE: 's' beside MIN or MAX is not supported yet"*).
 
-## Quadratic Inner Expressions in the Two-Level Form
+## Quadratic Inner Expressions in a Nested Objective
 
 Quadratic inner expressions are supported under an outer `sum`:
 
@@ -44,7 +44,7 @@ MINIMIZE sum(per grp: sum(power(x - target, 2)) by (grp))   -- sum of per-group 
 MINIMIZE sum(per grp: avg(power(x - target, 2)) by (grp))   -- inner avg scales each row by 1/n_g
 ```
 
-Nothing expands these before binding, so the `POWER(linear, 2)` pattern reaches the QP extractor intact and the optimizer strips the outer wrapper. A `min` or `max` over a squared body is modelled as the sum of the squares, flat or two-level — a logged wrong answer (`../../06_issues/bugs/todo.md`, "A MIN/MAX over a squared or multiplied body"); `test_per_objective.py::test_maximize_sum_max_power_per` and `test_minimize_sum_min_power_per` pass only because their rows are independent. See also `../../04_testing/quadratic/done.md`.
+Nothing expands these before binding, so the `POWER(linear, 2)` pattern reaches the QP extractor intact: the value rewrite writes both as the objective's own sum, each group once, an inner `avg` dividing its rows by the group's size (D75). Any other nested objective is helper decisions, and a `min` or `max` over a squared body inside nested reducers is refused (*"... squares or multiplies decisions inside nested reducers, which is not supported yet"*). A flat one is refused too (*"... inside MIN or MAX in the objective, which is not supported yet"*): the extremum's link states its members as linear rows, which read the square as the sum of the squares. See also `../../04_testing/quadratic/done.md`.
 
 ---
 
@@ -73,10 +73,10 @@ For linear objectives, the objective function is compiled into the `c` vector of
 - **Objective binder**: `src/planner/expression_binder/decide/decide_objective_binder.cpp`
   - Validates that only `SUM`, `AVG`, `MIN`, `MAX` are used (rejects other aggregates with error message)
   - `BindScopedObjective`: binds the body, then wraps a front `when` (`WHEN_CONSTRAINT_TAG`); `per ()` adds nothing
-  - `BindTwoLevelObjective`: binds `outer(per k: inner(e) by (k))` as `outer(inner(e))` under a `PER_CONSTRAINT_TAG` wrapper holding the key columns
+  - A nested objective (`outer(per k: inner(e) by (k))`, any depth) binds as nested aggregates, like a constraint's body (D75)
   - A reducer's own scope and `by` bind through `DecideBinder::BindScopedReducer` / `BindReducerBy`
 - **SUM argument validation**: `src/planner/expression_binder/decide/decide_binder.cpp` — `ValidateSumArgumentInternal` validates the expression tree inside SUM()
-- **Two-level objective rewrite/classification**: `src/optimizer/decide/decide_rewrite_minmax.cpp`
-  - `RewriteMinMaxObjective()` reads the two-level wrapper, sets the `per_inner_*` / `per_outer_*` metadata (reducer kinds, easy or hard), and rewrites inner `MIN/MAX/AVG` to `SUM`
+- **Nested objective**: `src/optimizer/decide/decide_rewrite_scoped.cpp` — `RewriteScopedReducers` makes each reducer of a nest a helper decision the objective reads once, or writes a sum of group sums directly (`InlineSumOfGroupSums`)
+- **MIN/MAX objective classification**: `src/optimizer/decide/decide_rewrite_minmax.cpp` — `RewriteMinMaxObjective()` sets `flat_objective_agg` / `flat_objective_is_easy` and rewrites the `MIN/MAX` to `SUM`
 - **Scope checks**: `DecideCanonicalizer::BuildObjectiveScopeChecks` — the front `when` keeps a row (D4); `per ()` determines every term outside reducers and every top-level `by` key
 - **Solver input**: `src/include/duckdb/decidb/formulation/solver_input.hpp`

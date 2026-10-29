@@ -18,7 +18,7 @@ All oracle-verified; gurobi-gated cases noted:
 - **MIQP** (integer vars + convex QP, `test_maximize_convex_power_integer_case_b`) — gurobi-gated.
 - **Mixed linear + quadratic**: same SUM (`SUM(POWER(x-t,2) + c*x)`), sibling SUMs, and negated quadratic + linear.
 - **Composition**: QP objective under a `when`; QP objective beside a `per` constraint (`test_per_interactions.py`).
-- **Two-level objectives**: `sum(per grp: sum(power(x - t, 2)) by (grp))` (binding per-group cap, unconstrained, and with no constant term), `sum(per grp: avg(power(x - t, 2)) by (grp))` with unequal groups (`test_quadratic.py`); hard inner `sum(per grp: max(power(...)) by (grp))` / `min` in `test_per_objective.py` — gurobi-gated.
+- **Nested objectives**: `sum(per grp: sum(power(x - t, 2)) by (grp))` (binding per-group cap, unconstrained, and with no constant term), `sum(per grp: avg(power(x - t, 2)) by (grp))` with unequal groups (`test_quadratic.py`), each written as the objective's own sum (D75); an inner `max(power(...))` / `min` is refused by name (`test_per_objective.py`, D74).
 
 ## Scenarios covered (constraints — QCQP)
 
@@ -74,6 +74,5 @@ side alone.
 | QP objective | linear terms in same SUM | ✓ |
 | QP objective | linear terms in sibling SUM | ✓ |
 | Negated QP objective | linear terms | ✓ |
-| QP objective | two-level, outer SUM | ✓ |
-| QP objective | two-level, inner MIN (hard) | ✓ |
-| QP objective | two-level, inner MAX (hard) | ✓ |
+| QP objective | nested, outer SUM over SUM/AVG | ✓ |
+| QP objective | nested, inner MIN or MAX | refused (D74) |

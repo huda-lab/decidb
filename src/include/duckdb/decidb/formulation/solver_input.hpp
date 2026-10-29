@@ -333,8 +333,8 @@ struct EvaluatedConstraint {
     //! group_offsets has size num_groups + 1 when populated; empty otherwise.
     //! Group g's active rows occupy [group_offsets[g], group_offsets[g+1]) in group_row_ids.
     //! Empty groups have group_offsets[g] == group_offsets[g+1].
-    //! Built once and reused across the model builder, deferred-NE expansion, and
-    //! two-level objective MIN/MAX paths to avoid repeated O(num_rows) reconstructions.
+    //! Built once and reused across the model builder and deferred-NE expansion to
+    //! avoid repeated O(num_rows) reconstructions.
     mutable vector<idx_t> group_offsets;
     mutable vector<idx_t> group_row_ids;
 };
@@ -547,13 +547,6 @@ struct SolverInput {
         CoefficientColumn row_coefficients; // logical size = num_rows
     };
     vector<BilinearObjectiveTerm> bilinear_objective_terms;
-
-    // The two-level objective's grouping (mirrors constraint row_group_ids pattern)
-    vector<idx_t> objective_row_group_ids;  // per-row group assignment
-    idx_t objective_num_groups = 0;          // 0 = ungrouped
-    //! CSR-style group→rows index for objectives (mirrors EvaluatedConstraint).
-    vector<idx_t> objective_group_offsets;
-    vector<idx_t> objective_group_row_ids;
 
     // Global auxiliary variables (exist once, not replicated per row)
     // Appended after the per-row grid at indices num_rows * num_decide_vars + i

@@ -9,7 +9,7 @@
 Tests live in:
 - `test/decide/tests/test_min_max.py` — primary MIN/MAX test file
 - `test/decide/tests/test_min_max_multiterm.py` — row expressions that are not a single product term
-- `test/decide/tests/test_per_objective.py` — two-level objectives
+- `test/decide/tests/test_per_objective.py` — nested objectives
 - `test/decide/tests/test_aggregate_local_when.py` — a reducer's own `when` with MAX
 - `test/decide/tests/test_per_interactions.py` — hard MIN/MAX constraints under `per` (per-group Big-M)
 - `test/decide/tests/test_edge_cases.py` — empty row sets under MIN/MAX (see [`../edge_cases/done.md`](../edge_cases/done.md))
@@ -25,16 +25,18 @@ All oracle-verified unless noted.
 - **Easy cases** (`test_min_max.py`, plus keyed variants in `test_entity_scope.py` and a reducer's own `when` in `test_aggregate_local_when.py`): `MAX(expr) <= K` / `MIN(expr) >= K` bound every member on its own row, with column coefficients (`MAX(x * expr) <= K`), on INT vars, under a `when`, under `per g: ... by (g)` (the same per-row bounds), `when` + `per` together, keyed MAX/MIN, a reducer's own `when` on an easy MAX. Over a bare decision with no `when` and no reducer filter the bound is absorbed into the decision's box (D41), so a negative K makes the decision signed (`test_scope_bare_clauses.py`).
 - **Hard cases (Big-M indicators)** (`test_min_max.py`, `test_per_interactions.py`, `test_entity_scope.py`, `test_aggregate_local_when.py`): `MAX(expr) >= K`, `MIN(expr) <= K`, equality for both; multiple MIN/MAX constraints in one query; MIN/MAX in both constraint and objective; keyed hard MAX; `per g:` variants with Big-M per group (`max(e) by (g) >= K`, `min(e) by (g) <= K`, `max(e) by (g) = K` combining easy + hard per group); hard MAX with a reducer's own `when`.
 - **Objectives** (`test_min_max.py`): easy `MINIMIZE MAX(expr)` / `MAXIMIZE MIN(expr)` (plain, on INT, and under a `when` in front); hard `MAXIMIZE MAX(expr)` / `MINIMIZE MIN(expr)`.
-- **Multi-term and constant row expressions** (`test_min_max_multiterm.py`): the inner expression is a linear combination, not a single product — `MAX((qty + 1) * x)` (distributes into two terms on one column), `MAX(qty * x + x)` (the same shape written out), `MAX(qty * x + 5)` (constant folds into the bound). Covered on the flat path (both directions), the composed path, and the two-level outer-MIN path with a **keyed** decision, where one column spans every row of a group so a single term is enough to repeat it. Each test pins the objective value against the oracle, so a linking row that is accepted but mis-linearized still fails.
+- **Multi-term and constant row expressions** (`test_min_max_multiterm.py`): the inner expression is a linear combination, not a single product — `MAX((qty + 1) * x)` (distributes into two terms on one column), `MAX(qty * x + x)` (the same shape written out), `MAX(qty * x + 5)` (constant folds into the bound). Covered on the flat path (both directions), the composed path, and the nested objective's outer MIN with a **keyed** decision, where one column spans every row of a group so a single term is enough to repeat it. Each test pins the objective value against the oracle, so a linking row that is accepted but mis-linearized still fails.
 
-### Two-level objectives
+### Nested MIN/MAX
 
 `test_per_objective.py` covers `outer(per k: inner(e) by (k))` with outer ∈ {SUM,
 MIN, MAX} and inner ∈ {SUM, MIN, MAX, AVG}: `sum(per k: max(...))` and
 `sum(per k: min(...))` (both directions, easy and hard inner), `max(per k: sum(...))`,
 `min(per k: sum(...))`, and `max`/`min`/`sum` over an inner `avg`.
 `max(per g: max(c * x) by (g))` with mixed-sign coefficients is in `test_min_max.py`.
-An outer AVG is refused ("not supported yet").
+An outer AVG answers (`test_scope_objective.py`). Nested MIN/MAX in constraints, the
+sides each level is pinned on, and a root bound reaching a nested closing link on HiGHS
+are `test_anr_nested.py`'s (D73).
 
 ### Composed MIN/MAX (additive LHS/objective with mixed aggregate terms)
 
@@ -50,7 +52,12 @@ scope oracle (`test_composed_minmax_per_scope_answers`,
 
 ### Error cases (binder rejections)
 
-`test_min_max.py`: `MAX(x) <> K` rejected (`test_max_notequal_error`). The
+`test_min_max.py`: `MAX(x) <> K` rejected (`test_max_notequal_error`). A square or a
+product of decisions inside a MIN or MAX is refused, on both solvers, wherever its members
+would be stated as linear rows -- the hard direction, `=`, a product of two INT decisions,
+either term of a composed clause, the objective -- and the bound every member meets still
+answers, `max(power(x, 2)) <= 16` among them (`test_a_min_or_max_over_a_square_is_refused`,
+`test_a_square_under_a_bound_every_member_meets`). The
 removed spellings of a grouped MIN/MAX objective are refused by the parser
 (`syntax_reference.md` §10.3, `test_scope_removed_syntax.py`).
 
@@ -95,7 +102,7 @@ sets".
 | MIN/MAX (hard) | a reducer's own `when` | ✓ |
 | MIN/MAX (easy) | `per` (per-row bounds) | ✓ |
 | MIN/MAX (easy) | `when` + `per` | ✓ |
-| MIN/MAX (inner or outer) | two-level objective | ✓ |
+| MIN/MAX (inner or outer) | nested objective | ✓ |
 | MIN/MAX (easy) | keyed decision | ✓ |
 | MIN/MAX (hard) | keyed decision | ✓ |
 | MIN/MAX | INT variables | ✓ |

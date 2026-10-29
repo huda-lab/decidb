@@ -298,7 +298,7 @@ static void ClassifyAbsConstraints(ClientContext &context, Expression &expr, idx
 // comparison rule above with the sense standing in for the relation.
 static void ClassifyAbsObjective(ClientContext &context, Expression &objective, idx_t decide_index,
                                  DecideSense sense) {
-	// A `when` or two-level `per` wrapper carries no sign: the body is its first child.
+	// A `when` wrapper carries no sign: the body is its first child.
 	Expression *body = &objective;
 	while (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conjunction = body->Cast<BoundConjunctionExpression>();

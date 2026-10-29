@@ -90,6 +90,7 @@
 
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/unordered_set.hpp"
+#include "duckdb/planner/decide/decide_reducer_path.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/common/unordered_map.hpp"
@@ -159,6 +160,9 @@ struct DecideSignatures {
 
 class DecideCanonicalizer {
 public:
+	//! Whether `expr` holds a reducer anywhere, itself included.
+	static bool ContainsReducer(const Expression &expr);
+
 	//! Provenance-only form: no table-index evidence is available, so arbitrary column
 	//! refs are never promoted to query-wide. Explicit QUERY_WIDE_VALUE_TAG metadata is
 	//! still honored. Variable scopes remain available for homogeneity validation.
@@ -212,7 +216,7 @@ public:
 
 	//! The objective's signature, `out.objective` -- it is produced once (D66), so
 	//! execution refuses a field with a second value -- and its qualified reducers', after
-	//! CanonicalizeObjective. The two-level form has none.
+	//! CanonicalizeObjective.
 	void BuildObjectiveSignatures(Expression &objective, DecideSignatures &out) const;
 
 	//! Quote expressions in the scope refusals as the query writes them, from
@@ -382,7 +386,6 @@ private:
 	Placement Classify(const Expression &expr) const;
 
 	bool ReferencesDecideVar(const Expression &expr) const;
-	static bool ContainsReducer(const Expression &expr);
 	void ValidateCanonicalTree(const Expression &constraints) const;
 	void ValidateCanonicalComparison(const BoundComparisonExpression &comparison) const;
 	void VerifyCanonicalTree(const Expression &constraints) const;
@@ -413,9 +416,9 @@ private:
 	//! comparison (or other constraint) as bound.
 	void BuildClauseScopeChecks(const Expression &leaf, DecideEnclosingScope enclosing,
 	                            DecideScopeChecks &scope) const;
-	//! The check of one reducer: a row in every `by` group (D8). `rows` is the clause's
-	//! `when`, null for every row.
-	void BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
+	//! The checks of one reducer and of the reducers nested in it: a row in every group of
+	//! its path key among the rows its path keeps (D8, syntax_reference.md §5.5).
+	void BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const DecideReducerPath &path,
 	                             DecideScopeChecks &scope) const;
 
 	//! The signature fields `expr` reads (D64, D77), appended to `fields` unless there or in
@@ -427,9 +430,9 @@ private:
 	idx_t AddSignature(DecideSignatures &out, const Expression *rows, vector<unique_ptr<Expression>> key,
 	                   vector<DecideSignatureField> fields, string text, idx_t source_clause_id) const;
 	//! Gives every relation-qualified reducer in `expr` whose body has a field its
-	//! signature and a scope of its own. `rows` is the clause's `when`.
-	void SignQualifiedReducers(Expression &expr, const Expression *rows, Clause clause, idx_t source_clause_id,
-	                           DecideSignatures &out) const;
+	//! signature and a scope of its own, counted over the rows its path keeps (syntax_reference.md §5.5).
+	void SignQualifiedReducers(Expression &expr, const DecideReducerPath &path, Clause clause,
+	                           idx_t source_clause_id, DecideSignatures &out) const;
 	void BuildConstraintSignatures(Expression &expr, const Expression *when, DecideSignatures &out) const;
 
 	//! Rebuild an additive chain from terms, negating every sign when `negate`

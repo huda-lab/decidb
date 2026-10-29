@@ -66,7 +66,8 @@ constraints exist (§5.4).
 
 Terms used below:
 
-- **Reducer**: `SUM`, `AVG`, `MIN` or `MAX` over rows.
+- **Reducer**: `SUM`, `AVG`, `MIN` or `MAX` over rows; its argument may hold reducers
+  of its own (§5.5).
 - **Tuple term**: any part of a clause that is not inside a reducer — a column, a
   decision, arithmetic over them.
 - **Key / class**: a key lists columns and relations (for `by`, also expressions);
@@ -88,7 +89,7 @@ constraint  ::= [scope ':'] comparison       -- AND separates constraints; a sco
 objective   ::= (MAXIMIZE | MINIMIZE) [scope ':'] expression     -- per must be '()' or absent
 scope       ::= ['when' condition] ['per' key]                   -- at least one of the two
 
-reducer     ::= agg '(' [scope ':'] expression ')' ['by' '(' [expression, ...] ')']
+reducer     ::= agg '(' [scope ':'] expression ')' ['by' '(' [expression, ...] ')']   -- expression may hold reducers
               | agg '(' relation, ... ':' expression ')' ['by' ...]   -- the colon form, §5.1
 agg         ::= SUM | AVG | MIN | MAX         -- norm(e, p) and count(*) take a by, no scope
 
@@ -385,7 +386,7 @@ MAXIMIZE sum(ship)                         -- produced once: per () implied
 MAXIMIZE per (): sum(ship)                 -- the same, written out
 MAXIMIZE when S.priority: sum(ship)        -- over the priority rows only
 MINIMIZE sum(S.unit_cost * ship) + sum(per D: D.opening_cost * open)
-MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))   -- two-level form
+MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))   -- a nested reducer (§5.5)
 ```
 
 - **Optional**: Omitting `MAXIMIZE`/`MINIMIZE` creates a feasibility problem — the
@@ -414,11 +415,14 @@ MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))   -- two-level form
   `Γ` with a single value there (`MAXIMIZE when g = 'A': sum(x) by (g)`); otherwise
   *"DECIDE objective: 'g' in by (g) takes more than one value over the kept rows (...),
   so the objective would be produced more than once; ..."*.
-- **Two-level form** `outer(per k: inner(e) by (k))`, the whole objective: `inner` is
-  evaluated once per class of `k` (NULL a class), then `outer` over those values. All
-  nine combinations of `SUM`, `MIN` and `MAX` are accepted, and `k` may list several
-  columns. It takes a `when` in front of the objective, not inside either reducer; its
-  inner reducer takes no `per`, and its `by` key must be its `per` key (§10.2).
+- **Nested reducers** work as in a constraint (§5.5, D75): `outer(per k: inner(e) by (k))`
+  evaluates `inner` once per class of `k` (NULL a class), then `outer` over those
+  values -- any of `SUM`, `AVG`, `MIN`, `MAX` at either level, `when` and `per` inside
+  either, any `by`, any depth, beside other terms or under a factor. The objective reads
+  the outer reducer's helper decision once. `sum(per k: sum(e) by (k))` and
+  `sum(per k: avg(e) by (k))` are summed directly instead, each group once, an inner
+  `AVG` dividing by its group's size, so a square in `e` stays a quadratic objective; a
+  `MIN` or `MAX` of a square inside nested reducers is refused (§10.2).
 - **Linear objectives**: must be linear in decision variables.
 - **Quadratic objectives (QP)**: `MINIMIZE SUM(POWER(linear_expr, 2))` is supported for convex quadratic programming. The inner expression must be linear in decision variables. Three equivalent syntax forms:
   - `POWER(expr, 2)` / `POW(expr, 2)` — function call
@@ -664,6 +668,50 @@ Tests: `test/decide/tests/test_scope_reducer_inner.py`.
 | `per D.depotID: sum(ship) by (D.depotID) <= D.capacity` | one per depot | that depot's rows |
 | `ship <= D.maxShipmentShare * sum(ship) by (D.depotID)` | one per row | the rows of that row's depot |
 
+### 5.5 Reducers inside reducers — the path rule
+
+```sql
+-- each depot's largest shipment, summed over the depots (deck example 9)
+sum(per D.depotID: max(ship) by (D.depotID)) <= 50
+-- the running example (deck pp. 79-97): per depot, the regional sum of each customer's
+-- largest shipment, plus 10% of the mode's demand
+per t.id: sum(when t.p per t.cid: max(ship) by (t.cid)) by (t.rid) + 0.10 * sum(t.d) by (t.m) <= t.c
+-- three levels
+per t.g: sum(per t.h: max(per t.k: sum(x) by (t.g, t.h, t.k)) by (t.g, t.h)) by (t.g) <= t.cap
+```
+
+- **Any depth, any kind**: `SUM`, `AVG`, `MIN` and `MAX` nest to any depth, with
+  `when`, `per` and `by` at every level, on either side of a constraint and in the
+  objective. `count` nests over data only.
+- **The path rule.** A nested reducer reads, at the row it stands for, the kept rows
+  that every enclosing reducer's own `when` keeps and that agree with that row on every
+  enclosing `by` key and on its own. In `sum(max(x) by (g)) by (h)` the inner maximum is
+  one per `(h, g)` pair, not one per `g` across the `h` groups. Those keys together are
+  the reducer's **path key**.
+- **Members.** An enclosing reducer receives one value per row it reads, or one per class
+  and variant of its own `per` (§5.3, §7.1); `AVG` divides by the values it receives.
+- **D8 inside a nest**: an inner `when` that keeps no row of some path group is the
+  error naming the group by its path key: *"DECIDE: max(when c: x) has no rows for t.g =
+  'a', t.h = 'q'."*
+- **Over data alone** a nest is a value, evaluated innermost first, on the bound side as
+  any data reducer: `x <= avg(per t.h: max(t.v) by (t.g, t.h)) by (t.g)`.
+- **How it is solved.** Every reducer of a nest over decisions is a helper decision
+  (§6.4) keyed by its path, one instance per path group, defined once per group,
+  innermost first, and read by the reducers around it. A `MIN` or `MAX` is pinned on
+  the side its readers push it, through `SUM` and `AVG` levels; under another `MIN` or
+  `MAX`, on both (D73). So the running example needs no Big-M: each inner `MAX` is
+  pushed down, and its envelope alone holds it. A bound written only at the root reaches
+  an inner `MIN`/`MAX` that needs its closing side: in `per t.g: sum(max(x) by (t.g,
+  t.h)) by (t.g) = 10`, with no other bound on `x`, the inner helper's Big-M is read off
+  the outer one's box. One box covers every instance of a helper.
+- **Refused** (D74, §10.2): `norm` inside a reducer; a square or a product of decisions
+  inside nested reducers, whose helpers would have no linear definition (but the
+  objective's direct sums of §4); a reducer over data alone inside one over decisions,
+  as an added term (as a factor, the coefficient rule of §5 refuses it).
+
+Tests: `test/decide/tests/test_anr_nested.py` (the fixtures, a 768-cell grid of nests at
+depth 2 and 3, the bounds through a nest), `test_scope_objective.py` (the objective).
+
 ## 6. Scoped constraints — `[when c] [per K]: C`
 
 ```sql
@@ -800,7 +848,8 @@ term without a decision (§5); a decision as a factor is refused. Operators, `BE
   where it is not (`ship + sum(ship + 0.5) by (D.region) > 40`, §10.1); it may be
   negative. Deck examples 1, 5 and 8 take this shape; example 1 costs N rows of two
   entries and one definition row, not N rows of N. A product or square of decisions
-  inside such a reducer is refused (§10.2).
+  inside such a reducer is refused (§10.2). A reducer holding reducers takes this shape
+  at every level (§5.5).
 
 `EXPLAIN` names a helper by its reducer (`sum(ship) by (D.depotID)`) and says it became
 a helper decision; `DIAGNOSE` names the clause and never offers a definition row.
@@ -1119,12 +1168,10 @@ Each shape below is refused with a message, never answered wrongly.
 
 | Shape | Message |
 |---|---|
-| A reducer inside a reducer, but the two-level objective (deck example 9 included) | `DECIDE: an aggregate inside an aggregate is not supported yet` |
-| The two-level objective beside another term or under a factor | `DECIDE: an aggregate inside an aggregate is not supported yet` |
-| A `per` inside the two-level objective's inner reducer | `DECIDE: per inside the inner reducer of min(per g: sum(...) by (g)) is not supported yet` |
-| A `when` inside either reducer of the two-level objective | `DECIDE: when inside the outer reducer of min(per g: ...) is not supported yet; write it in front of the objective` · `... inner reducer ...` |
-| A two-level `by` key other than its `per` key | `DECIDE: in min(per g: sum(...) by (id)) the by key must be the per key; any other is not supported yet` |
-| An outer `AVG` in the two-level objective | `DECIDE: avg over the classes of avg(per g: sum(...) by (g)) is not supported yet; write sum, min or max over them` |
+| `norm` inside a reducer | `DECIDE: norm inside a reducer is not supported yet` |
+| A square or a product of decisions inside nested reducers (§5.5), but the objective's direct `sum(per k: sum(e) by (k))` and `sum(per k: avg(e) by (k))` | `DECIDE: 'max(power(x - target, 2))' squares or multiplies decisions inside nested reducers, which is not supported yet` |
+| A square or a product of decisions inside a `MIN` or `MAX` that is not a bound every member meets (`max(power(x, 2)) >= 49`, either half of an `=`, a `MIN`/`MAX` objective), or in any term of a composed clause | `DECIDE: 'max(power(x, 2))' squares or multiplies decisions inside MIN or MAX, which is not supported yet; it is accepted only as a bound every member meets on its own: max(...) <= K or min(...) >= K` · `... inside MIN or MAX beside another term ...` · `'sum(power(x, 2))' ... beside MIN or MAX ...` · `... inside MIN or MAX in the objective ...` |
+| A reducer over data alone added inside a reducer over decisions | `DECIDE: max(...) over data alone inside a reducer over decisions is not supported yet; compute it in a subquery, or reduce it outside` |
 | `norm(D: e, p)` | `DECIDE: norm(D: ...) is not supported yet; a relation qualifier takes SUM, AVG, MIN or MAX` |
 | A product or square of decisions inside a reducer that a helper decision replaces (§6.4): a per-row or keyed decision or a product of decisions beside it, a row-varying factor on it, another `by` key next to it, an enclosing expression | `DECIDE: 'sum(ship * ship)' is not supported yet in this constraint: a product or square of decisions inside a reducer is accepted only where the constraint's reducers share one by key, under a whole-query factor, with nothing beside them but data and query-wide decisions, each on its own` |
 | `AVG` under `<>` beside another term, or with its own `when`/`per` | `DECIDE: AVG in a <> constraint is not supported yet ...` |
@@ -1166,8 +1213,8 @@ working spelling and stays a plain syntax error. The messages below are for
 | `COUNT(*) WHEN c` · `norm(e, p) WHEN c` | `sum(when c: 1)` · `when c:` in front of the constraint when the condition holds for all of it | `... write sum(when g = 'A': 1)` · `... norm takes no when inside it: write when g = 'A': in front of the constraint when the condition holds for all of it` |
 | `SUM(D: e) WHEN c` | `sum(when c per D: e)` | `the WHEN after sum(t: x) is removed; write sum(when g = 'A' per t: x)` |
 | `MAXIMIZE E WHEN c` | `MAXIMIZE when c: E` | `the postfix WHEN is removed; write MAXIMIZE when g = 'A': sum(x)` |
-| `MINIMIZE OUTER(INNER(e)) PER g` | `MINIMIZE outer(per g: inner(e) by (g))`; an outer `AVG` becomes `sum`; a `WHEN` inside the inner reducer goes in front | `the postfix PER is removed; write MINIMIZE sum(per g: max(x) by (g)); a NULL g is now its own group, so write MINIMIZE when g is not null: sum(per g: max(x) by (g)) to leave those rows out` · `... (an average over the classes is not supported yet; a sum ranks the solutions the same way)` |
-| `MINIMIZE OUTER(INNER(D: e)) PER g` · `MINIMIZE c * OUTER(INNER(e)) PER g` | no spelling yet | `the postfix PER is removed; the two-level form max(per g: inner(e) by (g)) takes no per inside its inner reducer yet` · `... the two-level form takes one reducer call inside the outer one ... is not supported yet` |
+| `MINIMIZE OUTER(INNER(e)) PER g` · `MINIMIZE OUTER(INNER(D: e)) PER g` | `MINIMIZE outer(per g: inner(e) by (g))`, the colon form as `inner(per D: e)`; a `WHEN` inside the inner reducer goes in front | `the postfix PER is removed; write MINIMIZE sum(per g: max(x) by (g)); a NULL g is now its own group, so write MINIMIZE when g is not null: sum(per g: max(x) by (g)) to leave those rows out` |
+| `MINIMIZE c * OUTER(INNER(e)) PER g`, or a nested reducer beside another term | the nested reducer as `outer(per g: inner(e) by (g))` where it stands (§5.5) | `the postfix PER is removed; write the nested reducer in 2 * SUM(MAX(x)) where it stands as outer(per g: inner(e) by (g)), as in MINIMIZE sum(per g: max(e) by (g))` |
 | `MAXIMIZE SUM(e) PER g` (flat) | `MAXIMIZE sum(e)` | `the postfix PER is removed; an objective is produced once: write MAXIMIZE sum(x)` |
 | `MAXIMIZE MAX(e) PER g` (flat `MIN` or `MAX`) | `MAXIMIZE max(e)`, or `MAXIMIZE sum(per g: max(e) by (g))` | `... an objective is produced once: write MAXIMIZE max(x), or MAXIMIZE sum(per g: max(x) by (g)) to combine one value per class` |
 | `MAXIMIZE AVG(e) PER g` (flat) | `MAXIMIZE when g is not null: sum(per g: avg(e) by (g))` (what it meant), or `MAXIMIZE avg(e)` | `the postfix PER is removed; write MAXIMIZE when g is not null: sum(per g: avg(x) by (g)) to add up one average per class as before (a NULL g is now its own group), or MAXIMIZE avg(x) for one average over all rows` |

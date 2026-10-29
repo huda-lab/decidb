@@ -55,104 +55,7 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 		wrapper->alias = WHEN_CONSTRAINT_TAG;
 		return std::move(wrapper);
 	};
-	// The two-level form's PER wrapper stays outermost, as the nested objective's rewrite
-	// reads it: PER{WHEN{objective, c}, k}.
-	if (bound->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION && IsPerConstraintTag(bound->alias)) {
-		auto &per = bound->Cast<BoundConjunctionExpression>();
-		per.children[0] = wrap(std::move(per.children[0]));
-		return BindResult(std::move(bound));
-	}
 	return BindResult(wrap(std::move(bound)));
-}
-
-BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth) {
-	// `outer(per k: inner(e) by (k)) [by ()]`.
-	auto *outer_slot = &expr_ptr;
-	if (IsDecideMarker(**outer_slot, REDUCER_BY_TAG)) {
-		outer_slot = &(*outer_slot)->Cast<FunctionExpression>().children[0];
-	}
-	auto &outer = (*outer_slot)->Cast<FunctionExpression>();
-	auto &per = outer.children[0]->Cast<FunctionExpression>();
-	if (IsDecideMarker(*per.children[0], SCOPE_WHEN_TAG)) {
-		return BindResult(BinderException::Unsupported(
-		    outer, StringUtil::Format("DECIDE: when inside the outer reducer of %s(per %s: ...) is not supported "
-		                              "yet; write it in front of the objective",
-		                              StringUtil::Lower(outer.function_name), DecideKeyToString(per))));
-	}
-	auto &inner_by = per.children[0]->Cast<FunctionExpression>();
-	auto &inner = inner_by.children[0]->Cast<FunctionExpression>();
-	auto form = StringUtil::Format("%s(per %s: %s(...) by (%s))", StringUtil::Lower(outer.function_name),
-	                               DecideKeyToString(per), StringUtil::Lower(inner.function_name),
-	                               DecideKeyToString(inner_by));
-	if (StringUtil::Lower(outer.function_name) == "avg") {
-		// The nested objective it would bind onto treats an outer AVG as a SUM, which is
-		// not an average over the classes; syntax_reference.md §4 admits sum, min and max
-		// over them.
-		return BindResult(BinderException::Unsupported(
-		    outer, StringUtil::Format("DECIDE: avg over the classes of %s is not supported yet; write sum, min or "
-		                              "max over them",
-		                              form)));
-	}
-	if (!inner.children.empty() && IsDecideMarker(*inner.children[0], SCOPE_PER_ROW_TAG)) {
-		// `per row`, the default written out: one value per row, as without it.
-		auto body = std::move(inner.children[0]->Cast<FunctionExpression>().children[0]);
-		inner.children[0] = std::move(body);
-	}
-	if (!inner.children.empty() && IsDecideMarker(*inner.children[0], SCOPE_WHEN_TAG)) {
-		return BindResult(BinderException::Unsupported(
-		    inner, StringUtil::Format("DECIDE: when inside the inner reducer of %s is not supported yet; write it "
-		                              "in front of the objective",
-		                              form)));
-	}
-	if (!inner.children.empty() && IsDecideMarker(*inner.children[0], SCOPE_PER_TAG)) {
-		return BindResult(BinderException::Unsupported(
-		    inner, StringUtil::Format("DECIDE: per inside the inner reducer of %s is not supported yet", form)));
-	}
-	for (idx_t i = 1; i < inner_by.children.size(); i++) {
-		if (inner_by.children[i]->GetExpressionClass() != ExpressionClass::COLUMN_REF) {
-			return BindResult(BinderException::Unsupported(
-			    inner_by, StringUtil::Format("DECIDE: in %s the by key must be the per key; any other is not "
-			                                 "supported yet",
-			                                 form)));
-		}
-	}
-	case_insensitive_set_t decision_names;
-	for (auto &variable : variables) {
-		decision_names.insert(variable.first);
-	}
-	auto key = BindKeyColumns(binder.bind_context, per, decision_names);
-	auto by_key = BindKeyColumns(binder.bind_context, inner_by, decision_names);
-	bool same_key = key.size() == by_key.size();
-	for (idx_t i = 0; same_key && i < key.size(); i++) {
-		same_key = key[i]->Cast<BoundColumnRefExpression>().binding ==
-		           by_key[i]->Cast<BoundColumnRefExpression>().binding;
-	}
-	if (!same_key) {
-		return BindResult(BinderException::Unsupported(
-		    inner_by, StringUtil::Format("DECIDE: in %s the by key must be the per key; any other is not supported "
-		                                 "yet",
-		                                 form)));
-	}
-	// The key as written, read before the move below destroys the marker that holds it.
-	const auto key_text = DecideKeyToString(per);
-	// The bound form: `outer(inner(e))` under a PER wrapper whose columns are the key.
-	outer.children[0] = std::move(inner_by.children[0]);
-	auto result = BindExpression(*outer_slot, depth);
-	if (result.HasError()) {
-		return result;
-	}
-	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-	wrapper->children.push_back(std::move(result.expression));
-	for (auto &column : key) {
-		wrapper->children.push_back(std::move(column));
-	}
-	wrapper->alias = PER_CONSTRAINT_TAG;
-	// The plan prints the key as written rather than its columns (RenderDecidePerKey).
-	if (qualifier_context && qualifier_context->source_fragments) {
-		AddDecideTag(wrapper->alias, MakeSourceFragmentTag(qualifier_context->source_fragments->size()));
-		qualifier_context->source_fragments->push_back(key_text);
-	}
-	return BindResult(std::move(wrapper));
 }
 
 BindResult DecideObjectiveBinder::BindExpression(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth, bool root_expression) {
@@ -186,9 +89,6 @@ BindResult DecideObjectiveBinder::BindExpressionInternal(unique_ptr<ParsedExpres
 	    if (is_top_expression && func.is_operator &&
 	        (func.function_name == SCOPE_PER_TAG || func.function_name == SCOPE_WHEN_TAG)) {
 	        return BindScopedObjective(expr_ptr, depth);
-	    }
-	    if (is_top_expression && IsTwoLevelObjective(expr)) {
-	        return BindTwoLevelObjective(expr_ptr, depth);
 	    }
 	        if (is_top_expression && GetExpressionType(expr, error_msg) == DecideExpression::INVALID) {
 	            return BindResult(BinderException::Unsupported(expr, error_msg));

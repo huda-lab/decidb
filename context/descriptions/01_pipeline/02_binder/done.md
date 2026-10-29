@@ -426,10 +426,14 @@ a reducer with no `by` is `by ()` (syntax_reference.md §1.1).
   ..."*, `todo.md`);
 - `norm(D: e, p)`: *"DECIDE: norm(D: ...) is not supported yet; a relation qualifier
   takes SUM, AVG, MIN or MAX"* (bound, it would read `SUM(D: e)`);
-- a reducer inside a reducer: *"DECIDE: an aggregate inside an aggregate is not supported
-  yet"*, except the objective's two-level form (`IsTwoLevelObjective`), and except a
-  reducer over data alone under a `*` or `/` that holds a decision (`sum(avg(cap) * x)`):
-  that is a coefficient, refused by `ValidateDecideNoNonLinearScalar` with its remedy.
+- a reducer inside a reducer binds, to any depth, in a constraint and in the objective
+  (`syntax_reference.md` §5.5; `ValidateSumArgument` holds a nested reducer's body to a reducer's rule), with
+  two refusals (D74): a `norm` inside a reducer (*"DECIDE: norm inside a reducer is not
+  supported yet"*), and a reducer over data alone added inside one over decisions
+  (*"DECIDE: max(...) over data alone inside a reducer over decisions is not supported
+  yet; compute it in a subquery, or reduce it outside"*). One under a `*` or `/` that
+  holds a decision (`sum(avg(cap) * x)`) is a coefficient, refused by
+  `ValidateDecideNoNonLinearScalar` with its remedy. A nest over data alone binds.
 
 | Written | Bound |
 |---|---|
@@ -441,7 +445,7 @@ a reducer with no `by` is `by ()` (syntax_reference.md §1.1).
 | `agg(when c: e)` | the aggregate's `filter` (§3) |
 | `agg(per K': e)`, `SUM(D: e)` | a `__qualified_by_<i>__` tag on an exact key scope; the colon form adds `COLON_FORM_TAG` (§3) |
 | `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
-| `outer(per k: inner(e) by (k))` | `PER{outer(inner(e)), k}` (`PER_CONSTRAINT_TAG`), its key as written a source fragment; a `when` in front sits inside it, `PER{WHEN{outer(inner(e)), c}, k}` |
+| `outer(per k: inner(e) by (k))` | the aggregates nested as written: `outer` tagged `__qualified_by_<i>__` on k's scope, `inner` `__group_key_<j>__` (D75) |
 
 - `BindScopedConstraint` binds the body, the condition as data, the key through
   `BindKeyColumns` (a declaration key's resolution; a column element keeps its written
@@ -457,11 +461,8 @@ a reducer with no `by` is `by ()` (syntax_reference.md §1.1).
   expressions, or written alike — a bound subquery equals nothing, not even itself.
 - `BindScopedReducer` peels the inner `per`/`when` (§3); `SUM(D: e)` is `sum(per D: e)`
   (`BindQualifiedReducer`, §3) and may take a `by`.
-- `BindScopedObjective`: `per ()` adds nothing; a `when` wraps the body, inside the
-  two-level form's `PER_CONSTRAINT_TAG` wrapper. `BindTwoLevelObjective` refuses a `when` inside either
-  reducer, a `per` inside the inner one, a `by` key that is not the `per` key, and an
-  outer `avg` (*"DECIDE: avg over the classes of avg(per g: sum(...) by (g)) is not
-  supported yet; write sum, min or max over them"*). A decision outside the objective's
+- `BindScopedObjective`: `per ()` adds nothing; a `when` wraps the body. A nested
+  objective binds like a constraint's body (D75). A decision outside the objective's
   reducers binds: a query-wide one is one column, and any other must have one instance
   over the kept rows, a run-time check. The objective's casts and subqueries are
   fragment-tagged like a constraint's.
@@ -488,8 +489,8 @@ a reducer with no `by` is `by ()` (syntax_reference.md §1.1).
 
 `DecideObjectiveBinder` binds `MAXIMIZE` / `MINIMIZE` bodies through the same
 `DecideBinder` rules. It knows the sense (`decide_sense`) because a few checks
-depend on it. A scope in front (`BindScopedObjective`) and the two-level form
-(`BindTwoLevelObjective`) are bound as §4a describes. It performs no algebraic
+depend on it. A scope in front (`BindScopedObjective`) is bound as §4a describes, and
+a nested reducer as in a constraint. It performs no algebraic
 rewriting: the objective's shape — its additive spine, its reducer scales, its
 constant offset — is decided once by `DecideCanonicalizer::CanonicalizeObjective` on
 the bound tree, alongside constraints.
@@ -525,6 +526,6 @@ and are lowered by the optimizer, alongside ABS, MIN/MAX, `<>` and bilinear
 | Shared DECIDE expression rules, reducers, key scopes (`FindOrCreateKeyScope`, `FindOrCreateExactScope`), where scopes may stand (`ValidateDecideScopeSpellings`) | `src/planner/expression_binder/decide/decide_binder.cpp` |
 | Degree — the one definition, and the gate over it | `src/planner/expression_binder/decide/decide_degree.cpp` |
 | `SUCH THAT` binding and a constraint's scope (`BindScopedConstraint`) | `src/planner/expression_binder/decide/decide_constraints_binder.cpp` |
-| Objective binding, its scope and the two-level form | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
+| Objective binding and its scope | `src/planner/expression_binder/decide/decide_objective_binder.cpp` |
 | Key scope struct | `src/include/duckdb/planner/operator/decide/logical_decide.hpp` |
 | Scope enum and DECIDE tags | `src/include/duckdb/common/enums/decide.hpp` |

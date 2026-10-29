@@ -96,7 +96,7 @@ string RenderDecidePerKey(const BoundConjunctionExpression &per, const vector<st
 
 //! Split a DECIDE constraint or objective tree into one rendered string per clause,
 //! turning the wrappers the binder stamps back into the syntax the user wrote: `when c
-//! per K:` in front, and the two-level objective. Leaves are rendered by
+//! per K:` in front. Leaves are rendered by
 //! RenderDecideSource. Used by the logical and
 //! physical EXPLAIN paths, which see the tree AFTER the optimizer, so the output
 //! includes the rows linearization emitted as well as the ones the user wrote.

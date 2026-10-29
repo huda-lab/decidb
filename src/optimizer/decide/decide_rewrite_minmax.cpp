@@ -26,6 +26,7 @@
 #include "duckdb/planner/expression/bound_function_expression.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
+#include "duckdb/planner/expression_binder/decide/decide_degree.hpp"
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
@@ -128,6 +129,22 @@ static bool AdditiveContainsMinMax(const Expression &e, idx_t decide_index) {
 // each MIN/MAX term's easy/hard classification; NONE (an outer `=`) classifies every
 // MIN/MAX term hard, with its auxiliary pinned from both sides.
 //! `names` quotes a refused term as written.
+//! A reducer here whose body squares or multiplies decisions -- what is left after the ABS
+//! and bilinear rewrites, a product with a BOOL being linear by then -- has no formulation:
+//! an extremum's link states each member as a linear row, and a composed clause each of its
+//! terms, so the square would be dropped and the answer wrong. Only the cheap direction of
+//! a constraint bounds each member on a row of its own, which a quadratic row states
+//! exactly (`max(power(x, 2)) <= 16`); a nested one is the value rewrite's refusal (D74).
+//! `where` says where the reducer stands, `accepted` what is accepted instead.
+static void RefuseNonlinearReducer(const BoundAggregateExpression &agg, const LogicalDecide &decide, const char *where,
+                                   const char *accepted = "") {
+	if (agg.children.empty() || DecideExpressionDegree(*agg.children[0], decide.decide_index).IsLinear()) {
+		return;
+	}
+	throw BinderException("DECIDE: '%s' squares or multiplies decisions %s, which is not supported yet%s",
+	                      RenderForPlan(agg, decide), where, accepted);
+}
+
 static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t source_clause_id,
                              const Expression &e, int sign, idx_t decide_index, ExtremumPush outer_push,
                              vector<LogicalDecide::ComposedMinMaxTerm> &out_terms, const DecideSourceNames &names) {
@@ -190,10 +207,12 @@ static void WalkComposedLhs(ClientContext &context, LogicalDecide &decide, idx_t
 		throw BinderException("Composed MIN/MAX: aggregate '%s' must have a single inner expression.", name);
 	}
 
+	const bool extremum = name == "min" || name == "max";
+	RefuseNonlinearReducer(agg, decide, extremum ? "inside MIN or MAX beside another term" : "beside MIN or MAX");
+
 	LogicalDecide::ComposedMinMaxTerm term;
-	term.kind = (name == "min" || name == "max")
-	                ? LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND
-	                : LogicalDecide::ComposedMinMaxTerm::SUM_KIND;
+	term.kind = extremum ? LogicalDecide::ComposedMinMaxTerm::MINMAX_KIND
+	                     : LogicalDecide::ComposedMinMaxTerm::SUM_KIND;
 	term.agg_name = name;
 	term.sign = sign;
 	term.inner_expr = agg.children[0]->Copy();
@@ -395,9 +414,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	}
 	auto &obj = *decide.decide_objective;
 
-	// `MAXIMIZE when c:` folds into the terms. The two-level form's PER wrapper never holds
-	// a composed body (its child is `outer(inner(e))`), so it declines below as a
-	// conjunction.
+	// `MAXIMIZE when c:` folds into the terms.
 	const Expression *body = &obj;
 	const Expression *scoped_when = nullptr;
 	if (obj.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
@@ -580,6 +597,14 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 	const bool is_easy = IsEasyExtremum(is_max, push);
 	const bool is_hard = push != ExtremumPush::NONE && !is_easy;
 
+	// The hard side states the extremum over linear members; the cheap side bounds each
+	// member on its own row, a square included.
+	if (is_hard || cmp_type == ExpressionType::COMPARE_EQUAL) {
+		RefuseNonlinearReducer(agg, decide, "inside MIN or MAX",
+		                       "; it is accepted only as a bound every member meets on its own: max(...) <= K "
+		                       "or min(...) >= K");
+	}
+
 	if (cmp_type == ExpressionType::COMPARE_NOTEQUAL) {
 		// Name the clause as written: a `norm(e, 'inf')` reaches here lowered onto a MAX.
 		idx_t source_id;
@@ -745,24 +770,11 @@ void DecideOptimizer::RewriteMinMaxObjective(LogicalDecide &decide) {
 }
 
 void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_ptr<Expression> &objective) {
-	// Navigate through the two-level form's PER wrapper and the `when` wrapper to find the actual aggregate
+	// Navigate through the `when` wrapper to find the actual aggregate
 	unique_ptr<Expression> *obj_owner = &objective;
 	Expression *obj_expr = objective.get();
-	bool has_per = false;
-	const BoundConjunctionExpression *per_wrapper = nullptr;
 
-	// Unwrap PER wrapper (outermost layer)
-	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
-		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
-			has_per = true;
-			per_wrapper = &conj;
-			obj_owner = &conj.children[0];
-			obj_expr = conj.children[0].get();
-		}
-	}
-
-	// Unwrap WHEN wrapper (inside PER, if present)
+	// Unwrap WHEN wrapper
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
 		if (IsWhenConstraintWrapper(conj) && !conj.children.empty()) {
@@ -798,88 +810,8 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 		return;
 	}
 
-	// Check for nested aggregate: OUTER(INNER(expr)) where INNER is also SUM/MIN/MAX/AVG
-	if (has_per && (outer_name == "sum" || outer_name == "min" || outer_name == "max") &&
-	    outer_agg.children.size() == 1) {
-		// Unwrap cast on inner child if present
-		Expression *inner_expr = outer_agg.children[0].get();
-		if (inner_expr->GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-			inner_expr = inner_expr->Cast<BoundCastExpression>().child.get();
-		}
-		if (inner_expr->GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			auto &inner_agg = inner_expr->Cast<BoundAggregateExpression>();
-			auto inner_name = StringUtil::Lower(inner_agg.function.name);
-
-			if ((inner_name == "sum" || inner_name == "min" || inner_name == "max" || inner_name == "avg") &&
-			    inner_agg.children.size() == 1 &&
-			    BoundExpressionReferencesDecide(*inner_agg.children[0], decide.decide_index)) {
-				// Found the two-level pattern: set metadata. (The binder refuses an outer
-				// avg: BindTwoLevelObjective.)
-				decide.per_outer_agg = StrToAggType(outer_name);
-				// Map inner AVG → SUM with flag for coefficient scaling
-				if (inner_name == "avg") {
-					decide.per_inner_agg = ObjectiveAggregateType::SUM;
-					decide.per_inner_was_avg = true;
-				} else {
-					decide.per_inner_agg = StrToAggType(inner_name);
-				}
-
-				// Pre-compute easy/hard classification for inner and outer levels
-				if (inner_name == "min" || inner_name == "max") {
-					bool inner_is_min = (inner_name == "min");
-					decide.per_inner_is_easy = (inner_is_min && decide.decide_sense == DecideSense::MAXIMIZE) ||
-					                           (!inner_is_min && decide.decide_sense == DecideSense::MINIMIZE);
-				}
-				if (outer_name == "min" || outer_name == "max") {
-					bool outer_is_min = (outer_name == "min");
-					decide.per_outer_is_easy = (outer_is_min && decide.decide_sense == DecideSense::MAXIMIZE) ||
-					                           (!outer_is_min && decide.decide_sense == DecideSense::MINIMIZE);
-				}
-				// What the plan says the two levels became, read before the inner is rebuilt.
-				// The `by` of the inner reducer is the `per` key, which the wrapper holds, so the
-				// subjects spell it out as written.
-				{
-					using Kind = LogicalDecide::RewriteAccount::Kind;
-					const string key = RenderDecidePerKey(*per_wrapper, decide.source_fragments);
-					auto inner_text = RenderForPlan(inner_agg, decide) + " by (" + key + ")";
-					if (inner_name == "min" || inner_name == "max") {
-						AddRewriteAccount(decide, DConstants::INVALID_INDEX,
-						                  decide.per_inner_is_easy ? Kind::EXTREMUM_PER_GROUP
-						                                           : Kind::EXTREMUM_PER_GROUP_PINNED,
-						                  inner_text);
-					}
-					if (inner_name == "avg") {
-						AddRewriteAccount(decide, DConstants::INVALID_INDEX, Kind::AVG_SUM, inner_text);
-					}
-					if (outer_name == "min" || outer_name == "max") {
-						AddRewriteAccount(decide, DConstants::INVALID_INDEX,
-						                  decide.per_outer_is_easy ? Kind::EXTREMUM : Kind::EXTREMUM_PINNED,
-						                  outer_name + "(per " + key + ": " + inner_text + ")");
-					}
-				}
-
-				// Rewrite inner MIN/MAX/AVG → SUM for normalization
-				if (inner_name == "min" || inner_name == "max" || inner_name == "avg") {
-					vector<unique_ptr<Expression>> sum_children;
-					sum_children.push_back(inner_agg.children[0]->Copy());
-					auto new_sum = optimizer.BindAggregateFunction("sum", std::move(sum_children));
-					if (inner_agg.filter) {
-						new_sum->Cast<BoundAggregateExpression>().filter = inner_agg.filter->Copy();
-					}
-					// The inner reducer's tags (its `by` key) stay on the sum that stands in
-					// for it, so a plan still prints it as written.
-					new_sum->alias = inner_agg.alias;
-					// Replace inner aggregate within the outer
-					outer_agg.children[0] = std::move(new_sum);
-				}
-				// Strip outer wrapper: replace OUTER(INNER(expr)) with INNER(expr)
-				*obj_owner = std::move(outer_agg.children[0]);
-				return;
-			}
-		}
-	}
-
-	// Flat MIN/MAX objective (not the two-level form).
+	// Flat MIN/MAX objective. A nested one is a helper decision by now
+	// (RewriteScopedReducers, D75).
 	//
 	// A FACTOR on it never reaches here: this path replaces the whole objective with
 	// its auxiliary at coefficient 1.0, so there is nowhere to put one.
@@ -889,9 +821,10 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	if (obj_scale) {
 		return;
 	}
-	if (!has_per && (outer_name == "min" || outer_name == "max") &&
+	if ((outer_name == "min" || outer_name == "max") &&
 	    outer_agg.children.size() == 1 &&
 	    BoundExpressionReferencesDecide(*outer_agg.children[0], decide.decide_index)) {
+		RefuseNonlinearReducer(outer_agg, decide, "inside MIN or MAX in the objective");
 		decide.flat_objective_agg = StrToAggType(outer_name);
 		bool is_min = (outer_name == "min");
 		decide.flat_objective_is_easy = (is_min && decide.decide_sense == DecideSense::MAXIMIZE) ||

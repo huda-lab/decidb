@@ -56,7 +56,6 @@ of the wrappers above each clause:
 |---|---|
 | `per K:` wrapper (`PER_CLASS_TAG`) | Add `per K` to the qualifier, the key as written (`PerClassQualifier`, from the source fragment the binder recorded); recurse into child 0 |
 | `when c:` wrapper (`WHEN_CONSTRAINT_TAG`, 2 children) | Put `when c` (child 1) in front of the qualifier (`WhenQualifier`); recurse into child 0 |
-| Two-level objective wrapper (`PER_CONSTRAINT_TAG`) | Print `outer(per k: inner(e) by (k))` whole (`RenderTwoLevelObjective`); after its rewrite, the inner reducer once per class |
 | Plain `AND` | Recurse into each child |
 | `IN` marker (`COMPARE_IN`) | `<target> IN (v1, v2, ...)`, each part through the renderer |
 | Leaf | `RenderDecideSource`, with the qualifier and a colon in front (`FrontQualifier`, `AttachDecideQualifier`) |
@@ -85,7 +84,9 @@ Every clause prints the same way, written as the user can edit it (D32):
   the key as written (`per D.depotID`), a column by its name;
 - the defaults `per row:` and `by ()` are not printed;
 - the colon form keeps its spelling: `SUM(D: e)` prints as `sum(D: e)`, not `sum(per D: e)` (D38);
-- the two-level objective whole: `MINIMIZE when tier > 0: max(per grp: sum(x * v) by (grp))`.
+- a nested reducer nested, as written: `MINIMIZE when tier > 0: max(per grp: sum(x * v) by (grp))`,
+  each of its reducers under its own account, *"sum(x * v) by (grp) becomes a helper
+  decision per group"*, *"max(per grp: ...) becomes a helper decision"* (D75).
 
 A diagnosis quotes clauses in the same style, and so do the labels of the rows a
 rewrite adds: a `MIN`/`MAX` extremum column is `max(ship)`
@@ -112,7 +113,7 @@ over a *decision* — while the reconciliation casts around `x` and `q` do not
 appear at all.
 
 A key prints as written rather than as binding indexes (`#[3.1]`): a `per K:` key
-and a two-level key from the source fragment the binder recorded, a reducer's own
+from the source fragment the binder recorded, a reducer's own
 `per` from its key scope's `table_alias`, and a `by` key from `DecideGroupKey::text`.
 A column inside an expression prints by its name, which a column reference carries as
 its alias.

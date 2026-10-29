@@ -1466,17 +1466,14 @@ def test_qp_mixed_negated_quadratic(
 # ===========================================================================
 # Nested outer-SUM of aggregate-of-quadratic (two-level QP objective)
 # ===========================================================================
-# These tests exercise the nested-aggregate quadratic shape. Before the fix,
-# MINIMIZE sum(per grp: sum(POWER(x - const, 2)) by (grp))
-# was rejected by the binder because POWER expansion produced a
-# __SUM__ placeholder that leaked through the nested-SUM validator. After the
-# fix, normalization preserves the raw AST and the post-bind optimizer's
-# nested-aggregate strip flattens the form.
+# These tests exercise the nested-aggregate quadratic shape,
+# MINIMIZE sum(per grp: sum(POWER(x - const, 2)) by (grp)).
 #
 # Semantically sum(per grp: sum(expr) by (grp)) ≡ SUM(expr), and the same with an
-# inner avg weights each row by 1/n_g (group size). An inner min/max needs
-# quadratic per-row auxiliary constraints downstream; those shapes now bind
-# successfully but their physical-layer correctness is tracked separately.
+# inner avg weights each row by 1/n_g (group size). The value rewrite writes it so --
+# the objective's own sum, each group once (D75) -- which keeps the square a convex
+# quadratic objective instead of a helper it could not define linearly. An inner
+# min/max of a square is refused (test_per_objective.py).
 
 
 @pytest.mark.quadratic

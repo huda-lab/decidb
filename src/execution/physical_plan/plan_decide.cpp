@@ -171,11 +171,6 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     decide_op->user_absorbed_bounds = std::move(op.user_absorbed_bounds);
     decide_op->flat_objective_agg = op.flat_objective_agg;
     decide_op->flat_objective_is_easy = op.flat_objective_is_easy;
-    decide_op->per_inner_agg = op.per_inner_agg;
-    decide_op->per_outer_agg = op.per_outer_agg;
-    decide_op->per_inner_is_easy = op.per_inner_is_easy;
-    decide_op->per_outer_is_easy = op.per_outer_is_easy;
-    decide_op->per_inner_was_avg = op.per_inner_was_avg;
     // The flattened constraints and objective, produced by the DECIDE optimizer's
     // final pass. Execution evaluates their coefficients; it does not re-derive them.
     decide_op->prepared = std::move(op.prepared);

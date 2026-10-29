@@ -487,15 +487,11 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
                               NativeConstructPolicy native_min_max) {
     idx_t num_rows = input.num_rows;
 
-    // Save objective data (needed for constraint generation in the two-level MIN/MAX
-    // and flat aggregate paths). Defer the deep copy of objective_coefficients
-    // — which is a vector<vector<double>> sized num_terms * num_rows — until
-    // we know we'll take one of those paths.
+    // Save objective data (needed for constraint generation in the flat aggregate
+    // path). Defer the deep copy of objective_coefficients — which is a
+    // vector<vector<double>> sized num_terms * num_rows — until we know we'll take it.
     auto saved_obj_var_indices = input.objective_variable_indices;
-    bool need_saved_obj =
-        !saved_obj_var_indices.empty() &&
-        ((spec.per_inner_agg != ObjectiveAggregateType::NONE && input.objective_num_groups > 0) ||
-         spec.flat_agg != ObjectiveAggregateType::NONE);
+    bool need_saved_obj = !saved_obj_var_indices.empty() && spec.flat_agg != ObjectiveAggregateType::NONE;
     vector<CoefficientColumn> saved_obj_coefficients;
     if (need_saved_obj) {
         saved_obj_coefficients = input.objective_coefficients;
@@ -595,10 +591,9 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     //! direction supplies the envelope — so these are always complementary here, unlike
     //! at a composed site where the clause sits in a constraint and neither is supplied.
     //!
-    //! `family` is the range the MEMBERS of this link reduce over, and it is a parameter
-    //! rather than `row_family()` because the two-level form's outer link reduces over group SUMS, not
-    //! over rows. Both the Big-M and the blame column come from it, so a link can never
-    //! be scaled off one family while its members live in another.
+    //! `family` is the range the MEMBERS of this link reduce over. Both the Big-M and the
+    //! blame column come from it, so a link can never be scaled off one family while its
+    //! members live in another.
     auto objective_link = [&](idx_t result_column, bool is_max, bool is_easy,
                               const AuxRange &family) {
         ExtremumLinkSpec link_spec;
@@ -615,10 +610,9 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
     // Accumulate one row of the saved objective expression into `link`, negated:
     // the linking row is `z - expr op bound`, so the expression's coefficients
     // enter with the opposite sign and its constant part lands on the bound.
-    // `scale` carries the inner-AVG 1/n_g factor at the two-level sites; 1.0 elsewhere.
-    auto AddObjectiveRowTerms = [&](MinMaxLinkRow &link, idx_t row, double scale) {
+    auto AddObjectiveRowTerms = [&](MinMaxLinkRow &link, idx_t row) {
         for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-            double coeff = saved_obj_coefficients[t].Get(row) * scale;
+            double coeff = saved_obj_coefficients[t].Get(row);
             if (std::abs(coeff) < 1e-15) {
                 continue;
             }
@@ -631,200 +625,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         }
     };
 
-    if (spec.per_inner_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty() &&
-        input.objective_num_groups > 0) {
-        // ================================================================
-        // PATH B: two-level objective outer(per k: inner(e) by (k))
-        // ================================================================
-        idx_t K = input.objective_num_groups;
-        auto &row_groups = input.objective_row_group_ids;
-
-        // Build group→rows CSR index once, reuse across phases.
-        BuildGroupCSR(row_groups, K,
-                      input.objective_group_offsets,
-                      input.objective_group_row_ids);
-        auto &obj_offsets = input.objective_group_offsets;
-        auto &obj_flat_rows = input.objective_group_row_ids;
-        auto group_size = [&](idx_t g) {
-            return obj_offsets[g + 1] - obj_offsets[g];
-        };
-
-        // Clear per-row objective (auxiliaries become the objective)
-        input.objective_coefficients.clear();
-        input.objective_variable_indices.clear();
-
-        // Phase A: Inner aggregate — produces K per-group values
-        // These are either group sums (no aux) or z_g auxiliaries (inner MIN/MAX)
-        bool inner_is_minmax = (spec.per_inner_agg == ObjectiveAggregateType::MIN_AGG || spec.per_inner_agg == ObjectiveAggregateType::MAX_AGG);
-        bool inner_is_min = (spec.per_inner_agg == ObjectiveAggregateType::MIN_AGG);
-
-        // group_value_indices[g] = solver variable index for group g's value
-        // For inner SUM: not used (group sums go directly to outer as coefficients)
-        // For inner MIN/MAX: index of z_g global variable
-        vector<idx_t> group_value_indices(K);
-
-        if (inner_is_minmax) {
-            // Inner MIN/MAX: create z_g auxiliary per group
-            bool inner_easy = spec.per_inner_is_easy;
-
-            // Each z_g is an extremum over rows of its group, so every one of them is
-            // boxed by the same per-row family.
-            for (idx_t g = 0; g < K; g++) {
-                group_value_indices[g] =
-                    AddGlobalContinuousAux(input, indexer, row_family(), 0.0); // obj set by outer phase
-            }
-
-            // Build a per-group CSR of the member rows: the rows the inner reducer reads,
-            // whatever their coefficients. Mirrors PATH A's active_rows.
-            vector<idx_t> active_offsets(K + 1, 0);
-            vector<idx_t> active_flat_rows;
-            active_flat_rows.reserve(obj_flat_rows.size());
-            for (idx_t g = 0; g < K; g++) {
-                active_offsets[g] = active_flat_rows.size();
-                for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
-                    idx_t row = obj_flat_rows[k];
-                    if (spec.member_rows[row]) {
-                        active_flat_rows.push_back(row);
-                    }
-                }
-            }
-            active_offsets[K] = active_flat_rows.size();
-
-            // For groups with no active rows, the original code emitted vacuous
-            // z_g op 0 rows that — combined with the outer optimization direction —
-            // implicitly pinned z_g at 0. Skipping those rows lets z_g float free,
-            // so we instead pin z_g's bounds directly. Captured as a lambda so both
-            // easy and hard branches use identical pinning logic.
-            auto PinZGroupToZero = [&](idx_t g) {
-                PinGlobalAux(input, indexer, group_value_indices[g], 0.0);
-            };
-
-            for (idx_t g = 0; g < K; g++) {
-                if (active_offsets[g] == active_offsets[g + 1]) {
-                    PinZGroupToZero(g);
-                    continue;
-                }
-                vector<ExtremumMember> members;
-                members.reserve(active_offsets[g + 1] - active_offsets[g]);
-                for (idx_t k = active_offsets[g]; k < active_offsets[g + 1]; k++) {
-                    idx_t row = active_flat_rows[k];
-                    ExtremumMember member;
-                    AddObjectiveRowTerms(member.link, row, 1.0);
-                    member.range = row_range_for(row);
-                    members.push_back(std::move(member));
-                }
-                EmitExtremumLink(input, indexer,
-                                 objective_link(group_value_indices[g], !inner_is_min,
-                                                inner_easy, row_family()),
-                                 members, var_names, native_min_max);
-            }
-        }
-
-        // Phase B: Outer aggregate — combines K group values into scalar objective
-        bool outer_is_sum = (spec.per_outer_agg == ObjectiveAggregateType::SUM);
-        bool outer_is_minmax = (spec.per_outer_agg == ObjectiveAggregateType::MIN_AGG || spec.per_outer_agg == ObjectiveAggregateType::MAX_AGG);
-        bool outer_is_min = (spec.per_outer_agg == ObjectiveAggregateType::MIN_AGG);
-
-        if (inner_is_minmax && outer_is_sum) {
-            // Outer SUM: objective = sum of z_g's
-            for (idx_t g = 0; g < K; g++) {
-                input.global_obj_coeffs[group_value_indices[g] - indexer.global_block_start] = 1.0;
-            }
-        } else if (inner_is_minmax && outer_is_minmax) {
-            // Outer MIN/MAX over z_g's: create global w auxiliary
-            bool outer_easy = spec.per_outer_is_easy;
-
-            // w is an extremum over the z_g's, and every z_g is boxed by the per-row
-            // family, so w inherits that same box.
-            idx_t w_idx = AddGlobalContinuousAux(input, indexer, row_family(), 1.0); // objective = w
-
-            // The members are the group values themselves — already columns, so a
-            // native arm needs no pinning rows at all and the envelope reads
-            // `w - z_g <op> 0`.
-            vector<ExtremumMember> members;
-            members.reserve(K);
-            for (idx_t g = 0; g < K; g++) {
-                ExtremumMember member;
-                member.link.AddColumn((int)group_value_indices[g], -1.0);
-                member.range = row_family();
-                members.push_back(std::move(member));
-            }
-            // Outer Big-M: the family range is the global span of the objective
-            // expression (max_r exprmax - min_r exprmin), which bounds the span of
-            // (w - z_g) since every z_g is boxed by that same range.
-            EmitExtremumLink(input, indexer,
-                             objective_link(w_idx, !outer_is_min, outer_easy, row_family()),
-                             members, var_names, native_min_max);
-        } else if (!inner_is_minmax && outer_is_sum) {
-            if (spec.per_inner_was_avg) {
-                // Inner AVG + Outer SUM: scale each row's coefficient by 1/n_g
-                // SUM over groups of AVG(expr) = Σ_g (Σ_{r∈g} c_r * x_r) / n_g
-                for (idx_t t = 0; t < saved_obj_var_indices.size(); t++) {
-                    auto &col = saved_obj_coefficients[t].MutableDense();
-                    for (idx_t row = 0; row < num_rows; row++) {
-                        if (row_groups[row] != DConstants::INVALID_INDEX) {
-                            idx_t g = row_groups[row];
-                            col[row] /= static_cast<double>(group_size(g));
-                        }
-                    }
-                }
-            }
-            // Restore (possibly scaled) objective coefficients
-            input.objective_coefficients = std::move(saved_obj_coefficients);
-            input.objective_variable_indices = std::move(saved_obj_var_indices);
-        } else if (!inner_is_minmax && outer_is_minmax) {
-            // Inner SUM + Outer MIN/MAX: compute per-group sums, then optimize over them
-            // Create w auxiliary for outer MIN/MAX over group sums
-            bool outer_easy = spec.per_outer_is_easy;
-
-            // This w reduces over group SUMS, not over rows, so it does NOT share the
-            // per-row family's box: a group sum leaves any single row's range as soon
-            // as the group holds more than one row. Derive the box from the actual
-            // per-group sums — each group's rows added up under the same inner-AVG
-            // scale the pinning rows below use — which is both correct and tighter than
-            // widening the per-row family by num_rows.
-            // `scale` is positive, so a member's floor stays the sum's floor and an
-            // infinite end carries through the addition on its own.
-            AuxRange group_sum_family;
-            for (idx_t g = 0; g < K; g++) {
-                double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
-                double g_lo = 0.0, g_hi = 0.0;
-                idx_t g_unbounded_var = DConstants::INVALID_INDEX;
-                for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
-                    auto rr = saved_row_range(obj_flat_rows[k]);
-                    g_lo += rr.lo * scale;
-                    g_hi += rr.hi * scale;
-                    if (g_unbounded_var == DConstants::INVALID_INDEX) {
-                        g_unbounded_var = rr.unbounded_var;
-                    }
-                }
-                group_sum_family.CoverRowSided(g_lo, g_hi, g_unbounded_var);
-            }
-            idx_t w_idx = AddGlobalContinuousAux(input, indexer, group_sum_family, 1.0); // objective = w
-
-            // Each member is one group's sum: sum_g = Σ_{r ∈ group_g} Σ_t coeff_t_r * x.
-            vector<ExtremumMember> members;
-            members.reserve(K);
-            for (idx_t g = 0; g < K; g++) {
-                double scale = spec.per_inner_was_avg ? 1.0 / static_cast<double>(group_size(g)) : 1.0;
-                ExtremumMember member;
-                for (idx_t k = obj_offsets[g]; k < obj_offsets[g + 1]; k++) {
-                    AddObjectiveRowTerms(member.link, obj_flat_rows[k], scale);
-                }
-                // Boxed by the family over group sums — looser than a per-group bracket,
-                // but sound (it covers every group) and finite whenever any of them is.
-                // The same range `w` itself was boxed by, so the two cannot drift.
-                member.range = group_sum_family;
-                members.push_back(std::move(member));
-            }
-            // Every group is a member, whatever its coefficients. The members ARE the
-            // group sums, so the Big-M comes from the family over group sums — the same
-            // range `w` and every member is boxed by.
-            EmitExtremumLink(input, indexer,
-                             objective_link(w_idx, !outer_is_min, outer_easy, group_sum_family), members,
-                             var_names, native_min_max);
-        }
-    } else if (spec.flat_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty()) {
+    if (spec.flat_agg != ObjectiveAggregateType::NONE && !saved_obj_var_indices.empty()) {
         // ================================================================
         // PATH A: flat MIN/MAX objective
         // ================================================================
@@ -857,7 +658,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         members.reserve(active_rows.size());
         for (idx_t row : active_rows) {
             ExtremumMember member;
-            AddObjectiveRowTerms(member.link, row, 1.0);
+            AddObjectiveRowTerms(member.link, row);
             member.range = row_range_for(row);
             members.push_back(std::move(member));
         }
@@ -896,8 +697,7 @@ static void AddComposedRowTerms(const VarIndexer &indexer, MinMaxLinkRow &link,
 //! so the two can never disagree about the term's reach.
 //!
 //! A term admitting no rows yields the seeded [0,0], which pins its auxiliary at 0 —
-//! the same settlement the two-level sites give a group with no active rows, and better than
-//! letting an auxiliary with no pinning rows float on the outer pressure.
+//! better than letting an auxiliary with no pinning rows float on the outer pressure.
 static AuxRange ComposedTermRange(const SolverInput &input, const vector<DecideTerm> &inner_terms,
                                   const vector<vector<double>> &per_term_coefs,
                                   const vector<bool> &filter_mask) {

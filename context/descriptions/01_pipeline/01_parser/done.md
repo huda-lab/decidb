@@ -281,10 +281,10 @@ removed condition to the reducer's own `when`:
   becomes `sum(when c: 1)`, and `norm` (which takes no `when` inside it) is pointed at the
   scope in front; a constraint with no reducer is told to drop a postfix `PER`;
 - `RefuseObjective` and `RefuseObjectivePer`, after the objective: the `when` in
-  front, the two-level form `outer(per g: inner(e) by (g))` for a reducer over a reducer
-  (an outer `avg` is pointed at `sum`, which ranks solutions the same way; a `WHEN` inside
-  the inner reducer goes in front; an inner colon form or a term beside the form has no
-  spelling yet), with the NULL note the old form's dropped NULL keys call for, and *"an
+  front, the nested form `outer(per g: inner(e) by (g))` for a reducer over a reducer
+  (a `WHEN` inside the inner reducer goes in front; an inner colon form is
+  `inner(per D: e)`; under a factor or beside a term, the nested reducer is written so
+  where it stands, `syntax_reference.md` §5.5), with the NULL note the old form's dropped NULL keys call for, and *"an
   objective is produced once"* for a flat reducer (a flat `avg` is pointed at the sum of
   one average per class, NULL keys left out, which is what it meant);
 - `RefuseDeclaration`, for a declaration in a parse tree stored before the removal (a
@@ -358,7 +358,7 @@ serialization. The regression matrix in
 `test/common/test_decidb_plan_serialization.cpp` covers every variable type and
 declaration scope, both clause orders, a constraint's `when` with a multi-column `per`
 and a `by`, a reducer's own `when` and `per`, the one- and many-relation colon forms,
-the objective's `when` and two-level form, `NORM`, `IN`, scalar subqueries, quoted
+the objective's `when` and a nested objective, `NORM`, `IN`, scalar subqueries, quoted
 identifiers and `DIAGNOSE`. It checks reparsed equality, stable rendering, and binary
 `SelectStatement` round trips; a second case does the same for the scope grammar in
 depth (deck examples 1–8 as written and fully explicit, words that are keywords inside

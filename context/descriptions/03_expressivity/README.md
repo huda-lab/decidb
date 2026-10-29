@@ -14,7 +14,7 @@ This folder documents the expressive power of the DECIQL language — the SQL ex
 | [problem_types/](problem_types/) | LP, ILP, MILP, QP, MIQP, QCQP, bilinear, feasibility — problem class taxonomy, solver support matrix, structural properties | SOCP |
 | [decide/](decide/) | BOOL, INT, REAL, per-row / keyed (`per K:`) / query-wide (`per ():`) declarations, signed variables, both clause orders, the colon form `SUM(D: e)` | No open work |
 | [such_that/](such_that/) | Comparisons (`=`,`<`,`<=`,`>`,`>=`,`<>`), BETWEEN, IN (columns + dec. vars), AND, subqueries (uncorrelated + correlated), composed MIN/MAX, factors on reducers, quadratic (`POWER(expr,2)`), NULL policy | No open work |
-| [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives, composed MIN/MAX, the two-level form; cross-refs to sql_functions, problem_types, scope | No open work |
+| [maximize_minimize/](maximize_minimize/) | SUM, multi-var, column arithmetic objectives, composed MIN/MAX, nested objectives; cross-refs to sql_functions, problem_types, scope | No open work |
 | [scope/](scope/) | `per`, `when` and `by`: keyed declarations, `[when c] [per K]:` in front of constraints and the objective, `agg([when c] [per K]: e) by (G)`, defaults, variant signatures, NULL and empty sets, how a clause becomes model rows, the two-level objective | The `entity` → `keyed` rename |
 | [sql_functions/](sql_functions/) | SUM, AVG, MIN/MAX, ABS, norm, `<>`, IN (dec. vars), arithmetic including division, comparisons, BETWEEN, NULL | No open work |
 | [bilinear/](bilinear/) | Bool×anything (McCormick), non-convex (Q matrix), bilinear constraints, data coefficients, composition with scopes | — |

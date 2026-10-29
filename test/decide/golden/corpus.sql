@@ -644,10 +644,10 @@ SELECT id, price, x FROM items DECIDE x(INT)
 SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <= 5
 MAXIMIZE MAX(x + price) + 0.001 * SUM(x);
 
--- 91 an extremum over GROUP SUMS rather than over rows. Its members leave any
--- single row's range as soon as a group holds more than one row, so its M comes
--- from the group-sum family; it used to be the per-row span multiplied by the
--- row count, which is a bound on that family rather than a measurement of it.
+-- 91 an extremum over GROUP SUMS rather than over rows: a nested objective (D75), a
+-- helper per group for the sum and one over them for the max. Its members leave any
+-- single row's range as soon as a group holds more than one row, so its closing M is
+-- read off the group helpers' box, derived from the group sums.
 SELECT grp, id, x FROM items DECIDE x(INT)
 SUCH THAT x >= 0 AND x <= 5 AND SUM(x) <= 6
 MAXIMIZE max(per grp: sum(x) by (grp));

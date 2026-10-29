@@ -43,6 +43,10 @@ struct TermFilterState {
     vector<bool> mask;
     bool has_filter = false;
     bool avg_scale = false;
+    //! An objective AVG's `by` groups among the rows it reads (DecideTerm::avg_group_key),
+    //! which its 1/n divides by; empty for one group.
+    vector<idx_t> avg_group_ids;
+    idx_t avg_num_groups = 0;
 };
 
 //===--------------------------------------------------------------------===//
@@ -152,19 +156,10 @@ public:
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
-    // Flat (not two-level) objective: original aggregate type before rewrite to SUM
+    // A MIN/MAX objective: original aggregate type before rewrite to SUM
     ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
     // Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
     bool flat_objective_is_easy = false;
-
-    // The two-level objective, outer(per k: inner(e) by (k))
-    ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
-    ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
-    // Pre-computed easy/hard at each level (only meaningful when agg is MIN_AGG or MAX_AGG)
-    bool per_inner_is_easy = false;
-    bool per_outer_is_easy = false;
-    // True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
-    bool per_inner_was_avg = false;
 
     // --- Key scopes ---
 
@@ -319,10 +314,6 @@ private:
     struct EvaluatedClauses {
         //! Per-term filter state for the objective's linear / squared / bilinear terms.
         vector<TermFilterState> linear_filters, quadratic_filters, bilinear_filters;
-        //! The two-level objective's grouping, keyed by the filters above. Copied into
-        //! `SolverInput` during assembly.
-        vector<idx_t> objective_row_group_ids;
-        idx_t objective_num_groups = 0;
 
         //! One composed MIN/MAX *constraint*, evaluated. Parallel to
         //! `composed_minmax_constraints`; the comparison and clause id stay on the plan.
@@ -342,7 +333,7 @@ private:
     };
 
     //! PHASE 2, sub-phase 2: evaluate the objective's coefficients onto gstate's
-    //! objective-evaluation fields, then settle the two-level objective's grouping.
+    //! objective-evaluation fields.
     EvaluatedClauses EvaluateObjective(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                        ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                        const vector<EntityMapping> &entity_mappings) const;

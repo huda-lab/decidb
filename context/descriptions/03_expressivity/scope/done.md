@@ -13,7 +13,7 @@ constraints exist. A *class* is the set of rows with one value of a key; a *kept
 a result row (after joins and `WHERE`) that the enclosing `when` keeps.
 
 **Syntax**: `../../00_project_overview/syntax_reference.md` (SR below) §1.1 (the forms and their
-defaults), §2.3 (keyed declarations), §4 (objective), §5.1–§5.4 (reducers), §6
+defaults), §2.3 (keyed declarations), §4 (objective), §5.1–§5.5 (reducers, nesting), §6
 (scoped constraints), §7 (variants, NULL, empty sets), §10.3 (the spellings that
 are refused). This doc covers what each form means beyond the syntax, how the layers
 build it, and where the code is.
@@ -117,7 +117,7 @@ side once and picks one of three shapes (SR §6.4):
 |---|---|---|
 | ROWS | no decision-bearing reducer | one row per variant of each class, from its first kept row (§5) |
 | AGGREGATE | decision reducers that share one `by` key, under whole-query factors, with only query-wide terms beside them | one row per `by` group of the kept rows, under the group's tightest bound |
-| VALUE | anything else: a per-row or keyed decision beside a reducer, a factor that varies by row, reducers with different `by` keys, a reducer inside another expression, a product of decisions beside a reducer, or a `MIN`/`MAX` beside another term (or under a factor of unknown sign) that has a `by`, a non-constant bound or a query-wide decision beside it | each decision reducer becomes a helper decision with one instance per `by` group, defined once; then one row per class |
+| VALUE | anything else: a per-row or keyed decision beside a reducer, a factor that varies by row, reducers with different `by` keys, a reducer inside another expression, a decision reducer holding a reducer (§4), a product of decisions beside a reducer, or a `MIN`/`MAX` beside another term (or under a factor of unknown sign) that has a `by`, a non-constant bound or a query-wide decision beside it | each decision reducer becomes a helper decision with one instance per `by` group -- a nested one per path group, innermost first -- defined once; then one row per class |
 
 The canonicalizer stamps a VALUE comparison with `VALUE_REWRITE_TAG`;
 `DecideOptimizer::RewriteScopedReducers` (`decide_rewrite_scoped.cpp`) replaces each
@@ -176,7 +176,18 @@ supported yet"*): the two rows a `<>` becomes hold a linear left side only.
   `sum(per D, T: e)`: the same classes and variants, and it may take a `by`. It
   is echoed as written (D38). Its semantics and implementation are in
   `../decide/done.md` → "The colon form".
-- **A reducer inside a reducer** is refused, except the two-level objective (§6).
+- **A reducer inside a reducer** nests to any depth, with `when`, `per` and `by` at every
+  level, in a constraint and in the objective (SR §5.5). The **path rule**: a nested
+  reducer reads, at the row it stands for, the kept rows every enclosing reducer's own
+  `when` keeps that agree with that row on every enclosing `by` key and its own -- its
+  path key. So `sum(max(x) by (g)) by (h)` takes one maximum per `(h, g)` pair, and a
+  `when` emptying a path group is D8 naming the group by its path key (*"DECIDE:
+  max(when c: x) has no rows for t.g = 'a', t.h = 'q'."*). An enclosing reducer receives
+  one value per row it reads, or per class and variant of its own `per`; `AVG` divides
+  by those. Over decisions every level is a helper decision keyed by its path (§3, "How
+  a constraint becomes model rows"); over data alone a nest is a value on the bound side.
+  Refused (D74): `norm` inside a reducer, a square or a product of decisions inside
+  nested reducers, a reducer over data alone added inside one over decisions.
 
 ## 5. Variant signatures
 
@@ -247,27 +258,24 @@ run under `DIAGNOSE`.
 - **A top-level reducer's `by`** must be one group over the kept rows:
   `MAXIMIZE when g = 'B': sum(x) by (g)` runs, `MAXIMIZE sum(x) by (g)` over two
   values of `g` is refused.
-- **Two-level form** `outer(per k: inner(e) by (k))` (D2): `inner` once per class of
-  `k`, NULL a class, then `outer` over those values; all nine of `SUM`/`MIN`/`MAX`.
-  It is the whole objective (beside another term it is a reducer inside a reducer). The
-  inner `by` key must be the `per` key; a `when` goes in front of the objective, not
-  inside either reducer; the inner reducer takes no `per`; an outer `avg` is refused
-  (*"DECIDE: avg over the classes of avg(per grp: sum(...) by (grp)) is not supported
-  yet; write sum, min or max over them"*).
+- **Nested reducers** (D2, D75), `outer(per k: inner(e) by (k))` the common case:
+  `inner` once per class of `k`, NULL a class, then `outer` over those values -- any of
+  `SUM`, `AVG`, `MIN`, `MAX` at either level, `when` and `per` inside either, any `by`,
+  any depth, beside another term or under a factor, as in a constraint (§4).
 
   ```sql
   MINIMIZE max(per D.depotID: sum(ship) by (D.depotID))       -- the busiest depot
   MINIMIZE sum(per grp: avg(power(x - target, 2)) by (grp))   -- each group's mean square
   ```
 
-  `DecideObjectiveBinder::BindTwoLevelObjective` binds it as `outer(inner(e))` under a
-  `PER_CONSTRAINT_TAG` wrapper whose children are the key columns;
-  `DecideOptimizer::RewriteMinMaxObjective` (`decide_rewrite_minmax.cpp`) reads that
-  wrapper into the `per_inner_*` / `per_outer_*` metadata (inner and outer reducer, easy
-  or hard), and execution groups by `DecideObjective::per_columns`. The inner MIN/MAX
-  builds a per-group active-rows index and emits linking rows only for rows with a
-  nonzero coefficient; a group with none has its auxiliary pinned to 0. Outer-easy
-  MIN/MAX over inner-SUM skips the analogous all-zero groups.
+  The canonicalizer tags each objective reducer over decisions that holds a reducer
+  (`TagNestedObjectiveReducers`); the value rewrite makes it and every reducer inside it
+  a helper decision, pushed the way the sense pushes the objective, and the objective
+  reads the outer helper once. `sum([when c] per K: inner(e) by (G))`, `inner` a SUM or
+  AVG with every column of `K` in `G`, is written as the objective's own sum instead
+  (`InlineSumOfGroupSums`): each `G` group once, an inner AVG dividing by its group's
+  size (`DecideTerm::avg_group_key`), so a square in `e` stays a convex QP. A `MIN` or
+  `MAX` of a square inside nested reducers is refused.
 
 ## 7. `when` is a row filter, not `CASE`
 
@@ -363,13 +371,16 @@ keyed decision (`../diagnose/done.md`).
   `BindQualifiedReducer` binds the colon form onto the same key scope and adds
   `COLON_FORM_TAG`.
 - `DecideObjectiveBinder::BindScopedObjective` wraps the objective's `when` the same
-  way; `BindTwoLevelObjective` binds the two-level form (§6).
+  way; a nested reducer binds as nested aggregates, anywhere (§4, §6).
 
 **Canonicalizer** (`src/planner/decide/decide_canonicalizer.cpp`): `ClassifyScoped`
-(the shape), `PeelScale` (factors), and the scope checks (§5).
+(the shape; a decision reducer holding a reducer is VALUE), `PeelScale` (factors), the
+objective's nest tags, and the scope checks and signatures (§5), a nested reducer's
+along its path (`DecideReducerPath`, `decide_reducer_path.hpp`).
 
-**Optimizer** (`src/optimizer/decide/`): `RewriteScopedReducers` (the VALUE shape),
-`RewriteMinMaxObjective` (two-level form), `TryMatchEasyExtremumTarget` (D41).
+**Optimizer** (`src/optimizer/decide/`): `RewriteScopedReducers` (the VALUE shape, a
+nest innermost first keyed by its path, the nested objective), `TryMatchEasyExtremumTarget`
+(D41).
 
 **Execution** (`src/execution/operator/decide/physical_decide.cpp`).
 - `RunScopeChecks` first; then each clause reads only its kept rows: `KeptRows` /
@@ -382,16 +393,15 @@ keyed decision (`../diagnose/done.md`).
 - The prepared model (`decide_prepared_model.hpp`) carries the scope on
   `DecideConstraint` — `when_condition`, `group_key` (the shared `by` key of the
   AGGREGATE shape), `per_key` (`PerKeyRole`: `NONE`, `ONE_ROW_PER_CLASS`,
-  `NAMES_CLASSES`) and `class_key` — and on `DecideObjective` — `when_condition` and
-  `per_columns` (the two-level key).
+  `NAMES_CLASSES`) and `class_key` — and on `DecideObjective` — `when_condition`, and an
+  AVG term's `avg_group_key`.
 - `BuildQualifierKeepMask` keeps one row per class of an inner `per` (or colon form) in
   each group; `ReduceAggregateRhsPerGroup` reduces a varying bound per group.
 
 **Rendering** (`src/planner/decide/decide_source_provenance.cpp`):
 `CollectDecideExpressionStrings` walks the wrappers, building the front qualifier from
 `WhenQualifier` and `PerClassQualifier` (`FrontQualifier`, `AttachDecideQualifier`);
-`RenderTwoLevelObjective` prints the two-level form; `RenderReducer` prints a reducer's
-inner scope and `by`.
+`RenderReducer` prints a reducer's inner scope and `by`, a nested one nested.
 
 ## 11. Scale
 

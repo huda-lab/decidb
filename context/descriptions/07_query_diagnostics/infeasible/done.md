@@ -558,8 +558,7 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   `(grp = CAST('a' AS VARCHAR))`), a cast the user typed is replayed from its source
   fragment, and a column that needs quoting keeps its quotes (`when "ok:": ...`).
 
-The two-level objective's `per` key passes a throwaway labels vector (objective groups
-are not diagnosed by clause key). A composite key is written as a comma list
+A composite key is written as a comma list
 (`per region, year:`); parentheses are only for `per ()`, and `per (region, year):` is a
 parse error that names the comma spelling. An easy `max(x) <= K` is a column bound, not a
 grouped clause — see "An easy MIN/MAX over a bare decision is a column bound" above.

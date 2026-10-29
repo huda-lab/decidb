@@ -49,7 +49,7 @@ bool MayHaveIntegralColumn(const LogicalDecide &op) {
 	auto is_minmax = [](ObjectiveAggregateType agg) {
 		return agg == ObjectiveAggregateType::MIN_AGG || agg == ObjectiveAggregateType::MAX_AGG;
 	};
-	return is_minmax(op.flat_objective_agg) || is_minmax(op.per_inner_agg) || is_minmax(op.per_outer_agg);
+	return is_minmax(op.flat_objective_agg);
 }
 
 //! Does the objective's quadratic part couple two decision variables, making Q

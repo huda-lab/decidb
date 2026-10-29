@@ -14,6 +14,7 @@ Tests live in:
 - `test/decide/tests/_anr_cases.py` — the ANR plan's fixtures, each as SQL and as oracle expressions with its hand-computed answer
 - `test/decide/tests/test_anr_oracle_selfcheck.py` — the checks that the ANR evaluator is right before any engine change relies on it
 - `test/decide/tests/test_anr_variants.py` — phase 1 of the ANR plan (variant signatures) through the engine
+- `test/decide/tests/test_anr_nested.py` — phase 2 of the ANR plan (nested reducers) through the engine
 - `test/decide/tests/test_scope_*.py` — twelve suites, one per part of the language
 - `test/decide/tests/test_no_old_spellings_remain.py` with `_old_spellings.py` — the scanner that keeps removed spellings out of every test surface
 - `test/decidb/test_scope_parser.test` — sqllogic: every spelling parses and binds (also inside a nested DECIDE; inside an ordinary subquery written in the clause it answers "not supported yet"), quoted keywords as names, the exact parse errors, and the removed spellings' messages
@@ -41,7 +42,7 @@ same thing.
 - **`ScopedModel`** — the clause scopes. `Scoped` is `[when c] [per K]: lhs sense rhs`,
   each side a sum of parts: a tuple term (a function of the row), a `Reduce`
   (`factor * agg([when c] [per K]: body) by (key)`) or, in the objective, a `Nested`
-  two-level form `outer(per k: inner(body) by (k))`. A `ScopedObjective` is generated
+  form `outer(per k: inner(body) by (k))`, two levels (deeper nests are `_anr_oracle`'s). A `ScopedObjective` is generated
   once. The oracle follows the ANR definition step by step: keep the rows the `when`
   keeps (a NULL condition drops the row), split the kept rows into classes of the `per`
   key, generate the body once per variant of each class — per distinct signature
@@ -173,7 +174,8 @@ docstring derives.
   NULL is a group; a constant key and an all-NULL key are one group; a `by` key with a
   subquery; the tightest bound per group without `per`; MIN and MAX in both directions,
   under a factor, a strict bound and in a composed clause; AVG divides by the rows its
-  `when` keeps; the refused shapes. Oracle and dump; `test_avg_not_equal` and
+  `when` keeps; a reducer nested in a `by`-grouped one reads its own `by` group
+  (syntax_reference.md §5.5, judged by `_anr_oracle`); the refused shapes. Oracle and dump; `test_avg_not_equal` and
   `test_a_square_in_a_grouped_reducer` are hand-checked.
 - **`test_scope_reducer_inner.py`** — `agg([when c] [per K]: e)`. The inner `when`
   filters its own reducer only; an inner `per` counts each class once, from its first
@@ -185,10 +187,11 @@ docstring derives.
   `per` is `per ()`; the `when` in front builds the same model as a `when` inside each
   reducer; a query-wide decision, or a keyed decision with one instance, beside a
   reducer counts once; tuple terms that are not one value make the objective produced
-  more than once (D66); the two-level
-  form, also under a `when`, and its refusals (an outer AVG); a reducer nested in a
-  constraint is refused; an objective `when` that keeps no row and an objective reducer
-  with no row are errors. Oracle, dump and pinned messages.
+  more than once (D66); the nested form, also under a `when`, and the forms its old
+  path refused (a `when` in either reducer, a `by` other than the `per` key, an outer
+  AVG, a third level) as answers judged by `_anr_oracle` (D75), as is deck example 9 in
+  a constraint; a keyed objective is refused; an objective `when` that keeps no row
+  and an objective reducer with no row are errors. Oracle, dump and pinned messages.
 - **`test_scope_variants.py`** — variant signatures (D64, D65; it replaced the
   determination suite). A bound, a factor, a `by` key, a decision outside reducers and an
   inner key's body that vary within a class are one instance per value. Each case runs on
@@ -205,6 +208,20 @@ docstring derives.
   decision the key fixes is one row per class, `per ()` over a per-row decision one per
   row; EXPLAIN ANALYZE's variant line (and none in a plain EXPLAIN, none without
   variants); DIAGNOSE's variant label (`a, 2`). Oracle, dump and pinned text.
+- **`test_anr_nested.py`** — the plan's phase-2 fixtures through the engine on Gurobi and
+  HiGHS (`Case.phase == 2`: F1 with a MAX and a SUM inner reducer, F14, F16, F16_small,
+  `count(e)` over a NULL, D8 inside a nest), each judged by `_anr_oracle`; F1's model (a
+  helper per `(rid, cid)` path group and per region, twelve columns, no Big-M); D8's
+  message naming the path group; a 768-cell grid -- depth 2, every kind and scope at
+  both levels over a per-row and a keyed decision, and depth 3 crossing every middle
+  kind and scope -- every cell the oracle's answer or its error; a constant bound on a
+  nest under `<=`, `>=` and `=` for every pair of kinds, the objective pushing against it
+  (the grid's bound is a column, which bound absorption never folds); an inner AVG dividing by
+  its members, an inner `count` counting them, an inner `by` read within the outer group;
+  a bound written only at the root reaching a nested closing link on HiGHS with MIN/MAX
+  lowered (and the named refusal where nothing bounds it); a bound through two helper
+  levels; the refusals of D74 (`norm`, a square, a data reducer inside a decision one).
+  Oracle, dump and pinned messages.
 - **`test_scope_value_rewrite.py`** — a reducer whose decision side mixes it with
   something a grouped row cannot hold (a per-row or keyed decision beside it, a factor
   that varies by row, a second `by` key, a reducer inside `abs` or a square) is built
@@ -219,7 +236,8 @@ docstring derives.
 - **`test_scope_bare_clauses.py`** — a clause with no `when`, `per` or `by` means its
   explicit form (`per row:` in front, `by ()` on each reducer, the objective once).
   Strict bounds step onto whole numbers; a negative factor on a hard MAX; an objective
-  term must be one value; a reducer inside a reducer is refused; an easy `min(x) >= K`
+  term must be one value; a bare reducer inside a reducer is read at every row
+  (`SUM(MAX(x))`, syntax_reference.md §5.5, judged by `_anr_oracle`); an easy `min(x) >= K`
   or `max(x) <= K` is absorbed into the decision's box (D41), so a negative K makes `x`
   signed and the model is the one the column bound builds; a constant inside MIN/MAX
   under a strict step is refused; query-wide decisions beside reducers under `<>`,
@@ -245,7 +263,7 @@ docstring derives.
 - **`test_scope_explain_diagnose.py`** — what EXPLAIN and DIAGNOSE print. EXPLAIN shows
   a clause as written, its canonical reading when that differs, auxiliaries as the
   expression they stand for and one account line per rewrite, including the objective's
-  rewrites and the two-level key. The echo is in the plan style: lower-case reducers
+  rewrites, a nested objective's helpers and its key as written. The echo is in the plan style: lower-case reducers
   and keywords, `when c per K:` in front, a reducer's `by (G)` after it, and no
   `per row:` or `by ()`. DIAGNOSE, in the expanded slack scope, reports a `by`-grouped
   clause once per class: per value of its `per` key, or per kept row when it has none

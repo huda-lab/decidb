@@ -1,23 +1,17 @@
-"""Tests for the two-level objective, `outer(per k: inner(e) by (k))`.
+"""Tests for the nested objective `outer(per k: inner(e) by (k))` (D75).
 
-The two-level ILP formulation (per DecidB docs):
-  INNER creates per-group auxiliary variables; OUTER creates a global
-  auxiliary. Easy / hard classification applies at each level independently.
+The formulation (syntax_reference.md §5.5): the inner reducer is a helper decision per
+group of k, defined once per group, and the outer one a helper over them that the
+objective reads once -- an equality for SUM and AVG, an extremum link for MIN and MAX,
+easy or hard by the direction the objective pushes it (an outer AVG divides by the
+classes). A SUM over group SUMs or AVGs is the objective's own sum instead, each group
+once, an inner AVG dividing its rows by the group's size -- NOT equivalent to SUM when
+groups differ in size -- so a square inside it stays a convex quadratic objective. A MIN
+or MAX of a square inside nested reducers is refused.
 
-  - SUM as outer (over groups) is always easy — linear sum of auxiliaries. An
-    outer AVG is refused ("not supported yet"); ``sum(per k: ...)`` ranks
-    solutions the same way.
-  - MIN/MAX as outer splits into easy (``MIN MAX SUM`` / ``MAX MIN SUM``) and
-    hard (``MAX MAX SUM`` / ``MIN MIN SUM``) cases.
-  - MIN/MAX as inner splits similarly: easy when the inner aggregate is
-    bounded in the direction optimization naturally tightens, hard
-    otherwise (needs Gurobi indicators).
-  - AVG as inner scales per-row coefficients by ``1 / n_g`` — NOT equivalent
-    to SUM when groups differ in size.
-
-Every correctness case below builds the same two-level model in gurobipy and
-compares DecidB's nested-aggregate objective (evaluated on its own output)
-against the oracle's ``objective_value``.
+Every correctness case below builds the same nested model in gurobipy and compares
+DecidB's nested-aggregate objective (evaluated on its own output) against the oracle's
+``objective_value``.
 """
 
 import time
@@ -31,7 +25,6 @@ from ._oracle_helpers import (
     group_indices,
     emit_inner_max, emit_inner_min,
     emit_hard_inner_max, emit_hard_inner_min,
-    emit_hard_inner_max_quadratic, emit_hard_inner_min_quadratic,
 )
 
 
@@ -1071,205 +1064,30 @@ def test_sum_avg_per_extreme_unequal_groups(
 
 
 # ===========================================================================
-# sum(per col: min/max(power(expr, 2)) by (col)) — hard inner with quadratic
+# sum(per col: min/max(power(expr, 2)) by (col)) — refused (D74)
 # ===========================================================================
 #
-# Inner expression is POWER(x - target, 2); outer is SUM over groups. The
-# inner aggregate is hard in the direction the outer pushes (MAXIMIZE pushes
-# MAX up, MINIMIZE pushes MIN down), so per-row indicators are required —
-# exactly the pattern exercised here. The quadratic POWER also means the
-# physical layer must preserve squared terms rather than collapsing to
-# linear auxiliaries.
-
-
-_POWER_DATA_SQL = """
-    SELECT 1 AS id, 'A' AS grp, 3.0 AS target UNION ALL
-    SELECT 2, 'A', 7.0 UNION ALL
-    SELECT 3, 'A', 5.0 UNION ALL
-    SELECT 4, 'B', 2.0 UNION ALL
-    SELECT 5, 'B', 8.0
-"""
-
-
-def _power_data(duckdb_conn):
-    return duckdb_conn.execute(
-        f"SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), "
-        f"CAST(target AS DOUBLE) FROM ({_POWER_DATA_SQL})"
-    ).fetchall()
-
-
-def _power_group_obj(rs, cs, reducer):
-    """Evaluate SUM_g reducer({POWER(x_i - target_i, 2) : i in group g})
-    from DecidB's output rows. Uses the full (x-t)^2 value — no constant
-    stripping — so the oracle side must match."""
-    xi = cs.index("x")
-    gi = cs.index("grp")
-    ti = cs.index("target")
-    groups: dict = defaultdict(list)
-    for r in rs:
-        groups[r[gi]].append((float(r[xi]) - float(r[ti])) ** 2)
-    return sum(reducer(vs) for vs in groups.values())
+# A nested reducer is a helper decision with a linear definition (syntax_reference.md §5.5), and a MIN or MAX
+# of a square has none. The two-level path this replaced read such a square as if the
+# MIN/MAX were a SUM over the group: under a budget shared by the groups it returned the
+# sum-of-squares answer, which is not the sum of the groups' minima.
 
 
 @pytest.mark.per_clause
 @pytest.mark.min_max
 @pytest.mark.quadratic
-@pytest.mark.obj_maximize
-@pytest.mark.correctness
-def test_maximize_sum_max_power_per(
-    decidb_cli_gurobi, duckdb_conn, oracle_solver, perf_tracker
-):
-    """MAXIMIZE sum(per grp: max(power(x - target, 2)) by (grp)) — hard inner MAX,
-    quadratic per-row expression. Budget couples x's so at most some rows
-    can reach the bound extremes; the group MAX must pick among affordable
-    pushes.
-
-    Non-convex (MAX of convex, then MAXIMIZE), so it is Gurobi-only and runs
-    on ``decidb_cli_gurobi``: the backend is pinned, and the skip is decided
-    up front by the fixture from the *environment* rather than by catching a
-    rejection from DecidB. Catching the rejection made this test report green
-    whether the shape was accepted or newly refused, which is exactly the
-    expressivity regression it exists to catch. The HiGHS side of the same
-    shape — the documented non-convex rejection message — is pinned in
-    ``test_bilinear.py``.
-    """
-    sql = f"""
-        WITH data AS ({_POWER_DATA_SQL})
-        SELECT id, grp, target, ROUND(x, 4) AS x FROM data
+@pytest.mark.error
+@pytest.mark.parametrize("objective", [
+    "MAXIMIZE sum(per grp: max(power(x - target, 2)) by (grp))",
+    "MINIMIZE sum(per grp: min(power(x - target, 2)) by (grp))",
+])
+def test_an_extremum_of_a_square_inside_a_nested_objective_is_refused(decidb_cli, objective):
+    result = decidb_cli.execute_raw(f"""
+        WITH data AS (SELECT 1 AS id, 'A' AS grp, 3.3 AS target UNION ALL SELECT 2, 'A', 6.7 UNION ALL
+                      SELECT 3, 'B', 2.8 UNION ALL SELECT 4, 'B', 8.1)
+        SELECT id, x FROM data
         DECIDE x(REAL)
-        SUCH THAT x >= 0 AND x <= 10 AND SUM(x) <= 20
-        MAXIMIZE sum(per grp: max(power(x - target, 2)) by (grp))
-    """
-    t0 = time.perf_counter()
-    rows, cols = decidb_cli_gurobi.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = _power_data(duckdb_conn)
-    n = len(data)
-    groups: dict = defaultdict(list)
-    for i, r in enumerate(data):
-        groups[r[1]].append(i)
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("sum_max_power_per")
-    xnames = [f"x_{i}" for i in range(n)]
-    for xn in xnames:
-        oracle_solver.add_variable(xn, VarType.CONTINUOUS, lb=0.0, ub=10.0)
-    oracle_solver.add_constraint(
-        {xn: 1.0 for xn in xnames}, "<=", 20.0, name="budget",
-    )
-    # Each row's expression: POWER(x_i - t_i, 2) = x_i^2 - 2 t_i x_i + t_i^2
-    # POWER is bounded by max((10 - t)^2, t^2) per row; 100 is a loose bound.
-    q_ub = 100.0
-    z_names = []
-    for grp, idxs in groups.items():
-        row_coeffs = []
-        for i in idxs:
-            t = float(data[i][2])
-            row_coeffs.append((
-                {xnames[i]: -2.0 * t},
-                {(xnames[i], xnames[i]): 1.0},
-                t * t,
-            ))
-        z = emit_hard_inner_max_quadratic(
-            oracle_solver, name_prefix=f"hmaxq_{grp}",
-            row_coeffs=row_coeffs, q_ub=q_ub,
-        )
-        z_names.append(z)
-    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MAXIMIZE)
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    cmp = compare_solutions(
-        rows, cols, result, data, ["x"],
-        decidb_objective_fn=lambda rs, cs: _power_group_obj(rs, cs, max),
-    )
-    perf_tracker.record(
-        "sum_max_power_per", decidb_time, build_time,
-        result.solve_time_seconds, n, 3 * n + len(groups), 2 * n + len(groups),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
-    )
-
-
-@pytest.mark.per_clause
-@pytest.mark.min_max
-@pytest.mark.quadratic
-@pytest.mark.obj_minimize
-@pytest.mark.correctness
-def test_minimize_sum_min_power_per(
-    decidb_cli_gurobi, duckdb_conn, oracle_solver, perf_tracker
-):
-    """MINIMIZE sum(per grp: min(power(x - target, 2)) by (grp)) — hard inner MIN,
-    quadratic per-row expression. INTEGER x with non-integer targets forces
-    every row's POWER strictly positive. Target offsets vary per row so
-    each row's best-achievable POWER differs, meaning the indicator has to
-    pick the *specific* minimum row in each group — a bug that selects the
-    wrong row, or emits a linear auxiliary, would change the objective.
-
-    Gurobi-only (MIQP), so it runs on ``decidb_cli_gurobi`` for the reason
-    given on ``test_maximize_sum_max_power_per``: the skip belongs to the
-    environment, not to what DecidB decided this run.
-    """
-    data_sql = """
-        SELECT 1 AS id, 'A' AS grp, 3.3 AS target UNION ALL
-        SELECT 2, 'A', 6.7 UNION ALL
-        SELECT 3, 'A', 1.2 UNION ALL
-        SELECT 4, 'B', 2.8 UNION ALL
-        SELECT 5, 'B', 8.1
-    """
-    sql = f"""
-        WITH data AS ({data_sql})
-        SELECT id, grp, target, x FROM data
-        DECIDE x(INT)
-        SUCH THAT x >= 0 AND x <= 10
-        MINIMIZE sum(per grp: min(power(x - target, 2)) by (grp))
-    """
-    t0 = time.perf_counter()
-    rows, cols = decidb_cli_gurobi.execute(sql)
-    decidb_time = time.perf_counter() - t0
-
-    data = duckdb_conn.execute(
-        f"SELECT CAST(id AS BIGINT), CAST(grp AS VARCHAR), "
-        f"CAST(target AS DOUBLE) FROM ({data_sql})"
-    ).fetchall()
-    n = len(data)
-    groups: dict = defaultdict(list)
-    for i, r in enumerate(data):
-        groups[r[1]].append(i)
-
-    t_build = time.perf_counter()
-    oracle_solver.create_model("sum_min_power_per")
-    xnames = [f"x_{i}" for i in range(n)]
-    for xn in xnames:
-        oracle_solver.add_variable(xn, VarType.INTEGER, lb=0.0, ub=10.0)
-    q_ub = 100.0
-    z_names = []
-    for grp, idxs in groups.items():
-        row_coeffs = []
-        for i in idxs:
-            t = float(data[i][2])
-            row_coeffs.append((
-                {xnames[i]: -2.0 * t},
-                {(xnames[i], xnames[i]): 1.0},
-                t * t,
-            ))
-        z = emit_hard_inner_min_quadratic(
-            oracle_solver, name_prefix=f"hminq_{grp}",
-            row_coeffs=row_coeffs, q_ub=q_ub,
-        )
-        z_names.append(z)
-    oracle_solver.set_objective({z: 1.0 for z in z_names}, ObjSense.MINIMIZE)
-    build_time = time.perf_counter() - t_build
-    result = oracle_solver.solve()
-
-    cmp = compare_solutions(
-        rows, cols, result, data, ["x"],
-        decidb_objective_fn=lambda rs, cs: _power_group_obj(rs, cs, min),
-    )
-    perf_tracker.record(
-        "sum_min_power_per", decidb_time, build_time,
-        result.solve_time_seconds, n, 3 * n + len(groups), 2 * n + len(groups),
-        result.objective_value, oracle_solver.solver_name(),
-        comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
-    )
+        SUCH THAT x <= 10 AND SUM(x) <= 15
+        {objective}""")
+    assert "squares or multiplies decisions inside nested reducers, which is not supported yet" in result.stderr, \
+        result.stderr

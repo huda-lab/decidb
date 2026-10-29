@@ -5,10 +5,10 @@
 **Today.** `LogicalDecide` holds a grouping key in three forms. `entity_scopes`
 (`EntityScopeInfo`) holds column bindings, one entry per set of key columns, for a
 declaration's `per K:`, a reducer's own `per K'` and the colon form `SUM(D: e)`.
-`group_keys` (`DecideGroupKey`) holds bound expressions for every `by (G)`, since a `by`
-key may be an expression and an `EntityScopeInfo` cannot hold one. A constraint's
-`per K:` key and the two-level objective's key are the trailing children of their
-wrappers (`PER_CLASS_TAG`, `PER_CONSTRAINT_TAG`). Execution follows with two grouping
+`group_keys` (`DecideGroupKey`) holds bound expressions for every `by (G)` (and a nested
+reducer's path key, which the optimizer adds), since a `by` key may be an expression and
+an `EntityScopeInfo` cannot hold one. A constraint's `per K:` key is the trailing
+children of its `PER_CLASS_TAG` wrapper. Execution follows with two grouping
 paths: `BuildEntityMappings` for `entity_scopes`, and `LookupOrBuildPerGroupIds`, one
 cache, for `by`, class and scope-check keys; NULL is a value in both, and an empty key is
 one group.

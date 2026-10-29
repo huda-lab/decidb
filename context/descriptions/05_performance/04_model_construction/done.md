@@ -32,3 +32,16 @@ says, it also holds the neutral `SolverModel::Build`.
 | Q9 | maximize MAX | 15,001 | 3.3 | 3 | 110 | 0.13 | 147 |
 | Q10 | maximize ABS | 2,500,000 | 4.3 | 232 | 41,359 | 41.82 | 3,221 |
 | Q11 | LP allocation | 68,000 | 3.4 | 3 | 143 | 0.16 | 140 |
+
+## After ANR phase 2
+
+Measured 2026-10-28 the same way, the phase-1 build (d626957dc8) and the phase-2 one
+back to back, medians of three runs. Every flat workload builds as fast as before (within
+a few milliseconds, or faster). Q4, whose objective is the nested
+`max(per l_returnflag: sum(keep * l_extendedprice) by (l_returnflag))`, builds in 752 ms
+against 583: each group sum is a helper decision now, defined by one equality per group
+that stage 06 assembles row by row through the extremum members' path
+(`BuildMinMaxGroups`), where the two-level path fed the group sums to the extremum
+directly; the model is three columns and three rows larger (1,000,013 rows). Its wall
+time is 6.13 s against 7.15 (the solver's share varies from run to run). Inlining a SUM
+helper into the one reader that sums it is phase 7 of the plan.

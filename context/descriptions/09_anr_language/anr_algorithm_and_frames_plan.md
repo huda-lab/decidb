@@ -1,6 +1,6 @@
 # The full ANR algorithm and frame selectors — implementation plan
 
-Status: phases 0 and 1 shipped (2026-10-28); phases 2–7 to build. Baseline commit
+Status: phases 0, 1 and 2 shipped (2026-10-28); phases 3–7 to build. Baseline commit
 38275dde6f (branch `Sami-Active`), reviewed
 27 October 2026 against `~/Desktop/Capstone/ANR.pdf` (the "DeciQL proposals" deck, 119
 pages) and `ANR Implementation.pdf`. It supersedes the first draft, which was never
@@ -119,8 +119,8 @@ implements it ships.
 
 This is the text to fold into `00_project_overview/syntax_reference.md` (§5.5 nesting,
 §5.6 frames, §7.1 rewritten, §10 updated) and `03_expressivity/scope/done.md` as each
-phase ships it. §3.2 is in the engine since phase 1 (`syntax_reference.md` §7.1); the
-rest is not yet. The reference evaluator built in phase 0,
+phase ships it. §3.2 is in the engine since phase 1 (`syntax_reference.md` §7.1), §3.1's
+path rule and §3.3 since phase 2 (§5.5); the rest is not yet. The reference evaluator built in phase 0,
 `test/decide/tests/_anr_oracle.py`, encodes every rule below
 (`04_testing/scope/done.md`), and the tests of §6 pin them.
 
@@ -451,6 +451,9 @@ refusals become answer tests (§6).
 
 ### 4.5 Optimizer (stage 05)
 
+Shipped in phase 2 but for frames (step 3), as `05_optimizer/done.md`, "The value
+rewrite", describes; the text below is the plan it was built from.
+
 `RewriteScopedReducers` (`decide_rewrite_scoped.cpp`) recurses, innermost first:
 
 1. For a reducer at depth `d` with path keys `(Γ1 … Γd)` and path conditions, allocate a
@@ -492,6 +495,10 @@ Only after that lands are `RewriteMinMaxObjectiveTree`'s two-level detection
 single-decision case already covered by D41; nothing new.
 
 ### 4.6 Model formulation (stage 06)
+
+Shipped in phase 2 (`06_model_formulation/done.md`, "Helper decisions of the value
+rewrite"), the backward pass tightening helper columns only; a box per helper instance
+did not ship (`05_optimizer/todo.md` §2).
 
 `LinearizeReducerValueLinks` states each helper's definition per instance from its
 member list as today (an equality for SUM/AVG, `EmitExtremumLink` for MIN/MAX). Two
@@ -637,21 +644,21 @@ so every stage that de-duplicates by a qualifier reads variants unchanged. Tests
 (`test_scope_determination.py` became `test_scope_variants.py`). Record:
 `09_anr_language/done.md`, "phase 1".
 
-### Phase 2 — Nested reducers (layers 2, 3, 5, 6, 8)
+### Phase 2 — Nested reducers (shipped 2026-10-28)
 
-- Lift the gate; recursive `RewriteScopedReducers` with path keys; recursive
-  `EvaluateReducerValueLinks` and bound-side evaluation; definition order; the backward
-  bound pass and the per-instance box decision (§4.6); **the objective deliverable of
-  §4.5** (objective VALUE shape, the value rewrite over `decide_objective`, PATH A over
-  helper instances, the outer AVG's member count); then delete the two-level special
-  path (binder, `RewriteMinMaxObjectiveTree` 801–878, PATH B,
-  `RenderTwoLevelObjective`/`RenderTwoLevelInner`, `per_columns`, `PER_CONSTRAINT_TAG`).
-- Tests: `test_anr_nested.py` (§6.5); `test_scope_objective.py`'s refusals become
-  answers; the "aggregate inside an aggregate" pins in `test_scope_bare_clauses.py` and
-  `test_scope_reducer_by.py` become answers; the nesting grid; the two-sided HiGHS pin of
-  §4.6.
-- Exit: F1 (both variants) and the grid pass on Gurobi and HiGHS and under
-  `DECIDB_NATIVE_CONSTRUCTS=on|off|force`; no "aggregate inside an aggregate" anywhere.
+Built as §3.1, §3.3, §4.2, §4.4–§4.7 describe for nesting: the gate lifted, the path
+rule stated once (`DecideReducerPath`) and read by the D8 checks, the variant rows and
+the recursive value rewrite (path keys, D73's pinning), the backward bound pass
+(`DeriveReducerMemberBounds`, helper columns only; the box per instance stays
+`05_optimizer/todo.md` §2), nested bound-side reducers and `count(e)`, and the
+objective as nested helpers (D75) with the two-level path deleted. Choices beyond the
+text above: the outermost objective reducer is a helper too, except a SUM over group
+SUMs or AVGs, which is the objective's own sum (a square in it stays a convex QP, and an
+inner AVG divides per group); a path key is a group key the optimizer adds, not
+`path_group_keys` / `path_whens` on the link; a MIN/MAX of a square inside nested
+reducers is refused (D74), where the deleted path answered it wrongly. Tests:
+`test_anr_nested.py` (§6.5) and the conversions listed in `done.md`, "phase 2". Record:
+`done.md`, "phase 2".
 
 ### Phase 3 — Frame syntax (layers 1, 2, 3; execution refuses at one gate)
 
@@ -696,9 +703,11 @@ so every stage that de-duplicates by a qualifier reads variants unchanged. Tests
 ### Phase 7 — Inlining, performance, closure
 
 - Inline a SUM/AVG helper whose only consumer is a linear root row (deck p. 115 inlines
-  the sums), and a range SUM/AVG frame in a Rows-shape clause, as redirected terms (one
-  per selected position; stage 06 accumulates them like like-terms) — only with a model
-  dump showing the smaller model and the suites unchanged. Singleton MIN/MAX groups
+  the sums) or a MIN/MAX link's members (Q4's group sums, built 170 ms slower since phase
+  2, `05_performance/04_model_construction/done.md`), and a range SUM/AVG frame in a
+  Rows-shape clause, as redirected terms (one per selected position; stage 06
+  accumulates them like like-terms) — only with a model dump showing the smaller model
+  and the suites unchanged. Singleton MIN/MAX groups
   collapse to their member (deck p. 112: `c2 → x3`).
 - Benchmarks (§6.10); profile counters; docs: `done.md` per stage, `09_anr_language/done.md`
   items 8–10, `04_testing/scope/done.md`, `README.md`; delete this file's shipped parts.
@@ -727,9 +736,9 @@ so every stage that de-duplicates by a qualifier reads variants unchanged. Tests
 
 Built in phase 0; its statements, its readings (`instances`, `solve`, `judge`,
 `feasible`, `brute_force`) and its error kinds are described in
-`04_testing/scope/done.md`. What remains: once phase 2 ships, `_scope_oracle.ScopedModel`
-delegates to it, so the existing suites keep their statements and lose the special
-`Nested` form. (`ScopeError.not_determined` was retired in phase 1, when `ScopedModel`
+`04_testing/scope/done.md`. What remains: `_scope_oracle.ScopedModel` delegates to it, so
+the existing suites keep their statements and lose the special `Nested` form (deeper
+nests are stated to `_anr_oracle` directly meanwhile). (`ScopeError.not_determined` was retired in phase 1, when `ScopedModel`
 learned variants on its own statements.)
 
 ### 6.3 Fixtures — `_anr_cases.py`
@@ -751,18 +760,9 @@ its SQL, its oracle statement and its hand-computed answer (`04_testing/scope/do
 
 Described in `04_testing/scope/done.md`.
 
-### 6.5 `test_anr_nested.py` (phase 2)
+### 6.5 `test_anr_nested.py` (phase 2, shipped)
 
-F1 (MAX and SUM inner, both solvers, three native modes), F14, F16; the grid: depth 2 and
-3 × inner scope (`none`, `when`, `per`, `when per`) at each level × reducer kind at each
-level × the decision per row or keyed, every cell oracle-judged (the shape of
-`test_scope_combinations.py`, ~800 cells, marked `correctness`); AVG at an inner level
-divides by members; COUNT at an inner level counts members; a `when` emptying an inner
-group is D8 naming the path group; the objective forms `sum(per g: max(x) by (g))`,
-`min(per g: sum(x) by (g))`, `avg(per g: …)`, `max(per g: sum(when c: x) by (g))`, `by`
-other than the `per` key — each the former refusal turned answer; `MAX(x) <= 10` through
-two helper levels on HiGHS (bound derivation order); `norm` inside a reducer refused;
-a product inside a nested operand refused; model-size pins for F1.
+Described in `04_testing/scope/done.md`.
 
 ### 6.6 `test_anr_frames.py` (phases 3–5)
 

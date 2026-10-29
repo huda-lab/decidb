@@ -30,23 +30,20 @@ and when/during which task it was discovered.
   `src/include/duckdb/planner/operator/decide/logical_decide.hpp`
   (`ComposedMinMaxConstraint`: `when`, `per_key`, `class_key`); the walkers
   `EnterClauseScope` (`decide_optimizer.cpp`, used by the ABS, norm/IN and value
-  rewrites) and the canonicalizer's `DecideEnclosingScope`; the two-level objective's
-  text, built by `RenderTwoLevelObjective` / `RenderTwoLevelInner`
-  (`decide_source_provenance.cpp`) and again for the account subjects in
-  `decide_rewrite_minmax.cpp` (`RenderDecidePerKey`); the rule that a query-wide
+  rewrites) and the canonicalizer's `DecideEnclosingScope`, beside the path of a nested
+  reducer (`DecideReducerPath`, which both read); the rule that a query-wide
   decision beside the reducers counts once, applied by hand in `ilp_model_builder.cpp`
   (linear and quadratic paths) and `linearization_not_equal.cpp`, beside execution's
   `CountOnce` (`physical_decide.cpp`).
 - **What's wrong:** one concept, several owners. A clause's `when` / `per K:` / `by`
   scope is declared on two structs and filled by two readers; the enclosing scope is
-  walked by two walkers; the two-level form is rendered twice; the once-count rule has
-  several hand copies.
+  walked by two walkers; the once-count rule has several hand copies.
 - **Why it matters:** a change to how a clause is scoped, rendered or counted must find
   every copy; a missed one gives a wrong count or an echo that differs between EXPLAIN
   and the rewrite accounts.
 - **Work (D47):** one `DecideClauseScope { when; per_key; class_key; group_key; }`
-  embedded in both structs, one enclosing-scope walker in `decide_constraint_walk.hpp`,
-  one exported two-level renderer, and one owner of the once-count rule at execution.
+  embedded in both structs, one enclosing-scope walker in `decide_constraint_walk.hpp`
+  that yields a reducer's path too, and one owner of the once-count rule at execution.
   Behaviour does not change: the scope suites, the golden corpus (identical on both
   solvers) and `DECIDB_VERIFY_SERIALIZER=1` stay green. The renames that go with it
   (D46) are `../../03_expressivity/scope/todo.md`.

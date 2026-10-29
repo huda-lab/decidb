@@ -24,24 +24,6 @@
   the query hang indefinitely on HiGHS once the model is large enough; there
   is no DeciDB-level safety net.
 
-## `count(e)` over a NULL value is refused, and counts NULLs otherwise
-
-- **Location:** `EvaluateRhsReducerPerGroup` in
-  `src/execution/operator/decide/physical_decide.cpp` (around line 1203, the argument read
-  through `ExtractDoubleColumn`, and line 1233, the `is_count` fold).
-- **Observed:** over `(VALUES (1, 5), (2, NULL), (3, 7)) t(id, v)`,
-  `x <= count(t.v)` stops with *"DECIDE: column "v" is NULL. Impute it with COALESCE(v,
-  0) ..."*. The argument of every bound-side reducer is read as a number, so a NULL is the
-  NULL-bound error even under `count`, and the fold adds one per row read whatever the
-  argument holds, so `count(e)` would equal `count(*)` if the read let the NULL through.
-- **Expected:** SQL's `COUNT(v)`: the non-NULL values, here 2. This is also the ANR
-  contract (`09_anr_language/anr_algorithm_and_frames_plan.md` §3.3).
-- **Impact:** a valid query is refused; no wrong answer, since the error stops it.
-- **Test:** `test/decide/tests/_anr_cases.py` `COUNT_NON_NULL`, run through DeciDB from
-  phase 2 of the ANR plan, which rebuilds the bound-side reducers.
-- **Discovered:** 2026-10-28, ANR phase 0, comparing the reference evaluator with today's
-  engine on the cases today's language runs.
-
 ## A decision named like a USING column is silently ignored
 
 - **Location:** the name-conflict check in `DecideDeclarationsBinder::BindDeclarations`
@@ -184,21 +166,10 @@ Each reproduces on the current build.
   reported infeasible; HiGHS refuses the bound in SQL terms.
 - **Impact:** a refused feasible query, and a misleading verdict.
 
-## Wrong answers: MIN/MAX bodies and solver tolerance
+## Wrong answers: solver tolerance
 
 Each reproduces on the current build.
 
-- **A MIN/MAX over a squared or multiplied body is modelled wrongly** (Gurobi; the user
-  chose to log it, 2026-10-18): over two INT rows with `x <= 7`, `max(power(x, 2)) >= 49`
-  is reported infeasible (x = 7 holds it); `min(power(x, 2)) <= 4` answers x = (7, 7) and
-  `sum(x) + max(power(x, 2)) <= 20` answers (6, 7), both violating the clause (the latter
-  on HiGHS too). In the objective, `MAXIMIZE max(power(x, 2))` and `sum(per g: max(power(x,
-  2)) by (g))` are solved as the sum of the squares: no auxiliary, no indicator, only the
-  Q matrix. Only the easy direction (`max(power(x, 2)) <= 16`) is right, in every scope.
-  `test_per_objective.py::test_maximize_sum_max_power_per` and
-  `test_minimize_sum_min_power_per` pass only because their rows are independent.
-  Expected: an exact formulation (an epigraph for the convex side, indicators for the
-  hard side) or a refusal.
 - **Gurobi accepts a row violated by 1 when its coefficients are near 10⁹:** over three
   rows with `x <= cap` (3, 5, 7), `y <= 5`, `per row: y + sum(x * 1000000000::DECIMAL(18,0))
   >= 5000000001` (or `> 5000000000`), `MINIMIZE SUM(x) + SUM(y)` answers `sum(x) = 5`,

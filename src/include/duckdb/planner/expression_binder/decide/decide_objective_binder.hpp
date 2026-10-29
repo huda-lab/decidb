@@ -32,9 +32,6 @@ private:
     //! Binds `[when c] [per ()]: objective`: `per ()` is the objective's only key and adds
     //! nothing; `when c` becomes the WHEN wrapper.
     BindResult BindScopedObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
-    //! Binds the two-level form `outer(per k: inner(e) by (k))`: the outer reducer's PER
-    //! wrapper over the inner reducer; NULL keys form a class.
-    BindResult BindTwoLevelObjective(unique_ptr<ParsedExpression> &expr_ptr, idx_t depth);
 
 };
 

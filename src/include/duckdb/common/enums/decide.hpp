@@ -209,16 +209,10 @@ inline bool ExtractDecideTagPayload(const string &alias, const string &prefix, s
 //! RefuseRemovedDecideSpellings refuses (syntax_reference.md §10.3).
 static constexpr const char *WHEN_CONSTRAINT_TAG = "__when_constraint__";
 
-//! Tag on the two-level objective's bound wrapper, `outer(per k: inner(e) by (k))`:
-//! child 0 is the objective body, children 1..N the key columns. A constraint's
-//! `per K:` is PER_CLASS_TAG. The parser emits it only for a removed spelling, which
-//! RefuseRemovedDecideSpellings refuses (syntax_reference.md §10.3).
+//! The parsed marker of the removed `... PER k` spelling, which RefuseRemovedDecideSpellings
+//! refuses (syntax_reference.md §10.3); nothing binds it. A constraint's `per K:` is
+//! PER_CLASS_TAG, and a nested objective is a nested reducer (D75).
 static constexpr const char *PER_CONSTRAINT_TAG = "__per_constraint__";
-
-//! Returns true if the alias is PER_CONSTRAINT_TAG
-inline bool IsPerConstraintTag(const string &alias) {
-	return HasDecideTag(alias, PER_CONSTRAINT_TAG);
-}
 
 //! Tag used by the parser to mark the colon form, `sum(D: expr)`: children[0] is the
 //! aggregate, children[1..] the relation names before the colon. The binder consumes

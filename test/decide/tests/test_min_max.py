@@ -36,6 +36,9 @@ Covers:
 
   Error cases:
   - test_max_notequal_error: MAX(x) <> K should error
+  - test_a_min_or_max_over_a_square_is_refused: a square or product of decisions inside a
+    MIN or MAX that is not a bound every member meets (test_a_square_under_a_bound_every_member_meets
+    pins the bound that answers)
 """
 
 import time
@@ -1146,6 +1149,67 @@ def test_max_notequal_error(decidb_cli):
         SUCH THAT MAX(x) <> 0
         MAXIMIZE SUM(x) LIMIT 1
     """, match=r"does not support <> comparison with MIN/MAX")
+
+
+#: Each was answered wrongly or failed internally before it was refused: an extremum's link
+#: and a composed clause state their members as linear rows, which dropped the square
+#: (06_issues/bugs/todo.md, "A MIN/MAX over a squared or multiplied body"). Inside nested
+#: reducers the value rewrite refuses the same shape (D74).
+_EACH_MEMBER = ("inside MIN or MAX, which is not supported yet; it is accepted only as a bound every member "
+                "meets on its own: max(...) <= K or min(...) >= K")
+_SQUARE_REFUSALS = [
+    pytest.param("max(power(x, 2)) >= 49", "MINIMIZE SUM(x)", "'max(power(x, 2))'", _EACH_MEMBER, id="hard-max"),
+    pytest.param("min(power(x, 2)) <= 4", "MAXIMIZE SUM(x)", "'min(power(x, 2))'", _EACH_MEMBER, id="hard-min"),
+    pytest.param("max(power(x, 2)) = 16", "MAXIMIZE SUM(x)", "'max(power(x, 2))'", _EACH_MEMBER, id="equality"),
+    pytest.param("y <= 3 AND max(x * y) >= 5", "MINIMIZE SUM(x)", "'max(x * y)'", _EACH_MEMBER, id="product"),
+    pytest.param("SUM(x) + max(power(x, 2)) <= 20", "MAXIMIZE SUM(x)", "'max(power(x, 2))'",
+                 "inside MIN or MAX beside another term, which is not supported yet", id="composed-max-term"),
+    pytest.param("sum(power(x, 2)) + MAX(x) <= 20", "MAXIMIZE SUM(x)", "'sum(power(x, 2))'",
+                 "beside MIN or MAX, which is not supported yet", id="composed-sum-term"),
+    pytest.param("SUM(x) <= 9", "MAXIMIZE max(power(x, 2))", "'max(power(x, 2))'",
+                 "inside MIN or MAX in the objective, which is not supported yet", id="objective-max"),
+    pytest.param("SUM(x) >= 9", "MINIMIZE min(power(x, 2))", "'min(power(x, 2))'",
+                 "inside MIN or MAX in the objective, which is not supported yet", id="objective-min"),
+    pytest.param("SUM(x) <= 9", "MAXIMIZE SUM(x) + max(power(x, 2))", "'max(power(x, 2))'",
+                 "inside MIN or MAX beside another term, which is not supported yet", id="composed-objective"),
+]
+
+
+@pytest.mark.min_max
+@pytest.mark.quadratic
+@pytest.mark.error
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize("clause, objective, subject, phrase", _SQUARE_REFUSALS)
+def test_a_min_or_max_over_a_square_is_refused(request, cli_fixture, clause, objective, subject, phrase):
+    """A square or a product of decisions inside a MIN or MAX that is not a bound every
+    member meets on its own row, on either solver, before any solver is asked."""
+    cli = request.getfixturevalue(cli_fixture)
+    result = cli.execute_raw(f"""
+        SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT), y(INT)
+        SUCH THAT x <= 7 AND {clause}
+        {objective}""")
+    assert f"DECIDE: {subject} squares or multiplies decisions {phrase}" in result.stderr, result.stderr
+
+
+@pytest.mark.min_max
+@pytest.mark.quadratic
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, objective, xs", [
+    pytest.param("max(power(x, 2)) <= 16", "MAXIMIZE SUM(x)", [4, 4], id="max-each-member"),
+    pytest.param("2 * max(power(x, 2)) <= 32", "MAXIMIZE SUM(x)", [4, 4], id="max-under-a-factor"),
+    pytest.param("min(power(x, 2)) >= 4", "MINIMIZE SUM(x)", [2, 2], id="min-each-member"),
+])
+def test_a_square_under_a_bound_every_member_meets(decidb_cli_gurobi, clause, objective, xs):
+    """The cheap direction bounds each member on a quadratic row of its own (x^2 <= 16 is
+    x <= 4), which is exact; a quadratic constraint needs Gurobi."""
+    rows, _ = decidb_cli_gurobi.execute(f"""
+        SELECT id, x FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT)
+        SUCH THAT x <= 7 AND {clause}
+        {objective}
+        ORDER BY id""")
+    assert [x for _, x in rows] == xs
 
 
 # ============================================================================

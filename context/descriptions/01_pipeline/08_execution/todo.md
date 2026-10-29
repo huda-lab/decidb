@@ -6,11 +6,11 @@
 `BuildGroupIds` and both with NULL a key value:
 
 - `BuildEntityMappings` (§4) for the key scopes (`EntityScopeInfo`: a keyed decision's
-  key, a reducer's own `per` or colon form, a helper decision's `by` key). Ids are
-  first-seen over every row; a helper's scope reads only its clause's kept rows and puts
+  key, a reducer's own `per` or colon form, a helper decision's path key). Ids are
+  first-seen over every row; a helper's scope reads only the rows its path keeps and puts
   every dropped row in one spare class. Nothing is cached.
 - `LookupOrBuildPerGroupIds` (§5) for the `by` keys, a constraint's `per K:` classes,
-  the scope checks' keys and the two-level objective's key. The ids over every row are
+  the scope checks' keys and an objective AVG's `by` key. The ids over every row are
   cached in `PerGroupCache`; each call then renumbers the groups its filter keeps densely,
   in the order their rows first appear, and a clause whose `when` drops rows builds
   afresh over its kept rows.

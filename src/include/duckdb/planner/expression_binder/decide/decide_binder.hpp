@@ -76,17 +76,13 @@ void ValidateDecideNoExplicitDecisionCasts(const ParsedExpression &expr,
 //! Where `when`, `per` and `by` may stand, checked on the parsed constraints (`objective`
 //! false) or objective before binding. `[when c] [per K]:` stands in front of a clause or
 //! of a SUM/AVG/MIN/MAX argument, `by (key)` right after a SUM/AVG/MIN/MAX, `norm` or
-//! `count`; a condition, a key and a `by` key take data only, and a reducer may not hold a
-//! reducer (the objective's two-level form aside). Anything else -- a scope inside a
-//! condition, a key or an ordinary subquery -- answers "not supported yet".
+//! `count`; a condition, a key and a `by` key take data only. A reducer may hold reducers
+//! to any depth (§5.5), but not a norm, and one over decisions not one over data alone
+//! (D74). Anything else -- a scope inside a condition, a key or an ordinary subquery --
+//! answers "not supported yet".
 void ValidateDecideScopeSpellings(const ParsedExpression &expr, const case_insensitive_map_t<idx_t> &variables,
                                   bool objective);
 
-//! Whether an objective (its `[when c] [per ()]:` peeled) has the two-level form
-//! `outer(per k: inner(e) by (k'))`: an outer reducer, optionally `by ()`, over a `per`
-//! whose body is one inner reducer with a `by`. Whether k and k' are the same key is
-//! the binder's question.
-bool IsTwoLevelObjective(const ParsedExpression &body);
 
 bool ContainsDecideAggregate(const ParsedExpression &expr);
 

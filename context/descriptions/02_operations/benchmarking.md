@@ -120,7 +120,7 @@ A full run (3 iterations × 2 sizes) takes roughly 17 minutes at these settings.
 | Q1 | `q1_ilp_selection.sql` | Boolean ILP selection; MAXIMIZE SUM with a `when` in front; AVG constraint; `when` in front of a constraint and inside a reducer; `per ()`; multi-column `per` key with its `by` |
 | Q2 | `q2_integer_domains.sql` | `INT` vars; BETWEEN, IN(var), `<>` per-row + aggregate, division, unary-minus, strict `>`; uncorrelated + correlated subqueries; data-only aggregate RHS; `%` fold |
 | Q3 | `q3_abs_norms.sql` | REAL signed domain; MINIMIZE; ABS lower-envelope; norm L1 / L∞ / L0 (row-limited — L0 is one binary per row) |
-| Q4 | `q4_minmax_nested.sql` | MINIMIZE MAX (easy) as the two-level objective `max(per l_returnflag: sum(...) by (l_returnflag))`; composed MIN/MAX-in-LHS; easy MAX constraint (full scale) |
+| Q4 | `q4_minmax_nested.sql` | MINIMIZE MAX (easy) as the nested objective `max(per l_returnflag: sum(...) by (l_returnflag))` (a helper per group and one over them, D75); composed MIN/MAX-in-LHS; easy MAX constraint (full scale) |
 | Q5 | `q5_qp_qcqp.sql` | Convex QP + QCQP; quadratic + mixed linear/quadratic objective; norm L2; aggregate quadratic constraint (row-limited, Gurobi) |
 | Q6 | `q6_bilinear_mccormick.sql` | MILP; BOOL×REAL bilinear objective + constraint (McCormick); `when` + `per` + `by` on one constraint (full `orders` scale) |
 | Q7 | `q7_nonconvex.sql` | MIQP + non-convex QP + non-convex bilinear; per-row quadratic constraint (full `orders` scale, Gurobi `NonConvex=2`) |

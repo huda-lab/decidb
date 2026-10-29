@@ -341,7 +341,7 @@ public:
     struct ReducerValueLink {
         idx_t value_var = DConstants::INVALID_INDEX;
         string agg_name;                   //!< "sum", "avg", "min" or "max"
-        string label;                      //!< the reducer as the user wrote it, for messages
+        string label;                      //!< the reducer as the user wrote it, `by` included, for messages
         unique_ptr<Expression> inner_expr; //!< e, as bound; the ABS and bilinear rewrites applied
         unique_ptr<Expression> filter;     //!< the reducer's own `when`, or null
         //! Its own `per K'`: the key scope whose classes it counts once; INVALID_INDEX
@@ -385,8 +385,6 @@ public:
             VALUE_HELPER_PER_GROUP,       //!< a reducer held by a helper decision per `by` group
             EXTREMUM,                     //!< a MIN/MAX held by its envelope
             EXTREMUM_PINNED,              //!< a MIN/MAX pinned by indicator rows
-            EXTREMUM_PER_GROUP,           //!< a two-level objective's inner MIN/MAX, per group
-            EXTREMUM_PER_GROUP_PINNED,    //!< the same, pinned by indicator rows
             NOT_EQUAL,                    //!< `<>`, two conditional rows with an indicator
             //! What the data made of a scoped expression's classes (D64): more instances
             //! than classes. Recorded by execution, so only EXPLAIN ANALYZE prints it, and
@@ -440,19 +438,11 @@ public:
 
     // --- MIN/MAX objective metadata (set by DecideOptimizer::RewriteMinMaxObjective) ---
 
-    // Flat (not two-level) objective: original aggregate type before rewrite to SUM
+    // A MIN/MAX objective: original aggregate type before rewrite to SUM. A nested one is
+    // a helper decision instead (RewriteScopedReducers, D75).
     ObjectiveAggregateType flat_objective_agg = ObjectiveAggregateType::NONE;
     // Pre-computed: true if easy formulation (MAXIMIZE+MIN or MINIMIZE+MAX)
     bool flat_objective_is_easy = false;
-
-    // The two-level objective, outer(per k: inner(e) by (k))
-    ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
-    ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
-    // Pre-computed easy/hard at each level (only meaningful when agg is MIN_AGG or MAX_AGG)
-    bool per_inner_is_easy = false;
-    bool per_outer_is_easy = false;
-    // True if inner aggregate was originally AVG (coefficients need 1/n_g scaling)
-    bool per_inner_was_avg = false;
 
     // --- Key scopes ---
 

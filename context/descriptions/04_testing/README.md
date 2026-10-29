@@ -25,8 +25,8 @@ Each subdirectory corresponds to a feature area and contains:
 | `qualified_reducer/` | The colon form `SUM(D: expr)`, which means `sum(per D: expr)` | `test_qualified_reducer.py` |
 | `constraints/` | Comparison operators (`=`, `<`, `<=`, `>`, `>=`, `<>`, BETWEEN, IN), per-row vs aggregate | `test_cons_*.py` |
 | `when/` | `when` in front of a constraint or the objective, and a reducer's own `when` | `test_when_*.py`, `test_aggregate_local_when.py` |
-| `per/` | `per K:` constraints and the two-level objective `outer(per k: inner(e) by (k))` | `test_per_*.py` |
-| `min_max/` | MIN/MAX linearization (easy/hard cases, composed, two-level) | `test_min_max.py`, `test_per_objective.py` |
+| `per/` | `per K:` constraints and the nested objective `outer(per k: inner(e) by (k))` | `test_per_*.py` |
+| `min_max/` | MIN/MAX linearization (easy/hard cases, composed, nested) | `test_min_max.py`, `test_per_objective.py` |
 | `avg/` | AVG aggregate (execution-time coefficient scaling) | `test_avg.py` |
 | `abs/` | ABS linearization | `test_abs_linearization.py` |
 | `bilinear/` | Bilinear terms `x * y` (McCormick for Bool × anything, Q-matrix otherwise) | `test_bilinear.py` |

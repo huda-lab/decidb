@@ -4,7 +4,7 @@ Tests live in:
 - `test/decide/tests/test_per_clause.py` — `per K:` on constraints
 - `test/decide/tests/test_per_multi_column.py` — keys of several columns
 - `test/decide/tests/test_per_qualified.py` — relation-qualified key columns (`per s.s_nationkey:`)
-- `test/decide/tests/test_per_objective.py` — the two-level objective `outer(per k: inner(e) by (k))`
+- `test/decide/tests/test_per_objective.py` — the nested objective `outer(per k: inner(e) by (k))`
 - `test/decide/tests/test_per_interactions.py` — `per` composed with auxiliary-variable features (hard MIN/MAX, ABS, several decisions)
 
 The scoping language's own suites (generation, `by`, determination, the grid) are in
@@ -32,7 +32,7 @@ All oracle-verified:
   (`test_per_not_equal_varying_bound_keeps_every_exclusion`, both spellings).
 - **Qualified key columns** (`test_per_qualified.py`): one and several qualified
   columns, mixed qualified and bare, equivalence with the unqualified spelling, a
-  table alias, a qualified column in a `when` and in the two-level objective, and an
+  table alias, a qualified column in a `when` and in the nested objective, and an
   unknown qualifier rejected cleanly.
 - **Auxiliary-variable interactions** (`test_per_interactions.py`): hard `max(e) >= K`
   and hard `min(e) <= K` per class (Big-M per group), `max(e) = K` (easy and hard
@@ -52,8 +52,9 @@ All oracle-verified:
 MAX} and inner ∈ {SUM, MIN, MAX, AVG}: `sum(per k: sum(e) by (k))` equal to the flat
 `sum(e)`, every `sum(per k: max/min(...))` direction (easy and hard inner),
 `max/min(per k: sum(...))`, `sum(per k: avg(...))` with unequal and extremely unequal
-groups, `max(per k: avg(...))` and `min(per k: avg(...))`, the two-level form under a
-`when` in front, a single class, and hard inner MIN/MAX over `power(...)` (Gurobi).
+groups, `max(per k: avg(...))` and `min(per k: avg(...))`, the nested form under a
+`when` in front, a single class, and the refusal of an inner MIN/MAX over `power(...)`
+(D74). Deeper nests and every level's scope are `test_anr_nested.py`'s.
 `max(per g: max(c * x) by (g))` with mixed-sign coefficients is in `test_min_max.py`.
 
 ### Error cases
@@ -75,7 +76,7 @@ groups, `max(per k: avg(...))` and `min(per k: avg(...))`, the two-level form un
 | `per` | NULL key values (a class of their own) | ✓ |
 | `per` | `<>` | ✓ |
 | `per` | MIN/MAX (easy, a bound on every member) | ✓ |
-| `per` | MIN/MAX (two-level objective) | ✓ |
+| `per` | MIN/MAX (nested objective) | ✓ |
 | `per` | AVG | ✓ |
 | `per` | keyed decisions | ✓ |
 | `per` | quadratic constraint | ✓ |

@@ -60,8 +60,9 @@ namespace duckdb {
 // BoundReferenceExpression nodes so that DuckDB's ExpressionExecutor can
 // evaluate expressions against data chunks (which use positional indices).
 
-//! Collect every reducer in an expression. Descent stops at a match: a reducer inside a
-//! reducer is not legal SQL, so there is nothing below one to find.
+//! Collect every reducer in an expression outside reducers. Descent stops at a match: a
+//! reducer inside another is read per group of its path (syntax_reference.md §5.5), which the one around it
+//! evaluates (EvaluateRhsReducerPerGroup).
 static void CollectReducers(const Expression &expr, vector<const Expression *> &out) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		out.push_back(&expr);
@@ -1189,8 +1190,14 @@ static vector<vector<bool>> KeptRowsOfEach(const vector<const Expression *> &con
 //! The reducer computes nothing outside the rows its group holds -- its own `when` is read
 //! on those, its argument on the ones that `when` keeps -- and counts each class of its
 //! `per` once among THOSE rows. Its messages quote the query's `fragments`.
+//!
+//! A reducer inside its argument is reduced first (syntax_reference.md §5.5): at a member row it is its group's
+//! value, the group of its path key -- `path_keys`, the `by` keys from the outermost
+//! reducer down to this one, and its own -- among the rows this one reads.
 static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression &agg,
                                                  const vector<idx_t> &group_ids, idx_t num_groups,
+                                                 const vector<idx_t> &path_keys,
+                                                 const vector<DecideGroupKey> &group_keys,
                                                  const vector<EntityMapping> &entity_mappings,
                                                  ChunkExprCache &chunk_expr_cache, ClientContext &context,
                                                  ColumnDataCollection &data, idx_t num_rows,
@@ -1252,21 +1259,92 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
     // COUNT(*) has no argument to evaluate; every other kind reduces one column.
     vector<double> values;
     if (!agg.children.empty()) {
+        // The reducers nested in the argument, each to a value per group of its path key
+        // among the rows this reducer reads, then read at each row as an extra column.
+        vector<const Expression *> nested;
+        CollectReducers(*agg.children[0], nested);
+        std::unordered_map<const Expression *, idx_t> substitutions;
+        vector<vector<double>> nested_columns;
+        for (auto *expr : nested) {
+            auto &inner = expr->Cast<BoundAggregateExpression>();
+            auto inner_keys = path_keys;
+            inner_keys.push_back(DecideReducerGroupKey(inner));
+            auto key = DecidePathKeyExpressions(inner_keys, group_keys);
+            vector<const Expression *> key_exprs;
+            for (auto &part : key) {
+                key_exprs.push_back(&CachedTransformToChunkExpression(chunk_expr_cache, *part, context));
+            }
+            vector<idx_t> inner_ids;
+            idx_t inner_count = 0;
+            BuildGroupIds(key_exprs, context, data, num_rows, std::function<bool(idx_t)> {}, inner_ids, inner_count,
+                          nullptr, &read_rows);
+            auto per_group = EvaluateRhsReducerPerGroup(inner, inner_ids, inner_count, inner_keys, group_keys,
+                                                        entity_mappings, chunk_expr_cache, context, data, num_rows,
+                                                        fragments);
+            vector<double> column(num_rows, 0.0);
+            for (idx_t row = 0; row < num_rows; row++) {
+                if (inner_ids[row] != DConstants::INVALID_INDEX && inner_ids[row] < per_group.size()) {
+                    column[row] = per_group[inner_ids[row]];
+                }
+            }
+            substitutions.emplace(expr, data.ColumnCount() + nested_columns.size());
+            nested_columns.push_back(std::move(column));
+        }
+        // A substituted tree is valid against the augmented chunk alone: never cached.
+        unique_ptr<Expression> owned_arg;
+        const Expression *arg_ptr;
+        if (substitutions.empty()) {
+            arg_ptr = &CachedTransformToChunkExpression(chunk_expr_cache, *agg.children[0], context);
+        } else {
+            owned_arg = TransformToChunkExpression(*agg.children[0], context, &substitutions);
+            arg_ptr = owned_arg.get();
+        }
+        const Expression &arg = *arg_ptr;
         ExpressionExecutor arg_executor(context);
-        const Expression &arg =
-            CachedTransformToChunkExpression(chunk_expr_cache, *agg.children[0], context);
         arg_executor.AddExpression(arg);
         values.reserve(num_rows);
         ColumnDataScanState scan;
         data.InitializeScan(scan);
-        DataChunk in_chunk;
-        in_chunk.Initialize(context, data.Types());
+        DataChunk scan_chunk;
+        scan_chunk.Initialize(context, data.Types());
+        auto chunk_types = data.Types();
+        for (idx_t i = 0; i < nested_columns.size(); i++) {
+            chunk_types.push_back(LogicalType::DOUBLE);
+        }
+        DataChunk augmented;
+        augmented.Initialize(context, chunk_types);
         DataChunk out_chunk;
         out_chunk.Initialize(context, vector<LogicalType>{arg.return_type});
         idx_t row_offset = 0;
-        while (data.Scan(scan, in_chunk)) {
+        while (data.Scan(scan, scan_chunk)) {
+            DataChunk *chunk = &scan_chunk;
+            if (!nested_columns.empty()) {
+                augmented.Reset();
+                for (idx_t col = 0; col < scan_chunk.ColumnCount(); col++) {
+                    augmented.data[col].Reference(scan_chunk.data[col]);
+                }
+                for (idx_t i = 0; i < nested_columns.size(); i++) {
+                    auto out = FlatVector::GetData<double>(augmented.data[scan_chunk.ColumnCount() + i]);
+                    for (idx_t row = 0; row < scan_chunk.size(); row++) {
+                        out[row] = nested_columns[i][row_offset + row];
+                    }
+                }
+                augmented.SetCardinality(scan_chunk.size());
+                chunk = &augmented;
+            }
+            auto &in_chunk = *chunk;
             out_chunk.Reset();
             ExecuteOnReadRows(arg_executor, in_chunk, row_offset, &read_rows, out_chunk);
+            if (is_count) {
+                // `count(e)` counts the rows where `e` is not NULL, as SQL does: 1 for a
+                // row it counts, 0 for one it does not; the value itself is never read.
+                for (idx_t row = 0; row < in_chunk.size(); row++) {
+                    const bool read = read_rows[row_offset + row];
+                    values.push_back(read && !out_chunk.data[0].GetValue(row).IsNull() ? 1.0 : 0.0);
+                }
+                row_offset += in_chunk.size();
+                continue;
+            }
             // A reducer's input feeds a bound, so it follows the same rule as
             // every other RHS: ±inf is a value, not an error. A group whose
             // MAX(cap) folds to +inf is a group with no upper bound, and one
@@ -1298,6 +1376,9 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
             continue;
         }
         double v = values.empty() ? 0.0 : (row < values.size() ? values[row] : 0.0);
+        if (is_count && !values.empty() && v == 0.0) {
+            continue; // a NULL `count(e)` does not count
+        }
         if (counts[g] == 0) {
             acc[g] = is_count ? 1.0 : v;
         } else if (is_min) {
@@ -1313,8 +1394,12 @@ static vector<double> EvaluateRhsReducerPerGroup(const BoundAggregateExpression 
     }
     for (idx_t g = 0; g < groups; g++) {
         // A group with no member cannot exist here: the group map is built from the
-        // kept rows, and the scope checks refused a reducer that reads no row (D8).
+        // kept rows, and the scope checks refused a reducer that reads no row (D8). A
+        // `count(e)` whose rows are all NULL counts none of them, which is 0.
         if (counts[g] == 0) {
+            if (is_count) {
+                continue;
+            }
             throw InternalException("DECIDE: a bound-side reducer read no row of its group");
         }
         if (is_avg) {
@@ -1372,8 +1457,9 @@ static void CountTupleTermsOnce(const vector<DecideTerm> &terms, const vector<De
 // and scans `data` once, then zeroes rows `filters[i]` excludes (a clause's `when` is
 // folded into every term's filter upstream).
 // AVG scaling is deliberately left to the caller: the constraint side applies it
-// immediately per-constraint, the objective side defers it until its two-level grouping is
-// resolved in Phase 3 — a real difference in control flow, not something to collapse.
+// immediately per-constraint, the objective side defers it until its qualifier
+// de-duplication has run in Phase 3 — a real difference in control flow, not something
+// to collapse.
 template <class BilinearTermSource>
 static vector<EvaluatedConstraint::BilinearTerm> EvaluateBilinearTerms(
     const vector<BilinearTermSource> &terms, const vector<TermFilterState> &filters,
@@ -1589,8 +1675,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 		// extremum, or the composed objective's 0.0 placeholder -- that its accounts
 		// describe and a row would misread. An AVG's sum stays, under its account, as in a
 		// constraint.
-		if (flat_objective_agg != ObjectiveAggregateType::NONE || !composed_minmax_objective_terms.empty() ||
-		    per_inner_agg == ObjectiveAggregateType::MIN_AGG || per_inner_agg == ObjectiveAggregateType::MAX_AGG) {
+		if (flat_objective_agg != ObjectiveAggregateType::NONE || !composed_minmax_objective_terms.empty()) {
 			objective_strs.clear();
 		}
 		result["Objective"] = RenderDecideObjectiveLayers(sense_prefix, written_objective, canonical_objective,
@@ -2982,9 +3067,9 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
                 LookupOrBuildPerGroupIds(per_group_cache, has_by ? group_keys[group_key].expressions : no_key,
                                          chunk_expr_cache, context, gstate.data, num_rows, kept, &scoped_kept, ids,
                                          count, labels);
-                reducer_values.push_back(EvaluateRhsReducerPerGroup(agg, ids, count, entity_mappings,
-                                                                    chunk_expr_cache, context, gstate.data,
-                                                                    num_rows, source_fragments));
+                reducer_values.push_back(EvaluateRhsReducerPerGroup(
+                    agg, ids, count, {has_by ? group_key : DConstants::INVALID_INDEX}, group_keys, entity_mappings,
+                    chunk_expr_cache, context, gstate.data, num_rows, source_fragments));
                 reducer_group_ids.push_back(std::move(ids));
                 agg_substitutions.emplace(rhs_reducers[i], data_columns + i);
             }
@@ -3515,69 +3600,37 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                 }
             }
         }
+
+        // An AVG with a `by` key -- a nested `sum(per k: avg(e) by (k))` the value rewrite
+        // inlined (D75) -- divides by its group's count: the groups of its key among the
+        // rows it reads, NULL a value.
+        auto group_avg = [&](idx_t group_key, TermFilterState &state) {
+            if (!state.avg_scale || group_key == DConstants::INVALID_INDEX) {
+                return;
+            }
+            std::function<bool(idx_t)> reads = [&](idx_t row) {
+                return !state.has_filter || state.mask[row];
+            };
+            vector<string> labels;
+            LookupOrBuildPerGroupIds(per_group_cache, group_keys[group_key].expressions, chunk_expr_cache, context,
+                                     gstate.data, num_rows, reads, nullptr, state.avg_group_ids, state.avg_num_groups,
+                                     labels);
+        };
+        for (idx_t i = 0; i < gstate.objective->terms.size() && i < obj_linear_term_filters.size(); i++) {
+            group_avg(gstate.objective->terms[i].avg_group_key, obj_linear_term_filters[i]);
+        }
+        for (idx_t i = 0; i < gstate.objective->squared_terms.size() && i < obj_quadratic_term_filters.size(); i++) {
+            group_avg(gstate.objective->squared_terms[i].avg_group_key, obj_quadratic_term_filters[i]);
+        }
+        for (idx_t i = 0; i < gstate.objective->bilinear_terms.size() && i < obj_bilinear_filters.size(); i++) {
+            group_avg(gstate.objective->bilinear_terms[i].avg_group_key, obj_bilinear_filters[i]);
+        }
     }
 
     EvaluatedClauses result;
     result.linear_filters = std::move(obj_linear_term_filters);
     result.quadratic_filters = std::move(obj_quadratic_term_filters);
     result.bilinear_filters = std::move(obj_bilinear_filters);
-
-    // The two-level objective's grouping. It is a read of the data (its key columns), so it
-    // belongs to this phase and not to the formulation pass — the grouping a widened
-    // variable bound produces is the same grouping. It runs last here because the
-    // "does this row carry a term at all" test below reads the filter masks settled above.
-    if (gstate.objective && !gstate.objective->per_columns.empty()) {
-        bool objective_has_local_filters = false;
-        bool objective_has_unfiltered_part = false;
-        for (auto &f : result.linear_filters) {
-            objective_has_local_filters |= f.has_filter;
-            objective_has_unfiltered_part |= !f.has_filter;
-        }
-        for (auto &f : result.quadratic_filters) {
-            objective_has_local_filters |= f.has_filter;
-            objective_has_unfiltered_part |= !f.has_filter;
-        }
-        for (auto &f : result.bilinear_filters) {
-            objective_has_local_filters |= f.has_filter;
-            objective_has_unfiltered_part |= !f.has_filter;
-        }
-
-        auto objective_row_has_local_term = [&](idx_t row) {
-            if (!objective_has_local_filters || objective_has_unfiltered_part) {
-                return true;
-            }
-            for (auto &f : result.linear_filters) {
-                if (f.has_filter && f.mask[row]) {
-                    return true;
-                }
-            }
-            for (auto &f : result.quadratic_filters) {
-                if (f.has_filter && f.mask[row]) {
-                    return true;
-                }
-            }
-            for (auto &f : result.bilinear_filters) {
-                if (f.has_filter && f.mask[row]) {
-                    return true;
-                }
-            }
-            return false;
-        };
-
-        auto obj_row_is_included = [&](idx_t row) -> bool {
-            if (objective_has_when && !objective_when_mask[row]) return false;
-            if (!objective_row_has_local_term(row)) return false;
-            return true;
-        };
-
-        vector<string> obj_group_labels; // unused: objective groups are not diagnosed by clause key
-        // The two-level objective keeps NULL as a class (D5).
-        LookupOrBuildPerGroupIds(per_group_cache, gstate.objective->per_columns,
-                                 chunk_expr_cache, context, gstate.data, num_rows,
-                                 obj_row_is_included, nullptr,
-                                 result.objective_row_group_ids,
-                                 result.objective_num_groups, obj_group_labels);
-    }
 
     return result;
 }
@@ -3733,8 +3786,8 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
                 ta.filter_mask.assign(num_rows, true);
             }
             // Fold in the relation qualifier's de-duplication mask, exactly as the
-            // non-composed reducer paths do. A composed objective is never two-level, so every
-            // row is in one group and `row_group_ids` is empty. Applied uniformly:
+            // non-composed reducer paths do. A composed objective has one group, so
+            // `row_group_ids` is empty. Applied uniformly:
             // for MIN/MAX it is provably a no-op (every row of an identity carries the
             // same value, so dropping repeats cannot move an extremum), which keeps
             // one code path instead of a special case that has to stay in sync. A term
@@ -3955,18 +4008,25 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     // explicit (possibly negative) lower-bound constraint keep their absorbed
     // value. Must run before any consumer of lower_bounds (implied-bound
     // propagation, Big-M, McCormick, model builder).
-    for (auto &lb : solver_input.lower_bounds) {
+    // A helper decision of the value rewrite holds a reducer's value, which may be
+    // negative: no default floor. The formulation pass boxes it by its members' reach
+    // (DeriveReducerValueBounds), after the rigid box below is captured with it free. A
+    // floor the user wrote on it stands, though: a nested reducer's clause is a bound on
+    // its outer helper alone (`per g: sum(max(x) by (g, h)) by (g) >= 3`), which bound
+    // absorption folds into the helper's box.
+    vector<bool> is_helper(solver_input.lower_bounds.size(), false);
+    for (auto &link : gstate.evaluated_value_links) {
+        if (link.value_var < is_helper.size()) {
+            is_helper[link.value_var] = true;
+        }
+    }
+    for (idx_t var = 0; var < solver_input.lower_bounds.size(); var++) {
+        auto &lb = solver_input.lower_bounds[var];
         if (lb <= ABSORBED_LOWER_UNSET) {
-            lb = 0.0;
+            lb = is_helper[var] ? -NumericLimits<double>::Maximum() : 0.0;
         }
     }
     solver_input.upper_bounds = gstate.absorbed_upper_bounds;
-    // A helper decision of the value rewrite holds a reducer's value, which may be
-    // negative: no default floor. The formulation pass boxes it by its members' reach
-    // (DeriveReducerValueBounds), after the rigid box below is captured with it free.
-    for (auto &link : gstate.evaluated_value_links) {
-        solver_input.lower_bounds[link.value_var] = -NumericLimits<double>::Maximum();
-    }
 
     // Everything below this point is stage 06 working on the evaluated model, so
     // hand the constraints and the formulation links over before the first pass.
@@ -4041,15 +4101,10 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
             solver_input.bilinear_objective_terms.push_back(std::move(bot));
         }
     }
-    // The two-level objective's grouping, settled by PHASE 2 off the data. It is copied onto
-    // `SolverInput` here because every consumer below reads it there: the qualifier
-    // de-duplication, AVG scaling, and the MIN/MAX objective encoding.
-    solver_input.objective_row_group_ids = evaluated.objective_row_group_ids;
-    solver_input.objective_num_groups = evaluated.objective_num_groups;
-
     // Relation-qualified reducers in the objective: same de-duplication as on the
-    // constraint side, applied once the objective's two-level groups are settled and before
-    // AVG scaling reads the surviving-row counts.
+    // constraint side, over the objective's one group, applied before AVG scaling reads the
+    // surviving-row counts.
+    const vector<idx_t> objective_row_group_ids;
     if (gstate.objective) {
         for (idx_t term_idx = 0; term_idx < gstate.objective->terms.size() &&
                                  term_idx < evaluated.linear_filters.size();
@@ -4057,7 +4112,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
             idx_t scope_idx = gstate.objective->terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
             ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids, num_rows,
+                                   objective_row_group_ids, num_rows,
                                    evaluated.linear_filters[term_idx]);
             MaskCoefficientColumn(solver_input.objective_coefficients[term_idx],
                                   evaluated.linear_filters[term_idx].mask);
@@ -4068,7 +4123,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
             idx_t scope_idx = gstate.objective->squared_terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
             ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids, num_rows,
+                                   objective_row_group_ids, num_rows,
                                    evaluated.quadratic_filters[term_idx]);
             MaskCoefficientColumn(solver_input.quadratic_inner_coefficients[term_idx],
                                   evaluated.quadratic_filters[term_idx].mask);
@@ -4079,7 +4134,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
             idx_t scope_idx = gstate.objective->bilinear_terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
             ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
-                                   solver_input.objective_row_group_ids, num_rows,
+                                   objective_row_group_ids, num_rows,
                                    evaluated.bilinear_filters[term_idx]);
             MaskCoefficientColumn(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
                                   evaluated.bilinear_filters[term_idx].mask);
@@ -4093,7 +4148,8 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         ScaleAvgRows(solver_input.objective_coefficients[term_idx],
                     evaluated.linear_filters[term_idx].has_filter,
                     evaluated.linear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
-                    solver_input.objective_row_group_ids, solver_input.objective_num_groups);
+                    evaluated.linear_filters[term_idx].avg_group_ids,
+                    evaluated.linear_filters[term_idx].avg_num_groups);
     }
     for (idx_t term_idx = 0; term_idx < evaluated.quadratic_filters.size(); term_idx++) {
         if (!evaluated.quadratic_filters[term_idx].avg_scale) {
@@ -4102,7 +4158,8 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         ScaleAvgRows(solver_input.quadratic_inner_coefficients[term_idx],
                     evaluated.quadratic_filters[term_idx].has_filter,
                     evaluated.quadratic_filters[term_idx].mask, /*quadratic_inner=*/true, num_rows,
-                    solver_input.objective_row_group_ids, solver_input.objective_num_groups);
+                    evaluated.quadratic_filters[term_idx].avg_group_ids,
+                    evaluated.quadratic_filters[term_idx].avg_num_groups);
     }
 
     for (idx_t term_idx = 0; term_idx < evaluated.bilinear_filters.size(); term_idx++) {
@@ -4112,7 +4169,8 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
         ScaleAvgRows(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
                     evaluated.bilinear_filters[term_idx].has_filter,
                     evaluated.bilinear_filters[term_idx].mask, /*quadratic_inner=*/false, num_rows,
-                    solver_input.objective_row_group_ids, solver_input.objective_num_groups);
+                    evaluated.bilinear_filters[term_idx].avg_group_ids,
+                    evaluated.bilinear_filters[term_idx].avg_num_groups);
     }
     // The flat column space, built ONCE and handed to every construct site below. A
     // general or indicator constraint names flat columns, so a site that may state one
@@ -4255,22 +4313,23 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     } else {
         // The value rewrite's helper decisions are boxed by their members' reach, and a
         // member may be an ABS auxiliary while an ABS may hold a helper: each box is the
-        // other's input. Both derivations only tighten, and a reducer holds no reducer, so
-        // alternating them settles in as many passes as the constructs nest. The lowering
-        // arm's refusal is decided last, on the settled boxes, naming a helper by its
-        // reducer.
+        // other's input. A helper's box also bounds the helpers it is defined from
+        // (DeriveReducerMemberBounds). Every derivation only tightens, so alternating
+        // them settles in as many passes as the constructs nest. The lowering arm's
+        // refusal is decided last, on the settled boxes, naming a helper by its reducer.
         for (auto &link : solver_input.reducer_value_links) {
             if (link.value_var < decide_var_names.size() && !link.label.empty()) {
                 decide_var_names[link.value_var] = link.label;
             }
         }
         const idx_t max_passes =
-            solver_input.abs_maximize_links.size() + solver_input.reducer_value_links.size() + 1;
+            2 * (solver_input.abs_maximize_links.size() + solver_input.reducer_value_links.size() + 1);
         for (idx_t pass = 0;; pass++) {
             auto lower = solver_input.lower_bounds;
             auto upper = solver_input.upper_bounds;
             DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, /*refuse_when_unbounded=*/false);
             DeriveReducerValueBounds(solver_input);
+            DeriveReducerMemberBounds(solver_input, var_indexer);
             if (lower == solver_input.lower_bounds && upper == solver_input.upper_bounds) {
                 break;
             }
@@ -4316,33 +4375,21 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     LinearizeBilinear(solver_input, box, decide_var_names);
 
     // Handle MIN/MAX objective: create global auxiliary variable z and linking constraints.
-    // Two paths: (A) flat MIN/MAX, (B) the two-level form outer(per k: inner(e) by (k)).
-    //
-    // For a two-level objective, the auxiliary formulation:
-    //   Phase A (inner): per-group auxiliary z_g for inner MIN/MAX aggregate
-    //   Phase B (outer): global auxiliary w for outer MIN/MAX aggregate
-    //
-    // Easy/hard classification at each level:
-    //   Easy (no indicators): MINIMIZE+MAX or MAXIMIZE+MIN
-    //   Hard (Big-M indicators): MINIMIZE+MIN or MAXIMIZE+MAX
+    // Easy (no indicators): MINIMIZE+MAX or MAXIMIZE+MIN; hard (Big-M indicators):
+    // MINIMIZE+MIN or MAXIMIZE+MAX. A nested one is a helper decision, defined with the
+    // other helpers (D75).
 
     // Global variables are appended at var_indexer.global_block_start.
     // As we add more global vars, their indices are global_block_start + g
     // where g is the position in the global vars array.
 
-    // Encode a MIN/MAX objective (flat `MIN(expr)`/`MAX(expr)` or the two-level
-    // `outer(per key: inner(expr) by (key))`) into global auxiliaries and their
+    // Encode a MIN/MAX objective (`MIN(expr)`/`MAX(expr)`) into a global auxiliary and its
     // envelope/indicator rows. Pure stage-06 work: it reads the coefficients PHASE 2
     // evaluated plus the flat column space, and needs no row of its own.
     phase.Next("formulation.minmax_objective");
     MinMaxObjectiveSpec minmax_objective_spec;
     minmax_objective_spec.flat_agg = flat_objective_agg;
     minmax_objective_spec.flat_is_easy = flat_objective_is_easy;
-    minmax_objective_spec.per_inner_agg = per_inner_agg;
-    minmax_objective_spec.per_outer_agg = per_outer_agg;
-    minmax_objective_spec.per_inner_is_easy = per_inner_is_easy;
-    minmax_objective_spec.per_outer_is_easy = per_outer_is_easy;
-    minmax_objective_spec.per_inner_was_avg = per_inner_was_avg;
     {
         // The rows the objective's reducer reads -- its terms' filters, the objective's
         // `when` folded in -- are its members, whatever their coefficients.

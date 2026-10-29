@@ -89,7 +89,7 @@ Per-row and aggregate constraint shapes, canonicalization spellings (side-swappe
 leading-negative, scaled reducers), `when` and `per` in front of a constraint, a
 reducer's own `when` and `per` (including a relation key, `sum(per i: keep)`), `by`
 keys (including `count(*) by (grp)`, entry 62), keyed and query-wide decisions, the
-two-level objective, subquery
+nested objective, subquery
 right-hand sides, ABS, MIN/MAX in all four hard forms, `<>` including both range
 collapses and a bound that varies within a `by` group (entry 94), and the value
 rewrite (entries 95–101: deck examples 1, 5 and 8, two helpers with different `by`

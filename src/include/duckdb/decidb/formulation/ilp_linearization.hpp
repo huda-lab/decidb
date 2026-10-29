@@ -231,6 +231,16 @@ void LinearizeAbsMaximize(SolverInput &input);
 //! defaulted to 0; an end no member bounds is left open.
 void DeriveReducerValueBounds(SolverInput &input);
 
+//! Its backward half (syntax_reference.md §5.5): a helper's box flows to the helpers it is defined from --
+//! through the equality of a SUM or AVG, each term is at most the helper's top less every
+//! other term's floor, and at least its floor less every other's top; through a MAX's
+//! envelope every member is at or under its top, a MIN's at or over its floor. So a nested
+//! MIN/MAX whose closing side needs a Big-M finds one in a bound written only at the root
+//! (`sum(max(x) by (g, h)) by (g) = 10`). One box covers every instance of a helper, so it
+//! is tightened only when every instance it defines is bounded, by the loosest bound.
+//! Only tightens; FormulateModel runs it in the same fixed point.
+void DeriveReducerMemberBounds(SolverInput &input, const VarIndexer &indexer);
+
 //! Phase 2: emit each helper's definition, one row per group of its members. SUM/AVG:
 //! the flat equality `value - members = constants` (an AVG's members carry their 1/n).
 //! MIN/MAX: an extremum link (EmitExtremumLink) on the sides the clause needs, its
@@ -485,21 +495,14 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer,
                       const vector<string> &var_names, NativeConstructPolicy policy);
 
 //! How stage 05 classified the objective's MIN/MAX shape, as `LinearizeMinMaxObjective`
-//! needs it. `flat_*` describes an unqualified `MIN(expr)` / `MAX(expr)` objective;
-//! `per_*` describes the two-level `outer(per k: inner(e) by (k))` form, whose group
-//! ids arrive on `SolverInput::objective_row_group_ids`. An objective is *easy* when the
-//! optimization direction already drives the auxiliary to the extreme (MINIMIZE+MAX,
-//! MAXIMIZE+MIN) and one envelope row per row suffices; the hard direction additionally
-//! needs the per-row indicator layer.
+//! needs it: `flat_*` describes a `MIN(expr)` / `MAX(expr)` objective. (A nested one is a
+//! helper decision, defined by LinearizeReducerValueLinks, D75.) An objective is *easy*
+//! when the optimization direction already drives the auxiliary to the extreme
+//! (MINIMIZE+MAX, MAXIMIZE+MIN) and one envelope row per row suffices; the hard direction
+//! additionally needs the per-row indicator layer.
 struct MinMaxObjectiveSpec {
     ObjectiveAggregateType flat_agg = ObjectiveAggregateType::NONE;
     bool flat_is_easy = false;
-    ObjectiveAggregateType per_inner_agg = ObjectiveAggregateType::NONE;
-    ObjectiveAggregateType per_outer_agg = ObjectiveAggregateType::NONE;
-    bool per_inner_is_easy = false;
-    bool per_outer_is_easy = false;
-    //! Inner reducer was AVG, rewritten to SUM with a per-group 1/n_g scale.
-    bool per_inner_was_avg = false;
     //! Exactly the rows the objective's reducer reads (its terms' filters, the
     //! objective's `when` folded in), each a member whatever its coefficients. Sized
     //! to the input's rows.
@@ -508,8 +511,7 @@ struct MinMaxObjectiveSpec {
 
 //! Encode a MIN/MAX *objective* — the counterpart of `LinearizeMinMaxIndicators`, which
 //! encodes a MIN/MAX *constraint*. The per-row objective is replaced by a global
-//! auxiliary (`z` flat, `z_g` per group plus an outer `w` for the two-level form),
-//! pinned by envelope rows against the evaluated objective coefficients; the hard
+//! auxiliary `z`, pinned by envelope rows against the evaluated objective coefficients; the hard
 //! direction adds one indicator binary per active row and a `SUM(y) >= 1` pin.
 //!
 //! Runs after the flat column space exists, so it emits into `input.global_constraints`

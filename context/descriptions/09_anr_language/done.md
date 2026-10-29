@@ -13,8 +13,8 @@ Sources: the "DeciQL proposals" deck (`ANR.pdf`, pp. 6–7, 14–32, 62) and
 `ANR Implementation.pdf` (semantics). They are context only: a construct is in the
 language because `syntax_reference.md` documents it, not because a PDF shows it.
 
-Open work lives with its owner: `../01_pipeline/02_binder/todo.md` (nested aggregates,
-bind-time refusals a later change may lift), `../01_pipeline/03_logical_plan/todo.md` and
+Open work lives with its owner: `../01_pipeline/02_binder/todo.md` (bind-time refusals
+a later change may lift), `../01_pipeline/03_logical_plan/todo.md` and
 `../01_pipeline/08_execution/todo.md` (one key table, one key-grouping path),
 `../01_pipeline/04_canonicalizer/todo.md` and `../01_pipeline/05_optimizer/todo.md`
 (shapes and formulations), `../03_expressivity/scope/todo.md` (the keyed-scope rename),
@@ -42,8 +42,8 @@ that implements it ships. Phase 0 shipped the same day and changed no engine cod
 - Baselines for later phases: the golden corpus identical on both solvers, and the
   medium-tier timings in
   [`../05_performance/04_model_construction/done.md`](../05_performance/04_model_construction/done.md).
-- Found on the way: a bound-side `count(e)` refuses a NULL instead of counting the
-  non-NULL values ([`../06_issues/bugs/todo.md`](../06_issues/bugs/todo.md)).
+- Found on the way: a bound-side `count(e)` refused a NULL instead of counting the
+  non-NULL values; fixed in phase 2.
 
 ## The full algorithm — phase 1: variant signatures
 
@@ -89,6 +89,84 @@ the determination error (D64; deck pp. 34–40; `syntax_reference.md` §7.1):
 - Corrected in the plan: two classes with equal bodies are two model rows (nothing merges
   them, and nothing needs to); `rows_stand_with_their_class` stays sound, since a row
   stands with its variant's first row, which carries the same decisions and data.
+
+## The full algorithm — phase 2: nested reducers
+
+Shipped 2026-10-28. A reducer nests in another to any depth, with `when`, `per` and `by`
+at every level, on either side of a constraint and in the objective
+(`syntax_reference.md` §5.5; deck pp. 16–32, 79–97, 111–119):
+
+- **The path rule.** A nested reducer reads, at the row it stands for, the kept rows that
+  every enclosing reducer's own `when` keeps and that agree with that row on every
+  enclosing `by` key and its own, its path key. `DecideReducerPath`
+  (`planner/decide/decide_reducer_path.hpp`) states it once; the canonicalizer reads it
+  for a nested reducer's D8 check (named by its path group, *"max(when c: x) has no rows
+  for t.g = 'a', t.h = 'q'"*) and the rows its variants are counted over, and the value
+  rewrite for its helper's key and rows.
+- **Binder.** The nesting gate is gone; a nested reducer's body is held to a reducer's
+  rule. Refused (D74): `norm` inside a reducer, and a reducer over data alone added
+  inside one over decisions.
+- **Constraints.** A decision reducer holding a reducer is the VALUE shape. The value
+  rewrite recurses innermost first: every reducer of a nest is a helper decision keyed by
+  its path (a new union of keys is a `group_keys` entry the optimizer adds), its members
+  read the inner helpers through their entity mappings, and a MIN/MAX is pinned on the
+  side its readers push it through SUM and AVG levels, on both under another MIN or MAX
+  (D73). F1 needs no Big-M: twelve columns, eight rows for the SUM inner, ten for the MAX.
+  A square or product of decisions inside nested reducers is refused by name (D74).
+- **Bounds.** `DeriveReducerMemberBounds`, the backward half of
+  `DeriveReducerValueBounds`: a helper's box bounds the helpers it is defined from
+  (through a SUM/AVG equality, through a MIN/MAX envelope), so a bound written only at
+  the root reaches a nested closing link (`per t.g: sum(max(x) by (t.g, t.h)) by (t.g) =
+  10` answers on HiGHS with MIN/MAX lowered). Only helper columns are tightened, when
+  every instance a helper defines is bounded; one box per helper stays a limit
+  (`../01_pipeline/05_optimizer/todo.md` §2). A helper's columns are named by its reducer
+  with its `by`, so the remedy of *"requires a finite bound on 'sum(x) by (t.g, t.h)'"*
+  can be written.
+- **The bound side.** A nest over data alone is evaluated innermost first, each inner
+  reducer over its path groups and read as a chunk column (F14). `count(e)` counts the
+  non-NULL values, 0 for a group that has none.
+- **The objective** (D75). `outer(per k: inner(e) by (k))` is a nested reducer: the
+  canonicalizer tags each objective reducer that holds one, the value rewrite makes the
+  nest helpers pushed by the sense, and the objective reads the outer helper once. Its
+  four refusals lifted (a `when` in either reducer, a `by` other than the `per` key, an
+  outer `avg`), and it nests deeper and beside other terms. `sum([when c] per K:
+  sum|avg(e) by (G))` with `K` in `G` is the objective's own sum instead, each group
+  once and an inner AVG dividing by its group's size (`DecideTerm::avg_group_key`), which
+  keeps a square in `e` a convex QP; a MIN/MAX of a square inside nested reducers is
+  refused. Deleted with the special path: `BindTwoLevelObjective`,
+  `IsTwoLevelObjective`, the two-level branch of `RewriteMinMaxObjectiveTree`, PATH B of
+  `LinearizeMinMaxObjective`, the `per_*` metadata, `DecideObjective::per_columns`,
+  the objective's group ids, `RenderTwoLevelObjective` / `RenderTwoLevelInner`, the bound
+  `PER_CONSTRAINT_TAG` wrapper and its predicates (the tag stays the removed spelling's
+  parsed marker), and the `EXTREMUM_PER_GROUP` accounts.
+- **Answers that changed.** The old path read a MIN/MAX of a square as the sum of the
+  squares, and an inner AVG under a budget the groups share without its 1/n per group;
+  both were wrong where the rows were coupled, and the tests that pinned them passed
+  only because theirs were not. The first is refused now, the second exact. The
+  removed-spelling messages for `... PER k` name the nested spellings that now work (an
+  outer `AVG` kept, an inner colon form, a nest under a factor).
+- **Golden corpus**: entries 91 and 92 (the two nested objectives) changed model -- a
+  helper per group and one over them, in place of the objective's extremum column -- on
+  both solvers; on Gurobi each answers with another assignment at the same optimum (6 and
+  0). Re-captured; every other entry identical.
+- **A bound on a lone helper.** Rewritten, `per t.g: sum(max(x) by (t.g, t.h)) by (t.g)
+  >= 3` is `h >= 3` on the outer helper, which bound absorption folds into its box;
+  execution freed every helper's floor after reading the box, so a `>=` or `=` bound on a
+  nest was dropped and answered wrongly (all zeros under MINIMIZE). Found by probing
+  after the first report; `BuildSolverInput` now frees a helper's floor only where none
+  was written.
+- Tests: `test_anr_nested.py` (the phase-2 fixtures on both solvers, F1's model, a
+  768-cell grid at depth 2 and 3, a constant bound on a nest under each sense, members,
+  bounds through a nest, the refusals);
+  `test_scope_objective.py`'s refusals, the nesting pins of `test_scope_bare_clauses.py`
+  and `test_scope_reducer_by.py`, and deck example 9 in a constraint became answers
+  judged by `_anr_oracle`; the two-level EXPLAIN, box and quadratic tests follow the
+  helper formulation.
+- Beyond the plan's text: the outermost objective reducer is a helper too rather than
+  riding the objective's SUM/MIN/MAX/AVG paths (one path; the objective sum of group sums
+  is the exception above); a path key is a group key rather than two new link fields;
+  `_scope_oracle.ScopedModel` still states its own `Nested` form rather than delegating
+  to `_anr_oracle` (plan §6.2).
 
 ## Item 1 — the scope grammar
 
@@ -169,7 +247,8 @@ Built together, under D3–D8, D15 and D18. What the user sees: `syntax_referenc
   to a `__group_key_<i>__` tag naming `decide_group_keys[i]` (one entry per key as
   written, a subquery in it included), an inner `per` to a `__qualified_by_<i>__` tag on
   an exact key scope, an inner `when` to the aggregate's filter. The two-level objective
-  binds onto the nested objective (`PER_CONSTRAINT_TAG`, `DecideObjective::per_columns`).
+  bound onto the nested objective (`PER_CONSTRAINT_TAG`, `DecideObjective::per_columns`)
+  until phase 2 made it a nested reducer (D75).
 - **Logical plan** (`03_logical_plan/done.md`). `LogicalDecide::group_keys` and
   `scope_checks`, serialized (ids 217–218), in `EnumerateExpressions`, flattened by
   `PlanSubqueries`.
@@ -311,8 +390,9 @@ the user sees: `syntax_reference.md` §8.1 and §9.
   for it (`OBJECTIVE_ROW_TAG`). A row that repeats its clause is left out; the hard
   MIN/MAX carrier prints as the reducer it marks; a MIN/MAX or composed objective prints
   its accounts and no carrier row, an AVG objective its sum under its account; an
-  automatic L0 bound prints as `M`; the two-level objective's rewritten row reads
-  `when c per k: inner(e) by (k)`, its key as written (`RenderDecidePerKey`); functions
+  automatic L0 bound prints as `M`; the two-level objective's rewritten row read
+  `when c per k: inner(e) by (k)`, its key as written (`RenderDecidePerKey`), until
+  phase 2; functions
   print lower-case and a column is quoted where SQL needs it (`"order"`, `"per"`); the
   rows a rewrite adds keep their clause's `when` in front; `norm(e, 'inf')` keeps its
   quotes. Parentheses follow DuckDB's precedence in every echo: `-(-x)`,
@@ -344,7 +424,7 @@ the user sees: `syntax_reference.md` §8.1 and §9.
   kept rows in the expanded scope only. The unbounded remedy is written
   `when region = 'B': buy <= <cap>`, the column as the clause names it (`t.depot` for a
   key column) and the value a SQL string. A HiGHS refusal quotes a clause with its scope
-  in front. An outer `avg` in the two-level objective is refused.
+  in front. An outer `avg` in the two-level objective was refused (until phase 2, D75).
 - **Conversion.** The pytest suites, the golden corpus (identical dumps and results on
   both solvers) and benchmarks p4, q1, q4, q6 and q8 are written in the language.
 - Tests: `test/decide/tests/test_scope_explain_diagnose.py` (accounts and labels per
@@ -417,8 +497,9 @@ the user sees: `syntax_reference.md` §10.3 (every removed spelling and its mess
   branches, and `SCOPED_CLAUSE_TAG` with every writer and reader.
 - **Logical plan** (`03_logical_plan/done.md`). `LogicalDecide::scoped_objective` (id 219)
   and `EntityScopeInfo::exact_key` (id 105) are deleted and retired as `"deleted": true`
-  in the serialization JSON, `serialize_*.cpp` regenerated. `PER_CONSTRAINT_TAG` now wraps
-  only the two-level objective; a constraint's `per K:` is `PER_CLASS_TAG`.
+  in the serialization JSON, `serialize_*.cpp` regenerated. `PER_CONSTRAINT_TAG` wrapped
+  only the two-level objective from then (since phase 2 it is only the removed spelling's
+  parsed marker); a constraint's `per K:` is `PER_CLASS_TAG`.
 - **Canonicalizer** (`04_canonicalizer/done.md` §3.7, §3.10, §4). `ClassifyScoped`
   classifies every comparison, and an `INVALID` one throws its refusal (or an
   `InternalException` when a decision survived on the bound side); `FindNonScalarDecideVar`,
@@ -545,7 +626,7 @@ and HiGHS):
   transformer reads it back.
 - A constant inside a `MIN` or `MAX` under a strict bound (`max(x + 0.5) > 3`) stays
   refused (*"Compare with '>=' instead"*); moving it onto the bound belongs in stage 04
-  (`../01_pipeline/02_binder/todo.md` §2).
+  (`../01_pipeline/02_binder/todo.md` §1).
 - The colon form's bind-time row-invariance check was deleted, not moved: the
   decision side already has the parsed-tree check, so `x <= SUM(D: 2)` answers like
   `x <= sum(per D: 2)`.
@@ -582,7 +663,7 @@ not the code.
 | D33 | The expanded DIAGNOSE scope reports per kept row for a clause with no `per` key (D28 read literally) |
 | D34 | `count(*)` takes a `by`; `count(*) by (g)` counts a group's rows |
 | D35 | `norm(e, p)` takes a `by` |
-| D36 | A removed objective form with no exact twin gets its own message: a flat `MIN`/`MAX`/`AVG` with `PER` is told that an objective is produced once; an outer `AVG` is pointed to `sum` |
+| D36 | A removed objective form with no exact twin gets its own message: a flat `MIN`/`MAX`/`AVG` with `PER` is told that an objective is produced once (an outer `AVG`, pointed to `sum` while it had no twin, keeps its `avg` since D75) |
 | D37 | Removed-spelling messages carry the fixed phrase "is removed" and quote the user's own expressions, built by the transformer from the parse tree |
 | D38 | The colon form takes an exact key on `D`'s stored columns, the run-time data check and a keyed decision inside it, and echoes as written |
 | D39 | Test changes are permitted by category, each one listed |
@@ -593,7 +674,7 @@ not the code.
 | D44 | The NULL class label in DIAGNOSE's `group` column is open: it prints as the text `NULL` (`../07_query_diagnostics/infeasible/todo.md` §2) |
 | D45 | EXPLAIN and DIAGNOSE keep printing a non-key column by its bare name over a join (`../03_expressivity/explain/todo.md`) |
 | D46 | The scope enum becomes `ROW / KEYED / GLOBAL` with its values kept, and DIAGNOSE's label `keyed`; a follow-up change (`../03_expressivity/scope/todo.md`) |
-| D47 | The structural follow-ups — one clause-scope struct and walker, one two-level renderer — are a follow-up change (`../06_issues/code_quality/todo.md`) |
+| D47 | The structural follow-ups — one clause-scope struct and walker (the two-level renderer went with the form, D75) — are a follow-up change (`../06_issues/code_quality/todo.md`) |
 | D48 | The settled decisions keep their numbers here; the transitional ones are retired |
 | D49 | The docs outside `context/descriptions` (`README.md`, `tools/pythonpkg/README.md`, `test/decide/README.md`, the `learn` and `recap` skills, the benchmark TAG headers) are written in the language; `.claude/CLAUDE.md` and the website change only on the user's word |
 | D50 | `DECIDE scalar cap` and `DECIDE lineitem.x` (no type) get the removed-spelling error, naming a typed declaration; `per (): cap` gets "needs a type" |
@@ -610,6 +691,9 @@ not the code.
 | D64 | Variant signatures replace the determination errors: a scoped expression is one instance per class and distinct value of its tuple terms, its decisions' instances and its reducers' `by` keys, in constraints and reducer operands |
 | D65 | An inner `per` and the colon form follow D64 too: a tuple whose body varies is one value per variant, which EXPLAIN ANALYZE counts |
 | D66 | The objective is produced once: a second variant is an error saying it would be produced more than once |
+| D73 | A nested MIN/MAX is pinned on the side its readers push it through SUM and AVG levels, and on both sides under any other reader |
+| D74 | Stays refused, each by name: `norm` inside a reducer, a square or product of decisions inside nested reducers (the objective's direct sums of group sums aside), a reducer over data alone added inside one over decisions; frames' refusals come with phases 3–5 |
+| D75 | The two-level objective keeps its spelling and loses its special path: it is a nested reducer, its four refusals lifted |
 | D77 | A signature's data field is a maximal decision- and reducer-free subtree, read on the canonical tree so the data terms of one additive context are one field; a decision is a field by instance |
 
 | # | Call |

@@ -126,8 +126,7 @@ message names them. `variable_scopes` points each keyed decision at one, with it
 written (`declared_key`). `group_keys` holds every `by (G)` key of the clauses
 (`DecideGroupKey`: the bound expressions, the key as written, each element's name); a
 reducer's `__group_key_<i>__` tag names entry `i`. A constraint's `per K:` key lives in
-its `PER_CLASS_TAG` wrapper, and the two-level objective's in its `PER_CONSTRAINT_TAG` wrapper, as bound
-column references. A scope the optimizer creates for a
+its `PER_CLASS_TAG` wrapper, as bound column references. A scope the optimizer creates for a
 helper decision of the value rewrite names the link it holds instead of key columns
 (`EntityScopeInfo::value_link`; its `entity_key_bindings` are empty, and the field is
 deliberately absent from the serialization: an optimized plan is never serialized). Its
@@ -156,12 +155,15 @@ replaced -- the construct as a plan prints it and what it became, `RewriteAccoun
 -- under the clause it came from, INVALID_INDEX for the objective; worded by the renderer;
 never serialized),
 `reducer_value_links` (the value rewrite's helper
-decisions, one per occurrence of a reducer in a clause: each `ReducerValueLink` holds
-the reducer a helper replaced — kind, body, its own `when` and `per`, its `by` key, its
-SQL as a label — the clause's `when`, the MIN/MAX sides any row of the clause needs, the
-clause id and removal group; `inner_terms` are flattened with the prepared form),
-`flat_objective_agg` / `flat_objective_is_easy`, the five `per_*` fields of the
-two-level objective, the absorbed variable box, and the prepared linear form.
+decisions, one per occurrence of a reducer in a clause or the objective, innermost first:
+each `ReducerValueLink` holds the reducer a helper replaced — kind, body (a nested
+reducer in it already a helper), its own `when` and `per`, its SQL with its `by` as a
+label — the rows its path keeps (the clause's `when` and every enclosing reducer's) and
+its path key (every enclosing `by` key and its own, a `group_keys` entry the optimizer
+adds when the union is new), the MIN/MAX sides any reader needs, the clause id and
+removal group; `inner_terms` are flattened with the prepared form),
+`flat_objective_agg` / `flat_objective_is_easy`, the absorbed variable box, and the
+prepared linear form.
 
 `optimized` marks the boundary between the first two groups and the third. It is
 set before the optimizer's first rewrite and is what takes this plan off the wire —
@@ -345,10 +347,9 @@ output, using `CollectDecideExpressionStrings` to print every clause in one styl
 (D32): the `when` and `per` wrappers become one qualifier in front (`when c per K:`),
 reducers and the words `when`, `per` and `by` are lower case, a reducer's `by (G)` follows it, and the defaults
 `per row:` and `by ()` are not printed. The colon form prints as written (`sum(D: x)`,
-D38). The two-level objective prints as `outer(per k: inner(e) by (k))`, a `when` in
-front of it, its key as written: `RenderDecidePerKey` reads the source fragment both
-binders record for a `per` key, falling back to the key columns' names, which
-`BindKeyColumns` made SQL text. A row the solver receives is left out where it reads as
+D38). A nested reducer prints nested, as written (`max(per k: sum(x) by (k))`).
+`RenderDecidePerKey` reads the source fragment the binder records for a `per` key,
+falling back to the key columns' names, which `BindKeyColumns` made SQL text. A row the solver receives is left out where it reads as
 the clause above it. Every renderer takes a
 `DecideSourceNames`: the clause registries, the relation aliases for messages,
 and the auxiliary labels (`aux_var_expressions`, with `decide_index`), so a decision

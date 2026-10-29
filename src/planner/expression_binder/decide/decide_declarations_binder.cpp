@@ -367,8 +367,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         result.variable_scopes = variable_scopes;
 
         // ne_clause_labels is now populated by DecideOptimizer (post-binding)
-        // minmax_clause_labels, flat_objective_agg/is_easy, per_inner/outer_agg/is_easy
-        // are now populated by DecideOptimizer::RewriteMinMax (post-binding)
+        // minmax_clause_labels and flat_objective_agg/is_easy are now populated by
+        // DecideOptimizer::RewriteMinMax (post-binding)
 
         // Hide auxiliary vars from SELECT * by truncating the bind context binding.
         // The decide_variables vector still has ALL vars (user + aux) for the execution layer,
