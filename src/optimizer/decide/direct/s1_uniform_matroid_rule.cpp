@@ -559,7 +559,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 //! shares; each stage takes the plan built so far and returns it extended. Data a later stage needs travels in explicit
 //! structs.
 //!
-//!   ProjectScopeState -> AddBoundValidation -> ProjectScore
+//!   ProjectScopeState -> ProjectScore
 //!     -> RankAndFilterFeasibility -> ProjectAssignment
 class PlanBuilder {
 public:
@@ -596,13 +596,19 @@ public:
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
 			bound_bindings.push_back(ColumnBinding(score_index, next_slot++));
 		}
+		// The messages of the checks the plan owes, in the solver's order: the NaN check of each raw bound, then each
+		// value the row fixes.
+		for (auto &bound : condition.source_bounds) {
+			limit_message_count += bound.reduction && bound.reduction->invalid ? 1 : 0;
+		}
+		for (idx_t i = 0; i < limit_message_count + condition.source_fixed_values.size(); i++) {
+			message_bindings.push_back(ColumnBinding(score_index, next_slot++));
+		}
 	}
 
 	DirectSubstitute Build(unique_ptr<LogicalOperator> source) const {
 		ScopeBindings scope;
 		source = ProjectScopeState(std::move(source), scope);
-		source = AddBoundValidation(std::move(source), scope);
-		source = AddFixedValueValidation(std::move(source), scope);
 		source = ProjectScore(std::move(source), scope);
 		auto ranked = RankAndFilterFeasibility(std::move(source));
 		auto result = ProjectAssignment(std::move(ranked));
@@ -659,6 +665,14 @@ private:
 	ColumnBinding fixed_zero_binding;
 	//! Each source-valued count bound's value, in the score projection.
 	vector<ColumnBinding> bound_bindings;
+	//! The message each check raises on the row (VARCHAR, NULL when it passes), in the score projection: the first
+	//! `limit_message_count` are the NaN checks of the raw bounds, the rest the values the row fixes.
+	vector<ColumnBinding> message_bindings;
+	idx_t limit_message_count = 0;
+	//! The least of each message in the row's group, and of the score's, in the rank window: the group raises them in
+	//! the order the solver checks them (FeasiblePredicate).
+	mutable vector<ColumnBinding> message_minimum;
+	mutable ColumnBinding score_message_minimum;
 	//! The MIN and the MAX of a raw bound over its group, in the rank window (RankAndFilterFeasibility): the MIN of an
 	//! upper bound and an `=` bound, the MAX of a lower bound and an `=` bound.
 	mutable vector<ColumnBinding> bound_minimum, bound_maximum;
@@ -716,39 +730,6 @@ private:
 		return std::move(state.plan);
 	}
 
-	//! Stage 2a: the rewrite's check of each raw bound for NaN, which comes before any value check of the plan.
-	unique_ptr<LogicalOperator> AddBoundValidation(unique_ptr<LogicalOperator> source,
-	                                               const ScopeBindings &scope) const {
-		vector<DirectRowCheck> checks;
-		for (auto &bound : condition.source_bounds) {
-			if (bound.reduction && bound.reduction->invalid) {
-				DirectRowCheck check;
-				check.invalid = CopyIntoState(*bound.reduction->invalid, scope);
-				checks.push_back(std::move(check));
-			}
-		}
-		source->ResolveOperatorTypes();
-		return DirectAddRowChecks(optimizer, checks, std::move(source));
-	}
-
-	//! Stage 2: validate the fixed values that come from the row, on the rows that read them. The source-valued bounds
-	//! were validated with the scope checks under the plan (VALUE_IS_VALID).
-	unique_ptr<LogicalOperator> AddFixedValueValidation(unique_ptr<LogicalOperator> source,
-	                                                    const ScopeBindings &scope) const {
-		vector<DirectRowBound> bounds;
-		for (auto &fixed : condition.source_fixed_values) {
-			DirectRowBound bound;
-			bound.value = CopyIntoState(*fixed.value, scope);
-			if (fixed.when) {
-				bound.kept = DirectActiveWhen(calc, CopyIntoState(*fixed.when, scope).get());
-			}
-			bound.reject_nan = fixed.reject_nan;
-			bound.coefficient = fixed.coefficient;
-			bounds.push_back(std::move(bound));
-		}
-		return DirectCheckRowBounds(optimizer, std::move(source), bounds);
-	}
-
 	//! Stage 3: the score projection. It forwards the source columns, the combined linear score, the scope and
 	//! fixed-value flags, and the source-valued bounds, so every later stage reads one projection. The constructor
 	//! laid out the slots; each is appended here at exactly that position.
@@ -804,6 +785,23 @@ private:
 			}
 			append_at(bound_bindings[i], calc.Out(calc.Cast(calc.Wrap(std::move(value)), LogicalType::DOUBLE)));
 		}
+		idx_t message = 0;
+		for (auto &bound : condition.source_bounds) {
+			if (bound.reduction && bound.reduction->invalid) {
+				append_at(message_bindings[message++],
+				          calc.Out(calc.Of(*CopyIntoState(*bound.reduction->invalid, scope))));
+			}
+		}
+		for (auto &fixed : condition.source_fixed_values) {
+			DirectRowBound bound;
+			bound.value = CopyIntoState(*fixed.value, scope);
+			if (fixed.when) {
+				bound.kept = DirectActiveWhen(calc, CopyIntoState(*fixed.when, scope).get());
+			}
+			bound.reject_nan = fixed.reject_nan;
+			bound.coefficient = fixed.coefficient;
+			append_at(message_bindings[message++], calc.Out(DirectRowBoundMessage(calc, bound)));
+		}
 		auto score = make_uniq<LogicalProjection>(score_index, std::move(score_expressions));
 		score->children.push_back(std::move(source));
 		return std::move(score);
@@ -847,6 +845,22 @@ private:
 				add("max", bound_maximum[i]);
 			}
 		}
+	}
+
+	//! Adds to `window`, which is partitioned like the rank, the least message of each check in the row's group.
+	void AddRowMessages(LogicalWindow &window) const {
+		auto add = [&](ExprPtr message) {
+			auto least = DirectWindowExtremum(optimizer, "min", calc.Out(message));
+			AddScope(*least);
+			window.expressions.push_back(std::move(least));
+			return ColumnBinding(window_index, window.expressions.size() - 1);
+		};
+		message_minimum.clear();
+		for (auto &binding : message_bindings) {
+			message_minimum.push_back(add(calc.Col(LogicalType::VARCHAR, binding)));
+		}
+		score_message_minimum =
+		    add(DirectNumberMessage(calc, calc.Col(LogicalType::DOUBLE, score_binding), DirectNumberKind::OBJECTIVE));
 	}
 
 	//! The error of each raw `=` bound whose group shows two values, NULL where it shows one.
@@ -948,12 +962,10 @@ private:
 		    OrderByNullType::NULLS_LAST, calc.Out(calc.Col(LogicalType::DOUBLE, score_binding)));
 	}
 
-	//! Stage 4: validate the score, rank rows within their scope, and raise the infeasibility error when the
-	//! bounds, fixed values, and row counts cannot all hold.
+	//! Stage 4: rank rows within their scope, raise the errors of the checks in the solver's order (the raw bounds, the
+	//! values the row fixes, the score), and the infeasibility error when the bounds, fixed values, and row counts
+	//! cannot all hold.
 	RankedRows RankAndFilterFeasibility(unique_ptr<LogicalOperator> score) const {
-		auto guard = make_uniq<LogicalFilter>(
-		    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, score_binding, DirectNumberKind::OBJECTIVE));
-		guard->children.push_back(std::move(score));
 		// Hand-built: a window is an operator-specific node, which the builder (scalar expressions) has no operation
 		// for.
 		auto rank =
@@ -991,14 +1003,13 @@ private:
 			window->expressions.push_back(std::move(count));
 		}
 		AddBoundReductions(*window);
-		window->children.push_back(std::move(guard));
+		AddRowMessages(*window);
+		window->children.push_back(std::move(score));
 		result.rank_binding = ColumnBinding(window_index, 0);
 		result.plan = std::move(window);
-		if (condition.impossible || has_lower || has_fixes || source_upper) {
-			auto feasible = make_uniq<LogicalFilter>(FeasiblePredicate(result, free_count_slot));
-			feasible->children.push_back(std::move(result.plan));
-			result.plan = std::move(feasible);
-		}
+		auto feasible = make_uniq<LogicalFilter>(FeasiblePredicate(result, free_count_slot));
+		feasible->children.push_back(std::move(result.plan));
+		result.plan = std::move(feasible);
 		return result;
 	}
 
@@ -1017,8 +1028,7 @@ private:
 		auto fixed_count = [&]() {
 			return calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, ranked.fixed_count_slot));
 		};
-		// A raw `=` bound takes one value in a group, which the bound-side rewrite checked before the bounds.
-		vector<unique_ptr<Expression>> group_checks = BoundDisagreements();
+		vector<unique_ptr<Expression>> group_checks;
 		if (condition.impossible) {
 			// No bound can hold, so a group with any row is infeasible.
 			group_checks.push_back(must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
@@ -1052,12 +1062,32 @@ private:
 				    must_hold(calc.Cmp(ExpressionType::COMPARE_LESSTHANOREQUALTO, fixed_count(), UpperLimit())));
 			}
 		}
+		// The checks of the rows of a group apply to eligible rows only.
+		auto in_group = [&](vector<unique_ptr<Expression>> list) {
+			auto group = DirectAllHold(calc, std::move(list));
+			return condition.scoped ? calc.Out(calc.If(calc.Col(LogicalType::BOOLEAN, eligible_binding),
+			                                           calc.Wrap(std::move(group)), calc.Bool(true)))
+			                        : std::move(group);
+		};
+		// The solver's order: the NaN checks of the raw bounds, a raw `=` bound that takes two values in a group, the
+		// row messages (the values the row fixes, then the score), then infeasible.
 		vector<unique_ptr<Expression>> checks;
+		auto raise = [&](const ColumnBinding &least) {
+			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, least)));
+		};
+		for (idx_t i = 0; i < limit_message_count; i++) {
+			raise(message_minimum[i]);
+		}
+		auto disagreements = BoundDisagreements();
+		if (!disagreements.empty()) {
+			checks.push_back(in_group(std::move(disagreements)));
+		}
+		for (idx_t i = limit_message_count; i < message_minimum.size(); i++) {
+			raise(message_minimum[i]);
+		}
+		raise(score_message_minimum);
 		if (!group_checks.empty()) {
-			auto group = DirectAllHold(calc, std::move(group_checks));
-			checks.push_back(condition.scoped ? calc.Out(calc.If(calc.Col(LogicalType::BOOLEAN, eligible_binding),
-			                                                     calc.Wrap(std::move(group)), calc.Bool(true)))
-			                                  : std::move(group));
+			checks.push_back(in_group(std::move(group_checks)));
 		}
 		if (has_fixes) {
 			// A row fixed to both values.

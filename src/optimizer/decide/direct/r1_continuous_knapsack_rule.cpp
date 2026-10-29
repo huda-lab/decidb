@@ -317,14 +317,6 @@ public:
 	}
 
 protected:
-	//! The message of a number the solver refuses (NaN or infinite), NULL for a valid one; a NULL number skips what it
-	//! reaches.
-	ExprPtr NumberMessage(const ExprPtr &number, DirectNumberKind kind) const {
-		auto none = calc.Constant(Value(LogicalType::VARCHAR));
-		return calc.If(
-		    calc.IsNull(number), none,
-		    calc.If(calc.Fn("isfinite", number), none, calc.Constant(Value(DirectInvalidNumberMessage(kind)))));
-	}
 
 	//! One item's values, each as the expression that reads it.
 	struct ItemExprs {
@@ -952,7 +944,7 @@ private:
 
 		vector<ExprPtr> messages;
 		auto number = [&](const string &name, DirectNumberKind kind) {
-			return NumberMessage(C(name), kind);
+			return DirectNumberMessage(calc, C(name), kind);
 		};
 		// The bound-side rewrite's checks of a raw limit come before any other, as its scope checks did.
 		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
@@ -1413,8 +1405,8 @@ private:
 		}
 		vector<ColumnBinding> value_messages;
 		for (auto &decision : items.columns.decisions) {
-			value_messages.push_back(
-			    aggregate.Add(Aggregate("min", NumberMessage(DoubleColumn(decision.v), DirectNumberKind::OBJECTIVE))));
+			value_messages.push_back(aggregate.Add(
+			    Aggregate("min", DirectNumberMessage(calc, DoubleColumn(decision.v), DirectNumberKind::OBJECTIVE))));
 		}
 		vector<ColumnBinding> sums;
 		for (idx_t slot = 0; slot < TOTAL_COUNT; slot++) {

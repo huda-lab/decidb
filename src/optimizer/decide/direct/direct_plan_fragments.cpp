@@ -237,6 +237,24 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 	return state;
 }
 
+ExprPtr DirectRowBoundMessage(const ExpressionBuilder &calc, const DirectRowBound &bound) {
+	auto none = calc.Constant(Value(LogicalType::VARCHAR));
+	auto message = none;
+	auto as_double = calc.Cast(calc.Of(*bound.value), LogicalType::DOUBLE);
+	if (bound.coefficient) {
+		message =
+		    calc.If(calc.Fn("isfinite", as_double), none, calc.Constant(Value(DirectCoefficientInvalidMessage())));
+	} else if (bound.reject_nan) {
+		message = calc.If(calc.Fn("isnan", as_double), calc.Constant(Value(DirectBoundNaNMessage())), none);
+	}
+	// A NULL value skips the instance it reaches.
+	message = calc.If(calc.IsNull(calc.Of(*bound.value)), none, message);
+	if (bound.kept) {
+		message = calc.If(calc.Of(*bound.kept), message, none);
+	}
+	return message;
+}
+
 unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
                                                  const vector<DirectRowBound> &bounds) {
 	if (bounds.empty()) {
@@ -247,20 +265,7 @@ unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_pt
 	auto window_index = optimizer.binder.GenerateTableIndex();
 	auto window = make_uniq<LogicalWindow>(window_index);
 	for (auto &bound : bounds) {
-		auto none = calc.Constant(Value(LogicalType::VARCHAR));
-		auto message = none;
-		auto as_double = calc.Cast(calc.Of(*bound.value), LogicalType::DOUBLE);
-		if (bound.coefficient) {
-			message =
-			    calc.If(calc.Fn("isfinite", as_double), none, calc.Constant(Value(DirectCoefficientInvalidMessage())));
-		} else if (bound.reject_nan) {
-			message = calc.If(calc.Fn("isnan", as_double), calc.Constant(Value(DirectBoundNaNMessage())), none);
-		}
-		// A NULL value skips the instance it reaches.
-		message = calc.If(calc.IsNull(calc.Of(*bound.value)), none, message);
-		if (bound.kept) {
-			message = calc.If(calc.Of(*bound.kept), message, none);
-		}
+		auto message = DirectRowBoundMessage(calc, bound);
 		window->expressions.push_back(DirectWindowExtremum(optimizer, "min", calc.Out(message)));
 	}
 	window->children.push_back(std::move(input));

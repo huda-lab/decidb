@@ -144,6 +144,10 @@ struct DirectRowBound {
 	bool coefficient = false;
 };
 
+//! The message a row raises for a per-row bound that is NaN or, for a coefficient, infinite, on a row its clause keeps;
+//! NULL when the bound is valid, or skips the instance it reaches.
+ExprPtr DirectRowBoundMessage(const ExpressionBuilder &calc, const DirectRowBound &bound);
+
 //! Raises the solver's error when a per-row bound is NaN or, for a coefficient, infinite, on a row its clause keeps;
 //! nothing is read on a row a `when` drops, and a NULL passes (it skips the instance). Which failing row is reported is
 //! not specified. Nothing is added when there is nothing to check.

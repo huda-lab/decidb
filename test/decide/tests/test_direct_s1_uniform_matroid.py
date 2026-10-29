@@ -1726,3 +1726,32 @@ def test_s1_a_bound_the_class_does_not_determine_raises_the_same_message_on_both
         messages.append(str(error.value))
     assert "per g does not determine cap. g = 'a' has more than one value: 4, 6." in messages[0], messages[0]
     assert messages[0] == messages[1]
+
+
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "bound, first",
+    [
+        # A NaN count bound on one row and a NaN coefficient on another: the bound is checked first.
+        pytest.param("SUM(x) <= cap", "null_bound", id="nan-bound-before-nan-coefficient"),
+        # An `=` bound that takes two values and a NaN coefficient: the bound's group check comes before the row messages.
+        pytest.param("SUM(x) = cap", "equality_varies", id="disagreeing-bound-before-nan-coefficient"),
+    ],
+)
+def test_s1_raises_the_checks_of_two_clauses_in_the_solvers_order(decidb_cli, bound, first):
+    # Row 1 carries the bad bound (a NaN, or a 1 where the others have 5) and row 2 the bad coefficient, in either order
+    # of the rows: the order of the checks, not of the rows, decides which error the query raises.
+    cap = "CAST('NaN' AS DOUBLE)" if first == "null_bound" else "1.0"
+    for rows in (
+        f"(1, {cap}, 1.0, 9.0), (2, 5.0, CAST('NaN' AS DOUBLE), 8.0), (3, 5.0, 1.0, 7.0)",
+        f"(3, 5.0, 1.0, 7.0), (2, 5.0, CAST('NaN' AS DOUBLE), 8.0), (1, {cap}, 1.0, 9.0)",
+    ):
+        sql = (
+            f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, cap, w, score) "
+            f"DECIDE x(BOOL) SUCH THAT {bound} AND w*x <= 1 MAXIMIZE SUM(score*x)) q"
+        )
+        direct = _outcome(decidb_cli, sql, "require")
+        assert direct != ("error", "direct_not_applied"), sql
+        assert direct == ("error", first) == _outcome(decidb_cli, sql, "off"), sql

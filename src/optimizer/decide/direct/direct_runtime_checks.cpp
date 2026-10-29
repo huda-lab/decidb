@@ -58,6 +58,12 @@ static unique_ptr<Expression> DirectInvalidNumberError(Optimizer &optimizer, Dir
 	return DirectErrorPredicate(optimizer, DirectInvalidNumberMessage(kind));
 }
 
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, DirectNumberKind kind) {
+	auto none = calc.Constant(Value(LogicalType::VARCHAR));
+	return calc.If(calc.IsNull(number), none,
+	               calc.If(calc.Fn("isfinite", number), none, calc.Constant(Value(DirectInvalidNumberMessage(kind)))));
+}
+
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message) {
 	return DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
 	                     DirectErrorPredicate(optimizer, calc.Out(message)));

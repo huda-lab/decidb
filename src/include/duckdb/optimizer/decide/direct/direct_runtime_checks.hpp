@@ -37,6 +37,10 @@ enum class DirectNumberKind : uint8_t { OBJECTIVE, CONSTRAINT };
 //! The message of the error DirectValidNumberPredicate raises for a NaN or infinite number.
 string DirectInvalidNumberMessage(DirectNumberKind kind);
 
+//! The message of a number the solver refuses (NaN or infinite), naming `kind`; NULL for a valid number. A NULL number
+//! skips what it reaches, so it is valid.
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, DirectNumberKind kind);
+
 //! The check, evaluated only on a row where `kept` is true. A value on a row a `when` drops is never read, so it raises
 //! nothing there, as on the solver path.
 unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, unique_ptr<Expression> kept,
