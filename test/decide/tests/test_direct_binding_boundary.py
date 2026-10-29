@@ -87,6 +87,23 @@ _SOURCES = {
 }
 
 
+# The largest score of each source's rows that reach the DECIDE. The join keeps the rows whose key is a multiple of 25000
+# (its filter), the others hold every `(i * 37) % 211`.
+_MAX_SCORE = {
+    "join": max((k * 37) % 1000003 for k in range(0, 1100000, 25000)),
+    "order_by": 210,
+    "distinct": 210,
+    "nested": 210,
+}
+
+
+def _solver_model_has_a_large_number(source, rule):
+    """A1 minimizes `SUM(POWER(x - score, 2))`, so the linear coefficient of `x` on a row is `-2 * score`; S1
+    maximizes `SUM(score * x)`, so it is `score`. The solver (`off`) warns when one reaches 1e6; a direct plan builds
+    no model."""
+    return (2 if rule == "a1" else 1) * _MAX_SCORE[source] >= 1e6
+
+
 def _close(left, right):
     assert len(left) == len(right), (left, right)
     for a, b in zip(left, right):
@@ -132,7 +149,7 @@ def test_a_pass_that_moves_bindings_above_a_source_keeps_the_parents_reads_bound
     without_pass = _plan(decidb_cli, setup, query, "require", disabled=optimizer)
     assert plan != without_pass, f"{optimizer} did not change the plan"
 
-    solver = outcome(decidb_cli, setup + query, "off")
+    solver = outcome(decidb_cli, setup + query, "off", _solver_model_has_a_large_number(source, rule))
     assert solver[0] == "ok", solver
     for mode in ("auto", "require"):
         direct = outcome(decidb_cli, setup + query, mode)

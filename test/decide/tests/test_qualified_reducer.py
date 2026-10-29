@@ -250,12 +250,20 @@ def test_three_relation_composite_qualifier_differs_from_single_and_unqualified(
             {names[ck]: weight(ck) for ck in custkeys}, ObjSense.MINIMIZE)
         return oracle_solver.solve().objective_value
 
+    # A customer's objective weight of 1e6 or more is a number of the model the solver is handed.
+    large = lambda weight: any(abs(weight(ck)) >= 1e6 for ck in custkeys)  # noqa: E731
     single, _ = decidb_cli.execute(
-        template.format(nation_key=nation_key, reducer="c: c.c_acctbal * keepC"))
+        template.format(nation_key=nation_key, reducer="c: c.c_acctbal * keepC"),
+        expect_large_numbers=large(lambda ck: acctbal[ck]),
+    )
     composite, _ = decidb_cli.execute(
-        template.format(nation_key=nation_key, reducer="c,o: c.c_acctbal * keepC"))
+        template.format(nation_key=nation_key, reducer="c,o: c.c_acctbal * keepC"),
+        expect_large_numbers=large(lambda ck: acctbal[ck] * order_count[ck]),
+    )
     unqualified, _ = decidb_cli.execute(
-        template.format(nation_key=nation_key, reducer="c.c_acctbal * keepC"))
+        template.format(nation_key=nation_key, reducer="c.c_acctbal * keepC"),
+        expect_large_numbers=large(lambda ck: acctbal[ck] * row_count[ck]),
+    )
 
     single_keep = _keep_by_nation(single, 0, 3)
     composite_keep = _keep_by_nation(composite, 0, 3)

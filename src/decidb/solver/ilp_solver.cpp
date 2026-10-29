@@ -123,6 +123,54 @@ void AppendSparseRow(std::string &out, const vector<int> &indices, const vector<
 	}
 }
 
+bool IsLargeCoefficient(double value) {
+	return std::isfinite(value) && std::fabs(value) >= DECIDE_LARGE_COEFFICIENT;
+}
+
+bool IsLargeTotal(double value) {
+	return std::isfinite(value) && std::fabs(value) >= DECIDE_LARGE_TOTAL;
+}
+
+//! A bound DeciDB reads as infinite is no number, whatever its magnitude.
+bool IsLargeLowerBound(double bound) {
+	return !DecideIsOpenBelow(bound) && IsLargeTotal(bound);
+}
+
+bool IsLargeUpperBound(double bound) {
+	return !DecideIsOpenAbove(bound) && IsLargeTotal(bound);
+}
+
+bool AnyLargeCoefficient(const vector<double> &values) {
+	return std::any_of(values.begin(), values.end(), IsLargeCoefficient);
+}
+
+bool ModelHoldsLargeNumber(const SolverModel &model) {
+	if (AnyLargeCoefficient(model.obj_coeffs) || AnyLargeCoefficient(model.q_vals)) {
+		return true;
+	}
+	if (std::any_of(model.col_lower.begin(), model.col_lower.end(), IsLargeLowerBound) ||
+	    std::any_of(model.col_upper.begin(), model.col_upper.end(), IsLargeUpperBound)) {
+		return true;
+	}
+	for (auto &row : model.constraints) {
+		if (IsLargeTotal(row.rhs) || AnyLargeCoefficient(row.coefficients)) {
+			return true;
+		}
+	}
+	for (auto &row : model.quadratic_constraints) {
+		if (IsLargeTotal(row.rhs) || AnyLargeCoefficient(row.linear_coefficients) ||
+		    AnyLargeCoefficient(row.q_coefficients)) {
+			return true;
+		}
+	}
+	for (auto &row : model.indicator_constraints) {
+		if (IsLargeTotal(row.rhs) || AnyLargeCoefficient(row.coefficients)) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void DumpSolverModel(const SolverModel &model) {
 	const char *dest = std::getenv("DECIDB_DUMP_MODEL");
 	if (!dest || !*dest) {
@@ -235,6 +283,14 @@ void DumpSolverModel(const SolverModel &model) {
 }
 
 } // namespace
+
+void LargeNumberWarning::Check(const SolverModel &model) {
+	if (said || !ModelHoldsLargeNumber(model)) {
+		return;
+	}
+	said = true;
+	fprintf(stderr, "very large number detected in model - numerical precision may make the solution unstable\n");
+}
 
 SolverBackend SelectSolverBackend() {
 	// Test-only override: DECIDB_FORCE_SOLVER=<registered backend name> pins the
@@ -427,6 +483,9 @@ SolverResult SolveModel(SolverInput &input, const VarIndexer &indexer, SolverBac
 	// on the freshly built model, so diagnostic re-solves (probe / ray / elastic
 	// models built later) never pollute the dump.
 	DumpSolverModel(model);
+	if (options.large_number_warning) {
+		options.large_number_warning->Check(model);
+	}
 	// Rows as actually handed to the backend, for the benchmark's model-size metric. Read
 	// off the built model because the pre-expansion inputs are not a row count at all: one
 	// per-row spec becomes a row per data row, one grouped spec a row per group. Captured here,

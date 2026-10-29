@@ -94,7 +94,8 @@ def test_a_tiny_coefficient_on_a_floor_is_not_rounded_away(decidb_cli_highs, ora
     total — so the objective is what the oracle pins, not the individual values.
     """
     rows, _ = decidb_cli_highs.execute(
-        _weighted_sum_sql("1e-9", "1e10", ">=", 1, "MINIMIZE"))
+        _weighted_sum_sql("1e-9", "1e10", ">=", 1, "MINIMIZE"), expect_large_numbers=True
+    )
     result = _weighted_sum_oracle(
         oracle_solver, "tiny_floor", 1e-9, 1e10, ">=", 1.0, ObjSense.MINIMIZE)
 
@@ -107,7 +108,8 @@ def test_a_tiny_coefficient_on_a_floor_is_not_rounded_away(decidb_cli_highs, ora
 def test_a_large_data_coefficient_loads(decidb_cli_highs, oracle_solver):
     """`w = 1e16` is above HiGHS's ceiling, and is still just a number in a column."""
     rows, _ = decidb_cli_highs.execute(
-        _weighted_sum_sql("1e16", 5, "<=", "1e20", "MAXIMIZE"))
+        _weighted_sum_sql("1e16", 5, "<=", "1e20", "MAXIMIZE"), expect_large_numbers=True
+    )
     result = _weighted_sum_oracle(
         oracle_solver, "large_cap", 1e16, 5.0, "<=", 1e20, ObjSense.MAXIMIZE)
 
@@ -135,8 +137,8 @@ def test_a_generated_big_m_above_the_ceiling_loads(decidb_cli_highs):
     A bound of 9e14 always worked and 1e15 did not, which is HiGHS's
     `large_matrix_value` showing through as a cliff in DECIDE's own syntax.
     """
-    below, _ = decidb_cli_highs.execute(_BIG_M_SQL.format(box="900000000000000"))
-    above, _ = decidb_cli_highs.execute(_BIG_M_SQL.format(box="4000000000000000"))
+    below, _ = decidb_cli_highs.execute(_BIG_M_SQL.format(box="900000000000000"), expect_large_numbers=True)
+    above, _ = decidb_cli_highs.execute(_BIG_M_SQL.format(box="4000000000000000"), expect_large_numbers=True)
 
     assert [r[1] for r in below] == pytest.approx([9e14, 9e14], rel=1e-9)
     assert [r[1] for r in above] == pytest.approx([4e15, 4e15], rel=1e-9)
@@ -144,21 +146,24 @@ def test_a_generated_big_m_above_the_ceiling_loads(decidb_cli_highs):
 
 @pytest.mark.edge_case
 @pytest.mark.correctness
-@pytest.mark.parametrize("sql", [
-    _weighted_sum_sql("0.000000001", 5, "<=", 1, "MAXIMIZE"),
-    _weighted_sum_sql("1e-9", "1e10", ">=", 1, "MINIMIZE"),
-    _weighted_sum_sql("1e16", 5, "<=", "1e20", "MAXIMIZE"),
-    _BIG_M_SQL.format(box="4000000000000000"),
-], ids=["tiny-cap", "tiny-floor", "large-cap", "big-m"])
-def test_the_backends_agree_across_the_window(decidb_cli_highs, decidb_cli_gurobi, sql):
+@pytest.mark.parametrize(
+    "sql, large",
+    [
+        pytest.param(_weighted_sum_sql("0.000000001", 5, "<=", 1, "MAXIMIZE"), False, id="tiny-cap"),
+        pytest.param(_weighted_sum_sql("1e-9", "1e10", ">=", 1, "MINIMIZE"), True, id="tiny-floor"),
+        pytest.param(_weighted_sum_sql("1e16", 5, "<=", "1e20", "MAXIMIZE"), True, id="large-cap"),
+        pytest.param(_BIG_M_SQL.format(box="4000000000000000"), True, id="big-m"),
+    ],
+)
+def test_the_backends_agree_across_the_window(decidb_cli_highs, decidb_cli_gurobi, sql, large):
     """Which solver is installed must not decide whether a query has an answer.
 
     Row scaling multiplies by a power of two, which is exact in binary floating point,
     so the two backends solve bit-identical constraints and the totals match to the
     solvers' own tolerances rather than approximately.
     """
-    highs_rows, _ = decidb_cli_highs.execute(sql)
-    gurobi_rows, _ = decidb_cli_gurobi.execute(sql)
+    highs_rows, _ = decidb_cli_highs.execute(sql, expect_large_numbers=large)
+    gurobi_rows, _ = decidb_cli_gurobi.execute(sql, expect_large_numbers=large)
 
     assert sum(r[1] for r in highs_rows) == pytest.approx(
         sum(r[1] for r in gurobi_rows), rel=1e-6)
@@ -173,13 +178,16 @@ def test_a_heavy_row_diagnosis_names_a_repair(decidb_cli_highs):
     at "the solver could not analyse the repair model" on HiGHS while Gurobi named the
     edit — a diagnosis that declined for a reason having nothing to do with the query.
     """
-    rows, cols = decidb_cli_highs.execute("""
+    rows, cols = decidb_cli_highs.execute(
+        """
         DIAGNOSE SELECT id, x AS contrib
         FROM (VALUES (1,1e9),(2,1e9),(3,1e9)) t(id,w)
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 5000 AND SUM(w * x) <= 1e15 AND SUM(x) >= 30000
         MAXIMIZE SUM(x)
-    """)
+    """,
+        expect_large_numbers=True,
+    )
 
     clause = cols.index("clause")
     change = cols.index("suggested_change")
@@ -215,8 +223,8 @@ def test_a_bound_past_the_solvers_infinity_is_answered(
     `infinite_bound` and HiGHS answers the question it was asked.
     """
     sql = _BOUND_SQL.format(clause=clause)
-    decidb_cli_highs.assert_error(sql, match=r"(?i)infeasible")
-    decidb_cli_gurobi.assert_error(sql, match=r"(?i)infeasible")
+    decidb_cli_highs.assert_error(sql, match=r"(?i)infeasible", expect_large_numbers=True)
+    decidb_cli_gurobi.assert_error(sql, match=r"(?i)infeasible", expect_large_numbers=True)
 
 
 @pytest.mark.edge_case
@@ -232,8 +240,8 @@ def test_a_bound_past_infinity_on_the_open_side_still_solves(
     that answered into one that refuses, whichever direction the oversized limit points.
     """
     sql = _BOUND_SQL.format(clause=clause)
-    highs_rows, _ = decidb_cli_highs.execute(sql)
-    gurobi_rows, _ = decidb_cli_gurobi.execute(sql)
+    highs_rows, _ = decidb_cli_highs.execute(sql, expect_large_numbers=True)
+    gurobi_rows, _ = decidb_cli_gurobi.execute(sql, expect_large_numbers=True)
 
     assert sum(r[1] for r in highs_rows) == pytest.approx(
         sum(r[1] for r in gurobi_rows), rel=1e-9)
@@ -252,12 +260,16 @@ def test_a_bound_no_scaling_can_reach_is_refused(decidb_cli_highs, clause):
     passed straight through to the internal error it was supposed to prevent. The limit
     is read from the clause instead, and the sense says which side it lands on.
     """
-    decidb_cli_highs.assert_error(f"""
+    decidb_cli_highs.assert_error(
+        f"""
         SELECT id, x FROM (VALUES (1),(2)) t(id)
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 5 AND {clause}
         MAXIMIZE SUM(x)
-    """, match=r"sets a limit of .* that HiGHS cannot hold")
+    """,
+        match=r"sets a limit of .* that HiGHS cannot hold",
+        expect_large_numbers=True,
+    )
 
 
 @pytest.mark.edge_case
@@ -269,12 +281,16 @@ def test_a_row_spanning_the_window_is_refused_in_sql_terms(decidb_cli_highs):
     so this one is refused, naming the clause as written and the numbers that conflict
     rather than reporting a solver-internal status.
     """
-    decidb_cli_highs.assert_error("""
+    decidb_cli_highs.assert_error(
+        """
         SELECT id, x, y FROM (VALUES (1,1e-12,1e16)) t(id,a,b)
         DECIDE x(REAL), y(REAL)
         SUCH THAT x >= 0 AND x <= 5 AND y >= 0 AND y <= 5 AND SUM(a*x + b*y) <= 1e18
         MAXIMIZE SUM(x + y)
-    """, match=r"mixes numbers too far apart in size.*1e-12.*1e\+16")
+    """,
+        match=r"mixes numbers too far apart in size.*1e-12.*1e\+16",
+        expect_large_numbers=True,
+    )
 
 
 @pytest.mark.edge_case
@@ -286,9 +302,13 @@ def test_a_bound_too_large_to_scale_is_refused_in_sql_terms(decidb_cli_highs):
     `infinite_bound`, at which point it stops being a limit at all. Refused for that
     reason specifically, rather than reported as the same spread problem.
     """
-    decidb_cli_highs.assert_error("""
+    decidb_cli_highs.assert_error(
+        """
         SELECT id, x FROM (VALUES (1,1e-12)) t(id,w)
         DECIDE x(REAL)
         SUCH THAT x >= 0 AND x <= 5 AND SUM(w*x) <= 1e19
         MAXIMIZE SUM(x)
-    """, match=r"sets a limit of 1e\+19 .* coefficients as small as 1e-12")
+    """,
+        match=r"sets a limit of 1e\+19 .* coefficients as small as 1e-12",
+        expect_large_numbers=True,
+    )

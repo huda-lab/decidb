@@ -42,6 +42,7 @@ from solver.types import ObjSense, VarType
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._direct_oracle_common import agree_with_oracle, outcome as _run_all, run as _run, sql_literal, values_clause
+from ._large_numbers import writes_large_number
 
 
 INF = math.inf
@@ -335,7 +336,8 @@ def _agree(decidb_cli, oracle_solver, case_, wrap="plain", modes=("off", "requir
     def check_assignment(rows, columns, mode):
         _check_assignment(case_, rows, columns, oracle, mode)
 
-    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes)
+    large = writes_large_number(sql, bounded=[name for name, _ in case_.decisions])
+    agree_with_oracle(decidb_cli, sql, oracle, check_assignment, modes, large_numbers=large)
 
 
 # ---------------------------------------------------------------------------
@@ -922,8 +924,9 @@ A1_ERROR_CASES = {
 @pytest.mark.parametrize("name", sorted(A1_ERROR_CASES))
 def test_a1_error_cases_fail_on_both_paths(decidb_cli, name):
     sql, expected = A1_ERROR_CASES[name]
+    # An answer beyond the whole-number range is raised after the solve, so the solver's model held the bound.
     with pytest.raises(DecidBCliError) as solver_error:
-        _run(decidb_cli, sql, "off")
+        _run(decidb_cli, sql, "off", expected == "int_range")
     with pytest.raises(DecidBCliError) as direct_error:
         _run(decidb_cli, sql, "require")
     assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
@@ -1021,7 +1024,7 @@ BOUNDARY_CASES = {
 def test_a1_boundary_values_read_like_the_solver(decidb_cli, name):
     sql = BOUNDARY_CASES[name]
     direct = _run_all(decidb_cli, sql, "require")
-    solver = _run_all(decidb_cli, sql, "off")
+    solver = _run_all(decidb_cli, sql, "off", writes_large_number(sql))
     assert direct[0] != "error" or "decide_direct_solve=require" not in direct[1], "no rule applied to the query"
     assert _all_close(direct, solver), (direct, solver)
 

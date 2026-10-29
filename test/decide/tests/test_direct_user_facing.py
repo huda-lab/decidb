@@ -27,8 +27,8 @@ def _run(cli, sql, mode="require"):
     return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
 
 
-def _raw(cli, sql, mode="require"):
-    return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}")
+def _raw(cli, sql, mode="require", expect_large_numbers=False):
+    return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}", expect_large_numbers=expect_large_numbers)
 
 
 def _has_decide_operator(plan):
@@ -135,8 +135,10 @@ def test_a1_whole_number_range_error_is_the_solvers_error_word_for_word(
     direct = _raw(decidb_cli, sql, mode="require").stderr
     assert "beyond the range DeciDB can return as a whole number" in direct, direct
     assert f"DECIDE variable '{name}' solves to " in direct, direct
-    assert _raw(decidb_cli, sql, mode="off").stderr == direct
-    assert _raw(decidb_cli_highs, sql, mode="off").stderr == direct
+    # Every bound is 1e6 or more, so the solver warns before it reaches the answer it cannot return; a direct plan
+    # builds no model.
+    assert _raw(decidb_cli, sql, mode="off", expect_large_numbers=True).stderr == direct
+    assert _raw(decidb_cli_highs, sql, mode="off", expect_large_numbers=True).stderr == direct
 
 
 # A plan prints an expression by its alias, so a pipeline tag left on a value a direct plan computes reaches EXPLAIN

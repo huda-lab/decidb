@@ -236,7 +236,7 @@ order:
 
 1. `SolverModel::Build(input, indexer)`. Build proves nothing infeasible itself: an
    inverted column box, a coefficient-free row that fails and an unreachable infinite
-   bound all stay in the model, which step 4 answers.
+   bound all stay in the model, which step 6 answers.
 2. `AssertBackendAcceptsBuiltModel(model, backend)` — both halves of the capability
    contract, re-read off the model *as built*. The model class is checked against
    `Capabilities().model_classes` (stage 05 already refused the query if the backend
@@ -248,8 +248,28 @@ order:
 3. `DumpSolverModel(model)` — a no-op unless `DECIDB_DUMP_MODEL` is set. Emitted
    on the freshly built model so diagnostic re-solves never pollute the dump. This
    is the golden corpus's characterization oracle.
-4. Record `model_constraint_rows` before anything moves the model.
-5. `model.ProvesInfeasible()`: the model has no solution and needs no solver to
+4. `options.large_number_warning->Check(model)`: stderr gets *very large number detected in
+   model - numerical precision may make the solution unstable* when the model holds a
+   number past the point where the solver's tolerance can show in the user's numbers.
+   The model, the settings and the answer are unchanged. Numerical precision is the
+   solver's limit: DeciDB does not rescale or analyse clauses to get around it, it tells
+   the user. Both thresholds derive from the tolerances DeciDB sets on every backend
+   (`decide_numeric_policy.hpp`): integrality and feasibility, 1e-6 each (Gurobi
+   `IntFeasTol` / `FeasibilityTol`, HiGHS `mip_feasibility_tolerance` /
+   `primal_feasibility_tolerance`), so the solver and the warning read one value.
+   - A coefficient (constraint, quadratic, indicator, objective) warns from
+     `DECIDE_LARGE_COEFFICIENT` = 1 / integrality tolerance = 1e6: an integer column
+     accepted that far from a whole number moves the row by 1.
+   - A right-hand side or a bound that is not open warns from `DECIDE_LARGE_TOTAL` =
+     feasibility tolerance / machine epsilon ≈ 4.5e9: a double holds the number only to
+     within the feasibility tolerance. A budget below that is held exactly enough.
+
+   The check reads the finished model, so it sees the query's literals, the data and
+   DeciDB's own constants (a Big-M) alike. One `LargeNumberWarning` lives per query and
+   prints at most once; the operator also passes it the DIAGNOSE repair model. A
+   direct-solved query builds no model and prints nothing.
+5. Record `model_constraint_rows` before anything moves the model.
+6. `model.ProvesInfeasible()`: the model has no solution and needs no solver to
    say so. That is a coefficient-free row against a bound it cannot meet
    (`SUM(0 * x) <= -1`, `x - x <= -1`), a row whose infinite right-hand side points
    the way no value reaches (`x >= +inf`, `x = -inf`), or an inverted column box.
@@ -259,10 +279,10 @@ order:
    on an inverted box or an infinite row bound): this short-circuits to `INFEASIBLE`,
    retaining the model, so Gurobi and HiGHS give the same answer. With diagnosis off
    the retained model is simply discarded. `SolvePreparedModel` runs the same check.
-6. Solve on a live session.
-7. `DisambiguateInfOrUnbd`.
-8. `AttachUnboundedRayIfRequested`.
-9. Hand back the session, then the model, to whoever asked.
+7. Solve on a live session.
+8. `DisambiguateInfOrUnbd`.
+9. `AttachUnboundedRayIfRequested`.
+10. Hand back the session, then the model, to whoever asked.
 
 ### Disambiguating INF_OR_UNBD
 

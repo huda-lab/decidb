@@ -13,8 +13,25 @@ that box.
 **Ruling (owner, 2026-10-28).** Do it now, without waiting for the measurement. It builds on
 the per-instance refinement the floors under a `when` use (`SolverInput::instance_lower_bounds`,
 `../06_model_formulation/done.md` §2): the decision's box stays the cover of every instance's
-box, so passes that read it stay sound. A helper instance needs both ends from its own group's
-reach, so the refinement's shape for helpers gets an architect review before coding.
+box, so passes that read it stay sound.
+
+**Design (architect review and owner, 2026-10-28).**
+- A helper's per-instance reach goes in fields of its own (`instance_reach_lower` /
+  `instance_reach_upper`), not in the floors' refinement. The floors' values hold against
+  any box, the rigid one included; a reach is derived from the members' current boxes and
+  holds only for the formulation it came from.
+- Readers take a formulation view or a rigid view. The `<>` range collapse keeps the rigid
+  view and never reads a derived reach.
+- `DeriveReducerValueBounds` writes the reach inside `FormulateModel`, mapping each group to
+  its instance through `VarIndexer::InstanceOf`, so a diagnosis re-derives it from widened
+  members.
+- The builder, the closing Big-M and `FlatColumnBox` read the instance box. The closing
+  Big-M's `value_var` blame arm becomes unreachable and goes, with any test that reached
+  only it.
+- ABS and `power` over a helper read the instance box too. `__body_` helpers
+  (`decide_rewrite_define.cpp`) are checked and boxed per instance if they share one box.
+- Golden diffs are expected (only an open group's closing goes native); the owner reads them
+  before any regeneration.
 
 **Test.** A dump of a helper over groups of different sizes shows each instance boxed by
 its own group's reach and a smaller closing Big-M; the answer is unchanged on both

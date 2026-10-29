@@ -19,6 +19,21 @@
 
 namespace duckdb {
 
+//! Says once per query that the model handed to a solver holds a large number. It reads finished numbers only: a
+//! constraint, quadratic, indicator or objective coefficient of |v| >= DECIDE_LARGE_COEFFICIENT, and a right-hand side
+//! or a bound that is not open of |v| >= DECIDE_LARGE_TOTAL (an open bound, DECIDE_SOLVER_INFINITY or any bound
+//! DecideIsOpenAbove/Below reads as infinite, is no number). The model and the answer are untouched.
+//!
+//! One instance lives for one query. Every solver-neutral model of the query is passed to Check: the solved model and,
+//! under DIAGNOSE, the repair model. The first model that holds a large number prints the line; later calls are silent.
+struct LargeNumberWarning {
+	//! Prints the warning to stderr if `model` holds a large number and none was said yet for this query.
+	void Check(const SolverModel &model);
+
+private:
+	bool said = false;
+};
+
 //! Internal solver toggles for diagnostic-only follow-up solves. The default
 //! preserves today's user-facing path: non-optimal solves return a status and
 //! no extra diagnostic artifacts.
@@ -37,6 +52,9 @@ struct SolveModelOptions {
 	//! boundary-only (no mid-solve interrupt). Gurobi honors it via a watcher thread;
 	//! HiGHS (no thread-safe terminate) ignores it.
 	std::function<bool()> interrupt_poll;
+	//! The query's large-number warning, checked on the model once it is built. Null = no check (diagnostic
+	//! follow-up solves, which hold no model of the query's own).
+	LargeNumberWarning *large_number_warning = nullptr;
 };
 
 //! Resolve the backend DeciDB should use for a DECIDE query, honoring the

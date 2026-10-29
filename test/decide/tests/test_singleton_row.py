@@ -73,12 +73,14 @@ def test_answer_is_the_value_duckdb_admits(
 ):
     expected = _duckdb_optimum(duckdb_conn, source, clause, sense)
     sql = f"SELECT x FROM (VALUES {source}) t(id, c) DECIDE x(INT) SUCH THAT {clause} {sense} SUM(x)"
+    # `1e-300 * x >= 1` is the bound `x >= 1e300`, a number of the model the solver is handed (it is then infeasible).
+    large = name == "tiny_coefficient"
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
         for mode in ("off", "auto"):
             full = f"SET decide_direct_solve='{mode}'; {sql}"
             if expected is None:
                 with pytest.raises(DecidBCliError, match=_INFEASIBLE):
-                    cli.execute(full)
+                    cli.execute(full, expect_large_numbers=large)
             else:
-                rows, _ = cli.execute(full)
+                rows, _ = cli.execute(full, expect_large_numbers=large)
                 assert rows == [(expected,)], f"[{mode}] {rows} != {expected}"

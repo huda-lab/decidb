@@ -17,6 +17,7 @@ from solver.types import ObjSense, SolverStatus, VarType
 
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
+from ._large_numbers import writes_large_number
 from ._direct_rule_fixtures import (
     RULE_FIXTURES,
     S1_AGGREGATE_BOUNDS_NOW_APPLIED,
@@ -29,8 +30,8 @@ def _run(cli, sql, mode="require"):
     return cli.execute(f"SET decide_direct_solve='{mode}'; {sql}")
 
 
-def _raw(cli, sql, mode="require"):
-    return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}")
+def _raw(cli, sql, mode="require", expect_large_numbers=False):
+    return cli.execute_raw(f"SET decide_direct_solve='{mode}'; {sql}", expect_large_numbers=expect_large_numbers)
 
 
 def _has_decide_operator(plan):
@@ -171,7 +172,10 @@ def test_near_misses_name_their_reason_and_keep_the_solver_plan(decidb_cli, fixt
     assert _has_decide_operator(plan.stdout) and "Direct solve" not in plan.stdout, (sql, plan.stderr)
 
     # A decline is invisible to the user: under `auto` the query still answers, exactly as it does under `off`.
-    auto, off = _raw(decidb_cli, sql, mode="auto"), _raw(decidb_cli, sql, mode="off")
+    # Both run the solver, so a number of 1e6 or more in the query reaches its model and is warned about.
+    large = writes_large_number(sql)
+    auto = _raw(decidb_cli, sql, mode="auto", expect_large_numbers=large)
+    off = _raw(decidb_cli, sql, mode="off", expect_large_numbers=large)
     assert (auto.stdout, auto.stderr) == (off.stdout, off.stderr), sql
 
 

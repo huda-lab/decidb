@@ -34,6 +34,7 @@ from decidb_cli import DecidBCliError
 from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
+from ._large_numbers import writes_large_number
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
 from ._direct_oracle_common import BY_KEY_PENDING, READ_THROUGH_PENDING, agree_with_oracle, direct_path
 from ._direct_oracle_common import outcome as _run_all, run as _run, sql_literal, values_clause
@@ -1817,7 +1818,7 @@ def test_r1_an_upper_limit_of_minus_infinity_is_infeasible_though_a_row_has_no_f
 def test_r1_boundary_values_read_like_the_solver(decidb_cli, name):
     sql = BOUNDARY_CASES[name]
     direct = _run_all(decidb_cli, sql, "require")
-    solver = _run_all(decidb_cli, sql, "off")
+    solver = _run_all(decidb_cli, sql, "off", writes_large_number(sql))
     assert direct[0] != "error" or "decide_direct_solve=require" not in direct[1], "no rule applied to the query"
     assert _all_close(direct, solver), (direct, solver)
 
@@ -1846,7 +1847,9 @@ def test_r1_leaves_a_limit_the_solver_reads_as_no_bound_to_the_solver(decidb_cli
     sql = _problem(WORKED, bounds="amount >= 0 AND amount <= cap", budget=f"SUM(w*amount) <= {limit}")
     require = _run_all(decidb_cli, sql, "require")
     assert require == ("error", "direct_not_applied")
-    assert _run_all(decidb_cli, sql, "auto") == _run_all(decidb_cli, sql, "off")
+    # A limit of 1e20 is a right-hand side of the model both solver runs build; an infinite one is no number.
+    large = writes_large_number(sql)
+    assert _run_all(decidb_cli, sql, "auto", large) == _run_all(decidb_cli, sql, "off", large)
 
 
 @pytest.mark.cons_aggregate
@@ -1866,7 +1869,8 @@ def test_r1_leaves_a_limit_the_solver_reads_as_no_bound_to_the_solver(decidb_cli
 def test_r1_leaves_a_minimum_or_exact_fill_the_solver_reads_as_no_bound_to_the_solver(decidb_cli, budget):
     sql = _problem(WORKED, bounds="amount >= 0 AND amount <= cap", budget=budget)
     assert _run_all(decidb_cli, sql, "require") == ("error", "direct_not_applied")
-    assert _run_all(decidb_cli, sql, "auto") == _run_all(decidb_cli, sql, "off")
+    large = writes_large_number(sql)
+    assert _run_all(decidb_cli, sql, "auto", large) == _run_all(decidb_cli, sql, "off", large)
 
 
 @pytest.mark.cons_aggregate

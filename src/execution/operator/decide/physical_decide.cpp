@@ -3981,8 +3981,11 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
     // engine. An unprefixed query pays for neither, and both failure terminals are
     // prefix-only anyway (RouteSolveResult).
     bool diagnosis_armed = diagnose;
+    // One warning slot for the whole query: the solved model and, under DIAGNOSE, the repair model share it.
+    LargeNumberWarning large_number_warning;
     SolveModelOptions solve_options;
     solve_options.extract_unbounded_ray = diagnosis_armed;
+    solve_options.large_number_warning = &large_number_warning;
     // Keep an inverted column box (col_lower > col_upper) alive through Build under
     // diagnosis so the INFEASIBLE terminal can reset it to the intrinsic domain and
     // diagnose it (Bug 1, all-column-bound conflicts). An unprefixed query keeps the
@@ -4348,6 +4351,9 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
                 StringUtil::Format("the repair model could not be built: %s", ex.what())));
             break;
         }
+        // The repair model is a solver-neutral model of this query too. The warning is said once, so this only speaks
+        // for a number the solved model did not hold (a one-decision row it folded into a bound).
+        large_number_warning.Check(elastic_model);
         InfeasibleDiagnosisInput diag_input {
             elastic_model, elastic_indexer,        var_labels, var_is_aux, elastic_global_labels,
             diag_params,   solve_diagnostic_model,

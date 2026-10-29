@@ -900,7 +900,7 @@ def test_large_coefficient_numeric_stability(
         MAXIMIZE SUM(x * val)
     """
     t0 = time.perf_counter()
-    decidb_rows, decidb_cols = decidb_cli.execute(sql)
+    decidb_rows, decidb_cols = decidb_cli.execute(sql, expect_large_numbers=True)
     decidb_time = time.perf_counter() - t0
 
     data = duckdb_conn.execute(

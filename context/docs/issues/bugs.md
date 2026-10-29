@@ -79,33 +79,58 @@
 
 Each reproduces on the current build.
 
-- **Gurobi accepts a row violated by 1 when its coefficients are near 10⁹:** over three
-  rows with `x <= cap` (3, 5, 7), `y <= 5`, `per row: y + sum(x * 1000000000::DECIMAL(18,0))
-  >= 5000000001` (or `> 5000000000`), `MINIMIZE SUM(x) + SUM(y)` answers `sum(x) = 5`,
-  `y = 0` on Gurobi: `5000000000 >= 5000000001` fails. HiGHS answers `sum(x) = 6`. Presolve
-  folds the helper's definition into the row and scales it, so the violation falls under
-  the feasibility tolerance. The same clause without `y` (every coefficient 1e9) answers 6
-  on Gurobi, so the trigger is the span between a clause's coefficients, not a large right
-  side. **Ruling (owner, 2026-10-27).** Warn when a clause's coefficients span more
-  than the solver resolves, naming the clause. Rescaling the model is a vendor workaround
-  and stays out of it.
-- **Design (owner, 2026-10-28).**
-  - The span is `max|a| / min|a|` over each row a clause makes, in the user's own numbers:
-    every auxiliary is replaced by what it stands for (a value helper by its sum, a MIN/MAX
-    helper by its members, an ABS by its argument, a product helper by the coefficient on
-    the product), an `IN` domain's values count, and so do a quadratic clause's
-    coefficients. Numbers DeciDB invents (Big-M, the L0 tolerance) are left out.
-  - The check runs over `SolverInput` after `BuildSolverInput`, before the linearizers clear
-    the helper definitions, and attributes to the reading clause.
-  - The threshold is 1 / the backend's feasibility tolerance (Gurobi 1e-6 → 1e6, HiGHS 1e-7
-    → 1e7, the vendor defaults), declared beside the backend's other properties
-    (`SolverCapabilities`, not `SolverConstructSupport`).
-  - stderr, once per query, one line per clause, quoted as written: *DECIDE warning: the
-    numbers in 'per row: y + sum(x * 1000000000) >= 5000000001' range from 1 to
-    1000000000, wider than the solver checks exactly; the answer may break this clause
-    slightly.*
-  - Before committing, count the clauses that warn over the test suite and the TPC-H models.
-- **Impact:** a wrong optimum, or a clause violated in the answer.
+- **A Big-M encoding over large integer coefficients is answered with the clause violated:**
+  over one row, `DECIDE x(INT), y(INT) SUCH THAT x <= 10 AND y <= 10 AND abs(c * x - c * y)
+  >= 5 MINIMIZE SUM(x) + SUM(y)` answers `x = y = 0`. The first wrong c:
+
+  | construct | HiGHS | Gurobi (native) | Gurobi, `DECIDB_NATIVE_CONSTRUCTS=off` |
+  |---|---|---|---|
+  | `abs(c*x - c*y) >= 5` | ~5e5 | ~3e8 | ~5e5 |
+  | `c*x - c*y <> 0` | 1e6 | 1e9 | 1e5 |
+  | hard `min(c*x) <= -5` | 1e9 | right | right |
+  | `x IN (0, c) AND x >= 5` | solver error (status 4) from 1e7 | right | right |
+
+  Hard `max` and bilinear products are right at every c tested. The plain row
+  `c*x - c*y >= 5` is right even at c = 1e10, so the large number alone is not the cause.
+  - **Cause (lowered path, confirmed in highspy):** the indicator takes a value inside the
+    integrality tolerance (z = 1.67e-10 at c = 1e9), and M·z ≈ 6.7 ≥ K satisfies the row.
+    Any valid M is at least range(e) + K, so M/K can exceed 1/tolerance; the threshold
+    moves with the decisions' bounds and with K. M is also twice what it needs to be:
+    `DeriveAbsAuxiliaryBounds` takes Σ|coef|·max|bound| (`linearization_bilinear_abs.cpp`)
+    where the signed interval is half, and the rows use 2M.
+  - **Cause (Gurobi native ABS):** an integer decision inside IntFeasTol (x = 5e-9) times
+    c = 1e9 gives |t| = 5. The continuous `t = c(x - y)` column hides the integer row from
+    presolve, which rescales the plain row.
+- **Ruling (owner, 2026-10-29).** Fix DeciDB's own part: tighten M to the signed
+  interval of the expression, with no doubling, over every affected encoding (ABS, `<>`,
+  hard MIN/MAX, IN). The rest is precision: an M that is right but large is a number in
+  the model like any other, and gets the large-number warning
+  (`../pipeline/07_solver/done.md` §3). No other encoding
+  change, no per-encoding warning.
+- **Impact:** a wrong optimum, the clause violated in the answer, at coefficient sizes
+  ordinary data reaches (1e5 to 1e6 on HiGHS).
+
+## A MIN/MAX `<>` refusal drops the clause's qualifier
+
+- **Observed:** the refusal for `<>` on a MIN/MAX quotes `when p: max(x) <> 2` (and
+  `per K:`, `when p per K:`, `per ():`) without its qualifier. Every other message site
+  attaches it.
+- **Location:** `decide_rewrite_minmax.cpp` calls `WrittenDecideComparison` without
+  `AttachDecideQualifier`.
+- **Expected:** the clause as written, qualifier included. A bare `per row:` is not printed
+  in any message, by design (D32), and pasting a suggested edit back without it gives the
+  same model. **Ruling (owner, 2026-10-28).** D32 stands. **Widened (owner, 2026-10-29):**
+  the cause is that a message site can quote a clause without its qualifier at all.
+  Every message that quotes a clause goes through one quoting function that attaches the
+  qualifier; no site calls `WrittenDecideComparison` on its own. Audit every caller,
+  route each through it, and test the refusal names `when p:` and `per K:`.
+  Audit (2026-10-29): two shapes of quote, each composed by hand at every site. A clause as
+  written is `AttachDecideQualifier(WrittenDecideComparison(source), source.qualifier)`
+  (`physical_decide.cpp` ×2, `decide_diagnostic_engines.cpp`). An edited
+  clause is `AttachDecideQualifier(lhs + " " + sense + " " + rhs, qualifier)`
+  (`decide_diagnostic_render.cpp` ×4, `deterministic_naive.cpp`). The minmax refusal is
+  the one site that skipped the attach. The design gets an architect review before coding.
+- **Impact:** one known message; the audit says whether there are more.
 
 ## Messages: operands, coefficients and keys
 

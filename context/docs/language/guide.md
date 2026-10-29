@@ -251,6 +251,11 @@ backends take doubles, so every value ends up there.
   the solve, are unaffected.
 - **Beyond 2^53**, a DECIDE model and row-by-row SQL can disagree (SQL rounds each side, DeciDB folds the bound once).
   Pinned by `test_canonicalize_cast.py::test_magnitudes_beyond_double_domain_are_a_documented_limit`.
+- **Large numbers warn, then solve.** A solver accepts an integer value within 1e-6 of a whole number and a row within
+  1e-6 of its limit; large numbers can carry that slack into a visible error. When the model sent to a solver holds a
+  coefficient of 1e6 or more, or a limit or bound of about 4.5e9 or more (a constant DeciDB adds counts too), stderr
+  shows once: *very large number detected in model - numerical precision may make the solution unstable*. The query
+  solves as usual. A query answered by direct solve (§10) uses no solver and prints nothing.
 
 ## 4. Objective
 

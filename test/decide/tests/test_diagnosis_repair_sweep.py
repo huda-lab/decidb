@@ -26,8 +26,36 @@ from .test_query_diagnostics_relation import (
     _errors,
     _rows,
 )
+from ._large_numbers import writes_large_number
 
 _BACKENDS = ["decidb_cli_highs", "decidb_cli_gurobi"]
+
+
+def _warns(sql):
+    """The one data column of these queries (`w` of the heavy row) is a coefficient; the other literals stand where
+    they are written."""
+    return writes_large_number(sql, data="coefficient")
+
+
+#: Where the user's numbers stay under the thresholds and DeciDB derives one: at scale 1e6 the box is 5e6 and the floor
+#: 3e7 (right-hand sides and bounds, which warn from about 4.5e9), and the Big-M or McCormick constant that closes the
+#: construct is a coefficient of that size (a warning from 1e6). Backends that state the construct natively have none:
+#: Gurobi states `abs` and `<>` itself. name -> the backends whose lowered model holds the constant.
+_DERIVED_COEFFICIENT_AT_1E6 = {
+    "abs": {"highs"},
+    "bilinear": {"highs", "gurobi"},
+    "minmax": {"highs", "gurobi"},
+    "ne": {"highs"},
+    "norm": {"highs", "gurobi"},
+}
+
+
+def _warns_on(name, backend):
+    """Does the query of case `name` warn on `backend`, as a function of the SQL it is asked about?"""
+    kind, _, scale = name.partition("@")
+    derived = scale == "1000000" and backend in _DERIVED_COEFFICIENT_AT_1E6.get(kind, ())
+    return lambda sql: derived or _warns(sql)
+
 
 #: Magnitudes a user's own numbers might live at. The point is not any single one — it is
 #: that the machinery must not care, and every bug this file caught was a scale coupling.
@@ -138,10 +166,13 @@ def test_the_reported_repair_repairs_the_query(request, name, cli_fixture):
     sql, subject_to_sql = CASES[name]
     cli = request.getfixturevalue(cli_fixture)
 
-    assert _errors(cli.execute_script(".mode csv\n" + sql + ";\n")), (
-        f"{name}: the sweep needs an infeasible query, but this one solved")
+    backend = cli_fixture.rsplit("_", 1)[1]
+    large = _warns_on(name, backend)(sql)
+    assert _errors(
+        cli.execute_script(".mode csv\n" + sql + ";\n", expect_large_numbers=large)
+    ), f"{name}: the sweep needs an infeasible query, but this one solved"
 
-    result = _diagnose(cli, sql)
+    result = _diagnose(cli, sql, expect_large_numbers=large)
     assert not _errors(result), f"{name}: DIAGNOSE raised instead of reporting: {result.stderr}"
     rows = _rows(result)
     edits = _clause_edits(rows)
@@ -151,7 +182,7 @@ def test_the_reported_repair_repairs_the_query(request, name, cli_fixture):
         assert "undiagnosed" in _attrs(rows, "model", "NULL"), (
             f"{name}: no repair and no explanation:\n{rows}")
         return
-    _apply_reported_fix(cli, sql, rows, subject_to_sql)
+    _apply_reported_fix(cli, sql, rows, subject_to_sql, expect_large_numbers=_warns_on(name, backend))
 
 
 @pytest.mark.query_diagnostics
@@ -165,7 +196,7 @@ def test_both_backends_blame_the_same_clauses(request, name, decidb_cli_gurobi,
     sql, _ = CASES[name]
     reported = {}
     for label, cli in (("gurobi", decidb_cli_gurobi), ("highs", decidb_cli_highs)):
-        rows = _rows(_diagnose(cli, sql))
+        rows = _rows(_diagnose(cli, sql, expect_large_numbers=_warns_on(name, label)(sql)))
         reported[label] = sorted(e["subject"] for e in _clause_edits(rows))
     if not reported["gurobi"] or not reported["highs"]:
         return  # one host could not analyse it; covered by the test above

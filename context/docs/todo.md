@@ -49,9 +49,10 @@ The agent may read code and investigate; it writes no fix until the owner answer
 
 ## B2. Wrong answers whose fix has an open choice
 
-Both lines are ruled (owner, 2026-10-28); work them in this order.
+Every line is ruled; work them in this order.
 
-- [ ] Warn when a clause's coefficients span more than the solver resolves — [bugs § solver tolerance](issues/bugs.md#wrong-answers-solver-tolerance)
+- [ ] Tighten the Big-M of ABS, `<>`, hard MIN/MAX and IN to the signed interval — [bugs § solver tolerance](issues/bugs.md#wrong-answers-solver-tolerance)
+- [ ] A MIN/MAX `<>` refusal drops the clause's qualifier: one quoting function for every message — [bugs § refusal qualifier](issues/bugs.md#a-minmax--refusal-drops-the-clauses-qualifier)
 - [ ] A box per helper instance, on the per-instance refinement — [optimizer § 1](pipeline/05_optimizer/todo.md#1-a-box-per-helper-instance)
 
 ## B3. Messages whose fix has an open route

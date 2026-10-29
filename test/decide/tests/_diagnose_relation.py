@@ -16,12 +16,13 @@ import csv
 import io
 
 
-def run(cli, decide_sql, *, setup="", pragmas="", scope=None, timeout=120):
+def run(cli, decide_sql, *, setup="", pragmas="", scope=None, timeout=120, expect_large_numbers=False):
     """Run `DIAGNOSE <decide_sql>` and return the CompletedProcess.
 
     A single statement now: the prefix runs the query and returns the diagnosis, so
     there is no failing statement to recover from and no second read-back. `scope` sets
-    the infeasible slack-scope tuning pragma (query | expanded) when given.
+    the infeasible slack-scope tuning pragma (query | expanded) when given. `expect_large_numbers`
+    declares the large-number warning, as `DecidBCli.execute` takes it.
     """
     scope_pragma = (
         f"PRAGMA diagnose_decide_infeasible_slack_scope='{scope}';\n" if scope else ""
@@ -33,7 +34,7 @@ def run(cli, decide_sql, *, setup="", pragmas="", scope=None, timeout=120):
         f"{pragmas}"
         f"DIAGNOSE {decide_sql};\n"
     )
-    return cli.execute_script(script, timeout=timeout)
+    return cli.execute_script(script, timeout=timeout, expect_large_numbers=expect_large_numbers)
 
 
 def rows(result):

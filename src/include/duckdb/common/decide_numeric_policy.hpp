@@ -21,6 +21,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <string>
 
 namespace duckdb {
@@ -28,6 +29,22 @@ namespace duckdb {
 //! The solver model's "no bound" value: a column bound of -1e30 or 1e30, and the unset side of a singleton-row bound.
 //! The builder writes it, and every backend reads it as infinite.
 constexpr double DECIDE_SOLVER_INFINITY = 1e30;
+
+//! The tolerances DeciDB sets on every backend, so the solver and the large-number warning read one value. How far a
+//! value of an integer column may sit from a whole number and still count as integral (Gurobi `IntFeasTol`, HiGHS
+//! `mip_feasibility_tolerance`), and how far a row may be violated and still count as satisfied (Gurobi
+//! `FeasibilityTol`, HiGHS `primal_feasibility_tolerance`).
+constexpr double DECIDE_INTEGRALITY_TOLERANCE = 1e-6;
+constexpr double DECIDE_FEASIBILITY_TOLERANCE = 1e-6;
+
+//! A coefficient of this magnitude or more: an integer column accepted this far from a whole number moves the row by
+//! the tolerance times the coefficient, which reaches 1 (1e6). The model is left as it is; DECIDE only says so (see
+//! LargeNumberWarning).
+constexpr double DECIDE_LARGE_COEFFICIENT = 1.0 / DECIDE_INTEGRALITY_TOLERANCE;
+
+//! A right-hand side or bound of this magnitude or more: a double holds a number only to its magnitude times the
+//! machine epsilon, and at this size that rounding reaches the feasibility tolerance (about 4.5e9).
+constexpr double DECIDE_LARGE_TOTAL = DECIDE_FEASIBILITY_TOLERANCE / std::numeric_limits<double>::epsilon();
 
 //! A finite bound at or beyond this magnitude is read as infinite (the variable is unbounded in that direction). It is
 //! the solver sentinel with a margin, so a bound that arithmetic pushed near the sentinel is still recognised.

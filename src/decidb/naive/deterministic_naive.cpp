@@ -263,10 +263,6 @@ private:
     SolverResult RunAndReadback(double time_limit_seconds);
 };
 
-//! How far a bound may sit from a whole number and still be read as it: HiGHS's default
-//! `mip_feasibility_tolerance`, the distance at which it calls a value integral.
-static constexpr double HIGHS_INTEGRALITY_TOLERANCE = 1e-6;
-
 bool HighsSession::Load(const SolverModel &model) {
     DecideProfileScope profile("highs.load");
     DecideProfileScope phase("highs.variable_types");
@@ -280,6 +276,10 @@ bool HighsSession::Load(const SolverModel &model) {
 	// The gap the user accepts (`decide_mip_gap`, default 0: the optimum, not HiGHS's default incumbent within 1e-4);
 	// Gurobi's `MIPGap` is set the same way.
 	highs.setOptionValue("mip_rel_gap", mip_gap);
+	// The tolerances DeciDB defines (decide_numeric_policy.hpp), which the large-number warning reads too. A bound
+	// within the integrality tolerance of a whole number is read as it (see the integer columns below).
+	highs.setOptionValue("mip_feasibility_tolerance", DECIDE_INTEGRALITY_TOLERANCE);
+	highs.setOptionValue("primal_feasibility_tolerance", DECIDE_FEASIBILITY_TOLERANCE);
 	// Note: the time_limit is NOT set here — it is a per-chunk budget applied in
     // RunAndReadback(), so a warm Continue() can extend it without a reload.
 
@@ -365,8 +365,8 @@ bool HighsSession::Load(const SolverModel &model) {
         if (var_types[i] != HighsVarType::kInteger) {
             continue;
         }
-        lp.col_lower_[i] = std::ceil(lp.col_lower_[i] - HIGHS_INTEGRALITY_TOLERANCE);
-        lp.col_upper_[i] = std::floor(lp.col_upper_[i] + HIGHS_INTEGRALITY_TOLERANCE);
+        lp.col_lower_[i] = std::ceil(lp.col_lower_[i] - DECIDE_INTEGRALITY_TOLERANCE);
+        lp.col_upper_[i] = std::floor(lp.col_upper_[i] + DECIDE_INTEGRALITY_TOLERANCE);
         if (lp.col_lower_[i] > lp.col_upper_[i]) {
             return false;
         }
