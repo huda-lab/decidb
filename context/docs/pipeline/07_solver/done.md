@@ -206,12 +206,14 @@ unparseable values are ignored. It is applied to **both** backends — Gurobi
 
 HiGHS reads the clock only at its checkpoints (MIP `checkLimits`, simplex bailout, IPX), and its MIP setup partitions
 the binary objective columns into cliques with a pairwise loop before the first one, so a model with many
-clique-sharing objective binaries (Q2) ran past any limit. The vendored `HighsCliqueTable::cliquePartition` reads the
-MIP timer once per 100,000 neighbourhood queries and, past the limit, leaves the remaining columns as singletons, a
-weaker but valid partition; the next `checkLimits` returns `kTimeLimit`. It is DeciDB's one patch to
+clique-sharing objective binaries (Q2) ran past any limit. The vendored `HighsCliqueTable::cliquePartition` calls
+`checkLimits` once per 100,000 neighbourhood queries and, past a limit, leaves the remaining columns as singletons, a
+weaker but valid partition. It is DeciDB's one patch to
 `third_party/highs`, each hunk marked `DeciDB patch (SOL-1)`, to carry over on an upgrade (upstream has the same
-loop). Test: `test_error_time_limit.py::TestTimeLimit::test_highs_limit_bounds_clique_partition`. Phases the clock
-still does not reach, none seen to stall: the root analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task
+loop). Ctrl-C reaches the same checkpoints: `HighsSession::SetInterruptPoll` sets HiGHS's MIP, simplex and IPM interrupt
+callbacks, and `kInterrupt` maps as Gurobi's `GRB_INTERRUPTED` does. Tests: `test_error_time_limit.py`
+(`test_highs_limit_bounds_clique_partition`, `test_highs_interrupt_reaches_clique_partition`). Phases the checks
+still do not reach, none seen to stall: the root analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task
 group), symmetry detection (`HighsSymmetry.cpp`), and presolve between its checks every 1,024 reductions.
 
 Diagnostic follow-up solves are budgeted separately

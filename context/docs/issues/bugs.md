@@ -29,6 +29,14 @@
 - **Fix:** one `AddCoefficient(target, value, written)` helper in the builder checks each sum and raises the message.
   After F4, whose CQ-4 rewrites the builder.
 
+## BUG-15 — A Ctrl-C before any solution reads as a time limit
+
+- **Observed:** on both backends, interrupting a solve that has found nothing prints `DECIDE stopped at your request
+  before finding a solution yet.` and then `DECIDE optimization hit the time limit...` (`ThrowDecideSolveError`,
+  `ilp_solver.cpp`), and `decidb -c` exits 0 after it. Repro: the market-split query of
+  `test_query_diagnostics_slow.py` with `DECIDB_TIME_LIMIT=20`, SIGINT at 1 s.
+- **Needs.** The agent finds the cause and stops with a proposed fix before coding.
+
 ## Limitations (not bugs)
 
 None.
