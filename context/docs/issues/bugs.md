@@ -1,30 +1,5 @@
 # Known bugs
 
-## BUG-1 — `DECIDB_TIME_LIMIT` is not enforced on HiGHS for large models
-
-- **Location:** `src/decidb/naive/deterministic_naive.cpp` (`HighsSession`);
-  contrast `src/decidb/gurobi/gurobi_solver.cpp:125`.
-- **Observed:** on Q2 at the large TPC-H tier (~1.5M variables, mixed-integer),
-  `highs.optimize` began and never returned — not at the requested 300s
-  `DECIDB_TIME_LIMIT`, not by 420s wall clock, when an external harness killed
-  the process. Every DeciDB-owned span (parse, rewrite, extraction, model
-  build, `highs.load`) completed in under 350ms total; the entire remainder
-  was spent inside HiGHS's own `run()`. Seen on the large benchmark tier (query Q2 on
-  HiGHS, status `process_timeout`); see `../performance/findings.md#solver-execution`.
-- **Cause:** `HighsSession` inherits `SolverSession::SetInterruptPoll`'s
-  no-op base instead of overriding it, so a HiGHS solve has no external
-  cancellation path — the only thing bounding it is HiGHS's own internal
-  check of the `time_limit` option, and that check's granularity was too
-  coarse to return within any reasonable margin of the budget on this model.
-  Gurobi does override `SetInterruptPoll` and is not affected.
-- **Expected:** `DECIDB_TIME_LIMIT` bounds a HiGHS solve the same way it
-  bounds Gurobi's — the query returns with a `TIME_LIMIT` status near the
-  requested budget, not an unbounded hang.
-- **Impact:** a user who sets a time limit expecting a bounded wait can have
-  the query hang indefinitely on HiGHS once the model is large enough; there
-  is no DeciDB-level safety net.
-- **Task.** `../pipeline/07_solver/todo.md` § SOL-1.
-
 ## BUG-2 — One matrix run of `DECIDB_TEST_DIRECT_SOLVE=off` reported one outcome fewer
 
 - **Observed:** on 2026-10-27 `test/decide/run_direct_matrix.sh` printed `off: 4520 passed, 335 xfailed, 0 failed`
