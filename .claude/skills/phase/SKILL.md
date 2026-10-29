@@ -44,8 +44,10 @@ Add this block to every brief, verbatim:
 
 ```
 Lane rules:
-- You work in your own git worktree. First run `bash .claude/skills/phase/setup_worktree.sh` from its root. Every
-  path you edit is inside this worktree; never edit the main tree.
+- You work in your own git worktree. It is created from origin's default branch (master), not from the phase's base,
+  so before anything else: check that `git status` is clean and that your branch has no commits of its own, then run
+  `git reset --hard <PHASE_BASE>`, then `bash .claude/skills/phase/setup_worktree.sh` from the worktree root. If the
+  check fails, stop and report. Every path you edit is inside this worktree; never edit the main tree.
 - Your job is this brief. Fix another problem only when it blocks your job or your job cannot be done well without
   it; say so under FIXED ALONG THE WAY. Any other problem you notice: do not fix it, list it under FILED (what, where,
   how to reproduce) and the orchestrator files it.
@@ -66,10 +68,16 @@ formatting), minus "Do not commit".
 
 ## 3. Launch
 
+Record the phase base: the main tree's `HEAD` commit, with every doc and ruling from steps 1–2 committed first. Put
+it in each brief in place of `<PHASE_BASE>`.
+
 One `Agent` call per lane, in one message: `subagent_type: "general-purpose"`, `model: "sonnet"`,
-`isolation: "worktree"`. Then `git worktree list`: every lane worktree must sit inside the repository. The owner
-forbids hand-made folders beside the repo in `~/Code/`; if a worktree landed there, stop the lanes and ask. Never
-create a worktree or branch by hand. Tell the owner which lanes are running, then end the turn.
+`isolation: "worktree"`. The tool creates each worktree at `.claude/worktrees/agent-<id>` inside the repository, on a
+branch `worktree-agent-<id>`, starting from origin's default branch; the lane resets it to the phase base itself
+(lane rules). `.git/info/exclude` already ignores `.claude/worktrees/`. Then `git worktree list`: every lane
+worktree must sit there. The owner forbids hand-made folders beside the repo in `~/Code/`; if a worktree landed
+anywhere else, stop the lanes and ask. Never create a worktree or branch by hand. Tell the owner which lanes are
+running, then end the turn.
 
 Before the first phase on a machine: `ccache` must be installed (`brew install ccache`); the setup script points it at
 the shared base directory so lanes reuse each other's objects. A cold build per worktree is about 3.4 GB on disk.
