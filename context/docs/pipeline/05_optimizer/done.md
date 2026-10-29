@@ -447,10 +447,15 @@ stays a product for the Q-matrix path. A factor that is not affine is left in pl
 product back (`FindAndReplaceBilinear`).
 
 **The auxiliary's scope is `JoinScopes` of its factors' scopes**, the least upper bound, as DuckDB promotes a binary
-operator's type: Scalar < Entity < Row. Two query-wide factors give one query-wide column; a query-wide factor and a
-keyed one, or two alike keyed factors, a column per key (registered in
-`keyed_scopes[..].scoped_variable_indices`); anything else a column per row. The ABS auxiliary, the body helpers and
-the `NORM_IN` indicators are still one column per row (`todo.md` § OPT-4).
+operator's type: Global < Keyed < Row. Two query-wide factors give one query-wide column; a query-wide factor and a
+keyed one, or two alike keyed factors, a column per key; anything else a column per row. Every other auxiliary takes
+its scope the same way, from the leaves its expression reads (`ScopeOf`: a decision brings its scope, a query-wide value
+is query-wide, any other column and any reducer is row data, since a reducer's value differs between groups): the ABS
+auxiliary and its sign indicator, the `__body_` helper, the L0 norm's and the IN's indicators. Their defining rows are
+emitted once per instance (`ScopeRowPerInstance`, outside the clause's `when`), so `ABS(s - 4)` over a query-wide `s` is
+one auxiliary and one row set, not one per row. The ABS Big-M and the L0 auto bound take their maximum over the rows
+(`InstanceBox`), which holds for a shared column. `AddAuxiliaryDecision` registers a keyed auxiliary in
+`keyed_scopes[..].scoped_variable_indices` itself, so no rewrite does.
 
 ### Non-linear reducer bodies — `DefineNonlinearReducerBodies`
 
