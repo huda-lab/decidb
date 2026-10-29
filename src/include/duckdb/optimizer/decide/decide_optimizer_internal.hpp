@@ -90,6 +90,11 @@ void TagAbsForBigM(ClientContext &context, LogicalDecide &decide);
 idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type, bool is_boolean,
                            DecideVarScopeInfo scope = DecideVarScopeInfo::Row(), const string &label = string());
 
+//! The scope of a column defined by two others (a product's auxiliary): their least upper bound, as DuckDB promotes
+//! the type of a binary operator. Two query-wide scopes join to a query-wide one, a query-wide scope and a keyed one
+//! to the keyed one, two of the same keyed scope to it, and anything else to a column per row.
+DecideVarScopeInfo JoinScopes(const DecideVarScopeInfo &a, const DecideVarScopeInfo &b);
+
 //! A reference to decision column `var_idx`, as an expression of the DECIDE clause.
 unique_ptr<Expression> MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx);
 

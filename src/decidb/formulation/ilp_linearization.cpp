@@ -128,17 +128,17 @@ static void FlatColumnBox(const SolverInput &input, const FormulationBox &box,
     // (stage 08 already resolved it, negatives included), the upper is intersected with
     // the type ceiling.
     idx_t instance = indexer.InstanceOfColumn(v, c);
-    lo = std::max(input.InstanceLower(v, instance, box.lower),
-                  InstanceReachLower(box.instance_reach_lower, v, instance));
+    lo = box.InstanceLower(input, v, instance);
     hi = box.InstanceUpper(v, instance);
     if (input.variable_types[v] == LogicalType::BOOLEAN) {
         hi = MinValue<double>(hi, 1.0);
     }
     // A bilinear auxiliary's column stays open; its McCormick rows hold it to the product
-    // of a 0/1 and x's box, exactly [min(0, L), max(0, U)].
+    // of a 0/1 and x's box, exactly [min(0, L), max(0, U)], x's box being that of the instance this one reads.
     if (auto link = BilinearLinkOf(input, v)) {
-        double x_lo = box.lower[link->other_var_idx];
-        double x_hi = box.upper[link->other_var_idx];
+        idx_t other_instance = indexer.InstanceUnder(link->other_var_idx, v, instance);
+        double x_lo = box.InstanceLower(input, link->other_var_idx, other_instance);
+        double x_hi = box.InstanceUpper(link->other_var_idx, other_instance);
         if (x_lo > -1e20) {
             lo = MaxValue<double>(lo, MinValue<double>(0.0, x_lo));
         }

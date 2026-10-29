@@ -205,6 +205,19 @@ idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &
 	return var_idx;
 }
 
+DecideVarScopeInfo decide_rewrite::JoinScopes(const DecideVarScopeInfo &a, const DecideVarScopeInfo &b) {
+	if (a.IsScalar()) {
+		return b;
+	}
+	if (b.IsScalar()) {
+		return a;
+	}
+	if (a.IsEntity() && b.IsEntity() && a.entity_scope_idx == b.entity_scope_idx) {
+		return a;
+	}
+	return DecideVarScopeInfo::Row();
+}
+
 unique_ptr<Expression> decide_rewrite::MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx) {
 	auto &ref = decide.decide_variables[var_idx]->Cast<BoundColumnRefExpression>();
 	return make_uniq<BoundColumnRefExpression>(ref.GetName(), ref.return_type, ref.binding);

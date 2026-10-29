@@ -208,14 +208,16 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
 //! corners are emitted and `w`'s lower bound is widened so the product can reach the
 //! negative value. Requires a finite upper bound on `x` and names it if missing.
 //!
+//! The rows are emitted per INSTANCE of `w`, in flat columns, each from the box of the instance of `x` it reads: a
+//! query-wide product is one block, a keyed one a block per key, a row-scoped one a block per row.
+//!
 //! The envelope is an EXACT linearization of the product over `box`, not a dominating
 //! constant: on a box wider than `box` it cuts valid points, and on a narrower one it is
 //! slack. So unlike a Big-M it is wrong in both directions once the box moves, which is
 //! why the box is named rather than read from `input`. `input` is still written (the
 //! auxiliary's own column is widened for a negative `x`), and that write is a column
 //! declaration rather than a derived constant.
-void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
-                       const vector<string> &var_names);
+void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const FormulationBox &box);
 
 //! Declare each McCormick auxiliary's box before ABS/MIN/MAX descendants inspect it. A factor with no
 //! finite ceiling is refused, unless `refuse_when_unbounded` is false: a helper decision of the value rewrite

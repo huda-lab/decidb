@@ -249,7 +249,16 @@ idx_t AddBooleanProduct(Optimizer &optimizer, LogicalDecide &decide, vector<Logi
 	// F6: a diagnosis, and a plan, name the auxiliary by the user's product (b * x).
 	string label = "(" + RenderForPlan(*decide.decide_variables[first], decide) + " * " +
 	               RenderForPlan(*decide.decide_variables[second], decide) + ")";
-	idx_t aux_idx = AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, DecideVarScopeInfo::Row(), label);
+	// The auxiliary has one instance per instance of the finer of its factors (a query-wide factor has one for all): a
+	// query-wide product is one column and a keyed one a column per key, not a copy per row.
+	auto scope_of = [&](idx_t var) {
+		return var < decide.variable_scopes.size() ? decide.variable_scopes[var] : DecideVarScopeInfo::Row();
+	};
+	auto scope = JoinScopes(scope_of(first), scope_of(second));
+	idx_t aux_idx = AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, scope, label);
+	if (scope.IsEntity()) {
+		decide.entity_scopes[scope.entity_scope_idx].scoped_variable_indices.push_back(aux_idx);
+	}
 	AddRewriteAccount(decide, clause_alias,
 	                  both_bool ? LogicalDecide::RewriteAccount::Kind::PRODUCT_AND
 	                            : LogicalDecide::RewriteAccount::Kind::PRODUCT_MCCORMICK,

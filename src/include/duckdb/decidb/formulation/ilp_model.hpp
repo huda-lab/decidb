@@ -105,6 +105,20 @@ struct VarIndexer {
         }
     }
 
+    //! The instance of `var_idx` that instance `inst` of `finer` reads, for a variable whose scope is no finer than
+    //! `finer`'s: the instance of a query-wide variable is the only one, a row-scoped `finer` reads the instance its
+    //! row does, and a keyed one reads the instance of a variable keyed alike (or of a row-scoped one: its own).
+    inline idx_t InstanceUnder(idx_t var_idx, idx_t finer, idx_t inst) const {
+        switch (var_scope[finer]) {
+        case DecideVarScope::ROW:
+            return InstanceOf(var_idx, inst);
+        case DecideVarScope::SCALAR:
+            return 0;
+        default:
+            return var_scope[var_idx] == DecideVarScope::SCALAR ? 0 : inst;
+        }
+    }
+
     //! The instance of `var_idx` that flat column `col` is, for a column in the decide-variable blocks: the inverse of
     //! InstanceColumn().
     inline idx_t InstanceOfColumn(idx_t var_idx, idx_t col) const {

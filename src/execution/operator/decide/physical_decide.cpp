@@ -3686,7 +3686,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		solver_input.upper_bounds[saved.first] = saved.second.second;
 	}
     phase.Next("formulation.bilinear");
-    LinearizeBilinear(solver_input, box, decide_var_names);
+    LinearizeBilinear(solver_input, var_indexer, box);
 
     // Handle MIN/MAX objective: create global auxiliary variable z and linking constraints.
     // Two paths: (A) flat MIN/MAX, (B) the two-level form outer(per k: inner(e) by (k)).

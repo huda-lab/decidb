@@ -793,6 +793,12 @@ struct FormulationBox {
         return std::min(upper[var], InstanceReachUpper(instance_reach_upper, var, instance));
     }
 
+    //! The floor of one instance of `var`: the box's, raised to the instance's own floor and reach.
+    double InstanceLower(const SolverInput &input, idx_t var, idx_t instance) const {
+        return std::max(input.InstanceLower(var, instance, lower),
+                        InstanceReachLower(instance_reach_lower, var, instance));
+    }
+
     static FormulationBox OfSolvedModel(const SolverInput &input) {
         return {input.lower_bounds,         input.upper_bounds,         input.global_lower_bounds,
                 input.global_upper_bounds, input.instance_reach_lower, input.instance_reach_upper};

@@ -1996,3 +1996,169 @@ def test_a_product_of_booleans_is_one_column_however_it_is_spelled(decidb_cli_gu
         )
     dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
     assert re.search(r"^num_vars: 6$", dump, re.M), dump
+
+
+# ---------------------------------------------------------------------------
+# The scope of a product's auxiliary: the join of its factors' scopes
+# ---------------------------------------------------------------------------
+
+_SCOPE_ROWS = "(VALUES (1, 'a', 'p'), (2, 'a', 'q'), (3, 'b', 'p'), (4, 'b', 'q')) t(id, g, h)"
+_GROUP_OF_ROW = (0, 0, 1, 1)
+_H_OF_ROW = (0, 1, 0, 1)
+
+
+def _alike_within(a, name, classes):
+    """The values of a keyed decision, one per row, agree within each class of `classes`."""
+    return all(a[f"{name}{i}"] == a[f"{name}{j}"] for i in range(4) for j in range(4) if classes[i] == classes[j])
+
+
+def _rows_of(a, name):
+    return [a[f"{name}{i}"] for i in range(4)]
+
+
+#: decisions, the objective, a clause, the domains of the judged assignment, whether an assignment is feasible (the
+#: clause, and a keyed decision agreeing within its key), its value, and the model the auxiliary makes: columns, and
+#: McCormick blocks (rows of three entries, one per instance of the auxiliary).
+SCOPE_CASES = [
+    pytest.param(
+        "per (): b(BOOL), per (): s(INT)",
+        "SUM(s) + 3 * SUM(b)",
+        "s <= 3 AND b * s >= 2",
+        {"b": range(2), "s": range(4)},
+        lambda a: a["b"] * a["s"] >= 2,
+        lambda a: 4 * a["s"] + 12 * a["b"],
+        3,
+        1,
+        id="query-wide-times-query-wide-is-one-column",
+    ),
+    pytest.param(
+        "per (): b(BOOL), per t.g: y(INT)",
+        "SUM(y) + 3 * SUM(b)",
+        "y <= 3 AND b * y >= 2",
+        {"b": range(2), **{f"y{i}": range(4) for i in range(4)}},
+        lambda a: _alike_within(a, "y", _GROUP_OF_ROW) and all(a["b"] * y >= 2 for y in _rows_of(a, "y")),
+        lambda a: sum(_rows_of(a, "y")) + 12 * a["b"],
+        5,
+        2,
+        id="query-wide-times-keyed-is-a-column-per-key",
+    ),
+    pytest.param(
+        "per t.g: c(BOOL), per t.g: y(INT)",
+        "SUM(y) + 3 * SUM(c)",
+        "y <= 3 AND c * y >= 2",
+        {**{f"c{i}": range(2) for i in range(4)}, **{f"y{i}": range(4) for i in range(4)}},
+        lambda a: _alike_within(a, "y", _GROUP_OF_ROW)
+        and _alike_within(a, "c", _GROUP_OF_ROW)
+        and all(c * y >= 2 for c, y in zip(_rows_of(a, "c"), _rows_of(a, "y"))),
+        lambda a: sum(_rows_of(a, "y")) + 3 * sum(_rows_of(a, "c")),
+        6,
+        2,
+        id="keyed-times-keyed-alike-is-a-column-per-key",
+    ),
+    pytest.param(
+        "x(INT), per (): b(BOOL)",
+        "SUM(x) + 3 * SUM(b)",
+        "x <= 3 AND b * x >= 2",
+        {"b": range(2), **{f"x{i}": range(4) for i in range(4)}},
+        lambda a: all(a["b"] * x >= 2 for x in _rows_of(a, "x")),
+        lambda a: sum(_rows_of(a, "x")) + 12 * a["b"],
+        9,
+        4,
+        id="row-times-query-wide-is-a-column-per-row",
+    ),
+    pytest.param(
+        "per t.g: y(INT), per t.h: c(BOOL)",
+        "SUM(y) + 3 * SUM(c)",
+        "y <= 3 AND c * y >= 2",
+        {**{f"c{i}": range(2) for i in range(4)}, **{f"y{i}": range(4) for i in range(4)}},
+        lambda a: _alike_within(a, "y", _GROUP_OF_ROW)
+        and _alike_within(a, "c", _H_OF_ROW)
+        and all(c * y >= 2 for c, y in zip(_rows_of(a, "c"), _rows_of(a, "y"))),
+        lambda a: sum(_rows_of(a, "y")) + 3 * sum(_rows_of(a, "c")),
+        8,
+        4,
+        id="keyed-times-keyed-differently-is-a-column-per-row",
+    ),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+@pytest.mark.parametrize("decide, objective, clause, domains, feasible, value, num_vars, blocks", SCOPE_CASES)
+def test_the_auxiliary_of_a_product_takes_the_join_of_its_factors_scopes(
+    decidb_cli_gurobi, decidb_cli_highs, tmp_path, decide, objective, clause, domains, feasible, value, num_vars, blocks
+):
+    """A product of two query-wide decisions is one column, a query-wide factor times a keyed one a column per key,
+    two alike keyed factors a column per key, and anything else a column per row: the McCormick rows are one block per
+    column. Judged against every assignment on both solvers."""
+    sql = f"""
+        SELECT * FROM {_SCOPE_ROWS}
+        DECIDE {decide}
+        SUCH THAT {clause}
+        MINIMIZE {objective}
+        ORDER BY id"""
+    dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
+    assert re.search(rf"^num_vars: {num_vars}$", dump, re.M), dump
+    assert len(re.findall(r"^row \d+: sense=> rhs=\S+ nnz=3 ", dump, re.M)) == blocks, dump
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        rows, columns = cli.execute(sql)
+        judge_rows([dict(zip(columns, row)) for row in rows], domains, feasible, value, False)
+
+
+_GROUPED_ROWS = "(VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)"
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+def test_a_product_with_a_reducer_per_group_is_boxed_by_each_groups_reach(
+    decidb_cli_gurobi, decidb_cli_highs, tmp_path
+):
+    """`b * SUM(x) by (t.g) <> 2` with `x <= 3`: group a's sum reaches 6 and group b's 3. The product has a column per
+    group, and each reads the box of its own group's sum: its McCormick rows (`w - U*b <= 0`) and, on HiGHS, its `<>`
+    Big-M (`FlatColumnBox`) are 6 for group a and 3 for group b."""
+    sql = f"""
+        SELECT id, x, b FROM {_GROUPED_ROWS}
+        DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT x <= 3 AND b * SUM(x) by (t.g) <> 2
+        MAXIMIZE SUM(x) + 8 * b
+        ORDER BY id"""
+    dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
+    mccormick = re.findall(r"^row \d+: sense=< rhs=0 nnz=2 \| \d+:1 \d+:-(\d+)$", dump, re.M)
+    assert sorted(int(u) for u in mccormick if u != "1") == [3, 6], dump
+    not_equal = re.findall(r"^row \d+: sense=< rhs=1 nnz=2 \| \d+:1 \d+:-(\d+)$", dump, re.M)
+    assert sorted(int(m) for m in not_equal) == [3, 6, 6], dump
+    domains = {**{f"x{i}": range(4) for i in range(3)}, "b": range(2)}
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        rows, columns = cli.execute(sql)
+        judge_rows(
+            [dict(zip(columns, row)) for row in rows],
+            domains,
+            lambda a: a["b"] * (a["x0"] + a["x1"]) != 2 and a["b"] * a["x2"] != 2,
+            lambda a: a["x0"] + a["x1"] + a["x2"] + 8 * a["b"],
+        )
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+def test_a_product_in_a_helpers_scope_links_only_the_groups_it_has(decidb_cli_gurobi, decidb_cli_highs, tmp_path):
+    """`when t.id > 1: b * SUM(x) by (t.g) <= 3`: the row the `when` drops reads no group, so the product's scope has
+    an instance for it that is fixed at 0 and links nothing: two McCormick blocks (a row of three entries each), one
+    per group the clause reads, not three."""
+    sql = f"""
+        SELECT id, x, b FROM {_GROUPED_ROWS}
+        DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT x <= 3 AND when t.id > 1: b * SUM(x) by (t.g) <= 3
+        MAXIMIZE SUM(x) + 8 * b
+        ORDER BY id"""
+    dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
+    assert len(re.findall(r"^row \d+: sense=> rhs=-3 nnz=3 ", dump, re.M)) == 2, dump
+    assert re.search(r"^num_rows: 8$", dump, re.M), dump
+    domains = {**{f"x{i}": range(4) for i in range(3)}, "b": range(2)}
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        rows, columns = cli.execute(sql)
+        judge_rows(
+            [dict(zip(columns, row)) for row in rows],
+            domains,
+            lambda a: a["b"] * a["x1"] <= 3 and a["b"] * a["x2"] <= 3,
+            lambda a: a["x0"] + a["x1"] + a["x2"] + 8 * a["b"],
+        )
