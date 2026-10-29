@@ -428,6 +428,9 @@ DERIVED_BOTH_PATHS = [
         "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(b * y) + SUM(b * y)",
         "MAXIMIZE 2 * sum(b * y) + sum(b * y)",
     ),
+    # Solver: the objective's factor or divisor applied to a constant term. A1: each constant term, scaled.
+    ("a1_factor_on_a_constant", "y(REAL) SUCH THAT y <= 5 MAXIMIZE 2 * SUM(y + b)", "MAXIMIZE 2 * sum(y + b)"),
+    ("a1_divisor_of_a_constant", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(y + b) / 0.5", "MAXIMIZE sum(y + b) / 0.5"),
     # A1: the sums inside a square, of its decision's terms and of its constants.
     (
         "a1_square_of_like_terms",

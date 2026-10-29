@@ -563,20 +563,19 @@ private:
 			return kept ? DirectOnKeptRows(calc, kept, value) : value;
 		};
 		// Linear coefficients add up per decision. A constant adds nothing to the answer, so like the solver path it
-		// is read one term at a time and never added up; each must still be valid, and is checked after the sums.
+		// is read one term at a time, with the part's factor applied, and never added up; each must still be valid,
+		// and is checked after the sums.
 		vector<ExprPtr> linear_sums(condition.decisions.size());
 		vector<unique_ptr<Expression>> constant_checks;
-		// The values each sum is made of, so a NULL in P2's check names the column it came from.
-		vector<vector<DirectSignedValue>> linear_terms(condition.decisions.size());
 		for (auto &term : part.linear.terms) {
 			auto value = calc.Wrap(DirectScaledTerm(optimizer, term.coefficient->Copy(), term.sign, false, 1.0, false));
 			auto &sum = linear_sums[term.decision];
 			sum = sum ? calc.Add(sum, value) : value;
-			linear_terms[term.decision].push_back({term.sign, term.coefficient->Copy()});
 		}
 		for (auto &term : part.terms) {
 			if (term.kind == Term::Kind::CONSTANT) {
-				auto value = calc.Wrap(DirectScaledTerm(optimizer, term.value->Copy(), term.sign, false, 1.0, false));
+				auto value = calc.Wrap(DirectScaledTerm(optimizer, term.value->Copy(), term.sign, part.linear.scaled,
+				                                        part.linear.scale, part.linear.divides));
 				constant_checks.push_back(ValidNumber(p1, p1.Add(calc.Out(on_kept(value))), term.value_names));
 			} else {
 				Raw::SquareColumns square;
