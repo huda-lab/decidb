@@ -10,6 +10,7 @@
 
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/profiler.hpp"
@@ -86,65 +87,226 @@ static bool ContainsReducer(const Expression &expr) {
 	return found;
 }
 
-bool DecideOptimizer::ExtractMultiplicativeCoefficient(const Expression &expr, idx_t decide_index,
-                                                        idx_t var_idx, unique_ptr<Expression> &coef_out) {
-	coef_out = nullptr;
-	// Bare variable reference (possibly CAST-wrapped — GetSingleDecideVarIdx unwraps casts).
-	idx_t found = GetSingleDecideVarIdx(expr, decide_index);
-	if (found == var_idx) {
+// A factor of a product is read as an affine expression in the decisions: `sum of coefficient * decision + constant`,
+// each coefficient and the constant decision-free (data, possibly a column that varies by row). `b * (x - 1)` is read
+// as `b * x - b`, `(2 * b) * x` as `2 * (b * x)`. Reading the factors this way is what lets one product rewrite stand
+// for every shape of factor: the product distributes over the terms, each product of two decisions is linearized once,
+// and every other term stays linear.
+namespace {
+
+//! One term of an affine expression: `coefficient * decision`; a null coefficient is 1.
+struct AffineTerm {
+	idx_t var;
+	unique_ptr<Expression> coefficient;
+};
+
+struct Affine {
+	vector<AffineTerm> terms;
+	//! The decision-free part, or null when there is none.
+	unique_ptr<Expression> constant;
+};
+
+//! `a * b` of two coefficients; a null coefficient is 1.
+unique_ptr<Expression> MultiplyCoefficients(Optimizer &optimizer, unique_ptr<Expression> a, unique_ptr<Expression> b) {
+	if (!a || !b) {
+		return a ? std::move(a) : std::move(b);
+	}
+	return optimizer.BindScalarFunction("*", std::move(a), std::move(b));
+}
+
+//! `a + b` of two coefficients; a null coefficient is 1.
+unique_ptr<Expression> AddCoefficients(Optimizer &optimizer, unique_ptr<Expression> a, unique_ptr<Expression> b) {
+	if (!a) {
+		a = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+	}
+	if (!b) {
+		b = make_uniq<BoundConstantExpression>(Value::INTEGER(1));
+	}
+	return optimizer.BindScalarFunction("+", std::move(a), std::move(b));
+}
+
+unique_ptr<Expression> NegateCoefficient(Optimizer &optimizer, unique_ptr<Expression> a) {
+	return a ? optimizer.BindScalarFunction("-", std::move(a)) : make_uniq<BoundConstantExpression>(Value::INTEGER(-1));
+}
+
+//! `into += other`. A decision may stand in several terms: the product merges them by pair.
+void AddAffine(Optimizer &optimizer, Affine &into, Affine other) {
+	for (auto &term : other.terms) {
+		into.terms.push_back(std::move(term));
+	}
+	if (other.constant) {
+		into.constant = into.constant ? optimizer.BindScalarFunction("+", std::move(into.constant),
+		                                                             std::move(other.constant))
+		                              : std::move(other.constant);
+	}
+}
+
+//! `affine * factor` for a decision-free `factor` (null: 1), or `affine / factor` with `divides`.
+void ScaleAffine(Optimizer &optimizer, Affine &affine, const Expression &factor, bool divides) {
+	auto scale = [&]() -> unique_ptr<Expression> {
+		if (!divides) {
+			return factor.Copy();
+		}
+		return optimizer.BindScalarFunction("/", make_uniq<BoundConstantExpression>(Value::DOUBLE(1.0)),
+		                                    factor.Copy());
+	};
+	for (auto &term : affine.terms) {
+		term.coefficient = MultiplyCoefficients(optimizer, scale(), std::move(term.coefficient));
+	}
+	if (affine.constant) {
+		affine.constant = MultiplyCoefficients(optimizer, scale(), std::move(affine.constant));
+	}
+}
+
+//! Read `expr` as an affine expression in the decisions; false when it is not one (a square, a product of two
+//! decision-bearing factors, a decision in a divisor).
+bool ReadAffine(Optimizer &optimizer, const Expression &expr, idx_t decide_index, Affine &out) {
+	vector<idx_t> vars;
+	CollectDecideVarIndices(expr, decide_index, vars);
+	if (vars.empty()) {
+		out.constant = expr.Copy();
 		return true;
 	}
-	// Unwrap CAST nodes — the binder inserts implicit casts around mixed-type
-	// multiplications (e.g. `cost * b` becomes `CAST(CAST(cost) * CAST(b))`).
-	// Walk through the cast to reach the underlying multiplication.
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		auto &cast = expr.Cast<BoundCastExpression>();
-		return ExtractMultiplicativeCoefficient(*cast.child, decide_index, var_idx, coef_out);
+	if (auto *colref = GetBareDecideColumnRef(expr, decide_index)) {
+		out.terms.push_back({colref->binding.column_index, nullptr});
+		return true;
 	}
-	// A negated factor, `-b` or `-(2 * b)`: the sign joins the coefficient, or the product loses it.
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &negation = expr.Cast<BoundFunctionExpression>();
-		if (StringUtil::Lower(negation.function.name) == "-" && negation.children.size() == 1) {
-			unique_ptr<Expression> inner_coef;
-			if (!ExtractMultiplicativeCoefficient(*negation.children[0], decide_index, var_idx, inner_coef)) {
-				return false;
-			}
-			coef_out = inner_coef ? optimizer.BindScalarFunction("-", std::move(inner_coef))
-			                      : make_uniq<BoundConstantExpression>(Value::INTEGER(-1));
-			return true;
-		}
+	auto *cur = UnwrapDecideCasts(expr, decide_index);
+	if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
 	}
-	// Multiplication chain: walk down the side that contains the variable, multiply
-	// coefficients harvested from the other side at each level.
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
-		auto &func = expr.Cast<BoundFunctionExpression>();
-		if (StringUtil::Lower(func.function.name) == "*" && func.children.size() == 2) {
-			vector<idx_t> left_vars, right_vars;
-			CollectDecideVarIndices(*func.children[0], decide_index, left_vars);
-			CollectDecideVarIndices(*func.children[1], decide_index, right_vars);
-			int var_side = -1;
-			if (left_vars.size() == 1 && left_vars[0] == var_idx && right_vars.empty()) {
-				var_side = 0;
-			} else if (right_vars.size() == 1 && right_vars[0] == var_idx && left_vars.empty()) {
-				var_side = 1;
-			} else {
-				return false;
-			}
-			unique_ptr<Expression> sub_coef;
-			if (!ExtractMultiplicativeCoefficient(*func.children[var_side], decide_index, var_idx, sub_coef)) {
-				return false;
-			}
-			auto outer_coef = func.children[1 - var_side]->Copy();
-			if (sub_coef) {
-				coef_out = optimizer.BindScalarFunction("*", std::move(outer_coef), std::move(sub_coef));
-			} else {
-				coef_out = std::move(outer_coef);
-			}
-			return true;
+	auto &func = cur->Cast<BoundFunctionExpression>();
+	const auto name = StringUtil::Lower(func.function.name);
+	auto read_child = [&](idx_t child, Affine &affine) {
+		return ReadAffine(optimizer, *func.children[child], decide_index, affine);
+	};
+	auto bears_decision = [&](idx_t child) {
+		vector<idx_t> child_vars;
+		CollectDecideVarIndices(*func.children[child], decide_index, child_vars);
+		return !child_vars.empty();
+	};
+	if ((name == "+" || name == "-") && func.children.size() == 2) {
+		Affine left, right;
+		if (!read_child(0, left) || !read_child(1, right)) {
+			return false;
 		}
+		if (name == "-") {
+			ScaleAffine(optimizer, right, BoundConstantExpression(Value::INTEGER(-1)), false);
+		}
+		AddAffine(optimizer, out, std::move(left));
+		AddAffine(optimizer, out, std::move(right));
+		return true;
+	}
+	if (name == "-" && func.children.size() == 1) {
+		if (!read_child(0, out)) {
+			return false;
+		}
+		ScaleAffine(optimizer, out, BoundConstantExpression(Value::INTEGER(-1)), false);
+		return true;
+	}
+	if (name == "*" && func.children.size() == 2 && bears_decision(0) != bears_decision(1)) {
+		const idx_t decision_side = bears_decision(0) ? 0 : 1;
+		if (!read_child(decision_side, out)) {
+			return false;
+		}
+		ScaleAffine(optimizer, out, *func.children[1 - decision_side], false);
+		return true;
+	}
+	if (name == "/" && func.children.size() == 2 && bears_decision(0) && !bears_decision(1)) {
+		if (!read_child(0, out)) {
+			return false;
+		}
+		ScaleAffine(optimizer, out, *func.children[1], true);
+		return true;
 	}
 	return false;
 }
+
+//! The auxiliary `w = first * second` for two decisions, one of them Boolean (`first` and `second` are in the order
+//! the user wrote them): AND for two Booleans, else the McCormick link whose rows stage 06 emits against the other
+//! factor's box. Returns the auxiliary's decision index.
+idx_t AddBooleanProduct(Optimizer &optimizer, LogicalDecide &decide, vector<LogicalDecide::BilinearLink> &links,
+                        const string &clause_alias, idx_t first, idx_t second) {
+	auto is_bool = [&](idx_t var) { return var < decide.is_boolean_var.size() && decide.is_boolean_var[var]; };
+	const bool both_bool = is_bool(first) && is_bool(second);
+	const idx_t bool_var_idx = is_bool(first) ? first : second;
+	const idx_t other_var_idx = bool_var_idx == first ? second : first;
+
+	// The auxiliary, named by the column it will take.
+	string aux_name = "__bilinear_aux_" + to_string(decide.decide_variables.size()) + "__";
+	// Bool×Bool auxiliary is semantically boolean but uses INTEGER type to match
+	// how user BOOLEAN variables are represented (INTEGER with 0/1 bounds).
+	// Using BOOLEAN would cause type-mismatch errors when binding arithmetic.
+	//
+	// Bool×Integer: the product b * y with b ∈ {0,1} and y ∈ ℤ always takes
+	// integer values, so declare the aux as INTEGER rather than DOUBLE. This
+	// preserves integer-valuedness of the LHS through McCormick linearization,
+	// which matters for the strict-inequality rewrite (`< K → <= K-1`) in
+	// ilp_model_builder.cpp.
+	auto &other_type = decide.decide_variables[other_var_idx]->return_type;
+	const bool other_is_integer_typed = !(other_type == LogicalType::DOUBLE || other_type == LogicalType::FLOAT);
+	LogicalType aux_type = (both_bool || other_is_integer_typed) ? LogicalType::INTEGER : LogicalType::DOUBLE;
+	// F6: a diagnosis, and a plan, name the auxiliary by the user's product (b * x).
+	string label = "(" + RenderForPlan(*decide.decide_variables[first], decide) + " * " +
+	               RenderForPlan(*decide.decide_variables[second], decide) + ")";
+	idx_t aux_idx = AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, DecideVarScopeInfo::Row(), label);
+	AddRewriteAccount(decide, clause_alias,
+	                  both_bool ? LogicalDecide::RewriteAccount::Kind::PRODUCT_AND
+	                            : LogicalDecide::RewriteAccount::Kind::PRODUCT_MCCORMICK,
+	                  label);
+
+	if (both_bool) {
+		// AND-linearization: w <= b1, w <= b2, w >= b1 + b2 - 1
+		auto &b1_ref = decide.decide_variables[bool_var_idx]->Cast<BoundColumnRefExpression>();
+		auto &b2_ref = decide.decide_variables[other_var_idx]->Cast<BoundColumnRefExpression>();
+		auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
+		auto ref = [](const BoundColumnRefExpression &source) {
+			return make_uniq<BoundColumnRefExpression>(source.alias, source.return_type, source.binding);
+		};
+
+		// w <= b1
+		auto c1 = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, ref(w_ref),
+		                                               ref(b1_ref));
+		MarkFormulationConstraint(*c1, clause_alias);
+		decide.AddConstraint(optimizer.context, std::move(c1));
+
+		// w <= b2
+		auto c2 = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO, ref(w_ref),
+		                                               ref(b2_ref));
+		MarkFormulationConstraint(*c2, clause_alias);
+		decide.AddConstraint(optimizer.context, std::move(c2));
+
+		// w >= b1 + b2 - 1  (i.e., b1 + b2 - w <= 1)
+		auto b1_plus_b2 = optimizer.BindScalarFunction("+", ref(b1_ref), ref(b2_ref));
+		auto b1_plus_b2_minus_w = optimizer.BindScalarFunction("-", std::move(b1_plus_b2), ref(w_ref));
+		auto c3 = make_uniq<BoundComparisonExpression>(ExpressionType::COMPARE_LESSTHANOREQUALTO,
+		                                               std::move(b1_plus_b2_minus_w),
+		                                               make_uniq<BoundConstantExpression>(Value::INTEGER(1)));
+		MarkFormulationConstraint(*c3, clause_alias);
+		decide.AddConstraint(optimizer.context, std::move(c3));
+	} else {
+		// Bool × Non-Bool McCormick: w <= x (structural, at plan time)
+		// w <= U*b and w >= x - U*(1-b) generated at execution time via BilinearLink
+		//
+		// The McCormick linking constraints (including the upper corner
+		// w <= x - L*(1-b), which for L>=0 is the plain structural w <= x)
+		// are emitted at execution time in physical_decide.cpp, where the
+		// resolved bounds L and U of the other variable are known. Emitting
+		// the structural w <= x here would be unconditional and therefore
+		// wrong for a negative-domain x (it forces x >= 0 when b=0). We only
+		// record the link; execution adds all four corners.
+		LogicalDecide::BilinearLink link;
+		link.aux_idx = aux_idx;
+		link.bool_var_idx = bool_var_idx;
+		link.other_var_idx = other_var_idx;
+		TryParseSourceClauseTag(clause_alias, link.source_clause_id);
+		TryParseRemovalGroupTag(clause_alias, link.removal_group_id);
+		links.push_back(link);
+	}
+	return aux_idx;
+}
+
+} // namespace
 
 void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
                                               vector<LogicalDecide::BilinearLink> &links,
@@ -165,205 +327,94 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 			// A reducer under a factor (`b * SUM(x)`) is not a product of two variables: it is the value
 			// rewrite's, which holds the reducer in a helper decision and hands the product back here.
 			if (!left_vars.empty() && !right_vars.empty() && !ContainsReducer(*func.children[0]) &&
-			    !ContainsReducer(*func.children[1])) {
-				// Both sides contain decide variables — this is bilinear (or identical QP)
-				// Skip the identical-expression case (QP, not bilinear)
-				if (func.children[0]->ToString() == func.children[1]->ToString()) {
-					return; // Handled by existing QP pipeline
-				}
-
-				// Determine which variables are involved and their types.
-				// For McCormick, we need exactly one Boolean factor.
-				// First try GetSingleDecideVarIdx (bare var or CAST-wrapped),
-				// then fall back to CollectDecideVarIndices for complex expressions
-				// like (data_col * bool_var) where the decide var is buried in a multiply.
-				idx_t left_single = GetSingleDecideVarIdx(*func.children[0], decide.decide_index);
-				idx_t right_single = GetSingleDecideVarIdx(*func.children[1], decide.decide_index);
-
-				// Fallback: if one side is a complex expression with exactly one decide var,
-				// use that var's index. This handles cases like (profit * b) * x.
-				if (left_single == DConstants::INVALID_INDEX && left_vars.size() == 1) {
-					left_single = left_vars[0];
-				}
-				if (right_single == DConstants::INVALID_INDEX && right_vars.size() == 1) {
-					right_single = right_vars[0];
-				}
-
-				bool left_is_bool = false, right_is_bool = false;
-				if (left_single != DConstants::INVALID_INDEX && left_single < decide.is_boolean_var.size()) {
-					left_is_bool = decide.is_boolean_var[left_single];
-				}
-				if (right_single != DConstants::INVALID_INDEX && right_single < decide.is_boolean_var.size()) {
-					right_is_bool = decide.is_boolean_var[right_single];
-				}
-
-				// Only linearize if at least one side is a single Boolean variable
-				if (!left_is_bool && !right_is_bool) {
-					// Non-Boolean × Non-Boolean: leave for Q matrix (Phase 2)
-					// Still recurse into children for nested bilinear
-					ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-						FindAndReplaceBilinear(child, decide, links, clause_alias);
-					});
-					return;
-				}
-
-				// Decide which side is the Boolean (b) and which is the other (x)
-				idx_t bool_var_idx, other_var_idx;
-				Expression *bool_expr, *other_expr;
-				if (left_is_bool) {
-					bool_var_idx = left_single;
-					other_var_idx = right_single; // may be INVALID_INDEX if right is complex
-					bool_expr = func.children[0].get();
-					other_expr = func.children[1].get();
-				} else {
-					bool_var_idx = right_single;
-					other_var_idx = left_single; // may be INVALID_INDEX if left is complex
-					bool_expr = func.children[1].get();
-					other_expr = func.children[0].get();
-				}
-
-				// For Bool×Bool: special AND-linearization (simpler, no Big-M)
-				bool both_bool = left_is_bool && right_is_bool;
-
-				// Resolve the non-bool factor's variable index up-front so the aux type
-				// decision below can consult it. This mirrors the fallback resolution
-				// done in the non-both-bool branch (lines below), hoisted earlier.
-				idx_t resolved_other_idx = other_var_idx;
-				if (!both_bool && resolved_other_idx == DConstants::INVALID_INDEX) {
-					vector<idx_t> other_vars_resolve;
-					CollectDecideVarIndices(*other_expr, decide.decide_index, other_vars_resolve);
-					if (other_vars_resolve.size() == 1) {
-						resolved_other_idx = other_vars_resolve[0];
-					}
-				}
-
-				// The auxiliary, named by the column it will take.
-				string aux_name = "__bilinear_aux_" + to_string(decide.decide_variables.size()) + "__";
-				// Bool×Bool auxiliary is semantically boolean but uses INTEGER type to match
-				// how user BOOLEAN variables are represented (INTEGER with 0/1 bounds).
-				// Using BOOLEAN would cause type-mismatch errors when binding arithmetic.
-				//
-				// Bool×Integer: the product b * y with b ∈ {0,1} and y ∈ ℤ always takes
-				// integer values, so declare the aux as INTEGER rather than DOUBLE. This
-				// preserves integer-valuedness of the LHS through McCormick linearization,
-				// which matters for the strict-inequality rewrite (`< K → <= K-1`) in
-				// ilp_model_builder.cpp.
-				bool other_is_integer_typed = false;
-				if (!both_bool && resolved_other_idx != DConstants::INVALID_INDEX &&
-				    resolved_other_idx < decide.decide_variables.size()) {
-					auto &rt = decide.decide_variables[resolved_other_idx]->return_type;
-					other_is_integer_typed = !(rt == LogicalType::DOUBLE || rt == LogicalType::FLOAT);
-				}
-				LogicalType aux_type = (both_bool || other_is_integer_typed)
-				                           ? LogicalType::INTEGER
-				                           : LogicalType::DOUBLE;
-				// F6: a diagnosis, and a plan, name the auxiliary by the user's product (b * x).
-				string label = "(" + RenderForPlan(*func.children[0], decide) + " * " +
-				               RenderForPlan(*func.children[1], decide) + ")";
-				idx_t aux_idx =
-				    AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, DecideVarScopeInfo::Row(), label);
-				AddRewriteAccount(decide, clause_alias,
-				                  both_bool ? LogicalDecide::RewriteAccount::Kind::PRODUCT_AND
-				                            : LogicalDecide::RewriteAccount::Kind::PRODUCT_MCCORMICK,
-				                  label);
-
-				if (both_bool) {
-					// AND-linearization: w <= b1, w <= b2, w >= b1 + b2 - 1
-					auto &b1_ref = decide.decide_variables[bool_var_idx]->Cast<BoundColumnRefExpression>();
-					auto &b2_ref = decide.decide_variables[other_var_idx]->Cast<BoundColumnRefExpression>();
-					auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
-
-					// w <= b1
-					auto c1 = make_uniq<BoundComparisonExpression>(
-					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
-					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
-					    make_uniq<BoundColumnRefExpression>(b1_ref.alias, b1_ref.return_type, b1_ref.binding));
-					MarkFormulationConstraint(*c1, clause_alias);
-					AppendConstraint(decide, std::move(c1));
-
-					// w <= b2
-					auto c2 = make_uniq<BoundComparisonExpression>(
-					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
-					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding),
-					    make_uniq<BoundColumnRefExpression>(b2_ref.alias, b2_ref.return_type, b2_ref.binding));
-					MarkFormulationConstraint(*c2, clause_alias);
-					AppendConstraint(decide, std::move(c2));
-
-					// w >= b1 + b2 - 1  (i.e., b1 + b2 - w <= 1)
-					auto b1_plus_b2 = optimizer.BindScalarFunction(
-					    "+",
-					    make_uniq<BoundColumnRefExpression>(b1_ref.alias, b1_ref.return_type, b1_ref.binding),
-					    make_uniq<BoundColumnRefExpression>(b2_ref.alias, b2_ref.return_type, b2_ref.binding));
-					auto b1_plus_b2_minus_w = optimizer.BindScalarFunction(
-					    "-",
-					    std::move(b1_plus_b2),
-					    make_uniq<BoundColumnRefExpression>(w_ref.alias, w_ref.return_type, w_ref.binding));
-					auto c3 = make_uniq<BoundComparisonExpression>(
-					    ExpressionType::COMPARE_LESSTHANOREQUALTO,
-					    std::move(b1_plus_b2_minus_w),
-					    make_uniq<BoundConstantExpression>(Value::INTEGER(1)));
-					MarkFormulationConstraint(*c3, clause_alias);
-					AppendConstraint(decide, std::move(c3));
-				} else {
-					// Bool × Non-Bool McCormick: w <= x (structural, at plan time)
-					// w <= U*b and w >= x - U*(1-b) generated at execution time via BilinearLink
-
-					// Resolve other_var_idx if other_expr is a complex single-variable expression.
-					if (other_var_idx == DConstants::INVALID_INDEX) {
-						vector<idx_t> other_vars;
-						CollectDecideVarIndices(*other_expr, decide.decide_index, other_vars);
-						if (other_vars.size() == 1) {
-							other_var_idx = other_vars[0];
+			    !ContainsReducer(*func.children[1]) && func.children[0]->ToString() != func.children[1]->ToString()) {
+				// (Identical factors are a square: the QP pipeline's.) Each factor is an affine expression in the
+				// decisions, and the product distributes over its terms.
+				Affine left, right;
+				auto is_bool = [&](idx_t var) {
+					return var < decide.is_boolean_var.size() && decide.is_boolean_var[var];
+				};
+				auto has_bool = [&](const Affine &affine) {
+					return std::any_of(affine.terms.begin(), affine.terms.end(),
+					                   [&](const AffineTerm &term) { return is_bool(term.var); });
+				};
+				if (ReadAffine(optimizer, *func.children[0], decide.decide_index, left) &&
+				    ReadAffine(optimizer, *func.children[1], decide.decide_index, right) &&
+				    (has_bool(left) || has_bool(right))) {
+					// The terms of the product: `coefficient * first * second` for a pair of decisions (`second` is
+					// INVALID for one decision, both INVALID for the constant), merged by the pair.
+					struct ProductTerm {
+						idx_t first;
+						idx_t second;
+						unique_ptr<Expression> coefficient;
+					};
+					vector<ProductTerm> product;
+					auto add = [&](idx_t first, idx_t second, unique_ptr<Expression> coefficient) {
+						// A Boolean squared is itself.
+						if (first == second && first != DConstants::INVALID_INDEX && is_bool(first)) {
+							second = DConstants::INVALID_INDEX;
+						}
+						auto same = std::find_if(product.begin(), product.end(), [&](const ProductTerm &term) {
+							const bool swapped = term.first == second && term.second == first &&
+							                     second != DConstants::INVALID_INDEX;
+							return (term.first == first && term.second == second) || swapped;
+						});
+						if (same == product.end()) {
+							product.push_back({first, second, std::move(coefficient)});
 						} else {
-							throw BinderException(
-							    "Bilinear product of a Boolean variable with a multi-variable expression "
-							    "is not yet supported. Use a simple variable reference (e.g., b * x, not b * (x + y)).");
+							same->coefficient =
+							    AddCoefficients(optimizer, std::move(same->coefficient), std::move(coefficient));
+						}
+					};
+					auto copy = [](const unique_ptr<Expression> &coefficient) {
+						return coefficient ? coefficient->Copy() : nullptr;
+					};
+					for (auto &a : left.terms) {
+						for (auto &b : right.terms) {
+							add(a.var, b.var,
+							    MultiplyCoefficients(optimizer, copy(a.coefficient), copy(b.coefficient)));
+						}
+						if (right.constant) {
+							add(a.var, DConstants::INVALID_INDEX,
+							    MultiplyCoefficients(optimizer, copy(a.coefficient), right.constant->Copy()));
+						}
+					}
+					if (left.constant) {
+						for (auto &b : right.terms) {
+							add(b.var, DConstants::INVALID_INDEX,
+							    MultiplyCoefficients(optimizer, left.constant->Copy(), copy(b.coefficient)));
+						}
+						if (right.constant) {
+							add(DConstants::INVALID_INDEX, DConstants::INVALID_INDEX,
+							    MultiplyCoefficients(optimizer, left.constant->Copy(), right.constant->Copy()));
 						}
 					}
 
-					// The McCormick linking constraints (including the upper corner
-					// w <= x - L*(1-b), which for L>=0 is the plain structural w <= x)
-					// are emitted at execution time in physical_decide.cpp, where the
-					// resolved bounds L and U of the other variable are known. Emitting
-					// the structural w <= x here would be unconditional and therefore
-					// wrong for a negative-domain x (it forces x >= 0 when b=0). We only
-					// record the link; execution adds all four corners.
-					LogicalDecide::BilinearLink link;
-					link.aux_idx = aux_idx;
-					link.bool_var_idx = bool_var_idx;
-					link.other_var_idx = other_var_idx;
-					TryParseSourceClauseTag(clause_alias, link.source_clause_id);
-					TryParseRemovalGroupTag(clause_alias, link.removal_group_id);
-					links.push_back(link);
+					auto column = [&](idx_t var) -> unique_ptr<Expression> {
+						auto &ref = decide.decide_variables[var]->Cast<BoundColumnRefExpression>();
+						return make_uniq<BoundColumnRefExpression>(ref.alias, ref.return_type, ref.binding);
+					};
+					unique_ptr<Expression> sum;
+					for (auto &term : product) {
+						unique_ptr<Expression> factor;
+						if (term.first == DConstants::INVALID_INDEX) {
+							factor = nullptr;
+						} else if (term.second == DConstants::INVALID_INDEX) {
+							factor = column(term.first);
+						} else if (is_bool(term.first) || is_bool(term.second)) {
+							factor = column(AddBooleanProduct(optimizer, decide, links, clause_alias, term.first,
+							                                  term.second));
+						} else {
+							// Two decisions, neither Boolean: the Q matrix's.
+							factor = optimizer.BindScalarFunction("*", column(term.first), column(term.second));
+						}
+						auto value = MultiplyCoefficients(optimizer, std::move(term.coefficient), std::move(factor));
+						sum = sum ? optimizer.BindScalarFunction("+", std::move(sum), std::move(value))
+						          : std::move(value);
+					}
+					expr = std::move(sum);
+					return;
 				}
-
-				// Replace the bilinear product with the auxiliary variable reference,
-				// folding in any data coefficients that were attached to either factor
-				// (e.g., `cost * b * x` parses as `(cost*b)*x` — without folding, `cost`
-				// would be silently dropped).
-				unique_ptr<Expression> bool_coef, other_coef;
-				ExtractMultiplicativeCoefficient(*bool_expr, decide.decide_index, bool_var_idx, bool_coef);
-				ExtractMultiplicativeCoefficient(*other_expr, decide.decide_index, other_var_idx, other_coef);
-
-				auto &w_ref = decide.decide_variables[aux_idx]->Cast<BoundColumnRefExpression>();
-				auto w_replacement = make_uniq<BoundColumnRefExpression>(
-				    w_ref.alias, w_ref.return_type, w_ref.binding);
-
-				unique_ptr<Expression> combined_coef;
-				if (bool_coef && other_coef) {
-					combined_coef = optimizer.BindScalarFunction("*", std::move(bool_coef), std::move(other_coef));
-				} else if (bool_coef) {
-					combined_coef = std::move(bool_coef);
-				} else if (other_coef) {
-					combined_coef = std::move(other_coef);
-				}
-
-				if (combined_coef) {
-					expr = optimizer.BindScalarFunction("*", std::move(combined_coef), std::move(w_replacement));
-				} else {
-					expr = std::move(w_replacement);
-				}
-				return;
 			}
 		}
 	}

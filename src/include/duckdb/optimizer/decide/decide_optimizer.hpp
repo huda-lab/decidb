@@ -214,14 +214,6 @@ private:
 	void FindAndReplaceBilinear(unique_ptr<Expression> &expr, LogicalDecide &decide,
 	                            vector<LogicalDecide::BilinearLink> &links, const string &source_alias);
 
-	//! Helper: walk a multiplication chain shaped as `coeff * ... * decide_var * ... * coeff`
-	//! around the decide variable with index `var_idx`, and combine all non-variable factors
-	//! into `coef_out`. Returns true if `expr` matches that shape (a single decide variable
-	//! buried under zero or more multiplicative data coefficients). `coef_out` is null when
-	//! `expr` is a bare variable reference.
-	bool ExtractMultiplicativeCoefficient(const Expression &expr, idx_t decide_index,
-	                                       idx_t var_idx, unique_ptr<Expression> &coef_out);
-
 	//! Carries per-ABS-node metadata through the two phases of RewriteAbs.
 	struct AbsPairInfo {
 		idx_t aux_idx;

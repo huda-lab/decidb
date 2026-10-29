@@ -1918,3 +1918,81 @@ def test_negated_factor_of_a_boolean_product_keeps_its_sign(decidb_cli_gurobi, d
     for cli in (decidb_cli_gurobi, decidb_cli_highs):
         rows, columns = cli.execute(sql)
         judge_rows([dict(zip(columns, row)) for row in rows], domains, feasible, value)
+
+
+#: A Boolean times an affine expression in the decisions: the product distributes over the terms, so the additive
+#: part of a factor is not dropped. `holds` reads one row; `c` is a data column (1 and 2 on the two rows).
+AFFINE_FACTOR_CASES = [
+    pytest.param("b * (x - 1) >= 2", lambda b, x, y, c: b * (x - 1) >= 2, "MINIMIZE", id="a-constant-subtracted"),
+    pytest.param("b * (x + 2) <= 4", lambda b, x, y, c: b * (x + 2) <= 4, "MAXIMIZE", id="a-constant-added"),
+    pytest.param(
+        "b * (2 * x - 3 * y) >= 1", lambda b, x, y, c: b * (2 * x - 3 * y) >= 1, "MINIMIZE", id="two-decisions"
+    ),
+    pytest.param("b * (x + t.c) >= 4", lambda b, x, y, c: b * (x + c) >= 4, "MINIMIZE", id="a-data-column"),
+    pytest.param("(b + 1) * x <= 4", lambda b, x, y, c: (b + 1) * x <= 4, "MAXIMIZE", id="a-sum-with-the-boolean"),
+    pytest.param(
+        "(2 * b - 1) * (x - 1) >= 2",
+        lambda b, x, y, c: (2 * b - 1) * (x - 1) >= 2,
+        "MINIMIZE",
+        id="affine-on-both-sides",
+    ),
+    pytest.param("b * (x - b) >= 2", lambda b, x, y, c: b * (x - b) >= 2, "MINIMIZE", id="the-boolean-in-both-factors"),
+    pytest.param("b * (x / 2) >= 1", lambda b, x, y, c: b * (x / 2) >= 1, "MINIMIZE", id="divided-by-data"),
+    pytest.param("b * (x + x - 1) >= 3", lambda b, x, y, c: b * (x + x - 1) >= 3, "MINIMIZE", id="like-terms-merged"),
+    pytest.param(
+        "(b + 1) * (x + b) >= 5", lambda b, x, y, c: (b + 1) * (x + b) >= 5, "MINIMIZE", id="like-products-merged"
+    ),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+@pytest.mark.parametrize("constraint, holds, sense", AFFINE_FACTOR_CASES)
+def test_boolean_times_an_affine_factor(decidb_cli_gurobi, decidb_cli_highs, constraint, holds, sense):
+    """`b * (x - 1)` is `b * x - b`: the rewrite once linearized it as `b * x` and dropped the `- 1`, so `b * (x - 1)
+    >= 2` accepted x = 2. Judged against every assignment of two rows."""
+    sql = f"""
+        SELECT id, x, y, b FROM (VALUES (1, 1), (2, 2)) t(id, c)
+        DECIDE x(INT), y(INT), b(BOOL)
+        SUCH THAT x <= 3 AND y <= 3 AND {constraint}
+        {sense} SUM(x) + SUM(y) + 2 * SUM(b)
+        ORDER BY id"""
+    domains = {
+        **{f"{name}{i}": range(4) for name in "xy" for i in range(2)},
+        **{f"b{i}": range(2) for i in range(2)},
+    }
+    data = (1, 2)
+
+    def feasible(a):
+        return all(holds(a[f"b{i}"], a[f"x{i}"], a[f"y{i}"], data[i]) for i in range(2))
+
+    def value(a):
+        return sum(a[f"x{i}"] + a[f"y{i}"] + 2 * a[f"b{i}"] for i in range(2))
+
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        rows, columns = cli.execute(sql)
+        judge_rows([dict(zip(columns, row)) for row in rows], domains, feasible, value, sense == "MAXIMIZE")
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+def test_a_product_of_booleans_is_one_column_however_it_is_spelled(decidb_cli_gurobi, decidb_cli_highs, tmp_path):
+    """`(b + d) * (d + b)` holds `b * d` twice, once from each order of its factors: one AND column per row, not two."""
+    sql = """
+        SELECT id, b, d FROM (VALUES (1), (2)) t(id)
+        DECIDE b(BOOL), d(BOOL)
+        SUCH THAT (b + d) * (d + b) >= 3
+        MINIMIZE SUM(b) + 2 * SUM(d)
+        ORDER BY id"""
+    domains = {f"{name}{i}": range(2) for name in "bd" for i in range(2)}
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        rows, columns = cli.execute(sql)
+        judge_rows(
+            [dict(zip(columns, row)) for row in rows],
+            domains,
+            lambda a: all((a[f"b{i}"] + a[f"d{i}"]) ** 2 >= 3 for i in range(2)),
+            lambda a: sum(a[f"b{i}"] + 2 * a[f"d{i}"] for i in range(2)),
+            False,
+        )
+    dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
+    assert re.search(r"^num_vars: 6$", dump, re.M), dump
