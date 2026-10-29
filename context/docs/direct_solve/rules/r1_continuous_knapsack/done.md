@@ -94,9 +94,15 @@ anchor, the break-even price `t = v / w` (items with `w = 0` or outside every bu
 sum), and the finite room up and down. An infinite room is a flag, counted apart, so no sum adds infinity to minus
 infinity. `ItemAlgebra` holds the verdicts, the candidate price, the price, the sums at the price and the answer.
 
-`DirectSourceReader` (`direct_source_reader.cpp`) hands out one read of the source per stage. A source that
-`DirectRepeatableSourceChain` accepts (non-volatile projections and filters over one repeatable DuckDB table scan) is
-rebuilt per read with fresh table indexes, its pushed-down table filters copied; any other source is one
+`DirectSourceReader` (`direct_source_reader.cpp`) hands out one read of the source per stage (`SOURCE_READS`, 4). A
+source that `DirectRepeatableSourceChain` accepts (non-volatile projections and filters over one repeatable DuckDB table
+scan) is copied once when `DirectSourceCopyIsCheaper` says so, else rebuilt per read with fresh table indexes, its
+pushed-down table filters copied. A read of the copy costs `COPY_READ_COST` (0.4) of a re-scan, so a source read three
+times or more is copied, provided the copy (estimated rows times the source's row width) is at most
+`1/COPY_MEMORY_SHARE` (1/8) of the memory limit; with no row estimate it is re-scanned. Both constants come from
+interleaved timings on partsupp and a 20-column wide table at 10K to 1M rows: at 100K the copy took 68 ms against 96
+(narrow) and 66 against 94 (wide), and past an eighth of the memory limit it lost. At 10K rows on partsupp it is 14 ms
+slower, in R1's sort, not in the reads. Any other source is one
 `LogicalMaterializedCTE`, defined through a projection that names its columns (a join under it may reorder its output
 in later passes) and read by `LogicalCTERef`s. The group key is the eligibility flag (the budget's `when` holds) and
 the `by` keys, joined with IS NOT DISTINCT FROM in a SINGLE join, the form DuckDB uses for a scalar subquery: every

@@ -51,15 +51,6 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Needs (owner, 2026-10-29).** A rule that takes the shape. Read into the IR with no rule taking it, the reading was
   reached only by an IR test, so it was removed; this task waits for A2–A4 (`../todo.md`).
 
-## H-10 — Re-scan or materialize the source by cost
-
-- **Problem.** `DirectSourceReader` (`direct_source_reader.cpp`) re-scans every source `DirectRepeatableSourceChain`
-  accepts, once per stage, and materializes anything else as one CTE, from the plan's shape alone. On narrow partsupp
-  at 100K rows R1's four scans take 78 ms against about 54 ms for one CTE copy.
-- **Change.** Choose from the bytes the reads need times the number of reads against one materialized copy, as DuckDB
-  weighs inlining a CTE; re-scan where late materialization pays (wide rows).
-- **Done when.** R1 and S1 at the medium tier pick the faster shape on partsupp and on `WIDE_SETUP`.
-
 ## H-09 — Reducer windows a rule could compute itself
 
 - **Problem.** A data reducer on the bound side (`sum(cap) by (g)`) is still installed as a window under every plan,
@@ -69,9 +60,9 @@ solver path answers those queries, so none of them is wrong, only slower.
   query, and a rule computes it in its own aggregate.
 - **Done when.** A direct plan over a reducer bound has no window under the rule; messages and their order unchanged.
 - **Ruling (owner's delegate, 2026-10-29).** A first build added a third bound kind beside `DirectBoundReduction`, with
-  a branch per rule, and ran slower (H-10's re-scan). The bound is one group-computed kind instead: aggregates of the
-  group, an expression over them and checks, which a raw reduction already is, added to a rule's aggregate by one
-  helper. Needs H-10, to measure the gain.
+  a branch per rule. The bound is one group-computed kind instead: aggregates of the group, an expression over them and
+  checks, which a raw reduction already is, added to a rule's aggregate by one helper. Needs F4, which edits the
+  bound-side rewrite.
 
 ## H-08 — VALUE-shape clauses (helper decisions)
 

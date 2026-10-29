@@ -24,8 +24,7 @@ at a time. Lanes: F4, then F5 and F8's BUG-14; F6; F8. F9 runs alone.
 
 ## 7. F6 Direct solve
 
-- [ ] H-10 Re-scan or materialize the source by cost — direct_solve/framework/todo.md § H-10
-- [ ] H-09 Reducer windows a rule could compute itself — direct_solve/framework/todo.md § H-09 (needs: H-10)
+- [ ] H-09 Reducer windows a rule could compute itself — direct_solve/framework/todo.md § H-09 (needs: F4)
 
 ## 9. F8 Solver runtime
 

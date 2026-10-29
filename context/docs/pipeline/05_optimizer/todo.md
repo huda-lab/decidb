@@ -37,10 +37,10 @@ factors' scopes, so a query-wide product is one column. Three other sites still 
 `__body_` helper (`decide_rewrite_define.cpp:333`), and the `NORM_IN` indicators (`decide_rewrite_norm_in.cpp:125`,
 `:215`). Each is one column per row where its operands are query-wide or keyed.
 
-**Design.** Each site takes `JoinScopes` of the decisions its expression reads and registers an entity-scoped auxiliary
-in `entity_scopes[..].scoped_variable_indices`. Stage 06 emits its rows once per instance, as `LinearizeBilinear` does.
-ABS needs a row-data check first: an expression that reads a data column differs by row, so its auxiliary stays one per
-row. The same check applies to a body helper.
+**Design.** Each site's auxiliary takes `ScopeOf` its expression (F4's OPT-2: `JoinScopes` over the leaves it reads,
+a data column making it `Row`) and is registered in `entity_scopes[..].scoped_variable_indices`. Its rows are wrapped in
+`per <key>:` (or `per ()`), so execution emits one row per class; `LinearizeBilinear` cannot carry them, since their
+coefficients are evaluated in execution.
 
 **Done when.** Each site takes `JoinScopes` and the per-instance emission, with a test per site: a model-size test for
 a query-wide expression, and an oracle-judged answer on both solvers.

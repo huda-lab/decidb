@@ -172,10 +172,11 @@ first bad value, and its projection raises infeasible, then unbounded. Stage 5's
 group's numbers, which exist only once stages 2 to 4 have read every row. The verdict column rides into the output, so
 a parent that reads no answer still raises.
 
-**Reading the source several times.** This is the recompute-or-materialize choice DuckDB makes for a CTE. A source
-that is a chain of non-volatile projections and filters over one scan of a DuckDB base table (what
-`DirectExposeStoredRowId` accepts) is rebuilt once per read with fresh table indexes, so each read is a parallel scan
-and no copy of the rows is kept. Any other source (a join, a subquery with an aggregate, a table function, a volatile
+**Reading the source several times.** This is the recompute-or-materialize choice DuckDB makes for a CTE. A source that
+is a chain of non-volatile projections and filters over one scan of a DuckDB base table (what `DirectExposeStoredRowId`
+accepts) is copied once when four reads of the copy cost less than four scans and the copy fits an eighth of the memory
+limit (`done.md`), and otherwise rebuilt once per read with fresh table indexes, so each read is a parallel scan and no
+copy of the rows is kept. Any other source (a join, a subquery with an aggregate, a table function, a volatile
 expression) is materialized once (`LogicalMaterializedCTE`) and read through `LogicalCTERef`s. Both reads return the
 same rows, and no stage depends on their order. The row-id late materialization does not apply to R1: its answers join
 on group keys, not on a row id.

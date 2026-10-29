@@ -26,8 +26,9 @@
 - **Observed:** the model builder adds like coefficients after each was checked finite, so `SUM(b*x) + SUM(c*x)` with
   b = c = 1e308, or `SUM(POWER(b*x, 2))` with b = 1e200, overflows to infinity and reaches the builder's
   InternalException or a Gurobi API error instead of `DecideInvalidValueMessage`.
-- **Fix:** one `AddCoefficient(target, value, written)` helper in the builder checks each sum and raises the message.
-  After F4, whose CQ-4 rewrites the builder.
+- **Fix:** one `AddCoefficient(target, value, written)` helper checks every merged sum, the accumulator's and the
+  fixed terms' included, and raises a new overflow role of `DecideInvalidValueMessage` that names the clause and says
+  to scale its data; direct solve's overflow messages move to that role. After F4, whose CQ-4 rewrites the builder.
 
 ## Limitations (not bugs)
 
