@@ -253,11 +253,7 @@ bool Rule::ProveDataLimit(const DirectIR &ir, const DirectIRConstraint &ir_node,
 	limit.comparison = ir_node.comparison;
 	limit.value = rhs.Copy();
 	if (ir_node.reduction) {
-		limit.reduction = make_uniq<DirectBoundReduction>();
-		limit.reduction->text = ir_node.reduction->text;
-		if (ir_node.reduction->invalid) {
-			limit.reduction->invalid = ir_node.reduction->invalid->Copy();
-		}
+		limit.reduction = ir_node.reduction->Copy();
 	}
 	condition.data_limits.push_back(std::move(limit));
 	return true;
@@ -321,6 +317,15 @@ public:
 	}
 
 protected:
+	//! The message of a number the solver refuses (NaN or infinite), NULL for a valid one; a NULL number skips what it
+	//! reaches.
+	ExprPtr NumberMessage(const ExprPtr &number, DirectNumberKind kind) const {
+		auto none = calc.Constant(Value(LogicalType::VARCHAR));
+		return calc.If(
+		    calc.IsNull(number), none,
+		    calc.If(calc.Fn("isfinite", number), none, calc.Constant(Value(DirectInvalidNumberMessage(kind)))));
+	}
+
 	//! One item's values, each as the expression that reads it.
 	struct ItemExprs {
 		//! The break-even price, the finite rooms up and down (units of budget), and whether each room is infinite.
@@ -618,8 +623,11 @@ struct ItemColumns {
 	vector<ColumnBinding> sources;
 	//! The group key: whether the row belongs to a budget (BOOLEAN), then the group keys. Empty without a scope.
 	vector<ColumnBinding> keys;
-	//! The check of every raw value and of every limit read from the data (BOOLEAN: true, or the row raises).
-	ColumnBinding valid_data;
+	//! The message each check of a raw value or of a limit read from the data raises on the row (VARCHAR, NULL when it
+	//! passes), in the order the solver checks them: the NaN checks of the raw limits (`limit_messages` of them), then
+	//! the others.
+	vector<ColumnBinding> messages;
+	idx_t limit_messages = 0;
 	//! The value of each limit read from the data on the row, as DOUBLE, in the order of the condition's data limits.
 	vector<ColumnBinding> limits;
 	//! The items of the row, one per decision.
@@ -719,7 +727,10 @@ public:
 				items.keys.push_back(columns.at(KeyName(i)).binding);
 			}
 		}
-		items.valid_data = columns.at("valid_data").binding;
+		for (auto &name : message_names) {
+			items.messages.push_back(columns.at(name).binding);
+		}
+		items.limit_messages = limit_message_count;
 		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
 			items.limits.push_back(columns.at(LimitName(j)).binding);
 		}
@@ -773,6 +784,9 @@ private:
 	unique_ptr<LogicalOperator> plan;
 	vector<string> names;
 	std::map<string, Column> columns;
+	//! The columns of the checks' messages, and how many are the raw limits' NaN checks.
+	vector<string> message_names;
+	idx_t limit_message_count = 0;
 
 	static string SourceName(idx_t i) {
 		return "s" + std::to_string(i);
@@ -902,7 +916,7 @@ private:
 	//! budget has the weight 0, as an item outside every budget. Returns the check on each, built over P1, which raises
 	//! only where the value is read. A decision the budget does not name has the weight 0, which needs no check; an
 	//! objective part has a raw value for each decision it names. A limit's group MIN and MAX are stage 2's.
-	vector<unique_ptr<Expression>> LayoutRawValues() {
+	vector<ExprPtr> LayoutRawValues() {
 		Named added;
 		AddLimitValues(added);
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
@@ -936,43 +950,43 @@ private:
 		}
 		auto p1 = Project(added);
 
-		vector<unique_ptr<Expression>> checks;
+		vector<ExprPtr> messages;
 		auto number = [&](const string &name, DirectNumberKind kind) {
-			return DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, columns.at(name).binding, kind);
+			return NumberMessage(C(name), kind);
 		};
 		// The bound-side rewrite's checks of a raw limit come before any other, as its scope checks did.
 		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
 			auto &reduction = condition.data_limits[j].reduction;
 			if (reduction && reduction->invalid) {
-				auto message = C(LimitMessageName(j));
-				checks.push_back(
-				    DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
-				                  DirectErrorPredicate(optimizer, calc.Out(message))));
+				messages.push_back(C(LimitMessageName(j)));
 			}
 		}
+		limit_message_count = messages.size();
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
 			auto suffix = std::to_string(j);
-			auto read_on = [&](unique_ptr<Expression> check) {
-				return clause.when ? DirectCheckOnKeptRows(calc, calc.Out(C("wh" + suffix)), std::move(check))
-				                   : std::move(check);
+			auto read_on = [&](ExprPtr message) {
+				return clause.when ? DirectOnKeptRows(calc, C("wh" + suffix), message) : message;
 			};
-			checks.push_back(read_on(number("c" + suffix, DirectNumberKind::CONSTRAINT)));
-			checks.push_back(read_on(DirectValidBoundPredicate(optimizer, columns.at("r" + suffix).binding)));
+			messages.push_back(read_on(number("c" + suffix, DirectNumberKind::CONSTRAINT)));
+			messages.push_back(
+			    read_on(calc.If(calc.Fn("isnan", C("r" + suffix)), calc.Constant(Value(DirectBoundNaNMessage())),
+			                    calc.Constant(Value(LogicalType::VARCHAR)))));
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = SignedValues(condition.budget, k);
 			if (!weights.empty()) {
-				checks.push_back(ReadOnBudgetRows(number(Dec("w", k), DirectNumberKind::CONSTRAINT)));
+				auto message = number(Dec("w", k), DirectNumberKind::CONSTRAINT);
+				messages.push_back(condition.scoped ? DirectOnKeptRows(calc, C(ELIGIBLE), message) : message);
 			}
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
 				if (!values.empty()) {
-					checks.push_back(number(Dec("o" + std::to_string(p), k), DirectNumberKind::OBJECTIVE));
+					messages.push_back(number(Dec("o" + std::to_string(p), k), DirectNumberKind::OBJECTIVE));
 				}
 			}
 		}
-		return checks;
+		return messages;
 	}
 
 	//! The value of a decision's items: the objective as a maximum, so MINIMIZE negates it, and zero for no objective
@@ -992,10 +1006,13 @@ private:
 		return condition.sense == DecideSense::MINIMIZE ? calc.Neg(value) : value;
 	}
 
-	//! P2: the check on every raw value (true, or the row raises), each clause's bounds, and each decision's v.
-	void AddBoundsAndValue(vector<unique_ptr<Expression>> checks) {
+	//! P2: the message of every check of a raw value, each clause's bounds, and each decision's v.
+	void AddBoundsAndValue(vector<ExprPtr> messages) {
 		Named added;
-		added.emplace_back("valid_data", calc.Wrap(DirectAllHold(calc, std::move(checks))));
+		for (idx_t i = 0; i < messages.size(); i++) {
+			message_names.push_back("message_" + std::to_string(i));
+			added.emplace_back(message_names.back(), messages[i]);
+		}
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto suffix = std::to_string(j);
 			DirectBoundColumns raw;
@@ -1389,13 +1406,16 @@ private:
 			key.push_back(aggregate.Group(calc.Out(KeyColumn(i, items.columns.keys))));
 		}
 		auto rows = aggregate.Add(optimizer.BindAggregateFunction("count_star", vector<unique_ptr<Expression>>()));
-		vector<unique_ptr<Expression>> data_checks;
-		data_checks.push_back(calc.Out(BoolColumn(items.columns.valid_data)));
-		for (auto &decision : items.columns.decisions) {
-			data_checks.push_back(
-			    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, decision.v, DirectNumberKind::OBJECTIVE));
+		// The least message of each check in the group; the group raises them in the solver's order below.
+		vector<ColumnBinding> messages;
+		for (auto message : items.columns.messages) {
+			messages.push_back(aggregate.Add(Aggregate("min", calc.Col(LogicalType::VARCHAR, message))));
 		}
-		auto data_valid = aggregate.Add(Aggregate("bool_and", calc.Wrap(DirectAllHold(calc, std::move(data_checks)))));
+		vector<ColumnBinding> value_messages;
+		for (auto &decision : items.columns.decisions) {
+			value_messages.push_back(
+			    aggregate.Add(Aggregate("min", NumberMessage(DoubleColumn(decision.v), DirectNumberKind::OBJECTIVE))));
+		}
 		vector<ColumnBinding> sums;
 		for (idx_t slot = 0; slot < TOTAL_COUNT; slot++) {
 			sums.push_back(aggregate.Add(Aggregate(TotalFunction(slot), inputs[slot])));
@@ -1411,20 +1431,30 @@ private:
 		auto verdict = VerdictOf(totals, lower, upper, condition.scoped ? BoolColumn(key[0]) : nullptr);
 		auto has_rows = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Col(LogicalType::BIGINT, rows),
 		                         calc.Constant(Value::BIGINT(0)));
+		// The solver's order: the NaN checks of the raw limits, an `=` limit that takes two values in a group, the row
+		// messages, then infeasible and unbounded.
 		vector<unique_ptr<Expression>> checks;
-		// A raw `=` limit takes one value in a group: its MIN and MAX agree (the bound-side rewrite's check).
+		auto raise = [&](ColumnBinding message) {
+			checks.push_back(DirectRaiseMessage(optimizer, calc, calc.Col(LogicalType::VARCHAR, message)));
+		};
+		for (idx_t i = 0; i < items.columns.limit_messages; i++) {
+			raise(messages[i]);
+		}
 		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
 			auto &limit = condition.data_limits[j];
 			if (limit.reduction && limit.comparison == ExpressionType::COMPARE_EQUAL) {
 				auto message = DirectBoundDisagreement(calc, limit.reduction->text,
 				                                       calc.Col(limit.value->return_type, extremes[j].minimum),
 				                                       calc.Col(limit.value->return_type, extremes[j].maximum));
-				checks.push_back(
-				    DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
-				                  DirectErrorPredicate(optimizer, calc.Out(message))));
+				checks.push_back(DirectRaiseMessage(optimizer, calc, message));
 			}
 		}
-		checks.push_back(calc.Out(BoolColumn(data_valid)));
+		for (idx_t i = items.columns.limit_messages; i < messages.size(); i++) {
+			raise(messages[i]);
+		}
+		for (auto message : value_messages) {
+			raise(message);
+		}
 		checks.push_back(DirectRaiseIf(calc, calc.Out(And(has_rows, verdict.infeasible)),
 		                               DirectInfeasibleErrorPredicate(optimizer)));
 		checks.push_back(

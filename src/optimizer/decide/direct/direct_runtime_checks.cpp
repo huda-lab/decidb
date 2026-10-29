@@ -48,11 +48,19 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
 	                                       "which decision needs a bound.");
 }
 
+string DirectInvalidNumberMessage(DirectNumberKind kind) {
+	return kind == DirectNumberKind::OBJECTIVE ? DecideInvalidValueMessage("objective coefficient", "NaN or Infinity")
+	                                           : DirectCoefficientInvalidMessage();
+}
+
 //! The error for a NaN or infinite number, naming the kind of coefficient the user wrote it in.
 static unique_ptr<Expression> DirectInvalidNumberError(Optimizer &optimizer, DirectNumberKind kind) {
-	return DirectErrorPredicate(optimizer, kind == DirectNumberKind::OBJECTIVE
-	                                           ? DecideInvalidValueMessage("objective coefficient", "NaN or Infinity")
-	                                           : DirectCoefficientInvalidMessage());
+	return DirectErrorPredicate(optimizer, DirectInvalidNumberMessage(kind));
+}
+
+unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message) {
+	return DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
+	                     DirectErrorPredicate(optimizer, calc.Out(message)));
 }
 
 string DirectBoundNaNMessage() {

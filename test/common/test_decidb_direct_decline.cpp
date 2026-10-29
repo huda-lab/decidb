@@ -172,39 +172,6 @@ duckdb::unique_ptr<Expression> PairWithSourceColumn(DirectIR &ir, duckdb::unique
 	    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ir.source_bindings[slot]));
 }
 
-//! A key element on source column `slot`.
-DirectKeyElement KeyOn(const DirectIR &ir, idx_t slot) {
-	DirectKeyElement element;
-	element.grouping = make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ir.source_bindings[slot]);
-	element.label = element.grouping->Copy();
-	element.name = "k" + std::to_string(slot);
-	return element;
-}
-
-//! `by` keys on the reduced part of the constraints, one list of source slots per constraint in order. The SQL writes
-//! a key as `sum(x) by (g)`; an edit gives a shape the key it names without it.
-Edit PerKeys(duckdb::vector<duckdb::vector<idx_t>> slots) {
-	return [slots](DirectIR &ir) {
-		for (idx_t i = 0; i < slots.size(); i++) {
-			for (auto slot : slots[i]) {
-				ir.constraints[i].lhs[0].by.push_back(KeyOn(ir, slot));
-			}
-		}
-	};
-}
-
-Edit PerKeyOnConstraint(idx_t constraint) {
-	return [constraint](DirectIR &ir) {
-		ir.constraints[constraint].lhs[0].by.push_back(KeyOn(ir, 0));
-	};
-}
-
-Edit PerKeyOnObjective() {
-	return [](DirectIR &ir) {
-		ir.objective.parts[0].by.push_back(KeyOn(ir, 0));
-	};
-}
-
 //===--------------------------------------------------------------------===//
 // S1
 //===--------------------------------------------------------------------===//
@@ -290,7 +257,7 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	                    [](DirectIR &ir) { LeftPart(ir, 1).terms[0].var_a = 1; }));
 	// CheckCondition: the objective.
 	shapes.push_back(S1("an objective WHEN", "SUM(x) <= 2", nullptr, "MAXIMIZE when flag: SUM(w*x)"));
-	shapes.push_back(S1("an objective PER key", "SUM(x) <= 2", PerKeyOnObjective()));
+	shapes.push_back(S1("an objective with a by key", "SUM(x) <= 2", nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
 	shapes.push_back(
 	    S1("a sense with no objective part", "SUM(x) <= 2", [](DirectIR &ir) { ir.objective.parts.clear(); }));
 	// ProveScope.
@@ -309,7 +276,6 @@ duckdb::vector<Shape> S1DeclineShapes() {
 		                    LeftPart(ir, 1).filter = True();
 		                    ir.constraints[1].scope.when = True();
 	                    }));
-	shapes.push_back(S1("bounds with different PER keys", "SUM(x) >= 1 AND SUM(x) <= 2", PerKeyOnConstraint(1)));
 	shapes.push_back(S1("bounds with different keys", "SUM(x) by (flag) >= 1 AND SUM(x) by (name) <= 2"));
 	shapes.push_back(S1("a bound with a key beside one without", "SUM(x) by (flag) >= 1 AND SUM(x) <= 2"));
 	shapes.push_back(S1("a key that reads a decision", "SUM(x) by (flag) <= 2", [](DirectIR &ir) {
@@ -458,7 +424,7 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	shapes.push_back(A1("a bound on a decision that is not declared", "x <= cap",
 	                    [](DirectIR &ir) { ir.constraints[0].bound.var_idx = 1; }));
 	// CheckCondition: the objective.
-	shapes.push_back(A1("an objective PER key", "x <= cap", PerKeyOnObjective()));
+	shapes.push_back(A1("an objective with a by key", "x <= cap", nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
 	shapes.push_back(A1("an average objective", "x <= cap", nullptr, "MAXIMIZE AVG(w*x)"));
 	shapes.push_back(A1("a nested objective part", "x <= cap",
 	                    [](DirectIR &ir) { ir.objective.parts[0].inner = make_uniq<DirectPart>(); }));
@@ -684,14 +650,10 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
 	shapes.push_back(R1("a membership constraint", "x IN (1, 2) AND SUM(cap*x) <= 5"));
 	// ProveBudgetScope: every clause of the budget covers the same rows.
-	shapes.push_back(R1("a PER key on one clause of the budget only", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
-	                    PerKeys({{NAME_SLOT}, {}})));
-	shapes.push_back(R1("another PER key on the second clause", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
-	                    PerKeys({{NAME_SLOT}, {FLAG_SLOT}})));
-	shapes.push_back(R1("the PER keys in another order on the second clause", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
-	                    PerKeys({{NAME_SLOT, FLAG_SLOT}, {FLAG_SLOT, NAME_SLOT}})));
-	shapes.push_back(R1("a PER key more on the second clause", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
-	                    PerKeys({{NAME_SLOT}, {NAME_SLOT, FLAG_SLOT}})));
+	shapes.push_back(R1("a key on one clause of the budget only", "SUM(cap*x) by (name) >= 1 AND SUM(cap*x) <= 5"));
+	shapes.push_back(R1("another key on the second clause", "SUM(cap*x) by (name) >= 1 AND SUM(cap*x) by (flag) <= 5"));
+	shapes.push_back(
+	    R1("a key more on the second clause", "SUM(cap*x) by (name) >= 1 AND SUM(cap*x) by (name, flag) <= 5"));
 	shapes.push_back(R1("a WHEN on one clause of the budget only", "when flag: SUM(cap*x) >= 1 AND SUM(cap*x) <= 5"));
 	shapes.push_back(
 	    R1("another WHEN on the second clause", "when flag: SUM(cap*x) >= 1 AND when NOT flag: SUM(cap*x) <= 5"));
@@ -751,7 +713,8 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	}));
 	shapes.push_back(R1("a bound below the built-in domain", "x <= -1 AND SUM(cap*x) <= 5"));
 	// CheckCondition and ProveObjective: the objective.
-	shapes.push_back(R1("an objective PER key", "x <= cap AND SUM(cap*x) <= 5", PerKeyOnObjective()));
+	shapes.push_back(
+	    R1("an objective with a by key", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE SUM(w*x) by (flag)"));
 	shapes.push_back(R1("a budget key that reads a decision", "SUM(cap*x) by (name) <= 5", [](DirectIR &ir) {
 		LeftPart(ir).by[0].grouping =
 		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ColumnBinding(ir.decide_index, 0));

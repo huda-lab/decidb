@@ -75,14 +75,14 @@ struct DirectKeyElement {
 	bool no_group = true;
 };
 
-//! Whether two keys group the same rows the same way: the same expressions in the same order, a NULL in each handled
-//! alike.
+//! Whether two keys group the same rows the same way: the same expressions in the same order. The binder keeps one
+//! entry for the same columns (FindOrCreateDecideKey), so two keys that agree there handle a NULL alike.
 inline bool DirectSameKey(const vector<DirectKeyElement> &a, const vector<DirectKeyElement> &b) {
 	if (a.size() != b.size()) {
 		return false;
 	}
 	for (idx_t i = 0; i < a.size(); i++) {
-		if (a[i].no_group != b[i].no_group || !a[i].grouping->Equals(*b[i].grouping)) {
+		if (!a[i].grouping->Equals(*b[i].grouping)) {
 			return false;
 		}
 	}
@@ -125,6 +125,15 @@ struct DirectBoundReduction {
 	//! The message a row raises for a NaN `rhs`, NULL on a valid row (an `=` bound whose group shows two values raises
 	//! DirectBoundDisagreement from its MIN and MAX); null when `rhs` cannot be NaN.
 	unique_ptr<Expression> invalid;
+
+	unique_ptr<DirectBoundReduction> Copy() const {
+		auto copy = make_uniq<DirectBoundReduction>();
+		copy->text = text;
+		if (invalid) {
+			copy->invalid = invalid->Copy();
+		}
+		return copy;
+	}
 };
 
 struct DirectIRConstraint {

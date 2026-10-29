@@ -42,8 +42,7 @@ public:
 		}
 		vector<unique_ptr<Expression>> raised;
 		for (auto &message : messages) {
-			auto fails = calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true));
-			raised.push_back(DirectRaiseIf(calc, calc.Out(fails), DirectErrorPredicate(optimizer, calc.Out(message))));
+			raised.push_back(DirectRaiseMessage(optimizer, calc, message));
 		}
 		auto filter = make_uniq<LogicalFilter>(DirectAllHold(calc, std::move(raised)));
 		for (idx_t i = 0; i < source_columns; i++) {

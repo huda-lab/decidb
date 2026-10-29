@@ -489,15 +489,8 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 		// the solver does, so an expression that can raise (an overflow in `COUNT(*) * k` over a window column) raises
 		// on both paths or on neither.
 		if (!bound.IsFoldable() && DirectIsSourceOnlyNumericMayRaise(bound, ir.decide_index, ir.source_bindings)) {
-			Condition::SourceBound source_bound {type, bound.Copy(), negated, nullptr};
-			if (factor->reduction) {
-				source_bound.reduction = make_uniq<DirectBoundReduction>();
-				source_bound.reduction->text = factor->reduction->text;
-				if (factor->reduction->invalid) {
-					source_bound.reduction->invalid = factor->reduction->invalid->Copy();
-				}
-			}
-			condition.source_bounds.push_back(std::move(source_bound));
+			condition.source_bounds.push_back(
+			    {type, bound.Copy(), negated, factor->reduction ? factor->reduction->Copy() : nullptr});
 			continue;
 		}
 		if (DirectIsLowerBound(type)) {
@@ -867,9 +860,7 @@ private:
 			auto type = bound.value->return_type;
 			auto message = DirectBoundDisagreement(calc, bound.reduction->text, calc.Col(type, bound_minimum[i]),
 			                                       calc.Col(type, bound_maximum[i]));
-			checks.push_back(DirectRaiseIf(calc,
-			                               calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
-			                               DirectErrorPredicate(optimizer, calc.Out(message))));
+			checks.push_back(DirectRaiseMessage(optimizer, calc, message));
 		}
 		return checks;
 	}

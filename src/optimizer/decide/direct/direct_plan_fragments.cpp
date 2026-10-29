@@ -268,8 +268,7 @@ unique_ptr<LogicalOperator> DirectCheckRowBounds(Optimizer &optimizer, unique_pt
 	vector<unique_ptr<Expression>> checks;
 	for (idx_t i = 0; i < bounds.size(); i++) {
 		auto message = calc.Col(LogicalType::VARCHAR, ColumnBinding(window_index, i));
-		checks.push_back(DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
-		                               DirectErrorPredicate(optimizer, calc.Out(message))));
+		checks.push_back(DirectRaiseMessage(optimizer, calc, message));
 	}
 	auto guard = make_uniq<LogicalFilter>(DirectAllHold(calc, std::move(checks)));
 	guard->children.push_back(std::move(window));

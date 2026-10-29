@@ -79,19 +79,6 @@ private:
 	//! Set while reading: a recorded bound a rule could not reduce.
 	mutable bool bound_windows_needed = false;
 
-	//! The source slot `expr` reads when it is exactly a source column.
-	bool SourceSlot(const Expression &expr, idx_t &slot) const {
-		if (expr.GetExpressionClass() != ExpressionClass::BOUND_COLUMN_REF) {
-			return false;
-		}
-		auto &ref = expr.Cast<BoundColumnRefExpression>();
-		auto found = std::find(source_bindings.begin(), source_bindings.end(), ref.binding);
-		// A resolved group key is a column of the source, never of an outer query.
-		D_ASSERT(ref.depth == 0 && found != source_bindings.end());
-		slot = NumericCast<idx_t>(found - source_bindings.begin());
-		return true;
-	}
-
 	//! A predicate a row check can evaluate under the rule's plan: it reads only source columns. One that raises does
 	//! so there, before any value is read, as in the solver's scope check.
 	bool CheckablePredicate(const Expression *predicate) const {

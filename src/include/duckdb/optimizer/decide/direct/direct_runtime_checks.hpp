@@ -1,6 +1,7 @@
 #pragma once
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/expression.hpp"
 
@@ -27,6 +28,15 @@ unique_ptr<Expression> DirectRaiseUnless(const ExpressionBuilder &calc, unique_p
 unique_ptr<Expression> DirectRaiseIf(const ExpressionBuilder &calc, unique_ptr<Expression> bad,
                                      unique_ptr<Expression> error);
 
+//! A check that raises `message` as an error on a row where it is not NULL, and is true otherwise.
+unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message);
+
+//! Which clause a number belongs to, so an error names the object the user wrote.
+enum class DirectNumberKind : uint8_t { OBJECTIVE, CONSTRAINT };
+
+//! The message of the error DirectValidNumberPredicate raises for a NaN or infinite number.
+string DirectInvalidNumberMessage(DirectNumberKind kind);
+
 //! The check, evaluated only on a row where `kept` is true. A value on a row a `when` drops is never read, so it raises
 //! nothing there, as on the solver path.
 unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, unique_ptr<Expression> kept,
@@ -52,8 +62,6 @@ string DirectBoundNaNMessage();
 //! The solver's message for a coefficient that is NaN or infinite.
 string DirectCoefficientInvalidMessage();
 
-//! Which clause a number belongs to, so an error names the object the user wrote.
-enum class DirectNumberKind : uint8_t { OBJECTIVE, CONSTRAINT };
 
 //! Evaluates to true for a finite number and raises an error for a non-finite one, naming `kind`. A NULL number skips
 //! what it reaches (a SUM reads a skipped row's terms as 0, DirectIR), so it passes.

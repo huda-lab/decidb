@@ -3,7 +3,7 @@
 //
 // duckdb/optimizer/decide/decide_solver_gate.hpp
 //
-// Stage 05's gate on the solver chosen for a query (decide_answer_choice.hpp): which model class the query demands of
+// The gate on the solver chosen for a query (decide_answer_choice.hpp): which model class the query demands of
 // it, and whether it can take that model at all.
 //
 //===----------------------------------------------------------------------===//

@@ -2889,3 +2889,33 @@ def test_r1_a_limit_the_class_does_not_determine_raises_the_same_message_on_both
         messages.append(str(error.value))
     assert "per g does not determine cap. g = 'a' has more than one value: 4.0, 6.0." in messages[0], messages[0]
     assert messages[0] == messages[1]
+
+
+@pytest.mark.var_real
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "limit, weight, first",
+    [
+        # A NaN limit on one row and a NaN weight on another: the limit is checked first (scope checks, then the bound).
+        pytest.param("CAST('NaN' AS DOUBLE)", "CAST('NaN' AS DOUBLE)", "null_bound", id="nan-limit-before-nan-weight"),
+        # An `=` limit that takes two values and a NaN weight: the limit's group check comes before the row messages.
+        pytest.param("1.0", "CAST('NaN' AS DOUBLE)", "equality_varies", id="disagreeing-limit-before-nan-weight"),
+    ],
+)
+def test_r1_raises_the_checks_of_two_clauses_in_the_solvers_order(decidb_cli, limit, weight, first):
+    # Row 1 carries the bad limit and row 2 the bad weight, in either order of the rows: the order of the checks, not of
+    # the rows, decides which error the query raises.
+    comparison = "=" if first == "equality_varies" else "<="
+    for rows in (
+        f"(1, {limit}, 1.0, 1.0), (2, 5.0, {weight}, 1.0), (3, 5.0, 1.0, 1.0)",
+        f"(3, 5.0, 1.0, 1.0), (2, 5.0, {weight}, 1.0), (1, {limit}, 1.0, 1.0)",
+    ):
+        sql = (
+            f"SELECT id, amount FROM (FROM (VALUES {rows}) t(id, cap, w, v) "
+            f"DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND 2 AND SUM(w*amount) {comparison} cap "
+            "MAXIMIZE SUM(v*amount)) q"
+        )
+        direct = _run_all(decidb_cli, sql, "require")
+        assert direct != ("error", "direct_not_applied"), sql
+        assert direct == ("error", first) == _run_all(decidb_cli, sql, "off"), sql
