@@ -126,23 +126,26 @@ struct DecideScopeCheck {
 
 //! A bound the bound-side rewrite (DecideOptimizer::RewriteRhsAggregates) left raw instead of reducing it: a clause in
 //! the aggregate shape is one constraint per group, which holds when the group's tightest bound does (`<=` takes its
-//! MIN,
-//! `>=` its MAX, `=` needs one value), so the bound is one value per group once reduced. The rewrite records what it
-//! would reduce; a direct-solve rule that applies reduces it in its own group aggregate, and when none does the
-//! solver path builds the windows (DecideOptimizer::InstallReducedBounds). Neither is serialized: the optimizer makes
-//! them, and an optimized plan is never serialized.
+//! MIN, `>=` its MAX, `=` needs one value), so the bound is one value per group once reduced. The rewrite records
+//! what it would reduce. A direct-solve rule that applies reduces it in its own group aggregate; when none does, the
+//! solver path builds the windows (DecideOptimizer::InstallReducedBounds) and the bound's checks join `scope_checks`
+//! where they would have stood. Neither is serialized: the optimizer makes them, and an optimized plan is never
+//! serialized.
 struct DecideReducedBound {
-	//! The comparison whose right-hand side is the raw value; the left side holds no reducer with a `when` of its own.
+	//! The comparison whose right-hand side is the raw value. It points into `decide_constraints`, which nothing
+	//! rewrites between the bound-side rewrite and the choice of how the query is answered; the windows are built, or
+	//! the node replaced, before the first formulation rewrite touches the tree.
 	Expression *comparison = nullptr;
 	//! The clause's `when` (it is in the constraint tree), or null.
 	const Expression *when = nullptr;
 	//! The bound as the user wrote it, for a message.
 	string text;
-	//! Indexes into `scope_checks` of the checks this bound owns, or INVALID_INDEX: the NaN check of its raw value, and
-	//! for an `=` bound the disagreement check, whose message the windows (or the rule) fill in. The direct IR reads
-	//! neither as a row check.
-	idx_t invalid_check = DConstants::INVALID_INDEX;
-	idx_t disagreement_check = DConstants::INVALID_INDEX;
+	//! The message a row raises for a NaN raw value, NULL on a valid row; null when the value cannot be NaN.
+	unique_ptr<Expression> invalid;
+	//! An `=` bound owes one more check: its group takes one value. Its message needs the windows (or the rule).
+	bool equality = false;
+	//! Where the bound's checks go in `scope_checks`: its size when the bound was recorded.
+	idx_t check_position = 0;
 };
 
 //! A source column's logical identity and the name the user wrote for it.

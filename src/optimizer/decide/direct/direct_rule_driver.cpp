@@ -9,6 +9,7 @@
 #include "duckdb/function/table/table_scan.hpp"
 #include "duckdb/main/client_context.hpp"
 #include "duckdb/main/config.hpp"
+#include "duckdb/optimizer/decide/decide_optimizer.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 #include "duckdb/optimizer/decide/direct/direct_result_adapter.hpp"
@@ -177,8 +178,12 @@ bool ApplyDirectSolveRules(unique_ptr<LogicalOperator> &op, unique_ptr<LogicalOp
 	DecideProfileScope direct_profile("optimizer.direct.analyze");
 	auto &decide = op->Cast<LogicalDecide>();
 	D_ASSERT(decide.children.size() == 1 && decide.children[0]);
-	auto &source = *decide.children[0];
 	auto ir = DirectIR::Read(optimizer.context, decide);
+	if (ir.bound_windows_needed) {
+		InstallReducedBoundWindows(optimizer, decide);
+		ir = DirectIR::Read(optimizer.context, decide);
+	}
+	auto &source = *decide.children[0];
 	struct AppliedCandidate {
 		const DirectSolveRule *rule;
 		unique_ptr<DirectApplicabilityCondition> condition;

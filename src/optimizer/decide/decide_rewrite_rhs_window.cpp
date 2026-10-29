@@ -72,12 +72,21 @@ public:
 	//! Builds the windows of the bounds `Run` recorded: the tightest value of each, and the message of an `=` bound
 	//! that takes two. The solver path needs them; a direct rule reduces the bound itself.
 	void InstallRecorded() {
+		idx_t inserted = 0;
 		for (auto &bound : decide.reduced_bounds) {
 			auto &comparison = bound.comparison->Cast<BoundComparisonExpression>();
 			when = bound.when;
 			auto disagreement = ReduceToTightest(comparison, bound.text);
-			if (bound.disagreement_check != DConstants::INVALID_INDEX) {
-				decide.scope_checks[bound.disagreement_check].value = std::move(disagreement);
+			auto position = decide.scope_checks.begin() + NumericCast<int64_t>(bound.check_position + inserted);
+			for (auto message : {&bound.invalid, &disagreement}) {
+				if (!*message) {
+					continue;
+				}
+				DecideScopeCheck check;
+				check.kind = DecideScopeCheckKind::VALUE_IS_VALID;
+				check.value = std::move(*message);
+				position = decide.scope_checks.insert(position, std::move(check)) + 1;
+				inserted++;
 			}
 		}
 		decide.reduced_bounds.clear();
@@ -121,8 +130,8 @@ private:
 	//! A clause in the aggregate shape is one constraint per group. Its data bound is checked on every kept row, before
 	//! any value is read, and a bound that may differ between the kept rows of a group is reduced to the tightest one.
 	//! `<>` keeps every value: each one is excluded. A query-wide value has one value already. A row-wise bound is
-	//! checked by the solver as it reads it. The reduction is only recorded when the sum has no `when` of its own, for
-	//! then the rows a rule sums are the rows the bound is read over; the solver path builds its window later.
+	//! checked by the solver as it reads it. A bound to reduce is only recorded; the solver path builds its window
+	//! later (InstallRecorded).
 	void RewriteBound(BoundComparisonExpression &comparison) {
 		// Canonicalization put every decision on the left, so the right is data.
 		bool aggregate_data_bound =
@@ -137,66 +146,22 @@ private:
 		auto invalid = InvalidValueMessage(*comparison.right, "constraint right-hand side", Kept());
 		bool reduces = comparison.type != ExpressionType::COMPARE_NOTEQUAL && !query_wide &&
 		               !OneValuePerGroup(*comparison.right, GroupKeyOf(comparison));
-		if (reduces && !HasOwnWhen(*comparison.left)) {
+		if (reduces) {
 			Record(comparison, text, std::move(invalid));
 			return;
 		}
 		AddValueCheck(std::move(invalid));
-		if (reduces) {
-			auto disagreement = ReduceToTightest(comparison, text);
-			AddValueCheck(std::move(disagreement));
-		}
 	}
 
-	//! Whether a reducer on `side` has a `when` written in it. The tests the canonicalizer adds so that a SUM skips a
-	//! NULL are not one: they leave the rows the sum covers as the clause's.
-	static bool HasOwnWhen(const Expression &side) {
-		bool found = false;
-		if (side.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
-			auto &filter = side.Cast<BoundAggregateExpression>().filter;
-			return filter && !OnlySkipNullTests(*filter);
-		}
-		ExpressionIterator::EnumerateChildren(side,
-		                                      [&](const Expression &child) { found = found || HasOwnWhen(child); });
-		return found;
-	}
-
-	static bool OnlySkipNullTests(const Expression &filter) {
-		if (HasDecideTag(filter.GetAlias(), SKIP_NULL_TAG)) {
-			return true;
-		}
-		if (filter.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
-			return false;
-		}
-		for (auto &child : filter.Cast<BoundConjunctionExpression>().children) {
-			if (!OnlySkipNullTests(*child)) {
-				return false;
-			}
-		}
-		return true;
-	}
-
-	//! Leaves the bound raw. The checks it owns keep their place in the scope checks, in clause order: the NaN check of
-	//! its raw value, and for an `=` bound the check of two values in a group, which has no message until the bound is
-	//! reduced.
+	//! Leaves the bound raw. Its checks stand where they would have, in clause order, once the windows are built.
 	void Record(BoundComparisonExpression &comparison, const string &text, unique_ptr<Expression> invalid) {
 		DecideReducedBound bound;
 		bound.comparison = &comparison;
 		bound.when = when;
 		bound.text = text;
-		auto add_check = [&](unique_ptr<Expression> message) {
-			DecideScopeCheck check;
-			check.kind = DecideScopeCheckKind::VALUE_IS_VALID;
-			check.value = std::move(message);
-			decide.scope_checks.push_back(std::move(check));
-			return decide.scope_checks.size() - 1;
-		};
-		if (invalid) {
-			bound.invalid_check = add_check(std::move(invalid));
-		}
-		if (comparison.type == ExpressionType::COMPARE_EQUAL) {
-			bound.disagreement_check = add_check(nullptr);
-		}
+		bound.invalid = std::move(invalid);
+		bound.equality = comparison.type == ExpressionType::COMPARE_EQUAL;
+		bound.check_position = decide.scope_checks.size();
 		decide.reduced_bounds.push_back(std::move(bound));
 	}
 
@@ -387,7 +352,7 @@ private:
 			return;
 		}
 		for (auto &check : decide.scope_checks) {
-			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && check.value && check.value->Equals(*message)) {
+			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && check.value->Equals(*message)) {
 				return;
 			}
 		}
@@ -505,10 +470,14 @@ void DecideOptimizer::RewriteRhsAggregates(LogicalDecide &decide) {
 	RhsWindowRewriter(optimizer, decide).Run();
 }
 
-void DecideOptimizer::InstallReducedBounds(LogicalDecide &decide) {
+void InstallReducedBoundWindows(Optimizer &optimizer, LogicalDecide &decide) {
 	if (!decide.reduced_bounds.empty()) {
 		RhsWindowRewriter(optimizer, decide).InstallRecorded();
 	}
+}
+
+void DecideOptimizer::InstallReducedBounds(LogicalDecide &decide) {
+	InstallReducedBoundWindows(optimizer, decide);
 }
 
 } // namespace duckdb

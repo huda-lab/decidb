@@ -66,6 +66,7 @@ public:
 		ReadConstraints(ir);
 		ReadObjective(ir.objective);
 		ReadRowChecks(ir);
+		ir.bound_windows_needed = bound_windows_needed;
 		return ir;
 	}
 
@@ -75,6 +76,8 @@ private:
 	DecideTermSplitter splitter;
 	DecideCanonicalizer canonicalizer;
 	vector<ColumnBinding> source_bindings;
+	//! Set while reading: a recorded bound a rule could not reduce.
+	mutable bool bound_windows_needed = false;
 
 	//! The source slot `expr` reads when it is exactly a source column.
 	bool SourceSlot(const Expression &expr, idx_t &slot) const {
@@ -130,23 +133,9 @@ private:
 		return true;
 	}
 
-	//! Whether a recorded bound owns scope check `index`: the rule that reads the bound makes it
-	//! (DirectBoundReduction).
-	bool OwnedByReducedBound(idx_t index) const {
-		for (auto &bound : decide.reduced_bounds) {
-			if (bound.invalid_check == index || bound.disagreement_check == index) {
-				return true;
-			}
-		}
-		return false;
-	}
-
 	void ReadRowChecks(DirectIR &ir) const {
 		for (idx_t index = 0; index < decide.scope_checks.size(); index++) {
 			auto &check = decide.scope_checks[index];
-			if (OwnedByReducedBound(index)) {
-				continue;
-			}
 			DirectRowCheck row_check;
 			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
 				// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
@@ -390,13 +379,20 @@ private:
 			if (bound.comparison != &comparison) {
 				continue;
 			}
+			// A rule sums the rows the sum reads. With a `when` of its own those are fewer than the rows the bound is
+			// read over, so the rule cannot reduce the bound: the windows are built and the IR is read again.
+			for (auto &part : ir_node.lhs) {
+				if (part.filter) {
+					bound_windows_needed = true;
+					return;
+				}
+			}
 			ir_node.reduction = make_uniq<DirectBoundReduction>();
 			ir_node.reduction->text = bound.text;
-			if (bound.invalid_check != DConstants::INVALID_INDEX) {
-				auto &message = decide.scope_checks[bound.invalid_check].value;
+			if (bound.invalid) {
 				// The rewrite built it over the source and its own windows.
-				D_ASSERT(CheckablePredicate(message.get()));
-				ir_node.reduction->invalid = message->Copy();
+				D_ASSERT(CheckablePredicate(bound.invalid.get()));
+				ir_node.reduction->invalid = bound.invalid->Copy();
 			}
 		}
 	}

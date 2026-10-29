@@ -44,6 +44,11 @@ class Optimizer;
 //!   - FoldSingletonRows: folds simple `x OP const` bounds into the column box.
 //!     Must run LAST — see its declaration.
 //!
+//! Builds the windows of the bounds the bound-side rewrite left raw (LogicalDecide::reduced_bounds) and puts their
+//! checks in the scope checks. The solver path needs them; so does a direct-solve IR whose rules cannot reduce a bound
+//! themselves (DirectIR::bound_windows_needed).
+void InstallReducedBoundWindows(Optimizer &optimizer, LogicalDecide &decide);
+
 class DecideOptimizer {
 public:
 	explicit DecideOptimizer(Optimizer &optimizer);
