@@ -752,6 +752,10 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(R1("a bound below the built-in domain", "x <= -1 AND SUM(cap*x) <= 5"));
 	// CheckCondition and ProveObjective: the objective.
 	shapes.push_back(R1("an objective PER key", "x <= cap AND SUM(cap*x) <= 5", PerKeyOnObjective()));
+	shapes.push_back(R1("a budget key that reads a decision", "SUM(cap*x) by (name) <= 5", [](DirectIR &ir) {
+		LeftPart(ir).by[0].grouping =
+		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ColumnBinding(ir.decide_index, 0));
+	}));
 	shapes.push_back(R1("an objective WHEN", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE when flag: SUM(w*x)"));
 	shapes.push_back(R1("an average objective", "x <= cap AND SUM(cap*x) <= 5", nullptr, "MAXIMIZE AVG(w*x)"));
 	shapes.push_back(R1("an objective part with a filter", "x <= cap AND SUM(cap*x) <= 5",
@@ -797,15 +801,17 @@ duckdb::vector<Shape> S1KeyedShapes() {
 
 duckdb::vector<Shape> R1KeyedShapes() {
 	duckdb::vector<Shape> shapes;
+	shapes.push_back(R1("a budget per a column", "SUM(cap*x) by (name) <= 5"));
+	shapes.push_back(R1("a budget per two columns", "SUM(cap*x) by (name, flag) <= 5"));
+	shapes.push_back(R1("a budget per an expression", "SUM(cap*x) by (cap + 1) <= 5"));
+	shapes.push_back(R1("a budget per a relation", "SUM(cap*x) by (t) <= 5"));
+	shapes.push_back(R1("a budget per a column under a WHEN", "when flag: SUM(cap*x) by (name) <= 5"));
+	shapes.push_back(R1("a column limit per a column and under a WHEN", "when flag: SUM(w*x) by (name) <= cap"));
 	shapes.push_back(
-	    R1("a column limit with a PER key and a WHEN", "when flag: SUM(w*x) <= cap", PerKeys({{NAME_SLOT}})));
-	shapes.push_back(
-	    R1("a budget with a PER key edited into the IR", "x <= cap AND SUM(cap*x) <= 5", PerKeyOnConstraint(1)));
-	shapes.push_back(R1("a budget with two PER keys", "SUM(cap*x) <= 5", PerKeys({{NAME_SLOT, FLAG_SLOT}})));
-	shapes.push_back(R1("a budget with a PER key and a WHEN", "when flag: SUM(cap*x) <= 5", PerKeys({{NAME_SLOT}})));
-	shapes.push_back(R1("a range with the same PER key on both clauses", "SUM(cap*x) >= 1 AND SUM(cap*x) <= 5",
-	                    PerKeys({{NAME_SLOT}, {NAME_SLOT}})));
-	shapes.push_back(R1("two decisions in a budget with a PER key", "SUM(cap*x + cap*y) <= 5", PerKeys({{NAME_SLOT}}),
+	    R1("a range with the same key on both clauses", "SUM(cap*x) by (name) >= 1 AND SUM(cap*x) by (name) <= 5"));
+	shapes.push_back(R1("a range whose keys list the same columns in another order",
+	                    "SUM(cap*x) by (name, flag) >= 1 AND SUM(cap*x) by (flag, name) <= 5"));
+	shapes.push_back(R1("two decisions in a budget per a column", "SUM(cap*x + cap*y) by (name) <= 5", nullptr,
 	                    "MAXIMIZE SUM(w*x + w*y)", "x(REAL), y(REAL)"));
 	return shapes;
 }
@@ -821,12 +827,6 @@ TEST_CASE("S1 declines each shape that is not exactly its class", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	ExpectDeclines(MakeS1UniformMatroidRule, con, S1DeclineShapes());
-}
-
-TEST_CASE("R1 declines a `by` key until it reads it", "[decidb]") {
-	DuckDB db(nullptr);
-	Connection con(db);
-	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, R1KeyedShapes());
 }
 
 TEST_CASE("A1 applies to the forms of its class", "[decidb]") {
@@ -845,6 +845,7 @@ TEST_CASE("R1 applies to the forms of its class", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	ExpectApplies(MakeR1ContinuousKnapsackRule, con, R1AppliesShapes());
+	ExpectApplies(MakeR1ContinuousKnapsackRule, con, R1KeyedShapes());
 }
 
 TEST_CASE("R1 declines each shape that is not exactly its class", "[decidb]") {
@@ -896,8 +897,8 @@ TEST_CASE("The rule driver offers a rule only an IR the front end read in full",
 // Keyed plans
 //===--------------------------------------------------------------------===//
 
-// A reducer's `by` key is read into the IR (DirectPart::by). A rule that reads the key groups by it, and its answer
-// must equal the solver's on the same query; a rule that does not declines the query, which the solver answers.
+// A reducer's `by` key is read into the IR (DirectPart::by). S1 and R1 group by it, and their answer must equal the
+// solver's on the same query.
 
 //! Source columns: id, g (VARCHAR; rows 8 and 9 have a NULL g, which is in no group, so the keyed plans and the solver
 //! both leave them ungrouped), w (DOUBLE), cap (INTEGER), flag (BOOLEAN). Within a group no two rows tie on w or on
@@ -921,7 +922,7 @@ duckdb::unique_ptr<MaterializedQueryResult> RunWithMode(Connection &con, const s
 
 struct KeyedCase {
 	string branch;
-	//! The rule that reads the key (S1 or R1), or null while no rule does.
+	//! The rule that reads the key (S1 or R1).
 	string rule;
 	string declaration;
 	//! The constraints, with the key written where `{by}` stands.
@@ -929,8 +930,6 @@ struct KeyedCase {
 	string objective;
 	string selected;
 	string written_key;
-	//! The rule reads the key; otherwise it declines the query.
-	bool reads_key;
 };
 
 string WithKey(const string &constraints, const string &key) {
@@ -942,18 +941,18 @@ TEST_CASE("S1 and R1 keyed plans answer as the solver does on the same `by` key"
 	Connection con(db);
 	duckdb::vector<KeyedCase> cases;
 	cases.push_back({"S1 counts per group", "S1_UNIFORM_MATROID", "x(BOOL)", "SUM(x){by} <= 1", "MAXIMIZE SUM(w*x)",
-	                 "x", " by (g)", true});
+	                 "x", " by (g)"});
 	// Fixed values and no lower bound: the plan counts the fixed rows per group but has no free count to keep.
 	cases.push_back({"S1 per group with a fixed value and no lower bound", "S1_UNIFORM_MATROID", "x(BOOL)",
-	                 "SUM(x){by} <= 2 AND x >= flag", "MAXIMIZE SUM(w*x)", "x", " by (g)", true});
+	                 "SUM(x){by} <= 2 AND x >= flag", "MAXIMIZE SUM(w*x)", "x", " by (g)"});
 	cases.push_back({"R1 fills each group's budget by value per weight", "R1_CONTINUOUS_KNAPSACK", "x(REAL)",
-	                 "x <= cap AND SUM(cap*x){by} <= 3", "MAXIMIZE SUM(w*x)", "ROUND(x, 9)", " by (g)", false});
+	                 "x <= cap AND SUM(cap*x){by} <= 3", "MAXIMIZE SUM(w*x)", "ROUND(x, 9)", " by (g)"});
 	cases.push_back({"R1 groups by two key columns", "R1_CONTINUOUS_KNAPSACK", "x(REAL)",
-	                 "x <= cap AND SUM(cap*x){by} <= 2", "MAXIMIZE SUM(w*x)", "ROUND(x, 9)", " by (g, flag)", false});
+	                 "x <= cap AND SUM(cap*x){by} <= 2", "MAXIMIZE SUM(w*x)", "ROUND(x, 9)", " by (g, flag)"});
 	// The second decision has no weight in the budget, so its rows spend nothing in any group.
 	cases.push_back({"R1 per group beside a decision outside the budget", "R1_CONTINUOUS_KNAPSACK", "x(REAL), y(REAL)",
 	                 "x <= cap AND y <= cap AND SUM(cap*x){by} <= 3", "MAXIMIZE SUM(w*x) + SUM(w*y)",
-	                 "ROUND(x, 9), ROUND(y, 9)", " by (g)", false});
+	                 "ROUND(x, 9), ROUND(y, 9)", " by (g)"});
 	for (auto &keyed : cases) {
 		INFO(keyed.branch);
 		auto query = KeyedQuery(keyed.declaration, WithKey(keyed.constraints, keyed.written_key), keyed.objective,
@@ -961,11 +960,6 @@ TEST_CASE("S1 and R1 keyed plans answer as the solver does on the same `by` key"
 		auto solver = RunWithMode(con, "off", query);
 		REQUIRE_NO_FAIL(*solver);
 		auto direct = RunWithMode(con, "require", query);
-		if (!keyed.reads_key) {
-			REQUIRE(direct->HasError());
-			CHECK(direct->GetError().find("direct solve did not apply") != string::npos);
-			continue;
-		}
 		REQUIRE_NO_FAIL(*direct);
 		CHECK(direct->ToString() == solver->ToString());
 		auto plan = RunWithMode(con, "require", "EXPLAIN " + query);

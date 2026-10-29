@@ -43,7 +43,7 @@ from solver.types import ObjSense, VarType
 
 from ._direct_differential import error_class
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import agree_with_oracle, direct_path, outcome as _outcome, run as _run, sql_literal
+from ._direct_oracle_common import agree_with_oracle, outcome as _outcome, run as _run, sql_literal
 from ._large_numbers import writes_large_number
 from ._direct_oracle_common import values_clause
 
@@ -1026,12 +1026,11 @@ def test_s1_error_cases_fail_on_both_paths(decidb_cli, name):
     with pytest.raises(DecidBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
     assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
-    with direct_path(sql):
-        with pytest.raises(DecidBCliError) as direct_error:
-            _run(decidb_cli, sql, "require")
-        message = str(direct_error.value)
-        assert "decide_direct_solve=require" not in message, f"direct solve declined:\n{message}"
-        assert error_class(message) == expected, message
+    with pytest.raises(DecidBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    message = str(direct_error.value)
+    assert "decide_direct_solve=require" not in message, f"direct solve declined:\n{message}"
+    assert error_class(message) == expected, message
 
 
 @pytest.mark.var_boolean
@@ -1154,10 +1153,9 @@ def test_s1_count_bound_raises_only_where_the_solver_does(decidb_cli, name):
     # A bound of 1e6 or more that the solver evaluates is in its model; an error is raised before one is built.
     solver = _outcome(decidb_cli, sql, "off", expected == "ok" and writes_large_number(constraint))
     assert solver[0] == expected, f"the solver gave {solver}, so this case no longer tests what it says"
-    with direct_path(sql):
-        direct = _outcome(decidb_cli, sql, "require")
-        assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
-        assert direct == solver
+    direct = _outcome(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
+    assert direct == solver
 
 
 # Each set has one best score; with room for one row the best is the only row worth selecting. The solvers
@@ -1416,12 +1414,11 @@ def test_s1_reducer_bound_errors_fail_on_both_paths(decidb_cli, name):
     )
     with pytest.raises(DecidBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
-    with direct_path(sql):
-        with pytest.raises(DecidBCliError) as direct_error:
-            _run(decidb_cli, sql, "require")
-        message = str(direct_error.value)
-        assert "decide_direct_solve=require" not in message, f"direct solve declined:\n{message}"
-        assert error_class(message) == error_class(str(solver_error.value)), (message, str(solver_error.value))
+    with pytest.raises(DecidBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    message = str(direct_error.value)
+    assert "decide_direct_solve=require" not in message, f"direct solve declined:\n{message}"
+    assert error_class(message) == error_class(str(solver_error.value)), (message, str(solver_error.value))
 
 
 # A NaN on a row the clause's `when` drops is never read (nothing is computed on a dropped row), so the query solves,
@@ -1452,8 +1449,7 @@ def test_s1_count_bound_skips_null_and_counts_nan_as_sql_does(decidb_cli):
     solver = _outcome(decidb_cli, sql, "off")
     assert solver[0] == "ok", solver
     assert sum(x for _, x in solver[1]) == counted - 1, (solver, counted)
-    with direct_path(sql):
-        assert _outcome(decidb_cli, sql, "require") == solver
+    assert _outcome(decidb_cli, sql, "require") == solver
 
 
 # Infinity is a value of the aggregate, not an error: no limit above, or a limit no count meets.
@@ -1617,10 +1613,9 @@ def test_s1_bound_over_a_column_raises_only_where_the_solver_does(decidb_cli, na
     # A bound of 1e6 or more that the solver evaluates is in its model; an error is raised before one is built.
     solver = _outcome(decidb_cli, sql, "off", expected == "ok" and writes_large_number(constraint))
     assert solver[0] == expected, f"the solver gave {solver}, so this case no longer tests what it says"
-    with direct_path(sql):
-        direct = _outcome(decidb_cli, sql, "require")
-        assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
-        assert direct == solver
+    direct = _outcome(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
+    assert direct == solver
 
 
 @pytest.mark.var_boolean

@@ -36,7 +36,7 @@ from solver.types import ObjSense, VarType
 from ._direct_differential import error_class
 from ._large_numbers import writes_large_number
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import BY_KEY_PENDING, agree_with_oracle, direct_path
+from ._direct_oracle_common import agree_with_oracle
 from ._direct_oracle_common import outcome as _run_all, run as _run, sql_literal, values_clause
 
 
@@ -1127,9 +1127,8 @@ def test_r1_scoped_budget_oracle_solver_and_direct_agree(decidb_cli, oracle_solv
     [
         # Two clauses of one budget must cover the same rows: `by` on one clause and not the other ...
         ("SUM(w*amount) by (g) >= 1 AND SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
-        # ... other keys, or the same keys in another order or number ...
+        # ... other keys, or a key of another number of columns ...
         ("SUM(w*amount) by (g) >= 1 AND SUM(w*amount) by (h) <= 6", "MAXIMIZE SUM(v*amount)"),
-        ("SUM(w*amount) by (g, h) >= 1 AND SUM(w*amount) by (h, g) <= 6", "MAXIMIZE SUM(v*amount)"),
         ("SUM(w*amount) by (g, h) >= 1 AND SUM(w*amount) by (g) <= 6", "MAXIMIZE SUM(v*amount)"),
         # ... a `when` on one clause and not the other, or two different ones.
         ("when f: SUM(w*amount) >= 1 AND SUM(w*amount) <= 6", "MAXIMIZE SUM(v*amount)"),
@@ -1144,6 +1143,19 @@ def test_r1_leaves_budgets_that_do_not_share_a_scope_to_the_solver(decidb_cli, b
     sql = _scoped_sql(THREE_GROUPS, budget, objective)
     assert _run_all(decidb_cli, sql, "require") == ("error", "direct_not_applied")
     assert _run_all(decidb_cli, sql, "auto") == _run_all(decidb_cli, sql, "off")
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_reads_one_key_written_in_two_orders_as_one_budget(decidb_cli):
+    # A key lists the same columns in one order however it is written, so two clauses that write them in another order
+    # share a scope, and R1 reads them as one budget.
+    sql = _scoped_sql(
+        THREE_GROUPS, "SUM(w*amount) by (g, h) >= 1 AND SUM(w*amount) by (h, g) <= 6", "MAXIMIZE SUM(v*amount)"
+    )
+    direct = _run_all(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_not_applied"), sql
+    assert direct == _run_all(decidb_cli, sql, "off")
 
 
 # ---------------------------------------------------------------------------
@@ -1709,11 +1721,10 @@ def test_r1_error_cases_fail_on_both_paths(decidb_cli, name):
     with pytest.raises(DecidBCliError) as solver_error:
         _run(decidb_cli, sql, "off")
     assert error_class(str(solver_error.value)) == expected, str(solver_error.value)
-    with direct_path(sql):
-        with pytest.raises(DecidBCliError) as direct_error:
-            _run(decidb_cli, sql, "require")
-        assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
-        assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
+    with pytest.raises(DecidBCliError) as direct_error:
+        _run(decidb_cli, sql, "require")
+    assert "decide_direct_solve=require" not in str(direct_error.value), "no rule applied to the query"
+    assert error_class(str(direct_error.value)) == expected, str(direct_error.value)
 
 
 @pytest.mark.cons_aggregate
@@ -1724,9 +1735,8 @@ def test_r1_an_equality_limit_that_differs_only_among_rows_outside_the_when_is_n
     sql = _data_error(OUTSIDE_ROWS, "when f: SUM(w*amount) by (g) = b")
     values = {row["id"]: row["v"] for row in OUTSIDE_ROWS}
     solver = sum(values[row[0]] * row[1] for row in _run(decidb_cli, sql, "off")[0])
-    with direct_path(sql):
-        direct = sum(values[row[0]] * row[1] for row in _run(decidb_cli, sql, "require")[0])
-        assert direct == pytest.approx(solver)
+    direct = sum(values[row[0]] * row[1] for row in _run(decidb_cli, sql, "require")[0])
+    assert direct == pytest.approx(solver)
 
 
 @pytest.mark.error
@@ -1997,19 +2007,17 @@ def test_r1_plan_reads_a_stored_table_four_times_and_sorts_narrow_columns(decidb
 
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-@pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)
 def test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key(decidb_cli, tmp_path):
     # A by key and a when: the group key is (in the budget, g). Each group-level stage is a hash aggregate, and the stages meet
-    # the items in hash joins on that key. The empty-aggregate guard is a window over the groups, not over the rows.
+    # the items in hash joins on that key. The one window is the sort of the items.
     query = _wide_query("when f: SUM(w*x) by (g) <= 500")
     plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {query}").stdout
     assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan, plan
     assert _count(plan, "HASH_GROUP_BY") == 3 and _count(plan, "HASH_JOIN") == 3, plan
     assert _count(plan, "CROSS_PRODUCT") == 0 and len(_ordered_windows(plan)) == 1, plan
-    assert _count(plan, "WINDOW") == 2, plan
-    guard, sort = sorted(_profiled_windows(decidb_cli, tmp_path, query))
-    assert not guard[0] and guard[1] <= 8, guard  # one row per group
-    assert sort[0] and sort[1] == 2000 and sort[2] <= 6 * 8, sort
+    assert _count(plan, "WINDOW") == 1, plan
+    ((ordered, rows, width),) = _profiled_windows(decidb_cli, tmp_path, query)
+    assert ordered and rows == 2000 and width <= 6 * 8, (rows, width)
 
 
 @pytest.mark.cons_aggregate
@@ -2019,7 +2027,7 @@ def test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key(decidb_
     [
         pytest.param("when f: SUM(w*x) <= 20000", 2, id="when"),
         pytest.param(
-            "SUM(w*x) by (g) <= 2000", 4, id="per", marks=pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)
+            "SUM(w*x) by (g) <= 2000", 4, id="per"
         ),
     ],
 )
@@ -2103,7 +2111,7 @@ STORED_SOURCES = {
     [
         pytest.param("SUM(w*x) <= 300", id="one_budget"),
         pytest.param(
-            "when f: SUM(w*x) by (g) <= 300", id="scoped", marks=pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)
+            "when f: SUM(w*x) by (g) <= 300", id="scoped"
         ),
     ],
 )
@@ -2685,7 +2693,7 @@ def _wide_pair_query(budget):
     "limit, scoped",
     [
         pytest.param("<= 2000", False, id="global"),
-        pytest.param("<= 500", True, id="scoped", marks=pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)),
+        pytest.param("<= 500", True, id="scoped"),
     ],
 )
 def test_r1_several_decisions_plan_has_one_sort_one_unpivot_and_one_aggregate(decidb_cli, tmp_path, limit, scoped):
@@ -2722,7 +2730,7 @@ def test_r1_several_decisions_plan_has_one_sort_one_unpivot_and_one_aggregate(de
     "scope",
     [
         pytest.param(""),
-        pytest.param(" by (g)", marks=pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)),
+        pytest.param(" by (g)"),
     ],
     ids=["global", "per"],
 )

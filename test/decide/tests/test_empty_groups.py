@@ -8,7 +8,7 @@ independently; a case direct solve takes also runs under `require`.
 
 import pytest
 
-from ._direct_oracle_common import _allow_direct_path, direct_path, run  # noqa: F401
+from ._direct_oracle_common import _allow_direct_path, run  # noqa: F401
 from ._scope_cases import aligned, scope_solver, table, table_rows  # noqa: F401
 from ._scope_oracle import CONSTANT, GLOBAL, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense, VarType

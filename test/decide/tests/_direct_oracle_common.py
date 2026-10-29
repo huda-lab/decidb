@@ -31,32 +31,6 @@ def _allow_direct_path(monkeypatch):
     monkeypatch.delenv("DECIDB_FORCE_SOLVER", raising=False)
 
 
-# Direct solve declines a reducer's `by` key until S1 and R1 read it (framework todo H-05). Until then the direct path
-# of a query with one is expected to fail, strictly, so that H-05 removes the mark.
-BY_KEY_PENDING = "direct solve reads no by key yet (framework todo H-05)"
-
-
-@contextlib.contextmanager
-def direct_path(sql, pending=None):
-    """Wraps the checks of `sql`'s direct path. While direct solve cannot read the query yet (`pending` names the task;
-    a `by` key implies BY_KEY_PENDING) they are a strict xfail: the test is reported xfailed when the block fails and
-    fails when it passes. Run the solver path before the block, so its checks stay ordinary assertions."""
-    # S1 reads a `by` key; R1 (the REAL decisions) does not yet.
-    reason = pending or (BY_KEY_PENDING if " by (" in sql and "(BOOL)" not in sql else None)
-    if reason is None:
-        yield
-        return
-    try:
-        yield
-    except (AssertionError, DecidBCliError, pytest.fail.Exception) as error:
-        pytest.xfail(f"{reason}: {str(error)[:200]}")
-    pytest.fail(f"[XPASS(strict)] {reason}: the direct path passes; remove the pending mark")
-
-
-def _path(sql, mode, pending):
-    return direct_path(sql, pending) if mode == "require" else contextlib.nullcontext()
-
-
 def run(cli, sql, mode, expect_large_numbers=False):
     """Runs `sql` with `decide_direct_solve` set to `mode`; returns `(rows, columns)`.
 
@@ -97,26 +71,25 @@ def sql_literal(value, sql_type):
     return f"CAST({value!r} AS {sql_type})"
 
 
-def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require"), pending=None, large_numbers=False):
+def agree_with_oracle(cli, sql, oracle, check_assignment, modes=("off", "require"), large_numbers=False):
     """Checks that DeciDB, on each of `modes`, gives the answer the oracle's result says it should.
 
     `oracle` is the solved oracle model. When it is infeasible or unbounded, every mode must raise that error. Otherwise
     every mode must return an assignment for which `check_assignment(rows, columns, mode)` raises no AssertionError; the
-    callback owns what a valid assignment is for the rule (row layout, boxes, constraints, objective value). `pending`
-    makes the direct path a strict xfail (`direct_path`). `large_numbers` says the query's model holds a number of 1e6
+    callback owns what a valid assignment is for the rule (row layout, boxes, constraints, objective value).
+    `large_numbers` says the query's model holds a number of 1e6
     or more: the solver path (`off`) warns, and the direct path (`require`) builds no model and prints nothing.
     """
     if oracle.status in (SolverStatus.INFEASIBLE, SolverStatus.UNBOUNDED):
         pattern = r"(?i)infeasible" if oracle.status == SolverStatus.INFEASIBLE else r"(?i)unbounded"
         for mode in modes:
-            with _path(sql, mode, pending), pytest.raises(DecidBCliError, match=pattern):
+            with pytest.raises(DecidBCliError, match=pattern):
                 run(cli, sql, mode, large_numbers and mode == "off")
         return
     assert oracle.status == SolverStatus.OPTIMAL, oracle.status
     for mode in modes:
-        with _path(sql, mode, pending):
-            rows, columns = run(cli, sql, mode, large_numbers and mode == "off")
-            try:
-                check_assignment(rows, columns, mode)
-            except AssertionError as error:
-                raise AssertionError(f"[{mode}] {error}") from None
+        rows, columns = run(cli, sql, mode, large_numbers and mode == "off")
+        try:
+            check_assignment(rows, columns, mode)
+        except AssertionError as error:
+            raise AssertionError(f"[{mode}] {error}") from None

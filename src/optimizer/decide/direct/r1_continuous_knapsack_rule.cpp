@@ -49,12 +49,10 @@ struct Condition final : DirectApplicabilityCondition {
 		unique_ptr<DirectBoundReduction> reduction;
 	};
 	DecideSense sense = DecideSense::FEASIBILITY;
-	//! Which rows the budget covers, and in which groups: a row whose `when` holds and whose group keys are all not
-	//! NULL belongs to the budget of its group; any other row is outside every budget. Every clause of the budget has
-	//! this scope. `group_key_slots` index the source's columns. The front end fills no group key today (it declines a
-	//! `by` key); reading one must make a NULL key a group of its own (D5), where this leaves it out as the removed PER
-	//! did.
-	vector<idx_t> group_key_slots;
+	//! Which rows the budget covers, and in which groups: a row whose `when` holds and whose `by` key has no NULL in a
+	//! NO_GROUP element (D5) belongs to the budget of its group; any other row is outside every budget. Every clause
+	//! of the budget has this scope. Empty without a key: one budget for all the rows it covers.
+	vector<DirectKeyElement> group_keys;
 	unique_ptr<Expression> when;
 	bool scoped = false;
 	//! Each decision's box before any per-row bound (one per decision), and the per-row clauses the plan evaluates;
@@ -180,12 +178,13 @@ bool Rule::ProveBudgetScope(const DirectIR &ir, const vector<const DirectIRConst
                             Condition &condition) const {
 	bool ok;
 	auto first_when = budgets[0]->Membership(ok);
-	if (!ok || !budgets[0]->PlainSum()->by.empty()) {
+	if (!ok) {
 		return false;
 	}
 	for (idx_t i = 1; i < budgets.size(); i++) {
 		auto when = budgets[i]->Membership(ok);
-		if (!ok || !budgets[i]->PlainSum()->by.empty() || static_cast<bool>(when) != static_cast<bool>(first_when) ||
+		if (!ok || !DirectSameKey(budgets[i]->PlainSum()->by, budgets[0]->PlainSum()->by) ||
+		    static_cast<bool>(when) != static_cast<bool>(first_when) ||
 		    (when && !Expression::Equals(*when, *first_when))) {
 			return false;
 		}
@@ -196,7 +195,18 @@ bool Rule::ProveBudgetScope(const DirectIR &ir, const vector<const DirectIRConst
 		}
 		condition.when = std::move(first_when);
 	}
-	condition.scoped = condition.when != nullptr;
+	// A key is evaluated on every row the budget covers, so it must be something a plan can compute: no decision, no
+	// volatile function, no subquery.
+	for (auto &key : budgets[0]->PlainSum()->by) {
+		if (!DirectIsDecisionFreeDeterministic(*key.grouping, ir.decide_index)) {
+			return false;
+		}
+		DirectKeyElement element;
+		element.grouping = key.grouping->Copy();
+		element.no_group = key.no_group;
+		condition.group_keys.push_back(std::move(element));
+	}
+	condition.scoped = !condition.group_keys.empty() || condition.when != nullptr;
 	return true;
 }
 
@@ -673,7 +683,15 @@ public:
 	unique_ptr<LogicalOperator> Build(unique_ptr<LogicalOperator> read, idx_t read_table_index) {
 		read_index = read_table_index;
 		auto when = condition.when ? OverState(*condition.when) : nullptr;
-		auto state = DirectProjectScope(binder, std::move(read), condition.scoped, when.get(), {}, {});
+		// The key is read on the rows of the read projection.
+		vector<DirectKeyElement> keys;
+		for (auto &key : condition.group_keys) {
+			DirectKeyElement element;
+			element.grouping = OverState(*key.grouping);
+			element.no_group = key.no_group;
+			keys.push_back(std::move(element));
+		}
+		auto state = DirectProjectScope(binder, std::move(read), condition.scoped, when.get(), keys, {});
 		state_index = state.state_index;
 		plan = std::move(state.plan);
 		for (idx_t i = 0; i < proved_bindings.size(); i++) {
@@ -681,6 +699,9 @@ public:
 		}
 		if (condition.scoped) {
 			Declare(ELIGIBLE, state.eligible, LogicalType::BOOLEAN);
+			for (idx_t i = 0; i < state.keys.size(); i++) {
+				Declare(KeyName(i), state.keys[i], state.key_types[i]);
+			}
 		}
 		auto checks = LayoutRawValues();
 		AddBoundsAndValue(std::move(checks));
@@ -698,8 +719,8 @@ public:
 		}
 		if (condition.scoped) {
 			items.keys.push_back(columns.at(ELIGIBLE).binding);
-			for (auto slot : condition.group_key_slots) {
-				items.keys.push_back(columns.at(SourceName(slot)).binding);
+			for (idx_t i = 0; i < condition.group_keys.size(); i++) {
+				items.keys.push_back(columns.at(KeyName(i)).binding);
 			}
 		}
 		items.valid_data = columns.at("valid_data").binding;
@@ -759,6 +780,10 @@ private:
 
 	static string SourceName(idx_t i) {
 		return "s" + std::to_string(i);
+	}
+	//! The name of the column that holds element `i` of the group key.
+	static string KeyName(idx_t i) {
+		return "key_" + std::to_string(i);
 	}
 
 	idx_t DecisionCount() const {
@@ -1164,8 +1189,8 @@ public:
 	    : ItemAlgebra(optimizer_p), condition(condition_p), binder(optimizer_p.binder), reader(reader_p) {
 		if (condition.scoped) {
 			key_types.push_back(LogicalType::BOOLEAN);
-			for (auto slot : condition.group_key_slots) {
-				key_types.push_back(reader.SourceTypes()[slot]);
+			for (auto &key : condition.group_keys) {
+				key_types.push_back(key.grouping->return_type);
 			}
 		}
 	}
