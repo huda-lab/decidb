@@ -24,6 +24,7 @@
 #include "duckdb/planner/expression/bound_subquery_expression.hpp"
 #include "duckdb/planner/expression_iterator.hpp"
 
+#include <algorithm>
 #include <cmath>
 
 namespace duckdb {
@@ -566,12 +567,12 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 		// separately, so the message names the factor the user actually has to fix.
 		const char *verb = factor_divides ? "divide" : "multiply";
 		if (ReferencesDecideVar(*factor)) {
-			// A constraint takes any data factor (a row-varying one is a tuple term, below) and a Boolean
-			// decision on a bare reducer: the comparison takes the VALUE shape, where the reducer becomes a
-			// helper decision and the product `b * helper` is linearized as every Boolean product is. The
-			// objective, produced once, takes only one value; an INT or REAL decision is not convex.
-			// (A divisor that bears a decision is refused by the binder, before this runs.)
-			const bool boolean_factor = clause == Clause::CONSTRAINT && IsBooleanFactor(*factor) &&
+			// A constraint takes any data factor (a row-varying one is a tuple term, below), and a clause of
+			// either kind a Boolean decision on a bare reducer: the clause takes the VALUE shape, where the
+			// reducer becomes a helper decision and the product `b * helper` is linearized as every Boolean
+			// product is. An INT or REAL decision is not convex. (A divisor that bears a decision is refused
+			// by the binder, before this runs.)
+			const bool boolean_factor = IsBooleanFactor(*factor) &&
 			                            UnwrapDecideCasts(*term, decide_index)->GetExpressionClass() ==
 			                                ExpressionClass::BOUND_AGGREGATE;
 			if (!boolean_factor) {
@@ -579,8 +580,12 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 				                      UserFacingName(*factor), verb, UserFacingName(*term),
 				                      clause == Clause::CONSTRAINT
 				                          ? "Only data or a BOOL decision can scale SUM/AVG/MIN/MAX."
-				                          : "Only constants and query-wide values can scale SUM/AVG/MIN/MAX.");
+				                          : "Only constants, query-wide values or a BOOL decision can scale "
+				                            "SUM/AVG/MIN/MAX.");
 			}
+			multipliers.push_back(factor);
+			cur = term;
+			continue;
 		}
 		// A row-varying factor on a reducer of a constraint is a tuple term of the row's
 		// constraint: the comparison takes the VALUE shape (ClassifyScoped), which
@@ -1219,7 +1224,16 @@ unique_ptr<Expression> DecideCanonicalizer::CanonicalizeObjectiveInternal(const 
 		    "DECIDE canonicalizer: objective references a decision but decomposed into no "
 		    "decision-bearing term");
 	}
-	return BuildAdditive(decision_atoms, false);
+	auto result = BuildAdditive(decision_atoms, false);
+	// A reducer under a Boolean decision takes the VALUE shape, as a comparison does: the value rewrite holds the
+	// reducer in a helper decision, and the product with it is a Boolean product.
+	if (std::any_of(decision_atoms.begin(), decision_atoms.end(),
+	                [&](const Atom &atom) { return atom.scale && ReferencesDecideVar(*atom.scale); })) {
+		auto alias = result->GetAlias();
+		AddDecideTag(alias, VALUE_REWRITE_TAG);
+		result->SetAlias(std::move(alias));
+	}
+	return result;
 }
 
 string DecideCanonicalizer::Quote(const Expression &expr) const {

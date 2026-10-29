@@ -47,36 +47,38 @@ namespace {
 struct ReducerSite {
 	unique_ptr<Expression> *slot;
 	int sign;
+	//! A decision multiplies the reducer (`b * sum(x)`): its product with the helper is the Boolean product.
+	bool under_decision;
 };
 
 void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &context, idx_t decide_index,
-                         vector<ReducerSite> &out) {
+                         vector<ReducerSite> &out, bool under_decision = false) {
 	if (!BoundExpressionReferencesDecide(*expr, decide_index)) {
 		return; // data holds no decision reducer
 	}
 	switch (expr->GetExpressionClass()) {
 	case ExpressionClass::BOUND_AGGREGATE:
-		out.push_back({&expr, sign});
+		out.push_back({&expr, sign, under_decision});
 		return;
 	case ExpressionClass::BOUND_CAST:
-		CollectReducerSites(expr->Cast<BoundCastExpression>().child, sign, context, decide_index, out);
+		CollectReducerSites(expr->Cast<BoundCastExpression>().child, sign, context, decide_index, out, under_decision);
 		return;
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr->Cast<BoundFunctionExpression>();
 		auto &name = func.function.name;
 		if (name == "+") {
 			for (auto &child : func.children) {
-				CollectReducerSites(child, sign, context, decide_index, out);
+				CollectReducerSites(child, sign, context, decide_index, out, under_decision);
 			}
 			return;
 		}
 		if (name == "-" && func.children.size() == 2) {
-			CollectReducerSites(func.children[0], sign, context, decide_index, out);
-			CollectReducerSites(func.children[1], -sign, context, decide_index, out);
+			CollectReducerSites(func.children[0], sign, context, decide_index, out, under_decision);
+			CollectReducerSites(func.children[1], -sign, context, decide_index, out, under_decision);
 			return;
 		}
 		if (name == "-" && func.children.size() == 1) {
-			CollectReducerSites(func.children[0], -sign, context, decide_index, out);
+			CollectReducerSites(func.children[0], -sign, context, decide_index, out, under_decision);
 			return;
 		}
 		if ((name == "*" || name == "/") && func.children.size() == 2) {
@@ -93,7 +95,8 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 				if (!(name == "/" && i == 1) && !BoundExpressionReferencesDecide(*other, decide_index)) {
 					factor_sign = ScaleSignAtPlanTime(context, other.get(), name == "/");
 				}
-				CollectReducerSites(term, sign * factor_sign, context, decide_index, out);
+				CollectReducerSites(term, sign * factor_sign, context, decide_index, out,
+				                    under_decision || BoundExpressionReferencesDecide(*other, decide_index));
 			}
 			return;
 		}
@@ -103,8 +106,9 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 		break;
 	}
 	// Any other node (ABS, POWER, CASE, ...): the sign of what it holds is not known.
-	ExpressionIterator::EnumerateChildren(
-	    *expr, [&](unique_ptr<Expression> &child) { CollectReducerSites(child, 0, context, decide_index, out); });
+	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
+		CollectReducerSites(child, 0, context, decide_index, out, under_decision);
+	});
 }
 
 //! The helper decisions allocated so far, each with the reducer it holds as written (the
@@ -137,10 +141,38 @@ struct Helpers {
 	}
 };
 
+//! `<`, `>` and `<>` step onto the whole numbers, which is exact for the row only when the helper is whole. The
+//! binder admitted the clause by its own reading: a constant beside the decisions inside a SUM moves to the bound when
+//! the reducer is summed in place (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`), but a helper holds the whole value.
+//! The message is the binder's (ValidateDecideIntegralComparisonOperands).
+void RefuseFractionalStep(const BoundAggregateExpression &agg, const DecideSourceNames &names, idx_t decide_index,
+                          ExpressionType comparison) {
+	if (DecideValueIsWholeNumbered(agg, decide_index) ||
+	    !(comparison == ExpressionType::COMPARE_LESSTHAN || comparison == ExpressionType::COMPARE_GREATERTHAN ||
+	      comparison == ExpressionType::COMPARE_NOTEQUAL)) {
+		return;
+	}
+	const bool not_equal = comparison == ExpressionType::COMPARE_NOTEQUAL;
+	const bool less = comparison == ExpressionType::COMPARE_LESSTHAN;
+	throw BinderException("Comparison '%s' is not supported here: '%s' can take fractional values in this "
+	                      "constraint, and %s. Compare with %s instead.",
+	                      not_equal ? "<>"
+	                      : less    ? "<"
+	                                : ">",
+	                      RenderDecideSource(agg, names),
+	                      not_equal ? "the rewrite (x <> K becomes x <= K-1 OR x >= K+1) is exact only on "
+	                                  "whole numbers"
+	                                : "stepping the bound is exact only on whole numbers",
+	                      not_equal ? "'<=' or '>='"
+	                      : less    ? "'<='"
+	                                : "'>='");
+}
+
 //! Replace the reducer at `site` by its helper decision: the clause's existing one for a
-//! repeated occurrence, else a new one, recording what it holds.
+//! repeated occurrence, else a new one, recording what it holds. `outer` is the push of the side the reducer
+//! stands in: the comparison's, or the objective's sense.
 void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const ClauseScope &scope,
-                    ExpressionType comparison, idx_t source_clause_id, const ReducerSite &site) {
+                    ExtremumPush outer, idx_t source_clause_id, const ReducerSite &site) {
 	auto &decide = helpers.decide;
 	auto &agg = (*site.slot)->Cast<BoundAggregateExpression>();
 	auto agg_name = StringUtil::Lower(agg.function.name);
@@ -153,35 +185,12 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	// holds for `>=` and for a negative term. An unknown sign, `=` and `<>` need both. A helper
 	// several rows read needs every side any of them does, and the rows read the helper alone:
 	// a slack value is harmless.
-	const ExtremumPush push = ExtremumPushOf(ExtremumPushOf(comparison), site.sign);
+	const ExtremumPush push = ExtremumPushOf(outer, site.sign);
 	const bool easy = IsEasyExtremum(agg_name != "min", push);
 	const bool need_envelope = push == ExtremumPush::NONE || easy;
 	const bool need_closing = push == ExtremumPush::NONE || !easy;
 
-	// `<`, `>` and `<>` step onto the whole numbers, which is exact for the row only when
-	// the helper is whole. The binder admitted the clause by its own reading: a constant
-	// beside the decisions inside a SUM moves to the bound when the reducer is summed in
-	// place (`sum(x + 0.5) > 4` is `sum(x) > 4 - 0.5 * n`), but a helper holds the whole
-	// value. The message is the binder's (ValidateDecideIntegralComparisonOperands).
 	const bool whole = DecideValueIsWholeNumbered(agg, decide.decide_index);
-	if (!whole &&
-	    (comparison == ExpressionType::COMPARE_LESSTHAN || comparison == ExpressionType::COMPARE_GREATERTHAN ||
-	     comparison == ExpressionType::COMPARE_NOTEQUAL)) {
-		const bool not_equal = comparison == ExpressionType::COMPARE_NOTEQUAL;
-		const bool less = comparison == ExpressionType::COMPARE_LESSTHAN;
-		throw BinderException("Comparison '%s' is not supported here: '%s' can take fractional values in this "
-		                      "constraint, and %s. Compare with %s instead.",
-		                      not_equal ? "<>"
-		                      : less    ? "<"
-		                                : ">",
-		                      RenderDecideSource(agg, names),
-		                      not_equal ? "the rewrite (x <> K becomes x <= K-1 OR x >= K+1) is exact only on "
-		                                  "whole numbers"
-		                                : "stepping the bound is exact only on whole numbers",
-		                      not_equal ? "'<=' or '>='"
-		                      : less    ? "'<='"
-		                                : "'>='");
-	}
 
 	// F6: a diagnosis, and a plan, name the helper by the reducer it holds, `by` included.
 	auto plan_label = RenderDecideSource(agg, names);
@@ -253,12 +262,23 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 } // namespace
 
 void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
-	if (!decide.decide_constraints) {
+	if (!decide.decide_constraints && !decide.decide_objective) {
 		return;
 	}
 	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	Helpers helpers {optimizer.context, decide, {}};
+
+	// A Boolean factor on a reducer (`b * sum(x)`, canonicalization admits no other decision) is now a product with
+	// the helper. The bilinear rewrite ran before this pass, so it never saw the product: hand it to its one-product
+	// linearization, the same McCormick column any Boolean product gets.
+	auto HandProductsToBilinear = [&](unique_ptr<Expression> &expr, const string &source_alias) {
+		vector<LogicalDecide::BilinearLink> products;
+		FindAndReplaceBilinear(expr, decide, products, source_alias);
+		for (auto &product : products) {
+			decide.bilinear_links.push_back(product);
+		}
+	};
 
 	std::function<void(unique_ptr<Expression> &, ClauseScope)> rewrite = [&](unique_ptr<Expression> &expr,
 	                                                                         ClauseScope scope) {
@@ -283,22 +303,50 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		vector<ReducerSite> sites;
 		CollectReducerSites(cmp.left, 1, optimizer.context, decide.decide_index, sites);
 		for (auto &site : sites) {
-			ReplaceReducer(helpers, names, scope, cmp.type, source_clause_id, site);
+			RefuseFractionalStep(site.slot->get()->Cast<BoundAggregateExpression>(), names, decide.decide_index,
+			                     cmp.type);
+			ReplaceReducer(helpers, names, scope, ExtremumPushOf(cmp.type), source_clause_id, site);
 		}
-		// A Boolean factor on a reducer (`b * sum(x)`, canonicalization admits no other decision) is now a product
-		// with the helper. The bilinear rewrite ran before this pass, so it never saw the product: hand it to its
-		// one-product linearization, the same McCormick column any Boolean product gets.
-		vector<LogicalDecide::BilinearLink> products;
-		FindAndReplaceBilinear(cmp.left, decide, products, cmp.GetAlias());
-		for (auto &product : products) {
-			decide.bilinear_links.push_back(product);
-		}
+		HandProductsToBilinear(cmp.left, cmp.GetAlias());
 		// One row per class from here on: the shape tag has done its work.
 		auto alias = cmp.GetAlias();
 		RemoveDecideTag(alias, VALUE_REWRITE_TAG);
 		cmp.SetAlias(std::move(alias));
 	};
-	rewrite(decide.decide_constraints, ClauseScope());
+	if (decide.decide_constraints) {
+		rewrite(decide.decide_constraints, ClauseScope());
+	}
+
+	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
+	// takes a helper decision the same way. The push is the sense times the term's sign, as for the body definitions;
+	// a decision's sign is not known before the query runs, so the helper is pinned on both sides whatever the sense.
+	// A reducer no decision multiplies stays in the objective as it is.
+	if (decide.decide_objective) {
+		auto objective = std::move(decide.decide_objective);
+		auto *body = &objective;
+		ClauseScope scope;
+		while ((*body)->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
+			auto &conjunction = (*body)->Cast<BoundConjunctionExpression>();
+			if (!IsConstraintWrapper(conjunction) || conjunction.children.empty()) {
+				break;
+			}
+			scope = EnterClauseScope(conjunction, scope);
+			body = &conjunction.children[0];
+		}
+		if (HasDecideTag((*body)->GetAlias(), VALUE_REWRITE_TAG)) {
+			vector<ReducerSite> sites;
+			CollectReducerSites(*body, 1, optimizer.context, decide.decide_index, sites);
+			const auto outer = decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
+			for (auto &site : sites) {
+				if (site.under_decision) {
+					D_ASSERT(site.sign == 0);
+					ReplaceReducer(helpers, names, scope, outer, DConstants::INVALID_INDEX, site);
+				}
+			}
+			HandProductsToBilinear(*body, OBJECTIVE_ROW_TAG);
+		}
+		decide.SetObjective(optimizer.context, std::move(objective));
+	}
 }
 
 } // namespace duckdb

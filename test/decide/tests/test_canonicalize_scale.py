@@ -36,6 +36,7 @@ all looking like the same `BoundColumnRefExpression`. The test is an allow-list,
 anything not positively marked as query-wide is treated as row-varying.
 """
 
+import re
 import time
 
 import pytest
@@ -663,19 +664,117 @@ def test_bool_decision_factor_stays_on_a_bare_reducer(decidb_cli, clause):
     )
 
 
+#: The objective holds the product term directly: the reducer's value is a helper decision and `b * helper` the one
+#: query-wide product column, which the objective reads once. The push on the helper comes from the sense and the
+#: term's sign. `SUM(x) <= 7` and `SUM(x) >= 2` bound the helper.
+BOOL_FACTOR_OBJECTIVES = [
+    pytest.param(
+        "MAXIMIZE b * SUM(x) - 2 * b + SUM(x)",
+        lambda a: sum(_xs(a)) * a["b"] - 2 * a["b"] + sum(_xs(a)),
+        True,
+        id="sum",
+    ),
+    pytest.param(
+        "MINIMIZE 3 * b * SUM(x) - 9 * b",
+        lambda a: 3 * a["b"] * sum(_xs(a)) - 9 * a["b"],
+        False,
+        id="a-data-factor-with-the-boolean",
+    ),
+    pytest.param(
+        "MINIMIZE SUM(x) - 3 * (b * SUM(x)) + 10",
+        lambda a: sum(_xs(a)) - 3 * a["b"] * sum(_xs(a)) + 10,
+        False,
+        id="a-negative-term-and-a-constant",
+    ),
+    pytest.param(
+        "MAXIMIZE b * AVG(x) + SUM(x)",
+        lambda a: a["b"] * sum(_xs(a)) / 3 + sum(_xs(a)),
+        True,
+        id="avg",
+    ),
+    pytest.param(
+        "MINIMIZE b * MAX(x) - 4 * b + SUM(x)",
+        lambda a: a["b"] * max(_xs(a)) - 4 * a["b"] + sum(_xs(a)),
+        False,
+        id="max",
+    ),
+    pytest.param(
+        "MAXIMIZE b * MIN(x) + 2 * b",
+        lambda a: a["b"] * min(_xs(a)) + 2 * a["b"],
+        True,
+        id="min",
+    ),
+    pytest.param(
+        "MAXIMIZE when t.id > 1: b * SUM(x) - 3 * b",
+        lambda a: a["b"] * (a["x1"] + a["x2"]) - 3 * a["b"],
+        True,
+        id="the-reducer-reads-the-kept-rows",
+    ),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.obj_maximize
+@pytest.mark.parametrize("objective, value, maximize", BOOL_FACTOR_OBJECTIVES)
+def test_bool_decision_factor_on_a_reducer_in_the_objective(
+    decidb_cli_gurobi, decidb_cli_highs, objective, value, maximize
+):
+    """Each objective answers on both solvers with the oracle's optimum, judged against every assignment."""
+    sql = f"""
+        SELECT id, x, b FROM {_BOOL_FACTOR_ROWS}
+        DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT x <= 3 AND SUM(x) <= 7 AND SUM(x) >= 2
+        {objective}
+        ORDER BY id"""
+    domains = {**_X_DOMAIN, "b": range(2)}
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        judge_rows(answer(cli, sql), domains, lambda a: 2 <= sum(_xs(a)) <= 7, value, maximize)
+
+
+@pytest.mark.correctness
+@pytest.mark.obj_maximize
+def test_only_the_reducer_under_a_boolean_gets_a_helper_in_the_objective(decidb_cli_highs, tmp_path):
+    """`b * SUM(x) + SUM(x)`: the reducer under `b` is held by a helper (and the product with it is one column, read
+    once by the objective); the plain `SUM(x)` is still the objective's own sum over `x`."""
+    sql = f"""
+        SELECT id, x, b FROM {_BOOL_FACTOR_ROWS}
+        DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT x <= 3 AND SUM(x) <= 7 AND SUM(x) >= 2
+        MAXIMIZE b * SUM(x) + SUM(x)"""
+    dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
+    assert re.search(r"^num_vars: 6$", dump, re.M), dump  # x, b, the helper and the product
+    assert re.findall(r"^col [0-2]: .* obj=(\S+)$", dump, re.M) == ["1", "1", "1"], dump
+    assert re.findall(r"^col 5: .* obj=(\S+)$", dump, re.M) == ["1"], dump
+
+
 @pytest.mark.obj_maximize
 @pytest.mark.error_binder
-def test_bool_decision_factor_in_objective_rejected(decidb_cli):
-    """A constraint takes a Boolean factor on a reducer; the objective, which has no helper to hold the reducer's
-    value, still refuses it as it refuses any decision."""
+def test_bool_decision_factor_per_row_in_the_objective_is_refused(decidb_cli):
+    """The objective is produced once, so a decision outside a reducer needs one instance over the kept rows: a
+    Boolean declared per row multiplying a reducer is refused as it is beside one, not counted once."""
     decidb_cli.assert_error(
         f"""
         SELECT id, x FROM {_BOOL_FACTOR_ROWS}
-        DECIDE x(INT), per (): b(BOOL)
+        DECIDE x(INT), c(BOOL)
         SUCH THAT x <= 3
-        MAXIMIZE b * SUM(x)
+        MAXIMIZE c * SUM(x)
     """,
-        match=r"'b' is a decision, so it cannot multiply SUM\(x\)",
+        match=r"does not determine the decision c",
+    )
+
+
+@pytest.mark.obj_maximize
+@pytest.mark.error_binder
+def test_int_decision_factor_in_the_objective_stays_refused(decidb_cli):
+    """Only a Boolean factor is lifted in the objective: an INT one is not convex."""
+    decidb_cli.assert_error(
+        f"""
+        SELECT id, x FROM {_BOOL_FACTOR_ROWS}
+        DECIDE x(INT), per (): s(INT)
+        SUCH THAT x <= 3 AND s <= 3
+        MAXIMIZE s * SUM(x)
+    """,
+        match=r"'s' is a decision, so it cannot multiply SUM\(x\)",
     )
 
 
