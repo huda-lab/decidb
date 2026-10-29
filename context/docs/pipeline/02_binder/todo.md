@@ -25,6 +25,10 @@ the change. Each needs a ruling.
 3. **The NaN and infinity message** lists "common causes" in a block. Recommended: name the column and the smallest
    edit (`../../language/errors.md`).
 
+**Ruling (owner, 2026-10-29).** All three as recommended: NaN in a bound or a data reducer's argument stays an error;
+infinity in a coefficient stays an error and in a bound stays a value; the message names the column and the smallest
+edit instead of the "common causes" block.
+
 Integer arithmetic follows DuckDB: a bound is computed in DuckDB's types before the model reads it (2^60 + 1 - 2^60
 is 1; a `HUGEINT` overflow raises as in SQL), and division by zero gives DuckDB's `inf`, `nan` or NULL. The model reads
 every number as `DOUBLE`, so a coefficient or bound beyond 2^53 is rounded there.

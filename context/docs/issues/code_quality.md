@@ -99,6 +99,9 @@ and when/during which task it was discovered.
   6. Replace `phase.Next` with a `RunPass(name, fn)` helper in the same change? Two spans time the wrong passes
      (`RewriteNorm` under `optimizer.tag_groups`, `RewriteAbs` under `optimizer.abs` with `TagAbsForBigM`).
      Recommended: yes.
+- **Ruling (owner, 2026-10-29).** All six as recommended: lazily; empty means unset, with a test; the whole stage on
+  both paths; keep `optimized`, fix its doc; `ChooseDecideAnswer` in a new `decide_answer_choice.cpp`; `RunPass` in
+  the same change.
 - **Discovered:** 2026-10-27, tracing a query through the code.
 
 ## CQ-3 — Name the keyed scope "keyed" everywhere

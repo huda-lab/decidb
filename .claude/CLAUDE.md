@@ -19,6 +19,11 @@ Use the established pattern and its standard name before inventing one: GoF patt
 what DuckDB already does. When a design departs from the standard idea, say which one and why in the docs. Name the
 pattern when proposing a design.
 
+Test a fix for patchwork: does it carry a list of cases that will keep growing? "Add the missing `IS NOT NULL` and
+`NOT` cases" has one; "copy the original text and swap the column names" does not, because it treats every expression
+the same way. Compilers do the same: Clang underlines the original source text in its errors rather than reprinting
+its syntax tree. Prefer the fix with no case list, and add no code that does not remove a cause.
+
 ## Commands (from the repository root)
 
 | Command | Purpose |

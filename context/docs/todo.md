@@ -11,12 +11,9 @@ at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or 
 
 ## 1. Owner decisions (independent of each other; ask all first)
 
-- [ ] F2: BUG-4 parser plan, BUG-5 route, LP-2 four choices
 - [ ] F3: INF-3 six calls, INF-1 which check, INF-2 relation key label
 - [ ] F4: CQ-1 five calls, CQ-3 names, CQ-4 encoding, CAN-2 four choices, OPT-2 indicator scope
 - [ ] F5: CAN-1 linearizer and objective, OPT-3 helper definition
-- [ ] F6: H-04 message order, H-03 where the reduction lives, CQ-2 six calls
-- [ ] F7: BIN-1 three rulings
 - [ ] F9: OPS-2 rename the names too, or not
 
 ## 2. F1 Numerics

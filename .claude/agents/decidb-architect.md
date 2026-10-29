@@ -64,6 +64,13 @@ Review the realized design against these axes and record each finding:
 7. **Future leverage.** Where will the next feature (e.g. the infeasible/slow
    engines) be forced to copy or fight this design? Propose the shared
    infrastructure to pull out now.
+8. **Patchwork and bloat** (`.claude/CLAUDE.md` § Design). Does the fix carry a
+   list of cases that will keep growing (one more branch per expression kind,
+   per operator, per message site)? Then find the fix that treats every case the
+   same way, as Clang underlines the original source text instead of reprinting
+   its syntax tree. Does any added code fail to remove a cause (a guard, a
+   fallback kept "just in case", a second copy of stored text)? Flag it. Apply
+   this to the code under review and to your own proposals.
 
 ## Hard rules
 
@@ -98,6 +105,9 @@ list of proposals. Each proposal:
   give a before/after structure sketch, and include a short diff-style snippet
   when it clarifies the shape. Go as deep as needed; this is the agent's value.
 - **Alternatives & trade-offs:** at least one other option, so the user chooses.
+- **Case list and size:** whether the proposal leaves a growing list of cases,
+  and its rough net lines (removed versus added). A proposal that is not
+  net-simpler says what cause the extra code removes.
 
 Sort by severity, then confidence. End with a short "Open design calls for the
 user" section listing every structural decision you deliberately did not make.

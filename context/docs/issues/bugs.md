@@ -62,7 +62,25 @@
 - **Expected:** the text as written. That needs each node's source span, which the
   parser does not keep (only its start).
 - **Impact:** messages only; they stay recognizable.
-- **Needs.** The owner approves the parser plan (each node keeps its source span) before coding.
+- **Ruling (owner, 2026-10-29).** Written text is cut from the query, never re-rendered (architect review done).
+  - The parser tracks bison's `{start, end}` locations: `YYLTYPE` (`scanner.hpp`) becomes a struct with an implicit
+    `int` conversion so every `@n` compiles unchanged, `YYLLOC_DEFAULT` sets the end from the last right-hand symbol,
+    and the lexer sets each token's end (`scan.l`, regenerated with `scripts/generate_flex.py`). Start offsets, and so
+    DuckDB's error positions, do not change; no node outside DECIDE grows.
+  - Spans are stored only at the DECIDE grammar positions (clause, scope, `when`, `per`/`by` keys, a subquery) and on
+    both sides of the six comparison operators, whose node location is the operator (`select.y`, the `@2` actions).
+  - The transformer gets the string actually parsed (both `Parser::ParseQuery` paths) and, while transforming the
+    DECIDE clause only, cuts each span's text into the existing serialized `source_fragments` registry, as DuckDB
+    cuts `CreateInfo::sql`. Written lhs, rhs, qualifier and key text are these cuts; `WhenQualifier`,
+    `PerClassQualifier`, `ScopedInQualifier`, `FrontQualifier`, `AppendQualifier` and the key display text from
+    `DecideKeyToString` go.
+  - A `BETWEEN` is quoted whole from its span. Implicit casts and folded constants are not in the text.
+  - Every column reference prints as written (the D45 change, `../pipeline/03_logical_plan/todo.md` § LP-2).
+  - The tree renderer (`RenderSource`) stays only for text DeciDB writes itself: the canonical layer, moved bounds,
+    edited clauses. A cast or subquery inside a moved term keeps DuckDB's rendering there. Anything with no span (a
+    node the binder makes up, a view or macro stored by an older build) takes one `ToString` fallback, not a branch
+    per node kind.
+  - The NULL-subquery message quotes its clause (from the span), not the subquery.
 
 ## BUG-5 — Messages raised while choosing a formulation name columns without their relation
 
@@ -76,9 +94,12 @@
 - **Expected:** `'D.capacity * s'`: stage 05 carries the relation names (a `LogicalDecide`
   field, serialized), or the refusal moves to stage 04.
 - **Impact:** messages only.
-- **Decision needed.** Which route. (1) Carry the relation names into stage 05: a `LogicalDecide` field, serialized.
-  (2) Move the refusal to stage 04, whose refusals already qualify through `QuoteMessagesWith`. No recommendation is
-  recorded.
+- **Ruling (owner, 2026-10-29).** No BUG-5 code; it closes with BUG-4 and LP-2. Each bound column carries its
+  spelling as written (LP-2), which `RenderSource` prints at any stage, so a stage-05 quote reads `D.capacity` where
+  the user wrote it. The example above no longer reaches either site (the objective walk keeps a non-MIN/MAX term
+  beside one). Find a query that reaches `decide_rewrite_minmax.cpp` (the `beside` refusal) and
+  `decide_linear_form.cpp` (the product refusal, the 4-argument overload) with a data column over a join; each
+  that is reached gets a test, each that is not reached at all is deleted.
 
 ## BUG-6 — Wrong answers: solver tolerance
 
@@ -135,7 +156,26 @@ Each reproduces on the current build.
   (`physical_decide.cpp` ×2, `decide_diagnostic_engines.cpp`). An edited
   clause is `AttachDecideQualifier(lhs + " " + sense + " " + rhs, qualifier)`
   (`decide_diagnostic_render.cpp` ×4, `deterministic_naive.cpp`). The minmax refusal is
-  the one site that skipped the attach. The design gets an architect review before coding.
+  the one site that skipped the attach.
+  **Ruling (owner, 2026-10-29), architect review done.** The audit missed a second site: the `<>` refusal over a
+  product or power (`decide_rewrite_notequal_avg.cpp`, `RenderForPlan(comp)`) and its `ne_clause_labels` also drop
+  the qualifier.
+  - Two functions beside `ConstraintSourceInfo` (`decide_source_info.hpp`, bodies in a new
+    `src/common/decide_source_info.cpp`): `QuoteWrittenClause(source)` and
+    `QuoteEditedClause(source *, lhs, cmp, rhs)` (a null source quotes a row with no clause bare). The object that
+    holds the qualifier does the quoting (Information Expert). `WrittenDecideComparison` and `AttachDecideQualifier`
+    become `static` there.
+  - `MakeClauseLabel`, `MakeLoosenEdit` and `MakeVirtualOffsetEdit` take the source instead of a qualifier string;
+    `SourceQualifier` goes.
+  - Stage 05 reads a comparison's source through one adapter beside `RenderForPlan`, used by the MIN/MAX and the
+    product `<>` refusals. The untagged fallback in the MIN/MAX refusal is deleted if no query reaches it.
+  - `qualifier` stays a public field; the tests at each site are the guard.
+  - EXPLAIN's rewritten rows keep their own qualifier, taken from the rewritten plan: a rewrite can put a row under a
+    different `per` than its clause.
+  - The `<>` label keeps a reference to its clause and is quoted when printed; no second string is stored.
+  - Tests, one per site, each failing if that site drops the qualifier: the MIN/MAX `<>` refusal and the product
+    `<>` refusal under `when p:` and `per K:`, the DROP label, the HiGHS refusal. If `physical_decide.cpp`'s bound
+    site never sees a qualified clause, record that instead of a test.
 - **Impact:** one known message; the audit says whether there are more.
 
 ## BUG-8 — Messages: operands, coefficients and keys
@@ -160,7 +200,8 @@ Each reproduces on the current build.
   printer infers which it holds. Same field as the shared key text above.
 - **Impact:** messages only.
 - **Needs.** `../pipeline/03_logical_plan/todo.md` § LP-2, whose design records display text per occurrence for both
-  bullets.
+  bullets. Under the 2026-10-29 ruling a clause's key text is cut from its own `per`/`by` span (BUG-4), so the first
+  bullet closes with LP-2; the second closes when every reference carries its spelling as written.
 
 ## BUG-9 — A `BETWEEN` echoes its lower half only
 

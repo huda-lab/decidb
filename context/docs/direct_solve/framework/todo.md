@@ -60,6 +60,7 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Recommendation.** 1, the one place that states the tightest bound; nothing is built to be torn down. Either way the
   value checks move into the rule's pass and must keep the solver's order (scope checks, then the bound's NULL/NaN,
   then weights).
+- **Ruling (owner, 2026-10-29).** Option 1.
 - **Change.** Let a rule that applies read through the window: the rewrite records, per reduced bound, the raw value it
   reduced, and the rule takes the MIN or MAX in its own group aggregate, as the window would. The value checks raise the
   same messages in the same order, but inside the rule's own pass, so no window is left under it. Keep one place that
@@ -80,6 +81,8 @@ solver path answers those queries, so none of them is wrong, only slower.
   the solver's row order, which a relational plan cannot reproduce reliably.
 - **Recommendation.** 1, so the message never depends on row order; the solver's pins that quote another order change
   with it.
+- **Ruling (owner, 2026-10-29).** Option 1: both paths name the least failing group and quote the least and greatest
+  values.
 - **Change.** Partition the window by the check's key for `DETERMINES`. Quote the failing class in the message, as
   `PhysicalDecide::RunScopeChecks` does.
 - **Done when.** The same message on both paths, including a NULL key value. H-05 and H-07 need this task.
