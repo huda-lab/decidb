@@ -7,14 +7,18 @@ Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
-at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or F5. F9 runs alone.
+at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or F5. F9 runs alone. F10 is first in
+the next phase, after F6 lands.
 
 ## 1. Owner decisions (independent of each other; ask all first)
 
 - [ ] F3: INF-3 six calls, INF-1 which check, INF-2 relation key label
 - [ ] F4: CQ-1 five calls, CQ-3 names, CQ-4 encoding, CAN-2 four choices, OPT-2 indicator scope
-- [ ] F5: CAN-1 linearizer and objective, OPT-3 helper definition
 - [ ] F9: OPS-2 rename the names too, or not
+
+## 2. F10 Wrong answers (needs: F6)
+
+- [ ] BUG-12 A NULL-key row's bound limits a `per K:` clause — issues/bugs.md § BUG-12
 
 ## 3. F2 Messages quote what the user wrote (needs: 1)
 
@@ -57,6 +61,7 @@ at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or 
 - [ ] R1 reads `by` again — direct_solve/rules/r1_continuous_knapsack/todo.md § Read a `by` key again (needs: H-05)
 - [ ] H-06 The two-level objective — direct_solve/framework/todo.md § H-06
 - [ ] H-07 `per K:` on a constraint — direct_solve/framework/todo.md § H-07 (needs: H-04)
+- [ ] H-09 Reducer windows a rule could compute itself — direct_solve/framework/todo.md § H-09 (needs: H-03)
 
 ## 8. F7 SQL semantics (needs: 1)
 

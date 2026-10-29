@@ -31,6 +31,11 @@ refusal).
 2. Is the objective lifted too (`MAXIMIZE b * sum(x)`)? It has no helper path. Recommended: constraints first; the
    objective as its own task.
 
+**Ruling (owner, 2026-10-29).** (1) Option (a): the value rewrite hands each `b * v` it makes to the bilinear
+rewrite's one-product linearization; the pass order stays. (2) The objective is lifted in this task too
+(`MAXIMIZE b * sum(x)`): it has no helper path today, so its design (a helper for the reducer's value in the objective,
+or the objective's own route to the same linearizer) is proposed and approved before it is coded.
+
 **Test.** Answer tests for the `BOOL` shapes lifted, oracle-judged on both solvers. The `INT` pins
 `test_canonicalize_scale.py::test_decision_factor_rejected` and `::test_decision_factor_in_objective_rejected` stay
 as they are.

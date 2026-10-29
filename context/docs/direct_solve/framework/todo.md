@@ -61,6 +61,11 @@ solver path answers those queries, so none of them is wrong, only slower.
   value checks move into the rule's pass and must keep the solver's order (scope checks, then the bound's NULL/NaN,
   then weights).
 - **Ruling (owner, 2026-10-29).** Option 1.
+- **Ruling (owner, 2026-10-29), from the lane review.** The rewrite records every reducible bound; the rule decides
+  what it can reduce (R1 applies a sum's own `when` as an aggregate `FILTER`; S1 asks the driver for the recorded
+  windows), so the rewrite holds no rule's limits. Error order matches the solver: each row check is a message column,
+  the rule takes its least message per group in the aggregate it already runs, then raises scope checks, the bound's
+  NaN, the `=` disagreement, then row messages.
 - **Change.** Let a rule that applies read through the window: the rewrite records, per reduced bound, the raw value it
   reduced, and the rule takes the MIN or MAX in its own group aggregate, as the window would. The value checks raise the
   same messages in the same order, but inside the rule's own pass, so no window is left under it. Keep one place that
@@ -85,6 +90,9 @@ solver path answers those queries, so none of them is wrong, only slower.
   values.
 - **Change.** Partition the window by the check's key for `DETERMINES`. Quote the failing class in the message, as
   `PhysicalDecide::RunScopeChecks` does.
+- **Ruling (owner, 2026-10-29), from the lane review.** One implementation of the determination and value checks: the
+  solver path installs the direct plan's row checks under `LogicalDecide`, and `RunScopeChecks` keeps only the
+  entity-decision checks. The lane times the solver path before and after on the focused tests.
 - **Done when.** The same message on both paths, including a NULL key value. H-05 and H-07 need this task.
 
 ## H-05 — Read a reducer's `by` key into the IR
@@ -125,6 +133,8 @@ solver path answers those queries, so none of them is wrong, only slower.
   `ReadReducer`) exists, but no query reaches it: the binder rejects a nested reducer anywhere else.
 - **Change.** Read the two-level objective into the IR through the nested-reducer reading.
 - **Done when.** `test_decidb_direct_ir.cpp`, "declines a two-level objective", reads the inner reducer. The nested order-0 norm case returns: an inner not-proved part leaves the outer not proved.
+- **Needs (owner, 2026-10-29).** A rule that takes the shape. Read into the IR with no rule taking it, the reading was
+  reached only by an IR test, so it was removed; this task waits for A2–A4 (`../todo.md`).
 
 ## H-07 — `per K:` on a constraint (one constraint per class)
 
@@ -133,6 +143,15 @@ solver path answers those queries, so none of them is wrong, only slower.
   of the reducer. The DETERMINES scope checks of the class come from H-04.
 - **Needs.** H-04.
 - **Done when.** A differential case per rule that reads it, on both paths, and the DETERMINES message on both paths.
+
+## H-09 — Reducer windows a rule could compute itself
+
+- **Problem.** A data reducer on the bound side (`sum(cap) by (g)`) is still installed as a window under every plan,
+  copying every source column, though a rule's own group aggregate could compute it, as H-03 does for the tightest
+  bound.
+- **Change.** The rewrite records the reducer as a value; the solver path builds the window only when no rule takes the
+  query, and a rule computes it in its own aggregate.
+- **Done when.** A direct plan over a reducer bound has no window under the rule; messages and their order unchanged.
 
 ## H-08 — VALUE-shape clauses (helper decisions)
 

@@ -67,14 +67,37 @@
     `int` conversion so every `@n` compiles unchanged, `YYLLOC_DEFAULT` sets the end from the last right-hand symbol,
     and the lexer sets each token's end (`scan.l`, regenerated with `scripts/generate_flex.py`). Start offsets, and so
     DuckDB's error positions, do not change; no node outside DECIDE grows.
-  - Spans are stored only at the DECIDE grammar positions (clause, scope, `when`, `per`/`by` keys, a subquery) and on
-    both sides of the six comparison operators, whose node location is the operator (`select.y`, the `@2` actions).
+  - `scripts/generate_flex.py` first reproduces the committed `src_backend_parser_scan.cpp` byte for byte from an
+    unchanged `scan.l` (today a plain run differs by about 87 `int`/`size_t` lines), in its own commit.
+  - Spans are recorded only at the DECIDE grammar positions (clause, scope, `when`, `per`/`by` keys) and on both sides
+    of the six comparison operators, whose node location is the operator (`select.y`, the `@2` actions); a subquery
+    gets no span of its own. They go in a side table of `{node, start, end}`, filled only while a DECIDE clause is
+    parsed and carried on `PGDecideClause` to the transformer, so no shared parser node grows.
+  - **Transport (owner, 2026-10-29, architect review).** A source map, as Clang's SourceManager and DuckDB's
+    `CreateInfo::sql`: `SelectNode` keeps the DECIDE tail's text (`decide_tail`, SUCH THAT to the end of the
+    objective), its start offset, and the spans relative to it, keyed by `(anchor, role)`: the anchor is the node's
+    `query_location`, which DuckDB keeps through copy, binding and serialization; the roles are comparison left,
+    comparison right, `when`, `per`, `by`, and (LP-2) column. The parser records `{anchor, role, start, end}`; the
+    transformer stores the map and tags nothing; binders cut text by `(query_location - tail_start, role)`.
+    `SelectNode::ToString` prints the tail as typed when the text is present, so a print-and-parse round trip (the
+    serializer check, prepared statements) gets identical spans. No text rides in a parsed node's alias, so no
+    alias-stripping in `FunctionExpression::ToString`, no moving marker text before binding, no consumed tag.
+    `SelectNode::Equals` ignores the text, as it ignores `query_location`. A macro argument inside a DECIDE clause
+    gets a test first; if its location can collide with the body's spans, stop: the fix is keying spans by their
+    source text, not a text-match guard.
   - The transformer gets the string actually parsed (both `Parser::ParseQuery` paths) and, while transforming the
     DECIDE clause only, cuts each span's text into the existing serialized `source_fragments` registry, as DuckDB
     cuts `CreateInfo::sql`. Written lhs, rhs, qualifier and key text are these cuts; `WhenQualifier`,
     `PerClassQualifier`, `ScopedInQualifier`, `FrontQualifier`, `AppendQualifier` and the key display text from
     `DecideKeyToString` go.
-  - A `BETWEEN` is quoted whole from its span. Implicit casts and folded constants are not in the text.
+  - Implicit casts and folded constants are not in the text. A `BETWEEN`'s halves are made by the binder and take the
+    fallback, as today; quoting it whole is `../diagnostics/infeasible/todo.md` § INF-3.
+  - `source_lhs` / `source_rhs` (the text an edit is spelled from) stay tree-rendered; only `written_*`, the
+    qualifier and key text are cuts.
+  - Cut text keeps the user's case: `SUM(x) <= 100` echoes `SUM(...)`. D32's lower-casing of reducers and keywords
+    no longer applies to quoted text (lower-casing a cut would re-render it through a keyword list); the rest of D32
+    stands (qualifier in front, no synthesized `per row:`, `by ()` not printed). Pins of the lower-cased echo assert
+    the typed text exactly.
   - Every column reference prints as written (the D45 change, `../pipeline/03_logical_plan/todo.md` § LP-2).
   - The tree renderer (`RenderSource`) stays only for text DeciDB writes itself: the canonical layer, moved bounds,
     edited clauses. A cast or subquery inside a moved term keeps DuckDB's rendering there. Anything with no span (a
@@ -189,6 +212,17 @@ Each reproduces on the current build.
   `per (): sum(x) + max(x) <= 1e-05` (amount 5.00001) in the expanded scope where Gurobi and the query scope say
   `<= 0`; the edit over-repairs by 1e-5. Reproduces on the current build.
 - **Needs.** The agent finds the cause and stops with a proposed fix before coding.
+
+## BUG-12 — Wrong answer: a NULL-key row's bound limits a `per K:` clause
+
+- **Observed:** over rows `(id, g, cap)` = `(1,'a',5)`, `(2,NULL,1)`, `(3,'a',5)`,
+  `DECIDE x(INT) SUCH THAT x <= 3 AND per g: SUM(x) <= cap MAXIMIZE SUM(x)` answers a total of 1. D5 puts the NULL
+  row in no class and D6 bounds the whole total once per class of `g`, so the one instance is class `'a'`,
+  `SUM(x) <= 5`, and the optimum is 5. The NULL row's `cap` is read as a limit of its own. Reproduces on the current
+  build, solver path; the direct rules (F6) copy the solver, so both paths agree and no test pins it.
+- **Impact:** a wrong optimum, silently, whenever a `per K:` key is NULL on a row whose bound is tighter.
+- **Needs.** The agent finds where the solver path instantiates a class for a NULL key and stops with a proposed fix
+  before coding; the fix covers both paths.
 
 ## Limitations (not bugs)
 

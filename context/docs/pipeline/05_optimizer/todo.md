@@ -80,6 +80,10 @@ model (Gurobi spatial branch and bound; HiGHS refuses either way).
    change).
 2. Apply (b) to linear helpers too, or only to quadratic ones? Recommended: all, one rule.
 
+**Ruling (owner, 2026-10-29).** (1) (b), the epigraph form: `v >= Σ e` when the rows push the term down, `v <= Σ e`
+when up, the equality only for `=`, `<>` or an unknown sign. (2) Every `SUM`/`AVG` helper, linear ones included: one
+rule.
+
 **Test.** The refused shape answers, oracle-judged on Gurobi; HiGHS refuses it. The owner reads the golden diffs
 before any regeneration.
 
