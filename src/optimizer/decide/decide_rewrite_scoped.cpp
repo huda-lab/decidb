@@ -52,7 +52,7 @@ struct ReducerSite {
 };
 
 void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &context, idx_t decide_index,
-                         vector<ReducerSite> &out, bool under_decision = false) {
+                         const BooleanDecisions &booleans, vector<ReducerSite> &out, bool under_decision = false) {
 	if (!BoundExpressionReferencesDecide(*expr, decide_index)) {
 		return; // data holds no decision reducer
 	}
@@ -61,24 +61,25 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 		out.push_back({&expr, sign, under_decision});
 		return;
 	case ExpressionClass::BOUND_CAST:
-		CollectReducerSites(expr->Cast<BoundCastExpression>().child, sign, context, decide_index, out, under_decision);
+		CollectReducerSites(expr->Cast<BoundCastExpression>().child, sign, context, decide_index, booleans, out,
+		                    under_decision);
 		return;
 	case ExpressionClass::BOUND_FUNCTION: {
 		auto &func = expr->Cast<BoundFunctionExpression>();
 		auto &name = func.function.name;
 		if (name == "+") {
 			for (auto &child : func.children) {
-				CollectReducerSites(child, sign, context, decide_index, out, under_decision);
+				CollectReducerSites(child, sign, context, decide_index, booleans, out, under_decision);
 			}
 			return;
 		}
 		if (name == "-" && func.children.size() == 2) {
-			CollectReducerSites(func.children[0], sign, context, decide_index, out, under_decision);
-			CollectReducerSites(func.children[1], -sign, context, decide_index, out, under_decision);
+			CollectReducerSites(func.children[0], sign, context, decide_index, booleans, out, under_decision);
+			CollectReducerSites(func.children[1], -sign, context, decide_index, booleans, out, under_decision);
 			return;
 		}
 		if (name == "-" && func.children.size() == 1) {
-			CollectReducerSites(func.children[0], -sign, context, decide_index, out, under_decision);
+			CollectReducerSites(func.children[0], -sign, context, decide_index, booleans, out, under_decision);
 			return;
 		}
 		if ((name == "*" || name == "/") && func.children.size() == 2) {
@@ -91,11 +92,12 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 				if (!BoundExpressionReferencesDecide(*term, decide_index)) {
 					continue;
 				}
+				// A BOOL decision is never negative, so it keeps the direction of the reducer it scales.
 				int factor_sign = 0;
-				if (!(name == "/" && i == 1) && !BoundExpressionReferencesDecide(*other, decide_index)) {
-					factor_sign = ScaleSignAtPlanTime(context, other.get(), name == "/");
+				if (!(name == "/" && i == 1)) {
+					factor_sign = ScaleSignAtPlanTime(context, other.get(), name == "/", &booleans);
 				}
-				CollectReducerSites(term, sign * factor_sign, context, decide_index, out,
+				CollectReducerSites(term, sign * factor_sign, context, decide_index, booleans, out,
 				                    under_decision || BoundExpressionReferencesDecide(*other, decide_index));
 			}
 			return;
@@ -107,7 +109,7 @@ void CollectReducerSites(unique_ptr<Expression> &expr, int sign, ClientContext &
 	}
 	// Any other node (ABS, POWER, CASE, ...): the sign of what it holds is not known.
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		CollectReducerSites(child, 0, context, decide_index, out, under_decision);
+		CollectReducerSites(child, 0, context, decide_index, booleans, out, under_decision);
 	});
 }
 
@@ -265,6 +267,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	if (!decide.decide_constraints && !decide.decide_objective) {
 		return;
 	}
+	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
 	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	Helpers helpers {optimizer.context, decide, {}};
@@ -301,7 +304,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		TryParseSourceClauseTag(cmp.GetAlias(), source_clause_id);
 		// Canonicalization put every decision reducer on the left.
 		vector<ReducerSite> sites;
-		CollectReducerSites(cmp.left, 1, optimizer.context, decide.decide_index, sites);
+		CollectReducerSites(cmp.left, 1, optimizer.context, decide.decide_index, booleans, sites);
 		for (auto &site : sites) {
 			RefuseFractionalStep(site.slot->get()->Cast<BoundAggregateExpression>(), names, decide.decide_index,
 			                     cmp.type);
@@ -318,8 +321,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 	}
 
 	// The objective is one expression under its sense (`MAXIMIZE b * sum(x)`): a reducer under a Boolean decision
-	// takes a helper decision the same way. The push is the sense times the term's sign, as for the body definitions;
-	// a decision's sign is not known before the query runs, so the helper is pinned on both sides whatever the sense.
+	// takes a helper decision the same way. The push is the sense times the term's sign, as for the body definitions.
 	// A reducer no decision multiplies stays in the objective as it is.
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
@@ -335,11 +337,10 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		}
 		if (HasDecideTag((*body)->GetAlias(), VALUE_REWRITE_TAG)) {
 			vector<ReducerSite> sites;
-			CollectReducerSites(*body, 1, optimizer.context, decide.decide_index, sites);
+			CollectReducerSites(*body, 1, optimizer.context, decide.decide_index, booleans, sites);
 			const auto outer = decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
 			for (auto &site : sites) {
 				if (site.under_decision) {
-					D_ASSERT(site.sign == 0);
 					ReplaceReducer(helpers, names, scope, outer, DConstants::INVALID_INDEX, site);
 				}
 			}

@@ -147,7 +147,17 @@ bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, d
 //! UNKNOWN. Every consumer that asks "which way does this factor push, if at all" --
 //! the MIN/MAX rewrites and the ABS classifier -- reads the one answer from here.
 enum class PlanTimeSign : uint8_t { ZERO, POSITIVE, NEGATIVE, UNKNOWN };
-PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr);
+
+//! The decisions declared BOOL (LogicalDecide::is_boolean_var, by decide-column index). A BOOL is in {0, 1}, so as a
+//! factor it is never negative: it keeps the direction of the term it scales (its sign reads POSITIVE; where it is 0
+//! the term vanishes and any direction is right for it). Without it a decision's sign is UNKNOWN.
+struct BooleanDecisions {
+	idx_t decide_index;
+	const vector<bool> &is_boolean;
+};
+
+PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr,
+                            const BooleanDecisions *booleans = nullptr);
 
 //! The sign a factor on a reducer contributes: +1, -1, or 0 when it is not known until
 //! the query runs (PlanTimeSignOf). A factor that is exactly zero reads as +1: the term
@@ -158,7 +168,8 @@ PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr);
 //! Nothing depends on this for correctness -- it selects between an exact cheap
 //! linearization and an exact expensive one. 0 must therefore be treated as "assume
 //! the expensive one", never as an error.
-int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides);
+int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides,
+                        const BooleanDecisions *booleans = nullptr);
 
 //! True when a factor on a reducer is exactly zero before the query runs
 //! (PlanTimeSignOf), so the term vanishes: nothing pushes its extremum anywhere, and the

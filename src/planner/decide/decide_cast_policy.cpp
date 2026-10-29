@@ -101,7 +101,7 @@ bool TryEvaluateFoldableDouble(ClientContext &context, const Expression &expr, d
 	return EvaluateFoldableDouble(context, expr, out, flags);
 }
 
-PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr) {
+PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr, const BooleanDecisions *booleans) {
 	double value;
 	if (TryEvaluateFoldableDouble(context, expr, value, FOLD_CATCH_ALL)) {
 		if (!std::isfinite(value)) {
@@ -110,7 +110,14 @@ PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr) {
 		return value == 0.0 ? PlanTimeSign::ZERO : (value < 0.0 ? PlanTimeSign::NEGATIVE : PlanTimeSign::POSITIVE);
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
-		return PlanTimeSignOf(context, *expr.Cast<BoundCastExpression>().child);
+		return PlanTimeSignOf(context, *expr.Cast<BoundCastExpression>().child, booleans);
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF && booleans) {
+		auto &binding = expr.Cast<BoundColumnRefExpression>().binding;
+		if (binding.table_index == booleans->decide_index && binding.column_index < booleans->is_boolean.size() &&
+		    booleans->is_boolean[binding.column_index]) {
+			return PlanTimeSign::POSITIVE;
+		}
 	}
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
 		return PlanTimeSign::UNKNOWN;
@@ -133,28 +140,30 @@ PlanTimeSign PlanTimeSignOf(ClientContext &context, const Expression &expr) {
 		return left == right ? PlanTimeSign::POSITIVE : PlanTimeSign::NEGATIVE;
 	};
 	if (name == "-" && func.children.size() == 1) {
-		return flip(PlanTimeSignOf(context, *func.children[0]));
+		return flip(PlanTimeSignOf(context, *func.children[0], booleans));
 	}
 	if (name == "*" && func.children.size() == 2) {
-		return times(PlanTimeSignOf(context, *func.children[0]), PlanTimeSignOf(context, *func.children[1]));
+		return times(PlanTimeSignOf(context, *func.children[0], booleans),
+		             PlanTimeSignOf(context, *func.children[1], booleans));
 	}
 	if (name == "/" && func.children.size() == 2) {
 		// A zero or unknown divisor leaves the quotient unknown; a zero numerator over
 		// anything else is zero.
-		auto divisor = PlanTimeSignOf(context, *func.children[1]);
+		auto divisor = PlanTimeSignOf(context, *func.children[1], booleans);
 		if (divisor == PlanTimeSign::ZERO || divisor == PlanTimeSign::UNKNOWN) {
 			return PlanTimeSign::UNKNOWN;
 		}
-		return times(PlanTimeSignOf(context, *func.children[0]), divisor);
+		return times(PlanTimeSignOf(context, *func.children[0], booleans), divisor);
 	}
 	return PlanTimeSign::UNKNOWN;
 }
 
-int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides) {
+int ScaleSignAtPlanTime(ClientContext &context, const Expression *scale, bool divides,
+                        const BooleanDecisions *booleans) {
 	if (!scale) {
 		return 1;
 	}
-	switch (PlanTimeSignOf(context, *scale)) {
+	switch (PlanTimeSignOf(context, *scale, booleans)) {
 	case PlanTimeSign::POSITIVE:
 		return 1;
 	case PlanTimeSign::NEGATIVE:

@@ -747,6 +747,36 @@ def test_only_the_reducer_under_a_boolean_gets_a_helper_in_the_objective(decidb_
     assert re.findall(r"^col 5: .* obj=(\S+)$", dump, re.M) == ["1"], dump
 
 
+#: A BOOL is in {0, 1}, never negative, so it keeps the direction of the term it scales: the helper that holds the
+#: reducer is defined on the side the clause (or the sense) pushes it, `v >= sum` or `v <= sum`; only `=`, or a data
+#: factor whose sign the rows decide, needs both.
+BOOL_FACTOR_SIDES = [
+    pytest.param("SUM(x) <= 7 AND b * SUM(x) <= 4", "MAXIMIZE SUM(x)", ">", id="pushed-down"),
+    pytest.param("SUM(x) <= 7 AND b * SUM(x) >= 4", "MAXIMIZE SUM(x)", "<", id="pushed-up"),
+    pytest.param("SUM(x) <= 7 AND -(b * SUM(x)) >= -4", "MAXIMIZE SUM(x)", ">", id="negated-flips-the-push"),
+    pytest.param("SUM(x) <= 7 AND b * SUM(x) = 3", "MAXIMIZE SUM(x)", "=", id="equality-needs-both"),
+    pytest.param(
+        "SUM(x) <= 7 AND (SELECT 2 - 1) * b * SUM(x) <= 4", "MAXIMIZE SUM(x)", "=", id="a-factor-of-unknown-sign"
+    ),
+    pytest.param("SUM(x) <= 7 AND SUM(x) >= 2", "MAXIMIZE b * SUM(x)", "<", id="maximized"),
+    pytest.param("SUM(x) <= 7 AND SUM(x) >= 2", "MINIMIZE b * SUM(x)", ">", id="minimized"),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, objective, sense", BOOL_FACTOR_SIDES)
+def test_a_bool_factor_leaves_the_helper_one_sided(decidb_cli_highs, tmp_path, clause, objective, sense):
+    """The definition row of the helper (the one with the three `x` and the helper, four entries) is `>=`, `<=` or `=`
+    by the push of the clause, and a BOOL factor does not hide the push."""
+    sql = f"""
+        SELECT id, x, b FROM {_BOOL_FACTOR_ROWS}
+        DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT x <= 3 AND {clause}
+        {objective}"""
+    dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
+    assert re.findall(r"^row \d+: sense=(.) rhs=\S+ nnz=4 ", dump, re.M) == [sense], dump
+
+
 @pytest.mark.obj_maximize
 @pytest.mark.error_binder
 def test_bool_decision_factor_per_row_in_the_objective_is_refused(decidb_cli):
