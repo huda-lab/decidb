@@ -470,10 +470,18 @@ private:
 			return;
 		}
 		if (IsPerClassWrapper(conjunction)) {
-			// No rule writes one constraint per class of a `per K:` key yet.
-			DirectIRConstraint ir_node;
-			MarkNotProved(ir_node.status);
-			out.push_back(std::move(ir_node));
+			// `per K: C` is one constraint per class of K (D6). An aggregate clause bounds the whole total in each
+			// class, with a bound the class determines: the solver reads it as the clause beside the scope checks
+			// that say K determines what the clause reads (row_checks), which every rule's plan makes. A clause per
+			// row would hold in a class alone, which no rule models.
+			D_ASSERT(!conjunction.children.empty());
+			auto first = out.size();
+			CollectConstraints(*conjunction.children[0], wrappers, out);
+			for (idx_t i = first; i < out.size(); i++) {
+				if (!out[i].aggregate) {
+					MarkNotProved(out[i].status);
+				}
+			}
 			return;
 		}
 		for (auto &child : conjunction.children) {

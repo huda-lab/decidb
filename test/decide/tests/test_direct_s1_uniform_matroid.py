@@ -1641,3 +1641,51 @@ def test_s1_a_data_bound_is_read_over_the_rows_the_clause_keeps(decidb_cli, cons
     direct = _outcome(decidb_cli, sql, "require")
     assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
     assert direct == _outcome(decidb_cli, sql, "off")
+
+
+# `per g: C` is one constraint per class of g (D6): a count bounds the whole total in each class, with a bound the class
+# determines, so the count takes the tightest class's. The scope check that g determines the bound runs under the plan.
+_PER_CLASS_ROWS = "(1, 'a', 9.0, 4), (2, 'a', 8.0, 4), (3, 'b', 7.0, 2), (4, 'b', 6.0, 2), (5, 'c', 5.0, 3)"
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        pytest.param("per g: SUM(x) <= cap", id="source-valued-bound"),
+        pytest.param("per g: SUM(x) <= 3", id="constant-bound"),
+        pytest.param("per g: SUM(x) by (g) <= cap", id="bound-per-class-group"),
+        pytest.param("per g: SUM(x) >= 1 AND SUM(x) <= cap", id="range-in-one-class-clause"),
+        pytest.param("per g: SUM(x) <= cap AND per g: SUM(x) >= 2", id="two-class-clauses"),
+        pytest.param("when score > 5: per g: SUM(x) <= cap", id="under-a-when"),
+    ],
+)
+def test_s1_a_count_per_class_answers_as_the_solver_does(decidb_cli, constraint):
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {_PER_CLASS_ROWS}) t(id, g, score, cap) "
+        f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    direct = _outcome(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
+    assert direct == _outcome(decidb_cli, sql, "off")
+
+
+@pytest.mark.var_boolean
+@pytest.mark.error
+@pytest.mark.correctness
+def test_s1_a_bound_the_class_does_not_determine_raises_the_same_message_on_both_paths(decidb_cli):
+    # Classes a and c both fail; the message names the least and quotes its least and greatest value.
+    rows = "(1, 'c', 9.0, 8), (2, 'c', 8.0, 7), (3, 'a', 7.0, 6), (4, 'a', 6.0, 4), (5, 'a', 5.0, 5), (6, 'b', 4.0, 3)"
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, g, score, cap) "
+        "DECIDE x(BOOL) SUCH THAT per g: SUM(x) <= cap MAXIMIZE SUM(score*x)) q"
+    )
+    messages = []
+    for mode in ("off", "require"):
+        with pytest.raises(DecidBCliError) as error:
+            _run(decidb_cli, sql, mode)
+        messages.append(str(error.value))
+    assert "per g does not determine cap. g = 'a' has more than one value: 4, 6." in messages[0], messages[0]
+    assert messages[0] == messages[1]

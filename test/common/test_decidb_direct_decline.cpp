@@ -785,6 +785,7 @@ duckdb::vector<Shape> R1DeclineShapes() {
 duckdb::vector<Shape> S1KeyedShapes() {
 	duckdb::vector<Shape> shapes;
 	shapes.push_back(S1("counts per a column", "SUM(x) by (flag) <= 2"));
+	shapes.push_back(S1("a count per class of a column", "per flag: SUM(x) <= cap"));
 	shapes.push_back(S1("counts per two columns", "SUM(x) by (name, flag) <= 1"));
 	// A key is one key in whichever order its elements are written.
 	shapes.push_back(S1("bounds whose keys list the same columns in another order",
@@ -802,6 +803,7 @@ duckdb::vector<Shape> S1KeyedShapes() {
 duckdb::vector<Shape> R1KeyedShapes() {
 	duckdb::vector<Shape> shapes;
 	shapes.push_back(R1("a budget per a column", "SUM(cap*x) by (name) <= 5"));
+	shapes.push_back(R1("a budget per class of a column", "x <= cap AND per flag: SUM(cap*x) <= 5"));
 	shapes.push_back(R1("a budget per two columns", "SUM(cap*x) by (name, flag) <= 5"));
 	shapes.push_back(R1("a budget per an expression", "SUM(cap*x) by (cap + 1) <= 5"));
 	shapes.push_back(R1("a budget per a relation", "SUM(cap*x) by (t) <= 5"));

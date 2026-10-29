@@ -2803,3 +2803,50 @@ def test_r1_a_data_limit_is_read_over_the_rows_the_clause_keeps(decidb_cli, budg
     direct = _run_all(decidb_cli, sql, "require")
     assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
     assert direct == _run_all(decidb_cli, sql, "off")
+
+
+# `per g: C` is one constraint per class of g (D6): a budget bounds the whole total in each class, with a limit the class
+# determines, so the total takes the tightest class's. The scope check that g determines the limit runs under the plan.
+_PER_CLASS_ROWS = "(1, 'a', 2.0, 3.0, 4), (2, 'a', 1.0, 2.0, 4), (3, 'b', 3.0, 1.0, 2), (4, 'b', 2.0, 2.0, 2), (5, 'c', 1.0, 1.0, 3)"
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "budget",
+    [
+        pytest.param("per g: SUM(w*amount) <= cap", id="column-limit"),
+        pytest.param("per g: SUM(w*amount) <= 5", id="constant-limit"),
+        pytest.param("per g: SUM(w*amount) by (g) <= cap", id="limit-per-class-group"),
+        pytest.param("per g: SUM(w*amount) <= cap AND SUM(w*amount) >= 1", id="range-in-one-class-clause"),
+        pytest.param("when v > 1: per g: SUM(w*amount) <= cap", id="under-a-when"),
+    ],
+)
+def test_r1_a_budget_per_class_answers_as_the_solver_does(decidb_cli, budget):
+    sql = (
+        f"SELECT id, amount FROM (FROM (VALUES {_PER_CLASS_ROWS}) t(id, g, w, v, cap) "
+        f"DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND 2 AND {budget} MAXIMIZE SUM(v*amount)) q ORDER BY id"
+    )
+    direct = _run_all(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
+    assert direct == _run_all(decidb_cli, sql, "off")
+
+
+@pytest.mark.var_real
+@pytest.mark.error
+@pytest.mark.correctness
+def test_r1_a_limit_the_class_does_not_determine_raises_the_same_message_on_both_paths(decidb_cli):
+    rows = "(1, 'c', 1.0, 1.0, 8), (2, 'c', 1.0, 2.0, 7), (3, 'a', 1.0, 3.0, 6), (4, 'a', 1.0, 4.0, 4), (5, 'b', 1.0, 5.0, 3)"
+    sql = (
+        f"SELECT id, amount FROM (FROM (VALUES {rows}) t(id, g, w, v, cap) "
+        "DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND 2 AND per g: SUM(w*amount) <= cap "
+        "MAXIMIZE SUM(v*amount)) q"
+    )
+    messages = []
+    for mode in ("off", "require"):
+        with pytest.raises(DecidBCliError) as error:
+            _run(decidb_cli, sql, mode)
+        messages.append(str(error.value))
+    assert "per g does not determine cap. g = 'a' has more than one value: 4.0, 6.0." in messages[0], messages[0]
+    assert messages[0] == messages[1]

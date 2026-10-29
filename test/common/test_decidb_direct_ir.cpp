@@ -394,6 +394,28 @@ TEST_CASE("Direct-solve IR models products and squares, and declines a two-level
 	REQUIRE(nested.ir.objective.parts.empty());
 }
 
+TEST_CASE("Direct-solve IR reads an aggregate clause per class and leaves a per-row clause per class to the solver",
+          "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	// `per K: C` is one constraint per class; an aggregate clause bounds the total in each, so it reads as the clause,
+	// beside the scope check that the key determines the bound.
+	QueryIR aggregate(con, IRQuery("x(BOOL)", "per flag: SUM(x) <= cap", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(aggregate.ir.status == DirectAnalysisStatus::PROVED);
+	REQUIRE(aggregate.ir.constraints.size() == 1);
+	REQUIRE(aggregate.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
+	REQUIRE(aggregate.ir.constraints[0].aggregate);
+	REQUIRE(aggregate.ir.row_checks.size() == 1);
+	REQUIRE(aggregate.ir.row_checks[0].kind == DirectRowCheckKind::DETERMINES);
+	REQUIRE(aggregate.ir.row_checks[0].text.object == "cap");
+
+	// A clause per row would hold in a class alone: no rule models it.
+	QueryIR per_row(con, IRQuery("x(BOOL)", "SUM(x) <= 2 AND per flag: x <= 1", "MAXIMIZE SUM(w*x)"));
+	REQUIRE(per_row.ir.constraints.size() == 2);
+	REQUIRE(per_row.ir.constraints[0].status == DirectAnalysisStatus::PROVED);
+	REQUIRE(per_row.ir.constraints[1].status == DirectAnalysisStatus::NOT_PROVED);
+}
+
 TEST_CASE("Direct-solve IR reports what it cannot model as not proved", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
