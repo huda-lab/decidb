@@ -383,7 +383,7 @@ an in-process binding.
 | `error_parser` | Parser-level syntax errors |
 | `error_binder` | Binder-level semantic errors |
 | `error_infeasible` | Infeasible models |
-| `when`, `when_constraint`, `when_perrow`, `when_objective`, `when_compound` | `when` in front of a clause (`test_when_*.py`) |
+| `when`, `when_constraint`, `when_row`, `when_objective`, `when_compound` | `when` in front of a clause (`test_when_*.py`) |
 | `per_clause` | `per` in front of a constraint (`test_per_*.py`) |
 | `large_scale` | Performance / scale tests (`test_large_scale.py`) |
 | `correctness` | Meta: all oracle comparison tests |

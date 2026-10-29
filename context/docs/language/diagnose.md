@@ -18,7 +18,7 @@ prefix is implemented. The engines that compute the findings are in `../diagnost
 - **There is no options syntax** (`DIAGNOSE (VERBOSE) …`).
 - **Scoped clauses.** `clause` and `suggested_change` quote clauses in the EXPLAIN style
   ([explain.md](explain.md#rendering)). `group` holds the `per` key value of an expanded finding, one row per class
-  (`edit_source = expanded_group`); a NULL key value prints as `NULL`. `scope` is `row`, or `entity` for a keyed
+  (`edit_source = expanded_group`); a NULL key value prints as `NULL`. `scope` is `row`, or `keyed` for a keyed
   decision's escape count; a query-wide decision has one instance and reports no count.
 - **Data checks still raise.** A `when` that keeps no row, a key that does not determine its clause, and an empty
   reducer group fail before solving, under DIAGNOSE as without it ([guide.md §7](guide.md#7-determination-null-and-empty-sets)).

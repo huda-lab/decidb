@@ -29,7 +29,7 @@ orders" and `../language/guide.md` §1.
 - **Every declaration scope parses in the split slot**: one decision per row
   (throughout), `per (): cap(INT)` (`test_scalar_declaration_in_split_slot`, one
   shared value across rows) and `per n: keep(BOOL)`
-  (`test_entity_scoped_declaration_in_split_slot`, one value per nation across the
+  (`test_keyed_declaration_in_split_slot`, one value per nation across the
   join's repeated rows, with a colon-form reducer `SUM(n: keep)`).
 - **The `in_decide_clause` lexer flag is cleared between the slots**:
   `test_case_when_in_join_on_between_slots` and
@@ -125,8 +125,7 @@ parser-level (`test_error_parser.py`).
 
 ## Keyed decisions
 
-Tests live in `test/decide/tests/test_entity_scope.py` (keyed decisions over joins;
-the file and its `test_entity_scoped_*` tests keep their names). The declaration
+Tests live in `test/decide/tests/test_keyed_scope.py` (keyed decisions over joins). The declaration
 itself — keys of columns and relations, NULL as a class, pruning, errors — is covered
 by `test_scope_declare.py` ([`scope_suite.md`](scope_suite.md)). Syntax:
 `../language/guide.md` §2.3.
@@ -138,7 +137,7 @@ gurobipy model via `compare_solutions` or the scope oracle.
 
 ### Scenarios covered
 
-Oracle-verified groups in `test_entity_scope.py`:
+Oracle-verified groups in `test_keyed_scope.py`:
 
 - **Core**: BOOL selection, one value per class under a tight `sum`, INT (per-row and
   aggregate bounds), REAL (single table, DOUBLE readback), keyed and per-row decisions
@@ -153,22 +152,22 @@ Oracle-verified groups in `test_entity_scope.py`:
 - **Source shapes and NULL**: an uncorrelated scalar subquery bound shared across `per`
   classes; a three-table fan-out join with the decision keyed on the middle relation and
   `per` on an outer one; a NULL key value as one shared class
-  (`test_entity_scoped_null_key`, keyed `per n.nk:`); a keyed decision beside a `per`
+  (`test_keyed_null_key`, keyed `per n.nk:`); a keyed decision beside a `per`
   constraint over the same nullable column, where NULL is one class in both
-  (`test_entity_scoped_vs_per_null_semantics`, the `per` half judged by the scope
+  (`test_keyed_vs_per_null_semantics`, the `per` half judged by the scope
   oracle); a per-row baseline on a 1-to-many orders × lineitem join
   (`test_row_scoped_vars_on_fanout_join`).
 
 Rows with unique caveats:
 
-- `test_entity_scoped_mixed_when_per` — keyed + per-row + `when` + `per`,
+- `test_keyed_mixed_when_per` — keyed + per-row + `when` + `per`,
   oracle-verified but Gurobi-only; the fixture skips on HiGHS-only hosts.
-- `test_entity_scoped_nonexistent_table` — error test: `per nonexistent:` is "neither
+- `test_keyed_nonexistent_table` — error test: `per nonexistent:` is "neither
   a column nor a relation of the FROM clause".
-- `test_entity_scoped_var_in_when_condition_error` — error test: "keepN is a decision;
+- `test_keyed_var_in_when_condition_error` — error test: "keepN is a decision;
   when, per and by may only use data".
-- `test_entity_scoped_over_subquery_of_base_table` /
-  `test_entity_scoped_over_cte_of_base_table` — `FROM (SELECT ... FROM base) t DECIDE
+- `test_keyed_over_subquery_of_base_table` /
+  `test_keyed_over_cte_of_base_table` — `FROM (SELECT ... FROM base) t DECIDE
   per t: x(BOOL)` and the same shape through a `WITH` CTE keep one decision per row of
   `t`; they guard the child bindings being read before `CreatePlan` moves the projection
   expressions out (`plan_decide.cpp`).
@@ -207,7 +206,7 @@ Rows with unique caveats:
 
 ## Query-wide decisions
 
-Tests live in `test/decide/tests/test_scalar_scope.py` (the file keeps its name), plus
+Tests live in `test/decide/tests/test_global_scope.py`, plus
 `test_scalar_var_in_aggregate.py` for a query-wide decision as a term of an aggregate
 constraint and `test_clause_order.py::test_scalar_declaration_in_split_slot` for the
 pre-`FROM` declaration position.
@@ -305,7 +304,7 @@ pre-`FROM` declaration position.
 ## Relation-qualified reducers
 
 Tests live in `test/decide/tests/test_qualified_reducer.py`, plus
-`test_clause_order.py::test_entity_scoped_declaration_in_split_slot` for a
+`test_clause_order.py::test_keyed_declaration_in_split_slot` for a
 qualified reducer in the split clause order.
 
 `SUM(D: expr)` reduces over `D`'s tuple identities instead of over join-result
@@ -460,15 +459,15 @@ Covers the constraint operators `=`, `<`, `<=`, `>`, `>=`, `<>`, `BETWEEN`, and 
 All 6 operators tested on both per-row and aggregate constraints,
 oracle-verified (`test_cons_comparison.py` and others).
 
-- **`<>` (NE Big-M)** (`test_cons_comparison.py`, plus `test_aggregate_local_when.py` for a reducer's own `when`): under a `when` in front and inside a reducer, with the `<>` binding or not, and a mixed-sign coefficient column (both-sided disjunction). `<>` on REAL LHS is rejected.
+- **`<>` (NE Big-M)** (`test_cons_comparison.py`, plus `test_reducer_filter.py` for a reducer's own `when`): under a `when` in front and inside a reducer, with the `<>` binding or not, and a mixed-sign coefficient column (both-sided disjunction). `<>` on REAL LHS is rejected.
 - **Strict `<` / `>` rejection coverage** (`test_cons_comparison.py`): rejected on REAL LHS (per-row and aggregate), non-integer coefficient, mixed BOOL + REAL LHS, quadratic path (`SUM(POWER(real, 2))`), and bilinear Bool × Real path.
 - **Strict `<` / `>` accepted shapes** (oracle-verified): pure INT SUM (per-row and aggregate), BOOL × INT bilinear LHS, INT × INT bilinear LHS (Gurobi), `SUM(ABS(integer_expr))`.
 - Regression: `<=` / `>=` on REAL LHS still work.
 
 #### BETWEEN
 
-- **Oracle-verified** (`test_cons_between.py`): per-row BETWEEN, fractional bounds on REAL var, column-derived bound (`x BETWEEN 0 AND col`) combined with multi-constraint + aggregate, aggregate BETWEEN standalone desugar (two constraints from one BETWEEN), and over a reducer with its own `when` (`test_aggregate_local_when.py`).
-- BETWEEN on a keyed decision: `test_entity_scope.py::test_entity_scoped_between_constraint`, oracle-verified on the objective.
+- **Oracle-verified** (`test_cons_between.py`): per-row BETWEEN, fractional bounds on REAL var, column-derived bound (`x BETWEEN 0 AND col`) combined with multi-constraint + aggregate, aggregate BETWEEN standalone desugar (two constraints from one BETWEEN), and over a reducer with its own `when` (`test_reducer_filter.py`).
+- BETWEEN on a keyed decision: `test_keyed_scope.py::test_keyed_between_constraint`, oracle-verified on the objective.
 - Error tests (`test_error_binder.py`): non-scalar RHS, DECIDE var in BETWEEN bounds.
 
 #### IN
@@ -514,11 +513,11 @@ signed column and negative constant literal multiplier
 
 Tests live in:
 - `test/decide/tests/test_when_constraint.py` — `when c:` in front of an aggregate constraint
-- `test/decide/tests/test_when_perrow.py` — `when c:` in front of a per-row constraint
+- `test/decide/tests/test_when_row.py` — `when c:` in front of a per-row constraint
 - `test/decide/tests/test_when_objective.py` — `MAXIMIZE|MINIMIZE when c: E`
 - `test/decide/tests/test_when_compound.py` — compound AND/OR conditions
 - `test/decide/tests/test_when_grammar.py` — parenthesized and bare conditions
-- `test/decide/tests/test_aggregate_local_when.py` — a reducer's own `when`, `agg(when c: e)`
+- `test/decide/tests/test_reducer_filter.py` — a reducer's own `when`, `agg(when c: e)`
 
 The scoping language's own suites (kept rows, NULL conditions, the empty-set errors,
 the grid) are in [`scope_suite.md`](scope_suite.md). Syntax:
@@ -534,9 +533,9 @@ All oracle-verified unless noted:
   (the row is dropped), an explicit `IS NOT NULL` condition, conditional and
   unconditional constraints together, a different `when` per constraint, constraint
   order invariance.
-- **`when` in front of a per-row constraint** (`test_when_perrow.py`): force to zero,
+- **`when` in front of a per-row constraint** (`test_when_row.py`): force to zero,
   force selection, a numeric row filter, every row kept, and a REAL decision with no
-  implicit [0, 1] cap (`test_when_perrow_real`).
+  implicit [0, 1] cap (`test_when_row_real`).
 - **`when` on the objective** (`test_when_objective.py`): MAXIMIZE and MINIMIZE under a
   `when`, an unconditional constraint beside it, the same and different conditions on
   the constraint and the objective, every row kept.
@@ -546,7 +545,7 @@ All oracle-verified unless noted:
   arithmetic conditions on a reducer's `when` and on the objective's; a bare comparison
   after the objective's `when` gives the same answer as its parenthesized spelling. A
   condition runs to its colon, so no condition needs parentheses.
-- **A reducer's own `when`** (`test_aggregate_local_when.py`): independent filters on
+- **A reducer's own `when`** (`test_reducer_filter.py`): independent filters on
   additive reducers (one reducer, three, overlapping filters, filtered beside
   unfiltered, in the constraint and the objective); a `when` in front applied before a
   reducer's own; composition with AVG, `per`, AVG + `per`, easy MAX, hard MAX (`>=`,
@@ -572,7 +571,7 @@ takes (also run under `require`). A `when` in front that leaves one
 
 A decision in a condition is refused with "x is a decision; when, per and by may only
 use data" — `test_error_binder.py` (plain and compound) and
-`test_aggregate_local_when.py` (a reducer's `when` and the objective's). The removed
+`test_reducer_filter.py` (a reducer's `when` and the objective's). The removed
 spellings of a condition are refused by the parser (`../language/errors.md` §3) —
 `test_scope_removed_syntax.py`.
 
@@ -703,7 +702,7 @@ Tests live in:
 - `test/decide/tests/test_min_max.py` — primary MIN/MAX test file
 - `test/decide/tests/test_min_max_multiterm.py` — row expressions that are not a single product term
 - `test/decide/tests/test_per_objective.py` — two-level objectives
-- `test/decide/tests/test_aggregate_local_when.py` — a reducer's own `when` with MAX
+- `test/decide/tests/test_reducer_filter.py` — a reducer's own `when` with MAX
 - `test/decide/tests/test_per_interactions.py` — hard MIN/MAX constraints under `per` (per-group Big-M)
 - `test/decide/tests/test_edge_cases.py` — empty row sets under MIN/MAX (see [`coverage.md#edge-cases-and-data-shapes`](coverage.md#edge-cases-and-data-shapes))
 
@@ -715,8 +714,8 @@ classifies each occurrence as **easy** (naturally per-row, no Big-M) or
 
 All oracle-verified unless noted.
 
-- **Easy cases** (`test_min_max.py`, plus keyed variants in `test_entity_scope.py` and a reducer's own `when` in `test_aggregate_local_when.py`): `MAX(expr) <= K` / `MIN(expr) >= K` bound every member on its own row, with column coefficients (`MAX(x * expr) <= K`), on INT vars, under a `when`, under `per g: ... by (g)` (the same per-row bounds), `when` + `per` together, keyed MAX/MIN, a reducer's own `when` on an easy MAX. With no `when` and no reducer filter, over one decision with a member scaled or shifted by constants (`max(-x) <= 2`, `min(x + 1) >= -1`), the bound is absorbed into the decision's box (D41), so a negative K makes the decision signed (`test_scope_bare_clauses.py`); a member scaled by data folds per row into each column at the value DuckDB admits (`test_implied_bounds.py`, `test_singleton_row.py`).
-- **Hard cases (Big-M indicators)** (`test_min_max.py`, `test_per_interactions.py`, `test_entity_scope.py`, `test_aggregate_local_when.py`): `MAX(expr) >= K`, `MIN(expr) <= K`, equality for both; multiple MIN/MAX constraints in one query; MIN/MAX in both constraint and objective; keyed hard MAX; `per g:` variants with Big-M per group (`max(e) by (g) >= K`, `min(e) by (g) <= K`, `max(e) by (g) = K` combining easy + hard per group); hard MAX with a reducer's own `when`; a reducer over data as the bound, `MAX(x) <= MAX(v)` (easy) and `MAX(x) >= MAX(v)` (hard), judged by the scope oracle (`test_max_against_a_reducer_bound`); DIAGNOSE of a hard MAX and a hard MIN over a decision declared `per g:`, each suggested change pasted back and run on both backends (`test_query_diagnostics_relation.py::test_hard_min_max_over_a_keyed_decision_repairs`).
+- **Easy cases** (`test_min_max.py`, plus keyed variants in `test_keyed_scope.py` and a reducer's own `when` in `test_reducer_filter.py`): `MAX(expr) <= K` / `MIN(expr) >= K` bound every member on its own row, with column coefficients (`MAX(x * expr) <= K`), on INT vars, under a `when`, under `per g: ... by (g)` (the same per-row bounds), `when` + `per` together, keyed MAX/MIN, a reducer's own `when` on an easy MAX. With no `when` and no reducer filter, over one decision with a member scaled or shifted by constants (`max(-x) <= 2`, `min(x + 1) >= -1`), the bound is absorbed into the decision's box (D41), so a negative K makes the decision signed (`test_scope_bare_clauses.py`); a member scaled by data folds per row into each column at the value DuckDB admits (`test_implied_bounds.py`, `test_singleton_row.py`).
+- **Hard cases (Big-M indicators)** (`test_min_max.py`, `test_per_interactions.py`, `test_keyed_scope.py`, `test_reducer_filter.py`): `MAX(expr) >= K`, `MIN(expr) <= K`, equality for both; multiple MIN/MAX constraints in one query; MIN/MAX in both constraint and objective; keyed hard MAX; `per g:` variants with Big-M per group (`max(e) by (g) >= K`, `min(e) by (g) <= K`, `max(e) by (g) = K` combining easy + hard per group); hard MAX with a reducer's own `when`; a reducer over data as the bound, `MAX(x) <= MAX(v)` (easy) and `MAX(x) >= MAX(v)` (hard), judged by the scope oracle (`test_max_against_a_reducer_bound`); DIAGNOSE of a hard MAX and a hard MIN over a decision declared `per g:`, each suggested change pasted back and run on both backends (`test_query_diagnostics_relation.py::test_hard_min_max_over_a_keyed_decision_repairs`).
 - **Objectives** (`test_min_max.py`): easy `MINIMIZE MAX(expr)` / `MAXIMIZE MIN(expr)` (plain, on INT, and under a `when` in front); hard `MAXIMIZE MAX(expr)` / `MINIMIZE MIN(expr)`.
 - **Multi-term and constant row expressions** (`test_min_max_multiterm.py`): the inner expression is a linear combination, not a single product — `MAX((qty + 1) * x)` (distributes into two terms on one column), `MAX(qty * x + x)` (the same shape written out), `MAX(qty * x + 5)` (constant folds into the bound). Covered on the flat path (both directions), the composed path, and the two-level outer-MIN path with a **keyed** decision, where one column spans every row of a group so a single term is enough to repeat it. Each test pins the objective value against the oracle, so a linking row that is accepted but mis-linearized still fails.
 
@@ -797,14 +796,14 @@ class the `when` in front leaves empty — see
 ## AVG
 
 Tests live in `test/decide/tests/test_avg.py` plus interactions in
-`test_aggregate_local_when.py` and `test_per_objective.py`.
+`test_reducer_filter.py` and `test_per_objective.py`.
 
 ### Scenarios covered
 
 All oracle-verified unless noted:
 
 - **Core** (`test_avg.py`): `AVG(x) op K` constraints, flat AVG objective (= SUM argmax), `when c: avg(...)` (divides by the kept rows), `per g: avg(...) by (g)` (per-group average), `when c per g: avg(...) by (g)`, BOOL and INT variables, AVG in bilinear constraint, `AVG(x) <> K` (Big-M + RHS scaling, plain and under a `when`), AVG with no DECIDE variable (passthrough, no oracle needed).
-- **A reducer's own `when`** (`test_aggregate_local_when.py`): `avg(when c: e)`, alone and under `per g: ... by (g)`.
+- **A reducer's own `when`** (`test_reducer_filter.py`): `avg(when c: e)`, alone and under `per g: ... by (g)`.
 - **Two-level objectives** (`test_per_objective.py`): `sum(per col: avg(x * cost) by (col))` with unequal groups, including extreme 1:5 group-size asymmetry; `max(per col: avg(...) by (col))` (easy MAX) and `min(per col: avg(...) by (col))` (easy MIN).
 
 ### Feature interactions covered
@@ -820,7 +819,7 @@ All oracle-verified unless noted:
 | AVG (inner) | SUM / MAX / MIN (outer) in the two-level objective | ✓ |
 | AVG | bilinear constraint | ✓ |
 | AVG | `<>` (NE Big-M) | ✓ (denominator hoisted to RHS at execution time; LHS stays integer-valued SUM — see `physical_decide.cpp` `ne_avg_rhs_scale` flag) |
-| AVG | keyed decision | ✓ (`test_entity_scope.py::test_entity_scoped_with_avg`) |
+| AVG | keyed decision | ✓ (`test_keyed_scope.py::test_keyed_with_avg`) |
 
 ## ABS
 
@@ -885,7 +884,7 @@ classification.
 ## Bilinear terms
 
 Tests live in `test/decide/tests/test_bilinear.py` plus interactions
-in `test_aggregate_local_when.py` and `test_quadratic_constraints.py`.
+in `test_reducer_filter.py` and `test_quadratic_constraints.py`.
 
 Bilinear terms (`x * y`, two different DECIDE variables) split into two
 categories:
@@ -903,7 +902,7 @@ All oracle-verified, in `test_bilinear.py` unless noted:
 
 - **Objectives**: Bool × Bool (AND-linearization), Bool × Real, Bool × Int; data-coefficient scaling (`profit * b * x`); MINIMIZE with data coefficient (both McCormick and AND-linearization shapes).
 - **Constraints**: Bool × Bool constraints; Bool × Real constraint (McCormick feasibility).
-- **Composition**: bilinear under a `when`, under `per` (per-group McCormick auxiliaries), under `when` + `per`; a keyed Bool × a per-row Real; a reducer's own `when` on a bilinear constraint and objective (`test_aggregate_local_when.py`).
+- **Composition**: bilinear under a `when`, under `per` (per-group McCormick auxiliaries), under `when` + `per`; a keyed Bool × a per-row Real; a reducer's own `when` on a bilinear constraint and objective (`test_reducer_filter.py`).
 - Backward compatibility: existing linear tests still pass.
 
 #### Non-convex (Gurobi only)
@@ -1106,7 +1105,7 @@ Categories covered in `test_error_binder.py` unless noted:
   (`test_objective_with_addition_succeeds`); a bare data column is rejected.
 - Subquery: non-scalar subquery RHS, scalar subquery returning multiple rows.
 - A decision in a `when` condition, plain and compound, and in a reducer's own `when`
-  (`test_aggregate_local_when.py`): "x is a decision; when, per and by may only use
+  (`test_reducer_filter.py`): "x is a decision; when, per and by may only use
   data".
 - A correlated subquery bound that takes two values under `=`
   (`test_correlated_subquery_aggregate_equality_rhs_rejected`).
@@ -1168,7 +1167,7 @@ stability (1e9 coeffs + NE Big-M), RHS = 0 forcing all variables to zero,
 trivially loose constraint (all selected), negative objective coefficients,
 feasibility problem (no objective), all-zero objective coefficients
 (`MAXIMIZE SUM(x * 0)`), and per-row decisions on a 1-to-many fan-out JOIN
-(`test_entity_scope.py::test_row_scoped_vars_on_fanout_join`).
+(`test_keyed_scope.py::test_row_scoped_vars_on_fanout_join`).
 
 Error tests (not oracle-verified):
 - NULL coefficients (with COALESCE hint) — `test_edge_cases.py::test_null_coefficients`
@@ -1198,12 +1197,12 @@ front that leaves one `per` class without rows generates nothing for that class
 ### JOIN sources
 
 All oracle-verified: 2-table and 3-table JOINs (`test_sql_joins.py`),
-JOIN + keyed decisions (many tests in `test_entity_scope.py`).
+JOIN + keyed decisions (many tests in `test_keyed_scope.py`).
 
 ### Scale / performance
 
 `test_large_scale.py` holds a 501-row knapsack and a 2204-row order selection, each judged by the oracle. The
-largest scale case is the 1500-customer problem in `test_entity_scope.py::test_entity_scoped_mixed_when_per`
+largest scale case is the 1500-customer problem in `test_keyed_scope.py::test_keyed_mixed_when_per`
 (Gurobi-only).
 
 ### Solver coverage

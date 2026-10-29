@@ -75,7 +75,7 @@ per escaping variable, or one per reported categorical slice: `clause` names the
 variable, `suggested_change` prescribes its cap, `edit_source` carries the direction,
 `group` names the slice, `amount` counts escaping instances, `total` retains the
 applicable denominator, and `scope` says whether the instances are rows (`row`) or a
-keyed decision's classes (`entity`).
+keyed decision's classes (`keyed`).
 
 **Only user variables escape in practice (verified, both backends).** Auxiliary
 variables are structurally bounded — ABS Big-M and bilinear McCormick require
@@ -95,7 +95,7 @@ For an unbounded finding, `state='unbounded'`; `clause` is the escaping variable
 scoped to the escaping rows when that is sound (below);
 `edit_source` is `runaway_+inf` or `runaway_-inf`; `amount` is the number of escaping
 scope-instances; `total` is the applicable whole-variable or categorical-slice count;
-`scope` is `row`, or `entity` for a keyed decision; and `group` is the categorical slice
+`scope` is `row`, or `keyed` for a keyed decision; and `group` is the categorical slice
 when one is reported.
 Thus `amount / total` reconstructs the escape rate that admitted a slice. `row` is NULL
 for unbounded findings. A single-instance or auxiliary/name-only finding omits the

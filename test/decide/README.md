@@ -75,7 +75,7 @@ make decide-test
 ./test/decide/run_tests.sh -m edge_case              # boundary / degenerate input tests
 ./test/decide/run_tests.sh -m when_constraint        # when c: in front of a constraint
 ./test/decide/run_tests.sh -m when_objective         # when c: in front of the objective
-./test/decide/run_tests.sh -m when_perrow            # when c: on a per-row bound
+./test/decide/run_tests.sh -m when_row            # when c: on a per-row bound
 ./test/decide/run_tests.sh -m when_compound          # compound when conditions (and/or)
 ./test/decide/run_tests.sh -m per_clause             # per K: in front of a constraint
 ./test/decide/run_tests.sh -m explain                # EXPLAIN / EXPLAIN ANALYZE output tests
@@ -134,7 +134,7 @@ make decide-test
 |--------|------|-------|--------|
 | `when_constraint` | `test_when_constraint.py` | 8 | passing |
 | `when_objective` | `test_when_objective.py` | 7 | passing |
-| `when_perrow` | `test_when_perrow.py` | 5 | passing |
+| `when_row` | `test_when_row.py` | 5 | passing |
 | `when_compound` | `test_when_compound.py` | 6 | passing |
 
 ### SQL Features

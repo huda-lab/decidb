@@ -58,7 +58,7 @@ Three scopes, recorded per variable in `variable_scopes` as a `DecideVarScopeInf
 |---|---|---|
 | `x(TYPE)`, `per row: x(TYPE)` | `Row()` | one decision per result row |
 | `per K: x(TYPE)` | `Keyed(scope_idx, K as written)` | one decision per class of `K` |
-| `per (): x(TYPE)` | `Scalar()` | one decision for the whole query |
+| `per (): x(TYPE)` | `Global()` | one decision for the whole query |
 
 `Keyed` is an `ENTITY` scope that also records `declared_key`, so a message can name
 the decision as it was declared; everything past the binder treats it as `ENTITY`.
@@ -71,7 +71,7 @@ the key as first written (`D.depotID, S.customerID`, `D`, `()`) and its elements
 a bound expression with the name a message prints and a NULL mode (`VALUE` for a column
 a relation element stands for, `NO_GROUP` for one written on its own).
 `FindOrCreateDecideKey` finds the entry with the same elements as a set, or appends one.
-A keyed decision points at an `EntityScopeInfo`: the key, the decisions it keys
+A keyed decision points at an `KeyedScopeInfo`: the key, the decisions it keys
 (`scoped_variable_indices`), and `value_link`, which only stage 05 sets, on a helper
 decision's scope. One scope exists per key, whichever spelling names it: a declaration's
 `per K`, a reducer's own `per K` and the colon form `SUM(D: e)` (§3) all go through
@@ -509,7 +509,7 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 
 | Written | Bound |
 |---|---|
-| `when c: C` | a WHEN wrapper (`WHEN_CONSTRAINT_TAG`) `[C, c]` |
+| `when c: C` | a WHEN wrapper (`WHEN_FILTER_TAG`) `[C, c]` |
 | `per K: C` | a `PER_CLASS_TAG` wrapper `[C]` tagged `__per_key_<i>__` with K's entry of the key table (no tag for `per ()`, which has no entry), its key as written a source fragment on the alias |
 | `when c per K: C` | `PER_CLASS{WHEN{C, c}}`, tagged with K |
 | `per row: C`, `agg(per row: e)`, `per row: x(TYPE)` | nothing: the default written out (`SCOPE_PER_ROW_TAG`, peeled) |
@@ -517,7 +517,7 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 | `agg(when c: e)` | the aggregate's `filter` (§3) |
 | `agg(per K': e)`, `SUM(D: e)` | a `__qualified_by_<i>__` tag on an exact key scope; the colon form adds `COLON_FORM_TAG` (§3) |
 | `MAXIMIZE when c: E` | a WHEN wrapper over the objective |
-| `outer(per k: inner(e) by (k))` | `PER{outer(inner(e))}` (`PER_CONSTRAINT_TAG`), tagged with k's entry, its key as written a source fragment; a `when` in front sits inside it, `PER{WHEN{outer(inner(e)), c}}` |
+| `outer(per k: inner(e) by (k))` | `PER{outer(inner(e))}` (`TWO_LEVEL_OBJECTIVE_TAG`), tagged with k's entry, its key as written a source fragment; a `when` in front sits inside it, `PER{WHEN{outer(inner(e)), c}}` |
 
 - `BindScopedConstraint` binds the body, the condition as data, the key through
   `BindKey` (a declaration key's resolution into the key table; a column element keeps
@@ -534,7 +534,7 @@ a reducer with no `by` is `by ()` (../../language/guide.md §1.1).
 - `BindScopedReducer` peels the inner `per`/`when` (§3); `SUM(D: e)` is `sum(per D: e)`
   (`BindQualifiedReducer`, §3) and may take a `by`.
 - `BindScopedObjective`: `per ()` adds nothing; a `when` wraps the body, inside the
-  two-level form's `PER_CONSTRAINT_TAG` wrapper. `BindTwoLevelObjective` refuses a `when` inside either
+  two-level form's `TWO_LEVEL_OBJECTIVE_TAG` wrapper. `BindTwoLevelObjective` refuses a `when` inside either
   reducer, a `per` inside the inner one, a `by` key that is not the `per` key, and an
   outer `avg` (*"DECIDE: avg over the classes of avg(per g: sum(...) by (g)) is not
   supported yet; write sum, min or max over them"*). A decision outside the objective's

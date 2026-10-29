@@ -16,7 +16,7 @@ Tests live in:
 
 The feature suites written in the same language are tracked by feature:
 [`../per/`](coverage.md#per-constraints-and-two-level-objectives) (`test_per_*.py`), [`../when/`](coverage.md#when)
-(`test_when_*.py`, `test_aggregate_local_when.py`),
+(`test_when_*.py`, `test_reducer_filter.py`),
 [`../entity_scope/`](coverage.md#keyed-decisions) (keyed decisions) and
 [`../scalar_scope/`](coverage.md#query-wide-decisions) (query-wide decisions).
 

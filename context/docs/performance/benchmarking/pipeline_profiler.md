@@ -73,7 +73,7 @@ Spans are inclusive parent totals. Each CSV stage column sums only parent spans,
 | `rewrite_ms` | `optimizer.decide`: the whole stage, from the bound-side rewrite and the choice of a rule or a solver to the solver path's row checks, bound windows and formulation passes |
 | `plan_ms` | `frontend.physical_decide` |
 | `input_ms` | `execution.assemble_input`, `execution.sink_append`, `execution.sink_combine` |
-| `extraction_ms` | `execution.evaluate_constraints`, `execution.evaluate_objective`, `execution.evaluate_composed`, `execution.entity_mapping`, `execution.formulate` |
+| `extraction_ms` | `execution.evaluate_constraints`, `execution.evaluate_objective`, `execution.evaluate_composed`, `execution.keyed_mapping`, `execution.formulate` |
 | `model_build_ms` | `solver.build_neutral_model` |
 | `backend_load_ms` | `gurobi.load`, `highs.load` |
 | `solve_ms` | `gurobi.optimize`, `highs.optimize` |

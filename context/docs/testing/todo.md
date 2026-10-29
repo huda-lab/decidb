@@ -15,20 +15,3 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
   undone.
 - **Test to add:** one MIP whose objective is large and whose default-gap incumbent is short of the optimum, compared
   with a relative tolerance, so that removing the gap-0 setting from either backend fails it.
-
-## TST-2 — Names that still say the removed spellings
-
-These test files and markers carry the removed vocabulary: `test_entity_scope.py` and its
-`test_entity_scoped_*` tests, `test_scalar_scope.py`, `test_aggregate_local_when.py`, and
-the `per_clause` and `when*` markers with their descriptions in `pytest.ini`. The code
-identifiers they echo are `DecideVarScope::ENTITY`, `EntityScopeInfo` and the DIAGNOSE
-scope label `entity`. **Ruling (owner, 2026-10-27).** Rename the tests in the same change
-as those identifiers; renaming them together keeps one
-vocabulary.
-The identifiers and the names still open are `../issues/code_quality.md` § CQ-3; this task lands in the same change.
-
-- Update: the area table in [README.md](README.md) and every section of [coverage.md](coverage.md) that names these files.
-
-**Ruling (owner's delegate, 2026-10-29).** `test_keyed_scope.py` (`test_keyed_*`), `test_global_scope.py`,
-`test_reducer_filter.py`; markers keep `when*` and `per_clause`, `when_perrow` becomes `when_row`, and descriptions use
-the guide's terms.

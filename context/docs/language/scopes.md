@@ -36,11 +36,11 @@ the clause the user wrote.
 - **Declarations.** `BindDeclarations` resolves a key through `FindOrCreateKeyScope`: each element against the query's
   own `FROM` (a declared decision is refused first, then a column, then a relation standing for its stored columns).
   `FindOrCreateDecideKey` de-duplicates the key and puts its elements in one order, so equal keys share one entry of
-  the key table and one `EntityScopeInfo`. `DecideVarScope` records `ROW`, `ENTITY` (keyed) or `SCALAR` (query-wide); a keyed
+  the key table and one `KeyedScopeInfo`. `DecideVarScope` records `ROW`, `KEYED` or `GLOBAL` (query-wide); a keyed
   declaration's `DecideVarScopeInfo` also keeps the key as written (`declared_key`) for messages. It is one struct
   rather than parallel arrays so an auxiliary appended by the optimizer cannot desync a scope from its key.
 - **Constraints.** `DecideConstraintsBinder::BindScopedConstraint` binds the body, then wraps it: `when` as a
-  conjunction tagged `WHEN_CONSTRAINT_TAG` (child 0 the constraint, child 1 the condition), `per` as one tagged
+  conjunction tagged `WHEN_FILTER_TAG` (child 0 the constraint, child 1 the condition), `per` as one tagged
   `PER_CLASS_TAG` (child 0 the constraint), tagged with its key's entry (`MakePerKeyTag`; no tag for `per ()`). The key's written text
   is recorded as a source fragment.
 - **Reducers.** `DecideBinder::BindScopedReducer` puts the inner `when` on `BoundAggregateExpression::filter` and tags
@@ -51,7 +51,7 @@ the clause the user wrote.
   (`AddDecideTag`, `HasDecideTag`), because a keyed `AVG` is tagged by the binder and again by the AVG→SUM rewrite.
 - **Objective.** `DecideObjectiveBinder::BindScopedObjective` wraps a front `when` the same way; `per ()` adds
   nothing. `BindTwoLevelObjective` binds `outer(per k: inner(e) by (k))` as `outer(inner(e))` under a
-  `PER_CONSTRAINT_TAG` wrapper whose children are the key columns.
+  `TWO_LEVEL_OBJECTIVE_TAG` wrapper (child 0 the objective) tagged with the key's entry.
 - `CASE WHEN` is refused with one message wherever it sits (`DecideCaseUnsupportedMessage`).
 
 ## Canonicalizer — shape and checks
@@ -62,8 +62,8 @@ its shape ([guide.md §6.4](guide.md#64-how-a-clause-becomes-model-rows)):
 | Shape | When | Model rows |
 |---|---|---|
 | ROWS | no decision-bearing reducer | one per class, from its first kept row |
-| AGGREGATE | decision reducers sharing one `by` key, whole-query factors, only query-wide terms beside | one per `by` group, under the group's tightest bound |
-| VALUE | anything else (per-row or keyed decision beside a reducer, row-varying factor, different `by` keys, a reducer inside an expression, a product of decisions beside a reducer, a `MIN`/`MAX` beside another term with a `by`, a non-constant bound or a query-wide decision) | each decision reducer becomes a helper decision, one instance per `by` group; then one row per class |
+| AGGREGATE | decision reducers sharing one `by` key, whole-query factors, terms beside that are one value per group (scope query-wide or the `by` key) | one per `by` group, under the group's tightest bound |
+| VALUE | anything else (a term beside a reducer finer than the `by` key, row-varying factor, different `by` keys, a reducer inside an expression, a product of decisions beside a reducer, a `MIN`/`MAX` beside another term with a `by`, a non-constant bound or a query-wide decision) | each decision reducer becomes a helper decision, one instance per `by` group; then one row per class |
 | UNSUPPORTED | `AVG` under `<>` with anything but plain `AVG`s | refused |
 
 The shape is decided here, once, because a later layer that re-decided it would need its own copy of these rules; the
@@ -102,7 +102,7 @@ canonicalizer never opens a term, so a filtered or grouped reducer is one atom t
 
 - `RewriteScopedReducers` (VALUE shape, above), after `RewriteBilinear` and before the MIN/MAX passes.
 - `RewriteMinMaxObjective` (`decide_rewrite_minmax.cpp`) reads the two-level wrapper into `per_inner_*` /
-  `per_outer_*` (reducer kinds, easy or hard); execution groups by `DecideObjective::per_key`. An inner
+  `per_outer_*` (reducer kinds, easy or hard); execution groups by `DecideObjective::two_level_key`. An inner
   `MIN`/`MAX` emits linking rows only for rows with a nonzero coefficient; a group with none has its auxiliary pinned
   to 0.
 - `RewriteRhsAggregates` (`decide_rewrite_rhs_window.cpp`) turns every reducer on a bound into a window column over
@@ -120,14 +120,15 @@ In `src/execution/operator/decide/physical_decide.cpp`:
 - `BuildGroupIds` partitions rows by a key, NULL a class; `LookupOrBuildPerGroupIds` caches one partition per key so
   every clause and check on the same key shares the numbering. An empty or constant key is one group.
   `CollectGroupClasses` lists the classes a model row stands for (DIAGNOSE's `group` column).
-- `BuildEntityMappings` gives every row its class's solver column, for keyed decisions and for helpers.
+- `BuildKeyedMappings` gives every row its class's solver column, for keyed decisions and for helpers.
 - `BuildQualifierKeepMask` keeps one row per class of an inner `per` (or colon form) in each group, among the rows
   the reducer reads; `ApplyQualifierToFilter` ANDs it into the term's filter. AVG's denominator then counts classes
   without special code. Which row survives cannot matter, because `DETERMINES` has checked every row of a class
   carries the same value. The mask is per term, so `SUM(D: a * open) + sum(b * ship)` de-duplicates only the first.
-- The prepared model (`decide_prepared_model.hpp`) carries the scope on `DecideConstraint` — `when_condition`,
-  `group_key`, `per_key` (`PerKeyRole`: `NONE`, `ONE_ROW_PER_CLASS`, `NAMES_CLASSES`) and `class_key` — and on
-  `DecideObjective` — `when_condition` and `per_key`. Each key is an index into `LogicalDecide::keys`.
+- The prepared model (`decide_prepared_model.hpp`) carries a clause's scope as one `DecideClauseScope` — `when`,
+  `per` (`PerRole`: `NONE`, `ONE_ROW_PER_CLASS`, `NAMES_CLASSES`) and `class_key` — embedded in `DecideConstraint`
+  (beside its `group_key`) and `ComposedMinMaxConstraint`, and on `DecideObjective` as `when_condition` and
+  `two_level_key`. Each key is an index into `LogicalDecide::keys`.
 
 ## Rendering
 

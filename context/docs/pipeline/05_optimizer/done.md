@@ -210,7 +210,7 @@ prepared terms rather than one path re-deriving its own.
 **A coefficient stays an unevaluated `Expression`.** `SUM(x * price)` yields the
 coefficient `price`, which is a number only once a row exists. Everything else
 about a term — which variable it names, its sign, which reducer produced it, which
-filter applies, which key scope (`EntityScopeInfo`) its reducer's own `per` names — is a
+filter applies, which key scope (`KeyedScopeInfo`) its reducer's own `per` names — is a
 fact about types and structure and is settled here. The pass reads no data.
 
 **Why it is here and not at execution.** Doing this algebra needs a binder: every
@@ -221,10 +221,12 @@ node's `FunctionData`, which does not fail on a type mismatch — it reinterpret
 children's physical representation and returns a plausible wrong number. That
 workaround is gone.
 
-**A clause's scope** (stage 04 §3.10). `AnalyzeConstraint` reads the wrappers the binder
-nests around a comparison. A `when c:` wrapper (`WHEN_CONSTRAINT_TAG`) gives
-`DecideConstraint::when_condition`. A `per K:` wrapper (`PER_CLASS_TAG`, kept over every
-shape) gives `class_key`, the wrapper's key (`PerWrapperKey`; no elements for `per ()`), and `per_key`: `ONE_ROW_PER_CLASS` over the
+**A clause's scope** (stage 04 §3.10). Every walk over a constraint tree reads the wrappers
+the binder nests around a comparison through one borrowed view, `DecideEnclosingScope`, and
+one step, `EnterDecideScope` (`decide_constraint_walk.hpp`); a clause that leaves the tree
+owns its scope as a `DecideClauseScope` built from the view. A `when c:` wrapper
+(`WHEN_FILTER_TAG`) gives `scope.when`. A `per K:` wrapper (`PER_CLASS_TAG`, kept over every
+shape) gives `class_key`, the wrapper's key (`PerWrapperKey`; no elements for `per ()`), and `scope.per`: `ONE_ROW_PER_CLASS` over the
 per-row shape, `NAMES_CLASSES` over the aggregate shape and an easy MIN/MAX, whose rows are
 their `by` groups and their members and only stand for the classes (D28). The
 comparison's `by` stamp gives `group_key`, an index into `LogicalDecide::keys`. An
@@ -243,7 +245,7 @@ second. So is a term that holds a decision under anything but a bare reference
 construct without a word.
 
 The objective's `when` wrapper gives `DecideObjective::when_condition`, and the two-level
-form's wrapper (`PER_CONSTRAINT_TAG`, outside the `when`) gives `DecideObjective::per_key`,
+form's wrapper (`TWO_LEVEL_OBJECTIVE_TAG`, outside the `when`) gives `DecideObjective::two_level_key`,
 the key `k` of `outer(per k: inner(e) by (k))`. A decision outside the objective's reducers
 — query-wide or not — is a `NONE` term, counted once at execution, and so is a product of
 two query-wide decisions (`MAXIMIZE SUM(x) + s * u`, a bilinear term with `reduction`
@@ -414,9 +416,14 @@ and the `x >= min(domain)` tightening on the general encoding — evaluate each
 value with the cast policy's folder, so a written-out expression such as
 `x IN (1-3, 2)` qualifies exactly like the literal `x IN (-2, 2)` does. Neither
 affects correctness: the indicator encoding is exact with or without them. Every row
-the IN generates keeps the clause's `when`, as an L0 norm's links do (`EnterClauseScope` /
-`ScopeHelperRow` in `decide_optimizer.cpp`), so a row the `when` drops is never read; under
-a `per K:` the rows are emitted once per kept row, not per class (`todo.md`). They are
+the IN generates keeps the clause's `when`, as an L0 norm's links do (`EnterDecideScope` /
+`ScopeHelperRow` in `decide_optimizer.cpp`), so a row the `when` drops is never read. The
+indicators are defined by the decision and its domain, so their scope is the join of the two
+(`ScopeOf`: `JoinScopes` over the leaves an expression reads; a decision brings its declared
+scope, a query-wide value is query-wide, any other column is row data), and their rows are
+emitted once per instance of it (`ScopeRowPerInstance`: under `per K:` for a scope keyed by
+`K`, `per ()` for a query-wide one). `per g: x IN (1, 2)` over a keyed `x` and three rows in
+two classes is four indicators, not six; a data domain stays per row. They are
 structural (`MarkFormulationConstraint`): a repair never loosens one on its own, and a
 DROP removes them with their clause, whose `removal_group_id` they carry.
 
@@ -442,7 +449,7 @@ product back (`FindAndReplaceBilinear`).
 **The auxiliary's scope is `JoinScopes` of its factors' scopes**, the least upper bound, as DuckDB promotes a binary
 operator's type: Scalar < Entity < Row. Two query-wide factors give one query-wide column; a query-wide factor and a
 keyed one, or two alike keyed factors, a column per key (registered in
-`entity_scopes[..].scoped_variable_indices`); anything else a column per row. The ABS auxiliary, the body helpers and
+`keyed_scopes[..].scoped_variable_indices`); anything else a column per row. The ABS auxiliary, the body helpers and
 the `NORM_IN` indicators are still one column per row (`todo.md` § OPT-4).
 
 ### Non-linear reducer bodies — `DefineNonlinearReducerBodies`
@@ -543,8 +550,8 @@ side (`CollectReducerSites`; a data-only reducer is a number and stays) the pass
    INTEGER when the reducer's value is whole by declared types, every constant inside
    counted (`DecideValueIsWholeNumbered`, shared with stage 02), so a strict bound on the
    rewritten row still steps on the lattice; else DOUBLE. It is query-wide
-   (`DecideVarScopeInfo::Scalar()`) for `by ()`, else keyed by a scope of its own
-   (`EntityScopeInfo::value_link`), whose classes are the `by` groups among the rows the
+   (`DecideVarScopeInfo::Global()`) for `by ()`, else keyed by a scope of its own
+   (`KeyedScopeInfo::value_link`), whose classes are the `by` groups among the rows the
    clause keeps, built by stage 08. Its label is the reducer's SQL, `by` included
    (`aux_var_expressions`, `ReducerValueLink::label`), so EXPLAIN and DIAGNOSE name it by
    what it holds;
@@ -675,7 +682,7 @@ under C0 precisely so that placeholder verifies.
 
 `ScopeComposedTerms` folds the clause's `when` into each term's filter, in front of the
 term's own, so stage 08 reads only the rows the clause keeps; under a `per K:` the
-clause's one row names the key's classes (`per_key` `NAMES_CLASSES`, `class_key`, D28).
+clause's one row names the key's classes (`scope.per` `NAMES_CLASSES`, `class_key`, D28).
 Stage 06 steps a strict outer bound onto the lattice. The canonicalizer has refused such a
 clause with a `by` or a bound that is not a constant (stage 04 §3.10); `AssertComposable`
 asserts it. In a constraint a decision beside a MIN or MAX is refused here, quoting it

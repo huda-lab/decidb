@@ -116,7 +116,7 @@ a rendering job rather than a re-plumbing job.
 
 | ID | Rule |
 |---|---|
-| **C0** | Ordinary `AND` conjunctions recurse into every child. A `when` wrapper, a `per K:` wrapper (`PER_CLASS_TAG`) or the two-level objective's wrapper (`PER_CONSTRAINT_TAG`) recurses into child 0 only; its condition or key columns are copied unchanged. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
+| **C0** | Ordinary `AND` conjunctions recurse into every child. A `when` wrapper, a `per K:` wrapper (`PER_CLASS_TAG`) or the two-level objective's wrapper (`TWO_LEVEL_OBJECTIVE_TAG`) recurses into child 0 only; a `when` condition is copied unchanged. A wrapper holds one clause: a plain `AND` or a `when` inside a `when` under a wrapper is an `InternalException` in every build, since nothing builds either shape and each walker would read it differently. Non-comparison leaves are copied unchanged. The predicates and the walk live in `planner/decide/decide_constraint_walk.hpp` and are shared with every other stage that reads a bound constraint tree, so a new wrapper kind is defined once. |
 | **C1** | Each DECIDE comparison has at least one decision-bearing term. |
 | **C2** | The right side contains no decision-variable reference. |
 | **C3** | Every top-level decision-bearing additive term is on the left; every top-level decision-free additive term is on the right. Data inside a reducer body stays inside that reducer. |
@@ -388,7 +388,7 @@ reason objectives get a boundary instead of their own normalizer.
 
 | ID | Rule | Shared with |
 |---|---|---|
-| **O0** | A `when` wrapper or the two-level objective's wrapper (`PER_CONSTRAINT_TAG`) recurses into child 0 only. | C0, same predicate |
+| **O0** | A `when` wrapper or the two-level objective's wrapper (`TWO_LEVEL_OBJECTIVE_TAG`) recurses into child 0 only. | C0, same predicate |
 | **O1** | The body is an additive spine whose every term references a decision. | — |
 | **O2** | A decision-free additive term is folded into `objective_constant_offset`. It shifts the objective without moving `argmax`/`argmin`. One that does not fold to a constant is rejected here. | — |
 | **O3** | The spine contains only `+`, binary `-`, unary `-`, and binder casts over decision algebra. Data casts are atoms. | C4, verbatim |
@@ -418,8 +418,8 @@ escape for `AGG * factor`: every consumer sees `factor * AGG` or `AGG / factor`.
 | Decision side holds | Shape | Model rows |
 |---|---|---|
 | no reducer (a data-only reducer may sit on the bound side) | `ROWS` | one per kept row, or per class of an enclosing `per K:` |
-| decision reducers sharing one `by` key, under whole-query factors, beside query-wide terms only | `AGGREGATE` | one per `by` group of the kept rows |
-| anything else: a per-row or keyed decision beside a reducer, a factor that varies by row or is a `BOOL` decision, a second `by` key, a reducer inside another expression, a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group, then one row per class |
+| decision reducers sharing one `by` key, under whole-query factors, beside terms that are one value per group | `AGGREGATE` | one per `by` group of the kept rows |
+| anything else: a term beside a reducer finer than the `by` key, a factor that varies by row or is a `BOOL` decision, a second `by` key, a reducer inside another expression, a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group, then one row per class |
 | `AVG` under `<>` unless every term is a plain `AVG` | refused | *"DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per"* |
 
 The refusal: an `AVG`'s exclusion under `<>` scales the bound by the group's row count,
@@ -445,6 +445,18 @@ bound side, is `INVALID`), so the linear form, the validation in `AddConstraint`
 debug verifier all read one classification; a VALUE comparison reaching the linear form
 is an internal error (the rewrite did not run).
 
+A term beside the reducers is one value per group when its scope, the join of its
+factors' scopes on the key lattice (`JoinDecideKeys`: query-wide < a key < per row), is the
+`by` key or query-wide. A decision brings its own key; data brings the enclosing `per`
+key, whose scope check makes it one value per class, or per row with no `per`. So the
+facility link `per D: sum(ship) by (D) <= cap * open`, with `open` declared `per D:`, is
+AGGREGATE: one row per depot with that depot's `open` column, where it used to take a
+helper per group. Execution counts the term once in each group's row (`CountOnce`, stage
+08). Only `CanonicalizeTree` sees the enclosing scope, so it decides the shape once and
+stamps it; the linear form, direct solve and the window rewrite read the stamp
+(`VALUE_REWRITE_TAG`, else AGGREGATE for a reducer on the decision side and PER_ROW for
+none) instead of classifying the bare comparison again.
+
 `CanonicalizeTree` stamps an aggregate-shape comparison with its `by` key
 (`__group_key_<i>__`) — the one grouping carrier after this stage, since later rewrites
 rebuild the reducers. A `per K:` wrapper over it stays, as over every shape
@@ -461,8 +473,8 @@ VALUE comparison is stamped `VALUE_REWRITE_TAG`, which the rewrite reads and rem
 `ClassifyCanonicalComparison` returns `PER_ROW`, `AGGREGATE`, `VALUE` (a comparison
 the value rewrite turns into `PER_ROW`, §3.10) or `INVALID`, from `ClassifyScoped`.
 Aggregate rows admit only reducer-rooted decision terms and query-wide top-level terms:
-a query-wide decision may sit beside the reducers, while a per-row or keyed decision, or
-row data, beside them makes the comparison VALUE. Physical extraction consumes this
+a term one value per group may sit beside the reducers (§3.10), while one finer than the
+`by` key makes the comparison VALUE. Physical extraction consumes this
 classifier rather than re-deciding from the mere presence of an aggregate.
 `ValidateCanonicalTree` throws `ClassifyScoped`'s refusal for an `INVALID` comparison,
 or an `InternalException` when a decision survived on the bound side, which no user

@@ -235,8 +235,8 @@ node, or a list) the children after it — into a tagged `FunctionExpression` wi
 | `PG_AEXPR_SCOPE_PER_ROW` | `FunctionExpression(SCOPE_PER_ROW_TAG, [body])` |
 | `PG_AEXPR_REDUCER_BY` | `FunctionExpression(REDUCER_BY_TAG, [reducer, key...])` |
 | `PG_AEXPR_QUALIFIED_REDUCER` | `FunctionExpression(QUALIFIED_REDUCER_TAG, [aggregate, relation...])` |
-| `PG_AEXPR_WHEN_CONSTRAINT` | `FunctionExpression(WHEN_CONSTRAINT_TAG, [body, condition])`, a removed spelling |
-| `PG_AEXPR_PER_CONSTRAINT` | `FunctionExpression(PER_CONSTRAINT_TAG, [body, col...])`, a removed spelling |
+| `PG_AEXPR_WHEN_CONSTRAINT` | `FunctionExpression(POSTFIX_WHEN_TAG, [body, condition])`, a removed spelling |
+| `PG_AEXPR_PER_CONSTRAINT` | `FunctionExpression(POSTFIX_PER_TAG, [body, col...])`, a removed spelling |
 
 The first five reach the binder, which binds every one into the bound tree's own
 wrappers and tags (`../02_binder/done.md` §4a). The last two never leave this stage.

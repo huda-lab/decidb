@@ -18,7 +18,7 @@ on `PhysicalDecide`, in call order:
 
 | Method | Phase |
 |---|---|
-| `BuildEntityMappings` | 1.5 — row → class maps for every key scope: a keyed decision's key, a reducer's own `per` or colon form, a helper decision's `by` key |
+| `BuildKeyedMappings` | 1.5 — row → class maps for every key scope: a keyed decision's key, a reducer's own `per` or colon form, a helper decision's `by` key |
 | `EvaluateConstraints` | 2, constraints — appends to `gstate.evaluated_constraints` |
 | `EvaluateObjective` | 2, objective — per-term filters with the objective's `when` folded in, and the two-level form's classes |
 | `EvaluateComposedClauses` | 2, composed MIN/MAX — per-row coefficients, reducer factors, filter masks, constant RHS |
@@ -50,7 +50,7 @@ separate objective-side copy.
 |---|---|---|
 | 1 | `GetGlobalSinkState` → `DecideGlobalSinkState` ctor | Read the folded variable box and alias the prepared linear form |
 | 2 | `Sink` / `Combine` | Materialize every surviving tuple into a `ColumnDataCollection` |
-| 3 | `Finalize` → `BuildEntityMappings` | Build the row → class maps of the key scopes |
+| 3 | `Finalize` → `BuildKeyedMappings` | Build the row → class maps of the key scopes |
 | 3a | `Finalize` → `RunScopeChecks` | Run the scope checks (§4a); the first failure stops the query |
 | 4 | `Finalize` → `EvaluateConstraints` / `EvaluateObjective` / `EvaluateComposedClauses` / `EvaluateReducerValueLinks` | Evaluate coefficients, `when` filters, `by` groups and `per` classes, RHS values, the helper decisions' members |
 | 5 | `Finalize` → `BuildSolverInput` → `FormulateModel` | Assemble `SolverInput` and settle the box, then linearize against it (stage 06) |
@@ -193,10 +193,10 @@ const unique_ptr<DecideObjective> &objective = op.prepared.objective;
 variable index, a sign, a still-unevaluated coefficient `Expression`, an optional
 filter (its reducer's own `when`), an AVG-scaling flag and the key scope of its
 reducer's own `per` (`qualifier_scope_idx`); plus the RHS expression, the comparison
-type, the clause's `when`, its `by` key (`group_key`) and `per` key (`per_key`,
-`class_key`), and the metadata linking it to indicators and diagnosis provenance. The
+type, the clause's scope (`DecideClauseScope`: `when`, `per`, `class_key`), its `by` key (`group_key`), and the metadata
+linking it to indicators and diagnosis provenance. The
 objective arrives the same way, with its `when`, the two-level form's key
-(`per_key`, an index into the key table), and `squared_terms` and `bilinear_terms` alongside `terms`.
+(`two_level_key`, an index into the key table), and `squared_terms` and `bilinear_terms` alongside `terms`.
 `ComposedMinMaxTerm::inner_terms` carries the composed MIN/MAX path's terms, so no
 construct is left re-deriving its own.
 
@@ -216,7 +216,7 @@ produces them, and why it cannot live here, is
 
 ## 4. PHASE 1.5 — entity mappings
 
-For each `EntityScopeInfo` — a keyed decision's key (`per K: x`), a reducer's own `per`
+For each `KeyedScopeInfo` — a keyed decision's key (`per K: x`), a reducer's own `per`
 or colon form (`sum(per K: e)`, `SUM(D: e)`), a helper decision's `by` key — before
 coefficient evaluation:
 
@@ -226,7 +226,7 @@ coefficient evaluation:
    `CachedTransformToChunkExpression`, one `ExpressionExecutor` for them all. A row with
    NULL in a written key column is in no class; a relation's columns compare NULL as a
    value. A key with no columns (a reducer's `per ()`) is one class, every row in it.
-2. A helper decision's scope (`EntityScopeInfo::value_link`, the value rewrite) reads its
+2. A helper decision's scope (`KeyedScopeInfo::value_link`, the value rewrite) reads its
    link's `by` key on the rows the link's clause `when` keeps only, so the key is never
    evaluated where the clause never reads: one entity per group that holds a member,
    numbered as its definition numbers them. A group with no member has no helper (its
@@ -307,9 +307,10 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
 - **The objective**: its `when` is folded into every
   term's filter, so reading, de-duplication and AVG denominators all follow it. A
   decision outside the reducers (`NONE`) keeps its coefficient on the first kept row only
-  (`CountTupleTermsOnce`; a query-wide one moves to row 0, where stage 06 reads it), and
-  so does a product of two query-wide decisions there (`CountOnce` on the evaluated
-  bilinear term; one inside a reducer is SUM and keeps every row). The two-level form
+  (`CountTupleTermsOnce`, over `CountOnce`), and so does a product of two query-wide decisions there (one inside a
+  reducer is SUM and keeps every row). `CountOnce` is the one place a term is counted
+  once, in the objective and in each group's row of an aggregate clause; stage 06 sums every
+  row, and a debug build checks no writer left such a term on two rows (`VerifyCountedOnce`). The two-level form
   puts a row whose written key is NULL in no class. A flat MIN/MAX that reads no row is
   dropped in formulation (D68).
 - **Composed clauses** read the rows their folded filter keeps and de-duplicate among
@@ -320,7 +321,7 @@ Every clause is then read by these rules; §5 gives the row maps they produce:
 - **Classes of a grouped row** (D28, `CollectGroupClasses`, under DIAGNOSE only). The
   rows of a clause over `by` groups -- an aggregate-shape group row, an easy
   MIN/MAX's member rows, a composed clause's one row -- stand for every class of its
-  `per` key in their group: with `per K:` in front (`per_key = NAMES_CLASSES`,
+  `per` key in their group: with `per K:` in front (`scope.per = NAMES_CLASSES`,
   `class_key`) the key's values among the group's kept rows (`LookupOrBuildPerGroupIds`
   over the kept rows, in key-value order); with no `per` (`NONE`) every kept row of the
   group; `per ()` the whole clause (one `WHOLE_CLAUSE` set its groups share). A per-row

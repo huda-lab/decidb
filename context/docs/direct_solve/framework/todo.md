@@ -44,7 +44,7 @@ solver path answers those queries, so none of them is wrong, only slower.
 ## H-06 — The two-level objective `outer(per k: inner(e) by (k))`
 
 - **Problem.** The objective is `MINIMIZE sum(per id: max(w*x) by (id))`. `ReadObjective`
-  (`direct_ir.cpp`) declines on `IsPerConstraintWrapper`. The nested-reducer reading (`DirectPart::inner` in
+  (`direct_ir.cpp`) declines on `IsTwoLevelObjectiveWrapper`. The nested-reducer reading (`DirectPart::inner` in
   `ReadReducer`) exists, but no query reaches it: the binder rejects a nested reducer anywhere else.
 - **Change.** Read the two-level objective into the IR through the nested-reducer reading.
 - **Done when.** `test_decidb_direct_ir.cpp`, "declines a two-level objective", reads the inner reducer. The nested order-0 norm case returns: an inner not-proved part leaves the outer not proved.
@@ -61,8 +61,7 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Done when.** A direct plan over a reducer bound has no window under the rule; messages and their order unchanged.
 - **Ruling (owner's delegate, 2026-10-29).** A first build added a third bound kind beside `DirectBoundReduction`, with
   a branch per rule. The bound is one group-computed kind instead: aggregates of the group, an expression over them and
-  checks, which a raw reduction already is, added to a rule's aggregate by one helper. Needs F4, which edits the
-  bound-side rewrite.
+  checks, which a raw reduction already is, added to a rule's aggregate by one helper.
 
 ## H-08 — VALUE-shape clauses (helper decisions)
 

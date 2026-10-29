@@ -79,8 +79,8 @@ before binding. A tagged node replays its own SQL; an untagged one, which the bi
 | Node | Handling |
 |---|---|
 | `PER_CLASS_TAG` (`per K:`) | add `per K`, key as written (`PerClassQualifier`); recurse |
-| `WHEN_CONSTRAINT_TAG` (`when c:`) | add `when c` in front (`WhenQualifier`); recurse |
-| `PER_CONSTRAINT_TAG` (two-level objective) | print it whole (`RenderTwoLevelObjective`) |
+| `WHEN_FILTER_TAG` (`when c:`) | add `when c` in front (`WhenQualifier`); recurse |
+| `TWO_LEVEL_OBJECTIVE_TAG` (two-level objective) | print it whole (`RenderTwoLevelObjective`) |
 | `AND` | recurse into each child |
 | `COMPARE_IN` marker | `<target> IN (v1, …)` |
 | leaf | the cut text (else `RenderDecideSource`), quoted with its qualifier by `QuoteWrittenClause` |

@@ -35,13 +35,13 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   Tests: `test_singleton_row.py`, `test_infinite_bounds.py`.
 - **Query-wide decisions** occupy their own block of `VarIndexer` (`[row | keyed | query-wide | auxiliary]`), below
   `global_block_start`, so "user decisions occupy `[0, global_block_start)`" holds for the model builder and the
-  diagnostic labeller. `Get()` ignores the row for them. The model builder adds a query-wide coefficient **once per
-  model row** when it stands beside a reducer, and accumulates it over the counted rows when it is inside one; the
-  two cases are told apart by `DecideTerm::reduction` (`NONE` vs `SUM`), carried to the objective side as
-  `objective_term_reductions`. A reducer whose body is row-invariant is refused in `ClassifyReducerCall` via
+  diagnostic labeller. `Get()` ignores the row for them. A query-wide coefficient counts **once per
+  model row** when it stands beside a reducer, and over the counted rows when it is inside one: execution keeps the
+  first on one row (`CountOnce`) and the model builder sums every row. A reducer whose body is row-invariant is refused
+  in `ClassifyReducerCall` via
   `IsRowInvariantExpression` (`decide_binder.cpp`). Under DIAGNOSE a query-wide decision has one instance, so an
-  unbounded report carries no escape count. Tests: `test_scalar_scope.py`, `test_scalar_var_in_aggregate.py`.
-- **Keyed decisions** resolve as in [scopes.md](scopes.md#binder); `EntityScopeInfo` (`logical_decide.hpp`) holds the
+  unbounded report carries no escape count. Tests: `test_global_scope.py`, `test_scalar_var_in_aggregate.py`.
+- **Keyed decisions** resolve as in [scopes.md](scopes.md#binder); `KeyedScopeInfo` (`logical_decide.hpp`) holds the
   key as written, its bindings and types, the relations it reads (`source_table_indices`) and the decisions declared
   on it. Physical index resolution is in `plan_decide.cpp`.
 

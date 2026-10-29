@@ -21,7 +21,7 @@ Stage numbers refer to the stage table in [`../README.md`](../README.md).
 | `planner/expression_binder/decide/decide_objective_binder.hpp` | 02 | `MAXIMIZE` / `MINIMIZE` |
 | `planner/expression_binder/decide/decide_declarations_binder.hpp` | 02 | `DecideDeclarationsBinder` — the whole DECIDE clause: declarations, scopes, then `SUCH THAT` and the objective |
 | `planner/expression_binder/decide/decide_degree.hpp` | 02 | `DecideDegree`, `DecideExpressionDegree` — the one definition of polynomial degree, and which degree-2 shape produced it |
-| `planner/operator/decide/logical_decide.hpp` | 03 | `LogicalDecide`, `EntityScopeInfo`, every metadata field |
+| `planner/operator/decide/logical_decide.hpp` | 03 | `LogicalDecide`, `KeyedScopeInfo`, every metadata field |
 | `planner/operator/decide/logical_decide_diagnose.hpp` | 03 | `LogicalDecideDiagnose` — the `DIAGNOSE <select>` plan node and the shape of the relation it returns |
 | `planner/decide/decide_canonicalizer.hpp` | 04 | The canonical contract, in code |
 | `planner/decide/decide_constraint_walk.hpp` | 04 | Which children of a node are constraints: the predicates for the `when`, `per K:` and two-level objective wrappers, and the constraint-position walk every stage shares |
@@ -176,7 +176,7 @@ classDiagram
     class SolverInput {
         +constraints
         +objective_coefficients
-        +entity_mappings
+        +keyed_mappings
     }
     class SolverModel {
         +col_lower / col_upper
@@ -226,10 +226,10 @@ Polynomial degree, not occurrence count, is `DecideExpressionDegree()` in
 ### `src/include/duckdb/planner/decide/decide_constraint_walk.hpp` — stage 04
 Header-only, and the one place that answers "which children of this node are
 constraints". A bound constraint tree is AND-conjunctions plus wrappers — `when c:`,
-`per K:` and the two-level objective's `PER_CONSTRAINT_TAG` — and a wrapper's trailing children are
+`per K:` and the two-level objective's `TWO_LEVEL_OBJECTIVE_TAG` — and a wrapper's trailing children are
 metadata — the `when` condition, the key columns — so descending into them would read
 a condition as another constraint.
-- **`IsWhenConstraintWrapper()` / `IsPerClassWrapper()` / `IsPerConstraintWrapper()`
+- **`IsWhenFilterWrapper()` / `IsPerClassWrapper()` / `IsTwoLevelObjectiveWrapper()`
   (the two-level objective's) / `IsConstraintWrapper()` / `IsConstraintChild()`** —
   the predicates. Every site that walks a bound constraint tree asks these, including
   the few that deliberately act differently on the answer: singleton-row folding refuses to
@@ -309,7 +309,7 @@ form `SUM(D: e)` use the same key scopes; only a declaration owns solver columns
 | Struct | Where | What |
 |---|---|---|
 | `DecideKey` | `logical_decide.hpp` | One entry of `LogicalDecide::keys`: `text` (the key as first written) and `elements` (`DecideKeyElement`: bound `expression`, `name`, `null_mode`) |
-| `EntityScopeInfo` | `logical_decide.hpp` | `key` (an index into `keys`), `scoped_variable_indices`, `value_link` |
+| `KeyedScopeInfo` | `logical_decide.hpp` | `key` (an index into `keys`), `scoped_variable_indices`, `value_link` |
 | `EntityMapping` | `solver_input.hpp` | `num_entities`, `row_to_entity` — built at execution |
 | `VarIndexer` | `ilp_model.hpp` | The four-block layout and `Get` / `InstanceColumn` / `NumInstances` |
 

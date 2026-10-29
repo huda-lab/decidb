@@ -243,7 +243,7 @@ MAXIMIZE SUM(buy * p_retailprice * 0.10);
 
 A per-supplier decision (`per s: capacity`, one `capacity` per supplier) escapes only
 for European suppliers — the exempted region. The description works even though
-`r_name` arrives through two joins. `scope` names the counted unit: `entity` for a keyed
+`r_name` arrives through two joins. `scope` names the counted unit: `keyed` for a keyed
 decision's classes (here, suppliers), `row` for a decision per result row.
 
 ```sql

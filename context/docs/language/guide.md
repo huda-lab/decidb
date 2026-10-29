@@ -157,7 +157,7 @@ MINIMIZE max_shortfall
 - **In the objective**: bare (`MINIMIZE max_shortfall`), as an additive term counted once
   (`MINIMIZE max_shortfall - sum(ship)`), or inside a reducer with row data (`sum(cost * cap)`).
 
-Tests: `test/decide/tests/test_scalar_scope.py`.
+Tests: `test/decide/tests/test_global_scope.py`.
 
 ### 2.3 Keyed — `per K: x(TYPE)`
 
@@ -490,10 +490,12 @@ per D.depotID: sum(ship) by (D.region) <= D.capacity
 Tuple terms and reducers mix freely on either side. Each comparison takes one of three shapes:
 
 - **Rows** — no reducer on the decision side: one model row per class, from its first kept row.
-- **Grouped** — decision reducers sharing one `by` key, under whole-query factors, beside query-wide terms only: one
-  model row per `by` group, under the group's tightest bound (`=` refuses differing bounds; `<>` excludes each).
-- **Helper decision** — anything else: a per-row or keyed decision beside a reducer (`ship <= 0.20 * sum(ship)`, the
-  facility link `sum(ship) by (D.depotID) <= D.capacity * open`), a row-varying factor, reducers with different `by`
+- **Grouped** — decision reducers sharing one `by` key, under whole-query factors, beside terms that are one value per
+  group (query-wide, or keyed by the `by` key: `per D: sum(ship) by (D) <= cap * open` with `open` declared
+  `per D:`): one model row per `by` group, under the group's tightest bound (`=` refuses differing bounds; `<>`
+  excludes each). A term beside the reducers counts once in its group's row.
+- **Helper decision** — anything else: a term beside a reducer that varies within a group (`ship <= 0.20 * sum(ship)`,
+  a decision keyed by another key), a row-varying factor, reducers with different `by`
   keys, a reducer inside another expression (`abs(sum(ship) by (g) - 40) <= 5`). Each reducer becomes a **helper
   decision** with one instance per `by` group, defined once (a row for `SUM`/`AVG` on the side the clause pushes it, an
   extremum link for `MIN`/`MAX`), and the clause is one row per class.
@@ -601,7 +603,7 @@ A relation, one row per finding; a query that solves returns one row, `state = '
 | `suggested_change` | VARCHAR | the smallest edit that addresses this finding |
 | `amount` | DOUBLE | how far a bound moves, escaping instances, or the achievable objective |
 | `total` | BIGINT | denominator of an unbounded escape count |
-| `scope` | VARCHAR | `row`, or `entity` for a keyed decision, on an escape count |
+| `scope` | VARCHAR | `row`, or `keyed` for a keyed decision, on an escape count |
 | `edit_source` | VARCHAR | the finding's kind (below) |
 | `group` | VARCHAR | the class's `per` key value (expanded scope; a relation key's values print as SQL literals, `'NULL'` quoted and NULL bare), or the slice a decision escapes on |
 | `row` | BIGINT | the kept row this finding covers (expanded scope) |

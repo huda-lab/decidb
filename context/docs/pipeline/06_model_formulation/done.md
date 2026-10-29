@@ -31,7 +31,7 @@ can be moved rather than copied, plus a pre-built `VarIndexer` threaded in from
 ```
 Block 1: per-row vars (ROW)        [0, num_rows * num_row_vars)
 Block 2: keyed vars (ENTITY)       sum of num_entities per scope
-Block 3: query-wide vars (SCALAR)  one column each
+Block 3: query-wide vars (GLOBAL)  one column each
 Block 4: global auxiliaries        ABS / MIN-MAX / McCormick auxiliaries
 ```
 
@@ -172,34 +172,18 @@ decide-variable index span fits the cap (~1M slots), or a sorted/merged
 
 Both aggregate branches use the same selector.
 
-### A query-wide decision's term: once, or once per counted row
+### A term beside the reducers: counted once by execution
 
-`CanUseRowScopedFastPath()` treats a `SCALAR`-scoped term the same as a keyed
-one — it always needs the accumulator, since a scalar's flat index
-never changes across rows and would collide with itself under the fast path.
-Inside the accumulator, a scalar term takes one of two rules, distinguished by
-`DecideTerm::reduction` (constraint side: `EvaluatedConstraint::
-linear_term_reductions`; objective side: `SolverInput::objective_term_reductions`,
-carried the same way):
-
-- **`LinearTermReduction::NONE`** — the term is a bare additive sibling of a
-  reducer, not inside one (`SUM(x) - max_shortfall <= cap`). It is row-invariant
-  by construction, so it contributes its coefficient **once** — read from row 0 (or
-  the first row of its `by` group), never summed across rows. Multiplying it by
-  the row count would silently change the problem.
-- **`LinearTermReduction::SUM`** — the term came from inside a real reducer's body
-  (`SUM(opening_cost * cap)`), stamped by `ApplyAggregateMetadata` on the
-  constraint side and by the matching inline stamp in
-  `ExtractAggregateObjectiveTerms` / `AnalyzeObjective` on the objective side. It
-  falls through to the same per-row accumulation loop a keyed variable
-  uses, so its coefficient becomes the **sum of every counted row's data** — the
-  scalar's contribution is `(Σ counted rows' coefficient) * cap`, not `1 * cap`.
-
-Getting this backwards in either direction is a silent wrong answer, not a
-rejection: reading a `SUM`-reduced scalar term as `NONE` drops every row's
-contribution but one; reading a `NONE` term as `SUM` multiplies a row-invariant
-sibling term by the row count it was never supposed to scale by. See
-`../../language/functions.md` ("Query-wide decisions") for the binder-side rule this implements.
+The builder sums every row's coefficient of every term. A term outside the reducers
+(`SUM(x) - max_shortfall <= cap`, `MAXIMIZE sum(x) + w * s`) counts once: execution kept
+its coefficient on one row, the first kept row or its group's first row, and zeroed the
+others (`CountOnce`, `../08_execution/done.md`). A query-wide decision inside a reducer
+(`SUM(opening_cost * cap)`) keeps every row, so its coefficient is the sum of the counted
+rows' data. The rule has one owner, so a writer cannot leave the builder a term whose
+count it reads from elsewhere; a debug build checks that no term outside the reducers
+reaches the builder on two rows of a group (`VerifyCountedOnce`). `CanUseRowScopedFastPath()`
+still sends a query-wide term to the accumulator, since its one solver index would collide
+with itself under the fast path. See `../../language/functions.md` ("Query-wide decisions").
 
 ### Path 1 — aggregate, ungrouped
 
@@ -262,9 +246,9 @@ coefficients directly.
 Constraints with bilinear terms or `POWER(..., 2)` go through the quadratic
 constraint builder into `model.quadratic_constraints`. Linear fixed LHS terms use
 the same `INVALID_INDEX` convention and are subtracted from the RHS over the
-selected row set before the quadratic constraint is finalized. A query-wide decision
-beside the reducers (`SCALAR`, not `LinearTermReduction::SUM`) enters once per row set,
-as in the linear builder: `SUM(POWER(x, 2)) + s <= 30` is not `... + n*s`.
+selected row set before the quadratic constraint is finalized. A decision beside the
+reducers enters once per row set, because execution left it on one row (`CountOnce`):
+`SUM(POWER(x, 2)) + s <= 30` is not `... + n*s`.
 
 ### Normalization on emission
 
@@ -886,9 +870,9 @@ A row dropped as a tautology allocates nothing at all.
 **Aggregate spellings expand per group.** They need one binary per group rather than per
 row, and their LHS is the group's rows summed onto one row, so `ExpandAggregateNotEqual`
 accumulates each group's coefficients and emits the same two conditional rows over the
-sum. A query-wide decision beside the reducers (`SCALAR`, not SUM-reduced) enters once
-per group, read off the group's first row, as in the linear builder (`SUM(x) + s <> 5`
-is not `... + n*s`); a clause with one takes no range collapse, since the per-row
+sum. A decision beside the reducers enters once per group, since execution left it on the
+group's first row (`CountOnce`; `SUM(x) + s <> 5` is not `... + n*s`); a clause with one takes no range collapse, since
+the per-row
 ranges would count it once per row. Groups skipped by the integer-RHS guard allocate no binary, so the model stays
 clean.
 

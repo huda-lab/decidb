@@ -118,7 +118,7 @@ Grouped by who writes it:
 
 **From the binder** — `decide_index`, `decide_variables`, `decide_constraints`,
 `decide_sense`, `decide_objective`, `num_auxiliary_vars`, `is_boolean_var`,
-`variable_scopes`, `keys`, `entity_scopes`, `constraint_sources`. `keys` is the one
+`variable_scopes`, `keys`, `keyed_scopes`, `constraint_sources`. `keys` is the one
 key table (`DecideKey`): every key the clauses write -- a declaration's `per K:`, a
 reducer's own `per K'` and the colon form `SUM(D: …)`, a reducer's `by (G)`, a
 constraint's `per K:` and the two-level objective's key -- is one entry, and keys with
@@ -131,13 +131,13 @@ by binding, then other expressions by text), and `written_as_by` when a `by` nam
 empty key (`per ()`, `by ()`) has no entry: it is `INVALID_INDEX`. A key holding
 a subquery is recognised by its text instead, since bound subqueries do not compare. Tags
 name entries: a reducer's `__group_key_<i>__` its `by` key, and a `PER_CLASS_TAG` or
-`PER_CONSTRAINT_TAG` wrapper's `__per_key_<i>__` its `per` key (`PerWrapperKey`; no tag is
+`TWO_LEVEL_OBJECTIVE_TAG` wrapper's `__per_key_<i>__` its `per` key (`PerWrapperKey`; no tag is
 `per ()`). The two tags differ so a walker that reads `by` keys never reads a `per` key.
-`entity_scopes` holds the key scopes, one per key that keys decisions or a reducer's own
-`per` (`EntityScopeInfo`: the key, the decisions it keys). `variable_scopes` points each
+`keyed_scopes` holds the key scopes, one per key that keys decisions or a reducer's own
+`per` (`KeyedScopeInfo`: the key, the decisions it keys). `variable_scopes` points each
 keyed decision at one, with its key as written (`declared_key`). A scope the optimizer
 creates for a helper decision of the value rewrite has the link's `by` key and names the
-link (`EntityScopeInfo::value_link`, deliberately absent from the serialization: an
+link (`KeyedScopeInfo::value_link`, deliberately absent from the serialization: an
 optimized plan is never serialized); its entities are the link's `by` groups among the
 rows the link's clause keeps, so it shares no scope with a binder scope on the same key.
 
@@ -266,7 +266,7 @@ binding fact, and the parser cannot see it (the clause may sit inside a subquery
 
 `LogicalDecide` and `LogicalDecideDiagnose` are serialized by DuckDB's generator.
 The field list lives in `storage/serialization/logical_operator.json`; the structs
-it names — `DecideKey`, `DecideKeyElement`, `EntityScopeInfo`, `DecideVarScopeInfo`,
+it names — `DecideKey`, `DecideKeyElement`, `KeyedScopeInfo`, `DecideVarScopeInfo`,
 `ConstraintSourceInfo`, `DecideSourceColumnName`, `DecideScopeCheck` — have their own entries
 in `nodes.json`, and both
 directions are generated into `src/storage/serialization/serialize_*.cpp`. There is
@@ -311,7 +311,7 @@ renumbered freely: a serialized logical plan lives for microseconds inside one
 process and is never persisted, so there is no older layout to stay readable for. A
 retired field stays in the list as a `"deleted": true` entry, for which the generated
 serializer writes nothing and the deserializer reads past (`ReadDeletedProperty`):
-`LogicalDecide`'s id 219 and `EntityScopeInfo`'s id 105.
+`LogicalDecide`'s id 219 and `KeyedScopeInfo`'s id 105.
 
 ### What exercises it
 

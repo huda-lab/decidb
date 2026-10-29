@@ -18,11 +18,11 @@ Coverage of direct solve is in each rule's `done.md` under [../direct_solve/rule
 |---|---|---|
 | Clause order | The two `DECIDE` clause positions (split / single-block) | `test_clause_order.py` |
 | Variable types | BOOL / INT / REAL, multi-variable | `test_var_*.py` |
-| Keyed decisions | Keyed decisions (`DECIDE per K: x(TYPE)`) over joins | `test_entity_scope.py` |
-| Query-wide decisions | Query-wide decisions (`DECIDE per (): x(TYPE)`) | `test_scalar_scope.py`, `test_scalar_var_in_aggregate.py` |
+| Keyed decisions | Keyed decisions (`DECIDE per K: x(TYPE)`) over joins | `test_keyed_scope.py` |
+| Query-wide decisions | Query-wide decisions (`DECIDE per (): x(TYPE)`) | `test_global_scope.py`, `test_scalar_var_in_aggregate.py` |
 | Relation-qualified reducers | The colon form `SUM(D: expr)`, which means `sum(per D: expr)` | `test_qualified_reducer.py` |
 | Constraint operators | `=`, `<`, `<=`, `>`, `>=`, `<>`, BETWEEN, IN; per-row vs aggregate | `test_cons_*.py` |
-| `when` | `when` in front of a constraint or the objective, and a reducer's own `when` | `test_when_*.py`, `test_aggregate_local_when.py` |
+| `when` | `when` in front of a constraint or the objective, and a reducer's own `when` | `test_when_*.py`, `test_reducer_filter.py` |
 | `per` constraints and two-level objectives | `per K:` constraints and `outer(per k: inner(e) by (k))` | `test_per_*.py` |
 | MIN and MAX | MIN/MAX linearization (easy/hard cases, composed, two-level) | `test_min_max.py`, `test_per_objective.py` |
 | AVG | AVG (execution-time coefficient scaling) | `test_avg.py` |

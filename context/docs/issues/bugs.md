@@ -28,7 +28,7 @@
   InternalException or a Gurobi API error instead of `DecideInvalidValueMessage`.
 - **Fix:** one `AddCoefficient(target, value, written)` helper checks every merged sum, the accumulator's and the
   fixed terms' included, and raises a new overflow role of `DecideInvalidValueMessage` that names the clause and says
-  to scale its data; direct solve's overflow messages move to that role. After F4, whose CQ-4 rewrites the builder.
+  to scale its data; direct solve's overflow messages move to that role.
 
 ## Limitations (not bugs)
 
