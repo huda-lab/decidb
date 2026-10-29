@@ -21,7 +21,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D28 | DIAGNOSE's `group` column holds the `per` key value: in the expanded slack scope a `by`-grouped clause reports its group's finding once per class of its `per` key, and once per kept row when it has no `per` key (ANR deck pp. 16–17, 110) |
 | D30 | Every clause follows the scope rules, bare clauses included |
 | D31 | There is one language; no clause carries a language tag |
-| D32 | One echo for every clause: lower-case reducers and keywords, the qualifier in front, no synthesized `per row:`, `by ()` not printed |
+| D32 | One echo for every clause: the qualifier in front, no synthesized `per row:`, `by ()` not printed. Quoted text keeps the user's case; text DeciDB writes (a rewritten row, an edit) uses lower-case reducers and keywords |
 | D33 | The expanded DIAGNOSE scope reports per kept row for a clause with no `per` key (D28 read literally) |
 | D34 | `count(*)` takes a `by`; `count(*) by (g)` counts a group's rows |
 | D35 | `norm(e, p)` takes a `by` |
@@ -32,7 +32,7 @@ A number not in the table is retired and is not reused. Add a new ruling with th
 | D41 | An easy `min(x) >= K` / `max(x) <= K` means `x >= K` / `x <= K` on every row it reads; with no `when` and no reducer filter it is absorbed into the decision's box, so a negative `K` makes `x` signed. A constant lower bound replaces the default floor of 0 on the rows it keeps: every row without a `when` or a reducer filter, and only the kept rows or members with one (the other rows keep 0). A keyed or query-wide decision takes the replaced floor when any row it reads is kept. The bound is read by value: any affine or scaled spelling with a constant other side (`min(x) - 1 >= K - 1`, `2 * min(x) >= 2K`, `-min(x) <= -K`) is absorbed like the literal one, and so is a member scaled or shifted by constants (`max(-x) <= 2` is `x >= -2`, `max(2 * x) <= -10` is `x <= -5`) |
 | D43 | `D.x` is refused at bind time when `D` is a `FROM` relation and `D.x` binds to no column (*"write open, not D.open; a decision is referenced by its bare name"*); in a `when`, `per` or `by`: *"D.open is a decision; when, per and by may only use data"* |
 | D44 | Open: the NULL class label in DIAGNOSE's `group` column prints as the text `NULL` (`../diagnostics/infeasible/todo.md` § INF-2) |
-| D45 | Open: EXPLAIN and DIAGNOSE print a non-key column by its bare name over a join (`../pipeline/03_logical_plan/todo.md` § LP-2) |
+| D45 | Every column prints as the user wrote it (`S.cap`, `cap`), at every stage: the binder cuts its spelling and tags the bound reference |
 | D46 | Open: the scope enum becomes `ROW / KEYED / GLOBAL` with its values kept, and DIAGNOSE's label `keyed` (`../issues/code_quality.md` § CQ-3) |
 | D47 | Open: one clause-scope struct and walker, one two-level renderer (`../issues/code_quality.md` § CQ-1) |
 | D50 | `DECIDE scalar cap` and `DECIDE lineitem.x` (no type) get the removed-spelling error, naming a typed declaration; `per (): cap` gets "needs a type" |

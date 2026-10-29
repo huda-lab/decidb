@@ -430,7 +430,7 @@ it — that formulation is one row over all of the clause's kept rows under one 
 otherwise it is VALUE, where each extremum is pinned per group. `PeelScale` lets a
 row-varying factor stay on a constraint's reducer as its scale (the comparison is then
 VALUE); a factor that is a decision is refused (§3.7). Refusals quote the query through
-`QuoteMessagesWith`: columns qualified by relation over a join, a reducer with its
+`QuoteMessagesWith`: every column as written, a reducer with its
 scopes and `by`. `ClassifyCanonicalComparison` maps the shape onto
 `CanonicalConstraintClass` (`ROWS` is `PER_ROW`; `UNSUPPORTED`, or a decision on the
 bound side, is `INVALID`), so the linear form, the validation in `AddConstraint` and the

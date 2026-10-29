@@ -132,7 +132,7 @@ In `src/execution/operator/decide/physical_decide.cpp`:
 ## Rendering
 
 `CollectDecideExpressionStrings` (`decide_source_provenance.cpp`) walks the wrappers, building the front qualifier
-from `WhenQualifier` and `PerClassQualifier` (`FrontQualifier`, `AttachDecideQualifier`). `RenderTwoLevelObjective`
+from `WhenQualifier` and `PerClassQualifier` (`FrontQualifier`), which read the cut text. `RenderTwoLevelObjective`
 prints the two-level form; `RenderReducer` prints a reducer's own scope and `by`. See [explain.md](explain.md).
 
 ## Scale

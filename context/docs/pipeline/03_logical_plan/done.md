@@ -341,19 +341,17 @@ The guarded suite passes every test.
 
 `GetName()` returns `"DECIDE"`. `ParamsToString()` builds the structured plan
 output, using `CollectDecideExpressionStrings` to print every clause in one style
-(D32): the `when` and `per` wrappers become one qualifier in front (`when c per K:`),
-reducers and the words `when`, `per` and `by` are lower case, a reducer's `by (G)` follows it, and the defaults
-`per row:` and `by ()` are not printed. The colon form prints as written (`sum(D: x)`,
+(D32): each clause as typed, the `when` and `per` wrappers as one qualifier in front (`when c per K:`), and the
+defaults `per row:` and `by ()` not printed (`../../language/explain.md`, Rendering). The colon form prints as written (`sum(D: x)`,
 D38). The two-level objective prints as `outer(per k: inner(e) by (k))`, a `when` in
 front of it, its key as written: `RenderDecidePerKey` reads the source fragment both
 binders record for a `per` key, falling back to the key columns' names, which
 `BindKeyColumns` made SQL text. A row the solver receives is left out where it reads as
-the clause above it. Every renderer takes a
-`DecideSourceNames`: the clause registries, the relation aliases for messages,
-and the auxiliary labels (`aux_var_expressions`, with `decide_index`), so a decision
+the clause above it. The renderers read the clause
+registries and the auxiliary labels (`aux_var_expressions`, with `decide_index`), so a decision
 column that stands for an expression -- an ABS auxiliary `abs(e)`, a product `(b * x)`,
 an indicator `(x = v)`, a helper `sum(e) by (g)` -- prints that expression wherever it
-appears, a later rewrite's label included; `DecidePlanNames` builds the plan's. Each
+appears, a later rewrite's label included. Each
 rewrite's account (`rewrite_accounts`, worded once by `RenderDecideRewriteAccount`:
 "`abs(e)` becomes an auxiliary variable") is printed under its clause before the rows it
 left; the objective's accounts, and the rows a rewrite added for the objective (tagged

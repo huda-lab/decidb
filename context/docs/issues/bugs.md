@@ -46,150 +46,6 @@
 - **Impact:** a large HiGHS query can take the whole process down, and the profile misreports why.
 - **Reproduce:** `make decide-bench-setup`, remove the entry from `SKIP`, run `profile_pipeline.py`. Memory-heavy.
 
-## BUG-4 — Messages print a subquery, a condition or a `by` key as DuckDB renders it
-
-- **Location:** a subquery's source fragment, and a `by` key's text, is its parsed
-  expression's `ToString` (`TagDecideSourceFragments` in `decide_source_provenance.cpp`,
-  `BindReducerBy`), and a condition is re-rendered from its bound form
-  (`RenderDecideSource`).
-- **Observed:** `when v in (SELECT 1000): ...` is quoted as `when (v = ANY(SELECT
-  1000))`; `when exists (SELECT 1 WHERE false): ...` gives
-  *"... when EXISTS(SELECT 1 WHERE CAST('f' AS BOOLEAN)) ..."*; `when id > 100 and g is
-  not null:` gives *"when id > 100 AND (g IS NOT NULL)"*. A `VALUES` list in a subquery
-  becomes `(SELECT * FROM (VALUES ('East', 30)) AS valueslist) AS c(region, cap)`, in a
-  `when` message and in the NULL-subquery message alike; `by (id % 2)` is quoted as
-  `by ((id % 2))`.
-- **Expected:** the text as written. That needs each node's source span, which the
-  parser does not keep (only its start).
-- **Impact:** messages only; they stay recognizable.
-- **Ruling (owner, 2026-10-29).** Written text is cut from the query, never re-rendered (architect review done).
-  - The parser tracks bison's `{start, end}` locations: `YYLTYPE` (`scanner.hpp`) becomes a struct with an implicit
-    `int` conversion so every `@n` compiles unchanged, `YYLLOC_DEFAULT` sets the end from the last right-hand symbol,
-    and the lexer sets each token's end (`scan.l`, regenerated with `scripts/generate_flex.py`). Start offsets, and so
-    DuckDB's error positions, do not change; no node outside DECIDE grows.
-  - `scripts/generate_flex.py` first reproduces the committed `src_backend_parser_scan.cpp` byte for byte from an
-    unchanged `scan.l` (today a plain run differs by about 87 `int`/`size_t` lines), in its own commit.
-  - Spans are recorded only at the DECIDE grammar positions (clause, scope, `when`, `per`/`by` keys) and on both sides
-    of the six comparison operators, whose node location is the operator (`select.y`, the `@2` actions); a subquery
-    gets no span of its own. They go in a side table of `{node, start, end}`, filled only while a DECIDE clause is
-    parsed and carried on `PGDecideClause` to the transformer, so no shared parser node grows.
-  - **Transport (owner, 2026-10-29, architect review).** A source map, as Clang's SourceManager and DuckDB's
-    `CreateInfo::sql`: `SelectNode` keeps the DECIDE tail's text (`decide_tail`, SUCH THAT to the end of the
-    objective), its start offset, and the spans relative to it, keyed by `(anchor, role)`: the anchor is the node's
-    `query_location`, which DuckDB keeps through copy, binding and serialization; the roles are comparison left,
-    comparison right, `when`, `per`, `by`, and (LP-2) column. The parser records `{anchor, role, start, end}`; the
-    transformer stores the map and tags nothing; binders cut text by `(query_location - tail_start, role)`.
-    `SelectNode::ToString` prints the tail as typed when the text is present, so a print-and-parse round trip (the
-    serializer check, prepared statements) gets identical spans. No text rides in a parsed node's alias, so no
-    alias-stripping in `FunctionExpression::ToString`, no moving marker text before binding, no consumed tag.
-    `SelectNode::Equals` ignores the text, as it ignores `query_location`. A macro argument inside a DECIDE clause
-    gets a test first; if its location can collide with the body's spans, stop: the fix is keying spans by their
-    source text, not a text-match guard.
-  - The transformer gets the string actually parsed (both `Parser::ParseQuery` paths) and, while transforming the
-    DECIDE clause only, cuts each span's text into the existing serialized `source_fragments` registry, as DuckDB
-    cuts `CreateInfo::sql`. Written lhs, rhs, qualifier and key text are these cuts; `WhenQualifier`,
-    `PerClassQualifier`, `ScopedInQualifier`, `FrontQualifier`, `AppendQualifier` and the key display text from
-    `DecideKeyToString` go.
-  - Implicit casts and folded constants are not in the text. A `BETWEEN`'s halves are made by the binder and take the
-    fallback, as today; quoting it whole is `../diagnostics/infeasible/todo.md` § INF-3.
-  - `source_lhs` / `source_rhs` (the text an edit is spelled from) stay tree-rendered; only `written_*`, the
-    qualifier and key text are cuts.
-  - Cut text keeps the user's case: `SUM(x) <= 100` echoes `SUM(...)`. D32's lower-casing of reducers and keywords
-    no longer applies to quoted text (lower-casing a cut would re-render it through a keyword list); the rest of D32
-    stands (qualifier in front, no synthesized `per row:`, `by ()` not printed). Pins of the lower-cased echo assert
-    the typed text exactly.
-  - Every column reference prints as written (the D45 change, `../pipeline/03_logical_plan/todo.md` § LP-2).
-  - The tree renderer (`RenderSource`) stays only for text DeciDB writes itself: the canonical layer, moved bounds,
-    edited clauses. A cast or subquery inside a moved term keeps DuckDB's rendering there. Anything with no span (a
-    node the binder makes up, a view or macro stored by an older build) takes one `ToString` fallback, not a branch
-    per node kind.
-  - The NULL-subquery message quotes its clause (from the span), not the subquery.
-
-## BUG-5 — Messages raised while choosing a formulation name columns without their relation
-
-- **Location:** stage 05 has no bind context, so `RenderDecideSource` there (the
-  composed walker's *"'s' beside MIN or MAX"* in `decide_rewrite_minmax.cpp`, the
-  objective's product refusal in `decide_linear_form.cpp`) cannot qualify a column by its
-  relation over a join; stage 04's refusals can (`QuoteMessagesWith`).
-- **Observed:** over the deck's join, `MAXIMIZE when S.priority: sum(ship) - max(ship) +
-  D.capacity * s` gives *"DECIDE: 'capacity * s' beside MIN or MAX is not supported
-  yet"*. A reducer's `by` key keeps its written text either way.
-- **Expected:** `'D.capacity * s'`: stage 05 carries the relation names (a `LogicalDecide`
-  field, serialized), or the refusal moves to stage 04.
-- **Impact:** messages only.
-- **Ruling (owner, 2026-10-29).** No BUG-5 code; it closes with BUG-4 and LP-2. Each bound column carries its
-  spelling as written (LP-2), which `RenderSource` prints at any stage, so a stage-05 quote reads `D.capacity` where
-  the user wrote it. The example above no longer reaches either site (the objective walk keeps a non-MIN/MAX term
-  beside one). Find a query that reaches `decide_rewrite_minmax.cpp` (the `beside` refusal) and
-  `decide_linear_form.cpp` (the product refusal, the 4-argument overload) with a data column over a join; each
-  that is reached gets a test, each that is not reached at all is deleted.
-
-## BUG-7 — A MIN/MAX `<>` refusal drops the clause's qualifier
-
-- **Observed:** the refusal for `<>` on a MIN/MAX quotes `when p: max(x) <> 2` (and
-  `per K:`, `when p per K:`, `per ():`) without its qualifier. Every other message site
-  attaches it.
-- **Location:** `decide_rewrite_minmax.cpp` calls `WrittenDecideComparison` without
-  `AttachDecideQualifier`.
-- **Expected:** the clause as written, qualifier included. A bare `per row:` is not printed
-  in any message, by design (D32), and pasting a suggested edit back without it gives the
-  same model. **Ruling (owner, 2026-10-28).** D32 stands. **Widened (owner, 2026-10-29):**
-  the cause is that a message site can quote a clause without its qualifier at all.
-  Every message that quotes a clause goes through one quoting function that attaches the
-  qualifier; no site calls `WrittenDecideComparison` on its own. Audit every caller,
-  route each through it, and test the refusal names `when p:` and `per K:`.
-  Audit (2026-10-29): two shapes of quote, each composed by hand at every site. A clause as
-  written is `AttachDecideQualifier(WrittenDecideComparison(source), source.qualifier)`
-  (`physical_decide.cpp` ×2, `decide_diagnostic_engines.cpp`). An edited
-  clause is `AttachDecideQualifier(lhs + " " + sense + " " + rhs, qualifier)`
-  (`decide_diagnostic_render.cpp` ×4, `deterministic_naive.cpp`). The minmax refusal is
-  the one site that skipped the attach.
-  **Ruling (owner, 2026-10-29), architect review done.** The audit missed a second site: the `<>` refusal over a
-  product or power (`decide_rewrite_notequal_avg.cpp`, `RenderForPlan(comp)`) and its `ne_clause_labels` also drop
-  the qualifier.
-  - Two functions beside `ConstraintSourceInfo` (`decide_source_info.hpp`, bodies in a new
-    `src/common/decide_source_info.cpp`): `QuoteWrittenClause(source)` and
-    `QuoteEditedClause(source *, lhs, cmp, rhs)` (a null source quotes a row with no clause bare). The object that
-    holds the qualifier does the quoting (Information Expert). `WrittenDecideComparison` and `AttachDecideQualifier`
-    become `static` there.
-  - `MakeClauseLabel`, `MakeLoosenEdit` and `MakeVirtualOffsetEdit` take the source instead of a qualifier string;
-    `SourceQualifier` goes.
-  - Stage 05 reads a comparison's source through one adapter beside `RenderForPlan`, used by the MIN/MAX and the
-    product `<>` refusals. The untagged fallback in the MIN/MAX refusal is deleted if no query reaches it.
-  - `qualifier` stays a public field; the tests at each site are the guard.
-  - EXPLAIN's rewritten rows keep their own qualifier, taken from the rewritten plan: a rewrite can put a row under a
-    different `per` than its clause.
-  - The `<>` label keeps a reference to its clause and is quoted when printed; no second string is stored.
-  - Tests, one per site, each failing if that site drops the qualifier: the MIN/MAX `<>` refusal and the product
-    `<>` refusal under `when p:` and `per K:`, the DROP label, the HiGHS refusal. If `physical_decide.cpp`'s bound
-    site never sees a qualified clause, record that instead of a test.
-- **Impact:** one known message; the audit says whether there are more.
-
-## BUG-8 — Messages: operands, coefficients and keys
-
-Each reproduces on the current build.
-
-- **Two keys over the same columns keep the key text of the one bound first**
-  (cosmetic): with `per D.d, D.cost: open(BOOL)` declared, `SUM(D: D.cost * open) <= 7`
-  is echoed by EXPLAIN as `sum(D.d, D."cost": "cost" * open) <= 7`, and a determination
-  message quotes `(in sum(D.d, D."cost": ...))`; declared `per D: open(BOOL)`, the same
-  clause echoes `sum(D: "cost" * open) <= 7`. Both keys name the same columns, so they
-  share one entry of the key table (`FindOrCreateDecideKey`, `logical_decide.cpp`), which
-  holds one key text. Expected: each clause echoed as written.
-- **A column reference is named in two forms:** `KeyElements` (`decide_binder.cpp`) names a key column's
-  reference by its SQL spelling (`t.depot`, `t."my col"`, `D."cost"`); every other reference
-  carries its bare column name. Anything that prints a reference's name has to tell the two
-  apart. The unbounded remedy (`plan_decide.cpp`, the name harvest) does it by comparing the
-  name with the binder's source name: equal is bare and is quoted where SQL needs it,
-  different is taken as SQL. A reference whose name differs from the source only in case
-  is taken as SQL unquoted. Expected: one form on every reference (the bare name, with the
-  key's SQL spelling kept beside it, as `DecideKeyElement::name` already keeps it), so no
-  printer infers which it holds. Same field as the shared key text above.
-- **Impact:** messages only.
-- **Needs.** `../pipeline/03_logical_plan/todo.md` § LP-2, whose design records display text per occurrence for both
-  bullets. Under the 2026-10-29 ruling a clause's key text is cut from its own `per`/`by` span (BUG-4), so the first
-  bullet closes with LP-2; the second closes when every reference carries its spelling as written.
-
 ## BUG-9 — A `BETWEEN` echoes its lower half only
 
 - **Observed:** `x BETWEEN 18 AND 25` beside `SUM(x) <= 20` over two rows reports the clause `x >= 18` and suggests
@@ -223,6 +79,14 @@ Each reproduces on the current build.
 - **Impact:** a wrong optimum, silently, whenever a `per K:` key is NULL on a row whose bound is tighter.
 - **Needs.** The agent finds where the solver path instantiates a class for a NULL key and stops with a proposed fix
   before coding; the fix covers both paths.
+
+## BUG-13 — A `per D:` clause groups a relation by its first column
+
+- **Observed:** over `D(d, region, cost, cap)` = `(1,'a',3,10)`, `(1,'b',5,25)`, `(2,'b',4,30)`,
+  `DECIDE open(BOOL) SUCH THAT per D: SUM(open) <= cap` raises *"per D does not determine cap. D = 1 has more than
+  one value: 10, 25."* A relation stands for all its stored columns (`../language/guide.md` §3), so each row is its own
+  class and `cap` is determined. A declaration `per D: open(BOOL)` groups correctly. Reproduces before F6.
+- **Impact:** a valid query is refused; the class label quotes one column.
 
 ## Limitations (not bugs)
 

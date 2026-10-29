@@ -44,18 +44,27 @@ a fact the rewrite recorded (`LogicalDecide::rewrite_accounts`), worded in one p
 
 EXPLAIN shows the model that was built, not only the query: the rows linearization emitted are part of the picture.
 An auxiliary column prints as the expression it stands for (`abs(ship - 20)`, `(open * ship)`, `max(ship)`,
-`sum(ship) by (D.region) <> 20`), never by its internal name. The labels live in `DecideSourceNames`,
+`sum(ship) by (D.region) <> 20`), never by its internal name. The labels live in `aux_var_expressions`,
 `minmax_clause_labels` and `ne_clause_labels`.
 
 ## Rendering
 
-**One renderer.** `RenderDecideSource` (`decide_source_provenance.cpp`) is the only user-facing expression renderer.
-The logical node, the physical node, the DIAGNOSE qualifier and its bound label all call it, so a clause reads the
-same wherever it is quoted. `Expression::ToString()` is not used because the bound tree is not the query: it carries
+**Written text is cut, never re-rendered** (a source map, as Clang's SourceManager and DuckDB's `CreateInfo::sql`).
+Inside a DECIDE clause the parser records spans (`{anchor, role, start, end}`) for a comparison's two sides, `when`,
+`per`, `by` and every column. `SelectNode::decide_text` (`DecideSourceText`) keeps the tail as typed and its spans
+keyed by `(query_location, role)`; it is serialized, `Equals` ignores it, and `SelectNode::ToString` prints the tail
+verbatim, so a print-and-parse round trip keeps the spans. Binders cut text into `source_fragments` and tag the bound
+node; a bound data column carries its spelling (`TagWrittenColumn`). A table macro whose argument lands in a DECIDE
+tail clears `decide_text`, since the argument is not in the body's text; that clause renders by tree. DuckDB's plan
+nodes strip only the source-fragment tag (`StripSourceFragmentTags`); rewrites read the other tags.
+
+**One tree renderer.** `RenderDecideSource` (`decide_source_provenance.cpp`) prints text DeciDB writes itself (the
+canonical layer, moved bounds, edited clauses) and any node without a span. `Expression::ToString()` is not used because the bound tree is not the query: it carries
 casts the binder inserted, prints functions in call form, and keeps pipeline tags in aliases that `GetName()` prints
 verbatim (`__source_clause_0__`).
 
-**The style** (D32): reducers, `norm` and scope keywords in lower case; the `when c per K:` qualifier in front; a
+**The style** (D32): quoted text as typed; written text with reducers, `norm` and keywords in lower case; the
+`when c per K:` qualifier in front; a
 reducer's own scope inside it and its `by (G)` after it; keys as written (`per D.depotID`), never as binding indexes;
 the defaults `per row:` and `by ()` not printed; the colon form kept as `sum(D: e)` (D38); the two-level objective
 printed whole.
@@ -74,9 +83,10 @@ before binding. A tagged node replays its own SQL; an untagged one, which the bi
 | `PER_CONSTRAINT_TAG` (two-level objective) | print it whole (`RenderTwoLevelObjective`) |
 | `AND` | recurse into each child |
 | `COMPARE_IN` marker | `<target> IN (v1, …)` |
-| leaf | `RenderDecideSource` with the qualifier in front |
+| leaf | the cut text (else `RenderDecideSource`), quoted with its qualifier by `QuoteWrittenClause` |
 
-The objective goes through the same walker. `GetName()` on a `when` wrapper would return its alias, the raw tag.
+Messages quote a clause only through `QuoteWrittenClause` or `QuoteEditedClause` (`decide_source_info.cpp`), which
+put the qualifier in front. The objective goes through the same walker. `GetName()` on a `when` wrapper would return its alias, the raw tag.
 
 **Clause identity is an id, not a position.** Stage 05 appends rows and removes clauses, so positional matching
 would drift. The binder stamps a `source_clause_id` on every written comparison, and every rewrite that emits rows

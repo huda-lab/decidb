@@ -644,10 +644,9 @@ the rows the solver receives. An auxiliary prints as the expression it stands fo
 derived from data prints as `M`. `EXPLAIN` plans without solving; `EXPLAIN ANALYZE` solves and adds actual rows and
 timing.
 
-**Echo.** EXPLAIN, DIAGNOSE and messages print a clause in one style: lower-case reducers and keywords, the
-`when c per K:` qualifier in front, a reducer's `by (Γ)` after it, the defaults `per row:` and `by ()` left out, the
-colon form as written. A key prints as written; EXPLAIN and DIAGNOSE print other columns by bare name, where messages
-qualify them over a join.
+**Echo.** EXPLAIN, DIAGNOSE and messages quote a clause as typed, with the `when c per K:` qualifier in front and
+the defaults `per row:` and `by ()` left out. Text DeciDB writes itself (a rewritten row, a suggested edit) uses
+lower-case reducers and keywords and spells every column as the query does.
 
 Tests: `test/decide/tests/test_explain.py`, `test_scope_explain_diagnose.py`. Internals: [explain.md](explain.md).
 

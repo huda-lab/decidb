@@ -7,7 +7,7 @@ Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
-at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or F5. F9 runs alone. F10 runs first.
+at a time. Lanes: F1 then F5; F6; F7 then F8. F4 never beside F2 or F5. F9 runs alone. F10 runs first.
 
 ## 1. Owner decisions (independent of each other; ask all first)
 
@@ -18,16 +18,9 @@ at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or 
 ## 2. F10 Wrong answers
 
 - [ ] BUG-12 A NULL-key row's bound limits a `per K:` clause — issues/bugs.md § BUG-12
+- [ ] BUG-13 A `per D:` clause groups a relation by its first column — issues/bugs.md § BUG-13
 
-## 3. F2 Messages quote what the user wrote (needs: 1)
-
-- [ ] BUG-7 One quoting function for every message — issues/bugs.md § BUG-7
-- [ ] BUG-5 Relation names in stage-05 messages — issues/bugs.md § BUG-5
-- [ ] BUG-4 Source spans instead of DuckDB's rendering — issues/bugs.md § BUG-4
-- [ ] LP-2 Display text per occurrence; qualify over a join — pipeline/03_logical_plan/todo.md § LP-2
-- [ ] BUG-8 One name form, one key text per clause — issues/bugs.md § BUG-8 (needs: LP-2)
-
-## 4. F3 Diagnosis output (needs: 1, F2)
+## 4. F3 Diagnosis output (needs: 1)
 
 - [ ] INF-3 A `BETWEEN` is quoted whole — diagnostics/infeasible/todo.md § INF-3
 - [ ] INF-1 An `=` on MIN/MAX is quoted as written — diagnostics/infeasible/todo.md § INF-1 (needs: INF-3)
@@ -56,7 +49,7 @@ at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or 
 
 ## 8. F7 SQL semantics (needs: 1)
 
-- [ ] BIN-1 The NaN and infinity message, one text on both paths — pipeline/02_binder/todo.md § BIN-1 (needs: F2)
+- [ ] BIN-1 The NaN and infinity message, one text on both paths — pipeline/02_binder/todo.md § BIN-1
 
 ## 9. F8 Solver runtime (needs: F7)
 

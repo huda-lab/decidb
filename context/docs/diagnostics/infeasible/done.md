@@ -542,15 +542,13 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   per clause on the bound tree by `InitializeConstraintSourceInfo`
   (`decide_source_provenance.cpp`, `VisitSourceComparisons`) and kept in the source
   registry (`ConstraintSourceInfo::qualifier`). `SourceAwareProvenance` copies it onto the
-  provenance the renderer reads, and `AttachDecideQualifier` writes it in front of both
+  provenance the renderer reads, and `QuoteWrittenClause` / `QuoteEditedClause` write it in front of both
   the clause and the suggestion. A `when` and a `per` key print in that order
   (`when active per grp: sum(x) by (grp) >= 5`); a key prints as written, comma-separated
   (`per r, y:`), `per ()` as `per ():`, and the default `per row:` not at all (D32). The
-  reducer prints with its `by (G)` after it. The `when` predicate renders through
-  `RenderDecideSource`, the renderer EXPLAIN uses, so a clause reads identically wherever
-  it is quoted back: the binder's implicit CASTs are dropped (`grp = 'a'`, not
-  `(grp = CAST('a' AS VARCHAR))`), a cast the user typed is replayed from its source
-  fragment, and a column that needs quoting keeps its quotes (`when "ok:": ...`).
+  reducer prints with its `by (G)` after it. The `when` predicate and
+  the clause are the text cut from the query, so a clause reads identically wherever it
+  is quoted back (`../../language/explain.md`, Rendering).
 
 The two-level objective's `per` key passes a throwaway labels vector (objective groups
 are not diagnosed by clause key). A composite key is written as a comma list

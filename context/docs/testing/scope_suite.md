@@ -180,9 +180,8 @@ one group at a time. No test asserts an answer its docstring derives.
 - **`test_scope_explain_diagnose.py`** — what EXPLAIN and DIAGNOSE print. EXPLAIN shows
   a clause as written, its canonical reading when that differs, auxiliaries as the
   expression they stand for and one account line per rewrite, including the objective's
-  rewrites and the two-level key. The echo is in the plan style: lower-case reducers
-  and keywords, `when c per K:` in front, a reducer's `by (G)` after it, and no
-  `per row:` or `by ()`. DIAGNOSE, in the expanded slack scope, reports a `by`-grouped
+  rewrites and the two-level key. The echo quotes each clause as typed, `when c per K:` in
+  front, and no `per row:` or `by ()`. DIAGNOSE, in the expanded slack scope, reports a `by`-grouped
   clause once per class: per value of its `per` key, or per kept row when it has none
   (D28); covers easy and hard MIN/MAX, absorbed and keyed bounds, unreachable bounds,
   composed clauses, quadratic clauses, the unbounded remedy naming a key column, and a

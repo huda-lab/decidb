@@ -92,9 +92,8 @@ too-open one.
   answered selection would diagnose a failure on a solver that did not produce it, and
   once selection depends on the model the two answers can genuinely differ.
 - **A clause is quoted as the user wrote it** — never as canonicalization built it —
-  in the echo style `EXPLAIN` uses (`../language/guide.md` §9):
-  lower-case reducers and keywords, the `when c per K:` scope in front, a reducer's
-  `by (G)` after it, and the defaults `per row:` and `by ()` left out. Stage 04 puts
+  as typed (`../language/guide.md` §9), the `when c per K:` scope in front and the
+  defaults `per row:` and `by ()` left out. Stage 04 puts
   decisions left and the bound right, which for most constraints is invisible:
   `sum(x) >= 100` is already canonical, so re-rendering the canonical tree reproduces
   what was typed. One shape does not survive it. When **both sides carry
