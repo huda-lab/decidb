@@ -13,7 +13,7 @@ if [ "$WT" = "$MAIN" ]; then
 	exit 1
 fi
 
-for f in test/decide/decide.db test/decide/_tpch_oracle.duckdb test/decide/results/oracle_cache.json; do
+for f in test/decide/decide.db test/decide/_tpch_oracle.duckdb test/decide/results/oracle_cache.json build/decidb.db; do
 	if [ -f "$MAIN/$f" ] && [ ! -e "$WT/$f" ]; then
 		mkdir -p "$(dirname "$WT/$f")"
 		cp -c "$MAIN/$f" "$WT/$f" 2>/dev/null || cp "$MAIN/$f" "$WT/$f"
