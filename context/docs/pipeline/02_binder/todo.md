@@ -7,7 +7,7 @@ Language-surface work is owned by `../../language/` (the scopes:
 
 ---
 
-## 1. Functions that behave unlike SQL
+## BIN-1 — Functions that behave unlike SQL
 
 **Rule (owner, 2026-10-27).** A function inside DECIDE behaves as the same SQL function does, NULL and NaN included,
 unless a strong reason that helps users says otherwise; each divergence is stated in the docs with that reason. A

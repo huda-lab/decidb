@@ -116,7 +116,7 @@ A column prints as SQL, quoted only where SQL requires it (`"my col"`, a reserve
 `zone` stays bare); a key column keeps its key's spelling (`t."my col"`). The NULL slice
 prints `when g IS NULL: ...`: the slice records which group holds the NULLs
 (`ColumnGrouping::null_group`), so a real string `'NULL'` still prints `g = 'NULL'`. The
-`group` column still labels the NULL slice `g = 'NULL'` (`../infeasible/todo.md` §2).
+`group` column still labels the NULL slice `g = 'NULL'` (`../infeasible/todo.md` § INF-2).
 
 Two conditions gate it, both decided in `CharacterizeEscape` and carried to the formatter
 on `EscapeRule::covers_scope` (the flattened finding fields cannot recover them):

@@ -3,7 +3,7 @@
 Open coverage gaps, one section each. Coverage that exists is in [coverage.md](coverage.md) and
 [scope_suite.md](scope_suite.md).
 
-## No differential test is large enough to see a solver's optimality gap
+## TST-1 — No differential test is large enough to see a solver's optimality gap
 
 - **Gap:** a MIP solver with a nonzero relative gap may stop at an incumbent short of the optimum. The differential
   suite cannot see this. Its datasets are small enough that Gurobi and HiGHS always close the gap, and
@@ -16,7 +16,7 @@ Open coverage gaps, one section each. Coverage that exists is in [coverage.md](c
 - **Test to add:** one MIP whose objective is large and whose default-gap incumbent is short of the optimum, compared
   with a relative tolerance, so that removing the gap-0 setting from either backend fails it.
 
-## Names that still say the removed spellings
+## TST-2 — Names that still say the removed spellings
 
 These test files and markers carry the removed vocabulary: `test_entity_scope.py` and its
 `test_entity_scoped_*` tests, `test_scalar_scope.py`, `test_aggregate_local_when.py`, and
@@ -25,5 +25,6 @@ identifiers they echo are `DecideVarScope::ENTITY`, `EntityScopeInfo` and the DI
 scope label `entity`. **Ruling (owner, 2026-10-27).** Rename the tests in the same change
 as those identifiers; renaming them together keeps one
 vocabulary.
+The identifiers and the names still open are `../issues/code_quality.md` § CQ-3; this task lands in the same change.
 
 - Update: the area table in [README.md](README.md) and every section of [coverage.md](coverage.md) that names these files.

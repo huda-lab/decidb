@@ -1,8 +1,8 @@
 # Stage 05 — Optimizer: open work
 
-Both items make the model smaller or the language wider without changing an answer that runs now.
+Each item makes the model smaller or the language wider without changing any answer that runs.
 
-## 1. A box per helper instance
+## OPT-1 — A box per helper instance
 
 **Why.** A helper keyed by a `by` key has one instance per group, but one column box: the
 cover of every group's reach (`DeriveReducerValueBounds`, stage 06), because the column box
@@ -39,19 +39,48 @@ solvers.
 
 **done.md.** `../06_model_formulation/done.md`, "Helper decisions of the value rewrite".
 
-## 2. `IN` under `per K:` once per class
+## OPT-2 — `IN` under `per K:` once per class
 
 **Why.** `RewriteInDomain` keeps the clause's `when` on the rows it emits but not its
 `per K:`, so `per g: x IN (1, 2)` over a keyed `x` emits one indicator set per kept row
 rather than per class: three rows in two classes give six indicators where four would
 do. It is exact, because the key determines the decision and the domain.
 
-**Decision needed.** None in the language. The indicators are row-scoped auxiliaries;
+**Decision needed.** None in the language; one in the design, below. The indicators are row-scoped auxiliaries;
 emitting them per class needs them keyed by `K` (a scope like a helper's) and the `per K:`
 wrapper kept on the generated rows, as the MIN/MAX equality's easy half keeps it.
+
+**Design choice.** Which scope keys the indicators. Per class, the indicators need a decision scope keyed by
+the wrapper's `K`. A scope is made only by the binder (declarations, reducer keys) and by the value rewrite (helpers);
+every key, `K` included, is an entry of the one key table (`LogicalDecide::keys`), from which a scope can be made.
+(a) Key the indicators by `K`'s entry. (b) For the case where `K` is the decision's own declared key only: the
+indicators take the decision's scope and the rows keep the wrapper (as the MIN/MAX easy half keeps it); any other `K`
+keeps one set per row. Recommended: (a); (b) is a special case beside the one key table, which (a) reads directly.
 
 **Test.** The dump of `per g: x IN (1, 2)` over three rows in two classes shows four
 indicators and four rows (a pick-one row and a linking row per class), not six and six;
 DIAGNOSE still names the clause.
 
 **done.md.** "NORM and IN — `RewriteNorm` / `RewriteInDomain`".
+
+## OPT-3 — A quadratic SUM behind a helper decision
+
+**Why.** Lifting the quadratic-row refusal (`sum(power(x, 2)) + gcap * s <= 30`, `../../issues/bugs.md`
+§ Limitations (not bugs), ruled: lift it) means a helper `v` for a quadratic `SUM`. Every `SUM` helper is defined by an
+equality, `v = Σ e`, which for a square is a nonconvex quadratic equality, so a convex clause would become a nonconvex
+model (Gurobi spatial branch and bound; HiGHS refuses either way).
+
+**Decision needed.**
+1. How is the helper defined? (a) Equality, emitted through the quadratic-row path: simplest, but the model class
+   changes. (b) The epigraph form, the side the rows push against, as `MIN`/`MAX` helpers already do
+   (`need_envelope`/`need_closing`): `v >= Σ e` when the rows push the term down, `v <= Σ e` when up, the equality
+   only for `=`, `<>` or an unknown sign. The clause keeps its convexity, and nothing reads a helper's value back, so a
+   slack `v` is harmless. Recommended: (b), applied to every `SUM`/`AVG` helper, linear ones included, so there is
+   one rule; linear models change from `=` to `>=`/`<=` rows on one side (same answers, golden dumps that print them
+   change).
+2. Apply (b) to linear helpers too, or only to quadratic ones? Recommended: all, one rule.
+
+**Test.** The refused shape answers, oracle-judged on Gurobi; HiGHS refuses it. The owner reads the golden diffs
+before any regeneration.
+
+**done.md.** `../06_model_formulation/done.md`, "Helper decisions of the value rewrite".

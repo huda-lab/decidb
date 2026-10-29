@@ -524,7 +524,7 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   with the dense ordinals). `FormatPerGroupKey` joins composite columns with `, `; a NULL
   value of a relation key (`per D`, which compares NULL as a value) renders `NULL`, and an empty-string key renders
   `''` so it is not confused with "ungrouped" (a string `'NULL'` reads like a NULL, see
-  `todo.md` §2). Threaded through `EvaluatedConstraint::group_labels` → stamped on
+  `todo.md` § INF-2). Threaded through `EvaluatedConstraint::group_labels` → stamped on
   `provenance.group_label` at **every** emission site in `ilp_model_builder.cpp`: the
   grouped aggregate sites, and the per-row site. The per-row site is the one
   that sees a hard MIN/MAX whose bound no row in a group can reach: the rewrite drops the

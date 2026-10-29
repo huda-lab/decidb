@@ -20,18 +20,30 @@ solver path answers those queries, so none of them is wrong, only slower.
 - The oracle tests cache solver results under the test's node id (`results/oracle_cache.json`). Do not rename a test
   function or move it to another file unless the task says so; a miss re-runs Gurobi, which needs a licence.
 - The Bash tool is zsh. In `grep`, put `--include` flags before `-e PATTERN`; after a `--` they are read as file names.
+- Stop and ask also when a golden changes that the task did not name, or a user-facing message needs wording the
+  doc does not give. A task that turns out to need the owner records its question as **Decision needed**.
+- A behavior change is judged by an oracle or the solver path, on both backends. A structural change gets a
+  `decidb-architect` review.
+- Never without the owner: large-tier benchmarks or other long CPU-bound runs, regenerating goldens before reading the
+  diff, pushing, new branches or worktrees, `git stash`.
 
 ## H-02 — Front end for the new language
 
+- **Decision needed.** Whether this task still applies. It waited for "a stable language branch", and the merge
+  brought one language.
 - **Needs.** A stable language branch.
 - **Problem.** The rules read an IR built from the current syntax only (`direct_ir.cpp`;
   `../architecture/ir.md`).
+- **Options.** 1. It still applies, as written. 2. It no longer applies, since there is one language; the task is
+  deleted.
+- **Recommendation.** None recorded; the owner confirms.
 - **Change.** A second front end builds the same IR from the new syntax. Extend the IR when semantics change; do not
   teach a rule parser spelling.
 - **Done when.** The IR contract and the direct/solver tests run on both syntaxes where comparable.
 
 ## H-03 — Read a data bound through the bound-side window
 
+- **Decision needed.** Where the reduction lives.
 - **Problem.** The bound-side window rewrite (`RewriteRhsAggregates`, `decide_rewrite_rhs_window.cpp`) is the one
   evaluator of a data bound: it reduces a clause's bound to its group's tightest value and appends VALUE_IS_VALID scope
   checks for NULL, NaN and a disagreeing `=` bound. A direct rule reads the reduced column, so a data limit adds two
@@ -39,6 +51,15 @@ solver path answers those queries, so none of them is wrong, only slower.
   checks (`AddRowChecks`).  R1's kept per-group plan could take the limit's MIN in the group aggregate it already runs. Measured
   on the wide R1 table (26 columns, 2,000,000 rows) with `SUM(w*x) <= cap * 500000`: about 1.0 s, against 0.33 s for
   the constant limit `1500000`; the two windows take about 0.35 s each.
+- **Options.**
+  1. The rewrite records each reduced bound (raw value, MIN/MAX/`=`, its value-check messages) as one value object;
+     the solver path turns it into windows only when no rule takes the query, and a rule that reads through computes
+     it in its own group aggregate (R1 already takes the group MIN/MAX of a data limit).
+  2. The rewrite installs the windows as it does and a rule that reads through removes them, rebinding shared,
+     stacked window slots.
+- **Recommendation.** 1, the one place that states the tightest bound; nothing is built to be torn down. Either way the
+  value checks move into the rule's pass and must keep the solver's order (scope checks, then the bound's NULL/NaN,
+  then weights).
 - **Change.** Let a rule that applies read through the window: the rewrite records, per reduced bound, the raw value it
   reduced, and the rule takes the MIN or MAX in its own group aggregate, as the window would. The value checks raise the
   same messages in the same order, but inside the rule's own pass, so no window is left under it. Keep one place that
@@ -48,16 +69,23 @@ solver path answers those queries, so none of them is wrong, only slower.
 
 ## H-04 — Keyed scope checks in the direct plan
 
+- **Decision needed.** How both paths choose what a message names when the answer depends on row order: which failing
+  group (several fail), and which two values a determination message quotes (`more than one value: 7, 5`; the solver
+  quotes the first value seen, then the first that differs). A relational plan has no reliable row order; its
+  existing checks raise the least message.
 - **Problem.** The value checks run under every rule's plan, in `AddRowChecks` (`direct_rule_driver.cpp`), a window
   and a filter that keep the source's bindings. A `DETERMINES` check makes the whole query decline
   (`DirectIR::status`).
+- **Options.** 1. Both paths name the least failing group and quote the least and greatest values. 2. Both paths keep
+  the solver's row order, which a relational plan cannot reproduce reliably.
+- **Recommendation.** 1, so the message never depends on row order; the solver's pins that quote another order change
+  with it.
 - **Change.** Partition the window by the check's key for `DETERMINES`. Quote the failing class in the message, as
   `PhysicalDecide::RunScopeChecks` does.
 - **Done when.** The same message on both paths, including a NULL key value. H-05 and H-07 need this task.
 
 ## H-05 — Read a reducer's `by` key into the IR
 
-- **Decision needed.**
 - **Problem.** A per-group limit is `sum(x) by (dept) <= 2`: the grouping sits on the reducer, not on a
   wrapper around the clause. `ReadReducer` (`direct_ir.cpp`) declines on `TryParseGroupKeyTag`.
   `DirectIRScope::per_key_slots` and `DirectFrontEnd::SourceSlot` exist, but nothing fills them. The S1 and R1
@@ -78,6 +106,7 @@ solver path answers those queries, so none of them is wrong, only slower.
   some reducer reads no row has no instance).
 - **Plan shape (owner's direction).** A `by` key is a GROUP BY in the direct plan: the rule groups the covered rows by
   the key (a hash aggregate on the key columns, joined back to the rows on the key), as the per-group plans kept in the code do. It is not one clause per row and not a window per clause.
+  It groups on `DecideKeyElement::Grouping()`, the collated expression.
 - **Tests waiting on this.** `direct_path` (`test/decide/tests/_direct_oracle_common.py`) makes the direct path of any
   case whose SQL holds ` by (` a strict xfail; its solver path is checked as usual. That is about 260 S1 grid cases (`S1_CASES` 77, `S1_OFFSET_CASES` 32,
   `S1_REDUCER_CASES` 151) and 22 R1 cases (`DATA_BUDGET_CASES` 13, `PIECE_CASES` 1, `SCOPED_CASES` 8). Delete the
@@ -104,7 +133,12 @@ solver path answers those queries, so none of them is wrong, only slower.
 
 ## H-08 — VALUE-shape clauses (helper decisions)
 
+- **Decision needed.** The rule and clause shape this is for. No rule's definition takes a VALUE-shape clause, so
+  reading the helper into the IR alone reaches no code.
 - **Problem.** `ReadConstraint` (`direct_ir.cpp`) declines a leaf tagged `VALUE_REWRITE_TAG`. The solver builds a
   helper decision from `reducer_value_links`.
+- **Options.** 1. Leave it until a rule names the shape it needs; the task then becomes that rule's. 2. The owner names
+  a rule and shape now.
+- **Recommendation.** 1.
 - **Change.** Read the helper decision and its definition into the IR, so a rule that applies can take the clause.
 - **Done when.** A differential case with a VALUE-shape clause runs on both paths with the same answer.
