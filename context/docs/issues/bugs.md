@@ -1,13 +1,5 @@
 # Known bugs
 
-## BUG-2 — One matrix run of `DECIDB_TEST_DIRECT_SOLVE=off` reported one outcome fewer
-
-- **Observed:** on 2026-10-27 `test/decide/run_direct_matrix.sh` printed `off: 4520 passed, 335 xfailed, 0 failed`
-  (4,855 outcomes) where `auto` and `serializer` printed 4,521 + 335. The rerun of the off suite gave 4,521 passed and 0
-  skipped. The matrix wrote its logs to a `mktemp -d` folder that was gone, so the missing test is unknown.
-- **Next step:** the matrix now keeps its logs (`test/decide/results/matrix_<time>/`) and prints each mode's outcome
-  total; when the totals differ again, find the missing test from the logs.
-
 ## BUG-23 — Q3 on HiGHS at `large` ran past the profiler's 420 s stop
 
 - **Observed:** the 2026-09-09 sweep (`benchmark/decide/results/pipeline_profile_large.csv`) records `process_timeout`

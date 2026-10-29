@@ -31,9 +31,7 @@ at a time. Lanes: F11.
 
 ## 12. Waiting
 
-- [ ] BUG-2 An off-mode run reported one outcome fewer (waits for a recurrence) — issues/bugs.md § BUG-2
 - [ ] OPS-1 Peak process memory on Windows (needs a Windows host) — operations/todo.md § OPS-1
-- [ ] H-02 Front end for a second syntax (owner decides if it applies) — direct_solve/framework/todo.md § H-02
 - [ ] H-06 The two-level objective (needs a rule that takes the shape) — direct_solve/framework/todo.md § H-06
 - [ ] H-08 VALUE-shape clauses (owner names the rule and shape) — direct_solve/framework/todo.md § H-08
 - [ ] A2–S4 Start one of the 16 defined classes not yet built (owner picks) — direct_solve/todo.md

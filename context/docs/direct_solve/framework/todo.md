@@ -27,20 +27,6 @@ solver path answers those queries, so none of them is wrong, only slower.
 - Never without the owner: large-tier benchmarks or other long CPU-bound runs, regenerating goldens before reading the
   diff, pushing, new branches or worktrees, `git stash`.
 
-## H-02 — Front end for the new language
-
-- **Decision needed.** Whether this task still applies. It waited for "a stable language branch", and the merge
-  brought one language.
-- **Needs.** A stable language branch.
-- **Problem.** The rules read an IR built from the current syntax only (`direct_ir.cpp`;
-  `../architecture/ir.md`).
-- **Options.** 1. It still applies, as written. 2. It no longer applies, since there is one language; the task is
-  deleted.
-- **Recommendation.** None recorded; the owner confirms.
-- **Change.** A second front end builds the same IR from the new syntax. Extend the IR when semantics change; do not
-  teach a rule parser spelling.
-- **Done when.** The IR contract and the direct/solver tests run on both syntaxes where comparable.
-
 ## H-06 — The two-level objective `outer(per k: inner(e) by (k))`
 
 - **Problem.** The objective is `MINIMIZE sum(per id: max(w*x) by (id))`. `ReadObjective`
