@@ -1,5 +1,8 @@
 # HiGHS (vendored, patched)
 
-DeciDB edits this copy of HiGHS. Every edit is marked `DeciDB patch (<id>)`, so
-`grep -rn "DeciDB patch" third_party/highs` lists them all; carry them over on an upgrade. Why each one exists is in
-`context/docs/pipeline/07_solver/done.md`.
+HiGHS 1.11.0 (`364c83a51`). `CMakeLists.txt` and `HConfig.h` are DeciDB's own build files. Each source edit is marked
+`DeciDB patch (<id>)` (`grep -rn "DeciDB patch" third_party/highs` lists them); carry them over on an upgrade. Why
+each exists: `context/docs/pipeline/07_solver/done.md`.
+
+- SOL-1 (`mip/HighsCliqueTable.*`, `mip/HighsObjectiveFunction.*`): the objective clique partition stops at the time
+  limit. SOL-2 changed the same hunk to call `checkLimits`, so Ctrl-C stops it too (marked SOL-1).
