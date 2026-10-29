@@ -117,6 +117,30 @@ class TestTimeLimit:
             f"No stdout from cheap query; stderr was:\n{result.stderr[:400]}"
         )
 
+    def test_highs_limit_bounds_clique_partition(self, decidb_cli_highs):
+        """HiGHS stops its objective clique partition at DECIDB_TIME_LIMIT.
+
+        Each row's ``IN`` domain is a clique of binaries that all sit in the objective, so HiGHS's MIP setup
+        (``HighsCliqueTable::cliquePartition``) queries every pair of the 270,000 binaries before it checks its
+        clock again. Without the time-limit check in that loop (third_party patch SOL-1) this solve runs past
+        30 s; with it, HiGHS returns TIME_LIMIT about 1 s in and the subprocess timeout is never reached.
+        """
+        sql = """
+            SELECT i, x
+            FROM (SELECT i, (i * 7919) % 1000 + 1 AS w, (i * 104729) % 97 + 1 AS c FROM range(90000) t(i))
+            DECIDE x(INT)
+            SUCH THAT x IN (0, 1, 3)
+                AND SUM(x * c) <= 1000000
+            MAXIMIZE SUM(x * w)
+        """
+        result = _run_decidb(decidb_cli_highs, sql, time_limit=1, subprocess_timeout=15)
+        combined = result.stderr + result.stdout
+        assert re.search(r"(?i)hit the time limit", combined), (
+            f"Expected 'hit the time limit' message but got:\n"
+            f"  stdout: {result.stdout[:400]}\n"
+            f"  stderr: {result.stderr[:400]}"
+        )
+
     @pytest.mark.parametrize("garbage", ["abc", "-5", "0", ""])
     def test_invalid_env_var_falls_back_to_default(self, decidb_cli_gurobi, garbage):
         """Garbage DECIDB_TIME_LIMIT values must silently fall back to default.

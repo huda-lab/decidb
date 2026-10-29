@@ -236,7 +236,9 @@ class HighsCliqueTable {
   void cliquePartition(std::vector<CliqueVar>& clqVars,
                        std::vector<HighsInt>& partitionStart);
 
-  void cliquePartition(const std::vector<double>& objective,
+  // DeciDB patch (SOL-1): stops growing partitions at mipsolver's time limit
+  void cliquePartition(const HighsMipSolver& mipsolver,
+                       const std::vector<double>& objective,
                        std::vector<CliqueVar>& clqVars,
                        std::vector<HighsInt>& partitionStart);
 

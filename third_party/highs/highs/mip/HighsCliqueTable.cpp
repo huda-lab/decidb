@@ -1001,7 +1001,9 @@ void HighsCliqueTable::cliquePartition(std::vector<CliqueVar>& clqVars,
   partitionStart.push_back(numClqVars);
 }
 
-void HighsCliqueTable::cliquePartition(const std::vector<double>& objective,
+// DeciDB patch (SOL-1): mipsolver supplies the time limit checked below
+void HighsCliqueTable::cliquePartition(const HighsMipSolver& mipsolver,
+                                       const std::vector<double>& objective,
                                        std::vector<CliqueVar>& clqVars,
                                        std::vector<HighsInt>& partitionStart) {
   randgen.shuffle(clqVars.data(), clqVars.size());
@@ -1021,7 +1023,21 @@ void HighsCliqueTable::cliquePartition(const std::vector<double>& objective,
   HighsInt extensionEnd = numClqVars;
   partitionStart.push_back(0);
   HighsInt lastSwappedIndex = 0;
+  // DeciDB patch (SOL-1): read the clock once per kQueriesPerTimeCheck queries
+  const int64_t kQueriesPerTimeCheck = 100000;
+  int64_t nextTimeCheck = numNeighbourhoodQueries;
   for (HighsInt i = 0; i < numClqVars; ++i) {
+    // DeciDB patch (SOL-1): past the time limit, the rest become singletons
+    if (numNeighbourhoodQueries >= nextTimeCheck) {
+      nextTimeCheck = numNeighbourhoodQueries + kQueriesPerTimeCheck;
+      if (mipsolver.options_mip_->time_limit < kHighsInf &&
+          mipsolver.timer_.read() >= mipsolver.options_mip_->time_limit) {
+        if (partitionStart.back() != i) partitionStart.push_back(i);
+        for (HighsInt j = i + 1; j < numClqVars; ++j)
+          partitionStart.push_back(j);
+        break;
+      }
+    }
     if (i == extensionEnd) {
       partitionStart.push_back(i);
       extensionEnd = numClqVars;

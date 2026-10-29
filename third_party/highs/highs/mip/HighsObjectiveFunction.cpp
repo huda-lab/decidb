@@ -18,7 +18,8 @@
 #include "util/HighsIntegers.h"
 
 HighsObjectiveFunction::HighsObjectiveFunction(const HighsMipSolver& mipsolver)
-    : model(mipsolver.model_) {
+    : mipsolver(&mipsolver),  // DeciDB patch (SOL-1): kept for the time limit
+      model(mipsolver.model_) {
   objectiveNonzeros.reserve(model->num_col_);
 
   for (HighsInt i = 0; i < model->num_col_; ++i) {
@@ -78,7 +79,9 @@ void HighsObjectiveFunction::setupCliquePartition(
     clqvars.emplace_back(col, model->col_cost_[col] < 0.0);
   }
 
-  cliqueTable.cliquePartition(model->col_cost_, clqvars, cliquePartitionStart);
+  // DeciDB patch (SOL-1): the partition stops at the solver's time limit
+  cliqueTable.cliquePartition(*mipsolver, model->col_cost_, clqvars,
+                              cliquePartitionStart);
   HighsInt numPartitions = cliquePartitionStart.size() - 1;
   if (numPartitions == numBinary)
     cliquePartitionStart.resize(1);

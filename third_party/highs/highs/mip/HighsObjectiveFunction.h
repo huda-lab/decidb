@@ -20,6 +20,8 @@ class HighsLp;
 class HighsMipSolver;
 
 class HighsObjectiveFunction {
+  // DeciDB patch (SOL-1): its time limit bounds setupCliquePartition
+  const HighsMipSolver* mipsolver;
   const HighsLp* model;
   double objIntScale;
   HighsInt numIntegral;
