@@ -66,32 +66,26 @@ _CLIQUE_PARTITION_SQL = """
 """
 
 
-# Two models whose symmetry group HiGHS takes about 9 s to search on its own thread (third_party patch BUG-3 stops
-# it at the time limit). Each row's x and y are interchangeable with every other row's.
-# - refinement: the y's form one ring of 50,000 (y_i + y_(i+1) <= 1, closed by the pair {0, N-1}), so a single
-#   ``HighsSymmetryDetection::partitionRefinement`` call walks the whole ring, splitting two vertices off the rest
-#   at each step.
-# - node: 100,000 unlinked pairs, so ``HighsSymmetryDetection::run`` fixes one pair per search node, 100,000 nodes
-#   whose refinements are each a few cells.
-_SYMMETRY_SQL = {
-    "refinement": """
-        SELECT count(*) AS n FROM (
-            SELECT i, x, y
-            FROM (SELECT i, i // 2 AS ga, (i + 1) // 2 AS gb, CASE WHEN i IN (0, 49999) THEN -1 ELSE i END AS gc
-                  FROM range(50000) t(i))
-            DECIDE x(BOOL), y(REAL)
-            SUCH THAT y <= 1 AND x <= y
-                AND per ga: sum(y) by (ga) <= 1 AND per gb: sum(y) by (gb) <= 1 AND per gc: sum(y) by (gc) <= 1
-            MAXIMIZE sum(x) + sum(y))
-    """,
-    "node": """
-        SELECT count(*) AS n FROM (
-            SELECT i, x, y FROM range(100000) t(i)
-            DECIDE x(BOOL), y(REAL)
-            SUCH THAT y <= x AND y <= 0.5 AND SUM(y) >= 25000
-            MINIMIZE SUM(x))
-    """,
-}
+# A path of 30,000 y's (y_i + y_(i+1) <= 1), each with its own x <= y. Its two ends differ from the rest, so the
+# first partition refinement of HiGHS's symmetry detection (``initializeDetection``, on the main thread before the
+# root LP) walks in from both ends, one cell at a time: about 17 s on its own.
+_SYMMETRY_PATH_SQL = """
+    SELECT count(*) AS n FROM (
+        SELECT i, x, y FROM (SELECT i, i // 2 AS ga, (i + 1) // 2 AS gb FROM range(30000) t(i))
+        DECIDE x(BOOL), y(REAL)
+        SUCH THAT y <= 1 AND x <= y AND per ga: sum(y) by (ga) <= 1 AND per gb: sum(y) by (gb) <= 1
+        MAXIMIZE sum(x) + sum(y))
+"""
+
+# 100,000 interchangeable (x, y) pairs. HiGHS solves the MIP at its root in under a second, while the symmetry
+# search on its worker thread fixes one pair per node and takes about 9 s.
+_SYMMETRY_PAIRS_SQL = """
+    SELECT count(*) AS n FROM (
+        SELECT i, x, y FROM range(100000) t(i)
+        DECIDE x(BOOL), y(REAL)
+        SUCH THAT y <= x AND y <= 0.5 AND SUM(y) >= 25000
+        MINIMIZE SUM(x))
+"""
 
 
 def _run_decidb(cli, sql, *, time_limit=None, subprocess_timeout=30):
@@ -185,20 +179,46 @@ class TestTimeLimit:
         assert "stopped at your request" in result.stderr.lower(), result.stderr[:800]
         assert latency < 10.0, f"interrupt took {latency:.2f}s — expected a stop inside the clique partition"
 
-    @pytest.mark.parametrize("check", ["refinement", "node"])
-    def test_highs_limit_bounds_symmetry_detection(self, decidb_cli_highs, check):
+    def test_highs_limit_bounds_symmetry_detection(self, decidb_cli_highs):
         """HiGHS stops its symmetry detection at DECIDB_TIME_LIMIT.
 
-        The detection runs on a worker thread that HiGHS waits for before it returns, and the search of these models
-        takes about 9 s. Each case reaches one stop of third_party patch BUG-3: ``refinement`` the check inside
-        ``partitionRefinement``, ``node`` the check at the top of ``run``'s search loop. Without it the solve ends
-        after the search, past the subprocess timeout; with it, about 2 s in, with the answer (HiGHS solves the root
-        before the limit) or the time-limit error.
+        The detection's first refinement runs on the main thread, outside HiGHS's limit checks, for about 17 s.
+        Third_party patch BUG-3 checks the clock inside it, so the solve ends with the time-limit error about 1.5 s
+        in; without it the subprocess timeout kills the solve.
         """
-        result = _run_decidb(decidb_cli_highs, _SYMMETRY_SQL[check], time_limit=2, subprocess_timeout=6)
+        result = _run_decidb(decidb_cli_highs, _SYMMETRY_PATH_SQL, time_limit=1.5, subprocess_timeout=5)
         combined = result.stderr + result.stdout
-        assert re.search(r"(?i)hit the time limit|\b(50000|100000)\b", combined), (
-            f"Expected the row count or 'hit the time limit' but got:\n"
+        assert re.search(r"(?i)hit the time limit", combined), (
+            f"Expected 'hit the time limit' message but got:\n"
+            f"  stdout: {result.stdout[:400]}\n"
+            f"  stderr: {result.stderr[:400]}"
+        )
+
+    def test_highs_interrupt_reaches_symmetry_detection(self, decidb_cli_highs):
+        """Ctrl-C stops HiGHS inside its symmetry detection, not after it.
+
+        The BUG-3 check inside the detection's first refinement asks the interrupt callback too, so a Ctrl-C ~3 s in
+        stops the detection at once. HiGHS then solves the root LP to the optimum before its next limit check, so the
+        answer comes back rather than the stop message. A clock-only check there would sit out the refinement
+        (about 17 s) under the 60 s limit.
+        """
+        cli = decidb_cli_highs.with_env({"DECIDB_TIME_LIMIT": "60"})
+        result, latency = cli.execute_interrupted(_SYMMETRY_PATH_SQL, after=3.0, timeout=15)
+        assert (
+            re.search(r"\b30000\b", result.stdout) or "stopped at your request" in result.stderr.lower()
+        ), f"  stdout: {result.stdout[:400]}\n  stderr: {result.stderr[:400]}"
+        assert latency < 10.0, f"interrupt took {latency:.2f}s — expected a stop inside the symmetry detection"
+
+    def test_highs_solved_mip_does_not_wait_for_symmetry_search(self, decidb_cli_highs):
+        """A MIP HiGHS solves at its root returns without waiting for its symmetry search.
+
+        HiGHS cancels the search once the root solves the MIP; BUG-3 checks for that cancellation at every search
+        node, not only at the search's leaves, so the answer comes back about 1.5 s in. Without it the solve waits
+        out the search (about 9 s) and the subprocess timeout kills it.
+        """
+        result = _run_decidb(decidb_cli_highs, _SYMMETRY_PAIRS_SQL, time_limit=30, subprocess_timeout=3)
+        assert re.search(r"\b100000\b", result.stdout), (
+            f"Expected the row count 100000 but got:\n"
             f"  stdout: {result.stdout[:400]}\n"
             f"  stderr: {result.stderr[:400]}"
         )

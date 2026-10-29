@@ -21,7 +21,8 @@
 #include "util/HighsDisjointSets.h"
 #include "util/HighsHash.h"
 #include "util/HighsInt.h"
-#include "util/HighsTimer.h"  // DeciDB patch (BUG-3): for the time limit
+#include "lp_data/HighsCallback.h"  // DeciDB patch (BUG-3): for the stop
+#include "util/HighsTimer.h"        // DeciDB patch (BUG-3): for the stop
 
 /// class that is responsible for assigning distinct colors for each distinct
 /// double value
@@ -188,12 +189,13 @@ class HighsSymmetryDetection {
   HighsInt numVertices;
   HighsInt numActiveCols;
 
-  // DeciDB patch (BUG-3): the time limit, read only: run() works off the main
-  // thread, where checkLimits would race with it
+  // DeciDB patch (BUG-3): the time limit and the user interrupt, read only:
+  // run() works off the main thread, where checkLimits would race with it
   const HighsTimer* timer = nullptr;
   double timeLimit = kHighsInf;
-  bool timeLimitReached = false;
-  bool checkTimeLimit();
+  const HighsCallback* callback = nullptr;
+  bool stopped = false;
+  bool checkStop();
 
   // node in the search tree for finding automorphisms
   struct Node {
@@ -281,8 +283,10 @@ class HighsSymmetryDetection {
  public:
   void loadModelAsGraph(const HighsLp& model, double epsilon);
 
-  // DeciDB patch (BUG-3): detection stops at the time limit
-  bool initializeDetection(const HighsTimer& mipTimer, double mipTimeLimit);
+  // DeciDB patch (BUG-3): detection stops at the time limit or a user
+  // interrupt (mipCallback: null for a sub-MIP)
+  bool initializeDetection(const HighsTimer& mipTimer, double mipTimeLimit,
+                           const HighsCallback* mipCallback);
 
   void run(HighsSymmetries& symmetries);
 };

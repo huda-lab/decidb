@@ -884,21 +884,32 @@ HighsSymmetryDetection::u32 HighsSymmetryDetection::getVertexHash(HighsInt v) {
   return 0;
 }
 
-// DeciDB patch (BUG-3): checkLimits's time test, which only reads
-bool HighsSymmetryDetection::checkTimeLimit() {
-  if (timeLimit < kHighsInf && timer->read() >= timeLimit)
-    timeLimitReached = true;
-  return timeLimitReached;
+// DeciDB patch (BUG-3): checkLimits's time and interrupt tests, without its
+// writes to the MIP solver's state
+bool HighsSymmetryDetection::checkStop() {
+  if (stopped) return true;
+  if (timeLimit < kHighsInf && timer->read() >= timeLimit) {
+    stopped = true;
+  } else if (callback && callback->user_callback &&
+             callback->active[kCallbackMipInterrupt]) {
+    // DeciDB patch (BUG-3): local output and input keep this thread off
+    // HiGHS's shared callback data (callback->data_out, data_in)
+    HighsCallbackOutput dataOut;
+    HighsCallbackInput dataIn;
+    callback->user_callback(kCallbackMipInterrupt, "Symmetry detection",
+                            &dataOut, &dataIn, callback->user_callback_data);
+    stopped = dataIn.user_interrupt;
+  }
+  return stopped;
 }
 
 bool HighsSymmetryDetection::partitionRefinement() {
-  // DeciDB patch (BUG-3): check the time limit once per
-  // kRefinementsPerTimeCheck cells; past it, stop with the partition partial
-  // (the callers leave at once)
-  const HighsInt kRefinementsPerTimeCheck = 100;
+  // DeciDB patch (BUG-3): check for a stop once per kRefinementsPerStopCheck
+  // cells; on one, leave the partition partial (the callers leave at once)
+  const HighsInt kRefinementsPerStopCheck = 100;
   HighsInt numRefinements = 0;
   while (!refinementQueue.empty()) {
-    if (++numRefinements % kRefinementsPerTimeCheck == 0 && checkTimeLimit())
+    if (++numRefinements % kRefinementsPerStopCheck == 0 && checkStop())
       return true;
     std::pop_heap(refinementQueue.begin(), refinementQueue.end(),
                   std::greater<HighsInt>());
@@ -1688,15 +1699,18 @@ bool HighsSymmetryDetection::isFullOrbitope(const ComponentData& componentData,
   return true;
 }
 
-// DeciDB patch (BUG-3): mipTimer and mipTimeLimit bound the detection
-bool HighsSymmetryDetection::initializeDetection(const HighsTimer& mipTimer,
-                                                 double mipTimeLimit) {
+// DeciDB patch (BUG-3): mipTimer, mipTimeLimit and mipCallback stop the
+// detection
+bool HighsSymmetryDetection::initializeDetection(
+    const HighsTimer& mipTimer, double mipTimeLimit,
+    const HighsCallback* mipCallback) {
   timer = &mipTimer;
   timeLimit = mipTimeLimit;
+  callback = mipCallback;
   initializeHashValues();
   partitionRefinement();
-  // DeciDB patch (BUG-3): a partition cut short at the time limit detects none
-  if (timeLimitReached) return false;
+  // DeciDB patch (BUG-3): a partition cut short by a stop detects none
+  if (stopped) return false;
   removeFixPoints();
   if (numActiveCols == 0) return false;
   return true;
@@ -1711,9 +1725,11 @@ void HighsSymmetryDetection::run(HighsSymmetries& symmetries) {
   HighsInt maxPerms = 64000000 / numActiveCols;
   HighsSplitDeque* workerDeque = HighsTaskExecutor::getThisWorkerDeque();
   while (!nodeStack.empty()) {
-    // DeciDB patch (BUG-3): past the time limit, keep the generators found, as
-    // the maxPerms break does
-    if (checkTimeLimit()) break;
+    // DeciDB patch (BUG-3): on a stop, keep the generators found, as the
+    // maxPerms break does; a cancelled search (the MIP finished without it)
+    // ends here too, not only at a leaf
+    if (checkStop()) break;
+    workerDeque->checkInterrupt();
     HighsInt targetCell = selectTargetCell();
     if (targetCell == -1) {
       if (firstLeavePartition.empty()) {
