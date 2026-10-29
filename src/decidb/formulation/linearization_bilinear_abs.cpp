@@ -290,26 +290,11 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, con
                 // carry on: this is exactly the query the capability buys back.
                 continue;
             }
-            // Locate an offending variable to name in the error.
-            idx_t bad = DConstants::INVALID_INDEX;
-            for (idx_t t = 0; t < c1.variable_indices.size(); t++) {
-                idx_t v = c1.variable_indices[t];
-                if (v == DConstants::INVALID_INDEX || v == link.aux_idx) {
-                    continue;
-                }
-                if (DecideIsOpenAbove(input.upper_bounds[v]) || DecideIsOpenBelow(input.lower_bounds[v])) {
-                    bad = v;
-                    break;
-                }
-            }
-            const string &name = var_names[bad];
-            throw InvalidInputException(
-                "ABS over decision variable requires a finite bound on '%s' "
-                "for the Big-M sign-indicator linearization. Add constraints "
-                "'%s >= <lower>' and '%s <= <upper>'. (Triggered by "
-                "MAXIMIZE SUM(ABS(...)) or by a hard-direction ABS constraint "
-                "such as ABS(...) >= K or ABS(...) = K.)",
-                name, name, name);
+            // The row's own auxiliary (`c1.abs_aux_idx` is `link.aux_idx`) is skipped: an offending member is named,
+            // and with none the reach overflowed a DOUBLE.
+            idx_t bad = FindUnboundedContributor(c1, input.lower_bounds, input.upper_bounds);
+            ThrowUnboundedBigMNaming(bad != DConstants::INVALID_INDEX, bad, var_names, "ABS",
+                                     DecideWrittenClause(input, c1.source_clause_id));
         }
 
         // A clause may demand more of the auxiliary than the box can supply, and then

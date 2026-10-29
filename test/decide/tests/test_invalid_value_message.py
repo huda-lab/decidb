@@ -255,6 +255,156 @@ def test_a_square_past_a_double_in_a_constraint_names_its_clause(decidb_cli_guro
     assert _too_large("SUM(POWER(b * x, 2)) <= 10") in stderr
 
 
+def _huge_query(decide):
+    # Every value is finite: `b` is near the largest DOUBLE on both rows, and `c` is near it with either sign.
+    rows = "(1, 1.0, 1e308::DOUBLE, -1e308::DOUBLE), (2, 2.0, 1e308::DOUBLE, 1e308::DOUBLE)"
+    return f"SELECT id FROM (FROM (VALUES {rows}) t(id, a, b, c) DECIDE {decide}) q"
+
+
+# (name, DECIDE clauses, the clause the message names). Each derives a number past a DOUBLE from finite ones, at a
+# different place: a reach or a Big-M a rewrite derives, or a literal coefficient, factor or reciprocal, which has no
+# column in it. Each names its clause on both backends, with direct solve off and on.
+DERIVED_TOO_LARGE = [
+    # A MIN/MAX auxiliary's box reaches past a DOUBLE: the column check at the hand-off names the clause that reads it.
+    (
+        "reach_of_an_extremum_member",
+        "x(REAL), y(REAL) SUCH THAT x <= 5 AND y <= 5 AND SUM(x) + MAX(b * y) <= 10 MAXIMIZE SUM(x)",
+        "SUM(x) + MAX(b * y) <= 10",
+    ),
+    # Members of either sign near the limit: the span of the MIN/MAX link is no Big-M (EmitExtremumLink).
+    ("span_of_an_extremum", "y(REAL) SUCH THAT y <= 5 AND MAX(y + c) >= 0 MAXIMIZE SUM(y)", "MAX(y + c) >= 0"),
+    # Lowered through ABS on HiGHS (DeriveAbsAuxiliaryBounds), stated natively on Gurobi.
+    ("reach_of_a_norm", "y(REAL) SUCH THAT y <= 5 AND norm(b * y, 0) <= 1 MAXIMIZE SUM(y)", "norm(b * y, 0) <= 1"),
+    # A literal past a DOUBLE on one decision folds into no box (FoldKnownBound): the row's coefficient check
+    # refuses it, as it refuses one beside another decision.
+    (
+        "literal_on_one_decision",
+        "y(REAL) SUCH THAT y <= 5 AND 2e308 * y <= 1e308 MAXIMIZE SUM(y)",
+        "2e308 * y <= 1e308",
+    ),
+    (
+        "like_literals_on_one_decision",
+        "y(REAL) SUCH THAT y <= 5 AND 1e308 * y + 1e308 * y <= 1e308 MAXIMIZE SUM(y)",
+        "1e308 * y + 1e308 * y <= 1e308",
+    ),
+    (
+        "literal_beside_another_decision",
+        "y(REAL), z(REAL) SUCH THAT y <= 5 AND z <= 5 AND 2e308 * y + 0.5 * z <= 1e308 MAXIMIZE SUM(y)",
+        "2e308 * y + 0.5 * z <= 1e308",
+    ),
+    (
+        "reciprocal_of_a_literal",
+        "y(REAL) SUCH THAT y <= 5 AND SUM(y) / 1e-310 <= 10 MAXIMIZE SUM(y)",
+        "SUM(y) / 1e-310 <= 10",
+    ),
+    # A composed MIN/MAX reads its member's coefficients and its factor apart from the rows of a sum.
+    (
+        "literal_inside_a_composed_extremum",
+        "y(REAL) SUCH THAT y <= 5 AND SUM(y) + MAX(2e308 * y) <= 10 MAXIMIZE SUM(y)",
+        "SUM(y) + MAX(2e308 * y) <= 10",
+    ),
+    (
+        "literal_factor_on_a_composed_extremum",
+        "y(REAL) SUCH THAT y <= 5 AND 2e308 * MAX(y) + SUM(y) <= 10 MAXIMIZE SUM(y)",
+        "2e308 * MAX(y) + SUM(y) <= 10",
+    ),
+    # The reciprocal of a finite factor on the objective's MIN/MAX: the objective check at the hand-off.
+    (
+        "reciprocal_on_an_extremum_in_the_objective",
+        "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(y) / (SELECT 1e-310)",
+        "MINIMIZE max(y) / (SELECT 1e-310)",
+    ),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize("name,decide,written", DERIVED_TOO_LARGE, ids=[case[0] for case in DERIVED_TOO_LARGE])
+def test_a_number_derived_past_a_double_names_its_clause(request, cli_fixture, mode, name, decide, written):
+    cli = request.getfixturevalue(cli_fixture)
+    assert _too_large(written) in _stderr(cli, _huge_query(decide), mode)
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("name", ["literal_on_one_decision", "like_literals_on_one_decision"])
+def test_a_literal_past_a_double_on_one_decision_names_its_clause_on_both_paths(decidb_cli, name):
+    # Direct solve reads the clause as a bound on the decision; its coefficient has no column in it.
+    decide, written = next((case[1], case[2]) for case in DERIVED_TOO_LARGE if case[0] == name)
+    direct = _stderr(decidb_cli, _huge_query(decide), "require")
+    assert _too_large(written) in direct
+    assert direct == _stderr(decidb_cli, _huge_query(decide), "off")
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+def test_a_literal_past_a_double_in_the_objective_names_it_on_the_solver_path(decidb_cli_highs, mode):
+    # HiGHS: the solver path either way.
+    stderr = _stderr(decidb_cli_highs, _huge_query("y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(2e308 * y)"), mode)
+    assert _too_large("MAXIMIZE sum(1e1000 * y)") in stderr
+
+
+# HiGHS only: Gurobi states MIN/MAX and ABS natively, so their Big-M rewrites never run there. Every member's box is
+# finite, so the refusal names the clause, not a decision to bound.
+HIGHS_BIG_M_TOO_LARGE = [
+    ("abs_in_the_objective", "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(ABS(b * y))", "MAXIMIZE sum(abs(b * y))"),
+    ("extremum_bounded_below", "y(REAL) SUCH THAT y <= 5 AND MAX(b * y) >= 1 MINIMIZE SUM(y)", "MAX(b * y) >= 1"),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+@pytest.mark.parametrize("name,decide,written", HIGHS_BIG_M_TOO_LARGE, ids=[c[0] for c in HIGHS_BIG_M_TOO_LARGE])
+def test_a_big_m_past_a_double_names_its_clause(decidb_cli_highs, mode, name, decide, written):
+    assert _too_large(written) in _stderr(decidb_cli_highs, _huge_query(decide), mode)
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+def test_a_big_m_over_an_open_decision_still_asks_for_its_bound(decidb_cli_highs, mode):
+    stderr = _stderr(decidb_cli_highs, _huge_query("y(REAL) SUCH THAT MAX(b * y) >= 1 MINIMIZE SUM(y)"), mode)
+    assert "Rewriting MIN/MAX requires a finite bound on 'y'." in stderr, stderr
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+def test_a_reciprocal_past_a_double_on_a_squared_sum_names_its_clause(decidb_cli_gurobi, mode):
+    # Gurobi only, as above. A query-wide factor is read when the query runs; its reciprocal is computed then.
+    decide = "y(REAL) SUCH THAT y <= 5 AND SUM(POWER(y, 2)) / (SELECT 1e-310) <= 10 MAXIMIZE SUM(y)"
+    stderr = _stderr(decidb_cli_gurobi, _huge_query(decide), mode)
+    assert _too_large("SUM(POWER(y, 2)) / (SELECT 1e-310) <= 10") in stderr
+
+
+# The continuous knapsack plan (R1) computes each item's price, value over weight, and the group's sums of the rooms
+# and of the anchors' spend. Either past a DOUBLE names the budget.
+R1_TOO_LARGE = [
+    ("price", "x(REAL) SUCH THAT x <= 5 AND SUM(1e-300 * x) <= 1 MAXIMIZE SUM(b * x)", "SUM(1e-300 * x) <= 1"),
+    ("sum_of_the_rooms", "x(REAL) SUCH THAT x <= 5 AND SUM(1e308 * x) <= 1 MAXIMIZE SUM(a * x)", "SUM(1e308 * x) <= 1"),
+]
+
+
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["auto", "require"])
+@pytest.mark.parametrize("name,decide,written", R1_TOO_LARGE, ids=[case[0] for case in R1_TOO_LARGE])
+def test_a_number_the_knapsack_plan_computes_past_a_double_names_the_budget(decidb_cli, mode, name, decide, written):
+    assert _too_large(written) in _stderr(decidb_cli, _huge_query(decide), mode)
+
+
+# A model whose numbers are each finite, which the solver then reads its own way: the warning stays (the CLI wrapper
+# checks it is printed), and so does the solver's verdict.
+@pytest.mark.error
+@pytest.mark.parametrize("mode", ["off", "auto"])
+def test_a_model_of_finite_huge_numbers_keeps_the_solvers_verdict(decidb_cli_gurobi, decidb_cli_highs, mode):
+    def stderr(cli, decide):
+        sql = f"SET decide_direct_solve='{mode}'; {_huge_query(decide)}"
+        return cli.execute_raw(sql, expect_large_numbers=True).stderr
+
+    unbounded = stderr(decidb_cli_gurobi, "y(REAL) SUCH THAT y <= 5 MAXIMIZE SUM(ABS(b * y))")
+    assert "DECIDE optimization is unbounded." in unbounded, unbounded
+    refused = stderr(decidb_cli_highs, "y(REAL) SUCH THAT y <= 5 MINIMIZE MAX(b * y)")
+    assert "mixes numbers too far apart in size for HiGHS to load" in refused, refused
+
+
 @pytest.mark.error
 @pytest.mark.parametrize("name,decide,value", SOLVER_COEFFICIENT, ids=[case[0] for case in SOLVER_COEFFICIENT])
 def test_a_coefficient_only_the_solver_reads_is_named_as_written(decidb_cli, name, decide, value):

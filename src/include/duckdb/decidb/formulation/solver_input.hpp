@@ -753,6 +753,9 @@ struct SolverInput {
 //! number the model computes from it. A row no clause claims is one a rewrite added for the objective
 //! (OBJECTIVE_ROW_TAG leaves no source id), so it names the objective.
 string DecideWrittenClause(const SolverInput &input, idx_t source_clause_id);
+//! The same, before a SolverInput holds the sources and the objective (DecideWrittenObjective).
+string DecideWrittenClause(const vector<ConstraintSourceInfo> &sources, const string &objective_written,
+                           idx_t source_clause_id);
 
 //! The column box a derived constant is valid against.
 //!

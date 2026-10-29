@@ -203,7 +203,7 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
             if (auto link = BilinearLinkOf(input, blame)) {
                 blame = link->other_var_idx;
             }
-            ThrowUnboundedBigMNaming(blame, var_names, "<>");
+            ThrowUnboundedBigMNaming(true, blame, var_names, "<>", DecideWrittenClause(input, row.source_clause_id));
         }
         double M = hi_end ? reach - row.rhs : row.rhs - reach;
         // A row already implied by its own box needs no relaxation at all. The margin is

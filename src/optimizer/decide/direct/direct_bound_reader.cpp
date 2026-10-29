@@ -89,7 +89,10 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 			return false;
 		}
 		clause.rhs = ir_node.rhs->Copy();
-		clause.coefficient_text = DirectCoefficientText(ir, context, clause.coefficient);
+		bool computed = std::all_of(clause.coefficient.begin(), clause.coefficient.end(),
+		                            [](const DirectSignedValue &term) { return term.expr->IsFoldable(); });
+		clause.coefficient_role = computed ? DecideValueRole::TOO_LARGE : DecideValueRole::COEFFICIENT;
+		clause.coefficient_text = computed ? ir_node.written : DirectCoefficientText(ir, context, clause.coefficient);
 		clause.rhs_text = ir.render(*clause.rhs);
 		clause.lower = bound.lower->Copy();
 		clause.upper = bound.upper->Copy();

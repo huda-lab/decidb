@@ -3,6 +3,7 @@
 #include <limits>
 
 #include "duckdb/common/common.hpp"
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/planner/column_binding.hpp"
@@ -39,7 +40,10 @@ struct DirectBoundClause {
 	//! The clause's coefficient and right side, which the plan checks as the solver path checks them.
 	vector<DirectSignedValue> coefficient;
 	unique_ptr<Expression> rhs;
-	//! What a message calls them, as the user wrote them (DirectCoefficientText, DirectIR::render).
+	//! What a message calls them, as the user wrote them (DirectCoefficientText, DirectIR::render). A coefficient with
+	//! no column in it (a literal, like literals merged) is a number DeciDB computes rather than one it reads from a
+	//! row: its message is TOO_LARGE and names the clause, as the solver path names it.
+	DecideValueRole coefficient_role = DecideValueRole::COEFFICIENT;
 	string coefficient_text;
 	string rhs_text;
 	//! The values of the decision the clause admits (DecideSingletonRow): DOUBLE, ±infinity on an open side.

@@ -29,11 +29,16 @@ double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint, const v
     return offset;
 }
 
-string DecideWrittenClause(const SolverInput &input, idx_t source_clause_id) {
-    if (source_clause_id < input.constraint_sources.size()) {
-        return QuoteWrittenClause(input.constraint_sources[source_clause_id]);
+string DecideWrittenClause(const vector<ConstraintSourceInfo> &sources, const string &objective_written,
+                           idx_t source_clause_id) {
+    if (source_clause_id < sources.size()) {
+        return QuoteWrittenClause(sources[source_clause_id]);
     }
-    return input.objective_written;
+    return objective_written;
+}
+
+string DecideWrittenClause(const SolverInput &input, idx_t source_clause_id) {
+    return DecideWrittenClause(input.constraint_sources, input.objective_written, source_clause_id);
 }
 
 static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
@@ -1394,14 +1399,27 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
     phase.Next("model.sanity_checks");
 
+    // Every number below was read finite or merged by AddCoefficient, so one that is not finite is a reach or a
+    // Big-M DeciDB derived past a DOUBLE: the user's error names the clause it belongs to. A column belongs to the
+    // first row that reads it, else to the objective. The structural checks stay internal: they are DeciDB's bugs.
+    auto too_large = [&](idx_t source_clause_id) {
+        return InvalidInputException(
+            DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, DecideWrittenClause(input, source_clause_id)));
+    };
+    auto column_clause = [&](idx_t col) {
+        for (auto &constr : model.constraints) {
+            if (std::find(constr.indices.begin(), constr.indices.end(), (int)col) != constr.indices.end()) {
+                return constr.provenance.source_clause_id;
+            }
+        }
+        return DConstants::INVALID_INDEX;
+    };
     for (idx_t i = 0; i < total_vars; i++) {
         if (!std::isfinite(model.col_lower[i]) || !std::isfinite(model.col_upper[i])) {
-            throw InternalException("Column bounds invalid at col %llu: [%f, %f]",
-                                    i, model.col_lower[i], model.col_upper[i]);
+            throw too_large(column_clause(i));
         }
         if (!std::isfinite(model.obj_coeffs[i])) {
-            throw InternalException("Objective coefficient not finite at col %llu: %f",
-                                    i, model.obj_coeffs[i]);
+            throw too_large(DConstants::INVALID_INDEX);
         }
     }
 
@@ -1416,8 +1434,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                         c, constr.indices[j], total_vars);
             }
             if (!std::isfinite(constr.coefficients[j])) {
-                throw InternalException("Constraint %llu: coefficient not finite at position %llu: %f",
-                                        c, j, constr.coefficients[j]);
+                throw too_large(constr.provenance.source_clause_id);
             }
         }
         if (!std::isfinite(constr.rhs) && !std::isinf(constr.rhs)) {
@@ -1436,7 +1453,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                     k, model.q_rows[k], model.q_cols[k]);
         }
         if (!std::isfinite(model.q_vals[k])) {
-            throw InternalException("Q matrix entry %llu: value not finite: %f", k, model.q_vals[k]);
+            throw too_large(DConstants::INVALID_INDEX);
         }
     }
 

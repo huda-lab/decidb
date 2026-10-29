@@ -149,11 +149,17 @@ void decide_linearize::DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t
 //! instead — and it applies on every backend, so one query never answers correctly on
 //! one solver and wrongly on another.
 //!
-//! The two callers below differ only in how they locate the column to blame, so the
-//! words the user reads live here, once. `bad` is that column, or INVALID_INDEX when
-//! the open bound could not be attributed to any named column.
-[[noreturn]] void decide_linearize::ThrowUnboundedBigMNaming(idx_t bad, const vector<string> &var_names,
-                                                             const char *construct) {
+//! The callers differ only in how they locate the column to blame, so the words the
+//! user reads live here, once. `open` says whether a column of the row has an open box
+//! (an auxiliary's counts); `bad` is then that column, or INVALID_INDEX when the open
+//! bound could not be attributed to any named column. With no open column the reach
+//! overflowed a DOUBLE: nothing is missing a bound, and the refusal names `written`, the
+//! clause the row belongs to, as every number too large for a DOUBLE does (AddCoefficient).
+[[noreturn]] void decide_linearize::ThrowUnboundedBigMNaming(bool open, idx_t bad, const vector<string> &var_names,
+                                                             const char *construct, const string &written) {
+    if (!open) {
+        throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, written));
+    }
     if (bad == DConstants::INVALID_INDEX || bad >= var_names.size() || var_names[bad].empty()) {
         throw InvalidInputException("Rewriting %s requires a finite bound on every decision variable it "
                                     "reads, and one of them is unbounded. Add an upper and a lower bound "
@@ -189,22 +195,6 @@ idx_t decide_linearize::FindUnboundedContributor(const EvaluatedConstraint &ec,
     return DConstants::INVALID_INDEX;
 }
 
-[[noreturn]] static void ThrowUnboundedBigM(const EvaluatedConstraint &ec, const vector<double> &lower_bounds,
-                                            const vector<double> &upper_bounds,
-                                            const vector<string> &var_names, const char *construct) {
-    ThrowUnboundedBigMNaming(FindUnboundedContributor(ec, lower_bounds, upper_bounds), var_names,
-                             construct);
-}
-
-//! The auxiliary-family twin of ThrowUnboundedBigM: a MIN/MAX auxiliary is linked to
-//! its expression by `(aux - expr) +/- M*y`, so M has to stay slack across the whole
-//! family's span. An unbounded contributor leaves no such M, and the same rule
-//! applies — refuse rather than guess.
-[[noreturn]] static void ThrowUnboundedAuxBigM(const AuxRange &range, const vector<string> &var_names,
-                                               const char *construct) {
-    // The range already recorded which variable opened it, so there is nothing to search.
-    ThrowUnboundedBigMNaming(range.unbounded_var, var_names, construct);
-}
 
 //! Which construct asked for this Big-M, for the refusal above. Read off the
 //! indicator the rewrite attached, so the message names what the user wrote.
@@ -250,7 +240,8 @@ double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox
     // Refuse before finishing the constant: an open contributor means there is no M
     // to return, so the slack term below would only be computed and thrown away.
     if (has_unbounded) {
-        ThrowUnboundedBigM(ec, lower_bounds, upper_bounds, var_names, DescribeBigMConstruct(ec));
+        ThrowUnboundedBigMNaming(true, FindUnboundedContributor(ec, lower_bounds, upper_bounds), var_names,
+                                 DescribeBigMConstruct(ec), written);
     }
     return M + 1.0;
 }

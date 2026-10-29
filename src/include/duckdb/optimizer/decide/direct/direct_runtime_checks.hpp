@@ -34,7 +34,9 @@ unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const Expression
 
 //! The message of a coefficient the solver refuses (NaN or infinite), naming it as the user `written` it (the text of
 //! DecideInvalidValueMessage); NULL for a valid number. A NULL number skips what it reaches, so it is valid.
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &written);
+//! TOO_LARGE is for a number the plan computes, as in DirectValidNumberPredicate.
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &written,
+                            DecideValueRole role = DecideValueRole::COEFFICIENT);
 
 //! The check, evaluated only on a row where `kept` is true. A value on a row a `when` drops is never read, so it raises
 //! nothing there, as on the solver path.

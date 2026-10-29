@@ -121,6 +121,9 @@ struct DirectIRConstraint {
 	//! Index into the source-clause registry: the user's clause this constraint came from, shared by the constraints
 	//! one clause expands into.
 	idx_t source_clause_id = DConstants::INVALID_INDEX;
+	//! The clause as a message names it (QuoteWrittenClause), as the solver path names it: a number the plan computes
+	//! past a DOUBLE names its clause (DecideValueRole::TOO_LARGE).
+	string written;
 	//! True for a reduced constraint, false for one constraint per row.
 	bool aggregate = false;
 	//! COMPARE_LESSTHANOREQUALTO ... COMPARE_NOTEQUAL, or COMPARE_IN for a membership `x IN (v, ...)`.

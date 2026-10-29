@@ -193,12 +193,23 @@ static void ExecuteOnReadRows(ExpressionExecutor &executor, DataChunk &chunk, id
 }
 
 //! A number read from the source, and what the message that refuses it calls it: `value` is the expression the number
-//! comes from, printed as the user wrote it (DecideInvalidValueMessage).
+//! comes from, printed as the user wrote it (DecideInvalidValueMessage). `clause` is the clause (or the objective) it
+//! belongs to: a coefficient with no column in it (a literal, like literals merged, a reciprocal) is a number DeciDB
+//! computed rather than one read from a row, so past a DOUBLE it names the clause (TOO_LARGE), as AddCoefficient does.
 struct ValueSource {
 	DecideValueRole role;
 	const Expression &value;
 	const DecideSourceNames &names;
+	string clause = string();
 };
+
+//! Refuses a number the model cannot read (NaN, or infinite where a bound is not allowed to be), naming `source`.
+[[noreturn]] static void ThrowInvalidValue(const ValueSource &source) {
+	if (source.role == DecideValueRole::COEFFICIENT && source.value.IsFoldable()) {
+		throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, source.clause));
+	}
+	throw InvalidInputException(DecideInvalidValueMessage(source.role, RenderDecideSource(source.value, source.names)));
+}
 
 //! Vectorized extraction of a chunk-result column into a vector<double>, multiplied by `sign`.
 //! Throws InvalidInputException on a number the model cannot read, naming `source`. A NULL reads
@@ -252,8 +263,7 @@ static void ExtractDoubleColumn(Vector &result_vec, idx_t count, double sign, ve
 		}
 		double dv = data[idx];
 		if (allow_infinite ? std::isnan(dv) : !std::isfinite(dv)) {
-			throw InvalidInputException(
-			    DecideInvalidValueMessage(source.role, RenderDecideSource(source.value, source.names)));
+			ThrowInvalidValue(source);
 		}
 		out.push_back(dv * sign);
 	}
@@ -1013,8 +1023,8 @@ template <class BilinearTermSource>
 static vector<EvaluatedConstraint::BilinearTerm>
 EvaluateBilinearTerms(const vector<BilinearTermSource> &terms, const vector<TermFilterState> &filters,
                       ChunkExprCache &chunk_expr_cache, ClientContext &context, ColumnDataCollection &data,
-                      idx_t num_rows, const DecideSourceNames &names, const vector<bool> &read_rows,
-                      vector<bool> *null_rows) {
+                      idx_t num_rows, const DecideSourceNames &names, const string &clause,
+                      const vector<bool> &read_rows, vector<bool> *null_rows) {
 	const idx_t num_bl = terms.size();
 	// A term is computed on the rows the clause keeps that the term's own `when` keeps,
 	// and nowhere else; its messages quote the query's `fragments`.
@@ -1070,8 +1080,8 @@ EvaluateBilinearTerms(const vector<BilinearTermSource> &terms, const vector<Term
 				idx_t term_idx = bl_route[j];
 				auto &col = ebts[term_idx].row_coefficients.MutableDense();
 				ExtractDoubleColumn(bl_results.data[j], bl_chunk.size(), terms[term_idx].sign, col,
-				                    {DecideValueRole::COEFFICIENT, *terms[term_idx].coefficient, names}, null_rows,
-				                    &term_reads[term_idx], row_offset);
+				                    {DecideValueRole::COEFFICIENT, *terms[term_idx].coefficient, names, clause},
+				                    null_rows, &term_reads[term_idx], row_offset);
 				ebts[term_idx].row_coefficients.SyncSize();
 			}
 			row_offset += bl_chunk.size();
@@ -1164,6 +1174,11 @@ PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardin
 
 DecideSourceNames PhysicalDecide::Names() const {
 	return DecidePlanNames(source_fragments, keyed_scopes, keys, decide_index, aux_var_expressions);
+}
+
+string PhysicalDecide::WrittenClause(idx_t source_clause_id) const {
+	return DecideWrittenClause(constraint_sources, DecideWrittenObjective(decide_sense, written_objective),
+	                           source_clause_id);
 }
 
 SolverBackend PhysicalDecide::PlannedSolverBackend() const {
@@ -2225,6 +2240,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		}
 
 		const auto names = Names();
+		const auto clause = WrittenClause(constraint->source_clause_id);
 		idx_t coefficient_row_base = 0;
 		while (gstate.data.Scan(scan_state, chunk)) {
 			if (constraint->lhs_terms.empty()) {
@@ -2234,10 +2250,10 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			ExecuteOnReadRows(coef_executor, chunk, coefficient_row_base, term_read_ptrs, coef_results);
 			for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
 				auto &col = eval_const.row_coefficients[term_idx].MutableDense();
-				ExtractDoubleColumn(coef_results.data[term_idx], chunk.size(), constraint->lhs_terms[term_idx].sign,
-				                    col,
-				                    {DecideValueRole::COEFFICIENT, *constraint->lhs_terms[term_idx].coefficient, names},
-				                    &null_rows, &term_reads[term_idx], coefficient_row_base);
+				ExtractDoubleColumn(
+				    coef_results.data[term_idx], chunk.size(), constraint->lhs_terms[term_idx].sign, col,
+				    {DecideValueRole::COEFFICIENT, *constraint->lhs_terms[term_idx].coefficient, names, clause},
+				    &null_rows, &term_reads[term_idx], coefficient_row_base);
 				eval_const.row_coefficients[term_idx].SyncSize();
 			}
 			coefficient_row_base += chunk.size();
@@ -2550,7 +2566,8 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         // Evaluate bilinear terms in constraint (if any).
         if (constraint->has_bilinear) {
 			auto ebts = EvaluateBilinearTerms(constraint->bilinear_terms, bilinear_filters, chunk_expr_cache, context,
-			                                  gstate.data, num_rows, Names(), scoped_kept, &null_rows);
+			                                  gstate.data, num_rows, Names(),
+			                                  WrittenClause(constraint->source_clause_id), scoped_kept, &null_rows);
 			for (idx_t term_idx = 0; term_idx < ebts.size(); term_idx++) {
                 auto &ebt = ebts[term_idx];
                 if (bilinear_filters[term_idx].avg_scale) {
@@ -2600,14 +2617,18 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 						}
                         double factor = value.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
                         if (!std::isfinite(factor)) {
-							throw InvalidInputException(DecideInvalidValueMessage(
-							    DecideValueRole::COEFFICIENT, RenderDecideSource(*qg.scale, Names())));
+							ThrowInvalidValue({DecideValueRole::COEFFICIENT, *qg.scale, names, clause});
 						}
                         if (qg.scale_divides && factor == 0.0) {
                             throw InvalidInputException(
                                 "DECIDE constraint: division by zero -- the factor on a squared aggregate evaluated to 0.");
                         }
                         eqg.sign *= qg.scale_divides ? 1.0 / factor : factor;
+                        // The reciprocal of a finite factor is a number DeciDB computes: past a DOUBLE it names the
+                        // clause.
+                        if (!std::isfinite(eqg.sign)) {
+                            throw InvalidInputException(DecideInvalidValueMessage(DecideValueRole::TOO_LARGE, clause));
+                        }
                     }
                 }
 
@@ -2647,7 +2668,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 							auto &col = eqg.row_coefficients[inner_idx].MutableDense();
 							ExtractDoubleColumn(
 							    q_results.data[inner_idx], qchunk.size(), qg.inner_terms[inner_idx].sign, col,
-							    {DecideValueRole::COEFFICIENT, *qg.inner_terms[inner_idx].coefficient, names},
+							    {DecideValueRole::COEFFICIENT, *qg.inner_terms[inner_idx].coefficient, names, clause},
 							    &null_rows, &q_reads, q_offset);
 							eqg.row_coefficients[inner_idx].SyncSize();
 						}
@@ -2850,6 +2871,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 				obj_reads.push_back(filter.has_filter ? &filter.mask : nullptr);
 			}
 
+			const auto objective = WrittenClause(DConstants::INVALID_INDEX);
 			idx_t obj_row_offset = 0;
 			while (gstate.data.Scan(obj_scan_state, obj_chunk)) {
 				if (route.empty()) {
@@ -2864,9 +2886,10 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                     int term_sign = (*b.src_terms)[term_idx].sign;
 					auto &filter = (*b.out_term_filters)[term_idx];
 					// A NULL term was read as 0 before like terms merged (DropNullObjectiveTerms).
-					ExtractDoubleColumn(obj_results.data[j], obj_chunk.size(), static_cast<double>(term_sign), out,
-					                    {DecideValueRole::COEFFICIENT, *(*b.src_terms)[term_idx].coefficient, names},
-					                    nullptr, filter.has_filter ? &filter.mask : nullptr, obj_row_offset);
+					ExtractDoubleColumn(
+					    obj_results.data[j], obj_chunk.size(), static_cast<double>(term_sign), out,
+					    {DecideValueRole::COEFFICIENT, *(*b.src_terms)[term_idx].coefficient, names, objective},
+					    nullptr, filter.has_filter ? &filter.mask : nullptr, obj_row_offset);
 					(*b.out_coeffs)[term_idx].SyncSize();
 				}
 				obj_row_offset += obj_chunk.size();
@@ -2933,9 +2956,9 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
         if (gstate.objective->has_bilinear) {
 			vector<bool> every_row(num_rows, true);
 			// A NULL product was read as 0 before the model was built (DropNullObjectiveTerms).
-			gstate.evaluated_bilinear_terms =
-			    EvaluateBilinearTerms(gstate.objective->bilinear_terms, obj_bilinear_filters, chunk_expr_cache, context,
-			                          gstate.data, num_rows, Names(), every_row, nullptr);
+			gstate.evaluated_bilinear_terms = EvaluateBilinearTerms(
+			    gstate.objective->bilinear_terms, obj_bilinear_filters, chunk_expr_cache, context, gstate.data,
+			    num_rows, Names(), WrittenClause(DConstants::INVALID_INDEX), every_row, nullptr);
 			// A product outside every reducer (`MAXIMIZE sum(x) + s * u`) counts once, as a
 			// linear term there does; one inside a reducer sums over its rows.
 			idx_t first_kept = FirstKeptRow(objective_has_when ? &objective_when_mask : nullptr, num_rows);
@@ -3036,7 +3059,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 	// Evaluate a DecideTerm's per-row coefficient (scaled by term.sign). `what` is
 	// "constraint" or "objective", naming the clause in any error. `read_rows` are the rows
 	// the term reads: every other row is 0 and never evaluated for NULL.
-	auto EvaluateTermCoefs = [&](const DecideTerm &term, const char *what,
+	auto EvaluateTermCoefs = [&](const DecideTerm &term, const char *what, const string &clause,
 	                             const vector<bool> &read_rows) -> vector<double> {
 		vector<double> coefs;
 		coefs.reserve(num_rows);
@@ -3065,8 +3088,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 				}
 				double d = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
                 if (!std::isfinite(d)) {
-					throw InvalidInputException(DecideInvalidValueMessage(
-					    DecideValueRole::COEFFICIENT, RenderDecideSource(*term.coefficient, Names())));
+					ThrowInvalidValue({DecideValueRole::COEFFICIENT, *term.coefficient, Names(), clause});
 				}
                 coefs.push_back(d * term.sign);
 			}
@@ -3086,7 +3108,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 	//! so a temporary would leave a dangling key that a later allocation at the
 	//! same address silently inherits.
 	//! A NULL factor is NULL: `is_null` is set and 0 returned.
-	auto EvaluateQueryWideScale = [&](const Expression &scale, bool divides, const char *what,
+	auto EvaluateQueryWideScale = [&](const Expression &scale, bool divides, const char *what, const string &clause,
 	                                  bool &is_null) -> double {
 		const Expression &transformed =
             CachedTransformToChunkExpression(chunk_expr_cache, scale, context);
@@ -3112,8 +3134,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 			}
             v = val.DefaultCastAs(LogicalType::DOUBLE).GetValue<double>();
             if (!std::isfinite(v)) {
-				throw InvalidInputException(
-				    DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, RenderDecideSource(scale, Names())));
+				ThrowInvalidValue({DecideValueRole::COEFFICIENT, scale, Names(), clause});
 			}
             got = true;
         }
@@ -3135,7 +3156,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 	// "constraint" or "objective"; it names the clause in every error raised here.
 	// `null_factor` is set when a term's factor is NULL; the term's coefficients are then 0.
 	auto EvaluateComposedTerms = [&](const vector<LogicalDecide::ComposedMinMaxTerm> &terms, const char *what,
-	                                 bool &null_factor) -> vector<ComposedMinMaxTermData> {
+	                                 const string &clause, bool &null_factor) -> vector<ComposedMinMaxTermData> {
 		// Collect filter expressions for batch evaluation. The clause's terms share its
 		// `when`, folded in front of each term's own.
 		vector<const Expression *> cond_ptrs;
@@ -3154,7 +3175,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
             ta.sign = term.sign;
             ta.is_easy = term.is_easy;
             if (term.scale) {
-				ta.scale = EvaluateQueryWideScale(*term.scale, term.scale_divides, what, null_factor);
+				ta.scale = EvaluateQueryWideScale(*term.scale, term.scale_divides, what, clause, null_factor);
 			}
             if (ta.is_minmax) {
 				// Named as the plan prints the reducer, so a diagnosis over the extremum
@@ -3183,7 +3204,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 				}
 			}
 			for (auto &inner_t : term.inner_terms) {
-				ta.per_term_coefs.push_back(EvaluateTermCoefs(inner_t, what, ta.filter_mask));
+				ta.per_term_coefs.push_back(EvaluateTermCoefs(inner_t, what, clause, ta.filter_mask));
 			}
 			evaluated.push_back(std::move(ta));
 		}
@@ -3211,7 +3232,8 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
                          .GetValue<double>();
 		// A NULL factor makes the clause's one instance NULL, which is skipped (deck p. 50).
 		bool null_factor = false;
-		clause.terms = EvaluateComposedTerms(spec.terms, "constraint", null_factor);
+		clause.terms =
+		    EvaluateComposedTerms(spec.terms, "constraint", WrittenClause(spec.source_clause_id), null_factor);
 		clause.skipped = null_factor || std::any_of(clause.terms.begin(), clause.terms.end(), reads_no_row);
 		clause.repair_group_id =
 		    gstate.constraints.size() + gstate.singleton_row_constraints.size() + evaluated.composed_constraints.size();
@@ -3231,7 +3253,8 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 	if (!composed_minmax_objective_terms.empty()) {
 		// A term with a NULL factor is dropped: its factor reads 0.
 		bool null_factor = false;
-		auto terms = EvaluateComposedTerms(composed_minmax_objective_terms, "objective", null_factor);
+		auto terms = EvaluateComposedTerms(composed_minmax_objective_terms, "objective",
+		                                   WrittenClause(DConstants::INVALID_INDEX), null_factor);
 		terms.erase(std::remove_if(terms.begin(), terms.end(), reads_no_row), terms.end());
 		evaluated.composed_objective_terms = std::move(terms);
 	}
@@ -3245,7 +3268,8 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 //! one scan: the columns of a lifted reducer's members.
 static void EvaluateTermColumns(ClientContext &context, ColumnDataCollection &data, ChunkExprCache &chunk_expr_cache,
                                 const vector<DecideTerm> &terms, const vector<bool> &read, idx_t num_rows,
-                                const DecideSourceNames &names, vector<CoefficientColumn> &columns) {
+                                const DecideSourceNames &names, const string &clause,
+                                vector<CoefficientColumn> &columns) {
 	columns.resize(terms.size());
 	if (terms.empty()) {
 		return;
@@ -3270,7 +3294,8 @@ static void EvaluateTermColumns(ClientContext &context, ColumnDataCollection &da
 		ExecuteOnReadRows(executor, chunk, row_base, &read, results);
 		for (idx_t t = 0; t < terms.size(); t++) {
 			ExtractDoubleColumn(results.data[t], chunk.size(), terms[t].sign, columns[t].MutableDense(),
-			                    {DecideValueRole::COEFFICIENT, *terms[t].coefficient, names}, nullptr, &read, row_base);
+			                    {DecideValueRole::COEFFICIENT, *terms[t].coefficient, names, clause}, nullptr, &read,
+			                    row_base);
 			columns[t].SyncSize();
 		}
 		row_base += chunk.size();
@@ -3313,9 +3338,10 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
 		                         num_rows, is_member, &kept, ec.row_group_ids, ec.num_groups, ec.group_labels);
 
-		// The members' coefficients, computed on the member rows alone.
+		// The members' coefficients, computed on the member rows alone. A helper serves every clause that reads its
+		// reducer, so a number past a DOUBLE names the reducer as written (as LinearizeReducerValueLinks does).
 		EvaluateTermColumns(context, gstate.data, chunk_expr_cache, link.inner_terms, read, num_rows, Names(),
-		                    ec.row_coefficients);
+		                    link.label, ec.row_coefficients);
 		for (auto &term : link.inner_terms) {
 			ec.variable_indices.push_back(term.variable_index);
 			ec.coefficient_labels.push_back(term.coefficient->GetName());

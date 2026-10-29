@@ -189,12 +189,13 @@ static bool ReadAffine(const ExpressionBuilder &calc, const DecideTermSplitter &
 }
 
 //! Fills the fields a bound known before the query runs carries (D41): everything folds to a number, which a column,
-//! a subquery or a parameter does not.
+//! a subquery or a parameter does not. A coefficient that is not finite (`2e308 * x`) folds into no box: the clause
+//! stays a row, whose coefficient check refuses it as it refuses one on a row of several decisions.
 static void FoldKnownBound(ClientContext &context, const ExpressionBuilder &calc, ExpressionType type, const ExprPtr &a,
                            const ExprPtr &r, DecideSingletonRow &out) {
 	double a_value, r_value;
 	out.folds = TryEvaluateFoldableDouble(context, *calc.Out(a), a_value, FOLD_CATCH_ALL) && a_value != 0.0 &&
-	            !std::isnan(a_value) && TryEvaluateFoldableDouble(context, *calc.Out(r), r_value, FOLD_CATCH_ALL) &&
+	            std::isfinite(a_value) && TryEvaluateFoldableDouble(context, *calc.Out(r), r_value, FOLD_CATCH_ALL) &&
 	            !std::isnan(r_value) &&
 	            TryEvaluateFoldableDouble(context, *out.lower, out.lower_value, FOLD_CATCH_ALL) &&
 	            TryEvaluateFoldableDouble(context, *out.upper, out.upper_value, FOLD_CATCH_ALL);

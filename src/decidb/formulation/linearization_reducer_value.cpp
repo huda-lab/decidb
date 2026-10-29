@@ -182,6 +182,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			if (spec.closing_underivable) {
 				spec.blame_var = FindUnboundedContributor(link.rows, input.lower_bounds, input.upper_bounds);
 			}
+			spec.written = link.label;
 			spec.label = link.label;
 			spec.envelope_kind = ConstraintKind::STRUCTURAL;
 			spec.closing_kind = ConstraintKind::STRUCTURAL;

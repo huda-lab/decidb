@@ -268,6 +268,8 @@ public:
 private:
 	//! What a message renders the query's values with: a value prints as the user wrote it.
 	DecideSourceNames Names() const;
+	//! The clause of `source_clause_id` as the user wrote it, the objective for none (DecideWrittenClause).
+	string WrittenClause(idx_t source_clause_id) const;
 
     //! The backend named on the plan, resolved to a registry entry. This is the ONLY
     //! place layer 8 turns `solver_backend_name` back into a backend, and it happens

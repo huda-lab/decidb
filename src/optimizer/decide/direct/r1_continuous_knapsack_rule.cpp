@@ -64,6 +64,9 @@ struct Condition final : DirectApplicabilityCondition {
 	//! The budget's weight terms; a decision's weight is `sum(sign * coefficient)` over its terms, and zero when it has
 	//! none.
 	DirectLinearPart budget;
+	//! The budget's first clause as a message names it: a price, a room or a sum the plan computes past a DOUBLE names
+	//! it (DecideValueRole::TOO_LARGE), as the solver path names a number it computes.
+	string budget_written;
 	//! The budget's constant limits: `<=` sets the upper one, `>=` the lower one, `=` both. A side with no limit is
 	//! infinite. Several constraints on the same weights are one budget, with the largest lower and smallest upper
 	//! limit, counting the data limits below.
@@ -267,6 +270,7 @@ bool Rule::ProveBudget(const DirectIR &ir, ClientContext &context, const vector<
 	if (!ProveBudgetScope(ir, budgets, condition)) {
 		return false;
 	}
+	condition.budget_written = budgets[0]->written;
 	for (idx_t i = 0; i < budgets.size(); i++) {
 		if (!ProveBudgetClause(ir, context, *budgets[i], condition, i == 0)) {
 			return false;
@@ -637,6 +641,9 @@ struct ItemColumns {
 	//! then the others.
 	vector<ColumnBinding> messages;
 	idx_t limit_messages = 0;
+	//! The message of each item's price past a DOUBLE (VARCHAR, NULL when finite): a number the plan computes from the
+	//! checked values. Raised after every check of a value read; the group sums are checked after it (GroupTotals).
+	vector<ColumnBinding> computed_messages;
 	//! What the aggregates of each limit read from the data read on the row, per data limit and per input.
 	vector<vector<DirectGroupInputColumns>> limits;
 	//! The items of the row, one per decision.
@@ -739,6 +746,9 @@ public:
 		for (auto &name : message_names) {
 			items.messages.push_back(columns.at(name).binding);
 		}
+		for (auto &name : computed_message_names) {
+			items.computed_messages.push_back(columns.at(name).binding);
+		}
 		items.limit_messages = limit_message_count;
 		for (idx_t j = 0; j < limit_bounds.size(); j++) {
 			items.limits.emplace_back();
@@ -809,6 +819,15 @@ private:
 	//! The columns of the checks' messages, and how many are the NaN checks of what the limits read.
 	vector<string> message_names;
 	idx_t limit_message_count = 0;
+	//! The columns of the messages of the numbers the plan computes (ItemColumns::computed_messages).
+	vector<string> computed_message_names;
+
+	//! Adds, beside `value`, the message of it past a DOUBLE: TOO_LARGE, naming the budget. NULL passes.
+	void AddComputed(Named &added, const string &name, const ExprPtr &value) {
+		computed_message_names.push_back("too_large_" + name);
+		added.emplace_back(computed_message_names.back(),
+		                   DirectNumberMessage(calc, value, condition.budget_written, DecideValueRole::TOO_LARGE));
+	}
 
 	static string SourceName(idx_t i) {
 		return "s" + std::to_string(i);
@@ -982,8 +1001,9 @@ private:
 		auto p1 = Project(added);
 
 		vector<ExprPtr> messages;
-		auto number = [&](const string &name, const string &written) {
-			return DirectNumberMessage(calc, C(name), written);
+		auto number = [&](const string &name, const string &written,
+		                  DecideValueRole role = DecideValueRole::COEFFICIENT) {
+			return DirectNumberMessage(calc, C(name), written, role);
 		};
 		// The bound-side rewrite's checks of what a limit reads come before any other, as its scope checks did.
 		for (idx_t j = 0; j < limit_bounds.size(); j++) {
@@ -1000,7 +1020,7 @@ private:
 			auto read_on = [&](ExprPtr message) {
 				return clause.when ? DirectOnKeptRows(calc, C("wh" + suffix), message) : message;
 			};
-			messages.push_back(read_on(number("c" + suffix, clause.coefficient_text)));
+			messages.push_back(read_on(number("c" + suffix, clause.coefficient_text, clause.coefficient_role)));
 			messages.push_back(read_on(
 			    calc.If(calc.Fn("isnan", C("r" + suffix)),
 			            calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, clause.rhs_text))),
@@ -1109,6 +1129,8 @@ private:
 			}
 			// Adding 0.0 turns -0.0 into 0.0, so prices that are equal sort and compare as equal.
 			auto price = calc.If(free_of_budget, NegativeInfinity(), calc.Add(calc.Div(v, w), Zero()));
+			// The -infinity of an item outside the ranking is a mark, not a number computed.
+			AddComputed(added, Dec("t", k), calc.If(free_of_budget, NullDouble(), price));
 			added.emplace_back(Dec("empty", k), empty);
 			added.emplace_back(Dec("a", k), anchor);
 			added.emplace_back(Dec("wz", k), free_of_budget);
@@ -1448,6 +1470,9 @@ private:
 			    aggregate.Add(Aggregate("min", DirectNumberMessage(calc, DoubleColumn(items.columns.decisions[k].v),
 			                                                       condition.value_text[k]))));
 		}
+		for (auto message : items.columns.computed_messages) {
+			value_messages.push_back(aggregate.Add(Aggregate("min", calc.Col(LogicalType::VARCHAR, message))));
+		}
 		vector<ColumnBinding> sums;
 		for (idx_t slot = 0; slot < TOTAL_COUNT; slot++) {
 			sums.push_back(aggregate.Add(Aggregate(TotalFunction(slot), inputs[slot])));
@@ -1488,6 +1513,14 @@ private:
 		}
 		for (auto message : value_messages) {
 			raise(message);
+		}
+		// The group's sums of the finite parts: the spend of the anchors and the finite rooms. An item's own part past
+		// a DOUBLE makes its sum so. The sums of the rooms at price zero are parts of these, and the running sums of
+		// stage 3 parts of the rooms.
+		for (auto slot : {TOTAL_S, TOTAL_SUP, TOTAL_SDN}) {
+			checks.push_back(DirectRaiseMessage(
+			    optimizer, calc,
+			    DirectNumberMessage(calc, totals[slot], condition.budget_written, DecideValueRole::TOO_LARGE)));
 		}
 		checks.push_back(DirectRaiseIf(calc, calc.Out(And(has_rows, verdict.infeasible)),
 		                               DirectInfeasibleErrorPredicate(optimizer)));

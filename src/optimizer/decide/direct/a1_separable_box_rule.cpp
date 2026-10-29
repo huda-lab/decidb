@@ -512,8 +512,8 @@ private:
 				                                   std::move(check))
 				           : std::move(check);
 			};
-			checks.push_back(read_on(
-			    DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, coefficient, clause.coefficient_text)));
+			checks.push_back(read_on(DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, coefficient,
+			                                                    clause.coefficient_text, clause.coefficient_role)));
 			checks.push_back(read_on(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text)));
 			raw.clauses.push_back(columns);
 		}

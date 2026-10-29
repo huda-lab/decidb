@@ -296,6 +296,7 @@ void LinearizeMinMaxConstraints(SolverInput &input, const VarIndexer &indexer,
             // found the same way every other row-Big-M refusal finds it.
             spec.blame_var =
                 FindUnboundedContributor(ec, input.lower_bounds, input.upper_bounds);
+            spec.written = written;
             spec.closing_kind = ConstraintKind::USER_MECHANISM;
             EmitExtremumLink(input, indexer, spec, group.members, var_names, policy);
 
@@ -443,8 +444,11 @@ void EmitExtremumLink(SolverInput &input, const VarIndexer &indexer,
         input.general_constraints.push_back(std::move(gc));
         return;
     }
-    if (spec.closing_underivable) {
-        ThrowUnboundedBigMNaming(spec.blame_var, var_names, "MIN/MAX");
+    // A span past a DOUBLE (`MAX(x + c)` over `c` of either sign near the limit) is no Big-M either, and no column is
+    // open: the refusal names the clause. The closing rows carry no clause of their own to name at the hand-off.
+    if (spec.closing_underivable || !std::isfinite(spec.closing_big_m)) {
+        ThrowUnboundedBigMNaming(spec.blame_var != DConstants::INVALID_INDEX, spec.blame_var, var_names, "MIN/MAX",
+                                 spec.written);
     }
 
     // One indicator per member, a Big-M row that binds `result` to that member when the
@@ -606,6 +610,7 @@ void LinearizeMinMaxObjective(SolverInput &input, const VarIndexer &indexer,
         link_spec.closing_underivable = family.Unbounded();
         link_spec.closing_big_m = link_spec.closing_underivable ? 0.0 : family.Span();
         link_spec.blame_var = family.unbounded_var;
+        link_spec.written = input.objective_written;
         return link_spec;
     };
 
@@ -994,6 +999,7 @@ static void EmitComposedMinMaxAuxiliaries(SolverInput &input, const VarIndexer &
         // row's constant against another's. Only within a single row does it cancel.
         spec.closing_big_m = spec.closing_underivable ? 0.0 : term_range[i].Span();
         spec.blame_var = term_range[i].unbounded_var;
+        spec.written = written;
         spec.label = ta.label;
         spec.source_clause_id = source_clause_id;
         spec.removal_group_id = removal_group_id;

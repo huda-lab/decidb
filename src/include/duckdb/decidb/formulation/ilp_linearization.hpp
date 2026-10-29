@@ -502,10 +502,13 @@ struct ExtremumLinkSpec {
     //! The closing Big-M, and whether one exists at all. Resolved by the CALLER, because
     //! the family a link reduces over is not always the family of its own members: an
     //! outer MIN/MAX over group SUMS spans the per-row reach times a group's row count,
-    //! not the per-row reach. `blame_var` names the variable that left it open.
+    //! not the per-row reach. `blame_var` names the variable that left it open, INVALID_INDEX
+    //! when none did: the reach overflowed a DOUBLE, and the refusal names `written`, the
+    //! clause (or objective, or reducer) the link belongs to (ThrowUnboundedBigMNaming).
     double closing_big_m = 0.0;
     bool closing_underivable = false;
     idx_t blame_var = DConstants::INVALID_INDEX;
+    string written;
     //! Names every column and binary this emits, through the global label channel, so a
     //! diagnosis renders `MAX(x)` rather than an internal column.
     string label;

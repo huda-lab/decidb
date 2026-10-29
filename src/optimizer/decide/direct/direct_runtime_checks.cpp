@@ -48,11 +48,12 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
 	                                       "which decision needs a bound.");
 }
 
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &written) {
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &written,
+                            DecideValueRole role) {
 	auto none = calc.Constant(Value(LogicalType::VARCHAR));
-	return calc.If(calc.IsNull(number), none,
-	               calc.If(calc.Fn("isfinite", number), none,
-	                       calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, written)))));
+	return calc.If(
+	    calc.IsNull(number), none,
+	    calc.If(calc.Fn("isfinite", number), none, calc.Constant(Value(DecideInvalidValueMessage(role, written)))));
 }
 
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message) {

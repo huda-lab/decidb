@@ -57,11 +57,14 @@ void DecideRowSignedRange(const EvaluatedConstraint &ec, idx_t row, const vector
                           const vector<double> &upper_bounds, double &out_lo, double &out_hi,
                           idx_t skip_idx = DConstants::INVALID_INDEX, const InstanceBox *instances = nullptr);
 
-//! Refuse a Big-M that has no finite M, naming the column to bound. Every caller
-//! refuses in the same words, so the message the user reads lives in one place.
-//! `bad` is the column to blame, or INVALID_INDEX when the open bound could not be
-//! attributed to any named column.
-[[noreturn]] void ThrowUnboundedBigMNaming(idx_t bad, const vector<string> &var_names, const char *construct);
+//! Refuse a Big-M that has no finite M. Every caller refuses in the same words, so the
+//! message the user reads lives in one place. `open` says whether a column of the row
+//! has an open box (an auxiliary's counts): `bad` is then the column to name, or
+//! INVALID_INDEX when the open bound could not be attributed to any named column. With
+//! no open column the reach overflowed a DOUBLE, and the refusal is the TOO_LARGE
+//! message naming `written`, the clause the row belongs to (DecideWrittenClause).
+[[noreturn]] void ThrowUnboundedBigMNaming(bool open, idx_t bad, const vector<string> &var_names, const char *construct,
+                                           const string &written);
 
 //! The first term whose column is unbounded in the direction a Big-M would need,
 //! or INVALID_INDEX when every contributor is boxed.
