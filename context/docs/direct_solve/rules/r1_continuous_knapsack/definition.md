@@ -285,7 +285,7 @@ What DeciDB admits beyond, or in place of, the catalogue text. Where the two dif
 > • **Budget scope.** A `by` key on the sum gives each group its own budget and price; a NULL key is in no group
 > (D5). A `when` on the clause or inside the sum (the same meaning for a constant budget) leaves a row out of every
 > budget; such a row takes its own best end, as an A1 row does. A `when` that keeps no row leaves no budget, as on the
-> solver (D68). As built, R1 reads no `by` key yet (`done.md`).
+> solver (D68).
 >
 > • **Budget from the data.** A limit may be a source column or expression, or an aggregate of the source. Each group
 > reads one L and one U: an upper limit takes the group's MIN, a lower one its MAX, and an equality needs one value in

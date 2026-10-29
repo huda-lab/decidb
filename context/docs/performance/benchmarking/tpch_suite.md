@@ -57,7 +57,7 @@ peak RSS and the median of each stage timer, over the successful runs.
 With `DECIDB_BENCH=1` the engine prints one line per figure to stderr, and the runner parses them into the result:
 
 ```
-DECIDB_BENCH: optimizer_ms=0.01         # DecideOptimizer rewrite passes
+DECIDB_BENCH: optimizer_ms=0.01         # the whole DecideOptimizer stage, on either path
 DECIDB_BENCH: model_construction_ms=32  # model building, up to SolverModel::Build
 DECIDB_BENCH: solver_ms=1448            # the SolveModel() call, which includes the neutral model build
 DECIDB_BENCH: total_variables=9965      # decision variables plus auxiliaries

@@ -12,7 +12,7 @@ solver path answers those queries, so none of them is wrong, only slower.
 - The baseline to compare against is the stamp at the top of `done.md`. Any other failure after your change is yours.
 - Checks that every code task runs (from the repository root): `make decide-test`,
   `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`, `DECIDB_VERIFY_SERIALIZER=1 make decide-test`,
-  `DECIDB_FORCE_SOLVER=highs make decide-test` (one failure that needs Gurobi is expected: `test_norm_combined_l1_l2_objective`),
+  `DECIDB_FORCE_SOLVER=highs make decide-test`,
   and `build/release/test/unittest "[decidb]"`. Rebuild first with `make release`. `test/decide/run_direct_matrix.sh` runs all
   five and prints one line each (about 3 minutes). Doc-only tasks need no checks.
 - Do not loosen or delete a test to make it pass. If a test fails for a reason the task did not predict, stop and report it.
@@ -41,91 +41,6 @@ solver path answers those queries, so none of them is wrong, only slower.
   teach a rule parser spelling.
 - **Done when.** The IR contract and the direct/solver tests run on both syntaxes where comparable.
 
-## H-03 — Read a data bound through the bound-side window
-
-- **Decision needed.** Where the reduction lives.
-- **Problem.** The bound-side window rewrite (`RewriteRhsAggregates`, `decide_rewrite_rhs_window.cpp`) is the one
-  evaluator of a data bound: it reduces a clause's bound to its group's tightest value and appends VALUE_IS_VALID scope
-  checks for NULL, NaN and a disagreeing `=` bound. A direct rule reads the reduced column, so a data limit adds two
-  windows under the rule, each copying every source column: the tightest-bound window and the window of the direct row
-  checks (`AddRowChecks`).  R1's kept per-group plan could take the limit's MIN in the group aggregate it already runs. Measured
-  on the wide R1 table (26 columns, 2,000,000 rows) with `SUM(w*x) <= cap * 500000`: about 1.0 s, against 0.33 s for
-  the constant limit `1500000`; the two windows take about 0.35 s each.
-- **Options.**
-  1. The rewrite records each reduced bound (raw value, MIN/MAX/`=`, its value-check messages) as one value object;
-     the solver path turns it into windows only when no rule takes the query, and a rule that reads through computes
-     it in its own group aggregate (R1 already takes the group MIN/MAX of a data limit).
-  2. The rewrite installs the windows as it does and a rule that reads through removes them, rebinding shared,
-     stacked window slots.
-- **Recommendation.** 1, the one place that states the tightest bound; nothing is built to be torn down. Either way the
-  value checks move into the rule's pass and must keep the solver's order (scope checks, then the bound's NULL/NaN,
-  then weights).
-- **Ruling (owner, 2026-10-29).** Option 1.
-- **Ruling (owner, 2026-10-29), from the lane review.** The rewrite records every reducible bound; the rule decides
-  what it can reduce (R1 applies a sum's own `when` as an aggregate `FILTER`; S1 asks the driver for the recorded
-  windows), so the rewrite holds no rule's limits. Error order matches the solver: each row check is a message column,
-  the rule takes its least message per group in the aggregate it already runs, then raises scope checks, the bound's
-  NaN, the `=` disagreement, then row messages.
-- **Change.** Let a rule that applies read through the window: the rewrite records, per reduced bound, the raw value it
-  reduced, and the rule takes the MIN or MAX in its own group aggregate, as the window would. The value checks raise the
-  same messages in the same order, but inside the rule's own pass, so no window is left under it. Keep one place that
-  states what the tightest bound is.
-- **Done when.** `test_r1_a_limit_from_the_data_runs_the_plan_of_a_constant_limit[global-*]` passes (it is a strict
-  xfail now) and the error order and messages are unchanged on both paths.
-
-## H-04 — Keyed scope checks in the direct plan
-
-- **Decision needed.** How both paths choose what a message names when the answer depends on row order: which failing
-  group (several fail), and which two values a determination message quotes (`more than one value: 7, 5`; the solver
-  quotes the first value seen, then the first that differs). A relational plan has no reliable row order; its
-  existing checks raise the least message.
-- **Problem.** The value checks run under every rule's plan, in `AddRowChecks` (`direct_rule_driver.cpp`), a window
-  and a filter that keep the source's bindings. A `DETERMINES` check makes the whole query decline
-  (`DirectIR::status`).
-- **Options.** 1. Both paths name the least failing group and quote the least and greatest values. 2. Both paths keep
-  the solver's row order, which a relational plan cannot reproduce reliably.
-- **Recommendation.** 1, so the message never depends on row order; the solver's pins that quote another order change
-  with it.
-- **Ruling (owner, 2026-10-29).** Option 1: both paths name the least failing group and quote the least and greatest
-  values.
-- **Change.** Partition the window by the check's key for `DETERMINES`. Quote the failing class in the message, as
-  `PhysicalDecide::RunScopeChecks` does.
-- **Ruling (owner, 2026-10-29), from the lane review.** One implementation of the determination and value checks: the
-  solver path installs the direct plan's row checks under `LogicalDecide`, and `RunScopeChecks` keeps only the
-  entity-decision checks. The lane times the solver path before and after on the focused tests.
-- **Done when.** The same message on both paths, including a NULL key value. H-05 and H-07 need this task.
-
-## H-05 — Read a reducer's `by` key into the IR
-
-- **Problem.** A per-group limit is `sum(x) by (dept) <= 2`: the grouping sits on the reducer, not on a
-  wrapper around the clause. `ReadReducer` (`direct_ir.cpp`) declines on `TryParseGroupKeyTag`.
-  `DirectIRScope::per_key_slots` and `DirectFrontEnd::SourceSlot` exist, but nothing fills them. The S1 and R1
-  per-group logic is reached only through IR edits (`PerKeys` in `test/common/test_decidb_direct_decline.cpp`): the
-  decline grids check the condition, and "S1 and R1 keyed plans answer as the solver does on the same `by` key" runs
-  the plans against the solver. That test keeps every key non-NULL because both plans leave a NULL-key row ungrouped:
-  with a key `g` NULL on rows 6 and 7, S1 under `SUM(x) <= 1` picks both and R1 fills both past the budget, where the
-  solver's `by (g)` holds them to one group. Add the NULL group to that test with the fix.
-- **Options.**
-  1. Keep the key on the clause scope (`per_key_slots`). Smallest change; the kept per-group plans read it.
-  2. Move the key onto the part (`DirectPart`), where the language puts it. Larger change; matches the grammar.
-- **Ruling (owner, 2026-10-27).** Option 2: the key lives on the part, where `by` is written. It also fits the NULL-key
-  rule (D5: a NULL key is no group of that key only).
-- **Change.** Read both spellings: `C` with `by (g)` after each reducer (one clause per row, each reading its
-  row's group), which allows a limit that varies by row. The
-  removed-spelling message suggests `per g: C` with `by (g)`: one clause per class, which needs `g` to determine the
-  limit. Honour the NULL-key rule D5 (a NULL key is in no group, as the kept plans have it) and D68 (a group in which
-  some reducer reads no row has no instance).
-- **Plan shape (owner's direction).** A `by` key is a GROUP BY in the direct plan: the rule groups the covered rows by
-  the key (a hash aggregate on the key columns, joined back to the rows on the key), as the per-group plans kept in the code do. It is not one clause per row and not a window per clause.
-  It groups on `DecideKeyElement::Grouping()`, the collated expression.
-- **Tests waiting on this.** `direct_path` (`test/decide/tests/_direct_oracle_common.py`) makes the direct path of any
-  case whose SQL holds ` by (` a strict xfail; its solver path is checked as usual. That is about 260 S1 grid cases (`S1_CASES` 77, `S1_OFFSET_CASES` 32,
-  `S1_REDUCER_CASES` 151) and 22 R1 cases (`DATA_BUDGET_CASES` 13, `PIECE_CASES` 1, `SCOPED_CASES` 8). Delete the
-  ` by (` branch of `direct_path` when S1 and R1 read the key; a case that then passes fails until the branch is gone.
-- **Needs.** H-04.
-- **Done when.** The IR carries the key for both spellings; the rule tasks `../rules/s1_uniform_matroid/todo.md` and
-  `../rules/r1_continuous_knapsack/todo.md` § "Read a `by` key again" can start.
-
 ## H-06 — The two-level objective `outer(per k: inner(e) by (k))`
 
 - **Problem.** The objective is `MINIMIZE sum(per id: max(w*x) by (id))`. `ReadObjective`
@@ -136,19 +51,11 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Needs (owner, 2026-10-29).** A rule that takes the shape. Read into the IR with no rule taking it, the reading was
   reached only by an IR test, so it was removed; this task waits for A2–A4 (`../todo.md`).
 
-## H-07 — `per K:` on a constraint (one constraint per class)
-
-- **Problem.** `CollectConstraints` (`direct_ir.cpp`) turns a `PER_CLASS_TAG` wrapper into one not-proved node.
-- **Change.** Read `per g: sum(x) <= k` as D6 states it: the whole total bounded once per class of `g`, not a grouping
-  of the reducer. The DETERMINES scope checks of the class come from H-04.
-- **Needs.** H-04.
-- **Done when.** A differential case per rule that reads it, on both paths, and the DETERMINES message on both paths.
-
 ## H-09 — Reducer windows a rule could compute itself
 
 - **Problem.** A data reducer on the bound side (`sum(cap) by (g)`) is still installed as a window under every plan,
-  copying every source column, though a rule's own group aggregate could compute it, as H-03 does for the tightest
-  bound.
+  copying every source column, though a rule's own group aggregate could compute it, as it does for the tightest
+  bound (`DecideReducedBound`, `done.md`).
 - **Change.** The rewrite records the reducer as a value; the solver path builds the window only when no rule takes the
   query, and a rule computes it in its own aggregate.
 - **Done when.** A direct plan over a reducer bound has no window under the rule; messages and their order unchanged.

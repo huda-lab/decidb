@@ -70,7 +70,7 @@ Spans are inclusive parent totals. Each CSV stage column sums only parent spans,
 |---|---|
 | `parse_bind_ms` | `frontend.parse`, `frontend.bind_select` |
 | `canonicalize_ms` | `canonicalize.comparison`, `canonicalize.objective` |
-| `rewrite_ms` | `optimizer.decide` |
+| `rewrite_ms` | `optimizer.decide`: the whole stage, from the bound-side rewrite and the choice of a rule or a solver to the solver path's row checks, bound windows and formulation passes |
 | `plan_ms` | `frontend.physical_decide` |
 | `input_ms` | `execution.assemble_input`, `execution.sink_append`, `execution.sink_combine` |
 | `extraction_ms` | `execution.evaluate_constraints`, `execution.evaluate_objective`, `execution.evaluate_composed`, `execution.entity_mapping`, `execution.formulate` |

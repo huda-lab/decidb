@@ -20,9 +20,9 @@ per objective part. A rule must decline a problem with a not-proved IR node in a
 rewrite cannot follow from a gap in the front end. A decline carries no reason: the rule applies or it does not.
 
 Not proved covers what the binder admits and no rule models: a per-row term the splitter cannot read, an order-0 norm,
-a reducer's `by` key, a `per K:` in front of a clause, a clause whose reducer value became a helper decision
-(`VALUE_REWRITE_TAG`) and the two-level objective. A scope check with a key (one per
-`by` group or per class) makes the whole IR not proved.
+a `per K:` in front of a per-row clause, a clause whose reducer value became a helper decision
+(`VALUE_REWRITE_TAG`) and the two-level objective. The determination of an entity-scoped decision, which only the
+DECIDE operator checks, makes the whole IR not proved; every other scope check is a row check the plan makes.
 The reader trusts the invariants of the bound tree for everything else (one source child, the four reducers, comparison
 and `IN` leaves, a `SUCH THAT` that is an `AND` of clauses (the binder rejects `OR` between constraints), at most one
 `when` in front of a clause, a `SUCH THAT` clause) and states them as `D_ASSERT`s, because no query can break them

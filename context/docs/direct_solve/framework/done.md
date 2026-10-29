@@ -1,25 +1,28 @@
 # Shared engine — what exists today
 
-Verified on 2026-10-28 at `c83bef034f` or later, with the strict xfails on the direct path of pending cases: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each
-4,681 passed and 326 strict expected failures (the direct path of keyed cases and other direct-solve follow-ups);
-`DECIDB_FORCE_SOLVER=highs make decide-test` 4,680 passed and one failure, `test_norm_combined_l1_l2_objective`, which
-needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,764 assertions in 67 cases.
+Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`,
+`DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each 5,194 passed; C++
+`build/release/test/unittest "[decidb]"` 2,869 assertions in 69 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check). Design: `../architecture/`.
 
 ## What it does
 
-- **Setting and fallback.** `decide_direct_solve` is `auto` (default), `off` or `require`. When a rule applies, its
-  substitute replaces the DECIDE node before solver selection; otherwise the node is left for the solver. `DIAGNOSE` and
-  a forced backend use the solver and conflict with `require`. A prepared plan keeps its selection until rebound.
+- **Setting and fallback.** `decide_direct_solve` is `auto` (default), `off` or `require`. `ChooseDecideAnswer`
+  (`decide_answer_choice.cpp`; Strategy selection with fallback) offers the IR to the rules after the bound-side
+  rewrite and chooses a solver, lazily, only when none applies. `DIAGNOSE` and a forced backend (`ForcedSolverName()`;
+  empty is unset) use the solver and conflict with `require`. A prepared plan keeps its selection until rebound.
   With the DECIDE optimizer off, every mode refuses the query (`../../pipeline/05_optimizer/done.md`).
 - **IR.** One read-only front end turns the bound tree into the IR: decision domains and scopes, each constraint with
-  its reducer, the reducer's own `when`, qualifier, factor, the clause's `when`, right side, and the objective, and the
-  value checks the plan must run (`row_checks`: the bound-side window's `VALUE_IS_VALID` checks). Parts the binder admits and no rule
-  models are *not proved*, and building the IR never throws: `norm(e, 0)` (it needs indicator variables), any norm tag
-  the front end does not expect, a reducer's `by` key, a `per K:` in front of a clause, a clause whose reducer value
-  became a helper decision and the two-level objective are not-proved parts; a
-  scope check with a key makes the whole IR not proved (`DirectIR::status`). Shapes the binder never produces are `D_ASSERT`s
+  its reducer, the reducer's own `when` and `by` key (`DirectPart::by`, grouped on `DecideKeyElement::Grouping()`, the
+  collated expression), qualifier, factor, the clause's `when`, right side (with its `reduction` when the bound-side
+  rewrite left it raw), a `per K:` in front of an aggregate clause (`per_class` and `classes`: D6, the whole total
+  bounded once per class), and the objective, and the row checks the plan must run (`row_checks`: value checks and
+  determination checks). A key element that is NULL puts its row in no group (D5), except a relation column, where
+  NULL is a value. Parts the binder admits and no rule models are *not proved*, and building the IR never throws:
+  `norm(e, 0)` (it needs indicator variables), any norm tag the front end does not expect, a `per K:` in front of a
+  per-row clause, a clause whose reducer value became a helper decision and the two-level objective are not-proved
+  parts; the determination of an entity-scoped decision, which only the DECIDE operator checks, makes the whole IR not
+  proved (`DirectIR::status`). Shapes the binder never produces are `D_ASSERT`s
   (`../architecture/ir.md`). No IR node is kept that no rule reads. It uses the same term splitter as the solver path.
 - **Rule interface.** `CheckCondition`, `Apply` and a fixed `Summary()` line for `EXPLAIN`, plus a shared Map step that
   checks the slot map. Rules are listed in `direct_registry.cpp`; a test seam replaces the list per connection. The
@@ -44,13 +47,21 @@ needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,764 assertions in 6
 - **Plan fragments.** `direct_plan_fragments.hpp` holds free functions that each return one plan fragment (the function
   form of a factory method). It lists only helpers with two or more users: `DirectGuardEmptyAggregate`,
   `DirectActiveWhen`, `DirectWindowMatchingCount`, `DirectValidationBreaker`, `DirectScaledTerm` (sign and constant factor
-  of a coefficient) and `DirectIsNull`.
+  of a coefficient) and `DirectIsNull`. S1 and R1 also share `DirectProveSharedScope` (the clauses read together have
+  one `by` key, `per` classes and `when`, else the rule declines) and `DirectAddInstanceFlag` (a `per K:` clause with
+  no kept class has no instance, D5).
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
   their messages: `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`, `DirectValidBoundPredicate`,
   and `DirectValidNumberPredicate`. Every check that raises is built with `DirectRaiseUnless(ok,
   error)` or `DirectRaiseIf(bad, error)`, which return true or raise, and a list of checks is joined by `DirectAllHold`, a
-  `CASE` chain in the order given, so an earlier check guards the later ones. Which of several errors a
-  query reports is not specified.
+  `CASE` chain in the order given, so an earlier check guards the later ones. A rule raises in the solver's order within a group (scope checks,
+  the bound's NaN, an `=` bound's disagreement, then the least row message); across failing groups the order may
+  differ.
+- **Row checks, one implementation** (`direct_row_checks.cpp`). `DirectAddRowChecks` puts the IR's row checks under a
+  plan as windows and a filter that keeps the source's bindings. A determination check names the least failing group
+  and quotes its least and greatest value, NULL last. The solver path installs the same checks under the node
+  (`DirectTakeRowChecks`); `PhysicalDecide::RunScopeChecks` keeps only an entity-scoped decision's determination. The
+  windows cost the solver path about 23% on tiny queries and change the order rows reach the model builder.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
   every direct-solve file. A per-row bound is read by the solver path's own classifier
@@ -125,18 +136,19 @@ needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,764 assertions in 6
   clause groups no reducer (D6). A window that reads another window's column is placed one level above it; equal windows
   are shared. The binder rejects `DISTINCT` and drops an `ORDER BY` inside these reducers, so neither reaches the
   rewrite. A data norm of order 0 is the count of its non-zero rows, `SUM(ABS(SIGN(e)))`.
-  - The bound of a clause in the aggregate shape is then reduced to its group's tightest value: the MIN of an upper
+  - The bound of a clause in the aggregate shape holds when its group's tightest value does: the MIN of an upper
     bound, the MAX of a lower one, over the kept rows of the comparison's group. An `=` bound must take one value per
     group. A bound with one value per group already (a constant, a query-wide value, or reducers whose `by` keys are in
-    the group's) is left alone, and so is a `<>` bound, which excludes each value it takes.
+    the group's) is left alone, and so is a `<>` bound, which excludes each value it takes. The rewrite records
+    such a bound as a value object (`DecideReducedBound`); a rule reduces it in its own group aggregate and raises its
+    checks, and only the solver path builds the windows (`InstallReducedBounds`). A sum with its own `when` asks the
+    driver for the windows (`bound_windows_needed`).
   - Every value the window reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a
     reducer's argument (or a norm's written body: `SIGN(NaN)` is 0) on the rows the reducer reads, the bound on the
-    kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row.
-    `PhysicalDecide::RunScopeChecks` raises the first on the solver path, `AddRowChecks` turns them into row checks in a
-    direct plan, so a scope error (a `per K:` that does not determine a value) is always reported before a bad
-    value, and both paths raise the same text.
-  - A rule reads the reduced bound as a column, so it never reduces or checks a data bound itself. The cost is two
-    windows under the rule for a data limit (framework todo H-03).
+    kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row. Both
+    paths make them with `DirectAddRowChecks` (above), so a scope error (a `per K:` that does not determine a value) is
+    always reported before a bad value, and both paths raise the same text.
+  - A data reducer on the bound side (`sum(cap) by (g)`) is still a window under every plan (framework todo H-09).
   - The solver and the direct rules read DuckDB's value, so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1,
     -2^60 reads the limit 1 on `off` and `require`. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's
     types. On a row a reducer does not read, its argument is not computed (syntax reference §6.3). The windows sit
@@ -242,8 +254,8 @@ asks the solver's own question about which values a bound admits and which bound
   `default` arms of the `ExpressionType` switches in S1's `NormalizeCapacity` and `SatisfiesComparison`; and the
   extension-name check in late materialization's `VisitForAdapters`, which keeps an operator of another extension from
   being cast to the adapter. The other three are the nested-reducer reading in `ReadReducer` (`DirectPart::inner`),
-  which no query reaches until the two-level objective is read (`todo.md` H-06). The keyed S1 and R1 plans, which no
-  query reaches while the front end declines a `by` key, run from an edited IR against the solver (`test/common/
+  which no query reaches until the two-level objective is read (`todo.md` H-06). The keyed S1 and R1 plans run from
+  queries in the S1 and R1 suites, and from an IR against the solver with NULL-key rows (`test/common/
   test_decidb_direct_decline.cpp`, "keyed plans"). Every other check follows one policy: a query reaches it and a test runs it; a
   check on what a rule hands the engine raises in release builds and a stub-rule C++ test reaches it; a check on a plan,
   IR or setting the engine builds itself is a `D_ASSERT`, which debug builds run; code no query reaches is deleted.

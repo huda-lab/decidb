@@ -1,10 +1,8 @@
 # A1 (separable box-constrained problem) — what works today
 
-Verified on 2026-10-28 at `c83bef034f` or later, with the strict xfails on the direct path of pending cases: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each
-4,681 passed and 326 strict expected failures (the direct path of keyed cases and other direct-solve follow-ups);
-`DECIDB_FORCE_SOLVER=highs make decide-test` 4,680 passed and one failure, `test_norm_combined_l1_l2_objective`, which
-needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,764 assertions in 67 cases.
+Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`,
+`DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each 5,194 passed; C++
+`build/release/test/unittest "[decidb]"` 2,869 assertions in 69 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/a1_separable_box_rule.cpp`; its per-row bounds come from the shared reader in
 `direct_bound_reader.cpp`. Class definition: [definition.md](definition.md).

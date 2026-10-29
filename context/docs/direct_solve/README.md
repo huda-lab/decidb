@@ -8,8 +8,8 @@ the solver and `require` raises an error when no rule applies.
 Three problem classes work: **S1**, "choose K rows by score" (count bounds on one `BOOL` variable), **A1**, "each row
 gets its best value in its own range" (per-row bounds on `BOOL`, `INT` or `REAL` decisions with a linear or one-square
 objective), and **R1**, "fill one budget by value per unit" (one budget over `REAL` decisions). On 5M-row sources S1 is
-about 16 to 19 times faster than Gurobi, A1 about 4 to 30 times and R1 about 7 to 13 times, on those shapes. Direct solve reads no `by` key yet, so S1 and R1 per group take the solver path until it does; the per-group plans kept in the code measured 50 to 98 and 15 to 16 times faster (`rules/s1_uniform_matroid/todo.md`,
-`rules/r1_continuous_knapsack/todo.md`). The other 16 classes in the catalogue are not started.
+about 16 to 19 times faster than Gurobi, A1 about 4 to 30 times and R1 about 7 to 13 times, on those shapes. S1 and R1 also read a reducer's `by` key and a `per K:` clause, one group each; their per-group
+plans measured 50 to 98 and 15 to 16 times faster. The other 16 classes in the catalogue are not started.
 
 ## Where to look
 

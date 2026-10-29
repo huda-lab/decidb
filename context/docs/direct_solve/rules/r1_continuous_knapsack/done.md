@@ -1,10 +1,8 @@
 # R1 (continuous knapsack) — what works today
 
-Verified on 2026-10-28 at `c83bef034f` or later, with the strict xfails on the direct path of pending cases: `make
-decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test` and `DECIDB_VERIFY_SERIALIZER=1 make decide-test` each
-4,681 passed and 326 strict expected failures (the direct path of keyed cases and other direct-solve follow-ups);
-`DECIDB_FORCE_SOLVER=highs make decide-test` 4,680 passed and one failure, `test_norm_combined_l1_l2_objective`, which
-needs Gurobi; C++ `build/release/test/unittest "[decidb]"` 2,764 assertions in 67 cases.
+Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_SOLVE=off make decide-test`,
+`DECIDB_VERIFY_SERIALIZER=1 make decide-test` and `DECIDB_FORCE_SOLVER=highs make decide-test` each 5,194 passed; C++
+`build/release/test/unittest "[decidb]"` 2,869 assertions in 69 cases.
 `test/decide/run_direct_matrix.sh` renews these numbers in one command (about 3 minutes; it prints one line per check).
 Code: `src/optimizer/decide/direct/r1_continuous_knapsack_rule.cpp`; its per-row bounds and the linear terms of the
 budget and the objective come from the shared reader in `direct_bound_reader.cpp`. Class definition and correctness
@@ -35,7 +33,9 @@ One or more row-scoped `REAL` decisions with:
   unbounded when that end is infinite with a nonzero value. Its empty box, and a NULL or NaN in its own bounds, still
   raise; its weight is not read. A `when` that keeps no row, or a sum whose own `when` keeps none, leaves no budget,
   so every row takes its own best end, as on the solver (D68). Clauses merge into one budget only with the same terms and
-  equal memberships. A `by` key on the sum or a `per K:` in front of the clause makes R1 decline (`todo.md`).
+  equal memberships. A `by` key on the sum gives each group its own budget
+  and price; a NULL key is in no group (D5). A `per K:` clause bounds the whole budget once per class (D6). Clauses
+  merge into one budget only with the same key; the same key written in two orders is one key.
 - **Several decisions in one budget.** Each (row, decision) is an item in the ranking with its own weight, value and
   box, and each decision answers in its own column. A decision the budget does not name has weight 0 and takes its own
   best end. Piece values may shrink or grow (`definition.md` § Correctness).
@@ -50,7 +50,6 @@ from S1, which counts `BOOL` decisions.
 |---|---|
 | An objective with a `when`, a `per` or a two-level reducer | Not a separable value per row. |
 | Budget clauses with different `when`s | Two budgets have no single price per unit. |
-| A `by` key on the budget's sum or a `per K:` in front of it | R1 does not read them yet (`todo.md`). |
 | A decision that is not `REAL`, or not row-scoped | `BOOL` and `INT` cannot fill part of an item. |
 | A per-row constraint that reads two decisions, or an objective product of two decisions | It links items, so they are no longer separate in the ranking. |
 | Two aggregate constraints with different terms | Two budgets have no single price per unit. |
@@ -100,7 +99,7 @@ infinity. `ItemAlgebra` holds the verdicts, the candidate price, the price, the 
 rebuilt per read with fresh table indexes, its pushed-down table filters copied; any other source is one
 `LogicalMaterializedCTE`, defined through a projection that names its columns (a join under it may reorder its output
 in later passes) and read by `LogicalCTERef`s. The group key is the eligibility flag (the budget's `when` holds) and
-the group keys (none today: R1 declines a `by` key), joined with IS NOT DISTINCT FROM in a SINGLE join, the form DuckDB uses for a scalar subquery: every
+the `by` keys, joined with IS NOT DISTINCT FROM in a SINGLE join, the form DuckDB uses for a scalar subquery: every
 item finds its one group row. A SINGLE join is never flipped by `BUILD_SIDE_PROBE_SIDE` and JOIN_ORDER estimates it as
 its item side, so the hash table is always built on the group rows; an inner join would be estimated far larger than
 either side and flipped to build on the items. With no scope the aggregates are ungrouped and the joins are cross
@@ -149,7 +148,7 @@ An empty source returns no rows, whatever the limits are, as on the solver.
 ## Performance
 
 Measured 2026-10-24 on top of `5269ad7c5e`, on a machine with 11 cores, with `benchmark/decide/direct_solve/archive/profile_direct_r1.py`.
-The per-group rows measure the per-group plan, which no query reaches while R1 declines a `by` key (`todo.md`).
+The per-group rows were measured on the per-group plan before R1 read a `by` key from a query, and are not measured since.
 Each run is a fresh `decidb` process that opens the stored database; peak memory is the process's own. Direct 3 runs
 (median), each solver 1 run; the solver path is `off` with `DECIDB_FORCE_SOLVER` set to `gurobi` or `highs`. The parent
 reads one aggregate row, so the time is the plan, not the transfer. Before timing, every shape's objective on direct and on Gurobi agreed within 1e-6.

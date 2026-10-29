@@ -30,7 +30,7 @@ infinity in a coefficient stays an error and in a bound stays a value; the messa
 edit instead of the "common causes" block.
 
 **Ruling (owner, 2026-10-29), item 3.** Items 1 and 2 need only docs. The message waits for F6: the direct path holds
-only computed numbers, and H-03's value object (`../../direct_solve/framework/todo.md` § H-03) is where a check carries
+only computed numbers, and the bound's value object (`DecideReducedBound`, `../../direct_solve/framework/done.md`) is where a check carries
 its rendered expression, so both paths print one text from one place. `DecideInvalidValueMessage`
 (`decide_value_messages.hpp`) takes the expression as written. `NULLIF` and `CASE` are refused inside DECIDE and
 `COALESCE` does not touch a NaN; `when` is the smallest edit:

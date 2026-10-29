@@ -54,55 +54,13 @@ and when/during which task it was discovered.
      Recommended: refuse in C0.
   3. Field names: `per_key` holds a role, not a key; rename it `per`, `when_condition` becomes `scope.when`?
      Recommended: yes.
-  4. Convert the window rewrite and `RewriteInDomain` walkers in this change, direct solve's at
-     `../direct_solve/framework/todo.md` § H-07? Recommended: yes.
+  4. Convert the window rewrite and `RewriteInDomain` walkers in this change, and direct solve's
+     `CollectConstraints` (`direct_ir.cpp`)? Recommended: yes.
   5. `DecideObjective` and `ReducerValueLink` stay outside D47 (D46 renames `per_columns`)? Recommended: yes.
 - **Order.** Before D46 ([CQ-3](#cq-3--name-the-keyed-scope-keyed-everywhere)), and before
   `../pipeline/04_canonicalizer/todo.md` § CAN-2 if CAN-2 passes the wrapper to every site.
 - **Discovered:** 2026-10-18, removing the spellings the scope language replaced
   (D47 in [../language/decisions.md](../language/decisions.md)).
-
-## CQ-2 — How a query is answered is chosen in two places
-
-- **Location:** `DecideOptimizer::OptimizeSubtree` (`decide_optimizer.cpp`, around line 61:
-  `RewriteRhsAggregates`, then `ApplyDirectSolveRules`) and `ChooseDecideSolver`, called
-  once in `OptimizeDecide`.
-- **What's wrong:** `OptimizeDecide`'s comment says the backend is "settled only once",
-  before any rewrite; but direct solve versus the solver is settled earlier, outside it,
-  after a rewrite (the window) that sits outside the pass list, its profiling scope and
-  `DECIDB_BENCH` timing.
-- **Why it matters:** a reader looking for "where is the backend chosen" finds the comment
-  that says one place and code that uses two.
-- **Work:** one choice step that picks among direct solve, Gurobi and HiGHS; the window
-  rewrite becomes pass 0 of the listed passes. The physical-planning fallback that called
-  `ChooseDecideSolver` a second time is gone: a plan the optimizer never saw is refused
-  (`../pipeline/05_optimizer/done.md`).
-- **Findings (architect review).** The direct rules need the window rewrite's output and not the solver choice;
-  `ChooseDecideSolver` needs neither, so one step can hold both without changing which queries go direct.
-- **Design.** Strategy selection with fallback (try the direct rules, else choose a solver), the window rewrite as pass
-  0 inside `OptimizeDecide`, the policy gate and both `require` errors moved out of `direct_rule_driver.cpp` into the
-  step. Making direct solve a solver-registry entry is not recommended: it rewrites the plan, it is not a solver
-  session.
-- **Decision needed.** Six choices, each with a recommendation.
-  1. Choose the backend lazily (only on the solver path) or eagerly? Recommended: lazily; eager makes every first
-     direct query probe Gurobi's licence and changes the error for `require` plus an unknown `DECIDB_FORCE_SOLVER`.
-  2. `DECIDB_FORCE_SOLVER=""` is read two ways: direct solve treats it as unset, `SelectSolverBackend` throws "is not
-     a solver DeciDB knows". One reader must pick one. Recommended: empty means unset, with a test.
-  3. What `optimizer_ms` and the `optimizer.decide` span cover: the whole stage on both paths (direct queries start
-     printing it), or a separate `direct_ms`? Recommended: the whole stage; update `pipeline_profiler.md` and
-     `tpch_suite.md`.
-  4. `LogicalDecide::optimized` is documented as "the optimizer started rewriting", which the window rewrite already
-     breaks; set it in `ChooseDecideSolver` and document it as "the solver formulation has begun", or rename it
-     `formulated`? Recommended: keep the name, fix the doc.
-  5. Name and home: `ChooseDecideAnswer` in a new `decide_answer_choice.cpp`, or keep `decide_solver_gate.cpp`?
-     Recommended: the new file.
-  6. Replace `phase.Next` with a `RunPass(name, fn)` helper in the same change? Two spans time the wrong passes
-     (`RewriteNorm` under `optimizer.tag_groups`, `RewriteAbs` under `optimizer.abs` with `TagAbsForBigM`).
-     Recommended: yes.
-- **Ruling (owner, 2026-10-29).** All six as recommended: lazily; empty means unset, with a test; the whole stage on
-  both paths; keep `optimized`, fix its doc; `ChooseDecideAnswer` in a new `decide_answer_choice.cpp`; `RunPass` in
-  the same change.
-- **Discovered:** 2026-10-27, tracing a query through the code.
 
 ## CQ-3 — Name the keyed scope "keyed" everywhere
 

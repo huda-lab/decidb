@@ -7,8 +7,7 @@ Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
-at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or F5. F9 runs alone. F10 is first in
-the next phase, after F6 lands.
+at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or F5. F9 runs alone. F10 runs first.
 
 ## 1. Owner decisions (independent of each other; ask all first)
 
@@ -16,7 +15,7 @@ the next phase, after F6 lands.
 - [ ] F4: CQ-1 five calls, CQ-3 names, CQ-4 encoding, CAN-2 four choices, OPT-2 indicator scope
 - [ ] F9: OPS-2 rename the names too, or not
 
-## 2. F10 Wrong answers (needs: F6)
+## 2. F10 Wrong answers
 
 - [ ] BUG-12 A NULL-key row's bound limits a `per K:` clause — issues/bugs.md § BUG-12
 
@@ -53,19 +52,11 @@ the next phase, after F6 lands.
 
 ## 7. F6 Direct solve (needs: 1)
 
-- [ ] H-04 Keyed scope checks in the direct plan — direct_solve/framework/todo.md § H-04
-- [ ] H-03 Read a data bound through the bound-side window — direct_solve/framework/todo.md § H-03
-- [ ] CQ-2 One step chooses how a query is answered — issues/code_quality.md § CQ-2
-- [ ] H-05 Read a reducer's `by` key into the IR — direct_solve/framework/todo.md § H-05 (needs: H-04)
-- [ ] S1 reads `by` again — direct_solve/rules/s1_uniform_matroid/todo.md § Read a `by` key again (needs: H-05)
-- [ ] R1 reads `by` again — direct_solve/rules/r1_continuous_knapsack/todo.md § Read a `by` key again (needs: H-05)
-- [ ] H-06 The two-level objective — direct_solve/framework/todo.md § H-06
-- [ ] H-07 `per K:` on a constraint — direct_solve/framework/todo.md § H-07 (needs: H-04)
-- [ ] H-09 Reducer windows a rule could compute itself — direct_solve/framework/todo.md § H-09 (needs: H-03)
+- [ ] H-09 Reducer windows a rule could compute itself — direct_solve/framework/todo.md § H-09
 
 ## 8. F7 SQL semantics (needs: 1)
 
-- [ ] BIN-1 The NaN and infinity message, one text on both paths — pipeline/02_binder/todo.md § BIN-1 (needs: F6 H-03)
+- [ ] BIN-1 The NaN and infinity message, one text on both paths — pipeline/02_binder/todo.md § BIN-1
 
 ## 9. F8 Solver runtime (needs: F7)
 
@@ -93,5 +84,6 @@ the next phase, after F6 lands.
 - [ ] BUG-2 An off-mode run reported one outcome fewer (waits for a recurrence) — issues/bugs.md § BUG-2
 - [ ] OPS-1 Peak process memory on Windows (needs a Windows host) — operations/todo.md § OPS-1
 - [ ] H-02 Front end for a second syntax (owner decides if it applies) — direct_solve/framework/todo.md § H-02
+- [ ] H-06 The two-level objective (needs a rule that takes the shape) — direct_solve/framework/todo.md § H-06
 - [ ] H-08 VALUE-shape clauses (owner names the rule and shape) — direct_solve/framework/todo.md § H-08
 - [ ] A2, A3, A4 Start a class not yet built (owner picks) — direct_solve/todo.md
