@@ -65,7 +65,7 @@ DecideDiagnostic DiagnoseUnbounded(const UnboundedDiagnosisInput &input) {
 		ve.name = agg.name;
 		ve.direction = agg.direction;
 		ve.is_aux = agg.is_aux;
-		ve.is_entity_scoped = input.indexer.var_scope[agg.vidx] == DecideVarScope::ENTITY;
+		ve.is_entity_scoped = input.indexer.var_scope[agg.vidx] == DecideVarScope::KEYED;
 		ve.total = input.indexer.NumInstances(agg.vidx);
 		ve.escaping = agg.instances.size();
 		ve.all_escape = ve.escaping >= ve.total;

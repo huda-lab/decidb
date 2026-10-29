@@ -31,7 +31,7 @@ def _run_oracle_test(
 ):
     """Boilerplate: execute DecidB, build oracle, compare.
 
-    Mirrors `test_aggregate_local_when._run_constraint_test`. Inlined here
+    Mirrors `test_reducer_filter._run_constraint_test`. Inlined here
     rather than imported to avoid cross-test-file coupling.
     """
     t0 = time.perf_counter()

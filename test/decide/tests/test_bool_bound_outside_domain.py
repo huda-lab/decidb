@@ -101,7 +101,7 @@ def test_bool_bound_outside_domain_matches_oracle(decidb_cli, oracle_solver, bou
 
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
-@pytest.mark.when_perrow
+@pytest.mark.when_row
 @pytest.mark.correctness
 @pytest.mark.parametrize("bound", _BOUNDS, ids=[b[0] for b in _BOUNDS])
 def test_bool_bound_outside_domain_with_when_matches_oracle(decidb_cli, oracle_solver, bound):

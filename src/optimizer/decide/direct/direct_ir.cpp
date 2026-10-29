@@ -128,7 +128,7 @@ private:
 			return RowCheckRead::READ;
 		}
 		// One instance for the whole query: nothing to determine.
-		if (check.decision != DConstants::INVALID_INDEX && decide.variable_scopes[check.decision].IsScalar()) {
+		if (check.decision != DConstants::INVALID_INDEX && decide.variable_scopes[check.decision].IsGlobal()) {
 			return RowCheckRead::NOTHING;
 		}
 		return ReadDetermination(check, row_check) ? RowCheckRead::READ : RowCheckRead::UNREADABLE;
@@ -184,7 +184,7 @@ private:
 			decision.name = variable->GetName();
 			decision.output_type = variable->return_type;
 			decision.scope = decide.variable_scopes[i].scope;
-			if (decision.scope == DecideVarScope::ENTITY) {
+			if (decision.scope == DecideVarScope::KEYED) {
 				decision.entity_scope = decide.variable_scopes[i].entity_scope_idx;
 			}
 			if (decide.is_boolean_var[i]) {

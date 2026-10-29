@@ -1585,7 +1585,7 @@ struct UnboundedCandidateProvider {
 		auto scope = decide_var_idx < var_indexer.var_scope.size()
 		                 ? var_indexer.var_scope[decide_var_idx]
 		                 : DecideVarScope::ROW;
-		if (scope == DecideVarScope::SCALAR) {
+		if (scope == DecideVarScope::GLOBAL) {
 			// One column for the whole query: there is no subset of rows or
 			// entities to characterize, so offer no grouping candidates.
 			return {};
@@ -1913,7 +1913,7 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 	DecideProfileScope profile("execution.scope_checks");
 	for (auto &check : scope_checks) {
 		D_ASSERT(check.kind == DecideScopeCheckKind::DETERMINES && check.decision != DConstants::INVALID_INDEX &&
-		         variable_scopes[check.decision].IsEntity());
+		         variable_scopes[check.decision].IsKeyed());
 		vector<bool> rows(num_rows, true);
 		if (check.rows) {
 			rows = KeptRows(*check.rows, chunk_expr_cache, context, gstate.data, num_rows);
@@ -1970,7 +1970,7 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 static void MarkAbsentDecisionReads(const vector<DecideVarScopeInfo> &scopes, const vector<EntityMapping> &mappings,
                                     idx_t var, const vector<bool> &scoped_kept, const TermFilterState &filter,
                                     vector<bool> &null_rows) {
-	if (var >= scopes.size() || !scopes[var].IsEntity()) {
+	if (var >= scopes.size() || !scopes[var].IsKeyed()) {
 		return;
 	}
 	auto &mapping = mappings[scopes[var].entity_scope_idx];
@@ -2962,7 +2962,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
     // belongs to this phase and not to the formulation pass — the grouping a widened
     // variable bound produces is the same grouping. It runs last here because the
     // "does this row carry a term at all" test below reads the filter masks settled above.
-	if (gstate.objective && gstate.objective->per_key != DConstants::INVALID_INDEX) {
+	if (gstate.objective && gstate.objective->two_level_key != DConstants::INVALID_INDEX) {
 		bool objective_has_local_filters = false;
 		bool objective_has_unfiltered_part = false;
         for (auto &f : result.linear_filters) {
@@ -3010,7 +3010,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 
 		vector<string> obj_group_labels; // unused: objective groups are not diagnosed by clause key
 		// A row whose written key is NULL is in no class; a class no row reads has no term.
-		LookupOrBuildPerGroupIds(per_group_cache, keys, gstate.objective->per_key, chunk_expr_cache, context,
+		LookupOrBuildPerGroupIds(per_group_cache, keys, gstate.objective->two_level_key, chunk_expr_cache, context,
 		                         gstate.data, num_rows, obj_row_is_included, nullptr, result.objective_row_group_ids,
 		                         result.objective_num_groups, obj_group_labels);
 	}
@@ -4672,7 +4672,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 
 		// A row in no class of a keyed decision's key has no decision: its value is NULL.
 		if (decide_var_idx < gstate.var_indexer.var_scope.size() &&
-		    gstate.var_indexer.var_scope[decide_var_idx] == DecideVarScope::ENTITY) {
+		    gstate.var_indexer.var_scope[decide_var_idx] == DecideVarScope::KEYED) {
 			auto &mapping =
 			    gstate.var_indexer.entity_mappings[gstate.var_indexer.var_entity_mapping_idx[decide_var_idx]];
 			for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {

@@ -210,8 +210,8 @@ idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &
 DecideVarScopeInfo decide_rewrite::JoinScopes(const DecideVarScopeInfo &a, const DecideVarScopeInfo &b) {
 	// The key lattice (JoinDecideKeys) over the scopes themselves: a keyed scope stands for its key.
 	auto key_of = [](const DecideVarScopeInfo &scope) {
-		return scope.IsScalar()   ? DConstants::INVALID_INDEX
-		       : scope.IsEntity() ? scope.entity_scope_idx
+		return scope.IsGlobal()   ? DConstants::INVALID_INDEX
+		       : scope.IsKeyed() ? scope.entity_scope_idx
 		                          : DECIDE_ROW_KEY;
 	};
 	auto joined = JoinDecideKeys(key_of(a), key_of(b));
@@ -229,13 +229,13 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 		}
 	}
 	if (canonicalizer.IsQueryWideConstant(expr)) {
-		return DecideVarScopeInfo::Scalar();
+		return DecideVarScopeInfo::Global();
 	}
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		return DecideVarScopeInfo::Row();
 	}
 	bool saw_child = false;
-	auto scope = DecideVarScopeInfo::Scalar();
+	auto scope = DecideVarScopeInfo::Global();
 	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
 		saw_child = true;
 		scope = JoinScopes(scope, ScopeOf(decide, canonicalizer, child));
@@ -485,13 +485,13 @@ unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row
 
 unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &decide, unique_ptr<Expression> row,
                                                            const DecideVarScopeInfo &scope) {
-	if (!scope.IsScalar() && !scope.IsEntity()) {
+	if (!scope.IsGlobal() && !scope.IsKeyed()) {
 		return row;
 	}
 	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 	wrapper->children.push_back(std::move(row));
 	wrapper->alias = PER_CLASS_TAG;
-	if (scope.IsEntity()) {
+	if (scope.IsKeyed()) {
 		AddDecideTag(wrapper->alias, MakePerKeyTag(decide.entity_scopes[scope.entity_scope_idx].key));
 	}
 	return std::move(wrapper);

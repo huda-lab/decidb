@@ -62,7 +62,7 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
     // Entity block: assign base offsets per entity-scoped variable
     idx_t entity_offset = 0;
     for (idx_t v = 0; v < num_decide_vars; v++) {
-        if (idx.var_scope[v] != DecideVarScope::ENTITY) {
+        if (idx.var_scope[v] != DecideVarScope::KEYED) {
             continue;
         }
         idx_t scope_idx = input.variable_scopes[v].entity_scope_idx;
@@ -77,7 +77,7 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
     idx.scalar_block_start = idx.entity_block_start + entity_offset;
     idx_t scalar_count = 0;
     for (idx_t v = 0; v < num_decide_vars; v++) {
-        if (idx.var_scope[v] != DecideVarScope::SCALAR) {
+        if (idx.var_scope[v] != DecideVarScope::GLOBAL) {
             continue;
         }
         idx.scalar_var_index[v] = idx.scalar_block_start + scalar_count;
@@ -382,7 +382,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         }
 		// A row with no decision maps to the absent entity: fixed at 0, so an objective term
 		// that reads it is dropped (EntityMapping::absent_entity).
-		if (indexer.var_scope[var] == DecideVarScope::ENTITY) {
+		if (indexer.var_scope[var] == DecideVarScope::KEYED) {
 			auto absent = indexer.entity_mappings[indexer.var_entity_mapping_idx[var]].absent_entity;
 			if (absent != DConstants::INVALID_INDEX) {
 				idx_t var_idx = indexer.InstanceColumn(var, absent);
@@ -1468,10 +1468,10 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
             // For entity-scoped vars, the instance is the entity id (col - base);
             // for row-scoped vars it is the row; a scalar has exactly one instance.
             switch (indexer.var_scope[var]) {
-            case DecideVarScope::ENTITY:
+            case DecideVarScope::KEYED:
                 slot.instance = col - indexer.entity_var_base[var];
                 break;
-            case DecideVarScope::SCALAR:
+            case DecideVarScope::GLOBAL:
                 slot.instance = 0;
                 break;
             default:

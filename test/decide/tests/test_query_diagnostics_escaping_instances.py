@@ -1,11 +1,11 @@
 """Unbounded escape characterization — which rows/entities of a variable escape.
 
 When a variable's name fans out into many scope-instances (row-scoped: one column per
-result row; entity-scoped: one per entity) and only some escape, `DIAGNOSE` breaks the
+result row; keyed: one per class of the key) and only some escape, `DIAGNOSE` breaks the
 escape out by categorical slice: one finding per (column, value) whose within-group
 escape rate clears the threshold, naming the slice in `group`, counting escaping
-instances in `amount`, retaining the denominator in `total`, and identifying rows vs
-entities in `scope`. Total escape collapses to one finding covering every instance; a
+instances in `amount`, retaining the denominator in `total`, and identifying `row` vs
+`keyed` instances in `scope`. Total escape collapses to one finding covering every instance; a
 single-instance variable or a scattered escape that no categorical group characterizes
 reports the bare count with no slice named.
 
@@ -147,7 +147,7 @@ class TestEscapingInstances:
         )
         rows = _rows(_diagnose(cli, sql))
         # Entity-scoped: the count is entities, not the rows they fan out to.
-        assert _escape(rows, "hire") == [(10, 10, "entity", "dept = 'A'")]
+        assert _escape(rows, "hire") == [(10, 10, "keyed", "dept = 'A'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_entity_scoped_join_column_escape_rule(self, request, cli_fixture):
@@ -163,7 +163,7 @@ class TestEscapingInstances:
             "MAXIMIZE SUM(hire)"
         )
         rows = _rows(_diagnose(cli, sql))
-        assert _escape(rows, "hire") == [(10, 10, "entity", "region = 'A'")]
+        assert _escape(rows, "hire") == [(10, 10, "keyed", "region = 'A'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_select_only_aliased_column_is_named(self, request, cli_fixture, oracle_solver):

@@ -162,9 +162,9 @@ static vector<idx_t> DecisionKeys(const vector<DecideVarScopeInfo> &variable_sco
 	vector<idx_t> keys;
 	for (auto &scope : variable_scopes) {
 		idx_t key = DECIDE_ROW_KEY;
-		if (scope.IsScalar()) {
+		if (scope.IsGlobal()) {
 			key = DConstants::INVALID_INDEX;
-		} else if (scope.IsEntity() && scope.entity_scope_idx < entity_scopes.size() &&
+		} else if (scope.IsKeyed() && scope.entity_scope_idx < entity_scopes.size() &&
 		           entity_scopes[scope.entity_scope_idx].key != DConstants::INVALID_INDEX) {
 			key = entity_scopes[scope.entity_scope_idx].key;
 		}
@@ -286,7 +286,7 @@ static void CollectAbsentDecisionKeys(const Expression &expr, idx_t decide_index
 		auto &binding = expr.Cast<BoundColumnRefExpression>().binding;
 		auto var = binding.column_index;
 		if (binding.table_index != decide_index || var >= variable_scopes.size() ||
-		    variable_scopes[var].scope != DecideVarScope::ENTITY) {
+		    variable_scopes[var].scope != DecideVarScope::KEYED) {
 			return;
 		}
 		for (auto &element : DecideKeyElements(keys, scopes[variable_scopes[var].entity_scope_idx].key)) {
@@ -1710,7 +1710,7 @@ static idx_t WithinGroups(idx_t key, idx_t by, vector<DecideKey> &keys) {
 //! How a message describes a decision's own key: `declared per row`, `declared per
 //! D.depotID`.
 static string DeclaredScope(const DecideVarScopeInfo &scope) {
-	if (scope.IsKeyed()) {
+	if (scope.HasDeclaredKey()) {
 		return "declared per " + scope.declared_key;
 	}
 	return "declared per row";
@@ -1752,7 +1752,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 	}
 	for (auto *decision : body.decisions) {
 		auto var_idx = decision->binding.column_index;
-		if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsScalar()) {
+		if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsGlobal()) {
 			continue;
 		}
 		auto check = make_check();
@@ -1792,7 +1792,7 @@ void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const D
 		}
 		for (auto *decision : parts.decisions) {
 			auto var_idx = decision->binding.column_index;
-			if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsScalar()) {
+			if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsGlobal()) {
 				continue;
 			}
 			auto check = make_check();
@@ -1860,7 +1860,7 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 	}
 	for (auto *decision : parts.decisions) {
 		auto var_idx = decision->binding.column_index;
-		if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsScalar()) {
+		if (var_idx < variable_scopes.size() && variable_scopes[var_idx].IsGlobal()) {
 			continue;
 		}
 		auto check = make_check();

@@ -173,7 +173,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             // `per (): x` is one decision for the query and carries no key scope; `per K: x`
             // is one per class of K; no `per` is one per result row.
             if (declaration.per && declaration.per->children.size() == 1) {
-                variable_scopes.push_back(DecideVarScopeInfo::Scalar());
+                variable_scopes.push_back(DecideVarScopeInfo::Global());
             } else if (declaration.per) {
                 auto key_text = DecideKeyToString(*declaration.per);
 			    auto scope_idx =
@@ -301,7 +301,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
         // tell a query-wide decision from a per-row one.
         case_insensitive_set_t scalar_variable_names;
         for (idx_t v = 0; v < variable_scopes.size() && v < var_names.size(); v++) {
-            if (variable_scopes[v].IsScalar()) {
+            if (variable_scopes[v].IsGlobal()) {
                 scalar_variable_names.insert(var_names[v]);
             }
         }

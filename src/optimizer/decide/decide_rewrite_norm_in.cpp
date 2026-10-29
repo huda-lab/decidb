@@ -212,7 +212,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			string label =
 			    "(" + RenderForPlan(*in.children[0], decide) + " = " + RenderForPlan(*in.children[1 + i], decide) + ")";
 			auto indicator = AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true, scope_of_in, label);
-			if (scope_of_in.IsEntity())
+			if (scope_of_in.IsKeyed())
 				decide.entity_scopes[scope_of_in.entity_scope_idx].scoped_variable_indices.push_back(indicator);
 			indicators.push_back(MakeDecisionRef(decide, indicator));
 		}

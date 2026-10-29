@@ -296,8 +296,8 @@ TEST_CASE("Direct-solve IR models every decision domain and scope", "[decidb]") 
 	REQUIRE(ir.decisions[0].output_type == LogicalType::INTEGER);
 	REQUIRE(ir.decisions[1].domain == DirectDomain::INT);
 	REQUIRE(ir.decisions[2].domain == DirectDomain::REAL);
-	REQUIRE(ir.decisions[3].scope == DecideVarScope::SCALAR);
-	REQUIRE(ir.decisions[4].scope == DecideVarScope::ENTITY);
+	REQUIRE(ir.decisions[3].scope == DecideVarScope::GLOBAL);
+	REQUIRE(ir.decisions[4].scope == DecideVarScope::KEYED);
 	REQUIRE(ir.decisions[4].entity_scope == 0);
 	REQUIRE(ir.entity_scopes.size() == 1);
 	REQUIRE(!ir.entity_scopes[0].key_slots.empty());

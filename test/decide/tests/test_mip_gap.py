@@ -1,6 +1,6 @@
 """The `decide_mip_gap` setting: the relative gap a DECIDE solve may stop at.
 
-The default, 0, proves the optimum. `test_entity_scope.py::test_entity_scoped_mixed_when_per` sets 1e-4 and is
+The default, 0, proves the optimum. `test_keyed_scope.py::test_keyed_mixed_when_per` sets 1e-4 and is
 oracle-compared on both backends.
 """
 

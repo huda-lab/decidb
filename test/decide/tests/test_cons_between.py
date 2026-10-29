@@ -3,7 +3,7 @@
 Covers:
   - q10_logic_dependency: per-row x BETWEEN 0 AND 5, with aggregate constraint
   - test_aggregate_between_standalone: SUM(x*w) BETWEEN lo AND hi — desugar
-    path without a reducer's own `when` (distinct from test_aggregate_local_when.py)
+    path without a reducer's own `when` (distinct from test_reducer_filter.py)
   - test_between_when_*, test_between_by_*: a `when` in front of a BETWEEN, or of
     the AND of two bounds written out (parenthesised, nested), applies to every
     bound, and a `by` groups each; on the solver path and under auto
@@ -89,7 +89,7 @@ def test_aggregate_between_standalone(
     """Standalone aggregate BETWEEN: ``SUM(x * weight) BETWEEN lo AND hi``.
 
     The only existing aggregate BETWEEN coverage lives nested inside
-    a reducer's own `when` (test_aggregate_local_when.py). Here we exercise
+    a reducer's own `when` (test_reducer_filter.py). Here we exercise
     the plain desugaring path, where the binder must emit two aggregate
     constraints — ``SUM(x * weight) >= lo`` and ``SUM(x * weight) <= hi``
     — from a single BETWEEN expression. A dropped sign or swapped bound
@@ -283,7 +283,7 @@ def _check_wrapped_between(decidb_cli, oracle_solver, data, sense, query_tail, b
 
 @pytest.mark.var_real
 @pytest.mark.cons_between
-@pytest.mark.when_perrow
+@pytest.mark.when_row
 @pytest.mark.correctness
 @pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
 @_TWO_SIDED_FORMS

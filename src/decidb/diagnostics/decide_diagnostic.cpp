@@ -377,7 +377,7 @@ DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes) {
 			diag.findings.push_back(std::move(base));
 			continue;
 		}
-		const char *instance_scope = ve.is_entity_scoped ? "entity" : "row";
+		const char *instance_scope = ve.is_entity_scoped ? "keyed" : "row";
 		if (ve.all_escape) {
 			// Every instance escapes, so no categorical slice explains anything the
 			// whole-variable count does not: one finding covering all of them.

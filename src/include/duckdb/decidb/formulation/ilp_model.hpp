@@ -67,7 +67,7 @@ struct VarIndexer {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
             return row * num_row_vars + row_var_offset[var_idx];
-        case DecideVarScope::SCALAR:
+        case DecideVarScope::GLOBAL:
             return scalar_var_index[var_idx];
         default: {
             auto &mapping = entity_mappings[var_entity_mapping_idx[var_idx]];
@@ -85,7 +85,7 @@ struct VarIndexer {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
             return inst * num_row_vars + row_var_offset[var_idx];
-        case DecideVarScope::SCALAR:
+        case DecideVarScope::GLOBAL:
             return scalar_var_index[var_idx];
         default:
             return entity_var_base[var_idx] + inst;
@@ -98,7 +98,7 @@ struct VarIndexer {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
             return row;
-        case DecideVarScope::SCALAR:
+        case DecideVarScope::GLOBAL:
             return 0;
         default:
             return entity_mappings[var_entity_mapping_idx[var_idx]].row_to_entity[row];
@@ -112,10 +112,10 @@ struct VarIndexer {
         switch (var_scope[finer]) {
         case DecideVarScope::ROW:
             return InstanceOf(var_idx, inst);
-        case DecideVarScope::SCALAR:
+        case DecideVarScope::GLOBAL:
             return 0;
         default:
-            return var_scope[var_idx] == DecideVarScope::SCALAR ? 0 : inst;
+            return var_scope[var_idx] == DecideVarScope::GLOBAL ? 0 : inst;
         }
     }
 
@@ -125,7 +125,7 @@ struct VarIndexer {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
             return col / num_row_vars;
-        case DecideVarScope::SCALAR:
+        case DecideVarScope::GLOBAL:
             return 0;
         default:
             return col - entity_var_base[var_idx];
@@ -137,7 +137,7 @@ struct VarIndexer {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
             return num_rows;
-        case DecideVarScope::SCALAR:
+        case DecideVarScope::GLOBAL:
             return 1;
         default: {
             return entity_mappings[var_entity_mapping_idx[var_idx]].num_entities;

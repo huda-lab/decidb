@@ -464,7 +464,7 @@ def test_perrow_integer_with_fractional_coef(decidb_cli, duckdb_conn, oracle_sol
 
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
-@pytest.mark.when_perrow
+@pytest.mark.when_row
 @pytest.mark.correctness
 def test_perrow_when_plus_linear_lhs(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN + linear LHS: `when flag: x + 3 <= 10` constrains only matching rows.

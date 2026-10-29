@@ -42,7 +42,7 @@ struct DirectIRDecision {
 	//! The SQL type of the decision's output column (INTEGER for BOOL, BIGINT for INT, DOUBLE for REAL).
 	LogicalType output_type;
 	DecideVarScope scope;
-	//! Index into DirectIR::entity_scopes for an ENTITY decision.
+	//! Index into DirectIR::entity_scopes for a KEYED decision.
 	idx_t entity_scope = DConstants::INVALID_INDEX;
 };
 

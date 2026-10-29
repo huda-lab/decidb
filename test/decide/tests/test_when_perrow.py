@@ -17,7 +17,7 @@ from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
 
 
-@pytest.mark.when_perrow
+@pytest.mark.when_row
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.cons_aggregate
@@ -84,7 +84,7 @@ def test_when_perrow_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     )
 
 
-@pytest.mark.when_perrow
+@pytest.mark.when_row
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.cons_aggregate
@@ -150,7 +150,7 @@ def test_when_perrow_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_t
     )
 
 
-@pytest.mark.when_perrow
+@pytest.mark.when_row
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.cons_aggregate
@@ -213,7 +213,7 @@ def test_when_perrow_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, p
     )
 
 
-@pytest.mark.when_perrow
+@pytest.mark.when_row
 @pytest.mark.var_integer
 @pytest.mark.cons_perrow
 @pytest.mark.cons_aggregate
@@ -275,7 +275,7 @@ def test_when_perrow_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_trac
     )
 
 
-@pytest.mark.when_perrow
+@pytest.mark.when_row
 @pytest.mark.var_real
 @pytest.mark.cons_perrow
 @pytest.mark.cons_aggregate

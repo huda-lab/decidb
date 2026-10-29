@@ -147,7 +147,7 @@ def test_when_compound_or_aggregate(decidb_cli, duckdb_conn, oracle_solver, perf
 
 
 @pytest.mark.when_compound
-@pytest.mark.when_perrow
+@pytest.mark.when_row
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.cons_aggregate
@@ -349,7 +349,7 @@ def test_when_compound_mixed_types(decidb_cli, duckdb_conn, oracle_solver, perf_
 
 
 @pytest.mark.when_compound
-@pytest.mark.when_perrow
+@pytest.mark.when_row
 @pytest.mark.var_boolean
 @pytest.mark.cons_perrow
 @pytest.mark.cons_aggregate

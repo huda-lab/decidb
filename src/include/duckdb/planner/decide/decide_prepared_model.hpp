@@ -175,7 +175,7 @@ struct DecideObjective {
 	vector<DecideTerm> terms;              // Linear objective terms
 	unique_ptr<Expression> when_condition; // the objective's `when` (nullptr = every row)
 	//! The two-level form's key (index into LogicalDecide::keys); INVALID_INDEX for none.
-	idx_t per_key = DConstants::INVALID_INDEX;
+	idx_t two_level_key = DConstants::INVALID_INDEX;
 	//! The objective reads only the rows its `when` keeps, its two-level form's key puts
 	//! a row whose written key is NULL in no class, and a term beside its reducers counts once, read on the first
 	//! kept row.

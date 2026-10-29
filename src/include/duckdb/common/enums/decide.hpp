@@ -30,12 +30,13 @@ enum class DecideExpression : uint8_t {
 
 //! How one DECIDE declaration maps onto solver columns.
 //!   ROW    — `x(INT)`, `per row: x(INT)` one column per result row
-//!   ENTITY — `per K: x(INT)`             one column per distinct value of the key
-//!   SCALAR — `per (): x(INT)`            one column for the whole query
+//!   KEYED  — `per K: x(INT)`             one column per distinct value of the key
+//!   GLOBAL — `per (): x(INT)`            one column for the whole query
+//! The values are serialized, so a stored plan reads under any rename.
 enum class DecideVarScope : uint8_t {
     ROW = 0,
-    ENTITY = 1,
-    SCALAR = 2
+    KEYED = 1,
+    GLOBAL = 2
 };
 
 //! Per-variable scope assignment. Kept as one struct rather than parallel
@@ -44,7 +45,7 @@ enum class DecideVarScope : uint8_t {
 struct DecideVarScopeInfo {
     DecideVarScope scope = DecideVarScope::ROW;
     //! Index into entity_scopes / entity_mappings. Meaningful only when
-    //! scope == ENTITY; INVALID_INDEX otherwise.
+    //! scope == KEYED; INVALID_INDEX otherwise.
     idx_t entity_scope_idx = DConstants::INVALID_INDEX;
 	//! The key written after `per`, as written (`D.depotID, S.customerID`), so a message
 	//! can name the decision the way it was declared. Empty for every other spelling.
@@ -58,27 +59,25 @@ struct DecideVarScopeInfo {
 	static DecideVarScopeInfo Row() {
         return DecideVarScopeInfo();
     }
-    static DecideVarScopeInfo Entity(idx_t entity_scope_idx_p) {
-        return DecideVarScopeInfo(DecideVarScope::ENTITY, entity_scope_idx_p);
-    }
-	//! `per K: x(TYPE)`: an entity scope whose key is the columns K names.
-	static DecideVarScopeInfo Keyed(idx_t entity_scope_idx_p, string declared_key_p) {
-		DecideVarScopeInfo result(DecideVarScope::ENTITY, entity_scope_idx_p);
+	//! One instance per class of the key of entity_scopes[entity_scope_idx_p]. `declared_key_p` is the key as written
+	//! for `per K: x(TYPE)`, and empty for a decision the optimizer adds.
+	static DecideVarScopeInfo Keyed(idx_t entity_scope_idx_p, string declared_key_p = string()) {
+		DecideVarScopeInfo result(DecideVarScope::KEYED, entity_scope_idx_p);
 		result.declared_key = std::move(declared_key_p);
 		return result;
 	}
-	static DecideVarScopeInfo Scalar() {
-		return DecideVarScopeInfo(DecideVarScope::SCALAR, DConstants::INVALID_INDEX);
+	static DecideVarScopeInfo Global() {
+		return DecideVarScopeInfo(DecideVarScope::GLOBAL, DConstants::INVALID_INDEX);
 	}
 
-	bool IsEntity() const {
-		return scope == DecideVarScope::ENTITY;
-	}
-	bool IsScalar() const {
-        return scope == DecideVarScope::SCALAR;
-    }
-	//! Declared `per K: x(TYPE)` with a non-empty key.
 	bool IsKeyed() const {
+		return scope == DecideVarScope::KEYED;
+	}
+	bool IsGlobal() const {
+		return scope == DecideVarScope::GLOBAL;
+	}
+	//! Declared `per K: x(TYPE)` with a non-empty key.
+	bool HasDeclaredKey() const {
 		return !declared_key.empty();
 	}
 

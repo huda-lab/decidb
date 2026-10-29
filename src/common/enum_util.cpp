@@ -1252,8 +1252,8 @@ DecideSense EnumUtil::FromString<DecideSense>(const char *value) {
 const StringUtil::EnumStringLiteral *GetDecideVarScopeValues() {
 	static constexpr StringUtil::EnumStringLiteral values[] {
 		{ static_cast<uint32_t>(DecideVarScope::ROW), "ROW" },
-		{ static_cast<uint32_t>(DecideVarScope::ENTITY), "ENTITY" },
-		{ static_cast<uint32_t>(DecideVarScope::SCALAR), "SCALAR" }
+		{ static_cast<uint32_t>(DecideVarScope::KEYED), "KEYED" },
+		{ static_cast<uint32_t>(DecideVarScope::GLOBAL), "GLOBAL" }
 	};
 	return values;
 }

@@ -472,7 +472,7 @@ private:
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 			idx_t var_idx = FindDecideVariable(expr);
 			return var_idx == DConstants::INVALID_INDEX ||
-			       (var_idx < op.variable_scopes.size() && op.variable_scopes[var_idx].IsScalar());
+			       (var_idx < op.variable_scopes.size() && op.variable_scopes[var_idx].IsGlobal());
 		}
 		bool all = true;
 		EnumerateChildrenConst(
@@ -924,12 +924,12 @@ private:
 		auto *expr = UnwrapDecideCasts(*expr_ptr, decide_index);
 
 		// DecidB: Check for PER wrapper on objective (outermost layer)
-		idx_t per_key = DConstants::INVALID_INDEX;
+		idx_t two_level_key = DConstants::INVALID_INDEX;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
 			if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
 				// `per ()` groups nothing: the objective is read once.
-				per_key = PerWrapperKey(conj);
+				two_level_key = PerWrapperKey(conj);
 				expr = UnwrapDecideCasts(*conj.children[0], decide_index);
 			}
 		}
@@ -978,14 +978,14 @@ private:
 			}
 
 			objective->when_condition = std::move(when_cond);
-			objective->per_key = per_key;
+			objective->two_level_key = two_level_key;
 		} else if (BoundExpressionContainsAggregate(*expr) || FindDecideVariable(*expr) != DConstants::INVALID_INDEX) {
 			// The second arm covers an objective with no aggregate at all: decisions
 			// outside every reducer (e.g. `minimize max_shortfall`), read once.
 			objective = make_uniq<DecideObjective>();
 			ExtractAggregateObjectiveTerms(*expr, *objective);
 			objective->when_condition = std::move(when_cond);
-			objective->per_key = per_key;
+			objective->two_level_key = two_level_key;
 		}
 	}
 

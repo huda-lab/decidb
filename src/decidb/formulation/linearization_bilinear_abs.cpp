@@ -68,7 +68,7 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 	// a row-scoped one a block per row. A product of two Booleans is the AND, the same block of three rows.
 	for (auto &link : input.bilinear_links) {
 		const auto &mapping_scope = indexer.var_scope[link.aux_idx];
-		const idx_t absent = mapping_scope == DecideVarScope::ENTITY
+		const idx_t absent = mapping_scope == DecideVarScope::KEYED
 		                         ? indexer.entity_mappings[indexer.var_entity_mapping_idx[link.aux_idx]].absent_entity
 		                         : DConstants::INVALID_INDEX;
 		for (idx_t instance = 0; instance < indexer.NumInstances(link.aux_idx); instance++) {

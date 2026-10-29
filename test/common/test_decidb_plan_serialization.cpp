@@ -372,7 +372,7 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	REQUIRE(scopes.size() == 2);
 	REQUIRE(vars.size() == 6);
 	// Equal keys share one scope, however they are written.
-	REQUIRE(vars[0].IsKeyed());
+	REQUIRE(vars[0].HasDeclaredKey());
 	REQUIRE(vars[0].declared_key == "region.r_name, site.cap");
 	REQUIRE(vars[1].declared_key == "site.cap, r_name, r_name");
 	REQUIRE(vars[0].entity_scope_idx == vars[1].entity_scope_idx);
@@ -383,14 +383,14 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	}
 	// A relation key is the relation's stored columns, one scope for every declaration
 	// that names it; a column key over some of those columns is another scope.
-	REQUIRE(vars[2].IsKeyed());
-	REQUIRE(vars[3].IsKeyed());
+	REQUIRE(vars[2].HasDeclaredKey());
+	REQUIRE(vars[3].HasDeclaredKey());
 	REQUIRE(vars[2].entity_scope_idx == vars[3].entity_scope_idx);
 	REQUIRE(vars[2].entity_scope_idx != vars[0].entity_scope_idx);
 	for (auto &element : before->keys[scopes[vars[2].entity_scope_idx].key].elements) {
 		REQUIRE(element.null_mode == DecideKeyNullMode::VALUE);
 	}
-	REQUIRE(vars[4].IsScalar());
+	REQUIRE(vars[4].IsGlobal());
 	REQUIRE(vars[5].scope == DecideVarScope::ROW);
 
 	auto copied = RoundTrip(con, *plan);

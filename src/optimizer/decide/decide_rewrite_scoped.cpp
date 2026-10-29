@@ -240,19 +240,19 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	// the rewritten row still steps on the integer lattice; a query-wide decision for `by ()`,
 	// else one instance per group of the `by` key among the rows the clause keeps -- a
 	// scope of its own (EntityScopeInfo::value_link), which execution builds from the link.
-	auto var_scope = DecideVarScopeInfo::Scalar();
+	auto var_scope = DecideVarScopeInfo::Global();
 	if (link.group_key != DConstants::INVALID_INDEX) {
 		EntityScopeInfo helper_scope;
 		helper_scope.key = link.group_key;
 		helper_scope.value_link = link_idx;
 		decide.entity_scopes.push_back(std::move(helper_scope));
-		var_scope = DecideVarScopeInfo::Entity(decide.entity_scopes.size() - 1);
+		var_scope = DecideVarScopeInfo::Keyed(decide.entity_scopes.size() - 1);
 	}
 	LogicalType aux_type = whole ? LogicalType::INTEGER : LogicalType::DOUBLE;
 	link.value_var =
 	    AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__", aux_type, false, var_scope, plan_label);
 	AddRewriteAccount(decide, source_clause_id, account_kind, plan_label);
-	if (var_scope.IsEntity()) {
+	if (var_scope.IsKeyed()) {
 		decide.entity_scopes[var_scope.entity_scope_idx].scoped_variable_indices.push_back(link.value_var);
 	}
 	// A reducer's value may be negative: no default floor. The formulation pass boxes it by its members' reach.
