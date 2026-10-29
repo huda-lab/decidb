@@ -783,6 +783,35 @@ class TestDiagnosticsRelation:
         assert by_group["''"]["suggested_change"] == "per grp: sum(x) by (grp) >= 1"
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_relation_key_labels_a_null_and_the_string_null_apart(self, request, cli_fixture):
+        """INF-2: a `per D` key compares NULL as a value, so a class whose column is NULL and one whose
+        column is the string 'NULL' are two classes. Their labels are SQL literals, as a determination
+        message writes them: `'NULL'` quoted, NULL bare."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT tag, x FROM (VALUES (NULL), ('NULL')) D(tag) "
+            "DECIDE x(BOOL) SUCH THAT per D: sum(x) by (D) >= 2 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, scope="expanded")
+
+        groups = sorted(r["group"] for r in _flat(result) if r["edit_source"] == "expanded_group")
+        # `.mode csv` renders the label NULL and an SQL NULL alike; the quotes tell the string apart.
+        assert groups == ["'NULL'", "NULL"], groups
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    def test_infeasible_written_key_labels_keep_their_plain_form(self, request, cli_fixture):
+        """INF-2: a key the user wrote keeps its labels. A NULL value is in no class there, so the one
+        class the string 'NULL' makes reads `NULL`, with no quotes."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT tag, x FROM (VALUES (NULL), ('NULL')) D(tag) "
+            "DECIDE x(BOOL) SUCH THAT per tag: sum(x) by (tag) >= 2 MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql, scope="expanded")
+
+        assert [r["group"] for r in _flat(result) if r["edit_source"] == "expanded_group"] == ["NULL"]
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_single_row_when_group_keeps_sum_wrapper(self, request, cli_fixture):
         """Facet B/C: a single-row aggregate group keeps its `sum(...)` wrapper and the
         when scope in the label. `when grp='a': sum(x) >= 99` matches one BOOLEAN row
