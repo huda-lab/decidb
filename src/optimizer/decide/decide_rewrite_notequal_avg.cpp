@@ -62,7 +62,7 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 		// change the answer.
 		if (!DecideExpressionDegree(*comp.left, decide.decide_index).IsLinear()) {
 			throw BinderException(comp, "DECIDE: <> over a product or a power of decisions is not supported yet: %s",
-			                      RenderForPlan(comp, decide));
+			                      QuoteWrittenClause(decide.constraint_sources[SourceClauseOf(comp, decide)]));
 		}
 		// No indicator variable. Whether a `<>` even HAS a disjunction to switch is a
 		// question about evaluated data — a range that lies wholly on one side of `K`
@@ -75,10 +75,10 @@ void DecideOptimizer::FindNotEqualConstraints(Expression &expr, LogicalDecide &d
 		// call it in a diagnosis, spelled as the plan prints the clause. The clause index
 		// rides the tag; stage 06 allocates the binaries for the disjunctions it actually
 		// emits, and labels them here.
-		idx_t clause_idx = decide.ne_clause_labels.size();
-		auto clause_text = RenderForPlan(comp, decide);
-		decide.ne_clause_labels.push_back(clause_text);
-		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::NOT_EQUAL, std::move(clause_text));
+		idx_t clause_idx = decide.ne_clause_sources.size();
+		decide.ne_clause_sources.push_back(SourceClauseOf(comp, decide));
+		AddRewriteAccount(decide, comp.alias, LogicalDecide::RewriteAccount::Kind::NOT_EQUAL,
+		                  RenderForPlan(comp, decide));
 		AddDecideTag(comp.alias, string(NE_CLAUSE_TAG_PREFIX) + to_string(clause_idx) + "__");
 	});
 }

@@ -223,6 +223,14 @@ string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide
 	                                                decide.decide_index, decide.aux_var_expressions));
 }
 
+idx_t decide_rewrite::SourceClauseOf(const Expression &comparison, const LogicalDecide &decide) {
+	idx_t source_id;
+	if (!TryParseSourceClauseTag(comparison.GetAlias(), source_id) || source_id >= decide.constraint_sources.size()) {
+		throw InternalException("DECIDE: a comparison carries no source clause");
+	}
+	return source_id;
+}
+
 void decide_rewrite::AddRewriteAccount(LogicalDecide &decide, idx_t source_clause_id,
                                        LogicalDecide::RewriteAccount::Kind kind, string subject) {
 	LogicalDecide::RewriteAccount account;

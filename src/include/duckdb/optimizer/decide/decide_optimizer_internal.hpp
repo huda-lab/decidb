@@ -103,6 +103,11 @@ void ReplaceWithDecision(ClientContext &context, const LogicalDecide &decide, id
 //! of an auxiliary decision, the text of a rewrite account.
 string RenderForPlan(const Expression &expr, const LogicalDecide &decide);
 
+//! The id of the source clause a written comparison carries (its `__source_clause_` tag). Every comparison of the
+//! user's constraints is tagged when the binder registers the sources, so a stage-05 refusal quotes its clause
+//! through QuoteWrittenClause (qualifier included) rather than rendering the comparison.
+idx_t SourceClauseOf(const Expression &comparison, const LogicalDecide &decide);
+
 //! Record what a rewrite made of `subject` (as RenderForPlan prints it), for EXPLAIN
 //! (LogicalDecide::rewrite_accounts): under the clause `source_clause_id`, or the
 //! objective (INVALID_INDEX). The alias form reads the clause id off a clause's alias;

@@ -14,12 +14,6 @@ namespace duckdb {
 class Serializer;
 class Deserializer;
 
-//! A clause's text with its `when c per K:` qualifier in front of it, where DECIDE
-//! writes it.
-inline string AttachDecideQualifier(const string &clause, const string &qualifier) {
-	return qualifier.empty() ? clause : qualifier + " " + clause;
-}
-
 //! How diagnostics should render the right-hand side of a source constraint.
 enum class ConstraintSourceRhsKind : uint8_t {
 	//! No directly editable symbolic RHS. Diagnostics quote its evaluated value.
@@ -78,13 +72,13 @@ struct ConstraintSourceInfo {
 	static ConstraintSourceInfo Deserialize(Deserializer &deserializer);
 };
 
-//! The clause as written (its canonical form where nothing was moved), without its
-//! qualifier: `lhs cmp rhs`.
-inline string WrittenDecideComparison(const ConstraintSourceInfo &source) {
-	const string &lhs = source.written_lhs.empty() ? source.canonical_lhs : source.written_lhs;
-	const string &rhs = source.written_rhs.empty() ? source.canonical_rhs : source.written_rhs;
-	const string &cmp = source.written_cmp.empty() ? source.canonical_cmp : source.written_cmp;
-	return cmp.empty() || rhs.empty() ? lhs : lhs + " " + cmp + " " + rhs;
-}
+//! The clause as the user wrote it (its canonical form where nothing was moved), `when c per K:` qualifier in front.
+//! Every message that quotes a clause goes through this or QuoteEditedClause, so none can quote one without its
+//! qualifier (Information Expert: the source holds the qualifier).
+string QuoteWrittenClause(const ConstraintSourceInfo &source);
+
+//! A clause DeciDB edited: `lhs cmp rhs` with the clause's qualifier in front. A null source (a row with no clause)
+//! quotes bare.
+string QuoteEditedClause(const ConstraintSourceInfo *source, const string &lhs, const string &cmp, const string &rhs);
 
 } // namespace duckdb

@@ -79,7 +79,7 @@ struct DecideConstraint {
 	                              // member, the bound reduced over each `by` group.
 	idx_t minmax_clause_idx = DConstants::INVALID_INDEX; // index into LogicalDecide::minmax_clause_labels
 	string minmax_agg_type;                                 // "min" or "max" (empty if not minmax)
-	idx_t ne_clause_idx = DConstants::INVALID_INDEX;     // index into LogicalDecide::ne_clause_labels
+	idx_t ne_clause_idx = DConstants::INVALID_INDEX;        // index into LogicalDecide::ne_clause_sources
 	idx_t abs_aux_idx = DConstants::INVALID_INDEX;          // ABS auxiliary this envelope row bounds
 	bool abs_is_pos_bound = false;                          // true=C1 (aux >= inner), false=C2 (aux >= -inner)
 	unique_ptr<Expression> when_condition;                  // the clause's `when` (nullptr = every row)

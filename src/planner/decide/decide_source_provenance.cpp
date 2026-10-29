@@ -24,7 +24,7 @@ namespace duckdb {
 
 //! Spell a comparison the way DECIDE documents it. `ExpressionTypeToOperator` renders
 //! not-equal as `!=`, but every other user-facing DECIDE surface -- the syntax
-//! reference, `ne_clause_labels`, the binder's own messages -- writes `<>`. A repair
+//! reference, the binder's own messages -- writes `<>`. A repair
 //! quotes this text straight back as SQL the user is meant to recognize, so the one
 //! spelling wins here too.
 static string DecideComparisonOperator(ExpressionType type) {
@@ -821,7 +821,7 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 			// written in front, with the `by` the form fixes to its `per` key.
 			auto inner = RenderTwoLevelInner(conj, names);
 			if (inner) {
-				PushClause(out, out_source_ids, AttachDecideQualifier(*inner, FrontQualifier(front)),
+				PushClause(out, out_source_ids, AppendQualifier(FrontQualifier(front), *inner),
 				           DConstants::INVALID_INDEX);
 				return;
 			}
@@ -863,15 +863,14 @@ static void CollectExpressionStrings(const Expression &expr, const DecideSourceN
 			if (!info.source_lhs.empty()) {
 				auto &cmp = expr.Cast<BoundComparisonExpression>();
 				PushClause(out, out_source_ids,
-				           AttachDecideQualifier(info.source_lhs + " " + DecideComparisonOperator(cmp.type) + " " +
-				                                     info.source_rhs,
-				                                 front_qualifier),
+				           AppendQualifier(front_qualifier, info.source_lhs + " " + DecideComparisonOperator(cmp.type) +
+				                                                " " + info.source_rhs),
 				           leaf_source_id);
 				return;
 			}
 		}
 	}
-	PushClause(out, out_source_ids, AttachDecideQualifier(RenderSource(expr, ContextOf(names)), front_qualifier),
+	PushClause(out, out_source_ids, AppendQualifier(front_qualifier, RenderSource(expr, ContextOf(names))),
 	           leaf_source_id);
 }
 
@@ -965,14 +964,14 @@ vector<DecideClauseLayers> CollectDecideClauseLayers(optional_ptr<const Expressi
 		string written = info.written_lhs.empty() && info.written_cmp.empty()
 		                     ? canonical
 		                     : info.written_lhs + " " + info.written_cmp + " " + info.written_rhs;
-		layers.written = AttachDecideQualifier(written, info.qualifier);
+		layers.written = QuoteWrittenClause(info);
 		if (canonical != written) {
-			layers.canonical = AttachDecideQualifier(canonical, info.qualifier);
+			layers.canonical = AppendQualifier(info.qualifier, canonical);
 		}
 		// The solver form is worth printing only where it says something the layer above
 		// did not: a row that reads as that layer is left out, whatever the rewrite put
 		// beside it (an ABS leaves the clause's own row next to its envelope rows).
-		const string above = AttachDecideQualifier(layers.canonical.empty() ? written : canonical, info.qualifier);
+		const string &above = layers.canonical.empty() ? layers.written : layers.canonical;
 		for (auto &row : by_clause[i]) {
 			if (row != above) {
 				layers.rewritten.push_back(std::move(row));

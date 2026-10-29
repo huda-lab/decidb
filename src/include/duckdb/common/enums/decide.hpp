@@ -310,7 +310,7 @@ static constexpr const char *AVG_REWRITE_TAG = "__avg_rewrite__";
 static constexpr const char *MINMAX_CLAUSE_TAG_PREFIX = "__minmax_clause_";
 
 //! Tag prefix linking a `<>` comparison to its clause (on BoundComparisonExpression.alias).
-//! Format: "__ne_clause_tag_<clause_idx>__", indexing `LogicalDecide::ne_clause_labels`.
+//! Format: "__ne_clause_tag_<clause_idx>__", indexing `LogicalDecide::ne_clause_sources`.
 static constexpr const char *NE_CLAUSE_TAG_PREFIX = "__ne_clause_tag_";
 
 //! Tag marking a comparison whose LHS is an easy-direction MIN/MAX reducer

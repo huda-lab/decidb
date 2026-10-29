@@ -134,11 +134,11 @@ static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_
     return seen ? verdict : NECollapse::DISJUNCTION;
 }
 
-//! The clause text stage 05 recorded for a `<>`, naming every binary it allocates so a
+//! The clause a `<>` came from, quoted as written, naming every binary it allocates so a
 //! diagnosis renders `SUM(x) <> 0` rather than an internal column.
 static string NotEqualClauseLabel(const SolverInput &input, const EvaluatedConstraint &ec) {
-    if (ec.ne_clause_idx < input.ne_clause_labels.size()) {
-        return input.ne_clause_labels[ec.ne_clause_idx];
+    if (ec.ne_clause_idx < input.ne_clause_sources.size()) {
+        return QuoteWrittenClause(input.constraint_sources[input.ne_clause_sources[ec.ne_clause_idx]]);
     }
     return string();
 }

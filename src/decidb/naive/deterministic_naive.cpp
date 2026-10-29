@@ -56,7 +56,7 @@ string DescribeRowClause(const SolverModel &model, const ModelConstraint &constr
         return string();
     }
     const char *sense = constr.sense == '<' ? "<=" : (constr.sense == '>' ? ">=" : "=");
-    return AttachDecideQualifier(source.canonical_lhs + " " + sense + " " + rhs_text, source.qualifier);
+    return QuoteEditedClause(&source, source.canonical_lhs, sense, rhs_text);
 }
 
 //===--------------------------------------------------------------------===//

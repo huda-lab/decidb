@@ -617,14 +617,9 @@ void DecideOptimizer::RewriteMinMaxInConstraint(unique_ptr<Expression> &expr, Lo
 
 	if (cmp_type == ExpressionType::COMPARE_NOTEQUAL) {
 		// Name the clause as written: a `norm(e, 'inf')` reaches here lowered onto a MAX.
-		idx_t source_id;
-		string clause =
-		    TryParseSourceClauseTag(comp.GetAlias(), source_id) && source_id < decide.constraint_sources.size()
-		        ? WrittenDecideComparison(decide.constraint_sources[source_id])
-		        : RenderForPlan(comp, decide);
 		throw BinderException("DECIDE does not support <> comparison with MIN/MAX aggregates (norm(e, 'inf') is a MAX "
 		                      "of absolute values): %s",
-		                      clause);
+		                      QuoteWrittenClause(decide.constraint_sources[SourceClauseOf(comp, decide)]));
 	}
 
 	// Re-attach the peeled factor to whatever form is emitted below. `scale * e` keeps

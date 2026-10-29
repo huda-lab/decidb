@@ -105,8 +105,8 @@ public:
     // intrinsic domain, not a user-editable bound. Indexed by decide_variables position.
     vector<bool> is_boolean_var;
 
-    // Indices of auxiliary indicator variables for not-equal (<>) constraints
-    vector<string> ne_clause_labels;
+    // The source clause (index into constraint_sources) of each not-equal (<>) constraint
+    vector<idx_t> ne_clause_sources;
 
     // Links from MIN/MAX indicator variables: (agg_name "min"/"max", indicator_idx)
     vector<string> minmax_clause_labels;

@@ -372,7 +372,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 	    result.entity_scopes = std::move(entity_scopes);
         result.variable_scopes = variable_scopes;
 
-        // ne_clause_labels is now populated by DecideOptimizer (post-binding)
+        // ne_clause_sources is now populated by DecideOptimizer (post-binding)
         // minmax_clause_labels, flat_objective_agg/is_easy, per_inner/outer_agg/is_easy
         // are now populated by DecideOptimizer::RewriteMinMax (post-binding)
 

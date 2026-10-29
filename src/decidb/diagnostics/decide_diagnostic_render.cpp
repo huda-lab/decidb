@@ -433,8 +433,7 @@ static string FormatQuadraticLhs(const SolverModel::QuadraticConstraint &qc,
 	return out.empty() ? "0" : out;
 }
 
-static const ConstraintSourceInfo *FindConstraintSource(const SolverModel &model,
-	                                             const ConstraintProvenance &provenance) {
+const ConstraintSourceInfo *FindConstraintSource(const SolverModel &model, const ConstraintProvenance &provenance) {
 	auto source_id = provenance.source_clause_id;
 	if (source_id == DConstants::INVALID_INDEX || source_id >= model.constraint_sources.size()) {
 		return nullptr;
@@ -472,12 +471,6 @@ string SourceAwareQuadraticLhs(const SolverModel &model, const SolverModel::Quad
 	return source && !source->canonical_lhs.empty() ? source->canonical_lhs : FormatQuadraticLhs(row, columns);
 }
 
-string SourceQualifier(const SolverModel &model, const ConstraintProvenance &provenance) {
-	// The source registry is the one place a clause's `when c per K:` qualifier lives.
-	auto source = FindConstraintSource(model, provenance);
-	return source ? source->qualifier : string();
-}
-
 string SourceAwareRhs(const SolverModel &model, const ConstraintProvenance &provenance, double fallback) {
 	auto source = FindConstraintSource(model, provenance);
 	if (source && source->rhs_kind == ConstraintSourceRhsKind::DATA_EXPRESSION &&
@@ -507,20 +500,20 @@ static double DisplayRhs(const ConstraintProvenance &prov, double rhs, char sens
 	return rhs - prov.rhs_mechanism_offset;
 }
 
-static string MakeClauseLabel(const ConstraintProvenance &prov, const string &qualifier, const string &lhs, double rhs,
-                              char sense) {
+static string MakeClauseLabel(const ConstraintProvenance &prov, const ConstraintSourceInfo *source, const string &lhs,
+                              double rhs, char sense) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	double base_rhs = DisplayRhs(prov, rhs, sense);
-	return AttachDecideQualifier(lhs + " " + sense_str + " " + FormatNum(base_rhs), qualifier);
+	return QuoteEditedClause(source, lhs, sense_str, FormatNum(base_rhs));
 }
 
 //! Build a LOOSEN edit from a constraint's rendered LHS + sense + RHS and the
 //! solved slack `amount` (signed; for `=` it is the net s⁺−s⁻). For a strict `<` /
 //! `>` the δ offset was baked into `rhs` at build time, so re-quote the suggestion
 //! against the user's typed literal (`typed_k`) and render `<` / `>` (I2.d).
-ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &qualifier, const string &lhs, double rhs,
-                          char sense, double amount) {
+ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const ConstraintSourceInfo *source, const string &lhs,
+                          double rhs, char sense, double amount) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	double base_rhs = DisplayRhs(prov, rhs, sense);
@@ -531,8 +524,8 @@ ClauseEdit MakeLoosenEdit(const ConstraintProvenance &prov, const string &qualif
 	// row) so two folded `SUM(x)` groups stay distinguishable in the relation.
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;
-	e.label = MakeClauseLabel(prov, qualifier, lhs, rhs, sense);
-	e.suggestion = AttachDecideQualifier(lhs + " " + sense_str + " " + FormatNum(new_rhs), qualifier);
+	e.label = MakeClauseLabel(prov, source, lhs, rhs, sense);
+	e.suggestion = QuoteEditedClause(source, lhs, sense_str, FormatNum(new_rhs));
 	e.has_amount = true;
 	e.amount = std::fabs(amount);
 	e.group = prov.group_label;
@@ -602,7 +595,7 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 	std::set<std::tuple<string, string, idx_t>> seen;
 	auto record = [&](const ConstraintProvenance &prov, const string &lhs, double rhs, char sense) {
 		ClauseEdit base;
-		base.label = MakeClauseLabel(prov, SourceQualifier(model, prov), lhs, rhs, sense);
+		base.label = MakeClauseLabel(prov, FindConstraintSource(model, prov), lhs, rhs, sense);
 		base.group = prov.group_label;
 		for (auto &finding : FanOutByClass(std::move(base), prov, model, expanded)) {
 			UnreachableClause c;
@@ -641,8 +634,8 @@ vector<UnreachableClause> CollectUnreachableClauses(const SolverModel &model, co
 //! stepped onto the lattice, and the written bound moves by the same amount.
 //! `rhs_text` is the RHS column name (`prov.rhs_label`) or a numeric fallback when no
 //! name is available. `edit_source` is stamped by the caller.
-ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string &qualifier, const string &lhs,
-                                 const string &rhs_text, char sense, double delta) {
+ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const ConstraintSourceInfo *source,
+                                 const string &lhs, const string &rhs_text, char sense, double delta) {
 	bool strict = prov.strict && sense != '=';
 	string sense_str = strict ? (sense == '>' ? ">" : "<") : SenseStr(sense);
 	bool down = sense == '=' ? delta < 0.0 : sense == '>';
@@ -650,8 +643,8 @@ ClauseEdit MakeVirtualOffsetEdit(const ConstraintProvenance &prov, const string 
 	string mag = FormatNum(std::fabs(delta));
 	ClauseEdit e;
 	e.kind = ClauseEditKind::LOOSEN;
-	e.label = AttachDecideQualifier(lhs + " " + sense_str + " " + rhs_text, qualifier);
-	e.suggestion = AttachDecideQualifier(lhs + " " + sense_str + " " + rhs_text + op + mag, qualifier);
+	e.label = QuoteEditedClause(source, lhs, sense_str, rhs_text);
+	e.suggestion = QuoteEditedClause(source, lhs, sense_str, rhs_text + op + mag);
 	e.has_amount = true;
 	e.amount = std::fabs(delta);
 	e.group = prov.group_label;

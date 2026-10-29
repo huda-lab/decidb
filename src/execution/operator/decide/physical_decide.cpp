@@ -1238,7 +1238,7 @@ public:
 					if (bound.decide_var_idx == var && bound.sense != (upper ? '>' : '<') && bound.k == k &&
 					    bound.source_clause_id < op.constraint_sources.size()) {
 						auto &source = op.constraint_sources[bound.source_clause_id];
-						return AttachDecideQualifier(WrittenDecideComparison(source), source.qualifier);
+						return QuoteWrittenClause(source);
 					}
 				}
 				return StringUtil::Format("%s %s %g", vname, upper ? "<=" : ">=", k);
@@ -3333,7 +3333,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
 	solver_input.constraints = std::move(gstate.evaluated_constraints);
 	solver_input.class_sets = std::move(gstate.class_sets);
 	solver_input.minmax_clause_labels = minmax_clause_labels;
-	solver_input.ne_clause_labels = ne_clause_labels;
+	solver_input.ne_clause_sources = ne_clause_sources;
 	for (auto &link : bilinear_links) {
         solver_input.bilinear_links.push_back(BilinearLinkSpec {
             link.aux_idx, link.bool_var_idx, link.other_var_idx,
@@ -3649,7 +3649,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // condition is stated to the backend or encoded with a Big-M is settled once, by
     // LowerDecideConstructs at the end of this function.
     phase.Next("formulation.not_equal");
-    if (!ne_clause_labels.empty()) {
+    if (!ne_clause_sources.empty()) {
         LinearizeNotEqual(solver_input, var_indexer, decide_var_names);
     }
 

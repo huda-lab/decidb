@@ -239,7 +239,7 @@ struct EvaluatedConstraint {
     //! both arms read: it is set whenever stage 05 tagged the row, whichever formulation
     //! was chosen for it.
     string minmax_agg_type;
-    //! Which `<>` clause this row is, as an index into `ne_clause_labels`. A tag, not
+    //! Which `<>` clause this row is, as an index into `ne_clause_sources`. A tag, not
     //! a variable: the disjunction binaries are allocated by the pass that emits the
     //! rows reading them.
     idx_t ne_clause_idx = DConstants::INVALID_INDEX;
@@ -691,10 +691,10 @@ struct SolverInput {
     //! becomes, so a repair reads the clause rather than an internal column.
     vector<string> minmax_clause_labels;
 
-    //! Diagnosis text of each `<>` clause (`SUM(x) <> 0`), indexed by
-    //! `EvaluatedConstraint::ne_clause_idx`. Names the disjunction binary, so the
-    //! diagnostics and model inspection can label the clause.
-    vector<string> ne_clause_labels;
+    //! The source clause of each `<>` clause (`SUM(x) <> 0`), indexed by
+    //! `EvaluatedConstraint::ne_clause_idx`. The disjunction binary is labelled by quoting it, so the
+    //! diagnostics and model inspection can name the clause.
+    vector<idx_t> ne_clause_sources;
 
     //! Constructs left native for the backend, in flat columns. Emitted at stage 08
     //! once the VarIndexer exists — like `global_constraints`, and for the same reason.
