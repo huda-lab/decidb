@@ -1,10 +1,9 @@
 # use flex to generate the scanner file for the parser
-# the following version of bison is used:
-# flex 2.5.35 Apple(flex-32)
+# the scanner is generated with upstream flex 2.6.4 (on macOS: --flex=/opt/homebrew/opt/flex/bin/flex; Apple's /usr/bin/flex 2.6.4 has a
+# different skeleton and does not reproduce the committed scanner)
 import os
 import subprocess
 import re
-from sys import platform
 import sys
 from python_helpers import open_utf8
 
@@ -65,7 +64,7 @@ text = re.sub('exit[(]', 'throw std::runtime_error(msg); //', text)
 text = re.sub(r'\n\s*if\s*[(]\s*!\s*yyin\s*[)]\s*\n\s*yyin\s*=\s*stdin;\s*\n', '\n', text)
 text = re.sub(r'\n\s*if\s*[(]\s*!\s*yyout\s*[)]\s*\n\s*yyout\s*=\s*stdout;\s*\n', '\n', text)
 
-file_null = 'NULL' if platform == 'linux' else '[(]FILE [*][)] 0'
+file_null = '(?:NULL|[(]FILE [*][)] 0)'
 
 text = re.sub(
     rf'[#]ifdef\s*YY_STDINIT\n\s*yyin = stdin;\n\s*yyout = stdout;\n[#]else\n\s*yyin = {file_null};\n\s*yyout = {file_null};\n[#]endif',
