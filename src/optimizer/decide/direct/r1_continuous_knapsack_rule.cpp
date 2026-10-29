@@ -673,8 +673,7 @@ public:
 	unique_ptr<LogicalOperator> Build(unique_ptr<LogicalOperator> read, idx_t read_table_index) {
 		read_index = read_table_index;
 		auto when = condition.when ? OverState(*condition.when) : nullptr;
-		auto state =
-		    DirectProjectScope(binder, std::move(read), condition.scoped, when.get(), condition.group_key_slots, {});
+		auto state = DirectProjectScope(binder, std::move(read), condition.scoped, when.get(), {}, {});
 		state_index = state.state_index;
 		plan = std::move(state.plan);
 		for (idx_t i = 0; i < proved_bindings.size(); i++) {

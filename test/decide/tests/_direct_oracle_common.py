@@ -41,7 +41,8 @@ def direct_path(sql, pending=None):
     """Wraps the checks of `sql`'s direct path. While direct solve cannot read the query yet (`pending` names the task;
     a `by` key implies BY_KEY_PENDING) they are a strict xfail: the test is reported xfailed when the block fails and
     fails when it passes. Run the solver path before the block, so its checks stay ordinary assertions."""
-    reason = pending or (BY_KEY_PENDING if " by (" in sql else None)
+    # S1 reads a `by` key; R1 (the REAL decisions) does not yet.
+    reason = pending or (BY_KEY_PENDING if " by (" in sql and "(BOOL)" not in sql else None)
     if reason is None:
         yield
         return

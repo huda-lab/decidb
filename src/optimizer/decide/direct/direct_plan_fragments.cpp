@@ -122,7 +122,7 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 }
 
 DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
-                                    const Expression *when, const vector<idx_t> &key_slots,
+                                    const Expression *when, const vector<DirectKeyElement> &keys,
                                     vector<unique_ptr<Expression>> extra) {
 	ExpressionBuilder calc(binder.context);
 	input->ResolveOperatorTypes();
@@ -141,13 +141,23 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 		state.input_bindings[i] = ColumnBinding(state.state_index, i);
 	}
 	if (scoped) {
-		auto eligible = calc.Wrap(DirectActiveWhen(calc, when));
-		for (auto slot : key_slots) {
-			D_ASSERT(slot < bindings.size());
-			eligible = calc.If(calc.IsNull(calc.Col(types[slot], bindings[slot])), calc.Bool(false), eligible);
+		auto active = calc.Wrap(DirectActiveWhen(calc, when));
+		auto eligible = active;
+		vector<ExprPtr> key_values;
+		for (auto &key : keys) {
+			auto value = calc.Of(*key.grouping);
+			key_values.push_back(when ? DirectOnKeptRows(calc, active, value) : value);
+			if (key.no_group) {
+				eligible = calc.If(calc.IsNull(key_values.back()), calc.Bool(false), eligible);
+			}
 		}
 		state.eligible = ColumnBinding(state.state_index, expressions.size());
 		expressions.push_back(calc.Out(eligible));
+		for (auto &value : key_values) {
+			state.keys.emplace_back(state.state_index, expressions.size());
+			state.key_types.push_back(value->return_type);
+			expressions.push_back(calc.Out(value));
+		}
 	}
 	for (auto &column : extra) {
 		state.extra.emplace_back(state.state_index, expressions.size());

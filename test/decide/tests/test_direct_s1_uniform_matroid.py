@@ -18,8 +18,8 @@ Strict bounds follow the solver path (`ilp_model_builder.cpp`): on an integer-va
 side, `< K` is `<= ceil(K) - 1` and `> K` is `>= floor(K) + 1`.
 
 A per-group case writes `by (g)` after every reducer of its clause, the sum and the bound's, and keeps a NULL `g` out
-of every group with `when g IS NOT NULL` (a NULL key is in no group either way). Direct solve reads no `by` key
-yet, so on those cases the direct path is a strict xfail (`direct_path`); the solver path is checked as usual.
+of every group with `when g IS NOT NULL` (a NULL key is in no group either way). S1 reads the key, so both paths are
+checked on those cases.
 
 A new class adds rows to the tables below. What a result comparison cannot see (which plan
 ran, EXPLAIN, prepared plans, DIAGNOSE, pruning) stays in `test_direct_rule_conformance.py`.

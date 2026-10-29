@@ -78,7 +78,9 @@ struct Condition final : DirectApplicabilityCondition {
 	bool impossible = false;
 	DecideSense sense;
 	vector<ObjectivePart> objective_parts;
-	vector<idx_t> group_key_slots;
+	//! The `by` key every bound shares: the groups whose rows the count bounds, each its own interval. Empty for one
+	//! group of all the rows the bounds cover. A row with a NULL in a NO_GROUP element is in no group (D5).
+	vector<DirectKeyElement> group_keys;
 	unique_ptr<Expression> when_condition;
 	vector<unique_ptr<Expression>> fixed_one_conditions;
 	vector<unique_ptr<Expression>> fixed_zero_conditions;
@@ -329,7 +331,8 @@ bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 		if (!ok) {
 			return false;
 		}
-		if (!factor->PlainSum()->by.empty() || static_cast<bool>(when) != static_cast<bool>(first_when)) {
+		if (!DirectSameKey(factor->PlainSum()->by, first_scope.PlainSum()->by) ||
+		    static_cast<bool>(when) != static_cast<bool>(first_when)) {
 			return false;
 		}
 		if (when && !Expression::Equals(*when, *first_when)) {
@@ -342,7 +345,18 @@ bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 		}
 		condition.when_condition = std::move(first_when);
 	}
-	condition.scoped = condition.when_condition != nullptr;
+	// A key is evaluated on every row the clause keeps, so it must be something a plan can compute: no decision, no
+	// volatile function, no subquery.
+	for (auto &key : first_scope.PlainSum()->by) {
+		if (!DirectIsDecisionFreeDeterministic(*key.grouping, ir.decide_index)) {
+			return false;
+		}
+		DirectKeyElement element;
+		element.grouping = key.grouping->Copy();
+		element.no_group = key.no_group;
+		condition.group_keys.push_back(std::move(element));
+	}
+	condition.scoped = !condition.group_keys.empty() || condition.when_condition != nullptr;
 	return true;
 }
 
@@ -602,6 +616,9 @@ public:
 		score_binding = ColumnBinding(score_index, next_slot++);
 		if (condition.scoped) {
 			eligible_binding = ColumnBinding(score_index, next_slot++);
+			for (idx_t i = 0; i < condition.group_keys.size(); i++) {
+				key_bindings.push_back(ColumnBinding(score_index, next_slot++));
+			}
 		}
 		if (has_fixes) {
 			fixed_one_binding = ColumnBinding(score_index, next_slot++);
@@ -638,6 +655,8 @@ private:
 		vector<ColumnBinding> input_bindings;
 		idx_t state_index = DConstants::INVALID_INDEX;
 		ColumnBinding eligible_binding;
+		//! The group key's elements.
+		vector<ColumnBinding> key_bindings;
 		ColumnBinding fixed_one_binding;
 		ColumnBinding fixed_zero_binding;
 	};
@@ -665,6 +684,8 @@ private:
 	bool has_upper = false;
 	ColumnBinding score_binding;
 	ColumnBinding eligible_binding;
+	//! The group key's elements in the score projection.
+	vector<ColumnBinding> key_bindings;
 	ColumnBinding fixed_one_binding;
 	ColumnBinding fixed_zero_binding;
 	//! Each source-valued count bound's value, in the score projection.
@@ -672,6 +693,11 @@ private:
 	//! The MIN and the MAX of a raw bound over its group, in the rank window (RankAndFilterFeasibility): the MIN of an
 	//! upper bound and an `=` bound, the MAX of a lower bound and an `=` bound.
 	mutable vector<ColumnBinding> bound_minimum, bound_maximum;
+
+	//! The type of group key element `i`.
+	const LogicalType &KeyType(idx_t i) const {
+		return condition.group_keys[i].grouping->return_type;
+	}
 
 	//! Copy of a proved expression whose source references follow the state projection, when there is one.
 	unique_ptr<Expression> CopyIntoState(const Expression &expr, const ScopeBindings &scope) const {
@@ -702,10 +728,11 @@ private:
 			fixed_flags.push_back(any_of(condition.fixed_zero_conditions));
 		}
 		auto state = DirectProjectScope(binder, std::move(source), condition.scoped, condition.when_condition.get(),
-		                                condition.group_key_slots, std::move(fixed_flags));
+		                                condition.group_keys, std::move(fixed_flags));
 		scope.input_bindings = std::move(state.input_bindings);
 		scope.state_index = state.state_index;
 		scope.eligible_binding = state.eligible;
+		scope.key_bindings = state.keys;
 		if (has_fixes) {
 			scope.fixed_one_binding = state.extra[0];
 			scope.fixed_zero_binding = state.extra[1];
@@ -772,6 +799,9 @@ private:
 		append_at(score_binding, calc.Out(combined_score));
 		if (condition.scoped) {
 			append_at(eligible_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.eligible_binding)));
+			for (idx_t i = 0; i < key_bindings.size(); i++) {
+				append_at(key_bindings[i], calc.Out(calc.Col(KeyType(i), scope.key_bindings[i])));
+			}
 		}
 		if (has_fixes) {
 			append_at(fixed_one_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.fixed_one_binding)));
@@ -922,8 +952,8 @@ private:
 			return;
 		}
 		expression.partitions.push_back(calc.Out(calc.Col(LogicalType::BOOLEAN, eligible_binding)));
-		for (auto slot : condition.group_key_slots) {
-			expression.partitions.push_back(calc.Out(calc.Col(source_types[slot], ColumnBinding(score_index, slot))));
+		for (idx_t i = 0; i < key_bindings.size(); i++) {
+			expression.partitions.push_back(calc.Out(calc.Col(KeyType(i), key_bindings[i])));
 		}
 	}
 

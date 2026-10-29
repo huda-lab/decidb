@@ -76,8 +76,8 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
                                                        unique_ptr<Expression> value);
 
 //! The per-row state of a scoped aggregate, projected once over the input: every input column, then whether the
-//! row is eligible (its `when` holds and no group key is NULL), then any per-row columns the rule adds. With no scope
-//! and no extra columns the input passes through unchanged.
+//! row is eligible (its `when` holds and no NO_GROUP key element is NULL), then the group key, then any per-row columns
+//! the rule adds. With no scope and no extra columns the input passes through unchanged.
 struct DirectScopeState {
 	unique_ptr<LogicalOperator> plan;
 	//! Where each input column lives in `plan`, in input order.
@@ -86,15 +86,19 @@ struct DirectScopeState {
 	idx_t state_index = DConstants::INVALID_INDEX;
 	//! Set only for a scoped state.
 	ColumnBinding eligible;
+	//! The group key's elements as the state carries them (NULL on a row whose `when` drops it), in key order.
+	vector<ColumnBinding> keys;
+	vector<LogicalType> key_types;
 	//! The rule's extra columns, in the order given.
 	vector<ColumnBinding> extra;
 };
 
-//! A row whose `when` is false or NULL does not join the clause, and neither does a row with a NULL group key (the
-//! removed PER; a `by` key makes NULL a group of its own, D5, when direct solve reads one). `key_slots` index
-//! the input's columns; `extra` are expressions over the input.
+//! A row whose `when` is false or NULL does not join the clause, and neither does a row with a NULL in a column of a
+//! `by` key (D5: a NULL key is in no group; the columns of a relation compare NULL as a value, and group). `keys` are
+//! the `by` key, its expressions over the input's columns; they are computed on the rows the `when` keeps alone, as
+//! nothing is computed on a row it drops. `extra` are expressions over the input.
 DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
-                                    const Expression *when, const vector<idx_t> &key_slots,
+                                    const Expression *when, const vector<DirectKeyElement> &keys,
                                     vector<unique_ptr<Expression>> extra);
 
 //! A per-row bound read from the data: it must not be NULL on a row its clause keeps, nor NaN when `reject_nan`.

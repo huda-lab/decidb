@@ -310,6 +310,12 @@ duckdb::vector<Shape> S1DeclineShapes() {
 		                    ir.constraints[1].scope.when = True();
 	                    }));
 	shapes.push_back(S1("bounds with different PER keys", "SUM(x) >= 1 AND SUM(x) <= 2", PerKeyOnConstraint(1)));
+	shapes.push_back(S1("bounds with different keys", "SUM(x) by (flag) >= 1 AND SUM(x) by (name) <= 2"));
+	shapes.push_back(S1("a bound with a key beside one without", "SUM(x) by (flag) >= 1 AND SUM(x) <= 2"));
+	shapes.push_back(S1("a key that reads a decision", "SUM(x) by (flag) <= 2", [](DirectIR &ir) {
+		LeftPart(ir).by[0].grouping =
+		    make_uniq<BoundColumnRefExpression>(LogicalType::INTEGER, ColumnBinding(ir.decide_index, 0));
+	}));
 	shapes.push_back(S1("a second bound without the WHEN the first has", "when flag: SUM(x) >= 1 AND SUM(x) <= 2"));
 	shapes.push_back(
 	    S1("bounds with different WHEN conditions", "when flag: SUM(x) >= 1 AND when NOT flag: SUM(x) <= 2"));
@@ -774,7 +780,18 @@ duckdb::vector<Shape> R1DeclineShapes() {
 //! The shapes that carry a `by` key, which a rule that reads the key applies to.
 duckdb::vector<Shape> S1KeyedShapes() {
 	duckdb::vector<Shape> shapes;
-	shapes.push_back(S1("counts PER a column", "SUM(x) <= 2", PerKeys({{FLAG_SLOT}})));
+	shapes.push_back(S1("counts per a column", "SUM(x) by (flag) <= 2"));
+	shapes.push_back(S1("counts per two columns", "SUM(x) by (name, flag) <= 1"));
+	// A key is one key in whichever order its elements are written.
+	shapes.push_back(S1("bounds whose keys list the same columns in another order",
+	                    "SUM(x) by (flag, name) >= 1 AND SUM(x) by (name, flag) <= 2"));
+	shapes.push_back(S1("counts per an expression", "SUM(x) by (cap + 1) <= 2"));
+	// A relation's columns compare NULL as a value, so its rows are all in a group.
+	shapes.push_back(S1("counts per a relation", "SUM(x) by (t) <= 1"));
+	shapes.push_back(S1("counts per a column under a WHEN", "when cap > 1: SUM(x) by (flag) <= 2"));
+	shapes.push_back(S1("a range per a column", "SUM(x) by (flag) >= 1 AND SUM(x) by (flag) <= 2"));
+	shapes.push_back(S1("a source-valued bound per a column", "SUM(x) by (flag) <= cap"));
+	shapes.push_back(S1("a fixed value beside a count per a column", "SUM(x) by (flag) <= 2 AND x >= flag"));
 	return shapes;
 }
 
@@ -797,6 +814,7 @@ TEST_CASE("S1 applies to the forms of its class", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	ExpectApplies(MakeS1UniformMatroidRule, con, S1AppliesShapes());
+	ExpectApplies(MakeS1UniformMatroidRule, con, S1KeyedShapes());
 }
 
 TEST_CASE("S1 declines each shape that is not exactly its class", "[decidb]") {
@@ -805,10 +823,9 @@ TEST_CASE("S1 declines each shape that is not exactly its class", "[decidb]") {
 	ExpectDeclines(MakeS1UniformMatroidRule, con, S1DeclineShapes());
 }
 
-TEST_CASE("S1 and R1 decline a `by` key until they read it", "[decidb]") {
+TEST_CASE("R1 declines a `by` key until it reads it", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
-	ExpectDeclines(MakeS1UniformMatroidRule, con, S1KeyedShapes());
 	ExpectDeclines(MakeR1ContinuousKnapsackRule, con, R1KeyedShapes());
 }
 
@@ -925,10 +942,10 @@ TEST_CASE("S1 and R1 keyed plans answer as the solver does on the same `by` key"
 	Connection con(db);
 	duckdb::vector<KeyedCase> cases;
 	cases.push_back({"S1 counts per group", "S1_UNIFORM_MATROID", "x(BOOL)", "SUM(x){by} <= 1", "MAXIMIZE SUM(w*x)",
-	                 "x", " by (g)", false});
+	                 "x", " by (g)", true});
 	// Fixed values and no lower bound: the plan counts the fixed rows per group but has no free count to keep.
 	cases.push_back({"S1 per group with a fixed value and no lower bound", "S1_UNIFORM_MATROID", "x(BOOL)",
-	                 "SUM(x){by} <= 2 AND x >= flag", "MAXIMIZE SUM(w*x)", "x", " by (g)", false});
+	                 "SUM(x){by} <= 2 AND x >= flag", "MAXIMIZE SUM(w*x)", "x", " by (g)", true});
 	cases.push_back({"R1 fills each group's budget by value per weight", "R1_CONTINUOUS_KNAPSACK", "x(REAL)",
 	                 "x <= cap AND SUM(cap*x){by} <= 3", "MAXIMIZE SUM(w*x)", "ROUND(x, 9)", " by (g)", false});
 	cases.push_back({"R1 groups by two key columns", "R1_CONTINUOUS_KNAPSACK", "x(REAL)",
@@ -955,6 +972,28 @@ TEST_CASE("S1 and R1 keyed plans answer as the solver does on the same `by` key"
 		REQUIRE_NO_FAIL(*plan);
 		CHECK(plan->ToString().find(keyed.rule) != string::npos);
 	}
+}
+
+// The columns of a relation compare NULL as a value (D5), so a row whose column is NULL is still in its relation's
+// group: each of the two rows of `t` below, joined with two rows of `u`, is a group of two rows with one pick.
+TEST_CASE("S1 groups by a relation whose column is NULL as the solver does", "[decidb]") {
+	DuckDB db(nullptr);
+	Connection con(db);
+	const string query =
+	    "SELECT t.id, u.v, x FROM (VALUES (1, CAST(NULL AS VARCHAR), 5.0), (2, CAST(NULL AS VARCHAR), 4.0)) t(id, g, "
+	    "w),"
+	    " (VALUES (1), (2)) u(v) DECIDE x(BOOL) SUCH THAT SUM(x) by (t) <= 1 MAXIMIZE SUM(w * x + v * x) ORDER BY 1, 2";
+	auto solver = RunWithMode(con, "off", query);
+	REQUIRE_NO_FAIL(*solver);
+	auto direct = RunWithMode(con, "require", query);
+	REQUIRE_NO_FAIL(*direct);
+	CHECK(direct->ToString() == solver->ToString());
+	// Each group picks one row: two picks, not four.
+	int32_t picks = 0;
+	for (idx_t row = 0; row < direct->RowCount(); row++) {
+		picks += direct->GetValue(2, row).GetValue<int32_t>();
+	}
+	CHECK(picks == 2);
 }
 
 } // namespace direct_decline_test

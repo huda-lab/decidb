@@ -75,6 +75,20 @@ struct DirectKeyElement {
 	bool no_group = true;
 };
 
+//! Whether two keys group the same rows the same way: the same expressions in the same order, a NULL in each handled
+//! alike.
+inline bool DirectSameKey(const vector<DirectKeyElement> &a, const vector<DirectKeyElement> &b) {
+	if (a.size() != b.size()) {
+		return false;
+	}
+	for (idx_t i = 0; i < a.size(); i++) {
+		if (a[i].no_group != b[i].no_group || !a[i].grouping->Equals(*b[i].grouping)) {
+			return false;
+		}
+	}
+	return true;
+}
+
 //! One additive part of a constraint's left side or of the objective: `sign * scale * reducer(terms)`.
 struct DirectPart {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
