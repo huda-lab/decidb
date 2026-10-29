@@ -9,10 +9,6 @@ Checks: `direct_solve/framework/todo.md` § How to work any task in these todo f
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
 at a time. Lanes: F4, then F5 and F8's BUG-14; F6; F8. F9 runs alone.
 
-## 1. Owner decisions (independent of each other; ask all first)
-
-- [ ] F9: OPS-2 rename the names too, or not
-
 ## 5. F4 One clause scope and keyed model
 
 - [ ] CQ-1 One clause scope (D47) — issues/code_quality.md § CQ-1
@@ -37,7 +33,7 @@ at a time. Lanes: F4, then F5 and F8's BUG-14; F6; F8. F9 runs alone.
 - [ ] BUG-3 Q10 on HiGHS at large is killed for memory (owner runs) — issues/bugs.md § BUG-3
 - [ ] BUG-14 Like coefficients that merge past DOUBLE raise an internal error — issues/bugs.md § BUG-14 (needs: F4)
 
-## 10. F9 Housekeeping (needs: 1; runs alone)
+## 10. F9 Housekeeping (runs alone)
 
 - [ ] OPS-2 Normalize the DecidB spelling — operations/todo.md § OPS-2
 

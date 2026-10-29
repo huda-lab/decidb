@@ -41,3 +41,5 @@ no identifier changes. About 470 matches remain (counted 2026-10-29: 378 in `tes
 project name). (a) Rename those too (`DeciDBCli`, `DeciDBRelease.yml`, `project(DeciDB)`), one mechanical change.
 (b) Comments and prose only, and the acceptance test excludes the names. Recommended: (a), since the test classes are
 internal and the spelling would otherwise stay.
+
+**Ruling (owner, 2026-10-29).** (a): `DeciDB` is the spelling, names included.
