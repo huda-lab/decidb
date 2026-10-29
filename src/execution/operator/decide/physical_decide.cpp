@@ -3573,7 +3573,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
                 // coefficient is positive.
                 ec.row_coefficients[z_term].AssignScalar(num_rows, 0.0);
                 double M = DecideTightPerRowBigM(
-                    ec, box, num_rows, decide_var_names, InstanceFloors {solver_input, var_indexer});
+                    ec, box, num_rows, decide_var_names, InstanceBox {solver_input, var_indexer});
                 ec.row_coefficients[z_term].AssignScalar(num_rows, M);
             }
         }
@@ -3616,7 +3616,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     // auxiliary open and answers.
     phase.Next("formulation.abs_bounds");
 	if (solver_input.reducer_value_links.empty()) {
-		DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, !native_abs);
+		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs);
 	} else {
 		// The value rewrite's helper decisions are boxed by their members' reach, and a
 		// member may be an ABS auxiliary while an ABS may hold a helper: each box is the
@@ -3633,16 +3633,19 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		for (idx_t pass = 0;; pass++) {
 			auto lower = solver_input.lower_bounds;
 			auto upper = solver_input.upper_bounds;
-			DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, /*refuse_when_unbounded=*/false);
-			DeriveReducerValueBounds(solver_input);
-			if (lower == solver_input.lower_bounds && upper == solver_input.upper_bounds) {
+			auto reach_lower = solver_input.instance_reach_lower;
+			auto reach_upper = solver_input.instance_reach_upper;
+			DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, /*refuse_when_unbounded=*/false);
+			DeriveReducerValueBounds(solver_input, var_indexer);
+			if (lower == solver_input.lower_bounds && upper == solver_input.upper_bounds &&
+			    reach_lower == solver_input.instance_reach_lower && reach_upper == solver_input.instance_reach_upper) {
 				break;
 			}
 			if (pass == max_passes) {
 				throw InternalException("DECIDE: the ABS and helper decision boxes did not settle");
 			}
 		}
-		DeriveAbsAuxiliaryBounds(solver_input, decide_var_names, !native_abs);
+		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs);
 	}
 	if (native_abs) {
 		EmitNativeAbs(solver_input, var_indexer);

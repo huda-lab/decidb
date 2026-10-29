@@ -25,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace duckdb {
 
@@ -485,6 +486,15 @@ struct GeneralConstraintSpec {
     idx_t removal_group_id = DConstants::INVALID_INDEX;
 };
 
+//! One end of an instance's reach (`SolverInput::instance_reach_lower` / `instance_reach_upper`): the value stored for
+//! the instance, or the open end (-infinity below, +infinity above) where the decision has no reach.
+inline double InstanceReachLower(const vector<vector<double>> &reach, idx_t var, idx_t instance) {
+    return var < reach.size() && !reach[var].empty() ? reach[var][instance] : -std::numeric_limits<double>::infinity();
+}
+inline double InstanceReachUpper(const vector<vector<double>> &reach, idx_t var, idx_t instance) {
+    return var < reach.size() && !reach[var].empty() ? reach[var][instance] : std::numeric_limits<double>::infinity();
+}
+
 //! Input for the deterministic solver
 struct SolverInput {
     idx_t num_rows;
@@ -542,6 +552,29 @@ struct SolverInput {
             floor = std::max(floor, instance_lower_bounds[var][instance]);
         }
         return floor;
+    }
+
+    //! A helper decision's reach per instance (the value rewrite, `DeriveReducerValueBounds`): the bracket of its own
+    //! group's value, for a helper keyed by a `by` key. Per decision, either empty or one entry per instance (the order
+    //! of `VarIndexer::InstanceColumn`); an end no member bounds, and an instance no group reaches, holds -infinity /
+    //! +infinity. The decision's box stays the cover of every instance's reach, so a reader that takes the decision's
+    //! box is sound, only looser.
+    //!
+    //! Not the floors' refinement (`instance_lower_bounds`): a floor holds against any box, the rigid one included,
+    //! while a reach is derived from the members' current boxes and holds only for the formulation it came from. A
+    //! formulation view (`FormulationBox`, the model builder) reads it; the rigid view (`rigid_*`, the `<>` range
+    //! collapse) never does. Re-derived by every `FormulateModel`, so a diagnosis gets it from its widened members.
+    vector<vector<double>> instance_reach_lower;
+    vector<vector<double>> instance_reach_upper;
+
+    //! The box an instance of `var` is declared in: the decision's box (`box_lower` / `box_upper`, a formulation's)
+    //! with the instance's floor and its reach on top. What the model builder writes into the column.
+    double InstanceBoxLower(idx_t var, idx_t instance, const vector<double> &box_lower) const {
+        return std::max(InstanceLower(var, instance, box_lower),
+                        InstanceReachLower(instance_reach_lower, var, instance));
+    }
+    double InstanceBoxUpper(idx_t var, idx_t instance, const vector<double> &box_upper) const {
+        return std::min(box_upper[var], InstanceReachUpper(instance_reach_upper, var, instance));
     }
 
     // Constraints
@@ -749,10 +782,19 @@ struct FormulationBox {
     const vector<double> &upper;
     const vector<double> &global_lower; //!< per global variable
     const vector<double> &global_upper;
+    //! A helper decision's reach per instance (`SolverInput::instance_reach_lower` / `instance_reach_upper`). Derived
+    //! from the members' boxes of this formulation, so it belongs to the box and not to the rigid view.
+    const vector<vector<double>> &instance_reach_lower;
+    const vector<vector<double>> &instance_reach_upper;
+
+    //! The ceiling of one instance of `var`: the box's, lowered to the instance's own reach.
+    double InstanceUpper(idx_t var, idx_t instance) const {
+        return std::min(upper[var], InstanceReachUpper(instance_reach_upper, var, instance));
+    }
 
     static FormulationBox OfSolvedModel(const SolverInput &input) {
-        return {input.lower_bounds, input.upper_bounds, input.global_lower_bounds,
-                input.global_upper_bounds};
+        return {input.lower_bounds,         input.upper_bounds,         input.global_lower_bounds,
+                input.global_upper_bounds, input.instance_reach_lower, input.instance_reach_upper};
     }
 };
 

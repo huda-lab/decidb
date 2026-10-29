@@ -375,10 +375,11 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         idx_t num_instances = indexer.NumInstances(var);
         for (idx_t inst = 0; inst < num_instances; inst++) {
             idx_t var_idx = indexer.InstanceColumn(var, inst);
-            // The instance's floor: the decision's, raised by the refinement where the default floor of 0 still holds
-            // (a constant lower bound under a `when` replaces the default floor on the instances it keeps alone).
-            model.col_lower[var_idx] = input.InstanceLower(var, inst, per_var_lower);
-            model.col_upper[var_idx] = per_var_upper[var];
+            // The instance's box: the decision's, with the floor raised by the refinement where the default floor of 0
+            // still holds (a constant lower bound under a `when` replaces the default floor on the instances it keeps
+            // alone), and a helper's ends at its own group's reach.
+            model.col_lower[var_idx] = input.InstanceBoxLower(var, inst, per_var_lower);
+            model.col_upper[var_idx] = input.InstanceBoxUpper(var, inst, per_var_upper);
             model.is_integer[var_idx] = !(input.variable_types[var] == LogicalType::DOUBLE ||
                                           input.variable_types[var] == LogicalType::FLOAT);
             model.is_binary[var_idx] = per_var_binary[var];

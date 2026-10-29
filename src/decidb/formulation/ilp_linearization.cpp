@@ -108,7 +108,7 @@ static const BilinearLinkSpec *BilinearLinkOf(const SolverInput &input, idx_t v)
 //! what `SolverModel::Build` will expand into `col_lower` / `col_upper`, and must:
 //! a Big-M derived from a wider box than the model declares would be slack, and one
 //! derived from a narrower box would cut the feasible region. The floor is the instance's
-//! (`SolverInput::InstanceLower`), as the builder writes it.
+//! (`SolverInput::InstanceLower`) and a helper's box is its instance's reach, as the builder writes them.
 static void FlatColumnBox(const SolverInput &input, const FormulationBox &box,
                           const VarIndexer &indexer, int col, double &lo, double &hi) {
     idx_t c = static_cast<idx_t>(col);
@@ -127,8 +127,10 @@ static void FlatColumnBox(const SolverInput &input, const FormulationBox &box,
     // The same asymmetry the model builder applies: the lower bound is authoritative
     // (stage 08 already resolved it, negatives included), the upper is intersected with
     // the type ceiling.
-    lo = input.InstanceLower(v, indexer.InstanceOfColumn(v, c), box.lower);
-    hi = box.upper[v];
+    idx_t instance = indexer.InstanceOfColumn(v, c);
+    lo = std::max(input.InstanceLower(v, instance, box.lower),
+                  InstanceReachLower(box.instance_reach_lower, v, instance));
+    hi = box.InstanceUpper(v, instance);
     if (input.variable_types[v] == LogicalType::BOOLEAN) {
         hi = MinValue<double>(hi, 1.0);
     }

@@ -86,7 +86,7 @@ enum class NECollapse : uint8_t {
 //! cleanly separates "can reach K" from "cannot".
 static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row,
                                 const vector<double> &lower_bounds,
-                                const vector<double> &upper_bounds, const InstanceFloors &floors) {
+                                const vector<double> &upper_bounds, const InstanceBox &floors) {
     double lo;
     double hi;
     DecideRowSignedRange(ec, row, lower_bounds, upper_bounds, lo, hi, DConstants::INVALID_INDEX, &floors);
@@ -116,7 +116,7 @@ static NECollapse ClassifyNERow(const EvaluatedConstraint &ec, idx_t row,
 //! verdict for every row. So a mixed constraint keeps the Big-M pair, unsplit.
 static NECollapse ClassifyNEConstraint(const EvaluatedConstraint &ec, idx_t num_rows,
                                        const vector<double> &lower_bounds,
-                                       const vector<double> &upper_bounds, const InstanceFloors &floors) {
+                                       const vector<double> &upper_bounds, const InstanceBox &floors) {
     bool seen = false;
     NECollapse verdict = NECollapse::DISJUNCTION;
     for (idx_t r = 0; r < num_rows; r++) {
@@ -321,7 +321,7 @@ void LinearizeNotEqual(SolverInput &input, const VarIndexer &indexer,
         // Range collapse, decided before anything is emitted. When the LHS cannot reach
         // the far side of K, one disjunct is dead and the clause is a plain inequality.
         NECollapse collapse = ClassifyNEConstraint(ec, num_rows, input.rigid_lower_bounds,
-                                                   input.rigid_upper_bounds, InstanceFloors {input, indexer});
+                                                   input.rigid_upper_bounds, InstanceBox {input, indexer});
         if (collapse == NECollapse::ALWAYS_TRUE) {
             continue; // excludes nothing reachable — drop, like the tautology case
         }
@@ -361,7 +361,7 @@ static void ExpandAggregateNotEqual(SolverInput &input, const VarIndexer &var_in
         }
     }
 
-    const InstanceFloors floors {input, var_indexer};
+    const InstanceBox floors {input, var_indexer};
     for (auto &ec : deferred_aggregate) {
         bool has_groups = !ec.row_group_ids.empty();
 

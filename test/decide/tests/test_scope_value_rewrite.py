@@ -26,6 +26,7 @@ from ._scope_cases import (
     SHIPMENTS,
     aligned,
     answer,
+    dump_bounds,
     dump_counts,
     error_of,
     from_clause,
@@ -414,6 +415,96 @@ def test_an_unbounded_member_under_a_closing_link(decidb_cli_highs, decidb_cli_g
 
 
 # ---------------------------------------------------------------------------
+# A box per helper instance
+# ---------------------------------------------------------------------------
+
+#: Every shipment is at most 10; a depot's group reaches the sum, or the largest multiple, of its members' 10s.
+SHIP_AT_MOST_10 = Scoped((X,), "<=", (_const(10),))
+#: The weights a MAX helper takes the largest of: D1's rows weigh 2 and 3, D2's 1 and 2, D3's 1.
+TRANSIT_OF_SHIP = lambda r: {"ship": r["transitDays"]}  # noqa: E731
+
+
+def _helper_dump(cli, sql, tmp_path):
+    """The model dump and the three helper columns' boxes, which follow the five shipments."""
+    dump = cli.dump_model(sql, tmp_path / "model.dump")
+    return dump, dump_bounds(dump)[len(SHIPMENTS) : len(SHIPMENTS) + len(DEPOTS)]
+
+
+@pytest.mark.correctness
+@pytest.mark.min_max
+def test_a_max_helper_instance_is_boxed_and_closed_by_its_own_group(
+    decidb_cli_highs, decidb_cli_gurobi, scope_solver, tmp_path
+):
+    """`ship <= 0.5 * max(ship * S.transitDays) by (D.depotID) + 1` with `ship <= 10`: the helper's three instances
+    reach 30 (D1's 3 * 10), 20 and 10. Each instance's column is boxed by its own group's reach, and each closing row
+    carries that reach as its Big-M, not the cover of all three (30) that a box per decision gave every group."""
+    sql = _ship_query("ship <= 10 AND ship <= 0.5 * max(ship * S.transitDays) by (D.depotID) + 1")
+    model = ScopedModel(joined(), SHIP)
+    clauses = [
+        SHIP_BOUND,
+        SHIP_AT_MOST_10,
+        Scoped((X,), "<=", (Reduce("max", TRANSIT_OF_SHIP, by=("depotID",), factor=lambda r: 0.5), _const(1))),
+    ]
+    for cli in (decidb_cli_highs, decidb_cli_gurobi):
+        dump, helper = _helper_dump(cli, sql, tmp_path)
+        assert helper == [(0.0, 30.0), (0.0, 20.0), (0.0, 10.0)]
+        # One closing row per member, `value - weight * ship <= M`: D1's two, D2's two and D3's one.
+        closing = re.findall(r"^row \d+: sense=< rhs=(\S+) nnz=3 ", dump, re.M)
+        assert [float(m) for m in closing] == [30, 30, 20, 20, 10]
+        assert _judged(cli, scope_solver, sql, model, clauses) == [10, 10, 10, 10, 2]
+
+
+@pytest.mark.correctness
+def test_a_not_equal_over_a_sum_helper_is_sized_by_each_groups_reach(
+    decidb_cli_highs, decidb_cli_gurobi, scope_solver, tmp_path
+):
+    """`ship <> sum(ship) by (D.depotID) - 3` with `ship <= 10`: the helper's instances reach 20, 20 and 10. HiGHS
+    lowers each `<>` row with a Big-M read off the flat columns' boxes (`FlatColumnBox`), so D3's rows are sized from
+    its own instance's 10 and not from the cover's 20 (-11 and -9 against -21 and -19)."""
+    sql = _ship_query("ship <= 10 AND ship <> sum(ship) by (D.depotID) - 3")
+    model = ScopedModel(joined(), SHIP)
+    clauses = [SHIP_BOUND, SHIP_AT_MOST_10, Scoped((X,), "<>", (_ship_reduce(by=("depotID",)), _const(-3)))]
+    dump, helper = _helper_dump(decidb_cli_highs, sql, tmp_path)
+    assert helper == [(0.0, 20.0), (0.0, 20.0), (0.0, 10.0)]
+    rows = re.findall(r"^row \d+: sense=([<>]) rhs=(\S+) nnz=3 ", dump, re.M)
+    assert [(sense, float(rhs)) for sense, rhs in rows] == [("<", -4), (">", -21)] * 4 + [("<", -4), (">", -11)]
+    for cli in (decidb_cli_highs, decidb_cli_gurobi):
+        _judged(cli, scope_solver, sql, model, clauses)
+
+    # The same on the helper's floor: `sum(0 - ship)` reaches -20, -20 and -10, which sizes the other half of each row.
+    sql = _ship_query("ship <= 10 AND ship <> sum(0 - ship) by (D.depotID) + 3")
+    negated = Reduce("sum", lambda r: {"ship": -1}, by=("depotID",))
+    clauses = [SHIP_BOUND, SHIP_AT_MOST_10, Scoped((X,), "<>", (negated, _const(3)))]
+    dump, helper = _helper_dump(decidb_cli_highs, sql, tmp_path)
+    assert helper == [(-20.0, 0.0), (-20.0, 0.0), (-10.0, 0.0)]
+    big_ms = re.findall(r"^row \d+: sense=[<>] rhs=\S+ nnz=3 \| \d+:\S+ \d+:\S+ \d+:(\S+)$", dump, re.M)
+    assert [float(m) for m in big_ms] == [-29, -5] * 4 + [-19, -5]
+    for cli in (decidb_cli_highs, decidb_cli_gurobi):
+        _judged(cli, scope_solver, sql, model, clauses)
+
+
+@pytest.mark.correctness
+def test_a_not_equal_range_collapse_never_reads_a_helpers_reach(
+    decidb_cli_highs, decidb_cli_gurobi, scope_solver, tmp_path
+):
+    """`S.transitDays * sum(ship) by (D.depotID) <> 1000` with `ship <= 10`: the helper's reach tops out at 20, so
+    1000 is out of its reach and a collapse that read the reach would drop the clause. The collapse decides the
+    clause's structure from the rigid box, which a diagnosis may widen past that reach, so every row keeps its
+    disjunction (two rows each) beside the three definitions."""
+    sql = _ship_query("ship <= 10 AND S.transitDays * sum(ship) by (D.depotID) <> 1000")
+    model = ScopedModel(joined(), SHIP)
+    transit_sum = _ship_reduce(by=("depotID",), factor=lambda r: r["transitDays"])
+    clauses = [SHIP_BOUND, SHIP_AT_MOST_10, Scoped((transit_sum,), "<>", (_const(1000),))]
+    dump = decidb_cli_highs.dump_model(sql, tmp_path / "model.dump")
+    assert dump_counts(dump) == {
+        "num_vars": 2 * len(SHIPMENTS) + len(DEPOTS),
+        "num_rows": len(DEPOTS) + 2 * len(SHIPMENTS),
+    }
+    for cli in (decidb_cli_highs, decidb_cli_gurobi):
+        _judged(cli, scope_solver, sql, model, clauses)
+
+
+# ---------------------------------------------------------------------------
 # Strict bounds, <>, AVG, the reducer's own when and per
 # ---------------------------------------------------------------------------
 
@@ -704,6 +795,33 @@ def test_a_helper_inside_a_hard_abs_is_boxed_with_it(decidb_cli_highs, decidb_cl
 
     for cli in (decidb_cli_highs, decidb_cli_gurobi):
         judge_rows(answer(cli, sql), domains, feasible, lambda a: sum(a.values()))
+
+
+@pytest.mark.correctness
+def test_abs_around_a_sum_helper_boxes_each_row_by_its_groups_reach(decidb_cli_highs, decidb_cli_gurobi, tmp_path):
+    """`x <= abs(t.w * sum(x) by (t.g) - 70) + 1` with `x <= 30`: group a's three members (weight 1) reach 90 and
+    group b's two (weight 3) reach 60. Each row's ABS argument is read at its own group's reach: native on Gurobi
+    boxes it [-70, 20] in a and [-70, 110] in b, and the HiGHS lowering boxes every ABS auxiliary by the widest,
+    110, not the 200 that the cover of the two (90) would give b's rows."""
+    columns = ("id", "g", "w", "cap")
+    rows = ((1, "a", 1, 30), (2, "a", 1, 30), (3, "a", 1, 30), (4, "b", 3, 30), (5, "b", 3, 30))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.cap AND x <= abs(t.w * sum(x) by (t.g) - 70) + 1
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    dump = decidb_cli_gurobi.dump_model(sql, tmp_path / "gurobi.dump")
+    assert dump_bounds(dump)[-len(rows) :] == [(-70.0, 20.0)] * 3 + [(-70.0, 110.0)] * 2
+    dump = decidb_cli_highs.dump_model(sql, tmp_path / "highs.dump")
+    assert [hi for lo, hi in dump_bounds(dump) if hi > 100 and lo == 0.0] == [110.0] * len(rows)
+    # Group a has three rows and group b two, which is how the weight reaches the check.
+    expected = _brute_force_optimum(
+        table_rows(columns, rows),
+        lambda xs: all(x <= abs((1 if len(xs) == 3 else 3) * sum(xs) - 70) + 1 for x in xs),
+    )
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        assert sum(row["x"] for row in answer(cli, sql)) == expected
 
 
 @pytest.mark.correctness

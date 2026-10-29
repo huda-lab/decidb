@@ -145,15 +145,32 @@ struct VarIndexer {
     static VarIndexer Build(const SolverInput &input);
 };
 
-//! The floors a reader that tells the instances of a decision apart takes (SolverInput::instance_lower_bounds), by the
-//! data row that reads the instance. A reader that takes the decision's box instead is sound, only looser.
-struct InstanceFloors {
+//! The box a reader that tells the instances of a decision apart takes, by the data row that reads the instance. A
+//! reader that takes the decision's box instead is sound, only looser.
+//!
+//! Two views, and a reader picks one. The rigid view (the default) refines the floor by the instance's own floor
+//! (SolverInput::instance_lower_bounds), which holds against any box. The formulation view (`reach`) also lowers the
+//! ceiling and raises the floor to a helper's reach (SolverInput::instance_reach_lower / instance_reach_upper), which
+//! holds only for the formulation it was derived from: a reader of `rigid_*` (the `<>` range collapse) never sets it.
+struct InstanceBox {
     const SolverInput &input;
     const VarIndexer &indexer;
+    bool reach = false;
 
     //! The floor of `var` as data row `row` reads it, against the box floors `box_lower`.
-    double OfRow(idx_t var, idx_t row, const vector<double> &box_lower) const {
-        return input.InstanceLower(var, indexer.InstanceOf(var, row), box_lower);
+    double LowerOfRow(idx_t var, idx_t row, const vector<double> &box_lower) const {
+        idx_t instance = indexer.InstanceOf(var, row);
+        double floor = input.InstanceLower(var, instance, box_lower);
+        return reach ? std::max(floor, InstanceReachLower(input.instance_reach_lower, var, instance)) : floor;
+    }
+
+    //! The ceiling of `var` as data row `row` reads it, against the box ceilings `box_upper`.
+    double UpperOfRow(idx_t var, idx_t row, const vector<double> &box_upper) const {
+        if (!reach) {
+            return box_upper[var];
+        }
+        idx_t instance = indexer.InstanceOf(var, row);
+        return std::min(box_upper[var], InstanceReachUpper(input.instance_reach_upper, var, instance));
     }
 };
 

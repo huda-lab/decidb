@@ -43,7 +43,7 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
                           const vector<double> &upper_bounds,
                           bool &has_unbounded,
                           idx_t skip_idx = DConstants::INVALID_INDEX,
-                          const InstanceFloors *floors = nullptr);
+                          const InstanceBox *instances = nullptr);
 
 //! Tight scalar Big-M for a per-row indicator constraint: the maximum over
 //! active rows of |rhs[r]| + (worst-case row contribution), plus a 1-unit margin
@@ -59,11 +59,11 @@ double DecideRowTermRange(const vector<idx_t> &variable_indices,
 //! `box` is the box the returned constant is valid for, and it is the caller's job to
 //! pass the one the constant will be used against — see `FormulationBox`. Widening a
 //! column after this returns does not make the constant conservative; it makes it a cap.
-//! `floors` gives each row's instance its own floor (SolverInput::instance_lower_bounds), so an instance the default
-//! floor of 0 holds on is sized from 0 and not from a lowered instance's floor.
+//! `instances` gives each row's instance its own box (InstanceBox), so an instance the default floor of 0 holds on is
+//! sized from 0 and not from a lowered instance's floor.
 double DecideTightPerRowBigM(const EvaluatedConstraint &ec, const FormulationBox &box,
                              idx_t num_rows,
-                             const vector<string> &var_names, const InstanceFloors &floors);
+                             const vector<string> &var_names, const InstanceBox &instances);
 
 //! The instances of a decision whose default floor of 0 a constant lower bound under a `when` replaces (a constraint's
 //! `lifted_floor`). A constant lower bound replaces the default floor on the instances whose rows it keeps; a decision
@@ -234,7 +234,7 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
 //! query is refused naming a column to bound. On the native path it is false — a
 //! general constraint needs no Big-M, so the auxiliary is simply left unboxed and the
 //! query answers. That divergence is the capability's whole payoff.
-void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_names,
+void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                               bool refuse_when_unbounded);
 
 //! Phase 2, LOWERING path: the Big-M sign-indicator rows that pin `aux = |inner|`.
@@ -242,13 +242,15 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
 void LinearizeAbsMaximize(SolverInput &input);
 
 //! The value rewrite's helper decisions (SolverInput::reducer_value_links), phase 1: box
-//! each helper by the reach of its members over every group -- the sum of their brackets
+//! each helper instance by the reach of its own group's members -- the sum of their brackets
 //! for SUM/AVG, their cover for MIN/MAX -- so a Big-M over it has a span and the root LP
-//! a box. Only ever tightens, like DeriveAbsAuxiliaryBounds: a member may be an ABS
-//! auxiliary and an ABS may hold a helper, so FormulateModel runs the two to a fixed
-//! point. A helper may be negative, so its floor is derived like its ceiling, never
-//! defaulted to 0; an end no member bounds is left open.
-void DeriveReducerValueBounds(SolverInput &input);
+//! a box. The reach goes to `instance_reach_lower` / `instance_reach_upper`, written afresh
+//! on each call (an instance is mapped to its group through VarIndexer::InstanceOf); the
+//! decision's box is the cover of every instance's reach and only ever tightens, like
+//! DeriveAbsAuxiliaryBounds: a member may be an ABS auxiliary and an ABS may hold a helper,
+//! so FormulateModel runs the two to a fixed point. A helper may be negative, so its floor
+//! is derived like its ceiling, never defaulted to 0; an end no member bounds is left open.
+void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer);
 
 //! Phase 2: emit each helper's definition, one row per group of its members. SUM/AVG:
 //! the flat equality `value - members = constants` (an AVG's members carry their 1/n).

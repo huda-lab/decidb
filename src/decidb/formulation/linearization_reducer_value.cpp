@@ -16,6 +16,7 @@
 #include "duckdb/decidb/formulation/ilp_linearization_internal.hpp"
 
 #include <cmath>
+#include <limits>
 
 namespace duckdb {
 
@@ -61,7 +62,10 @@ AuxRange GroupReach(const ReducerValueLinkSpec &link, const SolverInput &input, 
 
 } // namespace
 
-void DeriveReducerValueBounds(SolverInput &input) {
+void DeriveReducerValueBounds(SolverInput &input, const VarIndexer &indexer) {
+	constexpr double INF = std::numeric_limits<double>::infinity();
+	input.instance_reach_lower.resize(input.num_decide_vars);
+	input.instance_reach_upper.resize(input.num_decide_vars);
 	for (auto &link : input.reducer_value_links) {
 		auto &ec = link.rows;
 		const bool grouped = !ec.row_group_ids.empty();
@@ -72,20 +76,48 @@ void DeriveReducerValueBounds(SolverInput &input) {
 				members[group].push_back(row);
 			}
 		}
-		// One column box for the helper, whichever group an instance stands for: the
-		// cover of every group's reach. An end no member bounds stays open; an end
-		// already tighter stands.
+		// Each instance is boxed by the reach of the group it stands for: the helper has one instance per group, so a
+		// small group is not boxed as wide as the largest. An instance no group reaches keeps the open ends, and
+		// reads the decision's box.
+		const idx_t value_var = link.value_var;
+		const idx_t num_instances = indexer.NumInstances(value_var);
+		vector<AuxRange> reach(num_instances);
+		vector<bool> reached(num_instances, false);
 		AuxRange box;
 		for (auto &rows : members) {
-			if (!rows.empty()) {
-				box.Cover(GroupReach(link, input, rows));
+			if (rows.empty()) {
+				continue;
+			}
+			auto group_reach = GroupReach(link, input, rows);
+			auto instance = indexer.InstanceOf(value_var, rows.front());
+			reach[instance].Cover(group_reach);
+			reached[instance] = true;
+			box.Cover(group_reach);
+		}
+		// Written afresh on every call: the members' boxes have moved since the last one (an ABS auxiliary among them),
+		// and a diagnosis derives it again from its widened members.
+		auto &reach_lower = input.instance_reach_lower[value_var];
+		auto &reach_upper = input.instance_reach_upper[value_var];
+		reach_lower.assign(num_instances, -INF);
+		reach_upper.assign(num_instances, INF);
+		for (idx_t instance = 0; instance < num_instances; instance++) {
+			if (!reached[instance]) {
+				continue;
+			}
+			if (!reach[instance].lo_unbounded) {
+				reach_lower[instance] = reach[instance].lo;
+			}
+			if (!reach[instance].hi_unbounded) {
+				reach_upper[instance] = reach[instance].hi;
 			}
 		}
+		// The decision's box stays the cover of every instance's reach, so every pass that reads it stays sound. An end
+		// no member bounds stays open; an end already tighter stands.
 		if (!box.lo_unbounded) {
-			input.lower_bounds[link.value_var] = MaxValue<double>(input.lower_bounds[link.value_var], box.lo);
+			input.lower_bounds[value_var] = MaxValue<double>(input.lower_bounds[value_var], box.lo);
 		}
 		if (!box.hi_unbounded) {
-			input.upper_bounds[link.value_var] = MinValue<double>(input.upper_bounds[link.value_var], box.hi);
+			input.upper_bounds[value_var] = MinValue<double>(input.upper_bounds[value_var], box.hi);
 		}
 	}
 }
@@ -130,20 +162,21 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 			spec.need_envelope = link.need_envelope;
 			spec.need_closing = link.need_closing;
 			// Deactivated, a closing row reads `value - member <= M` for MAX (`>= -M` for
-			// MIN): the helper's box end against the family's far end. The helper's box is
-			// the cover of every group's reach (DeriveReducerValueBounds), so it may exceed
-			// this family's, which is why it is read rather than the family's own span.
-			const bool value_hi_open = input.upper_bounds[value_var] >= 1e20;
-			const bool value_lo_open = input.lower_bounds[value_var] <= -1e20;
+			// MIN): the helper's box end against the family's far end. The end is this
+			// group's own instance's (its reach, DeriveReducerValueBounds), not the
+			// decision's cover of every group's.
+			const idx_t instance = indexer.InstanceOf(value_var, group.first_row);
+			const double value_hi = input.InstanceBoxUpper(value_var, instance, input.upper_bounds);
+			const double value_lo = input.InstanceBoxLower(value_var, instance, input.lower_bounds);
+			const bool value_hi_open = value_hi >= 1e20;
+			const bool value_lo_open = value_lo <= -1e20;
 			spec.closing_underivable =
 			    is_max ? (value_hi_open || group.family.lo_unbounded) : (value_lo_open || group.family.hi_unbounded);
 			spec.closing_big_m = spec.closing_underivable ? 0.0
-			                     : is_max                 ? input.upper_bounds[value_var] - group.family.lo
-			                                              : group.family.hi - input.lower_bounds[value_var];
+			                     : is_max                 ? value_hi - group.family.lo
+			                                              : group.family.hi - value_lo;
 			if (spec.closing_underivable) {
-				spec.blame_var = group.family.Unbounded()
-				                     ? FindUnboundedContributor(link.rows, input.lower_bounds, input.upper_bounds)
-				                     : value_var;
+				spec.blame_var = FindUnboundedContributor(link.rows, input.lower_bounds, input.upper_bounds);
 			}
 			spec.label = link.label;
 			spec.envelope_kind = ConstraintKind::STRUCTURAL;

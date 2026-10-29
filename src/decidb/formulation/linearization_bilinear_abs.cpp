@@ -240,12 +240,14 @@ static double DemandedAuxReach(const SolverInput &input, idx_t aux_idx, idx_t nu
 
 } // namespace
 
-void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_names,
+void DeriveAbsAuxiliaryBounds(SolverInput &input, const VarIndexer &indexer, const vector<string> &var_names,
                               bool refuse_when_unbounded) {
     if (input.abs_maximize_links.empty()) {
         return;
     }
     const idx_t num_rows = input.num_rows;
+    // A helper among the members is read at its own instance's reach, as the model builder boxes its column.
+    const InstanceBox instances {input, indexer, /*reach=*/true};
     auto abs_tag_map = BuildAbsTagMap(input);
 
     for (auto &link : input.abs_maximize_links) {
@@ -279,7 +281,8 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
             }
             double vars_lo = 0.0;
             double vars_hi = 0.0;
-            DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, vars_lo, vars_hi, link.aux_idx);
+            DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, vars_lo, vars_hi, link.aux_idx,
+                                 &instances);
             // Negating the variable part swaps its two ends.
             double row_lo = link_rhs - vars_hi;
             double row_hi = link_rhs - vars_lo;
@@ -450,6 +453,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
         return;
     }
     const idx_t num_rows = input.num_rows;
+    const InstanceBox instances {input, indexer, /*reach=*/true};
     auto abs_tag_map = BuildAbsTagMap(input);
 
     for (auto &link : input.abs_maximize_links) {
@@ -489,8 +493,8 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             // is what makes this the range of the expression rather than of the row.
             double vars_lo = 0.0;
             double vars_hi = 0.0;
-            DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, vars_lo, vars_hi,
-                                 link.aux_idx);
+            DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, vars_lo, vars_hi, link.aux_idx,
+                                 &instances);
             double k = c1.rhs_values.Get(r);
             // Each end on its own. A row open on one side still contributes its closed
             // side, and a row whose contributors are all bounded gets a real box even
