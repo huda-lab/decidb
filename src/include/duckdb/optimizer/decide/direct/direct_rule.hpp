@@ -90,6 +90,18 @@ struct DirectIRScope {
 	unique_ptr<Expression> when;
 };
 
+//! A bound the bound-side rewrite left raw (DecideReducedBound): `rhs` is one value per row, and the constraint holds
+//! when the group's tightest value does. A rule that reads the bound reduces it in its own group aggregate: the MIN of
+//! an upper bound, the MAX of a lower one, both for `=`, over the rows the clause keeps in the group, and checks what
+//! the rewrite would have checked.
+struct DirectBoundReduction {
+	//! The bound as the user wrote it.
+	string text;
+	//! The message a row raises for a NaN `rhs`, NULL on a valid row (an `=` bound whose group shows two values raises
+	//! DirectBoundDisagreement from its MIN and MAX); null when `rhs` cannot be NaN.
+	unique_ptr<Expression> invalid;
+};
+
 struct DirectIRConstraint {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 	//! Index into the source-clause registry: the user's clause this constraint came from, shared by the constraints
@@ -101,6 +113,8 @@ struct DirectIRConstraint {
 	ExpressionType comparison = ExpressionType::INVALID;
 	vector<DirectPart> lhs;
 	unique_ptr<Expression> rhs;
+	//! Set when `rhs` is raw: the rule reduces it to the group's tightest value. Null when it is one value per group.
+	unique_ptr<DirectBoundReduction> reduction;
 	//! True when the comparison is a bound on one decision, read into `bound` by the solver path's own classifier
 	//! (DecideReadSingletonRow): the values it admits, on each row it keeps.
 	bool singleton_row = false;

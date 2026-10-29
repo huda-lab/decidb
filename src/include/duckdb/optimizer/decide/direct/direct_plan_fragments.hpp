@@ -2,6 +2,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
+#include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/planner/column_binding.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/expression/bound_window_expression.hpp"
@@ -59,6 +60,12 @@ unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Exp
 //! `value` on a row where `kept` is true, and NULL on any other. Nothing is computed on a row a `when` drops, so a
 //! value that raises (a logarithm of 0, an overflow) raises only on a kept row, as on the solver path.
 ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &value);
+
+//! The error of an `=` bound that takes two values in one group, on a row of the group: its smallest (`low`) and
+//! largest (`high`) value, and NULL where they agree. `text` is the bound as written. The bound-side rewrite and a rule
+//! that reduces the bound itself both raise it.
+ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &text, const ExprPtr &low,
+                                const ExprPtr &high);
 
 //===--------------------------------------------------------------------===//
 // Scope projection and data-valued bounds

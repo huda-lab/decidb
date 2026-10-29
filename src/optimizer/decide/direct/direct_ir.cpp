@@ -138,8 +138,23 @@ private:
 		return true;
 	}
 
+	//! Whether a recorded bound owns scope check `index`: the rule that reads the bound makes it
+	//! (DirectBoundReduction).
+	bool OwnedByReducedBound(idx_t index) const {
+		for (auto &bound : decide.reduced_bounds) {
+			if (bound.invalid_check == index || bound.disagreement_check == index) {
+				return true;
+			}
+		}
+		return false;
+	}
+
 	void ReadRowChecks(DirectIR &ir) const {
-		for (auto &check : decide.scope_checks) {
+		for (idx_t index = 0; index < decide.scope_checks.size(); index++) {
+			auto &check = decide.scope_checks[index];
+			if (OwnedByReducedBound(index)) {
+				continue;
+			}
 			DirectRowCheck row_check;
 			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
 				// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
@@ -361,6 +376,23 @@ private:
 	// Constraints
 	//===--------------------------------------------------------------------===//
 
+	//! The reduction the bound-side rewrite left to the rule, if it left one for this comparison.
+	void ReadReduction(const Expression &comparison, DirectIRConstraint &ir_node) const {
+		for (auto &bound : decide.reduced_bounds) {
+			if (bound.comparison != &comparison) {
+				continue;
+			}
+			ir_node.reduction = make_uniq<DirectBoundReduction>();
+			ir_node.reduction->text = bound.text;
+			if (bound.invalid_check != DConstants::INVALID_INDEX) {
+				auto &message = decide.scope_checks[bound.invalid_check].value;
+				// The rewrite built it over the source and its own windows.
+				D_ASSERT(CheckablePredicate(message.get()));
+				ir_node.reduction->invalid = message->Copy();
+			}
+		}
+	}
+
 	DirectIRConstraint ReadConstraint(const Expression &leaf, const WrapperScope &wrappers) const {
 		DirectIRConstraint ir_node;
 		idx_t source_id;
@@ -397,6 +429,7 @@ private:
 				ir_node.lhs.push_back(ReadRowPart(*comparison.left));
 			}
 			ir_node.rhs = comparison.right->Copy();
+			ReadReduction(leaf, ir_node);
 			ir_node.degree = DecideExpressionDegree(*comparison.left, decide.decide_index).degree;
 			// Direct rules run before the MIN/MAX rewrite tags an easy extremum, so only a per-row bound reads here.
 			ir_node.singleton_row = DecideReadSingletonRow(context, decide, comparison, ir_node.bound);

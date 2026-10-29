@@ -1,6 +1,7 @@
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
@@ -90,6 +91,18 @@ unique_ptr<Expression> DirectActiveWhen(const ExpressionBuilder &calc, const Exp
 
 ExprPtr DirectOnKeptRows(const ExpressionBuilder &calc, const ExprPtr &kept, const ExprPtr &value) {
 	return calc.If(kept, value, calc.Constant(Value(value->return_type)));
+}
+
+ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &text, const ExprPtr &low,
+                                const ExprPtr &high) {
+	// `text` is the bound as written (RenderDecideSource quotes a subquery from its source fragment).
+	auto format = StringUtil::Replace("`" + text + "`", "%", "%%") +
+	              " takes more than one value here (%g and %g) — an `=` bound cannot hold two different values "
+	              "at once, so this DECIDE query is infeasible.";
+	auto message = calc.Fn("printf", {calc.Constant(Value(format)), calc.Cast(low, LogicalType::DOUBLE),
+	                                  calc.Cast(high, LogicalType::DOUBLE)});
+	return calc.If(calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, low, high), message,
+	               calc.Constant(Value(LogicalType::VARCHAR)));
 }
 
 unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, const char *name,

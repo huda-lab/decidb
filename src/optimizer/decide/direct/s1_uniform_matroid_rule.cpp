@@ -11,6 +11,7 @@
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
+#include "duckdb/optimizer/decide/direct/direct_row_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
@@ -39,11 +40,14 @@ constexpr const char *RULE_NAME = "S1_UNIFORM_MATROID";
 struct Condition final : DirectApplicabilityCondition {
 	struct SourceBound {
 		ExpressionType comparison;
-		//! One value per group on every row the clause keeps: the bound-side window rewrite reduced the bound to its
-		//! group's tightest value and checked it (DecideOptimizer::RewriteRhsAggregates).
+		//! One value on every row the clause keeps: the group's tightest value already, or, with a `reduction`, the raw
+		//! value the plan reduces (DecideOptimizer::RewriteRhsAggregates).
 		unique_ptr<Expression> value;
 		//! The count body is `-x`, so `comparison` is already flipped and the value to compare against is `-B`.
 		bool negated = false;
+		//! The bound-side rewrite left `value` raw (DirectBoundReduction): the plan reduces it to its group's tightest
+		//! value and makes the checks the rewrite would have made. Null when `value` is one value per group already.
+		unique_ptr<DirectBoundReduction> reduction;
 	};
 	//! A value from the row that fixes `x`: it must be neither NULL nor, for a floating point value, NaN; a coefficient
 	//! must also be finite.
@@ -500,7 +504,15 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 		// the solver does, so an expression that can raise (an overflow in `COUNT(*) * k` over a window column) raises
 		// on both paths or on neither.
 		if (!bound.IsFoldable() && DirectIsSourceOnlyNumericMayRaise(bound, ir.decide_index, ir.source_bindings)) {
-			condition.source_bounds.push_back({type, bound.Copy(), negated});
+			Condition::SourceBound source_bound {type, bound.Copy(), negated, nullptr};
+			if (factor->reduction) {
+				source_bound.reduction = make_uniq<DirectBoundReduction>();
+				source_bound.reduction->text = factor->reduction->text;
+				if (factor->reduction->invalid) {
+					source_bound.reduction->invalid = factor->reduction->invalid->Copy();
+				}
+			}
+			condition.source_bounds.push_back(std::move(source_bound));
 			continue;
 		}
 		if (DirectIsLowerBound(type)) {
@@ -608,6 +620,7 @@ public:
 	DirectSubstitute Build(unique_ptr<LogicalOperator> source) const {
 		ScopeBindings scope;
 		source = ProjectScopeState(std::move(source), scope);
+		source = AddBoundValidation(std::move(source), scope);
 		source = AddFixedValueValidation(std::move(source), scope);
 		source = ProjectScore(std::move(source), scope);
 		auto ranked = RankAndFilterFeasibility(std::move(source));
@@ -661,6 +674,9 @@ private:
 	ColumnBinding fixed_zero_binding;
 	//! Each source-valued count bound's value, in the score projection.
 	vector<ColumnBinding> bound_bindings;
+	//! The MIN and the MAX of a raw bound over its group, in the rank window (RankAndFilterFeasibility): the MIN of an
+	//! upper bound and an `=` bound, the MAX of a lower bound and an `=` bound.
+	mutable vector<ColumnBinding> bound_minimum, bound_maximum;
 
 	//! Copy of a proved expression whose source references follow the state projection, when there is one.
 	unique_ptr<Expression> CopyIntoState(const Expression &expr, const ScopeBindings &scope) const {
@@ -700,6 +716,21 @@ private:
 			scope.fixed_zero_binding = state.extra[1];
 		}
 		return std::move(state.plan);
+	}
+
+	//! Stage 2a: the rewrite's check of each raw bound for NaN, which comes before any value check of the plan.
+	unique_ptr<LogicalOperator> AddBoundValidation(unique_ptr<LogicalOperator> source,
+	                                               const ScopeBindings &scope) const {
+		vector<DirectRowCheck> checks;
+		for (auto &bound : condition.source_bounds) {
+			if (bound.reduction && bound.reduction->invalid) {
+				DirectRowCheck check;
+				check.invalid = CopyIntoState(*bound.reduction->invalid, scope);
+				checks.push_back(std::move(check));
+			}
+		}
+		source->ResolveOperatorTypes();
+		return DirectAddRowChecks(optimizer, checks, std::move(source));
 	}
 
 	//! Stage 2: validate the fixed values that come from the row, on the rows that read them. The source-valued bounds
@@ -756,6 +787,17 @@ private:
 		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
 			auto &bound = condition.source_bounds[i];
 			auto value = CopyIntoState(*bound.value, scope);
+			if (bound.reduction) {
+				// A raw bound stays in its own type, whose MIN and MAX the rank window takes, and is computed on the
+				// rows the clause keeps alone.
+				auto raw = calc.Wrap(std::move(value));
+				append_at(
+				    bound_bindings[i],
+				    calc.Out(condition.scoped
+				                 ? DirectOnKeptRows(calc, calc.Col(LogicalType::BOOLEAN, scope.eligible_binding), raw)
+				                 : raw));
+				continue;
+			}
 			if (bound.negated) {
 				value = DirectScaledTerm(optimizer, std::move(value), -1, false, 1.0, false);
 			}
@@ -766,6 +808,64 @@ private:
 		return std::move(score);
 	}
 
+	//! The value of source-valued bound `index` on a side, as DOUBLE: the group's tightest value when the plan reduces
+	//! it, else the bound's own column. A negated bound (`SUM(-x) <= B` is `SUM(x) >= -B`) holds B, whose tightest
+	//! value on the flipped side is the other extremum, negated.
+	ExprPtr BoundValue(idx_t index, bool upper) const {
+		auto &bound = condition.source_bounds[index];
+		if (!bound.reduction) {
+			return calc.Col(LogicalType::DOUBLE, bound_bindings[index]);
+		}
+		auto type = bound.value->return_type;
+		auto extremum = calc.Cast(calc.Col(type, upper != bound.negated ? bound_minimum[index] : bound_maximum[index]),
+		                          LogicalType::DOUBLE);
+		return bound.negated ? calc.Neg(extremum) : extremum;
+	}
+
+	//! Adds the group MIN and MAX of each raw bound to `window`, which is partitioned like the rank: the MIN where the
+	//! bound as written is an upper bound or an `=` bound, the MAX where it is a lower bound or an `=` bound.
+	void AddBoundReductions(LogicalWindow &window) const {
+		bound_minimum.assign(condition.source_bounds.size(), ColumnBinding());
+		bound_maximum.assign(condition.source_bounds.size(), ColumnBinding());
+		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
+			auto &bound = condition.source_bounds[i];
+			if (!bound.reduction) {
+				continue;
+			}
+			auto add = [&](const char *function, ColumnBinding &slot) {
+				auto extremum = DirectWindowExtremum(optimizer, function,
+				                                     calc.Out(calc.Col(bound.value->return_type, bound_bindings[i])));
+				AddScope(*extremum);
+				slot = ColumnBinding(window_index, window.expressions.size());
+				window.expressions.push_back(std::move(extremum));
+			};
+			if (bound.negated ? DirectIsLowerBound(bound.comparison) : DirectIsUpperBound(bound.comparison)) {
+				add("min", bound_minimum[i]);
+			}
+			if (bound.negated ? DirectIsUpperBound(bound.comparison) : DirectIsLowerBound(bound.comparison)) {
+				add("max", bound_maximum[i]);
+			}
+		}
+	}
+
+	//! The error of each raw `=` bound whose group shows two values, NULL where it shows one.
+	vector<unique_ptr<Expression>> BoundDisagreements() const {
+		vector<unique_ptr<Expression>> checks;
+		for (idx_t i = 0; i < condition.source_bounds.size(); i++) {
+			auto &bound = condition.source_bounds[i];
+			if (!bound.reduction || bound.comparison != ExpressionType::COMPARE_EQUAL) {
+				continue;
+			}
+			auto type = bound.value->return_type;
+			auto message = DirectBoundDisagreement(calc, bound.reduction->text, calc.Col(type, bound_minimum[i]),
+			                                       calc.Col(type, bound_maximum[i]));
+			checks.push_back(DirectRaiseIf(calc,
+			                               calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
+			                               DirectErrorPredicate(optimizer, calc.Out(message))));
+		}
+		return checks;
+	}
+
 	//! Inclusive count limit of one source-valued bound, as BIGINT: its value rounded, clamped to the BIGINT range,
 	//! and -1 (upper) or 0 (lower) when the value is below zero. A NULL value skips its instance: no limit.
 	ExprPtr SourceLimit(idx_t index, bool upper) const {
@@ -773,7 +873,7 @@ private:
 		// Every caller asks for a side the bound has: an upper limit of an upper bound, a lower of a lower bound.
 		D_ASSERT(upper ? DirectIsUpperBound(bound.comparison) : DirectIsLowerBound(bound.comparison));
 		auto cap = [&]() {
-			return calc.Col(LogicalType::DOUBLE, bound_bindings[index]);
+			return BoundValue(index, upper);
 		};
 		bool strict =
 		    bound.comparison == (upper ? ExpressionType::COMPARE_LESSTHAN : ExpressionType::COMPARE_GREATERTHAN);
@@ -891,6 +991,7 @@ private:
 			AddScope(*count);
 			window->expressions.push_back(std::move(count));
 		}
+		AddBoundReductions(*window);
 		window->children.push_back(std::move(guard));
 		result.rank_binding = ColumnBinding(window_index, 0);
 		result.plan = std::move(window);
@@ -917,7 +1018,8 @@ private:
 		auto fixed_count = [&]() {
 			return calc.Col(LogicalType::BIGINT, ColumnBinding(window_index, ranked.fixed_count_slot));
 		};
-		vector<unique_ptr<Expression>> group_checks;
+		// A raw `=` bound takes one value in a group, which the bound-side rewrite checked before the bounds.
+		vector<unique_ptr<Expression>> group_checks = BoundDisagreements();
 		if (condition.impossible) {
 			// No bound can hold, so a group with any row is infeasible.
 			group_checks.push_back(must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
@@ -941,9 +1043,9 @@ private:
 					if (!DirectIsLowerBound(condition.source_bounds[i].comparison)) {
 						continue;
 					}
-					group_checks.push_back(must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
-					                                              calc.Col(LogicalType::DOUBLE, bound_bindings[i]),
-					                                              calc.Num(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT))));
+					group_checks.push_back(
+					    must_not_hold(calc.Cmp(ExpressionType::COMPARE_GREATERTHANOREQUALTO, BoundValue(i, false),
+					                           calc.Num(DECIDE_FIRST_DOUBLE_BEYOND_BIGINT))));
 				}
 			}
 			if (has_fixes && has_upper) {

@@ -60,6 +60,11 @@ private:
 	//! it.
 	void RewriteRhsAggregates(LogicalDecide &decide);
 
+	//! Builds the windows of the bounds RewriteRhsAggregates left raw (LogicalDecide::reduced_bounds): the tightest
+	//! value of each. Runs when no direct-solve rule took the query, because only the solver path reads the reduced
+	//! column.
+	void InstallReducedBounds(LogicalDecide &decide);
+
 	//! Apply all DECIDE optimization passes to a LogicalDecide node
 	void OptimizeDecide(LogicalDecide &decide);
 	//! Before any one-to-many rewrite, assign written-order identities to source clauses

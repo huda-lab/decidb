@@ -65,6 +65,7 @@ void DecideOptimizer::OptimizeSubtree(unique_ptr<LogicalOperator> &op, unique_pt
 		RewriteRhsAggregates(op->Cast<LogicalDecide>());
 		ApplyDirectSolveRules(op, root, optimizer, GetDirectSolveMode(optimizer.context));
 		if (op->type == LogicalOperatorType::LOGICAL_DECIDE) {
+			InstallReducedBounds(op->Cast<LogicalDecide>());
 			OptimizeDecide(op->Cast<LogicalDecide>());
 		}
 	}

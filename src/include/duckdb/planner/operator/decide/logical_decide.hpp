@@ -124,6 +124,27 @@ struct DecideScopeCheck {
     static DecideScopeCheck Deserialize(Deserializer &deserializer);
 };
 
+//! A bound the bound-side rewrite (DecideOptimizer::RewriteRhsAggregates) left raw instead of reducing it: a clause in
+//! the aggregate shape is one constraint per group, which holds when the group's tightest bound does (`<=` takes its
+//! MIN,
+//! `>=` its MAX, `=` needs one value), so the bound is one value per group once reduced. The rewrite records what it
+//! would reduce; a direct-solve rule that applies reduces it in its own group aggregate, and when none does the
+//! solver path builds the windows (DecideOptimizer::InstallReducedBounds). Neither is serialized: the optimizer makes
+//! them, and an optimized plan is never serialized.
+struct DecideReducedBound {
+	//! The comparison whose right-hand side is the raw value; the left side holds no reducer with a `when` of its own.
+	Expression *comparison = nullptr;
+	//! The clause's `when` (it is in the constraint tree), or null.
+	const Expression *when = nullptr;
+	//! The bound as the user wrote it, for a message.
+	string text;
+	//! Indexes into `scope_checks` of the checks this bound owns, or INVALID_INDEX: the NaN check of its raw value, and
+	//! for an `=` bound the disagreement check, whose message the windows (or the rule) fill in. The direct IR reads
+	//! neither as a row check.
+	idx_t invalid_check = DConstants::INVALID_INDEX;
+	idx_t disagreement_check = DConstants::INVALID_INDEX;
+};
+
 //! A source column's logical identity and the name the user wrote for it.
 //! Keeping these together makes it impossible for the binding/name association to
 //! drift through mismatched parallel vectors.
@@ -452,6 +473,10 @@ public:
 	//! bounds it computes, after them, so a bad value is reported only once every scope
 	//! check has passed, as when the bound was read in the operator.
 	vector<DecideScopeCheck> scope_checks;
+
+	//! The bounds RewriteRhsAggregates left raw, in clause order; see DecideReducedBound. Empty once the solver path
+	//! has built their windows.
+	vector<DecideReducedBound> reduced_bounds;
 
 	//! The registered name ("gurobi", "highs") of the solver this query will run on,
     //! chosen ONCE by ChooseDecideSolver before any rewrite pass and carried from here

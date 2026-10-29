@@ -36,7 +36,7 @@ from solver.types import ObjSense, VarType
 from ._direct_differential import error_class
 from ._large_numbers import writes_large_number
 from ._direct_oracle_common import _allow_direct_path  # noqa: F401  (autouse fixture)
-from ._direct_oracle_common import BY_KEY_PENDING, READ_THROUGH_PENDING, agree_with_oracle, direct_path
+from ._direct_oracle_common import BY_KEY_PENDING, agree_with_oracle, direct_path
 from ._direct_oracle_common import outcome as _run_all, run as _run, sql_literal, values_clause
 
 
@@ -2721,7 +2721,7 @@ def test_r1_several_decisions_plan_has_one_sort_one_unpivot_and_one_aggregate(de
 @pytest.mark.parametrize(
     "scope",
     [
-        pytest.param("", marks=pytest.mark.xfail(strict=True, reason=READ_THROUGH_PENDING)),
+        pytest.param(""),
         pytest.param(" by (g)", marks=pytest.mark.xfail(strict=True, reason=BY_KEY_PENDING)),
     ],
     ids=["global", "per"],
@@ -2771,3 +2771,27 @@ def test_r1_tied_items_of_several_decisions_share_in_proportion_to_their_room(de
     direct = _run(decidb_cli, sql, "require")[0]
     assert [row[1] for row in direct] == pytest.approx([1.5, 2.0, 1.0])
     assert [row[2] for row in direct] == pytest.approx([3.0, 1.0, 2.0])
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "budget",
+    [
+        # The sum has a `when` of its own, so the rows it covers are not the rows its limit is read over: row 3 is left
+        # out of the budget and its limit of 1 still rules (the bound-side rewrite builds its window).
+        "SUM(when keep: w*amount) <= cap",
+        "SUM(when keep: w*amount) >= cap",
+        # The `when` on the clause: the limit is read over the covered rows only.
+        "when keep: SUM(w*amount) <= cap",
+    ],
+)
+def test_r1_a_data_limit_is_read_over_the_rows_the_clause_keeps(decidb_cli, budget):
+    sql = (
+        "SELECT id, amount FROM (FROM (VALUES (1, true, 3.0, 1.0, 2.0), (2, true, 3.0, 1.0, 1.0), "
+        "(3, false, 1.0, 1.0, 5.0), (4, true, 3.0, 1.0, 3.0)) t(id, keep, cap, w, v) "
+        f"DECIDE amount(REAL) SUCH THAT amount >= 0 AND amount <= 4 AND {budget} MAXIMIZE SUM(v*amount)) q ORDER BY id"
+    )
+    direct = _run_all(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
+    assert direct == _run_all(decidb_cli, sql, "off")

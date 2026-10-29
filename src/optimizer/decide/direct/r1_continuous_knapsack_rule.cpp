@@ -37,12 +37,16 @@ constexpr const char *RULE_NAME = "R1_CONTINUOUS_KNAPSACK";
 //! decisions of a row: every per-row bound reads one decision, and no objective term multiplies two.
 struct Condition final : DirectApplicabilityCondition {
 	//! A limit of the budget read from the data: a source column or an expression over source columns. The bound-side
-	//! window rewrite (RewriteRhsAggregates) made it one value on every kept row of a group (its tightest, with `=`
-	//! values that agree) and checked it for NaN under the plan, so the rule only reads it. A NULL skips its instance:
-	//! the group's MIN or MAX passes over it (LimitOf).
+	//! rewrite (RewriteRhsAggregates) leaves it raw when no `when` of the sum's own narrows the budget, and the plan
+	//! reduces it to the group's tightest value in its group aggregate (LimitOf) and makes the checks the rewrite
+	//! would have made; otherwise it is one value on every kept row of a group already. A NULL skips its instance:
+	//! the group's MIN or MAX passes over it.
 	struct DataLimit {
 		ExpressionType comparison = ExpressionType::INVALID;
 		unique_ptr<Expression> value;
+		//! The bound-side rewrite left `value` raw (DirectBoundReduction): the plan checks it for NaN and, for an `=`
+		//! limit, that a group shows one value. Null when `value` is one value per group already.
+		unique_ptr<DirectBoundReduction> reduction;
 	};
 	DecideSense sense = DecideSense::FEASIBILITY;
 	//! Which rows the budget covers, and in which groups: a row whose `when` holds and whose group keys are all not
@@ -258,6 +262,13 @@ bool Rule::ProveDataLimit(const DirectIR &ir, const DirectIRConstraint &ir_node,
 	Condition::DataLimit limit;
 	limit.comparison = ir_node.comparison;
 	limit.value = rhs.Copy();
+	if (ir_node.reduction) {
+		limit.reduction = make_uniq<DirectBoundReduction>();
+		limit.reduction->text = ir_node.reduction->text;
+		if (ir_node.reduction->invalid) {
+			limit.reduction->invalid = ir_node.reduction->invalid->Copy();
+		}
+	}
 	condition.data_limits.push_back(std::move(limit));
 	return true;
 }
@@ -763,6 +774,10 @@ private:
 	static string LimitName(idx_t j) {
 		return "limit_" + std::to_string(j);
 	}
+	//! The name of the column that holds the NaN message of data limit `j`.
+	static string LimitMessageName(idx_t j) {
+		return "limit_message_" + std::to_string(j);
+	}
 
 	//! The column that says whether a row belongs to a budget; only a scoped budget has one.
 	static constexpr const char *ELIGIBLE = "elig";
@@ -838,16 +853,20 @@ private:
 	// P1 and P2: raw values, limits from the data, per-clause bounds, the objective value
 	//===------------------------------------------------------------------===//
 
-	//! The value of each limit read from the data, as DOUBLE, on the rows of the budget (NULL on the others). It is one
-	//! value on the budget's rows of a group, so stage 2's group MIN or MAX is that value.
+	//! The value of each limit read from the data, in its own type, on the rows of the budget (NULL on the others).
+	//! Stage 2 takes its group MIN or MAX, which is the limit itself when the value is one per group already.
 	void AddLimitValues(Named &added) const {
 		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
 			auto &limit = condition.data_limits[j];
-			auto value = calc.Cast(calc.Of(*OverState(*limit.value)), LogicalType::DOUBLE);
+			// In its own type: a MIN and a MAX of two values that become one double still differ (an `=` limit).
+			auto value = calc.Of(*OverState(*limit.value));
 			if (condition.scoped) {
 				value = DirectOnKeptRows(calc, C(ELIGIBLE), value);
 			}
 			added.emplace_back(LimitName(j), value);
+			if (limit.reduction && limit.reduction->invalid) {
+				added.emplace_back(LimitMessageName(j), calc.Of(*OverState(*limit.reduction->invalid)));
+			}
 		}
 	}
 
@@ -902,6 +921,16 @@ private:
 		auto number = [&](const string &name, DirectNumberKind kind) {
 			return DirectValidNumberPredicate(optimizer, LogicalType::DOUBLE, columns.at(name).binding, kind);
 		};
+		// The bound-side rewrite's checks of a raw limit come before any other, as its scope checks did.
+		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
+			auto &reduction = condition.data_limits[j].reduction;
+			if (reduction && reduction->invalid) {
+				auto message = C(LimitMessageName(j));
+				checks.push_back(
+				    DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
+				                  DirectErrorPredicate(optimizer, calc.Out(message))));
+			}
+		}
 		for (idx_t j = 0; j < condition.clauses.size(); j++) {
 			auto &clause = condition.clauses[j];
 			auto suffix = std::to_string(j);
@@ -1207,6 +1236,10 @@ private:
 	bool HasDataLimits() const {
 		return !condition.data_limits.empty();
 	}
+	//! The group extremum of data limit `j` as a DOUBLE.
+	ExprPtr LimitExtreme(idx_t j, ColumnBinding binding) const {
+		return calc.Cast(calc.Col(condition.data_limits[j].value->return_type, binding), LogicalType::DOUBLE);
+	}
 	//! The budget's limits L and U in a group: the constants, or with a limit read from the data the group columns
 	//! stage 2 computes.
 	ExprPtr LowerOf(const vector<ColumnBinding> &limits) const {
@@ -1292,11 +1325,12 @@ private:
 		vector<LimitExtremes> extremes;
 		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
 			LimitExtremes extreme;
+			auto type = condition.data_limits[j].value->return_type;
 			if (DirectIsUpperBound(condition.data_limits[j].comparison)) {
-				extreme.minimum = aggregate.Add(Aggregate("min", DoubleColumn(values[j])));
+				extreme.minimum = aggregate.Add(Aggregate("min", calc.Col(type, values[j])));
 			}
 			if (DirectIsLowerBound(condition.data_limits[j].comparison)) {
-				extreme.maximum = aggregate.Add(Aggregate("max", DoubleColumn(values[j])));
+				extreme.maximum = aggregate.Add(Aggregate("max", calc.Col(type, values[j])));
 			}
 			extremes.push_back(extreme);
 		}
@@ -1313,10 +1347,10 @@ private:
 		for (idx_t j = 0; j < extremes.size(); j++) {
 			auto comparison = condition.data_limits[j].comparison;
 			if (upper && DirectIsUpperBound(comparison)) {
-				sides.push_back(DoubleColumn(extremes[j].minimum));
+				sides.push_back(LimitExtreme(j, extremes[j].minimum));
 			}
 			if (!upper && DirectIsLowerBound(comparison)) {
-				sides.push_back(DoubleColumn(extremes[j].maximum));
+				sides.push_back(LimitExtreme(j, extremes[j].maximum));
 			}
 		}
 		return upper ? calc.Min(sides) : calc.Max(sides);
@@ -1359,6 +1393,18 @@ private:
 		auto has_rows = calc.Cmp(ExpressionType::COMPARE_GREATERTHAN, calc.Col(LogicalType::BIGINT, rows),
 		                         calc.Constant(Value::BIGINT(0)));
 		vector<unique_ptr<Expression>> checks;
+		// A raw `=` limit takes one value in a group: its MIN and MAX agree (the bound-side rewrite's check).
+		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
+			auto &limit = condition.data_limits[j];
+			if (limit.reduction && limit.comparison == ExpressionType::COMPARE_EQUAL) {
+				auto message = DirectBoundDisagreement(calc, limit.reduction->text,
+				                                       calc.Col(limit.value->return_type, extremes[j].minimum),
+				                                       calc.Col(limit.value->return_type, extremes[j].maximum));
+				checks.push_back(
+				    DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
+				                  DirectErrorPredicate(optimizer, calc.Out(message))));
+			}
+		}
 		checks.push_back(calc.Out(BoolColumn(data_valid)));
 		checks.push_back(DirectRaiseIf(calc, calc.Out(And(has_rows, verdict.infeasible)),
 		                               DirectInfeasibleErrorPredicate(optimizer)));

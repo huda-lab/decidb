@@ -973,6 +973,16 @@ S1_ERROR_CASES = {
         ),
         "equality_varies",
     ),
+    # The plan reduces a raw data bound itself (DecideReducedBound), and makes the checks the bound-side rewrite makes on
+    # the solver path: an `=` bound that takes two values in the one group, and a NaN limit on a row it reads.
+    "equality_bound_varies_without_a_scope": (
+        _problem("(1, 1.0::DOUBLE, 9.0), (2, 2.0::DOUBLE, 8.0)", "id, eqcap, score", "SUM(x) = eqcap"),
+        "equality_varies",
+    ),
+    "count_bound_is_nan": (
+        _problem("(1, 1.0::DOUBLE, 9.0), (2, 'NaN'::DOUBLE, 8.0)", "id, cap, score", "SUM(x) <= cap"),
+        "null_bound",
+    ),
     # A computed value raises direct solve's own NaN error.
     "fixed_computed_value_nan": (
         _problem(
@@ -1611,3 +1621,28 @@ def test_s1_bound_over_a_column_raises_only_where_the_solver_does(decidb_cli, na
         direct = _outcome(decidb_cli, sql, "require")
         assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
         assert direct == solver
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        # The sum has a `when` of its own, so the rows it counts are not the rows its bound is read over: row 3 is left
+        # out of the count and its limit of 1 still rules (the bound-side rewrite builds its window, DecideReducedBound).
+        pytest.param("SUM(when keep: x) <= cap", id="own-when-upper"),
+        pytest.param("SUM(when keep: x) >= cap", id="own-when-lower"),
+        # The same rows with the `when` on the clause: the limit is read over the covered rows only.
+        pytest.param("when keep: SUM(x) <= cap", id="clause-when-upper"),
+    ],
+)
+def test_s1_a_data_bound_is_read_over_the_rows_the_clause_keeps(decidb_cli, constraint):
+    sql = (
+        "SELECT id, x FROM (FROM (VALUES (1, true, 3.0, 9.0), (2, true, 3.0, 8.0), (3, false, 1.0, 7.0), "
+        "(4, true, 3.0, 6.0)) t(id, keep, cap, score) "
+        f"DECIDE x(BOOL) SUCH THAT {constraint} MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    direct = _outcome(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
+    assert direct == _outcome(decidb_cli, sql, "off")

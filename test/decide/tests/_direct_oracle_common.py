@@ -34,7 +34,6 @@ def _allow_direct_path(monkeypatch):
 # Direct solve declines a reducer's `by` key until S1 and R1 read it (framework todo H-05). Until then the direct path
 # of a query with one is expected to fail, strictly, so that H-05 removes the mark.
 BY_KEY_PENDING = "direct solve reads no by key yet (framework todo H-05)"
-READ_THROUGH_PENDING = "a data bound costs two windows before the rule (framework todo H-03)"
 
 
 @contextlib.contextmanager

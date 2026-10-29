@@ -69,6 +69,21 @@ public:
 		Install();
 	}
 
+	//! Builds the windows of the bounds `Run` recorded: the tightest value of each, and the message of an `=` bound
+	//! that takes two. The solver path needs them; a direct rule reduces the bound itself.
+	void InstallRecorded() {
+		for (auto &bound : decide.reduced_bounds) {
+			auto &comparison = bound.comparison->Cast<BoundComparisonExpression>();
+			when = bound.when;
+			auto disagreement = ReduceToTightest(comparison, bound.text);
+			if (bound.disagreement_check != DConstants::INVALID_INDEX) {
+				decide.scope_checks[bound.disagreement_check].value = std::move(disagreement);
+			}
+		}
+		decide.reduced_bounds.clear();
+		Install();
+	}
+
 private:
 	//! One LogicalWindow of the stack: level 0 reads the source, level k also the columns of the levels below it.
 	struct Level {
@@ -106,7 +121,8 @@ private:
 	//! A clause in the aggregate shape is one constraint per group. Its data bound is checked on every kept row, before
 	//! any value is read, and a bound that may differ between the kept rows of a group is reduced to the tightest one.
 	//! `<>` keeps every value: each one is excluded. A query-wide value has one value already. A row-wise bound is
-	//! checked by the solver as it reads it.
+	//! checked by the solver as it reads it. The reduction is only recorded when the sum has no `when` of its own, for
+	//! then the rows a rule sums are the rows the bound is read over; the solver path builds its window later.
 	void RewriteBound(BoundComparisonExpression &comparison) {
 		// Canonicalization put every decision on the left, so the right is data.
 		bool aggregate_data_bound =
@@ -118,10 +134,70 @@ private:
 		if (!aggregate_data_bound) {
 			return;
 		}
-		AddValueCheck(InvalidValueMessage(*comparison.right, "constraint right-hand side", Kept()));
-		if (comparison.type != ExpressionType::COMPARE_NOTEQUAL && !query_wide) {
-			ReduceToTightest(comparison, text);
+		auto invalid = InvalidValueMessage(*comparison.right, "constraint right-hand side", Kept());
+		bool reduces = comparison.type != ExpressionType::COMPARE_NOTEQUAL && !query_wide &&
+		               !OneValuePerGroup(*comparison.right, GroupKeyOf(comparison));
+		if (reduces && !HasOwnWhen(*comparison.left)) {
+			Record(comparison, text, std::move(invalid));
+			return;
 		}
+		AddValueCheck(std::move(invalid));
+		if (reduces) {
+			auto disagreement = ReduceToTightest(comparison, text);
+			AddValueCheck(std::move(disagreement));
+		}
+	}
+
+	//! Whether a reducer on `side` has a `when` written in it. The tests the canonicalizer adds so that a SUM skips a
+	//! NULL are not one: they leave the rows the sum covers as the clause's.
+	static bool HasOwnWhen(const Expression &side) {
+		bool found = false;
+		if (side.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+			auto &filter = side.Cast<BoundAggregateExpression>().filter;
+			return filter && !OnlySkipNullTests(*filter);
+		}
+		ExpressionIterator::EnumerateChildren(side,
+		                                      [&](const Expression &child) { found = found || HasOwnWhen(child); });
+		return found;
+	}
+
+	static bool OnlySkipNullTests(const Expression &filter) {
+		if (HasDecideTag(filter.GetAlias(), SKIP_NULL_TAG)) {
+			return true;
+		}
+		if (filter.GetExpressionType() != ExpressionType::CONJUNCTION_AND) {
+			return false;
+		}
+		for (auto &child : filter.Cast<BoundConjunctionExpression>().children) {
+			if (!OnlySkipNullTests(*child)) {
+				return false;
+			}
+		}
+		return true;
+	}
+
+	//! Leaves the bound raw. The checks it owns keep their place in the scope checks, in clause order: the NaN check of
+	//! its raw value, and for an `=` bound the check of two values in a group, which has no message until the bound is
+	//! reduced.
+	void Record(BoundComparisonExpression &comparison, const string &text, unique_ptr<Expression> invalid) {
+		DecideReducedBound bound;
+		bound.comparison = &comparison;
+		bound.when = when;
+		bound.text = text;
+		auto add_check = [&](unique_ptr<Expression> message) {
+			DecideScopeCheck check;
+			check.kind = DecideScopeCheckKind::VALUE_IS_VALID;
+			check.value = std::move(message);
+			decide.scope_checks.push_back(std::move(check));
+			return decide.scope_checks.size() - 1;
+		};
+		if (invalid) {
+			bound.invalid_check = add_check(std::move(invalid));
+		}
+		if (comparison.type == ExpressionType::COMPARE_EQUAL) {
+			bound.disagreement_check = add_check(nullptr);
+		}
+		decide.reduced_bounds.push_back(std::move(bound));
 	}
 
 	void ReplaceReducers(unique_ptr<Expression> &expr) {
@@ -239,14 +315,11 @@ private:
 	}
 
 	//! The tightest bound of each group: the MIN of an upper bound, the MAX of a lower one. An `=` bound must have one
-	//! value per group.
-	void ReduceToTightest(BoundComparisonExpression &comparison, const string &text) {
+	//! value per group, and the message of a row of a group where it has two is returned (null for any other bound).
+	unique_ptr<Expression> ReduceToTightest(BoundComparisonExpression &comparison, const string &text) {
 		D_ASSERT(DirectIsUpperBound(comparison.type) || DirectIsLowerBound(comparison.type));
 		auto kept = Kept();
 		auto keys = GroupKeyOf(comparison);
-		if (OneValuePerGroup(*comparison.right, keys)) {
-			return;
-		}
 		auto value = OnRows(kept, calc.Of(*comparison.right));
 		auto extremum = [&](const char *name) {
 			auto window = DirectWindowExtremum(optimizer, name, calc.Out(value));
@@ -254,11 +327,13 @@ private:
 			return Place(std::move(window));
 		};
 		auto tightest = extremum(DirectIsUpperBound(comparison.type) ? "min" : "max");
+		unique_ptr<Expression> disagreement;
 		if (comparison.type == ExpressionType::COMPARE_EQUAL) {
-			AddValueCheck(DisagreementMessage(text, tightest, extremum("max"), kept));
+			disagreement = calc.Out(OnRows(kept, DirectBoundDisagreement(calc, text, tightest, extremum("max"))));
 		}
 		comparison.right = calc.Out(tightest);
 		comparison.right->SetAlias(text);
+		return disagreement;
 	}
 
 	//! Whether `bound` has one value in each group of `keys` among the kept rows: it reads data only through reducers
@@ -284,19 +359,6 @@ private:
 		ExpressionIterator::EnumerateChildren(
 		    bound, [&](const Expression &child) { one = one && OneValuePerGroup(child, keys); });
 		return one;
-	}
-
-	//! The `=` bound's error on a kept row of a group whose bound takes two values (its smallest and largest).
-	unique_ptr<Expression> DisagreementMessage(const string &text, const ExprPtr &low, const ExprPtr &high,
-	                                           const ExprPtr &kept) const {
-		// `text` is the bound as written (RenderDecideSource quotes a subquery from its source fragment).
-		auto format = StringUtil::Replace("`" + text + "`", "%", "%%") +
-		              " takes more than one value here (%g and %g) — an `=` bound cannot hold two different values "
-		              "at once, so this DECIDE query is infeasible.";
-		auto message = calc.Fn("printf", {calc.Constant(Value(format)), calc.Cast(low, LogicalType::DOUBLE),
-		                                  calc.Cast(high, LogicalType::DOUBLE)});
-		auto differs = calc.Cmp(ExpressionType::COMPARE_NOTEQUAL, low, high);
-		return calc.Out(OnRows(kept, calc.If(differs, message, calc.Constant(Value(LogicalType::VARCHAR)))));
 	}
 
 	//! The message a row raises for a NaN `value` among `rows` (every row when null), and NULL elsewhere: the solver's
@@ -325,7 +387,7 @@ private:
 			return;
 		}
 		for (auto &check : decide.scope_checks) {
-			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && check.value->Equals(*message)) {
+			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID && check.value && check.value->Equals(*message)) {
 				return;
 			}
 		}
@@ -441,6 +503,12 @@ private:
 void DecideOptimizer::RewriteRhsAggregates(LogicalDecide &decide) {
 	D_ASSERT(decide.children.size() == 1);
 	RhsWindowRewriter(optimizer, decide).Run();
+}
+
+void DecideOptimizer::InstallReducedBounds(LogicalDecide &decide) {
+	if (!decide.reduced_bounds.empty()) {
+		RhsWindowRewriter(optimizer, decide).InstallRecorded();
+	}
 }
 
 } // namespace duckdb
