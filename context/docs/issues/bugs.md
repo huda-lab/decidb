@@ -101,42 +101,6 @@
   `decide_linear_form.cpp` (the product refusal, the 4-argument overload) with a data column over a join; each
   that is reached gets a test, each that is not reached at all is deleted.
 
-## BUG-6 — Wrong answers: solver tolerance
-
-Each reproduces on the current build.
-
-- **A Big-M encoding over large integer coefficients is answered with the clause violated:**
-  over one row, `DECIDE x(INT), y(INT) SUCH THAT x <= 10 AND y <= 10 AND abs(c * x - c * y)
-  >= 5 MINIMIZE SUM(x) + SUM(y)` answers `x = y = 0`. The first wrong c:
-
-  | construct | HiGHS | Gurobi (native) | Gurobi, `DECIDB_NATIVE_CONSTRUCTS=off` |
-  |---|---|---|---|
-  | `abs(c*x - c*y) >= 5` | ~5e5 | ~3e8 | ~5e5 |
-  | `c*x - c*y <> 0` | 1e6 | 1e9 | 1e5 |
-  | hard `min(c*x) <= -5` | 1e9 | right | right |
-  | `x IN (0, c) AND x >= 5` | solver error (status 4) from 1e7 | right | right |
-
-  Hard `max` and bilinear products are right at every c tested. The plain row
-  `c*x - c*y >= 5` is right even at c = 1e10, so the large number alone is not the cause.
-  - **Cause (lowered path, confirmed in highspy):** the indicator takes a value inside the
-    integrality tolerance (z = 1.67e-10 at c = 1e9), and M·z ≈ 6.7 ≥ K satisfies the row.
-    Any valid M is at least range(e) + K, so M/K can exceed 1/tolerance; the threshold
-    moves with the decisions' bounds and with K. M is also twice what it needs to be:
-    `DeriveAbsAuxiliaryBounds` takes Σ|coef|·max|bound| (`linearization_bilinear_abs.cpp`)
-    where the signed interval is half, and the rows use 2M.
-  - **Cause (Gurobi native ABS):** an integer decision inside IntFeasTol (x = 5e-9) times
-    c = 1e9 gives |t| = 5. The continuous `t = c(x - y)` column hides the integer row from
-    presolve, which rescales the plain row.
-- **Ruling (owner, 2026-10-29).** Fix DeciDB's own part: tighten M to the signed
-  interval of the expression, with no doubling, over every affected encoding (ABS, `<>`,
-  hard MIN/MAX, IN). The rest is precision: an M that is right but large is a number in
-  the model like any other, and gets the large-number warning
-  (`../pipeline/07_solver/done.md` §3). No other encoding
-  change, no per-encoding warning.
-- **Impact:** a wrong optimum, the clause violated in the answer, at coefficient sizes
-  ordinary data reaches (1e5 to 1e6 on HiGHS).
-- **Task.** `../pipeline/06_model_formulation/todo.md` § FRM-1.
-
 ## BUG-7 — A MIN/MAX `<>` refusal drops the clause's qualifier
 
 - **Observed:** the refusal for `<>` on a MIN/MAX quotes `when p: max(x) <> 2` (and

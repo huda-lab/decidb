@@ -862,9 +862,10 @@ deactivated arm of a disjunction, whereas a too-small one cuts off legal answers
 
 **Where it lands.**
 - **ABS** — `DemandedAuxReach` (`linearization_bilinear_abs.cpp`) returns the largest value any clause
-  requires the auxiliary to hold, and `DeriveAbsAuxiliaryBounds` takes `max(box reach, demand)`
-  before setting `link.abs_range` and the auxiliary's ceiling. Both consumers follow: the
-  ceiling, and the `2M` envelope `LinearizeAbsMaximize` emits off `abs_range`. The demand is
+  requires the auxiliary to hold, and `DeriveAbsAuxiliaryBounds` widens the interval of `inner` to
+  `[-D, D]` when a demand `D` exceeds its reach, before setting `link.inner_lo` / `inner_hi` and the
+  auxiliary's ceiling. Both consumers follow: the ceiling, and the two sign-row constants
+  `LinearizeAbsMaximize` emits off the interval. The demand is
   usually **not** a row — `ABS(x) >= 5` is a simple `var OP const` comparison, so
   `FoldSingletonRows` folds it into the auxiliary's own box — which is why the helper reads
   `lower_bounds[aux]` first and only then walks the rows. Otherwise the ceiling would sit *under* the floor: an empty column no widening of `x` could repair.

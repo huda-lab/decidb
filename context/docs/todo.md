@@ -16,10 +16,6 @@ at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or 
 - [ ] F5: CAN-1 linearizer and objective, OPT-3 helper definition
 - [ ] F9: OPS-2 rename the names too, or not
 
-## 2. F1 Numerics
-
-- [ ] FRM-1 Tighten the Big-M of ABS, `<>`, hard MIN/MAX, IN — pipeline/06_model_formulation/todo.md § FRM-1
-
 ## 3. F2 Messages quote what the user wrote (needs: 1)
 
 - [ ] BUG-7 One quoting function for every message — issues/bugs.md § BUG-7
@@ -45,7 +41,7 @@ at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or 
 - [ ] CAN-2 A keyed decision beside a reducer, no helper — pipeline/04_canonicalizer/todo.md § CAN-2
 - [ ] OPT-2 `IN` under `per K:` once per class — pipeline/05_optimizer/todo.md § OPT-2
 
-## 6. F5 Helper decisions (needs: 1, F1)
+## 6. F5 Helper decisions (needs: 1)
 
 - [ ] OPT-1 A box per helper instance — pipeline/05_optimizer/todo.md § OPT-1
 - [ ] CAN-1 A `BOOL` decision as a factor on a reducer — pipeline/04_canonicalizer/todo.md § CAN-1
@@ -64,7 +60,7 @@ at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or 
 
 ## 8. F7 SQL semantics (needs: 1)
 
-- [ ] BIN-1 Functions that behave unlike SQL: NaN and infinity — pipeline/02_binder/todo.md § BIN-1
+- [ ] BIN-1 The NaN and infinity message, one text on both paths — pipeline/02_binder/todo.md § BIN-1 (needs: F6 H-03)
 
 ## 9. F8 Solver runtime (needs: F7)
 

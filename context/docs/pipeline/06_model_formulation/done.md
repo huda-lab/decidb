@@ -524,11 +524,21 @@ the widened box a repair searches instead of inheriting the solved model's. See
 
 `DecideTightPerRowBigM()` returns the maximum over active rows of the row's
 effective bound magnitude plus its worst-case term contribution, plus a 1-unit
-margin covering the integer-step band of the `<>` rewrite. `DecideRowTermRange()`
-is the shared per-row worst case, also used by the ABS-maximize and aggregate `<>`
-paths that still emit from stage 08. `AuxRange::Span()` is the auxiliary-family
-twin, for the MIN/MAX auxiliaries that are pinned against a whole expression rather
-than compared to a fixed bound.
+margin covering the integer-step band of the `<>` rewrite; its per-row worst case,
+`DecideRowTermRange()`, sums each term's largest magnitude and serves only it. Every
+other Big-M is sized from the expression's **signed interval**, walked by
+`DecideRowSignedRange()`: ABS, `<>` and MIN/MAX share that one walk, and terms that
+cancel (`c*x - c*y`) are measured together rather than each at its worst.
+`AuxRange::Span()` is the auxiliary-family twin, for the MIN/MAX auxiliaries that are
+pinned against a whole expression rather than compared to a fixed bound. An
+`AuxRange` covers its members and nothing else: each end starts at the first member
+that reaches it, so a family over [100, 200] spans 100. A family that covers no row
+stays [0, 0], which the sites that pin an empty auxiliary to 0 rely on.
+
+A tight M does not make a large coefficient safe. Past about `c * bound / K ≈ 5e5` on
+HiGHS, an integer decision inside the integrality tolerance times `c` meets the row on
+its own, whatever M is; that is precision in the user's numbers, and the large-number
+warning (`../07_solver/done.md` §3) names it.
 
 **There is no fixed Big-M.** When a contributing variable has no finite bound, no
 constant dominates its range, and the query is **refused** — naming a column to
@@ -896,6 +906,14 @@ objective pushes `aux` down. Under MAXIMIZE they do not — `aux` is free to run
 above `|inner|` — so `LinearizeAbsMaximize()` pairs the tagged rows and derives the
 matching Big-M upper bounds that close it.
 
+**Each sign row has its own M.** `DeriveAbsAuxiliaryBounds` takes the signed interval
+`[lo, hi]` of `inner` over every row (`AbsMaximizeLinkSpec::inner_lo` / `inner_hi`). The
+row `aux + inner <= A2·y` holds `2·inner` when `y = 1` pins `aux = inner`, so
+`A2 = 2·max(0, hi)`; the row `aux - inner <= A1·(1 - y)` holds `-2·inner` when `y = 0`
+pins `aux = -inner`, so `A1 = 2·max(0, -lo)`. One shared constant, `hi - lo`, is too
+small for an interval that is not symmetric (`[-1, 100]` needs 200 on one side), and a
+side the interval never reaches needs no relaxation at all.
+
 The tag keys on the **auxiliary**, not on a sign indicator, because
 only the lowering arm has a sign indicator: see "one binary, on one arm only" below.
 
@@ -931,15 +949,15 @@ the row's own C1: `inner_r = k_r - sum_{v != aux} c_v x_v`, walked with
 `DecideRowSignedRange` (skipping the auxiliary) and folded in with
 `AuxRange::CoverRowSided` — the same per-row machinery
 `LinearizeMinMaxConstraints` already uses, keeping each end it can derive
-independently. One `abs_range` per link, the **maximum over rows**, would hand every row
+independently. One interval per link, the **cover over rows**, would hand every row
 but the extreme one more room than it can reach, and a single unbounded row would leave
 every row's column free. A slack continuous column is a measured cost at the root LP relaxation, which is
 why this is worth doing rather than a tidiness. A column is left free only where
 nothing at all is derivable — which is exactly the query the native arm exists to
 answer.
 
-The lowering arm also **narrows the auxiliary's column box** to the `M` it derives. The rows it
-emits pin `aux = |inner|`, so `M` is a valid upper bound — and the only one anything
+Phase 1 also **narrows the auxiliary's column box** to `max(|lo|, |hi|)`, on both arms. The
+formulation pins `aux = |inner|`, so that is a valid upper bound — and the only one anything
 derives, since `aux >= inner` / `aux >= -inner` bound the auxiliary from below only.
 That box is why this runs before every other linearizer: they all derive their own
 `M` from column boxes, and without it an outer MIN/MAX over `ABS(...)` sees an
