@@ -41,6 +41,7 @@ import time
 import pytest
 
 from solver.types import VarType, ObjSense, SolverStatus
+from ._brute_force import judge_rows
 from ._oracle_helpers import emit_hard_inner_max
 from ._scope_cases import answer, scope_solver  # noqa: F401 -- scope_solver is a fixture
 from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
@@ -451,6 +452,246 @@ def test_decision_factor_rejected(decidb_cli):
         MAXIMIZE SUM(x)
     """,
         match=r"'s' is a decision, so it cannot multiply SUM\(x\)",
+    )
+
+
+# ---------------------------------------------------------------------------
+# A BOOL decision as a factor on a reducer.
+# ---------------------------------------------------------------------------
+#
+# `b * SUM(x)` is a product of two decisions, and a Boolean one is linear: the reducer's
+# value lives in a helper decision (the value rewrite) and the product with it is one
+# McCormick column, as for any Boolean product. An INT or REAL factor is not convex and
+# stays refused (the two tests above).
+#
+# The scope oracle states no product of decisions, so each answer is judged against every
+# assignment of three rows' decisions (`_brute_force`): the optimum, and DeciDB's answer
+# against the clause stated in Python.
+
+#: Rows 1 and 2 are group a, row 3 is group b.
+_BOOL_FACTOR_ROWS = "(VALUES (1, 'a'), (2, 'a'), (3, 'b')) t(id, g)"
+_X_DOMAIN = {f"x{i}": range(4) for i in range(3)}
+_QUERY_WIDE_B = ("x(INT), per (): b(BOOL)", "b", {**_X_DOMAIN, "b": range(2)})
+_ROW_B = ("x(INT), c(BOOL)", "c", {**_X_DOMAIN, **{f"c{i}": range(2) for i in range(3)}})
+
+
+def _xs(a):
+    return [a["x0"], a["x1"], a["x2"]]
+
+
+def _bool_factor_sql(decide, column, clause, objective, maximize=True):
+    return f"""
+        SELECT id, x, {column} FROM {_BOOL_FACTOR_ROWS}
+        DECIDE {decide}
+        SUCH THAT x <= 3 AND {clause}
+        {"MAXIMIZE" if maximize else "MINIMIZE"} {objective}
+        ORDER BY id"""
+
+
+BOOL_FACTOR_CASES = [
+    pytest.param(
+        _QUERY_WIDE_B,
+        "b * SUM(x) <= 4",
+        "SUM(x) + 6 * b",
+        lambda a: a["b"] * sum(_xs(a)) <= 4,
+        lambda a: sum(_xs(a)) + 6 * a["b"],
+        True,
+        id="sum-below",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "b * SUM(x) >= 4",
+        "SUM(x) - 5 * b",
+        lambda a: a["b"] * sum(_xs(a)) >= 4,
+        lambda a: sum(_xs(a)) - 5 * a["b"],
+        False,
+        id="sum-above",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "-(b * SUM(x)) >= -4",
+        "SUM(x) + 6 * b",
+        lambda a: -(a["b"] * sum(_xs(a))) >= -4,
+        lambda a: sum(_xs(a)) + 6 * a["b"],
+        True,
+        id="negated-keeps-its-sign",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "SUM(x) * b <= 4",
+        "SUM(x) + 6 * b",
+        lambda a: sum(_xs(a)) * a["b"] <= 4,
+        lambda a: sum(_xs(a)) + 6 * a["b"],
+        True,
+        id="factor-written-after",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "2 * (b * SUM(x)) <= 6",
+        "SUM(x) + 8 * b",
+        lambda a: 2 * a["b"] * sum(_xs(a)) <= 6,
+        lambda a: sum(_xs(a)) + 8 * a["b"],
+        True,
+        id="data-around-the-product",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "2 * b * SUM(x) <= 6",
+        "SUM(x) + 8 * b",
+        lambda a: 2 * a["b"] * sum(_xs(a)) <= 6,
+        lambda a: sum(_xs(a)) + 8 * a["b"],
+        True,
+        id="data-times-the-boolean",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "b * AVG(x) <= 1",
+        "SUM(x) + 7 * b",
+        lambda a: a["b"] * sum(_xs(a)) <= 3,
+        lambda a: sum(_xs(a)) + 7 * a["b"],
+        True,
+        id="avg",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "b * MAX(x) <= 2",
+        "SUM(x) + 7 * b",
+        lambda a: a["b"] * max(_xs(a)) <= 2,
+        lambda a: sum(_xs(a)) + 7 * a["b"],
+        True,
+        id="max",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "b * MIN(x) >= 1",
+        "SUM(x) - 4 * b",
+        lambda a: a["b"] * min(_xs(a)) >= 1,
+        lambda a: sum(_xs(a)) - 4 * a["b"],
+        False,
+        id="min",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "b * SUM(x) by (t.g) <= 3",
+        "SUM(x) + 8 * b",
+        lambda a: a["b"] * (a["x0"] + a["x1"]) <= 3 and a["b"] * a["x2"] <= 3,
+        lambda a: sum(_xs(a)) + 8 * a["b"],
+        True,
+        id="one-helper-per-group",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "when t.id > 1: b * SUM(x) <= 3",
+        "SUM(x) + 8 * b",
+        lambda a: a["b"] * (a["x1"] + a["x2"]) <= 3,
+        lambda a: sum(_xs(a)) + 8 * a["b"],
+        True,
+        id="the-reducer-reads-the-kept-rows",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "b * SUM(x) = 3",
+        "SUM(x)",
+        lambda a: a["b"] * sum(_xs(a)) == 3,
+        lambda a: sum(_xs(a)),
+        True,
+        id="equality",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "SUM(x) <= 4 AND b * SUM(x) <> 3",
+        "SUM(x) + 4 * b",
+        lambda a: sum(_xs(a)) <= 4 and a["b"] * sum(_xs(a)) != 3,
+        lambda a: sum(_xs(a)) + 4 * a["b"],
+        True,
+        id="not-equal",
+    ),
+    pytest.param(
+        _QUERY_WIDE_B,
+        "b * SUM(x) + SUM(x) <= 7",
+        "SUM(x) + 3 * b",
+        lambda a: a["b"] * sum(_xs(a)) + sum(_xs(a)) <= 7,
+        lambda a: sum(_xs(a)) + 3 * a["b"],
+        True,
+        id="beside-the-plain-reducer",
+    ),
+    pytest.param(
+        _ROW_B,
+        "c * SUM(x) <= 3",
+        "SUM(x) + 4 * SUM(c)",
+        lambda a: all(a[f"c{i}"] * sum(_xs(a)) <= 3 for i in range(3)),
+        lambda a: sum(_xs(a)) + 4 * sum(a[f"c{i}"] for i in range(3)),
+        True,
+        id="a-boolean-per-row",
+    ),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.cons_aggregate
+@pytest.mark.parametrize("decision, clause, objective, feasible, value, maximize", BOOL_FACTOR_CASES)
+def test_bool_decision_factor_on_a_reducer(
+    decidb_cli_gurobi, decidb_cli_highs, decision, clause, objective, feasible, value, maximize
+):
+    """Each shape answers on both solvers with the oracle's optimum, and the answer satisfies the clause as written."""
+    decide, column, domains = decision
+    sql = _bool_factor_sql(decide, column, clause, objective, maximize)
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        judge_rows(answer(cli, sql), domains, feasible, value, maximize)
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.error_binder
+@pytest.mark.parametrize(
+    "clause",
+    [
+        pytest.param("b * (SUM(x) - 1) <= 4", id="a-reducer-inside-another-expression"),
+        pytest.param("(b + 1) * SUM(x) <= 4", id="a-sum-in-the-factor"),
+    ],
+)
+def test_bool_decision_factor_stays_on_a_bare_reducer(decidb_cli, clause):
+    """The factor is one Boolean decision (under a sign and data) and the term a reducer: anything else is a
+    product of decisions the value rewrite does not hold."""
+    decidb_cli.assert_error(
+        f"""
+        SELECT id, x FROM {_BOOL_FACTOR_ROWS}
+        DECIDE x(INT), per (): b(BOOL), per (): c(BOOL)
+        SUCH THAT x <= 3 AND {clause}
+        MAXIMIZE SUM(x)
+    """,
+        match=r"is a decision, so it cannot multiply",
+    )
+
+
+@pytest.mark.obj_maximize
+@pytest.mark.error_binder
+def test_bool_decision_factor_in_objective_rejected(decidb_cli):
+    """A constraint takes a Boolean factor on a reducer; the objective, which has no helper to hold the reducer's
+    value, still refuses it as it refuses any decision."""
+    decidb_cli.assert_error(
+        f"""
+        SELECT id, x FROM {_BOOL_FACTOR_ROWS}
+        DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT x <= 3
+        MAXIMIZE b * SUM(x)
+    """,
+        match=r"'b' is a decision, so it cannot multiply SUM\(x\)",
+    )
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.error_binder
+def test_bool_decision_factor_names_the_member_without_a_bound(decidb_cli):
+    """`b * SUM(x)` needs the reducer's value bounded above, which its members give: with no bound on `x` the
+    refusal names `x`, the column to bound, and not the helper that holds the sum."""
+    decidb_cli.assert_error(
+        f"""
+        SELECT id, x FROM {_BOOL_FACTOR_ROWS}
+        DECIDE x(INT), per (): b(BOOL)
+        SUCH THAT b * SUM(x) <= 4
+        MAXIMIZE SUM(x)
+    """,
+        match=r"finite upper bound on variable 'x'",
     )
 
 

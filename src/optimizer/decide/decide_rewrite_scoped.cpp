@@ -297,6 +297,14 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		for (auto &site : sites) {
 			ReplaceReducer(helpers, names, scope, cmp.type, source_clause_id, site);
 		}
+		// A Boolean factor on a reducer (`b * sum(x)`, canonicalization admits no other decision) is now a product
+		// with the helper. The bilinear rewrite ran before this pass, so it never saw the product: hand it to its
+		// one-product linearization, the same McCormick column any Boolean product gets.
+		vector<LogicalDecide::BilinearLink> products;
+		FindAndReplaceBilinear(cmp.left, decide, products, cmp.GetAlias());
+		for (auto &product : products) {
+			decide.bilinear_links.push_back(product);
+		}
 		// One row per class from here on: the shape tag has done its work.
 		auto alias = cmp.GetAlias();
 		RemoveDecideTag(alias, VALUE_REWRITE_TAG);

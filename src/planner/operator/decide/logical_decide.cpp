@@ -157,6 +157,7 @@ string LogicalDecide::GetName() const {
 
 void LogicalDecide::AddConstraint(ClientContext &context, unique_ptr<Expression> constraint) {
 	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes);
+	canonicalizer.ReadBooleanDecisions(is_boolean_var);
 	auto canonical = canonicalizer.CanonicalizeTree(*constraint);
 	canonicalizer.VerifyCanonical(*canonical);
 

@@ -237,6 +237,14 @@ public:
 		message_names = &names;
 	}
 
+	//! Name the decisions declared BOOL (`is_boolean[i]` for decision column `i`, as
+	//! LogicalDecide::is_boolean_var), so a constraint may multiply a reducer by one:
+	//! `b * SUM(x)` is a product the value rewrite hands to the Boolean linearization. Without
+	//! it no decision is Boolean, and every decision factor on a reducer is refused.
+	void ReadBooleanDecisions(const vector<bool> &is_boolean) {
+		boolean_decisions = is_boolean;
+	}
+
 	//! Canonicalize a single comparison. Pure -- `comparison` is untouched.
 	unique_ptr<Expression> CanonicalizeComparison(const Expression &comparison) const;
 
@@ -396,6 +404,10 @@ private:
 	//! `(SELECT max(w) FROM p)` is shape-identical to `weight` -- and, importantly, to
 	//! a CORRELATED subquery, which is per-row and must not qualify.
 	bool IsQueryWideConstant(const Expression &expr) const;
+
+	//! True when `expr` is one decision declared BOOL, under the binder's casts, a sign, and factors known before the
+	//! query runs: `b`, `-b`, `2 * b`. A reducer under such a factor takes the VALUE shape.
+	bool IsBooleanFactor(const Expression &expr) const;
 	//! Query-wide counterpart used for top-level aggregate terms. Unlike
 	//! IsQueryWideConstant, this admits scalar DECIDE variables while rejecting
 	//! row/entity decisions and ordinary row-varying columns.
@@ -494,6 +506,8 @@ private:
 	bool judge_column_refs = false;
 	//! See QuoteMessagesWith; null quotes through the bound tree (UserFacingName).
 	optional_ptr<const DecideSourceNames> message_names;
+	//! See ReadBooleanDecisions, indexed by decide-column index; a missing entry is not Boolean.
+	vector<bool> boolean_decisions;
 
 	//! `expr` as a scope refusal quotes it.
 	string Quote(const Expression &expr) const;

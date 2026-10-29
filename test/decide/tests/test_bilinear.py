@@ -30,6 +30,7 @@ import pytest
 from decidb_cli import DecidBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 
+from ._brute_force import judge_rows
 from ._oracle_helpers import add_bool_and
 
 
@@ -1884,3 +1885,36 @@ def test_bilinear_bool_real_constraint(decidb_cli, duckdb_conn, oracle_solver, p
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",
     )
+
+
+@pytest.mark.correctness
+@pytest.mark.bilinear
+@pytest.mark.parametrize(
+    "constraint, holds",
+    [
+        pytest.param("(-b) * x >= -3", lambda b, x: -b * x >= -3, id="negated-boolean"),
+        pytest.param("(-(2 * b)) * x >= -6", lambda b, x: -2 * b * x >= -6, id="negated-scaled-boolean"),
+        pytest.param("b * (-x) >= -3", lambda b, x: b * -x >= -3, id="negated-other-factor"),
+    ],
+)
+def test_negated_factor_of_a_boolean_product_keeps_its_sign(decidb_cli_gurobi, decidb_cli_highs, constraint, holds):
+    """`(-b) * x >= -3` is `b * x <= 3`. The product's coefficient was read off the chain of multiplications alone,
+    so a sign in front of a factor was dropped and the clause held for every assignment (`b * x >= -3`).
+    Judged against every assignment of two rows."""
+    sql = f"""
+        SELECT id, x, b FROM (VALUES (1), (2)) t(id)
+        DECIDE x(INT), b(BOOL)
+        SUCH THAT x <= 5 AND {constraint}
+        MAXIMIZE SUM(x) + SUM(b)
+        ORDER BY id"""
+    domains = {**{f"x{i}": range(6) for i in range(2)}, **{f"b{i}": range(2) for i in range(2)}}
+
+    def feasible(a):
+        return all(holds(a[f"b{i}"], a[f"x{i}"]) for i in range(2))
+
+    def value(a):
+        return sum(a[f"x{i}"] + a[f"b{i}"] for i in range(2))
+
+    for cli in (decidb_cli_gurobi, decidb_cli_highs):
+        rows, columns = cli.execute(sql)
+        judge_rows([dict(zip(columns, row)) for row in rows], domains, feasible, value)

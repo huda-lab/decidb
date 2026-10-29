@@ -329,6 +329,28 @@ DecideCanonicalizer::Placement DecideCanonicalizer::Classify(const Expression &e
 }
 
 
+bool DecideCanonicalizer::IsBooleanFactor(const Expression &expr) const {
+	auto *cur = UnwrapDecideCasts(expr, decide_index);
+	if (cur->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		// A decision column: a factor reaches here only for bearing one.
+		auto column = cur->Cast<BoundColumnRefExpression>().binding.column_index;
+		return column < boolean_decisions.size() && boolean_decisions[column];
+	}
+	if (cur->GetExpressionClass() != ExpressionClass::BOUND_FUNCTION) {
+		return false;
+	}
+	auto &func = cur->Cast<BoundFunctionExpression>();
+	if (func.function.name == "-" && func.children.size() == 1) {
+		return IsBooleanFactor(*func.children[0]); // the sign FoldNegationIntoFactor gives a negated reducer
+	}
+	if (func.function.name == "*" && func.children.size() == 2) {
+		// Data times the Boolean: the binder admits no product of two decisions beside a reducer (degree 3), so
+		// exactly one side bears the decision.
+		return IsBooleanFactor(*func.children[ReferencesDecideVar(*func.children[0]) ? 0 : 1]);
+	}
+	return false;
+}
+
 bool DecideCanonicalizer::IsQueryWideConstant(const Expression &expr) const {
 	// A factor on a reducer has to answer "are you one value for the whole query?", and
 	// for a column ref that cannot be answered from shape: flattening leaves
@@ -544,13 +566,21 @@ const Expression &DecideCanonicalizer::PeelScale(const Expression &expr, unique_
 		// separately, so the message names the factor the user actually has to fix.
 		const char *verb = factor_divides ? "divide" : "multiply";
 		if (ReferencesDecideVar(*factor)) {
-			// A constraint takes any data factor (a row-varying one is a tuple term, below);
-			// the objective, produced once, only one value.
-			throw BinderException("%s: '%s' is a decision, so it cannot %s %s. %s", clause_name,
-			                      UserFacingName(*factor), verb, UserFacingName(*term),
-			                      clause == Clause::CONSTRAINT
-			                          ? "Only data can scale SUM/AVG/MIN/MAX."
-			                          : "Only constants and query-wide values can scale SUM/AVG/MIN/MAX.");
+			// A constraint takes any data factor (a row-varying one is a tuple term, below) and a Boolean
+			// decision on a bare reducer: the comparison takes the VALUE shape, where the reducer becomes a
+			// helper decision and the product `b * helper` is linearized as every Boolean product is. The
+			// objective, produced once, takes only one value; an INT or REAL decision is not convex.
+			// (A divisor that bears a decision is refused by the binder, before this runs.)
+			const bool boolean_factor = clause == Clause::CONSTRAINT && IsBooleanFactor(*factor) &&
+			                            UnwrapDecideCasts(*term, decide_index)->GetExpressionClass() ==
+			                                ExpressionClass::BOUND_AGGREGATE;
+			if (!boolean_factor) {
+				throw BinderException("%s: '%s' is a decision, so it cannot %s %s. %s", clause_name,
+				                      UserFacingName(*factor), verb, UserFacingName(*term),
+				                      clause == Clause::CONSTRAINT
+				                          ? "Only data or a BOOL decision can scale SUM/AVG/MIN/MAX."
+				                          : "Only constants and query-wide values can scale SUM/AVG/MIN/MAX.");
+			}
 		}
 		// A row-varying factor on a reducer of a constraint is a tuple term of the row's
 		// constraint: the comparison takes the VALUE shape (ClassifyScoped), which

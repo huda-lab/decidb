@@ -3606,7 +3606,10 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		    {link.aux_idx, {solver_input.lower_bounds[link.aux_idx],
 		                    solver_input.upper_bounds[link.aux_idx]}});
 	}
-	DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names);
+	// A factor that is a helper decision of the value rewrite (`b * sum(x)`) has no box until its members' boxes
+	// are derived below, so with helpers the refusal waits for them.
+	DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names,
+	                              /*refuse_when_unbounded=*/solver_input.reducer_value_links.empty());
 
     // ABS FIRST, and the order is load-bearing. Deriving an ABS auxiliary's range is
     // also what boxes its column, and every linearizer below computes its Big-M from
@@ -3619,22 +3622,24 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs);
 	} else {
 		// The value rewrite's helper decisions are boxed by their members' reach, and a
-		// member may be an ABS auxiliary while an ABS may hold a helper: each box is the
-		// other's input. Both derivations only tighten, and a reducer holds no reducer, so
-		// alternating them settles in as many passes as the constructs nest. The lowering
-		// arm's refusal is decided last, on the settled boxes, naming a helper by its
-		// reducer.
+		// member may be an ABS auxiliary or a product with a helper (`b * sum(x)`) while an
+		// ABS may hold a helper: each box is the other's input. The derivations only
+		// tighten, and a reducer holds no reducer, so alternating them settles in as many
+		// passes as the constructs nest. The refusals are decided last, on the settled
+		// boxes, naming a helper by its reducer.
 		for (auto &link : solver_input.reducer_value_links) {
 			if (link.value_var < decide_var_names.size() && !link.label.empty()) {
 				decide_var_names[link.value_var] = link.label;
 			}
 		}
-		const idx_t max_passes = solver_input.abs_maximize_links.size() + solver_input.reducer_value_links.size() + 1;
+		const idx_t max_passes = solver_input.abs_maximize_links.size() + solver_input.bilinear_links.size() +
+		                         solver_input.reducer_value_links.size() + 1;
 		for (idx_t pass = 0;; pass++) {
 			auto lower = solver_input.lower_bounds;
 			auto upper = solver_input.upper_bounds;
 			auto reach_lower = solver_input.instance_reach_lower;
 			auto reach_upper = solver_input.instance_reach_upper;
+			DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names, /*refuse_when_unbounded=*/false);
 			DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, /*refuse_when_unbounded=*/false);
 			DeriveReducerValueBounds(solver_input, var_indexer);
 			if (lower == solver_input.lower_bounds && upper == solver_input.upper_bounds &&
@@ -3645,6 +3650,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
 				throw InternalException("DECIDE: the ABS and helper decision boxes did not settle");
 			}
 		}
+		DeriveBilinearAuxiliaryBounds(solver_input, box, decide_var_names);
 		DeriveAbsAuxiliaryBounds(solver_input, var_indexer, decide_var_names, !native_abs);
 	}
 	if (native_abs) {

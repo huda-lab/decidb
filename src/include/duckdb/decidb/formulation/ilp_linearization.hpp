@@ -217,9 +217,12 @@ void LowerDecideConstructs(SolverInput &input, const VarIndexer &indexer,
 void LinearizeBilinear(SolverInput &input, const FormulationBox &box,
                        const vector<string> &var_names);
 
-//! Declare each McCormick auxiliary's box before ABS/MIN/MAX descendants inspect it.
+//! Declare each McCormick auxiliary's box before ABS/MIN/MAX descendants inspect it. A factor with no
+//! finite ceiling is refused, unless `refuse_when_unbounded` is false: a helper decision of the value rewrite
+//! (`SolverInput::reducer_value_links`) is boxed after this runs, so the run that settles the helpers' boxes
+//! leaves such an auxiliary open and a final refusing run decides.
 void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box,
-                                   const vector<string> &var_names);
+                                   const vector<string> &var_names, bool refuse_when_unbounded = true);
 
 //! Phase 1 of the ABS auxiliary formulation, and it runs before EVERY other
 //! linearizer. For each `abs_maximize_links` entry it derives the signed interval of the

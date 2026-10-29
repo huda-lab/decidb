@@ -75,6 +75,17 @@ static void CollectDecideVarIndices(const Expression &expr, idx_t decide_index, 
 	});
 }
 
+//! Whether a reducer stands anywhere in `expr`.
+static bool ContainsReducer(const Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
+		return true;
+	}
+	bool found = false;
+	ExpressionIterator::EnumerateChildren(expr,
+	                                      [&](const Expression &child) { found = found || ContainsReducer(child); });
+	return found;
+}
+
 bool DecideOptimizer::ExtractMultiplicativeCoefficient(const Expression &expr, idx_t decide_index,
                                                         idx_t var_idx, unique_ptr<Expression> &coef_out) {
 	coef_out = nullptr;
@@ -89,6 +100,19 @@ bool DecideOptimizer::ExtractMultiplicativeCoefficient(const Expression &expr, i
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 		auto &cast = expr.Cast<BoundCastExpression>();
 		return ExtractMultiplicativeCoefficient(*cast.child, decide_index, var_idx, coef_out);
+	}
+	// A negated factor, `-b` or `-(2 * b)`: the sign joins the coefficient, or the product loses it.
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_FUNCTION) {
+		auto &negation = expr.Cast<BoundFunctionExpression>();
+		if (StringUtil::Lower(negation.function.name) == "-" && negation.children.size() == 1) {
+			unique_ptr<Expression> inner_coef;
+			if (!ExtractMultiplicativeCoefficient(*negation.children[0], decide_index, var_idx, inner_coef)) {
+				return false;
+			}
+			coef_out = inner_coef ? optimizer.BindScalarFunction("-", std::move(inner_coef))
+			                      : make_uniq<BoundConstantExpression>(Value::INTEGER(-1));
+			return true;
+		}
 	}
 	// Multiplication chain: walk down the side that contains the variable, multiply
 	// coefficients harvested from the other side at each level.
@@ -138,7 +162,10 @@ void DecideOptimizer::FindAndReplaceBilinear(unique_ptr<Expression> &expr, Logic
 			CollectDecideVarIndices(*func.children[0], decide.decide_index, left_vars);
 			CollectDecideVarIndices(*func.children[1], decide.decide_index, right_vars);
 
-			if (!left_vars.empty() && !right_vars.empty()) {
+			// A reducer under a factor (`b * SUM(x)`) is not a product of two variables: it is the value
+			// rewrite's, which holds the reducer in a helper decision and hands the product back here.
+			if (!left_vars.empty() && !right_vars.empty() && !ContainsReducer(*func.children[0]) &&
+			    !ContainsReducer(*func.children[1])) {
 				// Both sides contain decide variables — this is bilinear (or identical QP)
 				// Skip the identical-expression case (QP, not bilinear)
 				if (func.children[0]->ToString() == func.children[1]->ToString()) {

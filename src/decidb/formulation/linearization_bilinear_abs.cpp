@@ -24,15 +24,27 @@ using namespace decide_linearize; // NOLINT: internal DECIDE linearization helpe
 //===--------------------------------------------------------------------===//
 
 void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box,
-                                   const vector<string> &var_names) {
+                                   const vector<string> &var_names, bool refuse_when_unbounded) {
     for (const auto &link : input.bilinear_links) {
         double U = box.upper[link.other_var_idx];
         double L = box.lower[link.other_var_idx];
         if (DecideIsOpenAbove(U)) {
+            if (!refuse_when_unbounded) {
+                continue;
+            }
+            // A helper decision of the value rewrite holds a reducer's value, which the user cannot bound: name the
+            // member of the reducer that has no bound.
+            idx_t blame = link.other_var_idx;
+            for (const auto &helper : input.reducer_value_links) {
+                if (helper.value_var == link.other_var_idx) {
+                    idx_t member = FindUnboundedContributor(helper.rows, box.lower, box.upper);
+                    blame = member == DConstants::INVALID_INDEX ? blame : member;
+                }
+            }
             throw InvalidInputException(
                 "Bilinear term requires a finite upper bound on variable '%s'. "
                 "Add a constraint like '%s <= <bound>' to provide one.",
-                var_names[link.other_var_idx], var_names[link.other_var_idx]);
+                var_names[blame], var_names[blame]);
         }
         input.lower_bounds[link.aux_idx] = std::min(0.0, L);
         input.upper_bounds[link.aux_idx] = std::max(0.0, U);

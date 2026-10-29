@@ -60,6 +60,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// canonical form should fail loudly rather than reach the extractor.
 	if (op.decide_constraints || op.decide_objective) {
         DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes);
+        canonicalizer.ReadBooleanDecisions(op.is_boolean_var);
         if (op.decide_constraints) {
             canonicalizer.VerifyCanonical(*op.decide_constraints);
         }

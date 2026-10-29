@@ -60,6 +60,7 @@ public:
 	RhsWindowRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)
 	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context),
 	      canonicalizer(optimizer_p.context, decide_p.decide_index, decide_p.variable_scopes) {
+		canonicalizer.ReadBooleanDecisions(decide_p.is_boolean_var);
 	}
 
 	void Run() {
