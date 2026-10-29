@@ -125,36 +125,69 @@ private:
 				return false;
 			}
 		}
-		row_check.text.subject = check.subject;
-		row_check.text.object = check.object;
-		row_check.text.context = check.context;
-		row_check.text.one_class = check.key == DConstants::INVALID_INDEX;
-		row_check.text.decision = decision;
+		row_check.text = check.DeterminesText();
 		return true;
 	}
 
+	//! What a scope check is to the plan: nothing to check, a row check read into `row_check`, or one the plan cannot
+	//! make (a determination of an entity-scoped decision, or of an expression that reads more than the source).
+	enum class RowCheckRead : uint8_t { NOTHING, READ, UNREADABLE };
+
+	RowCheckRead ReadRowCheck(const DecideScopeCheck &check, DirectRowCheck &row_check) const {
+		if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
+			// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
+			D_ASSERT(!check.rows && CheckablePredicate(check.value.get()));
+			row_check.invalid = check.value->Copy();
+			return RowCheckRead::READ;
+		}
+		// One instance for the whole query: nothing to determine.
+		if (check.decision != DConstants::INVALID_INDEX && decide.variable_scopes[check.decision].IsScalar()) {
+			return RowCheckRead::NOTHING;
+		}
+		return ReadDetermination(check, row_check) ? RowCheckRead::READ : RowCheckRead::UNREADABLE;
+	}
+
 	void ReadRowChecks(DirectIR &ir) const {
-		for (idx_t index = 0; index < decide.scope_checks.size(); index++) {
-			auto &check = decide.scope_checks[index];
+		for (auto &check : decide.scope_checks) {
 			DirectRowCheck row_check;
-			if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
-				// The bound-side window rewrite makes these over the source and its own windows, with no `rows`.
-				D_ASSERT(!check.rows && CheckablePredicate(check.value.get()));
-				row_check.invalid = check.value->Copy();
-			} else {
-				// One instance for the whole query: nothing to determine.
-				if (check.decision != DConstants::INVALID_INDEX && decide.variable_scopes[check.decision].IsScalar()) {
-					continue;
-				}
-				if (!ReadDetermination(check, row_check)) {
-					MarkNotProved(ir.status);
-					continue;
-				}
+			switch (ReadRowCheck(check, row_check)) {
+			case RowCheckRead::NOTHING:
+				break;
+			case RowCheckRead::READ:
+				ir.row_checks.push_back(std::move(row_check));
+				break;
+			case RowCheckRead::UNREADABLE:
+				MarkNotProved(ir.status);
+				break;
 			}
-			ir.row_checks.push_back(std::move(row_check));
 		}
 	}
 
+public:
+	//! Moves the scope checks the plan can make out of the node: the solver path installs them under it
+	//! (DirectAddRowChecks). A check the plan cannot make stays for the operator.
+	vector<DirectRowCheck> TakeRowChecks() {
+		source_bindings = decide.children[0]->GetColumnBindings();
+		vector<DirectRowCheck> taken;
+		vector<DecideScopeCheck> left;
+		for (auto &check : decide.scope_checks) {
+			DirectRowCheck row_check;
+			switch (ReadRowCheck(check, row_check)) {
+			case RowCheckRead::NOTHING:
+				break;
+			case RowCheckRead::READ:
+				taken.push_back(std::move(row_check));
+				break;
+			case RowCheckRead::UNREADABLE:
+				left.push_back(std::move(check));
+				break;
+			}
+		}
+		decide.scope_checks = std::move(left);
+		return taken;
+	}
+
+private:
 	void ReadDecisions(DirectIR &ir) const {
 		auto count = decide.decide_variables.size();
 		D_ASSERT(decide.is_boolean_var.size() == count && decide.variable_scopes.size() == count);
@@ -528,6 +561,10 @@ private:
 };
 
 } // namespace
+
+vector<DirectRowCheck> DirectTakeRowChecks(ClientContext &context, LogicalDecide &decide) {
+	return DirectFrontEnd(context, decide).TakeRowChecks();
+}
 
 DirectIR DirectIR::Read(ClientContext &context, LogicalDecide &decide) {
 	return DirectFrontEnd(context, decide).Read();

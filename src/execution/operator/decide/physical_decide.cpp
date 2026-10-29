@@ -1831,49 +1831,19 @@ static string DescribeKeyValues(const vector<string> &names, const vector<Value>
 	return result;
 }
 
-//! `expr` on each of `rows`, as values (NULL on the others): what a determination check
-//! compares.
-static vector<Value> EvaluateRowValues(const Expression &expr, ChunkExprCache &chunk_expr_cache, ClientContext &context,
-                                       ColumnDataCollection &data, idx_t num_rows, const vector<bool> &rows) {
-	ExpressionExecutor executor(context);
-	auto &transformed = CachedTransformToChunkExpression(chunk_expr_cache, expr, context);
-	executor.AddExpression(transformed);
-	vector<Value> values;
-	values.reserve(num_rows);
-	ColumnDataScanState scan;
-	data.InitializeScan(scan);
-	DataChunk chunk;
-	chunk.Initialize(context, data.Types());
-	DataChunk result;
-	result.Initialize(context, {transformed.return_type});
-	while (data.Scan(scan, chunk)) {
-		result.Reset();
-		ExecuteOnReadRows(executor, chunk, values.size(), &rows, result);
-		for (idx_t row = 0; row < chunk.size(); row++) {
-			values.push_back(result.data[0].GetValue(row));
-		}
-	}
-	return values;
-}
-
+//! The scope checks left for the operator: the determination of an entity-scoped decision, which needs the entity
+//! mapping the operator builds. Every other check is a plan under the DECIDE node (DirectAddRowChecks, installed by
+//! DecideOptimizer::InstallRowChecks) and has passed by now.
 void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                     ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
                                     const vector<EntityMapping> &entity_mappings) const {
 	DecideProfileScope profile("execution.scope_checks");
 	for (auto &check : scope_checks) {
+		D_ASSERT(check.kind == DecideScopeCheckKind::DETERMINES && check.decision != DConstants::INVALID_INDEX &&
+		         variable_scopes[check.decision].IsEntity());
 		vector<bool> rows(num_rows, true);
 		if (check.rows) {
 			rows = KeptRows(*check.rows, chunk_expr_cache, context, gstate.data, num_rows);
-		}
-		if (check.kind == DecideScopeCheckKind::VALUE_IS_VALID) {
-			// The first row with a message raises it. Which row is first is not specified.
-			for (auto &message :
-			     EvaluateRowValues(*check.value, chunk_expr_cache, context, gstate.data, num_rows, rows)) {
-				if (!message.IsNull()) {
-					throw InvalidInputException(message.ToString());
-				}
-			}
-			continue;
 		}
 		vector<bool> filter;
 		if (check.filter) {
@@ -1891,86 +1861,30 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 		idx_t count = 0;
 		vector<string> labels;
 		vector<vector<Value>> key_values;
-		auto one_class = check.key == DConstants::INVALID_INDEX;
 		LookupOrBuildPerGroupIds(per_group_cache, keys, check.key, chunk_expr_cache, context, gstate.data, num_rows,
 		                         looked_at_row, &looked_at, ids, count, labels, nullptr, nullptr, &key_values);
-		DecideDeterminesText text;
-		text.subject = check.subject;
-		text.object = check.object;
-		text.context = check.context;
-		text.one_class = one_class;
-		text.decision = check.decision != DConstants::INVALID_INDEX;
-		// A class fails when it shows more than one value or decision. Several can; the message names the least one by
-		// key value (the groups are numbered in that order), so it never depends on the order rows arrive in.
-		auto describe_group = [&](idx_t group) {
-			return one_class ? string() : DescribeKeyValues(keys[check.key].Names(), key_values[group]);
-		};
-		if (text.decision) {
-			if (check.decision >= variable_scopes.size() || variable_scopes[check.decision].IsScalar()) {
-				continue; // one instance for the whole query
-			}
-			auto &scope = variable_scopes[check.decision];
-			vector<idx_t> instance(count, DConstants::INVALID_INDEX);
-			idx_t failing = DConstants::INVALID_INDEX;
-			for (idx_t row = 0; row < num_rows; row++) {
-				auto group = ids[row];
-				if (group == DConstants::INVALID_INDEX) {
-					continue;
-				}
-				if (scope.IsEntity() && entity_mappings[scope.entity_scope_idx].IsAbsent(row)) {
-					continue; // no decision on this row: a reducer skips it
-				}
-				auto id = scope.IsEntity() ? entity_mappings[scope.entity_scope_idx].row_to_entity[row] : row;
-				if (instance[group] == DConstants::INVALID_INDEX) {
-					instance[group] = id;
-				} else if (instance[group] != id) {
-					failing = MinValue(failing, group);
-				}
-			}
-			if (failing != DConstants::INVALID_INDEX) {
-				throw InvalidInputException(one_class ? StringUtil::Format(text.Format())
-				                                      : StringUtil::Format(text.Format(), describe_group(failing)));
-			}
-			continue;
-		}
-		auto values = EvaluateRowValues(*check.value, chunk_expr_cache, context, gstate.data, num_rows, looked_at);
-		// Per group: the rows read, the non-NULL ones, and the least and greatest of those.
-		vector<idx_t> read(count, 0), non_null(count, 0);
-		vector<Value> least(count), greatest(count);
+		auto &scope = variable_scopes[check.decision];
+		vector<idx_t> instance(count, DConstants::INVALID_INDEX);
+		// Several classes can fail; the message names the least by key value (the groups are numbered in that order).
+		idx_t failing = DConstants::INVALID_INDEX;
 		for (idx_t row = 0; row < num_rows; row++) {
 			auto group = ids[row];
-			if (group == DConstants::INVALID_INDEX) {
-				continue;
+			if (group == DConstants::INVALID_INDEX || entity_mappings[scope.entity_scope_idx].IsAbsent(row)) {
+				continue; // no decision on this row: a reducer skips it
 			}
-			read[group]++;
-			auto &value = values[row];
-			if (value.IsNull()) {
-				continue;
-			}
-			if (non_null[group]++ == 0) {
-				least[group] = value;
-				greatest[group] = value;
-			} else if (value < least[group]) {
-				least[group] = value;
-			} else if (greatest[group] < value) {
-				greatest[group] = value;
+			auto id = entity_mappings[scope.entity_scope_idx].row_to_entity[row];
+			if (instance[group] == DConstants::INVALID_INDEX) {
+				instance[group] = id;
+			} else if (instance[group] != id) {
+				failing = MinValue(failing, group);
 			}
 		}
-		for (idx_t group = 0; group < count; group++) {
-			if (non_null[group] == 0) {
-				continue;
-			}
-			// NULL is a value of its own, after every other.
-			bool has_null = non_null[group] < read[group];
-			if (!has_null && Value::NotDistinctFrom(least[group], greatest[group])) {
-				continue;
-			}
-			auto high = has_null ? string("NULL") : SqlLiteral(greatest[group]);
-			if (one_class) {
-				throw InvalidInputException(StringUtil::Format(text.Format(), SqlLiteral(least[group]), high));
-			}
+		if (failing != DConstants::INVALID_INDEX) {
+			auto text = check.DeterminesText();
 			throw InvalidInputException(
-			    StringUtil::Format(text.Format(), describe_group(group), SqlLiteral(least[group]), high));
+			    text.one_class ? StringUtil::Format(text.Format())
+			                   : StringUtil::Format(text.Format(),
+			                                        DescribeKeyValues(keys[check.key].Names(), key_values[failing])));
 		}
 	}
 }

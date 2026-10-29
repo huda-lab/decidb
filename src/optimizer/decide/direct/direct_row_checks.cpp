@@ -154,13 +154,16 @@ private:
 			for (idx_t i = 0; i < check.key.size(); i++) {
 				auto &element = check.key[i];
 				names += (i > 0 ? ", " : "") + StringUtil::Replace(element.name, "%", "%%") + " = %s";
-				// A class is named by its least spelling, as a collated key's classes are.
-				labels.push_back(
-				    Literal(element.label->Equals(*element.grouping)
-				                ? keys[i]
-				                : Place(LEVEL_GROUP,
-				                        partitioned(DirectWindowExtremum(
-				                            optimizer, "min", calc.Out(OnRows(in_class, calc.Of(*element.label))))))));
+				// A class is named by its least spelling in binary order, as a collated key's classes are.
+				auto spelling = calc.Of(*element.label);
+				if (spelling->return_type.id() == LogicalTypeId::VARCHAR) {
+					// Concatenating drops a collation, so MIN compares the spellings as bytes.
+					spelling = calc.If(calc.IsNull(spelling), calc.Constant(Value(LogicalType::VARCHAR)),
+					                   calc.Fn("concat", spelling, calc.Constant(Value(""))));
+				}
+				labels.push_back(Literal(
+				    Place(LEVEL_GROUP,
+				          partitioned(DirectWindowExtremum(optimizer, "min", calc.Out(OnRows(in_class, spelling)))))));
 			}
 			labels[0] = calc.Constant(Value(names));
 			arguments.push_back(calc.Fn("printf", labels));

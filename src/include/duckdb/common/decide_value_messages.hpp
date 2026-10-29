@@ -13,6 +13,7 @@
 
 #include "duckdb/common/common.hpp"
 #include "duckdb/common/enums/decide.hpp"
+#include "duckdb/common/string_util.hpp"
 #include "duckdb/common/types.hpp"
 
 namespace duckdb {
@@ -46,14 +47,7 @@ struct DecideDeterminesText {
 	//! greatest value.
 	string Format() const {
 		auto escaped = [](const string &text) {
-			string result;
-			for (auto character : text) {
-				result += character;
-				if (character == '%') {
-					result += '%';
-				}
-			}
-			return result;
+			return StringUtil::Replace(text, "%", "%%");
 		};
 		string head = "DECIDE: per " + escaped(subject) + " does not determine " + (decision ? "the decision " : "") +
 		              escaped(object) + (context.empty() ? "" : " (" + escaped(context) + ")") + ". ";

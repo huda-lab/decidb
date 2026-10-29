@@ -8,6 +8,8 @@
 
 #pragma once
 
+#include "duckdb/common/decide_value_messages.hpp"
+
 #include "duckdb/planner/logical_operator.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/decide_source_info.hpp"
@@ -119,7 +121,18 @@ struct DecideScopeCheck {
 	string object;
     string context;
 
-    //! Generated from `storage/serialization/nodes.json`.
+	//! The text of the error this check raises, as the solver path and the direct-solve plans both write it.
+	DecideDeterminesText DeterminesText() const {
+		DecideDeterminesText text;
+		text.subject = subject;
+		text.object = object;
+		text.context = context;
+		text.one_class = key == DConstants::INVALID_INDEX;
+		text.decision = decision != DConstants::INVALID_INDEX;
+		return text;
+	}
+
+	//! Generated from `storage/serialization/nodes.json`.
     void Serialize(Serializer &serializer) const;
     static DecideScopeCheck Deserialize(Deserializer &deserializer);
 };

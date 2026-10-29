@@ -565,9 +565,9 @@ def test_two_relation_composite_qualifier_equals_unqualified_when_query_has_only
     composite, _ = decidb_cli.execute(template.format(reducer="n,c: n.n_nationkey * keepN"))
     unqualified, _ = decidb_cli.execute(template.format(reducer="n.n_nationkey * keepN"))
 
-    # Row-for-row identical output, not just the same objective: every (customer,
-    # nation) row keeps the same keepN either way.
-    assert composite == unqualified
+    # The same rows, not just the same objective: every (customer, nation) row keeps
+    # the same keepN either way. Without ORDER BY the row order is not part of the answer.
+    assert sorted(composite) == sorted(unqualified)
 
 
 @pytest.mark.error_binder

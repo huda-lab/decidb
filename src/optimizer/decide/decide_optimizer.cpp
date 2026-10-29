@@ -9,6 +9,7 @@
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/optimizer/decide/decide_optimizer_internal.hpp"
 #include "duckdb/optimizer/decide/decide_answer_choice.hpp"
+#include "duckdb/optimizer/decide/direct/direct_row_checks.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_between_expression.hpp"
@@ -105,8 +106,15 @@ void DecideOptimizer::OptimizeDecide(unique_ptr<LogicalOperator> &op, unique_ptr
 	}
 }
 
+void DecideOptimizer::InstallRowChecks(LogicalDecide &decide) {
+	auto checks = DirectTakeRowChecks(optimizer.context, decide);
+	decide.children[0]->ResolveOperatorTypes();
+	decide.children[0] = DirectAddRowChecks(optimizer, checks, std::move(decide.children[0]));
+}
+
 void DecideOptimizer::RewriteForSolver(LogicalDecide &decide) {
 	RunPass("optimizer.install_bound_windows", [&] { InstallReducedBounds(decide); });
+	RunPass("optimizer.install_row_checks", [&] { InstallRowChecks(decide); });
 	RunPass("optimizer.tag_groups", [&] { TagAtomicRemovalGroups(decide); });
 	RunPass("optimizer.norm", [&] { RewriteNorm(decide); });
 	RunPass("optimizer.in_domain", [&] { RewriteInDomain(decide); });
