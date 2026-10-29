@@ -9,7 +9,7 @@ Quantify measurement overhead: an instrumented run against an uninstrumented one
 
 Decide whether to add a lightweight correctness check: the profiler checks row counts only, and even a per-query objective sanity bound would catch a fast wrong answer, which the row-count-only check cannot.
 
-Repeat the sweep on a second host, since every number so far comes from one machine. The large-tier sweep exists on this machine: `benchmark/decide/results/pipeline_profile_large.csv` (written 2026-09-09; 90 rows: 65 `ok`, 10 `solver_limit`, 7 `process_timeout`, 6 `unsupported`, 2 `skipped_memory`), with raw spans in `pipeline_profile_raw_large/` and the console log in `sweep_large.log`. No finding cites it yet; `../issues/bugs.md` cites its raw logs for the HiGHS time-limit bug.
+Repeat the sweep on a second host, since every number so far comes from one machine. The large-tier sweep exists on this machine: `benchmark/decide/results/pipeline_profile_large.csv` (written 2026-09-09; 90 rows: 65 `ok`, 10 `solver_limit`, 7 `process_timeout`, 6 `unsupported`, 2 `skipped_memory`), with raw spans in `pipeline_profile_raw_large/` and the console log in `sweep_large.log`. No finding cites it yet. Its 7 `process_timeout` rows are Q2, Q3 and Q10 on HiGHS running past the 420 s stop; Q2's and Q10's causes are fixed (`../pipeline/07_solver/done.md`), Q3's is BUG-23. Its 2 `skipped_memory` rows are Q10 on HiGHS, skipped by a list the profiler no longer has.
 
 ## PERF-2 — Planning
 

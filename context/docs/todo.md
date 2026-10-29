@@ -19,6 +19,7 @@ at a time. Lanes: F11.
 ## 11. Measurement (last; the owner runs them)
 
 - [ ] TST-1 A test large enough to see an optimality gap — testing/todo.md § TST-1
+- [ ] BUG-23 Q3 on HiGHS at large overran its limit in the September sweep — issues/bugs.md § BUG-23
 - [ ] PERF-1 Measurement overhead, a correctness check, a second host — performance/todo.md § PERF-1
 - [ ] PERF-2 Backend discovery versus parsing and planning — performance/todo.md § PERF-2
 - [ ] PERF-3 Rank extraction work; scope-check spans in `extraction` — performance/todo.md § PERF-3
@@ -35,4 +36,4 @@ at a time. Lanes: F11.
 - [ ] H-02 Front end for a second syntax (owner decides if it applies) — direct_solve/framework/todo.md § H-02
 - [ ] H-06 The two-level objective (needs a rule that takes the shape) — direct_solve/framework/todo.md § H-06
 - [ ] H-08 VALUE-shape clauses (owner names the rule and shape) — direct_solve/framework/todo.md § H-08
-- [ ] A2, A3, A4 Start a class not yet built (owner picks) — direct_solve/todo.md
+- [ ] A2–S4 Start one of the 16 defined classes not yet built (owner picks) — direct_solve/todo.md

@@ -8,6 +8,16 @@
 - **Next step:** the matrix now keeps its logs (`test/decide/results/matrix_<time>/`) and prints each mode's outcome
   total; when the totals differ again, find the missing test from the logs.
 
+## BUG-23 — Q3 on HiGHS at `large` ran past the profiler's 420 s stop
+
+- **Observed:** the 2026-09-09 sweep (`benchmark/decide/results/pipeline_profile_large.csv`) records `process_timeout`
+  for Q3 on HiGHS in all three passes, under a 300 s solver limit. The sweep kept no HiGHS log
+  (`pipeline_profile_raw_large/Q3_highs_*`), so the phase that ignores the limit is unknown. The two other HiGHS
+  overruns of that sweep had causes since fixed: Q2's clique partition (SOL-1) and Q10's symmetry detection (BUG-3).
+  Q3 has L0 binaries, so either fix may cover it.
+- **Next step:** one run of Q3 at `large` on HiGHS with `DECIDB_PROFILE_SOLVER_LOG=1` (up to about 7 minutes): if it
+  stops near 300 s, delete this entry; if not, sample its stack as BUG-3's diagnosis did.
+
 ## BUG-16 — An overflowed range reads as an open variable: internal errors, a crash, wrong "unbounded"
 
 The overflow rule (owner, 2026-10-29), as DuckDB treats a DOUBLE: arithmetic stays IEEE and nothing prevents an
@@ -26,8 +36,9 @@ BUG-21 apply the rule; none builds new arithmetic. Probes: `VALUES` tables, b = 
   - Not ours: Gurobi's "unbounded" on `MAXIMIZE SUM(ABS(b*y))` and HiGHS's load refusal on `MINIMIZE MAX(b*y)` follow
     the large-number warning or the vendor's limit.
 - **Fix:** the hand-off checks raise TOO_LARGE for a non-finite coefficient, column bound, objective or Q entry (a
-  column is named by a clause that reads it, else the objective); structural checks stay internal. `ThrowUnboundedBigMNaming`
-  raises TOO_LARGE naming the clause when no column of the row is open, and the ABS refusal goes through it.
+  column is named by a clause that reads it, else the objective); structural checks stay internal.
+  `ThrowUnboundedBigMNaming` raises TOO_LARGE naming the clause when no column of the row is open, and the ABS refusal
+  goes through it.
 
 ## BUG-18 — A literal infinite coefficient on one decision drops the clause
 
