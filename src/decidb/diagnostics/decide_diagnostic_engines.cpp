@@ -244,11 +244,12 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 		}
 	};
 
-	// Slack only the relaxable LINEAR rows (USER_PARAMETER). Quadratic rows and
-	// STRUCTURAL / USER_MECHANISM rows stay rigid (quadratic-RHS slack is I2.d; ABS
-	// pin rows are already USER_PARAMETER and are picked up here, their envelopes are
-	// STRUCTURAL and stay rigid). One slack per row for `<` / `>`; two for `=`
-	// (decision 3) so it can be violated in either direction while staying linear.
+	// Slack only the relaxable rows (USER_PARAMETER), linear and quadratic. STRUCTURAL /
+	// USER_MECHANISM rows stay rigid (ABS pin rows are already USER_PARAMETER and are
+	// picked up here, their envelopes are STRUCTURAL and stay rigid). A quadratic row
+	// takes its slack on the linear RHS only, never on Q (I2.d). One slack per row for
+	// `<` / `>`; two for `=` (decision 3) so it can be violated in either direction
+	// while staying linear.
 	//
 	// T3 folding policy. A user knob fans into N rows; the minimal loosening is the max
 	// overshoot (a single `s` with `eᵢ − s ≤ K` is driven to the max), not the sum.
@@ -285,88 +286,82 @@ ElasticModel BuildElasticModel(const SolverModel &base, const string &slack_scop
 		return fold_data ? std::make_pair(p.repair_group_id, static_cast<idx_t>(0))
 		                 : std::make_pair(p.repair_group_id, p.group_key);
 	};
-	std::map<std::pair<idx_t, idx_t>, vector<idx_t>> blocks;
-	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
-		const auto &row = elastic.constraints[r];
-		if (row.provenance.removal_group_id != DConstants::INVALID_INDEX ||
-		    !IsRelaxableForElastic(row.provenance.kind) || !folds(row.provenance)) {
-			continue;
-		}
-		auto &block = blocks[block_key(row.provenance)];
-		// Rows that share a slack are one clause's: a repair id two clauses hold welds them
-		// into one edit.
-		D_ASSERT(block.empty() ||
-		         elastic.constraints[block.front()].provenance.source_clause_id == row.provenance.source_clause_id);
-		block.push_back(r);
-	}
+	// Linear rows come first, then quadratic ones, each in row order: a slack's position is its repair rank.
+	for (bool quadratic : {false, true}) {
+		auto row_count = quadratic ? elastic.quadratic_constraints.size() : elastic.constraints.size();
+		auto provenance_of = [&](idx_t r) -> const ConstraintProvenance & {
+			return quadratic ? elastic.quadratic_constraints[r].provenance : elastic.constraints[r].provenance;
+		};
+		auto sense_of = [&](idx_t r) {
+			return quadratic ? elastic.quadratic_constraints[r].sense : elastic.constraints[r].sense;
+		};
+		auto norm_of = [&](idx_t r) {
+			return quadratic ? qc_norm[r] : lin_norm[r];
+		};
+		auto wire_row = [&](idx_t r, idx_t pos_col, idx_t neg_col) {
+			if (!quadratic) {
+				wire(r, pos_col, neg_col);
+				return;
+			}
+			auto &qc = elastic.quadratic_constraints[r];
+			qc.linear_indices.push_back(static_cast<int>(pos_col));
+			qc.linear_coefficients.push_back(qc.sense == '>' ? 1.0 : -1.0);
+			if (qc.sense == '=') {
+				qc.linear_indices.push_back(static_cast<int>(neg_col));
+				qc.linear_coefficients.push_back(1.0);
+			}
+		};
+		auto relaxable = [&](idx_t r) {
+			const auto &p = provenance_of(r);
+			return p.removal_group_id == DConstants::INVALID_INDEX && IsRelaxableForElastic(p.kind);
+		};
+		// A quadratic clause is always an editable literal, never a data offset: the conflict summary covers
+		// linear data-RHS rows only.
+		auto data_offset_of = [&](idx_t r) {
+			return !quadratic && is_data_offset(provenance_of(r));
+		};
 
-	// Emit in row order: a shared block is emitted once, at its first row (its rows
-	// are collected in ascending order, so `front()` is the first we reach); every
-	// other relaxable row gets its own size-1 block.
-	for (idx_t r = 0; r < elastic.constraints.size(); r++) {
-		const auto &row = elastic.constraints[r];
-		if (row.provenance.removal_group_id != DConstants::INVALID_INDEX ||
-		    !IsRelaxableForElastic(row.provenance.kind)) {
-			continue;
+		std::map<std::pair<idx_t, idx_t>, vector<idx_t>> blocks;
+		for (idx_t r = 0; r < row_count; r++) {
+			if (!relaxable(r) || !folds(provenance_of(r))) {
+				continue;
+			}
+			auto &block = blocks[block_key(provenance_of(r))];
+			// Rows that share a slack are one clause's: a repair id two clauses hold welds them
+			// into one edit.
+			D_ASSERT(block.empty() ||
+			         provenance_of(block.front()).source_clause_id == provenance_of(r).source_clause_id);
+			block.push_back(r);
 		}
-		if (folds(row.provenance)) {
-			const vector<idx_t> &grp = blocks[block_key(row.provenance)];
-			if (grp.front() != r) {
-				continue; // already emitted at the block's first row
+
+		// Emit in row order: a shared block is emitted once, at its first row (its rows
+		// are collected in ascending order, so `front()` is the first we reach); every
+		// other relaxable row gets its own size-1 block.
+		for (idx_t r = 0; r < row_count; r++) {
+			if (!relaxable(r)) {
+				continue;
+			}
+			vector<idx_t> members {r};
+			if (folds(provenance_of(r))) {
+				members = blocks[block_key(provenance_of(r))];
+				if (members.front() != r) {
+					continue; // already emitted at the block's first row
+				}
 			}
 			// A shared block is one editable literal knob, scale-normalized by its
 			// representative row (members are same-clause instances → equal norms), or
 			// one folded data offset in query mode.
-			char sense = elastic.constraints[grp.front()].sense;
-			bool data_offset = is_data_offset(row.provenance);
-			ElasticRepairTier tier = data_offset ? ElasticRepairTier::DATA_OFFSET
-			                                     : ElasticRepairTier::EDITABLE_LOOSEN;
-			double w = data_offset ? 1.0 : editable_weight(lin_norm[grp.front()]);
+			char sense = sense_of(r);
+			bool data_offset = data_offset_of(r);
+			ElasticRepairTier tier = data_offset ? ElasticRepairTier::DATA_OFFSET : ElasticRepairTier::EDITABLE_LOOSEN;
+			double w = data_offset ? 1.0 : editable_weight(norm_of(r));
 			idx_t pos_col = add_slack();
 			idx_t neg_col = (sense == '=') ? add_slack() : DConstants::INVALID_INDEX;
-			for (idx_t rr : grp) {
-				wire(rr, pos_col, neg_col);
+			for (idx_t member : members) {
+				wire_row(member, pos_col, neg_col);
 			}
-			out.slacks.push_back({grp, pos_col, neg_col, sense, tier, w});
-		} else {
-			char sense = row.sense;
-			bool data_offset = is_data_offset(row.provenance);
-			ElasticRepairTier tier = data_offset ? ElasticRepairTier::DATA_OFFSET
-			                                     : ElasticRepairTier::EDITABLE_LOOSEN;
-			double w = data_offset ? 1.0 : editable_weight(lin_norm[r]);
-			idx_t pos_col = add_slack();
-			idx_t neg_col = (sense == '=') ? add_slack() : DConstants::INVALID_INDEX;
-			wire(r, pos_col, neg_col);
-			out.slacks.push_back({{r}, pos_col, neg_col, sense, tier, w});
+			out.slacks.push_back({members, pos_col, neg_col, sense, tier, w, quadratic});
 		}
-	}
-
-	// I2.d: relaxable QUADRATIC constraints (QCQP). Slack the LINEAR RHS only —
-	// never the Q matrix — so `e(x) + xᵀQx ≤ K` loosens to `… ≤ K + s` while
-	// staying a quadratic constraint. Each is its own size-1 block (shared-slack
-	// quadratic shapes are out of scope); the `quadratic` flag marks that `rows`
-	// indexes `quadratic_constraints`. Solver-gated to Gurobi (HiGHS skips QCQP).
-	for (idx_t qr = 0; qr < elastic.quadratic_constraints.size(); qr++) {
-		auto &qc = elastic.quadratic_constraints[qr];
-		if (qc.provenance.removal_group_id != DConstants::INVALID_INDEX ||
-		    !IsRelaxableForElastic(qc.provenance.kind)) {
-			continue;
-		}
-		// A quadratic constraint is always reported as a LOOSEN edit (the conflict
-		// summary covers linear data-RHS rows only), so its slack is an editable knob
-		// (scale-normalized by its linear part), not penalized as data.
-		char sense = qc.sense;
-		double w = editable_weight(qc_norm[qr]);
-		idx_t pos_col = add_slack();
-		idx_t neg_col = (sense == '=') ? add_slack() : DConstants::INVALID_INDEX;
-		qc.linear_indices.push_back(static_cast<int>(pos_col));
-		qc.linear_coefficients.push_back(sense == '>' ? 1.0 : -1.0);
-		if (sense == '=') {
-			qc.linear_indices.push_back(static_cast<int>(neg_col));
-			qc.linear_coefficients.push_back(1.0);
-		}
-		out.slacks.push_back({{qr}, pos_col, neg_col, sense, ElasticRepairTier::EDITABLE_LOOSEN, w,
-		                      /*quadratic=*/true});
 	}
 
 	return out;
@@ -904,11 +899,13 @@ static RemovalCandidate SolveRemovalCandidate(const InfeasibleDiagnosisInput &in
 			SolverModel tiebreak_model = stage2_model;
 			if (BuildTieBreakModel(tiebreak_model, slacks, /*freeze_objective=*/true,
 			                       result.objective_value)) {
+				// The tie-break only chooses among repairs that cost the same; stage 2a's is already one of
+				// them, so a pass the solver cannot finish (the frozen objective row is exact, and a barrier
+				// QCP can stop short of it) keeps it.
 				SolverResult tiebreak = input.solve_model(tiebreak_model);
-				if (tiebreak.status != SolverStatus::OPTIMAL || tiebreak.solution.empty()) {
-					return result;
+				if (tiebreak.status == SolverStatus::OPTIMAL && !tiebreak.solution.empty()) {
+					repair_solution = std::move(tiebreak.solution);
 				}
-				repair_solution = std::move(tiebreak.solution);
 			}
 		} else if (stage2.status == SolverStatus::UNBOUNDED) {
 			result.objective_unbounded = true;

@@ -1395,6 +1395,25 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows, {"power(x, 2) <= 4": "POWER(x,2) <= 4"})
 
     @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
+    def test_infeasible_quadratic_clause_over_rows_is_one_finding_in_the_query_scope(self, request, cli_fixture):
+        """BUG-10: `power(x - 20, 2) <= 4` makes one quadratic row per kept row, and rows of one clause share a
+        slack as linear rows do, so the query scope reports the clause once. The expanded scope still names each row."""
+        cli = request.getfixturevalue(cli_fixture)
+        sql = (
+            "SELECT id, x FROM (VALUES (1), (2)) t(id) "
+            "DECIDE x(REAL) SUCH THAT power(x - 20, 2) <= 4 AND x >= 25 MAXIMIZE SUM(x)"
+        )
+        rows = _rows(_diagnose(cli, sql))
+        edits = _clause_edits(rows)
+        assert [e["subject"] for e in edits] == ["power(x - 20, 2) <= 4"], rows
+        assert float(edits[0]["amount"]) == pytest.approx(21.0, abs=1e-3)
+        _apply_reported_fix(cli, sql, rows, {"power(x - 20, 2) <= 4": "power(x - 20, 2) <= 4"})
+
+        expanded = [r for r in _flat(_diagnose(cli, sql, scope="expanded")) if r["edit_source"] == "expanded_row"]
+        clause = "power(x - 20, 2) <= 4"
+        assert [(r["clause"], r["row"]) for r in expanded] == [(clause, "0"), (clause, "1")]
+
+    @pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi"])
     def test_infeasible_strict_quadratic_requotes_typed_literal(self, request, cli_fixture):
         """I2.d regression: strict quadratic constraints must carry the user's typed
         literal through the quadratic builder too. `POWER(x,2) < 10` is enforced as

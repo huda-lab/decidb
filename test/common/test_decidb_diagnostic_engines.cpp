@@ -765,6 +765,52 @@ TEST_CASE("DeciDB diagnosis engines", "[decidb][query_diagnostics][engines]") {
 		CHECK(eqc.linear_coefficients[0] == -1.0);
 	}
 
+	SECTION("BuildElasticModel gives the quadratic rows of one clause a shared slack") {
+		// BUG-10: `x² <= 4` over two rows is two quadratic rows of one clause. In the query scope they share a
+		// slack, as linear rows do; a kept row of its own keeps its slack in the expanded scope; another clause
+		// never joins them.
+		auto make = [](idx_t clauses, bool per_kept_row) {
+			SolverModel model;
+			model.num_vars = 2;
+			model.col_lower = {0.0, 0.0};
+			model.col_upper = {DECIDE_SOLVER_INFINITY, DECIDE_SOLVER_INFINITY};
+			model.is_integer = {false, false};
+			model.is_binary = {false, false};
+			model.obj_coeffs = {0.0, 0.0};
+			model.maximize = false;
+			for (idx_t row = 0; row < 2; row++) {
+				SolverModel::QuadraticConstraint qc;
+				qc.q_rows = {static_cast<int>(row)};
+				qc.q_cols = {static_cast<int>(row)};
+				qc.q_coefficients = {1.0};
+				qc.sense = '<';
+				qc.rhs = 4.0;
+				qc.provenance.repair_group_id = row % clauses;
+				qc.provenance.source_clause_id = row % clauses;
+				qc.provenance.kind = ConstraintKind::USER_PARAMETER;
+				qc.provenance.shape = ElasticShape::SHARED_SCALAR;
+				qc.provenance.per_kept_row = per_kept_row;
+				model.quadratic_constraints.push_back(std::move(qc));
+			}
+			for (idx_t clause = 0; clause < clauses; clause++) {
+				model.constraint_sources.push_back(ConstraintSourceInfo());
+			}
+			return model;
+		};
+		ElasticModel shared = BuildElasticModel(make(1, false));
+		REQUIRE(shared.slacks.size() == 1);
+		CHECK(shared.slacks[0].quadratic);
+		CHECK(shared.slacks[0].rows == duckdb::vector<idx_t> {0, 1});
+		CHECK(shared.model.num_vars == 3);
+		for (auto &qc : shared.model.quadratic_constraints) {
+			REQUIRE(qc.linear_indices.size() == 1);
+			CHECK(static_cast<idx_t>(qc.linear_indices[0]) == shared.slacks[0].pos_col);
+		}
+		CHECK(BuildElasticModel(make(1, true), "expanded").slacks.size() == 2);
+		CHECK(BuildElasticModel(make(1, true), "query").slacks.size() == 1);
+		CHECK(BuildElasticModel(make(2, false)).slacks.size() == 2);
+	}
+
 	// I3: a 2-decide-var, 1-row input so columns name distinct variables x and y.
 	SolverInput input2;
 	input2.num_rows = 1;
