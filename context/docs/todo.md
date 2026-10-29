@@ -18,7 +18,6 @@ at a time. Lanes: F11.
 
 ## 11. Measurement (last; the owner runs them)
 
-- [ ] TST-1 A test large enough to see an optimality gap — testing/todo.md § TST-1
 - [ ] BUG-23 Q3 on HiGHS at large overran its limit in the September sweep — issues/bugs.md § BUG-23
 - [ ] PERF-1 Measurement overhead, a correctness check, a second host — performance/todo.md § PERF-1
 - [ ] PERF-2 Backend discovery versus parsing and planning — performance/todo.md § PERF-2
@@ -28,7 +27,3 @@ at a time. Lanes: F11.
 - [ ] PERF-6 Scale ladders on both backends — performance/todo.md § PERF-6
 - [ ] PERF-7 Readback, temporary results and cleanup — performance/todo.md § PERF-7
 - [ ] PERF-8 Where each workload stops fitting in memory — performance/todo.md § PERF-8
-
-## 12. Waiting
-
-- [ ] OPS-1 Peak process memory on Windows (needs a Windows host) — operations/todo.md § OPS-1
