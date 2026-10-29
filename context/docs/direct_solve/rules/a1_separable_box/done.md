@@ -42,7 +42,9 @@ One or more row-scoped `BOOL`, `INT` or `REAL` decisions, each solved on its own
   computed only on the rows its `when` and the objective's keep. Terms: a row-valued
   coefficient times a decision, a per-row constant, and at most one square `k*(w*x + t)^2`, where `k` is a nonzero
   constant and `w` and `t` are row-valued (`w` may be zero or negative). `POWER(x - t, 2)`, `(x - t)*(x - t)`,
-  `x*x - 2*t*x`, `norm(e, 2)` and a constant factor inside or outside the `SUM` are all this shape.
+  `x*x - 2*t*x`, `norm(e, 2)` and a constant factor inside or outside the `SUM` are all this shape. A per-row
+  constant changes no answer: as on the solver path, each is checked on its own, with the part's factor applied, and
+  none is added up.
 - **Per row, the optimum** is an endpoint or the clamped turning point. For whole numbers the turning point is replaced
   by the first integer whose next step no longer improves, so a tie goes to the smaller value (as on the solver).
   Maximizing a convex square and minimizing a concave one compare the two endpoints.

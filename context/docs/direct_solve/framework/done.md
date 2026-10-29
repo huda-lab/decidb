@@ -180,6 +180,8 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
     Its check is one `isfinite` on the result; only the row it fails on reads the inputs. The first input a column
     holds that is not finite is named (COEFFICIENT, quoting the input as written); with none, DeciDB's arithmetic or a
     literal left the DOUBLE range, and the clause is named (TOO_LARGE). Only the first failing row is classified.
+  - A number no answer reads is not computed: an objective's per-row constants are checked one term at a time, as the
+    solver path reads them, and never summed.
   - A number the model computes from finite ones (like coefficients merged across rows, a square, fixed terms moved to
     the bound side) is TOO_LARGE past a DOUBLE and names its clause, or the objective as EXPLAIN prints it. The solver
     path grows every such sum through `AddCoefficient` (`ilp_model.hpp`); A1's answer checks and R1's checks of each
