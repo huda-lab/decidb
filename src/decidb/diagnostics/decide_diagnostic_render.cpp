@@ -10,6 +10,7 @@
 #include "duckdb/decidb/diagnostics/decide_diagnostic_render.hpp"
 
 #include "duckdb/common/assert.hpp"
+#include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/decidb/diagnostics/diagnostic_constants.hpp"
 
@@ -80,8 +81,10 @@ double SnapToPrecision(double v) {
 	// the solver found is not a repair at all — the user pastes `x <= 3.33333`, the sum
 	// lands on 9.99999 against a `>= 10` floor, and the query is still infeasible. When
 	// the tidy value would fall below what was measured, take the next tick up instead.
-	// Over-repairing by one part in a million is invisible; under-repairing is a bug.
-	if (ticks / scale < mag) {
+	// Over-repairing by one part in a million is invisible; under-repairing is a bug. Under-repairing by no more
+	// than the feasibility tolerance DeciDB gives both solvers is not: the solver accepts the tidy value, and a
+	// value that far above a tick is arithmetic noise (5.0000000000000853), which a whole tick must not answer.
+	if (ticks / scale < mag - DECIDE_FEASIBILITY_TOLERANCE) {
 		ticks += 1.0;
 	}
 	double snapped = ticks / scale;

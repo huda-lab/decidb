@@ -674,6 +674,22 @@ def test_a_dropped_ne_leaves_the_composed_clause_its_own_slack(decidb_cli):
 
 
 @pytest.mark.diagnose
+def test_a_slack_a_hair_above_a_whole_number_reads_as_it(decidb_cli):
+    """BUG-11: HiGHS returns the composed clause's slack as 5.0000000000000853, and rounding it up a tick
+    reported `<= 1e-05` (amount 5.00001). Noise within the solver's feasibility tolerance is the clean number."""
+    rows = _diagnose(
+        decidb_cli,
+        "x <> -1 AND x <> -2 AND x <> -3 AND x <> -4 AND x <> -5 AND "
+        "per (): sum(x) + max(x) <= -5 AND per row: x >= 18",
+        scope="expanded",
+    )
+    composed = [row for row in rows if row["clause"] == "per (): sum(x) + max(x) <= -5"]
+    assert [(row["suggested_change"], float(row["amount"])) for row in composed] == [
+        ("per (): sum(x) + max(x) <= 0", 5.0)
+    ], rows
+
+
+@pytest.mark.diagnose
 @pytest.mark.parametrize(
     "clause, suggestions",
     [
