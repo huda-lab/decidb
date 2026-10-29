@@ -7,14 +7,11 @@ Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
-at a time. Lanes: F11.
+at a time. Lanes: BUG-21.
 
-## 10. F11 Derived-number overflow (one lane; BUG-16 states the rule)
+## 10. BUG-21 One message per overflow (one lane)
 
-- [ ] BUG-16 An overflowed range reads as an open variable — issues/bugs.md § BUG-16
-- [ ] BUG-18 A literal infinite coefficient on one decision drops the clause — issues/bugs.md § BUG-18
-- [ ] BUG-19 R1's SQL overflows to an infinite room — issues/bugs.md § BUG-19
-- [ ] BUG-21 One overflow, different messages — issues/bugs.md § BUG-21
+- [ ] BUG-21 A number DeciDB derives from the user's values says COEFFICIENT — issues/bugs.md § BUG-21
 
 ## 11. Measurement (last; the owner runs them)
 

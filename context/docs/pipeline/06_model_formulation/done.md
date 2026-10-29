@@ -150,7 +150,11 @@ in the objective across all of its rows. Every merged sum grows through one help
 the objective's linear, square and bilinear sums, quadratic rows, fixed terms moved to the
 bound side, implied bounds, `<>`, MIN/MAX rows and value links. A sum past a DOUBLE raises
 `DecideInvalidValueMessage`'s TOO_LARGE role naming the clause (`constraint_sources`) or the
-objective (`objective_written`), never an InternalException or a solver API error.
+objective (`objective_written`), never an InternalException or a solver API error. The model's hand-off checks raise
+the same for a non-finite column bound, coefficient, objective entry or Q entry; a column is named by the first row
+that reads it, else by the objective. A Big-M or ABS refusal with no open column (`ThrowUnboundedBigMNaming`) does too:
+the range over finite boxes overflowed, and no decision lacks a bound. A literal coefficient that is not finite folds
+into no box (`FoldKnownBound`), so its row's coefficient check refuses it.
 
 `maximize` comes from `input.sense`.
 

@@ -62,6 +62,8 @@ from S1, which counts `BOOL` decisions.
 - **Rounding on a binding budget.** The plan sums the rooms in `DOUBLE`. A budget that does not bind is exact. A
   binding one that mixes magnitudes far apart (1e19 beside values near 1) can lose the small terms, and the spend can
   exceed `B` by about 1e-13 of its size, inside the solver's own tolerance.
+- **A weight near the DOUBLE limit.** `SUM(1e308*x) <= 1` with `x` in [0, 5]: the solver path warns and solves; R1's
+  rooms `w·(high − a)` overflow, and direct solve raises TOO_LARGE naming the budget.
 - **A per-row cap of 1e25 under forced HiGHS.** The default solver and direct solve read it as no bound; HiGHS, forced,
   reads it as a number. A1 shares this.
 - **A data-valued upper limit between 1e21 and 1e25 beside an uncapped improving row.** Gurobi reports unbounded;
