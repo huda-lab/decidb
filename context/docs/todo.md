@@ -9,15 +9,12 @@ Checks: `direct_solve/framework/todo.md` § How to work any task in these todo f
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
 at a time. Lanes: F11.
 
-## 10. F11 Derived-number overflow (one lane; the owner decides CQ-5's four questions first)
+## 10. F11 Derived-number overflow (one lane; BUG-16 states the rule)
 
-- [ ] CQ-5 One reach calculator and checked arithmetic — issues/code_quality.md § CQ-5
-- [ ] BUG-16 A row's range overflows: internal errors, wrong refusals — issues/bugs.md § BUG-16
-- [ ] BUG-18 Literal factors merged past a DOUBLE drop a constraint — issues/bugs.md § BUG-18
+- [ ] BUG-16 An overflowed range reads as an open variable — issues/bugs.md § BUG-16
+- [ ] BUG-18 A literal infinite coefficient on one decision drops the clause — issues/bugs.md § BUG-18
 - [ ] BUG-19 R1's SQL overflows to an infinite room — issues/bugs.md § BUG-19
-- [ ] BUG-20 A derived number past the solver's infinity: wrong "infeasible" — issues/bugs.md § BUG-20
 - [ ] BUG-21 One overflow, different messages — issues/bugs.md § BUG-21
-- [ ] BUG-22 DIAGNOSE's row norm overflows above 1.3e154 — issues/bugs.md § BUG-22
 
 ## 11. Measurement (last; the owner runs them)
 
