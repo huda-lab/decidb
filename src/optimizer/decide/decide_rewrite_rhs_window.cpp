@@ -109,17 +109,23 @@ private:
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conjunction = expr.Cast<BoundConjunctionExpression>();
 			auto saved_when = when;
+			auto saved_class_key = class_key;
 			if (IsWhenConstraintWrapper(conjunction)) {
 				D_ASSERT(conjunction.children.size() == 2);
 				when = conjunction.children[1].get();
 			}
-			// A `per K:` wrapper groups no reducer: its child is read like any other clause.
+			// A `per K:` wrapper groups no reducer: its child is read like any other clause. Its key says which rows
+			// are in a class.
+			if (IsPerClassWrapper(conjunction)) {
+				class_key = PerWrapperKey(conjunction);
+			}
 			for (idx_t i = 0; i < conjunction.children.size(); i++) {
 				if (IsConstraintChild(conjunction, i)) {
 					Walk(*conjunction.children[i]);
 				}
 			}
 			when = saved_when;
+			class_key = saved_class_key;
 			return;
 		}
 		if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
@@ -143,14 +149,34 @@ private:
 		if (!aggregate_data_bound) {
 			return;
 		}
-		auto invalid = InvalidValueMessage(*comparison.right, "constraint right-hand side", Kept());
 		bool reduces = comparison.type != ExpressionType::COMPARE_NOTEQUAL && !query_wide &&
 		               !OneValuePerGroup(*comparison.right, GroupKeyOf(comparison));
+		if (reduces) {
+			InClassOnly(comparison.right);
+		}
+		auto invalid = InvalidValueMessage(*comparison.right, "constraint right-hand side", Kept());
 		if (reduces) {
 			Record(comparison, text, std::move(invalid));
 			return;
 		}
 		AddValueCheck(std::move(invalid));
+	}
+
+	//! A row whose written `per` column is NULL is in no class (D5), so it has no instance and its bound is read by
+	//! none: the bound is NULL there, which the tightest value and the checks skip, as they skip a row a `when` drops.
+	//! A relation's columns compare NULL as a value and keep their rows.
+	void InClassOnly(unique_ptr<Expression> &bound) const {
+		if (class_key == DConstants::INVALID_INDEX) {
+			return;
+		}
+		D_ASSERT(class_key < decide.keys.size());
+		for (auto &element : decide.keys[class_key].elements) {
+			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
+				auto value = calc.Of(*bound);
+				auto none = calc.Constant(Value(value->return_type));
+				bound = calc.Out(calc.If(calc.IsNull(calc.Of(element.Grouping())), none, value));
+			}
+		}
 	}
 
 	//! Leaves the bound raw. Its checks stand where they would have, in clause order, once the windows are built.
@@ -459,6 +485,8 @@ private:
 	ExpressionBuilder calc;
 	DecideCanonicalizer canonicalizer;
 	const Expression *when = nullptr;
+	//! The key of the enclosing `per K:`, INVALID_INDEX for none or `per ()`.
+	idx_t class_key = DConstants::INVALID_INDEX;
 	vector<Level> levels;
 	vector<ReducerColumn> reducer_columns;
 };

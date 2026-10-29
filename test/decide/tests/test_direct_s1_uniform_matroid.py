@@ -1680,7 +1680,8 @@ def test_s1_a_count_per_class_answers_as_the_solver_does(decidb_cli, constraint)
     [
         # Every kept row has a NULL g, so there is no class and no instance: the count does not bind (D5).
         pytest.param("(1, NULL::VARCHAR, 9.0, 1), (2, NULL::VARCHAR, 8.0, 1), (3, NULL::VARCHAR, 7.0, 1)", id="every-g-null"),
-        # One class is enough for the instance, and a row in no class still counts in the total.
+        # One class is enough for the instance. A row in no class still counts in the total, but its own bound limits no
+        # instance (test_per_class_null_key_bound.py).
         pytest.param("(1, NULL::VARCHAR, 9.0, 2), (2, 'a', 8.0, 2), (3, NULL::VARCHAR, 7.0, 5)", id="one-class"),
         # The `when` leaves only NULL-g rows: no kept row has a class.
         pytest.param("(1, NULL::VARCHAR, 9.0, 1), (2, 'a', 3.0, 1)", id="the-class-row-is-not-kept"),

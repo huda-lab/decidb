@@ -2841,7 +2841,8 @@ def test_r1_a_budget_per_class_answers_as_the_solver_does(decidb_cli, budget):
     [
         # Every kept row has a NULL g, so there is no class and no instance: the budget does not bind (D5).
         pytest.param("(1, NULL::VARCHAR, 2.0, 3.0, 1), (2, NULL::VARCHAR, 1.0, 2.0, 1)", id="every-g-null"),
-        # One class is enough for the instance, and a row in no class still counts in the total.
+        # One class is enough for the instance. A row in no class still counts in the total, but its own bound limits no
+        # instance (test_per_class_null_key_bound.py).
         pytest.param("(1, NULL::VARCHAR, 2.0, 3.0, 2), (2, 'a', 1.0, 2.0, 2), (3, NULL::VARCHAR, 2.0, 1.0, 5)", id="one-class"),
         # The `when` leaves only NULL-g rows with a high value: no kept row has a class.
         pytest.param("(1, NULL::VARCHAR, 2.0, 3.0, 1), (2, 'a', 1.0, 0.5, 1)", id="the-class-row-is-not-kept"),
