@@ -21,14 +21,21 @@
 - **Impact:** a large HiGHS query can take the whole process down, and the profile misreports why.
 - **Reproduce:** `make decide-bench-setup`, remove the entry from `SKIP`, run `profile_pipeline.py`. Memory-heavy.
 
-## BUG-14 — Like coefficients that merge past DOUBLE raise an internal error
+## BUG-16 — A huge coefficient times a decision's bound overflows a helper's box
 
-- **Observed:** the model builder adds like coefficients after each was checked finite, so `SUM(b*x) + SUM(c*x)` with
-  b = c = 1e308, or `SUM(POWER(b*x, 2))` with b = 1e200, overflows to infinity and reaches the builder's
-  InternalException or a Gurobi API error instead of `DecideInvalidValueMessage`.
-- **Fix:** one `AddCoefficient(target, value, written)` helper checks every merged sum, the accumulator's and the
-  fixed terms' included, and raises a new overflow role of `DecideInvalidValueMessage` that names the clause and says
-  to scale its data; direct solve's overflow messages move to that role.
+- **Observed:** `SUM(x) + MAX(b*y) <= 10` with b = 1e308 and `y` in [0, 5] raises the InternalException "Column bounds
+  invalid": the MIN/MAX auxiliary's box and the Big-M derived from it are coefficient × bound, which overflows past a
+  DOUBLE. No merged sum is involved, so `AddCoefficient` does not see it.
+- **Expected:** the TOO_LARGE message naming the clause, as for a merged sum.
+- **Reproduce:** the query above on Gurobi or HiGHS, `decide_direct_solve='off'`.
+
+## BUG-17 — A data sum on the bound side that overflows reads as infeasible
+
+- **Observed:** a bound such as `SUM(x) <= SUM(b) + SUM(b)` or `x <= b + b` with b = 1e308 is computed in SQL as -inf or
+  +inf, and the query reports "infeasible" (or no bound) instead of an error.
+- **Expected:** the bound is DuckDB's SQL arithmetic, so the open question is whether an infinite bound that the
+  data did not hold should raise the TOO_LARGE message.
+- **Reproduce:** the query above with b = 1e308.
 
 ## Limitations (not bugs)
 

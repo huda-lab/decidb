@@ -145,7 +145,12 @@ A flat `obj_coeffs` of size `total_vars`, zero-initialized. For each term,
 
 For a keyed variable, every row of a class maps to the same column, and their
 coefficients **accumulate** — which is exactly right: one keyed decision participates
-in the objective across all of its rows.
+in the objective across all of its rows. Every merged sum grows through one helper,
+`AddCoefficient(target, value, written)` (`ilp_model.hpp`): the accumulator, the per-row map,
+the objective's linear, square and bilinear sums, quadratic rows, fixed terms moved to the
+bound side, implied bounds, `<>`, MIN/MAX rows and value links. A sum past a DOUBLE raises
+`DecideInvalidValueMessage`'s TOO_LARGE role naming the clause (`constraint_sources`) or the
+objective (`objective_written`), never an InternalException or a solver API error.
 
 `maximize` comes from `input.sense`.
 

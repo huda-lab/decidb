@@ -175,6 +175,9 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   value's `DecideValueRole` and its text as written: the cut query text, or `DirectIR::render` where none was cut
   (`DirectCoefficientText` merges like coefficients first; `NULL_GUARD_TAG` keeps a NULL guard out of the text). It
   names no row: a row's place in the input depends on the scan.
+  - A number the model computes from finite ones (like coefficients merged across rows, a square, fixed terms moved to
+    the bound side) is TOO_LARGE past a DOUBLE and names its clause, or the objective as EXPLAIN prints it. The solver
+    path grows every such sum through `AddCoefficient` (`ilp_model.hpp`); A1's answer checks raise the same text.
   - A source value read as a coefficient must be finite; one read as a bound (a count limit, a fixed value, a per-row
     lower or upper bound) only has to be a number, because an infinite bound means "no bound" or "nothing satisfies it".
     NaN raises in every slot.

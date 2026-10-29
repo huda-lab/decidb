@@ -46,6 +46,7 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 | Three or more decisions in one product | bind | `Triple or higher-order products of DECIDE variables are not supported (total degree > 2)` |
 | A `BOOL` bound that cannot hold (`x >= 2`) | before reading rows | `DECIDE optimization is infeasible: x >= 2 cannot hold for a BOOL variable.` |
 | A NaN in the data, or an infinite coefficient | run | `DECIDE: v is NaN or infinite on some rows. Skip those rows with 'when isfinite(v):'.` (a bound: `DECIDE: the bound v is NaN on some rows. Skip those rows with 'when NOT isnan(v):'.`) |
+| Finite numbers the model adds or squares past a DOUBLE (`SUM(b*x)` over rows of one keyed decision, `POWER(b*x, 2)`) | run | `DECIDE: SUM(b * x) <= 10 computes a number too large for a DOUBLE. Scale its data down.` (names the clause, or the objective) |
 | An infinite bound under `ABS`, `MIN`, `MAX` or `<>` | run | `DECIDE: the bound v is infinite on some rows, and this clause needs a finite one. Skip those rows with 'when isfinite(v):'.` |
 | An unbounded member under a lowered hard `MIN`/`MAX`, `<>`, Big-M `ABS` or McCormick product | run | names the variable and the bound to add |
 | A model class the available solver cannot run (non-convex QP, MIQP, quadratic constraints on HiGHS) | plan | names what the query does and that it needs Gurobi |
