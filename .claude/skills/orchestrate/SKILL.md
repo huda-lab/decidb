@@ -36,6 +36,7 @@ If the queue does not name checks, use the ones `.claude/CLAUDE.md` gives for th
 
 ## Ground rules
 
+- **Several batches at once go through `/phase`**, which gives each lane its own worktree. Within this skill:
 - **One code item at a time.** Agents share one working tree and one `build/release`; parallel builds or test runs
   corrupt each other's results. Only read-only work (scoping, a requirements or design review) may run alongside.
 - **No unilateral design choices**, by you or by Sonnet. Any choice the owner has not made goes in the brief as a
