@@ -256,9 +256,9 @@ the rest of the engine are unchanged. `BuildElasticModel(base, slack_scope)`:
   term across its comparison, the finding offsets the bound as written. A bound the
   optimizer folded into a column box reports the same way through its own clause's rows
   An unreachable bound names its `per` key's values in both scopes
-  and its kept rows in the expanded scope only. A quadratic row keeps its own slack
-  and, in the expanded scope, reports the classes it stands for through the same
-  `FanOutByClass`.
+  and its kept rows in the expanded scope only. A quadratic row folds as a linear one does,
+  its slack on the linear RHS only, and in the expanded scope reports the classes it stands
+  for through the same `FanOutByClass`.
 
 **Reporting contract.** Every LOOSEN finding carries
 `edit_source ∈ {source_literal, virtual_offset, expanded_row, expanded_group}`. The
@@ -360,6 +360,14 @@ all, a repair with no SQL edit behind it). Before this they were rigid too, so t
 had no loosenable row and the diagnosis fell back to whatever column bound sat nearby —
 the same SQL repaired differently depending on which solver the host had, and only the
 Gurobi answer named the line the user wrote.
+
+**An `=` on a MIN/MAX is a range.** Its two halves keep the clause's source id as the ends of a range: a finding
+quotes the clause as written and suggests `max(e) BETWEEN lo AND hi` with the end that moved, which always repairs.
+
+**A `BETWEEN` is one written clause.** The binder splits `x BETWEEN lo AND hi` into two comparisons, each with its own
+source id; each half links to its partner and both carry the whole clause as written text (a many-to-one source map).
+A finding quotes the whole clause, and its edit spells the `BETWEEN` with the moved end, or both ends in one edit with
+the summed amount. EXPLAIN lists the halves under the clause; a removable half makes the clause one removal group.
 
 **What the reader is quoted: `DisplayRhs`.** A row's own RHS is often not the number the
 user typed. Three things shift it and they are resolved in one place
@@ -521,10 +529,10 @@ channels, read off `ConstraintProvenance` and the source registry (no change to 
   the cache entry; the per-call renumbering to consecutive `0..K'` (the groups the call's
   filter keeps, in key-value order) reindexes the labels in lockstep (a
   new `mapped` id is pushed at exactly `out_group_labels.size()`, so labels stay aligned
-  with the dense ordinals). `FormatPerGroupKey` joins composite columns with `, `; a NULL
-  value of a relation key (`per D`, which compares NULL as a value) renders `NULL`, and an empty-string key renders
-  `''` so it is not confused with "ungrouped" (a string `'NULL'` reads like a NULL, see
-  `todo.md` § INF-2). Threaded through `EvaluatedConstraint::group_labels` → stamped on
+  with the dense ordinals). `FormatPerGroupKey` joins composite columns with `, `; a relation
+  key (`per D`, which compares NULL as a value) writes each value as an SQL literal, as the determination messages do
+  (`'NULL'` quoted, NULL bare); a written key keeps its labels, where an empty-string key renders `''` so it is not
+  confused with "ungrouped". Threaded through `EvaluatedConstraint::group_labels` → stamped on
   `provenance.group_label` at **every** emission site in `ilp_model_builder.cpp`: the
   grouped aggregate sites, and the per-row site. The per-row site is the one
   that sees a hard MIN/MAX whose bound no row in a group can reach: the rewrite drops the
@@ -705,7 +713,8 @@ the stage-1 read. The stage-2a achievable objective `Z*` is what gets reported (
 own objective is just the ranking sum). The pass is skipped — keeping the prior result — when
 no tier owns `≥ 2` knobs (budgets pin cross-tier trades, so no naming tie is possible) or, on
 the freeze path, when the objective is quadratic (freezing it would need a quadratic row; an
-exact tie there is rarer still).
+exact tie there is rarer still). A tie-break the solver cannot finish (a barrier QCP can stop short of the frozen
+objective row) keeps the stage-2a repair, which is one of the tied repairs.
 
 **Repair-tie policy.** `DIAGNOSE` promises one repair that is optimal
 under the lexicographic tier budgets above and, when stage 2 succeeds, the best achievable user
@@ -775,8 +784,9 @@ objective are snapped by `SnapDiagnosticValue` — snap to the nearest integer w
 noise, an absolute `1e-6` plus a relative `1e-9` (recovering integer bounds at **any** magnitude, where significant-figure rounding would turn
 `1234567890` into `1234570001`), else trim to a fixed
 absolute precision. The relative part is that small on purpose: a relative `1e-6` at `1e6`
-would erase a real `0.34` of a repair, and the pasted bound would not repair the query. Separately, both stage reads use one-directional, per-edit precision cleanup for
-noise introduced by the widened formulation; only stage 2 receives the additional budget-row
+would erase a real `0.34` of a repair, and the pasted bound would not repair the query. Separately, both stage reads use one-directional, per-edit precision cleanup
+(`SnapToPrecision`) for noise introduced by the widened formulation: it never rounds down, and a value within the
+feasibility tolerance DeciDB gives both solvers (`DECIDE_FEASIBILITY_TOLERANCE`) of a tidier one reads as it; only stage 2 receives the additional budget-row
 snap described here.
 
 **Objective value plumbing.** `SolverResult` carries `objective_value`, populated on

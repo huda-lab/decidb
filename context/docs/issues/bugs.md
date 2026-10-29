@@ -46,36 +46,13 @@
 - **Impact:** a large HiGHS query can take the whole process down, and the profile misreports why.
 - **Reproduce:** `make decide-bench-setup`, remove the entry from `SKIP`, run `profile_pipeline.py`. Memory-heavy.
 
-## BUG-9 — A `BETWEEN` echoes its lower half only
-
-- **Observed:** `x BETWEEN 18 AND 25` beside `SUM(x) <= 20` over two rows reports the clause `x >= 18` and suggests
-  `x >= 10`; pasted back, the upper half is lost. The binder splits a BETWEEN into two comparisons that share the
-  clause. Reproduces on the current build.
-- **Impact:** a suggested change that does not repair the query.
-- **Task.** `../diagnostics/infeasible/todo.md` § INF-3.
-
-## BUG-10 — A quadratic clause is reported once per row or group in the query scope
-
-- **Observed:** quadratic rows never share a slack (I2.d), so `power(x - 20, 2) <= 4` beside `x >= 25` over two rows
-  gives two identical query-scope findings with no row to tell them apart; the expanded scope names each class (D28).
-  Reproduces on the current build.
-- **Impact:** findings the user cannot tell apart.
-- **Needs.** The agent finds the cause and stops with a proposed fix before coding.
-
-## BUG-11 — HiGHS's expanded repair can carry a 1e-5 cushion
-
-- **Observed:** `x <> -1 AND ... AND per (): sum(x) + max(x) <= -5 AND per row: x >= 18` suggests
-  `per (): sum(x) + max(x) <= 1e-05` (amount 5.00001) in the expanded scope where Gurobi and the query scope say
-  `<= 0`; the edit over-repairs by 1e-5. Reproduces on the current build.
-- **Needs.** The agent finds the cause and stops with a proposed fix before coding.
-
 ## BUG-14 — Like coefficients that merge past DOUBLE raise an internal error
 
 - **Observed:** the model builder adds like coefficients after each was checked finite, so `SUM(b*x) + SUM(c*x)` with
   b = c = 1e308, or `SUM(POWER(b*x, 2))` with b = 1e200, overflows to infinity and reaches the builder's
   InternalException or a Gurobi API error instead of `DecideInvalidValueMessage`.
 - **Fix:** one `AddCoefficient(target, value, written)` helper in the builder checks each sum and raises the message.
-  After F5, which edits the builder.
+  After F4, whose CQ-4 rewrites the builder.
 
 ## Limitations (not bugs)
 

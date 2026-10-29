@@ -26,6 +26,9 @@ DIAGNOSE still names the clause.
 
 **done.md.** "NORM and IN — `RewriteNorm` / `RewriteInDomain`".
 
+**Ruling (owner's delegate, 2026-10-29).** Neither: an indicator's scope is `JoinScopes(scope(x), scope(domain))`, so (b)
+is a result, not a case; a data domain under `per K:` stays per row until a scope is made from the key table.
+
 ## OPT-4 — ABS, body helpers and `NORM_IN` take their auxiliary's scope by `JoinScopes`
 
 **Why.** `JoinScopes` (`decide_optimizer.cpp`) gives a Boolean product's auxiliary the least upper bound of its

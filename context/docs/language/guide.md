@@ -603,7 +603,7 @@ A relation, one row per finding; a query that solves returns one row, `state = '
 | `total` | BIGINT | denominator of an unbounded escape count |
 | `scope` | VARCHAR | `row`, or `entity` for a keyed decision, on an escape count |
 | `edit_source` | VARCHAR | the finding's kind (below) |
-| `group` | VARCHAR | the class's `per` key value (expanded scope; a NULL key prints as `NULL`), or the slice a decision escapes on |
+| `group` | VARCHAR | the class's `per` key value (expanded scope; a relation key's values print as SQL literals, `'NULL'` quoted and NULL bare), or the slice a decision escapes on |
 | `row` | BIGINT | the kept row this finding covers (expanded scope) |
 
 | `edit_source` | meaning |

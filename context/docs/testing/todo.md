@@ -28,3 +28,7 @@ vocabulary.
 The identifiers and the names still open are `../issues/code_quality.md` § CQ-3; this task lands in the same change.
 
 - Update: the area table in [README.md](README.md) and every section of [coverage.md](coverage.md) that names these files.
+
+**Ruling (owner's delegate, 2026-10-29).** `test_keyed_scope.py` (`test_keyed_*`), `test_global_scope.py`,
+`test_reducer_filter.py`; markers keep `when*` and `per_clause`, `when_perrow` becomes `when_row`, and descriptions use
+the guide's terms.

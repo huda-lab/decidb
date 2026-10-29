@@ -62,6 +62,10 @@ and when/during which task it was discovered.
 - **Discovered:** 2026-10-18, removing the spellings the scope language replaced
   (D47 in [../language/decisions.md](../language/decisions.md)).
 
+**Ruling (owner's delegate, 2026-10-29).** (1) `group_key` stays out of `DecideClauseScope`. (2) A plain AND or a `when`
+inside a `when` under a wrapper is refused in C0. (3) `per_key` becomes `per`, `when_condition` `scope.when`. (4) Every
+walker converts, F5's objective value-rewrite walker included. (5) `DecideObjective` and `ReducerValueLink` stay out.
+
 ## CQ-3 — Name the keyed scope "keyed" everywhere
 
 - **Today:** the language says *keyed*; the code and one label say *entity*: `DecideVarScope::ENTITY`
@@ -85,6 +89,9 @@ and when/during which task it was discovered.
 - **Docs:** [scopes.md](../language/scopes.md), [diagnose.md](../language/diagnose.md),
   [guide.md §8.1](../language/guide.md#81-what-it-returns), [../diagnostics/](../diagnostics/README.md).
 
+**Ruling (owner's delegate, 2026-10-29).** `TWO_LEVEL_OBJECTIVE_TAG` and `two_level_key`, the guide's "two-level form";
+the rename covers `JoinScopes`' `IsScalar`/`IsEntity`.
+
 ## CQ-4 — "Count once" is encoded twice
 
 - **Location:** `CountTupleTermsOnce` (`physical_decide.cpp`) and the model builder's `is_reduced_scalar`
@@ -101,3 +108,7 @@ and when/during which task it was discovered.
 - **Decision needed.** Which encoding: (1) the builder sums every row and the reduction arrays leave `SolverInput`;
   (2) the builder keeps them and refuses arrays whose sizes differ. Recommended: (1), one fact in one place.
 - **Discovered:** 2026-10-27, reviewing the lift of a decision beside MIN/MAX in the objective.
+
+**Ruling (owner's delegate, 2026-10-29).** (1): execution's `CountOnce` is the one owner and the reduction arrays leave
+`SolverInput`, with one debug-only check, as DuckDB's `Verify()`, that no writer repeats a query-wide coefficient per
+row.

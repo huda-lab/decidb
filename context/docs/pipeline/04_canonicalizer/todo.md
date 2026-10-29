@@ -43,3 +43,7 @@ model.
 
 **Update.** `done.md` §3.10, `../05_optimizer/done.md` (the value rewrite no longer sees
 the clause), `../06_model_formulation/done.md`.
+
+**Ruling (owner's delegate, 2026-10-29).** (1) The shape is decided once and stamped as a tag. (2) One rule: the join of
+the factors' scopes (`JoinScopes`' lattice) equals the `by` key. (3, 4) Moot after CQ-4: "once per group" goes to
+`CountOnce`.
