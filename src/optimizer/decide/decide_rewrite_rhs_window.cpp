@@ -154,7 +154,7 @@ private:
 		if (reduces) {
 			InClassOnly(comparison.right);
 		}
-		auto invalid = InvalidValueMessage(*comparison.right, "constraint right-hand side", Kept());
+		auto invalid = InvalidValueMessage(*comparison.right, text, Kept());
 		if (reduces) {
 			Record(comparison, text, std::move(invalid));
 			return;
@@ -216,7 +216,8 @@ private:
 		if (!reducer.children.empty() && name != "count") {
 			// A norm's definition can hide a NaN (an L0 count's SIGN reads it as 0), so the value checked is the body.
 			auto body = DecideWrittenNormBody(reducer);
-			auto nan = NanMessage(body ? *body : *reducer.children[0], "constraint right-hand side aggregate");
+			auto argument = body ? body : reducer.children[0].get();
+			auto nan = NanMessage(*argument, Written(*argument));
 			if (nan) {
 				AddValueCheck(calc.Out(OnRows(reads, InGroup(reducer, nan))));
 			}
@@ -352,11 +353,12 @@ private:
 		return one;
 	}
 
-	//! The message a row raises for a NaN `value` among `rows` (every row when null), and NULL elsewhere: the solver's
-	//! text; null when `value` cannot be NaN. A NULL bound skips its instance (deck p. 50) and infinity is a value.
-	unique_ptr<Expression> InvalidValueMessage(const Expression &value, const string &context,
+	//! The message a row raises for a NaN `value` among `rows` (every row when null), and NULL elsewhere: the one text
+	//! of DecideInvalidValueMessage, naming the bound as `written`; null when `value` cannot be NaN. A NULL bound skips
+	//! its instance (deck p. 50) and infinity is a value.
+	unique_ptr<Expression> InvalidValueMessage(const Expression &value, const string &written,
 	                                           const ExprPtr &rows) const {
-		auto nan = NanMessage(value, context);
+		auto nan = NanMessage(value, written);
 		if (!nan) {
 			return nullptr;
 		}
@@ -364,12 +366,12 @@ private:
 	}
 
 	//! The message a row raises for a NaN `value`, and NULL elsewhere; null when `value` cannot be NaN.
-	ExprPtr NanMessage(const Expression &value, const string &context) const {
+	ExprPtr NanMessage(const Expression &value, const string &written) const {
 		if (value.return_type != LogicalType::FLOAT && value.return_type != LogicalType::DOUBLE) {
 			return nullptr;
 		}
 		return calc.If(calc.Fn("isnan", calc.Cast(calc.Of(value), LogicalType::DOUBLE)),
-		               calc.Constant(Value(DecideInvalidValueMessage(context, "NaN"))),
+		               calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, written))),
 		               calc.Constant(Value(LogicalType::VARCHAR)));
 	}
 

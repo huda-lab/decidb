@@ -9,6 +9,7 @@
 #include "duckdb/planner/decide/decide_canonicalizer.hpp"
 #include "duckdb/planner/decide/decide_cast_policy.hpp"
 #include "duckdb/planner/decide/decide_constraint_walk.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -56,6 +57,9 @@ public:
 		// The IR describes what the user wrote. After OptimizeDecide the tree holds a solver formulation instead.
 		D_ASSERT(!decide.optimized && !decide.num_auxiliary_vars);
 		DirectIR ir;
+		ir.render = [&decide = decide](const Expression &expr) {
+			return RenderDecideSource(expr, decide.source_fragments, decide.entity_scopes, &decide.keys);
+		};
 		ir.decide_index = decide.decide_index;
 		ir.source_clause_count = decide.constraint_sources.size();
 		D_ASSERT(decide.children.size() == 1 && decide.children[0]);
@@ -257,16 +261,21 @@ private:
 		auto zero = [&](const LogicalType &type) {
 			return calc.Constant(Value::INTEGER(0).DefaultCastAs(type));
 		};
+		// The guard is the engine's: a render prints the coefficient it guards (NULL_GUARD_TAG), which keeps the tags
+		// that tell how the user wrote it (the plan loses them in StripTagsAbove).
+		auto guard = [&](const Expression &coefficient) {
+			auto guarded = calc.Out(calc.If(valid, calc.Wrap(coefficient.Copy()), zero(coefficient.return_type)));
+			guarded->SetAlias(NULL_GUARD_TAG);
+			return guarded;
+		};
 		if (term.coefficient) {
-			auto type = term.coefficient->return_type;
-			term.coefficient = calc.Out(calc.If(valid, calc.Of(*term.coefficient), zero(type)));
+			term.coefficient = guard(*term.coefficient);
 		} else {
 			term.coefficient = calc.Out(calc.If(valid, calc.Num(1), calc.Num(0)));
 		}
 		for (auto &inner : term.inner) {
 			if (inner.coefficient) {
-				auto type = inner.coefficient->return_type;
-				inner.coefficient = calc.Out(calc.If(valid, calc.Of(*inner.coefficient), zero(type)));
+				inner.coefficient = guard(*inner.coefficient);
 			}
 		}
 	}

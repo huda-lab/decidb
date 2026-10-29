@@ -39,6 +39,9 @@ struct DirectBoundClause {
 	//! The clause's coefficient and right side, which the plan checks as the solver path checks them.
 	vector<DirectSignedValue> coefficient;
 	unique_ptr<Expression> rhs;
+	//! What a message calls them, as the user wrote them (DirectCoefficientText, DirectIR::render).
+	string coefficient_text;
+	string rhs_text;
 	//! The values of the decision the clause admits (DecideSingletonRow): DOUBLE, ±infinity on an open side.
 	unique_ptr<Expression> lower;
 	unique_ptr<Expression> upper;
@@ -117,6 +120,9 @@ struct DirectLinearTerm {
 	idx_t decision = 0;
 	int sign = 1;
 	unique_ptr<Expression> coefficient;
+	//! The coefficient as the solver path reads it, with the part's constant factor applied (`2 * w`, `w / 2`): what a
+	//! message names.
+	unique_ptr<Expression> scaled;
 };
 
 //! One part `sign * scale * SUM(...)` of an objective or of a constraint's left side, with the part's constant factor
@@ -128,7 +134,15 @@ struct DirectLinearPart {
 	double scale = 1.0;
 	bool divides = false;
 	vector<DirectLinearTerm> terms;
+	//! For each decision, the coefficient a message names: the part's terms on it, merged as the solver merges like
+	//! terms and scaled. Empty for a decision with no term.
+	vector<string> text;
 };
+
+//! The coefficient a message names for `terms`, the like terms of one decision: merged as the solver path merges them
+//! (DecideMergeLikeCoefficients, in reading order, the first term's sign kept), printed as the user wrote it. A single
+//! term prints as itself.
+string DirectCoefficientText(const DirectIR &ir, ClientContext &context, const vector<DirectSignedValue> &terms);
 
 //! Reads the sign and constant factor of one part and each of its linear terms. Returns false when the factor is not a
 //! finite constant (or divides by zero) or when a linear term's coefficient is not a numeric value of the source row.

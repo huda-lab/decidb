@@ -110,7 +110,10 @@ def test_a_nan_bound_on_a_null_key_row_is_never_read(decidb_cli, oracle_solver, 
 def test_a_nan_bound_on_a_class_row_still_raises(decidb_cli, shape, mode):
     """Class b's one row has a NaN bound: the class determines it, and the message is the same on both paths."""
     rows = [row[:4] + (NAN if row[0] == 4 else row[4],) for row in ROWS if row[1] != "b" or row[0] == 4]
-    with pytest.raises(DecidBCliError, match=r"right-hand side contains invalid value \(NaN\)"):
+    with pytest.raises(
+        DecidBCliError,
+        match=r"DECIDE: the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\.",
+    ):
         run(decidb_cli, _sql(rows, shape), mode)
 
 

@@ -48,33 +48,16 @@ unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer) {
 	                                       "which decision needs a bound.");
 }
 
-string DirectInvalidNumberMessage(DirectNumberKind kind) {
-	return kind == DirectNumberKind::OBJECTIVE ? DecideInvalidValueMessage("objective coefficient", "NaN or Infinity")
-	                                           : DirectCoefficientInvalidMessage();
-}
-
-//! The error for a NaN or infinite number, naming the kind of coefficient the user wrote it in.
-static unique_ptr<Expression> DirectInvalidNumberError(Optimizer &optimizer, DirectNumberKind kind) {
-	return DirectErrorPredicate(optimizer, DirectInvalidNumberMessage(kind));
-}
-
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, DirectNumberKind kind) {
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &written) {
 	auto none = calc.Constant(Value(LogicalType::VARCHAR));
 	return calc.If(calc.IsNull(number), none,
-	               calc.If(calc.Fn("isfinite", number), none, calc.Constant(Value(DirectInvalidNumberMessage(kind)))));
+	               calc.If(calc.Fn("isfinite", number), none,
+	                       calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, written)))));
 }
 
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message) {
 	return DirectRaiseIf(calc, calc.Out(calc.If(calc.IsNull(message), calc.Bool(false), calc.Bool(true))),
 	                     DirectErrorPredicate(optimizer, calc.Out(message)));
-}
-
-string DirectBoundNaNMessage() {
-	return DecideInvalidValueMessage("constraint right-hand side", "NaN");
-}
-
-string DirectCoefficientInvalidMessage() {
-	return DecideInvalidValueMessage("constraint coefficient", "NaN or Infinity");
 }
 
 unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, unique_ptr<Expression> kept,
@@ -83,18 +66,21 @@ unique_ptr<Expression> DirectCheckOnKeptRows(const ExpressionBuilder &calc, uniq
 }
 
 unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
-                                                  ColumnBinding number_binding, DirectNumberKind kind) {
+                                                  ColumnBinding number_binding, const string &written) {
 	ExpressionBuilder calc(optimizer.context);
 	auto number = calc.Col(number_type, number_binding);
 	auto finite = calc.If(calc.IsNull(number), calc.Bool(true), calc.Fn("isfinite", number));
-	return DirectRaiseUnless(calc, calc.Out(finite), DirectInvalidNumberError(optimizer, kind));
+	return DirectRaiseUnless(
+	    calc, calc.Out(finite),
+	    DirectErrorPredicate(optimizer, DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, written)));
 }
 
-unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding) {
+unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
+                                                 const string &written) {
 	ExpressionBuilder calc(optimizer.context);
 	auto bound = calc.Col(LogicalType::DOUBLE, bound_binding);
 	return DirectRaiseIf(calc, calc.Out(calc.Fn("isnan", bound)),
-	                     DirectErrorPredicate(optimizer, DirectBoundNaNMessage()));
+	                     DirectErrorPredicate(optimizer, DecideInvalidValueMessage(DecideValueRole::BOUND, written)));
 }
 
 } // namespace duckdb

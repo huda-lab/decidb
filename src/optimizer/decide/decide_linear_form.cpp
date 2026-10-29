@@ -257,6 +257,7 @@ private:
 			auto guarded = make_uniq<BoundOperatorExpression>(ExpressionType::OPERATOR_COALESCE, type);
 			guarded->children.push_back(std::move(coefficient));
 			guarded->children.push_back(make_uniq<BoundConstantExpression>(Value::INTEGER(0).DefaultCastAs(type)));
+			guarded->SetAlias(NULL_GUARD_TAG);
 			coefficient = std::move(guarded);
 		};
 		for (auto &term : objective.terms) {

@@ -18,14 +18,20 @@
 
 namespace duckdb {
 
-//! The error for a NaN or infinite value. `context` names where the value sits (`objective coefficient`), `kind` what
-//! is not allowed (`NaN` or `NaN or Infinity`). It names no row: a row's position in the input depends on the scan.
-inline string DecideInvalidValueMessage(const string &context, const string &kind) {
-	return "DECIDE " + context + " contains invalid value (" + kind +
-	       "). Common causes:\n"
-	       "  • Division by zero in the expression\n"
-	       "  • Arithmetic overflow in calculations\n"
-	       "Check your expressions and input data.";
+//! What a number the model reads is: a coefficient must be finite, a bound only has to be a number (an infinite bound
+//! means "no bound" or "nothing satisfies it").
+enum class DecideValueRole : uint8_t { COEFFICIENT, BOUND };
+
+//! The error for a NaN or infinite value, the one text every site that refuses one raises. `written` is the value as
+//! the user wrote it (the cut text of the query, or the tree rendered where no text was cut). The message gives the
+//! smallest edit, a `when` that skips the rows, and names no row: a row's position in the input depends on the scan.
+inline string DecideInvalidValueMessage(DecideValueRole role, const string &written) {
+	if (role == DecideValueRole::BOUND) {
+		return "DECIDE: the bound " + written + " is NaN on some rows. Skip those rows with 'when NOT isnan(" +
+		       written + "):'.";
+	}
+	return "DECIDE: " + written + " is NaN or infinite on some rows. Skip those rows with 'when isfinite(" + written +
+	       "):'.";
 }
 
 //! The error of a scope check that finds a class showing more than one value or decision (language/guide.md §7.3).

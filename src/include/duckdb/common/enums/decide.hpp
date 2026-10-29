@@ -406,6 +406,10 @@ static constexpr const char *BOUND_REDUCER_TAG = "__bound_reducer__";
 //! (DecideCanonicalizer::SkipNullData): the query never wrote it, so no render prints it.
 static constexpr const char *SKIP_NULL_TAG = "__skip_null__";
 
+//! On the COALESCE or CASE that reads a NULL coefficient as 0 (DecideOptimizer's DropNullObjectiveTerms, the direct
+//! IR's GuardCoefficients): the query never wrote it, so a render prints the value it guards.
+static constexpr const char *NULL_GUARD_TAG = "__null_guard__";
+
 //! Stable source-comparison identity. The payload indexes the per-DECIDE
 //! ConstraintSourceInfo registry; it survives canonical rebuilding and optimizer
 //! one-to-many rewrites but is never used to group elastic slacks.

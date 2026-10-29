@@ -941,7 +941,7 @@ def test_a1_late_bad_row_raises_under_count_and_where(decidb_cli):
         t_sql="CASE WHEN i = 4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
     )
     for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
-        with pytest.raises(DecidBCliError, match="invalid value"):
+        with pytest.raises(DecidBCliError, match=r"t is NaN or infinite on some rows"):
             _run(decidb_cli, outer, "require")
     assert _run(decidb_cli, f"SELECT i FROM ({inner}) q LIMIT 0", "require")[0] == []
 

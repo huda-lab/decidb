@@ -262,7 +262,9 @@ def test_rhs_aggregate_argument_that_is_nan_raises_without_a_row_position(decidb
         "SELECT id, x FROM (FROM (VALUES (0, 3, 1.0, 5.0), (1, 4, 'NaN'::DOUBLE, 4.0)) t(id, w, cap, p) "
         "DECIDE x(BOOL) SUCH THAT SUM(x * w) <= MIN(cap) MAXIMIZE SUM(p*x)) q"
     )
-    with pytest.raises(DecidBCliError, match=r"constraint right-hand side aggregate contains invalid value \(NaN\)"):
+    with pytest.raises(
+        DecidBCliError, match=r"the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\."
+    ):
         run(decidb_cli, sql, "off")
 
 
@@ -274,7 +276,9 @@ def test_rhs_l0_norm_reads_a_nan_body_as_invalid(decidb_cli, mode):
         "SELECT id, x FROM (FROM (VALUES (0, 3, 1.0, 5.0), (1, 4, 'NaN'::DOUBLE, 4.0)) t(id, w, cap, p) "
         "DECIDE x(BOOL) SUCH THAT SUM(x) <= norm(cap, 0) MAXIMIZE SUM(p*x)) q"
     )
-    with pytest.raises(DecidBCliError, match=r"right-hand side aggregate contains invalid value \(NaN\)"):
+    with pytest.raises(
+        DecidBCliError, match=r"the bound cap is NaN on some rows\. Skip those rows with 'when NOT isnan\(cap\):'\."
+    ):
         run(decidb_cli, sql, mode)
 
 

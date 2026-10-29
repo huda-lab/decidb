@@ -20,10 +20,10 @@ ERROR_CLASSES = [
     # Before "infeasible": an `=` bound that disagrees within a group ends "so this DECIDE query is infeasible".
     (r"takes more than one value here", "equality_varies"),
     (r"(?i)infeasible", "infeasible"),
-    # A NaN bound reads "contains invalid value (NaN)" on the solver path.
-    (r"(?i)is NULL|NULL or NaN|contains NULL|invalid value \(NaN\)", "null_bound"),
-    # A coefficient that is NaN or infinite.
-    (r"(?i)contains invalid value", "invalid_value"),
+    # A NaN bound reads "the bound v is NaN on some rows" on both paths.
+    (r"(?i)is NULL|NULL or NaN|contains NULL|the bound .* is NaN on some rows", "null_bound"),
+    # A coefficient that is NaN or infinite reads "v is NaN or infinite on some rows".
+    (r"(?i)is NaN or infinite on some rows", "invalid_value"),
     (r"(?i)is unbounded", "unbounded"),
     # An INT answer beyond what a double holds exactly. The solver names the variable; direct solve cannot.
     (r"(?i)beyond the range", "int_range"),

@@ -188,8 +188,8 @@ def test_wide_value_is_proved_by_direct_solve_and_answers_like_the_solver(decidb
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("bad", ["'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
-def test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in(decidb_cli, bad):
-    # A bad number is reported with the noun of the clause that holds it, in both modes.
+def test_a1_invalid_coefficient_names_the_value_the_user_wrote(decidb_cli, bad):
+    # A bad number is reported as the value the user wrote and the edit that skips its rows, in both modes.
     def error(constraint_expression, objective_expression, mode):
         sql = f"""
             SELECT id, x FROM (
@@ -199,20 +199,20 @@ def test_a1_invalid_coefficient_names_the_clause_the_user_wrote_it_in(decidb_cli
         """
         return _raw(decidb_cli, sql, mode=mode).stderr
 
+    skip_w = "DECIDE: w is NaN or infinite on some rows. Skip those rows with 'when isfinite(w):'."
+    skip_two_w = "DECIDE: 2 * w is NaN or infinite on some rows. Skip those rows with 'when isfinite(2 * w):'."
     for mode in ("require", "off"):
-        in_constraint = error("w * x", "s * x", mode)
-        assert "constraint coefficient contains invalid value" in in_constraint, (mode, in_constraint)
-        assert "objective coefficient" not in in_constraint, (mode, in_constraint)
-        in_objective = error("x", "w * x", mode)
-        assert "objective coefficient contains invalid value" in in_objective, (mode, in_objective)
-        assert "constraint coefficient" not in in_objective, (mode, in_objective)
+        assert skip_w in error("w * x", "s * x", mode), mode
+        assert skip_w in error("x", "w * x", mode), mode
+        # The value is named as the solver reads it once the sum's constant factor is applied.
+        assert skip_two_w in error("x", "2 * w * x", mode), mode
 
 
 @pytest.mark.correctness
 @pytest.mark.parametrize("bad", ["'NaN'::DOUBLE", "'Infinity'::DOUBLE"])
-def test_r1_invalid_number_names_the_clause_the_user_wrote_it_in(decidb_cli, bad):
-    # The weight of the budget is a constraint coefficient and the value in the objective an objective coefficient,
-    # on both paths, and the two messages are the same.
+def test_r1_invalid_number_names_the_value_the_user_wrote(decidb_cli, bad):
+    # The weight of the budget and the value in the objective are named as written, on both paths, and the two messages
+    # are the same.
     def error(weight, value, mode):
         sql = f"""
             SELECT id, x FROM (
@@ -222,19 +222,16 @@ def test_r1_invalid_number_names_the_clause_the_user_wrote_it_in(decidb_cli, bad
         """
         return _raw(decidb_cli, sql, mode=mode).stderr
 
+    skip_b = "DECIDE: b is NaN or infinite on some rows. Skip those rows with 'when isfinite(b):'."
     for mode in ("require", "off"):
-        in_budget = error("b", "a", mode)
-        assert "constraint coefficient contains invalid value" in in_budget, (mode, in_budget)
-        assert "objective coefficient" not in in_budget, (mode, in_budget)
-        in_objective = error("a", "b", mode)
-        assert "objective coefficient contains invalid value" in in_objective, (mode, in_objective)
-        assert "constraint coefficient" not in in_objective, (mode, in_objective)
+        assert skip_b in error("b", "a", mode), mode
+        assert skip_b in error("a", "b", mode), mode
     direct = error("b", "a", "require")
     assert error("b", "a", "off") == direct
 
 
 @pytest.mark.correctness
-def test_r1_objective_factor_that_overflows_is_an_objective_coefficient_error_like_the_solvers(decidb_cli):
+def test_r1_objective_factor_that_overflows_names_the_scaled_value_like_the_solvers(decidb_cli):
     sql = """
         SELECT id, x FROM (
             FROM (VALUES (1, 4.0, 2.0, 10.0), (2, 3.0, 3.0, 9.0)) t(id, cap, w, v)
@@ -243,7 +240,7 @@ def test_r1_objective_factor_that_overflows_is_an_objective_coefficient_error_li
     """
     direct = _raw(decidb_cli, sql, mode="require").stderr
     solver = _raw(decidb_cli, sql, mode="off").stderr
-    assert "objective coefficient contains invalid value" in direct, direct
+    assert "1e+308 * v is NaN or infinite on some rows. Skip those rows with 'when isfinite(1e+308 * v):'." in direct
     assert solver == direct
 
 
@@ -285,7 +282,7 @@ def _s1_source_bound_error(decidb_cli, cap_type, cap):
 def test_s1_source_bound_error_for_a_column_is_the_solvers(decidb_cli):
     """A bound that is one column raises the solver's NaN error."""
     direct, solver = _s1_source_bound_error(decidb_cli, "DOUBLE", "'NaN'")
-    assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
+    assert "DECIDE: the bound cap is NaN on some rows. Skip those rows with 'when NOT isnan(cap):'." in direct, direct
     assert solver == direct
 
 
@@ -330,7 +327,9 @@ def test_r1_budget_limit_error_is_the_solvers(decidb_cli):
 
     for lim_type in ("FLOAT", "DOUBLE"):
         direct, solver = error(lim_type, "'NaN'")
-        assert "constraint right-hand side contains invalid value (NaN)" in direct, direct
+        assert (
+            "DECIDE: the bound lim is NaN on some rows. Skip those rows with 'when NOT isnan(lim):'." in direct
+        ), direct
         assert solver == direct
 
 
@@ -369,7 +368,7 @@ def test_unused_wide_output_is_pruned_without_losing_rank_or_bindings(decidb_cli
 
     invalid = setup.replace("(i % 101)::DOUBLE AS score", "CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END AS score")
     count_only = f"SELECT COUNT(*) FROM ({decide.replace('<=500', '<=0')}) q"
-    assert "invalid value" in _raw(decidb_cli, invalid + count_only).stderr
+    assert "score is NaN or infinite on some rows" in _raw(decidb_cli, invalid + count_only).stderr
 
     throwing_source = """
         SELECT i, i::DOUBLE AS score,

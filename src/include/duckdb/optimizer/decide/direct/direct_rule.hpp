@@ -213,6 +213,9 @@ struct DirectRowCheck {
 struct DirectIR {
 	static DirectIR Read(ClientContext &context, LogicalDecide &decide);
 
+	//! Prints an expression of the source as the user wrote it, for a message that names a value (RenderDecideSource).
+	//! It reads the DECIDE node the IR was read from, which outlives the IR.
+	std::function<string(const Expression &)> render;
 	idx_t decide_index;
 	vector<DirectIRDecision> decisions;
 	vector<DirectIREntityScope> entity_scopes;

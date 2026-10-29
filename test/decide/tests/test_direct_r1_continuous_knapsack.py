@@ -1745,7 +1745,7 @@ def test_r1_an_equality_limit_that_differs_only_among_rows_outside_the_when_is_n
 def test_r1_late_bad_row_raises_under_count_and_where(decidb_cli):
     inner = _late(LATE_DECIDE, w_sql=_last_row("'NaN'::DOUBLE", "1.0"))
     for outer in (f"SELECT COUNT(*) FROM ({inner}) q", f"SELECT i FROM ({inner}) q WHERE i = 0"):
-        with pytest.raises(DecidBCliError, match="invalid value"):
+        with pytest.raises(DecidBCliError, match=r"w is NaN or infinite on some rows"):
             _run(decidb_cli, outer, "require")
     assert _run(decidb_cli, f"SELECT i FROM ({inner}) q LIMIT 0", "require")[0] == []
     # LIMIT 1 reads the whole problem too: the last row is the unbounded one.

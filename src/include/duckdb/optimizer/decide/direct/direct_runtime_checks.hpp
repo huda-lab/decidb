@@ -31,15 +31,9 @@ unique_ptr<Expression> DirectRaiseIf(const ExpressionBuilder &calc, unique_ptr<E
 //! A check that raises `message` as an error on a row where it is not NULL, and is true otherwise.
 unique_ptr<Expression> DirectRaiseMessage(Optimizer &optimizer, const ExpressionBuilder &calc, const ExprPtr &message);
 
-//! Which clause a number belongs to, so an error names the object the user wrote.
-enum class DirectNumberKind : uint8_t { OBJECTIVE, CONSTRAINT };
-
-//! The message of the error DirectValidNumberPredicate raises for a NaN or infinite number.
-string DirectInvalidNumberMessage(DirectNumberKind kind);
-
-//! The message of a number the solver refuses (NaN or infinite), naming `kind`; NULL for a valid number. A NULL number
-//! skips what it reaches, so it is valid.
-ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, DirectNumberKind kind);
+//! The message of a coefficient the solver refuses (NaN or infinite), naming it as the user `written` it (the text of
+//! DecideInvalidValueMessage); NULL for a valid number. A NULL number skips what it reaches, so it is valid.
+ExprPtr DirectNumberMessage(const ExpressionBuilder &calc, const ExprPtr &number, const string &written);
 
 //! The check, evaluated only on a row where `kept` is true. A value on a row a `when` drops is never read, so it raises
 //! nothing there, as on the solver path.
@@ -57,19 +51,15 @@ unique_ptr<Expression> DirectInfeasibleErrorPredicate(Optimizer &optimizer);
 //! DECIDE's unboundedness error: some decision can improve the objective without limit.
 unique_ptr<Expression> DirectUnboundedErrorPredicate(Optimizer &optimizer);
 
-//! Evaluates to true for a DOUBLE bound that is not NaN, and raises the bound error otherwise. Infinity is a valid
-//! bound (no bound on that side), and a NULL one skips the instance it reaches, which the plan reads as no bound.
-unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding);
+//! Evaluates to true for a DOUBLE bound that is not NaN, and raises the bound error, naming the bound as the user
+//! `written` it, otherwise. Infinity is a valid bound (no bound on that side), and a NULL one skips the instance it
+//! reaches, which the plan reads as no bound.
+unique_ptr<Expression> DirectValidBoundPredicate(Optimizer &optimizer, ColumnBinding bound_binding,
+                                                 const string &written);
 
-//! The solver's error for a NaN bound, without the row position the solver adds.
-string DirectBoundNaNMessage();
-//! The solver's message for a coefficient that is NaN or infinite.
-string DirectCoefficientInvalidMessage();
-
-
-//! Evaluates to true for a finite number and raises an error for a non-finite one, naming `kind`. A NULL number skips
-//! what it reaches (a SUM reads a skipped row's terms as 0, DirectIR), so it passes.
+//! Evaluates to true for a finite number and raises an error for a non-finite one, naming the coefficient as the user
+//! `written` it. A NULL number skips what it reaches (a SUM reads a skipped row's terms as 0, DirectIR), so it passes.
 unique_ptr<Expression> DirectValidNumberPredicate(Optimizer &optimizer, const LogicalType &number_type,
-                                                  ColumnBinding number_binding, DirectNumberKind kind);
+                                                  ColumnBinding number_binding, const string &written);
 
 } // namespace duckdb

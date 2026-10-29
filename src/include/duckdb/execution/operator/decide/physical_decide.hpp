@@ -5,6 +5,7 @@
 #include "duckdb/common/profiler.hpp"
 #include "duckdb/planner/expression.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
+#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_prepared_model.hpp"
 #include "duckdb/planner/column_binding_map.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
@@ -265,6 +266,9 @@ public:
     InsertionOrderPreservingMap<string> ParamsToString() const override;
 
 private:
+	//! What a message renders the query's values with: a value prints as the user wrote it.
+	DecideSourceNames Names() const;
+
     //! The backend named on the plan, resolved to a registry entry. This is the ONLY
     //! place layer 8 turns `solver_backend_name` back into a backend, and it happens
     //! where a solve is about to run — the primary one and every diagnostic re-solve.

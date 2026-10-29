@@ -57,8 +57,12 @@ struct Condition final : DirectApplicabilityCondition {
 		//! The clause's `when`; the value is read only on the rows it keeps. Null for every row.
 		unique_ptr<Expression> when;
 		bool coefficient = false;
+		//! The value as the user wrote it, which the error names.
+		string written;
 	};
 	struct ObjectivePart {
+		//! The reducer the term is of, an index into `part_text`.
+		idx_t part;
 		int sign;
 		unique_ptr<Expression> coefficient;
 		//! A constant factor the part's objective term is multiplied by, or divided by when `divides`.
@@ -78,6 +82,12 @@ struct Condition final : DirectApplicabilityCondition {
 	bool impossible = false;
 	DecideSense sense;
 	vector<ObjectivePart> objective_parts;
+	//! What a message calls the score, the objective's coefficient of `x` as the user wrote it, and each reducer's
+	//! share of it. The solver merges like terms within one reducer and checks each reducer's coefficient apart, so a
+	//! message names the reducer whose coefficient fails, and the whole score only when each is fine and their sum is
+	//! not.
+	string score_text;
+	vector<string> part_text;
 	//! The `by` key every bound shares: the groups whose rows the count bounds, each its own interval. Empty for one
 	//! group of all the rows the bounds cover. A row with a NULL in a NO_GROUP element is in no group (D5).
 	vector<DirectKeyElement> group_keys;
@@ -369,7 +379,7 @@ void FixFromBooleanSource(const ExpressionBuilder &calc, ExpressionType type, co
 		condition.fixed_zero_conditions.push_back(
 		    OnKeptRows(calc, when, calc.Cmp(ExpressionType::COMPARE_EQUAL, calc.Of(source), calc.Bool(false))));
 	}
-	condition.source_fixed_values.push_back({source.Copy(), false, when ? when->Copy() : nullptr});
+	condition.source_fixed_values.push_back({source.Copy(), false, when ? when->Copy() : nullptr, false, string()});
 }
 
 bool Rule::ProveFixedVariable(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &factor,
@@ -454,12 +464,13 @@ bool Rule::FixFromAllowedValues(const DirectIR &ir, ClientContext &context, cons
 	for (auto &term : *FixedTerms(factor)) {
 		if (!term.coefficient->IsFoldable()) {
 			condition.source_fixed_values.push_back(
-			    {term.coefficient->Copy(), true, when ? when->Copy() : nullptr, true});
+			    {term.coefficient->Copy(), true, when ? when->Copy() : nullptr, true, ir.render(*term.coefficient)});
 		}
 	}
 	if (!constant_value) {
 		auto reject_nan = value.return_type == LogicalType::FLOAT || value.return_type == LogicalType::DOUBLE;
-		condition.source_fixed_values.push_back({value.Copy(), reject_nan, when ? when->Copy() : nullptr});
+		condition.source_fixed_values.push_back(
+		    {value.Copy(), reject_nan, when ? when->Copy() : nullptr, false, ir.render(value)});
 	}
 	return true;
 }
@@ -525,6 +536,8 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	// adds the signed coefficients in order, as the solver's like-term collection does.
 	auto &parts = ir.objective.parts;
 	idx_t term_count = 0;
+	//! The terms of the score as the solver reads them, scaled and signed, which the message names.
+	vector<DirectSignedValue> scored;
 	for (auto &part : parts) {
 		if (part.reducer != DirectReducer::SUM || part.filter || part.inner ||
 		    part.qualifier != DConstants::INVALID_INDEX || !part.by.empty()) {
@@ -544,13 +557,20 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 		if (!DirectReadLinearPart(ir, context, part, read)) {
 			return false;
 		}
+		vector<DirectSignedValue> like;
 		for (auto &term : read.terms) {
 			if (term_count > 1 && DirectMayThrow(*term.coefficient)) {
 				return false;
 			}
-			condition.objective_parts.push_back(
-			    {read.sign * term.sign, std::move(term.coefficient), read.scaled, read.scale, read.divides});
+			scored.push_back({read.sign * term.sign, term.scaled->Copy()});
+			like.push_back({term.sign, term.scaled->Copy()});
+			condition.objective_parts.push_back({condition.part_text.size(), read.sign * term.sign,
+			                                     std::move(term.coefficient), read.scaled, read.scale, read.divides});
 		}
+		condition.part_text.push_back(like.empty() ? string() : DirectCoefficientText(ir, context, like));
+	}
+	if (!scored.empty()) {
+		condition.score_text = DirectCoefficientText(ir, context, scored);
 	}
 	return true;
 }
@@ -583,6 +603,7 @@ public:
 		// ProjectScore appends its columns in this order and checks each against it.
 		idx_t next_slot = source_bindings.size();
 		score_binding = ColumnBinding(score_index, next_slot++);
+		score_message_binding = ColumnBinding(score_index, next_slot++);
 		if (condition.scoped) {
 			eligible_binding = ColumnBinding(score_index, next_slot++);
 			for (idx_t i = 0; i < condition.group_keys.size(); i++) {
@@ -658,6 +679,8 @@ private:
 	bool has_lower = false;
 	bool has_upper = false;
 	ColumnBinding score_binding;
+	//! The message the score raises on a row, NULL where it is valid.
+	ColumnBinding score_message_binding;
 	ColumnBinding eligible_binding;
 	//! The group key's elements in the score projection.
 	vector<ColumnBinding> key_bindings;
@@ -747,13 +770,28 @@ private:
 		if (condition.objective_parts.size() != 1 || condition.objective_parts[0].sign < 0) {
 			combined_score = calc.Num(0.0);
 		}
+		vector<ExprPtr> part_scores(condition.part_text.size());
 		for (auto &part : condition.objective_parts) {
 			auto coefficient = CopyIntoState(*part.coefficient, scope);
 			auto term = calc.Wrap(
 			    DirectScaledTerm(optimizer, std::move(coefficient), part.sign, part.scaled, part.scale, part.divides));
 			combined_score = combined_score ? calc.Add(combined_score, term) : term;
+			part_scores[part.part] = part_scores[part.part] ? calc.Add(part_scores[part.part], term) : term;
 		}
 		append_at(score_binding, calc.Out(combined_score));
+		// A reducer whose coefficient fails is named before the score they make together.
+		auto score_message = DirectNumberMessage(calc, combined_score, condition.score_text);
+		vector<ExprPtr> candidates;
+		for (idx_t p = 0; p < part_scores.size(); p++) {
+			if (part_scores[p]) {
+				candidates.push_back(DirectNumberMessage(calc, part_scores[p], condition.part_text[p]));
+			}
+		}
+		if (candidates.size() > 1) {
+			candidates.push_back(score_message);
+			score_message = calc.Coalesce(candidates);
+		}
+		append_at(score_message_binding, calc.Out(score_message));
 		if (condition.scoped) {
 			append_at(eligible_binding, calc.Out(calc.Col(LogicalType::BOOLEAN, scope.eligible_binding)));
 			for (idx_t i = 0; i < key_bindings.size(); i++) {
@@ -800,6 +838,7 @@ private:
 			}
 			bound.reject_nan = fixed.reject_nan;
 			bound.coefficient = fixed.coefficient;
+			bound.written = fixed.written;
 			append_at(message_bindings[message++], calc.Out(DirectRowBoundMessage(calc, bound)));
 		}
 		auto score = make_uniq<LogicalProjection>(score_index, std::move(score_expressions));
@@ -859,8 +898,7 @@ private:
 		for (auto &binding : message_bindings) {
 			message_minimum.push_back(add(calc.Col(LogicalType::VARCHAR, binding)));
 		}
-		score_message_minimum =
-		    add(DirectNumberMessage(calc, calc.Col(LogicalType::DOUBLE, score_binding), DirectNumberKind::OBJECTIVE));
+		score_message_minimum = add(calc.Col(LogicalType::VARCHAR, score_message_binding));
 	}
 
 	//! The error of each raw `=` bound whose group shows two values, NULL where it shows one.

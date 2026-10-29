@@ -74,6 +74,9 @@ struct Condition final : DirectApplicabilityCondition {
 	vector<DataLimit> data_limits;
 	//! The objective's parts, each a signed, scaled sum of linear terms. None for no objective.
 	vector<DirectLinearPart> objective;
+	//! For each decision, what a message calls its value, the objective's coefficient of it over all the parts as the
+	//! user wrote it. Empty for a decision the objective does not name.
+	vector<string> value_text;
 };
 
 //! The terms are linear in the declared decisions and none is missing its coefficient.
@@ -299,6 +302,20 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 			return false;
 		}
 		condition.objective.push_back(std::move(read));
+	}
+	condition.value_text.resize(ir.decisions.size());
+	for (idx_t decision = 0; decision < ir.decisions.size(); decision++) {
+		vector<DirectSignedValue> like;
+		for (auto &part : condition.objective) {
+			for (auto &term : part.terms) {
+				if (term.decision == decision) {
+					like.push_back({part.sign * term.sign, term.scaled->Copy()});
+				}
+			}
+		}
+		if (!like.empty()) {
+			condition.value_text[decision] = DirectCoefficientText(ir, context, like);
+		}
 	}
 	return true;
 }
@@ -943,8 +960,8 @@ private:
 		auto p1 = Project(added);
 
 		vector<ExprPtr> messages;
-		auto number = [&](const string &name, DirectNumberKind kind) {
-			return DirectNumberMessage(calc, C(name), kind);
+		auto number = [&](const string &name, const string &written) {
+			return DirectNumberMessage(calc, C(name), written);
 		};
 		// The bound-side rewrite's checks of a raw limit come before any other, as its scope checks did.
 		for (idx_t j = 0; j < condition.data_limits.size(); j++) {
@@ -960,21 +977,22 @@ private:
 			auto read_on = [&](ExprPtr message) {
 				return clause.when ? DirectOnKeptRows(calc, C("wh" + suffix), message) : message;
 			};
-			messages.push_back(read_on(number("c" + suffix, DirectNumberKind::CONSTRAINT)));
-			messages.push_back(
-			    read_on(calc.If(calc.Fn("isnan", C("r" + suffix)), calc.Constant(Value(DirectBoundNaNMessage())),
-			                    calc.Constant(Value(LogicalType::VARCHAR)))));
+			messages.push_back(read_on(number("c" + suffix, clause.coefficient_text)));
+			messages.push_back(read_on(
+			    calc.If(calc.Fn("isnan", C("r" + suffix)),
+			            calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, clause.rhs_text))),
+			            calc.Constant(Value(LogicalType::VARCHAR)))));
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = SignedValues(condition.budget, k);
 			if (!weights.empty()) {
-				auto message = number(Dec("w", k), DirectNumberKind::CONSTRAINT);
+				auto message = number(Dec("w", k), condition.budget.text[k]);
 				messages.push_back(condition.scoped ? DirectOnKeptRows(calc, C(ELIGIBLE), message) : message);
 			}
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
 				if (!values.empty()) {
-					messages.push_back(number(Dec("o" + std::to_string(p), k), DirectNumberKind::OBJECTIVE));
+					messages.push_back(number(Dec("o" + std::to_string(p), k), condition.objective[p].text[k]));
 				}
 			}
 		}
@@ -1404,9 +1422,10 @@ private:
 			messages.push_back(aggregate.Add(Aggregate("min", calc.Col(LogicalType::VARCHAR, message))));
 		}
 		vector<ColumnBinding> value_messages;
-		for (auto &decision : items.columns.decisions) {
-			value_messages.push_back(aggregate.Add(
-			    Aggregate("min", DirectNumberMessage(calc, DoubleColumn(decision.v), DirectNumberKind::OBJECTIVE))));
+		for (idx_t k = 0; k < items.columns.decisions.size(); k++) {
+			value_messages.push_back(
+			    aggregate.Add(Aggregate("min", DirectNumberMessage(calc, DoubleColumn(items.columns.decisions[k].v),
+			                                                       condition.value_text[k]))));
 		}
 		vector<ColumnBinding> sums;
 		for (idx_t slot = 0; slot < TOTAL_COUNT; slot++) {

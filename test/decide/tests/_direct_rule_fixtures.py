@@ -241,7 +241,7 @@ R1 = RuleFixture(
                 "x(REAL) SUCH THAT x >= 0 AND x <= cap AND SUM(w*x) <= 3000 MAXIMIZE SUM(v*x)",
                 w_sql="CASE WHEN i=4999 THEN 'NaN'::DOUBLE ELSE 1.0 END",
             ),
-            "invalid value",
+            "w is NaN or infinite on some rows",
         ),
     ),
     late_column="i",

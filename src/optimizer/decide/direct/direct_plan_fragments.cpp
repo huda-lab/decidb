@@ -1,5 +1,6 @@
 #include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
 
+#include "duckdb/common/decide_value_messages.hpp"
 #include "duckdb/common/enums/decide.hpp"
 #include "duckdb/common/string_util.hpp"
 #include "duckdb/function/aggregate/distributive_functions.hpp"
@@ -242,10 +243,11 @@ ExprPtr DirectRowBoundMessage(const ExpressionBuilder &calc, const DirectRowBoun
 	auto message = none;
 	auto as_double = calc.Cast(calc.Of(*bound.value), LogicalType::DOUBLE);
 	if (bound.coefficient) {
-		message =
-		    calc.If(calc.Fn("isfinite", as_double), none, calc.Constant(Value(DirectCoefficientInvalidMessage())));
+		message = calc.If(calc.Fn("isfinite", as_double), none,
+		                  calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::COEFFICIENT, bound.written))));
 	} else if (bound.reject_nan) {
-		message = calc.If(calc.Fn("isnan", as_double), calc.Constant(Value(DirectBoundNaNMessage())), none);
+		message = calc.If(calc.Fn("isnan", as_double),
+		                  calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, bound.written))), none);
 	}
 	// A NULL value skips the instance it reaches.
 	message = calc.If(calc.IsNull(calc.Of(*bound.value)), none, message);

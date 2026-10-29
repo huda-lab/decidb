@@ -89,6 +89,8 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 			return false;
 		}
 		clause.rhs = ir_node.rhs->Copy();
+		clause.coefficient_text = DirectCoefficientText(ir, context, clause.coefficient);
+		clause.rhs_text = ir.render(*clause.rhs);
 		clause.lower = bound.lower->Copy();
 		clause.upper = bound.upper->Copy();
 		if (ir_node.scope.when) {
@@ -161,6 +163,34 @@ ExprPtr DirectBoxIsEmpty(const ExpressionBuilder &calc, const ExprPtr &lower, co
 	                 calc.Cmp(ExpressionType::COMPARE_EQUAL, upper, calc.Num(NEGATIVE_INFINITY))});
 }
 
+string DirectCoefficientText(const DirectIR &ir, ClientContext &context, const vector<DirectSignedValue> &terms) {
+	D_ASSERT(!terms.empty());
+	auto merged = terms[0].expr->Copy();
+	for (idx_t i = 1; i < terms.size(); i++) {
+		merged = DecideMergeLikeCoefficients(context, terms[0].sign, std::move(merged), terms[i].sign,
+		                                     terms[i].expr->Copy());
+	}
+	return ir.render(*merged);
+}
+
+//! A coefficient once the part's constant factor is applied, as the solver path applies it (`scale * coefficient`,
+//! `coefficient / scale`).
+static unique_ptr<Expression> ScaledCoefficient(ClientContext &context, const DirectPart &part,
+                                                const Expression &coefficient) {
+	if (!part.scale) {
+		return coefficient.Copy();
+	}
+	vector<unique_ptr<Expression>> children;
+	if (part.scale_divides) {
+		children.push_back(coefficient.Copy());
+		children.push_back(part.scale->Copy());
+	} else {
+		children.push_back(part.scale->Copy());
+		children.push_back(coefficient.Copy());
+	}
+	return DecideRebindOperator(context, part.scale_divides ? "/" : "*", std::move(children));
+}
+
 bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, DirectLinearPart &out) {
 	out.sign = part.sign;
 	out.scaled = part.scale != nullptr;
@@ -175,7 +205,20 @@ bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const Dire
 		if (!term.coefficient || !DirectProveValue(ir, *term.coefficient)) {
 			return false;
 		}
-		out.terms.push_back({term.var_a, term.sign, term.coefficient->Copy()});
+		out.terms.push_back(
+		    {term.var_a, term.sign, term.coefficient->Copy(), ScaledCoefficient(context, part, *term.coefficient)});
+	}
+	out.text.resize(ir.decisions.size());
+	for (idx_t decision = 0; decision < out.text.size(); decision++) {
+		vector<DirectSignedValue> like;
+		for (auto &term : out.terms) {
+			if (term.decision == decision) {
+				like.push_back({term.sign, term.scaled->Copy()});
+			}
+		}
+		if (!like.empty()) {
+			out.text[decision] = DirectCoefficientText(ir, context, like);
+		}
 	}
 	return true;
 }
