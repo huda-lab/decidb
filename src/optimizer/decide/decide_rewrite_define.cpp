@@ -339,9 +339,6 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		idx_t helper =
 		    AddAuxiliaryDecision(decide, "__body_" + to_string(family) + "__",
 		                         whole ? LogicalType::INTEGER : LogicalType::DOUBLE, false, scope, body_text);
-		if (scope.IsKeyed()) {
-			decide.keyed_scopes[scope.keyed_scope_idx].scoped_variable_indices.push_back(helper);
-		}
 		decide.signed_helper_vars.push_back(helper);
 		// Each clause that reads the helper says so in its own plan, once.
 		const auto kind = equal ? Kind::BODY_EQUAL : down ? Kind::BODY_AT_LEAST : Kind::BODY_AT_MOST;

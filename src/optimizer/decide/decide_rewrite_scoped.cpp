@@ -252,9 +252,6 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	link.value_var =
 	    AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__", aux_type, false, var_scope, plan_label);
 	AddRewriteAccount(decide, source_clause_id, account_kind, plan_label);
-	if (var_scope.IsKeyed()) {
-		decide.keyed_scopes[var_scope.keyed_scope_idx].scoped_variable_indices.push_back(link.value_var);
-	}
 	// A reducer's value may be negative: no default floor. The formulation pass boxes it by its members' reach.
 	decide.signed_helper_vars.push_back(link.value_var);
 	helpers.reducers.push_back(agg.Copy());

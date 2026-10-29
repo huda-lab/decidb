@@ -359,9 +359,6 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 				// The sign of the auxiliary's argument: one per instance of the auxiliary.
 				y_idx = AddAuxiliaryDecision(decide, "__abs_y_" + to_string(pi) + "__", LogicalType::BOOLEAN, true,
 				                             pair.scope, "(" + RenderForPlan(*pair.inner_expr, decide) + " >= 0)");
-				if (pair.scope.IsKeyed()) {
-					decide.keyed_scopes[pair.scope.keyed_scope_idx].scoped_variable_indices.push_back(y_idx);
-				}
 			}
 
 			// Tag C1 and C2 so the linearizer can find them at finalization. Keyed by the
@@ -427,9 +424,6 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
 				idx_t aux_idx = AddAuxiliaryDecision(decide, "__abs_aux_" + to_string(abs_pairs.size()) + "__",
 				                                     aux_type, false, aux_scope, label);
-				if (aux_scope.IsKeyed()) {
-					decide.keyed_scopes[aux_scope.keyed_scope_idx].scoped_variable_indices.push_back(aux_idx);
-				}
 
 				// Read the Big-M marker TagAbsForBigM set on the BoundFunctionExpression
 				// alias before the rewrite: the one place that decides exactness, for a

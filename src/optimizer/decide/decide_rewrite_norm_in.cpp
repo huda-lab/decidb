@@ -116,12 +116,9 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 		// An indicator is a column defined by the counted expression: one per instance of the scopes it reads, its
 		// links one row per instance.
 		auto z_scope = ScopeOf(decide, canonicalizer, *aggregate.children[0]);
-		auto z_idx = AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, z_scope,
-		                                  "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)");
-		if (z_scope.IsKeyed()) {
-			decide.keyed_scopes[z_scope.keyed_scope_idx].scoped_variable_indices.push_back(z_idx);
-		}
-		auto z = MakeDecisionRef(decide, z_idx);
+		auto z = MakeDecisionRef(decide,
+		                         AddAuxiliaryDecision(decide, z_name, LogicalType::INTEGER, true, z_scope,
+		                                              "(" + RenderForPlan(*aggregate.children[0], decide) + " <> 0)"));
 		AddRewriteAccount(decide, clause_alias, LogicalDecide::RewriteAccount::Kind::L0_INDICATORS,
 		                  RenderForPlan(aggregate, decide));
 		auto make_mz = [&]() {
@@ -220,8 +217,6 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			string label =
 			    "(" + RenderForPlan(*in.children[0], decide) + " = " + RenderForPlan(*in.children[1 + i], decide) + ")";
 			auto indicator = AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true, scope_of_in, label);
-			if (scope_of_in.IsKeyed())
-				decide.keyed_scopes[scope_of_in.keyed_scope_idx].scoped_variable_indices.push_back(indicator);
 			indicators.push_back(MakeDecisionRef(decide, indicator));
 		}
 		in_counter++;

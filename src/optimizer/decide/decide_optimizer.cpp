@@ -201,6 +201,9 @@ idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &
 		}
 		decide.variable_scopes.push_back(scope);
 	}
+	if (scope.IsKeyed()) {
+		decide.keyed_scopes[scope.keyed_scope_idx].scoped_variable_indices.push_back(var_idx);
+	}
 	if (!label.empty()) {
 		decide.aux_var_expressions.emplace_back(var_idx, label);
 	}

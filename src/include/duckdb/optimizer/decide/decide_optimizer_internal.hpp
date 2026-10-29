@@ -81,7 +81,8 @@ void TagAbsForBigM(ClientContext &context, LogicalDecide &decide);
 //! Allocate an auxiliary decision column `name` of `type`: its reference in
 //! `decide_variables`, its Boolean flag, and its scope -- recorded only when the plan
 //! keeps scopes at all (`variable_scopes` is empty while every decision is row-scoped,
-//! and stays so for a row-scoped auxiliary). A non-empty `label` names the column in a
+//! and stays so for a row-scoped auxiliary). A keyed auxiliary is one of its keyed scope's
+//! `scoped_variable_indices`. A non-empty `label` names the column in a
 //! diagnosis (F6) by what it stands for. Returns the column's index.
 idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const LogicalType &type, bool is_boolean,
                            DecideVarScopeInfo scope = DecideVarScopeInfo::Row(), const string &label = string());
