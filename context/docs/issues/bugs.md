@@ -1,14 +1,16 @@
 # Known bugs
 
-## BUG-23 — Q3 on HiGHS at `large` ran past the profiler's 420 s stop
+## BUG-23 — HiGHS's presolve ignores the time limit while it finds nothing: Q3 at large stops 339 s late
 
-- **Observed:** the 2026-09-09 sweep (`benchmark/decide/results/pipeline_profile_large.csv`) records `process_timeout`
-  for Q3 on HiGHS in all three passes, under a 300 s solver limit. The sweep kept no HiGHS log
-  (`pipeline_profile_raw_large/Q3_highs_*`), so the phase that ignores the limit is unknown. The two other HiGHS
-  overruns of that sweep had causes since fixed: Q2's clique partition (SOL-1) and Q10's symmetry detection (BUG-3).
-  Q3 has L0 binaries, so either fix may cover it.
-- **Next step:** one run of Q3 at `large` on HiGHS with `DECIDB_PROFILE_SOLVER_LOG=1` (up to about 7 minutes): if it
-  stops near 300 s, delete this entry; if not, sample its stack as BUG-3's diagnosis did.
+- **Observed (2026-10-29, `q3_abs_norms.sql` at `large`: 840,000 columns, 1,560,001 rows; solver limit 300 s):**
+  presolve starts at 0 s, reports the model unchanged at 638 s, then "Presolve: Time limit reached"; the query ends
+  with DeciDB's time-limit error at 639 s. Peak memory 1.9 GiB, one core busy, so it is not a memory kill. HiGHS
+  checks the clock in presolve once per 1,024 reductions (`../pipeline/07_solver/done.md`), and this presolve makes
+  none. The 2026-09-09 sweep's three `process_timeout` rows for Q3 on HiGHS are this overrun.
+- **Next step:** one run with a stack sample at about 200 s names the presolve routine; then a vendored check there,
+  marked `DeciDB patch (BUG-23)`, as SOL-1's and BUG-3's are.
+- **Reproduce:** Q3 with `${Q3_ROW_LIMIT}` = 120000 and `${Q3_ABS_CAP}` = 900000 on `large.db`,
+  `DECIDB_FORCE_SOLVER=highs DECIDB_TIME_LIMIT=300 DECIDB_PROFILE_SOLVER_LOG=1`; about 11 minutes, 1.9 GiB.
 
 ## BUG-16 — An overflowed range reads as an open variable: internal errors, a crash, wrong "unbounded"
 

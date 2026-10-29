@@ -18,7 +18,7 @@ at a time. Lanes: F11.
 
 ## 11. Measurement (last; the owner runs them)
 
-- [ ] BUG-23 Q3 on HiGHS at large overran its limit in the September sweep — issues/bugs.md § BUG-23
+- [ ] BUG-23 HiGHS's presolve ignores the time limit while it finds nothing (Q3) — issues/bugs.md § BUG-23
 - [ ] PERF-1 Measurement overhead, a correctness check, a second host — performance/todo.md § PERF-1
 - [ ] PERF-2 Backend discovery versus parsing and planning — performance/todo.md § PERF-2
 - [ ] PERF-3 Rank extraction work; scope-check spans in `extraction` — performance/todo.md § PERF-3
