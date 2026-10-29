@@ -63,6 +63,18 @@ enum class DirectReducer : uint8_t {
 	MAX
 };
 
+//! One element of a grouping key: the expression rows group on (`DecideKeyElement::Grouping()`, the collated one) and
+//! the expression a message quotes (`DecideKeyElement::expression`).
+struct DirectKeyElement {
+	unique_ptr<Expression> grouping;
+	unique_ptr<Expression> label;
+	//! How a message names it (`D.region`).
+	string name;
+	//! A row whose element is NULL is in no group (D5), unless the element is a column of a relation, where NULL is a
+	//! value of its own.
+	bool no_group = true;
+};
+
 //! One additive part of a constraint's left side or of the objective: `sign * scale * reducer(terms)`.
 struct DirectPart {
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
@@ -71,6 +83,9 @@ struct DirectPart {
 	unique_ptr<Expression> scale;
 	bool scale_divides = false;
 	DirectReducer reducer = DirectReducer::NONE;
+	//! The reducer's `by` key (`sum(x) by (g)`): the groups it reduces, one value each. Empty without one. Every
+	//! reducer of an aggregate clause shares it, and a clause's rows are one constraint per group.
+	vector<DirectKeyElement> by;
 	//! The reducer's own `when` (`sum(when c: x)`).
 	unique_ptr<Expression> filter;
 	//! Entity scope the reducer is qualified by (`SUM(D: e)`), or INVALID_INDEX.
@@ -81,12 +96,8 @@ struct DirectPart {
 	unique_ptr<DirectPart> inner;
 };
 
-//! Which rows a constraint or objective applies to: a row whose `when` is false or NULL does not join. `per_key_slots`
-//! are group keys, read by the per-group code S1 and R1 keep, which leaves a NULL-key row out of every group (the
-//! removed PER). Nothing fills them until the front end reads a reducer's `by` key, where a NULL key is a group of its
-//! own (D5).
+//! Which rows a constraint or objective applies to: a row whose `when` is false or NULL does not join.
 struct DirectIRScope {
-	vector<idx_t> per_key_slots;
 	unique_ptr<Expression> when;
 };
 
@@ -143,17 +154,6 @@ struct DirectIRObjective {
 	double offset = 0;
 	vector<DirectPart> parts;
 	DirectIRScope scope;
-};
-
-//! One element of a check's key: the expression rows group on (`DecideKeyElement::Grouping()`, the collated one) and
-//! the expression a message quotes (`DecideKeyElement::expression`).
-struct DirectKeyElement {
-	unique_ptr<Expression> grouping;
-	unique_ptr<Expression> label;
-	//! How a message names it (`D.region`).
-	string name;
-	//! A row whose element is NULL is in no class (D5).
-	bool no_group = true;
 };
 
 enum class DirectRowCheckKind : uint8_t {

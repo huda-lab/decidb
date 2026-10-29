@@ -214,7 +214,7 @@ TEST_CASE("S1 condition rejects an unrepresentable bound and volatile coefficien
 	REQUIRE(!applies("SUM(x)<=1", "SUM((score+txid_current())*x)"));
 }
 
-TEST_CASE("Direct-solve IR retains a when and declines a reducer's by key", "[decidb]") {
+TEST_CASE("Direct-solve IR retains a when and reads a reducer's by key", "[decidb]") {
 	DuckDB db(nullptr);
 	Connection con(db);
 	REQUIRE_NO_FAIL(con.Query("SET disabled_optimizers='decide_optimizer'"));
@@ -230,7 +230,7 @@ TEST_CASE("Direct-solve IR retains a when and declines a reducer's by key", "[de
 	auto constraint_ir = DirectIR::Read(*con.context, *constraint_decide);
 	REQUIRE(constraint_ir.constraints.size() == 1);
 	REQUIRE(constraint_ir.constraints[0].scope.when != nullptr);
-	REQUIRE(constraint_ir.constraints[0].scope.per_key_slots.empty());
+	REQUIRE(constraint_ir.constraints[0].lhs[0].by.empty());
 
 	auto per_plan = IRPlan(con, "SELECT id, x FROM ("
 	                            " FROM (VALUES (1, 9.0::DOUBLE, 'A'::VARCHAR),"
@@ -241,10 +241,34 @@ TEST_CASE("Direct-solve IR retains a when and declines a reducer's by key", "[de
 	auto *per_decide = FindDirectIRInput(*per_plan);
 	REQUIRE(per_decide != nullptr);
 	auto per_ir = DirectIR::Read(*con.context, *per_decide);
-	// No rule groups a reducer by its own `by` key yet: the clause is not proved; the rest of the problem is still
-	// read.
+	// The key lives on the reducer's part, where `by` is written: the column the rows group on, the name a message
+	// gives it, and a NULL in it puts the row in no group (D5).
 	REQUIRE(per_ir.constraints.size() == 1);
-	REQUIRE(per_ir.constraints[0].status == DirectAnalysisStatus::NOT_PROVED);
+	REQUIRE(per_ir.constraints[0].status == DirectAnalysisStatus::PROVED);
+	auto &key = per_ir.constraints[0].lhs[0].by;
+	REQUIRE(key.size() == 1);
+	REQUIRE(key[0].name == "dept");
+	REQUIRE(key[0].no_group);
+	REQUIRE(key[0].grouping->GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF);
+
+	// A key of two elements keeps their order; a relation's columns compare NULL as a value.
+	auto pair_plan = IRPlan(con, "SELECT id, x FROM ("
+	                             " FROM (VALUES (1, 9.0::DOUBLE, 'A'::VARCHAR, TRUE)) s(id,score,dept,flag)"
+	                             " DECIDE x(BOOL) SUCH THAT SUM(x) by (dept, flag)<=1 AND SUM(x) by (s)<=1"
+	                             " MAXIMIZE SUM(score*x)"
+	                             ") q");
+	auto *pair_decide = FindDirectIRInput(*pair_plan);
+	REQUIRE(pair_decide != nullptr);
+	auto pair_ir = DirectIR::Read(*con.context, *pair_decide);
+	REQUIRE(pair_ir.constraints.size() == 2);
+	auto &pair = pair_ir.constraints[0].lhs[0].by;
+	REQUIRE(pair.size() == 2);
+	REQUIRE((pair[0].name == "dept" && pair[1].name == "flag"));
+	auto &relation = pair_ir.constraints[1].lhs[0].by;
+	REQUIRE(!relation.empty());
+	for (auto &element : relation) {
+		REQUIRE(!element.no_group);
+	}
 
 	auto objective_plan = IRPlan(con, "SELECT id, x FROM ("
 	                                  " FROM (VALUES (1, 9.0::DOUBLE, TRUE)) s(id,score,active)"

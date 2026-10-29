@@ -144,15 +144,13 @@ public:
 			if (ir_node.aggregate) {
 				return nullptr;
 			}
-			if (!ir_node.scope.per_key_slots.empty() || !DirectIsSingletonRow(ir, ir_node)) {
+			if (!DirectIsSingletonRow(ir, ir_node)) {
 				return nullptr;
 			}
 		}
-		if (!ir.objective.scope.per_key_slots.empty()) {
-			return nullptr;
-		}
 		for (auto &part : ir.objective.parts) {
-			if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX) {
+			if (part.reducer != DirectReducer::SUM || part.inner || part.qualifier != DConstants::INVALID_INDEX ||
+			    !part.by.empty()) {
 				return nullptr;
 			}
 			for (auto &term : part.terms) {

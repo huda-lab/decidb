@@ -280,7 +280,7 @@ public:
 		if (condition->bound_factors.empty()) {
 			return nullptr;
 		}
-		if (ir.objective.scope.when || !ir.objective.scope.per_key_slots.empty()) {
+		if (ir.objective.scope.when) {
 			return nullptr;
 		}
 		if (ir.objective.parts.empty() && ir.objective.sense != DecideSense::FEASIBILITY) {
@@ -329,22 +329,20 @@ bool Rule::ProveScope(const DirectIR &ir, Condition &condition) const {
 		if (!ok) {
 			return false;
 		}
-		if (factor->scope.per_key_slots != first_scope.scope.per_key_slots ||
-		    static_cast<bool>(when) != static_cast<bool>(first_when)) {
+		if (!factor->PlainSum()->by.empty() || static_cast<bool>(when) != static_cast<bool>(first_when)) {
 			return false;
 		}
 		if (when && !Expression::Equals(*when, *first_when)) {
 			return false;
 		}
 	}
-	condition.group_key_slots = first_scope.scope.per_key_slots;
 	if (first_when) {
 		if (!DirectIsSourceOnlyPredicate(*first_when, ir.decide_index, ir.source_bindings)) {
 			return false;
 		}
 		condition.when_condition = std::move(first_when);
 	}
-	condition.scoped = !condition.group_key_slots.empty() || condition.when_condition != nullptr;
+	condition.scoped = condition.when_condition != nullptr;
 	return true;
 }
 
@@ -386,9 +384,6 @@ void FixFromBooleanSource(const ExpressionBuilder &calc, ExpressionType type, co
 
 bool Rule::ProveFixedVariable(const DirectIR &ir, ClientContext &context, const DirectIRConstraint &factor,
                               Condition &condition) const {
-	if (!factor.scope.per_key_slots.empty()) {
-		return false;
-	}
 	auto when = factor.scope.when.get();
 	if (when && !DirectIsSourceOnlyPredicate(*when, ir.decide_index, ir.source_bindings)) {
 		return false;
@@ -549,7 +544,7 @@ bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition 
 	idx_t term_count = 0;
 	for (auto &part : parts) {
 		if (part.reducer != DirectReducer::SUM || part.filter || part.inner ||
-		    part.qualifier != DConstants::INVALID_INDEX) {
+		    part.qualifier != DConstants::INVALID_INDEX || !part.by.empty()) {
 			return false;
 		}
 		for (auto &term : part.terms) {

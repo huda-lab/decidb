@@ -118,16 +118,8 @@ private:
 			row_check.value = check.value->Copy();
 		}
 		if (check.key != DConstants::INVALID_INDEX) {
-			for (auto &element : DecideKeyElements(decide.keys, check.key)) {
-				if (!CheckablePredicate(&element.Grouping()) || !CheckablePredicate(element.expression.get())) {
-					return false;
-				}
-				DirectKeyElement key_element;
-				key_element.grouping = element.Grouping().Copy();
-				key_element.label = element.expression->Copy();
-				key_element.name = element.name;
-				key_element.no_group = element.null_mode == DecideKeyNullMode::NO_GROUP;
-				row_check.key.push_back(std::move(key_element));
+			if (!ReadKey(check.key, row_check.key)) {
+				return false;
 			}
 		}
 		row_check.text.subject = check.subject;
@@ -270,6 +262,23 @@ private:
 		}
 	}
 
+	//! The key a reducer groups by, as the plan reads it; false when it reads more than the source.
+	bool ReadKey(idx_t key, vector<DirectKeyElement> &elements) const {
+		D_ASSERT(key < decide.keys.size());
+		for (auto &element : DecideKeyElements(decide.keys, key)) {
+			if (!CheckablePredicate(&element.Grouping()) || !CheckablePredicate(element.expression.get())) {
+				return false;
+			}
+			DirectKeyElement read;
+			read.grouping = element.Grouping().Copy();
+			read.label = element.expression->Copy();
+			read.name = element.name;
+			read.no_group = element.null_mode == DecideKeyNullMode::NO_GROUP;
+			elements.push_back(std::move(read));
+		}
+		return true;
+	}
+
 	void ReadReducer(const BoundAggregateExpression &aggregate, DirectPart &part) const {
 		D_ASSERT(!aggregate.IsDistinct() && !aggregate.order_bys && aggregate.children.size() == 1);
 		string order;
@@ -291,8 +300,7 @@ private:
 			part.reducer = DirectReducer::MAX;
 		}
 		idx_t group_key;
-		if (TryParseGroupKeyTag(aggregate.GetAlias(), group_key)) {
-			// No rule groups a reducer by its own `by` key yet.
+		if (TryParseGroupKeyTag(aggregate.GetAlias(), group_key) && !ReadKey(group_key, part.by)) {
 			MarkNotProved(part.status);
 			return;
 		}

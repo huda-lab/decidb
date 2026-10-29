@@ -153,7 +153,7 @@ bool Rule::ProveConstraints(const DirectIR &ir, vector<const DirectIRConstraint 
 			budgets.push_back(&ir_node);
 			continue;
 		}
-		if (!ir_node.scope.per_key_slots.empty() || !DirectIsSingletonRow(ir, ir_node)) {
+		if (!DirectIsSingletonRow(ir, ir_node)) {
 			return false;
 		}
 	}
@@ -180,13 +180,12 @@ bool Rule::ProveBudgetScope(const DirectIR &ir, const vector<const DirectIRConst
                             Condition &condition) const {
 	bool ok;
 	auto first_when = budgets[0]->Membership(ok);
-	if (!ok) {
+	if (!ok || !budgets[0]->PlainSum()->by.empty()) {
 		return false;
 	}
 	for (idx_t i = 1; i < budgets.size(); i++) {
 		auto when = budgets[i]->Membership(ok);
-		if (!ok || budgets[i]->scope.per_key_slots != budgets[0]->scope.per_key_slots ||
-		    static_cast<bool>(when) != static_cast<bool>(first_when) ||
+		if (!ok || !budgets[i]->PlainSum()->by.empty() || static_cast<bool>(when) != static_cast<bool>(first_when) ||
 		    (when && !Expression::Equals(*when, *first_when))) {
 			return false;
 		}
@@ -197,8 +196,7 @@ bool Rule::ProveBudgetScope(const DirectIR &ir, const vector<const DirectIRConst
 		}
 		condition.when = std::move(first_when);
 	}
-	condition.group_key_slots = budgets[0]->scope.per_key_slots;
-	condition.scoped = !condition.group_key_slots.empty() || condition.when != nullptr;
+	condition.scoped = condition.when != nullptr;
 	return true;
 }
 
@@ -299,12 +297,13 @@ bool Rule::ProveBounds(const DirectIR &ir, ClientContext &context, Condition &co
 
 //! The objective: signed, scaled `SUM(v*x)` parts, or none. Each coefficient must be a value of the source row.
 bool Rule::ProveObjective(const DirectIR &ir, ClientContext &context, Condition &condition) const {
-	if (!ir.objective.scope.per_key_slots.empty() || ir.objective.scope.when) {
+	if (ir.objective.scope.when) {
 		return false;
 	}
 	for (auto &part : ir.objective.parts) {
 		if (part.reducer != DirectReducer::SUM || part.filter || part.inner ||
-		    part.qualifier != DConstants::INVALID_INDEX || !OnlyLinearTerms(part.terms, ir.decisions.size())) {
+		    part.qualifier != DConstants::INVALID_INDEX || !part.by.empty() ||
+		    !OnlyLinearTerms(part.terms, ir.decisions.size())) {
 			return false;
 		}
 		DirectLinearPart read;
