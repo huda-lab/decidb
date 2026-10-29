@@ -13,7 +13,6 @@ at a time. Lanes: F8. F9 runs alone.
 
 - [ ] BUG-3 Q10 on HiGHS at large is killed for memory (owner runs) — issues/bugs.md § BUG-3
 - [ ] BUG-16 A huge coefficient times a bound overflows a helper's box — issues/bugs.md § BUG-16
-- [ ] BUG-17 A bound-side data sum that overflows reads as infeasible (decide first) — issues/bugs.md § BUG-17
 
 ## 10. F9 Housekeeping (runs alone)
 

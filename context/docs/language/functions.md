@@ -89,7 +89,10 @@ mechanics (Big-M constants, envelope rows, McCormick corners) belong to stages 0
   one, and an infinite bound keeps its SQL meaning (D65). Both paths raise `DecideInvalidValueMessage`, which names the
   value as written and the `when` that skips its rows. Integer arithmetic is DuckDB's: a bound is computed in DuckDB's
   types before the model reads it as `DOUBLE`, so a `HUGEINT` overflow raises as in SQL and division by zero gives
-  DuckDB's `inf`, `nan` or NULL. A bound's reducer carries `BOUND_REDUCER_TAG`, so a
+  DuckDB's `inf`, `nan` or NULL. A `DOUBLE` bound that overflows in SQL (`x <= b + b` with `b` = 1e308) is DuckDB's
+  infinity and keeps that meaning: +inf is no bound, and -inf makes the query infeasible, which DIAGNOSE reports as the
+  clause `x <= -inf` with "raise this bound". A number DeciDB itself computes past a `DOUBLE` is an error instead
+  (`errors.md`). A bound's reducer carries `BOUND_REDUCER_TAG`, so a
   render quotes it as written. `COALESCE`/`IFNULL` work inline when decision-free. Tests: `test_null_values.py`,
   `test_null_coalesce_reducer.py`, `test_rhs_aggregate_window.py`, the R1/S1/A1 rule files.
 

@@ -29,14 +29,6 @@
 - **Expected:** the TOO_LARGE message naming the clause, as for a merged sum.
 - **Reproduce:** the query above on Gurobi or HiGHS, `decide_direct_solve='off'`.
 
-## BUG-17 — A data sum on the bound side that overflows reads as infeasible
-
-- **Observed:** a bound such as `SUM(x) <= SUM(b) + SUM(b)` or `x <= b + b` with b = 1e308 is computed in SQL as -inf or
-  +inf, and the query reports "infeasible" (or no bound) instead of an error.
-- **Expected:** the bound is DuckDB's SQL arithmetic, so the open question is whether an infinite bound that the
-  data did not hold should raise the TOO_LARGE message.
-- **Reproduce:** the query above with b = 1e308.
-
 ## Limitations (not bugs)
 
 None.
