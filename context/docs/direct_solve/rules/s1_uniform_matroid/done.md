@@ -13,18 +13,18 @@ One row-scoped `BOOL` decision `x` (output is `INTEGER` 0/1), with:
 
 - **Count bounds on `SUM(x)`:** `<=`, `<`, `>=`, `>`, `=`, or several combined into one interval. A bound can be a constant,
   a foldable constant expression, or a numeric source column or deterministic expression over source columns that varies per
-  row, including one that can raise (`cap + 1`, a narrowing `CAST`). A data bound reaches S1 already reduced and checked
-  by the bound-side window rewrite (`../../framework/done.md`): one value on every kept row (the MIN of an upper bound, the MAX
-  of a lower one, and an `=` bound that must agree), with its NaN and disagreement errors raised by the scope (a NULL skips the instance)
-  checks under the plan, in the solver's words. S1 reads that value in its score projection, on the rows its clause
+  row, including one that can raise (`cap + 1`, a narrowing `CAST`). A data bound reaches S1 as a group bound
+  (`../../framework/done.md`): S1 adds its aggregates (the MIN of an upper bound, the MAX of a lower one, an `=` bound's
+  MIN and MAX that must agree) as windows over its groups, and raises its NaN and disagreement errors under the plan,
+  in the solver's words (a NULL skips the instance). S1 reads that value in its score projection, on the rows its clause
   keeps; nothing is computed on a row the `when` drops (syntax reference §6.3). Values are converted to DOUBLE as the
   solver does; strict and fractional limits become inclusive integer counts; limits are exact up to 2^53.
 - **Bounds read from the kept rows:** `COUNT(*)`, `COUNT`, `MIN`, `MAX`, `SUM` and `AVG` of a numeric source expression on
   the right of a count bound, alone or inside `+ - * / //` and other arithmetic (`SUM(x) <= COUNT(*) / 2`,
   `>= COUNT(*) * 0.1`, `<= MIN(cap)`, `>= MAX(lo) / 2`, `<= SUM(cap)`), with or without a `when` of its own
-  (`<= sum(when f: 1)`, `<= min(when cap > 1: cap)`), a written norm and a keyed or colon reducer. The bound-side window
-  rewrite (`../../framework/done.md`) hands S1 each reducer as a source column holding its value, so S1 reads the bound like
-  any data bound. S1 has no reader of its own for a reducer. The value is DuckDB's, in its own types: `SUM` over any numeric type is
+  (`<= sum(when f: 1)`, `<= min(when cap > 1: cap)`), a written norm and a keyed or colon reducer. A reducer over exactly the clause's
+  group is a group bound, which S1 computes in its own windows; any other reducer reaches S1 as a source column the
+  bound-side rewrite built (`../../framework/done.md`). S1 has no reader of its own for a reducer. The value is DuckDB's, in its own types: `SUM` over any numeric type is
   exact, a bound of `COUNT(*) * 0.57` over 100 rows is exactly 57, and over the `BIGINT` values 2^60, 1, -2^60
   `SUM(cap)` is 1. `COUNT(*)` counts the rows the clause's `when` keeps; a `when` inside the left-hand sum
   (`SUM(when active: x) <= COUNT(*) / 2`) does not narrow the right. An infinite value is a value. An overflow

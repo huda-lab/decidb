@@ -21,11 +21,11 @@ One or more row-scoped `REAL` decisions with:
   are one budget, with the largest lower limit and the smallest upper one. Limits that cross are infeasible, as on the
   solver.
 - **Limits.** A finite constant or foldable constant expression, a source column or expression, or an aggregate of the
-  source (`<= 0.5*SUM(cost)`), mixed freely across the clauses of one budget. A data-valued limit reaches R1 already
-  reduced and checked by the bound-side window rewrite (`../../framework/done.md`): one value on the kept rows of a group (the
-  MIN of an upper limit, the MAX of a lower one, an equality that must agree), with its NULL, NaN and disagreement
-  errors raised by the scope checks under the plan, in the solver's words. R1 reads it on the budget's rows, and its
-  group aggregate only carries it to the group. A row the `when` drops is not read (syntax reference §6.3). A data
+  source (`<= 0.5*SUM(cost)`), mixed freely across the clauses of one budget. A data-valued limit reaches R1 as a group
+  bound (`../../framework/done.md`): R1 adds its aggregates (the MIN of an upper limit, the MAX of a lower one, an
+  equality's MIN and MAX that must agree, or a reducer of the budget's group) to the hash aggregate it already runs, and
+  raises its NULL, NaN and disagreement errors under the plan, in the solver's words. A plain data limit takes the
+  same path. A row the `when` drops is not read (syntax reference §6.3). A data
   value is the number it is, however large, as the solver loads it; an infinite one is infinite, so an upper limit of
   +infinity is no bound and a lower limit of +infinity (or an upper one of −infinity) is infeasible.
 - **Budget scope.** One budget over the source. A `when` on the clause or inside the sum (the same meaning for a

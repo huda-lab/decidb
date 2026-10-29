@@ -137,18 +137,27 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   are shared. The binder rejects `DISTINCT` and drops an `ORDER BY` inside these reducers, so neither reaches the
   rewrite. A data norm of order 0 is the count of its non-zero rows, `SUM(ABS(SIGN(e)))`.
   - The bound of a clause in the aggregate shape holds when its group's tightest value does: the MIN of an upper
-    bound, the MAX of a lower one, over the kept rows of the comparison's group; a row in no class of the clause's `per K:` (D5) gives no bound. An `=`
-    bound must take one value per group. A bound with one value per group already (a constant, a query-wide value, or reducers whose `by` keys are in
-    the group's) is left alone, and so is a `<>` bound, which excludes each value it takes. The rewrite records
-    such a bound as a value object (`DecideReducedBound`); a rule reduces it in its own group aggregate and raises its
-    checks, and only the solver path builds the windows (`InstallReducedBounds`). A sum with its own `when` asks the
-    driver for the windows (`bound_windows_needed`).
+    bound, the MAX of a lower one, over the kept rows of the comparison's group; a row in no class of the clause's
+    `per K:` (D5) gives no bound. An `=` bound must take one value per group. A constant, a query-wide value, a reducer
+    whose `by` key is coarser than the group's, and a `<>` bound (which excludes each value it takes) are left alone.
+    Every other data bound is one kind, a value computed from its group (`DecideGroupBound`, held by
+    `DecideReducedBound`): the group's aggregates over per-row inputs, an upper and a lower limit over their results,
+    and the checks of what they read and give. A raw bound that varies in its group is the MIN and MAX of its value
+    (`DirectTightestBound`); a bound that reads data only through reducers of exactly the clause's group
+    (`sum(x) by (g) <= sum(cap) by (g)`) is an expression over those reducers' aggregates. A rule adds the aggregates to
+    the group aggregate it already runs, with no branch per bound (`DirectAddGroupBound` and a rule's
+    `DirectGroupSink`: S1 a window, R1 its hash aggregate), so a direct plan has no window under the rule. Only the
+    solver path builds the windows (`PlaceGroupBound`, from `InstallReducedBounds`), and it returns the checks in the
+    order a rule raises them: every bound's per-row reads, then each bound's NaN limit and `=` agreement. A reducer on
+    another `by` key, a qualified reducer, a column beside a reducer and a sum with its own `when` keep the eager
+    window (`bound_windows_needed`).
   - Every value the window reads is checked first, by VALUE_IS_VALID scope checks appended after the planner's: a
     reducer's argument (or a norm's written body: `SIGN(NaN)` is 0) on the rows the reducer reads, the bound on the
     kept rows, and an `=` bound's agreement in its group. Each check is a per-row message, NULL on a valid row. Both
     paths make them with `DirectAddRowChecks` (above), so a scope error (a `per K:` that does not determine a value) is
     always reported before a bad value, and both paths raise the same text.
-  - A data reducer on the bound side (`sum(cap) by (g)`) is still a window under every plan (framework todo H-09).
+  - A data reducer on the bound side over exactly the clause's group is computed in the rule's group aggregate, not
+    as a window under the plan; one on another `by` key, qualified, or beside a column is still a window.
   - The solver and the direct rules read DuckDB's value, so `SUM(x) <= SUM(cap)` over the `BIGINT` values 2^60, 1,
     -2^60 reads the limit 1 on `off` and `require`. Arithmetic around the aggregate (`COUNT(*) / 2`) runs in DuckDB's
     types. On a row a reducer does not read, its argument is not computed (syntax reference §6.3). The windows sit

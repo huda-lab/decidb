@@ -7,15 +7,11 @@ Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
-at a time. Lanes: F5; F6; F8. F9 runs alone.
+at a time. Lanes: F5; F8. F9 runs alone.
 
 ## 6. F5 Helper decisions
 
 - [ ] OPT-4 ABS, body helpers and NORM_IN scope their auxiliary by JoinScopes — pipeline/05_optimizer/todo.md § OPT-4
-
-## 7. F6 Direct solve
-
-- [ ] H-09 Reducer windows a rule could compute itself — direct_solve/framework/todo.md § H-09
 
 ## 9. F8 Solver runtime
 

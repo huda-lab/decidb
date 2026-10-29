@@ -51,18 +51,6 @@ solver path answers those queries, so none of them is wrong, only slower.
 - **Needs (owner, 2026-10-29).** A rule that takes the shape. Read into the IR with no rule taking it, the reading was
   reached only by an IR test, so it was removed; this task waits for A2–A4 (`../todo.md`).
 
-## H-09 — Reducer windows a rule could compute itself
-
-- **Problem.** A data reducer on the bound side (`sum(cap) by (g)`) is still installed as a window under every plan,
-  copying every source column, though a rule's own group aggregate could compute it, as it does for the tightest
-  bound (`DecideReducedBound`, `done.md`).
-- **Change.** The rewrite records the reducer as a value; the solver path builds the window only when no rule takes the
-  query, and a rule computes it in its own aggregate.
-- **Done when.** A direct plan over a reducer bound has no window under the rule; messages and their order unchanged.
-- **Ruling (owner's delegate, 2026-10-29).** A first build added a third bound kind beside `DirectBoundReduction`, with
-  a branch per rule. The bound is one group-computed kind instead: aggregates of the group, an expression over them and
-  checks, which a raw reduction already is, added to a rule's aggregate by one helper.
-
 ## H-08 — VALUE-shape clauses (helper decisions)
 
 - **Decision needed.** The rule and clause shape this is for. No rule's definition takes a VALUE-shape clause, so
