@@ -1,8 +1,9 @@
-"""A MIN/MAX over a squared or multiplied body: the body is defined by a helper per row.
+"""A MIN/MAX over a squared or multiplied body: the body is defined by a helper decision.
 
 Every extremum DeciDB builds reads its members as linear. Stage 05 therefore names a
-non-linear body first (``DefineNonlinearReducerBodies``): one helper decision ``t`` per row
-and one quadratic row defining it by the body ``q``, on the side the clause pushes the
+non-linear body first (``DefineNonlinearReducerBodies``): one helper decision ``t`` per
+instance of the body's scope (per row once it reads a data column) and one quadratic row per
+instance defining it by the body ``q``, on the side the clause pushes the
 reducer (pushed down ``t >= q``, up ``t <= q``, neither ``t = q``). Every reader of one
 reducer (copies in a clause, other clauses, the objective) shares one helper, defined on
 every side a reader pushes it. The helper has no box,
@@ -22,6 +23,7 @@ Covers:
   - test_explain_states_the_side_and_hides_the_row: the account line, one per side
   - test_cheap_lone_extremum_is_not_defined: `max(q) <= K` keeps one row per member
   - test_defined_body_refused_without_native_minmax: the refusal, one per message branch
+  - test_body_helper_takes_the_scope_the_body_reads: one helper per instance of the body's scope
 """
 
 import os
@@ -34,6 +36,7 @@ import pytest
 from decidb_cli import DecidBCliError
 from solver.types import ObjSense, VarType
 from comparison.compare import compare_solutions
+from ._brute_force import judge_rows
 
 _TWO_ROWS = "(VALUES (1), (2)) v(id)"
 _TWO_ROWS_DATA = [(1,), (2,)]
@@ -627,3 +630,60 @@ def test_defined_body_refused_without_native_minmax(decidb_cli, name, env, decis
     assert cause in message, message
     assert "which needs Gurobi" in message, message
     assert "replace power(x, 2) with an expression linear in the decision variables" in message, message
+
+
+# ---------------------------------------------------------------------------
+# One helper per instance of the scopes the body reads
+# ---------------------------------------------------------------------------
+
+_SCOPE_ROWS = "(VALUES (1, 'a', 2), (2, 'a', 3), (3, 'b', 4)) t(id, k, w)"
+_SCOPE_W = (2, 3, 4)
+
+
+@pytest.mark.min_max
+@pytest.mark.quadratic
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "declare, clause, objective, domains, holds, value, num_vars, num_qrows",
+    [
+        pytest.param(
+            "x(INT), per (): d(INT)",
+            "d <= 3 AND x <= 3 AND SUM(power(d, 2)) + max(x) <= 20",
+            "MAXIMIZE SUM(w * d) + SUM(x)",
+            {"d": range(4), **{f"x{i}": range(4) for i in range(3)}},
+            lambda a: 3 * a["d"] ** 2 + max(a[f"x{i}"] for i in range(3)) <= 20,
+            lambda a: sum(_SCOPE_W) * a["d"] + sum(a[f"x{i}"] for i in range(3)),
+            # x per row, d, one helper and the maximum's column.
+            6,
+            1,
+            id="body-query-wide-is-one-helper",
+        ),
+        pytest.param(
+            "per k: d(INT)",
+            "d <= 3 AND max(power(d, 2)) by (k) >= 4",
+            "MINIMIZE SUM(w * d)",
+            {f"d{i}": range(4) for i in range(3)},
+            lambda a: a["d0"] == a["d1"] and a["d0"] ** 2 >= 4 and a["d2"] ** 2 >= 4,
+            lambda a: sum(w * a[f"d{i}"] for i, w in enumerate(_SCOPE_W)),
+            # d and one helper per key, and each group's maximum.
+            6,
+            2,
+            id="body-keyed-is-one-helper-per-key",
+        ),
+    ],
+)
+def test_body_helper_takes_the_scope_the_body_reads(
+    decidb_cli_gurobi, tmp_path, declare, clause, objective, domains, holds, value, num_vars, num_qrows
+):
+    """A non-linear body's helper is a column defined by the body: one for a query-wide body
+    and one per key for a keyed one, with its quadratic row once per instance, while the
+    reducer still reads it on every row. Only Gurobi states the MIN/MAX over a helper.
+    Judged against every assignment."""
+    sql = f"""
+        SELECT * FROM {_SCOPE_ROWS}
+        DECIDE {declare} SUCH THAT {clause} {objective} ORDER BY id"""
+    dump = decidb_cli_gurobi.dump_model(sql, tmp_path / "model.dump")
+    assert re.search(rf"^num_vars: {num_vars}$", dump, re.M), dump
+    assert re.search(rf"^num_qrows: {num_qrows}$", dump, re.M), dump
+    rows, columns = decidb_cli_gurobi.execute(sql)
+    judge_rows([dict(zip(columns, row)) for row in rows], domains, holds, value, objective.startswith("MAXIMIZE"))

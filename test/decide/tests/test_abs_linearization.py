@@ -13,6 +13,8 @@ Covers:
   - test_abs_maximize_objective_basic: MAXIMIZE SUM(ABS(x - col)) with Big-M fix
   - test_abs_maximize_bound_inferred_from_sum: MAXIMIZE SUM(ABS(x - col)) with no
     explicit bound but SUM(x)=K; the bound is inferred from the constraint so it solves
+  - test_abs_auxiliary_takes_the_scope_its_argument_reads: one auxiliary per instance of
+    its argument's scope
 """
 
 import re
@@ -23,7 +25,7 @@ import pytest
 from decidb_cli import DecidBCliError, _last_complete_model_dump
 from solver.types import VarType, ObjSense, SolverStatus
 from ._brute_force import judge_rows
-from ._scope_cases import answer, error_of
+from ._scope_cases import answer, dump_counts, error_of
 
 
 def _compute_abs_objective(decidb_rows, decidb_cols, var_name, ref_col):
@@ -1914,3 +1916,64 @@ def test_abs_reaches_the_long_end_of_an_asymmetric_interval(
         value,
         objective.startswith("MAXIMIZE"),
     )
+
+
+# ---------------------------------------------------------------------------
+# One auxiliary per instance of the scopes its argument reads
+# ---------------------------------------------------------------------------
+
+_SCOPE_ROWS = "(VALUES (1, 'a', 2), (2, 'a', 3), (3, 'b', 4)) t(id, k, w)"
+_SCOPE_W = (2, 3, 4)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize(
+    "declare, clause, domains, holds, objective, sizes",
+    [
+        pytest.param(
+            "per (): d(INT)",
+            "d <= 2 AND ABS(d - 2) >= 1",
+            {"d": range(4)},
+            lambda a: a["d"] <= 2 and abs(a["d"] - 2) >= 1,
+            lambda a: sum(_SCOPE_W) * a["d"],
+            # Gurobi: d, the auxiliary and the native argument column; HiGHS: d, the auxiliary and its sign.
+            {"decidb_cli_gurobi": (3, 3), "decidb_cli_highs": (3, 4)},
+            id="abs-query-wide-is-one-auxiliary",
+        ),
+        pytest.param(
+            "per k: d(INT)",
+            "d <= 2 AND ABS(d - 2) >= 1",
+            {f"d{i}": range(4) for i in range(3)},
+            lambda a: a["d0"] == a["d1"] and all(a[f"d{i}"] <= 2 and abs(a[f"d{i}"] - 2) >= 1 for i in range(3)),
+            lambda a: sum(w * a[f"d{i}"] for i, w in enumerate(_SCOPE_W)),
+            {"decidb_cli_gurobi": (6, 6), "decidb_cli_highs": (6, 8)},
+            id="abs-keyed-is-one-auxiliary-per-key",
+        ),
+        pytest.param(
+            "per (): d(INT)",
+            "d <= 3 AND ABS(SUM(d) by (k) - 4) >= 1",
+            {"d": range(4)},
+            lambda a: a["d"] <= 3 and abs(2 * a["d"] - 4) >= 1 and abs(a["d"] - 4) >= 1,
+            lambda a: sum(_SCOPE_W) * a["d"],
+            {"decidb_cli_gurobi": (9, 11), "decidb_cli_highs": (9, 14)},
+            id="abs-over-a-reducer-is-per-row",
+        ),
+    ],
+)
+def test_abs_auxiliary_takes_the_scope_its_argument_reads(
+    request, cli_fixture, tmp_path, declare, clause, domains, holds, objective, sizes
+):
+    """ABS's auxiliary, and on the lowering arm its sign indicator, is a column defined by its
+    argument: one for a query-wide argument and one per key for a keyed one, with its envelope
+    rows once per instance. A reducer is one value per group of its own `by`, which no
+    declared scope names, so an argument holding one keeps a column per row: one shared column
+    would have to equal both groups' |SUM(d) - 4|. Gurobi states the ABS natively and HiGHS
+    lowers it by its sign. Judged against every assignment on both solvers."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = f"""
+        SELECT id, d FROM {_SCOPE_ROWS}
+        DECIDE {declare} SUCH THAT {clause} MAXIMIZE SUM(w * d) ORDER BY id"""
+    num_vars, num_rows = sizes[cli_fixture]
+    assert dump_counts(cli.dump_model(sql, tmp_path / "model.dump")) == {"num_vars": num_vars, "num_rows": num_rows}
+    judge_rows(answer(cli, sql), domains, holds, objective)

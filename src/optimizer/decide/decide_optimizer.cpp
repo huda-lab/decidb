@@ -229,7 +229,9 @@ DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const De
 	if (canonicalizer.IsQueryWideConstant(expr)) {
 		return DecideVarScopeInfo::Global();
 	}
-	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+	// A reducer is one value per group of its own `by`, which no declared scope names (ScopeKeyOf reads it the same).
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF ||
+	    expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		return DecideVarScopeInfo::Row();
 	}
 	bool saw_child = false;

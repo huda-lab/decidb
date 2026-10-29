@@ -92,8 +92,8 @@ idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const Logi
 DecideVarScopeInfo JoinScopes(const DecideVarScopeInfo &a, const DecideVarScopeInfo &b);
 
 //! The scope of a value computed from the leaves `expr` reads: JoinScopes folded over them. A decision brings its
-//! declared scope, a value `canonicalizer` finds query-wide (IsQueryWideConstant) is query-wide, and any other column
-//! is row data.
+//! declared scope, a value `canonicalizer` finds query-wide (IsQueryWideConstant) is query-wide, and any other column,
+//! or a reducer, is row data.
 DecideVarScopeInfo ScopeOf(const LogicalDecide &decide, const DecideCanonicalizer &canonicalizer,
                            const Expression &expr);
 

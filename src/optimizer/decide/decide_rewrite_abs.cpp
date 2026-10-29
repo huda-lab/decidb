@@ -273,12 +273,15 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 	// Each entry records the aux index, a copy of the inner expression, and the clause
 	// the ABS node was written in (the objective's rows carry OBJECTIVE_ROW_TAG).
 	vector<AbsPairInfo> abs_pairs;
+	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
+	                                  decide.keyed_scopes, decide.is_boolean_var);
 	if (decide.decide_constraints) {
-		FindAndReplaceAbs(decide.decide_constraints, decide, abs_pairs, string(), DecideEnclosingScope());
+		FindAndReplaceAbs(decide.decide_constraints, decide, canonicalizer, abs_pairs, string(),
+		                  DecideEnclosingScope());
 	}
 	if (decide.decide_objective) {
 		auto objective = std::move(decide.decide_objective);
-		FindAndReplaceAbs(objective, decide, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope());
+		FindAndReplaceAbs(objective, decide, canonicalizer, abs_pairs, OBJECTIVE_ROW_TAG, DecideEnclosingScope());
 		decide.SetObjective(optimizer.context, std::move(objective));
 	}
 
@@ -353,9 +356,12 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			// decision: the arm is known at the moment the variable would be allocated.
 			idx_t y_idx = DConstants::INVALID_INDEX;
 			if (!decide.use_native_constructs.abs) {
+				// The sign of the auxiliary's argument: one per instance of the auxiliary.
 				y_idx = AddAuxiliaryDecision(decide, "__abs_y_" + to_string(pi) + "__", LogicalType::BOOLEAN, true,
-				                             DecideVarScopeInfo::Row(),
-				                             "(" + RenderForPlan(*pair.inner_expr, decide) + " >= 0)");
+				                             pair.scope, "(" + RenderForPlan(*pair.inner_expr, decide) + " >= 0)");
+				if (pair.scope.IsKeyed()) {
+					decide.keyed_scopes[pair.scope.keyed_scope_idx].scoped_variable_indices.push_back(y_idx);
+				}
 			}
 
 			// Tag C1 and C2 so the linearizer can find them at finalization. Keyed by the
@@ -374,14 +380,16 @@ void DecideOptimizer::RewriteAbs(LogicalDecide &decide) {
 			MarkFormulationConstraint(*c2, pair.source_alias);
 		}
 
-		AppendConstraint(decide, ScopeHelperRow(std::move(c1), pair.when.get()));
-		AppendConstraint(decide, ScopeHelperRow(std::move(c2), pair.when.get()));
+		AppendConstraint(decide,
+		                 ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c1), pair.when.get()), pair.scope));
+		AppendConstraint(decide,
+		                 ScopeRowPerInstance(decide, ScopeHelperRow(std::move(c2), pair.when.get()), pair.scope));
 	}
 }
 
 void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
-                                        vector<AbsPairInfo> &abs_pairs, const string &source_alias,
-                                        DecideEnclosingScope scope) {
+                                        const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
+                                        const string &source_alias, DecideEnclosingScope scope) {
 	if (!expr) {
 		return;
 	}
@@ -413,10 +421,15 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 				// ABS no later pass would lower (term extraction read `abs(h)` as `h`). Its
 				// pair is appended before this one, which is the order the auxiliary-bound
 				// derivation boxes them in: the outer range needs the inner box.
-				FindAndReplaceAbs(func.children[0], decide, abs_pairs, clause_alias, scope);
+				FindAndReplaceAbs(func.children[0], decide, canonicalizer, abs_pairs, clause_alias, scope);
 
+				// A column defined by its argument: one per instance of the scopes the argument reads.
+				auto aux_scope = ScopeOf(decide, canonicalizer, *func.children[0]);
 				idx_t aux_idx = AddAuxiliaryDecision(decide, "__abs_aux_" + to_string(abs_pairs.size()) + "__",
-				                                     aux_type, false, DecideVarScopeInfo::Row(), label);
+				                                     aux_type, false, aux_scope, label);
+				if (aux_scope.IsKeyed()) {
+					decide.keyed_scopes[aux_scope.keyed_scope_idx].scoped_variable_indices.push_back(aux_idx);
+				}
 
 				// Read the Big-M marker TagAbsForBigM set on the BoundFunctionExpression
 				// alias before the rewrite: the one place that decides exactness, for a
@@ -426,7 +439,8 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 				// Stash the bound inner expression for constraint generation
 				abs_pairs.push_back({aux_idx, func.children[0]->Copy(), clause_alias, needs_bigm,
-				                     scope.Condition() ? scope.Condition()->Copy() : nullptr, std::move(label)});
+				                     scope.Condition() ? scope.Condition()->Copy() : nullptr, std::move(label),
+				                     aux_scope});
 
 				// Replace ABS(inner) with aux var reference
 				ReplaceWithDecision(optimizer.context, decide, aux_idx, expr);
@@ -437,7 +451,7 @@ void DecideOptimizer::FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDec
 
 	// Recurse into children
 	ExpressionIterator::EnumerateChildren(*expr, [&](unique_ptr<Expression> &child) {
-		FindAndReplaceAbs(child, decide, abs_pairs, clause_alias, scope);
+		FindAndReplaceAbs(child, decide, canonicalizer, abs_pairs, clause_alias, scope);
 	});
 }
 

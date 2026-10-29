@@ -13,6 +13,8 @@ its hand-written equivalent (robust to alternate optima), plus the error paths.
 import pytest
 
 from decidb_cli import DecidBCliError
+from ._brute_force import judge_rows
+from ._scope_cases import answer, dump_counts
 
 # Sole-norm objective so the achieved norm value *is* the objective (unique at
 # the optimum even when the assignment is not). l_orderkey <= 3 keeps it small.
@@ -449,3 +451,55 @@ def test_norm_in_arithmetic_on_highs(decidb_cli_highs):
     rows, cols = decidb_cli_highs.execute(_MIXED.format(
         obj="norm(new_qty - l_quantity, 0, 100) + 0.001 * SUM(new_qty)"))
     assert rows  # solved and returned rows
+
+
+# ---------------------------------------------------------------------------
+# One L0 indicator per instance of the scopes the counted expression reads
+# ---------------------------------------------------------------------------
+
+_SCOPE_ROWS = "(VALUES (1, 'a', 2), (2, 'a', 3), (3, 'b', 4)) t(id, k, w)"
+_SCOPE_W = (2, 3, 4)
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize(
+    "declare, clause, domains, holds, objective, sizes",
+    [
+        pytest.param(
+            "per (): d(INT)",
+            "d <= 3 AND norm(d - 1, 0) <= 0",
+            {"d": range(4)},
+            lambda a: a["d"] <= 3 and 3 * (a["d"] != 1) <= 0,
+            lambda a: sum(_SCOPE_W) * a["d"],
+            # d, the indicator, and the reverse link's ABS auxiliary with its native column (Gurobi) or sign (HiGHS).
+            {"decidb_cli_gurobi": (4, 7), "decidb_cli_highs": (4, 8)},
+            id="norm-l0-query-wide-is-one-indicator",
+        ),
+        pytest.param(
+            "per k: d(INT)",
+            "d <= 3 AND norm(d - 1, 0) <= 1",
+            {f"d{i}": range(4) for i in range(3)},
+            lambda a: a["d0"] == a["d1"]
+            and all(a[f"d{i}"] <= 3 for i in range(3))
+            and sum(a[f"d{i}"] != 1 for i in range(3)) <= 1,
+            lambda a: sum(w * a[f"d{i}"] for i, w in enumerate(_SCOPE_W)),
+            {"decidb_cli_gurobi": (8, 13), "decidb_cli_highs": (8, 15)},
+            id="norm-l0-keyed-is-one-indicator-per-key",
+        ),
+    ],
+)
+def test_norm_l0_indicator_takes_the_scope_the_counted_expression_reads(
+    request, cli_fixture, tmp_path, declare, clause, domains, holds, objective, sizes
+):
+    """`norm(e, 0)` counts the rows where `e` is not zero by an indicator defined by `e`: one
+    for a query-wide `e` and one per key for a keyed one, its links once per instance, while
+    the count still reads it on every row. The automatic Big-M of the links reads the box of
+    each instance. Judged against every assignment on both solvers."""
+    cli = request.getfixturevalue(cli_fixture)
+    sql = f"""
+        SELECT id, d FROM {_SCOPE_ROWS}
+        DECIDE {declare} SUCH THAT {clause} MAXIMIZE SUM(w * d) ORDER BY id"""
+    num_vars, num_rows = sizes[cli_fixture]
+    assert dump_counts(cli.dump_model(sql, tmp_path / "model.dump")) == {"num_vars": num_vars, "num_rows": num_rows}
+    judge_rows(answer(cli, sql), domains, holds, objective)

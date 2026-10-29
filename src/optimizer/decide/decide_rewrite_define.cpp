@@ -38,9 +38,10 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // composed terms, the flat and the two-level objective. A body that squares or multiplies
 // decisions (`max(power(x, 2))`, once RewriteBilinear has taken the Boolean products)
 // would lose its square there. This pass names such a body first: one helper decision `t`
-// per row and one quadratic row defining it by the body `q`, so the reducer reads the bare
-// column `t` and every later pass keeps reading linear members. RewriteAbs does the same
-// for an ABS.
+// per instance of the scopes the body reads (ScopeOf: per row once it reads a data column)
+// and one quadratic row defining it by the body `q` per instance, so the reducer reads the
+// bare column `t` and every later pass keeps reading linear members. RewriteAbs does the
+// same for an ABS.
 //
 // The row is one-sided where the clause pushes the reducer one way, as the
 // Plaisted-Greenbaum encoding states a definition only in the polarity it occurs in. SUM,
@@ -313,6 +314,8 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 	}
 
 	using Kind = LogicalDecide::RewriteAccount::Kind;
+	DecideCanonicalizer canonicalizer(context, decide_index, decide.variable_scopes, decide.keyed_scopes,
+	                                  decide.is_boolean_var);
 	// The rows are appended after both walks, so neither walks a row this pass added.
 	vector<unique_ptr<Expression>> rows;
 	for (idx_t family = 0; family < families.size(); family++) {
@@ -331,9 +334,14 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		const string body_text = RenderForPlan(*body, decide);
 		// Whole-numbered when the body is, so a strict bound over the reducer still steps on the integer lattice.
 		const bool whole = DecideValueIsWholeNumbered(*body, decide_index);
-		idx_t helper = AddAuxiliaryDecision(decide, "__body_" + to_string(family) + "__",
-		                                    whole ? LogicalType::INTEGER : LogicalType::DOUBLE, false,
-		                                    DecideVarScopeInfo::Row(), body_text);
+		// A column defined by the body: one per instance of the scopes it reads, its row one per instance.
+		const auto scope = ScopeOf(decide, canonicalizer, *body);
+		idx_t helper =
+		    AddAuxiliaryDecision(decide, "__body_" + to_string(family) + "__",
+		                         whole ? LogicalType::INTEGER : LogicalType::DOUBLE, false, scope, body_text);
+		if (scope.IsKeyed()) {
+			decide.keyed_scopes[scope.keyed_scope_idx].scoped_variable_indices.push_back(helper);
+		}
 		decide.signed_helper_vars.push_back(helper);
 		// Each clause that reads the helper says so in its own plan, once.
 		const auto kind = equal ? Kind::BODY_EQUAL : down ? Kind::BODY_AT_LEAST : Kind::BODY_AT_MOST;
@@ -359,7 +367,7 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		AddDecideTag(alias, BODY_DEFINITION_TAG);
 		row->SetAlias(std::move(alias));
 		auto condition = HelperCondition(first);
-		rows.push_back(ScopeHelperRow(std::move(row), condition.get()));
+		rows.push_back(ScopeRowPerInstance(decide, ScopeHelperRow(std::move(row), condition.get()), scope));
 
 		for (auto member : members) {
 			auto &reducer = *sites[member].reducer;

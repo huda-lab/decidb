@@ -13,6 +13,7 @@
 
 namespace duckdb {
 
+class DecideCanonicalizer;
 class LogicalDecide;
 class Optimizer;
 
@@ -33,7 +34,7 @@ class Optimizer;
 //!     replaces ABS nodes with aux var refs, generates linearization constraints
 //!   - RewriteBilinear: McCormick linearization for Boolean × anything products
 //!   - DefineNonlinearReducerBodies: names each non-linear body a MIN/MAX formulation would read by a helper decision
-//!     per row, defined on the side its clause pushes it (decide_rewrite_define.cpp)
+//!     per instance of its scope, defined on the side its clause pushes it (decide_rewrite_define.cpp)
 //!   - RewriteScopedReducers: the value rewrite of a scoped comparison -- each decision
 //!     reducer of a VALUE-shape comparison becomes a helper decision defined per group
 //!   - RewriteComposedMinMax: detects composed MIN/MAX before the single-term pass
@@ -228,13 +229,16 @@ private:
 		unique_ptr<Expression> when;
 		//! The ABS as a plan prints it: the auxiliary's name there, and its account's.
 		string label;
+		//! The auxiliary's scope, ScopeOf its argument: its envelope rows are one per instance of it.
+		DecideVarScopeInfo scope;
 	};
 
 	//! Helper: recursively find BoundFunctionExpression for ABS over decide vars,
 	//! replace with auxiliary variable references, and collect AbsPairInfo entries,
 	//! innermost first. Whether an auxiliary is pinned exactly is read off the tag
 	//! TagAbsForBigM left on the node; this pass decides nothing about it.
-	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide, vector<AbsPairInfo> &abs_pairs,
+	void FindAndReplaceAbs(unique_ptr<Expression> &expr, LogicalDecide &decide,
+	                       const DecideCanonicalizer &canonicalizer, vector<AbsPairInfo> &abs_pairs,
 	                       const string &source_alias, DecideEnclosingScope scope);
 
 	//! Helper: register a hard MIN/MAX clause and produce the corresponding SUM(inner)
