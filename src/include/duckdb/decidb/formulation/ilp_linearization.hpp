@@ -222,8 +222,9 @@ void DeriveBilinearAuxiliaryBounds(SolverInput &input, const FormulationBox &box
                                    const vector<string> &var_names);
 
 //! Phase 1 of the ABS auxiliary formulation, and it runs before EVERY other
-//! linearizer. For each `abs_maximize_links` entry it derives the largest |inner| any
-//! row can reach and narrows the auxiliary's column box to it — the only place that
+//! linearizer. For each `abs_maximize_links` entry it derives the signed interval of the
+//! expression inside ABS over every row (the two sign-row constants come from its ends)
+//! and narrows the auxiliary's column box to the largest |inner| it reaches — the only place that
 //! box is ever derived, since `aux >= inner` / `aux >= -inner` bound it from below
 //! only. Every other linearizer computes its Big-M from column boxes, so an auxiliary
 //! they read has to be boxed by the time they run.
@@ -290,12 +291,16 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer);
 //! object without the wrong one eventually being picked, so only the sound one is
 //! representable.
 //!
-//! Both endpoints seed at 0. That only ever widens the box — it never cuts off a
-//! reachable value — and it keeps the box consistent with the sites that pin an
-//! empty auxiliary to exactly 0.
+//! Each end is seeded by the first row that reaches it, so the range is the cover of the
+//! family and nothing else; a family holding only positive values does not reach down to 0.
+//! A family that covers no row at all stays [0, 0], which is what the sites that pin an
+//! empty auxiliary to exactly 0 rely on.
 struct AuxRange {
     double lo = 0.0;
     double hi = 0.0;
+    //! Whether `lo` / `hi` hold a covered value yet, as opposed to the empty family's 0.
+    bool lo_seeded = false;
+    bool hi_seeded = false;
     //! The two ends are tracked separately because they fail separately. A decision
     //! variable declared `x >= 0` with no ceiling leaves `hi` underivable and `lo`
     //! perfectly well known, and a box keeping the closed side is strictly better than
@@ -357,8 +362,12 @@ struct AuxRange {
 
     //! Widen to also cover `other` — an extremum taken over several families.
     void Cover(const AuxRange &other) {
-        lo = MinOf(lo, other.lo);
-        hi = MaxOf(hi, other.hi);
+        if (other.lo_seeded) {
+            FoldLo(other.lo);
+        }
+        if (other.hi_seeded) {
+            FoldHi(other.hi);
+        }
         // The blame travels with the openness. Merging the flags without the variable
         // leaves a range that reports `Unbounded()` but has no column to name, so a
         // refusal over the merged family degrades to the generic "one of them is
@@ -374,8 +383,8 @@ struct AuxRange {
     //! Extend by one more row expression bracketed by [`row_lo`, `row_hi`].
     void CoverRow(double row_lo, double row_hi) {
         D_ASSERT(!std::isinf(row_lo) && !std::isinf(row_hi));
-        lo = MinOf(lo, row_lo);
-        hi = MaxOf(hi, row_hi);
+        FoldLo(row_lo);
+        FoldHi(row_hi);
     }
 
     //! `CoverRow` for a bracket that may be infinite on either end, as the signed walk
@@ -386,16 +395,24 @@ struct AuxRange {
         if (std::isinf(row_lo)) {
             MarkLoUnbounded(var);
         } else {
-            lo = MinOf(lo, row_lo);
+            FoldLo(row_lo);
         }
         if (std::isinf(row_hi)) {
             MarkHiUnbounded(var);
         } else {
-            hi = MaxOf(hi, row_hi);
+            FoldHi(row_hi);
         }
     }
 
 private:
+    void FoldLo(double value) {
+        lo = lo_seeded ? MinOf(lo, value) : value;
+        lo_seeded = true;
+    }
+    void FoldHi(double value) {
+        hi = hi_seeded ? MaxOf(hi, value) : value;
+        hi_seeded = true;
+    }
     static double MinOf(double a, double b) { return a < b ? a : b; }
     static double MaxOf(double a, double b) { return a > b ? a : b; }
 };

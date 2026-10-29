@@ -387,11 +387,13 @@ struct AbsMaximizeLinkSpec {
     //! Binary sign indicator, or INVALID_INDEX when the backend states ABS natively --
     //! the native arm has no Big-M to switch, so no indicator is allocated for it.
     idx_t y_idx;
-    //! The largest |inner| any row can reach, filled in by DeriveAbsAuxiliaryBounds.
-    //! It is both the Big-M the lowering path needs and the auxiliary's upper box, so
-    //! it is derived once, before any other linearizer reads that box.
-    double abs_range = 0.0;
-    //! True when no finite `abs_range` exists because a contributing variable is
+    //! The signed interval `[inner_lo, inner_hi]` of the expression inside ABS over every row,
+    //! filled in by DeriveAbsAuxiliaryBounds. The lowering's two sign-row constants and the
+    //! auxiliary's upper box (`max(|lo|, |hi|)`) both come from it, so it is derived once,
+    //! before any other linearizer reads that box.
+    double inner_lo = 0.0;
+    double inner_hi = 0.0;
+    //! True when no finite interval exists because a contributing variable is
     //! unbounded. The lowering path cannot proceed (it is refused up front); the
     //! native path does not care, because a general constraint needs no Big-M.
     bool range_unbounded = false;

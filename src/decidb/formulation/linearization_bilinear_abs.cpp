@@ -254,14 +254,16 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
                  it->second.c2 != DConstants::INVALID_INDEX);
         const auto &c1 = input.constraints[it->second.c1];
 
-        // M = max over rows of |rhs[r]| + sum_{t: var != aux} |coeff[t][r]| * max(|lb|, |ub|),
-        // reusing the shared per-row range helper (skipping the aux term). This
-        // upper-bounds |inner| across all rows and variable values. Derived afresh each
-        // time: a run that found a member open may be followed by one that finds it
-        // boxed, once the value rewrite's helpers among the members are boxed.
+        // The reach of the expression inside ABS, `inner = k_r - sum_{t != aux} c_t x_t`, over every
+        // row: the signed interval [lo, hi], by the same walk `<>`, MIN/MAX and the native arm
+        // use (`DecideRowSignedRange`). Derived afresh each time: a run that found a member open
+        // may be followed by one that finds it boxed, once the value rewrite's helpers among the
+        // members are boxed.
         link.range_unbounded = false;
         bool abs_unbounded = false;
-        double M = 0.0;
+        double lo = 0.0;
+        double hi = 0.0;
+        bool seen_row = false;
         for (idx_t r = 0; r < num_rows; r++) {
             // The link's bound carries the constant part of the expression the user
             // wrote inside ABS. An infinity there is a data problem, not a bounding
@@ -275,11 +277,19 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
                     "or exclude the row with WHERE.",
                     r);
             }
-            double row_bound = std::abs(link_rhs) +
-                               DecideRowTermRange(c1.variable_indices, c1.row_coefficients, r,
-                                                  input.lower_bounds, input.upper_bounds,
-                                                  abs_unbounded, link.aux_idx);
-            M = std::max(M, row_bound);
+            double vars_lo = 0.0;
+            double vars_hi = 0.0;
+            DecideRowSignedRange(c1, r, input.lower_bounds, input.upper_bounds, vars_lo, vars_hi, link.aux_idx);
+            // Negating the variable part swaps its two ends.
+            double row_lo = link_rhs - vars_hi;
+            double row_hi = link_rhs - vars_lo;
+            if (!std::isfinite(row_lo) || !std::isfinite(row_hi)) {
+                abs_unbounded = true;
+                continue;
+            }
+            lo = seen_row ? std::min(lo, row_lo) : row_lo;
+            hi = seen_row ? std::max(hi, row_hi) : row_hi;
+            seen_row = true;
         }
 
         if (abs_unbounded) {
@@ -317,20 +327,28 @@ void DeriveAbsAuxiliaryBounds(SolverInput &input, const vector<string> &var_name
         // `x` in [-1, 1] needs `aux` to be ABLE to hold 5, or the only repair the
         // infeasible diagnosis can see is weakening the ABS itself. See
         // `DemandedAuxReach` — this can only widen, and only on a clause that cannot
-        // be met as written.
-        M = MaxValue<double>(M, DemandedAuxReach(input, link.aux_idx, num_rows));
+        // be met as written. `aux = |inner|` holds a demand of D by `inner` at +D or -D,
+        // so the interval grows to cover both.
+        double reach = std::max(std::abs(lo), std::abs(hi));
+        double demanded = DemandedAuxReach(input, link.aux_idx, num_rows);
+        if (demanded > reach) {
+            lo = std::min(lo, -demanded);
+            hi = std::max(hi, demanded);
+            reach = demanded;
+        }
 
-        link.abs_range = M;
+        link.inner_lo = lo;
+        link.inner_hi = hi;
         // The formulation that follows — Big-M rows or a native `aux = |t|` — pins
-        // `aux = |inner|`, and M is the largest |inner| any row can reach. So M is a
+        // `aux = |inner|`, and `reach` is the largest |inner| any row can attain. So it is a
         // valid upper bound on the auxiliary's column, and the only one anything
         // derives: the pair `aux >= inner`, `aux >= -inner` bounds the auxiliary from
         // BELOW only, which is why it otherwise sits at +infinity. Narrow the box
         // here, before any other linearizer reads it, so an outer MIN/MAX or `<>` over
         // this auxiliary gets a tight Big-M instead of an unbounded column it must
-        // refuse. Never widens: an implied bound already tighter than M stands.
-        if (M < input.upper_bounds[link.aux_idx]) {
-            input.upper_bounds[link.aux_idx] = M;
+        // refuse. Never widens: an implied bound already tighter than `reach` stands.
+        if (reach < input.upper_bounds[link.aux_idx]) {
+            input.upper_bounds[link.aux_idx] = reach;
         }
     }
 }
@@ -343,8 +361,8 @@ void LinearizeAbsMaximize(SolverInput &input) {
 
     // For each link, find the two tagged lower-bound EvaluatedConstraints
     // (C1: aux >= inner tagged ABS_UB_POS, C2: aux >= -inner tagged ABS_UB_NEG) and emit:
-    //   C_ub1: derived from C1, add y with coeff +2M, comparison <=, rhs[r] += 2M
-    //   C_ub2: derived from C2, add y with coeff -2M, comparison <=, rhs unchanged
+    //   C_ub1: derived from C1, add y with coeff +A1, comparison <=, rhs[r] += A1
+    //   C_ub2: derived from C2, add y with coeff -A2, comparison <=, rhs unchanged
     // Together with C1/C2 these force aux = |inner| under MAXIMIZE.
     auto abs_tag_map = BuildAbsTagMap(input);
 
@@ -371,7 +389,12 @@ void LinearizeAbsMaximize(SolverInput &input) {
         // read column boxes. An unbounded range was refused there; reaching here with
         // one would mean the gate routed a lowering it had already declined.
         D_ASSERT(!link.range_unbounded);
-        double two_M = 2.0 * link.abs_range;
+        // The two sign rows relax by what the deactivated branch needs, each on its own:
+        // `y = 1` pins `aux = inner`, so the row `aux + inner <= A2 * y` must admit `2 * inner`
+        // up to `2 * hi`; `y = 0` pins `aux = -inner`, so `aux - inner <= A1 * (1 - y)` must
+        // admit `-2 * inner` up to `-2 * lo`. A side the interval never reaches needs nothing.
+        const double relax_neg = 2.0 * std::max(0.0, -link.inner_lo); // A1
+        const double relax_pos = 2.0 * std::max(0.0, link.inner_hi);  // A2
 
         auto ShiftRhs = [&](const CoefficientColumn &src, double delta) {
             if (src.IsUniform()) {
@@ -384,13 +407,13 @@ void LinearizeAbsMaximize(SolverInput &input) {
             return out;
         };
 
-        // C_ub1: same as C1 but add y_idx with coeff +2M, flip to <=, rhs[r] += 2M
+        // C_ub1: same as C1 but add y_idx with coeff +A1, flip to <=, rhs[r] += A1
         EvaluatedConstraint ec_ub1;
         ec_ub1.variable_indices = c1.variable_indices;
         ec_ub1.row_coefficients = c1.row_coefficients;
         ec_ub1.variable_indices.push_back(link.y_idx);
-        ec_ub1.row_coefficients.push_back(CoefficientColumn::MakeScalar(two_M, num_rows));
-        ec_ub1.rhs_values = ShiftRhs(c1.rhs_values, two_M);
+        ec_ub1.row_coefficients.push_back(CoefficientColumn::MakeScalar(relax_neg, num_rows));
+        ec_ub1.rhs_values = ShiftRhs(c1.rhs_values, relax_neg);
         ec_ub1.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
         ec_ub1.lhs_is_aggregate = false;
         ec_ub1.row_group_ids = c1.row_group_ids;
@@ -402,12 +425,12 @@ void LinearizeAbsMaximize(SolverInput &input) {
         ec_ub1.removal_group_id = c1.removal_group_id;
         input.constraints.push_back(std::move(ec_ub1));
 
-        // C_ub2: same as C2 but add y_idx with coeff -2M, flip to <=, rhs unchanged
+        // C_ub2: same as C2 but add y_idx with coeff -A2, flip to <=, rhs unchanged
         EvaluatedConstraint ec_ub2;
         ec_ub2.variable_indices = c2.variable_indices;
         ec_ub2.row_coefficients = c2.row_coefficients;
         ec_ub2.variable_indices.push_back(link.y_idx);
-        ec_ub2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-two_M, num_rows));
+        ec_ub2.row_coefficients.push_back(CoefficientColumn::MakeScalar(-relax_pos, num_rows));
         ec_ub2.rhs_values = c2.rhs_values;
         ec_ub2.comparison_type = ExpressionType::COMPARE_LESSTHANOREQUALTO;
         ec_ub2.lhs_is_aggregate = false;
@@ -456,7 +479,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             // MIN/MAX boxes its argument columns with, rather than one table-wide
             // magnitude reused for every row. The wider box is not free: a slack
             // continuous column costs the root LP relaxation (see the note at the top of
-            // this file), and `abs_range` is the MAXIMUM over rows, so every row but the
+            // this file), and the ABS interval is the cover over rows, so every row but the
             // extreme one was being given more room than it can reach.
             //
             // The bracket is read off C1 exactly as the link row below states it. C1 is
@@ -471,7 +494,7 @@ void EmitNativeAbs(SolverInput &input, const VarIndexer &indexer) {
             double k = c1.rhs_values.Get(r);
             // Each end on its own. A row open on one side still contributes its closed
             // side, and a row whose contributors are all bounded gets a real box even
-            // when some other row's are not — which `abs_range` could not express, being
+            // when some other row's are not — which the one interval could not express, being
             // one number for the whole link. Free only where nothing at all is derivable,
             // which is precisely the query this arm exists to answer and the only case
             // that earns a free column. The bracket carries the constant, as `k` here.

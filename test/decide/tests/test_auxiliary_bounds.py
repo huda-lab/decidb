@@ -293,3 +293,36 @@ def test_half_open_range_keeps_its_closed_side(decidb_cli_gurobi, tmp_path):
             f"auxiliary col {idx} threw away its derived floor: [{lb}, {ub}]\n{dump}"
         assert ub >= 1e20, \
             f"auxiliary col {idx} was given a ceiling nothing derived: [{lb}, {ub}]\n{dump}"
+
+
+# A family's range is the cover of its members, not the cover of its members and 0. The two differ exactly when every
+# member lies on one side of 0, and the span (the Big-M of a hard MIN/MAX) is the part of that gap that is dead weight.
+@pytest.mark.min_max
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "decide, box, big_m",
+    [
+        pytest.param("x >= 5 AND x <= 10 AND max(2 * x) >= 16", (10.0, 20.0), 10.0, id="constraint-above-zero"),
+        pytest.param("x >= -10 AND x <= -5 AND max(2 * x) >= -16", (-20.0, -10.0), 10.0, id="constraint-below-zero"),
+    ],
+)
+def test_a_family_on_one_side_of_zero_is_not_stretched_to_zero(decidb_cli, tmp_path, decide, box, big_m):
+    """The extremum column is boxed by the family and the closing row's Big-M is the family's span, neither reaching 0."""
+    dump = _lowering(decidb_cli).dump_model(
+        f"SELECT x FROM (SELECT 1 AS id) t DECIDE x(INT) SUCH THAT {decide} MINIMIZE SUM(x)", tmp_path / "family.dump"
+    )
+    assert [(lb, ub) for _, lb, ub in _assert_all_boxed(dump, 1)] == [box], dump
+    binary = int(re.search(r"^col (\d+): .* bin=1", dump, re.M)[1])
+    closing = re.search(rf"^row \d+: sense=\S+ rhs=\S+ nnz=3 \| .*\b{binary}:(\S+)", dump, re.M)
+    assert abs(float(closing[1])) == big_m, dump
+
+
+@pytest.mark.min_max
+@pytest.mark.correctness
+@pytest.mark.parametrize("sense", ["MAXIMIZE MIN", "MINIMIZE MAX"])
+def test_an_objective_extremum_over_a_family_above_zero_is_boxed_by_it(decidb_cli, tmp_path, sense):
+    dump = _lowering(decidb_cli).dump_model(
+        f"SELECT id, x FROM (VALUES (1), (2)) t(id) DECIDE x(INT) SUCH THAT x >= 5 AND x <= 10 {sense}(2 * x)",
+        tmp_path / "objective_family.dump",
+    )
+    assert [(lb, ub) for _, lb, ub in _assert_all_boxed(dump, 1)] == [(10.0, 20.0)], dump

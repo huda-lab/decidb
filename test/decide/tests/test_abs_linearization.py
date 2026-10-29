@@ -20,6 +20,7 @@ import time
 
 import pytest
 
+from decidb_cli import DecidBCliError
 from solver.types import VarType, ObjSense, SolverStatus
 from ._brute_force import judge_rows
 from ._scope_cases import answer, error_of
@@ -1793,4 +1794,123 @@ def test_abs_under_a_zero_factor_needs_no_bound(request, cli_fixture, extra_env,
         lambda a: True,
         lambda a: -_total(a) if maximize else _total(a),
         maximize,
+    )
+
+
+# ---------------------------------------------------------------------------
+# The sign-row constants of the lowered ABS are the signed interval of the expression inside it
+# ---------------------------------------------------------------------------
+
+_ONE_ROW = "(SELECT 1 AS id) t"
+
+
+def _abs_lowering(cli):
+    """The Big-M lowering of ABS, which is the formulation whose constants these tests read."""
+    return cli.with_env({"DECIDB_NATIVE_CONSTRUCTS": "off"})
+
+
+def _abs_sign_rows(dump: str, aux_col: int) -> tuple[float, float, float]:
+    """`(aux ceiling, A1, A2)` of the one lowered ABS in `dump`, whose auxiliary is column `aux_col`.
+
+    A1 and A2 are the sign indicator's coefficients in the two `<=` rows `aux - inner <= A1 * (1 - y)` and
+    `aux + inner <= A2 * y`, in that order; a row the indicator is absent from has coefficient 0.
+    """
+    binary = int(re.search(r"^col (\d+): .* bin=1", dump, re.M)[1])
+    ceiling = float(re.search(rf"^col {aux_col}: lb=\S+ ub=(\S+)", dump, re.M)[1])
+    sign_rows = list(re.finditer(r"^row \d+: sense=< rhs=\S+ nnz=\d+ \| (.*)$", dump, re.M))
+    assert len(sign_rows) == 2, f"expected the two sign rows of one ABS:\n{dump}"
+    coefficients = []
+    for m in sign_rows:
+        terms = dict(term.split(":") for term in m[1].split())
+        coefficients.append(float(terms.get(str(binary), 0.0)))
+    a1, a2 = coefficients
+    assert a1 >= 0.0 and a2 <= 0.0, f"the indicator enters with +A1 and -A2:\n{dump}"
+    return ceiling, a1, -a2
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "decide, ceiling, a1, a2",
+    [
+        # inner in [-1000, 1000]: the ceiling is the larger end and each constant is twice its own end. Sizing off the
+        # sum of |coefficient| * the larger bound gave 2000, 4000 and 4000.
+        pytest.param(
+            "x(INT), y(INT) SUCH THAT x <= 10 AND y <= 10 AND abs(100 * x - 100 * y) >= 5",
+            1000,
+            2000,
+            2000,
+            id="symmetric",
+        ),
+        # inner in [-1, 100]: the positive end needs twice 100, which the width 101 would cut.
+        pytest.param(
+            "x(INT), y(INT) SUCH THAT x <= 100 AND y <= 1 AND abs(x - y) >= 1", 100, 2, 200, id="long-positive-end"
+        ),
+        pytest.param(
+            "x(INT), y(INT) SUCH THAT x <= 1 AND y <= 100 AND abs(x - y) >= 1", 100, 200, 2, id="long-negative-end"
+        ),
+        # inner in [3, 10]: never negative, so the branch `aux = -inner` is dead and its row needs no relaxation.
+        pytest.param(
+            "x(INT), y(INT) SUCH THAT x >= 5 AND x <= 10 AND y <= 2 AND abs(x - y) >= 4", 10, 0, 20, id="never-negative"
+        ),
+        # inner in [-10, -3]: the mirror image.
+        pytest.param(
+            "x(INT), y(INT) SUCH THAT x <= 2 AND y >= 5 AND y <= 10 AND abs(x - y) >= 4", 10, 20, 0, id="never-positive"
+        ),
+    ],
+)
+def test_abs_sign_rows_are_sized_by_the_signed_interval(decidb_cli_highs, tmp_path, decide, ceiling, a1, a2):
+    """`ceiling` is max(|lo|, |hi|) of the expression's interval [lo, hi]; A1 = 2 * max(0, -lo), A2 = 2 * max(0, hi)."""
+    dump = _abs_lowering(decidb_cli_highs).dump_model(
+        f"SELECT x, y FROM {_ONE_ROW} DECIDE {decide} MINIMIZE SUM(x) + SUM(y)", tmp_path / "abs.dump"
+    )
+    assert _abs_sign_rows(dump, 2) == (ceiling, a1, a2), dump
+
+
+@pytest.mark.correctness
+def test_abs_sign_rows_cover_a_demand_beyond_the_box(decidb_cli_highs, tmp_path):
+    """`ABS(x) >= 5` over x in [-1, 1] cannot be met, and the interval grows to [-5, 5] so that widening x stays representable."""
+    path = tmp_path / "demand.dump"
+    with pytest.raises(DecidBCliError):
+        _abs_lowering(decidb_cli_highs).dump_model(
+            "SELECT x FROM (SELECT 1 AS id) t DECIDE x(INT) SUCH THAT x >= -1 AND x <= 1 AND abs(x) >= 5 MINIMIZE SUM(x)",
+            path,
+        )
+    assert _abs_sign_rows(path.read_text(), 1) == (5, 10, 10)
+
+
+@_HARD_SOLVERS
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "bounds, objective, feasible, value",
+    [
+        # The answer sits at the long end of the interval, which a constant of the interval's width would cut: 12
+        # against a width of 13.
+        pytest.param(
+            "x <= 12 AND y <= 1",
+            "MAXIMIZE SUM(x - y)",
+            lambda a: a["x0"] <= 12 and a["y0"] <= 1,
+            lambda a: a["x0"] - a["y0"],
+            id="long-positive-end",
+        ),
+        pytest.param(
+            "x <= 1 AND y <= 12",
+            "MINIMIZE SUM(x - y)",
+            lambda a: a["x0"] <= 1 and a["y0"] <= 12,
+            lambda a: a["x0"] - a["y0"],
+            id="long-negative-end",
+        ),
+    ],
+)
+def test_abs_reaches_the_long_end_of_an_asymmetric_interval(
+    request, cli_fixture, extra_env, bounds, objective, feasible, value
+):
+    cli = request.getfixturevalue(cli_fixture).with_env(extra_env)
+    sql = f"""SELECT x, y FROM {_ONE_ROW}
+        DECIDE x(INT), y(INT) SUCH THAT {bounds} AND abs(x - y) >= 1 {objective}"""
+    judge_rows(
+        answer(cli, sql),
+        {"x0": range(13), "y0": range(13)},
+        lambda a: feasible(a) and abs(a["x0"] - a["y0"]) >= 1,
+        value,
+        objective.startswith("MAXIMIZE"),
     )

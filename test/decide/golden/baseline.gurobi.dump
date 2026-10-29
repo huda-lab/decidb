@@ -683,16 +683,16 @@ num_genconstrs: 4
 num_indconstrs: 0
 col 0: lb=0 ub=20 int=0 bin=0 obj=1
 col 1: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 2: lb=0 ub=29 int=0 bin=0 obj=0
+col 2: lb=0 ub=11 int=0 bin=0 obj=0
 col 3: lb=0 ub=20 int=0 bin=0 obj=1
 col 4: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 5: lb=0 ub=29 int=0 bin=0 obj=0
+col 5: lb=0 ub=11 int=0 bin=0 obj=0
 col 6: lb=0 ub=20 int=0 bin=0 obj=1
 col 7: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 8: lb=0 ub=29 int=0 bin=0 obj=0
+col 8: lb=0 ub=11 int=0 bin=0 obj=0
 col 9: lb=0 ub=20 int=0 bin=0 obj=1
 col 10: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 11: lb=0 ub=29 int=0 bin=0 obj=0
+col 11: lb=0 ub=11 int=0 bin=0 obj=0
 col 12: lb=-9 ub=11 int=0 bin=0 obj=0
 col 13: lb=-9 ub=11 int=0 bin=0 obj=0
 col 14: lb=-9 ub=11 int=0 bin=0 obj=0
@@ -736,19 +736,19 @@ num_indconstrs: 0
 col 0: lb=0 ub=20 int=0 bin=0 obj=1
 col 1: lb=0 ub=20 int=0 bin=0 obj=1
 col 2: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 3: lb=0 ub=29 int=0 bin=0 obj=0
+col 3: lb=0 ub=11 int=0 bin=0 obj=0
 col 4: lb=0 ub=20 int=0 bin=0 obj=1
 col 5: lb=0 ub=20 int=0 bin=0 obj=1
 col 6: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 7: lb=0 ub=29 int=0 bin=0 obj=0
+col 7: lb=0 ub=11 int=0 bin=0 obj=0
 col 8: lb=0 ub=20 int=0 bin=0 obj=1
 col 9: lb=0 ub=20 int=0 bin=0 obj=1
 col 10: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 11: lb=0 ub=29 int=0 bin=0 obj=0
+col 11: lb=0 ub=11 int=0 bin=0 obj=0
 col 12: lb=0 ub=20 int=0 bin=0 obj=1
 col 13: lb=0 ub=20 int=0 bin=0 obj=1
 col 14: lb=0 ub=1e+30 int=0 bin=0 obj=0
-col 15: lb=0 ub=29 int=0 bin=0 obj=0
+col 15: lb=0 ub=11 int=0 bin=0 obj=0
 col 16: lb=-9 ub=11 int=0 bin=0 obj=0
 col 17: lb=-9 ub=11 int=0 bin=0 obj=0
 col 18: lb=-9 ub=11 int=0 bin=0 obj=0
@@ -1389,13 +1389,13 @@ num_qrows: 0
 num_genconstrs: 4
 num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
-col 1: lb=0 ub=10 int=1 bin=0 obj=0
+col 1: lb=0 ub=7 int=1 bin=0 obj=0
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
-col 3: lb=0 ub=10 int=1 bin=0 obj=0
+col 3: lb=0 ub=7 int=1 bin=0 obj=0
 col 4: lb=0 ub=9 int=1 bin=0 obj=1
-col 5: lb=0 ub=10 int=1 bin=0 obj=0
+col 5: lb=0 ub=7 int=1 bin=0 obj=0
 col 6: lb=0 ub=9 int=1 bin=0 obj=1
-col 7: lb=0 ub=10 int=1 bin=0 obj=0
+col 7: lb=0 ub=7 int=1 bin=0 obj=0
 col 8: lb=-2 ub=7 int=0 bin=0 obj=0
 col 9: lb=-2 ub=7 int=0 bin=0 obj=0
 col 10: lb=-2 ub=7 int=0 bin=0 obj=0
@@ -1426,13 +1426,13 @@ num_qrows: 0
 num_genconstrs: 4
 num_indconstrs: 0
 col 0: lb=0 ub=9 int=1 bin=0 obj=1
-col 1: lb=0 ub=11 int=1 bin=0 obj=0
+col 1: lb=0 ub=7 int=1 bin=0 obj=0
 col 2: lb=0 ub=9 int=1 bin=0 obj=1
-col 3: lb=0 ub=11 int=1 bin=0 obj=0
+col 3: lb=0 ub=7 int=1 bin=0 obj=0
 col 4: lb=0 ub=9 int=1 bin=0 obj=1
-col 5: lb=0 ub=11 int=1 bin=0 obj=0
+col 5: lb=0 ub=7 int=1 bin=0 obj=0
 col 6: lb=0 ub=9 int=1 bin=0 obj=1
-col 7: lb=0 ub=11 int=1 bin=0 obj=0
+col 7: lb=0 ub=7 int=1 bin=0 obj=0
 col 8: lb=-2 ub=7 int=0 bin=0 obj=0
 col 9: lb=-2 ub=7 int=0 bin=0 obj=0
 col 10: lb=-2 ub=7 int=0 bin=0 obj=0
@@ -1586,16 +1586,16 @@ col 0: lb=0 ub=5 int=1 bin=0 obj=0
 col 1: lb=0 ub=5 int=1 bin=0 obj=0
 col 2: lb=0 ub=5 int=1 bin=0 obj=0
 col 3: lb=0 ub=5 int=1 bin=0 obj=0
-col 4: lb=0 ub=45 int=0 bin=0 obj=1
+col 4: lb=10 ub=45 int=0 bin=0 obj=1
 col 5: lb=0 ub=1 int=1 bin=1 obj=0
 col 6: lb=0 ub=1 int=1 bin=1 obj=0
 col 7: lb=0 ub=1 int=1 bin=1 obj=0
 col 8: lb=0 ub=1 int=1 bin=1 obj=0
 row 0: sense=< rhs=5 nnz=4 | 0:1 1:1 2:1 3:1
-row 1: sense=< rhs=55 nnz=3 | 0:-1 4:1 5:45
-row 2: sense=< rhs=65 nnz=3 | 1:-1 4:1 6:45
-row 3: sense=< rhs=75 nnz=3 | 2:-1 4:1 7:45
-row 4: sense=< rhs=85 nnz=3 | 3:-1 4:1 8:45
+row 1: sense=< rhs=45 nnz=3 | 0:-1 4:1 5:35
+row 2: sense=< rhs=55 nnz=3 | 1:-1 4:1 6:35
+row 3: sense=< rhs=65 nnz=3 | 2:-1 4:1 7:35
+row 4: sense=< rhs=75 nnz=3 | 3:-1 4:1 8:35
 row 5: sense=> rhs=1 nnz=4 | 5:1 6:1 7:1 8:1
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
@@ -1609,7 +1609,7 @@ col 0: lb=0 ub=5 int=1 bin=0 obj=0.001
 col 1: lb=0 ub=5 int=1 bin=0 obj=0.001
 col 2: lb=0 ub=5 int=1 bin=0 obj=0.001
 col 3: lb=0 ub=5 int=1 bin=0 obj=0.001
-col 4: lb=0 ub=45 int=0 bin=0 obj=1
+col 4: lb=10 ub=45 int=0 bin=0 obj=1
 col 5: lb=0 ub=1 int=1 bin=1 obj=0
 col 6: lb=0 ub=1 int=1 bin=1 obj=0
 col 7: lb=0 ub=1 int=1 bin=1 obj=0
@@ -1619,10 +1619,10 @@ row 1: sense=> rhs=10 nnz=2 | 0:-1 4:1
 row 2: sense=> rhs=20 nnz=2 | 1:-1 4:1
 row 3: sense=> rhs=30 nnz=2 | 2:-1 4:1
 row 4: sense=> rhs=40 nnz=2 | 3:-1 4:1
-row 5: sense=< rhs=55 nnz=3 | 0:-1 4:1 5:45
-row 6: sense=< rhs=65 nnz=3 | 1:-1 4:1 6:45
-row 7: sense=< rhs=75 nnz=3 | 2:-1 4:1 7:45
-row 8: sense=< rhs=85 nnz=3 | 3:-1 4:1 8:45
+row 5: sense=< rhs=45 nnz=3 | 0:-1 4:1 5:35
+row 6: sense=< rhs=55 nnz=3 | 1:-1 4:1 6:35
+row 7: sense=< rhs=65 nnz=3 | 2:-1 4:1 7:35
+row 8: sense=< rhs=75 nnz=3 | 3:-1 4:1 8:35
 row 9: sense=> rhs=1 nnz=4 | 5:1 6:1 7:1 8:1
 === END MODEL DUMP ===
 === DECIDB MODEL DUMP ===
