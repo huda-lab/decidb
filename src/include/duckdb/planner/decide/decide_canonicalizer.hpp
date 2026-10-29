@@ -188,8 +188,13 @@ public:
 	//! refs are never promoted to query-wide. Explicit QUERY_WIDE_VALUE_TAG metadata is
 	//! still honored. Variable scopes remain available for homogeneity validation.
 	//! Used by LogicalDecide::AddConstraint for optimizer output.
-	DecideCanonicalizer(ClientContext &context, idx_t decide_index,
-	                    vector<DecideVarScopeInfo> variable_scopes);
+	//!
+	//! `is_boolean[i]` says decision column `i` is declared BOOL (LogicalDecide::is_boolean_var), so a constraint may
+	//! multiply a reducer by one: `b * SUM(x)` is a product the value rewrite hands to the Boolean linearization. It
+	//! is required by every constructor: a canonicalizer built without it would refuse `b * SUM(x)` as a product of
+	//! decisions, wherever it classifies a user's clause.
+	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
+	                    const vector<bool> &is_boolean);
 
 	//! Strict form: `query_wide_table_indexes` are the table indexes that UNCORRELATED
 	//! scalar subqueries flattened into, collected in plan_select_node.cpp at the only
@@ -206,9 +211,8 @@ public:
 	//! what the user wrote. A flattened correlated subquery is a column ref literally
 	//! named "SUBQUERY", and reporting that -- or suggesting `SUM(x * SUBQUERY)` --
 	//! would name an object the user never typed.
-	DecideCanonicalizer(ClientContext &context, idx_t decide_index,
-	                    vector<DecideVarScopeInfo> variable_scopes,
-	                    unordered_set<idx_t> query_wide_table_indexes,
+	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
+	                    const vector<bool> &is_boolean, unordered_set<idx_t> query_wide_table_indexes,
 	                    unordered_set<idx_t> correlated_subquery_table_indexes = {});
 
 	//! Canonicalize a whole SUCH THAT tree: AND-conjunctions plus the `when` and `per K:`
@@ -235,14 +239,6 @@ public:
 	//! which alone has them; `names` must outlive the canonicalizer.
 	void QuoteMessagesWith(const DecideSourceNames &names) {
 		message_names = &names;
-	}
-
-	//! Name the decisions declared BOOL (`is_boolean[i]` for decision column `i`, as
-	//! LogicalDecide::is_boolean_var), so a constraint may multiply a reducer by one:
-	//! `b * SUM(x)` is a product the value rewrite hands to the Boolean linearization. Without
-	//! it no decision is Boolean, and every decision factor on a reducer is refused.
-	void ReadBooleanDecisions(const vector<bool> &is_boolean) {
-		boolean_decisions = is_boolean;
 	}
 
 	//! Canonicalize a single comparison. Pure -- `comparison` is untouched.
@@ -506,7 +502,7 @@ private:
 	bool judge_column_refs = false;
 	//! See QuoteMessagesWith; null quotes through the bound tree (UserFacingName).
 	optional_ptr<const DecideSourceNames> message_names;
-	//! See ReadBooleanDecisions, indexed by decide-column index; a missing entry is not Boolean.
+	//! Which decision columns are declared BOOL, indexed by decide-column index.
 	vector<bool> boolean_decisions;
 
 	//! `expr` as a scope refusal quotes it.

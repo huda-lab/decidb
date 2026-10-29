@@ -176,10 +176,10 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		                                 scope_checks.keys};
 		{
 			DecideCanonicalizer canonicalizer(context, statement.decide_index, statement.variable_scopes,
+			                                  statement.is_boolean_var,
 			                                  std::move(query_wide_table_indexes),
 			                                  std::move(correlated_subquery_table_indexes));
 			canonicalizer.QuoteMessagesWith(message_names);
-			canonicalizer.ReadBooleanDecisions(statement.is_boolean_var);
 			if (statement.decide_constraints) {
 				canonicalizer.BuildConstraintScopeChecks(*statement.decide_constraints, scope_checks);
 				statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);

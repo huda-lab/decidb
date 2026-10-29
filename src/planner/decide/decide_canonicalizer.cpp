@@ -155,17 +155,17 @@ vector<CanonicalAtom> ReadCanonicalAtoms(const Expression &side, idx_t decide_in
 }
 
 DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
-                                         vector<DecideVarScopeInfo> variable_scopes)
+                                         vector<DecideVarScopeInfo> variable_scopes, const vector<bool> &is_boolean)
     : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes)),
-      judge_column_refs(false) {
+      boolean_decisions(is_boolean), judge_column_refs(false) {
 }
 
 DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
-                                         vector<DecideVarScopeInfo> variable_scopes,
+                                         vector<DecideVarScopeInfo> variable_scopes, const vector<bool> &is_boolean,
                                          unordered_set<idx_t> query_wide_table_indexes,
                                          unordered_set<idx_t> correlated_subquery_table_indexes)
     : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes)),
-      query_wide_table_indexes(std::move(query_wide_table_indexes)),
+      boolean_decisions(is_boolean), query_wide_table_indexes(std::move(query_wide_table_indexes)),
       correlated_subquery_table_indexes(std::move(correlated_subquery_table_indexes)),
       judge_column_refs(true) {
 }

@@ -53,7 +53,7 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 	Connection con(db);
 	DecideCanonicalizer canonicalizer(
 	    *con.context, DECIDE_INDEX,
-	    {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()});
+	    {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()}, duckdb::vector<bool> {false, false});
 
 	SECTION("canonical reversed comparison is a fixed point") {
 		auto written = Comparison(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
