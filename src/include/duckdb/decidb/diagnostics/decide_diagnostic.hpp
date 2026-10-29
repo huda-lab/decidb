@@ -202,7 +202,7 @@ enum class ClauseEditKind : uint8_t { LOOSEN, DROP };
 //! (other fields unused). All fields are pre-formatted strings so the builder is pure
 //! layout.
 struct ClauseEdit {
-	//! The edit of one end of a range clause (a BETWEEN half), as the
+	//! The edit of one end of a range clause (a BETWEEN half, or an arm of an `=` that stage 05 split in two), as the
 	//! row it was read from states it. `SpellRangeEdits` turns the ends of one clause into one edit of the whole.
 	struct MovedEnd {
 		idx_t source_clause_id = DConstants::INVALID_INDEX; //!< INVALID_INDEX => an edit of a whole clause

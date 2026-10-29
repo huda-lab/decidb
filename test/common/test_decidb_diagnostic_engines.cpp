@@ -1220,12 +1220,28 @@ TEST_CASE("DeciDB range-clause edits", "[decidb][query_diagnostics][range]") {
 		CHECK(edits.size() == 2);
 	}
 
+	SECTION("the two arms of an equality are the ends of its range") {
+		SolverModel model;
+		model.constraint_sources.push_back(MakeSource("max(2 * x)", "=", "20"));
+		auto edits = decide_render::SpellRangeEdits({MakeEndEdit(model, 0, '>', 20, 14)}, model);
+		REQUIRE(edits.size() == 1);
+		CHECK(edits[0].label == "max(2 * x) = 20");
+		CHECK(edits[0].suggestion == "max(2 * x) BETWEEN 6 AND 20");
+		edits = decide_render::SpellRangeEdits({MakeEndEdit(model, 0, '>', 20, 14), MakeEndEdit(model, 0, '<', 20, 40)},
+		                                       model);
+		REQUIRE(edits.size() == 1);
+		CHECK(edits[0].suggestion == "max(2 * x) BETWEEN 6 AND 60");
+		CHECK(edits[0].amount == 54);
+	}
+
 	SECTION("only a range end is spelled as a range") {
 		SolverModel model = MakeBetweenModel();
+		model.constraint_sources.push_back(MakeSource("sum(x)", "=", "20"));
 		model.constraint_sources.push_back(MakeSource("x", "<=", "5"));
-		// A plain comparison is edited as it is.
-		CHECK(!decide_render::IsRangeEnd(model, 2, '<'));
-		auto plain = MakeEndEdit(model, 2, '<', 5, 2);
+		// The row of a whole equality, and a plain comparison: edited as they are.
+		CHECK(!decide_render::IsRangeEnd(model, 2, '='));
+		CHECK(!decide_render::IsRangeEnd(model, 3, '<'));
+		auto plain = MakeEndEdit(model, 3, '<', 5, 2);
 		auto edits = decide_render::SpellRangeEdits({plain}, model);
 		REQUIRE(edits.size() == 1);
 		CHECK(edits[0].suggestion == "x <= 7");

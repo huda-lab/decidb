@@ -577,6 +577,35 @@ class TestDiagnosticsRelation:
         _apply_reported_fix(cli, sql, rows)
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
+    @pytest.mark.parametrize("aggregate", ["max", "min"])
+    @pytest.mark.parametrize("side", ["low", "high"])
+    @pytest.mark.parametrize("scoped", [False, True])
+    def test_infeasible_extremum_equality_is_quoted_as_written_and_suggests_a_range(
+        self, request, cli_fixture, aggregate, side, scoped
+    ):
+        """INF-1: stage 05 splits `max(e) = K` into a cheap bound per member and a hard extremum bound
+        (`min` the other way round), and both keep the clause. A finding names the clause as written
+        and suggests the range through the BETWEEN spelling: the end the data pushes moves, the other
+        stays K, so the edit repairs whichever half failed. `x <= c` (c = 3) starves the lower end;
+        `x >= c` (c = 30) pushes the upper end."""
+        cli = request.getfixturevalue(cli_fixture)
+        bound = "x <= c" if side == "low" else "x >= c"
+        value = 3 if side == "low" else 30
+        clause = f"per g: {aggregate}(2 * x) by (g) = 20" if scoped else f"{aggregate}(2 * x) = 20"
+        sql = (
+            f"SELECT g, x FROM (VALUES (1, 'a', {value}), (2, 'a', {value}), (3, 'b', {value})) t(id, g, c) "
+            f"DECIDE x(REAL) SUCH THAT x >= 0 AND x <= 100 AND {bound} AND {clause} MAXIMIZE SUM(x)"
+        )
+        result = _diagnose(cli, sql)
+
+        rows = _rows(result)
+        edits = _clause_edits(rows)
+        assert [e["subject"] for e in edits] == [clause], rows
+        range_text = "BETWEEN 6 AND 20" if side == "low" else "BETWEEN 20 AND 60"
+        assert edits[0]["suggested_change"] == f"{clause[: -len('= 20')]}{range_text}", rows
+        _apply_reported_fix(cli, sql, rows)
+
+    @pytest.mark.parametrize("cli_fixture", _BACKENDS)
     def test_infeasible_easy_max_shares_one_slack_max_overshoot(self, request, cli_fixture):
         """I2.a: `MAX(x) <= 5` is folded as a per-instance 0/1-style cap that shares
         ONE knob across rows. Floors force x@row1 >= 8 (overshoot 3) and x@row2 >= 12

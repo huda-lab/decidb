@@ -524,7 +524,7 @@ bool IsRangeEnd(const SolverModel &model, idx_t source_clause_id, char sense) {
 	}
 	auto &source = model.constraint_sources[source_clause_id];
 	if (source.between_partner == DConstants::INVALID_INDEX) {
-		return false;
+		return source.written_cmp == "=" && sense != '=';
 	}
 	// The halves read as one range when they share a left side and each bounds the side its half names.
 	return HalfLhs(source) == HalfLhs(model.constraint_sources[source.between_partner]) &&
@@ -551,7 +551,7 @@ vector<ClauseEdit> SpellRangeEdits(vector<ClauseEdit> edits, const SolverModel &
 		}
 		auto moved = edit.moved;
 		auto &source = model.constraint_sources[id];
-		// The clause is named by its lower half.
+		// The clause is named by its lower half; an `=` is its own.
 		idx_t root = source.between_upper ? source.between_partner : id;
 		idx_t found = DConstants::INVALID_INDEX;
 		for (idx_t r = 0; r < ranges.size(); r++) {
@@ -561,7 +561,9 @@ vector<ClauseEdit> SpellRangeEdits(vector<ClauseEdit> edits, const SolverModel &
 		}
 		if (found == DConstants::INVALID_INDEX) {
 			auto &lower = model.constraint_sources[root];
-			auto &upper = model.constraint_sources[lower.between_partner];
+			auto &upper = source.between_partner == DConstants::INVALID_INDEX
+			                  ? lower
+			                  : model.constraint_sources[lower.between_partner];
 			ranges.push_back({out.size(), root, edit.moved.lhs, HalfBound(lower), HalfBound(upper)});
 			found = ranges.size() - 1;
 			edit.label = QuoteWrittenClause(source);

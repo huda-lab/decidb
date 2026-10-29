@@ -52,9 +52,10 @@ const ConstraintSourceInfo *FindConstraintSource(const SolverModel &model, const
 //! Render a row's RHS from its source spelling, falling back to `fallback`.
 string SourceAwareRhs(const SolverModel &model, const ConstraintProvenance &provenance, double fallback);
 
-//! Whether a row of `source` is one end of a range clause the user wrote as one: a half of a BETWEEN. A message quotes
-//! the whole clause (QuoteWrittenClause), and an edit spells it back as a BETWEEN with the end moved (SpellRangeEdits).
-//! A BETWEEN whose halves do not read as one range (a canonicalization that turned one half around) is not.
+//! Whether a row of `source` is one end of a range clause the user wrote as one: a half of a BETWEEN, or an arm of an
+//! `=` that stage 05 split into `<=` and `>=`. A message quotes the whole clause (QuoteWrittenClause), and an edit
+//! spells it back as a BETWEEN with the end moved (SpellRangeEdits). A BETWEEN whose halves do not read as one range
+//! (a canonicalization that turned one half around) is not.
 bool IsRangeEnd(const SolverModel &model, idx_t source_clause_id, char sense);
 
 //! Replace the edits of a range clause's ends by one edit of the clause: `x BETWEEN lo AND hi` with the moved ends
