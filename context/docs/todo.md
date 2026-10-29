@@ -32,6 +32,3 @@ at a time. Lanes: F11.
 ## 12. Waiting
 
 - [ ] OPS-1 Peak process memory on Windows (needs a Windows host) — operations/todo.md § OPS-1
-- [ ] H-06 The two-level objective (needs a rule that takes the shape) — direct_solve/framework/todo.md § H-06
-- [ ] H-08 VALUE-shape clauses (owner names the rule and shape) — direct_solve/framework/todo.md § H-08
-- [ ] A2–S4 Start one of the 16 defined classes not yet built (owner picks) — direct_solve/todo.md
