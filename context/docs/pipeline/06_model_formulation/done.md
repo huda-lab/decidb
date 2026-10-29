@@ -154,7 +154,10 @@ objective (`objective_written`), never an InternalException or a solver API erro
 the same for a non-finite column bound, coefficient, objective entry or Q entry; a column is named by the first row
 that reads it, else by the objective. A Big-M or ABS refusal with no open column (`ThrowUnboundedBigMNaming`) does too:
 the range over finite boxes overflowed, and no decision lacks a bound. A literal coefficient that is not finite folds
-into no box (`FoldKnownBound`), so its row's coefficient check refuses it.
+into no box (`FoldKnownBound`), so its row's coefficient check refuses it. A coefficient the linear form computes
+(like terms merged, a reducer's factor applied) keeps its inputs (`DecideTerm::inputs`); the read that refuses it
+names the first input a column holds that is not finite on the failing row, else the clause
+(`direct_solve/framework/done.md`, "Number messages").
 
 `maximize` comes from `input.sense`.
 

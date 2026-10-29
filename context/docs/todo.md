@@ -7,11 +7,11 @@ Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
-at a time. Lanes: BUG-21.
+at a time. Lanes: BUG-24.
 
-## 10. BUG-21 One message per overflow (one lane)
+## 10. BUG-24 Direct objective constant (one lane)
 
-- [ ] BUG-21 A number DeciDB derives from the user's values says COEFFICIENT — issues/bugs.md § BUG-21
+- [ ] BUG-24 Direct solve sums an objective constant the solver path drops — issues/bugs.md § BUG-24
 
 ## 11. Measurement (last; the owner runs them)
 

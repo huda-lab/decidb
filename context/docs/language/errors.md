@@ -55,7 +55,8 @@ there is nothing to diagnose. The data checks that run before solving are in [gu
 DeciDB prevents no overflow, as DuckDB's DOUBLE arithmetic does not. Large finite numbers solve after the large-number
 warning (`../pipeline/07_solver/done.md`), and the solver's verdict on them stands. An infinite bound is no bound. A
 coefficient that is NaN or infinite where DeciDB reads it raises one of the two messages above: the first when a column
-holds it, TOO_LARGE naming the clause otherwise.
+holds it, quoting that column's value even inside a merged or scaled coefficient (`2 * b` names `b`), TOO_LARGE naming
+the clause otherwise.
 
 ## 2. Not supported yet
 

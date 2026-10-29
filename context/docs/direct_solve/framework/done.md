@@ -52,7 +52,7 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   no kept class has no instance, D5).
 - **Runtime checks.** `direct_runtime_checks.hpp` holds the predicates that raise an error while the plan runs, and
   their messages: `DirectInfeasibleErrorPredicate`, `DirectUnboundedErrorPredicate`, `DirectValidBoundPredicate`,
-  and `DirectValidNumberPredicate`. Every check that raises is built with `DirectRaiseUnless(ok,
+  and `DirectNumberMessage`. Every check that raises is built with `DirectRaiseUnless(ok,
   error)` or `DirectRaiseIf(bad, error)`, which return true or raise, and a list of checks is joined by `DirectAllHold`, a
   `CASE` chain in the order given, so an earlier check guards the later ones. A rule raises in the solver's order within a group (scope checks,
   the bound's NaN, an `=` bound's disagreement, then the least row message); across failing groups the order may
@@ -173,8 +173,13 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   (`StripTagsAbove`), so EXPLAIN never prints one.
 - **Number messages.** Both paths raise one text, `DecideInvalidValueMessage` (`decide_value_messages.hpp`), from the
   value's `DecideValueRole` and its text as written: the cut query text, or `DirectIR::render` where none was cut
-  (`DirectCoefficientText` merges like coefficients first; `NULL_GUARD_TAG` keeps a NULL guard out of the text). It
-  names no row: a row's place in the input depends on the scan.
+  (`NULL_GUARD_TAG` keeps a NULL guard out of the text). It names no row: a row's place in the input depends on the
+  scan.
+  - A coefficient DeciDB computes (like terms merged, a reducer's factor or divisor applied) keeps the values it is
+    computed from (`DecideTerm::inputs` on the solver path, `DirectNumberNames` from `DirectNamesOf` in direct solve).
+    Its check is one `isfinite` on the result; only the row it fails on reads the inputs. The first input a column
+    holds that is not finite is named (COEFFICIENT, quoting the input as written); with none, DeciDB's arithmetic or a
+    literal left the DOUBLE range, and the clause is named (TOO_LARGE). Only the first failing row is classified.
   - A number the model computes from finite ones (like coefficients merged across rows, a square, fixed terms moved to
     the bound side) is TOO_LARGE past a DOUBLE and names its clause, or the objective as EXPLAIN prints it. The solver
     path grows every such sum through `AddCoefficient` (`ilp_model.hpp`); A1's answer checks and R1's checks of each
