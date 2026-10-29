@@ -33,13 +33,12 @@ at a time. Lanes: F1 then F5; F6; F8. F4 never beside F2 or F5. F9 runs alone.
 
 ## 6. F5 Helper decisions (needs: 1)
 
-- [ ] OPT-1 A box per helper instance — pipeline/05_optimizer/todo.md § OPT-1
-- [ ] CAN-1 A `BOOL` decision as a factor on a reducer — pipeline/04_canonicalizer/todo.md § CAN-1
-- [ ] OPT-3 A quadratic SUM behind a helper decision — pipeline/05_optimizer/todo.md § OPT-3
+- [ ] OPT-4 ABS, body helpers and NORM_IN scope their auxiliary by JoinScopes — pipeline/05_optimizer/todo.md § OPT-4
 
 ## 7. F6 Direct solve (needs: 1)
 
-- [ ] H-09 Reducer windows a rule could compute itself — direct_solve/framework/todo.md § H-09
+- [ ] H-10 Re-scan or materialize the source by cost — direct_solve/framework/todo.md § H-10
+- [ ] H-09 Reducer windows a rule could compute itself — direct_solve/framework/todo.md § H-09 (needs: H-10)
 
 ## 9. F8 Solver runtime (needs: 1)
 

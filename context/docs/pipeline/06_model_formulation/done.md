@@ -699,25 +699,36 @@ own column enters only here (`linearization_reducer_value.cpp`).
 
 `DeriveReducerValueBounds` brackets, per group, the reducer's value — the sum of the
 members' signed brackets for SUM/AVG (an AVG's coefficients already carry the 1/n), their
-cover for MIN/MAX — and boxes the helper by the cover of every group's reach, each end on
-its own, only ever tightening; an end no member bounds stays open. One box per decision,
-so an instance may be boxed wider than its own group. A member may be an ABS auxiliary
-and an ABS may hold a helper, so when a model has helpers `FormulateModel` names them
-first and alternates `DeriveAbsAuxiliaryBounds` (not refusing) with this derivation until
-no box moves — a reducer holds no reducer, so the chain is finite — and only then runs
-the ABS derivation that refuses on the lowering arm. Each ABS derivation starts afresh
+cover for MIN/MAX — and boxes each helper instance by its own group's reach
+(`instance_reach_lower` / `instance_reach_upper`, mapped through `VarIndexer::InstanceOf`),
+each end on its own; an end no member bounds stays open. The decision's box is the cover of
+every instance's reach, so every pass that reads it stays sound, and only ever tightens.
+The reach is not the floors' refinement: a floor holds against any box, the rigid one
+included, while a reach is derived from the members' current boxes and holds only for the
+formulation it came from. It is written afresh by every `FormulateModel`, so a diagnosis
+derives it from its widened members. The model builder, the closing Big-M, `FlatColumnBox`
+(through `FormulationBox::InstanceUpper` / `InstanceLower`) and the ABS argument boxes read
+the instance box (`InstanceBox` with `reach` set); the `<>` range collapse keeps the rigid
+view (`InstanceBox` default) and never reads a reach. A member may be an ABS
+auxiliary, a product with a helper (`b * sum(x)`) or hold one, so when a model has helpers
+`FormulateModel` alternates `DeriveBilinearAuxiliaryBounds` and `DeriveAbsAuxiliaryBounds`
+(neither refusing) with this derivation until no box moves — a reducer holds no reducer, so
+the chain is finite — and only then runs the two that refuse (a bilinear factor with no
+ceiling names the unbounded member, not the helper). Each ABS derivation starts afresh
 (`range_unbounded` is reset), so a range open on one pass may close on the next.
 
 `LinearizeReducerValueLinks` then states each definition over the groups
 `BuildMinMaxGroups` splits the members into, consuming the evaluated rows. A SUM/AVG
-helper gets one flat equality per group in `global_constraints`:
-`value - members' expressions = members' constants`, the members' columns accumulated
-first (a keyed decision may stand in several rows of a group), STRUCTURAL, with the
-clause's provenance. A MIN/MAX helper gets one extremum link per group through
-`EmitExtremumLink`, its result column the helper's instance for that group, on the sides
-stage 05 recorded; the closing Big-M is the helper's box end against the family's far
-end (`upper_bounds[value] - family.lo` for MAX, `family.hi - lower_bounds[value]` for
-MIN), because the box is wider than one family. Where that constant does not exist the
+helper gets one flat row per group in `global_constraints`, on the side stage 05 recorded
+(the epigraph form): `value - members' expressions >= members' constants` when the clauses
+push the value down (`need_envelope`), `<=` when up (`need_closing`), `=` when both. The
+members' columns are accumulated first (a keyed decision may stand in several rows of a
+group), STRUCTURAL, with the clause's provenance. A quadratic body is not in the row: stage 05
+defined it per row, so the members are columns. A MIN/MAX helper gets one extremum link per
+group through `EmitExtremumLink`, its result column the helper's instance for that group, on
+the same sides; the closing Big-M is the instance's box end against the family's far end
+(the instance's ceiling `- family.lo` for MAX, `family.hi -` its floor for MIN), so a small
+group's Big-M is its own reach, not the widest group's. Where that constant does not exist the
 lowering arm refuses naming a column to bound and the native arm states the extremum, as
 for every other MIN/MAX.
 
@@ -883,8 +894,13 @@ clean.
 
 ### Bilinear products
 
-`LinearizeBilinear()` emits the McCormick envelope for each `w = b * x` link, with
-`b` Boolean and `x` in `[L, U]`:
+`LinearizeBilinear()` emits the rows of each `w = b * x` link once per instance of `w`, in flat
+columns (as a helper's definition is), from the box of the instance of `x` that instance
+reads (`VarIndexer::InstanceUnder`). A query-wide product is one block, a keyed one a block per
+key, a row-scoped one a block per row (the scope of `w` is stage 05's `JoinScopes`); the
+instance fixed at 0 for rows that read no key links nothing. For two Booleans the block is the
+AND, `w <= b`, `w <= x`, `w >= b + x - 1`. With `b` Boolean and `x` in `[L, U]` the
+McCormick envelope is:
 
 | Row | Condition |
 |---|---|
@@ -896,7 +912,9 @@ clean.
 For `L >= 0` the lower corner is implied by `w`'s own non-negative bound, so three
 rows suffice. For `L < 0` all four are emitted and `w`'s own lower bound is widened
 so the product can reach the negative value of `x` at `b = 1`. A missing finite
-upper bound on `x` is refused by name — there is no envelope without it.
+upper bound on `x` is refused by name — there is no envelope without it. A factor that is a
+helper has no box until its members' are derived, so the refusal waits for them and names the
+member.
 
 ### ABS under MAXIMIZE
 

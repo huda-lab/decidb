@@ -79,24 +79,6 @@
 
 ## Limitations (not bugs)
 
-- **A decision as a factor on a reducer is refused:** `b * sum(x) <= 5` with
-  `per (): b(BOOL)` (or an INT `s`, in a constraint or in the objective) answers *"'b' is
-  a decision, so it cannot multiply SUM(x). Only data can scale
-  SUM/AVG/MIN/MAX."* (`decide_linear_form.cpp`); the product written inside the reducer,
-  `sum(b * x)`, is a bilinear term and answers. `../language/guide.md` §5 states the
-  refusal. **Ruling (owner, 2026-10-27).** Lift it for a `BOOL` factor only: one McCormick helper over
-  the reducer's value, as the bilinear rules of §4 linearize any `BOOL` product. An `INT`
-  or `REAL` factor stays refused; its product is not convex.
-  A lift changes §5; the `INT` pins `test_canonicalize_scale.py::test_decision_factor_rejected` and
-  `::test_decision_factor_in_objective_rejected` stay. **Task.**
-  `../pipeline/04_canonicalizer/todo.md` § CAN-1.
-- **A quadratic row refuses a row-varying factor on a query-wide decision that the linear
-  row accepts:** with `s` declared `per ()` and `gcap` varying by row,
-  `sum(x) + gcap * s <= 30` is generated per row and answers, while
-  `sum(power(x, 2)) + gcap * s <= 30` answers *"'sum(power(x, 2))' is not supported yet in
-  this constraint: ... with nothing beside them but data and query-wide decisions, each on
-  its own"* (`decide_rewrite_scoped.cpp`); `sum(power(x, 2)) + s <= 30` answers. No test
-  covers this shape. **Ruling (owner, 2026-10-27).** Lift it: the linear row accepts the same factor,
-  so the refusal is an inconsistency, not a policy. **Task.** `../pipeline/05_optimizer/todo.md` § OPT-3.
+None.
 
 Resolved behavior is documented by its owning `done.md`.

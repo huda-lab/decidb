@@ -425,11 +425,25 @@ DROP removes them with their clause, whose `removal_group_id` they carry.
 | Operand types | Formulation |
 |---|---|
 | Boolean × Boolean | AND-linearization: `w <= b1`, `w <= b2`, `w >= b1 + b2 - 1` |
-| Boolean × other | Partial McCormick: `w <= x` at plan time, `w <= U·b` and `w >= x - U·(1-b)` at execution time via `BilinearLink` (needs runtime bounds) |
+| Boolean × other | McCormick: `w <= U·b`, `w >= x - U·(1-b)` and the `L` corners (needs runtime bounds) |
 | Non-Boolean × non-Boolean | Left in place for the Q-matrix path in the physical operator |
 
-`ExtractMultiplicativeCoefficient` walks a chain shaped
-`coeff * ... * decide_var * ... * coeff` and combines the non-variable factors.
+The pass records a `BilinearLink` for both Boolean rows and emits none itself; stage 06 emits the rows once per
+instance of the auxiliary (`LinearizeBilinear`, `../06_model_formulation/done.md`).
+
+**Each factor is read as an affine expression in the decisions** (`ReadAffine`): data-coefficient × decision terms and
+a data constant, through `+`, `-`, a data factor, a data divisor and casts. The product distributes over the terms, so
+`b * (x - 1)` is `b * x - b` and `(2 * b - 1) * (x - 1)` has four terms. Each pair holding a Boolean gets one auxiliary,
+and the pairs are merged (`(b + d) * (d + b)` holds `b * d` once); a Boolean squared is itself; a pair of non-Booleans
+stays a product for the Q-matrix path. A factor that is not affine is left in place. A reducer under a factor
+(`b * SUM(x)`) is not a product of variables to this pass: the value rewrite holds the reducer in a helper and hands the
+product back (`FindAndReplaceBilinear`).
+
+**The auxiliary's scope is `JoinScopes` of its factors' scopes**, the least upper bound, as DuckDB promotes a binary
+operator's type: Scalar < Entity < Row. Two query-wide factors give one query-wide column; a query-wide factor and a
+keyed one, or two alike keyed factors, a column per key (registered in
+`entity_scopes[..].scoped_variable_indices`); anything else a column per row. The ABS auxiliary, the body helpers and
+the `NORM_IN` indicators are still one column per row (`todo.md` § OPT-4).
 
 ### Non-linear reducer bodies — `DefineNonlinearReducerBodies`
 
@@ -466,7 +480,9 @@ reads always holds), and each reading clause accounts for the helper in its own 
 
 **Which bodies.** Every MIN or MAX whose body is not linear (`DecideExpressionDegree`). In
 a constraint that holds a MIN or MAX, every SUM and AVG term too, since the composed row
-reads them as linear (`sum(power(x, 2)) + max(x) <= 30`). In the objective, the inner
+reads them as linear (`sum(power(x, 2)) + max(x) <= 30`); and in a constraint of the VALUE shape, whose helper is
+defined over linear members (`sum(power(x, 2)) + gcap * s <= 30`). A SUM or AVG that no MIN or MAX reads needs no
+native MIN/MAX: its rows are quadratic, which the model-class gate refuses on HiGHS. In the objective, the inner
 reducer of a two-level form under an outer MIN or MAX
 (`max(per g: sum(power(x - t, 2)) by (g))`); a SUM beside a MIN or MAX stays on the
 objective's own quadratic path. A plain constraint whose one MIN or MAX is pushed its
@@ -538,7 +554,7 @@ side (`CollectReducerSites`; a data-only reducer is a number and stays) the pass
 
 The comparison then holds no decision reducer and the tag is removed: it is one row per
 kept row, or per class under `per K:`. Stage 06 states each helper's definition per group,
-an equality for SUM/AVG and an extremum link for MIN/MAX
+a row for SUM/AVG and an extremum link for MIN/MAX
 ([`../06_model_formulation/done.md`](../06_model_formulation/done.md), "Helper decisions of
 the value rewrite"). Deck example 1 costs N rows and one helper, rather than N rows of N
 terms. The user-facing account of the three shapes is
@@ -564,20 +580,31 @@ it, which is harmless, since an equality on a helper nothing else reads always h
 DIAGNOSE reads it as part of the fixed model like every untagged structural row. Each
 clause that reads the helper still accounts for it in its own plan, once.
 
-A MIN/MAX helper records which side pins it (`need_envelope` / `need_closing`), from the
+A helper records which side pins it (`need_envelope` / `need_closing`), the epigraph form, from the
 sign its term carries once the side is read as a sum — through `+`, `-`, binder casts and
-the factors on it (`ScaleSignAtPlanTime`; 0 for a data factor, a decision factor or an
-enclosing expression) — and the comparison, read as an `ExtremumPush`: a term pushed
-down needs a MAX's envelope (`value >= member`) or a MIN's closing side (`value >= some
-member`, with indicators), a term pushed up the other one, and an unknown sign, `=` or
-`<>` both. A shared helper takes every side any of its rows needs. A SUM/AVG helper is an
-equality and needs neither.
+the factors on it (`ScaleSignAtPlanTime`; 0 for a data factor of unknown sign or an
+enclosing expression; a `BOOL` decision reads +1 and `-b` -1, since it is never negative,
+`BooleanDecisions`) — and the comparison, read as an `ExtremumPush`. A SUM, AVG or MAX pushed
+down needs `value >= members` (a MAX's envelope), pushed up `value <= members`; a MIN is the
+mirror (its envelope is `value <= member`, its closing side `value >= some member`, with
+indicators). An unknown sign, `=` or `<>` need both, the equality for SUM/AVG. A shared
+helper takes every side any of its rows needs. Nothing reads a helper's value but the
+clauses, so a slack value is harmless, and a clause over a square keeps its convexity.
 
-A body that still multiplies decisions after `RewriteBilinear` — a product of two
-non-Boolean decisions or a square — is refused here with "not supported yet"
-([`errors.md`](../../language/errors.md) §2): its
-definition would be a quadratic equality. The test is
-on what survives the ABS and bilinear rewrites, whose auxiliaries are linear.
+**A `BOOL` factor on a reducer** (`b * sum(x)`, stage 04 §3.7) leaves a product `b * helper`
+once the reducer is replaced. The pass hands it to `FindAndReplaceBilinear`, so the pass
+order stays: one linearizer for every Boolean product. A decision's sign is not otherwise
+known, so only the `BOOL` factor keeps the push.
+
+**The objective** is walked the same way when stage 04 stamped it `VALUE_REWRITE_TAG`
+(a reducer under a `BOOL` factor): `MAXIMIZE b * sum(x)` replaces `sum(x)` by a helper
+pushed by the sense and the term's sign, and the product is one auxiliary the objective reads
+once. A reducer no decision multiplies stays in the objective. A factor declared per row is
+refused by the objective's scope check.
+
+A body that multiplies decisions (a square, a product of two non-Booleans) is defined per row
+first by `DefineNonlinearReducerBodies`, so the helper's members are linear; the model
+class decides whether a backend takes the rows.
 
 Every auxiliary decision column the passes allocate — an ABS auxiliary and its sign
 indicator, a McCormick product, an L0 and an `IN` indicator, a value helper — goes

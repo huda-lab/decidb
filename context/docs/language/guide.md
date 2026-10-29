@@ -319,8 +319,11 @@ Tests: `test/decide/tests/test_scope_objective.py`. Problem classes and solver s
     helper-decision shape (§6.4).
   - In the **objective** it must be one value over the kept rows; a row-varying one is refused with a pointer to
     `SUM(x * weight)`.
-  - A **decision** as the factor is refused, even a query-wide one: `s * sum(x)` is written `sum(s * x)`, a bilinear
-    term.
+  - A **`BOOL` decision** as the factor answers, in a constraint and in the objective: `b * sum(x) <= 4`,
+    `MAXIMIZE b * sum(x)`. It also takes `-b` and data times `b` (`2 * b`); the reducer is a bare `SUM`, `AVG`, `MIN` or
+    `MAX` (§6.4). An `INT` or `REAL` decision as the factor is refused, even a query-wide one: `s * sum(x)` is written
+    `sum(s * x)`, a bilinear term. In the objective `b` must be one instance over the kept rows, as a decision beside a
+    reducer must.
   - A **data-only reducer** may not share a scaled term with a decision (`x * avg(cap)`, `sum(x) / sum(cap)`); compute
     it as an uncorrelated subquery instead.
 - **Either side may carry the decision.** `5 >= x` and `x <= 5` are one constraint, and a reducer may sit on both
@@ -492,11 +495,14 @@ Tuple terms and reducers mix freely on either side. Each comparison takes one of
 - **Helper decision** — anything else: a per-row or keyed decision beside a reducer (`ship <= 0.20 * sum(ship)`, the
   facility link `sum(ship) by (D.depotID) <= D.capacity * open`), a row-varying factor, reducers with different `by`
   keys, a reducer inside another expression (`abs(sum(ship) by (g) - 40) <= 5`). Each reducer becomes a **helper
-  decision** with one instance per `by` group, defined once (an equality row for `SUM`/`AVG`, an extremum link for
-  `MIN`/`MAX`), and the clause is one row per class. Example 1 costs N rows of two entries plus one definition row,
+  decision** with one instance per `by` group, defined once (a row for `SUM`/`AVG` on the side the clause pushes it, an
+  extremum link for `MIN`/`MAX`), and the clause is one row per class.
+  Example 1 costs N rows of two entries plus one definition row,
   not N rows of N entries. Clauses holding the same reducer over the same rows share one helper and one definition,
   which belongs to none of them: a `DIAGNOSE` that drops one leaves the definition the others read. The helper is whole-numbered when the reducer's value is, so `<`, `>`, `<>` follow §3. A
-  product or square of decisions inside such a reducer is refused.
+  product or square of decisions inside such a reducer is defined per row first, so `sum(power(x, 2)) + gcap * s <= 30`
+  answers on Gurobi and is refused on HiGHS, which has no quadratic constraints (§3.1). A `BOOL` factor on a reducer
+  (`b * sum(x)`) leaves the product `b * helper`, which is linearized as any `BOOL` product (§4).
 
 `EXPLAIN` names a helper by its reducer; `DIAGNOSE` names the clause and never a definition row. Tests:
 `test/decide/tests/test_scope_value_rewrite.py`.

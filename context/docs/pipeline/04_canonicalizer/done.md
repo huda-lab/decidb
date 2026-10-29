@@ -276,10 +276,18 @@ What may be a factor (`PeelScale`, the single place that judges it):
   refused: *"DECIDE objective: 'w' varies per row, so it cannot multiply SUM(x). Move
   it inside the aggregate, e.g. SUM(x * w)."*, or, for a correlated subquery, *"this
   subquery returns a different value for each row, ..."*;
-- a decision — nowhere: *"DECIDE constraint: 'b' is a decision, so it cannot multiply
-  SUM(x). Only data can scale SUM/AVG/MIN/MAX."* (the objective says *"Only constants and
-  query-wide values ..."*). A product
-  of a decision and a reducer is not a scale.
+- a `BOOL` decision on a bare reducer (`IsBooleanFactor`: `b`, `-b`, or data times `b`, such as `2 * b`), in a
+  constraint and in the objective. The comparison takes the VALUE shape; the value rewrite holds the reducer in a
+  helper decision and the product `b * helper` is linearized as every Boolean product is (stage 05). The objective is
+  stamped `VALUE_REWRITE_TAG` when a reducer sits under such a factor. A `BOOL` is never negative, so it keeps the
+  push of the term it scales (`PlanTimeSignOf` reads it POSITIVE through `BooleanDecisions`);
+- any other decision — nowhere: *"DECIDE constraint: 's' is a decision, so it cannot multiply
+  SUM(x). Only data or a BOOL decision can scale SUM/AVG/MIN/MAX."* (the objective says *"Only constants,
+  query-wide values or a BOOL decision ..."*). An `INT` or `REAL` decision times a reducer is not convex, and a `BOOL`
+  times anything but a bare reducer (`b * (sum(x) - 1)`) is not held by a helper.
+
+The canonicalizer takes the `BOOL` decisions at construction (`is_boolean`, after `variable_scopes`, required by both
+constructors), since the factor's type is not in the bound tree.
 
 **Peeling runs to exhaustion.** `2 * (3 * SUM(x))` and `(SUM(x) / 2) / 3` each
 yield *one* factor: multipliers compose into `M`, divisors into `D`, and the
@@ -411,7 +419,7 @@ escape for `AGG * factor`: every consumer sees `factor * AGG` or `AGG / factor`.
 |---|---|---|
 | no reducer (a data-only reducer may sit on the bound side) | `ROWS` | one per kept row, or per class of an enclosing `per K:` |
 | decision reducers sharing one `by` key, under whole-query factors, beside query-wide terms only | `AGGREGATE` | one per `by` group of the kept rows |
-| anything else: a per-row or keyed decision beside a reducer, a factor that varies by row, a second `by` key, a reducer inside another expression, a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group, then one row per class |
+| anything else: a per-row or keyed decision beside a reducer, a factor that varies by row or is a `BOOL` decision, a second `by` key, a reducer inside another expression, a product of decisions beside a reducer with a query-wide decision in the clause (`sum(x) + b * s`) | `VALUE` | the value rewrite (stage 05): each decision reducer becomes a helper decision per `by` group, then one row per class |
 | `AVG` under `<>` unless every term is a plain `AVG` | refused | *"DECIDE: AVG in a <> constraint is not supported yet beside another term or with its own when or per"* |
 
 The refusal: an `AVG`'s exclusion under `<>` scales the bound by the group's row count,
@@ -428,8 +436,8 @@ decisions beside another term, or alone under a factor whose sign is not known b
 the query runs) is AGGREGATE only with no `by`, a constant bound and no decision beside
 it — that formulation is one row over all of the clause's kept rows under one bound;
 otherwise it is VALUE, where each extremum is pinned per group. `PeelScale` lets a
-row-varying factor stay on a constraint's reducer as its scale (the comparison is then
-VALUE); a factor that is a decision is refused (§3.7). Refusals quote the query through
+row-varying factor, or a `BOOL` decision, stay on a reducer as its scale (the comparison is then
+VALUE); any other decision is refused (§3.7). Refusals quote the query through
 `QuoteMessagesWith`: every column as written, a reducer with its
 scopes and `by`. `ClassifyCanonicalComparison` maps the shape onto
 `CanonicalConstraintClass` (`ROWS` is `PER_ROW`; `UNSUPPORTED`, or a decision on the
