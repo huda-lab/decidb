@@ -18,7 +18,7 @@ There is no setting for it:
 | clock ran out, at a terminal       | print the report, then offer to keep solving or take the best so far |
 | clock ran out, anywhere else       | print the report, then error — nobody can answer the offer            |
 | user pressed Ctrl-C                | print the report, hand back the best so far with its caveat — terminal or not; the decision was already made |
-| user pressed Ctrl-C, nothing found | print the report, then error — there is nothing to hand back          |
+| user pressed Ctrl-C, nothing found | one interrupt error, `DECIDE stopped at your request before finding a solution.` |
 
 **Shared time limit (both backends).** The per-solve wall-clock cap is resolved in
 one solver-agnostic place — `ResolveDecideTimeLimit()` in
@@ -89,13 +89,12 @@ block has two shapes, split on `has_solution`:
     elapsed 300s · peak memory 1.2 GB
   ```
 
-**Timeout vs. interrupt wording.** The two stop causes share one best-so-far readback but
-must not read the same to the user. When the backend attributes the stop to a user Ctrl-C
-(`SolverResult::user_interrupted`, Gurobi only), the report opener becomes **"DECIDE stopped
-at your request …"** instead of **"DECIDE hit the 300s time limit …"** (both the
-solution-found and no-solution shapes); everything else (closeness, elapsed, peak memory) is
-identical. HiGHS never sets the flag, so its boundary-only interrupt keeps the time-limit
-wording.
+**Timeout vs. interrupt wording.** The two stop causes share one best-so-far readback but must not read the same to the
+user. When the backend attributes the stop to a user Ctrl-C (`SolverResult::user_interrupted`, or the query interrupt
+the operator reads beside it), the report opener becomes **"DECIDE stopped at your request …"** instead of **"DECIDE hit
+the 300s time limit …"** (both the solution-found and no-solution shapes); everything else (closeness, elapsed, peak
+memory) is identical. The operator writes its one decision back into `user_interrupted`, so the report and any error
+read the same answer.
 
 **A sibling's failure is neither.** A SELECT can hold several DECIDE clauses — two
 subqueries joined side by side — and when one throws, DuckDB stops the remaining
@@ -104,9 +103,8 @@ tests above read that interrupt, so a live sibling would report a cancellation n
 asked for, printed *above* the error that actually stopped the query and carrying
 elapsed/memory figures for a solve that was never the problem. So the very first thing
 the `TIME_LIMIT` block does is ask `Executor::HasError()`: when the executor already
-holds an error, nothing is printed and that error is re-raised. Only Gurobi ever
-reproduced this — HiGHS has no thread-safe terminate, so its solve is never cut short
-mid-search.
+holds an error, nothing is printed and that error is re-raised. Both backends cut a
+solve short mid-search, so either can meet it.
 
 Details:
 
@@ -155,13 +153,12 @@ is the whole rule:
   incumbent, the plain timeout error fires. The interrupt flag is cleared on the way out
   so the rows flow instead of the executor aborting the query.
 
-### Ctrl-C as a peer trigger (Gurobi) — first solve + continuation
+### Ctrl-C as a peer trigger — first solve + continuation
 
 Ctrl-C is an **independent trigger into the slow branch**, decoupled from the time limit: a
 user interrupt on *any* solve — the **first (normal) solve**, not just a continuation
 chunk after a timeout — cuts it short and hands back the best-so-far, instead of aborting
-the query. On Gurobi it also stops the running solve the instant it is interrupted
-(rather than waiting out the chunk).
+the query. It also stops the running solve at the backend's next check (rather than waiting out the chunk).
 
 - **`SolveModelOptions::interrupt_poll`** (`ilp_solver.hpp`) — the operator arms it
   **unconditionally** (`physical_decide.cpp`), reading `context.interrupted`, so an interrupt on any query
@@ -189,16 +186,12 @@ the query. On Gurobi it also stops the running solve the instant it is interrupt
   make the executor abort a query that actually succeeded. The operator clears
   `context.interrupted` on the SOLVED path too (guarded on the poll being armed), mirroring the
   clear the `TIME_LIMIT` terminal already does on its incumbent-stop path.
-- **Solver-agnostic fallback — HiGHS is boundary-only.** `GRBterminate` is loaded best-effort
-  (optional symbol, like `GRBaddqconstr`); if absent the watcher is never spawned. **HiGHS** does
-  not override `SetInterruptPoll` (no thread-safe terminate), so it **ignores the poll during a
-  solve**: a mid-first-solve Ctrl-C is not seen until the chunk boundary (its own time limit),
-  and the stop is then reported as a **time-limit** stop (`user_interrupted` stays false), yet
-  the incumbent is still delivered at the boundary. A 0.7 s signal into a 2 s
-  chunk waits out the chunk, then returns rows with the "time limit" wording. The delivery
-  works because the operator asks **two** questions, not one: the backend's own attribution
-  (`user_interrupted`) OR the query interrupt (`context.interrupted`), which SIGINT sets on
-  every backend. Reading only the first would have made Ctrl-C error out on HiGHS.
+- **`HighsSession`** (`deterministic_naive.cpp`) — the poll is HiGHS's MIP, simplex and IPM interrupt callbacks,
+  which HiGHS runs at its time-limit checks (`../07_solver/done.md` § 2, "Time limits"); `kInterrupt` maps as
+  `GRB_INTERRUPTED` does. `GRBterminate` is loaded best-effort (optional symbol, like `GRBaddqconstr`); if absent the
+  watcher is never spawned and a Gurobi solve sees the interrupt at the chunk boundary. The operator still asks two
+  questions, the backend's attribution (`user_interrupted`) OR the query interrupt (`context.interrupted`), so a
+  Ctrl-C after the solver's last check counts as the user's.
 - **Watcher cost.** Because the poll is armed on **every** solve, each spawns the watcher
   `std::thread` for the duration of `optimize()` and joins it immediately after — negligible
   (a 25 ms-polling sleeper), and the price of Ctrl-C working on any query. Internal
@@ -258,15 +251,12 @@ correctness is covered by manual/oracle checks (the timing window that both back
 time-out-then-finish quickly is too narrow for a stable CI assertion). Instances are
 sized with margin so the asserted branch is stable across machines.
 
-First-solve Ctrl-C (`TestSlowFirstSolveInterrupt`): a **generous** `DECIDB_TIME_LIMIT` (20s)
-keeps the first boundary far away, so a fast stop after a ~1s SIGINT proves the *first solve
-itself* was interrupted mid-solve (a boundary-only path would wait out ~19s). Gurobi-only
-assertions: the incumbent comes back with the **"stopped at your request"** wording (not
-"time limit") + caveat, rc 0, latency < 5s; an interrupt on the market-split (nothing found
-yet) reports the interrupt and errors, delivering no rows. HiGHS is asserted
-**boundary-only**: a mid-first-solve SIGINT is reported as a
-time-limit stop (never "stopped at your request") yet still delivers the incumbent at the
-boundary — the solver-agnostic fallback.
+First-solve Ctrl-C (`TestSlowFirstSolveInterrupt`): a **generous** `DECIDB_TIME_LIMIT` (20s) keeps the first boundary
+far away, so a fast stop after a ~1s SIGINT proves the *first solve itself* was interrupted mid-solve (a boundary-only
+path would wait out ~19s). Assertions: the incumbent comes back with the **"stopped at your request"** wording (not
+"time limit") + caveat, rc 0, latency < 5s; an interrupt on the market-split (nothing found yet) raises the one
+interrupt error, never "time limit", and delivers no rows. The HiGHS tests assert the same, and
+`test_error_time_limit.py` interrupts HiGHS inside its objective clique partition.
 
 Sibling failure (`test_diagnose_trigger.py::TestASiblingFailureIsNotACancellation`,
 both backends): a composed query joins a live 599-row knapsack to a tiny infeasible
