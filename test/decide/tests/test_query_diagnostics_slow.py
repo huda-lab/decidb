@@ -331,26 +331,28 @@ class TestSlowFirstSolveInterrupt:
         self, decidb_cli_gurobi
     ):
         """Interrupting a solve that has found nothing yet has no best-so-far to hand
-        back, so it reports what it knows and errors."""
+        back, so it fails with one message that says it was stopped, not timed out."""
         cli = _slow_cli(decidb_cli_gurobi, 20)
         proc, _ = cli.execute_interrupted(_MARKET_SPLIT_SQL, after=1.0)
         out, err = proc.stdout, proc.stderr
         low = err.lower()
-        assert _STOP_REQUEST in low, err[:1000]
+        assert low.count(_STOP_REQUEST) == 1, err[:1000]
+        assert "time limit" not in low, err[:1000]
         assert _STOP_CAVEAT not in low, "nothing was found, so nothing is delivered"
         assert not out.strip(), "no incumbent means no rows"
 
     def test_first_solve_interrupt_without_an_incumbent_errors_highs(self, decidb_cli_highs):
         """HiGHS: Ctrl-C stops the solve at HiGHS's next interrupt checkpoint (its MIP, simplex
         and IPM interrupt callbacks), attributed to the user. With nothing found yet there is no
-        best-so-far, so it reports and errors, as on Gurobi. Without the callbacks HiGHS would
+        best-so-far, so it fails with one stop message, as on Gurobi. Without the callbacks HiGHS would
         run to the far 20s boundary; without the `kInterrupt` mapping the stop would not read as
         the user's."""
         cli = _slow_cli(decidb_cli_highs, 20)
         proc, latency = cli.execute_interrupted(_MARKET_SPLIT_SQL, after=1.0, timeout=8)
         out, err = proc.stdout, proc.stderr
         low = err.lower()
-        assert _STOP_REQUEST in low, err[:1000]
+        assert low.count(_STOP_REQUEST) == 1, err[:1000]
+        assert "time limit" not in low, err[:1000]
         assert _STOP_CAVEAT not in low, "nothing was found, so nothing is delivered"
         assert not out.strip(), "no incumbent means no rows"
         # A stop at the far 20s boundary would take ~19s; 5s leaves margin for a loaded machine.

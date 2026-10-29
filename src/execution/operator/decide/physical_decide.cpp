@@ -4088,18 +4088,22 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         // Did the user stop this, or the clock? `user_interrupted` is the backend's own
         // attribution (both backends cut the solve short mid-search and say so); a Ctrl-C
         // that lands after the solver's last check arrives indistinguishable from a
-        // timeout. The query interrupt is set either way, so read it too.
+        // timeout. The query interrupt is set either way, so read it too. The answer is
+        // written back into the result once, so the report and the error below read the
+        // same decision.
         bool stopped_by_user = solve_result.user_interrupted || context.interrupted.load();
+        solve_result.user_interrupted = stopped_by_user;
         if (stopped_by_user) {
             // Ctrl-C is not a question. The user has already said stop, so there is
-            // nothing to offer: print what was found and hand back the best-so-far,
-            // with the caveat that it is not proven best. This is the one stop that
-            // does not need a terminal — the decision was made at the keyboard, not in
-            // an answer to a prompt.
-            PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
+            // nothing to offer: hand back the best-so-far, with the caveat that it is not
+            // proven best. This is the one stop that does not need a terminal — the
+            // decision was made at the keyboard, not in an answer to a prompt. With
+            // nothing found there is nothing to hand back: the query was cancelled, so
+            // it fails as DuckDB's own interrupt does, with one message.
             if (!solve_result.has_solution) {
-                ThrowDecideSolveError(solve_result);
+                throw Exception(ExceptionType::INTERRUPT, "DECIDE stopped at your request before finding a solution.");
             }
+            PrintDecideTimeoutReport(solve_result, cum_elapsed, cum_budget);
             fprintf(stderr,
                     "DECIDE is returning the best solution found so far — it is NOT proven the best possible.\n");
             context.interrupted = false;
