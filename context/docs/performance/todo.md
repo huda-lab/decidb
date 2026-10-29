@@ -9,7 +9,7 @@ Quantify measurement overhead: an instrumented run against an uninstrumented one
 
 Decide whether to add a lightweight correctness check: the profiler checks row counts only, and even a per-query objective sanity bound would catch a fast wrong answer, which the row-count-only check cannot.
 
-Repeat the sweep on a second host, since every number so far comes from one machine. The large-tier sweep exists on this machine: `benchmark/decide/results/pipeline_profile_large.csv` (written 2026-09-09; 90 rows: 65 `ok`, 10 `solver_limit`, 7 `process_timeout`, 6 `unsupported`, 2 `skipped_memory`), with raw spans in `pipeline_profile_raw_large/` and the console log in `sweep_large.log`. No finding cites it yet. Its 7 `process_timeout` rows are Q2, Q3 and Q10 on HiGHS running past the 420 s stop; Q2's and Q10's causes are fixed (`../pipeline/07_solver/done.md`), Q3's is BUG-23. Its 2 `skipped_memory` rows are Q10 on HiGHS, skipped by a list the profiler no longer has. Rerun the sweep before analysing it (owner, 2026-10-29): it predates the HiGHS limit fixes and most of October's formulation changes, and one fresh run serves PERF-1, PERF-6 and PERF-8.
+Repeat the sweep on a second host, since every number so far comes from one machine. The large-tier sweep on this machine: `benchmark/decide/results/pipeline_profile_large.csv` (written 2026-10-30 at d385eca667; 90 rows: 63 `ok`, 18 `solver_limit`, 3 `process_timeout`, 6 `unsupported`), with raw spans in `pipeline_profile_raw_large/` and the console log in `sweep_large.log`. No finding cites it yet. Its 3 `process_timeout` rows are Q1 on HiGHS (BUG-25). Q8's non-solver time and peak memory grew fivefold since the 2026-09-09 sweep (BUG-26). That sweep is kept in `pipeline_profile_large_20260909/` for comparison; its rows predate the HiGHS limit fixes and the MIP gap of 0, so its HiGHS `ok` rows on Q1 are near-optimal answers, not optima.
 
 ## PERF-2 — Planning
 
@@ -41,4 +41,4 @@ Quantify readback, temporary-result writing and destruction after fast solves. P
 
 ## PERF-8 — Memory and scaling
 
-Find the point where each workload and backend stops fitting comfortably, and which stage holds the memory when it does. Relate peak RSS to model size — variables, rows and nonzeros are recorded alongside it in the same CSV row. A large-database sweep exists, `benchmark/decide/results/pipeline_profile_large.csv` (written 2026-09-09, 90 rows with `peak_rss_mib`), and is not yet analysed here.
+Find the point where each workload and backend stops fitting comfortably, and which stage holds the memory when it does. Relate peak RSS to model size — variables, rows and nonzeros are recorded alongside it in the same CSV row. The large-tier sweep (`benchmark/decide/results/pipeline_profile_large.csv`, 2026-10-30, 90 rows with `peak_rss_mib`; PERF-1) is not yet analysed here.
