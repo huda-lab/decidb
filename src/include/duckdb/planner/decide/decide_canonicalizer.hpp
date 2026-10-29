@@ -237,6 +237,13 @@ public:
 		message_names = &names;
 	}
 
+	//! True when `expr` evaluates to a single value for the entire query, so it may
+	//! scale a reducer. Constants qualify by folding; a column ref qualifies only by
+	//! being listed in `query_wide_table_indexes`, because after flattening a
+	//! `(SELECT max(w) FROM p)` is shape-identical to `weight` -- and, importantly, to
+	//! a CORRELATED subquery, which is per-row and must not qualify.
+	bool IsQueryWideConstant(const Expression &expr) const;
+
 	//! Canonicalize a single comparison. Pure -- `comparison` is untouched.
 	unique_ptr<Expression> CanonicalizeComparison(const Expression &comparison) const;
 
@@ -390,13 +397,6 @@ private:
 	//! VALUE shape, where the reducer becomes a helper decision the row's factor multiplies.
 	const Expression &PeelScale(const Expression &expr, unique_ptr<Expression> &out_scale, bool &out_divides,
 	                            Clause clause = Clause::CONSTRAINT) const;
-
-	//! True when `expr` evaluates to a single value for the entire query, so it may
-	//! scale a reducer. Constants qualify by folding; a column ref qualifies only by
-	//! being listed in `query_wide_table_indexes`, because after flattening a
-	//! `(SELECT max(w) FROM p)` is shape-identical to `weight` -- and, importantly, to
-	//! a CORRELATED subquery, which is per-row and must not qualify.
-	bool IsQueryWideConstant(const Expression &expr) const;
 
 	//! True when `expr` is one decision declared BOOL, under the binder's casts, a sign, and factors known before the
 	//! query runs: `b`, `-b`, `2 * b`. A reducer under such a factor takes the VALUE shape.

@@ -218,6 +218,31 @@ DecideVarScopeInfo decide_rewrite::JoinScopes(const DecideVarScopeInfo &a, const
 	return joined == key_of(a) ? a : joined == key_of(b) ? b : DecideVarScopeInfo::Row();
 }
 
+DecideVarScopeInfo decide_rewrite::ScopeOf(const LogicalDecide &decide, const DecideCanonicalizer &canonicalizer,
+                                           const Expression &expr) {
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		auto &ref = expr.Cast<BoundColumnRefExpression>();
+		if (ref.binding.table_index == decide.decide_index) {
+			auto var_idx = ref.binding.column_index;
+			return var_idx < decide.variable_scopes.size() ? decide.variable_scopes[var_idx]
+			                                               : DecideVarScopeInfo::Row();
+		}
+	}
+	if (canonicalizer.IsQueryWideConstant(expr)) {
+		return DecideVarScopeInfo::Scalar();
+	}
+	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
+		return DecideVarScopeInfo::Row();
+	}
+	bool saw_child = false;
+	auto scope = DecideVarScopeInfo::Scalar();
+	ExpressionIterator::EnumerateChildren(expr, [&](const Expression &child) {
+		saw_child = true;
+		scope = JoinScopes(scope, ScopeOf(decide, canonicalizer, child));
+	});
+	return saw_child ? scope : DecideVarScopeInfo::Row();
+}
+
 unique_ptr<Expression> decide_rewrite::MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx) {
 	auto &ref = decide.decide_variables[var_idx]->Cast<BoundColumnRefExpression>();
 	return make_uniq<BoundColumnRefExpression>(ref.GetName(), ref.return_type, ref.binding);
@@ -455,6 +480,20 @@ unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row
 	wrapper->children.push_back(std::move(row));
 	wrapper->children.push_back(when->Copy());
 	wrapper->alias = WHEN_CONSTRAINT_TAG;
+	return std::move(wrapper);
+}
+
+unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &decide, unique_ptr<Expression> row,
+                                                           const DecideVarScopeInfo &scope) {
+	if (!scope.IsScalar() && !scope.IsEntity()) {
+		return row;
+	}
+	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
+	wrapper->children.push_back(std::move(row));
+	wrapper->alias = PER_CLASS_TAG;
+	if (scope.IsEntity()) {
+		AddDecideTag(wrapper->alias, MakePerKeyTag(decide.entity_scopes[scope.entity_scope_idx].key));
+	}
 	return std::move(wrapper);
 }
 

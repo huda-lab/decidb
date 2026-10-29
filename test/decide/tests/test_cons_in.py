@@ -12,7 +12,9 @@ import pytest
 
 from solver.types import VarType, ObjSense
 from comparison.compare import compare_solutions
+from ._brute_force import judge_rows
 from ._oracle_helpers import add_in_domain
+from ._scope_cases import answer, dump_counts
 
 
 def _common_lineitem(duckdb_conn, where_clause):
@@ -755,3 +757,95 @@ def test_in_negative_value_with_per_row_upper_bound(
         oracle_solver.solver_name(),
         comparison_status=cmp.status, decide_vector=cmp.oracle_vector,
     )
+
+
+
+# ---------------------------------------------------------------------------
+# One indicator set per instance of the decision and its domain
+# ---------------------------------------------------------------------------
+
+_IN_ROWS = "(VALUES (1, 'a', 2, 1, 2), (2, 'a', 3, 1, 2), (3, 'b', 4, 3, 5)) t(id, g, w, lo, hi)"
+_IN_W = (2, 3, 4)
+_KEYED_DOMAINS = {"x0": range(6), "x1": range(6), "x2": range(6)}
+
+
+def _keyed_objective(a):
+    return sum(w * a[f"x{i}"] for i, w in enumerate(_IN_W))
+
+
+@pytest.mark.cons_in
+@pytest.mark.correctness
+@pytest.mark.parametrize("cli_fixture", ["decidb_cli_gurobi", "decidb_cli_highs"])
+@pytest.mark.parametrize(
+    "declare, clause, domains, holds, objective, columns, rows",
+    [
+        pytest.param(
+            "per g: x(INT)",
+            "per g: x IN (1, 2)",
+            _KEYED_DOMAINS,
+            lambda a: a["x0"] == a["x1"] and all(a[f"x{i}"] in (1, 2) for i in range(3)),
+            _keyed_objective,
+            2 + 2 * 2,
+            2 * 2,
+            id="keyed-constant-domain",
+        ),
+        pytest.param(
+            "per g: x(INT)",
+            "x IN (1, 2)",
+            _KEYED_DOMAINS,
+            lambda a: a["x0"] == a["x1"] and all(a[f"x{i}"] in (1, 2) for i in range(3)),
+            _keyed_objective,
+            2 + 2 * 2,
+            2 * 2,
+            id="keyed-constant-domain-per-row",
+        ),
+        pytest.param(
+            "per g: x(INT)",
+            "per g: x IN (lo, hi)",
+            _KEYED_DOMAINS,
+            lambda a: a["x0"] == a["x1"] and a["x0"] in (1, 2) and a["x2"] in (3, 5),
+            _keyed_objective,
+            2 + 3 * 2,
+            3 * 2,
+            id="keyed-data-domain",
+        ),
+        pytest.param(
+            "per (): x(INT)",
+            "x IN (1, 2)",
+            {"x": range(6)},
+            lambda a: a["x"] in (1, 2),
+            lambda a: sum(_IN_W) * a["x"],
+            1 + 2,
+            2,
+            id="query-wide-constant-domain",
+        ),
+    ],
+)
+def test_in_emits_one_indicator_set_per_instance_of_the_decision_and_its_domain(
+    request, cli_fixture, tmp_path, declare, clause, domains, holds, objective, columns, rows
+):
+    """An indicator is a column defined by the decision and its domain, so there is one set
+    per instance of their scopes' join, and the pick-one and linking rows are one per
+    instance: a constant domain over a keyed or query-wide decision takes the decision's
+    scope, whatever the clause's `per`; a domain read from the data is per row."""
+    cli = request.getfixturevalue(cli_fixture).with_env({"DECIDB_TEST_DIRECT_SOLVE": "off"})
+    sql = f"""
+        SELECT id, x FROM {_IN_ROWS}
+        DECIDE {declare} SUCH THAT {clause} MAXIMIZE SUM(w * x) ORDER BY id"""
+    assert dump_counts(cli.dump_model(sql, tmp_path / "model.dump")) == {"num_vars": columns, "num_rows": rows}
+    judge_rows(answer(cli, sql), domains, holds, objective)
+
+
+@pytest.mark.cons_in
+@pytest.mark.correctness
+def test_in_per_class_keeps_the_diagnosis_of_the_clause_beside_it(decidb_cli):
+    """With the IN's rows one per class, DIAGNOSE still names the bound that conflicts with
+    the domain and the edit that restores it."""
+    rows = answer(
+        decidb_cli,
+        f"""DIAGNOSE SELECT id, x FROM {_IN_ROWS}
+        DECIDE per g: x(INT) SUCH THAT per g: x IN (1, 2) AND per g: x >= 3 MAXIMIZE SUM(w * x) ORDER BY id""",
+    )
+    assert [(row["clause"], row["suggested_change"]) for row in rows if row["clause"]] == [
+        ("per g: x >= 3", "per g: x >= 2")
+    ]

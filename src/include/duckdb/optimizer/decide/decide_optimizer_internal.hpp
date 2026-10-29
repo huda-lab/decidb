@@ -24,6 +24,7 @@
 namespace duckdb {
 
 class ClientContext;
+class DecideCanonicalizer;
 class LogicalDecide;
 
 namespace decide_rewrite {
@@ -51,6 +52,11 @@ unique_ptr<Expression> MakeTrueExpression(const string &source_alias = string())
 //! `row`, which a rewrite adds for a clause, wrapped in a copy of the clause's `when` condition when it has one, so
 //! it reads only the rows the clause keeps.
 unique_ptr<Expression> ScopeHelperRow(unique_ptr<Expression> row, const Expression *when);
+
+//! `row` once per instance of `scope`: under `per K:` for a scope keyed by K, under `per ():` for a query-wide one,
+//! and as it is for one per row. A row that reads only columns of `scope` is the same on every row of an instance.
+unique_ptr<Expression> ScopeRowPerInstance(const LogicalDecide &decide, unique_ptr<Expression> row,
+                                           const DecideVarScopeInfo &scope);
 
 //! Polarity analysis: the sign each subterm carries once a clause is read as one expression `E` under `E <op> 0`
 //! (`LHS - RHS`), or the objective as `E` under its sense. Walking `expr` with `sign`, a node keeps its parent's sign
@@ -84,6 +90,12 @@ idx_t AddAuxiliaryDecision(LogicalDecide &decide, const string &name, const Logi
 //! the type of a binary operator. Two query-wide scopes join to a query-wide one, a query-wide scope and a keyed one
 //! to the keyed one, two of the same keyed scope to it, and anything else to a column per row.
 DecideVarScopeInfo JoinScopes(const DecideVarScopeInfo &a, const DecideVarScopeInfo &b);
+
+//! The scope of a value computed from the leaves `expr` reads: JoinScopes folded over them. A decision brings its
+//! declared scope, a value `canonicalizer` finds query-wide (IsQueryWideConstant) is query-wide, and any other column
+//! is row data.
+DecideVarScopeInfo ScopeOf(const LogicalDecide &decide, const DecideCanonicalizer &canonicalizer,
+                           const Expression &expr);
 
 //! A reference to decision column `var_idx`, as an expression of the DECIDE clause.
 unique_ptr<Expression> MakeDecisionRef(const LogicalDecide &decide, idx_t var_idx);

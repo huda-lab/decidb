@@ -151,10 +151,14 @@ void DecideOptimizer::RewriteNorm(LogicalDecide &decide) {
 void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> generated;
 	idx_t in_counter = 0;
-	// Every row an IN generates keeps its clause's `when`.
+	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
+	                                  decide.entity_scopes, decide.is_boolean_var);
+	// Every row an IN generates keeps its clause's `when`, and is one row per instance of the indicators' scope: an
+	// indicator is a column defined by the decision and its domain, so it is one per instance of their join.
+	DecideVarScopeInfo scope_of_in;
 	auto emit = [&](unique_ptr<Expression> constraint, const Expression *when, const string &source_alias) {
 		MarkFormulationConstraint(*constraint, source_alias);
-		generated.push_back(ScopeHelperRow(std::move(constraint), when));
+		generated.push_back(ScopeRowPerInstance(decide, ScopeHelperRow(std::move(constraint), when), scope_of_in));
 	};
 	std::function<void(unique_ptr<Expression> &, DecideEnclosingScope, const string &)> rewrite =
 	    [&](unique_ptr<Expression> &expr, DecideEnclosingScope scope, const string &source_alias) {
@@ -180,6 +184,9 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 		auto *target = GetBareDecideColumnRef(*in.children[0], decide.decide_index);
 		if (!target) throw InternalException("DECIDE IN marker target is not a decision variable");
 		idx_t k = in.children.size() - 1;
+		scope_of_in = ScopeOf(decide, canonicalizer, *in.children[0]);
+		for (idx_t i = 1; i < in.children.size(); i++)
+			scope_of_in = JoinScopes(scope_of_in, ScopeOf(decide, canonicalizer, *in.children[i]));
 		if (target->binding.column_index < decide.is_boolean_var.size() && decide.is_boolean_var[target->binding.column_index] && k == 2) {
 			double a, b;
 			if (TryEvaluateFoldableDouble(optimizer.context, *in.children[1], a, FOLD_CATCH_ALL) &&
@@ -204,8 +211,10 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			// A plan names an indicator by the value it stands for.
 			string label =
 			    "(" + RenderForPlan(*in.children[0], decide) + " = " + RenderForPlan(*in.children[1 + i], decide) + ")";
-			indicators.push_back(MakeDecisionRef(decide, AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true,
-			                                                                  DecideVarScopeInfo::Row(), label)));
+			auto indicator = AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true, scope_of_in, label);
+			if (scope_of_in.IsEntity())
+				decide.entity_scopes[scope_of_in.entity_scope_idx].scoped_variable_indices.push_back(indicator);
+			indicators.push_back(MakeDecisionRef(decide, indicator));
 		}
 		in_counter++;
 		auto cardinality = indicators[0]->Copy();
