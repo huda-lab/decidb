@@ -163,7 +163,7 @@ and `BOUND_REDUCER_TAG`, so a message quotes `max(cap) by (g)` and never calls i
 varies with the thread schedule. The DECIDE operator reads them in that order, so the model's
 row and column order and the group a scope check names first can differ between runs of
 one query. Neither changes the answer's optimum. Tests that compare models run on one thread
-(`DecidBCli.dump_model`, `golden/capture.sh`). Then the direct-solve rules may replace the node with
+(`DeciDBCli.dump_model`, `golden/capture.sh`). Then the direct-solve rules may replace the node with
 ordinary operators (`../../direct_solve/README.md`); a node they leave takes the passes
 below.
 

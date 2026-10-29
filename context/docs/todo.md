@@ -7,16 +7,12 @@ Read first: `language/guide.md`, `direct_solve/README.md`, `issues/bugs.md`.
 Checks: `direct_solve/framework/todo.md` § How to work any task in these todo files.
 
 Each batch finishes completely. One working tree: agents may edit disjoint batches side by side; one builds and tests
-at a time. Lanes: F8. F9 runs alone.
+at a time. Lanes: F8.
 
 ## 9. F8 Solver runtime
 
 - [ ] BUG-3 Q10 on HiGHS at large is killed for memory (owner runs) — issues/bugs.md § BUG-3
 - [ ] BUG-16 A huge coefficient times a bound overflows a helper's box — issues/bugs.md § BUG-16
-
-## 10. F9 Housekeeping (runs alone)
-
-- [ ] OPS-2 Normalize the DecidB spelling — operations/todo.md § OPS-2
 
 ## 11. Measurement (last; the owner runs them)
 

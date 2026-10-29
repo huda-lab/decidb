@@ -1135,7 +1135,7 @@ the determination error, "per grp does not determine cap", instead
 Error messages are matched exactly (`(?i)unbounded` here, `(?i)infeasible`
 for the infeasible class). Gurobi's ambiguous `INF_OR_UNBD` status is
 disambiguated in the backend via a `DualReductions=0` re-solve (Gurobi's
-documented recipe), so DecidB always reports the definitive status; the
+documented recipe), so DeciDB always reports the definitive status; the
 gurobipy oracle applies the same recipe.
 
 ### Solver-specific error paths

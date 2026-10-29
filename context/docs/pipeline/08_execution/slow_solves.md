@@ -241,7 +241,7 @@ output — while a MIP-timeout regression case asserts the real bound + closenes
 appear.
 
 Continuation (`TestSlowContinuation`): the interactive prompt is driven through a
-pseudo-terminal (`DecidBCli.execute_interactive`, so `isatty` is true) — `s` stops and
+pseudo-terminal (`DeciDBCli.execute_interactive`, so `isatty` is true) — `s` stops and
 returns incumbent rows + caveat, `\n\ns\n` shows the report repeating with rising
 cumulative elapsed, EOF stops. Piped stdin is asserted to never prompt and to
 report-then-error even with an incumbent in hand. A SIGINT over piped stdin is asserted

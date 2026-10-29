@@ -175,7 +175,7 @@ gurobipy check (see §3.6) to cross-verify on the oracle side.
 |---------|-------|---------|
 | `decidb_db_path` | session | Path to `decidb.db` (TPC-H SF-0.01); skip if missing |
 | `decidb_exe_path` | session | Path to `build/release/decidb`; skip if missing |
-| `decidb_cli` | session | `DecidBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)`. DeciDB picks its own backend (Gurobi when available). Every run fails its test on an internal error or an internal name in the output, and on an error that carries "is removed" (a removed DECIDE spelling) unless the call passes `removed_spelling=True`, as only `test_scope_removed_syntax.py` does |
+| `decidb_cli` | session | `DeciDBCli` subprocess wrapper — `execute(sql) -> (rows, cols)`, `assert_error(sql, match=...)`. DeciDB picks its own backend (Gurobi when available). Every run fails its test on an internal error or an internal name in the output, and on an error that carries "is removed" (a removed DECIDE spelling) unless the call passes `removed_spelling=True`, as only `test_scope_removed_syntax.py` does |
 | `decidb_cli_gurobi` | session | Same wrapper with `DECIDB_FORCE_SOLVER=gurobi`; skips up front if Gurobi is unavailable on the host |
 | `decidb_cli_highs` | session | Same wrapper with `DECIDB_FORCE_SOLVER=highs`, for verifying HiGHS-specific error paths on a host where Gurobi is also linked |
 | `_oracle_db_path` | session | Path to `_tpch_oracle.duckdb`; auto-generated on first run via `CALL dbgen(sf=0.01)` against a vanilla duckdb connection |

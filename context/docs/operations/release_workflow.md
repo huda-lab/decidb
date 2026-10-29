@@ -1,12 +1,12 @@
 # GitHub Actions Release Workflow
 
-`DecidBRelease.yml` builds release CLI binaries for Linux, macOS, and Windows and creates a draft GitHub release. It is **manually triggered** (`workflow_dispatch`).
+`DeciDBRelease.yml` builds release CLI binaries for Linux, macOS, and Windows and creates a draft GitHub release. It is **manually triggered** (`workflow_dispatch`).
 
 A separate workflow, `python-wheels.yml`, builds the Python wheels: it runs on `workflow_dispatch` (with a TestPyPI dry-run target) and auto-publishes to PyPI + attaches wheels to the release when the GitHub release is **published**. See `pip.md` for the package itself.
 
 ## Triggering
 
-Actions tab → **DecidB Release Build** → Run workflow:
+Actions tab → **DeciDB Release Build** → Run workflow:
 
 | Input | Description | Default |
 |-------|-------------|---------|
@@ -48,7 +48,7 @@ Runs `if: always() && inputs.create_release`, downloads all artifacts, generates
 ```bash
 gh release create ${version} \
   --repo ... --target ${github.sha} \
-  --title "DecidB ${version}" --notes-file release_notes.md \
+  --title "DeciDB ${version}" --notes-file release_notes.md \
   --draft artifacts/**/*.zip
 ```
 
