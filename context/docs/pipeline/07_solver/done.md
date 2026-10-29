@@ -223,9 +223,16 @@ clock and calls the interrupt callback with local data instead of calling `check
 status. Each node also checks the task's cancellation, so a MIP solved during the search no longer waits for it.
 Tests: `test_decidb_highs_symmetry.cpp` (each stop, with a stop already due) and `test_error_time_limit.py`
 (`test_highs_limit_bounds_symmetry_detection`, `test_highs_interrupt_reaches_symmetry_detection`,
-`test_highs_solved_mip_does_not_wait_for_symmetry_search`). Phases the checks still do not reach, none seen to stall:
-the root analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task group) and presolve between its checks
-every 1,024 reductions.
+`test_highs_solved_mip_does_not_wait_for_symmetry_search`).
+
+HiGHS's presolve checks the clock once per 1,024 reductions, and its dominated-columns pass
+(`HPresolve::dominatedColumns`) scans each column's rows in full while it may make none: Q3 at `large`, with rows over
+all 120,000 adjustments, stayed in it 339 s past a 300 s limit. The vendored pass (`DeciDB patch (BUG-23)`) checks the
+clock once per 1,024 columns, before a column's work starts, and stops through presolve's own `kStopped`. Test:
+`test_error_time_limit.py` (`test_highs_limit_bounds_dominated_columns`). Presolve calls no interrupt callback, so a
+Ctrl-C waits for presolve to end. Phases the time checks still do not reach, none seen to stall: the root
+analytic-centre IPM (`HighsMipSolverData.cpp`, awaited by its task group) and the other presolve passes between their
+checks every 1,024 reductions. The upstream report is drafted in `../../issues/highs_upstream.md`.
 
 Diagnostic follow-up solves are budgeted separately
 (`ResolveDecideDiagnosticTimeLimit`), capped at the smaller of the primary budget

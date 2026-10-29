@@ -8,3 +8,4 @@ each exists: `context/docs/pipeline/07_solver/done.md`.
   limit. SOL-2 changed the same hunk to call `checkLimits`, so Ctrl-C stops it too (marked SOL-1).
 - BUG-3 (`presolve/HighsSymmetry.*`, `mip/HighsMipSolverData.cpp`): symmetry detection stops at the time limit, a
   Ctrl-C, or the MIP finishing without it.
+- BUG-23 (`presolve/HPresolve.cpp`): the dominated-columns pass stops at the time limit.

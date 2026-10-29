@@ -208,8 +208,8 @@ class TestTimeLimit:
     def test_highs_limit_bounds_dominated_columns(self, decidb_cli_highs):
         """HiGHS stops its dominated-columns presolve at DECIDB_TIME_LIMIT.
 
-        Presolve checks the clock once per 1,024 reductions, and this pass makes none for about 25 s. Third_party
-        patch BUG-23 checks it once per 1,024 columns, so the solve ends with the time-limit error about 1 s in;
+        Presolve checks the clock once per 1,024 reductions, and this pass makes none for about 25 s. The vendored
+        patch (BUG-23) checks it once per 1,024 columns, so the solve ends with the time-limit error about 1 s in;
         without it the subprocess timeout kills the solve.
         """
         result = _run_decidb(decidb_cli_highs, _DOMINATED_COLUMNS_SQL, time_limit=1, subprocess_timeout=5)
