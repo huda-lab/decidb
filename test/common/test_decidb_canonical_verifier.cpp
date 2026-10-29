@@ -114,12 +114,12 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 		auto per = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 		per->SetAlias(PER_CLASS_TAG);
 		per->children.push_back(std::move(both));
-		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*per));
+		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*per), InternalException);
 	}
 
 	SECTION("a WHEN inside a WHEN violates C0") {
 		auto nested = when_wrapper(when_wrapper(bound_on_x()));
-		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*nested));
+		REQUIRE_THROWS_AS(canonicalizer.VerifyCanonical(*nested), InternalException);
 	}
 
 	SECTION("a WHEN inside a per wrapper is one scope") {

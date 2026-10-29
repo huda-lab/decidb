@@ -1458,7 +1458,6 @@ static void VerifyOneScopePerClause(const Expression &expression, bool under_wra
 }
 
 void DecideCanonicalizer::VerifyCanonicalTree(const Expression &constraints) const {
-	VerifyOneScopePerClause(constraints, false, false);
 	auto verify = [&](const Expression &expression) {
 		if (expression.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 			VerifyCanonicalComparison(expression.Cast<BoundComparisonExpression>());
@@ -1546,6 +1545,8 @@ void DecideCanonicalizer::VerifyCanonicalObjective(const Expression &objective) 
 }
 
 void DecideCanonicalizer::VerifyCanonical(const Expression &constraints) const {
+	// One test per clause, so it runs in every build: each walk that carries a clause's scope relies on it.
+	VerifyOneScopePerClause(constraints, false, false);
 #ifdef DEBUG
 	try {
 		if (ContainsDesugarableNorm(constraints, decide_index)) {

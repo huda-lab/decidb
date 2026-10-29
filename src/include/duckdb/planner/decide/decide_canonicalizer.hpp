@@ -279,8 +279,9 @@ public:
 	//!
 	//! DEBUG-ONLY, like LogicalOperator::Verify: the body re-canonicalizes the whole
 	//! tree to check idempotency, which is too expensive to pay on every DECIDE query
-	//! in release. Call sites call it unconditionally; in a release build it compiles
-	//! to an empty function. Build `debug` or `relassert` to exercise it.
+	//! in release. Call sites call it unconditionally; in a release build only C0's scope
+	//! rule (one scope per clause, one test per clause) runs. Build `debug` or `relassert`
+	//! to exercise the rest.
 	void VerifyCanonical(const Expression &constraints) const;
 
 	//! The objective counterpart of VerifyCanonical. Step 6 shipped the constraint

@@ -82,7 +82,7 @@ inline bool IsConstraintChild(const BoundConjunctionExpression &conjunction, idx
 
 //! The scope a clause is written under, borrowed from the tree: the `when c:` wrapper and the `per K:` wrapper
 //! (PER_CLASS_TAG) that enclose it, null for none. The canonical tree holds at most one of each above a clause and no
-//! plain AND below either (C0, DecideCanonicalizer::VerifyCanonicalTree), so a walk carries its scope through a plain
+//! plain AND below either (C0, DecideCanonicalizer::VerifyCanonical), so a walk carries its scope through a plain
 //! AND: above every wrapper it is the empty scope, and below one there is none. A rewrite that replaces nodes keeps
 //! its own recursion and takes each step with EnterDecideScope; a pass that only reads the clauses takes
 //! ForEachScopedConstraintLeaf. A clause that leaves the tree owns its scope as a DecideClauseScope
