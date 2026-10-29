@@ -1218,11 +1218,16 @@ public:
 		}
 	}
 
+	//! How many times the plan reads the source: stages 2 to 4 and the answer of stage 5 each read it once.
+	static constexpr idx_t SOURCE_READS = 4;
+
 	DirectSubstitute Build() {
 		auto totals = GroupTotals();
 		auto price = Price(std::move(totals));
 		auto shares = Shares(std::move(price));
-		return Answer(std::move(shares));
+		auto answer = Answer(std::move(shares));
+		D_ASSERT(reads_made == SOURCE_READS);
+		return answer;
 	}
 
 private:
@@ -1267,6 +1272,7 @@ private:
 	const Condition &condition;
 	Binder &binder;
 	DirectSourceReader &reader;
+	idx_t reads_made = 0;
 	//! The types of the group key: BOOLEAN, then the group keys. Empty without a scope.
 	vector<LogicalType> key_types;
 
@@ -1297,6 +1303,7 @@ private:
 
 	//! A new read of the source, as stage 1 computes it.
 	Items ReadItems() {
+		reads_made++;
 		auto read = reader.ReadSource();
 		ItemStages stages(condition, optimizer, reader.SourceBindings(), reader.SourceTypes());
 		Items items;
@@ -1752,7 +1759,7 @@ private:
 DirectSubstitute Rule::Apply(unique_ptr<LogicalOperator> source, Optimizer &optimizer,
                              const DirectApplicabilityCondition &candidate) const {
 	auto &condition = static_cast<const Condition &>(candidate);
-	DirectSourceReader reader(optimizer, std::move(source));
+	DirectSourceReader reader(optimizer, std::move(source), AggregatePlanBuilder::SOURCE_READS);
 	AggregatePlanBuilder builder(condition, optimizer, reader);
 	return builder.Build();
 }

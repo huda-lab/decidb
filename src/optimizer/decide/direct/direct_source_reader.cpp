@@ -5,6 +5,7 @@
 #include "duckdb/optimizer/decide/direct/direct_late_materialization.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/binder.hpp"
+#include "duckdb/storage/buffer_manager.hpp"
 #include "duckdb/planner/operator/logical_cteref.hpp"
 #include "duckdb/planner/operator/logical_filter.hpp"
 #include "duckdb/planner/operator/logical_get.hpp"
@@ -13,13 +14,50 @@
 
 namespace duckdb {
 
-DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<LogicalOperator> source_p)
-    : optimizer(optimizer_p), source(std::move(source_p)) {
+//! The one constant of the choice: what a read of the materialized copy costs, as a share of re-scanning the chain once
+//! (no decompression, filters or projections to redo). Re-scanning costs `reads` units; materializing costs one scan of
+//! the chain, writing the copy (one copy-read) and `reads` copy-reads. At 0.4, R1's four reads cost 4 against 3, and
+//! two reads cost 2 against 2.2, so a source is copied only when it is read three times or more. Set from R1 on
+//! partsupp and on a 20-column table at 100K and 1M rows, where one copy ran at 0.70 to 0.96 of four re-scans.
+static constexpr double COPY_READ_COST = 0.4;
+//! The copy may take at most 1/8 of the memory the buffer manager has. A bigger one spills along with the sort and the
+//! joins above it, and then the re-scans win. Measured at 800K rows: partsupp's copy (the width of its source, which
+//! counts a column the query never reads) tied the re-scans at 1/11 of the memory, lost 5% at 1/7 and 14% at 1/4; the
+//! 20-column table whose parent reads every column tied at 1/1.5, lost 8% at 1/1.2 and 44% at 1/0.7. 1/8 re-scans
+//! wherever the copy could lose, and gives up the copy's win on a big table under a small memory limit.
+static constexpr idx_t COPY_MEMORY_SHARE = 8;
+
+bool DirectSourceCopyIsCheaper(idx_t reads, idx_t rows, idx_t row_width, idx_t memory) {
+	if (!(1.0 + COPY_READ_COST * static_cast<double>(reads + 1) < static_cast<double>(reads))) {
+		return false;
+	}
+	// Nothing is known of an empty or unestimated source: it is re-scanned.
+	return rows > 0 && rows <= memory / COPY_MEMORY_SHARE / MaxValue<idx_t>(row_width, 1);
+}
+
+//! The width of one row of the source, from the physical size of its columns; a variable-width column counts its 16
+//! inline bytes.
+static idx_t RowWidth(const vector<LogicalType> &types) {
+	idx_t width = 0;
+	for (auto &type : types) {
+		auto physical = type.InternalType();
+		width += TypeIsConstantSize(physical) ? GetTypeIdSize(physical) : sizeof(string_t);
+	}
+	return width;
+}
+
+DirectSourceReader::DirectSourceReader(Optimizer &optimizer_p, unique_ptr<LogicalOperator> source_p, idx_t reads_p)
+    : optimizer(optimizer_p), source(std::move(source_p)), reads(reads_p) {
 	source->ResolveOperatorTypes();
 	bindings = source->GetColumnBindings();
 	types = source->types;
 	D_ASSERT(bindings.size() == types.size());
 	chain_scan = DirectRepeatableSourceChain(*source, chain);
+	if (chain_scan && DirectSourceCopyIsCheaper(reads, source->EstimateCardinality(optimizer.context), RowWidth(types),
+	                                            BufferManager::GetBufferManager(optimizer.context).GetMaxMemory())) {
+		chain_scan = nullptr;
+		chain.clear();
+	}
 	if (!chain_scan) {
 		cte_index = optimizer.binder.GenerateTableIndex();
 	}

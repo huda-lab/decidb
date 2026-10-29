@@ -9,6 +9,7 @@
 #include "duckdb/optimizer/decide/direct/direct_runtime_checks.hpp"
 #include "duckdb/optimizer/decide/direct/direct_rule.hpp"
 #include "duckdb/optimizer/decide/direct/direct_solve.hpp"
+#include "duckdb/optimizer/decide/direct/direct_source_reader.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
@@ -708,4 +709,20 @@ TEST_CASE("Direct rule driver raises a determination check as the solver does", 
 		REQUIRE(solver->GetError().find(test.expected) != string::npos);
 		REQUIRE(direct->GetError() == solver->GetError());
 	}
+}
+
+// A source that could be re-scanned is copied once only when the plan reads it often enough for the copy to pay (R1's
+// four reads do, two do not) and the copy fits in a share of the memory; with no rows, or no estimate of them, it is
+// re-scanned.
+TEST_CASE("The source reader copies a source only when reads and memory favor the copy", "[decidb]") {
+	const idx_t memory = 8000;
+	// Four reads, 100 rows of 10 bytes (1000 bytes, one eighth of the memory): the copy.
+	REQUIRE(DirectSourceCopyIsCheaper(4, 100, 10, memory));
+	// Two reads pay less than a copy costs.
+	REQUIRE(!DirectSourceCopyIsCheaper(2, 100, 10, memory));
+	REQUIRE(!DirectSourceCopyIsCheaper(1, 100, 10, memory));
+	// A copy past a share of the memory.
+	REQUIRE(!DirectSourceCopyIsCheaper(4, 101, 10, memory));
+	// No rows, or no estimate.
+	REQUIRE(!DirectSourceCopyIsCheaper(4, 0, 10, memory));
 }

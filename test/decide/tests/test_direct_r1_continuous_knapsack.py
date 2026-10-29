@@ -1918,13 +1918,17 @@ def _ordered_windows(plan):
 
 
 # A stored table whose parent reads 20 columns the plan never uses (`pad_0` ... `pad_19`), so a window over source
-# columns would be 20 DOUBLEs wider than one over the plan's own.
+# columns would be 20 DOUBLEs wider than one over the plan's own. It has 580 more that no query reads, which make the
+# source 4.8 KB wide: a copy of its 2000 rows (9.7 MB) is more than an eighth of 32 MB, a limit well above what the
+# plan needs to run. A smaller limit makes the window spill, and a spilling window reports only part of its rows.
 WIDE_SETUP = (
     "CREATE OR REPLACE TEMP TABLE r1_wide AS SELECT i AS id, 1.0 + (i % 3) AS w, 2.0 + (i % 5) AS v, 3.0 AS cap, "
     "i % 4 AS g, i % 7 > 0 AS f, "
-    + ", ".join(f"((i * {k + 1}) % 101)::DOUBLE AS pad_{k}" for k in range(20))
+    + ", ".join(f"((i * {k + 1}) % 101)::DOUBLE AS pad_{k}" for k in range(600))
     + " FROM range(2000) t(i);"
 )
+# A memory limit that a copy of the source (WIDE_SETUP) does not fit in, so the plan re-scans the table once per stage.
+REQUIRE_RESCAN = "SET decide_direct_solve='require'; SET memory_limit='32MB'; "
 WIDE_READ = "id, x, " + ", ".join(f"pad_{k}" for k in range(20))
 
 
@@ -1936,8 +1940,7 @@ def _profiled_windows(decidb_cli, tmp_path, query):
     """Runs the query under the JSON profiler; returns (sorts, rows, bytes per row) for each WINDOW operator."""
     path = tmp_path / "profile.json"
     decidb_cli.execute_raw(
-        f"SET decide_direct_solve='require'; {WIDE_SETUP} "
-        f"PRAGMA enable_profiling='json'; PRAGMA profiling_output='{path}'; {query}"
+        f"{REQUIRE_RESCAN}{WIDE_SETUP} PRAGMA enable_profiling='json'; PRAGMA profiling_output='{path}'; {query}"
     )
     widths = []
 
@@ -1994,7 +1997,7 @@ def test_r1_plan_has_one_sort_and_no_solver_operator(decidb_cli):
 def test_r1_plan_reads_a_stored_table_four_times_and_sorts_narrow_columns(decidb_cli, tmp_path):
     # One budget: the aggregates have no GROUP BY and each stage meets the group's one row in a cross product.
     query = _wide_query("SUM(w*x) <= 2000")
-    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {query}").stdout
+    plan = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {query}").stdout
     assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
     assert _count(plan, "SEQ_SCAN") == 4 and "CTE" not in plan, plan
     assert "ORDER_BY" not in plan and _count(plan, "WINDOW") == 1 and len(_ordered_windows(plan)) == 1, plan
@@ -2005,13 +2008,52 @@ def test_r1_plan_reads_a_stored_table_four_times_and_sorts_narrow_columns(decidb
     assert ordered and rows == 2000 and width <= 5 * 8, (rows, width)
 
 
+# The source is a chain over one table scan, which the plan can re-scan once per stage or read from one copy. It takes the
+# copy when it fits in a share of the memory limit and re-scans otherwise (DirectSourceCopyIsCheaper); the answer is the same.
+SOURCE_ANSWER = (
+    "SELECT COUNT(*), ROUND(SUM(x), 6), ROUND(SUM(v * x), 6) FROM (FROM r1_wide DECIDE x(REAL) SUCH THAT "
+    "x BETWEEN 0 AND cap AND SUM(w*x) by (g) <= 500 MAXIMIZE SUM(v*x)) q"
+)
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_source_is_one_copy_read_four_times_when_the_copy_fits(decidb_cli):
+    query = _wide_query("SUM(w*x) by (g) <= 500")
+    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {query}").stdout
+    assert "R1_CONTINUOUS_KNAPSACK" in plan, plan
+    assert _count(plan, "CTE_SCAN") == 4 and _count(plan, "SEQ_SCAN") == 1, plan
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_source_is_rescanned_when_the_copy_does_not_fit(decidb_cli):
+    query = _wide_query("SUM(w*x) by (g) <= 500")
+    plan = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {query}").stdout
+    assert "R1_CONTINUOUS_KNAPSACK" in plan, plan
+    assert _count(plan, "SEQ_SCAN") == 4 and _count(plan, "CTE_SCAN") == 0, plan
+    copy = decidb_cli.execute(f"SET decide_direct_solve='require'; {WIDE_SETUP} {SOURCE_ANSWER}")
+    rescan = decidb_cli.execute(f"{REQUIRE_RESCAN}{WIDE_SETUP} {SOURCE_ANSWER}")
+    assert copy == rescan, (copy, rescan)
+
+
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_source_with_no_rows_is_rescanned(decidb_cli):
+    empty = WIDE_SETUP.replace("FROM range(2000) t(i);", "FROM range(2000) t(i) WHERE false;")
+    plan = decidb_cli.execute_raw(
+        f"SET decide_direct_solve='require'; {empty} EXPLAIN {_wide_query('SUM(w*x) by (g) <= 500')}"
+    ).stdout
+    assert _count(plan, "SEQ_SCAN") == 4 and _count(plan, "CTE_SCAN") == 0, plan
+
+
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
 def test_r1_scoped_plan_groups_with_hash_aggregates_and_joins_on_the_key(decidb_cli, tmp_path):
     # A by key and a when: the group key is (in the budget, g). Each group-level stage is a hash aggregate, and the stages meet
     # the items in hash joins on that key. The one window is the sort of the items.
     query = _wide_query("when f: SUM(w*x) by (g) <= 500")
-    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {query}").stdout
+    plan = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {query}").stdout
     assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan, plan
     assert _count(plan, "HASH_GROUP_BY") == 3 and _count(plan, "HASH_JOIN") == 3, plan
     assert _count(plan, "CROSS_PRODUCT") == 0 and len(_ordered_windows(plan)) == 1, plan
@@ -2702,14 +2744,14 @@ def test_r1_several_decisions_plan_has_one_sort_one_unpivot_and_one_aggregate(de
     # numbers, not an UNNEST) of the narrow prices and rooms only, and no row number and no hash aggregate that groups the items back into rows.
     scope, by = ("when f: ", " by (g)") if scoped else ("", "")
     pair = _wide_pair_query(f"{scope}SUM(w*x + w*y){by} {limit}")
-    plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {pair}").stdout
+    plan = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {pair}").stdout
     assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
     assert _count(plan, "SEQ_SCAN") == 4 and "ORDER_BY" not in plan, plan
     assert len(_ordered_windows(plan)) == 1 and _count(plan, "UNNEST") == 0, plan
     assert "ROW_NUMBER" not in plan, plan
     # The operators that group and join are those of one decision: nothing groups items back.
     single = _wide_query(f"{scope}SUM(w*x){by} {limit}")
-    single_plan = decidb_cli.execute_raw(f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {single}").stdout
+    single_plan = decidb_cli.execute_raw(f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {single}").stdout
     assert _count(single_plan, "UNNEST") == 0 and _count(single_plan, "COLUMN_DATA_SCAN") == 0, single_plan
     for operator in ("HASH_GROUP_BY", "UNGROUPED_AGGREGATE", "HASH_JOIN", "WINDOW"):
         assert _count(plan, operator) == _count(single_plan, operator), (operator, plan)
@@ -2746,7 +2788,7 @@ def test_r1_a_limit_from_the_data_runs_the_plan_of_a_constant_limit(decidb_cli, 
     plans = {}
     for name, limit in (("data", "cap * 500"), ("constant", "1500")):
         plans[name] = decidb_cli.execute_raw(
-            f"SET decide_direct_solve='require'; {WIDE_SETUP} EXPLAIN {query(limit)}"
+            f"{REQUIRE_RESCAN}{WIDE_SETUP} EXPLAIN {query(limit)}"
         ).stdout
     plan = plans["data"]
     assert "R1_CONTINUOUS_KNAPSACK" in plan and not re.search(r"│\s+DECIDE(_DIAGNOSE)?\s+│", plan), plan
