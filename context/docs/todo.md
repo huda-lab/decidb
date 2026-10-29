@@ -56,7 +56,7 @@ at a time. Lanes: F1 then F5; F2 then F3; F6; F7 then F8. F4 never beside F2 or 
 
 ## 8. F7 SQL semantics (needs: 1)
 
-- [ ] BIN-1 The NaN and infinity message, one text on both paths — pipeline/02_binder/todo.md § BIN-1
+- [ ] BIN-1 The NaN and infinity message, one text on both paths — pipeline/02_binder/todo.md § BIN-1 (needs: F2)
 
 ## 9. F8 Solver runtime (needs: F7)
 
