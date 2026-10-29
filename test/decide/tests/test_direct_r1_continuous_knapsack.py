@@ -2819,7 +2819,7 @@ _PER_CLASS_ROWS = "(1, 'a', 2.0, 3.0, 4), (2, 'a', 1.0, 2.0, 4), (3, 'b', 3.0, 1
         pytest.param("per g: SUM(w*amount) <= cap", id="column-limit"),
         pytest.param("per g: SUM(w*amount) <= 5", id="constant-limit"),
         pytest.param("per g: SUM(w*amount) by (g) <= cap", id="limit-per-class-group"),
-        pytest.param("per g: SUM(w*amount) <= cap AND SUM(w*amount) >= 1", id="range-in-one-class-clause"),
+        pytest.param("per g: SUM(w*amount) <= cap AND per g: SUM(w*amount) >= 1", id="range-of-two-class-clauses"),
         pytest.param("when v > 1: per g: SUM(w*amount) <= cap", id="under-a-when"),
     ],
 )
@@ -2831,6 +2831,45 @@ def test_r1_a_budget_per_class_answers_as_the_solver_does(decidb_cli, budget):
     direct = _run_all(decidb_cli, sql, "require")
     assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
     assert direct == _run_all(decidb_cli, sql, "off")
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "rows",
+    [
+        # Every kept row has a NULL g, so there is no class and no instance: the budget does not bind (D5).
+        pytest.param("(1, NULL::VARCHAR, 2.0, 3.0, 1), (2, NULL::VARCHAR, 1.0, 2.0, 1)", id="every-g-null"),
+        # One class is enough for the instance, and a row in no class still counts in the total.
+        pytest.param("(1, NULL::VARCHAR, 2.0, 3.0, 2), (2, 'a', 1.0, 2.0, 2), (3, NULL::VARCHAR, 2.0, 1.0, 5)", id="one-class"),
+        # The `when` leaves only NULL-g rows with a high value: no kept row has a class.
+        pytest.param("(1, NULL::VARCHAR, 2.0, 3.0, 1), (2, 'a', 1.0, 0.5, 1)", id="the-class-row-is-not-kept"),
+    ],
+)
+def test_r1_a_budget_per_class_has_no_instance_without_a_class(decidb_cli, rows):
+    sql = (
+        f"SELECT id, amount FROM (FROM (VALUES {rows}) t(id, g, w, v, cap) "
+        "DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND 2 AND when v > 1: per g: SUM(w*amount) <= cap "
+        "MAXIMIZE SUM(v*amount)) q ORDER BY id"
+    )
+    direct = _run_all(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
+    assert direct == _run_all(decidb_cli, sql, "off")
+
+
+@pytest.mark.var_real
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_r1_leaves_clauses_of_different_scope_to_the_solver(decidb_cli):
+    # `per g: A AND B` scopes A alone: the two limits do not cover the same instances.
+    sql = (
+        f"SELECT id, amount FROM (FROM (VALUES {_PER_CLASS_ROWS}) t(id, g, w, v, cap) "
+        "DECIDE amount(REAL) SUCH THAT amount BETWEEN 0 AND 2 AND per g: SUM(w*amount) <= cap AND SUM(w*amount) >= 1 "
+        "MAXIMIZE SUM(v*amount)) q ORDER BY id"
+    )
+    assert _run_all(decidb_cli, sql, "require") == ("error", "direct_not_applied")
+    assert _run_all(decidb_cli, sql, "auto") == _run_all(decidb_cli, sql, "off")
 
 
 @pytest.mark.var_real

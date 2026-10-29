@@ -53,6 +53,10 @@ struct Condition final : DirectApplicabilityCondition {
 	//! NO_GROUP element (D5) belongs to the budget of its group; any other row is outside every budget. Every clause
 	//! of the budget has this scope. Empty without a key: one budget for all the rows it covers.
 	vector<DirectKeyElement> group_keys;
+	//! The clauses are written `per K:` and a NULL in K puts a row in no class: a query whose kept rows all have one
+	//! has no instance (DirectSharedScope::gated).
+	bool gated = false;
+	vector<DirectKeyElement> per_class_keys;
 	unique_ptr<Expression> when;
 	bool scoped = false;
 	//! Each decision's box before any per-row bound (one per decision), and the per-row clauses the plan evaluates;
@@ -176,37 +180,15 @@ bool SameBudgetTerms(const DirectLinearPart &a, const DirectLinearPart &b) {
 //! on the clause or on the sum: both read as a membership of the budget). Records the scope the plan applies.
 bool Rule::ProveBudgetScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &budgets,
                             Condition &condition) const {
-	bool ok;
-	auto first_when = budgets[0]->Membership(ok);
-	if (!ok) {
+	DirectSharedScope scope;
+	if (!DirectProveSharedScope(ir, budgets, scope)) {
 		return false;
 	}
-	for (idx_t i = 1; i < budgets.size(); i++) {
-		auto when = budgets[i]->Membership(ok);
-		if (!ok || !DirectSameKey(budgets[i]->PlainSum()->by, budgets[0]->PlainSum()->by) ||
-		    static_cast<bool>(when) != static_cast<bool>(first_when) ||
-		    (when && !Expression::Equals(*when, *first_when))) {
-			return false;
-		}
-	}
-	if (first_when) {
-		if (!DirectIsSourceOnlyPredicate(*first_when, ir.decide_index, ir.source_bindings)) {
-			return false;
-		}
-		condition.when = std::move(first_when);
-	}
-	// A key is evaluated on every row the budget covers, so it must be something a plan can compute: no decision, no
-	// volatile function, no subquery.
-	for (auto &key : budgets[0]->PlainSum()->by) {
-		if (!DirectIsDecisionFreeDeterministic(*key.grouping, ir.decide_index)) {
-			return false;
-		}
-		DirectKeyElement element;
-		element.grouping = key.grouping->Copy();
-		element.no_group = key.no_group;
-		condition.group_keys.push_back(std::move(element));
-	}
-	condition.scoped = !condition.group_keys.empty() || condition.when != nullptr;
+	condition.scoped = scope.Scoped();
+	condition.gated = scope.gated;
+	condition.when = std::move(scope.when);
+	condition.group_keys = std::move(scope.keys);
+	condition.per_class_keys = std::move(scope.classes);
 	return true;
 }
 
@@ -691,7 +673,21 @@ public:
 			element.no_group = key.no_group;
 			keys.push_back(std::move(element));
 		}
-		auto state = DirectProjectScope(binder, std::move(read), condition.scoped, when.get(), keys, {});
+		unique_ptr<Expression> instance;
+		if (condition.gated) {
+			vector<DirectKeyElement> classes;
+			for (auto &key : condition.per_class_keys) {
+				DirectKeyElement element;
+				element.grouping = OverState(*key.grouping);
+				element.no_group = key.no_group;
+				classes.push_back(std::move(element));
+			}
+			ColumnBinding flag;
+			read = DirectAddInstanceFlag(optimizer, std::move(read), when.get(), classes, flag);
+			instance = calc.Out(calc.Col(LogicalType::BOOLEAN, flag));
+		}
+		auto state =
+		    DirectProjectScope(binder, std::move(read), condition.scoped, when.get(), keys, {}, std::move(instance));
 		state_index = state.state_index;
 		plan = std::move(state.plan);
 		for (idx_t i = 0; i < proved_bindings.size(); i++) {

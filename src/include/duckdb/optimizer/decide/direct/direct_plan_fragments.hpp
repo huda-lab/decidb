@@ -75,6 +75,37 @@ ExprPtr DirectBoundDisagreement(const ExpressionBuilder &calc, const string &tex
 unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, const char *name,
                                                        unique_ptr<Expression> value);
 
+//! The rows and groups the clauses of one rule's aggregate share (S1's count bounds, R1's budget): a rule reads them
+//! as one scope or declines.
+struct DirectSharedScope {
+	//! The rows every clause covers (the clause's `when`, with the sum's own), or null for all.
+	unique_ptr<Expression> when;
+	//! The `by` key: the groups, each its own bound. Empty for one group.
+	vector<DirectKeyElement> keys;
+	//! The clauses are written `per K:` and a NULL in K puts a row in no class, so a query whose kept rows all have a
+	//! NULL K has no instance (the plan owes that: DirectAddInstanceFlag). `classes` is K.
+	bool gated = false;
+	vector<DirectKeyElement> classes;
+
+	bool Scoped() const {
+		return when || !keys.empty() || gated;
+	}
+};
+
+//! Proves that every clause covers the same rows in the same groups and reads the scope: the same plain SUM scope
+//! (`Membership`), `by` key and `per` key, and a `when` and keys a plan can compute for each row (no decision, nothing
+//! volatile, no subquery). False when they differ.
+bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &clauses,
+                            DirectSharedScope &scope);
+
+//! Appends to `input` a column that is true when some row `when` keeps has a class of `classes` (no NULL in a NO_GROUP
+//! element), and returns its binding in `flag`. The rows are the same on every row. A clause `per K: C` has no
+//! instance without one (D5: a NULL key is in no class); `when` and `classes` are over `input`'s columns, which keep
+//! their bindings.
+unique_ptr<LogicalOperator> DirectAddInstanceFlag(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
+                                                  const Expression *when, const vector<DirectKeyElement> &classes,
+                                                  ColumnBinding &flag);
+
 //! The per-row state of a scoped aggregate, projected once over the input: every input column, then whether the
 //! row is eligible (its `when` holds and no NO_GROUP key element is NULL), then the group key, then any per-row columns
 //! the rule adds. With no scope and no extra columns the input passes through unchanged.
@@ -96,10 +127,11 @@ struct DirectScopeState {
 //! A row whose `when` is false or NULL does not join the clause, and neither does a row with a NULL in a column of a
 //! `by` key (D5: a NULL key is in no group; the columns of a relation compare NULL as a value, and group). `keys` are
 //! the `by` key, its expressions over the input's columns; they are computed on the rows the `when` keeps alone, as
-//! nothing is computed on a row it drops. `extra` are expressions over the input.
+//! nothing is computed on a row it drops. `extra` are expressions over the input. A row is eligible only when
+//! `instance` (a BOOLEAN over the input, or null for none) holds.
 DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
                                     const Expression *when, const vector<DirectKeyElement> &keys,
-                                    vector<unique_ptr<Expression>> extra);
+                                    vector<unique_ptr<Expression>> extra, unique_ptr<Expression> instance = nullptr);
 
 //! A per-row bound read from the data: it must not be NULL on a row its clause keeps, nor NaN when `reject_nan`.
 struct DirectRowBound {

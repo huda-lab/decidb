@@ -506,8 +506,10 @@ private:
 			D_ASSERT(!conjunction.children.empty());
 			auto first = out.size();
 			CollectConstraints(*conjunction.children[0], wrappers, out);
+			auto key = PerWrapperKey(conjunction);
 			for (idx_t i = first; i < out.size(); i++) {
-				if (!out[i].aggregate) {
+				out[i].per_class = true;
+				if (!out[i].aggregate || (key != DConstants::INVALID_INDEX && !ReadKey(key, out[i].classes))) {
 					MarkNotProved(out[i].status);
 				}
 			}

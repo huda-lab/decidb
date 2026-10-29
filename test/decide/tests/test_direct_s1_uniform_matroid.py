@@ -1657,7 +1657,7 @@ _PER_CLASS_ROWS = "(1, 'a', 9.0, 4), (2, 'a', 8.0, 4), (3, 'b', 7.0, 2), (4, 'b'
         pytest.param("per g: SUM(x) <= cap", id="source-valued-bound"),
         pytest.param("per g: SUM(x) <= 3", id="constant-bound"),
         pytest.param("per g: SUM(x) by (g) <= cap", id="bound-per-class-group"),
-        pytest.param("per g: SUM(x) >= 1 AND SUM(x) <= cap", id="range-in-one-class-clause"),
+        pytest.param("per g: SUM(x) >= 1 AND per g: SUM(x) <= cap", id="range-of-two-class-clauses"),
         pytest.param("per g: SUM(x) <= cap AND per g: SUM(x) >= 2", id="two-class-clauses"),
         pytest.param("when score > 5: per g: SUM(x) <= cap", id="under-a-when"),
     ],
@@ -1670,6 +1670,43 @@ def test_s1_a_count_per_class_answers_as_the_solver_does(decidb_cli, constraint)
     direct = _outcome(decidb_cli, sql, "require")
     assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
     assert direct == _outcome(decidb_cli, sql, "off")
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "rows",
+    [
+        # Every kept row has a NULL g, so there is no class and no instance: the count does not bind (D5).
+        pytest.param("(1, NULL::VARCHAR, 9.0, 1), (2, NULL::VARCHAR, 8.0, 1), (3, NULL::VARCHAR, 7.0, 1)", id="every-g-null"),
+        # One class is enough for the instance, and a row in no class still counts in the total.
+        pytest.param("(1, NULL::VARCHAR, 9.0, 2), (2, 'a', 8.0, 2), (3, NULL::VARCHAR, 7.0, 5)", id="one-class"),
+        # The `when` leaves only NULL-g rows: no kept row has a class.
+        pytest.param("(1, NULL::VARCHAR, 9.0, 1), (2, 'a', 3.0, 1)", id="the-class-row-is-not-kept"),
+    ],
+)
+def test_s1_a_clause_per_class_has_no_instance_without_a_class(decidb_cli, rows):
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {rows}) t(id, g, score, cap) "
+        "DECIDE x(BOOL) SUCH THAT when score > 5: per g: SUM(x) <= cap MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    direct = _outcome(decidb_cli, sql, "require")
+    assert direct != ("error", "direct_not_applied"), f"direct solve declined:\n{sql}"
+    assert direct == _outcome(decidb_cli, sql, "off")
+
+
+@pytest.mark.var_boolean
+@pytest.mark.cons_aggregate
+@pytest.mark.correctness
+def test_s1_leaves_clauses_of_different_scope_to_the_solver(decidb_cli):
+    # `per g: A AND B` scopes A alone: the two bounds do not cover the same instances.
+    sql = (
+        f"SELECT id, x FROM (FROM (VALUES {_PER_CLASS_ROWS}) t(id, g, score, cap) "
+        "DECIDE x(BOOL) SUCH THAT per g: SUM(x) >= 1 AND SUM(x) <= cap MAXIMIZE SUM(score*x)) q ORDER BY id"
+    )
+    assert _outcome(decidb_cli, sql, "require") == ("error", "direct_not_applied")
+    assert _outcome(decidb_cli, sql, "auto") == _outcome(decidb_cli, sql, "off")
 
 
 @pytest.mark.var_boolean

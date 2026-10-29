@@ -121,9 +121,74 @@ unique_ptr<BoundWindowExpression> DirectWindowExtremum(Optimizer &optimizer, con
 	return result;
 }
 
+bool DirectProveSharedScope(const DirectIR &ir, const vector<const DirectIRConstraint *> &clauses,
+                            DirectSharedScope &scope) {
+	D_ASSERT(!clauses.empty());
+	auto &first = *clauses[0];
+	bool ok;
+	auto first_when = first.Membership(ok);
+	if (!ok) {
+		return false;
+	}
+	for (auto clause : clauses) {
+		auto when = clause->Membership(ok);
+		if (!ok || !DirectSameKey(clause->PlainSum()->by, first.PlainSum()->by) ||
+		    clause->per_class != first.per_class || !DirectSameKey(clause->classes, first.classes) ||
+		    static_cast<bool>(when) != static_cast<bool>(first_when) ||
+		    (when && !Expression::Equals(*when, *first_when))) {
+			return false;
+		}
+	}
+	if (first_when) {
+		if (!DirectIsSourceOnlyPredicate(*first_when, ir.decide_index, ir.source_bindings)) {
+			return false;
+		}
+		scope.when = std::move(first_when);
+	}
+	auto copy_key = [&](const vector<DirectKeyElement> &from, vector<DirectKeyElement> &to) {
+		for (auto &key : from) {
+			if (!DirectIsDecisionFreeDeterministic(*key.grouping, ir.decide_index)) {
+				return false;
+			}
+			DirectKeyElement element;
+			element.grouping = key.grouping->Copy();
+			element.no_group = key.no_group;
+			to.push_back(std::move(element));
+		}
+		return true;
+	};
+	if (!copy_key(first.PlainSum()->by, scope.keys) || !copy_key(first.classes, scope.classes)) {
+		return false;
+	}
+	for (auto &key : scope.classes) {
+		scope.gated = scope.gated || key.no_group;
+	}
+	return true;
+}
+
+unique_ptr<LogicalOperator> DirectAddInstanceFlag(Optimizer &optimizer, unique_ptr<LogicalOperator> input,
+                                                  const Expression *when, const vector<DirectKeyElement> &classes,
+                                                  ColumnBinding &flag) {
+	ExpressionBuilder calc(optimizer.context);
+	auto active = calc.Wrap(DirectActiveWhen(calc, when));
+	auto in_class = active;
+	for (auto &key : classes) {
+		if (key.no_group) {
+			auto value = DirectOnKeptRows(calc, active, calc.Of(*key.grouping));
+			in_class = calc.If(calc.IsNull(value), calc.Bool(false), in_class);
+		}
+	}
+	auto index = optimizer.binder.GenerateTableIndex();
+	auto window = make_uniq<LogicalWindow>(index);
+	window->expressions.push_back(DirectWindowExtremum(optimizer, "bool_or", calc.Out(in_class)));
+	window->children.push_back(std::move(input));
+	flag = ColumnBinding(index, 0);
+	return std::move(window);
+}
+
 DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> input, bool scoped,
                                     const Expression *when, const vector<DirectKeyElement> &keys,
-                                    vector<unique_ptr<Expression>> extra) {
+                                    vector<unique_ptr<Expression>> extra, unique_ptr<Expression> instance) {
 	ExpressionBuilder calc(binder.context);
 	input->ResolveOperatorTypes();
 	auto bindings = input->GetColumnBindings();
@@ -150,6 +215,9 @@ DirectScopeState DirectProjectScope(Binder &binder, unique_ptr<LogicalOperator> 
 			if (key.no_group) {
 				eligible = calc.If(calc.IsNull(key_values.back()), calc.Bool(false), eligible);
 			}
+		}
+		if (instance) {
+			eligible = calc.If(calc.Wrap(std::move(instance)), eligible, calc.Bool(false));
 		}
 		state.eligible = ColumnBinding(state.state_index, expressions.size());
 		expressions.push_back(calc.Out(eligible));

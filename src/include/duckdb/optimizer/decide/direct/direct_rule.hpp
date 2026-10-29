@@ -150,6 +150,11 @@ struct DirectIRConstraint {
 	//! `when` keeps (DecideSingletonRow::LiftsDefaultFloor).
 	bool variable_bound = false;
 	DirectIRScope scope;
+	//! The clause is written `per K: C` (D6): one constraint per class of K, each bounding the whole total. `classes`
+	//! is K; a row whose K has a NULL in a NO_GROUP element is in no class, and with no class at all the clause has no
+	//! instance. Empty for `per ()`.
+	bool per_class = false;
+	vector<DirectKeyElement> classes;
 	idx_t degree = 0;
 
 	//! The reduced left side when it is one plain `SUM(...)`: unsigned, unscaled, unqualified, not nested; null
