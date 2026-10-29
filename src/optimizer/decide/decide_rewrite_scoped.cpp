@@ -145,30 +145,18 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Clau
 	auto &agg = (*site.slot)->Cast<BoundAggregateExpression>();
 	auto agg_name = StringUtil::Lower(agg.function.name);
 	auto label = RenderDecideReducer(agg, names);
-	// language/errors.md §2: a product or square of decisions inside a reducer is
-	// accepted only where the reducer's own row sums it -- the aggregate shape. Here its
-	// definition would be a quadratic equality. The test is on what survives the rewrites
-	// before this one: an ABS is an auxiliary by now and a Boolean product its McCormick
-	// column, both linear; what remains nonlinear is a square or a product of two
-	// non-Boolean decisions.
-	if (!DecideExpressionDegree(*agg.children[0], decide.decide_index).IsLinear()) {
-		throw BinderException("DECIDE: '%s' is not supported yet in this constraint: a product or square of "
-		                      "decisions inside a reducer is accepted only where the constraint's reducers share "
-		                      "one by key, under a whole-query factor, with nothing beside them but data and "
-		                      "query-wide decisions, each on its own",
-		                      label);
-	}
-
-	// MIN/MAX: which side pins the helper is the one the row would otherwise let it escape
-	// through. Under `<=` a positive term is pushed down, so a MAX needs its envelope
-	// (`value >= member`) and a MIN its closing side (`value >= some member`, with
-	// indicators); the mirror for `>=` and for a negative term. An unknown sign, `=` and
-	// `<>` need both. A helper several rows read needs every side any of them does.
-	const bool extremum = agg_name == "min" || agg_name == "max";
+	// Which side pins the helper is the one the row would otherwise let it escape through
+	// (the epigraph form; the Plaisted-Greenbaum polarity of DefineNonlinearReducerBodies). Under
+	// `<=` a positive term is pushed down, so a MAX needs its envelope (`value >= member`) and a
+	// MIN its closing side (`value >= some member`, with indicators); a SUM or AVG, which like a
+	// MAX never decreases when a member grows, needs `value >= sum`, its envelope. The mirror
+	// holds for `>=` and for a negative term. An unknown sign, `=` and `<>` need both. A helper
+	// several rows read needs every side any of them does, and the rows read the helper alone:
+	// a slack value is harmless.
 	const ExtremumPush push = ExtremumPushOf(ExtremumPushOf(comparison), site.sign);
-	const bool easy = IsEasyExtremum(agg_name == "max", push);
-	const bool need_envelope = extremum && (push == ExtremumPush::NONE || easy);
-	const bool need_closing = extremum && (push == ExtremumPush::NONE || !easy);
+	const bool easy = IsEasyExtremum(agg_name != "min", push);
+	const bool need_envelope = push == ExtremumPush::NONE || easy;
+	const bool need_closing = push == ExtremumPush::NONE || !easy;
 
 	// `<`, `>` and `<>` step onto the whole numbers, which is exact for the row only when
 	// the helper is whole. The binder admitted the clause by its own reading: a constant

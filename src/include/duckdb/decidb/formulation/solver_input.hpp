@@ -407,9 +407,10 @@ struct AbsMaximizeLinkSpec {
 //! A helper decision of the value rewrite (LogicalDecide::ReducerValueLink), evaluated.
 //! `rows` holds the reducer's members: the inner terms' coefficients on the rows the
 //! clause and the reducer keep (every other row 0), grouped by the `by` key over the kept
-//! rows. For SUM and AVG it also carries the helper's own term, -1 on each group's first
-//! row, so the row is the equality `members - value = 0` per group; a MIN/MAX helper is
-//! pinned by an extremum link per group instead (ExtremumLinkSpec).
+//! rows. A SUM or AVG helper is defined by one row per group over the members and the helper's own
+//! term, on the sides the clauses push it against: `value >= members` (`need_envelope`), `value <=
+//! members` (`need_closing`), the equality when both; a MIN/MAX helper is pinned by an extremum link
+//! per group instead (ExtremumLinkSpec), on the same two sides.
 struct ReducerValueLinkSpec {
     idx_t value_var = DConstants::INVALID_INDEX;
     string agg_name;

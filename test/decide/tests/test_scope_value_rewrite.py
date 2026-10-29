@@ -890,18 +890,119 @@ def test_the_model_grows_linearly(decidb_cli, tmp_path):
     assert sum(int(nnz) for nnz in re.findall(r"nnz=(\d+)", dump)) == 3 * n + 1
 
 
-@pytest.mark.error
-@pytest.mark.error_binder
-def test_a_product_of_decisions_inside_a_rewritten_reducer_is_refused(decidb_cli):
-    """§10.2: a square inside a reducer is accepted only in the aggregate shape."""
-    result = decidb_cli.execute_raw(_ship_query("ship <= 0.5 * sum(ship * ship) by (D.region)"))
-    assert (
-        "DECIDE: 'sum(ship * ship)' is not supported yet in this constraint: a product or square of "
-        "decisions inside a reducer is accepted only where the constraint's reducers share one by key, "
-        "under a whole-query factor, with nothing beside them but data and query-wide decisions, each on "
-        "its own"
-    ) in result.stderr, result.stderr
-    assert_no_internal_leak(result, "a product inside a rewritten reducer")
+@pytest.mark.correctness
+@pytest.mark.quadratic
+def test_a_product_of_decisions_inside_a_rewritten_reducer(decidb_cli_gurobi, decidb_cli_highs):
+    """A product of decisions inside a reducer the value rewrite holds in a helper: the helper is defined over a
+    column per row that holds each product (the body definition), so the clause is a quadratic row per shipment.
+    The sum is pushed up here, which makes it non-convex: Gurobi answers it, judged by enumerating every assignment
+    a region at a time (the scope oracle is linear), and HiGHS, which states no quadratic row, refuses it."""
+    sql = _ship_query("ship <= 0.5 * sum(ship * ship) by (D.region)")
+    rows = answer(decidb_cli_gurobi, sql)
+    _judge_apart(
+        rows, lambda row: row["region"], lambda region, ships: all(s <= 0.5 * sum(t * t for t in ships) for s in ships)
+    )
+    refused = decidb_cli_highs.execute_raw(sql)
+    assert "squares or multiplies decision variables" in refused.stderr, refused.stderr
+    assert "MIN or MAX" not in refused.stderr, refused.stderr  # no extremum reads the sum
+    assert_no_internal_leak(refused, "a product inside a rewritten reducer on HiGHS")
+
+
+@pytest.mark.correctness
+@pytest.mark.quadratic
+def test_a_quadratic_sum_beside_a_row_varying_factor_on_a_query_wide_decision(decidb_cli_gurobi, decidb_cli_highs):
+    """`sum(power(x, 2)) + gcap * s <= 30` with `s` query-wide and `gcap` varying by row: one row per `gcap`, each
+    holding the helper of the sum of squares. The sum is pushed down, so the helper is `v >= sum` over one column
+    per row `t >= x^2`: a convex model Gurobi answers (judged by enumerating every assignment) and HiGHS refuses."""
+    rows = ((1, 1), (2, 2), (3, 3))
+    sql = f"""
+        SELECT id, x, s {table('t', ('id', 'gcap'), rows)}
+        DECIDE x(INT), per (): s(INT)
+        SUCH THAT x <= 4 AND s <= 3 AND sum(power(x, 2)) + t.gcap * s <= 30
+        MAXIMIZE SUM(x) + 2 * s
+        ORDER BY id"""
+    domains = {**{f"x{i}": range(5) for i in range(3)}, "s": range(4)}
+    judge_rows(
+        answer(decidb_cli_gurobi, sql),
+        domains,
+        lambda a: all(sum(a[f"x{i}"] ** 2 for i in range(3)) + gcap * a["s"] <= 30 for _, gcap in rows),
+        lambda a: sum(a[f"x{i}"] for i in range(3)) + 2 * a["s"],
+    )
+    refused = decidb_cli_highs.execute_raw(sql)
+    assert "squares or multiplies decision variables" in refused.stderr, refused.stderr
+    assert "MIN or MAX" not in refused.stderr, refused.stderr  # no extremum reads the sum
+    assert_no_internal_leak(refused, "a quadratic sum behind a helper on HiGHS")
+
+
+#: The side of a SUM or AVG helper's definition the clauses push it against: `v >= sum` where they push it down,
+#: `v <= sum` where up, the equality where both or neither is known.
+EPIGRAPH_CASES = [
+    pytest.param(
+        "per row: ship <= 0.5 * sum(ship)",
+        [Scoped((X,), "<=", (_ship_reduce(factor=0.5),))],
+        "<",
+        id="pushed-up",
+    ),
+    pytest.param(
+        "per row: ship + sum(ship) <= 40",
+        [Scoped((X, _ship_reduce()), "<=", (_const(40),))],
+        ">",
+        id="pushed-down",
+    ),
+    pytest.param(
+        "per row: ship >= 0.1 * sum(ship)",
+        [Scoped((X,), ">=", (_ship_reduce(factor=0.1),))],
+        ">",
+        id="pushed-down-from-below-a-negative-term",
+    ),
+    pytest.param(
+        "per row: ship <= 1.5 * avg(ship)",
+        [Scoped((X,), "<=", (_ship_reduce("avg", factor=1.5),))],
+        "<",
+        id="avg",
+    ),
+    pytest.param(
+        "per row: ship <= D.maxShipmentShare * sum(ship)",
+        [Scoped((X,), "<=", (_ship_reduce(factor=lambda r: r["maxShipmentShare"]),))],
+        "=",
+        id="a-factor-of-unknown-sign",
+    ),
+    pytest.param(
+        "per row: ship = 0.2 * sum(ship)",
+        [Scoped((X,), "=", (_ship_reduce(factor=0.2),))],
+        "=",
+        id="equality",
+    ),
+    pytest.param(
+        "per row: ship <> sum(ship) - 10",
+        [Scoped((X,), "<>", (_ship_reduce(), _const(-10)))],
+        "=",
+        id="not-equal",
+    ),
+    pytest.param(
+        "per row: ship <= 0.5 * sum(ship) AND per row: ship + sum(ship) <= 80",
+        [Scoped((X,), "<=", (_ship_reduce(factor=0.5),)), Scoped((X, _ship_reduce()), "<=", (_const(80),))],
+        "=",
+        id="two-clauses-pushing-both-ways",
+    ),
+]
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize("clause, clauses, sense", EPIGRAPH_CASES)
+def test_a_sum_helper_is_defined_on_the_side_the_clauses_push_it(
+    decidb_cli_highs, decidb_cli_gurobi, scope_solver, tmp_path, clause, clauses, sense
+):
+    """The definition of the helper of a SUM or AVG is one row over every shipment and the helper (the one row with
+    six entries): `value - members` against 0 on the side the clauses push the value. The answer is the oracle's on
+    both solvers, a slack helper included: nothing reads the value but the clauses."""
+    sql = _ship_query(clause)
+    model = ScopedModel(joined(), SHIP)
+    for cli in (decidb_cli_highs, decidb_cli_gurobi):
+        dump = cli.dump_model(sql, tmp_path / "model.dump")
+        definitions = re.findall(r"^row \d+: sense=(.) rhs=\S+ nnz=6 ", dump, re.M)
+        assert definitions == [sense], dump
+        _judged(cli, scope_solver, sql, model, [SHIP_BOUND] + clauses)
 
 
 @pytest.mark.error

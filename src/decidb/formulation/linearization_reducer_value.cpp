@@ -135,8 +135,10 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				continue;
 			}
 			if (!IsExtremum(link)) {
-				// `value - sum of members' expressions = sum of their constants`. The
-				// members' columns are accumulated first: a keyed decision may stand in
+				// `value - sum of members' expressions` against `sum of their constants`: the
+				// side the clauses push the value against (`value >= sum` when they push it
+				// down, `value <= sum` when up), the equality only when both sides are needed.
+				// The members' columns are accumulated first: a keyed decision may stand in
 				// several rows of the group, and a row states each column once.
 				MinMaxLinkRow sum;
 				double constants = 0.0;
@@ -150,7 +152,7 @@ void LinearizeReducerValueLinks(SolverInput &input, const VarIndexer &indexer, c
 				rc.indices.push_back(static_cast<int>(indexer.Get(value_var, group.first_row)));
 				rc.coefficients.push_back(1.0);
 				sum.AppendTo(rc);
-				rc.sense = '=';
+				rc.sense = link.need_envelope && link.need_closing ? '=' : link.need_envelope ? '>' : '<';
 				rc.rhs = constants;
 				rc.kind = ConstraintKind::STRUCTURAL;
 				input.global_constraints.push_back(std::move(rc));

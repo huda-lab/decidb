@@ -375,9 +375,10 @@ public:
         //! Γ, into `keys`; INVALID_INDEX for `by ()`, every kept row.
         idx_t group_key = DConstants::INVALID_INDEX;
         unique_ptr<Expression> when; //!< the clause's `when`, or null
-        //! MIN/MAX: the sides that pin the helper (ExtremumLinkSpec), read from the way the
-        //! clause pushes it; both when the sign of its factor is not known before the query
-        //! runs or the comparison is `=` or `<>`. Unused for SUM/AVG, whose row is an equality.
+        //! The sides that pin the helper, read from the way the clause pushes it; both when the sign of its
+        //! factor is not known before the query runs or the comparison is `=` or `<>`. MIN/MAX: the
+        //! extremum link's envelope and closing sides (ExtremumLinkSpec). SUM/AVG: `value >= members`
+        //! (`need_envelope`) and `value <= members` (`need_closing`), the equality when both.
         bool need_envelope = false;
         bool need_closing = false;
         //! `inner_expr` flattened by BuildDecidePreparedModel, like a composed term's.

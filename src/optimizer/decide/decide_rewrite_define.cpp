@@ -57,15 +57,19 @@ using namespace decide_rewrite; // NOLINT: internal DECIDE rewrite helpers
 // on a helper nothing else reads always holds.
 //
 // Which bodies: every MIN or MAX's; in a constraint that holds a MIN or MAX, every SUM and
-// AVG term's too (the composed row reads them as linear); and the inner reducer's of a
-// two-level objective under an outer MIN or MAX. A plain constraint whose one MIN or MAX is
-// pushed its cheap way (`max(q) <= K`) is left alone: the MIN/MAX rewrite makes it one
-// quadratic row per member and needs no helper. An objective's SUM beside a MIN or MAX
+// AVG term's too (the composed row reads them as linear); in a constraint the value rewrite
+// takes (VALUE shape), every SUM and AVG term's (the helper decision that holds the reducer
+// is defined over linear members, and it is the same epigraph form); and the inner
+// reducer's of a two-level objective under an outer MIN or MAX. A plain constraint whose one
+// MIN or MAX is pushed its cheap way (`max(q) <= K`) is left alone: the MIN/MAX rewrite makes
+// it one quadratic row per member and needs no helper. An objective's SUM beside a MIN or MAX
 // stays on the objective's own quadratic path.
 //
 // A helper has no box, so the Big-M arm has no constant for an extremum over it: only a
 // backend that states MIN/MAX natively takes one (stage 08 takes the native arm for a family
-// with no box). Any other backend is refused here, before a row is read.
+// with no box). Any other backend is refused here, before a row is read. A SUM or AVG that
+// no MIN or MAX reads needs no such backend: its row is quadratic, which the model class
+// gate (decide_solver_gate.cpp) refuses on a backend that states none.
 
 namespace {
 
@@ -108,6 +112,9 @@ struct BodySite {
 	ExtremumPush push;
 	//! A SUM or AVG term beside a MIN or MAX, rather than one or a reducer inside one: what the refusal says.
 	bool beside_extremum;
+	//! Whether a MIN or MAX reads this body, so the backend must state MIN/MAX natively: the reducer is one, sits
+	//! inside one, or sits in a constraint that holds one.
+	bool needs_native_extremum;
 	string source_alias;
 	ClauseScope scope;
 };
@@ -130,12 +137,13 @@ void CollectReducerSigns(ClientContext &context, Expression &side, int sign, idx
 //! The reducers under `expr` whose body is not linear and holds no reducer. A SUM or AVG qualifies with `sums`
 //! (a constraint that holds a MIN or MAX) or `under_extremum` (the inner reducer of a two-level objective). A reducer
 //! the polarity walk did not reach (`signs`) is pushed neither way.
-void CollectBodySites(Expression &expr, idx_t decide_index, bool sums, bool under_extremum, ExtremumPush outer,
-                      const unordered_map<const Expression *, int> &signs, const string &source_alias,
-                      const ClauseScope &scope, vector<BodySite> &sites) {
+void CollectBodySites(Expression &expr, idx_t decide_index, bool sums, bool extremum_clause, bool under_extremum,
+                      ExtremumPush outer, const unordered_map<const Expression *, int> &signs,
+                      const string &source_alias, const ClauseScope &scope, vector<BodySite> &sites) {
 	if (!AsDecisionReducer(expr, decide_index)) {
 		ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) {
-			CollectBodySites(child, decide_index, sums, under_extremum, outer, signs, source_alias, scope, sites);
+			CollectBodySites(child, decide_index, sums, extremum_clause, under_extremum, outer, signs, source_alias,
+			                 scope, sites);
 		});
 		return;
 	}
@@ -143,7 +151,8 @@ void CollectBodySites(Expression &expr, idx_t decide_index, bool sums, bool unde
 	const bool is_extremum = IsExtremumName(StringUtil::Lower(reducer.function.name));
 	auto &body = *reducer.children[0];
 	if (HoldsReducer(body, decide_index, false)) {
-		CollectBodySites(body, decide_index, sums, is_extremum, outer, signs, source_alias, scope, sites);
+		CollectBodySites(body, decide_index, sums, extremum_clause, is_extremum, outer, signs, source_alias, scope,
+		                 sites);
 		return;
 	}
 	if (DecideExpressionDegree(body, decide_index).IsLinear() || (!is_extremum && !sums && !under_extremum)) {
@@ -151,7 +160,8 @@ void CollectBodySites(Expression &expr, idx_t decide_index, bool sums, bool unde
 	}
 	auto sign = signs.find(&expr);
 	const auto push = sign == signs.end() ? ExtremumPush::NONE : ExtremumPushOf(outer, sign->second);
-	sites.push_back({&reducer, push, !is_extremum && !under_extremum, source_alias, scope});
+	sites.push_back({&reducer, push, !is_extremum && !under_extremum,
+	                 is_extremum || under_extremum || extremum_clause, source_alias, scope});
 }
 
 //! A plain constraint whose one MIN or MAX is pushed its cheap way (`max(q) <= K`, `-2 * min(q) <= K`): the MIN/MAX
@@ -232,8 +242,13 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 				}
 				return;
 			}
-			if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON ||
-			    !HoldsReducer(expr, decide_index, true)) {
+			if (expr.GetExpressionClass() != ExpressionClass::BOUND_COMPARISON) {
+				return;
+			}
+			// A MIN or MAX in the constraint, or any reducer the value rewrite holds in a helper decision.
+			const bool extremum_clause = HoldsReducer(expr, decide_index, true);
+			if (!extremum_clause && !(HasDecideTag(expr.GetAlias(), VALUE_REWRITE_TAG) &&
+			                          HoldsReducer(expr, decide_index, false))) {
 				return;
 			}
 			auto &comparison = expr.Cast<BoundComparisonExpression>();
@@ -245,8 +260,10 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 			CollectReducerSigns(context, *comparison.left, 1, decide_index, signs);
 			CollectReducerSigns(context, *comparison.right, -1, decide_index, signs);
 			const auto outer = ExtremumPushOf(comparison.type);
-			CollectBodySites(*comparison.left, decide_index, true, false, outer, signs, source_alias, scope, sites);
-			CollectBodySites(*comparison.right, decide_index, true, false, outer, signs, source_alias, scope, sites);
+			CollectBodySites(*comparison.left, decide_index, true, extremum_clause, false, outer, signs, source_alias,
+			                 scope, sites);
+			CollectBodySites(*comparison.right, decide_index, true, extremum_clause, false, outer, signs, source_alias,
+			                 scope, sites);
 		};
 		walk(*decide.decide_constraints, string(), ClauseScope());
 	}
@@ -270,11 +287,15 @@ void DecideOptimizer::DefineNonlinearReducerBodies(LogicalDecide &decide) {
 		unordered_map<const Expression *, int> signs;
 		CollectReducerSigns(context, *body, 1, decide_index, signs);
 		const auto outer = decide.decide_sense == DecideSense::MINIMIZE ? ExtremumPush::DOWN : ExtremumPush::UP;
-		CollectBodySites(*body, decide_index, false, false, outer, signs, OBJECTIVE_ROW_TAG, scope, sites);
+		CollectBodySites(*body, decide_index, false, false, false, outer, signs, OBJECTIVE_ROW_TAG, scope, sites);
 	}
 
-	if (!sites.empty() && !decide.use_native_constructs.min_max) {
-		RefuseWithoutNativeMinMax(sites[0], decide);
+	if (!decide.use_native_constructs.min_max) {
+		for (auto &site : sites) {
+			if (site.needs_native_extremum) {
+				RefuseWithoutNativeMinMax(site, decide);
+			}
+		}
 	}
 
 	// Group the copies before any body is replaced: a replaced body no longer compares equal.
