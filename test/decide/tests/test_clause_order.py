@@ -178,7 +178,7 @@ def test_scalar_declaration_in_split_slot(decidb_cli, perf_tracker):
 
 
 @pytest.mark.correctness
-def test_entity_scoped_declaration_in_split_slot(decidb_cli, perf_tracker):
+def test_keyed_declaration_in_split_slot(decidb_cli, perf_tracker):
     """A keyed declaration (`per n:`) parses in the pre-FROM slot and still shares one
     variable per entity across the join's repeated rows."""
     rows, cols = decidb_cli.execute(

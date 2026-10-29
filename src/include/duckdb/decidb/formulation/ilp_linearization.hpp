@@ -429,7 +429,7 @@ private:
 //!
 //! DecideTerm arrays are indexed by term, not by variable, so the same solver column
 //! reaches one row more than once in two situations: `(c + 1) * x` distributes
-//! into `c*x + 1*x`, and an entity-scoped or scalar variable resolves to a
+//! into `c*x + 1*x`, and a keyed or scalar variable resolves to a
 //! single column across every row it spans. A repeated column index is rejected
 //! outright by both Gurobi and HiGHS, so coefficients are summed per column here
 //! rather than pushed per term. Constant terms carry no column at all

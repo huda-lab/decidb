@@ -137,7 +137,7 @@ private:
 
 //! Every decision is a row-scoped REAL decision: an item is one decision on one row.
 bool Rule::ProveDecision(const DirectIR &ir) const {
-	if (ir.decisions.empty() || !ir.entity_scopes.empty()) {
+	if (ir.decisions.empty() || !ir.keyed_scopes.empty()) {
 		return false;
 	}
 	for (auto &decision : ir.decisions) {

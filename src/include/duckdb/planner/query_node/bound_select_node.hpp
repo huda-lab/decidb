@@ -74,7 +74,7 @@ public:
     //! Per-variable boolean flag (true if declared IS BOOLEAN)
     vector<bool> is_boolean_var;
     //! Key scopes and each decision's scope (populated during binding, transferred to LogicalDecide)
-    vector<EntityScopeInfo> entity_scopes;
+    vector<KeyedScopeInfo> keyed_scopes;
     vector<DecideVarScopeInfo> variable_scopes;
 	//! Every key of the clause; transferred to LogicalDecide::keys.
 	vector<DecideKey> decide_keys;

@@ -379,7 +379,7 @@ void LogicalDecide::Serialize(Serializer &serializer) const {
 	serializer.WritePropertyWithDefault<vector<bool>>(207, "is_boolean_var", is_boolean_var);
 	serializer.WriteProperty<double>(208, "objective_constant_offset", objective_constant_offset);
 	serializer.WritePropertyWithDefault<vector<DecideVarScopeInfo>>(209, "variable_scopes", variable_scopes);
-	serializer.WritePropertyWithDefault<vector<EntityScopeInfo>>(210, "entity_scopes", entity_scopes);
+	serializer.WritePropertyWithDefault<vector<KeyedScopeInfo>>(210, "keyed_scopes", keyed_scopes);
 	/* [Deleted] (vector<unique_ptr<Expression>>) "entity_key_expressions" */
 	serializer.WritePropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", constraint_sources);
 	serializer.WritePropertyWithDefault<string>(213, "written_objective", written_objective);
@@ -403,7 +403,7 @@ unique_ptr<LogicalOperator> LogicalDecide::Deserialize(Deserializer &deserialize
 	deserializer.ReadPropertyWithDefault<vector<bool>>(207, "is_boolean_var", result->is_boolean_var);
 	deserializer.ReadProperty<double>(208, "objective_constant_offset", result->objective_constant_offset);
 	deserializer.ReadPropertyWithDefault<vector<DecideVarScopeInfo>>(209, "variable_scopes", result->variable_scopes);
-	deserializer.ReadPropertyWithDefault<vector<EntityScopeInfo>>(210, "entity_scopes", result->entity_scopes);
+	deserializer.ReadPropertyWithDefault<vector<KeyedScopeInfo>>(210, "keyed_scopes", result->keyed_scopes);
 	deserializer.ReadDeletedProperty<vector<unique_ptr<Expression>>>(211, "entity_key_expressions");
 	deserializer.ReadPropertyWithDefault<vector<ConstraintSourceInfo>>(212, "constraint_sources", result->constraint_sources);
 	deserializer.ReadPropertyWithDefault<string>(213, "written_objective", result->written_objective);

@@ -224,9 +224,9 @@ unique_ptr<ParsedExpression> Transformer::TransformAExprInternal(duckdb_libpgque
 	// postfix WHEN and PER are removed spellings: they still parse so that
 	// RefuseRemovedDecideSpellings can name the new spelling once the clause is built.
 	case duckdb_libpgquery::PG_AEXPR_WHEN_CONSTRAINT:
-		return decide_marker(WHEN_CONSTRAINT_TAG);
+		return decide_marker(POSTFIX_WHEN_TAG);
 	case duckdb_libpgquery::PG_AEXPR_PER_CONSTRAINT:
-		return decide_marker(PER_CONSTRAINT_TAG);
+		return decide_marker(POSTFIX_PER_TAG);
 	case duckdb_libpgquery::PG_AEXPR_QUALIFIED_REDUCER:
 		return decide_marker(QUALIFIED_REDUCER_TAG);
 	case duckdb_libpgquery::PG_AEXPR_SCOPE_WHEN:

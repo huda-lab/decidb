@@ -707,13 +707,13 @@ static bool ContainsScalarSubqueryProvenance(const Expression &expr) {
 //! `eligible`, when given, is the rows the reducer reads (its own `when` included): the
 //! first row of each class among THEM is kept, so a class whose first joined row the
 //! `when` drops is still counted once.
-static vector<bool> BuildQualifierKeepMask(const vector<EntityMapping> &mappings, idx_t scope_idx,
+static vector<bool> BuildQualifierKeepMask(const vector<KeyedMapping> &mappings, idx_t scope_idx,
                                            const vector<idx_t> &row_group_ids, idx_t num_rows,
                                            const vector<bool> *eligible = nullptr) {
 	auto &mapping = mappings[scope_idx];
 	vector<bool> keep(num_rows, false);
-	// Group ids are dense in [0, num_groups) and entity ids in [0, num_entities),
-    // so (group, entity) flattens into one dense index with no hashing.
+	// Group ids are dense in [0, num_groups) and class ids in [0, num_classes),
+    // so (group, class) flattens into one dense index with no hashing.
     idx_t num_groups = 1;
     if (!row_group_ids.empty()) {
         for (idx_t gid : row_group_ids) {
@@ -722,7 +722,7 @@ static vector<bool> BuildQualifierKeepMask(const vector<EntityMapping> &mappings
             }
         }
     }
-    vector<bool> seen(num_groups * mapping.num_entities, false);
+    vector<bool> seen(num_groups * mapping.num_classes, false);
     for (idx_t row = 0; row < num_rows; row++) {
         idx_t group = row_group_ids.empty() ? 0 : row_group_ids[row];
         if (group == DConstants::INVALID_INDEX) {
@@ -731,7 +731,7 @@ static vector<bool> BuildQualifierKeepMask(const vector<EntityMapping> &mappings
 		if ((eligible && !(*eligible)[row]) || mapping.IsAbsent(row)) {
 			continue; // a row in no class of the reducer's `per` is not read
 		}
-		idx_t slot = group * mapping.num_entities + mapping.row_to_entity[row];
+		idx_t slot = group * mapping.num_classes + mapping.row_to_class[row];
 		if (!seen[slot]) {
 			seen[slot] = true;
             keep[row] = true;
@@ -744,7 +744,7 @@ static vector<bool> BuildQualifierKeepMask(const vector<EntityMapping> &mappings
 // zeroing and AVG's denominator (which counts surviving rows and therefore becomes the
 // distinct-identity count) — treats a duplicate row exactly as it treats a
 // `when`-excluded one.
-static void ApplyQualifierToFilter(const vector<EntityMapping> &mappings, idx_t scope_idx,
+static void ApplyQualifierToFilter(const vector<KeyedMapping> &mappings, idx_t scope_idx,
                                    const vector<idx_t> &row_group_ids, idx_t num_rows,
                                    TermFilterState &state) {
     auto keep =
@@ -1163,7 +1163,7 @@ PhysicalDecide::PhysicalDecide(vector<LogicalType> types, idx_t estimated_cardin
 }
 
 DecideSourceNames PhysicalDecide::Names() const {
-	return DecidePlanNames(source_fragments, entity_scopes, keys, decide_index, aux_var_expressions);
+	return DecidePlanNames(source_fragments, keyed_scopes, keys, decide_index, aux_var_expressions);
 }
 
 SolverBackend PhysicalDecide::PlannedSolverBackend() const {
@@ -1200,7 +1200,7 @@ InsertionOrderPreservingMap<string> PhysicalDecide::ParamsToString() const {
 
 	// What the optimizer made of the clauses: a column that stands for an expression
 	// prints it, and each rewrite's account follows its clause, the objective's its own.
-	auto names = DecidePlanNames(source_fragments, entity_scopes, keys, decide_index, aux_var_expressions);
+	auto names = DecidePlanNames(source_fragments, keyed_scopes, keys, decide_index, aux_var_expressions);
 	vector<string> objective_accounts;
 	for (auto &account : rewrite_accounts) {
 		if (account.source_clause_id == DConstants::INVALID_INDEX) {
@@ -1259,7 +1259,7 @@ class DecideGlobalSinkState : public GlobalSinkState {
 public:
 	explicit DecideGlobalSinkState(ClientContext &context, const PhysicalDecide &op)
 	    : data(context, op.children[0]->GetTypes()), context(context), op(op),
-	      canonicalizer(context, op.decide_index, op.variable_scopes, op.entity_scopes, op.is_boolean_var) {
+	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.is_boolean_var) {
         // The decision column box was resolved by DecideOptimizer::FoldSingletonRows.
         // A variable whose box never had a lower bound written is one the query never
         // lowered, and Finalize resolves it to the default 0 floor.
@@ -1451,11 +1451,11 @@ SinkCombineResultType PhysicalDecide::Combine(ExecutionContext &context, Operato
 
 //! Builds the categorical-candidate groupings the unbounded engine consumes to
 //! characterize *which* instances of an escaping variable run away. Operator-bound
-//! (it reads the executor chunks, entity scopes, and BuildGroupIds), so it lives
+//! (it reads the executor chunks, keyed scopes, and BuildGroupIds), so it lives
 //! here rather than in the pure router/engine units; Finalize just invokes it.
 //!
 //! A stateful functor (not a set of lambdas) so its lazily-built caches — the
-//! row-scoped candidates and the per-scope entity candidates — survive across the
+//! row-scoped candidates and the per-scope keyed candidates — survive across the
 //! many calls the engine makes, one per escaping decision variable. The stored
 //! references point at Finalize-locals that outlive the engine call.
 namespace {
@@ -1467,15 +1467,15 @@ struct UnboundedCandidateProvider {
 	const vector<string> &input_column_names;
 	const vector<bool> &input_column_in_clause;
 	const VarIndexer &var_indexer;
-	const vector<EntityScopeInfo> &entity_scopes;
-	const vector<EntityMapping> &entity_mappings;
+	const vector<KeyedScopeInfo> &keyed_scopes;
+	const vector<KeyedMapping> &keyed_mappings;
 	idx_t num_rows;
 
 	//! Row-scoped candidate columns are variable-independent — built once.
 	vector<ColumnGrouping> row_candidates;
 	bool row_candidates_built = false;
-	//! Entity-scoped candidates cached per scope.
-	std::map<idx_t, vector<ColumnGrouping>> entity_candidates;
+	//! Keyed candidates cached per scope.
+	std::map<idx_t, vector<ColumnGrouping>> keyed_candidates;
 
 	bool ColumnHasHarvestedName(idx_t ci) const {
 		return ci < input_column_names.size() && !input_column_names[ci].empty();
@@ -1527,21 +1527,21 @@ struct UnboundedCandidateProvider {
 		return row_candidates;
 	}
 
-	//! Lift a row-indexed grouping to entity granularity. The lift is accepted only
-	//! when every joined row for an entity maps to the same categorical group; this
-	//! lets dimension-table labels characterize entity escapes without inventing a
+	//! Lift a row-indexed grouping to class granularity. The lift is accepted only
+	//! when every joined row for a class maps to the same categorical group; this
+	//! lets dimension-table labels characterize keyed escapes without inventing a
 	//! single value for genuinely one-to-many columns.
-	bool LiftRowGroupingToEntities(const ColumnGrouping &rowcg, const EntityMapping &mapping, idx_t num_entities,
-	                               ColumnGrouping &out) {
+	bool LiftRowGroupingToClasses(const ColumnGrouping &rowcg, const KeyedMapping &mapping, idx_t num_classes,
+	                              ColumnGrouping &out) {
 		out.column = rowcg.column;
 		out.clause_referenced = rowcg.clause_referenced;
 		out.group_value = rowcg.group_value;
 		out.null_group = rowcg.null_group;
-		out.instance_to_group.assign(num_entities, DConstants::INVALID_INDEX);
-		vector<bool> seen(num_entities, false);
-		for (idx_t r = 0; r < num_rows && r < mapping.row_to_entity.size() && r < rowcg.instance_to_group.size(); r++) {
-			idx_t e = mapping.row_to_entity[r];
-			if (e >= num_entities) {
+		out.instance_to_group.assign(num_classes, DConstants::INVALID_INDEX);
+		vector<bool> seen(num_classes, false);
+		for (idx_t r = 0; r < num_rows && r < mapping.row_to_class.size() && r < rowcg.instance_to_group.size(); r++) {
+			idx_t e = mapping.row_to_class[r];
+			if (e >= num_classes) {
 				continue;
 			}
 			idx_t g = rowcg.instance_to_group[r];
@@ -1555,29 +1555,29 @@ struct UnboundedCandidateProvider {
 		return true;
 	}
 
-	//! Entity-scoped candidate columns are any named DECIDE-clause input columns
-	//! whose value is constant within each entity; grouping is lifted to entity
+	//! Keyed candidate columns are any named DECIDE-clause input columns
+	//! whose value is constant within each class; grouping is lifted to class
 	//! granularity after the constancy check.
-	vector<ColumnGrouping> &GetEntityCandidates(idx_t scope_idx) {
-		auto found = entity_candidates.find(scope_idx);
-		if (found != entity_candidates.end()) {
+	vector<ColumnGrouping> &GetKeyedCandidates(idx_t scope_idx) {
+		auto found = keyed_candidates.find(scope_idx);
+		if (found != keyed_candidates.end()) {
 			return found->second;
 		}
 		vector<ColumnGrouping> cands;
-		auto &mapping = entity_mappings[scope_idx];
-		idx_t num_entities = mapping.num_entities;
+		auto &mapping = keyed_mappings[scope_idx];
+		idx_t num_classes = mapping.num_classes;
 		for (idx_t ci = 0; ci < types.size(); ci++) {
 			ColumnGrouping rowcg;
-			if (!BuildRowGrouping(ci, num_entities, rowcg)) {
+			if (!BuildRowGrouping(ci, num_classes, rowcg)) {
 				continue;
 			}
 			ColumnGrouping ecg;
-			if (!LiftRowGroupingToEntities(rowcg, mapping, num_entities, ecg)) {
+			if (!LiftRowGroupingToClasses(rowcg, mapping, num_classes, ecg)) {
 				continue;
 			}
 			cands.push_back(std::move(ecg));
 		}
-		return entity_candidates.emplace(scope_idx, std::move(cands)).first->second;
+		return keyed_candidates.emplace(scope_idx, std::move(cands)).first->second;
 	}
 
 	vector<ColumnGrouping> operator()(idx_t decide_var_idx, idx_t total_instances) {
@@ -1587,37 +1587,36 @@ struct UnboundedCandidateProvider {
 		                 : DecideVarScope::ROW;
 		if (scope == DecideVarScope::GLOBAL) {
 			// One column for the whole query: there is no subset of rows or
-			// entities to characterize, so offer no grouping candidates.
+			// classes to characterize, so offer no grouping candidates.
 			return {};
 		}
 		if (scope == DecideVarScope::ROW) {
 			return GetRowCandidates();
 		}
-		idx_t scope_idx = decide_var_idx < var_indexer.var_entity_mapping_idx.size()
-		                      ? var_indexer.var_entity_mapping_idx[decide_var_idx]
+		idx_t scope_idx = decide_var_idx < var_indexer.var_keyed_mapping_idx.size()
+		                      ? var_indexer.var_keyed_mapping_idx[decide_var_idx]
 		                      : DConstants::INVALID_INDEX;
-		if (scope_idx == DConstants::INVALID_INDEX || scope_idx >= entity_scopes.size() ||
-		    scope_idx >= entity_mappings.size()) {
+		if (scope_idx == DConstants::INVALID_INDEX || scope_idx >= keyed_scopes.size() ||
+		    scope_idx >= keyed_mappings.size()) {
 			return {};
 		}
-		return GetEntityCandidates(scope_idx);
+		return GetKeyedCandidates(scope_idx);
 	}
 };
 } // namespace
 
 //! Assemble the unbounded engine's `get_candidates` callback. Resolves the live
-//! entity mappings (the Finalize-local mappings have been moved into the solver
+//! keyed mappings (the Finalize-local mappings have been moved into the solver
 //! input by now, so var_indexer owns them) and returns a stateful
 //! provider wrapped as the engine's std::function input.
 static std::function<vector<ColumnGrouping>(idx_t, idx_t)>
 BuildUnboundedCandidateProvider(ClientContext &context, ColumnDataCollection &data, vector<LogicalType> types,
                                 const DecideDiagParams &params, const vector<string> &input_column_names,
                                 const vector<bool> &input_column_in_clause, const VarIndexer &var_indexer,
-                                const vector<EntityScopeInfo> &entity_scopes, idx_t num_rows) {
-	return UnboundedCandidateProvider {context,           data,          std::move(types),
-	                                   params,            input_column_names, input_column_in_clause,
-	                                   var_indexer,       entity_scopes, var_indexer.entity_mappings,
-	                                   num_rows};
+                                const vector<KeyedScopeInfo> &keyed_scopes, idx_t num_rows) {
+	return UnboundedCandidateProvider {
+	    context,     data,         std::move(types),           params,  input_column_names, input_column_in_clause,
+	    var_indexer, keyed_scopes, var_indexer.keyed_mappings, num_rows};
 }
 
 //===--------------------------------------------------------------------===//
@@ -1722,16 +1721,16 @@ static void PrintDecideTimeoutReport(const SolverResult &result, double elapsed_
 }
 
 //===--------------------------------------------------------------------===//
-// Finalize: PHASE 1.5 — Build Entity Mappings for Keyed Decisions
+// Finalize: PHASE 1.5 — Build Keyed Mappings for Keyed Decisions
 //===--------------------------------------------------------------------===//
 
-vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate,
+vector<KeyedMapping> PhysicalDecide::BuildKeyedMappings(ClientContext &context, DecideGlobalSinkState &gstate,
                                                           idx_t num_rows, ChunkExprCache &chunk_expr_cache,
                                                           PerGroupCache &per_group_cache) const {
-	vector<EntityMapping> entity_mappings;
-	vector<string> labels; // entities are not labelled
-	for (auto &scope : entity_scopes) {
-		EntityMapping mapping;
+	vector<KeyedMapping> keyed_mappings;
+	vector<string> labels; // classes are not labelled
+	for (auto &scope : keyed_scopes) {
+		KeyedMapping mapping;
 		// A declaration's scope: the classes of its key over every row. A helper decision's
 		// scope: the groups of its link's `by` key among the rows the link's clause keeps
 		// that hold a member, numbered as its definition numbers them; the key is never
@@ -1751,27 +1750,27 @@ vector<EntityMapping> PhysicalDecide::BuildEntityMappings(ClientContext &context
 			std::function<bool(idx_t)> every_kept_row;
 			vector<idx_t> member_ids;
 			LookupOrBuildPerGroupIds(per_group_cache, keys, link.group_key, chunk_expr_cache, context, gstate.data,
-			                         num_rows, is_member, &kept, member_ids, mapping.num_entities, labels,
-			                         &every_kept_row, &mapping.row_to_entity);
+			                         num_rows, is_member, &kept, member_ids, mapping.num_classes, labels,
+			                         &every_kept_row, &mapping.row_to_class);
 		} else {
 			LookupOrBuildPerGroupIds(per_group_cache, keys, scope.key, chunk_expr_cache, context, gstate.data, num_rows,
-			                         std::function<bool(idx_t)> {}, nullptr, mapping.row_to_entity,
-			                         mapping.num_entities, labels);
+			                         std::function<bool(idx_t)> {}, nullptr, mapping.row_to_class, mapping.num_classes,
+			                         labels);
 		}
 		// A row in no class (a NULL written key, a dropped row) has no decision: it maps to
-		// one spare entity, so that every row has an id (EntityMapping::absent_entity).
-		for (auto &entity : mapping.row_to_entity) {
-			if (entity == DConstants::INVALID_INDEX) {
-				mapping.absent_entity = mapping.num_entities;
-				entity = mapping.absent_entity;
+		// one spare class, so that every row has an id (KeyedMapping::absent_class).
+		for (auto &id : mapping.row_to_class) {
+			if (id == DConstants::INVALID_INDEX) {
+				mapping.absent_class = mapping.num_classes;
+				id = mapping.absent_class;
 			}
 		}
-		if (mapping.absent_entity != DConstants::INVALID_INDEX) {
-			mapping.num_entities++;
+		if (mapping.absent_class != DConstants::INVALID_INDEX) {
+			mapping.num_classes++;
 		}
-		entity_mappings.push_back(std::move(mapping));
+		keyed_mappings.push_back(std::move(mapping));
 	}
-	return entity_mappings;
+	return keyed_mappings;
 }
 
 SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, ClientContext &context,
@@ -1813,19 +1812,19 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     PerGroupCache per_group_cache;
 
     //===--------------------------------------------------------------------===//
-    // PHASE 1.5: Build Entity Mappings for Keyed Decisions
+    // PHASE 1.5: Build Keyed Mappings for Keyed Decisions
     //===--------------------------------------------------------------------===//
 
-    DecideProfileScope phase("execution.entity_mapping");
-    vector<EntityMapping> entity_mappings =
-        BuildEntityMappings(context, gstate, num_rows, chunk_expr_cache, per_group_cache);
+    DecideProfileScope phase("execution.keyed_mapping");
+    vector<KeyedMapping> keyed_mappings =
+        BuildKeyedMappings(context, gstate, num_rows, chunk_expr_cache, per_group_cache);
 
     //===--------------------------------------------------------------------===//
     // PHASE 1.6: Scope checks of the clauses
     //===--------------------------------------------------------------------===//
 
     phase.Next("execution.scope_checks");
-    RunScopeChecks(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
+    RunScopeChecks(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
 
     //===--------------------------------------------------------------------===//
     // PHASE 2: Evaluate Coefficient Expressions
@@ -1833,20 +1832,20 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
 
     // 1. Evaluate constraints
     phase.Next("execution.evaluate_constraints");
-    EvaluateConstraints(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
+    EvaluateConstraints(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
 
     // 2. Evaluate objective
     phase.Next("execution.evaluate_objective");
     EvaluatedClauses evaluated =
-        EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
+        EvaluateObjective(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
 
     // 3. Evaluate composed MIN/MAX clauses (constraint and objective)
     phase.Next("execution.evaluate_composed");
-    EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings, evaluated);
+    EvaluateComposedClauses(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings, evaluated);
 
     // 4. Evaluate the value rewrite's helper decisions (their reducers' members)
     phase.Next("execution.evaluate_value_links");
-    EvaluateReducerValueLinks(context, gstate, num_rows, chunk_expr_cache, per_group_cache, entity_mappings);
+    EvaluateReducerValueLinks(context, gstate, num_rows, chunk_expr_cache, per_group_cache, keyed_mappings);
 
     //===--------------------------------------------------------------------===//
     // PHASE 3: Build and Solve ILP
@@ -1857,7 +1856,7 @@ SinkFinalizeType PhysicalDecide::Finalize(Pipeline &pipeline, Event &event, Clie
     phase.Next("execution.assemble_input");
     VarIndexer var_indexer;
     SolverInput solver_input =
-        BuildSolverInput(gstate, num_rows, std::move(entity_mappings), evaluated, var_indexer);
+        BuildSolverInput(gstate, num_rows, std::move(keyed_mappings), evaluated, var_indexer);
 
     // Under DIAGNOSE, keep the model input and column space as assembly left them —
     // before a single constant was derived. An infeasibility repair searches a WIDER box
@@ -1904,12 +1903,12 @@ static string DescribeKeyValues(const vector<string> &names, const vector<Value>
 	return result;
 }
 
-//! The scope checks left for the operator: the determination of an entity-scoped decision, which needs the entity
+//! The scope checks left for the operator: the determination of a keyed decision, which needs the class
 //! mapping the operator builds. Every other check is a plan under the DECIDE node (DirectAddRowChecks, installed by
 //! DecideOptimizer::InstallRowChecks) and has passed by now.
 void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                     ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                    const vector<EntityMapping> &entity_mappings) const {
+                                    const vector<KeyedMapping> &keyed_mappings) const {
 	DecideProfileScope profile("execution.scope_checks");
 	for (auto &check : scope_checks) {
 		D_ASSERT(check.kind == DecideScopeCheckKind::DETERMINES && check.decision != DConstants::INVALID_INDEX &&
@@ -1942,10 +1941,10 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 		idx_t failing = DConstants::INVALID_INDEX;
 		for (idx_t row = 0; row < num_rows; row++) {
 			auto group = ids[row];
-			if (group == DConstants::INVALID_INDEX || entity_mappings[scope.entity_scope_idx].IsAbsent(row)) {
+			if (group == DConstants::INVALID_INDEX || keyed_mappings[scope.keyed_scope_idx].IsAbsent(row)) {
 				continue; // no decision on this row: a reducer skips it
 			}
-			auto id = entity_mappings[scope.entity_scope_idx].row_to_entity[row];
+			auto id = keyed_mappings[scope.keyed_scope_idx].row_to_class[row];
 			if (instance[group] == DConstants::INVALID_INDEX) {
 				instance[group] = id;
 			} else if (instance[group] != id) {
@@ -1963,18 +1962,18 @@ void PhysicalDecide::RunScopeChecks(ClientContext &context, DecideGlobalSinkStat
 }
 
 //! A row in no class of a keyed decision's key has no decision there
-//! (EntityMapping::absent_entity), which reads like a NULL: a term that reads it on that row
+//! (KeyedMapping::absent_class), which reads like a NULL: a term that reads it on that row
 //! marks the row in `null_rows`, so its instance is skipped. A reducer over the decision never
 //! reads the row (DecideCanonicalizer::SkipNullData), and a row outside the clause's `when`
 //! is no instance.
-static void MarkAbsentDecisionReads(const vector<DecideVarScopeInfo> &scopes, const vector<EntityMapping> &mappings,
+static void MarkAbsentDecisionReads(const vector<DecideVarScopeInfo> &scopes, const vector<KeyedMapping> &mappings,
                                     idx_t var, const vector<bool> &scoped_kept, const TermFilterState &filter,
                                     vector<bool> &null_rows) {
 	if (var >= scopes.size() || !scopes[var].IsKeyed()) {
 		return;
 	}
-	auto &mapping = mappings[scopes[var].entity_scope_idx];
-	if (mapping.absent_entity == DConstants::INVALID_INDEX) {
+	auto &mapping = mappings[scopes[var].keyed_scope_idx];
+	if (mapping.absent_class == DConstants::INVALID_INDEX) {
 		return;
 	}
 	for (idx_t row = 0; row < null_rows.size(); row++) {
@@ -2056,7 +2055,7 @@ static void SkipGroupsWithAnEmptyReducer(const vector<const TermFilterState *> &
 void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate,
                                          idx_t num_rows, ChunkExprCache &chunk_expr_cache,
                                          PerGroupCache &per_group_cache,
-                                         const vector<EntityMapping> &entity_mappings) const {
+                                         const vector<KeyedMapping> &keyed_mappings) const {
     // The folded scoped bounds follow under DIAGNOSE, numbered after every other clause:
     // only the repair model emits their rows.
     const idx_t num_constraints = gstate.constraints.size();
@@ -2360,20 +2359,20 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 		for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
 			idx_t scope_idx = constraint->lhs_terms[term_idx].qualifier_scope_idx;
 			if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, num_rows,
+            ApplyQualifierToFilter(keyed_mappings, scope_idx, eval_const.row_group_ids, num_rows,
                                    term_filters[term_idx]);
             MaskCoefficientColumn(eval_const.row_coefficients[term_idx], term_filters[term_idx].mask);
 		}
 		for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
 			idx_t scope_idx = constraint->bilinear_terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, num_rows,
+            ApplyQualifierToFilter(keyed_mappings, scope_idx, eval_const.row_group_ids, num_rows,
                                    bilinear_filters[term_idx]);
 		}
 		for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
             idx_t scope_idx = constraint->quadratic_groups[group_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(entity_mappings, scope_idx, eval_const.row_group_ids, num_rows,
+            ApplyQualifierToFilter(keyed_mappings, scope_idx, eval_const.row_group_ids, num_rows,
                                    quadratic_filters[group_idx]);
         }
 		// A MIN/MAX reads the rows of its group as members, so a row the de-duplication
@@ -2441,8 +2440,7 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 			// genuine data RHS; a shared-scalar RHS reports the numeric knob instead.
 			if (!eval_const.rhs_is_shared_scalar &&
                 !ContainsScalarSubqueryProvenance(*constraint->rhs_expr)) {
-				eval_const.rhs_label =
-				    RenderDecideSource(*constraint->rhs_expr, source_fragments, entity_scopes, &keys);
+				eval_const.rhs_label = RenderDecideSource(*constraint->rhs_expr, source_fragments, keyed_scopes, &keys);
 			}
 			eval_const.rhs_values.Reserve(num_rows);
 		}
@@ -2679,18 +2677,18 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
         }
 
 		for (idx_t term_idx = 0; term_idx < constraint->lhs_terms.size(); term_idx++) {
-			MarkAbsentDecisionReads(variable_scopes, entity_mappings, constraint->lhs_terms[term_idx].variable_index,
+			MarkAbsentDecisionReads(variable_scopes, keyed_mappings, constraint->lhs_terms[term_idx].variable_index,
 			                        scoped_kept, term_filters[term_idx], null_rows);
 		}
 		for (idx_t term_idx = 0; term_idx < constraint->bilinear_terms.size(); term_idx++) {
 			for (auto var : {constraint->bilinear_terms[term_idx].var_a, constraint->bilinear_terms[term_idx].var_b}) {
-				MarkAbsentDecisionReads(variable_scopes, entity_mappings, var, scoped_kept, bilinear_filters[term_idx],
+				MarkAbsentDecisionReads(variable_scopes, keyed_mappings, var, scoped_kept, bilinear_filters[term_idx],
 				                        null_rows);
 			}
 		}
 		for (idx_t group_idx = 0; group_idx < constraint->quadratic_groups.size(); group_idx++) {
 			for (auto &term : constraint->quadratic_groups[group_idx].inner_terms) {
-				MarkAbsentDecisionReads(variable_scopes, entity_mappings, term.variable_index, scoped_kept,
+				MarkAbsentDecisionReads(variable_scopes, keyed_mappings, term.variable_index, scoped_kept,
 				                        quadratic_filters[group_idx], null_rows);
 			}
 		}
@@ -2706,7 +2704,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
                                                                    idx_t num_rows,
                                                                    ChunkExprCache &chunk_expr_cache,
                                                                    PerGroupCache &per_group_cache,
-                                                                   const vector<EntityMapping> &entity_mappings) const {
+                                                                   const vector<KeyedMapping> &keyed_mappings) const {
     // 2. Evaluate objective
     vector<TermFilterState> obj_linear_term_filters;
     vector<TermFilterState> obj_quadratic_term_filters;
@@ -3030,7 +3028,7 @@ PhysicalDecide::EvaluatedClauses PhysicalDecide::EvaluateObjective(ClientContext
 // variable bound, so a second formulation against a widened box reuses it as is.
 void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                              ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                             const vector<EntityMapping> &entity_mappings,
+                                             const vector<KeyedMapping> &keyed_mappings,
                                              EvaluatedClauses &evaluated) const {
 	if (composed_minmax_constraints.empty() && composed_minmax_objective_terms.empty()) {
 		return;
@@ -3162,7 +3160,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 				// Named as the plan prints the reducer, so a diagnosis over the extremum
 				// column reads `max(ship)`.
 				ta.label = term.agg_name + "(" +
-				           RenderDecideSource(*term.inner_expr, source_fragments, entity_scopes, &keys) + ")";
+				           RenderDecideSource(*term.inner_expr, source_fragments, keyed_scopes, &keys) + ")";
 			}
 			ta.inner_terms = &term.inner_terms;
 			if (term.filter) {
@@ -3179,7 +3177,7 @@ void PhysicalDecide::EvaluateComposedClauses(ClientContext &context, DecideGloba
 			// keeps the first row of each class among the rows it reads.
 			if (term.qualifier_scope_idx != DConstants::INVALID_INDEX) {
 				auto keep =
-				    BuildQualifierKeepMask(entity_mappings, term.qualifier_scope_idx, {}, num_rows, &ta.filter_mask);
+				    BuildQualifierKeepMask(keyed_mappings, term.qualifier_scope_idx, {}, num_rows, &ta.filter_mask);
 				for (idx_t row = 0; row < num_rows; row++) {
 					ta.filter_mask[row] = ta.filter_mask[row] && keep[row];
 				}
@@ -3281,7 +3279,7 @@ static void EvaluateTermColumns(ClientContext &context, ColumnDataCollection &da
 
 void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                                ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                               const vector<EntityMapping> &entity_mappings) const {
+                                               const vector<KeyedMapping> &keyed_mappings) const {
 	for (auto &link : reducer_value_links) {
 		DecideProfileScope clause_profile("extraction.value_link");
 		ReducerValueLinkSpec spec;
@@ -3307,7 +3305,7 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		    link.filter ? KeptRows(*link.filter, chunk_expr_cache, context, gstate.data, num_rows, &kept) : kept;
 
 		// One group per `by` value among the kept rows that holds a member, numbered as the
-		// helper's scope numbers them (BuildEntityMappings); a member row stands in its
+		// helper's scope numbers them (BuildKeyedMappings); a member row stands in its
 		// group, every other row outside.
 		std::function<bool(idx_t)> is_member = [&](idx_t row) {
 			return read[row];
@@ -3329,7 +3327,7 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 		members.has_filter = true;
 		members.mask = read;
 		if (link.qualifier_scope_idx != DConstants::INVALID_INDEX) {
-			ApplyQualifierToFilter(entity_mappings, link.qualifier_scope_idx, ec.row_group_ids, num_rows, members);
+			ApplyQualifierToFilter(keyed_mappings, link.qualifier_scope_idx, ec.row_group_ids, num_rows, members);
 			for (idx_t row = 0; row < num_rows; row++) {
 				if (!members.mask[row]) {
 					ec.row_group_ids[row] = DConstants::INVALID_INDEX;
@@ -3354,7 +3352,7 @@ void PhysicalDecide::EvaluateReducerValueLinks(ClientContext &context, DecideGlo
 //===--------------------------------------------------------------------===//
 
 SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows,
-                                             vector<EntityMapping> entity_mappings,
+                                             vector<KeyedMapping> keyed_mappings,
                                              EvaluatedClauses &evaluated,
                                              VarIndexer &out_var_indexer) const {
     DecideProfileScope phase("assembly.var_indexer");
@@ -3364,17 +3362,17 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
     SolverInput solver_input;
     solver_input.num_rows = num_rows;
     solver_input.num_decide_vars = num_decide_vars;
-    solver_input.entity_mappings = std::move(entity_mappings);
+    solver_input.keyed_mappings = std::move(keyed_mappings);
     solver_input.variable_scopes = variable_scopes;
 
-    // The flat column space, built ONCE and handed to every consumer below. It reads only the scopes and the entity
+    // The flat column space, built ONCE and handed to every consumer below. It reads only the scopes and the class
     // mappings, which are final here, and the floors a `when` lowers (ResolveLiftedFloors) need its row to instance
     // map before the first box pass.
     //
     // It is reused for: (1) the row to instance map of the floors, (2) the flat indices every construct site emits
     // against, a general or indicator constraint naming flat columns, so a site that may state one natively needs the
     // index before it can emit, (3) the SolverModel::Build() call inside SolveModel(), and (4) gstate.var_indexer for
-    // solution readback after the solve. Nothing below adds a decide variable, so the row / entity / scalar blocks are
+    // solution readback after the solve. Nothing below adds a decide variable, so the row / keyed / global blocks are
     // final from this point; only `solver_input.num_global_vars` keeps growing as auxiliary globals are appended,
     // and `total_vars` is refreshed just before the solve. The owning form survives past `solver_input` once that is
     // moved onto gstate.
@@ -3510,7 +3508,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
              term_idx < gstate.objective->terms.size() && term_idx < evaluated.linear_filters.size(); term_idx++) {
             idx_t scope_idx = gstate.objective->terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
+            ApplyQualifierToFilter(solver_input.keyed_mappings, scope_idx,
                                    solver_input.objective_row_group_ids, num_rows,
                                    evaluated.linear_filters[term_idx]);
             MaskCoefficientColumn(solver_input.objective_coefficients[term_idx],
@@ -3521,7 +3519,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
              term_idx++) {
             idx_t scope_idx = gstate.objective->squared_terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
+            ApplyQualifierToFilter(solver_input.keyed_mappings, scope_idx,
                                    solver_input.objective_row_group_ids, num_rows,
                                    evaluated.quadratic_filters[term_idx]);
             MaskCoefficientColumn(solver_input.quadratic_inner_coefficients[term_idx],
@@ -3532,7 +3530,7 @@ SolverInput PhysicalDecide::BuildSolverInput(DecideGlobalSinkState &gstate, idx_
              term_idx++) {
             idx_t scope_idx = gstate.objective->bilinear_terms[term_idx].qualifier_scope_idx;
             if (scope_idx == DConstants::INVALID_INDEX) continue;
-            ApplyQualifierToFilter(solver_input.entity_mappings, scope_idx,
+            ApplyQualifierToFilter(solver_input.keyed_mappings, scope_idx,
                                    solver_input.objective_row_group_ids, num_rows,
                                    evaluated.bilinear_filters[term_idx]);
             MaskCoefficientColumn(solver_input.bilinear_objective_terms[term_idx].row_coefficients,
@@ -3581,7 +3579,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
     idx_t num_rows = solver_input.num_rows;
 
     // The flat column space is settled by assembly and is never rebuilt here: the row,
-    // entity and scalar blocks are final, and only the global block grows as auxiliaries
+    // keyed and global blocks are final, and only the global block grows as auxiliaries
     // are appended below. That is what lets a second formulation, against a different
     // box, name exactly the same columns as the first — which the elastic path relies on
     // to read its solution back through the same labels.
@@ -3825,7 +3823,7 @@ void PhysicalDecide::FormulateModel(SolverInput &solver_input, const Formulation
                                          native_min_max);
 	}
 
-	// Refresh total_vars: the row/entity blocks were finalized before linearization,
+	// Refresh total_vars: the row/keyed blocks were finalized before linearization,
     // but global aux vars were appended by the construct sites above.
     var_indexer.total_vars = var_indexer.global_block_start + solver_input.num_global_vars;
 
@@ -4298,7 +4296,7 @@ SinkFinalizeType PhysicalDecide::FinalizeSolveResult(ClientContext &context, Dec
         auto get_candidates =
             BuildUnboundedCandidateProvider(context, gstate.data, gstate.data.Types(), diag_params,
                                             input_column_names, input_column_in_clause, var_indexer,
-                                            entity_scopes, num_rows);
+                                            keyed_scopes, num_rows);
 
         UnboundedDiagnosisInput diag_input {
             solve_result, var_indexer, var_labels, var_is_aux, diag_params, get_candidates,
@@ -4673,8 +4671,7 @@ SourceResultType PhysicalDecide::GetData(ExecutionContext &context, DataChunk &c
 		// A row in no class of a keyed decision's key has no decision: its value is NULL.
 		if (decide_var_idx < gstate.var_indexer.var_scope.size() &&
 		    gstate.var_indexer.var_scope[decide_var_idx] == DecideVarScope::KEYED) {
-			auto &mapping =
-			    gstate.var_indexer.entity_mappings[gstate.var_indexer.var_entity_mapping_idx[decide_var_idx]];
+			auto &mapping = gstate.var_indexer.keyed_mappings[gstate.var_indexer.var_keyed_mapping_idx[decide_var_idx]];
 			for (idx_t row_in_chunk = 0; row_in_chunk < chunk_size; row_in_chunk++) {
 				if (mapping.IsAbsent(source_state.current_row_offset + row_in_chunk)) {
 					FlatVector::SetNull(output_vector, row_in_chunk, true);

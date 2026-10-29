@@ -53,7 +53,7 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 	Connection con(db);
 	DecideCanonicalizer canonicalizer(*con.context, DECIDE_INDEX,
 	                                  {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Row()},
-	                                  duckdb::vector<EntityScopeInfo>(), duckdb::vector<bool> {false, false});
+	                                  duckdb::vector<KeyedScopeInfo>(), duckdb::vector<bool> {false, false});
 
 	SECTION("canonical reversed comparison is a fixed point") {
 		auto written = Comparison(ExpressionType::COMPARE_GREATERTHANOREQUALTO,
@@ -76,7 +76,7 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 
 	SECTION("WHEN wrapper arity is structural") {
 		auto wrapped = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		wrapped->SetAlias(WHEN_CONSTRAINT_TAG);
+		wrapped->SetAlias(WHEN_FILTER_TAG);
 		wrapped->children.push_back(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO,
 		                                       DecideRef(0), DoubleConstant(5)));
 		REQUIRE_VERIFY_THROWS(canonicalizer.VerifyCanonical(*wrapped));
@@ -84,7 +84,7 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 
 	SECTION("WHEN wrapper remains structural with composable metadata") {
 		auto wrapped = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		string alias = WHEN_CONSTRAINT_TAG;
+		string alias = WHEN_FILTER_TAG;
 		AddDecideTag(alias, MakeSourceClauseTag(0));
 		wrapped->SetAlias(std::move(alias));
 		wrapped->children.push_back(Comparison(ExpressionType::COMPARE_LESSTHANOREQUALTO,
@@ -97,7 +97,7 @@ TEST_CASE("DeciDB canonical invariant verifier", "[decidb][canonicalize][verifie
 	// C0's scope rule: every walk that carries a clause's enclosing scope reads one `when` and one `per` per clause.
 	auto when_wrapper = [&](duckdb::unique_ptr<Expression> constraint) {
 		auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
-		wrapper->SetAlias(WHEN_CONSTRAINT_TAG);
+		wrapper->SetAlias(WHEN_FILTER_TAG);
 		wrapper->children.push_back(std::move(constraint));
 		wrapper->children.push_back(make_uniq<BoundConstantExpression>(Value::BOOLEAN(true)));
 		return wrapper;

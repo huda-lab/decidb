@@ -44,7 +44,7 @@ STAGES = {
     "plan": ["frontend.physical_decide"],
     "input": ["execution.assemble_input", "execution.sink_append", "execution.sink_combine"],
     "extraction": ["execution.evaluate_constraints", "execution.evaluate_objective",
-                   "execution.evaluate_composed", "execution.entity_mapping", "execution.formulate"],
+                   "execution.evaluate_composed", "execution.keyed_mapping", "execution.formulate"],
     "model_build": ["solver.build_neutral_model"],
     "backend_load": ["gurobi.load", "highs.load"],
     "solve": ["gurobi.optimize", "highs.optimize"],

@@ -140,7 +140,7 @@ public:
 	}
 
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
-		if (ir.decisions.empty() || !ir.entity_scopes.empty()) {
+		if (ir.decisions.empty() || !ir.keyed_scopes.empty()) {
 			return nullptr;
 		}
 		for (auto &decision : ir.decisions) {

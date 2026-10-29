@@ -282,7 +282,7 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 
 	// `r_name` is referenced ONLY by the keyed declaration. Its column ref lives in the
 	// key table, which column pruning reads, so a round trip that loses the table loses
-	// the entity's identity.
+	// the keyed scope's key.
 	// `ship <= cap * open` is the one shape canonicalization has to move -- a bound that
 	// CONTAINS a decision -- so it is the only thing that populates source_lhs/source_rhs.
 	auto plan = con.ExtractPlan("SELECT s_key, ship FROM site JOIN region USING (r_key) "
@@ -297,20 +297,20 @@ TEST_CASE("Bound DECIDE plans survive a serialization round trip", "[decidb]") {
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
 
-	// Entity scopes and the keys they name, which the previous hand-written serializer
+	// Keyed scopes and the keys they name, which the previous hand-written serializer
 	// dropped entirely.
-	REQUIRE(after->entity_scopes.size() == before->entity_scopes.size());
-	REQUIRE(after->entity_scopes.size() == 1);
-	REQUIRE(after->entity_scopes[0].key == before->entity_scopes[0].key);
-	REQUIRE(after->entity_scopes[0].scoped_variable_indices == before->entity_scopes[0].scoped_variable_indices);
-	REQUIRE(!before->keys[before->entity_scopes[0].key].elements.empty());
+	REQUIRE(after->keyed_scopes.size() == before->keyed_scopes.size());
+	REQUIRE(after->keyed_scopes.size() == 1);
+	REQUIRE(after->keyed_scopes[0].key == before->keyed_scopes[0].key);
+	REQUIRE(after->keyed_scopes[0].scoped_variable_indices == before->keyed_scopes[0].scoped_variable_indices);
+	REQUIRE(!before->keys[before->keyed_scopes[0].key].elements.empty());
 	RequireSameKeys(*after, *before);
 
 	// Per-variable scope assignment.
 	REQUIRE(after->variable_scopes.size() == before->variable_scopes.size());
 	for (idx_t i = 0; i < before->variable_scopes.size(); i++) {
 		REQUIRE(after->variable_scopes[i].scope == before->variable_scopes[i].scope);
-		REQUIRE(after->variable_scopes[i].entity_scope_idx == before->variable_scopes[i].entity_scope_idx);
+		REQUIRE(after->variable_scopes[i].keyed_scope_idx == before->variable_scopes[i].keyed_scope_idx);
 	}
 
 	// Display provenance, including the source_lhs/source_rhs pair the old serializer
@@ -367,7 +367,7 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
 
-	auto &scopes = before->entity_scopes;
+	auto &scopes = before->keyed_scopes;
 	auto &vars = before->variable_scopes;
 	REQUIRE(scopes.size() == 2);
 	REQUIRE(vars.size() == 6);
@@ -375,8 +375,8 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	REQUIRE(vars[0].HasDeclaredKey());
 	REQUIRE(vars[0].declared_key == "region.r_name, site.cap");
 	REQUIRE(vars[1].declared_key == "site.cap, r_name, r_name");
-	REQUIRE(vars[0].entity_scope_idx == vars[1].entity_scope_idx);
-	auto &shared = before->keys[scopes[vars[0].entity_scope_idx].key];
+	REQUIRE(vars[0].keyed_scope_idx == vars[1].keyed_scope_idx);
+	auto &shared = before->keys[scopes[vars[0].keyed_scope_idx].key];
 	REQUIRE(shared.elements.size() == 2);
 	for (auto &element : shared.elements) {
 		REQUIRE(element.null_mode == DecideKeyNullMode::NO_GROUP);
@@ -385,9 +385,9 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	// that names it; a column key over some of those columns is another scope.
 	REQUIRE(vars[2].HasDeclaredKey());
 	REQUIRE(vars[3].HasDeclaredKey());
-	REQUIRE(vars[2].entity_scope_idx == vars[3].entity_scope_idx);
-	REQUIRE(vars[2].entity_scope_idx != vars[0].entity_scope_idx);
-	for (auto &element : before->keys[scopes[vars[2].entity_scope_idx].key].elements) {
+	REQUIRE(vars[2].keyed_scope_idx == vars[3].keyed_scope_idx);
+	REQUIRE(vars[2].keyed_scope_idx != vars[0].keyed_scope_idx);
+	for (auto &element : before->keys[scopes[vars[2].keyed_scope_idx].key].elements) {
 		REQUIRE(element.null_mode == DecideKeyNullMode::VALUE);
 	}
 	REQUIRE(vars[4].IsGlobal());
@@ -396,15 +396,15 @@ TEST_CASE("Keyed declarations share one scope per key and survive a serializatio
 	auto copied = RoundTrip(con, *plan);
 	auto *after = FindDecide(*copied);
 	REQUIRE(after != nullptr);
-	REQUIRE(after->entity_scopes.size() == scopes.size());
+	REQUIRE(after->keyed_scopes.size() == scopes.size());
 	for (idx_t i = 0; i < scopes.size(); i++) {
-		REQUIRE(after->entity_scopes[i].key == scopes[i].key);
+		REQUIRE(after->keyed_scopes[i].key == scopes[i].key);
 	}
 	RequireSameKeys(*after, *before);
 	REQUIRE(after->variable_scopes.size() == vars.size());
 	for (idx_t i = 0; i < vars.size(); i++) {
 		REQUIRE(after->variable_scopes[i].scope == vars[i].scope);
-		REQUIRE(after->variable_scopes[i].entity_scope_idx == vars[i].entity_scope_idx);
+		REQUIRE(after->variable_scopes[i].keyed_scope_idx == vars[i].keyed_scope_idx);
 		REQUIRE(after->variable_scopes[i].declared_key == vars[i].declared_key);
 	}
 }
@@ -420,8 +420,8 @@ TEST_CASE("A column written beside its relation keeps the written column's NULL 
 	                            "DECIDE per region, r_name: g(INT) SUCH THAT g <= 1 MAXIMIZE SUM(g)");
 	auto *before = FindDecide(*plan);
 	REQUIRE(before != nullptr);
-	REQUIRE(before->entity_scopes.size() == 1);
-	auto &key = before->keys[before->entity_scopes[0].key];
+	REQUIRE(before->keyed_scopes.size() == 1);
+	auto &key = before->keys[before->keyed_scopes[0].key];
 	REQUIRE(key.elements.size() == 2);
 	idx_t written = 0;
 	for (auto &element : key.elements) {
@@ -573,7 +573,7 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 	// `per region` within its `by (site.r_key)` groups adds their union for its check.
 	REQUIRE(before->keys.size() == 4);
 	REQUIRE(before->scope_checks[1].key == KeyWritten(*before, "region, site.r_key"));
-	REQUIRE(KeyWritten(*before, "region") == before->entity_scopes[0].key);
+	REQUIRE(KeyWritten(*before, "region") == before->keyed_scopes[0].key);
 	REQUIRE(before->keys[KeyWritten(*before, "site.r_key")].Names() == duckdb::vector<string> {"site.r_key"});
 	duckdb::vector<DecideScopeCheckKind> kinds;
 	for (auto &check : before->scope_checks) {
@@ -607,8 +607,8 @@ TEST_CASE("Scoped clauses keep their by keys, scope checks and objective mark th
 		REQUIRE(copy.object == check.object);
 		REQUIRE(copy.context == check.context);
 	}
-	REQUIRE(after->entity_scopes.size() == before->entity_scopes.size());
-	for (idx_t i = 0; i < before->entity_scopes.size(); i++) {
-		REQUIRE(after->entity_scopes[i].key == before->entity_scopes[i].key);
+	REQUIRE(after->keyed_scopes.size() == before->keyed_scopes.size());
+	for (idx_t i = 0; i < before->keyed_scopes.size(); i++) {
+		REQUIRE(after->keyed_scopes[i].key == before->keyed_scopes[i].key);
 	}
 }

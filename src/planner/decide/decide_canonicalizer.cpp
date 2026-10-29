@@ -158,15 +158,15 @@ vector<CanonicalAtom> ReadCanonicalAtoms(const Expression &side, idx_t decide_in
 //! The key of each decision's scope: the empty key for a query-wide decision, its key for a keyed one, one per row
 //! for every other.
 static vector<idx_t> DecisionKeys(const vector<DecideVarScopeInfo> &variable_scopes,
-                                  const vector<EntityScopeInfo> &entity_scopes) {
+                                  const vector<KeyedScopeInfo> &keyed_scopes) {
 	vector<idx_t> keys;
 	for (auto &scope : variable_scopes) {
 		idx_t key = DECIDE_ROW_KEY;
 		if (scope.IsGlobal()) {
 			key = DConstants::INVALID_INDEX;
-		} else if (scope.IsKeyed() && scope.entity_scope_idx < entity_scopes.size() &&
-		           entity_scopes[scope.entity_scope_idx].key != DConstants::INVALID_INDEX) {
-			key = entity_scopes[scope.entity_scope_idx].key;
+		} else if (scope.IsKeyed() && scope.keyed_scope_idx < keyed_scopes.size() &&
+		           keyed_scopes[scope.keyed_scope_idx].key != DConstants::INVALID_INDEX) {
+			key = keyed_scopes[scope.keyed_scope_idx].key;
 		}
 		keys.push_back(key);
 	}
@@ -175,19 +175,19 @@ static vector<idx_t> DecisionKeys(const vector<DecideVarScopeInfo> &variable_sco
 
 DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
                                          vector<DecideVarScopeInfo> variable_scopes_p,
-                                         const vector<EntityScopeInfo> &entity_scopes, const vector<bool> &is_boolean)
+                                         const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean)
     : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
-      decision_keys(DecisionKeys(variable_scopes, entity_scopes)), boolean_decisions(is_boolean),
+      decision_keys(DecisionKeys(variable_scopes, keyed_scopes)), boolean_decisions(is_boolean),
       judge_column_refs(false) {
 }
 
 DecideCanonicalizer::DecideCanonicalizer(ClientContext &context, idx_t decide_index,
                                          vector<DecideVarScopeInfo> variable_scopes_p,
-                                         const vector<EntityScopeInfo> &entity_scopes, const vector<bool> &is_boolean,
+                                         const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean,
                                          unordered_set<idx_t> query_wide_table_indexes,
                                          unordered_set<idx_t> correlated_subquery_table_indexes)
     : context(context), decide_index(decide_index), variable_scopes(std::move(variable_scopes_p)),
-      decision_keys(DecisionKeys(variable_scopes, entity_scopes)),
+      decision_keys(DecisionKeys(variable_scopes, keyed_scopes)),
       query_wide_table_indexes(std::move(query_wide_table_indexes)),
       correlated_subquery_table_indexes(std::move(correlated_subquery_table_indexes)), judge_column_refs(true),
       boolean_decisions(is_boolean) {
@@ -277,7 +277,7 @@ static void CollectNullableData(const Expression &expr, idx_t decide_index, vect
 //! NULL there leaves the row with no decision (a relation's columns compare NULL as a value).
 static void CollectAbsentDecisionKeys(const Expression &expr, idx_t decide_index,
                                       const vector<DecideVarScopeInfo> &variable_scopes,
-                                      const vector<EntityScopeInfo> &scopes, const vector<DecideKey> &keys,
+                                      const vector<KeyedScopeInfo> &scopes, const vector<DecideKey> &keys,
                                       vector<unique_ptr<Expression>> &out) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		return;
@@ -289,7 +289,7 @@ static void CollectAbsentDecisionKeys(const Expression &expr, idx_t decide_index
 		    variable_scopes[var].scope != DecideVarScope::KEYED) {
 			return;
 		}
-		for (auto &element : DecideKeyElements(keys, scopes[variable_scopes[var].entity_scope_idx].key)) {
+		for (auto &element : DecideKeyElements(keys, scopes[variable_scopes[var].keyed_scope_idx].key)) {
 			if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
 				AddNullTest(*element.expression, out);
 			}
@@ -301,7 +301,7 @@ static void CollectAbsentDecisionKeys(const Expression &expr, idx_t decide_index
 	});
 }
 
-void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<EntityScopeInfo> &scopes,
+void DecideCanonicalizer::SkipNullData(Expression &expr, const vector<KeyedScopeInfo> &scopes,
                                        const vector<DecideKey> &keys) const {
 	ExpressionIterator::EnumerateChildren(expr, [&](Expression &child) { SkipNullData(child, scopes, keys); });
 	if (expr.GetExpressionClass() != ExpressionClass::BOUND_AGGREGATE || !ReferencesDecideVar(expr)) {
@@ -1454,11 +1454,11 @@ static void VerifyOneScopePerClause(const Expression &expression, bool under_wra
 	if (!IsConstraintWrapper(conjunction) && under_wrapper) {
 		CanonicalInvariantFailure("C0", "a plain AND under a WHEN or per wrapper", expression);
 	}
-	if (IsWhenConstraintWrapper(conjunction) && under_when) {
+	if (IsWhenFilterWrapper(conjunction) && under_when) {
 		CanonicalInvariantFailure("C0", "a WHEN wrapper inside another WHEN wrapper", expression);
 	}
 	const bool wrapper = IsConstraintWrapper(conjunction);
-	const bool when = under_when || IsWhenConstraintWrapper(conjunction);
+	const bool when = under_when || IsWhenFilterWrapper(conjunction);
 	for (idx_t i = 0; i < conjunction.children.size(); i++) {
 		if (IsConstraintChild(conjunction, i)) {
 			VerifyOneScopePerClause(*conjunction.children[i], under_wrapper || wrapper, when);
@@ -1482,7 +1482,7 @@ void DecideCanonicalizer::VerifyCanonicalTree(const Expression &constraints) con
 		if (conjunction.type != ExpressionType::CONJUNCTION_AND) {
 			CanonicalInvariantFailure("C0", "constraint conjunction is not AND", expression);
 		}
-		if (IsWhenConstraintWrapper(conjunction) && conjunction.children.size() != 2) {
+		if (IsWhenFilterWrapper(conjunction) && conjunction.children.size() != 2) {
 			CanonicalInvariantFailure("C0", "WHEN wrapper must contain one constraint and one condition",
 			                          expression);
 		}
@@ -1718,19 +1718,19 @@ static string DeclaredScope(const DecideVarScopeInfo &scope) {
 
 void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression &reducer, const Expression *rows,
                                                   DecideScopeChecks &scope) const {
-	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys};
+	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
 	auto reducer_text = RenderDecideReducer(reducer, names);
 	idx_t by = DConstants::INVALID_INDEX;
 	TryParseGroupKeyTag(reducer.GetAlias(), by);
 	// The reducer's own `per K'` -- or `D` of the colon form `SUM(D: e)` -- determines its
 	// body within each `by` group, over the rows its `when` keeps.
 	idx_t scope_idx;
-	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= scope.entity_scopes.size() ||
+	if (!TryParseQualifiedReducerTag(reducer.GetAlias(), scope_idx) || scope_idx >= scope.keyed_scopes.size() ||
 	    reducer.children.empty()) {
 		return;
 	}
-	auto key = WithinGroups(scope.entity_scopes[scope_idx].key, by, scope.keys);
-	auto subject = DecideKeyText(scope.keys, scope.entity_scopes[scope_idx].key);
+	auto key = WithinGroups(scope.keyed_scopes[scope_idx].key, by, scope.keys);
+	auto subject = DecideKeyText(scope.keys, scope.keyed_scopes[scope_idx].key);
 	ClauseParts body;
 	CollectClauseParts(
 	    *reducer.children[0], decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, body);
@@ -1764,7 +1764,7 @@ void DecideCanonicalizer::BuildReducerScopeChecks(const BoundAggregateExpression
 
 void DecideCanonicalizer::BuildClauseScopeChecks(const Expression &leaf, const DecideEnclosingScope &enclosing,
                                                  DecideScopeChecks &scope) const {
-	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys};
+	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
 	ClauseParts parts;
 	CollectClauseParts(
 	    leaf, decide_index, [&](const Expression &expr) { return IsQueryWideConstant(expr); }, parts);
@@ -1832,11 +1832,11 @@ void DecideCanonicalizer::BuildObjectiveScopeChecks(const Expression &objective,
 		if (!IsConstraintWrapper(conj) || conj.children.empty()) {
 			break;
 		}
-		two_level = two_level || IsPerConstraintWrapper(conj);
+		two_level = two_level || IsTwoLevelObjectiveWrapper(conj);
 		enclosing = EnterDecideScope(conj, enclosing);
 		body = conj.children[0].get();
 	}
-	DecideSourceNames names {scope.source_fragments, scope.entity_scopes, scope.keys};
+	DecideSourceNames names {scope.source_fragments, scope.keyed_scopes, scope.keys};
 	if (two_level) {
 		return; // its classes are the inner reducer's own `by` groups, its key's
 	}

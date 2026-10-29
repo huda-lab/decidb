@@ -54,7 +54,7 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 		wrapper->children.push_back(std::move(objective));
 		wrapper->children.push_back(BoundCastExpression::AddCastToType(
 		    context, std::move(BoundExpression::GetExpression(*when->children[1])), LogicalType::BOOLEAN));
-		wrapper->alias = WHEN_CONSTRAINT_TAG;
+		wrapper->alias = WHEN_FILTER_TAG;
 		if (when_text != DConstants::INVALID_INDEX) {
 			AddDecideTag(wrapper->alias, MakeSourceFragmentTag(when_text));
 		}
@@ -62,7 +62,7 @@ BindResult DecideObjectiveBinder::BindScopedObjective(unique_ptr<ParsedExpressio
 	};
 	// The two-level form's PER wrapper stays outermost, as the nested objective's rewrite
 	// reads it: PER{WHEN{objective, c}, k}.
-	if (bound->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION && IsPerConstraintTag(bound->alias)) {
+	if (bound->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION && IsTwoLevelObjectiveTag(bound->alias)) {
 		auto &per = bound->Cast<BoundConjunctionExpression>();
 		per.children[0] = wrap(std::move(per.children[0]));
 		return BindResult(std::move(bound));
@@ -147,7 +147,7 @@ BindResult DecideObjectiveBinder::BindTwoLevelObjective(unique_ptr<ParsedExpress
 	}
 	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 	wrapper->children.push_back(std::move(result.expression));
-	wrapper->alias = PER_CONSTRAINT_TAG;
+	wrapper->alias = TWO_LEVEL_OBJECTIVE_TAG;
 	if (key != DConstants::INVALID_INDEX) {
 		AddDecideTag(wrapper->alias, MakePerKeyTag(key));
 	}

@@ -1065,7 +1065,7 @@
       },
       {
         "id": 101,
-        "name": "entity_scope_idx",
+        "name": "keyed_scope_idx",
         "type": "idx_t"
       },
       {
@@ -1131,7 +1131,7 @@
     "pointer_type": "none"
   },
   {
-    "class": "EntityScopeInfo",
+    "class": "KeyedScopeInfo",
     "includes": [
       "duckdb/planner/operator/decide/logical_decide.hpp"
     ],

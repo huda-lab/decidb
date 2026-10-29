@@ -17,7 +17,7 @@ Covers:
 Cross-feature interactions (oracle-compared, module-level):
   - test_bilinear_per_group:           bilinear + `per` (McCormick aux per group)
   - test_bilinear_when_per_triple:     bilinear + `when` + `per` triple composition
-  - test_bilinear_entity_scoped:       entity-scoped Boolean × row-scoped Real
+  - test_bilinear_keyed:               keyed Boolean × row-scoped Real
   - test_bilinear_minimize_objective:  MINIMIZE direction with data coefficient
   - test_bilinear_bool_real_constraint: McCormick feasibility for Bool×Real constraint
 """
@@ -1398,7 +1398,7 @@ def test_bilinear_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_bilinear_entity_scoped(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_bilinear_keyed(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Boolean keepN declared per n (one per nation) × row-scoped Real x.
     McCormick aux per join row must use the entity-keyed Boolean — multiple
     rows of the same nation share the same keepN variable."""
@@ -1427,7 +1427,7 @@ def test_bilinear_entity_scoped(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     nations = sorted({int(row[1]) for row in data})
 
     t_build = time.perf_counter()
-    oracle_solver.create_model("bilinear_entity_scoped")
+    oracle_solver.create_model("bilinear_keyed")
     knames = {nk: f"keepN_{nk}" for nk in nations}
     xnames = [f"x_{i}" for i in range(n)]
     wnames = [f"w_{i}" for i in range(n)]
@@ -1476,7 +1476,7 @@ def test_bilinear_entity_scoped(decidb_cli, duckdb_conn, oracle_solver, perf_tra
     )
 
     perf_tracker.record(
-        "bilinear_entity_scoped", decidb_time, build_time,
+        "bilinear_keyed", decidb_time, build_time,
         result.solve_time_seconds, n, len(nations) + n * 2, n * 3 + 1,
         result.objective_value, oracle_solver.solver_name(),
         comparison_status="optimal",

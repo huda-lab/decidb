@@ -69,7 +69,7 @@ void LinearizeBilinear(SolverInput &input, const VarIndexer &indexer, const Form
 	for (auto &link : input.bilinear_links) {
 		const auto &mapping_scope = indexer.var_scope[link.aux_idx];
 		const idx_t absent = mapping_scope == DecideVarScope::KEYED
-		                         ? indexer.entity_mappings[indexer.var_entity_mapping_idx[link.aux_idx]].absent_entity
+		                         ? indexer.keyed_mappings[indexer.var_keyed_mapping_idx[link.aux_idx]].absent_class
 		                         : DConstants::INVALID_INDEX;
 		for (idx_t instance = 0; instance < indexer.NumInstances(link.aux_idx); instance++) {
 			if (instance == absent) {

@@ -44,9 +44,9 @@ struct DecideTerm {
 	unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
 	bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
 	LinearTermReduction reduction = LinearTermReduction::NONE;
-	//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
-	//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
-	//! entity_mappings; coefficient evaluation keeps one row per tuple identity
+	//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
+	//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
+	//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 
@@ -63,9 +63,9 @@ struct BilinearConstraintTerm {
 	int sign = 1;
 	unique_ptr<Expression> filter; // Optional filter: the reducer's own `when`
 	bool avg_scale = false;        // True when this term came from AVG and needs 1/N scaling
-	//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
-	//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
-	//! entity_mappings; coefficient evaluation keeps one row per tuple identity
+	//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
+	//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
+	//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 	//! of that relation and zeroes the duplicates the join introduced.
 	idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 };
@@ -154,9 +154,9 @@ struct DecideConstraint {
 		bool scale_divides = false;
 		unique_ptr<Expression> filter; // Optional filter: the reducer's own `when`
 		bool avg_scale = false;        // True when this group came from AVG and needs 1/N scaling
-		//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
-		//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
-		//! entity_mappings; coefficient evaluation keeps one row per tuple identity
+		//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
+		//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
+		//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 		//! of that relation and zeroes the duplicates the join introduced.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 
@@ -197,9 +197,9 @@ struct DecideObjective {
 		int sign = 1;                       // +1 or -1
 		unique_ptr<Expression> filter;      // Optional filter: the reducer's own `when`
 		bool avg_scale = false;             // True when this term came from AVG and needs 1/N scaling
-		//! Entity scope this term's reducer is qualified by (`sum(D: ...)`), or
-		//! INVALID_INDEX for an unqualified reducer. Indexes entity_scopes /
-		//! entity_mappings; coefficient evaluation keeps one row per tuple identity
+		//! Keyed scope this term's reducer is qualified by (`sum(D: ...)`), or
+		//! INVALID_INDEX for an unqualified reducer. Indexes keyed_scopes /
+		//! keyed_mappings; coefficient evaluation keeps one row per tuple identity
 		//! of that relation and zeroes the duplicates the join introduced.
 		idx_t qualifier_scope_idx = DConstants::INVALID_INDEX;
 		//! SUM inside a reducer, NONE outside every reducer (counted once), as for DecideTerm.

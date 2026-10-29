@@ -210,9 +210,7 @@ idx_t decide_rewrite::AddAuxiliaryDecision(LogicalDecide &decide, const string &
 DecideVarScopeInfo decide_rewrite::JoinScopes(const DecideVarScopeInfo &a, const DecideVarScopeInfo &b) {
 	// The key lattice (JoinDecideKeys) over the scopes themselves: a keyed scope stands for its key.
 	auto key_of = [](const DecideVarScopeInfo &scope) {
-		return scope.IsGlobal()   ? DConstants::INVALID_INDEX
-		       : scope.IsKeyed() ? scope.entity_scope_idx
-		                          : DECIDE_ROW_KEY;
+		return scope.IsGlobal() ? DConstants::INVALID_INDEX : scope.IsKeyed() ? scope.keyed_scope_idx : DECIDE_ROW_KEY;
 	};
 	auto joined = JoinDecideKeys(key_of(a), key_of(b));
 	return joined == key_of(a) ? a : joined == key_of(b) ? b : DecideVarScopeInfo::Row();
@@ -257,7 +255,7 @@ void decide_rewrite::ReplaceWithDecision(ClientContext &context, const LogicalDe
 string decide_rewrite::RenderForPlan(const Expression &expr, const LogicalDecide &decide) {
 	// The labels of the auxiliaries earlier passes made, so a construct over one prints
 	// it as what it stands for rather than by its internal name.
-	return RenderDecideSource(expr, DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.keys,
+	return RenderDecideSource(expr, DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys,
 	                                                decide.decide_index, decide.aux_var_expressions));
 }
 
@@ -479,7 +477,7 @@ unique_ptr<Expression> decide_rewrite::ScopeHelperRow(unique_ptr<Expression> row
 	auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 	wrapper->children.push_back(std::move(row));
 	wrapper->children.push_back(when->Copy());
-	wrapper->alias = WHEN_CONSTRAINT_TAG;
+	wrapper->alias = WHEN_FILTER_TAG;
 	return std::move(wrapper);
 }
 
@@ -492,7 +490,7 @@ unique_ptr<Expression> decide_rewrite::ScopeRowPerInstance(const LogicalDecide &
 	wrapper->children.push_back(std::move(row));
 	wrapper->alias = PER_CLASS_TAG;
 	if (scope.IsKeyed()) {
-		AddDecideTag(wrapper->alias, MakePerKeyTag(decide.entity_scopes[scope.entity_scope_idx].key));
+		AddDecideTag(wrapper->alias, MakePerKeyTag(decide.keyed_scopes[scope.keyed_scope_idx].key));
 	}
 	return std::move(wrapper);
 }

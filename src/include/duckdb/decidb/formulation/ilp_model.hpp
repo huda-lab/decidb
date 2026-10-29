@@ -20,9 +20,9 @@
 namespace duckdb {
 
 //! Maps (decide_var_idx, row) pairs to flat solver variable indices.
-//! Supports row-scoped, entity-scoped and query-wide variables with a four-block layout:
+//! Supports row-scoped, keyed and query-wide variables with a four-block layout:
 //!   Block 1: row-scoped vars  (num_rows * num_row_vars entries)
-//!   Block 2: entity-scoped vars (sum of num_entities per scope)
+//!   Block 2: keyed vars (sum of num_classes per scope)
 //!   Block 3: scalar (query-wide) vars, one column each
 //!   Block 4: global auxiliary vars
 //! Scalars sit *below* global_block_start so the "user decide-variable columns
@@ -31,7 +31,7 @@ namespace duckdb {
 struct VarIndexer {
     idx_t num_rows = 0;
     idx_t num_row_vars = 0;          //!< Count of row-scoped decide variables
-    idx_t entity_block_start = 0;    //!< First index of entity block
+    idx_t keyed_block_start = 0;    //!< First index of keyed block
     idx_t scalar_block_start = 0;    //!< First index of scalar block
     idx_t global_block_start = 0;    //!< First index of global (auxiliary) block
     idx_t total_vars = 0;
@@ -42,11 +42,11 @@ struct VarIndexer {
     //! For row-scoped vars: offset within the row block (var_idx → position in row)
     vector<idx_t> row_var_offset;
 
-    //! For entity-scoped vars: base offset in entity block
-    vector<idx_t> entity_var_base;
+    //! For keyed vars: base offset in keyed block
+    vector<idx_t> keyed_var_base;
 
-    //! For entity-scoped vars: index into entity_mappings source
-    vector<idx_t> var_entity_mapping_idx;
+    //! For keyed vars: index into keyed_mappings source
+    vector<idx_t> var_keyed_mapping_idx;
 
     //! For scalar vars: the single flat column index in the scalar block
     vector<idx_t> scalar_var_index;
@@ -56,10 +56,10 @@ struct VarIndexer {
     //! refusal, and a refusal must not cost a scan to phrase itself.
     vector<idx_t> row_offset_var;   //!< position within a row → var_idx
     vector<idx_t> scalar_slot_var;  //!< position within the scalar block → var_idx
-    vector<idx_t> entity_block_var; //!< entity-scoped var_idx, ascending by base
+    vector<idx_t> keyed_block_var; //!< keyed var_idx, ascending by base
 
-    //! Owned entity mappings. The indexer can therefore outlive its SolverInput.
-    vector<EntityMapping> entity_mappings;
+    //! Owned keyed mappings. The indexer can therefore outlive its SolverInput.
+    vector<KeyedMapping> keyed_mappings;
 
     //! Get the flat solver variable index for a given decide variable at a given row.
     //! A scalar variable ignores `row` — every row resolves to the same column.
@@ -70,9 +70,9 @@ struct VarIndexer {
         case DecideVarScope::GLOBAL:
             return scalar_var_index[var_idx];
         default: {
-            auto &mapping = entity_mappings[var_entity_mapping_idx[var_idx]];
-            idx_t entity_id = mapping.row_to_entity[row];
-            return entity_var_base[var_idx] + entity_id;
+            auto &mapping = keyed_mappings[var_keyed_mapping_idx[var_idx]];
+            idx_t class_id = mapping.row_to_class[row];
+            return keyed_var_base[var_idx] + class_id;
         }
         }
     }
@@ -80,7 +80,7 @@ struct VarIndexer {
     //! Flat column for the inst-th instance of a variable, where
     //! inst < NumInstances(var_idx). Unlike Get(), which resolves through a result
     //! row, this walks a variable's own instances — rows for row-scoped variables,
-    //! entity ids for entity-scoped ones, and the single column for a scalar.
+    //! class ids for keyed ones, and the single column for a scalar.
     inline idx_t InstanceColumn(idx_t var_idx, idx_t inst) const {
         switch (var_scope[var_idx]) {
         case DecideVarScope::ROW:
@@ -88,11 +88,11 @@ struct VarIndexer {
         case DecideVarScope::GLOBAL:
             return scalar_var_index[var_idx];
         default:
-            return entity_var_base[var_idx] + inst;
+            return keyed_var_base[var_idx] + inst;
         }
     }
 
-    //! The instance of a variable that data row `row` reads: the row itself, its entity, or the single query-wide
+    //! The instance of a variable that data row `row` reads: the row itself, its class, or the single query-wide
     //! instance. Up to the block offset the inverse of Get(): `InstanceColumn(v, InstanceOf(v, row)) == Get(v, row)`.
     inline idx_t InstanceOf(idx_t var_idx, idx_t row) const {
         switch (var_scope[var_idx]) {
@@ -101,7 +101,7 @@ struct VarIndexer {
         case DecideVarScope::GLOBAL:
             return 0;
         default:
-            return entity_mappings[var_entity_mapping_idx[var_idx]].row_to_entity[row];
+            return keyed_mappings[var_keyed_mapping_idx[var_idx]].row_to_class[row];
         }
     }
 
@@ -128,7 +128,7 @@ struct VarIndexer {
         case DecideVarScope::GLOBAL:
             return 0;
         default:
-            return col - entity_var_base[var_idx];
+            return col - keyed_var_base[var_idx];
         }
     }
 
@@ -140,7 +140,7 @@ struct VarIndexer {
         case DecideVarScope::GLOBAL:
             return 1;
         default: {
-            return entity_mappings[var_entity_mapping_idx[var_idx]].num_entities;
+            return keyed_mappings[var_keyed_mapping_idx[var_idx]].num_classes;
         }
         }
     }
@@ -154,7 +154,7 @@ struct VarIndexer {
     //! NAME; without this it could only say "some variable is unbounded".
     idx_t OwnerOf(idx_t col) const;
 
-    //! Build a VarIndexer that owns a copy of entity_mappings.
+    //! Build a VarIndexer that owns a copy of keyed_mappings.
     //! Safe to use after the SolverInput is destroyed (e.g., stored on gstate for readback).
     static VarIndexer Build(const SolverInput &input);
 };
@@ -267,8 +267,8 @@ struct ConstraintProvenance {
     //! column name is available (the render then falls back to the numeric representative).
     string rhs_label;
     //! Per-term coefficient the user actually wrote, for an aggregate row whose terms *fold*
-    //! onto fewer solver columns than there are contributing rows. An entity-scoped variable
-    //! (`DECIDE S.keepS`) maps every joined row of an entity onto ONE column, so the builder
+    //! onto fewer solver columns than there are contributing rows. A keyed variable
+    //! (`DECIDE S.keepS`) maps every joined row of a class onto ONE column, so the builder
     //! accumulates instead of fanning out: `SUM(keepS)` over two rows of one sensor arrives
     //! as a single index with coefficient 2. The fan-out that `FormatSumLhs` keys on is then
     //! structurally absent, and the reconstruction quotes a constant the user never typed
@@ -327,7 +327,7 @@ inline bool ConstantRowFails(char sense, double rhs) {
 //! Solver-agnostic optimization model, ready for any backend to consume.
 //! Supports linear objectives (LP/MILP) and convex quadratic objectives (QP/MIQP).
 struct SolverModel {
-    //! Total number of variables across all three blocks (row-scoped + entity-scoped +
+    //! Total number of variables across all three blocks (row-scoped + keyed +
     //! global auxiliary). Initialized so a default-constructed model (one Build never
     //! populated) reads as empty rather than as garbage: every `col < num_vars` guard
     //! downstream depends on it.
@@ -460,7 +460,7 @@ struct ColumnProvenance {
     string label;
     //! Source decide-variable index; INVALID for global-block columns.
     idx_t decide_var_idx = DConstants::INVALID_INDEX;
-    //! Row (row-scoped) or entity id (entity-scoped) this column instantiates;
+    //! Row (row-scoped) or class id (keyed) this column instantiates;
     //! INVALID for global-block columns. Disambiguates repeated names.
     idx_t instance = DConstants::INVALID_INDEX;
 };
@@ -470,7 +470,7 @@ struct ColumnProvenance {
 //! caller pre-extracts per-decide-variable labels (user name or aux source
 //! expression) and an is-aux flag. Output is sized `indexer.total_vars`; every
 //! entry defaults to GLOBAL_AUX (the global block stays unnamed), then the row /
-//! entity blocks are filled by inverting `indexer.Get(var, row)` over all
+//! keyed blocks are filled by inverting `indexer.Get(var, row)` over all
 //! decide variables and rows — mirrors the solution-readback iteration.
 //!   var_labels[v]  — name (USER) or source expression (AUX) for decide var v
 //!   var_is_aux[v]  — true if decide var v is an auxiliary linearization variable

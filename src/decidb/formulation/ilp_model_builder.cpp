@@ -36,8 +36,8 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
 
     idx.var_scope.resize(num_decide_vars, DecideVarScope::ROW);
     idx.row_var_offset.resize(num_decide_vars, DConstants::INVALID_INDEX);
-    idx.entity_var_base.resize(num_decide_vars, DConstants::INVALID_INDEX);
-    idx.var_entity_mapping_idx.resize(num_decide_vars, DConstants::INVALID_INDEX);
+    idx.keyed_var_base.resize(num_decide_vars, DConstants::INVALID_INDEX);
+    idx.var_keyed_mapping_idx.resize(num_decide_vars, DConstants::INVALID_INDEX);
     idx.scalar_var_index.resize(num_decide_vars, DConstants::INVALID_INDEX);
 
     // Classify variables and compute row-block offsets
@@ -57,24 +57,24 @@ static void BuildVarIndexer(VarIndexer &idx, const SolverInput &input) {
     idx.num_row_vars = row_var_count;
 
     // Row block: num_rows * num_row_vars
-    idx.entity_block_start = input.num_rows * row_var_count;
+    idx.keyed_block_start = input.num_rows * row_var_count;
 
-    // Entity block: assign base offsets per entity-scoped variable
-    idx_t entity_offset = 0;
+    // Keyed block: assign base offsets per keyed variable
+    idx_t keyed_offset = 0;
     for (idx_t v = 0; v < num_decide_vars; v++) {
         if (idx.var_scope[v] != DecideVarScope::KEYED) {
             continue;
         }
-        idx_t scope_idx = input.variable_scopes[v].entity_scope_idx;
-        D_ASSERT(scope_idx < idx.entity_mappings.size());
-        idx.var_entity_mapping_idx[v] = scope_idx;
-        idx.entity_var_base[v] = idx.entity_block_start + entity_offset;
-        idx.entity_block_var.push_back(v);
-        entity_offset += idx.entity_mappings[scope_idx].num_entities;
+        idx_t scope_idx = input.variable_scopes[v].keyed_scope_idx;
+        D_ASSERT(scope_idx < idx.keyed_mappings.size());
+        idx.var_keyed_mapping_idx[v] = scope_idx;
+        idx.keyed_var_base[v] = idx.keyed_block_start + keyed_offset;
+        idx.keyed_block_var.push_back(v);
+        keyed_offset += idx.keyed_mappings[scope_idx].num_classes;
     }
 
     // Scalar block: exactly one column per query-wide variable, independent of num_rows
-    idx.scalar_block_start = idx.entity_block_start + entity_offset;
+    idx.scalar_block_start = idx.keyed_block_start + keyed_offset;
     idx_t scalar_count = 0;
     for (idx_t v = 0; v < num_decide_vars; v++) {
         if (idx.var_scope[v] != DecideVarScope::GLOBAL) {
@@ -93,16 +93,16 @@ idx_t VarIndexer::OwnerOf(idx_t col) const {
     if (col >= global_block_start) {
         return DConstants::INVALID_INDEX; // global block: no decide variable owns it
     }
-    if (col < entity_block_start) {
+    if (col < keyed_block_start) {
         // Row block, laid out row-major: every row holds one slot per row-scoped var.
         return num_row_vars == 0 ? DConstants::INVALID_INDEX : row_offset_var[col % num_row_vars];
     }
     if (col < scalar_block_start) {
-        // Entity block: bases ascend in entity_block_var order, so the owner is the
+        // Keyed block: bases ascend in keyed_block_var order, so the owner is the
         // last variable whose base does not exceed `col`.
         idx_t owner = DConstants::INVALID_INDEX;
-        for (idx_t v : entity_block_var) {
-            if (entity_var_base[v] > col) {
+        for (idx_t v : keyed_block_var) {
+            if (keyed_var_base[v] > col) {
                 break;
             }
             owner = v;
@@ -115,7 +115,7 @@ idx_t VarIndexer::OwnerOf(idx_t col) const {
 VarIndexer VarIndexer::Build(const SolverInput &input) {
     VarIndexer idx;
     // Own a copy so this VarIndexer can outlive the SolverInput
-    idx.entity_mappings = input.entity_mappings;
+    idx.keyed_mappings = input.keyed_mappings;
     BuildVarIndexer(idx, input);
     return idx;
 }
@@ -380,10 +380,10 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                                           input.variable_types[var] == LogicalType::FLOAT);
             model.is_binary[var_idx] = per_var_binary[var];
         }
-		// A row with no decision maps to the absent entity: fixed at 0, so an objective term
-		// that reads it is dropped (EntityMapping::absent_entity).
+		// A row with no decision maps to the absent class: fixed at 0, so an objective term
+		// that reads it is dropped (KeyedMapping::absent_class).
 		if (indexer.var_scope[var] == DecideVarScope::KEYED) {
-			auto absent = indexer.entity_mappings[indexer.var_entity_mapping_idx[var]].absent_entity;
+			auto absent = indexer.keyed_mappings[indexer.var_keyed_mapping_idx[var]].absent_class;
 			if (absent != DConstants::INVALID_INDEX) {
 				idx_t var_idx = indexer.InstanceColumn(var, absent);
 				model.col_lower[var_idx] = 0.0;
@@ -392,7 +392,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 		}
 	}
 
-    // Append global auxiliary variables after row+entity blocks.
+    // Append global auxiliary variables after row+keyed blocks.
     //
     // Stage 05 derives every auxiliary's box from the expression it stands for, so an
     // infinite bound here means one of two things: the expression genuinely reaches an
@@ -448,7 +448,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             for (idx_t row = 0; row < num_rows; row++) {
                 if (row >= col.Size()) break;
                 idx_t var_idx = indexer.Get(decide_var_idx, row);
-                // Use += because entity-scoped vars: multiple rows map to same solver var
+                // Use += because keyed vars: multiple rows map to same solver var
                 model.obj_coeffs[var_idx] += col.Get(row);
             }
         }
@@ -774,7 +774,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
 
         // Detect whether this constraint can bypass the hash-map accumulator:
         // * every non-fixed term must reference a row-scoped decide variable
-        //   (entity-scoped vars collapse many rows to the same solver index —
+        //   (keyed vars collapse many rows to the same solver index —
         //   need dedup), AND
         // * no decide variable appears in more than one term (otherwise distinct
         //   terms at the same row collide on the same flat index). Fixed LHS
@@ -784,7 +784,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
             for (idx_t term_idx = 0; term_idx < ec.variable_indices.size(); term_idx++) {
                 idx_t v = ec.variable_indices[term_idx];
                 if (v == DConstants::INVALID_INDEX) continue;
-                // Entity- and scalar-scoped variables both collapse many rows onto
+                // Keyed and query-wide variables both collapse many rows onto
                 // one column, so the per-row fan-out below would double-write them.
                 if (indexer.var_scope[v] != DecideVarScope::ROW) return false;
                 if (!seen_vars.insert(v).second) return false;
@@ -807,7 +807,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
         };
 
         // Written per-term coefficients, for the accumulating path only. There the row's
-        // coefficient is a *sum* over the folded rows (entity-scoped vars collapse many
+        // coefficient is a *sum* over the folded rows (keyed vars collapse many
         // rows onto one column), so the reconstruction cannot recover what the user typed
         // from the matrix alone.
         //
@@ -881,7 +881,7 @@ SolverModel SolverModel::Build(SolverInput &input, const VarIndexer &indexer) {
                         }
                     }
                 } else {
-                    // Entity-scoped vars or repeated decide vars — need to
+                    // Keyed vars or repeated decide vars — need to
                     // accumulate because multiple (term, row) pairs can map
                     // to the same flat solver index. A term beside the reducers counts
                     // once: execution kept its coefficient on one row (CountOnce).
@@ -1443,7 +1443,7 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
                                                const vector<bool> &var_is_aux,
                                                const vector<string> &global_var_labels) {
     // Every flat column defaults to an unnamed global-block auxiliary; the row /
-    // entity blocks are then overwritten below. Columns in [global_block_start,
+    // keyed blocks are then overwritten below. Columns in [global_block_start,
     // total_vars) (internal global auxiliaries) keep the default unless named via
     // global_var_labels (an aggregate `<>` indicator — see below).
     vector<ColumnProvenance> provenance(indexer.total_vars);
@@ -1453,9 +1453,9 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
         ColumnKind kind = (var < var_is_aux.size() && var_is_aux[var]) ? ColumnKind::AUX
                                                                        : ColumnKind::USER;
         // Inverting Get(var, row) over all rows visits every column this variable
-        // owns. Entity-scoped variables collapse multiple rows onto one column;
+        // owns. Keyed variables collapse multiple rows onto one column;
         // the repeated writes are idempotent (same var/label, instance pinned to
-        // the entity id via Get's mapping).
+        // the class id via Get's mapping).
         for (idx_t row = 0; row < indexer.num_rows; row++) {
             idx_t col = indexer.Get(var, row);
             if (col >= provenance.size()) {
@@ -1465,11 +1465,11 @@ vector<ColumnProvenance> BuildColumnProvenance(const VarIndexer &indexer,
             slot.kind = kind;
             slot.label = var_labels[var];
             slot.decide_var_idx = var;
-            // For entity-scoped vars, the instance is the entity id (col - base);
+            // For keyed vars, the instance is the class id (col - base);
             // for row-scoped vars it is the row; a scalar has exactly one instance.
             switch (indexer.var_scope[var]) {
             case DecideVarScope::KEYED:
-                slot.instance = col - indexer.entity_var_base[var];
+                slot.instance = col - indexer.keyed_var_base[var];
                 break;
             case DecideVarScope::GLOBAL:
                 slot.instance = 0;

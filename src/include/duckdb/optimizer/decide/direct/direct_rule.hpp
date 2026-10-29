@@ -42,13 +42,13 @@ struct DirectIRDecision {
 	//! The SQL type of the decision's output column (INTEGER for BOOL, BIGINT for INT, DOUBLE for REAL).
 	LogicalType output_type;
 	DecideVarScope scope;
-	//! Index into DirectIR::entity_scopes for a KEYED decision.
-	idx_t entity_scope = DConstants::INVALID_INDEX;
+	//! Index into DirectIR::keyed_scopes for a KEYED decision.
+	idx_t keyed_scope = DConstants::INVALID_INDEX;
 };
 
 //! A relation whose tuples carry one identity: a table-scoped declaration (`T.x`) or a reducer qualifier
 //! (`SUM(D: e)`).
-struct DirectIREntityScope {
+struct DirectIRKeyedScope {
 	vector<idx_t> relations;
 	//! Source slots of the identity key columns.
 	vector<idx_t> key_slots;
@@ -102,7 +102,7 @@ struct DirectPart {
 	vector<DirectKeyElement> by;
 	//! The reducer's own `when` (`sum(when c: x)`).
 	unique_ptr<Expression> filter;
-	//! Entity scope the reducer is qualified by (`SUM(D: e)`), or INVALID_INDEX.
+	//! Keyed scope the reducer is qualified by (`SUM(D: e)`), or INVALID_INDEX.
 	idx_t qualifier = DConstants::INVALID_INDEX;
 	//! The body's terms. Empty when `inner` holds a nested reducer (the two-level objective
 	//! `outer(per k: inner(e) by (k))`, which the front end declines today).
@@ -218,7 +218,7 @@ struct DirectIR {
 	std::function<string(const Expression &)> render;
 	idx_t decide_index;
 	vector<DirectIRDecision> decisions;
-	vector<DirectIREntityScope> entity_scopes;
+	vector<DirectIRKeyedScope> keyed_scopes;
 	vector<ColumnBinding> source_bindings;
 	//! Number of entries in the source-clause registry.
 	idx_t source_clause_count = 0;
@@ -230,7 +230,7 @@ struct DirectIR {
 	//! driver builds the windows (InstallReducedBoundWindows) and reads the IR again.
 	bool bound_windows_needed = false;
 	//! NOT_PROVED when the DECIDE operator owes the rows a scope check the plan cannot make: a determination of an
-	//! entity-scoped decision.
+	//! keyed decision.
 	DirectAnalysisStatus status = DirectAnalysisStatus::PROVED;
 };
 
@@ -261,7 +261,7 @@ struct DirectSubstitute {
 };
 
 //! Whether the front end read the whole IR: the constraints and the objective are all proved (each constraint too),
-//! the objective offset is finite and the sense is one the rules know. The decisions, the entity scopes and the source
+//! the objective offset is finite and the sense is one the rules know. The decisions, the keyed scopes and the source
 //! are always read in full. The rule driver offers a rule an IR only when this holds, so a rule checks only what
 //! concerns its own class.
 bool DirectIRIsReadable(const DirectIR &ir);

@@ -398,7 +398,7 @@ BindResult DecideConstraintsBinder::BindScopedConstraint(unique_ptr<ParsedExpres
 			auto wrapper = make_uniq<BoundConjunctionExpression>(ExpressionType::CONJUNCTION_AND);
 			wrapper->children.push_back(std::move(constraint));
 			wrapper->children.push_back(std::move(this_condition));
-			wrapper->alias = WHEN_CONSTRAINT_TAG;
+			wrapper->alias = WHEN_FILTER_TAG;
 			if (when_text != DConstants::INVALID_INDEX) {
 				AddDecideTag(wrapper->alias, MakeSourceFragmentTag(when_text));
 			}

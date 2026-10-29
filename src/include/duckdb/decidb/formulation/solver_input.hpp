@@ -356,15 +356,15 @@ double SumFixedAggregateLhsOffset(const EvaluatedConstraint &constraint,
 //! Maps result rows to the classes of a key scope: a `per K:` decision's or a helper's
 //! value is shared by every result row of its class.
 //! A row in no class (a NULL written key column, or a row a helper's clause drops) maps
-//! to `absent_entity`: one spare entity fixed at 0 that no constraint reads, so the row
+//! to `absent_class`: one spare class fixed at 0 that no constraint reads, so the row
 //! has no decision (its output is NULL). INVALID_INDEX when every row has a class.
-struct EntityMapping {
-    idx_t num_entities = 0;          //! Number of distinct entities in this table
-    vector<idx_t> row_to_entity;     //! [row_idx] -> entity_id (0..num_entities-1)
-	idx_t absent_entity = DConstants::INVALID_INDEX;
+struct KeyedMapping {
+    idx_t num_classes = 0;          //! Number of distinct classes in this table
+    vector<idx_t> row_to_class;     //! [row_idx] -> class_id (0..num_classes-1)
+	idx_t absent_class = DConstants::INVALID_INDEX;
 
 	bool IsAbsent(idx_t row) const {
-		return absent_entity != DConstants::INVALID_INDEX && row_to_entity[row] == absent_entity;
+		return absent_class != DConstants::INVALID_INDEX && row_to_class[row] == absent_class;
 	}
 };
 
@@ -732,12 +732,12 @@ struct SolverInput {
 
     // --- Key scopes ---
 
-    //! Entity mappings: one per EntityScopeInfo (a `per K:` decision's key, a reducer's
+    //! Keyed mappings: one per KeyedScopeInfo (a `per K:` decision's key, a reducer's
     //! `per K:` or colon-form qualifier, a helper decision's `by` key)
-    vector<EntityMapping> entity_mappings;
+    vector<KeyedMapping> keyed_mappings;
 
     //! Per-variable scope (row / keyed / query-wide).
-    //! For a keyed variable, entity_scope_idx indexes entity_mappings.
+    //! For a keyed variable, keyed_scope_idx indexes keyed_mappings.
     vector<DecideVarScopeInfo> variable_scopes;
 
     //! When set (infeasible diagnosis armed), SolverModel::Build keeps each data-valued bound on one

@@ -1258,7 +1258,7 @@ def test_between_aggregate_local_when_constraint(
 @pytest.mark.when_constraint
 @pytest.mark.cons_aggregate
 @pytest.mark.correctness
-def test_entity_scoped_aggregate_local_when(
+def test_keyed_aggregate_local_when(
     decidb_cli, duckdb_conn, oracle_solver, perf_tracker
 ):
     """Keyed ``per n: keepN`` with an inner ``when`` on a row-scoped column."""

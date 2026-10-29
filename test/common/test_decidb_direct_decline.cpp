@@ -227,7 +227,7 @@ duckdb::vector<Shape> S1DeclineShapes() {
 	shapes.push_back(S1("a query-wide decision", "s <= 1", nullptr, "MAXIMIZE s", "per (): s(BOOL)"));
 	shapes.push_back(S1("a decision whose output is not INTEGER", "SUM(x) <= 2",
 	                    [](DirectIR &ir) { ir.decisions[0].output_type = LogicalType::BIGINT; }));
-	shapes.push_back(S1("an entity scope", "SUM(x) <= 2", [](DirectIR &ir) { ir.entity_scopes.emplace_back(); }));
+	shapes.push_back(S1("a keyed scope", "SUM(x) <= 2", [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
 	// CheckCondition: the constraints.
 	shapes.push_back(S1("no constraint", "SUM(x) <= 2", [](DirectIR &ir) {
 		ir.constraints.clear();
@@ -412,7 +412,7 @@ duckdb::vector<Shape> A1DeclineShapes() {
 	duckdb::vector<Shape> shapes;
 	// CheckCondition: the decisions.
 	shapes.push_back(A1("no decision", "x <= cap", [](DirectIR &ir) { ir.decisions.clear(); }));
-	shapes.push_back(A1("an entity scope", "x <= cap", [](DirectIR &ir) { ir.entity_scopes.emplace_back(); }));
+	shapes.push_back(A1("a keyed scope", "x <= cap", [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
 	shapes.push_back(A1("a query-wide decision", "s <= 3", nullptr, "MAXIMIZE s", "per (): s(REAL)"));
 	// CheckCondition: the constraints.
 	shapes.push_back(A1("an aggregate constraint", "SUM(x) <= 5"));
@@ -633,7 +633,7 @@ duckdb::vector<Shape> R1DeclineShapes() {
 	shapes.push_back(R1("a query-wide decision", "SUM(cap*s) <= 5", nullptr, "MAXIMIZE s", "per (): s(REAL)"));
 	shapes.push_back(R1("a decision whose output is not DOUBLE", "SUM(cap*x) <= 5",
 	                    [](DirectIR &ir) { ir.decisions[0].output_type = LogicalType::BIGINT; }));
-	shapes.push_back(R1("an entity scope", "SUM(cap*x) <= 5", [](DirectIR &ir) { ir.entity_scopes.emplace_back(); }));
+	shapes.push_back(R1("a keyed scope", "SUM(cap*x) <= 5", [](DirectIR &ir) { ir.keyed_scopes.emplace_back(); }));
 	// CheckCondition: the constraints.
 	shapes.push_back(R1("no budget, only a bound", "x <= cap"));
 	// Aggregate constraints are one budget only when their sums have the same terms (ProveBudgetClause).

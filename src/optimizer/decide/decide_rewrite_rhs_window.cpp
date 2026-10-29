@@ -59,7 +59,7 @@ class RhsWindowRewriter {
 public:
 	RhsWindowRewriter(Optimizer &optimizer_p, LogicalDecide &decide_p)
 	    : optimizer(optimizer_p), decide(decide_p), calc(optimizer_p.context),
-	      canonicalizer(optimizer_p.context, decide_p.decide_index, decide_p.variable_scopes, decide_p.entity_scopes,
+	      canonicalizer(optimizer_p.context, decide_p.decide_index, decide_p.variable_scopes, decide_p.keyed_scopes,
 	                    decide_p.is_boolean_var) {
 	}
 
@@ -231,7 +231,7 @@ private:
 			auto first = calc.Cmp(ExpressionType::COMPARE_EQUAL, FirstOfClass(scope_idx, keys, reads),
 			                      calc.Constant(Value::BIGINT(1)));
 			// A row whose written `per` column is NULL is in no class, so it is not counted.
-			for (auto &element : DecideKeyElements(decide.keys, decide.entity_scopes[scope_idx].key)) {
+			for (auto &element : DecideKeyElements(decide.keys, decide.keyed_scopes[scope_idx].key)) {
 				if (element.null_mode == DecideKeyNullMode::NO_GROUP) {
 					first = calc.If(calc.IsNull(calc.Of(*element.expression)), calc.Bool(false), first);
 				}
@@ -279,8 +279,8 @@ private:
 	//! 1 on the first row of each class of the reducer's `per` key (or relation, in the colon form) in its group, among
 	//! the rows it reads. That row stands for the class: the key determines the reducer's body (a scope check).
 	ExprPtr FirstOfClass(idx_t scope_idx, const vector<const Expression *> &keys, const ExprPtr &reads) {
-		D_ASSERT(scope_idx < decide.entity_scopes.size());
-		auto &scope = decide.entity_scopes[scope_idx];
+		D_ASSERT(scope_idx < decide.keyed_scopes.size());
+		auto &scope = decide.keyed_scopes[scope_idx];
 		// Only the optimizer's helper decisions have scopes over a link, and they are made after this pass.
 		D_ASSERT(scope.value_link == DConstants::INVALID_INDEX);
 		auto rank =
@@ -473,7 +473,7 @@ private:
 	}
 
 	string Written(const Expression &expr) const {
-		return RenderDecideSource(expr, decide.source_fragments, decide.entity_scopes, &decide.keys);
+		return RenderDecideSource(expr, decide.source_fragments, decide.keyed_scopes, &decide.keys);
 	}
 
 	Optimizer &optimizer;

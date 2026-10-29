@@ -139,13 +139,13 @@ string FunctionExpression::ToString() const {
 	}
 	// The removed postfix WHEN and PER print as written: a parse tree stored before they
 	// were removed (a view) still shows its own SQL, and is refused when bound.
-	if (is_operator && function_name == WHEN_CONSTRAINT_TAG) {
+	if (is_operator && function_name == POSTFIX_WHEN_TAG) {
 		if (children.size() != 2) {
 			throw InternalException("DECIDE WHEN marker has %s children, expected 2", children.size());
 		}
 		return children[0]->ToString() + " WHEN " + children[1]->ToString();
 	}
-	if (is_operator && function_name == PER_CONSTRAINT_TAG) {
+	if (is_operator && function_name == POSTFIX_PER_TAG) {
 		if (children.size() < 2) {
 			throw InternalException("DECIDE PER marker has %s children, expected at least 2", children.size());
 		}

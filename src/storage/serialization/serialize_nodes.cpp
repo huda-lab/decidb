@@ -530,39 +530,15 @@ DecideSourceText DecideSourceText::Deserialize(Deserializer &deserializer) {
 
 void DecideVarScopeInfo::Serialize(Serializer &serializer) const {
 	serializer.WriteProperty<DecideVarScope>(100, "scope", scope);
-	serializer.WritePropertyWithDefault<idx_t>(101, "entity_scope_idx", entity_scope_idx);
+	serializer.WritePropertyWithDefault<idx_t>(101, "keyed_scope_idx", keyed_scope_idx);
 	serializer.WritePropertyWithDefault<string>(102, "declared_key", declared_key);
 }
 
 DecideVarScopeInfo DecideVarScopeInfo::Deserialize(Deserializer &deserializer) {
 	DecideVarScopeInfo result;
 	deserializer.ReadProperty<DecideVarScope>(100, "scope", result.scope);
-	deserializer.ReadPropertyWithDefault<idx_t>(101, "entity_scope_idx", result.entity_scope_idx);
+	deserializer.ReadPropertyWithDefault<idx_t>(101, "keyed_scope_idx", result.keyed_scope_idx);
 	deserializer.ReadPropertyWithDefault<string>(102, "declared_key", result.declared_key);
-	return result;
-}
-
-void EntityScopeInfo::Serialize(Serializer &serializer) const {
-	/* [Deleted] (string) "table_alias" */
-	/* [Deleted] (vector<idx_t>) "source_table_indices" */
-	/* [Deleted] (vector<LogicalType>) "entity_key_column_types" */
-	/* [Deleted] (vector<ColumnBinding>) "entity_key_bindings" */
-	serializer.WritePropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", scoped_variable_indices);
-	/* [Deleted] (bool) "exact_key" */
-	/* [Deleted] (vector<string>) "key_names" */
-	serializer.WritePropertyWithDefault<idx_t>(107, "key", key);
-}
-
-EntityScopeInfo EntityScopeInfo::Deserialize(Deserializer &deserializer) {
-	EntityScopeInfo result;
-	deserializer.ReadDeletedProperty<string>(100, "table_alias");
-	deserializer.ReadDeletedProperty<vector<idx_t>>(101, "source_table_indices");
-	deserializer.ReadDeletedProperty<vector<LogicalType>>(102, "entity_key_column_types");
-	deserializer.ReadDeletedProperty<vector<ColumnBinding>>(103, "entity_key_bindings");
-	deserializer.ReadPropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", result.scoped_variable_indices);
-	deserializer.ReadDeletedProperty<bool>(105, "exact_key");
-	deserializer.ReadDeletedProperty<vector<string>>(106, "key_names");
-	deserializer.ReadPropertyWithDefault<idx_t>(107, "key", result.key);
 	return result;
 }
 
@@ -617,6 +593,30 @@ JoinCondition JoinCondition::Deserialize(Deserializer &deserializer) {
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(100, "left", result.left);
 	deserializer.ReadPropertyWithDefault<unique_ptr<Expression>>(101, "right", result.right);
 	deserializer.ReadProperty<ExpressionType>(102, "comparison", result.comparison);
+	return result;
+}
+
+void KeyedScopeInfo::Serialize(Serializer &serializer) const {
+	/* [Deleted] (string) "table_alias" */
+	/* [Deleted] (vector<idx_t>) "source_table_indices" */
+	/* [Deleted] (vector<LogicalType>) "entity_key_column_types" */
+	/* [Deleted] (vector<ColumnBinding>) "entity_key_bindings" */
+	serializer.WritePropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", scoped_variable_indices);
+	/* [Deleted] (bool) "exact_key" */
+	/* [Deleted] (vector<string>) "key_names" */
+	serializer.WritePropertyWithDefault<idx_t>(107, "key", key);
+}
+
+KeyedScopeInfo KeyedScopeInfo::Deserialize(Deserializer &deserializer) {
+	KeyedScopeInfo result;
+	deserializer.ReadDeletedProperty<string>(100, "table_alias");
+	deserializer.ReadDeletedProperty<vector<idx_t>>(101, "source_table_indices");
+	deserializer.ReadDeletedProperty<vector<LogicalType>>(102, "entity_key_column_types");
+	deserializer.ReadDeletedProperty<vector<ColumnBinding>>(103, "entity_key_bindings");
+	deserializer.ReadPropertyWithDefault<vector<idx_t>>(104, "scoped_variable_indices", result.scoped_variable_indices);
+	deserializer.ReadDeletedProperty<bool>(105, "exact_key");
+	deserializer.ReadDeletedProperty<vector<string>>(106, "key_names");
+	deserializer.ReadPropertyWithDefault<idx_t>(107, "key", result.key);
 	return result;
 }
 

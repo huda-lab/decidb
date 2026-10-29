@@ -15,7 +15,7 @@ namespace duckdb {
 //! The parsed DECIDE markers are operator functions the transformer builds: a scope in
 //! front of a body (SCOPE_WHEN_TAG, SCOPE_PER_TAG, SCOPE_PER_ROW_TAG), a reducer's `by`
 //! (REDUCER_BY_TAG), the colon form (QUALIFIED_REDUCER_TAG) and the removed postfix forms
-//! (WHEN_CONSTRAINT_TAG, PER_CONSTRAINT_TAG). The parser's refusal of the removed spellings
+//! (POSTFIX_WHEN_TAG, POSTFIX_PER_TAG). The parser's refusal of the removed spellings
 //! and the binder read them, and the reducer calls they attach to, through these.
 
 //! `expr` is the marker `tag` with at least one child.

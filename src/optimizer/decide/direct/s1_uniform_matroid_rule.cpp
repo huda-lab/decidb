@@ -269,7 +269,7 @@ public:
 	unique_ptr<DirectApplicabilityCondition> CheckCondition(const DirectIR &ir, ClientContext &context) const override {
 		if (ir.decisions.size() != 1 || ir.decisions[0].domain != DirectDomain::BOOL ||
 		    ir.decisions[0].scope != DecideVarScope::ROW || ir.decisions[0].output_type != LogicalType::INTEGER ||
-		    !ir.entity_scopes.empty()) {
+		    !ir.keyed_scopes.empty()) {
 			return nullptr;
 		}
 		if (ir.constraints.empty() || ir.source_clause_count != ir.constraints.size()) {

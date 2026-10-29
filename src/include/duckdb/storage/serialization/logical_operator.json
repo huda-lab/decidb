@@ -1001,8 +1001,8 @@
       },
       {
         "id": 210,
-        "name": "entity_scopes",
-        "type": "vector<EntityScopeInfo>"
+        "name": "keyed_scopes",
+        "type": "vector<KeyedScopeInfo>"
       },
       {
         "id": 211,

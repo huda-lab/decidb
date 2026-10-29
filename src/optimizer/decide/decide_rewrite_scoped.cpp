@@ -239,21 +239,21 @@ void ReplaceReducer(Helpers &helpers, const DecideSourceNames &names, const Deci
 	// The helper decision: whole-numbered when the reducer's value is, so a strict bound on
 	// the rewritten row still steps on the integer lattice; a query-wide decision for `by ()`,
 	// else one instance per group of the `by` key among the rows the clause keeps -- a
-	// scope of its own (EntityScopeInfo::value_link), which execution builds from the link.
+	// scope of its own (KeyedScopeInfo::value_link), which execution builds from the link.
 	auto var_scope = DecideVarScopeInfo::Global();
 	if (link.group_key != DConstants::INVALID_INDEX) {
-		EntityScopeInfo helper_scope;
+		KeyedScopeInfo helper_scope;
 		helper_scope.key = link.group_key;
 		helper_scope.value_link = link_idx;
-		decide.entity_scopes.push_back(std::move(helper_scope));
-		var_scope = DecideVarScopeInfo::Keyed(decide.entity_scopes.size() - 1);
+		decide.keyed_scopes.push_back(std::move(helper_scope));
+		var_scope = DecideVarScopeInfo::Keyed(decide.keyed_scopes.size() - 1);
 	}
 	LogicalType aux_type = whole ? LogicalType::INTEGER : LogicalType::DOUBLE;
 	link.value_var =
 	    AddAuxiliaryDecision(decide, "__value_" + to_string(link_idx) + "__", aux_type, false, var_scope, plan_label);
 	AddRewriteAccount(decide, source_clause_id, account_kind, plan_label);
 	if (var_scope.IsKeyed()) {
-		decide.entity_scopes[var_scope.entity_scope_idx].scoped_variable_indices.push_back(link.value_var);
+		decide.keyed_scopes[var_scope.keyed_scope_idx].scoped_variable_indices.push_back(link.value_var);
 	}
 	// A reducer's value may be negative: no default floor. The formulation pass boxes it by its members' reach.
 	decide.signed_helper_vars.push_back(link.value_var);
@@ -269,7 +269,7 @@ void DecideOptimizer::RewriteScopedReducers(LogicalDecide &decide) {
 		return;
 	}
 	const BooleanDecisions booleans {decide.decide_index, decide.is_boolean_var};
-	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.keys, decide.decide_index,
+	auto names = DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	Helpers helpers {optimizer.context, decide, {}};
 

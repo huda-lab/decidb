@@ -318,7 +318,7 @@ void DecideOptimizer::FoldSingletonRowsInExpression(Expression &expr, LogicalDec
 		// bound: `when c: x <= 0` does not mean `x <= 0` everywhere. This is why the pass keeps
 		// its own descent rather than using ForEachConstraintLeaf -- it asks the shared
 		// predicate what a wrapper is, then deliberately answers differently.
-		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+		if (IsWhenFilterWrapper(conj) && conj.children.size() == 2) {
 			break;
 		}
 		for (auto &child : conj.children) {

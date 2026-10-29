@@ -29,7 +29,7 @@ struct DecideSourceNames;
 //! belongs to.
 idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
-                           vector<DecideKey> &keys, vector<EntityScopeInfo> &entity_scopes);
+                           vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes);
 
 //! The entry of `keys` for the columns of `per K` (the parser's `SCOPE_PER_TAG` marker),
 //! created when no key so far has them: a column element compares NULL as SQL's `=`
@@ -39,13 +39,13 @@ idx_t BindKey(BindContext &bind_context, const FunctionExpression &per, const ca
               const string &key_text, vector<DecideKey> &keys);
 
 //! What a reducer's own key (`sum(per K: e)`, `SUM(D: e)`) and `by` need in order to
-//! resolve. Owned by the declarations binder, which is still filling `entity_scopes` when
+//! resolve. Owned by the declarations binder, which is still filling `keyed_scopes` when
 //! the constraint and objective binders run; the binders hold a pointer so a reducer can
 //! add a key-only scope to the same list.
 struct DecideQualifierContext {
     //! Table index the decision-variable column refs bind to.
     idx_t decide_index = DConstants::INVALID_INDEX;
-    vector<EntityScopeInfo> *entity_scopes = nullptr;
+    vector<KeyedScopeInfo> *keyed_scopes = nullptr;
     //! Every key bound so far; a reducer's GROUP_KEY_TAG_PREFIX tag names its `by` key.
     vector<DecideKey> *keys = nullptr;
     //! The query's source fragments (TagDecideSourceFragments): a `per K:` in front of a

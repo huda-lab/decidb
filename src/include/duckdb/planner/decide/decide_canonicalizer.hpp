@@ -170,7 +170,7 @@ enum class CanonicalConstraintClass : uint8_t { PER_ROW, AGGREGATE, VALUE, INVAL
 struct DecideScopeChecks {
 	//! A check keyed by a scope's key and a `by` key together adds their union.
 	vector<DecideKey> &keys;
-	const vector<EntityScopeInfo> &entity_scopes;
+	const vector<KeyedScopeInfo> &keyed_scopes;
 	const vector<string> &source_fragments;
 	vector<DecideScopeCheck> checks;
 };
@@ -186,10 +186,10 @@ public:
 	//! multiply a reducer by one: `b * SUM(x)` is a product the value rewrite hands to the Boolean linearization. It
 	//! is required by every constructor: a canonicalizer built without it would refuse `b * SUM(x)` as a product of
 	//! decisions, wherever it classifies a user's clause.
-	//! `entity_scopes` gives each keyed decision's key (EntityScopeInfo::key), which decides whether a keyed decision
+	//! `keyed_scopes` gives each keyed decision's key (KeyedScopeInfo::key), which decides whether a keyed decision
 	//! beside a reducer is one value per group (ClassifyScoped).
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
-	                    const vector<EntityScopeInfo> &entity_scopes, const vector<bool> &is_boolean);
+	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean);
 
 	//! Strict form: `query_wide_table_indexes` are the table indexes that UNCORRELATED
 	//! scalar subqueries flattened into, collected in plan_select_node.cpp at the only
@@ -207,7 +207,7 @@ public:
 	//! named "SUBQUERY", and reporting that -- or suggesting `SUM(x * SUBQUERY)` --
 	//! would name an object the user never typed.
 	DecideCanonicalizer(ClientContext &context, idx_t decide_index, vector<DecideVarScopeInfo> variable_scopes,
-	                    const vector<EntityScopeInfo> &entity_scopes, const vector<bool> &is_boolean,
+	                    const vector<KeyedScopeInfo> &keyed_scopes, const vector<bool> &is_boolean,
 	                    unordered_set<idx_t> query_wide_table_indexes,
 	                    unordered_set<idx_t> correlated_subquery_table_indexes = {});
 
@@ -275,7 +275,7 @@ public:
 	//! copies a reducer's `when`, and after the clause's texts are recorded. A keyed decision
 	//! the body reads has no value on a row whose written key column is NULL, so that column
 	//! is tested too (`scopes` and `keys` name each decision's key).
-	void SkipNullData(Expression &expr, const vector<EntityScopeInfo> &scopes, const vector<DecideKey> &keys) const;
+	void SkipNullData(Expression &expr, const vector<KeyedScopeInfo> &scopes, const vector<DecideKey> &keys) const;
 
 	//! The shape of an already-canonical comparison, as CanonicalizeTree decided it with the clause's enclosing
 	//! scope and stamped it: VALUE_REWRITE_TAG for the VALUE shape, else AGGREGATE for a reducer on the decision side

@@ -59,7 +59,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
 	// re-enters through LogicalDecide::SetObjective, so a rewrite that breaks the
 	// canonical form should fail loudly rather than reach the extractor.
 	if (op.decide_constraints || op.decide_objective) {
-        DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.entity_scopes,
+        DecideCanonicalizer canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes,
                                           op.is_boolean_var);
         if (op.decide_constraints) {
             canonicalizer.VerifyCanonical(*op.decide_constraints);
@@ -86,8 +86,8 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // (notably LogicalProjection) move their `expressions` vector into the physical
     // op during CreatePlan, which leaves GetColumnBindings() returning an empty
     // vector afterward. LogicalGet isn't affected because its bindings come from
-    // column_ids, which is why base-table entity scopes worked and subquery /
-    // CTE-backed scopes silently collapsed to a single entity.
+    // column_ids, which is why base-table keyed scopes worked and subquery /
+    // CTE-backed scopes silently collapsed to a single class.
     auto child_bindings = op.children[0]->GetColumnBindings();
     // Capture user-written column names off the child projection BEFORE CreatePlan
     // moves its `expressions` vector out (same reason as child_bindings above). These
@@ -203,7 +203,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // final pass. Execution evaluates their coefficients; it does not re-derive them.
     decide_op->prepared = std::move(op.prepared);
 
-    decide_op->entity_scopes = std::move(op.entity_scopes);
+    decide_op->keyed_scopes = std::move(op.keyed_scopes);
     decide_op->variable_scopes = std::move(op.variable_scopes);
     // Resolved like every other expression the operator owns (EnumerateExpressions).
     decide_op->keys = std::move(op.keys);
@@ -214,7 +214,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
     // diagnosis to label escaping categorical groups (affected_rows).
     //
     // Harvest names from the DECIDE clause's own bound references to source columns
-    // (`when` / `per` / `by` / objective / constraint / entity-key columns). By physical-plan
+    // (`when` / `per` / `by` / objective / constraint / key columns of keyed decisions). By physical-plan
     // time the column-binding resolver has rewritten table-column references to
     // BoundReferenceExpressions whose `index` is the position in the child data chunk
     // — exactly the indexing of gstate.data — so this aligns directly and survives
@@ -263,7 +263,7 @@ unique_ptr<PhysicalOperator> PhysicalPlanGenerator::CreatePlan(LogicalDecide &op
         // A `per K:` names its key after its clause, as written.
         if (e.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
             auto &conjunction = e.Cast<BoundConjunctionExpression>();
-            if (IsPerClassWrapper(conjunction) || IsPerConstraintWrapper(conjunction)) {
+            if (IsPerClassWrapper(conjunction) || IsTwoLevelObjectiveWrapper(conjunction)) {
                 harvest_key(PerWrapperKey(conjunction));
             }
         }

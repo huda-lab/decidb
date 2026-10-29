@@ -152,7 +152,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 	vector<unique_ptr<Expression>> generated;
 	idx_t in_counter = 0;
 	DecideCanonicalizer canonicalizer(optimizer.context, decide.decide_index, decide.variable_scopes,
-	                                  decide.entity_scopes, decide.is_boolean_var);
+	                                  decide.keyed_scopes, decide.is_boolean_var);
 	// Every row an IN generates keeps its clause's `when`, and is one row per instance of the indicators' scope: an
 	// indicator is a column defined by the decision and its domain, so it is one per instance of their join.
 	DecideVarScopeInfo scope_of_in;
@@ -171,7 +171,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 				if (IsConstraintChild(conj, i)) rewrite(conj.children[i], scope, clause_alias);
 			}
 			// A `when c:` goes with the clause it held: the placeholder stands in for both.
-			if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2 &&
+			if (IsWhenFilterWrapper(conj) && conj.children.size() == 2 &&
 			    conj.children[0]->GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
 			    conj.children[0]->Cast<BoundConstantExpression>().value.GetValue<bool>())
 				expr = MakeTrueExpression(conj.children[0]->GetAlias());
@@ -213,7 +213,7 @@ void DecideOptimizer::RewriteInDomain(LogicalDecide &decide) {
 			    "(" + RenderForPlan(*in.children[0], decide) + " = " + RenderForPlan(*in.children[1 + i], decide) + ")";
 			auto indicator = AddAuxiliaryDecision(decide, name, LogicalType::INTEGER, true, scope_of_in, label);
 			if (scope_of_in.IsKeyed())
-				decide.entity_scopes[scope_of_in.entity_scope_idx].scoped_variable_indices.push_back(indicator);
+				decide.keyed_scopes[scope_of_in.keyed_scope_idx].scoped_variable_indices.push_back(indicator);
 			indicators.push_back(MakeDecisionRef(decide, indicator));
 		}
 		in_counter++;

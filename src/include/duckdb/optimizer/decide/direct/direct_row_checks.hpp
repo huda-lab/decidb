@@ -25,7 +25,7 @@ unique_ptr<LogicalOperator> DirectAddRowChecks(Optimizer &optimizer, const vecto
 
 //! The scope checks of a DECIDE node that the plan can make, moved out of the node (LogicalDecide::scope_checks), for
 //! the solver path to install under it with DirectAddRowChecks, so one implementation makes them on both paths. What
-//! remains in the node is for the operator: the determination of an entity-scoped decision.
+//! remains in the node is for the operator: the determination of a keyed decision.
 vector<DirectRowCheck> DirectTakeRowChecks(ClientContext &context, LogicalDecide &decide);
 
 } // namespace duckdb

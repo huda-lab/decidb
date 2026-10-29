@@ -119,8 +119,8 @@ public:
 	// These are columns that are present in the name_map, appearing in the order that they're bound
 	const vector<ColumnIndex> &GetBoundColumnIds() const;
 	//! Registers column_index in bound_column_ids (if not already present) and returns the
-	//! ColumnBinding (table_index, position-in-bound_column_ids). Exposed for entity-scoped
-	//! variable binding in DECIDE clauses which must force entity-key columns into the scan.
+	//! ColumnBinding (table_index, position-in-bound_column_ids). Exposed for keyed
+	//! variable binding in DECIDE clauses which must force key columns of keyed decisions into the scan.
 	ColumnBinding GetColumnBinding(column_t column_index);
 };
 

@@ -23,8 +23,8 @@ class SelectNode;
 //! This runs before star expansion, because `SELECT *` must be able to see the
 //! declared decisions as columns, and the auxiliary decisions the optimizer will
 //! later add must stay hidden from it. Everything the bound plan needs about the
-//! decisions -- their types, their `0/1` domains, their entity scopes and the
-//! entity-key columns that must survive column pruning -- is written onto the
+//! decisions -- their types, their `0/1` domains, their keyed scopes and the
+//! key columns of keyed decisions that must survive column pruning -- is written onto the
 //! BoundSelectNode here.
 class DecideDeclarationsBinder {
 public:

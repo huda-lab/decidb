@@ -131,7 +131,7 @@ class TestEscapingInstances:
         assert _escape(rows, "buy") == [(50, 100, "row", "")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_entity_scoped_partial_escape_rule(self, request, cli_fixture):
+    def test_keyed_partial_escape_rule(self, request, cli_fixture):
         """Entity-scoped vars are characterized by their entity-key columns.
 
         The CLI fixture runs read-only, so the entity table is an inline subquery
@@ -150,7 +150,7 @@ class TestEscapingInstances:
         assert _escape(rows, "hire") == [(10, 10, "keyed", "dept = 'A'")]
 
     @pytest.mark.parametrize("cli_fixture", _BACKENDS)
-    def test_entity_scoped_join_column_escape_rule(self, request, cli_fixture):
+    def test_keyed_join_column_escape_rule(self, request, cli_fixture):
         """A joined dimension column can characterize entity-scoped escapes when
         that joined value is constant for each entity."""
         cli = request.getfixturevalue(cli_fixture)

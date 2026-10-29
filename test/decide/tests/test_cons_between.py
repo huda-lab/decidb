@@ -287,7 +287,7 @@ def _check_wrapped_between(decidb_cli, oracle_solver, data, sense, query_tail, b
 @pytest.mark.correctness
 @pytest.mark.parametrize("sense", ["MAXIMIZE", "MINIMIZE"])
 @_TWO_SIDED_FORMS
-def test_between_when_perrow_matches_some_rows(decidb_cli, duckdb_conn, oracle_solver, sense, form):
+def test_between_when_row_matches_some_rows(decidb_cli, duckdb_conn, oracle_solver, sense, form):
     """The bounds hold on the rows where the `when` holds and nowhere else.
 
     MAXIMIZE sees the upper bound (the unflagged row with the best payoff is not capped at `cap`), MINIMIZE sees the

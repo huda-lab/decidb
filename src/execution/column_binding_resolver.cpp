@@ -147,7 +147,7 @@ void ColumnBindingResolver::VisitOperator(LogicalOperator &op) {
 		}
 
 		// Every expression LogicalDecide owns (variables, constraints, objective,
-		// composed MIN/MAX terms, entity keys) must be resolved here for the same
+		// composed MIN/MAX terms, keyed decisions' keys) must be resolved here for the same
 		// reason as any other operator's expressions: the physical operator evaluates
 		// each reference's index as a *position in the materialized child chunk*. An
 		// unresolved BoundColumnRef still carries a logical (table_index, column_index),

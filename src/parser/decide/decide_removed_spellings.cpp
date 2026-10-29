@@ -123,7 +123,7 @@ struct Reducer {
 bool ReadReducer(const ParsedExpression &target, Reducer &out) {
 	const ParsedExpression *at = &target;
 	vector<string> removed;
-	while (IsDecideMarker(*at, WHEN_CONSTRAINT_TAG)) {
+	while (IsDecideMarker(*at, POSTFIX_WHEN_TAG)) {
 		auto &marker = at->Cast<FunctionExpression>();
 		if (marker.children.size() < 2) {
 			return false;
@@ -194,7 +194,7 @@ string ReducerSpelling(const Reducer &reducer) {
 //! scopes and `by` in the lower-case spelling, any earlier removed WHEN left out.
 string ReducerAsWritten(const ParsedExpression &target) {
 	const ParsedExpression *reducer_text = &target;
-	while (IsDecideMarker(*reducer_text, WHEN_CONSTRAINT_TAG)) {
+	while (IsDecideMarker(*reducer_text, POSTFIX_WHEN_TAG)) {
 		reducer_text = reducer_text->Cast<FunctionExpression>().children[0].get();
 	}
 	Reducer reducer;
@@ -244,7 +244,7 @@ unique_ptr<ParsedExpression> *ChildSlot(ParsedExpression &expr, idx_t index) {
 }
 
 bool IsRemovedMarker(const ParsedExpression &expr) {
-	return IsDecideMarker(expr, WHEN_CONSTRAINT_TAG) || IsDecideMarker(expr, PER_CONSTRAINT_TAG);
+	return IsDecideMarker(expr, POSTFIX_WHEN_TAG) || IsDecideMarker(expr, POSTFIX_PER_TAG);
 }
 
 //! Any DECIDE marker: a scope, a `by`, the colon form or a removed form. None is an operator
@@ -531,7 +531,7 @@ vector<ReducerWhenFix> FixReducerWhens(unique_ptr<ParsedExpression> &region, Reg
 	vector<ReducerWhenFix> fixes;
 	while (true) {
 		vector<PathStep> path;
-		if (!FindRemovedMarker(*region, path) || !IsDecideMarker(*path.back().node, WHEN_CONSTRAINT_TAG)) {
+		if (!FindRemovedMarker(*region, path) || !IsDecideMarker(*path.back().node, POSTFIX_WHEN_TAG)) {
 			return fixes;
 		}
 		auto &marker = path.back().node->Cast<FunctionExpression>();
@@ -616,7 +616,7 @@ string ReducerWhenNote(const ParsedExpression &constraint) {
 	auto key = KeyText(per);
 	const ParsedExpression *constraint = per.children[0].get();
 	const ParsedExpression *when = nullptr;
-	if (IsDecideMarker(*constraint, WHEN_CONSTRAINT_TAG) &&
+	if (IsDecideMarker(*constraint, POSTFIX_WHEN_TAG) &&
 	    IsConstraint(*constraint->Cast<FunctionExpression>().children[0])) {
 		auto &marker = constraint->Cast<FunctionExpression>();
 		when = marker.children[1].get();
@@ -650,7 +650,7 @@ string ReducerWhenNote(const ParsedExpression &constraint) {
 		// Put the WHEN back on the reducer the constraint's text ends with.
 		auto &bound = condition.Cast<ComparisonExpression>();
 		const ParsedExpression *at = &constraint;
-		while (!TakesReducerBy(UnwrapReducerMarkers(*at)) && !IsDecideMarker(*at, WHEN_CONSTRAINT_TAG) &&
+		while (!TakesReducerBy(UnwrapReducerMarkers(*at)) && !IsDecideMarker(*at, POSTFIX_WHEN_TAG) &&
 		       EndsWithLastOperand(*at) && ChildCount(*at) > 0) {
 			idx_t last = ChildCount(*at) - 1, index = 0;
 			ParsedExpressionIterator::EnumerateChildren(*at, [&](const ParsedExpression &child) {
@@ -684,10 +684,10 @@ void RefuseClause(const ParsedExpression &clause) {
 		                                            [&](const ParsedExpression &child) { RefuseClause(child); });
 		return;
 	}
-	if (IsDecideMarker(clause, PER_CONSTRAINT_TAG)) {
+	if (IsDecideMarker(clause, POSTFIX_PER_TAG)) {
 		RefusePostfixPer(clause.Cast<FunctionExpression>());
 	}
-	if (IsDecideMarker(clause, WHEN_CONSTRAINT_TAG)) {
+	if (IsDecideMarker(clause, POSTFIX_WHEN_TAG)) {
 		auto &when = clause.Cast<FunctionExpression>();
 		Reducer reducer;
 		if (SwallowedCondition(when) && ReadReducer(*when.children[0], reducer)) {
@@ -700,7 +700,7 @@ void RefuseClause(const ParsedExpression &clause) {
 		return;
 	}
 	auto &marker = *path.back().node;
-	if (IsDecideMarker(marker, PER_CONSTRAINT_TAG)) {
+	if (IsDecideMarker(marker, POSTFIX_PER_TAG)) {
 		RefusePostfixPer(marker.Cast<FunctionExpression>());
 	}
 	Reducer reducer;
@@ -718,7 +718,7 @@ void RefuseClause(const ParsedExpression &clause) {
 //! `condition` receives it as written and `body` what it followed.
 bool WhenAfterWhole(const ParsedExpression &expr, WrittenWhen &condition, const ParsedExpression *&body) {
 	vector<PathStep> path;
-	if (!FindRemovedMarker(expr, path) || !IsDecideMarker(*path.back().node, WHEN_CONSTRAINT_TAG)) {
+	if (!FindRemovedMarker(expr, path) || !IsDecideMarker(*path.back().node, POSTFIX_WHEN_TAG)) {
 		return false;
 	}
 	idx_t top;
@@ -809,7 +809,7 @@ const FunctionExpression *NestedReducer(const ParsedExpression &expr) {
 }
 
 void RefuseObjective(const ParsedExpression &objective, const string &sense) {
-	if (IsDecideMarker(objective, PER_CONSTRAINT_TAG)) {
+	if (IsDecideMarker(objective, POSTFIX_PER_TAG)) {
 		RefuseObjectivePer(objective.Cast<FunctionExpression>(), sense);
 	}
 	vector<PathStep> path;
@@ -817,7 +817,7 @@ void RefuseObjective(const ParsedExpression &objective, const string &sense) {
 		return;
 	}
 	auto &marker = path.back().node->Cast<FunctionExpression>();
-	if (IsDecideMarker(marker, PER_CONSTRAINT_TAG)) {
+	if (IsDecideMarker(marker, POSTFIX_PER_TAG)) {
 		RefuseObjectivePer(marker, sense);
 	}
 	WrittenWhen condition;
@@ -896,7 +896,7 @@ void RefuseInExpression(const ParsedExpression &expr) {
 		return;
 	}
 	auto &marker = path.back().node->Cast<FunctionExpression>();
-	if (IsDecideMarker(marker, PER_CONSTRAINT_TAG)) {
+	if (IsDecideMarker(marker, POSTFIX_PER_TAG)) {
 		RefusePostfixPer(marker);
 	}
 	Reducer reducer;

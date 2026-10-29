@@ -298,9 +298,9 @@ TEST_CASE("Direct-solve IR models every decision domain and scope", "[decidb]") 
 	REQUIRE(ir.decisions[2].domain == DirectDomain::REAL);
 	REQUIRE(ir.decisions[3].scope == DecideVarScope::GLOBAL);
 	REQUIRE(ir.decisions[4].scope == DecideVarScope::KEYED);
-	REQUIRE(ir.decisions[4].entity_scope == 0);
-	REQUIRE(ir.entity_scopes.size() == 1);
-	REQUIRE(!ir.entity_scopes[0].key_slots.empty());
+	REQUIRE(ir.decisions[4].keyed_scope == 0);
+	REQUIRE(ir.keyed_scopes.size() == 1);
+	REQUIRE(!ir.keyed_scopes[0].key_slots.empty());
 	// The query-wide decision is a row-level part beside the reducers.
 	REQUIRE(ir.objective.parts.size() == 5);
 	REQUIRE(ir.objective.parts[3].reducer == DirectReducer::NONE);

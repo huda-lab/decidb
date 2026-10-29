@@ -495,23 +495,23 @@ static vector<DecideKeyElement> KeyElements(const KeyColumns &columns) {
 }
 
 //! The scope of the decisions and reducers keyed by `key`: one per key.
-static idx_t FindOrCreateScope(idx_t key, vector<EntityScopeInfo> &entity_scopes) {
-	for (idx_t scope_idx = 0; scope_idx < entity_scopes.size(); scope_idx++) {
-		if (entity_scopes[scope_idx].key == key && entity_scopes[scope_idx].value_link == DConstants::INVALID_INDEX) {
+static idx_t FindOrCreateScope(idx_t key, vector<KeyedScopeInfo> &keyed_scopes) {
+	for (idx_t scope_idx = 0; scope_idx < keyed_scopes.size(); scope_idx++) {
+		if (keyed_scopes[scope_idx].key == key && keyed_scopes[scope_idx].value_link == DConstants::INVALID_INDEX) {
 			return scope_idx;
 		}
 	}
-	EntityScopeInfo scope_info;
+	KeyedScopeInfo scope_info;
 	scope_info.key = key;
-	entity_scopes.push_back(std::move(scope_info));
-	return entity_scopes.size() - 1;
+	keyed_scopes.push_back(std::move(scope_info));
+	return keyed_scopes.size() - 1;
 }
 
 idx_t FindOrCreateKeyScope(BindContext &bind_context, const FunctionExpression &per,
                            const case_insensitive_set_t &decision_names, const string &key_text,
-                           vector<DecideKey> &keys, vector<EntityScopeInfo> &entity_scopes) {
+                           vector<DecideKey> &keys, vector<KeyedScopeInfo> &keyed_scopes) {
 	auto key = BindKey(bind_context, per, decision_names, key_text, keys);
-	return FindOrCreateScope(key, entity_scopes);
+	return FindOrCreateScope(key, keyed_scopes);
 }
 
 idx_t BindKey(BindContext &bind_context, const FunctionExpression &per, const case_insensitive_set_t &decision_names,
@@ -1506,7 +1506,7 @@ bool DecideBinder::IsRowInvariantExpression(const ParsedExpression &expr) const 
 		if (!IsVariableExpression(expr, variables)) {
 			return false; // a plain data column varies per row
 		}
-		return IsScalarDecideVariable(expr); // row/entity-scoped decisions vary; scalars don't
+		return IsScalarDecideVariable(expr); // row/keyed decisions vary; scalars don't
 	}
 	bool invariant = true;
 	ParsedExpressionIterator::EnumerateChildren(expr, [&](const ParsedExpression &child) {
@@ -1680,7 +1680,7 @@ BindResult DecideBinder::BindQualifiedReducer(FunctionExpression &qualified_expr
 	// `SUM(D, T: e)` is `sum(per D, T: e)` (language/guide.md §5.1): the same exact scope, so the same
 	// classes and the same check that the key determines the body.
 	auto scope_idx =
-	    FindOrCreateScope(FindOrCreateDecideKey(KeyElements(key), relation_list, *ctx.keys), *ctx.entity_scopes);
+	    FindOrCreateScope(FindOrCreateDecideKey(KeyElements(key), relation_list, *ctx.keys), *ctx.keyed_scopes);
 
 	auto aggregate_result = BindExpression(qualified_expr.children[0], depth);
 	if (aggregate_result.HasError()) {
@@ -1777,7 +1777,7 @@ BindResult DecideBinder::BindScopedReducer(unique_ptr<ParsedExpression> &expr_pt
 		auto &marker = per->Cast<FunctionExpression>();
 		auto scope_idx =
 		    FindOrCreateKeyScope(binder.bind_context, marker, DecisionNames(variables), DecideKeyToString(marker),
-		                         *qualifier_context->keys, *qualifier_context->entity_scopes);
+		                         *qualifier_context->keys, *qualifier_context->keyed_scopes);
 		AddDecideTag(aggregate->alias,
 		             MakeQualifiedReducerTag(scope_idx, qualifier_context->WrittenFragment(marker, DecideSpanRole::PER)));
 	}

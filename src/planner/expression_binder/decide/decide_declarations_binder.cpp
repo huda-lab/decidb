@@ -140,7 +140,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 
         // Key scopes: one per distinct key, shared by the declarations and reducers on it.
 	    vector<DecideKey> keys;
-	    vector<EntityScopeInfo> entity_scopes;
+	    vector<KeyedScopeInfo> keyed_scopes;
         vector<DecideVarScopeInfo> variable_scopes; // per variable: row / keyed / query-wide
 
         // A parse tree stored by an earlier version (a view, a macro) may still carry a
@@ -177,8 +177,8 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             } else if (declaration.per) {
                 auto key_text = DecideKeyToString(*declaration.per);
 			    auto scope_idx =
-			        FindOrCreateKeyScope(bind_context, *declaration.per, declared_names, key_text, keys, entity_scopes);
-			    entity_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
+			        FindOrCreateKeyScope(bind_context, *declaration.per, declared_names, key_text, keys, keyed_scopes);
+			    keyed_scopes[scope_idx].scoped_variable_indices.push_back(var_idx);
                 variable_scopes.push_back(DecideVarScopeInfo::Keyed(scope_idx, key_text));
             } else {
                 variable_scopes.push_back(DecideVarScopeInfo::Row());
@@ -306,11 +306,11 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
             }
         }
         // What a relation-qualified reducer needs to resolve `sum(D: ...)`. The binders
-        // may append a key-only entity scope to `entity_scopes`, which is why this runs
+        // may append a key-only keyed scope to `keyed_scopes`, which is why this runs
         // before the vector is moved onto the operator below.
         DecideQualifierContext qualifier_context;
         qualifier_context.decide_index = result.decide_index;
-        qualifier_context.entity_scopes = &entity_scopes;
+        qualifier_context.keyed_scopes = &keyed_scopes;
 	    qualifier_context.keys = &keys;
 	    qualifier_context.source_fragments = &decide_source_fragments;
 	    qualifier_context.source_text = &statement.decide_text;
@@ -325,7 +325,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 // read the decision's declared type off the DECIDE clause; every other
                 // operand's type is only known now that binding has resolved it. Together
                 // they are the whole refusal, so the model builder no longer raises one.
-			    DecideSourceNames names {decide_source_fragments, entity_scopes, keys};
+			    DecideSourceNames names {decide_source_fragments, keyed_scopes, keys};
 			    ValidateDecideIntegralComparisonOperands(*result.decide_constraints, result.decide_index, &names);
                 // Degree has one owner, and this is it. Running on the bound tree makes the
                 // rule total: a reducer argument and a bare per-row constraint are judged
@@ -333,7 +333,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
                 // ever called for SUM/AVG/MIN/MAX arguments.
                 ValidateDecideConstraintDegree(*result.decide_constraints, result.decide_index);
 			    result.decide_constraint_sources =
-			        InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, entity_scopes,
+			        InitializeConstraintSourceInfo(*result.decide_constraints, decide_source_fragments, keyed_scopes,
 			                                       result.decide_index, &keys, &statement.decide_text);
 		    }
             // Types are now determined from the DECIDE clause, not from constraint binding
@@ -370,7 +370,7 @@ void DecideDeclarationsBinder::BindDeclarations(SelectNode &statement, BoundSele
 
 	    result.decide_keys = std::move(keys);
 
-	    result.entity_scopes = std::move(entity_scopes);
+	    result.keyed_scopes = std::move(keyed_scopes);
         result.variable_scopes = variable_scopes;
 
         // ne_clause_sources is now populated by DecideOptimizer (post-binding)

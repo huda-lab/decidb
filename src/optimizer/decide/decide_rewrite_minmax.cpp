@@ -299,7 +299,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 		}
 		// The `when c:` folds into the terms, which then read only the rows it keeps; the
 		// wrapper goes with the clause it held.
-		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+		if (IsWhenFilterWrapper(conj) && conj.children.size() == 2) {
 			auto &inner = *conj.children[0];
 			if (inner.GetExpressionClass() == ExpressionClass::BOUND_CONSTANT &&
 			    inner.return_type == LogicalType::BOOLEAN) {
@@ -369,7 +369,7 @@ void DecideOptimizer::RewriteComposedMinMaxInConstraint(unique_ptr<Expression> &
 
 	const ExtremumPush outer_push = ExtremumPushOf(cmp_type);
 
-	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.keys, decide.decide_index,
+	auto names = DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	AssertComposable(comp);
 	LogicalDecide::ComposedMinMaxConstraint spec;
@@ -405,7 +405,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	const Expression *scoped_when = nullptr;
 	if (obj.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj.Cast<BoundConjunctionExpression>();
-		if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2 &&
+		if (IsWhenFilterWrapper(conj) && conj.children.size() == 2 &&
 		    AdditiveContainsMinMax(*conj.children[0], decide.decide_index)) {
 			body = conj.children[0].get();
 			scoped_when = conj.children[1].get();
@@ -447,7 +447,7 @@ void DecideOptimizer::RewriteComposedMinMaxObjectiveTop(LogicalDecide &decide) {
 	vector<LogicalDecide::ComposedMinMaxTerm> terms;
 	vector<pair<int, const Expression *>> beside;
 	// An objective always has a direction, so no term needs the both-sides pin here.
-	auto names = DecidePlanNames(decide.source_fragments, decide.entity_scopes, decide.keys, decide.decide_index,
+	auto names = DecidePlanNames(decide.source_fragments, decide.keyed_scopes, decide.keys, decide.decide_index,
 	                             decide.aux_var_expressions);
 	WalkComposedLhs(optimizer.context, decide, DConstants::INVALID_INDEX, *body, /*sign=*/1, decide.decide_index,
 	                outer_push, terms, names, beside);
@@ -752,7 +752,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	// Unwrap PER wrapper (outermost layer)
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
+		if (IsTwoLevelObjectiveWrapper(conj) && !conj.children.empty()) {
 			has_per = true;
 			per_wrapper = &conj;
 			obj_owner = &conj.children[0];
@@ -763,7 +763,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 	// Unwrap WHEN wrapper (inside PER, if present)
 	if (obj_expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = obj_expr->Cast<BoundConjunctionExpression>();
-		if (IsWhenConstraintWrapper(conj) && !conj.children.empty()) {
+		if (IsWhenFilterWrapper(conj) && !conj.children.empty()) {
 			obj_owner = &conj.children[0];
 			obj_expr = conj.children[0].get();
 		}
@@ -839,7 +839,7 @@ void DecideOptimizer::RewriteMinMaxObjectiveTree(LogicalDecide &decide, unique_p
 				{
 					using Kind = LogicalDecide::RewriteAccount::Kind;
 					const string key =
-					    SplitDecideTwoLevel(*per_wrapper, decide.source_fragments, decide.entity_scopes).key;
+					    SplitDecideTwoLevel(*per_wrapper, decide.source_fragments, decide.keyed_scopes).key;
 					auto inner_text = RenderDecideTwoLevelInner(RenderForPlan(inner_agg, decide), key);
 					// Defined members have no box, so every extremum over them, the outer one's
 					// included, is stated natively.

@@ -44,7 +44,7 @@ struct DiagnosticFinding {
 	//! (`x <= <cap>`), or a plain instruction when there is no re-quotable text
 	//! ("remove this clause"). Empty => NULL.
 	string suggested_change;
-	//! Size of the edit: how far a bound moves, how many row/entity instances a variable
+	//! Size of the edit: how far a bound moves, how many row/class instances a variable
 	//! escapes on, or the achievable objective. `has_amount` false => NULL.
 	bool has_amount = false;
 	double amount = 0.0;
@@ -53,7 +53,7 @@ struct DiagnosticFinding {
 	//! is the variable's total instance count. `has_total` false => NULL.
 	bool has_total = false;
 	int64_t total = 0;
-	//! Kind of instance counted by `amount` / `total`: `row` or `entity` for an
+	//! Kind of instance counted by `amount` / `total`: `row` or `keyed` for an
 	//! unbounded escape count. Empty => NULL for findings without an instance count.
 	string scope;
 	//! What KIND of finding this row is, and where it came from. One vocabulary, so a
@@ -126,7 +126,7 @@ struct VarEscape {
 	idx_t total = 0;        //!< total instances of this variable
 	bool all_escape = false; //!< escaping == total
 	bool is_aux = false;     //!< aux/linearization column (name-only, no rules)
-	bool is_entity_scoped = false; //!< true => instances are entities, not rows (noun)
+	bool is_keyed = false;   //!< true => instances are classes, not rows (noun)
 	vector<EscapeRule> rules; //!< categorical rules (empty => count fallback)
 };
 
@@ -181,7 +181,7 @@ vector<EscapeRule> CharacterizeEscape(const std::set<idx_t> &escaping, idx_t tot
 //! the forced remedy without inventing the cap (`x <= <cap>`), `edit_source` carries the
 //! direction (`runaway_+inf` / `runaway_-inf`), `group` names the slice (`region = 'EU'`)
 //! and `amount` / `total` give the escaping and considered instance counts. `scope`
-//! says whether those instances are rows or entities. Precondition: `escapes` is
+//! says whether those instances are rows or classes. Precondition: `escapes` is
 //! non-empty; the caller reports the bare status when the ray names nothing (quadratic
 //! model, or only internal auxiliaries).
 DecideDiagnostic BuildUnboundedDiagnostic(const vector<VarEscape> &escapes);

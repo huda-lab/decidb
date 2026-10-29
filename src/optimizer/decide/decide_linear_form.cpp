@@ -80,7 +80,7 @@ class DecideLinearFormBuilder {
 public:
 	DecideLinearFormBuilder(ClientContext &context, LogicalDecide &op)
 	    : context(context), op(op), decide_index(op.decide_index),
-	      canonicalizer(context, op.decide_index, op.variable_scopes, op.entity_scopes, op.is_boolean_var),
+	      canonicalizer(context, op.decide_index, op.variable_scopes, op.keyed_scopes, op.is_boolean_var),
 	      splitter(context, op.decide_index, op.decide_variables) {
 	}
 
@@ -320,7 +320,7 @@ private:
 	// Reducer metadata and peeled scales
 	//===------------------------------------------------------------------===//
 
-	//! Entity scope a reducer is qualified by (`sum(D: ...)`), read back from the tag the
+	//! Keyed scope a reducer is qualified by (`sum(D: ...)`), read back from the tag the
 	//! binder stamped on the aggregate; INVALID_INDEX when the reducer is unqualified.
 	static idx_t QualifierScopeOf(const BoundAggregateExpression &agg) {
 		idx_t scope_idx = DConstants::INVALID_INDEX;
@@ -874,7 +874,7 @@ private:
 				    (obj.bilinear_terms.size() != bilinear_before && !ReadsOnlyQueryWideDecisions(expr))) {
 					throw InvalidInputException(
 					    "DECIDE objective: '%s' multiplies decisions outside a reducer, which is not supported yet",
-					    RenderDecideSource(expr, op.source_fragments, op.entity_scopes, &op.keys));
+					    RenderDecideSource(expr, op.source_fragments, op.keyed_scopes, &op.keys));
 				}
 				continue;
 			}
@@ -927,7 +927,7 @@ private:
 		idx_t two_level_key = DConstants::INVALID_INDEX;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			if (IsPerConstraintWrapper(conj) && !conj.children.empty()) {
+			if (IsTwoLevelObjectiveWrapper(conj) && !conj.children.empty()) {
 				// `per ()` groups nothing: the objective is read once.
 				two_level_key = PerWrapperKey(conj);
 				expr = UnwrapDecideCasts(*conj.children[0], decide_index);
@@ -938,7 +938,7 @@ private:
 		unique_ptr<Expression> when_cond;
 		if (expr->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &conj = expr->Cast<BoundConjunctionExpression>();
-			if (IsWhenConstraintWrapper(conj) && conj.children.size() == 2) {
+			if (IsWhenFilterWrapper(conj) && conj.children.size() == 2) {
 				when_cond = conj.children[1]->Copy();
 				// Unwrap to get the actual objective expression
 				expr = UnwrapDecideCasts(*conj.children[0], decide_index);

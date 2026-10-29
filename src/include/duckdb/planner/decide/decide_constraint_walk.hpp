@@ -16,7 +16,7 @@
 //
 // So every pass over the tree has to know the same rule: at a wrapper, descend only
 // into child 0. That rule used to be retyped as
-// `HasDecideTag(alias, WHEN_CONSTRAINT_TAG) || IsPerConstraintTag(alias)` at fifteen
+// `HasDecideTag(alias, WHEN_FILTER_TAG) || IsTwoLevelObjectiveTag(alias)` at fifteen
 // sites, which meant a third wrapper kind would have to be found at all fifteen --
 // and the one that got missed would start walking a condition as a constraint.
 //
@@ -44,14 +44,14 @@
 namespace duckdb {
 
 //! `when <condition>: <constraint>`: child 0 is the constraint, child 1 the condition.
-inline bool IsWhenConstraintWrapper(const BoundConjunctionExpression &conjunction) {
-	return HasDecideTag(conjunction.GetAlias(), WHEN_CONSTRAINT_TAG);
+inline bool IsWhenFilterWrapper(const BoundConjunctionExpression &conjunction) {
+	return HasDecideTag(conjunction.GetAlias(), WHEN_FILTER_TAG);
 }
 
 //! The two-level objective `outer(per k: inner(e) by (k))`: child 0 is the objective
 //! body; the tag names the key. Only the objective carries it.
-inline bool IsPerConstraintWrapper(const BoundConjunctionExpression &conjunction) {
-	return IsPerConstraintTag(conjunction.GetAlias());
+inline bool IsTwoLevelObjectiveWrapper(const BoundConjunctionExpression &conjunction) {
+	return IsTwoLevelObjectiveTag(conjunction.GetAlias());
 }
 
 //! `per K: <constraint>`: child 0 is the constraint; the tag names the key, none for
@@ -71,7 +71,7 @@ inline idx_t PerWrapperKey(const BoundConjunctionExpression &wrapper) {
 //! True for any wrapper. An untagged conjunction is a plain AND, every child of which
 //! is a constraint in its own right.
 inline bool IsConstraintWrapper(const BoundConjunctionExpression &conjunction) {
-	return IsPerConstraintWrapper(conjunction) || IsWhenConstraintWrapper(conjunction) ||
+	return IsTwoLevelObjectiveWrapper(conjunction) || IsWhenFilterWrapper(conjunction) ||
 	       IsPerClassWrapper(conjunction);
 }
 
@@ -109,7 +109,7 @@ inline DecideEnclosingScope EnterDecideScope(const Expression &node, DecideEnclo
 		return scope;
 	}
 	auto &conjunction = node.Cast<BoundConjunctionExpression>();
-	if (IsWhenConstraintWrapper(conjunction) && conjunction.children.size() == 2) {
+	if (IsWhenFilterWrapper(conjunction) && conjunction.children.size() == 2) {
 		scope.when_wrapper = &conjunction;
 	} else if (IsPerClassWrapper(conjunction) && !conjunction.children.empty()) {
 		scope.per_wrapper = &conjunction;

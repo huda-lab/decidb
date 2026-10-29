@@ -163,7 +163,7 @@ def test_keyed_consistency(decidb_cli, duckdb_conn, oracle_solver, perf_tracker)
         nkey = int(row[0])
         nation_acctbal[nkey] = nation_acctbal.get(nkey, 0.0) + float(row[1])
 
-    oracle_solver.create_model("entity_scoped_consistency")
+    oracle_solver.create_model("keyed_consistency")
     vnames = {nkey: f"keepN_{nkey}" for nkey in nation_ids}
     for nkey in nation_ids:
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
@@ -233,7 +233,7 @@ def test_keyed_integer(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         nation_count[nkey] = nation_count.get(nkey, 0) + 1
         nation_acctbal[nkey] = nation_acctbal.get(nkey, 0.0) + float(row[1])
 
-    oracle_solver.create_model("entity_scoped_integer")
+    oracle_solver.create_model("keyed_integer")
     vnames = {nkey: f"qty_{nkey}" for nkey in nation_ids}
     for nkey in nation_ids:
         oracle_solver.add_variable(vnames[nkey], VarType.INTEGER, lb=0.0, ub=3.0)
@@ -317,7 +317,7 @@ def test_keyed_mixed_with_row_scoped(decidb_cli, duckdb_conn, oracle_solver, per
     cust_acctbal = {ckey: acctbal for ckey, _, acctbal in customers}
     oracle_nation_ids = sorted(set(nkey for _, nkey, _ in customers))
 
-    oracle_solver.create_model("entity_scoped_mixed")
+    oracle_solver.create_model("keyed_mixed")
     kn_vars = {nkey: f"keepN_{nkey}" for nkey in oracle_nation_ids}
     x_cvars = {ckey: f"x_{ckey}" for ckey, _, _ in customers}
     for nkey in oracle_nation_ids:
@@ -389,7 +389,7 @@ def test_keyed_with_when(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         if acctbal > 0:
             nation_acctbal_pos[nkey] = nation_acctbal_pos.get(nkey, 0.0) + acctbal
 
-    oracle_solver.create_model("entity_scoped_with_when")
+    oracle_solver.create_model("keyed_with_when")
     vnames = {nkey: f"keepN_{nkey}" for nkey in nation_ids}
     for nkey in nation_ids:
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
@@ -497,7 +497,7 @@ def test_keyed_with_per(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         nation_count[nkey] = nation_count.get(nkey, 0) + 1
         nation_acctbal[nkey] = nation_acctbal.get(nkey, 0.0) + float(row[2])
 
-    oracle_solver.create_model("entity_scoped_per")
+    oracle_solver.create_model("keyed_per")
     vnames = {nkey: f"keepN_{nkey}" for nkey in nation_ids}
     for nkey in nation_ids:
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
@@ -580,7 +580,7 @@ def test_keyed_with_max(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     nation_cnt9 = {int(r[0]): int(r[2]) for r in raw}
     nation_ids9 = sorted(nation_max_acctbal.keys())
 
-    oracle_solver.create_model("entity_scoped_with_max")
+    oracle_solver.create_model("keyed_with_max")
     vnames9 = {nkey: f"keepN_{nkey}" for nkey in nation_ids9}
     for nkey in nation_ids9:
         # MAX easy case: nation with any acctbal > 8000 must be forced to 0
@@ -649,7 +649,7 @@ def test_keyed_with_avg(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
         f"AVG constraint violated: AVG(keepN * c_acctbal) = {avg_val:.2f} > 3000"
 
     # Oracle: AVG rewrite → SUM(keepN * acctbal) <= 3000 * n_total
-    oracle_solver.create_model("entity_scoped_with_avg")
+    oracle_solver.create_model("keyed_with_avg")
     nation_ids = sorted(nation_values.keys())
     nation_count2 = {}
     for r in data:
@@ -755,7 +755,7 @@ def test_keyed_when_per_triple(decidb_cli, duckdb_conn, oracle_solver, perf_trac
         if acctbal > 5000:
             nation_acctbal_high[nkey] = nation_acctbal_high.get(nkey, 0.0) + acctbal
 
-    oracle_solver.create_model("entity_scoped_when_per")
+    oracle_solver.create_model("keyed_when_per")
     vnames = {nkey: f"keepN_{nkey}" for nkey in nation_ids}
     for nkey in nation_ids:
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
@@ -810,7 +810,7 @@ def test_keyed_ne_constraint(decidb_cli, duckdb_conn, oracle_solver):
     """).fetchall()
     nation_ids = sorted(int(r[0]) for r in raw)
 
-    oracle_solver.create_model("entity_scoped_ne_constraint")
+    oracle_solver.create_model("keyed_ne_constraint")
     vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
     for nk in nation_ids:
         oracle_solver.add_variable(vnames[nk], VarType.BINARY)
@@ -878,7 +878,7 @@ def test_keyed_max_hard_case(decidb_cli, duckdb_conn, oracle_solver):
     nation_cnt14 = {int(r[0]): int(r[2]) for r in raw}
     nation_ids14 = sorted(nation_max14.keys())
 
-    oracle_solver.create_model("entity_scoped_max_hard")
+    oracle_solver.create_model("keyed_max_hard")
     vnames14 = {nkey: f"keepN_{nkey}" for nkey in nation_ids14}
     for nkey in nation_ids14:
         oracle_solver.add_variable(vnames14[nkey], VarType.BINARY)
@@ -955,7 +955,7 @@ def test_keyed_mixed_when_per(
     """).fetchall()
     nation_ids = sorted({int(row[1]) for row in data})
 
-    oracle_solver.create_model("entity_scoped_mixed_when_per")
+    oracle_solver.create_model("keyed_mixed_when_per")
     knames = {nk: f"keepN_{nk}" for nk in nation_ids}
     for nk in nation_ids:
         oracle_solver.add_variable(knames[nk], VarType.BINARY)
@@ -1081,7 +1081,7 @@ def test_keyed_when_on_objective(decidb_cli, duckdb_conn, oracle_solver):
         if acctbal > 0:
             nation_acctbal_pos[nkey] = nation_acctbal_pos.get(nkey, 0.0) + acctbal
 
-    oracle_solver.create_model("entity_scoped_when_obj")
+    oracle_solver.create_model("keyed_when_obj")
     vnames = {nkey: f"keepN_{nkey}" for nkey in nation_ids}
     for nkey in nation_ids:
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
@@ -1169,7 +1169,7 @@ def test_keyed_multi_column_per(decidb_cli, duckdb_conn, oracle_solver):
         nation_seg_count[(nkey, seg)] = nation_seg_count.get((nkey, seg), 0) + 1
 
     groups = set((nation_region[nkey], seg) for (nkey, seg) in nation_seg_count)
-    oracle_solver.create_model("entity_scoped_multi_col_per")
+    oracle_solver.create_model("keyed_multi_col_per")
     vnames = {nkey: f"keepN_{nkey}" for nkey in nation_ids}
     for nkey in nation_ids:
         oracle_solver.add_variable(vnames[nkey], VarType.BINARY)
@@ -1252,7 +1252,7 @@ def test_keyed_min_easy_case(decidb_cli, duckdb_conn, oracle_solver):
     nation_cnt19 = {int(r[0]): int(r[2]) for r in raw19}
     nation_ids19 = sorted(nation_min19.keys())
 
-    oracle_solver.create_model("entity_scoped_min_easy")
+    oracle_solver.create_model("keyed_min_easy")
     vnames19 = {nkey: f"keepN_{nkey}" for nkey in nation_ids19}
     for nkey in nation_ids19:
         ub19 = 0.0 if nation_min19[nkey] < 0 else 1.0
@@ -1327,7 +1327,7 @@ def test_keyed_avg_per(decidb_cli, duckdb_conn, oracle_solver):
         rname = str(r[1])
         region_row_count20[rname] = region_row_count20.get(rname, 0) + int(r[3])
 
-    oracle_solver.create_model("entity_scoped_avg_per")
+    oracle_solver.create_model("keyed_avg_per")
     vnames20 = {nkey: f"keepN_{nkey}" for nkey in nation_ids20}
     for nkey in nation_ids20:
         oracle_solver.add_variable(vnames20[nkey], VarType.BINARY)
@@ -1380,7 +1380,7 @@ def test_keyed_ne_per(decidb_cli, duckdb_conn, oracle_solver):
     nation_region = {int(r[0]): int(r[1]) for r in raw}
     regions = sorted(set(nation_region.values()))
 
-    oracle_solver.create_model("entity_scoped_ne_per")
+    oracle_solver.create_model("keyed_ne_per")
     vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
     for nk in nation_ids:
         oracle_solver.add_variable(vnames[nk], VarType.BINARY)
@@ -1432,7 +1432,7 @@ def test_keyed_between_constraint(decidb_cli, duckdb_conn, oracle_solver):
     """).fetchall()
     nation_ids = sorted(int(r[0]) for r in raw)
 
-    oracle_solver.create_model("entity_scoped_between")
+    oracle_solver.create_model("keyed_between")
     vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
     for nk in nation_ids:
         oracle_solver.add_variable(vnames[nk], VarType.BINARY)
@@ -1525,7 +1525,7 @@ def test_keyed_two_tables(decidb_cli, duckdb_conn, oracle_solver):
         rkey = nation_to_region22[nkey]
         nations_per_region22[rkey] = nations_per_region22.get(rkey, 0) + 1
 
-    oracle_solver.create_model("entity_scoped_two_tables")
+    oracle_solver.create_model("keyed_two_tables")
     kn22 = {nkey: f"keepN_{nkey}" for nkey in nation_ids22}
     kr22 = {rkey: f"keepR_{rkey}" for rkey in region_ids22}
     for nkey in nation_ids22:
@@ -1604,7 +1604,7 @@ def test_keyed_equality_constraint(
     """).fetchall()
     nation_ids = sorted(int(r[0]) for r in raw)
 
-    oracle_solver.create_model("entity_scoped_equality")
+    oracle_solver.create_model("keyed_equality")
     vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
     for nk in nation_ids:
         oracle_solver.add_variable(vnames[nk], VarType.BINARY)
@@ -1672,7 +1672,7 @@ def test_keyed_is_real(decidb_cli, duckdb_conn, oracle_solver):
     """).fetchall()
     nation_ids = [int(r[0]) for r in data]
 
-    oracle_solver.create_model("entity_scoped_is_real")
+    oracle_solver.create_model("keyed_is_real")
     vnames = {n: f"budget_{n}" for n in nation_ids}
     for n in nation_ids:
         oracle_solver.add_variable(vnames[n], VarType.CONTINUOUS, lb=0.0, ub=1000.0)
@@ -1738,7 +1738,7 @@ def test_keyed_hard_min_max(decidb_cli, duckdb_conn, oracle_solver):
     nation_cnt = {int(r[0]): int(r[1]) for r in data}
     nation_ids = sorted(nation_cnt.keys())
 
-    oracle_solver.create_model("entity_scoped_hard_min")
+    oracle_solver.create_model("keyed_hard_min")
     qvars = {n: f"qty_{n}" for n in nation_ids}
     yvars = {n: f"y_{n}" for n in nation_ids}
     BIG_M = 20.0  # qty max 10; slack must exceed 10-3 = 7
@@ -1818,7 +1818,7 @@ def test_keyed_abs(decidb_cli, duckdb_conn, oracle_solver):
     """).fetchall()
     nation_ids = sorted(set(int(r[1]) for r in data))
 
-    oracle_solver.create_model("entity_scoped_abs")
+    oracle_solver.create_model("keyed_abs")
     keep_v = {n: f"keepN_{n}" for n in nation_ids}
     for n in nation_ids:
         oracle_solver.add_variable(keep_v[n], VarType.BINARY)
@@ -1907,7 +1907,7 @@ def test_keyed_when_min_max_triple(decidb_cli, duckdb_conn, oracle_solver):
             qualifying_nations.add(nkey)
     nation_ids = sorted(nation_cnt.keys())
 
-    oracle_solver.create_model("entity_scoped_when_max_triple")
+    oracle_solver.create_model("keyed_when_max_triple")
     kv = {n: f"keepN_{n}" for n in nation_ids}
     for n in nation_ids:
         oracle_solver.add_variable(kv[n], VarType.BINARY)
@@ -1966,7 +1966,7 @@ def test_keyed_ne_oracle(decidb_cli, duckdb_conn, oracle_solver):
     """).fetchall()
     nation_ids = sorted(int(r[0]) for r in data)
 
-    oracle_solver.create_model("entity_scoped_ne")
+    oracle_solver.create_model("keyed_ne")
     qv = {n: f"qty_{n}" for n in nation_ids}
     zv = {n: f"z_{n}" for n in nation_ids}
     BIG_M = 20.0
@@ -2168,7 +2168,7 @@ def test_keyed_null_key(
     decidb_rows, decidb_cols = decidb_cli.execute(sql)
 
     # Oracle: one entity, nk=1 (coefficient 10).
-    oracle_solver.create_model("entity_scoped_null_key")
+    oracle_solver.create_model("keyed_null_key")
     oracle_solver.add_variable("keep_1", VarType.BINARY)
     oracle_solver.add_constraint({"keep_1": 1.0}, "=", 1.0, name="sum_eq_1")
     oracle_solver.set_objective({"keep_1": 10.0}, ObjSense.MAXIMIZE)
@@ -2254,7 +2254,7 @@ def test_keyed_three_way_join_per_region(
         nation_count[nk] += 1
         nation_acctbal[nk] += float(row[3])
 
-    oracle_solver.create_model("entity_scoped_three_way_join_per_region")
+    oracle_solver.create_model("keyed_three_way_join_per_region")
     vnames = {nk: f"keepN_{nk}" for nk in nation_ids}
     for nk in nation_ids:
         oracle_solver.add_variable(vnames[nk], VarType.BINARY)

@@ -279,8 +279,8 @@ static bool FormatSumLhs(const vector<int> &indices, const vector<double> &coeff
 }
 
 //! Aggregate LHS for a row built on the *accumulating* path, where each matrix coefficient
-//! is a sum over folded rows rather than the coefficient the user wrote. An entity-scoped
-//! variable collapses every joined row of an entity onto one column, so `SUM(keepS)` over
+//! is a sum over folded rows rather than the coefficient the user wrote. A keyed
+//! variable collapses every joined row of a class onto one column, so `SUM(keepS)` over
 //! two rows of a sensor reaches the matrix as `2*keepS` — there is no fan-out for
 //! `FormatSumLhs` to key on, and the accumulated constant is not quotable. Render straight
 //! from the per-term coefficients the builder recorded (`ConstraintProvenance::folded_terms`)
@@ -383,9 +383,9 @@ static string FormatLhs(const ModelConstraint &row, const vector<ColumnProvenanc
 	// Collapse a uniform SUM fan-out to SUM(c*var). Grouped aggregates fold too: they
 	// stay distinguishable in the relation via the finding's `group` column + `when c per K:` qualifier
 	// (Facet A), so the old group_key == INVALID gate is gone.
-	// A row off the accumulating build path carries per-entity *totals*, not the coefficients
+	// A row off the accumulating build path carries per-class *totals*, not the coefficients
 	// the user wrote, so every matrix-inference path below misreads it — either as a literal
-	// the user never typed (`SUM(2*keepS)`) or, when the totals differ across entities, as a
+	// the user never typed (`SUM(2*keepS)`) or, when the totals differ across classes, as a
 	// data-varying weight (`SUM(keepS * 1)`). Render from the recorded per-term coefficients
 	// first. `folded_terms` is non-empty only for accumulated rows, so a row-scoped fan-out
 	// never diverts here; and the call declines whenever it cannot reconstruct the whole row,

@@ -90,13 +90,13 @@ TEST_CASE("DeciDB F6 variable provenance", "[decidb][query_diagnostics][provenan
 		}
 	}
 
-	SECTION("entity-scoped columns collapse rows onto one column per entity") {
-		// 4 rows, 2 vars: x row-scoped (user), cap entity-scoped (user) over 2 entities.
+	SECTION("keyed columns collapse rows onto one column per class") {
+		// 4 rows, 2 vars: x row-scoped (user), cap keyed (user) over 2 classes.
 		SolverInput input = MakeRowScopedInput(4, 2, 0);
-		EntityMapping mapping;
-		mapping.num_entities = 2;
-		mapping.row_to_entity = {0, 0, 1, 1};
-		input.entity_mappings.push_back(mapping);
+		KeyedMapping mapping;
+		mapping.num_classes = 2;
+		mapping.row_to_class = {0, 0, 1, 1};
+		input.keyed_mappings.push_back(mapping);
 		input.variable_scopes = {DecideVarScopeInfo::Row(), DecideVarScopeInfo::Keyed(0)};
 
 		VarIndexer indexer = VarIndexer::Build(input);
@@ -105,7 +105,7 @@ TEST_CASE("DeciDB F6 variable provenance", "[decidb][query_diagnostics][provenan
 		auto prov = BuildColumnProvenance(indexer, labels, is_aux);
 
 		// Row block: num_rows * num_row_vars = 4 * 1 = 4 (only x is row-scoped),
-		// then 2 entity columns for cap. No global block.
+		// then 2 class columns for cap. No global block.
 		REQUIRE(prov.size() == 6);
 		REQUIRE(indexer.total_vars == 6);
 
@@ -116,15 +116,15 @@ TEST_CASE("DeciDB F6 variable provenance", "[decidb][query_diagnostics][provenan
 			CHECK(p.label == "x");
 			CHECK(p.instance == r);
 		}
-		// cap collapses rows {0,1} -> entity 0 and {2,3} -> entity 1 onto 2 columns.
+		// cap collapses rows {0,1} -> class 0 and {2,3} -> class 1 onto 2 columns.
 		idx_t cap_e0 = indexer.Get(1, 0);
 		idx_t cap_e1 = indexer.Get(1, 2);
 		CHECK(cap_e0 != cap_e1);
-		CHECK(indexer.Get(1, 1) == cap_e0); // row 1 shares entity 0's column
-		CHECK(indexer.Get(1, 3) == cap_e1); // row 3 shares entity 1's column
+		CHECK(indexer.Get(1, 1) == cap_e0); // row 1 shares class 0's column
+		CHECK(indexer.Get(1, 3) == cap_e1); // row 3 shares class 1's column
 		CHECK(prov[cap_e0].kind == ColumnKind::USER);
 		CHECK(prov[cap_e0].label == "cap");
-		CHECK(prov[cap_e0].instance == 0); // entity id
+		CHECK(prov[cap_e0].instance == 0); // class id
 		CHECK(prov[cap_e1].instance == 1);
 	}
 }

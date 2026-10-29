@@ -79,13 +79,13 @@ string DecideKeyText(const vector<DecideKey> &keys, idx_t key);
 //! The classes some decisions are keyed by: one decision instance per class of `key`.
 //! A declaration's `per K:` and a reducer's own `per K'` (or `SUM(D: e)`, whose classes
 //! a reducer counts once) each make one; scopes on the same key share it.
-struct EntityScopeInfo {
+struct KeyedScopeInfo {
     //! Index into LogicalDecide::keys.
     idx_t key = DConstants::INVALID_INDEX;
     //! Which decide_variables indices this scope keys
     vector<idx_t> scoped_variable_indices;
     //! A helper decision's scope (DecideOptimizer::RewriteScopedReducers): the link into
-    //! `LogicalDecide::reducer_value_links` it holds. Its entities are the groups of
+    //! `LogicalDecide::reducer_value_links` it holds. Its classes are the groups of
     //! `key` -- the link's `by` key -- among the rows the link's clause keeps, so
     //! execution builds the mapping from the link. INVALID_INDEX for every scope the
     //! binder creates. Deliberately absent from the serialization: the optimizer creates
@@ -94,7 +94,7 @@ struct EntityScopeInfo {
 
     //! Generated from `storage/serialization/nodes.json`.
     void Serialize(Serializer &serializer) const;
-    static EntityScopeInfo Deserialize(Deserializer &deserializer);
+    static KeyedScopeInfo Deserialize(Deserializer &deserializer);
 };
 
 //! One run-time requirement of a clause
@@ -323,7 +323,7 @@ public:
         //! true when the term was `AGG(...) / scale` rather than `scale * AGG(...)`.
         bool scale_divides = false;
         bool is_easy = true;                  // For MIN/MAX: easy (no Big-M) or hard (indicator).
-        //! Entity scope this term's reducer is qualified by (`SUM(D: ...)`), or
+        //! Keyed scope this term's reducer is qualified by (`SUM(D: ...)`), or
         //! INVALID_INDEX when unqualified. Mirrors `Term::qualifier_scope_idx`; the
         //! physical layer folds the matching de-duplication mask into `filter`'s mask so a
         //! qualified reducer keeps its identity semantics inside a composed clause.
@@ -474,10 +474,10 @@ public:
 
     //! Every key scope: of `per K:` and `sum(T: ...)`, one per key. Empty when no decision
     //! or reducer is keyed.
-    vector<EntityScopeInfo> entity_scopes;
+    vector<KeyedScopeInfo> keyed_scopes;
 
-    //! Per-variable scope assignment (row / entity / query-wide scalar).
-    //! Defaults to row-scoped; entity_scope_idx indexes entity_scopes.
+    //! Per-variable scope assignment (row / keyed / query-wide).
+    //! Defaults to row-scoped; keyed_scope_idx indexes keyed_scopes.
     vector<DecideVarScopeInfo> variable_scopes;
 
 	//! The run-time requirements of every clause, in

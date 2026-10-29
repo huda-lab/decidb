@@ -45,7 +45,7 @@ class DirectFrontEnd {
 public:
 	DirectFrontEnd(ClientContext &context_p, LogicalDecide &decide_p)
 	    : context(context_p), decide(decide_p), splitter(context_p, decide_p.decide_index, decide_p.decide_variables),
-	      canonicalizer(context_p, decide_p.decide_index, decide_p.variable_scopes, decide_p.entity_scopes,
+	      canonicalizer(context_p, decide_p.decide_index, decide_p.variable_scopes, decide_p.keyed_scopes,
 	                    decide_p.is_boolean_var) {
 	}
 
@@ -54,7 +54,7 @@ public:
 		D_ASSERT(!decide.optimized && !decide.num_auxiliary_vars);
 		DirectIR ir;
 		ir.render = [&decide = decide](const Expression &expr) {
-			return RenderDecideSource(expr, decide.source_fragments, decide.entity_scopes, &decide.keys);
+			return RenderDecideSource(expr, decide.source_fragments, decide.keyed_scopes, &decide.keys);
 		};
 		ir.decide_index = decide.decide_index;
 		ir.source_clause_count = decide.constraint_sources.size();
@@ -62,7 +62,7 @@ public:
 		source_bindings = decide.children[0]->GetColumnBindings();
 		ir.source_bindings = source_bindings;
 		ReadDecisions(ir);
-		ReadEntityScopes(ir);
+		ReadKeyedScopes(ir);
 		ReadConstraints(ir);
 		ReadObjective(ir.objective);
 		ReadRowChecks(ir);
@@ -117,7 +117,7 @@ private:
 	}
 
 	//! What a scope check is to the plan: nothing to check, a row check read into `row_check`, or one the plan cannot
-	//! make (a determination of an entity-scoped decision, or of an expression that reads more than the source).
+	//! make (a determination of a keyed decision, or of an expression that reads more than the source).
 	enum class RowCheckRead : uint8_t { NOTHING, READ, UNREADABLE };
 
 	RowCheckRead ReadRowCheck(const DecideScopeCheck &check, DirectRowCheck &row_check) const {
@@ -185,7 +185,7 @@ private:
 			decision.output_type = variable->return_type;
 			decision.scope = decide.variable_scopes[i].scope;
 			if (decision.scope == DecideVarScope::KEYED) {
-				decision.entity_scope = decide.variable_scopes[i].entity_scope_idx;
+				decision.keyed_scope = decide.variable_scopes[i].keyed_scope_idx;
 			}
 			if (decide.is_boolean_var[i]) {
 				decision.domain = DirectDomain::BOOL;
@@ -199,9 +199,9 @@ private:
 		}
 	}
 
-	void ReadEntityScopes(DirectIR &ir) const {
-		for (auto &scope : decide.entity_scopes) {
-			DirectIREntityScope ir_node;
+	void ReadKeyedScopes(DirectIR &ir) const {
+		for (auto &scope : decide.keyed_scopes) {
+			DirectIRKeyedScope ir_node;
 			// The IR is read before the value rewrite makes its helper scopes; a binder scope's key is columns.
 			D_ASSERT(scope.value_link == DConstants::INVALID_INDEX);
 			for (auto &element : DecideKeyElements(decide.keys, scope.key)) {
@@ -211,11 +211,11 @@ private:
 					ir_node.relations.push_back(binding.table_index);
 				}
 				auto found = std::find(source_bindings.begin(), source_bindings.end(), binding);
-				// The binder keeps every entity key live in the source.
+				// The binder keeps every keyed decision's key live in the source.
 				D_ASSERT(found != source_bindings.end());
 				ir_node.key_slots.push_back(NumericCast<idx_t>(found - source_bindings.begin()));
 			}
-			ir.entity_scopes.push_back(std::move(ir_node));
+			ir.keyed_scopes.push_back(std::move(ir_node));
 		}
 	}
 
@@ -510,7 +510,7 @@ private:
 		auto index = decide.decide_index;
 		const Expression *body = UnwrapDecideCasts(*decide.decide_objective, index);
 		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION &&
-		    IsPerConstraintWrapper(body->Cast<BoundConjunctionExpression>())) {
+		    IsTwoLevelObjectiveWrapper(body->Cast<BoundConjunctionExpression>())) {
 			// No rule models the two-level objective `outer(per k: inner(e) by (k))` yet.
 			MarkNotProved(objective.status);
 			return;
@@ -518,7 +518,7 @@ private:
 		const Expression *when = nullptr;
 		if (body->GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 			auto &wrapper = body->Cast<BoundConjunctionExpression>();
-			D_ASSERT(IsWhenConstraintWrapper(wrapper) && wrapper.children.size() == 2);
+			D_ASSERT(IsWhenFilterWrapper(wrapper) && wrapper.children.size() == 2);
 			when = wrapper.children[1].get();
 			body = UnwrapDecideCasts(*wrapper.children[0], index);
 		}

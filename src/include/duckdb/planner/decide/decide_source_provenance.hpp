@@ -30,13 +30,13 @@ void PreserveDecideSourceFragment(const ParsedExpression &source, Expression &bo
 //! `per K` and `by (...)`; every renderer below takes it for the same reason.
 //! `text`, when given, supplies each comparison's two sides as the user wrote them.
 vector<ConstraintSourceInfo> InitializeConstraintSourceInfo(Expression &constraints, const vector<string> &fragments,
-                                                            const vector<EntityScopeInfo> &entity_scopes,
+                                                            const vector<KeyedScopeInfo> &keyed_scopes,
                                                             idx_t decide_index, const vector<DecideKey> *keys = nullptr,
                                                             const DecideSourceText *text = nullptr);
 
 //! Rebuild canonical display templates after PlanSubqueries and canonicalization.
 void FinalizeConstraintSourceInfo(const Expression &constraints, vector<ConstraintSourceInfo> &sources,
-                                  const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
+                                  const vector<string> &fragments, const vector<KeyedScopeInfo> &keyed_scopes,
                                   const vector<DecideKey> *keys = nullptr);
 
 //! Render one bound expression as the user wrote it.
@@ -51,13 +51,13 @@ void FinalizeConstraintSourceInfo(const Expression &constraints, vector<Constrai
 //! Every surface that echoes a DECIDE clause back to a user goes through here:
 //! EXPLAIN on both plans, and the clause labels an infeasibility diagnosis prints.
 string RenderDecideSource(const Expression &expr, const vector<string> &fragments,
-                          const vector<EntityScopeInfo> &entity_scopes, const vector<DecideKey> *keys = nullptr);
+                          const vector<KeyedScopeInfo> &keyed_scopes, const vector<DecideKey> *keys = nullptr);
 
 //! What a message about a clause renders with: the registries above. A column reads as the user wrote it
 //! (`D.depotID`): its bound reference carries that spelling as a source fragment.
 struct DecideSourceNames {
     const vector<string> &fragments;
-    const vector<EntityScopeInfo> &entity_scopes;
+    const vector<KeyedScopeInfo> &keyed_scopes;
 	const vector<DecideKey> &keys;
     //! The decision columns that stand for an expression (`LogicalDecide::aux_var_expressions`:
     //! an ABS auxiliary `abs(e)`, a product `(b * x)`, an indicator `(x = v)`, a helper
@@ -68,7 +68,7 @@ struct DecideSourceNames {
 };
 
 //! The names a plan and the rewrites render with: the clause registries and the auxiliary labels.
-DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<EntityScopeInfo> &entity_scopes,
+DecideSourceNames DecidePlanNames(const vector<string> &fragments, const vector<KeyedScopeInfo> &keyed_scopes,
                                   const vector<DecideKey> &keys, idx_t decide_index,
                                   const vector<pair<idx_t, string>> &aux_labels);
 
@@ -89,7 +89,7 @@ const Expression *DecideWrittenNormBody(const BoundAggregateExpression &reducer)
 string RenderDecidePerKey(const BoundConjunctionExpression &per, const vector<string> &fragments);
 
 //! The two-level objective `outer(per k: inner(e) by (k))` (language/guide.md), which binds to the nested
-//! `outer(inner(e))` under a PER_CONSTRAINT_TAG wrapper keyed on k, taken apart: the `when` in front of the body
+//! `outer(inner(e))` under a TWO_LEVEL_OBJECTIVE_TAG wrapper keyed on k, taken apart: the `when` in front of the body
 //! (empty for none), the key as the query writes it, and the body under both. Every text of the form is built from
 //! these parts by the two formatters below: the written objective, the rows the solver receives after the rewrite
 //! (`per k: inner(e) by (k)`) and the rewrite's accounts.
@@ -99,7 +99,7 @@ struct DecideTwoLevelParts {
 	const Expression *body = nullptr;
 };
 DecideTwoLevelParts SplitDecideTwoLevel(const BoundConjunctionExpression &per, const vector<string> &fragments,
-                                        const vector<EntityScopeInfo> &entity_scopes);
+                                        const vector<KeyedScopeInfo> &keyed_scopes);
 //! The inner level, `inner(e) by (k)`, from the inner reducer as rendered (`inner(e)`).
 string RenderDecideTwoLevelInner(const string &inner, const string &key);
 //! The whole form, `outer(per k: inner(e) by (k))`, from the inner level as RenderDecideTwoLevelInner renders it.

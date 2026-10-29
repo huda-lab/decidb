@@ -167,10 +167,10 @@ public:
 
     //! Every key scope: of a `per K:` decision, a reducer's `per K:` or colon-form
     //! qualifier, and the value rewrite's helper decisions
-    vector<EntityScopeInfo> entity_scopes;
+    vector<KeyedScopeInfo> keyed_scopes;
 
     //! Per-variable scope assignment (row / keyed / query-wide);
-    //! entity_scope_idx indexes entity_scopes
+    //! keyed_scope_idx indexes keyed_scopes
     vector<DecideVarScopeInfo> variable_scopes;
 
     //! Every key of the clause (LogicalDecide::keys), its expressions resolved against the
@@ -275,10 +275,10 @@ private:
     //! Layer 8 never re-selects: it looks up the name stage 05 recorded.
     SolverBackend PlannedSolverBackend() const;
 
-    //! PHASE 1.5: one row→entity mapping per key scope -- a keyed decision's key columns,
+    //! PHASE 1.5: one row→class mapping per key scope -- a keyed decision's key columns,
     //! or a helper decision's `by` key over the rows its clause keeps
-    //! (EntityScopeInfo::value_link).
-    vector<EntityMapping> BuildEntityMappings(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
+    //! (KeyedScopeInfo::value_link).
+    vector<KeyedMapping> BuildKeyedMappings(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                               ChunkExprCache &chunk_expr_cache,
                                               PerGroupCache &per_group_cache) const;
 
@@ -288,13 +288,13 @@ private:
     //! value or a decision, a reducer with no row in some `by` group.
     void RunScopeChecks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                         ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                        const vector<EntityMapping> &entity_mappings) const;
+                        const vector<KeyedMapping> &keyed_mappings) const;
 
     //! PHASE 2, sub-phase 1: evaluate every constraint's coefficients and append the
     //! result to gstate.evaluated_constraints.
     void EvaluateConstraints(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                              ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                             const vector<EntityMapping> &entity_mappings) const;
+                             const vector<KeyedMapping> &keyed_mappings) const;
 
     //! Everything PHASE 2 reads off the data that a later phase still needs. It carries
     //! objective terms *and* composed-MIN/MAX constraint clauses, so it is named for the
@@ -332,14 +332,14 @@ private:
     //! objective-evaluation fields, then settle the two-level objective's grouping.
     EvaluatedClauses EvaluateObjective(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                        ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                       const vector<EntityMapping> &entity_mappings) const;
+                                       const vector<KeyedMapping> &keyed_mappings) const;
 
     //! PHASE 2, sub-phase 3: evaluate every composed MIN/MAX clause — each inner term's
     //! per-row coefficient, the factor peeled off a reducer, the term's WHEN mask, the
     //! constant RHS. The rows these become are emitted later, by the formulation pass.
     void EvaluateComposedClauses(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                  ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                 const vector<EntityMapping> &entity_mappings, EvaluatedClauses &evaluated) const;
+                                 const vector<KeyedMapping> &keyed_mappings, EvaluatedClauses &evaluated) const;
 
     //! PHASE 2, sub-phase 4: evaluate every helper decision's members -- the rows of the
     //! reducer it holds, among those the clause and the reducer keep, grouped by its `by`
@@ -347,7 +347,7 @@ private:
     //! definition over them.
     void EvaluateReducerValueLinks(ClientContext &context, DecideGlobalSinkState &gstate, idx_t num_rows,
                                    ChunkExprCache &chunk_expr_cache, PerGroupCache &per_group_cache,
-                                   const vector<EntityMapping> &entity_mappings) const;
+                                   const vector<KeyedMapping> &keyed_mappings) const;
 
     //! PHASE 3a, assembly: build `SolverInput` out of what PHASE 2 evaluated — variable
     //! types and the column box, implied-bound propagation, the objective transfer with
@@ -358,7 +358,7 @@ private:
     //! filter masks are *finalized*: the relation qualifier's de-duplication is folded
     //! into them before AVG scaling reads the surviving-row counts. The formulation pass
     //! below does not read those masks, so a second formulation is unaffected.
-    SolverInput BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows, vector<EntityMapping> entity_mappings,
+    SolverInput BuildSolverInput(DecideGlobalSinkState &gstate, idx_t num_rows, vector<KeyedMapping> keyed_mappings,
                                  EvaluatedClauses &evaluated, VarIndexer &out_var_indexer) const;
 
     //! PHASE 3b, formulation: turn the evaluated clauses into solver rows against `box`

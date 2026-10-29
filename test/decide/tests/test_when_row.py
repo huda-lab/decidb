@@ -5,7 +5,7 @@ Covers:
   - Force select: when condition: x = 1 (require matching rows)
   - Numeric condition on per-row bound
   - Boundary: all rows match (equivalent to unconditional per-row)
-  - test_when_perrow_real: REAL variable (no implicit [0,1] cap) + WHEN
+  - test_when_row_real: REAL variable (no implicit [0,1] cap) + WHEN
     per-row — continuous skip-constraint path
 """
 
@@ -23,7 +23,7 @@ from comparison.compare import compare_solutions
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_row_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Block non-returned items: when returnflag='N': x <= 0, plus capacity."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -90,7 +90,7 @@ def test_when_perrow_force_zero(decidb_cli, duckdb_conn, oracle_solver, perf_tra
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_row_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Force selection of high-discount items: when discount >= 0.09: x = 1."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity,
@@ -156,7 +156,7 @@ def test_when_perrow_force_select(decidb_cli, duckdb_conn, oracle_solver, perf_t
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_row_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Exclude large-quantity items: when quantity > 40: x <= 0."""
     sql = """
         SELECT l_orderkey, l_linenumber, l_extendedprice, l_quantity, x
@@ -219,7 +219,7 @@ def test_when_perrow_numeric_condition(decidb_cli, duckdb_conn, oracle_solver, p
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_row_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """WHEN matches all rows — equivalent to unconditional per-row bound."""
     sql = """
         SELECT ps_partkey, ps_availqty, x
@@ -281,7 +281,7 @@ def test_when_perrow_all_match(decidb_cli, duckdb_conn, oracle_solver, perf_trac
 @pytest.mark.cons_aggregate
 @pytest.mark.obj_maximize
 @pytest.mark.correctness
-def test_when_perrow_real(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
+def test_when_row_real(decidb_cli, duckdb_conn, oracle_solver, perf_tracker):
     """Per-row WHEN bound with(REAL) — continuous skip-constraint path.
 
     All existing per-row WHEN tests use BOOLEAN or INTEGER variables, both

@@ -253,7 +253,7 @@ idx_t AddBooleanProduct(LogicalDecide &decide, vector<LogicalDecide::BilinearLin
 	auto scope = JoinScopes(scope_of(first), scope_of(second));
 	idx_t aux_idx = AddAuxiliaryDecision(decide, aux_name, aux_type, both_bool, scope, label);
 	if (scope.IsKeyed()) {
-		decide.entity_scopes[scope.entity_scope_idx].scoped_variable_indices.push_back(aux_idx);
+		decide.keyed_scopes[scope.keyed_scope_idx].scoped_variable_indices.push_back(aux_idx);
 	}
 	AddRewriteAccount(decide, clause_alias,
 	                  both_bool ? LogicalDecide::RewriteAccount::Kind::PRODUCT_AND

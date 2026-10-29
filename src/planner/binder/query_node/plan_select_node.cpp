@@ -170,13 +170,12 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
         string canonical_objective;
 		// The run-time checks of the clauses, built by the
 		// canonicalizer from each clause as bound, before it is canonicalized.
-		DecideScopeChecks scope_checks {statement.decide_keys, statement.entity_scopes,
+		DecideScopeChecks scope_checks {statement.decide_keys, statement.keyed_scopes,
 		                                statement.decide_source_fragments};
-		DecideSourceNames message_names {scope_checks.source_fragments, scope_checks.entity_scopes,
-		                                 scope_checks.keys};
+		DecideSourceNames message_names {scope_checks.source_fragments, scope_checks.keyed_scopes, scope_checks.keys};
 		{
 			DecideCanonicalizer canonicalizer(context, statement.decide_index, statement.variable_scopes,
-			                                  statement.entity_scopes, statement.is_boolean_var,
+			                                  statement.keyed_scopes, statement.is_boolean_var,
 			                                  std::move(query_wide_table_indexes),
 			                                  std::move(correlated_subquery_table_indexes));
 			canonicalizer.QuoteMessagesWith(message_names);
@@ -185,9 +184,9 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				statement.decide_constraints = canonicalizer.CanonicalizeTree(*statement.decide_constraints);
 				canonicalizer.VerifyCanonical(*statement.decide_constraints);
 				FinalizeConstraintSourceInfo(*statement.decide_constraints, statement.decide_constraint_sources,
-				                             statement.decide_source_fragments, statement.entity_scopes,
+				                             statement.decide_source_fragments, statement.keyed_scopes,
 				                             &statement.decide_keys);
-				canonicalizer.SkipNullData(*statement.decide_constraints, statement.entity_scopes,
+				canonicalizer.SkipNullData(*statement.decide_constraints, statement.keyed_scopes,
 				                           statement.decide_keys);
 			}
 			// The objective is one side of a comparison, so it belongs to the same
@@ -198,7 +197,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
                 // FinalizeConstraintSourceInfo: written on the way in, canonical on the
                 // way out, captured around the one call that can change it. There is
                 // exactly one objective, so these are two strings rather than a registry.
-				DecideSourceNames objective_names {statement.decide_source_fragments, statement.entity_scopes,
+				DecideSourceNames objective_names {statement.decide_source_fragments, statement.keyed_scopes,
 				                                   statement.decide_keys};
 				written_objective = RenderDecideObjective(*statement.decide_objective, objective_names);
 				canonicalizer.BuildObjectiveScopeChecks(*statement.decide_objective, scope_checks);
@@ -209,7 +208,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 				if (canonical_objective == written_objective) {
 					canonical_objective.clear();
 				}
-				canonicalizer.SkipNullData(*statement.decide_objective, statement.entity_scopes, statement.decide_keys);
+				canonicalizer.SkipNullData(*statement.decide_objective, statement.keyed_scopes, statement.decide_keys);
 			}
 		}
 
@@ -220,7 +219,7 @@ unique_ptr<LogicalOperator> Binder::CreatePlan(BoundSelectNode &statement) {
 		decide_op->num_auxiliary_vars = statement.num_auxiliary_vars;
         decide_op->objective_constant_offset = statement.objective_constant_offset;
         decide_op->is_boolean_var = std::move(statement.is_boolean_var);
-        decide_op->entity_scopes = std::move(statement.entity_scopes);
+        decide_op->keyed_scopes = std::move(statement.keyed_scopes);
         decide_op->variable_scopes = std::move(statement.variable_scopes);
         decide_op->constraint_sources = std::move(statement.decide_constraint_sources);
         decide_op->written_objective = std::move(written_objective);

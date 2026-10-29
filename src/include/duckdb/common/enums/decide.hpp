@@ -41,28 +41,28 @@ enum class DecideVarScope : uint8_t {
 
 //! Per-variable scope assignment. Kept as one struct rather than parallel
 //! arrays so the optimizer's auxiliary-variable appends cannot desync the
-//! scope from its entity index.
+//! scope from its keyed scope index.
 struct DecideVarScopeInfo {
     DecideVarScope scope = DecideVarScope::ROW;
-    //! Index into entity_scopes / entity_mappings. Meaningful only when
+    //! Index into keyed_scopes / keyed_mappings. Meaningful only when
     //! scope == KEYED; INVALID_INDEX otherwise.
-    idx_t entity_scope_idx = DConstants::INVALID_INDEX;
+    idx_t keyed_scope_idx = DConstants::INVALID_INDEX;
 	//! The key written after `per`, as written (`D.depotID, S.customerID`), so a message
 	//! can name the decision the way it was declared. Empty for every other spelling.
 	string declared_key;
 
 	DecideVarScopeInfo() = default;
-	DecideVarScopeInfo(DecideVarScope scope_p, idx_t entity_scope_idx_p)
-	    : scope(scope_p), entity_scope_idx(entity_scope_idx_p) {
+	DecideVarScopeInfo(DecideVarScope scope_p, idx_t keyed_scope_idx_p)
+	    : scope(scope_p), keyed_scope_idx(keyed_scope_idx_p) {
 	}
 
 	static DecideVarScopeInfo Row() {
         return DecideVarScopeInfo();
     }
-	//! One instance per class of the key of entity_scopes[entity_scope_idx_p]. `declared_key_p` is the key as written
+	//! One instance per class of the key of keyed_scopes[keyed_scope_idx_p]. `declared_key_p` is the key as written
 	//! for `per K: x(TYPE)`, and empty for a decision the optimizer adds.
-	static DecideVarScopeInfo Keyed(idx_t entity_scope_idx_p, string declared_key_p = string()) {
-		DecideVarScopeInfo result(DecideVarScope::KEYED, entity_scope_idx_p);
+	static DecideVarScopeInfo Keyed(idx_t keyed_scope_idx_p, string declared_key_p = string()) {
+		DecideVarScopeInfo result(DecideVarScope::KEYED, keyed_scope_idx_p);
 		result.declared_key = std::move(declared_key_p);
 		return result;
 	}
@@ -178,7 +178,7 @@ inline void RemoveDecideTag(string &alias, const string &tag) {
 }
 
 //! Remove every DECIDE tag from an alias, leaving whatever ordinary alias it was appended
-//! to: "cost__source_clause_0____when_constraint__" yields "cost", and an alias that was
+//! to: "cost__source_clause_0____when_filter__" yields "cost", and an alias that was
 //! nothing but tags yields "".
 //!
 //! Tags are only ever appended (`AddDecideTag`), so they are always a suffix, and each one
@@ -219,20 +219,23 @@ inline bool ExtractDecideTagPayload(const string &alias, const string &prefix, s
 	return !payload.empty();
 }
 
-//! Tag on the bound `when c:` wrapper of a constraint or the objective: child 0 is the
-//! body, child 1 the condition. The parser emits it only for a removed spelling, which
-//! RefuseRemovedDecideSpellings refuses (language/errors.md §3).
-static constexpr const char *WHEN_CONSTRAINT_TAG = "__when_constraint__";
+//! The parser's markers for the removed postfix spellings, `C WHEN c` and `C PER k`: children[0] is the clause,
+//! children[1] the condition or children[1..] the key. RefuseRemovedDecideSpellings refuses both (language/errors.md
+//! §3); a parse tree stored before they were removed (a view) still prints its own SQL from them. A parser marker is
+//! named for the spelling it marks and a bound wrapper for what it means, so no check reads one as the other.
+static constexpr const char *POSTFIX_WHEN_TAG = "__when_constraint__";
+static constexpr const char *POSTFIX_PER_TAG = "__per_constraint__";
 
-//! Tag on the two-level objective's bound wrapper, `outer(per k: inner(e) by (k))`:
-//! child 0 is the objective body, children 1..N the key columns. A constraint's
-//! `per K:` is PER_CLASS_TAG. The parser emits it only for a removed spelling, which
-//! RefuseRemovedDecideSpellings refuses (language/errors.md §3).
-static constexpr const char *PER_CONSTRAINT_TAG = "__per_constraint__";
+//! The bound form of a `when c:` in front of a constraint or the objective: a conjunction whose child 0 is the body
+//! and child 1 the condition. The body reads only the rows where the condition is true.
+static constexpr const char *WHEN_FILTER_TAG = "__when_filter__";
 
-//! Returns true if the alias is PER_CONSTRAINT_TAG
-inline bool IsPerConstraintTag(const string &alias) {
-	return HasDecideTag(alias, PER_CONSTRAINT_TAG);
+//! The bound form of the two-level objective, `outer(per k: inner(e) by (k))`: a conjunction whose child 0 is the
+//! objective `outer(inner(e))`, keyed on k (PER_KEY_TAG_PREFIX). A constraint's `per K:` is PER_CLASS_TAG.
+static constexpr const char *TWO_LEVEL_OBJECTIVE_TAG = "__two_level_objective__";
+
+inline bool IsTwoLevelObjectiveTag(const string &alias) {
+	return HasDecideTag(alias, TWO_LEVEL_OBJECTIVE_TAG);
 }
 
 //! Tag used by the parser to mark the colon form, `sum(D: expr)`: children[0] is the
@@ -241,8 +244,8 @@ inline bool IsPerConstraintTag(const string &alias) {
 static constexpr const char *QUALIFIED_REDUCER_TAG = "__qualified_reducer__";
 
 //! Tag prefix recording a reducer's own key, `sum(per K: e)` or `SUM(D: e)` (on
-//! BoundAggregateExpression.alias). Format: "__qualified_by_<entity_scope_idx>__" — the
-//! index is into LogicalDecide::entity_scopes, whose entry supplies the classes
+//! BoundAggregateExpression.alias). Format: "__qualified_by_<keyed_scope_idx>__" — the
+//! index is into LogicalDecide::keyed_scopes, whose entry supplies the classes
 //! the reducer takes one value from. The scope may have no variable declared on it.
 static constexpr const char *QUALIFIED_REDUCER_SCOPE_TAG_PREFIX = "__qualified_by_";
 
@@ -250,15 +253,15 @@ static constexpr const char *QUALIFIED_REDUCER_SCOPE_TAG_PREFIX = "__qualified_b
 //! and shares its scope: the tag keeps only the spelling, for the echo (D38).
 static constexpr const char *COLON_FORM_TAG = "__colon_form__";
 
-//! Builds the alias tag naming the entity scope a reducer is qualified by.
+//! Builds the alias tag naming the keyed scope a reducer is qualified by.
 //! `text_fragment`, when given, is the fragment holding the key as this reducer wrote it
 //! ("__qualified_by_<i>_<fragment>__").
-inline string MakeQualifiedReducerTag(idx_t entity_scope_idx, idx_t text_fragment = DConstants::INVALID_INDEX) {
-	return string(QUALIFIED_REDUCER_SCOPE_TAG_PREFIX) + to_string(entity_scope_idx) +
+inline string MakeQualifiedReducerTag(idx_t keyed_scope_idx, idx_t text_fragment = DConstants::INVALID_INDEX) {
+	return string(QUALIFIED_REDUCER_SCOPE_TAG_PREFIX) + to_string(keyed_scope_idx) +
 	       (text_fragment == DConstants::INVALID_INDEX ? string() : "_" + to_string(text_fragment)) + "__";
 }
 
-//! Reads back the entity scope index from an alias written by MakeQualifiedReducerTag.
+//! Reads back the keyed scope index from an alias written by MakeQualifiedReducerTag.
 //! Returns false (leaving `scope_idx` untouched) when the alias carries no such tag.
 inline bool TryParseQualifiedReducerTag(const string &alias, idx_t &scope_idx) {
 	string digits;
@@ -323,7 +326,7 @@ inline string MakeGroupKeyTag(idx_t group_key_idx, idx_t text_fragment = DConsta
 	       (text_fragment == DConstants::INVALID_INDEX ? string() : "_" + to_string(text_fragment)) + "__";
 }
 
-//! Tag prefix naming the key of a `per K:` wrapper (PER_CLASS_TAG, PER_CONSTRAINT_TAG):
+//! Tag prefix naming the key of a `per K:` wrapper (PER_CLASS_TAG, TWO_LEVEL_OBJECTIVE_TAG):
 //! "__per_key_<i>__" indexes LogicalDecide::keys. No tag means `per ()`: one class.
 static constexpr const char *PER_KEY_TAG_PREFIX = "__per_key_";
 

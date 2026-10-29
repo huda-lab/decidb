@@ -156,7 +156,7 @@ string LogicalDecide::GetName() const {
 }
 
 void LogicalDecide::AddConstraint(ClientContext &context, unique_ptr<Expression> constraint) {
-	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, entity_scopes, is_boolean_var);
+	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, is_boolean_var);
 	auto canonical = canonicalizer.CanonicalizeTree(*constraint);
 	canonicalizer.VerifyCanonical(*canonical);
 
@@ -175,7 +175,7 @@ void LogicalDecide::SetObjective(ClientContext &context, unique_ptr<Expression> 
 		decide_objective = nullptr;
 		return;
 	}
-	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, entity_scopes, is_boolean_var);
+	DecideCanonicalizer canonicalizer(context, decide_index, variable_scopes, keyed_scopes, is_boolean_var);
 	decide_objective = canonicalizer.CanonicalizeObjective(*objective, objective_constant_offset);
 	canonicalizer.VerifyCanonicalObjective(*decide_objective);
 }
@@ -268,7 +268,7 @@ InsertionOrderPreservingMap<string> LogicalDecide::ParamsToString() const {
 	// wrappers print as written rather than as a generic conjunction. What the optimizer
 	// made of them: a column that stands for an expression prints it, and each rewrite's
 	// account follows its clause, the objective's its own.
-	auto names = DecidePlanNames(source_fragments, entity_scopes, keys, decide_index, aux_var_expressions);
+	auto names = DecidePlanNames(source_fragments, keyed_scopes, keys, decide_index, aux_var_expressions);
 	vector<string> objective_accounts;
 	for (auto &account : rewrite_accounts) {
 		if (account.source_clause_id == DConstants::INVALID_INDEX) {
