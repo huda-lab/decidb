@@ -428,8 +428,8 @@ bool Rule::FixFromAllowedValues(const DirectIR &ir, ClientContext &context, cons
 	auto le = ExpressionType::COMPARE_LESSTHANOREQUALTO;
 	auto allows = [&](double v) -> ExprPtr {
 		if (factor.singleton_row) {
-			return calc.If(calc.Cmp(le, calc.Of(*factor.bound.lower), calc.Num(v)),
-			               calc.Cmp(le, calc.Num(v), calc.Of(*factor.bound.upper)), calc.Bool(false));
+			return calc.If(calc.Cmp(le, calc.Wrap(factor.bound.RowLower()), calc.Num(v)),
+			               calc.Cmp(le, calc.Num(v), calc.Wrap(factor.bound.RowUpper())), calc.Bool(false));
 		}
 		return calc.Cmp(factor.comparison, calc.Num(v), calc.Cast(calc.Of(value), LogicalType::DOUBLE));
 	};

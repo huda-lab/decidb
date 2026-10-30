@@ -20,6 +20,9 @@
 #include "duckdb/common/decide_profile.hpp"
 #include "duckdb/planner/expression/bound_operator_expression.hpp"
 #include "duckdb/planner/expression/bound_reference_expression.hpp"
+#include "duckdb/optimizer/expression_rewriter.hpp"
+#include "duckdb/optimizer/rule/constant_folding.hpp"
+#include "duckdb/planner/operator/logical_projection.hpp"
 
 #include "duckdb/decidb/solver/ilp_solver.hpp"
 #include "duckdb/decidb/formulation/ilp_model.hpp"
@@ -69,7 +72,7 @@ namespace duckdb {
 //! Transform a coefficient/value expression for ExpressionExecutor.
 //! Handles: BOUND_COLUMN_REF, BOUND_FUNCTION, BOUND_CAST, BOUND_COMPARISON,
 //! BOUND_CONJUNCTION, BOUND_OPERATOR. Falls back to Copy() for others.
-static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr, ClientContext &context) {
+static unique_ptr<Expression> ToChunkReferences(const Expression &expr, ClientContext &context) {
 	if (expr.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF) {
 		auto &colref = expr.Cast<BoundColumnRefExpression>();
 		return make_uniq_base<Expression, BoundReferenceExpression>(colref.return_type, colref.binding.column_index);
@@ -77,7 +80,7 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 		auto &func = expr.Cast<BoundFunctionExpression>();
 		vector<unique_ptr<Expression>> new_children;
 		for (auto &child : func.children) {
-			new_children.push_back(TransformToChunkExpression(*child, context));
+			new_children.push_back(ToChunkReferences(*child, context));
 		}
 		unique_ptr<FunctionData> new_bind_info;
 		if (func.bind_info) {
@@ -87,7 +90,7 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 		                                                           std::move(new_children), std::move(new_bind_info));
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CAST) {
 		auto &cast = expr.Cast<BoundCastExpression>();
-		auto transformed_child = TransformToChunkExpression(*cast.child, context);
+		auto transformed_child = ToChunkReferences(*cast.child, context);
 		return BoundCastExpression::AddCastToType(context, std::move(transformed_child), cast.return_type, cast.try_cast);
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_AGGREGATE) {
 		// The operator evaluates row values only. A reducer of data is a column by now (the optimizer's bound-side
@@ -95,26 +98,40 @@ static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr,
 		throw InternalException("DECIDE: a reducer reached row evaluation: %s", expr.ToString());
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_COMPARISON) {
 		auto &comp = expr.Cast<BoundComparisonExpression>();
-		auto left = TransformToChunkExpression(*comp.left, context);
-		auto right = TransformToChunkExpression(*comp.right, context);
+		auto left = ToChunkReferences(*comp.left, context);
+		auto right = ToChunkReferences(*comp.right, context);
 		return make_uniq_base<Expression, BoundComparisonExpression>(comp.type, std::move(left), std::move(right));
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_CONJUNCTION) {
 		auto &conj = expr.Cast<BoundConjunctionExpression>();
 		auto result = make_uniq<BoundConjunctionExpression>(conj.GetExpressionType());
 		for (auto &child : conj.children) {
-			result->children.push_back(TransformToChunkExpression(*child, context));
+			result->children.push_back(ToChunkReferences(*child, context));
 		}
 		return std::move(result);
 	} else if (expr.GetExpressionClass() == ExpressionClass::BOUND_OPERATOR) {
 		auto &op_expr = expr.Cast<BoundOperatorExpression>();
 		auto result = make_uniq<BoundOperatorExpression>(op_expr.type, op_expr.return_type);
 		for (auto &child : op_expr.children) {
-			result->children.push_back(TransformToChunkExpression(*child, context));
+			result->children.push_back(ToChunkReferences(*child, context));
 		}
 		return std::move(result);
 	} else {
 		return expr.Copy();
 	}
+}
+
+//! `expr` as stage 08 evaluates it: over the chunk's columns, and constant-folded once by DuckDB's own rule, as the
+//! expression rewriter folds a query's own expressions. Every tree stage 08 evaluates passes through here, the ones
+//! the DECIDE optimizer builds among them, so no constant subtree (`CAST(CAST(45 AS DECIMAL(18,2)) AS DOUBLE)`,
+//! `45 >= 1e20`) is evaluated on every row. A message names the prepared tree, not this one, so it reads as written.
+static unique_ptr<Expression> TransformToChunkExpression(const Expression &expr, ClientContext &context) {
+	ExpressionRewriter rewriter(context);
+	rewriter.rules.push_back(make_uniq<ConstantFoldingRule>(rewriter));
+	vector<unique_ptr<Expression>> tree;
+	tree.push_back(ToChunkReferences(expr, context));
+	LogicalProjection holder(DConstants::INVALID_INDEX, std::move(tree));
+	rewriter.VisitOperator(holder);
+	return std::move(holder.expressions[0]);
 }
 
 //! ChunkExprCache is declared in physical_decide.hpp (Finalize's private phase methods
@@ -2560,26 +2577,86 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 				row_executor.AddExpression(transformed_rhs);
 				row_types.push_back(transformed_rhs.return_type);
 			}
+			// The admitted ends read `a` and `r` many times, so they are two projections: `[a, r]` on the rows the
+			// member filter keeps (as a term's coefficients are read), then the ends over the row and those columns.
+			auto data_types = gstate.data.Types();
+			unique_ptr<Expression> lower_over_inputs, upper_over_inputs;
+			ExpressionExecutor input_executor(context);
+			ExpressionExecutor end_executor(context);
+			vector<LogicalType> input_types {LogicalType::DOUBLE, LogicalType::DOUBLE};
+			DataChunk inputs, end_input, ends;
 			if (admitted) {
-				row_executor.AddExpression(
-				    CachedTransformToChunkExpression(chunk_expr_cache, *constraint->admitted_lower, context));
-				row_executor.AddExpression(
-				    CachedTransformToChunkExpression(chunk_expr_cache, *constraint->admitted_upper, context));
-				row_types.push_back(LogicalType::DOUBLE);
-				row_types.push_back(LogicalType::DOUBLE);
+				input_executor.AddExpression(
+				    CachedTransformToChunkExpression(chunk_expr_cache, *constraint->admitted_a, context));
+				input_executor.AddExpression(
+				    CachedTransformToChunkExpression(chunk_expr_cache, *constraint->admitted_r, context));
+				BoundReferenceExpression a_column(LogicalType::DOUBLE, data_types.size());
+				BoundReferenceExpression r_column(LogicalType::DOUBLE, data_types.size() + 1);
+				lower_over_inputs = TransformToChunkExpression(
+				    *DecideBindAdmittedInputs(*constraint->admitted_lower, a_column, r_column), context);
+				upper_over_inputs = TransformToChunkExpression(
+				    *DecideBindAdmittedInputs(*constraint->admitted_upper, a_column, r_column), context);
+				end_executor.AddExpression(*lower_over_inputs);
+				end_executor.AddExpression(*upper_over_inputs);
+				auto end_types = data_types;
+				end_types.insert(end_types.end(), input_types.begin(), input_types.end());
+				inputs.Initialize(context, input_types);
+				end_input.InitializeEmpty(end_types);
+				ends.Initialize(context, input_types);
 				eval_const.admitted_lower.Reserve(num_rows);
 				eval_const.admitted_upper.Reserve(num_rows);
 			}
 			ColumnDataScanState scan_state;
 			gstate.data.InitializeScan(scan_state);
 			DataChunk scan_chunk;
-			scan_chunk.Initialize(context, gstate.data.Types());
+			scan_chunk.Initialize(context, data_types);
 			DataChunk row_result;
-			row_result.Initialize(context, row_types);
+			if (rhs_per_row) {
+				row_result.Initialize(context, row_types);
+			}
 			idx_t scanned = 0;
 			while (gstate.data.Scan(scan_state, scan_chunk)) {
-				row_result.Reset();
-				ExecuteOnReadRows(row_executor, scan_chunk, scanned, &scoped_kept, row_result);
+				const idx_t count = scan_chunk.size();
+				if (rhs_per_row) {
+					row_result.Reset();
+					ExecuteOnReadRows(row_executor, scan_chunk, scanned, &scoped_kept, row_result);
+				}
+				if (admitted) {
+					// Both projections read only the members among the kept rows; a row that is no member admits every
+					// value.
+					vector<bool> members(scoped_kept.begin() + NumericCast<int64_t>(scanned),
+					                     scoped_kept.begin() + NumericCast<int64_t>(scanned + count));
+					if (constraint->admitted_member) {
+						KeepChunkRowsWhere(*constraint->admitted_member, chunk_expr_cache, context, scan_chunk,
+						                   members);
+					}
+					inputs.Reset();
+					ExecuteOnReadRows(input_executor, scan_chunk, 0, &members, inputs);
+					end_input.Reset();
+					for (idx_t col = 0; col < scan_chunk.ColumnCount(); col++) {
+						end_input.data[col].Reference(scan_chunk.data[col]);
+					}
+					end_input.data[data_types.size()].Reference(inputs.data[0]);
+					end_input.data[data_types.size() + 1].Reference(inputs.data[1]);
+					end_input.SetCardinality(count);
+					ends.Reset();
+					ExecuteOnReadRows(end_executor, end_input, 0, &members, ends);
+					if (std::find(members.begin(), members.end(), false) != members.end()) {
+						for (idx_t side = 0; side < 2; side++) {
+							auto &end = ends.data[side];
+							end.Flatten(count);
+							auto values = FlatVector::GetData<double>(end);
+							auto &validity = FlatVector::Validity(end);
+							for (idx_t i = 0; i < count; i++) {
+								if (!members[i]) {
+									values[i] = side == 0 ? -std::numeric_limits<double>::infinity()
+									                      : std::numeric_limits<double>::infinity();
+									validity.SetValid(i);
+								}
+							}
+						}
+					}
+				}
 				idx_t column = 0;
 				if (rhs_per_row) {
 					// Infinities are admitted here and nowhere else: this column becomes
@@ -2593,12 +2670,12 @@ void PhysicalDecide::EvaluateConstraints(ClientContext &context, DecideGlobalSin
 					eval_const.rhs_values.SyncSize();
 				}
 				if (admitted) {
-					ExtractDoubleColumn(
-					    row_result.data[column++], scan_chunk.size(), 1.0, eval_const.admitted_lower.MutableDense(),
-					    {DecideValueRole::BOUND, *constraint->rhs_expr, names}, &null_rows, &scoped_kept, scanned);
-					ExtractDoubleColumn(
-					    row_result.data[column++], scan_chunk.size(), 1.0, eval_const.admitted_upper.MutableDense(),
-					    {DecideValueRole::BOUND, *constraint->rhs_expr, names}, &null_rows, &scoped_kept, scanned);
+					ExtractDoubleColumn(ends.data[0], count, 1.0, eval_const.admitted_lower.MutableDense(),
+					                    {DecideValueRole::BOUND, *constraint->rhs_expr, names}, &null_rows,
+					                    &scoped_kept, scanned);
+					ExtractDoubleColumn(ends.data[1], count, 1.0, eval_const.admitted_upper.MutableDense(),
+					                    {DecideValueRole::BOUND, *constraint->rhs_expr, names}, &null_rows,
+					                    &scoped_kept, scanned);
 					eval_const.admitted_lower.SyncSize();
 					eval_const.admitted_upper.SyncSize();
 				}

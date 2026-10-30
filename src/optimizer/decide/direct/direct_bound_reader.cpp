@@ -91,8 +91,8 @@ bool DirectReadBounds(const DirectIR &ir, ClientContext &context, DirectBoundRea
 		clause.rhs = ir_node.rhs->Copy();
 		clause.coefficient_names = DirectNamesOf(ir, clause.coefficient, ir_node.written);
 		clause.rhs_text = ir.render(*clause.rhs);
-		clause.lower = bound.lower->Copy();
-		clause.upper = bound.upper->Copy();
+		clause.lower = bound.RowLower();
+		clause.upper = bound.RowUpper();
 		if (ir_node.scope.when) {
 			clause.when = ir_node.scope.when->Copy();
 			clause.lifts_floor = bound.LiftsDefaultFloor();

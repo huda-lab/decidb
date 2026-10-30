@@ -34,7 +34,7 @@ from ._scope_cases import (
     table,
     table_rows,
 )
-from ._scope_oracle import CONSTANT, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
+from ._scope_oracle import CONSTANT, GLOBAL, Decision, Reduce, Scoped, ScopedModel, ScopedObjective
 from solver.types import ObjSense
 
 SHIP = [Decision("ship")]
@@ -562,6 +562,28 @@ def test_a_when_guards_a_function_that_fails_on_its_dropped_rows(decidb_cli, sco
         X_BOUND,
         Scoped((lambda r: {"x": 1},), "<=", (lambda r: {CONSTANT: math.log(r["w"]) * 10},), when=lambda r: r["w"] > 0),
     ]
+    objective = ScopedObjective(ObjSense.MAXIMIZE, (_x_sum(),))
+    result = aligned(answer(decidb_cli, sql), model, "id")
+    assert model.judge_scoped(result, clauses, objective) == pytest.approx(
+        model.solve_scoped(scope_solver, clauses, objective)
+    )
+
+
+@pytest.mark.correctness
+def test_a_reducer_when_guards_a_function_that_fails_on_its_dropped_rows(decidb_cli, scope_solver):
+    """`ln(0)` is an error: an easy MAX bounds each member it reads, and the reducer's own `when` drops the row where w
+    is 0, so the bound that row would admit is never computed (stage 08 reads only the members)."""
+    columns = ("id", "w", "v")
+    rows = ((1, 0.0, 10), (2, 4.0, 20), (3, 9.0, 30))
+    sql = f"""
+        SELECT id, x {table('t', columns, rows)}
+        DECIDE x(INT)
+        SUCH THAT x <= t.v AND max(when t.w > 0: ln(t.w) * x) <= 20
+        MAXIMIZE SUM(x)
+        ORDER BY id"""
+    model = ScopedModel(table_rows(columns, rows), [Decision("x")])
+    member = Reduce("max", lambda r: {"x": math.log(r["w"])}, when=lambda r: r["w"] > 0)
+    clauses = [X_BOUND, Scoped((member,), "<=", (lambda r: {CONSTANT: 20},), per=GLOBAL)]
     objective = ScopedObjective(ObjSense.MAXIMIZE, (_x_sum(),))
     result = aligned(answer(decidb_cli, sql), model, "id")
     assert model.judge_scoped(result, clauses, objective) == pytest.approx(

@@ -133,11 +133,16 @@ struct DecideConstraint {
 	//! Atomic DROP identity, independent of display and elastic grouping provenance.
 	idx_t removal_group_id = DConstants::INVALID_INDEX;
 	//! A per-row bound on one decision: the values of the decision it admits on each row (DecideSingletonRow), as
-	//! DOUBLE expressions over the row, ±infinity on an open side. Null for any other constraint. The model builder
-	//! folds them into the decision's column instead of adding the row; a data bound narrows the column and never
-	//! replaces its floor of 0 (D41).
+	//! DOUBLE expressions over the row and the inputs `admitted_a` and `admitted_r`, ±infinity on an open side. Null
+	//! for any other constraint. Stage 08 evaluates the inputs once on the rows `admitted_member` keeps (every kept
+	//! row without one) and the ends over them; a row that is no member admits every value. The model builder folds
+	//! them into the decision's column instead of adding the row; a data bound narrows the column and never replaces
+	//! its floor of 0 (D41).
 	unique_ptr<Expression> admitted_lower;
 	unique_ptr<Expression> admitted_upper;
+	unique_ptr<Expression> admitted_a;
+	unique_ptr<Expression> admitted_r;
+	unique_ptr<Expression> admitted_member;
 	//! The decision whose default floor of 0 this bound replaces on the rows the clause keeps, or INVALID_INDEX: a
 	//! constant lower bound under a `when` or a reducer filter (DecideSingletonRow::LiftsDefaultFloor), which
 	//! singleton-row folding does not enter. An unconditional one is folded into the decision's box and sets no field

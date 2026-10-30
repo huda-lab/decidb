@@ -24,10 +24,19 @@ class LogicalDecide;
 struct DecideSingletonRow {
 	//! The decision, an index into decide_variables.
 	idx_t var_idx = DConstants::INVALID_INDEX;
-	//! The admitted interval as DOUBLE expressions over the source row: ±infinity on a side the clause leaves open (on
-	//! both sides for a row an easy extremum's reducer filter leaves out), and `lower > upper` when no value holds. A
+	//! The clause read as `a * x <comparison> r`: `a` the decision's coefficient and `r` the right side moved onto it,
+	//! DOUBLE expressions over the source row.
+	unique_ptr<Expression> a;
+	unique_ptr<Expression> r;
+	//! An easy extremum's reducer filter, or null: a row it leaves out is no member and admits every value, and its
+	//! `a` and `r` are never read.
+	unique_ptr<Expression> member;
+	//! The admitted interval of a member as DOUBLE expressions over the source row and the inputs `a` and `r`
+	//! (DecideAdmittedInput): ±infinity on a side the clause leaves open, and `lower > upper` when no value holds. A
 	//! whole-numbered decision admits exactly the whole numbers for which the written comparison holds as DuckDB
-	//! evaluates it.
+	//! evaluates it. Both ends read `a` and `r` many times, so a reader evaluates the two once per row and the ends
+	//! over them (two projections, the second over the first's columns); RowLower and RowUpper put them back in. An
+	//! input that is a constant is in the ends already.
 	unique_ptr<Expression> lower;
 	unique_ptr<Expression> upper;
 	//! True when the bound folds into the decision's box (D41): the interval is known before the query runs, the
@@ -56,7 +65,19 @@ struct DecideSingletonRow {
 	bool LiftsDefaultFloor() const {
 		return constant_on_read_rows && sense != '<';
 	}
+
+	//! The admitted interval over the source row alone: the ends with `a` and `r` put in, and -infinity / +infinity on
+	//! a row that is no member.
+	unique_ptr<Expression> RowLower() const;
+	unique_ptr<Expression> RowUpper() const;
 };
+
+//! Input `index` of the admitted ends: 0 is `a`, 1 is `r`. A reference to a column no plan has, so nothing but
+//! DecideBindAdmittedInputs reads it.
+unique_ptr<Expression> DecideAdmittedInput(idx_t index);
+
+//! `end` with input 0 replaced by a copy of `a` and input 1 by a copy of `r`.
+unique_ptr<Expression> DecideBindAdmittedInputs(const Expression &end, const Expression &a, const Expression &r);
 
 //! Reads `comparison` as a bound on one decision. False when it is not one: its decision side is not linear terms of
 //! one decision over coefficients that hold no decision (nor an easy `min`/`max` over such terms), or the decision

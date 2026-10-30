@@ -26,6 +26,7 @@
 #include "duckdb/optimizer/decide/decide_solver_gate.hpp"
 #include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/expression/bound_aggregate_expression.hpp"
+#include "duckdb/planner/expression/bound_case_expression.hpp"
 #include "duckdb/planner/expression/bound_cast_expression.hpp"
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
@@ -188,17 +189,18 @@ static bool ReadAffine(const ExpressionBuilder &calc, const DecideTermSplitter &
 	return var_idx != DConstants::INVALID_INDEX;
 }
 
-//! Fills the fields a bound known before the query runs carries (D41): everything folds to a number, which a column,
-//! a subquery or a parameter does not. A coefficient that is not finite (`2e308 * x`) folds into no box: the clause
-//! stays a row, whose coefficient check refuses it as it refuses one on a row of several decisions.
-static void FoldKnownBound(ClientContext &context, const ExpressionBuilder &calc, ExpressionType type, const ExprPtr &a,
-                           const ExprPtr &r, DecideSingletonRow &out) {
+//! Fills the fields a bound known before the query runs carries (D41) from `bound`'s ends over the row: everything
+//! folds to a number, which a column, a subquery or a parameter does not. A coefficient that is not finite
+//! (`2e308 * x`) folds into no box: the clause stays a row, whose coefficient check refuses it as it refuses one on a
+//! row of several decisions.
+static void FoldKnownBound(ClientContext &context, ExpressionType type, const DecideSingletonRow &bound,
+                           DecideSingletonRow &out) {
 	double a_value, r_value;
-	out.folds = TryEvaluateFoldableDouble(context, *calc.Out(a), a_value, FOLD_CATCH_ALL) && a_value != 0.0 &&
-	            std::isfinite(a_value) && TryEvaluateFoldableDouble(context, *calc.Out(r), r_value, FOLD_CATCH_ALL) &&
+	out.folds = TryEvaluateFoldableDouble(context, *bound.a, a_value, FOLD_CATCH_ALL) && a_value != 0.0 &&
+	            std::isfinite(a_value) && TryEvaluateFoldableDouble(context, *bound.r, r_value, FOLD_CATCH_ALL) &&
 	            !std::isnan(r_value) &&
-	            TryEvaluateFoldableDouble(context, *out.lower, out.lower_value, FOLD_CATCH_ALL) &&
-	            TryEvaluateFoldableDouble(context, *out.upper, out.upper_value, FOLD_CATCH_ALL);
+	            TryEvaluateFoldableDouble(context, *bound.RowLower(), out.lower_value, FOLD_CATCH_ALL) &&
+	            TryEvaluateFoldableDouble(context, *bound.RowUpper(), out.upper_value, FOLD_CATCH_ALL);
 	if (!out.folds) {
 		return;
 	}
@@ -261,26 +263,29 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 		return calc.Cmp(type, calc.Cast(calc.Wrap(std::move(left)), input_type),
 		                calc.Cast(calc.Of(*comparison.right), input_type));
 	};
-	ExprPtr lower, upper;
 	double exact_limit = !whole                              ? 0.0
 	                     : type_id == LogicalTypeId::INTEGER ? double(NumericLimits<int32_t>::Maximum())
 	                                                         : DECIDE_MAX_FRACTIONAL_MAGNITUDE;
-	AdmittedInterval(calc, type, exact_limit, a, r, admits, lower, upper);
+	out.a = calc.Out(a);
+	out.r = calc.Out(r);
+	// The ends read `a` and `r` as inputs, evaluated once per row. A constant needs no evaluating: it goes into the
+	// ends, where it folds.
+	auto input = [&](const unique_ptr<Expression> &value, idx_t index) {
+		return calc.Wrap(value->IsFoldable() ? value->Copy() : DecideAdmittedInput(index));
+	};
+	ExprPtr lower, upper;
+	AdmittedInterval(calc, type, exact_limit, input(out.a, 0), input(out.r, 1), admits, lower, upper);
 	out.lower = calc.Out(lower);
 	out.upper = calc.Out(upper);
-	FoldKnownBound(context, calc, type, a, r, out);
+	FoldKnownBound(context, type, out, out);
 	out.constant_on_read_rows = out.folds;
 	if (member_filter) {
 		// A row the reducer's filter leaves out is no member and admits every value; its member is never read. The
 		// interval then depends on the row, so it folds into the box only if the filter itself is known.
-		auto member = calc.Of(*member_filter);
-		lower = calc.If(member, lower, calc.Num(-std::numeric_limits<double>::infinity()));
-		upper = calc.If(member, upper, calc.Num(std::numeric_limits<double>::infinity()));
+		out.member = calc.Out(calc.Of(*member_filter));
 		out.folds = false;
 		DecideSingletonRow filtered;
-		filtered.lower = calc.Out(lower);
-		filtered.upper = calc.Out(upper);
-		FoldKnownBound(context, calc, type, a, r, filtered);
+		FoldKnownBound(context, type, out, filtered);
 		if (filtered.folds) {
 			out.folds = true;
 			out.sense = filtered.sense;
@@ -288,10 +293,44 @@ bool DecideReadSingletonRow(ClientContext &context, const LogicalDecide &decide,
 			out.upper_value = filtered.upper_value;
 			out.written_k = filtered.written_k;
 		}
-		out.lower = std::move(filtered.lower);
-		out.upper = std::move(filtered.upper);
 	}
 	return true;
+}
+
+unique_ptr<Expression> DecideAdmittedInput(idx_t index) {
+	return make_uniq<BoundColumnRefExpression>(LogicalType::DOUBLE, ColumnBinding(DConstants::INVALID_INDEX, index));
+}
+
+unique_ptr<Expression> DecideBindAdmittedInputs(const Expression &end, const Expression &a, const Expression &r) {
+	auto bound = end.Copy();
+	ReplaceDecisionTerm(
+	    bound,
+	    [](const Expression &node) {
+		    return node.GetExpressionClass() == ExpressionClass::BOUND_COLUMN_REF &&
+		           node.Cast<BoundColumnRefExpression>().binding.table_index == DConstants::INVALID_INDEX;
+	    },
+	    [&](const Expression &node) {
+		    return (node.Cast<BoundColumnRefExpression>().binding.column_index == 0 ? a : r).Copy();
+	    });
+	return bound;
+}
+
+//! `end` over the row: `a` and `r` put in, and `other` on a row that is no member.
+static unique_ptr<Expression> OverRow(const DecideSingletonRow &bound, const Expression &end, double other) {
+	auto row = DecideBindAdmittedInputs(end, *bound.a, *bound.r);
+	if (!bound.member) {
+		return row;
+	}
+	return make_uniq<BoundCaseExpression>(bound.member->Copy(), std::move(row),
+	                                      make_uniq<BoundConstantExpression>(Value::DOUBLE(other)));
+}
+
+unique_ptr<Expression> DecideSingletonRow::RowLower() const {
+	return OverRow(*this, *lower, -std::numeric_limits<double>::infinity());
+}
+
+unique_ptr<Expression> DecideSingletonRow::RowUpper() const {
+	return OverRow(*this, *upper, std::numeric_limits<double>::infinity());
 }
 
 void DecideWrittenBox::Add(char sense, double k) {
