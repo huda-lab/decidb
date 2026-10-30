@@ -19,7 +19,7 @@ Quantify first-use backend discovery versus parsing, binding and rewriting. Dist
 
 Rank repeated scans and coefficient/RHS work by workload and clause. Compare Q8's keyed-decision mapping, Q1's low-cardinality `per` classes and P4's order-key classes. Propose batching/caching only where supported by measured cost.
 
-`profile_pipeline.py` puts `execution.scope_checks` and `execution.evaluate_value_links` in no stage column, so their time shows only inside `non_solver_ms`. The scope checks (`../language/guide.md` §7.3) run before constraint evaluation on every query with a `when` or a `per` key, one pass over the kept rows per check. Add both spans to the `extraction` stage (each stage names parent spans only, so no time is counted twice), then rank the checks against constraint evaluation on Q1, Q6, Q8 and P4. Record the result in `findings.md`.
+`profile_pipeline.py` puts `execution.scope_checks` and `execution.evaluate_value_links` in no stage column, so their time shows only inside `non_solver_ms`. The scope checks (`../language/guide.md` §7.3) run before constraint evaluation on every query with a `when` or a `per` key, one pass over the kept rows per check. Add both spans to the `extraction` stage (each stage names parent spans only, so no time is counted twice), then rank the checks against constraint evaluation. No benchmark query builds a `DETERMINES` check since a key's own elements need none (`../pipeline/04_canonicalizer/done.md` § Scope checks), so measure on a query whose `per` key must determine another column. Record the result in `findings.md`.
 
 ## PERF-4 — Model construction
 
@@ -42,3 +42,34 @@ Quantify readback, temporary-result writing and destruction after fast solves. P
 ## PERF-8 — Memory and scaling
 
 Find the point where each workload and backend stops fitting comfortably, and which stage holds the memory when it does. Relate peak RSS to model size — variables, rows and nonzeros are recorded alongside it in the same CSV row. The large-tier sweep (`benchmark/decide/results/pipeline_profile_large.csv`, 2026-10-30, 90 rows with `peak_rss_mib`; PERF-1) is not yet analysed here.
+
+## Regressions since the 2026-09-09 sweep
+
+The 2026-10-30 large sweep (PERF-1) against the 2026-09-09 one, on Gurobi, where every run finishes in both: total
+time fell 3 % (smaller models: per-row bounds fold into column boxes), and the non-solver stages grew in a few
+queries. The scope checks a key always passes caused most of it and are fixed (Q8 4.0 s and 3.95 GiB → 1.7 s and
+1.14 GiB). These three remain unexplained. Each task: find the cause with the profile spans (`profile_pipeline.py`
+raw `profile.json`, one query at `large`), fix it if it is a defect, else record why the cost is needed. Record in
+`findings.md`, and in the owning stage's `done.md` if code changes.
+
+### PERF-9 — Q8's keyed-decision mapping is five times slower
+
+`execution.keyed_mapping` (`physical_decide.cpp:~1877`) takes 1,169 ms on Q8 (`DECIDE per o: assign(BOOL)` over
+lineitem ⋈ orders, 1.4M rows, 250k orders); the 2026-09-09 build's `execution.entity_mapping` took 229 ms for the same
+job. It is the rest of Q8's gap to September (1.7 s against 0.7 s; 1.14 GiB against 0.69 GiB). The keyed scoping
+language (ANR items 2-7, 2026-10-09 to 10-19) replaced the entity mapping. Expected: back near 229 ms, or a reason.
+
+### PERF-10 — Extraction grew 40-240 ms on most queries
+
+Median `extraction_ms` grew on Q4 (+237), Q6 (+161), Q1 (+133), P4 (+116), Q10 (+88), Q2 and P1 (+45). The spans that
+grew: `extraction.when_per_and_qualifiers` (`physical_decide.cpp:~2322`; Q1 122 → 195 ms, P4 96 → 202 ms),
+`extraction.constraint_setup` (Q1 34 → 88 ms), `extraction.group_ids` (`:~383`; Q8 432 → 873 ms), and
+`assembly.implied_bounds` (`:~3534`; Q1 14 → 59 ms). Rerun the five queries at `large` on the current build first:
+the sweep predates the BUG-26 fix. Expected: one cause per span, or the work each needs.
+
+### PERF-11 — Peak memory grew on Q3 and Q10
+
+On Gurobi, peak RSS grew on Q3 (4.0 → 4.8 GiB) and Q10 (6.5 → 7.1 GiB); neither builds a scope check, and both
+models are the same size as in September. Find the stage that holds the peak (`rss_bytes` and `peak_rss_bytes` on
+each span in `stderr.log`), on the current build, and compare it with the 2026-09-09 raw spans in
+`benchmark/decide/results/pipeline_profile_large_20260909/`. Expected: the stage and its cause.
