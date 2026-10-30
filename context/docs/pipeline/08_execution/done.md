@@ -269,16 +269,15 @@ A class or group is named by its key's values as SQL literals (`D.depotID = 'D1'
 `()` the message says "The kept rows". Groups come from `LookupOrBuildPerGroupIds`: a row
 with NULL in a written key column (`DecideKeyNullMode::NO_GROUP`) is in no group, and a relation's columns
 (`VALUE`) compare NULL as a value. A key with no columns (`per ()`, `by ()`, a reducer's `per ()`) is one group
-of every row the filter keeps: `BuildGroupIds` says so once, for every caller. A key that
-is the same on every row (`by (1)`) hashes to a constant vector, which `BuildGroupIds`
-flattens before each row reads its own hash. A check reads its `when` on every row
+of every row the filter keeps: `BuildGroupIds` says so once, for every caller. A check reads its `when` on every row
 (`KeptRows`), a reducer's own `when` on the rows that keeps, and its key and value only on
 the rows it looks at.
 
 Every clause is then read by these rules; §5 gives the row maps they produce:
 
-- **Kept rows first.** Its `when` is read before anything else, on every row, the parts
-  of an AND or an OR left to right, each only on the rows the earlier parts leave
+- **Kept rows first.** Its `when` is read before anything else, on every row, in one scan
+  (`KeepRowsWhere`), each chunk reading the parts of an AND or an OR left to right, each
+  only on the rows the earlier parts leave
   undecided -- an AND's on the rows they keep, an OR's on the rows they do not
   (`KeptRows`; the composed rewrite folds the clause's `when` in front of a term's own).
   Anything else, `not` included, is computed whole. Nothing is then
@@ -410,7 +409,11 @@ clause reads:
 
 **One numbering per key** (`BuildGroupIds`, `LookupOrBuildPerGroupIds`). A key is
 computed once per query into a `PerGroupCache` entry, its index in the key table the
-cache key. `BuildGroupIds` hashes the distinct key tuples, then numbers them by value:
+cache key. `BuildGroupIds` finds each row's group in DuckDB's aggregate hash table with no
+aggregate (`GroupedAggregateHashTable::FindOrCreateGroups`, as GROUP BY and the recursive
+CTE's UNION use it), which compares keys in place and names a group by the address of its
+row; a group's key values become `Value`s once, for its first row. It then numbers the
+groups by value:
 columns compare in key order, a relation column's NULL after every value, as `ORDER BY`
 places it. Each
 reader takes the groups its filters keep as a subsequence, renumbered `0..K'` in the same
@@ -422,8 +425,9 @@ over both sets, so the numbering stays one.
 **A key groups under its collation** (D69). The planner gives each key element whose type
 carries a collation a `collated` copy (`ExpressionBinder::PushCollation`, as GROUP BY binds
 its groups); rows group and number on it (`DecideKeyElement::Grouping()`), and
-`BuildGroupIds` keeps each group's least raw value of the element for its label, so a
-message quotes `'A'` for a NOCASE group of 'a' and 'A' in any row order. The bound-side
+`BuildGroupIds` keeps each group's least raw value of the element for its label (a second
+scan, for a collated key only, once the groups are numbered), so a message quotes `'A'`
+for a NOCASE group of 'a' and 'A' in any row order. The bound-side
 window partitions on the same expression (`decide_rewrite_rhs_window.cpp`).
 
 The bound side of the aggregate shape gets its own map with the same numbering over every
@@ -438,9 +442,11 @@ decision on its absent entity (§4), and `SkipNullInstances` skips that row's in
 it skips one with a NULL coefficient. So `sum(x) by (g) <= 0.5 * sum(x)` gives a NULL-`g`
 row no limit (its `by (g)` helper is absent there) while the total still counts it.
 
-Keys use a `string`-keyed hash map with the same NULL-safe tagging as entity mapping.
 The ids a key takes over every row are cached (`PerGroupCache`) across every constraint,
-check and the objective, so one key is evaluated once however many clauses use it; a
+check and the objective, so one key is evaluated once however many clauses use it. A
+lookup returns the groups its rows keep (`kept_groups`, each one's index in the key's own
+numbering); a caller that names a group formats that one label from the entry's values,
+so no label is built for a group no message quotes; a
 clause whose `when` drops rows builds its groups afresh over its kept rows
 (`LookupOrBuildPerGroupIds`' `read_rows`), since the cached key was computed on every row.
 

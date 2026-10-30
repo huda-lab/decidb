@@ -49,3 +49,20 @@ Every run records its peak resident set size, taken from `/usr/bin/time -l`, as 
 The profiler carries no memory guard, cap or early stop. A machine-wide counter such as `vm_stat` swapins covers every process since boot, not the run being measured, so it cannot judge a run; nothing here is a claim about swap.
 
 The medium-tier sweep (`results/pipeline_profile_medium.csv`) peaks at 6,525 MiB, on Q10/HiGHS at 2.5M variables; the median across all 90 runs is 668 MiB. The machine has 18 GiB, so this scale fits with room to spare.
+
+## Regressions since 2026-09-09
+
+Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three interleaved runs beside other work (load
+8-18, single spans swing up to 3x).
+
+- **Q8's keyed mapping (PERF-9).** Group ids compared each row with its group's representative `Value` by `Value`,
+  built a label string for every group, and copied an uncollated key into a label column. Group ids now come from
+  DuckDB's aggregate hash table, labels are formatted only for the groups a message names, and a key keeps one copy
+  of an uncollated column. `execution.keyed_mapping` 1,169 → 257 ms; `extraction.group_ids` 868 → 309 ms and
+  extraction 1,028 → 453 ms on Q8; Q1's group ids 104 → 25-37 ms. Q8's peak RSS 1,172 → about 860 MiB.
+- **A `when` read once per part (PERF-10, part).** `KeepRowsWhere` scanned the data once per AND or OR part; it now
+  scans once. Q1 `when_per_and_qualifiers` 218 → 165-174 ms.
+- **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
+  builds them once. Q1 model build about 15 ms lower.
+- **Peak memory on Q3 and Q10 (PERF-11).** The peak is inside Gurobi's solve, after DeciDB hands over the model; the
+  stages before it hold less than the solve adds. Not a DeciDB cost.

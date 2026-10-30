@@ -48,28 +48,22 @@ Find the point where each workload and backend stops fitting comfortably, and wh
 The 2026-10-30 large sweep (PERF-1) against the 2026-09-09 one, on Gurobi, where every run finishes in both: total
 time fell 3 % (smaller models: per-row bounds fold into column boxes), and the non-solver stages grew in a few
 queries. The scope checks a key always passes caused most of it and are fixed (Q8 4.0 s and 3.95 GiB → 1.7 s and
-1.14 GiB). These three remain unexplained. Each task: find the cause with the profile spans (`profile_pipeline.py`
+1.14 GiB); so are the group ids and the `when` scan (PERF-9, PERF-11 closed: `findings.md`). Each task: find
+the cause with the profile spans (`profile_pipeline.py`
 raw `profile.json`, one query at `large`), fix it if it is a defect, else record why the cost is needed. Record in
 `findings.md`, and in the owning stage's `done.md` if code changes.
 
-### PERF-9 — Q8's keyed-decision mapping is five times slower
-
-`execution.keyed_mapping` (`physical_decide.cpp:~1877`) takes 1,169 ms on Q8 (`DECIDE per o: assign(BOOL)` over
-lineitem ⋈ orders, 1.4M rows, 250k orders); the 2026-09-09 build's `execution.entity_mapping` took 229 ms for the same
-job. It is the rest of Q8's gap to September (1.7 s against 0.7 s; 1.14 GiB against 0.69 GiB). The keyed scoping
-language (ANR items 2-7, 2026-10-09 to 10-19) replaced the entity mapping. Expected: back near 229 ms, or a reason.
-
 ### PERF-10 — Extraction grew 40-240 ms on most queries
 
-Median `extraction_ms` grew on Q4 (+237), Q6 (+161), Q1 (+133), P4 (+116), Q10 (+88), Q2 and P1 (+45). The spans that
-grew: `extraction.when_per_and_qualifiers` (`physical_decide.cpp:~2322`; Q1 122 → 195 ms, P4 96 → 202 ms),
-`extraction.constraint_setup` (Q1 34 → 88 ms), `extraction.group_ids` (`:~383`; Q8 432 → 873 ms), and
-`assembly.implied_bounds` (`:~3534`; Q1 14 → 59 ms). Rerun the five queries at `large` on the current build first:
-the sweep predates the BUG-26 fix. Expected: one cause per span, or the work each needs.
+Median `extraction_ms` grew on Q4 (+237), Q6 (+161), Q1 (+133), P4 (+116), Q10 (+88), Q2 and P1 (+45). Group ids
+and the `when` scan are fixed (`findings.md` § Regressions since 2026-09-09). Left: `extraction.constraint_setup`
+(Q1 34 → 88 ms) and `assembly.implied_bounds` (Q1 14 → 59 ms, still 61-75 ms after the shared row lists). Rerun Q1,
+Q4 and P4 at `large` alone on the current build (the 2026-10-30 timings ran beside other work, load 8-18). Expected:
+one cause per span, or the work each needs.
 
-### PERF-11 — Peak memory grew on Q3 and Q10
+### PERF-12 — A constraint's provenance formats its group label eagerly
 
-On Gurobi, peak RSS grew on Q3 (4.0 → 4.8 GiB) and Q10 (6.5 → 7.1 GiB); neither builds a scope check, and both
-models are the same size as in September. Find the stage that holds the peak (`rss_bytes` and `peak_rss_bytes` on
-each span in `stderr.log`), on the current build, and compare it with the 2026-09-09 raw spans in
-`benchmark/decide/results/pipeline_profile_large_20260909/`. Expected: the stage and its cause.
+The model builder copies a group's label string into every constraint's provenance, per-row rows included
+(`ilp_model_builder.cpp` ~990, ~1063, ~1291), though only a message that prints reads it. Provenance carrying (key,
+group id) and formatting only when a message prints removes the work. Expected: the spans of Q1 and Q8 before and
+after.

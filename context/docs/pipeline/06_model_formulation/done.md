@@ -462,7 +462,10 @@ negative; an aggregate one (`lhs_is_aggregate`, `SUM(x) = -3`) sums every row's
 instance and keeps the sign condition. This turns declared-unbounded variables
 into bounded ones, which is what makes a finite and tight Big-M possible. Only
 provably-implied bounds are applied, so the feasible region and the optimum are
-unchanged.
+unchanged. The pass reads a grouped aggregate's instances from the row lists the builder
+emits from (`ClauseRows`: one row per group, built once and kept on the clause, also read
+by the `<>` expansion), so a bound and the rows it is derived from cannot disagree;
+ungrouped and per-row clauses are read in place.
 
 `a_r` is the variable's **combined** coefficient at that row. A variable can hold
 several additive terms of one constraint (`2*ship + 3*ship <= 10`, or two reducers
