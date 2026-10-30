@@ -21,7 +21,6 @@
 #include "duckdb/planner/expression/bound_columnref_expression.hpp"
 #include "duckdb/planner/expression/bound_comparison_expression.hpp"
 #include "duckdb/planner/expression/bound_constant_expression.hpp"
-#include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/operator/decide/logical_decide.hpp"
 #include "duckdb/planner/operator/logical_projection.hpp"
 
@@ -468,13 +467,11 @@ private:
 		return result;
 	}
 
-	//! `sum(sign * value)` over the proved values, read as DOUBLE. Null for none. `guarded` false reads each value
-	//! without its NULL guard: the number on a row the guard keeps (DecideUnguarded).
-	unique_ptr<Expression> SumOf(const vector<DirectSignedValue> &values, bool guarded = true) const {
+	//! `sum(sign * value)` over the proved values, read as DOUBLE. Null for none.
+	unique_ptr<Expression> SumOf(const vector<DirectSignedValue> &values) const {
 		unique_ptr<Expression> total;
 		for (auto &value : values) {
-			auto &written = guarded ? *value.expr : DecideUnguarded(*value.expr);
-			auto term = DirectScaledTerm(optimizer, written.Copy(), value.sign, false, 1.0, false);
+			auto term = DirectScaledTerm(optimizer, value.expr->Copy(), value.sign, false, 1.0, false);
 			total =
 			    total ? calc.Out(calc.Add(calc.Wrap(std::move(total)), calc.Wrap(std::move(term)))) : std::move(term);
 		}
@@ -482,14 +479,13 @@ private:
 	}
 
 	//! The check of a raw value of P1, evaluated over P1: it raises what DirectNumberMessage names, reading the values
-	//! the number is computed from in the source columns P1 carries first. `kept` is the number as a row its NULL guard
-	//! keeps reads it. A number that is a finite constant there is finite on every row (a skipped row reads 0), so no
-	//! row can fail it and there is no check (null).
+	//! the number is computed from in the source columns P1 carries first. `values` are what the number is made of
+	//! (with the part's factor, when `scaled`); null when they are finite constants, which no row can fail
+	//! (DirectIsFiniteWhereKept).
 	unique_ptr<Expression> ValidNumber(const Stage &p1, ColumnBinding number, const DirectNumberNames &names,
-	                                   const unique_ptr<Expression> &kept) const {
-		double constant;
-		if (kept && TryEvaluateFoldableDouble(optimizer.context, *kept, constant, DIRECT_CONSTANT) &&
-		    std::isfinite(constant)) {
+	                                   const vector<DirectSignedValue> &values, bool scaled = false, double scale = 1.0,
+	                                   bool divides = false) const {
+		if (DirectIsFiniteWhereKept(optimizer, values, scaled, scale, divides)) {
 			return nullptr;
 		}
 		auto message =
@@ -535,7 +531,7 @@ private:
 				                                   std::move(check))
 				           : std::move(check);
 			};
-			if (auto check = ValidNumber(p1, coefficient, clause.coefficient_names, SumOf(clause.coefficient, false))) {
+			if (auto check = ValidNumber(p1, coefficient, clause.coefficient_names, clause.coefficient)) {
 				checks.push_back(read_on(std::move(check)));
 			}
 			checks.push_back(read_on(DirectValidBoundPredicate(optimizer, rhs, clause.rhs_text)));
@@ -579,24 +575,22 @@ private:
 		// is read one term at a time, with the part's factor applied, and never added up; each must still be valid,
 		// and is checked after the sums.
 		vector<ExprPtr> linear_sums(condition.decisions.size());
-		vector<ExprPtr> linear_kept(condition.decisions.size());
+		vector<vector<DirectSignedValue>> linear_values(condition.decisions.size());
 		vector<unique_ptr<Expression>> constant_checks;
 		for (auto &term : part.linear.terms) {
-			auto add = [&](ExprPtr &sum, const Expression &coefficient) {
-				auto value = calc.Wrap(DirectScaledTerm(optimizer, coefficient.Copy(), term.sign, false, 1.0, false));
-				sum = sum ? calc.Add(sum, value) : value;
-			};
-			add(linear_sums[term.decision], *term.coefficient);
-			add(linear_kept[term.decision], DecideUnguarded(*term.coefficient));
+			auto value = calc.Wrap(DirectScaledTerm(optimizer, term.coefficient->Copy(), term.sign, false, 1.0, false));
+			auto &sum = linear_sums[term.decision];
+			sum = sum ? calc.Add(sum, value) : value;
+			linear_values[term.decision].push_back({term.sign, term.coefficient->Copy()});
 		}
 		for (auto &term : part.terms) {
 			if (term.kind == Term::Kind::CONSTANT) {
 				auto value = calc.Wrap(DirectScaledTerm(optimizer, term.value->Copy(), term.sign, part.linear.scaled,
 				                                        part.linear.scale, part.linear.divides));
-				auto kept_value = DirectScaledTerm(optimizer, DecideUnguarded(*term.value).Copy(), term.sign,
-				                                   part.linear.scaled, part.linear.scale, part.linear.divides);
-				auto check = ValidNumber(p1, p1.Add(calc.Out(on_kept(value))), term.value_names, kept_value);
-				if (check) {
+				vector<DirectSignedValue> read;
+				read.push_back({term.sign, term.value->Copy()});
+				if (auto check = ValidNumber(p1, p1.Add(calc.Out(on_kept(value))), term.value_names, read,
+				                             part.linear.scaled, part.linear.scale, part.linear.divides)) {
 					constant_checks.push_back(std::move(check));
 				}
 			} else {
@@ -604,14 +598,12 @@ private:
 				square.decision = term.decision;
 				square.scale = term.sign * term.square_scale;
 				square.linear = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(term.inner_linear)))));
-				if (auto check =
-				        ValidNumber(p1, square.linear, term.inner_linear_names, SumOf(term.inner_linear, false))) {
+				if (auto check = ValidNumber(p1, square.linear, term.inner_linear_names, term.inner_linear)) {
 					checks.push_back(std::move(check));
 				}
 				if (!term.inner_constant.empty()) {
 					square.constant = p1.Add(calc.Out(on_kept(calc.Wrap(SumOf(term.inner_constant)))));
-					if (auto check = ValidNumber(p1, square.constant, term.inner_constant_names,
-					                             SumOf(term.inner_constant, false))) {
+					if (auto check = ValidNumber(p1, square.constant, term.inner_constant_names, term.inner_constant)) {
 						checks.push_back(std::move(check));
 					}
 				} else {
@@ -625,8 +617,7 @@ private:
 				continue;
 			}
 			auto binding = p1.Add(calc.Out(on_kept(linear_sums[d])));
-			auto kept_sum = calc.Out(linear_kept[d]);
-			if (auto check = ValidNumber(p1, binding, part.linear.names[d], kept_sum)) {
+			if (auto check = ValidNumber(p1, binding, part.linear.names[d], linear_values[d])) {
 				checks.push_back(std::move(check));
 			}
 			columns.linear_decision.push_back(d);

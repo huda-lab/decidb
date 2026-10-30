@@ -1,10 +1,13 @@
 #include "duckdb/optimizer/decide/direct/direct_bound_reader.hpp"
 
 #include <algorithm>
+#include <cmath>
 
 #include "duckdb/common/decide_numeric_policy.hpp"
 #include "duckdb/optimizer/decide/decide_singleton_row_folding.hpp"
 #include "duckdb/optimizer/decide/direct/direct_expression.hpp"
+#include "duckdb/optimizer/decide/direct/direct_plan_fragments.hpp"
+#include "duckdb/optimizer/optimizer.hpp"
 #include "duckdb/planner/decide/decide_source_provenance.hpp"
 #include "duckdb/planner/decide/decide_term_split.hpp"
 
@@ -175,6 +178,20 @@ DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedVal
 	}
 	names.clause = clause;
 	return names;
+}
+
+bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValue> &values, bool scaled, double scale,
+                             bool divides) {
+	ExpressionBuilder calc(optimizer.context);
+	ExprPtr total;
+	for (auto &value : values) {
+		auto term = calc.Wrap(
+		    DirectScaledTerm(optimizer, DecideUnguarded(*value.expr).Copy(), value.sign, scaled, scale, divides));
+		total = total ? calc.Add(total, term) : term;
+	}
+	double constant;
+	return total && TryEvaluateFoldableDouble(optimizer.context, *calc.Out(total), constant, DIRECT_CONSTANT) &&
+	       std::isfinite(constant);
 }
 
 bool DirectReadLinearPart(const DirectIR &ir, ClientContext &context, const DirectPart &part, const string &clause,

@@ -144,6 +144,13 @@ struct DirectLinearPart {
 //! the clause, as the solver path names it.
 DirectNumberNames DirectNamesOf(const DirectIR &ir, const vector<DirectSignedValue> &values, const string &clause);
 
+//! Whether a number computed from `values` (with the part's factor, when `scaled`) needs no invalid-value check: each
+//! value, read as a row its NULL guard keeps reads it, is a constant, and their sum is finite at plan time. A row the
+//! guard skips reads 0, so the number is finite on every row. A constant that is not finite keeps its check, which
+//! raises at run time as the solver path does.
+bool DirectIsFiniteWhereKept(Optimizer &optimizer, const vector<DirectSignedValue> &values, bool scaled = false,
+                             double scale = 1.0, bool divides = false);
+
 //! Reads the sign and constant factor of one part and each of its linear terms. Returns false when the factor is not a
 //! finite constant (or divides by zero) or when a linear term's coefficient is not a numeric value of the source row.
 //! A term that is not linear is skipped, and so are the part's reducer, filter and qualifier: the rule checks those,

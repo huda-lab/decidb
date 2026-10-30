@@ -246,9 +246,54 @@ def test_a1_a_finite_literal_adds_no_too_large_check(decidb_cli, objective, mess
     assert plan.count("computesanumbertoolargeforaDOUBLE") == messages, plan
 
 
+def _r1_too_large_checks(cli, decisions, constraint, objective):
+    sql = f"""
+        EXPLAIN SELECT id FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
+        DECIDE {decisions} SUCH THAT {constraint} MAXIMIZE SUM({objective})
+    """
+    plan = _raw(cli, sql).stdout
+    assert "R1_CONTINUOUS_KNAPSACK" in plan, plan
+    return "".join(plan.replace("│", "").split()).count("computesanumbertoolargeforaDOUBLE")
+
+
+@pytest.mark.correctness
+@pytest.mark.parametrize(
+    "literal,column",
+    [
+        # Each pair differs at one number the plan checks: the clause's coefficient, the budget's weight, an objective
+        # value, and an objective value under the guard that `p` puts on its sum (the `2`, on a row where p is NULL).
+        (("x(REAL)", "x <= q AND SUM(x) <= 4", "q * x"), ("x(REAL)", "p * x <= q AND SUM(x) <= 4", "q * x")),
+        (("x(REAL)", "x <= q AND SUM(x) <= 4", "q * x"), ("x(REAL)", "x <= q AND SUM(p * x) <= 4", "q * x")),
+        (("x(REAL)", "x <= q AND SUM(x) <= 4", "2 * x"), ("x(REAL)", "x <= q AND SUM(x) <= 4", "q * x")),
+        (
+            ("x(REAL), y(REAL)", "x <= q AND y <= q AND SUM(x + y) <= 4", "2 * x + p * y"),
+            ("x(REAL), y(REAL)", "x <= q AND y <= q AND SUM(x + y) <= 4", "q * x + p * y"),
+        ),
+    ],
+)
+def test_r1_a_finite_literal_adds_no_too_large_check(decidb_cli, literal, column):
+    assert _r1_too_large_checks(decidb_cli, *literal) < _r1_too_large_checks(decidb_cli, *column)
+
+
 @pytest.mark.error
 @pytest.mark.correctness
-@pytest.mark.parametrize("coefficient", ["s * 'NaN'::DOUBLE - p", "s - p + 'NaN'::DOUBLE", "s * 1e308 * 10 - p"])
+@pytest.mark.parametrize("budget", [False, True])
+def test_r1_a_non_finite_literal_under_a_guard_raises_what_the_solver_raises(decidb_cli, budget):
+    # `'NaN'::DOUBLE` beside a column the data may leave NULL is a literal: it is named as the clause, not as a value.
+    body = "'NaN'::DOUBLE * x + p * y"
+    sql = f"""
+        SELECT id FROM (VALUES (1, 1.0::DOUBLE, 2.0::DOUBLE), (2, NULL, 3.0), (3, 4.0, 5.0)) t(id, p, q)
+        DECIDE x(REAL), y(REAL) SUCH THAT x <= q AND y <= q AND SUM({body if budget else 'x + y'}) <= 4
+        MAXIMIZE SUM({'x + y' if budget else body})
+    """
+    direct = _raw(decidb_cli, sql, mode="require").stderr
+    assert "computes a number too large for a DOUBLE" in direct, direct
+    assert direct == _raw(decidb_cli, sql, mode="off").stderr
+
+
+@pytest.mark.error
+@pytest.mark.correctness
+@pytest.mark.parametrize("coefficient", ["s * 'NaN'::DOUBLE - p","s - p + 'NaN'::DOUBLE", "s * 1e308 * 10 - p"])
 def test_a1_a_non_finite_literal_raises_what_the_solver_raises(decidb_cli, coefficient):
     # A literal that is not finite keeps its check, which names the objective as the solver path does. Under the data's
     # NULL skip the literal is still no column's value, so it is never named as one.

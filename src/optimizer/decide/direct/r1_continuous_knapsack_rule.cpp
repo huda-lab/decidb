@@ -1019,7 +1019,9 @@ private:
 			auto read_on = [&](ExprPtr message) {
 				return clause.when ? DirectOnKeptRows(calc, C("wh" + suffix), message) : message;
 			};
-			messages.push_back(read_on(number("c" + suffix, clause.coefficient_names)));
+			if (!DirectIsFiniteWhereKept(optimizer, clause.coefficient)) {
+				messages.push_back(read_on(number("c" + suffix, clause.coefficient_names)));
+			}
 			messages.push_back(read_on(
 			    calc.If(calc.Fn("isnan", C("r" + suffix)),
 			            calc.Constant(Value(DecideInvalidValueMessage(DecideValueRole::BOUND, clause.rhs_text))),
@@ -1027,13 +1029,13 @@ private:
 		}
 		for (idx_t k = 0; k < DecisionCount(); k++) {
 			auto weights = SignedValues(condition.budget, k);
-			if (!weights.empty()) {
+			if (!weights.empty() && !DirectIsFiniteWhereKept(optimizer, weights)) {
 				auto message = number(Dec("w", k), condition.budget.names[k]);
 				messages.push_back(condition.scoped ? DirectOnKeptRows(calc, C(ELIGIBLE), message) : message);
 			}
 			for (idx_t p = 0; p < condition.objective.size(); p++) {
 				auto values = SignedValues(condition.objective[p], k);
-				if (!values.empty()) {
+				if (!values.empty() && !DirectIsFiniteWhereKept(optimizer, values)) {
 					messages.push_back(number(Dec("o" + std::to_string(p), k), condition.objective[p].names[k]));
 				}
 			}
