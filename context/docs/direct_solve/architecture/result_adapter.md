@@ -40,6 +40,13 @@ constants, and passthrough aliases through projections, filters, or inner compar
 raise an error stays live, because the solver would have raised it. This is what lets a wide unused payload leave the
 rank sort. The validated columns stay live even when no parent reads any output.
 
+The plan holds materialized CTEs: a copy of the source, a bound's side table, a gate's verdict. DuckDB's
+`RemoveUnusedColumns` prunes a definition to the union of the columns its references read and narrows each reference to
+that union at the end of the pass. This is projection pushdown across a CTE boundary, the column twin of DuckDB's
+`CTEFilterPusher` and what Spark's `PushdownPredicatesAndPruneColumnsForCTEDef` does. DuckDB kept a definition whole,
+because the pass does not follow a reference back to its definition. A definition with a reference the pass does not
+reach (one read through a table in-out function) is still kept whole.
+
 ## Every row is read
 
 Runtime checks (NULL or non-finite scores, bad bounds) must run over every input row whenever the DECIDE result is
@@ -86,10 +93,12 @@ row id after the plan has chosen its rows. DuckDB's own `LATE_MATERIALIZATION` p
 has a separate step, `ApplyDirectLateMaterialization`, for the reason at the end of this section.
 
 When the source is one DuckDB base table under non-volatile projections and filters, the plan carries the table's
-`rowid` as a hidden column. After unused-column removal, when it is known what the parent reads, each parent-read output
-that is a plain stored column the rule's plan only forwards comes from a second scan of the table, joined (inner, on
-`rowid`) under the adapter. That column never enters the rank, and the first read still checks every row,
-so a bad last row under `LIMIT 1` still raises.
+`rowid` as a hidden column, passed along like any source column through the rule's windows, the side tables' joins, the
+gates and a copy of the source. The second scan is the table the row id's binding leads back to, through projections and
+CTE references (`FindScanOfRowId`), so no list of operators limits which plans qualify. After unused-column removal,
+when it is known what the parent reads, each parent-read output that is a plain stored column the rule's plan only
+forwards comes from a second scan of the table, joined (inner, on `rowid`) under the adapter. That column never enters
+the rank, and the first read still checks every row, so a bad last row under `LIMIT 1` still raises.
 
 - **Only variable-width columns move** (`VARCHAR`, `BLOB`, `BIT`, lists, arrays, structs, maps, unions: a physical type
   that is not constant-size). Holding those is what costs memory. A fixed-width column stays in the single read, and an
@@ -104,6 +113,9 @@ so a bad last row under `LIMIT 1` still raises.
   The passes in between add projection maps that unused-column removal does not keep up to date, so pruning again after
   them is unsafe. With that pass disabled the row id is dropped and the plan holds rows.
 - **Other sources hold their rows** in a plan that holds rows, wide columns included.
+- **A copy of the source leaves the moved columns out.** The copy is pruned to what its reads use, so its row width in
+  the copy decision (`CopyWidth`) counts every column except the variable-width stored ones the node does not read. A
+  pipelined plan over a copy holds those columns in the copy, which this rule does not see yet (PERF-22).
 
 ## Result types
 

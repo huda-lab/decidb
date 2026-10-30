@@ -305,8 +305,19 @@ Measured 2026-10-30 on Gurobi with `DECIDB_TIME_LIMIT=3`, medians of three inter
   source (lineitem with a reducer 361 → 512 MiB; PERF-21). profile_direct_a1.py at 5M rows: 0.32 → 0.09 s.
 - **Column pruning below a materialized CTE.** DuckDB's `RemoveUnusedColumns` kept every column below a materialized
   CTE, the consuming plan's included, so every gate verdict (PERF-3) and side table (PERF-15) wrapped around a direct
-  plan stopped pruning beneath it: `SELECT count(*)` over A1 scanned all 16 lineitem columns. The definition now keeps
-  every column (it is read through CTE refs the pass does not follow) and the consuming plan is pruned as any other.
+  plan stopped pruning beneath it: `SELECT count(*)` over A1 scanned all 16 lineitem columns. The consuming plan is now
+  pruned as any other, and the definition keeps only the union of the columns its references read (PERF-21).
+- **Late materialization under side tables, gates and copies (PERF-20 and PERF-21, closed).** Late materialization
+  accepted only a plan of projections, windows, filters and scans, so a bound's side table or a row-check gate made S1
+  and R1 hold every column; a copy of the source kept every column whatever its reads used, and the copy decision
+  counted them all. The row id is now followed through any operator to its scan, the copy is pruned to its references'
+  columns, and its width leaves out what late materialization reads back. large.db at 1M rows (lisup is lineitem JOIN
+  supplier), a parent that reads every column (wide) or none, medians of 3, wall ms / peak MiB, old → new: S1 with a
+  reducer on lisup, wide, 247 / 809 → 217 / 434; S1 with a row check on lisup, wide, 211 / 1041 → 180 / 683; R1 with a
+  constant bound on lineitem, wide, 137 / 473 → 121 / 250; the same on lisup, none, 163 / 667 → 113 / 217; A1 with a
+  reducer on lisup, none, 64 / 548 → 26 / 112. A1 with a reducer on lisup whose parent reads every column (CTAS) stays
+  near 250 / 506: a join is copied whole and is never late-materialized. The lisup cases gain from the pruned copy,
+  the lineitem case from late materialization.
 - **Row lists built twice.** Implied bounds and the builder each built a grouped clause's row lists; `ClauseRows`
   builds them once. Q1 model build about 15 ms lower.
 - **Group keys formatted when printed (PERF-12).** A grouped clause formatted every group's key text when its data

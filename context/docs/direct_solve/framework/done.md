@@ -58,22 +58,22 @@ Verified on 2026-10-29 at `c85704ad45`: `make decide-test`, `DECIDB_TEST_DIRECT_
   `CASE` chain in the order given, so an earlier check guards the later ones. A rule raises in the solver's order within a group (scope checks,
   the bound's NaN, an `=` bound's disagreement, then the least row message); across failing groups the order may
   differ.
-- **Row checks, one implementation** (`direct_row_checks.cpp`), in the shape of DuckDB's uncorrelated scalar
-  subquery. One `DirectSourceReader` serves the whole plan: the rule driver builds it for the rule's reads
+- **Row checks, one implementation** (`direct_row_checks.cpp`), in the shape of DuckDB's uncorrelated scalar subquery.
+  One `DirectSourceReader` serves the whole plan: the rule driver builds it for the rule's reads
   (`DirectApplicabilityCondition::source_reads`) plus one per bound side table and one per check, so it decides once,
   from the real total, whether to recompute or materialize the source. `DirectAddRowChecks` gives each check its own
   read and a grouped aggregate over only the columns the check reads (counts, least and greatest value, the least label
   per key), then an ungrouped `arg_min(message, struct_pack(keys))` over the failing groups, which picks the least
   failing group, NULL keys last. The checks' verdict (`DirectAllHold`, true or raises) is the definition of a one-row
   materialized CTE, and the reader is gated on it (`DirectSourceReader::Gate`): every later read is
-  `Filter[v](CrossProduct(read, CTERef v))`, whose `projection_map` keeps the read's bindings. A gated read passes a row
-  only once the CTE is computed, whichever side of the product is built first, so a check raises before any rule-built
-  raise. Gates chain: a rule gates the reader again on its own verdict (A1), computed from reads the row checks gate,
-  so a scope error raises before a rule's own, and every read after waits for the newest verdict alone; the verdict
-  CTEs nest oldest outermost (`DirectSourceReader::Finish`). The solver path uses the same reader with one read plus the
-  side tables' and the checks' (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps only an entity-scoped
-  decision's determination. A rule builds a plan over one read with `DirectBuildOverRead`, or over its only read with
-  `DirectBuildOverOneRead`.
+  `Filter[v](CrossProduct(rows, CTERef v))` under the read's forwarding projection, which keeps the rows' bindings. A
+  gated read passes a row only once the CTE is computed, whichever side of the product is built first, so a check raises
+  before any rule-built raise. Gates chain: a rule gates the reader again on its own verdict (A1), computed from reads
+  the row checks gate, so a scope error raises before a rule's own, and every read after waits for the newest verdict
+  alone; the verdict CTEs nest oldest outermost (`DirectSourceReader::Finish`). The solver path uses the same reader
+  with one read plus the side tables' and the checks' (`DirectInstallRowChecks`); `PhysicalDecide::RunScopeChecks` keeps
+  only an entity-scoped decision's determination. A rule builds a plan over one read with `DirectBuildOverRead`, or over
+  its only read with `DirectBuildOverOneRead`.
 - **Per-row bound reader** (`direct_bound_reader.{hpp,cpp}`; A1 is its only user until R1 is built on it). It makes sure
   two rules cannot read a bound differently. Its header defines `POSITIVE_INFINITY` and `NEGATIVE_INFINITY` once for
   every direct-solve file. A per-row bound is read by the solver path's own classifier

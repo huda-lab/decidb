@@ -30,10 +30,8 @@ peak (PERF-11) is Gurobi's own (`performance/findings.md` § Regressions since 2
 
 ## 3. Extraction costs
 
-- [ ] PERF-20 S1 and R1 lose late materialization under a side table or a row-check gate; measure first —
-  performance/todo.md § PERF-20
-- [ ] PERF-21 A materialized copy of the source keeps every column (+240 MiB on A1 with a side table) —
-  performance/todo.md § PERF-21
+- [ ] PERF-22 A pipelined plan over a copy of the source holds its wide columns; measure first —
+  performance/todo.md § PERF-22
 
 ## 4. Measurement (last)
 

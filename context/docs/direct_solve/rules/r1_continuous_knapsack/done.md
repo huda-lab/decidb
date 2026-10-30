@@ -100,18 +100,20 @@ infinity. `ItemAlgebra` holds the verdicts, the candidate price, the price, the 
 source that `DirectRepeatableSourceChain` accepts (non-volatile projections and filters over one repeatable DuckDB table
 scan) is copied once when `DirectSourceCopyIsCheaper` says so, else rebuilt per read with fresh table indexes, its
 pushed-down table filters copied. A read of the copy costs `COPY_READ_COST` (0.4) of a re-scan, so a source read three
-times or more is copied, provided the copy (estimated rows times the source's row width) is at most
-`1/COPY_MEMORY_SHARE` (1/8) of the memory limit; with no row estimate it is re-scanned. Both constants come from
-interleaved timings on partsupp and a 20-column wide table at 10K to 1M rows: at 100K the copy took 68 ms against 96
-(narrow) and 66 against 94 (wide), and past an eighth of the memory limit it lost. At 10K rows on partsupp it is 14 ms
-slower, in R1's sort, not in the reads. Any other source is one
-`LogicalMaterializedCTE`, defined through a projection that names its columns (a join under it may reorder its output
-in later passes) and read by `LogicalCTERef`s. The group key is the eligibility flag (the budget's `when` holds) and
-the `by` keys, joined with IS NOT DISTINCT FROM in a SINGLE join, the form DuckDB uses for a scalar subquery: every
-item finds its one group row. A SINGLE join is never flipped by `BUILD_SIDE_PROBE_SIDE` and JOIN_ORDER estimates it as
-its item side, so the hash table is always built on the group rows; an inner join would be estimated far larger than
-either side and flipped to build on the items. With no scope the aggregates are ungrouped and the joins are cross
-products with one row.
+times or more is copied, provided the copy (estimated rows times its row width, which leaves out the variable-width
+columns late materialization reads back) is at most `1/COPY_MEMORY_SHARE` (1/8) of the memory limit; with no row
+estimate it is re-scanned. Both constants come from interleaved timings on partsupp and a 20-column wide table at 10K to
+1M rows: at 100K the copy took 68 ms against 96 (narrow) and 66 against 94 (wide), and past an eighth of the memory
+limit it lost. At 10K rows on partsupp it is 14 ms slower, in R1's sort, not in the reads. Re-measured on a copy of only
+the columns the plan reads (partsupp, lineitem and the wide table, 100K and 1M rows), the copy took 1.0 to 1.2 of the
+re-scans' time at two reads, 0.57 to 0.98 at three and 0.62 to 1.05 at four. Any constant from 1/3 to 1/2 copies at
+three reads and re-scans at two, so 0.4 stays. Any other source is one `LogicalMaterializedCTE`, defined through a
+projection that names its columns (a join under it may reorder its output in later passes) and read by `LogicalCTERef`s.
+The group key is the eligibility flag (the budget's `when` holds) and the `by` keys, joined with IS NOT DISTINCT FROM in
+a SINGLE join, the form DuckDB uses for a scalar subquery: every item finds its one group row. A SINGLE join is never
+flipped by `BUILD_SIDE_PROBE_SIDE` and JOIN_ORDER estimates it as its item side, so the hash table is always built on
+the group rows; an inner join would be estimated far larger than either side and flipped to build on the items. With no
+scope the aggregates are ungrouped and the joins are cross products with one row.
 
 1. Group totals: a hash aggregate of every item's sums, the row count, each data limit's MIN and MAX, and the check of
    every raw value and `v`, so a NaN raises here, before any verdict; a NULL weight or value leaves its row out of the
